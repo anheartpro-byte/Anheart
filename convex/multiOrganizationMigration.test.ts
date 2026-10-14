@@ -13,6 +13,7 @@ import {
   attachExistingRowsToAnheart,
   duplicateHoldsData,
   repairDuplicatedAnheartOrganization,
+  repairNotConfirmed,
 } from "./migrations/multiOrganization";
 import {
   configureAnheartOrganization,
@@ -458,11 +459,17 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
     updatedAt: NOW + 5,
   };
 
-  const repair = (w: LegacyWorld) =>
+  /** A dry run unless `apply` is true. */
+  const repair = (
+    w: LegacyWorld,
+    args: { apply?: boolean; expectedName?: string } = {},
+  ) =>
     w.t.mutation(
       internal.migrations.multiOrganization.repairDuplicatedAnheartOrganization,
-      {},
+      args,
     );
+  /** The applying run, confirmed with the name the dry run reports. */
+  const CONFIRMED = { apply: true, expectedName: SNAPSHOT.name };
 
   const joined = (
     w: LegacyWorld,
@@ -538,14 +545,61 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
       users: await ctx.db.query("users").collect(),
     }));
 
-  it("folds the webhook's row into the default organisation and links it to Clerk", async () => {
+  it("by default only describes what it would do, and writes nothing", async () => {
+    const { w, defaultOrganization, duplicate } = await duplicatedWorld();
+    const before = await mirror(w);
+
+    const described = await repair(w);
+
+    expect(described).toEqual({
+      status: "dry_run",
+      absorbs: {
+        organizationId: duplicate,
+        name: "Anheart SAS",
+        slug: "anheart-sas",
+        clerkOrgId: ANHEART_CLERK_ORG,
+        memberships: 3,
+        admins: 2,
+      },
+      links: {
+        organizationId: defaultOrganization,
+        name: "Anheart",
+        slug: "anheart",
+      },
+      movedMemberships: 1,
+      mergedMemberships: 2,
+      movedUsers: 1,
+    });
+    // A name without `apply` is still a dry run.
+    expect(await repair(w, { expectedName: SNAPSHOT.name })).toMatchObject({
+      status: "dry_run",
+    });
+    expect(await mirror(w)).toEqual(before);
+    await expect(migrate(w)).rejects.toThrow(ANHEART_ORGANIZATION_DUPLICATED);
+  });
+
+  it.each([
+    ["without a name", { apply: true }],
+    ["with another name", { apply: true, expectedName: "Anheart" }],
+    ["with the slug for a name", { apply: true, expectedName: "anheart-sas" }],
+  ])("refuses to apply, and writes nothing, %s", async (_case, args) => {
+    const { w } = await duplicatedWorld();
+    const before = await mirror(w);
+
+    await expect(repair(w, args)).rejects.toThrow(
+      repairNotConfirmed("Anheart SAS"),
+    );
+    expect(await mirror(w)).toEqual(before);
+  });
+
+  it("folds the webhook's row into the default organisation and links it to Clerk, once confirmed", async () => {
     const { w, defaultOrganization } = await duplicatedWorld();
     await expect(migrate(w)).rejects.toThrow(ANHEART_ORGANIZATION_DUPLICATED);
 
-    const result = await repair(w);
+    const result = await repair(w, CONFIRMED);
 
     expect(result).toEqual({
-      repaired: true,
+      status: "repaired",
       organizationId: defaultOrganization,
       movedMemberships: 1,
       mergedMemberships: 2,
@@ -620,7 +674,7 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
 
   it("leaves the webhook writing to the default organisation, newer events only", async () => {
     const { w, defaultOrganization } = await duplicatedWorld();
-    await repair(w);
+    await repair(w, CONFIRMED);
 
     // A delivery older than what the repair carried over changes nothing.
     await w.t.mutation(internal.clerkWebhook.applyEvent, {
@@ -658,10 +712,13 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
 
   it("finds nothing to do once repaired", async () => {
     const { w } = await duplicatedWorld();
-    await repair(w);
+    await repair(w, CONFIRMED);
     const before = await mirror(w);
 
-    expect(await repair(w)).toEqual({ repaired: false });
+    expect(await repair(w)).toEqual({ status: "nothing_to_repair" });
+    expect(await repair(w, CONFIRMED)).toEqual({
+      status: "nothing_to_repair",
+    });
     expect(await mirror(w)).toEqual(before);
   });
 
@@ -671,7 +728,7 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
     await migrate(w);
     const before = await mirror(w);
 
-    expect(await repair(w)).toEqual({ repaired: false });
+    expect(await repair(w)).toEqual({ status: "nothing_to_repair" });
     expect(await mirror(w)).toEqual(before);
   });
 
@@ -680,7 +737,9 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
     configureAnheartOrganization(null);
     const before = await mirror(w);
 
-    await expect(repair(w)).rejects.toThrow(ANHEART_ORG_ID_REQUIRED);
+    for (const args of [{}, CONFIRMED]) {
+      await expect(repair(w, args)).rejects.toThrow(ANHEART_ORG_ID_REQUIRED);
+    }
     expect(await mirror(w)).toEqual(before);
   });
 
@@ -689,9 +748,11 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
     await w.t.run((ctx) => ctx.db.patch(duplicate, { deletedAt: NOW + 30 }));
     const before = await mirror(w);
 
-    await expect(repair(w)).rejects.toThrow(
-      ANHEART_ORGANIZATION_DELETED_IN_CLERK,
-    );
+    for (const args of [{}, CONFIRMED]) {
+      await expect(repair(w, args)).rejects.toThrow(
+        ANHEART_ORGANIZATION_DELETED_IN_CLERK,
+      );
+    }
     expect(await mirror(w)).toEqual(before);
   });
 
@@ -748,8 +809,92 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
       await write(w, duplicate);
       const before = await mirror(w);
 
-      await expect(repair(w)).rejects.toThrow(duplicateHoldsData(table));
+      for (const args of [{}, CONFIRMED]) {
+        await expect(repair(w, args)).rejects.toThrow(
+          duplicateHoldsData(table),
+        );
+      }
       expect(await mirror(w)).toEqual(before);
     },
   );
+
+  // ANH-225 review: ANHEART_ORG_ID copied from a client organisation the
+  // webhook already mirrors. Nothing in the database tells it from Anheart's:
+  // the dry run shows its name, and applying needs that very name.
+  describe("when ANHEART_ORG_ID names a client organisation by mistake", () => {
+    const CLIENT = {
+      id: "org_synthetic_client",
+      name: "Clinique Exemple",
+      slug: "clinique-exemple",
+      createdAt: NOW,
+      updatedAt: NOW + 5,
+    };
+
+    async function wrongVariableWorld() {
+      const w = await seedLegacyWorld(modules);
+      const { organizationId: defaultOrganization } = await migrate(w);
+      // The webhook receives a client organisation and its admin.
+      await w.t.mutation(internal.clerkWebhook.applyEvent, {
+        eventId: "evt_client_admin",
+        event: {
+          kind: "membership",
+          deleted: false,
+          organization: CLIENT,
+          occurredAt: NOW + 10,
+          updatedAt: NOW + 10,
+          membershipId: "orgmem_client_admin",
+          userId: "user_client_admin",
+          firstName: "Client",
+          lastName: "Admin",
+          email: "client-admin@example.invalid",
+          verifiedEmails: ["client-admin@example.invalid"],
+          role: "admin",
+        },
+      });
+      configureAnheartOrganization(CLIENT.id);
+      return { w, defaultOrganization };
+    }
+
+    it("the dry run shows the client's name, slug and Clerk identifier", async () => {
+      const { w } = await wrongVariableWorld();
+      await expect(migrate(w)).rejects.toThrow(ANHEART_ORGANIZATION_DUPLICATED);
+
+      expect(await repair(w)).toMatchObject({
+        status: "dry_run",
+        absorbs: {
+          name: "Clinique Exemple",
+          slug: "clinique-exemple",
+          clerkOrgId: CLIENT.id,
+          memberships: 1,
+          admins: 1,
+        },
+      });
+    });
+
+    it("an operator who confirms the Anheart organisation is refused, and nothing moves", async () => {
+      const { w, defaultOrganization } = await wrongVariableWorld();
+      const before = await mirror(w);
+
+      await expect(
+        repair(w, { apply: true, expectedName: "Anheart" }),
+      ).rejects.toThrow(repairNotConfirmed("Clinique Exemple"));
+
+      expect(await mirror(w)).toEqual(before);
+      const defaultRow = await w.t.run((ctx) =>
+        ctx.db.get(defaultOrganization),
+      );
+      expect(defaultRow?.clerkOrgId).toBeUndefined();
+    });
+
+    it("only confirming the client's own name applies it: the check is the operator's", async () => {
+      const { w, defaultOrganization } = await wrongVariableWorld();
+
+      expect(
+        await repair(w, { apply: true, expectedName: "Clinique Exemple" }),
+      ).toMatchObject({
+        status: "repaired",
+        organizationId: defaultOrganization,
+      });
+    });
+  });
 });
