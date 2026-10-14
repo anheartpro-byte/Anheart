@@ -169,29 +169,46 @@ ordre**. Le détail des réglages est dans
    d'organisation en cours » pour qui a une organisation active : le serveur
    ne voit jamais l'organisation choisie.
 3. **Site** : mettre en ligne cette version, qui porte le sélecteur
-   d'organisation et la page Membres. Organizations doit déjà être activé : sur
-   une instance de développement, Clerk lève une erreur au montage du
-   sélecteur sinon.
+   d'organisation et la page Membres. Activer Organizations avant (étape 2).
+   Ce que fait le sélecteur sur une instance où Organizations est désactivé
+   (erreur, avertissement ou rien) **n'est pas vérifié** : les paquets npm du
+   site (`@clerk/nextjs` 6.39, `@clerk/clerk-react` 5.61, `@clerk/shared` 3.48)
+   ne contrôlent pas ce réglage ; `OrganizationSwitcher` confie l'affichage à
+   `clerk-js`, que le navigateur charge à l'exécution depuis l'API Frontend de
+   l'instance (`/npm/@clerk/clerk-js@5/dist/clerk.browser.js`), et c'est ce
+   script qui décide. Aucune instance sans Organizations n'a été essayée.
 4. **Créer l'organisation Anheart dans Clerk** et noter son identifiant
    (`org_…`). Le webhook ne doit **pas** encore être configuré : il créerait
    une seconde organisation « Anheart », vide, au lieu de reprendre celle de
-   l'étape 1.
+   l'étape 1. **N'y ajouter personne avant l'étape 6**, pas même un
+   propriétaire choisi à la création : Clerk n'envoie un événement qu'aux
+   endpoints qui existent quand il se produit, et ne rejoue pas les
+   précédents. Convex ne connaît pas l'appartenance d'un membre ajouté plus
+   tôt ; un gestionnaire, par exemple, ne peut alors recevoir ni machine ni
+   patient. Si c'est déjà fait : après l'étape 6, changer le rôle de ce membre
+   dans Clerk puis le remettre ; chaque changement est un événement, et le
+   premier crée l'appartenance dans Convex.
 5. **Poser `ANHEART_ORG_ID`** sur le déploiement Convex
    (`npx convex env set ANHEART_ORG_ID org_…`), puis relancer la migration :
    elle relie l'organisation par défaut à celle de Clerk. Vérifier dans le
    tableau de bord Convex qu'il n'existe **qu'une** organisation « anheart »,
    avec ce `clerkOrgId`. Si le webhook l'avait déjà reçue, la migration
-   s'arrête sans rien écrire (« Two Anheart organisations… »). Dès cette étape,
-   un jeton sans organisation est refusé, seuls les `org:admin` d'Anheart sont
-   admins Anheart, et les rôles ne se changent plus que dans Clerk.
+   s'arrête sans rien écrire (« Two Anheart organisations… ») : la sortie est
+   décrite dans
+   [convex.md, « Sortir de deux organisations Anheart »](convex.md#sortir-de-deux-organisations-anheart).
+   Dès cette étape, un jeton sans organisation est refusé, seuls les
+   `org:admin` d'Anheart sont admins Anheart, et les rôles ne se changent plus
+   que dans Clerk.
 6. **Webhook** : créer l'endpoint Clerk vers `/clerk/webhook` et poser son
    secret dans `CLERK_WEBHOOK_SIGNING_SECRET`. Il reconnaît désormais
-   l'organisation Anheart comme celle de l'étape 1.
+   l'organisation Anheart comme celle de l'étape 1. Les membres s'ajoutent à
+   partir d'ici.
 7. **Comptes** : inviter le premier admin avec `org:admin`, et faire entrer
    chaque compte existant dans son organisation Clerk avec le rôle qu'il a dans
    Convex. Entre l'étape 5 et son entrée, un compte existant ne voit que
-   « Choisissez une organisation » ou « Votre compte n'appartient à aucune
-   organisation » : enchaîner les étapes 5 à 7 dans une même fenêtre annoncée.
+   « Choisissez une organisation pour continuer. » (son jeton ne porte aucune
+   organisation, ce que le serveur refuse dès que `ANHEART_ORG_ID` est
+   définie) : enchaîner les étapes 5 à 7 dans une même fenêtre annoncée.
 8. **Chaque client** : l'admin Anheart crée son organisation dans Clerk et y
    invite son premier `org:admin`, qui invite à son tour gestionnaires et
    patients depuis la page Membres (ou crée ses patients depuis la page
@@ -339,6 +356,17 @@ liste. Après l'enregistrement, la
 fenêtre se ferme et la carte Configuration affiche « Machine mise à jour avec
 succès » ; si le serveur refuse, son message s'affiche en rouge en haut de la
 fenêtre, qui reste ouverte. La règle d'envoi est dans `lib/machineForm.ts`.
+
+Une machine écrite avant la migration multi-organisation n'a pas encore
+d'organisation ; seul l'admin Anheart la voit. Sa fenêtre ne demande alors
+aucune liste de gestionnaires (sans organisation, le serveur rendrait ceux de
+toutes les organisations) et n'envoie jamais la liste : le serveur ne garde
+que les gestionnaires de l'organisation de la machine, donc une liste envoyée
+retirerait ses gestionnaires sans en mettre aucun. Elle affiche à la place
+« Cette machine n'appartient encore à aucune organisation : elle garde ses
+gestionnaires actuels, qui pourront être changés ici une fois la migration
+multi-organisation passée. » Le nom et le lieu s'enregistrent comme pour toute
+machine.
 
 ### Mes machines : `/fr/dashboard/my-machines`
 

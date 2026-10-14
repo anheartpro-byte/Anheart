@@ -1473,7 +1473,11 @@ mono-organisation.
    patient qui les aurait verrait le nom et l'adresse de tous les membres.
    Désactiver la création d'organisations par les utilisateurs : sinon
    n'importe quel compte crée la sienne et en devient `org_admin`.
-3. Créer l'organisation « Anheart » et noter son identifiant (`org_…`).
+3. Créer l'organisation « Anheart » et noter son identifiant (`org_…`). N'y
+   ajouter personne, pas même un propriétaire choisi à la création, avant que
+   le webhook soit configuré (C, étape 3) : Clerk ne rejoue pas pour un
+   nouvel endpoint les événements produits avant lui, et Convex ne connaîtrait
+   pas ces appartenances.
 4. Dans le modèle JWT nommé `convex`, ajouter aux revendications existantes
    (`email`, `email_verified`…) :
    ```json
@@ -1496,14 +1500,17 @@ mono-organisation.
 quelconque et lui crée sa propre ligne, vide. La migration de l'étape 2
 s'arrête alors sans rien écrire (« Two Anheart organisations… ») au lieu de
 relier la mauvaise ligne : les machines, séances et comptes existants restent
-dans l'organisation par défaut. Ordre complet, côté site compris :
+dans l'organisation par défaut. Pour en sortir :
+[« Sortir de deux organisations Anheart »](#sortir-de-deux-organisations-anheart).
+Ordre complet, côté site compris :
 [tableau-de-bord.md, « Amorçage d'un déploiement »](tableau-de-bord.md#amorçage-dun-déploiement).
 
 1. Définir la variable d'environnement du déploiement :
    ```bash
    npx convex env set ANHEART_ORG_ID org_…
    ```
-   À partir de là, tout jeton sans organisation est refusé, et seuls les
+   À partir de là, tout jeton sans organisation est refusé (le site affiche
+   « Choisissez une organisation pour continuer. »), et seuls les
    `org:admin` de cette organisation sont admins Anheart.
 2. Relancer la migration (même commande qu'en A) : elle relie l'organisation
    par défaut à cette organisation Clerk (`clerkOrgId`) au lieu d'en créer une
@@ -1511,10 +1518,11 @@ dans l'organisation par défaut. Ordre complet, côté site compris :
    organization is not known to the server yet »). Vérifier qu'il n'existe
    qu'une organisation de slug `anheart`, avec ce `clerkOrgId`.
 3. Configurer le webhook ([ci-dessous](#webhook-clerk-vers-le-miroir)), puis
-   inviter le premier admin dans l'organisation Anheart depuis Clerk, avec le
-   rôle `org:admin`, et faire entrer chaque compte existant dans son
-   organisation Clerk avec son rôle. Jusque-là, un compte existant n'a plus
-   accès à rien : enchaîner les étapes 1 à 3 dans une même fenêtre annoncée.
+   seulement inviter le premier admin dans l'organisation Anheart depuis
+   Clerk, avec le rôle `org:admin`, et faire entrer chaque compte existant
+   dans son organisation Clerk avec son rôle. Jusque-là, un compte existant
+   n'a plus accès à rien : enchaîner les étapes 1 à 3 dans une même fenêtre
+   annoncée.
 
 Ne définir `ANHEART_ORG_ID` qu'une fois en ligne la version du site qui porte
 le sélecteur d'organisation (ANH-187) : sans organisation active dans sa
@@ -1525,6 +1533,59 @@ lui proposant d'en choisir une. Procédure d'amorçage pas à pas, côté site :
 Les organisations clientes arrivent par le webhook décrit ci-dessous ; ni la
 migration ni la première connexion ne les créent à partir d'un jeton. Tant que
 l'événement n'a pas été reçu, une organisation inconnue reste refusée.
+
+#### Sortir de deux organisations Anheart
+
+Si le webhook a reçu l'organisation Anheart de Clerk avant que
+`ANHEART_ORG_ID` soit définie, il lui a créé sa propre ligne, et la migration
+s'arrête (« Two Anheart organisations… »). `ANHEART_ORG_ID` étant posée,
+lancer :
+
+```bash
+npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{}'
+```
+
+C'est une mutation **interne** (le site ne peut pas l'appeler), en une seule
+transaction. Elle n'agit que si la ligne créée par le webhook ne porte que ce
+que le webhook écrit, des appartenances et des comptes. Alors :
+
+- chaque appartenance de cette ligne passe à l'organisation par défaut. Un
+  compte qui y avait déjà la sienne (la migration en a donné une à chaque
+  compte existant) n'en garde qu'une, qui prend le rôle, l'état et les
+  identifiants envoyés par Clerk : à partir de `ANHEART_ORG_ID`, c'est Clerk
+  qui fait foi sur les rôles ;
+- un compte que le webhook a créé dans cette ligne prend l'organisation par
+  défaut pour organisation principale ;
+- la ligne est supprimée et l'organisation par défaut est reliée à
+  l'organisation Clerk (`clerkOrgId`), avec le nom, le slug et les dates que
+  le webhook avait reçus. Son slug devient donc celui de Clerk, qui peut ne
+  pas être `anheart`.
+
+Elle répond `repaired: true` avec le nombre d'appartenances déplacées
+(`movedMemberships`), fusionnées (`mergedMemberships`) et de comptes déplacés
+(`movedUsers`). Relancer ensuite la migration (même commande qu'en A) : elle
+doit répondre avec le même `organizationId`. Vérifier dans le tableau de bord
+Convex qu'une seule organisation porte ce `clerkOrgId` et qu'aucune n'a le
+slug `anheart` sans `clerkOrgId`. Les webhooks suivants écrivent dans
+l'organisation par défaut ; une livraison plus ancienne que ce qu'elle a
+repris ne change rien.
+
+Elle refuse, sans rien écrire :
+
+- si `ANHEART_ORG_ID` n'est pas définie ;
+- si Clerk a supprimé l'organisation que nomme `ANHEART_ORG_ID` : vérifier la
+  variable ;
+- si la ligne du webhook porte d'autres données : machine, séance, télémétrie
+  ou événement de séance, programme, droit de lancement, lien entre un
+  gestionnaire et une machine ou un patient, invitation de patient. Le message
+  nomme la table. Quelqu'un a alors travaillé dans cette organisation, et
+  rattacher ou supprimer ces lignes demande de les examiner une à une : aucune
+  procédure n'est écrite pour ce cas, qui revient au responsable produit.
+
+Relancée après une réparation, ou quand l'ordre de l'amorçage a été suivi,
+elle répond `repaired: false` et ne change rien. Comme la migration, elle n'a
+tourné qu'en mémoire, dans les tests (`convex/multiOrganizationMigration.test.ts`),
+sur aucun déploiement.
 
 ### Webhook Clerk vers le miroir
 
@@ -1555,6 +1616,8 @@ le secret de production pour la recette. Envoyer ensuite un événement signé
 de test et vérifier les lignes du miroir, puis rejouer la livraison : une seule
 ligne d'événement doit subsister. Sans secret, la route répond 503 ; signature
 refusée, 401 ; charge illisible, 400 ; événement accepté ou ignoré, 204.
+N'ajouter de membre à l'organisation Anheart dans Clerk qu'une fois l'endpoint
+créé : Clerk ne lui envoie pas les événements produits avant lui (B, étape 3).
 
 **Délai des droits portés par un jeton** : le rôle du jeton Clerk vérifié reste
 l'autorité de l'appelant jusqu'à son expiration. La réception d'un retrait dans
