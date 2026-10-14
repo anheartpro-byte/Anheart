@@ -41,6 +41,18 @@ for (const row of readFileSync(registryFile, "utf8").split(/\r?\n/)) {
 if (registry.size === 0) refuse("empty Linear registry");
 
 const catalogue = readFileSync(join(docs, "menaces.md"), "utf8").replaceAll("\r\n", "\n");
+// A ticket the page names outside an Issues field must have been read too, and
+// any Linear link must be the one Linear gave: five names once entered the text
+// without a read, and nothing refused them.
+for (const [, issueId] of catalogue.matchAll(/\b(ANH-[1-9][0-9]*)\b/g)) {
+  if (!issueId || !registry.has(issueId)) refuse(`Linear issue named but not verified: ${issueId}`);
+}
+for (const [url, issueId] of catalogue.matchAll(/https:\/\/linear\.app\/anheart\/issue\/(ANH-[1-9][0-9]*)(?:\/[^\s)#>]*)?/g)) {
+  if (!issueId || registry.get(issueId) !== url) refuse(`unverified Linear issue link: ${issueId}`);
+}
+for (const [, issueId, url] of catalogue.matchAll(/\[(ANH-[1-9][0-9]*)\]\((https:\/\/linear\.app\/[^\s)]+)\)/g)) {
+  if (!issueId || registry.get(issueId) !== url) refuse(`Linear issue link labelled with another issue: ${issueId}`);
+}
 /** @type {Set<string>} */
 const definitions = new Set();
 for (const block of catalogue.split(/(?=^## )/m)) {
