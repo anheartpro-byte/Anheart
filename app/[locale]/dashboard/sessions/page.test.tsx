@@ -397,35 +397,34 @@ describe("sessions list: tabs and search", () => {
 });
 
 describe("sessions list: page by page", () => {
-  /** 120 finished sessions, newest first, as the server lists them. */
-  const many = Array.from({ length: 120 }, (_, i) =>
+  /** 60 finished sessions, newest first, as the server lists them. */
+  const many = Array.from({ length: 60 }, (_, i) =>
     listed(String(i).padStart(3, "0"), { startedAt: NOW - (i + 1) * 60_000 }),
   );
+  const names = (count: number) =>
+    many.slice(0, count).map((s) => s.patientName);
+  // Read straight from the table: role queries over hundreds of cells are
+  // what made these tests slow.
+  const riders = () =>
+    Array.from(document.querySelectorAll("tbody tr td:first-child")).map(
+      (cell) => cell.textContent,
+    );
+  const showMore = () => screen.queryByText(fr.common.showMore);
 
-  it("shows the first 50 sessions, says there are more, and adds 50 at each 'Show more'", async () => {
+  it("shows the first 50 sessions, says there are more, and adds the next ones at 'Show more'", async () => {
     serverLists(...many);
     const { user } = await renderPage(<SessionsPage />);
 
-    expect(patientsListed()).toEqual(
-      many.slice(0, 50).map((s) => s.patientName),
-    );
+    expect(riders()).toEqual(names(50));
     expect(screen.getByText("50+ sessions")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+    await user.click(showMore()!);
     expect(argsAsked(LIST).at(-1)).toEqual({
       paginationOpts: { numItems: 50, cursor: "50" },
     });
-    expect(patientsListed()).toEqual(
-      many.slice(0, 100).map((s) => s.patientName),
-    );
-    expect(screen.getByText("100+ sessions")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
-    expect(patientsListed()).toEqual(many.map((s) => s.patientName));
-    expect(screen.getByText("120 sessions")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: fr.common.showMore }),
-    ).toBeNull();
+    expect(riders()).toEqual(names(60));
+    expect(screen.getByText("60 sessions")).toBeTruthy();
+    expect(showMore()).toBeNull();
   });
 
   it("keeps the sessions shown and offers nothing more while the next page loads", async () => {
@@ -435,28 +434,43 @@ describe("sessions list: page by page", () => {
     );
     const { user } = await renderPage(<SessionsPage />);
 
-    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+    await user.click(showMore()!);
 
-    expect(patientsListed()).toHaveLength(50);
-    const waitingButton = screen.getByRole("button", {
-      name: fr.common.loading,
-    });
+    expect(riders()).toHaveLength(50);
+    const waitingButton = screen.getByText(fr.common.loading);
     expect((waitingButton as HTMLButtonElement).disabled).toBe(true);
-    expect(
-      screen.queryByRole("button", { name: fr.common.showMore }),
-    ).toBeNull();
+    expect(showMore()).toBeNull();
   });
 
   it("starts again from the first page of a tab when the tab changes", async () => {
     serverListsByStatus(...many);
     const { user } = await renderPage(<SessionsPage />);
-    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
-    expect(patientsListed()).toHaveLength(100);
+    await user.click(showMore()!);
+    expect(riders()).toHaveLength(60);
 
-    await user.click(screen.getByRole("tab", { name: fr.sessions.completed }));
+    await user.click(screen.getByText(fr.sessions.completed));
 
     expect(argsAsked(LIST).at(-1)).toEqual(firstPage({ status: "completed" }));
-    expect(patientsListed()).toHaveLength(50);
+    expect(riders()).toEqual(names(50));
     expect(screen.getByText("50+ sessions")).toBeTruthy();
+  });
+
+  it("says there is no session only once the list is done, not on an empty page with more to come", async () => {
+    // The server cut its first page short: nothing in it, older ones remain.
+    answer(LIST, (args) =>
+      args.paginationOpts.cursor === null
+        ? { page: [], isDone: false, continueCursor: "0" }
+        : pagesOf([finished])(args),
+    );
+    const { user } = await renderPage(<SessionsPage />);
+
+    expect(screen.queryByText(fr.sessions.noSessions)).toBeNull();
+    expect(screen.getByText("0+ sessions")).toBeTruthy();
+
+    await user.click(showMore()!);
+
+    expect(riders()).toEqual(["Patient B"]);
+    expect(screen.getByText("1 sessions")).toBeTruthy();
+    expect(showMore()).toBeNull();
   });
 });

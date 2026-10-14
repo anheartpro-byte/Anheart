@@ -222,6 +222,23 @@ describe("reports: page by page", () => {
     expect((waiting as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("says there is no report only once the list is done, not on an empty page with more to come", async () => {
+    signedInAs("user");
+    // The server cut its first page short: nothing in it, older ones remain.
+    answer(LIST, (args) =>
+      args.paginationOpts.cursor === null
+        ? { page: [], isDone: false, continueCursor: "0" }
+        : pagesOf(many.slice(0, 1))(args),
+    );
+    const { user } = await renderPage(<ReportsPage />);
+
+    expect(screen.queryByText(fr.reports.noReports)).toBeNull();
+    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+
+    expect(cards()).toHaveLength(1);
+    expect(screen.queryByText(fr.reports.noReports)).toBeNull();
+  });
+
   it("offers no 'Show more' when every report is shown", async () => {
     signedInAs("user");
     serverLists(...many.slice(0, 50));

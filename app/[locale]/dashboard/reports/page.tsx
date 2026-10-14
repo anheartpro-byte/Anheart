@@ -47,12 +47,15 @@ export default function ReportsPage() {
           ))}
         </div>
       ) : (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <p className="text-muted-foreground">{t("noReports")}</p>
-          </CardContent>
-        </Card>
+        // An empty page while older reports remain: "Show more" alone.
+        status === "Exhausted" && (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
+              <p className="text-muted-foreground">{t("noReports")}</p>
+            </CardContent>
+          </Card>
+        )
       )}
 
       {(status === "CanLoadMore" || status === "LoadingMore") && (

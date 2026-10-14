@@ -214,12 +214,19 @@ export default function SessionsPage() {
       {loading ? (
         <TableSkeleton />
       ) : table.getRowModel().rows.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Activity className="h-12 w-12 text-muted-foreground mb-4" />
-            <p className="text-muted-foreground">{t("sessions.noSessions")}</p>
-          </CardContent>
-        </Card>
+        // A page can come back empty while older sessions remain (the
+        // server split it, or left out a row): "none" only once the list is
+        // done; until then "Show more" alone.
+        status === "Exhausted" && (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <Activity className="h-12 w-12 text-muted-foreground mb-4" />
+              <p className="text-muted-foreground">
+                {t("sessions.noSessions")}
+              </p>
+            </CardContent>
+          </Card>
+        )
       ) : (
         <Card>
           <CardContent className="p-0">
