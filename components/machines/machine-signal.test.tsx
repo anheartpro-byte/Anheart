@@ -11,10 +11,16 @@ import {
   LastSignal,
   MachineStatusBadge,
   MachineStatusText,
-  OnlineMachinesCount,
+  useConnectedMachines,
   VersionsSeen,
   type MachineSignal,
 } from "./MachineSignal";
+
+/** The count as the dashboard's card reads it: connected, then in a session. */
+function ConnectedCount({ machines }: { machines: MachineSignal[] }) {
+  const { connected, inSession } = useConnectedMachines(machines);
+  return <>{`${connected} / ${inSession}`}</>;
+}
 
 /**
  * A machine's status, the "machines online" count and "last signal", as the
@@ -155,22 +161,28 @@ describe("machines online count", () => {
     machine("offline", 400_000),
   ];
 
-  it("counts the machines shown online: one in a session is not", () => {
-    expect(paint(<OnlineMachinesCount machines={fleet()} />)).toBe("2");
+  it("counts the machines shown online or in a session, and those in a session apart", () => {
+    expect(paint(<ConnectedCount machines={fleet()} />)).toBe("3 / 1");
   });
 
-  it("counts none while the list loads", () => {
-    expect(paint(<OnlineMachinesCount machines={[]} />)).toBe("0");
+  it("counts none when there is no machine", () => {
+    expect(paint(<ConnectedCount machines={[]} />)).toBe("0 / 0");
   });
 
-  it("stops counting each machine 90 s after its last signal, while its record still says online", () => {
+  it("never counts a status it does not know", () => {
+    expect(
+      paint(<ConnectedCount machines={[machine("rebooting", 2000)]} />),
+    ).toBe("0 / 0");
+  });
+
+  it("stops counting each machine 90 s after its last signal, while its record still says it is connected", () => {
     const machines = fleet();
-    const count = <OnlineMachinesCount machines={machines} />;
-    expect(paintAfter(29_000, count)).toBe("2");
+    const count = <ConnectedCount machines={machines} />;
+    expect(paintAfter(29_000, count)).toBe("3 / 1");
     elapse(1000);
-    expect(paint(count)).toBe("1");
+    expect(paint(count)).toBe("2 / 1");
     elapse(58_000);
-    expect(paint(count)).toBe("0");
+    expect(paint(count)).toBe("0 / 0");
   });
 
   it.each(VIEWER_CLOCKS)(
@@ -178,10 +190,10 @@ describe("machines online count", () => {
     (_name, off) => {
       viewerClock(off);
       const machines = fleet();
-      const count = <OnlineMachinesCount machines={machines} />;
-      expect(paintAfter(29_000, count)).toBe("2");
+      const count = <ConnectedCount machines={machines} />;
+      expect(paintAfter(29_000, count)).toBe("3 / 1");
       elapse(1000);
-      expect(paint(count)).toBe("1");
+      expect(paint(count)).toBe("2 / 1");
     },
   );
 });
