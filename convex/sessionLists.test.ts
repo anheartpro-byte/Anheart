@@ -392,8 +392,8 @@ describe("ANH-158 lists of sessions: what the rule leaves out", () => {
       { paginationOpts: { numItems: 10, cursor: null } },
     );
     expect(page.page.map((r) => r._id)).toEqual([ids.own]);
-    // A session whose machine is gone is listed to the Anheart admin only,
-    // as `getSession` serves it to them only.
+    // A session whose machine is gone is listed to the Anheart admin and to
+    // its rider only (`canAccessSession`); this one has no rider.
     const orgAdminList = await as(w.t, "orgAdmin").query(
       api.sessions.listSessions,
       {},

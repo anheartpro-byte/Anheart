@@ -373,7 +373,9 @@ sous le titre se termine par « + » (« 50+ sessions »). Changer d'onglet repa
 de la première page. Le serveur n'applique la page qu'après les droits : un
 patient ou un gestionnaire voit toutes ses séances, page après page, quel que
 soit le nombre de séances des autres. La recherche ne porte que sur les
-séances déjà chargées.
+séances déjà chargées. « Aucune session trouvée » ne s'affiche qu'une fois la
+liste finie : une page vide alors qu'il reste des séances (le serveur peut
+couper une page) ne laisse que le bouton.
 
 Cette page ne crée aucune séance : une séance auto se lance depuis une machine
 (« Lancer une séance auto », §5), une séance manuelle depuis la console. Le

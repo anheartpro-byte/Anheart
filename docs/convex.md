@@ -912,9 +912,14 @@ routes d'entraînement.
 
 **Les droits avant la limite (ANH-158).** Les trois listes lisent la même
 requête : qui peut lire quelles séances fait partie de la requête, et la
-limite ou la page ne se coupe qu'ensuite. Une page de 50 contient donc
-50 séances que l'appelant peut lire (moins à la fin de la liste), jamais les
-50 dernières de la base filtrées après coup. Avant ce ticket, une séance d'un
+limite ou la page ne se coupe qu'ensuite. Une page de 50 contient donc en
+général 50 séances que l'appelant peut lire, jamais les 50 dernières de la
+base filtrées après coup. Elle peut en contenir moins, et même aucune sans que
+la liste soit finie : à la fin de la liste, quand le serveur demande de couper
+une page qui lit trop, quand des séances arrivent ou changent pendant la
+lecture, ou quand le second contrôle décrit plus bas en retire une. Le site
+propose la suite d'après le statut de la liste, pas d'après la taille d'une
+page, et n'écrit « aucune séance » qu'une fois la liste finie. Avant ce ticket, une séance d'un
 patient ou d'un gestionnaire pouvait manquer à sa liste parce que des séances
 plus récentes d'autres personnes remplissaient la page.
 
@@ -934,7 +939,11 @@ toutes les autres lectures d'une séance ([§3](#les-règles)) : le filtre de la
 requête est cette même règle, donc ce contrôle n'enlève rien tant que les deux
 s'accordent ; s'ils divergeaient, une séance serait omise plutôt que montrée.
 Une séance sans organisation (antérieure à la migration) n'est lue que par
-l'admin Anheart, et une séance dont la machine n'existe plus non plus.
+l'admin Anheart. Une séance dont la machine n'existe plus n'est lue que par
+l'admin Anheart et par son pratiquant : `canAccessSession` donne la séance à
+son pratiquant avant de regarder la machine. Aucune mutation ne produit cet
+état (une machine n'est supprimée qu'en douceur), et `getSession` échoue sur
+une telle séance pour tout le monde, comme avant ce ticket.
 
 *Le cas du gestionnaire.* Le ticket proposait de lire `by_machine` pour chaque
 machine du gestionnaire et de fusionner les flux par date. Ce n'est pas ce que
@@ -951,6 +960,22 @@ centre où il en gère une sur vingt, une page lit environ vingt fois plus de
 séances qu'elle n'en montre. Quand une page lit trop, le serveur Convex demande
 de la couper en deux, ce que fait `usePaginatedQuery`. Ce coût n'a été mesuré
 sur aucun déploiement.
+
+Le pire cas est un gestionnaire qui ne voit aucune machine de son centre (il
+n'en gère aucune, ou celles qu'il gère n'y sont plus) et n'y a roulé aucune
+séance. Sa liste est vide, mais pour la servir la requête lit **tout
+l'historique des séances du centre** : à chaque page, à chaque ouverture de
+l'accueil (`listSessions` avec `limit: 10`), et de nouveau à chaque séance
+écrite dans le centre, puisque la requête est réactive. Une page peut au moins
+être coupée à la demande du serveur ; `listSessions` et
+`getCompletedSessionsForUser` (`take`) n'ont pas ce recours, et échoueraient
+au-delà de la limite de lecture d'une exécution Convex. Le même parcours sans
+résultat a lieu quand un appelant filtre sur une machine ou un pratiquant
+qu'il ne voit pas ; il est alors borné par l'historique de cette machine ou de
+ce pratiquant, et rien n'est montré. Reste à faire, dans un ticket de suite :
+pour `take`, la fusion bornée des index de chaque machine (le problème de
+curseur ne s'y pose pas), et une borne de lecture imposée par le serveur à la
+page du gestionnaire.
 
 ### `ecgData.ts` et `sessionSummaries.ts` (historique, lecture seule)
 
