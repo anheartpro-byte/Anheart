@@ -7,12 +7,16 @@ import {
   type FunctionReturnType,
 } from "convex/server";
 import { useTranslations } from "next-intl";
-import { describeMutationError, pushFeedback } from "@/lib/feedback";
-import type {
-  MutationFeedback,
-  MutationOutcome,
+import {
+  runWithFeedback,
+  type MutationFeedback,
+  type MutationOutcome,
 } from "./use-mutation-with-feedback";
 
+/**
+ * The only way the site calls a Convex action: the same contract as
+ * `useMutationWithFeedback` (never rejects, every outcome shown).
+ */
 export function useActionWithFeedback<
   Action extends FunctionReference<"action">,
 >(action: Action) {
@@ -23,27 +27,8 @@ export function useActionWithFeedback<
     async (
       args: FunctionArgs<Action>,
       feedback?: MutationFeedback<FunctionReturnType<Action>>,
-    ): Promise<MutationOutcome<FunctionReturnType<Action>>> => {
-      let value: FunctionReturnType<Action>;
-      try {
-        value = await run(args);
-      } catch (error) {
-        const failure = describeMutationError(error, t);
-        console.error(
-          `[action] ${name} failed`,
-          { requestId: failure.requestId, code: failure.code },
-          error,
-        );
-        pushFeedback("error", failure.message);
-        return { ok: false, ...failure };
-      }
-      const success =
-        typeof feedback?.success === "function"
-          ? feedback.success(value)
-          : feedback?.success;
-      if (success) pushFeedback("success", success);
-      return { ok: true, value };
-    },
+    ): Promise<MutationOutcome<FunctionReturnType<Action>>> =>
+      runWithFeedback(`[action] ${name}`, () => run(args), feedback, t),
     [run, name, t],
   );
 }

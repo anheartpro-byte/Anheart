@@ -19,7 +19,7 @@ import {
   renderPage,
   routeParams,
   router,
-  serverFailures,
+  codedFailures,
   signedInAs,
   takeLoggedFailures,
   wasMounted,
@@ -398,7 +398,7 @@ describe("machine page: a deleted machine", () => {
   });
 
   it.each(
-    serverFailures(api.machines.restoreMachine, "Machine is not deleted"),
+    codedFailures(api.machines.restoreMachine, "machine_not_deleted"),
   )(
     "keeps the window open and shows the failure when the restoration fails $where",
     async ({ error, shown }) => {
@@ -472,10 +472,7 @@ describe("machine page: deleting the machine", () => {
   });
 
   it.each(
-    serverFailures(
-      api.machines.deleteMachine,
-      "Cannot delete machine with active session",
-    ),
+    codedFailures(api.machines.deleteMachine, "machine_in_session"),
   )(
     "stays on the page, on its question, and shows the failure when the deletion fails $where",
     async ({ error, shown }) => {
@@ -585,10 +582,7 @@ describe("machine page: renewing the key of the machine", () => {
   });
 
   it.each(
-    serverFailures(
-      api.machines.regenerateApiKey,
-      "Not authorized to manage this machine",
-    ),
+    codedFailures(api.machines.regenerateApiKey, "machine_not_managed"),
   )(
     "shows no key, the failure, and its question still open when the renewal fails $where",
     async ({ error, shown }) => {
@@ -638,23 +632,18 @@ describe("machine page: editing the machine", () => {
     expect(propsOf<EditWindow>("MachineFormModal").machine).toEqual(shown);
   });
 
-  it("confirms on the page that the machine was saved, until it is edited again", async () => {
+  // ANH-194: the window's notification says that the machine was saved; the
+  // page no longer repeats it in a line of its own.
+  it("leaves the confirmation of a save to the window's notification", async () => {
     const { user } = await open("admin");
-    expect(screen.queryByRole("status")).toBeNull();
 
     await user.click(screen.getByRole("button", editButton));
-    act(() => {
-      propsOf<EditWindow>("MachineFormModal").onSuccess?.();
-      propsOf<EditWindow>("MachineFormModal").onOpenChange(false);
-    });
+    expect(propsOf<EditWindow>("MachineFormModal").onSuccess).toBeUndefined();
+    act(() => propsOf<EditWindow>("MachineFormModal").onOpenChange(false));
 
-    expect(screen.getByRole("status").textContent).toBe(
-      fr.machines.updateSuccess,
-    );
     expect(propsOf<EditWindow>("MachineFormModal").open).toBe(false);
-
-    await user.click(screen.getByRole("button", editButton));
     expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(fr.machines.updateSuccess)).toBeNull();
   });
 });
 

@@ -27,6 +27,7 @@ import {
 import { act, cleanup, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
+import { ConvexError } from "convex/values";
 import {
   getFunctionName,
   type FunctionArgs,
@@ -180,6 +181,27 @@ export function serverFailures(reference: Mutation, thrown: string) {
       where: "on a development deployment, which sends what the server threw",
       error: serverError(reference, thrown),
       shown: thrown,
+    },
+  ];
+}
+
+/**
+ * The failures of a function that refuses with a stable code
+ * (`convex/lib/errors.ts`): the code reaches the site in production as on a
+ * development deployment, and the site shows its translation. With it, the
+ * masked failure of anything else the function may throw. For `it.each`.
+ */
+export function codedFailures(
+  reference: Mutation,
+  code: keyof typeof fr.errors,
+) {
+  const [masked] = serverFailures(reference, code);
+  return [
+    masked,
+    {
+      where: `with the stable code ${code} the server refuses with`,
+      error: new ConvexError(code),
+      shown: fr.errors[code],
     },
   ];
 }

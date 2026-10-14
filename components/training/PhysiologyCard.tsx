@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Check, HeartPulse, Loader2 } from "lucide-react";
+import { HeartPulse, Loader2 } from "lucide-react";
 import { effectiveHrMax, readOptionalNumber } from "@/lib/training";
 
 /**
@@ -47,7 +47,6 @@ export function PhysiologyCard({
   );
   const [dirty, setDirty] = useState({ hrMax: false, birthYear: false });
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [nowYear] = useState(() => new Date().getFullYear());
@@ -86,7 +85,6 @@ export function PhysiologyCard({
     if (!canSave) return;
     setSaving(true);
     setError(null);
-    setSaved(false);
     const result = await setPhysiology(
       {
         userId,
@@ -95,9 +93,9 @@ export function PhysiologyCard({
       },
       { success: t("feedback.physiologySaved") },
     );
+    // The success is said once, by the notification of the hook.
     if (result.ok) {
       setDirty({ hrMax: false, birthYear: false });
-      setSaved(true);
     } else {
       setError(result.message);
     }
@@ -137,7 +135,6 @@ export function PhysiologyCard({
                 onChange={(e) => {
                   setHrMax(e.target.value);
                   setDirty((d) => ({ ...d, hrMax: true }));
-                  setSaved(false);
                 }}
               />
               {hrMaxInvalid && (
@@ -160,7 +157,6 @@ export function PhysiologyCard({
                 onChange={(e) => {
                   setBirthYear(e.target.value);
                   setDirty((d) => ({ ...d, birthYear: true }));
-                  setSaved(false);
                 }}
               />
               {birthYearInvalid && (
@@ -200,12 +196,8 @@ export function PhysiologyCard({
           </p>
 
           <Button type="submit" disabled={!canSave}>
-            {saving ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : saved ? (
-              <Check className="h-4 w-4 mr-2" />
-            ) : null}
-            {saved ? t("training.physiology.saved") : t("common.save")}
+            {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            {t("common.save")}
           </Button>
         </form>
       </CardContent>

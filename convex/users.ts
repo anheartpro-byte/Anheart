@@ -6,7 +6,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { ConvexError, v, type Infer } from "convex/values";
+import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
@@ -16,6 +16,7 @@ import {
   sendPatientInvitation,
 } from "./lib/patientInvitation";
 import { effectiveHrMax } from "./training";
+import { refusal } from "./lib/errors";
 import {
   ORGANIZATION_ADMIN_ROLES,
   STAFF_ROLES,
@@ -99,7 +100,7 @@ export const getOrCreateUser = mutation({
 
     if (existing) {
       if (existing.clerkDeletedAt !== undefined)
-        throw new ConvexError("profile_pending");
+        throw refusal("profile_pending");
       if (claimed.kind === "claimed") {
         await mirrorMembership(
           ctx,
@@ -118,7 +119,7 @@ export const getOrCreateUser = mutation({
           normalizedEmail(user.email) === normalizedEmail(identity.email ?? ""),
       )
     )
-      throw new ConvexError("profile_pending");
+      throw refusal("profile_pending");
 
     let home: {
       organizationId: Id<"organizations">;
@@ -285,7 +286,7 @@ export const updateUserRole = mutation({
     const currentUser = await requireRole(ctx, ["admin"]);
 
     if (anheartClerkOrganizationId() !== null) {
-      throw new ConvexError("Roles are managed in Clerk Organizations");
+      throw refusal("roles_managed_in_clerk");
     }
 
     const membership = await findMembership(
@@ -294,7 +295,7 @@ export const updateUserRole = mutation({
       currentUser.organizationId,
     );
     if (!membership) {
-      throw new Error("User not found");
+      throw refusal("user_not_found");
     }
 
     await ctx.db.patch(membership._id, { role: args.role });
@@ -487,7 +488,7 @@ export const createPatient = action({
         clerkInvitationId,
       });
       if (clerkInvitationId === null)
-        throw new ConvexError("invitation_failed");
+        throw refusal("invitation_failed");
     }
     return {
       invitationId: prepared.invitationId,
@@ -514,14 +515,14 @@ export const updatePatient = mutation({
 
     // Check access rights
     if (!(await canManageUser(ctx, args.userId, currentUser))) {
-      throw new Error("Not authorized to edit this patient");
+      throw refusal("patient_not_managed");
     }
     await requireSharedProfileAuthority(ctx, args.userId, currentUser);
 
     // Check if user exists
     const targetUser = await ctx.db.get(args.userId);
     if (!targetUser) {
-      throw new Error("User not found");
+      throw refusal("user_not_found");
     }
 
     const updates: Record<string, string> = {};
@@ -617,15 +618,15 @@ export const deleteUser = mutation({
 
     // Cannot delete self
     if (currentUser._id === args.userId) {
-      throw new Error("Cannot delete your own account");
+      throw refusal("cannot_delete_self");
     }
 
     // Check permissions
     if (currentUser.role === "user") {
-      throw new Error("Not authorized to delete users");
+      throw refusal("not_authorized");
     }
     if (!(await canManageUser(ctx, args.userId, currentUser))) {
-      throw new Error("Not authorized to delete this user");
+      throw refusal("user_not_managed");
     }
     if (currentUser.role === "gestionnaire") {
       // Gestionnaire can only delete their own patients (via relation)
@@ -635,13 +636,13 @@ export const deleteUser = mutation({
         currentUser.organizationId,
       );
       if (targetRole !== "user") {
-        throw new Error("Can only delete patient accounts");
+        throw refusal("only_patients_deletable");
       }
     }
 
     const targetUser = await ctx.db.get(args.userId);
     if (!targetUser) {
-      throw new Error("User not found");
+      throw refusal("user_not_found");
     }
 
     // What the caller may remove: every organisation for the Anheart admin,
@@ -822,7 +823,7 @@ export const assignGestionnaireToUser = mutation({
       organizationId,
     );
     if (organizationId === undefined || targetRole !== "user") {
-      throw new Error("Can only assign gestionnaires to patients");
+      throw refusal("not_a_patient");
     }
 
     // Verify gestionnaire has the correct role in the organisation
@@ -832,14 +833,14 @@ export const assignGestionnaireToUser = mutation({
       organizationId,
     );
     if (gestionnaireRole !== "gestionnaire") {
-      throw new Error("Target user is not a gestionnaire");
+      throw refusal("not_a_gestionnaire");
     }
 
     // Check permissions
     if (currentUser.role === "gestionnaire") {
       // Gestionnaire can only add themselves
       if (args.gestionnaireId !== currentUser._id) {
-        throw new Error("Gestionnaires can only assign themselves to patients");
+        throw refusal("gestionnaire_self_only");
       }
     }
 
@@ -850,7 +851,7 @@ export const assignGestionnaireToUser = mutation({
       args.gestionnaireId,
     );
     if (existingRelations.some((r) => r.organizationId === organizationId)) {
-      throw new Error("Gestionnaire already assigned to this patient");
+      throw refusal("gestionnaire_already_assigned");
     }
 
     // Create relation
@@ -883,9 +884,7 @@ export const removeGestionnaireFromUser = mutation({
     if (currentUser.role === "gestionnaire") {
       // Gestionnaire can only remove themselves
       if (args.gestionnaireId !== currentUser._id) {
-        throw new Error(
-          "Gestionnaires can only remove themselves from patients",
-        );
+        throw refusal("gestionnaire_self_only");
       }
     }
 
@@ -895,7 +894,7 @@ export const removeGestionnaireFromUser = mutation({
     ).filter((r) => inScope(currentUser, r.organizationId));
 
     if (relations.length === 0) {
-      throw new Error("Gestionnaire is not assigned to this patient");
+      throw refusal("gestionnaire_not_assigned");
     }
 
     for (const relation of relations) {
@@ -955,7 +954,8 @@ export const getGestionnairesForPatient = query({
 
 /**
  * List all gestionnaires (admin only): every organisation for the Anheart
- * admin, their own organisation for an organisation admin.
+ * admin, their own organisation for an organisation admin. `machineCount`
+ * leaves deleted machines out, as `machines.getMachinesForGestionnaire` does.
  *
  * `organizationId` narrows the list to the gestionnaires of one organisation
  * (the machine form asks for those of the organisation a new machine goes
@@ -1017,10 +1017,15 @@ export const listGestionnaires = query({
       const g = await ctx.db.get(gestionnaireId);
       if (!g) continue;
 
-      const machineRelations = await ctx.db
+      // A deleted machine keeps its links for a restore: it is not counted.
+      const machineRelations: Doc<"machine_gestionnaires">[] = [];
+      for (const relation of await ctx.db
         .query("machine_gestionnaires")
         .withIndex("by_gestionnaire", (q) => q.eq("gestionnaireId", g._id))
-        .collect();
+        .collect()) {
+        const machine = await ctx.db.get(relation.machineId);
+        if (machine && !machine.isDeleted) machineRelations.push(relation);
+      }
 
       const patientRelations = await ctx.db
         .query("user_gestionnaires")

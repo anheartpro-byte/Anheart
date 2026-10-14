@@ -16,7 +16,7 @@ import {
   NOW,
   renderPage,
   routeParams,
-  serverFailures,
+  codedFailures,
   signedInAs,
   takeLoggedFailures,
   type CurrentUser,
@@ -302,8 +302,8 @@ describe("gestionnaire page: what an admin sees", () => {
     expect(machines.getAllByText(fr.machines.online)).toHaveLength(2);
 
     const patients = card(fr.nav.patients);
-    // What the page does today: the count is not put in the singular.
-    expect(patients.getByText("1 patients assignés")).toBeTruthy();
+    // ANH-194: the count agrees with its number.
+    expect(patients.getByText("1 patient assigné")).toBeTruthy();
     expect(patients.getByText("Rose Rider")).toBeTruthy();
     expect(patients.getByText("rose@example.test")).toBeTruthy();
     expect(patients.queryByText("Remi Rider")).toBeNull();
@@ -357,7 +357,7 @@ describe("gestionnaire page: assigning machines", () => {
     });
   });
 
-  it("saves exactly the ticked machines for this manager, and confirms on the page what changed", async () => {
+  it("saves exactly the ticked machines for this manager, and confirms once what changed", async () => {
     given();
     const { user } = await open();
     const dialog = await openMachines(user);
@@ -375,8 +375,10 @@ describe("gestionnaire page: assigning machines", () => {
     ]);
     const saved = "Machines enregistrées : 1 ajoutée, 1 retirée.";
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe(saved);
+    // ANH-194: said by the notification only, not again by a line of the page.
     expect(feedbackShown()).toEqual([{ kind: "success", message: saved }]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(saved)).toBeNull();
   });
 
   it("confirms with what the server says it changed, in the visitor's language", async () => {
@@ -396,9 +398,9 @@ describe("gestionnaire page: assigning machines", () => {
       }),
     );
 
-    expect(screen.getByRole("status").textContent).toBe(
-      "Machines saved: none added, 2 removed.",
-    );
+    expect(feedbackShown()).toEqual([
+      { kind: "success", message: "Machines saved: none added, 2 removed." },
+    ]);
   });
 
   it("keeps the link to a machine that has no box, which nobody could untick", async () => {
@@ -429,10 +431,7 @@ describe("gestionnaire page: assigning machines", () => {
       error: new ConvexError(NO_ACTIVE_ORGANIZATION),
       shown: NO_ACTIVE_ORGANIZATION,
     },
-    ...serverFailures(
-      api.machines.setGestionnaireMachines,
-      "Machine not found",
-    ),
+    ...codedFailures(api.machines.setGestionnaireMachines, "machine_not_found"),
   ])(
     "shows the failure in the window, which stays open with its boxes, and confirms nothing: $where",
     async ({ error, shown }) => {
@@ -464,7 +463,7 @@ describe("gestionnaire page: assigning machines", () => {
     },
   );
 
-  it("forgets the refusal and the confirmation of an earlier save when the window is opened again", async () => {
+  it("forgets the refusal of an earlier save when the window is opened again", async () => {
     given();
     const save = mutation(api.machines.setGestionnaireMachines);
     save.mockRejectedValueOnce(new ConvexError(NO_ACTIVE_ORGANIZATION));
@@ -479,10 +478,44 @@ describe("gestionnaire page: assigning machines", () => {
     dialog = await openMachines(user);
     expect(dialog.queryByRole("alert")).toBeNull();
     await user.click(dialog.getByRole("button", saveButton));
-    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
 
-    await openMachines(user);
-    expect(screen.queryByRole("status")).toBeNull();
+  it("keeps the boxes being ticked when the machines send a heartbeat", async () => {
+    // ANH-194 EX-1: every heartbeat of an online machine is a new answer of
+    // the two machine lists (`lastHeartbeat`, the server's clock).
+    given();
+    const { user, refresh } = await open();
+    const dialog = await openMachines(user);
+    await user.click(dialog.getByRole("checkbox", { name: "Lyon" }));
+    await user.click(dialog.getByRole("checkbox", { name: "Nice" }));
+
+    const later = { lastHeartbeat: NOW + 25_000, serverNow: NOW + 30_000 };
+    answer(api.machines.listMachines, [
+      machine(paris, "Paris", { location: "Salle 1", ...later }),
+      machine(lyon, "Lyon", later),
+      machine(nice, "Nice", later),
+    ]);
+    answer(api.machines.getMachinesForGestionnaire, [
+      { ...managed(paris, "Paris"), ...later },
+      { ...managed(lyon, "Lyon"), ...later },
+    ]);
+    await refresh();
+
+    expect(boxes()).toEqual({
+      "Paris(Salle 1)": true,
+      Lyon: false,
+      Nice: true,
+    });
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", saveButton),
+    );
+    expect(mutationsSent()).toEqual([
+      {
+        name: "machines:setGestionnaireMachines",
+        args: { gestionnaireId, machineIds: [paris, nice] },
+      },
+    ]);
   });
 
   it("sends nothing when the window is cancelled, and opens again on the manager's own machines", async () => {
@@ -572,7 +605,7 @@ describe("gestionnaire page: assigning patients", () => {
     });
   });
 
-  it("saves exactly the ticked patients for this manager, and confirms on the page what changed", async () => {
+  it("saves exactly the ticked patients for this manager, and confirms once what changed", async () => {
     given();
     const { user } = await open();
     const dialog = await openPatients(user);
@@ -590,8 +623,10 @@ describe("gestionnaire page: assigning patients", () => {
     ]);
     const saved = "Patients enregistrés : 1 ajouté, 1 retiré.";
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(card(fr.nav.patients).getByRole("status").textContent).toBe(saved);
+    // ANH-194: said by the notification only, not again by a line of the page.
     expect(feedbackShown()).toEqual([{ kind: "success", message: saved }]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(saved)).toBeNull();
   });
 
   it("confirms with what the server says it changed, in the visitor's language", async () => {
@@ -612,9 +647,9 @@ describe("gestionnaire page: assigning patients", () => {
       }),
     );
 
-    expect(card(en.nav.patients).getByRole("status").textContent).toBe(
-      "Patients saved: none added, 2 removed.",
-    );
+    expect(feedbackShown()).toEqual([
+      { kind: "success", message: "Patients saved: none added, 2 removed." },
+    ]);
   });
 
   it("keeps the link to a patient who has no box, whom nobody could untick", async () => {
@@ -650,9 +685,9 @@ describe("gestionnaire page: assigning patients", () => {
       error: new ConvexError(NO_ACTIVE_ORGANIZATION),
       shown: NO_ACTIVE_ORGANIZATION,
     },
-    ...serverFailures(
+    ...codedFailures(
       api.users.assignPatientsToGestionnaire,
-      "Target user is not a gestionnaire",
+      "not_a_gestionnaire",
     ),
   ])(
     "shows the failure in the window, which stays open with its boxes, and confirms nothing: $where",
@@ -685,7 +720,7 @@ describe("gestionnaire page: assigning patients", () => {
     },
   );
 
-  it("forgets the refusal and the confirmation of an earlier save when the window is opened again", async () => {
+  it("forgets the refusal of an earlier save when the window is opened again", async () => {
     given();
     const save = mutation(api.users.assignPatientsToGestionnaire);
     save.mockRejectedValueOnce(new ConvexError(NO_ACTIVE_ORGANIZATION));
@@ -700,10 +735,7 @@ describe("gestionnaire page: assigning patients", () => {
     dialog = await openPatients(user);
     expect(dialog.queryByRole("alert")).toBeNull();
     await user.click(dialog.getByRole("button", saveButton));
-    expect(card(fr.nav.patients).getByRole("status")).toBeTruthy();
-
-    await openPatients(user);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("cannot be saved twice while the server has not answered", async () => {
@@ -811,7 +843,9 @@ describe("gestionnaire page: assigning patients", () => {
     ]);
   });
 
-  it("takes its boxes from the server again when the manager's patients change while it is open", async () => {
+  it("keeps the box the visitor unticked, and shows a patient another admin gives meanwhile", async () => {
+    // ANH-194 EX-1: a new answer of the server no longer undoes the edit in
+    // progress; the boxes nobody clicked follow the server.
     given();
     const { user, refresh } = await open();
     const dialog = await openPatients(user);
@@ -824,9 +858,9 @@ describe("gestionnaire page: assigning patients", () => {
     ]);
     await refresh();
 
-    // The boxes are the server's again: what is saved is what is on screen.
+    // What is saved is what is on screen: Rose removed, Remi kept.
     expect(boxes()).toEqual({
-      "Rose Rider(rose@example.test)": true,
+      "Rose Rider(rose@example.test)": false,
       "Remi Rider(remi@example.test)": true,
     });
     await user.click(
@@ -835,7 +869,7 @@ describe("gestionnaire page: assigning patients", () => {
     expect(mutationsSent()).toEqual([
       {
         name: "users:assignPatientsToGestionnaire",
-        args: { gestionnaireId, patientIds: [rose, remi] },
+        args: { gestionnaireId, patientIds: [remi] },
       },
     ]);
   });

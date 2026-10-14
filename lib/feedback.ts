@@ -12,9 +12,21 @@ export type FeedbackToast = {
   message: string;
 };
 
+/** A success leaves by itself; a failure stays until it is closed. */
 const SUCCESS_VISIBLE_MS = 5_000;
-const ERROR_VISIBLE_MS = 12_000;
 const MAX_TOASTS = 4;
+
+/**
+ * Whether a click or a focus landed on the messages (`data-feedback-toaster`
+ * on their container): a dialog must not take it for a click outside itself.
+ */
+export function isFeedbackElement(target: EventTarget | null): boolean {
+  const element = target as { closest?: unknown } | null;
+  return (
+    typeof element?.closest === "function" &&
+    (target as Element).closest("[data-feedback-toaster]") !== null
+  );
+}
 
 /** The list before any message, also what the server renders. */
 export const NO_FEEDBACK: readonly FeedbackToast[] = [];
@@ -28,13 +40,34 @@ function publish(next: readonly FeedbackToast[]): void {
   for (const listener of listeners) listener();
 }
 
+/**
+ * The list with its newest message, kept to `MAX_TOASTS`: an older success
+ * leaves first, a failure only when no older success is left to go.
+ */
+function withNewest(
+  list: readonly FeedbackToast[],
+  newest: FeedbackToast,
+): FeedbackToast[] {
+  const kept = [...list, newest];
+  while (kept.length > MAX_TOASTS) {
+    const success = kept
+      .slice(0, -1)
+      .findIndex((toast) => toast.kind === "success");
+    kept.splice(success === -1 ? 0 : success, 1);
+  }
+  return kept;
+}
+
+/**
+ * Show a message. A success leaves after 5 s. A failure stays until its cross
+ * is pressed: for some failures it is the only place the reason is shown.
+ */
 export function pushFeedback(kind: FeedbackToast["kind"], message: string) {
   const id = nextId++;
-  publish([...toasts, { id, kind, message }].slice(-MAX_TOASTS));
-  setTimeout(
-    () => dismissFeedback(id),
-    kind === "error" ? ERROR_VISIBLE_MS : SUCCESS_VISIBLE_MS,
-  );
+  publish(withNewest(toasts, { id, kind, message }));
+  if (kind === "success") {
+    setTimeout(() => dismissFeedback(id), SUCCESS_VISIBLE_MS);
+  }
 }
 
 export function dismissFeedback(id: number): void {

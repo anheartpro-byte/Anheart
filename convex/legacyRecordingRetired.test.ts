@@ -462,7 +462,7 @@ describe("ANH-135 migration: recording sessions left open are marked failed", ()
       as(w.t, "admin").mutation(api.machines.deleteMachine, {
         machineId: w.machine,
       }),
-    ).rejects.toThrow(/pending sessions/);
+    ).rejects.toThrow(/machine_has_pending_session/);
 
     await migrate(w);
 

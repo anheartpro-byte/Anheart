@@ -98,8 +98,10 @@ describe("FAQ page", () => {
   });
 
   // Written in the dashboard's guide: the limits are those of the machine's
-  // software, said to be technical, and the six channels are named.
-  it("says the limits are technical, not medical, and names the six channels", async () => {
+  // software, said to be technical. The signals are those of the Pi's
+  // documentation (docs/raspberry-pi.md, section 9): the ECG gives the heart
+  // rate, the other channels are shown only, and no SpO2 is measured.
+  it("says the limits are technical, not medical, and what the machine measures", async () => {
     const { user } = await renderPage(<FAQPage />);
 
     await user.click(
@@ -115,10 +117,16 @@ describe("FAQ page", () => {
 
     await user.click(
       screen.getByRole("button", {
-        name: "Quels canaux le système de surveillance ECG suit-il?",
+        name: "Que mesure la machine pendant une séance ?",
       }),
     );
-    expect(screen.getByText(/ECG, EDA, SpO2, RESP, EMG et LUX/)).toBeTruthy();
+    const answer = screen.getByText(/^Un capteur BITalino enregistre/);
+    expect(answer.textContent).toContain("aucun ne commande la machine");
+    expect(answer.textContent).toContain(
+      "La saturation en oxygène du sang n'est pas mesurée.",
+    );
+    // The former answer named six channels of an "ECG monitoring system".
+    expect(screen.queryByText(/six canaux/)).toBeNull();
   });
 
   it("gives the address to write to and the way back to the landing page", async () => {

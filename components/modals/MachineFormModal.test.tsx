@@ -403,6 +403,8 @@ describe("ANH-203 machine window: editing", () => {
     ]);
     expect(order).toEqual(["update", "assign"]);
     expect(onOpenChange.mock.calls).toEqual([[false]]);
+    // ANH-194 EX-2: the success is said once, after both calls.
+    expect(shown()).toEqual([{ kind: "success", message: t.updateSuccess }]);
   });
 
   it("an organisation admin who ticks a gestionnaire sends the new list too", async () => {
@@ -438,7 +440,7 @@ describe("ANH-203 machine window: editing", () => {
     logged.mockRestore();
   });
 
-  it("when the server refuses the list, the refusal is shown and the window stays open", async () => {
+  it("when the server refuses the list, says that the name and the place are saved, and the window stays open", async () => {
     signedInAs("admin");
     answer("users:listGestionnaires", [ANNA, BORIS]);
     mutation(ASSIGN).mockRejectedValue(
@@ -450,9 +452,15 @@ describe("ANH-203 machine window: editing", () => {
 
     await submit(screen.form());
 
-    expect(screen.text()).toContain("Only an admin may assign gestionnaires");
+    // ANH-194 EX-2: no success for the half that passed; the window says
+    // what was saved and why the list was not.
+    expect(screen.text()).toContain(
+      t.form.partiallySaved.replace(
+        "{reason}",
+        "Only an admin may assign gestionnaires",
+      ),
+    );
     expect(shown()).toEqual([
-      { kind: "success", message: t.updateSuccess },
       { kind: "error", message: "Only an admin may assign gestionnaires" },
     ]);
     expect(onOpenChange).not.toHaveBeenCalled();
@@ -507,6 +515,63 @@ describe("ANH-203 machine window: editing", () => {
     expect(onOpenChange.mock.calls).toEqual([[false]]);
     expect(onSuccess).not.toHaveBeenCalled();
     expect(mutationCalls()).toEqual({});
+  });
+
+  it("keeps what is being typed, the boxes and the error when the machine sends a heartbeat", async () => {
+    // ANH-194 EX-1: the page hands the window a new machine object at every
+    // heartbeat of an online machine (`lastHeartbeat`, the server's clock).
+    signedInAs("admin");
+    answer("users:listGestionnaires", [ANNA, BORIS]);
+    mutation(UPDATE).mockRejectedValueOnce(new Error("Réseau coupé"));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const onOpenChange = vi.fn();
+    const online = { ...MACHINE, lastHeartbeat: 1_000, serverNow: 1_500 };
+    const { screen } = open({ machine: online, onOpenChange });
+    await type(field(screen, "name"), "Centri Paris Nord");
+    await click(box(screen, BORIS));
+    await submit(screen.form());
+    expect(screen.text()).toContain("Réseau coupé");
+    await type(field(screen, "location"), "Salle 4");
+
+    const heartbeat = {
+      ...MACHINE,
+      gestionnaires: [{ ...ANNA, isOwner: true }],
+      lastHeartbeat: 31_000,
+      serverNow: 31_200,
+    };
+    screen.rerender(
+      <MachineFormModal open onOpenChange={onOpenChange} machine={heartbeat} />,
+    );
+
+    expect(field(screen, "name").value).toBe("Centri Paris Nord");
+    expect(field(screen, "location").value).toBe("Salle 4");
+    expect(box(screen, BORIS).getAttribute("aria-checked")).toBe("true");
+    expect(screen.text()).toContain("Réseau coupé");
+
+    // And what is sent is what was typed, against the machine as it is now.
+    await submit(screen.form());
+    expect(mutation(UPDATE).mock.calls.at(-1)).toEqual([
+      { machineId, name: "Centri Paris Nord", location: "Salle 4" },
+    ]);
+    expect(mutation(ASSIGN).mock.calls).toEqual([
+      [{ machineId, gestionnaireIds: ["anna", "boris"] }],
+    ]);
+    logged.mockRestore();
+  });
+
+  it("opens again on the machine as it is, not on what was typed before closing", async () => {
+    signedInAs("admin");
+    const { screen } = open({ machine: MACHINE });
+    await type(field(screen, "name"), "Brouillon");
+
+    screen.rerender(
+      <MachineFormModal open={false} onOpenChange={() => {}} machine={MACHINE} />,
+    );
+    screen.rerender(
+      <MachineFormModal open onOpenChange={() => {}} machine={MACHINE} />,
+    );
+
+    expect(field(screen, "name").value).toBe("Centri Paris");
   });
 
   it("opened again on another machine, shows that machine and not what was typed before", async () => {

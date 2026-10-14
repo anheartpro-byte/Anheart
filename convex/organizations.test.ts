@@ -94,7 +94,7 @@ describe("EX-2 the role and the organisation are those of the verified identity"
     expect(me?.role).toBe("user");
     await expect(
       as(w.t, "stranger").mutation(api.machines.createMachine, { name: "x" }),
-    ).rejects.toThrow(/Unauthorized/);
+    ).rejects.toThrow(/not_authorized/);
     expect(
       await as(w.t, "stranger").query(api.machines.listMachines, {}),
     ).toEqual([]);
@@ -186,7 +186,7 @@ describe("EX-1 only the admins of the organisation named by ANHEART_ORG_ID are A
     expect((await whoAmI(as(w.t, "admin")))?.role).toBe("org_admin");
     await expect(
       as(w.t, "admin").mutation(api.machines.createMachine, { name: "x" }),
-    ).rejects.toThrow(/Unauthorized/);
+    ).rejects.toThrow(/not_authorized/);
   });
 
   it("treats a blank variable as unset", async () => {
@@ -627,7 +627,7 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
         machineId: foreign,
         name: "taken",
       }),
-    ).rejects.toThrow(/Not authorized to manage this machine/);
+    ).rejects.toThrow(/machine_not_managed/);
   });
 
   it("reads the role from the membership, never from the stored mirror", async () => {
@@ -641,7 +641,7 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
       legacy(w, "legacy-patient").mutation(api.machines.createMachine, {
         name: "x",
       }),
-    ).rejects.toThrow(/Unauthorized/);
+    ).rejects.toThrow(/not_authorized/);
     expect(
       await legacy(w, "legacy-patient").query(api.machines.listMachines, {}),
     ).toEqual([]);
@@ -734,7 +734,7 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
         userId: outsider,
         role: "admin",
       }),
-    ).rejects.toThrow(/User not found/);
+    ).rejects.toThrow(/user_not_found/);
     expect((await w.t.run((ctx) => ctx.db.get(outsider)))?.role).toBe("user");
   });
 
@@ -821,7 +821,7 @@ describe("transition: once Clerk Organizations is configured (ANHEART_ORG_ID set
         userId: w.patient,
         role: "admin",
       }),
-    ).rejects.toThrow(/Roles are managed in Clerk Organizations/);
+    ).rejects.toThrow(/roles_managed_in_clerk/);
     expect((await w.t.run((ctx) => ctx.db.get(w.patient)))?.role).toBe("user");
   });
 

@@ -18,10 +18,11 @@
  * resource of centre A by direct identifier (scope "foreign") or lists from
  * centre B; `completeness.test.ts` fails if an entry has none.
  *
- * Error codes: the code has NO stable numeric/string error codes. Training
- * functions throw `ConvexError(message)`; users/machines/sessions/ecg throw
- * `Error(message)`. Refusal cells therefore assert that the call is rejected
- * and, where the exact reason matters, match an English message substring.
+ * Error codes: users, machines and the role checks of `convex/lib/auth.ts`
+ * refuse with a stable code (`ConvexError(code)`, table in
+ * `convex/lib/errors.ts`); a refusal cell of theirs matches the code. Training
+ * functions still throw `ConvexError(message)` with an English sentence, and
+ * the sign-in checks a plain `Error`: their cells match a substring of it.
  *
  * The file name has two dots so the Convex bundler never deploys it.
  */
@@ -109,7 +110,7 @@ const empty: Expectation = { outcome: "empty" };
 const filtered: Expectation = { outcome: "filtered" };
 
 const NOT_AUTH = /Not authenticated/;
-const UNAUTHORIZED = /Unauthorized/;
+const UNAUTHORIZED = /not_authorized/;
 
 function userId(w: World, actor: Actor): Id<"users"> {
   const map: Partial<Record<Actor, Id<"users">>> = {
@@ -283,7 +284,7 @@ export const MATRIX: Entry[] = [
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       {
         actor: "admin",
-        expect: refuse(/Roles are managed in Clerk Organizations/),
+        expect: refuse(/roles_managed_in_clerk/),
         note: "roles are a read-only mirror of Clerk",
       },
       {
@@ -446,7 +447,7 @@ export const MATRIX: Entry[] = [
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to edit this patient/),
+        expect: refuse(/patient_not_managed/),
         note: "does not manage this patient",
       },
       { actor: "admin", expect: ok, note: "admin edits anyone" },
@@ -454,13 +455,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to edit this patient/),
+        expect: refuse(/patient_not_managed/),
         note: "a patient of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to edit this patient/),
+        expect: refuse(/patient_not_managed/),
         note: "a patient of another organisation, by identifier",
       },
     ],
@@ -525,14 +526,14 @@ export const MATRIX: Entry[] = [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
-        expect: refuse(/Not authorized to delete users/),
+        expect: refuse(/not_authorized/),
         note: "a user cannot delete anyone",
       },
       { actor: "manager", scope: "own", expect: ok, note: "deletes their own patient" },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to delete this user/),
+        expect: refuse(/user_not_managed/),
         note: "not this patient's manager",
       },
       { actor: "admin", scope: "other", expect: ok, note: "admin deletes a user" },
@@ -540,13 +541,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to delete this user/),
+        expect: refuse(/user_not_managed/),
         note: "a patient of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to delete this user/),
+        expect: refuse(/user_not_managed/),
         note: "a patient of another organisation, by identifier",
       },
     ],
@@ -645,7 +646,7 @@ export const MATRIX: Entry[] = [
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/can only assign themselves/),
+        expect: refuse(/gestionnaire_self_only/),
         note: "a gestionnaire cannot assign another gestionnaire",
       },
       { actor: "admin", expect: ok, note: "admin assigns" },
@@ -653,13 +654,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Can only assign gestionnaires to patients/),
+        expect: refuse(/not_a_patient/),
         note: "the patient is not one of their organisation",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Can only assign gestionnaires to patients/),
+        expect: refuse(/not_a_patient/),
         note: "the patient is not one of their organisation",
       },
     ],
@@ -697,7 +698,7 @@ export const MATRIX: Entry[] = [
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/can only remove themselves/),
+        expect: refuse(/gestionnaire_self_only/),
         note: "cannot remove another gestionnaire",
       },
       { actor: "admin", expect: ok, note: "admin removes" },
@@ -705,13 +706,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/is not assigned to this patient/),
+        expect: refuse(/gestionnaire_not_assigned/),
         note: "a link of another organisation does not exist for them",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/can only remove themselves/),
+        expect: refuse(/gestionnaire_self_only/),
         note: "cannot remove another gestionnaire, here of another organisation",
       },
     ],
@@ -805,7 +806,7 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Gestionnaire not found/),
+        expect: refuse(/gestionnaire_not_found/),
         note: "a gestionnaire of another organisation does not exist for them",
       },
       { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
@@ -910,7 +911,7 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Machine not found/),
+        expect: refuse(/machine_not_found/),
         note: "a machine of another organisation does not exist for them",
       },
       { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
@@ -965,7 +966,7 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Gestionnaire not found/),
+        expect: refuse(/gestionnaire_not_found/),
         note: "a gestionnaire of another organisation does not exist for them",
       },
       {
@@ -990,14 +991,14 @@ export const MATRIX: Entry[] = [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a user cannot manage a machine",
       },
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin regenerates" },
@@ -1005,13 +1006,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
     ],
@@ -1093,14 +1094,14 @@ export const MATRIX: Entry[] = [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a user cannot manage a machine",
       },
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin updates" },
@@ -1108,13 +1109,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
     ],
@@ -1132,14 +1133,14 @@ export const MATRIX: Entry[] = [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a user cannot manage a machine",
       },
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin deletes" },
@@ -1147,13 +1148,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
     ],
@@ -1251,7 +1252,7 @@ export const MATRIX: Entry[] = [
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin assigns" },
@@ -1259,13 +1260,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
     ],
@@ -1312,7 +1313,7 @@ export const MATRIX: Entry[] = [
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine (removing the owner)",
       },
       { actor: "admin", expect: ok, note: "admin removes" },
@@ -1320,13 +1321,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to manage this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
     ],
@@ -2085,10 +2086,10 @@ export const MATRIX: Entry[] = [
       {actor:"anonymous",expect:refuse(NOT_AUTH),note:"sign-in required"},
       {actor:"admin",expect:ok,note:"Anheart administrator"},
       {actor:"orgAdmin",scope:"own",expect:ok,note:"organisation administrator"},
-      {actor:"manager",scope:"own",expect:refuse(/Unauthorized/),note:"admin deletion only"},
-      {actor:"patient",scope:"own",expect:refuse(/Unauthorized/),note:"admin deletion only"},
+      {actor:"manager",scope:"own",expect:refuse(UNAUTHORIZED),note:"admin deletion only"},
+      {actor:"patient",scope:"own",expect:refuse(UNAUTHORIZED),note:"admin deletion only"},
       {actor:"orgBAdmin",scope:"foreign",expect:refuse(/Session not found/),note:"other organisation"},
-      {actor:"orgBManager",scope:"foreign",expect:refuse(/Unauthorized/),note:"other organisation"},
+      {actor:"orgBManager",scope:"foreign",expect:refuse(UNAUTHORIZED),note:"other organisation"},
     ],
     onSuccess: async (_res,w,_actor,_scope,args) => {
       if(typeof args.sessionId!=="string") throw Error("Missing session identifier");

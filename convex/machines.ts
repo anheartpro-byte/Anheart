@@ -4,8 +4,10 @@ import {
   mutation,
   internalQuery,
   internalMutation,
+  type MutationCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel";
 import { machineHealthValidator, HEARTBEAT_RETENTION_MS } from "./lib/machineHealth";
 import { recordMachineHealth } from "./machineHealth";
 import {
@@ -21,11 +23,68 @@ import {
   sameOrganization,
 } from "./lib/auth";
 import { generateApiKey } from "./lib/crypto";
+import { refusal } from "./lib/errors";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
 import { interruptSilentSessions, resumeNamedSession } from "./training";
 // One threshold for the server's job and for the dashboard, which reads the
 // age of `lastHeartbeat` on `serverNow` (hooks/use-freshness.ts).
 import { LIVE_FRESH_MS } from "../lib/training";
+
+/**
+ * Make `gestionnaireIds` the exact list of a machine's gestionnaires, writing
+ * only what differs from the rows already there.
+ *
+ * Only the gestionnaires of the machine's organisation are kept, each once, in
+ * the order given; the first of them owns the machine. A row that already
+ * links a kept gestionnaire stays the same row, with its author and its date
+ * (its `isOwner` follows the new first place). A row whose gestionnaire is not
+ * kept is deleted, and so is a second row for the same gestionnaire.
+ */
+async function writeMachineGestionnaires(
+  ctx: MutationCtx,
+  machine: Pick<Doc<"machines">, "_id" | "organizationId">,
+  gestionnaireIds: readonly Id<"users">[],
+  createdBy: Id<"users">,
+): Promise<void> {
+  const kept: Id<"users">[] = [];
+  for (const gestionnaireId of new Set(gestionnaireIds)) {
+    const role = await organizationRoleOf(
+      ctx,
+      gestionnaireId,
+      machine.organizationId,
+    );
+    if (role === "gestionnaire") kept.push(gestionnaireId);
+  }
+  const owner = kept[0];
+
+  const existing = await ctx.db
+    .query("machine_gestionnaires")
+    .withIndex("by_machine", (q) => q.eq("machineId", machine._id))
+    .collect();
+  const linked = new Set<Id<"users">>();
+  for (const row of existing) {
+    if (!kept.includes(row.gestionnaireId) || linked.has(row.gestionnaireId)) {
+      await ctx.db.delete(row._id);
+      continue;
+    }
+    linked.add(row.gestionnaireId);
+    const isOwner = row.gestionnaireId === owner;
+    if (row.isOwner !== isOwner) await ctx.db.patch(row._id, { isOwner });
+  }
+
+  const now = Date.now();
+  for (const gestionnaireId of kept) {
+    if (linked.has(gestionnaireId)) continue;
+    await ctx.db.insert("machine_gestionnaires", {
+      organizationId: machine.organizationId,
+      machineId: machine._id,
+      gestionnaireId,
+      isOwner: gestionnaireId === owner,
+      createdAt: now,
+      createdBy,
+    });
+  }
+}
 
 /**
  * Create a new machine (Raspberry Pi) - Anheart admin only
@@ -55,7 +114,7 @@ export const createMachine = mutation({
     // inactive and none of them could use it.
     const organization = await ctx.db.get(organizationId);
     if (!organization || organization.deletedAt !== undefined) {
-      throw new Error("Organization not found");
+      throw refusal("organization_not_found");
     }
 
     const { plain, hashed, selector } = await generateApiKey();
@@ -72,27 +131,13 @@ export const createMachine = mutation({
       createdAt: now,
     });
 
-    // Assign machine to gestionnaires
-    if (args.gestionnaireIds && args.gestionnaireIds.length > 0) {
-      for (let i = 0; i < args.gestionnaireIds.length; i++) {
-        const gestionnaireId = args.gestionnaireIds[i];
-        const role = await organizationRoleOf(
-          ctx,
-          gestionnaireId,
-          organizationId,
-        );
-        if (role === "gestionnaire") {
-          await ctx.db.insert("machine_gestionnaires", {
-            organizationId,
-            machineId,
-            gestionnaireId,
-            isOwner: i === 0, // First one is the primary owner
-            createdAt: now,
-            createdBy: currentUser._id,
-          });
-        }
-      }
-    }
+    // Assign machine to gestionnaires: the first one kept owns it.
+    await writeMachineGestionnaires(
+      ctx,
+      { _id: machineId, organizationId },
+      args.gestionnaireIds ?? [],
+      currentUser._id,
+    );
 
     // Return plain API key - this is the only time it's visible!
     return {
@@ -103,9 +148,11 @@ export const createMachine = mutation({
 });
 
 /**
- * Assign a machine to gestionnaires (Admin only: Anheart's, or the admin of
- * the machine's organisation). Only gestionnaires of the machine's
- * organisation are assigned.
+ * Set the exact list of a machine's gestionnaires (Admin only: Anheart's, or
+ * the admin of the machine's organisation). Only gestionnaires of the
+ * machine's organisation are assigned, each once even when sent twice; the
+ * first of them owns the machine. A gestionnaire who keeps the machine keeps
+ * their row as it is: only the difference is written.
  */
 export const assignMachineToGestionnaires = mutation({
   args: {
@@ -119,41 +166,15 @@ export const assignMachineToGestionnaires = mutation({
 
     const machine = await ctx.db.get(args.machineId);
     if (!machine || !inScope(currentUser, machine.organizationId)) {
-      throw new Error("Machine not found");
+      throw refusal("machine_not_found");
     }
 
-    const now = Date.now();
-
-    // Remove existing relations
-    const existingRelations = await ctx.db
-      .query("machine_gestionnaires")
-      .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
-      .collect();
-
-    for (const relation of existingRelations) {
-      await ctx.db.delete(relation._id);
-    }
-
-    // Add new relations
-    for (let i = 0; i < args.gestionnaireIds.length; i++) {
-      const gestionnaireId = args.gestionnaireIds[i];
-      const role = await organizationRoleOf(
-        ctx,
-        gestionnaireId,
-        machine.organizationId,
-      );
-      if (role === "gestionnaire") {
-        await ctx.db.insert("machine_gestionnaires", {
-          organizationId: machine.organizationId,
-          machineId: args.machineId,
-          gestionnaireId,
-          isOwner: i === 0,
-          createdAt: now,
-          createdBy: currentUser._id,
-        });
-      }
-    }
-
+    await writeMachineGestionnaires(
+      ctx,
+      machine,
+      args.gestionnaireIds,
+      currentUser._id,
+    );
     return null;
   },
 });
@@ -167,6 +188,10 @@ export const assignMachineToGestionnaires = mutation({
  * written: a machine added here keeps its other gestionnaires, and a machine
  * removed here stays managed by them. A link that already exists is left as it
  * is, with its `isOwner`. A new link is never an owner link.
+ *
+ * A deleted machine is outside the decision: its link is kept whether or not
+ * it is named (the dashboard lists no deleted machine, and a restored machine
+ * gets its gestionnaires back), and a deleted machine is never linked.
  */
 export const setGestionnaireMachines = mutation({
   args: {
@@ -186,7 +211,7 @@ export const setGestionnaireMachines = mutation({
 
     // Only the links of the organisation the decision applies to: what this
     // gestionnaire manages in another organisation is not read nor written.
-    const existingRelations = (
+    const relations = (
       await ctx.db
         .query("machine_gestionnaires")
         .withIndex("by_gestionnaire", (q) =>
@@ -194,20 +219,31 @@ export const setGestionnaireMachines = mutation({
         )
         .collect()
     ).filter((r) => r.organizationId === organizationId);
+    // Among them, those the decision may remove: not a link to a deleted
+    // machine (nor to a machine gone from the table).
+    const removable: typeof relations = [];
+    for (const relation of relations) {
+      const machine = await ctx.db.get(relation.machineId);
+      if (machine && !machine.isDeleted) removable.push(relation);
+    }
 
     const wanted = new Set(args.machineIds);
-    const linked = new Set(existingRelations.map((r) => r.machineId));
+    const linked = new Set(relations.map((r) => r.machineId));
 
     const toAdd = [...wanted].filter((machineId) => !linked.has(machineId));
-    const toRemove = existingRelations.filter((r) => !wanted.has(r.machineId));
+    const toRemove = removable.filter((r) => !wanted.has(r.machineId));
 
-    // Every machine to link must exist, in that organisation, before anything
-    // is written. A machine of another organisation is a machine that does
-    // not exist.
+    // Every machine to link must exist, in that organisation, and not be
+    // deleted, before anything is written. A machine of another organisation
+    // is a machine that does not exist.
     for (const machineId of toAdd) {
       const machine = await ctx.db.get(machineId);
-      if (!machine || machine.organizationId !== organizationId) {
-        throw new Error("Machine not found");
+      if (
+        !machine ||
+        machine.isDeleted ||
+        machine.organizationId !== organizationId
+      ) {
+        throw refusal("machine_not_found");
       }
     }
 
@@ -250,12 +286,12 @@ export const regenerateApiKey = mutation({
     const currentUser = await getCurrentUserOrThrow(ctx);
     const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
-      throw new Error("Not authorized to manage this machine");
+      throw refusal("machine_not_managed");
     }
 
     const machine = await ctx.db.get(args.machineId);
     if (!machine) {
-      throw new Error("Machine not found");
+      throw refusal("machine_not_found");
     }
 
     // Generate new API key
@@ -349,10 +385,13 @@ export const getMachine = query({
       }),
     );
 
-    // Return without API key
-    const validGestionnaires = gestionnaires.filter(
-      (g): g is NonNullable<typeof g> => g !== null,
-    );
+    // Return without API key. The owner comes first: the machine form sends
+    // the list back in this order, and the server makes its first one the
+    // owner (`assignMachineToGestionnaires` keeps rows, so their order alone
+    // no longer says who owns the machine).
+    const validGestionnaires = gestionnaires
+      .filter((g): g is NonNullable<typeof g> => g !== null)
+      .sort((a, b) => Number(b.isOwner) - Number(a.isOwner));
 
     return {
       _id: machine._id,
@@ -476,12 +515,12 @@ export const updateMachine = mutation({
     const currentUser = await getCurrentUserOrThrow(ctx);
     const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
-      throw new Error("Not authorized to manage this machine");
+      throw refusal("machine_not_managed");
     }
 
     const machine = await ctx.db.get(args.machineId);
     if (!machine) {
-      throw new Error("Machine not found");
+      throw refusal("machine_not_found");
     }
 
     const updates: Record<string, unknown> = {};
@@ -509,17 +548,17 @@ export const deleteMachine = mutation({
     const currentUser = await getCurrentUserOrThrow(ctx);
     const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
-      throw new Error("Not authorized to manage this machine");
+      throw refusal("machine_not_managed");
     }
 
     const machine = await ctx.db.get(args.machineId);
     if (!machine) {
-      throw new Error("Machine not found");
+      throw refusal("machine_not_found");
     }
 
     // Check for active sessions
     if (machine.status === "in_session") {
-      throw new Error("Cannot delete machine with active session");
+      throw refusal("machine_in_session");
     }
 
     // Check for any pending sessions
@@ -531,7 +570,7 @@ export const deleteMachine = mutation({
       .first();
 
     if (pendingSessions) {
-      throw new Error("Cannot delete machine with pending sessions");
+      throw refusal("machine_has_pending_session");
     }
 
     // Soft delete - mark as deleted instead of actually deleting
@@ -560,11 +599,11 @@ export const restoreMachine = mutation({
 
     const machine = await ctx.db.get(args.machineId);
     if (!machine) {
-      throw new Error("Machine not found");
+      throw refusal("machine_not_found");
     }
 
     if (!machine.isDeleted) {
-      throw new Error("Machine is not deleted");
+      throw refusal("machine_not_deleted");
     }
 
     // Restore the machine
@@ -620,6 +659,8 @@ export const recordHeartbeat = internalMutation({
     const machine = await ctx.db.get(args.machineId);
 
     if (!machine) {
+      // Read by the heartbeat route, which answers the machine with its own
+      // codes (`refusalOf`, convex/lib/contract.ts): not a dashboard refusal.
       throw new Error("Machine not found");
     }
 
@@ -785,13 +826,13 @@ export const assignGestionnaireToMachine = mutation({
 
     // Check permissions - the machine is one the caller manages
     if (!(await canManageMachine(ctx, args.machineId, currentUser))) {
-      throw new Error("Not authorized to manage this machine");
+      throw refusal("machine_not_managed");
     }
 
     // Verify machine exists
     const machine = await ctx.db.get(args.machineId);
     if (!machine) {
-      throw new Error("Machine not found");
+      throw refusal("machine_not_found");
     }
 
     // Verify gestionnaire has the correct role in the machine's organisation
@@ -801,7 +842,7 @@ export const assignGestionnaireToMachine = mutation({
       machine.organizationId,
     );
     if (role !== "gestionnaire") {
-      throw new Error("Target user is not a gestionnaire");
+      throw refusal("not_a_gestionnaire");
     }
 
     // Check if relation already exists
@@ -815,7 +856,7 @@ export const assignGestionnaireToMachine = mutation({
       .unique();
 
     if (existingRelation) {
-      throw new Error("Gestionnaire already assigned to this machine");
+      throw refusal("gestionnaire_already_assigned");
     }
 
     // Create relation
@@ -847,7 +888,7 @@ export const removeGestionnaireFromMachine = mutation({
 
     // Check permissions
     if (!(await canManageMachine(ctx, args.machineId, currentUser))) {
-      throw new Error("Not authorized to manage this machine");
+      throw refusal("machine_not_managed");
     }
     if (currentUser.role === "gestionnaire") {
       // Gestionnaire cannot remove themselves if they are the only one
@@ -857,9 +898,7 @@ export const removeGestionnaireFromMachine = mutation({
           .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
           .collect();
         if (allRelations.length <= 1) {
-          throw new Error(
-            "Cannot remove yourself as the only gestionnaire. Delete the machine instead.",
-          );
+          throw refusal("last_gestionnaire");
         }
       }
     }
@@ -875,7 +914,7 @@ export const removeGestionnaireFromMachine = mutation({
       .unique();
 
     if (!relation) {
-      throw new Error("Gestionnaire is not assigned to this machine");
+      throw refusal("gestionnaire_not_assigned");
     }
 
     await ctx.db.delete(relation._id);
@@ -931,7 +970,7 @@ export const getGestionnairesForMachine = query({
 });
 
 /**
- * Get all machines for a gestionnaire
+ * Get all machines for a gestionnaire, deleted machines left out
  */
 export const getMachinesForGestionnaire = query({
   args: {
@@ -981,8 +1020,11 @@ export const getMachinesForGestionnaire = query({
     const machines = await Promise.all(
       relations.map(async (r) => {
         const m = await ctx.db.get(r.machineId);
-        // Only the machines of an organisation the caller may see
-        if (!m || !inScope(currentUser, m.organizationId)) return null;
+        // Only the machines of an organisation the caller may see, and never
+        // a deleted one: its link is kept for a restore, not shown.
+        if (!m || m.isDeleted || !inScope(currentUser, m.organizationId)) {
+          return null;
+        }
         return {
           _id: m._id,
           name: m.name,

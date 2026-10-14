@@ -19,7 +19,7 @@ import {
   renderPage,
   routeParams,
   router,
-  serverFailures,
+  codedFailures,
   signedInAs,
   takeLoggedFailures,
   wasMounted,
@@ -368,7 +368,7 @@ describe("patient page: editing and deleting the account", () => {
   });
 
   it.each(
-    serverFailures(api.users.deleteUser, "Not authorized to delete this user"),
+    codedFailures(api.users.deleteUser, "user_not_managed"),
   )(
     "stays on the page, on its question, and shows the failure when the deletion fails $where",
     async ({ error, shown }) => {

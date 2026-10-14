@@ -5,7 +5,28 @@
     "invitation_unavailable": "Cette invitation ne peut pas être créée. Vérifiez vos droits et les membres de votre organisation.",
     "profile_reconciliation_required": "Le rattachement du profil nécessite une vérification par un administrateur.",
     "profile_pending": "Le profil attend la confirmation de Clerk. Réessayez dans quelques instants.",
-    "rate_limited": "Trop de demandes en peu de temps. Patientez un instant, puis réessayez."
+    "rate_limited": "Trop de demandes en peu de temps. Patientez un instant, puis réessayez.",
+    "not_authorized": "Votre rôle ne permet pas cette action.",
+    "roles_managed_in_clerk": "Les rôles se changent dans Clerk Organizations, plus sur ce site.",
+    "shared_profile_admin_only": "Ce profil appartient à plusieurs organisations : seul un administrateur Anheart peut le modifier.",
+    "organization_not_found": "Organisation introuvable.",
+    "user_not_found": "Compte introuvable. Il a peut-être été supprimé.",
+    "user_not_managed": "Vous ne gérez pas ce compte.",
+    "patient_not_managed": "Vous ne gérez pas ce patient.",
+    "cannot_delete_self": "Vous ne pouvez pas supprimer votre propre compte.",
+    "only_patients_deletable": "Un gestionnaire ne peut supprimer que des comptes patients.",
+    "not_a_patient": "Ce compte n'est pas patient dans cette organisation.",
+    "gestionnaire_not_found": "Gestionnaire introuvable.",
+    "not_a_gestionnaire": "Ce compte n'est pas gestionnaire dans cette organisation.",
+    "gestionnaire_self_only": "Un gestionnaire ne peut ajouter ou retirer que lui-même.",
+    "gestionnaire_already_assigned": "Ce gestionnaire est déjà assigné.",
+    "gestionnaire_not_assigned": "Ce gestionnaire n'est pas assigné.",
+    "machine_not_found": "Machine introuvable. Elle a peut-être été supprimée.",
+    "machine_not_managed": "Vous ne gérez pas cette machine.",
+    "machine_in_session": "La machine est en séance : elle ne peut pas être supprimée maintenant.",
+    "machine_has_pending_session": "Une séance attend son départ sur cette machine : annulez-la avant de supprimer la machine.",
+    "machine_not_deleted": "Cette machine n'est pas supprimée : il n'y a rien à restaurer.",
+    "last_gestionnaire": "Vous êtes le seul gestionnaire de cette machine : supprimez-la plutôt que de vous en retirer."
   },
   "sessionRecord": {
     "next": "Page suivante",
@@ -123,7 +144,8 @@
     "launchRightRevoked": "Droit de lancement retiré.",
     "physiologySaved": "Physiologie enregistrée.",
     "sessionLaunched": "Séance créée. Elle attend que la machine l'arme.",
-    "stopRequestSent": "Demande envoyée. L'état de la séance s'affiche sur cette page."
+    "stopRequestSent": "Demande envoyée. L'état de la séance s'affiche sur cette page.",
+    "done": "Action effectuée."
   },
   "nav": {
     "dashboard": "Tableau de bord",
@@ -193,7 +215,8 @@
     "saveChanges": "Enregistrer les modifications",
     "saved": "Paramètres enregistrés avec succès",
     "rolesInClerk": "Les rôles se gèrent dans l'organisation, depuis la page Membres.",
-    "openMembers": "Ouvrir la page Membres"
+    "openMembers": "Ouvrir la page Membres",
+    "applicationName": "Tableau de bord Gaura"
   },
   "home": {
     "badge": "La gravité pour une vie meilleure",
@@ -400,11 +423,12 @@
       "organization": "Organisation",
       "organizationDescription": "La machine appartient à cette organisation ; seuls ses gestionnaires peuvent lui être assignés.",
       "organizationPlaceholder": "Choisir une organisation...",
-      "noOrganization": "Cette machine n'appartient encore à aucune organisation : elle garde ses gestionnaires actuels, qui pourront être changés ici une fois la migration multi-organisation passée."
+      "noOrganization": "Cette machine n'appartient encore à aucune organisation : elle garde ses gestionnaires actuels, qui pourront être changés ici une fois la migration multi-organisation passée.",
+      "partiallySaved": "Le nom et le lieu sont enregistrés, mais pas la liste des gestionnaires : {reason}"
     }
   },
   "sessions": {
-    "title": "Sessions ECG",
+    "title": "Sessions",
     "active": "Actives",
     "interrupted": "Interrompues",
     "completed": "Terminées",
@@ -459,8 +483,8 @@
     "title": "Gestion des Gestionnaires",
     "total": "gestionnaires",
     "noGestionnaires": "Aucun gestionnaire trouvé",
-    "machinesAssigned": "machines assignées",
-    "patientsAssigned": "patients assignés",
+    "machinesAssigned": "{count, plural, =0 {Aucune machine assignée} one {# machine assignée} other {# machines assignées}}",
+    "patientsAssigned": "{count, plural, =0 {Aucun patient assigné} one {# patient assigné} other {# patients assignés}}",
     "noMachinesAssigned": "Aucune machine assignée",
     "noPatientsAssigned": "Aucun patient assigné",
     "assignMachines": "Assigner des Machines",
@@ -742,7 +766,6 @@
       "estimated": "estimée (208 − 0,7 × âge)",
       "notSet": "Non renseignée",
       "hint": "Une FC max mesurée prime sur l'estimation par l'âge. Laisser vide pour effacer.",
-      "saved": "Enregistré",
       "invalidHrMax": "La FC max doit être comprise entre 100 et 220 bpm",
       "invalidBirthYear": "Année de naissance invalide"
     }

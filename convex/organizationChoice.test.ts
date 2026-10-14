@@ -160,7 +160,7 @@ describe("the organisations a machine can be created in", () => {
         name: "Centri Lyon",
         organizationId: w.orgB,
       }),
-    ).rejects.toThrow("Organization not found");
+    ).rejects.toThrow("organization_not_found");
     const inB = await w.t.run((ctx) =>
       ctx.db
         .query("machines")

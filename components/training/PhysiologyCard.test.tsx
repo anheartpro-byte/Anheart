@@ -196,11 +196,13 @@ describe("ANH-203 physiology card: what it sends", () => {
 
     // The birth year, untouched, is not in the call: it cannot be overwritten.
     expect(mutationCalls()).toEqual({ [save]: [[{ userId, hrMax: 190 }]] });
+    // ANH-194: the success is said once, by the notification; the button
+    // goes back to "save", disabled until a field changes again.
     expect(shown()).toEqual([
       { kind: "success", message: fr.feedback.physiologySaved },
     ]);
-    expect(screen.hasButton(t.saved)).toBe(true);
-    expect(screen.button(t.saved).hasAttribute("disabled")).toBe(true);
+    expect(screen.text()).not.toContain(fr.feedback.physiologySaved);
+    expect(screen.button(fr.common.save).hasAttribute("disabled")).toBe(true);
   });
 
   it("sends null for a field the manager emptied, to erase it", async () => {
@@ -217,15 +219,14 @@ describe("ANH-203 physiology card: what it sends", () => {
     });
   });
 
-  it('goes back to "save" as soon as a field changes after a save', async () => {
+  it("can be saved again as soon as a field changes after a save", async () => {
     const screen = render(<PhysiologyCard userId={userId} user={{}} />);
     await type(screen.field("phys-birthyear"), "1986");
     await submit(screen.form());
-    expect(screen.hasButton(t.saved)).toBe(true);
+    expect(screen.button(fr.common.save).hasAttribute("disabled")).toBe(true);
 
     await type(screen.field("phys-birthyear"), "1987");
 
-    expect(screen.hasButton(t.saved)).toBe(false);
     expect(screen.button(fr.common.save).hasAttribute("disabled")).toBe(false);
   });
 
@@ -239,7 +240,6 @@ describe("ANH-203 physiology card: what it sends", () => {
 
     expect(screen.text()).toContain("offline");
     expect(shown()).toEqual([{ kind: "error", message: "offline" }]);
-    expect(screen.hasButton(t.saved)).toBe(false);
     // Still dirty: the manager can try again without typing again.
     expect(screen.button(fr.common.save).hasAttribute("disabled")).toBe(false);
     logged.mockRestore();

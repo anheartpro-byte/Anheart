@@ -18,6 +18,7 @@ import type * as lib_auth from "../lib/auth.js";
 import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
 import type * as lib_contract from "../lib/contract.js";
 import type * as lib_crypto from "../lib/crypto.js";
+import type * as lib_errors from "../lib/errors.js";
 import type * as lib_machineAuth from "../lib/machineAuth.js";
 import type * as lib_machineHealth from "../lib/machineHealth.js";
 import type * as lib_machineHttpAuth from "../lib/machineHttpAuth.js";
@@ -58,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   "lib/clerkWebhook": typeof lib_clerkWebhook;
   "lib/contract": typeof lib_contract;
   "lib/crypto": typeof lib_crypto;
+  "lib/errors": typeof lib_errors;
   "lib/machineAuth": typeof lib_machineAuth;
   "lib/machineHealth": typeof lib_machineHealth;
   "lib/machineHttpAuth": typeof lib_machineHttpAuth;

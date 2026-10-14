@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, use, useEffect } from "react";
+import { useState, use } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { isOrganizationAdmin } from "@/lib/organizationAccess";
@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import { Shield, Users, Cpu, Pencil, ArrowLeft, Loader2 } from "lucide-react";
 import { MachineStatusBadge } from "@/components/machines/MachineSignal";
-import { machineIdsToSave } from "@/lib/gestionnaireMachines";
+import { machineIdsToSave, tickedBoxes } from "@/lib/gestionnaireMachines";
 import { patientIdsToSave } from "@/lib/gestionnairePatients";
 
 export default function GestionnaireDetailPage({
@@ -64,30 +64,22 @@ export default function GestionnaireDetailPage({
 
   const [showMachineDialog, setShowMachineDialog] = useState(false);
   const [showPatientDialog, setShowPatientDialog] = useState(false);
-  const [selectedMachines, setSelectedMachines] = useState<Id<"machines">[]>(
-    [],
-  );
-  const [selectedPatients, setSelectedPatients] = useState<Id<"users">[]>([]);
+  // What the visitor clicked in each window since it opened, box by box. A
+  // box clicked keeps that choice until the window is opened again; the
+  // others show the server as it is now (`tickedBoxes`). A new answer of the
+  // server while a window is open (a heartbeat of one of the machines is
+  // enough) never undoes an edit in progress.
+  const [machineChoices, setMachineChoices] = useState<
+    ReadonlyMap<Id<"machines">, boolean>
+  >(new Map());
+  const [patientChoices, setPatientChoices] = useState<
+    ReadonlyMap<Id<"users">, boolean>
+  >(new Map());
   const [saving, setSaving] = useState(false);
   const [machinesError, setMachinesError] = useState<string | null>(null);
-  const [machinesSaved, setMachinesSaved] = useState<string | null>(null);
   const [patientsError, setPatientsError] = useState<string | null>(null);
-  const [patientsSaved, setPatientsSaved] = useState<string | null>(null);
 
   const gestionnaire = gestionnaires?.find((g) => g._id === gestionnaireId);
-
-  // Initialize selections when data loads
-  useEffect(() => {
-    if (gestionnaireMachines) {
-      setSelectedMachines(gestionnaireMachines.map((m) => m._id));
-    }
-  }, [gestionnaireMachines]);
-
-  useEffect(() => {
-    if (gestionnairePatients) {
-      setSelectedPatients(gestionnairePatients.map((p) => p._id));
-    }
-  }, [gestionnairePatients]);
 
   // The account and the lists are still loading.
   if (
@@ -123,16 +115,22 @@ export default function GestionnaireDetailPage({
     );
   }
 
-  // The machines the window shows a box for.
+  // The machines the window shows a box for, and those ticked.
   const listedMachines = allMachines.filter((m) => !m.isDeleted);
+  const tickedMachines = new Set(
+    tickedBoxes({
+      listed: listedMachines.map((m) => m._id),
+      linked: (gestionnaireMachines ?? []).map((m) => m._id),
+      choices: machineChoices,
+    }),
+  );
 
   const openMachineDialog = () => {
     // The window always opens on the gestionnaire's current machines, never on
     // boxes left from a cancelled edit.
     if (!gestionnaireMachines) return;
-    setSelectedMachines(gestionnaireMachines.map((m) => m._id));
+    setMachineChoices(new Map());
     setMachinesError(null);
-    setMachinesSaved(null);
     setShowMachineDialog(true);
   };
 
@@ -147,7 +145,7 @@ export default function GestionnaireDetailPage({
         {
           gestionnaireId,
           machineIds: machineIdsToSave({
-            checked: selectedMachines,
+            checked: [...tickedMachines],
             listed: listedMachines.map((m) => m._id),
             linked: gestionnaireMachines.map((m) => m._id),
           }),
@@ -158,8 +156,8 @@ export default function GestionnaireDetailPage({
         setMachinesError(result.message);
         return;
       }
+      // The counts are said once, by the notification.
       setShowMachineDialog(false);
-      setMachinesSaved(t("gestionnaires.machinesSaved", result.value));
     } finally {
       setSaving(false);
     }
@@ -170,14 +168,20 @@ export default function GestionnaireDetailPage({
   // boxes. Until both are known it is neither opened nor saved.
   const patientsLoaded =
     gestionnairePatients !== undefined && allPatients !== undefined;
+  const tickedPatients = new Set(
+    tickedBoxes({
+      listed: (allPatients ?? []).map((p) => p._id),
+      linked: (gestionnairePatients ?? []).map((p) => p._id),
+      choices: patientChoices,
+    }),
+  );
 
   const openPatientDialog = () => {
     // The window always opens on the gestionnaire's current patients, never on
     // boxes left from a cancelled edit.
     if (!gestionnairePatients || !allPatients) return;
-    setSelectedPatients(gestionnairePatients.map((p) => p._id));
+    setPatientChoices(new Map());
     setPatientsError(null);
-    setPatientsSaved(null);
     setShowPatientDialog(true);
   };
 
@@ -192,7 +196,7 @@ export default function GestionnaireDetailPage({
         {
           gestionnaireId,
           patientIds: patientIdsToSave({
-            checked: selectedPatients,
+            checked: [...tickedPatients],
             listed: allPatients.map((p) => p._id),
             linked: gestionnairePatients.map((p) => p._id),
           }),
@@ -203,8 +207,8 @@ export default function GestionnaireDetailPage({
         setPatientsError(result.message);
         return;
       }
+      // The counts are said once, by the notification.
       setShowPatientDialog(false);
-      setPatientsSaved(t("gestionnaires.patientsSaved", result.value));
     } finally {
       setSaving(false);
     }
@@ -242,8 +246,9 @@ export default function GestionnaireDetailPage({
                   {t("nav.machines")}
                 </CardTitle>
                 <CardDescription>
-                  {gestionnaire.machineCount}{" "}
-                  {t("gestionnaires.machinesAssigned")}
+                  {t("gestionnaires.machinesAssigned", {
+                    count: gestionnaire.machineCount,
+                  })}
                 </CardDescription>
               </div>
               <Button
@@ -258,15 +263,17 @@ export default function GestionnaireDetailPage({
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {machinesSaved && (
-              <div
-                role="status"
-                className="rounded-md border border-green-500/50 bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-200"
-              >
-                {machinesSaved}
-              </div>
+            {gestionnaireMachines === undefined && (
+              <p className="text-muted-foreground text-sm">
+                {t("common.loading")}
+              </p>
             )}
-            {gestionnaireMachines && gestionnaireMachines.length > 0 ? (
+            {gestionnaireMachines?.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                {t("gestionnaires.noMachinesAssigned")}
+              </p>
+            )}
+            {gestionnaireMachines && gestionnaireMachines.length > 0 && (
               <div className="space-y-2">
                 {gestionnaireMachines.map((m) => (
                   <div
@@ -278,10 +285,6 @@ export default function GestionnaireDetailPage({
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">
-                {t("gestionnaires.noMachinesAssigned")}
-              </p>
             )}
           </CardContent>
         </Card>
@@ -296,8 +299,9 @@ export default function GestionnaireDetailPage({
                   {t("nav.patients")}
                 </CardTitle>
                 <CardDescription>
-                  {gestionnaire.patientCount}{" "}
-                  {t("gestionnaires.patientsAssigned")}
+                  {t("gestionnaires.patientsAssigned", {
+                    count: gestionnaire.patientCount,
+                  })}
                 </CardDescription>
               </div>
               <Button
@@ -312,14 +316,6 @@ export default function GestionnaireDetailPage({
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {patientsSaved && (
-              <div
-                role="status"
-                className="rounded-md border border-green-500/50 bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-200"
-              >
-                {patientsSaved}
-              </div>
-            )}
             {gestionnairePatients === undefined && (
               <p className="text-muted-foreground text-sm">
                 {t("common.loading")}
@@ -373,16 +369,12 @@ export default function GestionnaireDetailPage({
               <div key={machine._id} className="flex items-center space-x-2">
                 <Checkbox
                   id={`machine-${machine._id}`}
-                  checked={selectedMachines.includes(machine._id)}
-                  onCheckedChange={(checked) => {
-                    if (checked) {
-                      setSelectedMachines([...selectedMachines, machine._id]);
-                    } else {
-                      setSelectedMachines(
-                        selectedMachines.filter((id) => id !== machine._id),
-                      );
-                    }
-                  }}
+                  checked={tickedMachines.has(machine._id)}
+                  onCheckedChange={(checked) =>
+                    setMachineChoices((choices) =>
+                      new Map(choices).set(machine._id, checked === true),
+                    )
+                  }
                 />
                 <label
                   htmlFor={`machine-${machine._id}`}
@@ -447,16 +439,12 @@ export default function GestionnaireDetailPage({
                 <div key={patient._id} className="flex items-center space-x-2">
                   <Checkbox
                     id={`patient-${patient._id}`}
-                    checked={selectedPatients.includes(patient._id)}
-                    onCheckedChange={(checked) => {
-                      if (checked) {
-                        setSelectedPatients([...selectedPatients, patient._id]);
-                      } else {
-                        setSelectedPatients(
-                          selectedPatients.filter((id) => id !== patient._id),
-                        );
-                      }
-                    }}
+                    checked={tickedPatients.has(patient._id)}
+                    onCheckedChange={(checked) =>
+                      setPatientChoices((choices) =>
+                        new Map(choices).set(patient._id, checked === true),
+                      )
+                    }
                   />
                   <label
                     htmlFor={`patient-${patient._id}`}

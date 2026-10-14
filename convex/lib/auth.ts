@@ -18,6 +18,7 @@ import { ConvexError } from "convex/values";
 import type { UserIdentity } from "convex/server";
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
+import { refusal } from "./errors";
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -331,9 +332,7 @@ export async function requireRole(ctx: Ctx, allowedRoles: Role[]) {
   const user = await getCurrentUserOrThrow(ctx);
 
   if (!allowedRoles.includes(user.role)) {
-    throw new Error(
-      `Unauthorized. Required roles: ${allowedRoles.join(", ")}. Your role: ${user.role}`,
-    );
+    throw refusal("not_authorized");
   }
 
   return user;
@@ -467,10 +466,7 @@ export async function requireSharedProfileAuthority(
   const organizations = new Set(
     memberships.filter((row) => row.active).map((row) => row.organizationId),
   );
-  if (organizations.size > 1)
-    throw new ConvexError(
-      "Shared profile changes require an Anheart administrator",
-    );
+  if (organizations.size > 1) throw refusal("shared_profile_admin_only");
 }
 
 /**
@@ -561,10 +557,10 @@ export async function requireGestionnaireAdmin(
   // The role held in that organisation, never the stored mirror.
   const role = await organizationRoleOf(ctx, gestionnaireId, organizationId);
   if (!gestionnaire || (currentUser.role !== "admin" && role === null)) {
-    throw new Error("Gestionnaire not found");
+    throw refusal("gestionnaire_not_found");
   }
   if (organizationId === undefined || role !== "gestionnaire") {
-    throw new Error("Target user is not a gestionnaire");
+    throw refusal("not_a_gestionnaire");
   }
 
   return { currentUser, gestionnaire, organizationId };
