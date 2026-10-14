@@ -57,9 +57,8 @@ export const prepare = internalMutation({
     const matches = (await ctx.db.query("users").collect()).filter(
       (user) => normalizedEmail(user.email) === email,
     );
-    if (matches.length > 1)
-      throw new ConvexError("profile_reconciliation_required");
-    const held = matches[0];
+    const ambiguous = matches.length > 1;
+    const held = ambiguous ? undefined : matches[0];
     if (
       held &&
       (await organizationRoleOf(ctx, held._id, me.organizationId)) !== null &&
@@ -72,19 +71,20 @@ export const prepare = internalMutation({
     )
       throw new ConvexError("invitation_unavailable");
     const now = Date.now();
-    const userId =
-      held?._id ??
-      (await ctx.db.insert("users", {
-        clerkId: "",
-        organizationId: me.organizationId,
-        role: "user",
-        firstName,
-        lastName,
-        email,
-        language: args.language ?? "fr",
-        createdAt: now,
-      }));
-    if (!held)
+    const userId = ambiguous
+      ? undefined
+      : (held?._id ??
+        (await ctx.db.insert("users", {
+          clerkId: "",
+          organizationId: me.organizationId,
+          role: "user",
+          firstName,
+          lastName,
+          email,
+          language: args.language ?? "fr",
+          createdAt: now,
+        })));
+    if (!held && userId)
       await ctx.db.insert("memberships", {
         userId,
         organizationId: me.organizationId,

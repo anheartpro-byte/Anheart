@@ -351,7 +351,7 @@ export const MATRIX: Entry[] = [
       const invitation = await w.t.run((ctx) =>
         ctx.db.get(result.invitationId),
       );
-      if (!invitation || invitation.status !== "sent")
+      if (!invitation?.userId || invitation.status !== "sent")
         throw new Error("Invitation was not sent");
       const created = invitation.userId;
       const { row, memberships } = await w.t.run(async (ctx) => ({

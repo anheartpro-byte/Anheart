@@ -20,6 +20,61 @@ afterEach(() => {
 });
 
 describe("patient invitations", () => {
+  it("does not reveal ambiguous foreign email matches and resolves only the verified Clerk account", async () => {
+    const w = await seedWorld(modules);
+    const original = await w.t.run((ctx) => ctx.db.get(w.orgBPatient));
+    if (!original) throw new Error("Missing patient");
+    const duplicateId = await w.t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "legacy_foreign_duplicate",
+        email: original.email,
+        firstName: "Private",
+        lastName: "Legacy",
+        organizationId: w.orgB,
+        role: "user",
+        language: "fr",
+        createdAt: NOW,
+      }),
+    );
+    const before = await w.t.run((ctx) => ctx.db.query("users").collect());
+    const sent = await as(w.t, "manager").action(api.users.createPatient, {
+      ...input,
+      email: original.email,
+    });
+    expect(sent).toEqual({
+      invitationId: expect.any(String),
+      email: original.email.toLowerCase(),
+      status: "sent",
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(
+      (await w.t.run((ctx) => ctx.db.get(sent.invitationId)))?.userId,
+    ).toBeUndefined();
+    expect(await w.t.run((ctx) => ctx.db.query("users").collect())).toEqual(
+      before,
+    );
+    expect(
+      await as(w.t, "manager").query(api.users.getUserById, {
+        userId: original._id,
+      }),
+    ).toBeNull();
+    await expect(
+      acceptPatientInvitation(w, sent.invitationId, "unknown_clerk_account"),
+    ).rejects.toThrow("profile_reconciliation_required");
+    expect(await w.t.run((ctx) => ctx.db.query("users").collect())).toEqual(
+      before,
+    );
+    expect(
+      await acceptPatientInvitation(w, sent.invitationId, original.clerkId),
+    ).toBe(original._id);
+    expect(await w.t.run((ctx) => ctx.db.get(original._id))).toEqual(original);
+    expect((await w.t.run((ctx) => ctx.db.get(duplicateId)))?.clerkId).toBe(
+      "legacy_foreign_duplicate",
+    );
+    expect(
+      await w.t.run((ctx) => ctx.db.query("users").collect()),
+    ).toHaveLength(before.length);
+  });
   it("reuses a foreign account without disclosing it or changing its profile before acceptance", async () => {
     const w = await seedWorld(modules);
     const original = await w.t.run((ctx) => ctx.db.get(w.orgBPatient));
@@ -74,7 +129,7 @@ describe("patient invitations", () => {
       }),
     );
     const invitation = await w.t.run((ctx) => ctx.db.get(sent.invitationId));
-    if (!invitation) throw new Error("Missing invitation");
+    if (!invitation?.userId) throw new Error("Missing prepared profile");
     expect(
       await manager.query(api.users.getUserById, { userId: invitation.userId }),
     ).toBeNull();

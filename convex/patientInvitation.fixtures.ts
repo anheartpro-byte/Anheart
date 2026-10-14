@@ -28,10 +28,12 @@ export function mockClerkInvitations() {
 export async function acceptPatientInvitation(
   w: World,
   invitationId: Id<"patient_invitations">,
+  clerkId?: string,
 ) {
   const invitation = await w.t.run((ctx) => ctx.db.get(invitationId));
   if (!invitation) throw new Error("Missing invitation");
-  const user = await w.t.run((ctx) => ctx.db.get(invitation.userId));
+  const userId = invitation.userId;
+  const user = userId ? await w.t.run((ctx) => ctx.db.get(userId)) : null;
   const organization = await w.t.run((ctx) =>
     ctx.db.get(invitation.organizationId),
   );
@@ -51,7 +53,7 @@ export async function acceptPatientInvitation(
         updatedAt: NOW,
       },
       membershipId: `orgmem_${invitationId}`,
-      userId: user?.clerkId || `user_${invitationId}`,
+      userId: clerkId ?? (user?.clerkId || `user_${invitationId}`),
       firstName: "Clerk",
       lastName: "Patient",
       email: invitation.email,
@@ -59,5 +61,7 @@ export async function acceptPatientInvitation(
       role: "user",
     },
   });
-  return invitation.userId;
+  const accepted = await w.t.run((ctx) => ctx.db.get(invitationId));
+  if (!accepted?.userId) throw new Error("Missing accepted profile");
+  return accepted.userId;
 }

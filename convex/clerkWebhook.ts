@@ -163,12 +163,21 @@ export const applyEvent = internalMutation({
         }
         if (
           invitationsForUser.some(
-            (invitation) => user && invitation.userId !== user._id,
+            (invitation) =>
+              user &&
+              invitation.userId !== undefined &&
+              invitation.userId !== user._id,
           )
         )
           throw new ConvexError("profile_reconciliation_required");
       }
       if (!user) {
+        if (
+          invitationsForUser.some(
+            (invitation) => invitation.userId === undefined,
+          )
+        )
+          throw new ConvexError("profile_reconciliation_required");
         const id = await ctx.db.insert("users", {
           clerkId: event.userId,
           firstName: event.firstName,
@@ -186,7 +195,10 @@ export const applyEvent = internalMutation({
       if (!user) throw new Error("User insert did not persist");
       if (
         !event.deleted &&
-        invitationsForUser.some((invitation) => invitation.userId !== user._id)
+        invitationsForUser.some(
+          (invitation) =>
+            invitation.userId !== undefined && invitation.userId !== user._id,
+        )
       )
         throw new ConvexError("profile_reconciliation_required");
       const row = await ctx.db
@@ -229,11 +241,13 @@ export const applyEvent = internalMutation({
       ) {
         for (const invitation of invitationsForUser) {
           if (
-            invitation.userId !== user._id ||
+            (invitation.userId !== undefined &&
+              invitation.userId !== user._id) ||
             invitation.status === "accepted"
           )
             continue;
           await ctx.db.patch(invitation._id, {
+            userId: user._id,
             status: "accepted",
             updatedAt: Date.now(),
           });

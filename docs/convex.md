@@ -500,8 +500,11 @@ de relier une fiche pré-créée dans l'organisation. Une adresse présente dans
 une autre organisation peut recevoir une invitation sans révéler son nom,
 son rôle ni son identifiant Convex ; son compte existant est réutilisé après
 acceptation. Les champs communs ne sont pas remplacés par ceux de l'invitation.
-Un conflit entre plusieurs anciennes fiches exige une réconciliation humaine :
-aucune fusion de dossiers ni réattribution de séances n'est automatique.
+Plusieurs anciennes fiches ne produisent pas de refus distinct à l'invitation :
+la préparation reste sans fiche attribuée. L'acceptation peut sélectionner un
+compte déjà relié à l'identifiant Clerk vérifié ; sinon le conflit exige une
+réconciliation humaine. Aucune fusion de dossiers ni réattribution de séances
+n'est automatique.
 `user.deleted` conserve la fiche et rend ses appartenances inactives ; un
 événement ancien ne réactive pas ce compte. L'accueil ne crée plus de fiche.
 

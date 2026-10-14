@@ -125,7 +125,7 @@ export default defineSchema({
 
   patient_invitations: defineTable({
     organizationId: v.id("organizations"),
-    userId: v.id("users"),
+    userId: v.optional(v.id("users")),
     email: v.string(),
     requestedBy: v.id("users"),
     gestionnaireIds: v.array(v.id("users")),
