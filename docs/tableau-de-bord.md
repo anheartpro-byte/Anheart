@@ -719,6 +719,13 @@ max (« Le serveur refusera ce lancement. »).
 Après **Lancer** :
 
 1. Convex refait tous les contrôles ([convex.md §4](convex.md#4-fonctions-de-trainingts)) et crée la séance **en attente**.
+   Une seule séance à la fois (ANH-144) : si le pratiquant a déjà une séance
+   en attente, en cours, ou interrompue sur une machine qui ne s'est pas
+   manifestée depuis, sur n'importe quelle machine, le lancement est refusé
+   avec « Ce pratiquant a déjà une séance en attente ou en cours sur une
+   machine : une seule à la fois. » ; si c'est la machine, avec « Cette
+   machine a déjà une séance en attente ou en cours : une seule à la fois. ».
+   Le message ne dit pas où est l'autre séance.
 2. Le site ouvre la vue en direct : « En attente que la machine arme la
    séance… ».
 3. Le Pi interroge Convex toutes les 3 s. Il refait **ses** contrôles
@@ -730,6 +737,31 @@ Après **Lancer** :
 5. S'il refuse, la séance passe **échouée** avec la raison du Pi, qui commence
    par « refusee par la machine : ». Sans réponse en 60 s : « la boucle n'a ni
    demarre ni refuse ».
+6. Convex **revérifie** le lancement pendant qu'il attend et au moment où la
+   machine l'arme ([convex.md, Revérification à l'armement](convex.md#revérification-à-larmement-anh-144)) :
+   droit de celui qui a lancé, adhésions, machine, âge et FC max du
+   pratiquant, autre séance du pratiquant, délai d'attente. Si l'un a changé,
+   la machine ne se voit plus offrir le lancement, et la séance passe
+   **échouée** avec sa raison en clair sous « Séance échouée » (sur la page de
+   la séance : « Ce lancement a été refusé avant que le serveur n'en confirme
+   le départ à la machine. ») :
+
+   | Raison affichée | Cause |
+   |---|---|
+   | Droit retiré avant le départ | Le droit de lancement du patient a été retiré, le gestionnaire ne gère plus la machine ou le patient, une adhésion a été désactivée, ou un compte supprimé. |
+   | Expirée : la machine ne l'a pas armée à temps | La machine ne l'a pas armée en 5 min (`PENDING_SESSION_TTL_S`, [convex.md](convex.md#revérification-à-larmement-anh-144)) : machine hors ligne, par exemple. Passée échouée dans la minute qui suit. |
+   | FC max du pratiquant modifiée avant le départ | La FC max retenue n'est plus celle du lancement : relancer la séance. |
+   | Âge du pratiquant refusé avant le départ | L'année de naissance a été effacée, ou donne moins de 18 ans. |
+   | Pratiquant déjà dans une autre séance au moment du départ | Une séance a démarré pour lui sur une autre machine pendant l'attente. |
+   | Machine passée dans une autre organisation avant le départ | La machine a changé d'organisation. |
+   | Machine supprimée avant le départ | La machine a été supprimée. |
+
+   Une telle séance n'est comptée ni « active » ni « en attente » sur le
+   tableau de bord. Une confirmation de départ qui arriverait quand même est
+   refusée (409) ; la console de ce dépôt confirme un départ juste après
+   avoir armé la machine, elle l'arrête alors aussitôt sur la rampe
+   ordinaire. Le contrôle de l'aptitude et du consentement (ANH-143) n'est pas
+   encore fait.
 
 **Important** : avec la configuration livrée (`raspberry-pi/.env.example`),
 `PROGRAMS_ENABLED=false` et `OCCUPANCY_OCCUPIED_ENABLED=false`. Le site affiche
