@@ -80,6 +80,18 @@ export const LIVE_FRESH_MS = 90_000;
 export const TELEMETRY_FRESH_MS = 20_000;
 
 /**
+ * An active session of which the server has had no news for this long is no
+ * longer shown as running: the server's job marks it "interrupted, end
+ * unknown" (convex/training.ts, `interruptSilentSessions`). News of a session
+ * is a heartbeat of its machine that names it as the session it runs, a point
+ * or an event of it received, or its registration. A machine that runs it
+ * says so with every heartbeat (every 10 s), so ten minutes without a word of
+ * it is a console stopped, a machine switched off, or a link down that long.
+ * The mark is undone by the next heartbeat that names it.
+ */
+export const SESSION_SILENCE_MS = 10 * 60_000;
+
+/**
  * How far after `now` a date may be and still be believed. Two dates written
  * by one clock differ by milliseconds; a date further ahead was not written by
  * that clock, and nothing can be said of its age.

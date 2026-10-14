@@ -606,7 +606,7 @@ export async function addSession(
   fields: {
     machineId: Id<"machines">;
     userId?: Id<"users">;
-    status: "pending" | "active" | "completed" | "failed";
+    status: "pending" | "active" | "interrupted" | "completed" | "failed";
     kind?: "auto" | "manual";
     startedById?: Id<"users">;
     stopRequestedAt?: number;

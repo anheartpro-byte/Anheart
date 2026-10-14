@@ -420,17 +420,22 @@
     "startedBy": "Started by",
     "status": {
       "active": "Active",
+      "interrupted": "Interrupted, end unknown",
       "completed": "Completed",
       "pending": "Pending",
       "failed": "Failed"
     },
     "notFound": "Session not found",
-    "inProgress": "In progress"
+    "inProgress": "In progress",
+    "unknownEnd": "End unknown"
   },
   "sessionDetail": {
     "failedTitle": "Session Failed",
     "failedDescription": "This session encountered an error and was terminated.",
     "pendingTitle": "Waiting for Device",
+    "interruptedTitle": "Session interrupted, end unknown",
+    "interruptedDescription": "The server had no news of this session for {minutes} minutes (console stopped, machine switched off or link down): its end has not been received. If the machine reports it running again, it becomes active again; if the machine sends its end, however late, the session is closed with it.",
+    "interruptedAt": "Marked interrupted on {date}.",
     "noEcgData": "No ECG data recorded for this session",
     "timing": "Session Timing",
     "started": "Started",
@@ -705,6 +710,8 @@
       "pending": "Waiting for the machine to arm the session…",
       "failed": "Session failed",
       "completed": "Session completed",
+      "interrupted": "Session interrupted, end unknown",
+      "interruptedDesc": "No news of this session for more than {minutes} min: its end has not been received. If it is still running, it becomes active again as soon as the machine is heard from, and a stop asked for here reaches it then.",
       "endReason": "End reason",
       "program": "Programme",
       "zone": "Target zone",

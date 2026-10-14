@@ -328,6 +328,11 @@ export default defineSchema({
     status: v.union(
       v.literal("pending"),
       v.literal("active"),
+      // An active session of which the server had no news for
+      // SESSION_SILENCE_MS (lib/training.ts): its end is unknown. It goes back
+      // to "active" when a heartbeat of its machine names it again, and ends
+      // as any active session does when the machine sends its end.
+      v.literal("interrupted"),
       v.literal("completed"),
       v.literal("failed"),
     ),
@@ -358,6 +363,9 @@ export default defineSchema({
     machineStartedAt: v.optional(v.number()),
     stopRequestedAt: v.optional(v.number()),
     endReason: v.optional(v.string()),
+    // When the server marked the session "interrupted" (server's clock).
+    // Present exactly while the status is "interrupted".
+    interruptedAt: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
     .index("by_machine_and_local_ref", ["machineId", "localRef"])
@@ -366,7 +374,8 @@ export default defineSchema({
     .index("by_started_by", ["startedById"])
     .index("by_organization", ["organizationId"])
     // The active or pending sessions of one organisation, or of all of them:
-    // what the dashboard counts (`dashboard.counters`).
+    // what the dashboard counts (`dashboard.counters`), and the active ones
+    // the job of `interruptSilentSessions` looks at.
     .index("by_status_and_organization", ["status", "organizationId"])
     // The lists of sessions (`convex/sessions.ts`): each one reads a single
     // range of one of these, most recent start first.

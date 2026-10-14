@@ -79,7 +79,7 @@ async function seedPendingAuto(w: MachineWorld, machineId: Id<"machines">) {
 async function seedSession(
   w: MachineWorld,
   machineId: Id<"machines">,
-  status: "pending" | "active" | "completed" | "failed",
+  status: "pending" | "active" | "interrupted" | "completed" | "failed",
   kind: "legacy" | "auto",
 ) {
   return await w.t.run((ctx) =>
@@ -668,7 +668,13 @@ const sessionRoutes: Array<{
   },
 ];
 
-const sessionStates = ["pending", "active", "completed", "failed"] as const;
+const sessionStates = [
+  "pending",
+  "active",
+  "interrupted",
+  "completed",
+  "failed",
+] as const;
 const sessionKinds = ["legacy", "auto"] as const;
 
 /** Status, headers and body: everything the caller can observe. */

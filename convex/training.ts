@@ -21,6 +21,12 @@
  * the Pi, which can still refuse the start (e-stop wiring not attested, a
  * standing safety verdict, a drive fault...). A refusal comes back as a
  * failed session with the Pi's reason.
+ *
+ * Only the machine ends a session it started. A session of which the server
+ * has had no news for `SESSION_SILENCE_MS` is marked `interrupted` (end
+ * unknown), never `completed` nor `failed`: the machine is not told to stop
+ * it, a heartbeat that names it makes it active again, and the end the
+ * machine sends, however late, closes it (`interruptSilentSessions`).
  */
 import { limitUser } from "./lib/rateLimits";
 import { ConvexError, v } from "convex/values";
@@ -50,7 +56,7 @@ import { authorizedMachineLive } from "./lib/trainingPrivacy";
 import { machineError } from "./lib/contract";
 // A heartbeat older than this means the machine cannot be relied on to answer.
 // The dashboard judges freshness on the same value (hooks/use-freshness.ts).
-import { LIVE_FRESH_MS } from "../lib/training";
+import { LIVE_FRESH_MS, SESSION_SILENCE_MS } from "../lib/training";
 
 // ---------------------------------------------------------------------------
 // Physiology: mirrors raspberry-pi/src/training/plan.py. The Pi re-checks all
@@ -467,6 +473,15 @@ export const listLaunchableMachines = query({
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether the machine started the session and the server has not received
+ * its end: `active`, or `interrupted` (no news of it for a while; it may
+ * still be running).
+ */
+function startedNotEnded(status: Doc<"sessions">["status"]): boolean {
+  return status === "active" || status === "interrupted";
+}
+
+/**
  * Queue an AUTO session for the machine to pick up. The only remote launch.
  *
  * A user launches for themselves only; an admin or a gestionnaire launches
@@ -602,7 +617,8 @@ export const launchAutoSession = mutation({
  * Ask a training session to stop. Pending: cancelled here. Active: the Pi is
  * asked to stop, and ramps down on the commissioned ramp; the session becomes
  * completed when the Pi reports the end, not before - the arm is still
- * turning until then.
+ * turning until then. Interrupted: the same request, which the machine reads
+ * if it comes back with the session still running.
  */
 export const requestStop = mutation({
   args: { sessionId: v.id("sessions") },
@@ -632,7 +648,7 @@ export const requestStop = mutation({
       });
       return null;
     }
-    if (session.status !== "active") return null;
+    if (!startedNotEnded(session.status)) return null;
     if (session.stopRequestedAt === undefined) {
       await ctx.db.patch(args.sessionId, { stopRequestedAt: now });
     }
@@ -901,6 +917,8 @@ export const getTrainingSession = query({
       endedAt: v.optional(v.number()),
       stopRequestedAt: v.optional(v.number()),
       endReason: v.optional(v.string()),
+      // When the server marked it interrupted (end unknown): only while it is.
+      interruptedAt: v.optional(v.number()),
       canStop: v.boolean(),
     }),
     v.null(),
@@ -934,7 +952,8 @@ export const getTrainingSession = query({
       endedAt: s.endedAt,
       stopRequestedAt: s.stopRequestedAt,
       endReason: s.endReason,
-      canStop: s.status === "pending" || s.status === "active",
+      interruptedAt: s.interruptedAt,
+      canStop: s.status === "pending" || startedNotEnded(s.status),
     };
   },
 });
@@ -1215,6 +1234,10 @@ export const registerLocalSession = internalMutation({
   },
 });
 
+/**
+ * The machine ends a session of its own. An `interrupted` one too: the end the
+ * server had no news of arrives, and closes it as it would have then.
+ */
 export const endTrainingSession = internalMutation({
   args: {
     machineId: v.id("machines"),
@@ -1241,6 +1264,7 @@ export const endTrainingSession = internalMutation({
       status: args.failed ? "failed" : "completed",
       endedAt,
       endReason: args.reason,
+      interruptedAt: undefined,
     });
     await ctx.db.patch(args.machineId, { status: "online" });
     // Nothing is scheduled here: the summary of a training session will be
@@ -1249,6 +1273,12 @@ export const endTrainingSession = internalMutation({
   },
 });
 
+/**
+ * What the machine is told of a session it asks about. `active` is whether the
+ * server holds it started and not ended: true for an `interrupted` session as
+ * well. The machine stops its session on `active: false`, and the server never
+ * asks a running session to stop because it had no news of it.
+ */
 export const getTrainingStatus = internalQuery({
   args: { machineId: v.id("machines"), sessionId: v.id("sessions") },
   returns: v.union(
@@ -1264,7 +1294,7 @@ export const getTrainingStatus = internalQuery({
     if (!s || s.machineId !== args.machineId) return null;
     return {
       status: s.status,
-      active: s.status === "active",
+      active: startedNotEnded(s.status),
       stopRequested: s.stopRequestedAt !== undefined,
     };
   },
@@ -1385,3 +1415,112 @@ export const storeEvents = internalMutation({
     return outcome;
   },
 });
+
+// ---------------------------------------------------------------------------
+// A session the machine no longer gives news of
+// ---------------------------------------------------------------------------
+
+/**
+ * The first news of a session, on the server's clock: the creation of its row
+ * by the machine's declaration (a session started at the machine), or the
+ * confirmation of its start (a launch from the dashboard, whose `startedAt`
+ * is then a date of the server, never before the launch).
+ */
+function firstNewsOf(session: Doc<"sessions">): number {
+  return session.origin === "remote"
+    ? Math.max(session._creationTime, session.startedAt)
+    : session._creationTime;
+}
+
+/**
+ * Whether the server has heard of `session` after `since`, on its own clock:
+ * its first news, the reception of its point of greatest `t` or of its event
+ * of greatest rank, or a heartbeat of its machine naming it as the session the
+ * machine runs. No date the machine wrote is read.
+ */
+async function heardOfSince(
+  ctx: QueryCtx,
+  session: Doc<"sessions">,
+  since: number,
+): Promise<boolean> {
+  if (firstNewsOf(session) > since) return true;
+  const point = await ctx.db
+    .query("training_telemetry")
+    .withIndex("by_session_and_t", (q) => q.eq("sessionId", session._id))
+    .order("desc")
+    .first();
+  if (point !== null && point._creationTime > since) return true;
+  const event = await ctx.db
+    .query("training_events")
+    .withIndex("by_session_and_seq", (q) => q.eq("sessionId", session._id))
+    .order("desc")
+    .first();
+  if (event !== null && event._creationTime > since) return true;
+  const beats = ctx.db
+    .query("machine_heartbeats")
+    .withIndex("by_machine_and_timestamp", (q) =>
+      q.eq("machineId", session.machineId).gt("timestamp", since),
+    );
+  for await (const beat of beats) {
+    if (beat.activeSessionId === session._id) return true;
+  }
+  return false;
+}
+
+/**
+ * Mark `interrupted` every active training session the server has heard
+ * nothing of for `SESSION_SILENCE_MS` (`heardOfSince`): its console stopped
+ * before sending its end, its machine is off, or its link has been down that
+ * long. Run once a minute by the job of `machines.checkOfflineMachines`.
+ * Returns how many it marked.
+ *
+ * Never `completed` nor `failed`: its end is unknown, and it may still be
+ * running on a machine that cannot reach the server. Nothing is asked of the
+ * machine: `getTrainingStatus` still answers that the session is active, a
+ * stop asked for on the site still reaches it, the next heartbeat naming it
+ * makes it active again (`resumeNamedSession`), and the end the machine sends
+ * closes it. Sessions of the retired recording mode (no `kind`) are history,
+ * left as they are.
+ */
+export async function interruptSilentSessions(
+  ctx: MutationCtx,
+  now: number,
+): Promise<number> {
+  const since = now - SESSION_SILENCE_MS;
+  const active = await ctx.db
+    .query("sessions")
+    .withIndex("by_status_and_organization", (q) => q.eq("status", "active"))
+    .collect();
+  let marked = 0;
+  for (const session of active) {
+    if (session.kind === undefined) continue;
+    if (await heardOfSince(ctx, session, since)) continue;
+    await ctx.db.patch(session._id, {
+      status: "interrupted",
+      interruptedAt: now,
+    });
+    marked++;
+  }
+  return marked;
+}
+
+/**
+ * A heartbeat of `machineId` names `sessionId` as the session it runs: a
+ * session the server had marked `interrupted` is active again. A machine only
+ * ever revives a session of its own; any other session is left as it is.
+ */
+export async function resumeNamedSession(
+  ctx: MutationCtx,
+  machineId: Id<"machines">,
+  sessionId: Id<"sessions">,
+): Promise<void> {
+  const session = await ctx.db.get(sessionId);
+  if (
+    session === null ||
+    session.machineId !== machineId ||
+    session.status !== "interrupted"
+  ) {
+    return;
+  }
+  await ctx.db.patch(sessionId, { status: "active", interruptedAt: undefined });
+}

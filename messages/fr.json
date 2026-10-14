@@ -420,17 +420,22 @@
     "startedBy": "Démarrée par",
     "status": {
       "active": "Active",
+      "interrupted": "Interrompue, fin inconnue",
       "completed": "Terminée",
       "pending": "En attente",
       "failed": "Échouée"
     },
     "notFound": "Session introuvable",
-    "inProgress": "En cours"
+    "inProgress": "En cours",
+    "unknownEnd": "Fin inconnue"
   },
   "sessionDetail": {
     "failedTitle": "Session échouée",
     "failedDescription": "Cette session a rencontré une erreur et a été interrompue.",
     "pendingTitle": "En attente de l'appareil",
+    "interruptedTitle": "Séance interrompue, fin inconnue",
+    "interruptedDescription": "Le serveur n'a eu aucune nouvelle de cette séance pendant {minutes} minutes (console arrêtée, machine éteinte ou liaison coupée) : sa fin n'a pas été reçue. Si la machine la signale de nouveau en cours, elle redevient active ; si la machine envoie sa fin, même tard, la séance est close avec elle.",
+    "interruptedAt": "Marquée interrompue le {date}.",
     "noEcgData": "Aucune donnée ECG enregistrée pour cette session",
     "timing": "Chronologie de la session",
     "started": "Début",
@@ -705,6 +710,8 @@
       "pending": "En attente que la machine arme la séance…",
       "failed": "Séance échouée",
       "completed": "Séance terminée",
+      "interrupted": "Séance interrompue, fin inconnue",
+      "interruptedDesc": "Aucune nouvelle de cette séance depuis plus de {minutes} min : sa fin n'a pas été reçue. Si elle tourne encore, elle redevient active dès que la machine se manifeste, et un arrêt demandé ici lui parvient alors.",
       "endReason": "Motif de fin",
       "program": "Programme",
       "zone": "Zone cible",

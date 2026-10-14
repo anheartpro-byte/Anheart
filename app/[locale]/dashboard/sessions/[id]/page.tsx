@@ -27,11 +27,12 @@ import {
   Calendar,
   Radio,
   AlertCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
-import { isTrainingKind } from "@/lib/training";
+import { isTrainingKind, SESSION_SILENCE_MS } from "@/lib/training";
 import { TrainingDetailsCard } from "@/components/training/TrainingDetailsCard";
 import { SessionRecordCard } from "@/components/training/SessionRecordCard";
 import {
@@ -83,12 +84,16 @@ export default function SessionDetailPage({
     ? `${session.patient.firstName} ${session.patient.lastName}`
     : (session.subjectLabel ?? t("training.session.riderNotSpecified"));
 
-  // A session of the former recording mode that never ended is not running.
+  const interrupted = isTraining && session.status === "interrupted";
+  // A session of the former recording mode that never ended is not running,
+  // and the end of an interrupted one has not been received.
   const duration = session.endedAt
     ? formatDuration(session.endedAt - session.startedAt)
-    : isTraining
-      ? t("sessions.inProgress")
-      : "-";
+    : interrupted
+      ? t("sessions.unknownEnd")
+      : isTraining
+        ? t("sessions.inProgress")
+        : "-";
 
   return (
     <div className="space-y-6">
@@ -111,8 +116,11 @@ export default function SessionDetailPage({
             {format(session.startedAt, "PPP", { locale: dateLocale })}
           </p>
         </div>
+        {/* An interrupted session may still be running: its stop is asked for there. */}
         {isTraining &&
-          (session.status === "active" || session.status === "pending") && (
+          (session.status === "active" ||
+            session.status === "pending" ||
+            interrupted) && (
             <Link href={`/dashboard/sessions/${sessionId}/live`}>
               <Button>
                 <Radio className="h-4 w-4 mr-2 animate-pulse" />
@@ -143,6 +151,36 @@ export default function SessionDetailPage({
                 {session.notes && session.notes.includes("Failure reason:") && (
                   <p className="text-sm text-red-600 dark:text-red-400 mt-2 font-mono">
                     {session.notes.split("Failure reason:")[1]?.trim()}
+                  </p>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Interrupted Session: no news of it, its end unknown */}
+      {interrupted && (
+        <Card className="border-amber-500 bg-amber-50 dark:bg-amber-950">
+          <CardContent className="py-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-6 w-6 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-semibold text-amber-800 dark:text-amber-200">
+                  {t("sessionDetail.interruptedTitle")}
+                </h3>
+                <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+                  {t("sessionDetail.interruptedDescription", {
+                    minutes: SESSION_SILENCE_MS / 60_000,
+                  })}
+                </p>
+                {training?.interruptedAt !== undefined && (
+                  <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+                    {t("sessionDetail.interruptedAt", {
+                      date: format(training.interruptedAt, "PPp", {
+                        locale: dateLocale,
+                      }),
+                    })}
                   </p>
                 )}
               </div>

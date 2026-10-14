@@ -49,7 +49,7 @@ const NOW = 1_800_000_000_000;
 const sessionId = "session-1" as Id<"sessions">;
 
 type Session = {
-  status: "pending" | "active" | "completed" | "failed";
+  status: "pending" | "active" | "interrupted" | "completed" | "failed";
   kind: "auto" | "manual";
   canStop: boolean;
   startedAt: number;
@@ -61,6 +61,9 @@ type Session = {
   endReason?: string;
   profileName?: string;
   operatorName?: string;
+  interruptedAt?: number;
+  lastSignalAt?: number | null;
+  lastMeasuredAt?: number | null;
 };
 
 /** The session as `training.getTrainingSession` answers it, heard from a moment ago. */
@@ -264,6 +267,44 @@ describe("ANH-203 training panel: who is shown the stop control", () => {
     expect(screen.tag("button")).toEqual([]);
   });
 
+  it("an interrupted session, which may still be running, keeps its stop control", async () => {
+    session({
+      status: "interrupted",
+      interruptedAt: NOW - 60_000,
+      lastSignalAt: null,
+      lastMeasuredAt: null,
+    });
+    telemetry([point({ t: NOW - 900_000 })]);
+    const screen = panel();
+
+    await click(screen.button(t.stop));
+    expect(screen.text()).toContain(t.stopConfirmDesc);
+    await click(
+      screen.all(
+        (element) =>
+          element.localName === "button" && screen.textOf(element) === t.stop,
+      )[1],
+    );
+
+    expect(mutationCalls()).toEqual({ [STOP]: [[{ sessionId }]] });
+  });
+
+  it("a stop asked for an interrupted session waits for the machine: no ramp is said to run", () => {
+    session({
+      status: "interrupted",
+      interruptedAt: NOW - 60_000,
+      lastSignalAt: null,
+      lastMeasuredAt: null,
+      stopRequestedAt: NOW - 30_000,
+    });
+    telemetry([point({ t: NOW - 900_000 })]);
+
+    const screen = panel();
+
+    expect(screen.button(t.stop).hasAttribute("disabled")).toBe(true);
+    expect(screen.text()).not.toContain(t.stopRequested);
+  });
+
   it("a session not yet armed is cancelled, not stopped: other words, same request", async () => {
     session({ status: "pending" });
     telemetry([]);
@@ -411,6 +452,47 @@ describe("ANH-203 training panel: what it says of a session", () => {
     expect(screen.text()).toContain(`0:00 ${t.elapsed}`);
     expect(screen.text()).toContain(`${t.remaining} 30:00`);
     expect(screen.text()).toContain(t.noTelemetry);
+  });
+
+  it("an interrupted session says its end is unknown, shows nothing as current, and counts up to its last point", () => {
+    // Started 20 minutes ago; its last point was measured 5 minutes in.
+    session({
+      status: "interrupted",
+      startedAt: NOW - 1_200_000,
+      interruptedAt: NOW - 60_000,
+      lastSignalAt: null,
+      lastMeasuredAt: null,
+    });
+    telemetry([point({ t: NOW - 900_000, bpm: 128, outputRpm: 21.456 })]);
+
+    const screen = panel();
+
+    expect(screen.text()).toContain(t.interrupted);
+    expect(screen.text()).toContain(
+      t.interruptedDesc.replace("{minutes}", "10"),
+    );
+    expect(screen.text()).not.toContain(fr.training.live.staleDesc);
+    expect(screen.text()).not.toContain(fr.training.live.lateDesc);
+    expect(screen.text()).not.toContain("128");
+    expect(screen.text()).not.toContain("21.5");
+    expect(screen.text()).toContain(`5:00 ${t.elapsed}`);
+    expect(screen.text()).not.toContain(t.completed);
+    expect(screen.text()).not.toContain(t.failed);
+  });
+
+  it("an interrupted session without any point has run for an unknown time: none is counted", () => {
+    session({
+      status: "interrupted",
+      interruptedAt: NOW - 60_000,
+      lastSignalAt: null,
+      lastMeasuredAt: null,
+    });
+    telemetry([]);
+
+    const screen = panel();
+
+    expect(screen.text()).toContain(t.interrupted);
+    expect(screen.text()).toContain(`0:00 ${t.elapsed}`);
   });
 
   it("a completed session shows how long it lasted and why it ended", () => {
