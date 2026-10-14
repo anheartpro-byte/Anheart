@@ -1379,6 +1379,22 @@ export const syncProfiles = internalMutation({
 /**
  * Riders the local panel may pick from: users holding the launch right who are
  * still active members of the machine's organisation.
+ *
+ * Per rider, what the console needs to vet a programmed session the way
+ * `launchAutoSession` does, and nothing more:
+ *
+ * - `userId`: the pseudonym the console writes as `subject_id` in the
+ *   session record and sends back with a local session;
+ * - `name`: shown on the console so the operator picks the right person.
+ *   The console keeps it in memory only: never in a record, never in a log;
+ * - `hrMax`: the one `launchAutoSession` would use (measured, else estimated
+ *   from the birth year), null when neither is usable;
+ * - `birthYear`: a whole number, or null. The console computes the age from
+ *   it the way `ageFrom` does.
+ *
+ * Both values are set on the site by a manager (`setUserPhysiology`); the
+ * console shows them and cannot change them. Fitness and consent (ANH-143)
+ * are not served yet.
  */
 export const getRoster = internalQuery({
   args: { machineId: v.id("machines") },
@@ -1387,6 +1403,7 @@ export const getRoster = internalQuery({
       userId: v.id("users"),
       name: v.string(),
       hrMax: v.union(v.number(), v.null()),
+      birthYear: v.union(v.number(), v.null()),
     }),
   ),
   handler: async (ctx, args) => {
@@ -1410,6 +1427,7 @@ export const getRoster = internalQuery({
         userId: user._id,
         name: fullName(user),
         hrMax: effectiveHrMax(user, now),
+        birthYear: isWholeNumber(user.birthYear) ? user.birthYear : null,
       });
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));

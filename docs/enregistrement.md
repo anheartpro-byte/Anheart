@@ -95,7 +95,7 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | `kind` | `auto` ou `manual` |
 | `occupancy` | `bench` ou `occupied` |
 | `operator` | identifiant opaque d'opérateur, jamais son nom affiché |
-| `subject_id` | pseudonyme du passager, ou `null` |
+| `subject_id` | pseudonyme du passager : son identifiant Convex (`userId`), celui du lancement venu du tableau de bord ou du passager choisi dans la liste de la machine pour une séance lancée à la console ; `null` quand personne n'est nommé (séance de banc). Jamais son nom, qui n'est écrit nulle part dans l'enregistrement |
 | `profile` | programme résolu figé, ou `null` pour une séance manuelle |
 | `config_hash` | SHA-256 hexadécimal minuscule de la configuration appliquée |
 | `software_version` | version du logiciel qui a écrit l'enregistrement : le contenu de `raspberry-pi/VERSION`, pour la console du Pi comme pour les scénarios de la simulation (`pi-unknown` si le fichier manque ou est mal formé). Aucune variable d'environnement ne la règle. Les enregistrements exportés dans la bibliothèque de la simulation portent `unversioned`, exprès, pour rester reproductibles d'une version à l'autre |

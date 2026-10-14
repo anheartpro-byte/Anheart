@@ -44,6 +44,7 @@ from src.web.deps import Services, WebConfig
 from src.web.profile_writer import ProfileWriter
 from src.web.schemas import CommandRow
 from src.web.ws import LOGGED_HEADER_LIMIT, logged_header
+from tests.roster_support import RIDER_ID, listed
 from tests.test_web_api import (
     GEOMETRY,
     OPERATOR,
@@ -205,7 +206,7 @@ HANDLERS: Final[tuple[_Handler, ...]] = (
         False,
         "POST",
         "/api/session/start",
-        {"profile_id": PROFILE_ID, "operator": OPERATOR},
+        {"profile_id": PROFILE_ID, "operator": OPERATOR, "subject_id": RIDER_ID},
     ),
     _Handler(
         "stop_session",
@@ -284,6 +285,7 @@ def _app_with_manual_sessions(tmp_path: Path) -> FastAPI:
         ports=StubPorts(),
         geometry=GEOMETRY,
         ceilings=ceiling,
+        roster=listed(clock),
     )
     return create_app(services=services, config=WebConfig(host="127.0.0.1", port=8080, token=TOKEN))
 

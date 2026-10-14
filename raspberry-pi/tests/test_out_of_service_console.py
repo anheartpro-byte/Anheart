@@ -37,6 +37,7 @@ from src.units import Monotonic, UnixMillis
 from src.web.app import create_app
 from src.web.deps import WebConfig
 from src.web.schemas import PanelRow, ServiceRow, StatusRow
+from tests.roster_support import RIDER_ID, listed
 from tests.test_failure_rig import (
     BENCH_ENV,
     ENERGISED,
@@ -100,6 +101,7 @@ def console(
         treat=no_dsp,
         drive=DriveSide(backend=sim, simulator=sim, release=_nothing),
         journal=journal,
+        roster=listed(clock),
         service=None if journal is None else open_service(journal, clock),
     )
     return Rig(
@@ -210,7 +212,7 @@ async def test_ex2_out_of_service_a_programme_is_refused_before_any_other_gate(
                 "profile_id": SHORT_PROFILE,
                 "operator": OPERATOR,
                 "total_duration_s": None,
-                "subject_age": 30,
+                "subject_id": RIDER_ID,
             },
         )
         assert asked.status_code == HTTPStatus.ACCEPTED

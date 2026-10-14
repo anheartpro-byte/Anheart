@@ -260,6 +260,9 @@ include = [
     # The versioned contract of that link: it decides whether a launch that
     # came down from the dashboard may be armed at all.
     "src/contract.py",
+    # The riders' list that link keeps: which person a start with somebody on
+    # board may name, and the maximum heart rate and age it is vetted on.
+    "src/roster.py",
     # Whether a time service keeps the wall clock: it refuses a start with a
     # person on board, and says in every record what its dates are worth.
     "src/wall_clock.py",
@@ -320,6 +323,7 @@ safety_chain = [
     "src/link_state.py",
     "src/record_uplink.py",
     "src/contract.py",
+    "src/roster.py",
     "src/wall_clock.py",
     "src/dsp.py",
     "src/sensors/*",

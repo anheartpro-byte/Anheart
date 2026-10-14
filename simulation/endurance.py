@@ -66,6 +66,7 @@ from typing import Final, Protocol
 
 import httpx
 from tests.fake_record_dashboard import RecordingDashboard
+from tests.roster_support import RIDER_ID
 
 from simulation.endurance_measures import (
     DataFolder,
@@ -426,9 +427,11 @@ class Operator:
         await self._post("/api/manual/target", {"output_rpm": output_rpm, "operator": OPERATOR})
 
     async def start_programme(self, total: float | None) -> None:
-        """Ask for the scenario's programmed session, for an adult rider.
+        """Ask for the scenario's programmed session, for the adult rider the dashboard lists.
 
         ``total``: the duration the operator chooses for it, or ``None`` for its own.
+        The rider is named, and nothing else of them: their age and maximum heart
+        rate are the dashboard's (:mod:`tests.roster_support`).
         """
         await self._post(
             "/api/session/start",
@@ -436,7 +439,7 @@ class Operator:
                 "profile_id": PROFILE_ID,
                 "operator": OPERATOR,
                 "total_duration_s": total,
-                "subject_age": 30,
+                "subject_id": RIDER_ID,
             },
         )
 

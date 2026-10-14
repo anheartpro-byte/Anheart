@@ -14,7 +14,8 @@ every request this fake received in the acceptance scenario
 answers.
 
 It also plays the network: reachable or not, and an answer that is lost after
-the request was received.
+the request was received. And it lists the machine's riders (``roster``), the
+synthetic rider of :mod:`tests.roster_support` unless a test sets others.
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ from typing import Final, cast
 from src.cloud_sync import CloudError, Document, Refused, Unreachable
 from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD, ErrorCode
 from src.result import Err, Ok, Result
+from src.roster import ROSTER_PATH
 from src.training.plan import JsonValue
+from tests.roster_support import roster_document
 
 EARLIEST_SESSION_START_MS: Final[int] = 1_704_067_200_000
 WINDOW_MARGIN_MS: Final[int] = 60_000
@@ -108,6 +111,8 @@ class FakeDashboard:
     rejected: int = 0
     trace: list[Exchange] = field(default_factory=list[Exchange])
     paths: list[str] = field(default_factory=list[str])
+    roster: Mapping[str, JsonValue] = field(default_factory=roster_document)
+    """The answer to ``GET /api/machine/roster``: the riders of this machine."""
 
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
         if not self.online:
@@ -115,6 +120,8 @@ class FakeDashboard:
         self.paths.append(path)
         if path.endswith("/poll"):
             return Ok({"session": None, SERVER_VERSION_FIELD: CONTRACT_VERSION})
+        if path == ROSTER_PATH:
+            return Ok(self.roster)
         session = self.sessions.get((params or {}).get("sessionId", ""))
         active = session is not None and session.status == "active"
         return Ok(

@@ -265,6 +265,11 @@ class Declaration:
     total_duration_s: float | None = None
     subject_hr_max: int | None = None
     occupancy: str | None = None
+    user_id: str | None = None
+    """The rider's dashboard identifier (the record's ``subject_id``); ``None``: nobody named."""
+
+    subject_label: str | None = None
+    """The rider's name, from the list in memory only: a record never holds it."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -401,7 +406,11 @@ _NOTHING_TO_DECLARE: Final[Declaration] = Declaration(kind="auto", operator="")
 
 
 def declaration_from(head: Head) -> Declaration:
-    """What a manifest alone says of a session: no name, and no programme name."""
+    """What a manifest alone says of a session: no name, and no programme name.
+
+    The rider is its ``subject_id``, the dashboard's identifier: the session is
+    attributed to them after a restart too, without their name.
+    """
     profile = head.profile
     return Declaration(
         kind=head.kind,
@@ -411,6 +420,7 @@ def declaration_from(head: Head) -> Declaration:
         total_duration_s=None if profile is None else profile.total_duration_s,
         subject_hr_max=None if profile is None else profile.subject_hr_max,
         occupancy=head.occupancy if head.kind == "manual" else None,
+        user_id=head.subject_id,
     )
 
 
@@ -1002,6 +1012,8 @@ class RecordUplink:
             "totalDurationS": declaration.total_duration_s,
             "subjectHrMax": declaration.subject_hr_max,
             "occupancy": declaration.occupancy,
+            "userId": declaration.user_id,
+            "subjectLabel": declaration.subject_label,
         }
         body.update({key: value for key, value in optional.items() if value is not None})
         answer = await self._post(now, owed, LOCAL_PATH, body)

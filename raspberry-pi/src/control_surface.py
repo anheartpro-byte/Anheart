@@ -314,13 +314,19 @@ class StartSession:
     """The identifier of this request. Display data, like every ``request_id`` below."""
 
     subject_id: str = LOCAL_SUBJECT
-    """Who rides. :data:`LOCAL_SUBJECT` for a start typed at the console."""
+    """Who rides: the rider's dashboard identifier. :data:`LOCAL_SUBJECT` names nobody,
+    which a programmed session refuses."""
 
     subject_hr_max: Bpm | None = None
-    """The rider's maximum heart rate, when known; the profile is re-checked against it."""
+    """For a launch from the dashboard: the rider's maximum heart rate it carries.
+
+    A start at the console carries none: the loop reads it, and the age, from
+    the riders' list (:mod:`src.roster`) when it arms."""
 
     subject_age: int | None = None
-    """The rider's age in years. A programmed session refuses an unknown or too-young rider."""
+    """For a launch from the dashboard: the rider's age in years it carries.
+
+    A programmed session refuses an unknown or too-young rider."""
 
     cloud_session_id: str | None = None
     """The dashboard session this start answers, or ``None`` for a local start."""
@@ -355,6 +361,9 @@ class StartManual:
     operator: str
     at: Monotonic
     request_id: str
+    subject_id: str = LOCAL_SUBJECT
+    """Who rides: a rider of the list with a person on board; :data:`LOCAL_SUBJECT`
+    on the bench, where nobody does."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -830,9 +839,13 @@ class ControlSurface:
         return Ok(command)
 
     def submit_start_manual(
-        self, *, occupancy: Occupancy, operator: str
+        self, *, occupancy: Occupancy, operator: str, subject_id: str = ""
     ) -> Result[StartManual, StartRefusal]:
-        """Ask for a manual session to start. The same three gates as :meth:`submit_start`."""
+        """Ask for a manual session to start. The same three gates as :meth:`submit_start`.
+
+        ``subject_id`` names the rider with a person on board; the loop checks
+        it against the riders' list when it arms, as it checks the occupancy.
+        """
         attested = self._supervisor.require_estop_confirmed()
         if isinstance(attested, Err):
             return self._refuse_start(attested.error)
@@ -847,6 +860,7 @@ class ControlSurface:
             operator=operator,
             at=self._clock.monotonic(),
             request_id=self._next_request(),
+            subject_id=subject_id or LOCAL_SUBJECT,
         )
         self._accept_start(command)
         return Ok(command)

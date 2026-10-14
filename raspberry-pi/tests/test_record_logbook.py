@@ -34,6 +34,7 @@ from src.training.types import Occupancy
 from src.units import Monotonic, Seconds, UnixMillis
 from tests.record_console_support import RecordedRig, recorded_rig, set_target, start_bench, stop
 from tests.record_journal_support import clock_at_start, count_fsync, session
+from tests.roster_support import CHILD, RIDER_ID
 from tests.test_failure_rig import OPERATOR, PROGRAMME_ENV, SHORT_PROFILE
 from tests.test_record_session import bare_recorder, surface_event
 
@@ -524,6 +525,7 @@ async def test_ex3_a_start_the_machine_refuses_is_in_the_logbook_with_its_reason
 ) -> None:
     """Nothing was ever armed: before this, such a refusal was written nowhere."""
     recorded = recorded_rig(tmp_path, env=PROGRAMME_ENV)
+    recorded.rig.panel.roster.adopt((CHILD,), recorded.rig.clock.monotonic())
     async with recorded.rig.http() as http:
         attested = await http.post(
             "/api/safety/attest",
@@ -536,7 +538,7 @@ async def test_ex3_a_start_the_machine_refuses_is_in_the_logbook_with_its_reason
                 "profile_id": SHORT_PROFILE,
                 "operator": OPERATOR,
                 "total_duration_s": None,
-                "subject_age": 9,
+                "subject_id": CHILD.user_id,
             },
         )
         assert started.status_code == 202, started.text
@@ -560,6 +562,7 @@ async def test_ex3_a_start_the_machine_refuses_is_in_the_logbook_with_its_reason
     on_disk = recorded.everything_on_disk()
     assert SHORT_PROFILE.encode() not in on_disk, "the programme's identifier is not written"
     assert OPERATOR.encode() not in on_disk
+    assert CHILD.name.encode() not in on_disk, "the rider's name is never written"
 
 
 async def test_ex3_a_refused_start_never_writes_the_identifier_of_the_programme_it_asked_for(
@@ -576,7 +579,7 @@ async def test_ex3_a_refused_start_never_writes_the_identifier_of_the_programme_
     attested = surface.attest_estop_wiring(OPERATOR)
     assert isinstance(attested, Ok)
     asked = surface.submit_start(
-        profile_id=programme, operator=OPERATOR, total_duration_s=None, subject_age=30
+        profile_id=programme, operator=OPERATOR, total_duration_s=None, subject_id=RIDER_ID
     )
     assert isinstance(asked, Ok), asked
     await recorded.tick(1.0)

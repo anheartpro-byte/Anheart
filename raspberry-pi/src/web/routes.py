@@ -68,6 +68,16 @@ from src.motor.drive import DriveState, FaultReport
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
 from src.result import Err, Ok
+from src.roster import (
+    NoPassenger,
+    OnBench,
+    Passenger,
+    PassengerRefusal,
+    Rider,
+    Roster,
+    describe_passenger_refusal,
+    passenger_of,
+)
 from src.sensors.registry import SPECS
 from src.training.plan import (
     DeleteError,
@@ -97,7 +107,7 @@ from src.training.safety import (
     Unattributed,
 )
 from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySnapshot
-from src.units import Monotonic, OutputRpm, Seconds, elapsed
+from src.units import Bpm, Monotonic, OutputRpm, Seconds, elapsed
 from src.web.deps import TOKEN_HEADER, Services, VerdictSource, WebConfig
 from src.web.profile_writer import ProfileWriter
 from src.web.schemas import (
@@ -129,6 +139,7 @@ from src.web.schemas import (
     RecordsRow,
     RequestRow,
     RestoreBody,
+    RosterRow,
     SafetyRow,
     SensorRow,
     SensorsRow,
@@ -332,6 +343,7 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     auth: Sequence[params.Depends] = (Depends(token_guard(config)),)
     _register_reads(app, services=services, config=config, auth=auth)
     _register_profiles(app, services=services, auth=auth)
+    _register_riders(app, services=services, auth=auth)
     _register_session(app, services=services, auth=auth)
     _register_manual(app, services=services, auth=auth)
     _register_safety(app, services=services, auth=auth)
@@ -639,15 +651,40 @@ def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[param
         comes back as motor rpm, output rpm, Hz and g together, because the
         g-load at the ceiling is the number worth reading before somebody is in
         the machine rather than after.
+
+        With a rider of the list, the profile is fitted to their maximum heart
+        rate, as their start would be; a rider a start would be refused for is
+        refused here with the same sentence (409).
         """
+        hr_max = None
+        if body.subject_id:
+            hr_max = _require_passenger(services, body.subject_id).hr_max
         resolved = store.resolve(
             body.profile_id,
             at=services.clock.unix_millis(),
             total_duration_s=_optional_seconds(body.total_duration_s),
+            subject_hr_max=hr_max,
         )
         if isinstance(resolved, Ok):
             return _preview(resolved.value, geometry)
         raise _resolve_failure(resolved.error)
+
+
+def _register_riders(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+    """The riders' list, as the page offers it."""
+
+    @app.get("/api/roster", dependencies=auth, tags=["session"])
+    async def roster() -> RosterRow:
+        """The riders a start with a person on board may name, and what the site set for them.
+
+        Read from memory: the list the dashboard last gave (:mod:`src.roster`).
+        Their names go to the page and nowhere else. An interface without a
+        list answers an empty one, ``unlinked``.
+        """
+        held = services.roster
+        now = services.clock.monotonic()
+        view = (Roster(linked=False) if held is None else held).view(now)
+        return RosterRow.of(view, services.clock.unix_millis())
 
 
 def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
@@ -666,17 +703,28 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         The profile id is checked for shape here and its existence is checked
         by resolving it, before anything is submitted, so an operator gets a
         404 rather than a session that starts and immediately ends.
+
+        The rider is named, by the list's identifier, and nothing else of them
+        is taken: an age sent with the start is refused (422), since the age
+        and the maximum heart rate are the site's. A rider the list does not
+        hold now, or one missing either value, is refused (409) with the
+        sentence the loop would say; the profile is resolved fitted to their
+        maximum heart rate. The loop checks the rider again when it arms.
         """
         _require_motion_enabled(services)
         _require_programs_enabled(services)
         operator = _require_operator(body.operator)
-        _require_known_profile(services, body.profile_id, body.total_duration_s)
+        _refuse_typed_age(body.subject_age)
+        passenger = _require_passenger(services, body.subject_id)
+        _require_known_profile(
+            services, body.profile_id, body.total_duration_s, hr_max=passenger.hr_max
+        )
         _require_drive_not_faulted(services)
         submitted = surface.submit_start(
             profile_id=body.profile_id,
             operator=operator,
             total_duration_s=_optional_seconds(body.total_duration_s),
-            subject_age=body.subject_age,
+            subject_id=passenger.rider.user_id,
         )
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
@@ -746,13 +794,20 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         403 when motion is disabled or the occupancy is refused by
         configuration (``occupied`` until milestone M6); 422 for an occupancy
         this build does not know.
+
+        The rider: none on the bench (422 if one is named), a rider of the
+        list with a person on board (422 without one, 409 for one the list
+        does not hold now). The loop checks the rider again when it arms.
         """
         _require_motion_enabled(services)
         operator = _require_operator(body.operator)
         occupancy = _require_occupancy(body.occupancy)
         _require_occupancy_allowed(services, occupancy)
+        subject = _require_rider_for(services, occupancy, body.subject_id)
         _require_drive_not_faulted(services)
-        submitted = surface.submit_start_manual(occupancy=occupancy, operator=operator)
+        submitted = surface.submit_start_manual(
+            occupancy=occupancy, operator=operator, subject_id=subject
+        )
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
         raise _start_failure(submitted.error)
@@ -1203,14 +1258,15 @@ def _require_operator(operator: str) -> str:
 
 
 def _require_known_profile(
-    services: Services, profile_id: str, total_duration_s: float | None
+    services: Services, profile_id: str, total_duration_s: float | None, *, hr_max: Bpm
 ) -> None:
     """Refuse a start for a profile that is not a usable programme, before submitting.
 
     The control surface does no I/O and therefore cannot check this; the loop
     would find out and end the session. Checking here turns "the session started
     and stopped and nobody knows why" into a 404 or a 422 on the screen of the
-    person who typed it.
+    person who typed it. Resolved fitted to the rider's ``hr_max``, as the loop
+    resolves it: a zone too high for this person is said now.
     """
     if not is_profile_id(profile_id):
         raise HTTPException(
@@ -1221,9 +1277,64 @@ def _require_known_profile(
         profile_id,
         at=services.clock.unix_millis(),
         total_duration_s=_optional_seconds(total_duration_s),
+        subject_hr_max=hr_max,
     )
     if isinstance(resolved, Err):
         raise _resolve_failure(resolved.error)
+
+
+TYPED_AGE_DETAIL: Final[str] = (
+    "l'age du passager ne se saisit plus a la console : il vient du site, avec sa FC max, "
+    "regles par un gestionnaire. Choisir le passager dans la liste (subject_id)."
+)
+
+
+def _refuse_typed_age(age: int | None) -> None:
+    """422 for a start that still carries an age typed at the console: nothing typed here counts."""
+    if age is not None:
+        raise HTTPException(status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail=TYPED_AGE_DETAIL)
+
+
+def _passenger_failure(refusal: PassengerRefusal) -> HTTPException:
+    """The answer to a start refused for its rider, in the words the loop would use.
+
+    422 for a request that contradicts itself (no rider with a person on
+    board, a rider on the bench); 409 for a rider the list held now does not
+    allow (not listed, list too old, a value missing on the site).
+    """
+    status = (
+        HTTPStatus.UNPROCESSABLE_ENTITY
+        if isinstance(refusal, NoPassenger | OnBench)
+        else HTTPStatus.CONFLICT
+    )
+    return HTTPException(status_code=status, detail=describe_passenger_refusal(refusal))
+
+
+def _require_rider(services: Services, subject_id: str | None) -> Rider:
+    """The rider ``subject_id`` names, if the list offered now holds them."""
+    held = services.roster
+    roster = Roster(linked=False) if held is None else held
+    found = roster.find(subject_id or "", services.clock.monotonic())
+    if isinstance(found, Err):
+        raise _passenger_failure(found.error)
+    return found.value
+
+
+def _require_passenger(services: Services, subject_id: str | None) -> Passenger:
+    """The rider, with the maximum heart rate and the age a programme is vetted on."""
+    vetted = passenger_of(_require_rider(services, subject_id), services.clock.unix_millis())
+    if isinstance(vetted, Err):
+        raise _passenger_failure(vetted.error)
+    return vetted.value
+
+
+def _require_rider_for(services: Services, occupancy: Occupancy, subject_id: str | None) -> str:
+    """Who rides a manual session: nobody on the bench, a rider of the list on board."""
+    if occupancy is Occupancy.BENCH:
+        if subject_id:
+            raise _passenger_failure(OnBench())
+        return ""
+    return _require_rider(services, subject_id).user_id
 
 
 def _optional_seconds(value: float | None) -> Seconds | None:

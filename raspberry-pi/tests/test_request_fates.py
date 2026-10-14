@@ -78,6 +78,7 @@ from src.web.routes import (
     answer_refusal,
 )
 from src.web.schemas import CommandRow, StatusRow, WsEnvelope, encode_envelope
+from tests.roster_support import RIDER, RIDER_ID
 from tests.test_failure_rig import (
     OPERATOR,
     PROGRAMME_ENV,
@@ -724,7 +725,7 @@ async def screen(web: WebRig) -> httpx.AsyncClient:
 
 
 def start_body(operator: str) -> Body:
-    return {"profile_id": PROFILE_ID, "operator": operator, "subject_age": 41}
+    return {"profile_id": PROFILE_ID, "operator": operator, "subject_id": RIDER_ID}
 
 
 async def test_a_second_start_gets_a_code_a_fixed_sentence_and_nothing_of_the_first(
@@ -737,9 +738,9 @@ async def test_a_second_start_gets_a_code_a_fixed_sentence_and_nothing_of_the_fi
     assert refusal_of(second) == RefusedAtOnce(
         detail=START_PENDING_DETAIL, code=START_PENDING, waiting_request_id=request_of(first)
     )
-    # Nothing of the request in the way: not who asked, not when, not the rider's age.
+    # Nothing of the request in the way: not who asked, not when, not the rider.
     body_without_opaque_id = second.text.replace(f'"{request_of(first)}"', '""')
-    for leaked in (ALICE, "alice", "StartSession", "subject_age", "41", "at="):
+    for leaked in (ALICE, "alice", "StartSession", "subject_id", RIDER_ID, "at="):
         assert leaked not in body_without_opaque_id, leaked
     waiting = web.surface.pending
     assert isinstance(waiting, StartSession)
@@ -1236,19 +1237,25 @@ async def test_a_programme_start_is_answered_under_its_identifier_taken_or_refus
     tmp_path: Path,
 ) -> None:
     made = await console(tmp_path, programmes=True)
-    body: Body = {"profile_id": SHORT_PROFILE, "operator": ALICE}
+    body: Body = {"profile_id": SHORT_PROFILE, "operator": ALICE, "subject_id": RIDER_ID}
+    roster = made.rig.panel.roster
 
-    without_age = await made.post("/api/session/start", body)
+    # The list held when the start is asked holds the rider; the one held when
+    # the loop arms it no longer does: the loop refuses it.
+    no_longer_listed = await made.post("/api/session/start", body)
+    roster.adopt((), made.rig.clock.monotonic())
     await made.tick()
-    with_age = await made.post("/api/session/start", {**body, "subject_age": 30})
+    roster.adopt((RIDER,), made.rig.clock.monotonic())
+    listed_again = await made.post("/api/session/start", body)
     await made.tick()
 
     assert made.said(*FATE_KINDS) == [
-        (EventKind.REFUSED, request_of(without_age)),
-        (EventKind.TAKEN, request_of(with_age)),
+        (EventKind.REFUSED, request_of(no_longer_listed)),
+        (EventKind.TAKEN, request_of(listed_again)),
     ]
     assert made.rig.refusals() == [
-        "demarrage refuse : age du passager requis pour une seance programmee"
+        "demarrage refuse : ce passager n'est pas dans la derniere liste du tableau de bord "
+        "(droit retire, ou liste changee) : le choisir de nouveau"
     ]
     assert made.rig.panel.runtime.state is RuntimeState.RUNNING
     await made.rig.panel.close()

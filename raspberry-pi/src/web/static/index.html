@@ -351,9 +351,16 @@
         <label>Operateur
           <input id="operator" type="text" autocomplete="off" placeholder="qui conduit la seance" />
         </label>
-        <label>Age du passager (ans, obligatoire)
-          <input id="rider-age" type="number" min="1" max="120" step="1" placeholder="refus si inconnu ou trop jeune" />
+        <!--
+          The rider, from the list the dashboard gives this machine (GET /api/roster).
+          Their age and max heart rate are shown, never typed: a manager sets them on
+          the site. The name stays on this page: nothing writes it.
+        -->
+        <label>Passager (liste du tableau de bord, obligatoire)
+          <select id="rider"></select>
         </label>
+        <p id="rider-facts" class="note">&mdash;</p>
+        <p id="roster-note" class="note"></p>
         <button id="preview" class="btn" type="button">Previsualiser</button>
         <button id="start" class="btn btn-go" type="button">Demarrer la seance</button>
         <!--

@@ -43,6 +43,7 @@ from src.units import Monotonic, RawRegister, Seconds, UnixMillis
 from src.web.deps import Services, new_instance
 from src.web.routes import DRIVE_FAULT_DETAIL
 from src.web.schemas import SnapshotRow, StatusRow, WsEnvelope
+from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import OPERATOR as CONSOLE_OPERATOR
 from tests.test_failure_rig import TICK, attest, make_rig, precommanded
 from tests.test_failure_rig import Rig as ConsoleRig
@@ -287,7 +288,7 @@ async def test_a_drive_never_read_is_unknown_whatever_the_snapshot_holds(rig: Ri
 
 
 def _start_body() -> dict[str, object]:
-    return {"profile_id": PROFILE_ID, "operator": OPERATOR, "subject_age": 30}
+    return {"profile_id": PROFILE_ID, "operator": OPERATOR, "subject_id": RIDER_ID}
 
 
 async def test_a_programme_start_is_refused_at_once_while_the_drive_shows_a_fault(
@@ -403,7 +404,9 @@ async def test_what_cannot_be_started_anyway_is_still_told_its_own_reason_first(
             "/api/session/start", headers=auth(), json={"profile_id": PROFILE_ID, "operator": " "}
         )
         unknown = await session.post(
-            "/api/session/start", headers=auth(), json={"profile_id": "nope", "operator": OPERATOR}
+            "/api/session/start",
+            headers=auth(),
+            json={"profile_id": "nope", "operator": OPERATOR, "subject_id": RIDER_ID},
         )
     assert nameless.status_code == HTTPStatus.BAD_REQUEST
     assert unknown.status_code == HTTPStatus.NOT_FOUND

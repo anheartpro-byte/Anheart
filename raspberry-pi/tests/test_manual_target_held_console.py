@@ -41,6 +41,7 @@ from src.training.runtime import (
 )
 from src.training.types import SafetyAction, SafetyVerdict
 from src.units import Monotonic, MotorRpm
+from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import (
     OPERATOR,
     PROGRAMME_ENV,
@@ -274,7 +275,8 @@ async def test_with_a_rider_the_console_follows_a_first_target_and_refuses_one_w
         await rig.tick(10.0)
         await attest(session)
         started = await session.post(
-            "/api/manual/start", json={"occupancy": "occupied", "operator": OPERATOR}
+            "/api/manual/start",
+            json={"occupancy": "occupied", "operator": OPERATOR, "subject_id": RIDER_ID},
         )
         assert started.status_code == httpx.codes.ACCEPTED, started.text
         await rig.tick(1.0)
@@ -353,7 +355,8 @@ async def test_with_a_rider_the_console_announces_a_hold_before_a_target_is_type
         assert await _announced(session) is None, "announced at rest, where no target is typed"
         await attest(session)
         started = await session.post(
-            "/api/manual/start", json={"occupancy": "occupied", "operator": OPERATOR}
+            "/api/manual/start",
+            json={"occupancy": "occupied", "operator": OPERATOR, "subject_id": RIDER_ID},
         )
         assert started.status_code == httpx.codes.ACCEPTED, started.text
         await rig.tick(1.0)

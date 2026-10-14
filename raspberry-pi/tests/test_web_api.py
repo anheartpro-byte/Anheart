@@ -120,6 +120,7 @@ from src.web.schemas import (
     encode_envelope,
 )
 from src.web.ws import TELEMETRY_PATH
+from tests.roster_support import RIDER_ID, listed
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 
@@ -230,6 +231,7 @@ def build_rig(tmp_path: Path, *, token: str | None = TOKEN, host: str = "127.0.0
         store=store,
         ports=StubPorts(),
         geometry=GEOMETRY,
+        roster=listed(clock),
     )
     return Rig(
         clock=clock,
@@ -473,7 +475,7 @@ async def test_a_start_is_refused_until_the_estop_wiring_is_attested(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
     )
     assert response.status_code == HTTPStatus.PRECONDITION_FAILED
     assert "attested" in detail(response)
@@ -521,7 +523,7 @@ async def test_start_stop_flow(client: httpx.AsyncClient, rig: Rig) -> None:
     started = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
     )
     assert started.status_code == HTTPStatus.ACCEPTED, started.text
     assert parse(CommandRow, started).kind == "start"
@@ -552,7 +554,7 @@ async def test_a_second_start_is_refused(client: httpx.AsyncClient, rig: Rig) ->
     not a reason to accept another one.
     """
     rig.attest()
-    body = {"profile_id": PROFILE_ID, "operator": OPERATOR}
+    body = {"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR}
     first = await client.post("/api/session/start", headers=auth(), json=body)
     assert first.status_code == HTTPStatus.ACCEPTED
 
@@ -577,7 +579,7 @@ async def test_a_second_stop_is_refused(client: httpx.AsyncClient, rig: Rig) -> 
     await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
     )
     first = await client.post("/api/session/stop", headers=auth(), json={"operator": OPERATOR})
     assert first.status_code == HTTPStatus.ACCEPTED
@@ -589,7 +591,9 @@ async def test_a_start_needs_an_operator_name(client: httpx.AsyncClient, rig: Ri
     """A session record nobody is answerable for is not a session record."""
     rig.attest()
     response = await client.post(
-        "/api/session/start", headers=auth(), json={"profile_id": PROFILE_ID, "operator": " "}
+        "/api/session/start",
+        headers=auth(),
+        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": " "},
     )
     assert response.status_code == HTTPStatus.BAD_REQUEST
 
@@ -602,7 +606,7 @@ async def test_a_start_for_an_unknown_profile_is_refused_before_submission(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": "no_such_profile", "operator": OPERATOR},
+        json={"subject_id": RIDER_ID, "profile_id": "no_such_profile", "operator": OPERATOR},
     )
     assert response.status_code == HTTPStatus.NOT_FOUND
     assert rig.surface.pending is None
@@ -617,7 +621,7 @@ async def test_a_start_with_a_malformed_profile_id_is_refused(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": "Not A Profile Id", "operator": OPERATOR},
+        json={"subject_id": RIDER_ID, "profile_id": "Not A Profile Id", "operator": OPERATOR},
     )
     assert response.status_code == HTTPStatus.BAD_REQUEST
 
@@ -630,7 +634,12 @@ async def test_an_impossible_duration_override_is_refused(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": PROFILE_ID, "operator": OPERATOR, "total_duration_s": 60.0},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "total_duration_s": 60.0,
+        },
     )
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert "hold_too_short" in detail(response)
@@ -726,7 +735,7 @@ async def test_a_start_is_refused_while_a_latched_verdict_stands(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
     )
     assert response.status_code == HTTPStatus.CONFLICT
     assert "acknowledged" in detail(response)
@@ -787,7 +796,7 @@ async def test_acknowledging_clears_the_latch_and_allows_a_start(
     started = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
     )
     assert started.status_code == HTTPStatus.ACCEPTED
 
@@ -1133,7 +1142,7 @@ async def test_a_go_silent_verdict_cannot_be_acknowledged_away(
     start = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
     )
     assert start.status_code == HTTPStatus.CONFLICT
 

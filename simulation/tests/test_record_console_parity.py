@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from tests.roster_support import RIDER_ID, listed
 
 from simulation.recording import FrameKind
 from simulation.replay import replay
@@ -94,6 +95,7 @@ async def _console_record(tmp_path: Path, *, programme: bool) -> Path:
         profiles_path=tmp_path / "profiles.json",
         treat=_inline,
         journal=journal,
+        roster=listed(clock),
     )
     surface = panel.surface
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
@@ -102,7 +104,7 @@ async def _console_record(tmp_path: Path, *, programme: bool) -> Path:
             profile_id="standard_30_min",
             operator=OPERATOR,
             total_duration_s=None,
-            subject_age=30,
+            subject_id=RIDER_ID,
         )
         assert isinstance(started, Ok), started
         await _ticks(panel, journal, clock, 8.0)

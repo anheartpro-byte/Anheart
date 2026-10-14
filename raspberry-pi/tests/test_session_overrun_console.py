@@ -68,6 +68,7 @@ from src.training.runtime import EndReason, RuntimeState, TrainingRuntime
 from src.training.safety import RULE_OPERATOR_ESTOP, RULE_SESSION_OVERRUN
 from src.training.types import RunMode, SafetyAction, TelemetrySnapshot
 from src.units import Seconds
+from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import OPERATOR, attest, start_manual
 from tests.test_runtime_session_overrun import (
     _nothing_asks_for_the_descent,  # pyright: ignore[reportPrivateUsage]
@@ -115,7 +116,7 @@ START_BODY: Final[dict[str, object]] = {
     "profile_id": QUICK_PROFILE,
     "operator": OPERATOR,
     "total_duration_s": None,
-    "subject_age": 30,
+    "subject_id": RIDER_ID,
 }
 
 MANUAL_LIMIT: Final[Seconds] = Seconds(30.0)

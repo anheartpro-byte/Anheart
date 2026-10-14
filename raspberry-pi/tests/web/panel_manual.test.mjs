@@ -163,7 +163,7 @@ for (const mode of ["manual", "programmed"]) {
     const { context, nodes } = panel(storage);
     context.state.profiles = [{ profile_id: "standard_30_min" }];
     nodes.get("profile").value = "standard_30_min";
-    nodes.get("rider-age").value = "30";
+    nodes.get("rider").value = "k17rider0synthetic";
     nodes.get("manual-bench").checked = true;
     const current = mode === "manual" ? "manual-operator" : "operator";
     const other = mode === "manual" ? "operator" : "manual-operator";
@@ -179,6 +179,7 @@ for (const mode of ["manual", "programmed"]) {
     if (mode === "manual") context.doManualStart();
     else context.doStart();
     assert.equal(requests[0].body.operator, "Declared actor");
+    if (mode === "programmed") assert.equal(requests[0].body.subject_id, "k17rider0synthetic");
     assert.equal(storage.get("anheart-operator"), "Declared actor");
     context.ping();
     assert.equal(storage.get("anheart-operator"), "Declared actor");

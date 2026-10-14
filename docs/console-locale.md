@@ -847,9 +847,12 @@ Si l'avertissement se lève avant l'arrêt, la consigne remonte vers la cible (b
 | champ `Operateur` | nom de la personne qui pilote ; obligatoire (400 sinon) |
 | bouton `Demarrer MANUEL` | `POST /api/manual/start` avec `occupancy: "bench"` ; la cible initiale est 0 |
 
-La page ne propose **que** la déclaration BANC. Une séance manuelle « personne à bord »
-(`occupied`) n'existe que par l'API, et elle est refusée tant que
-`OCCUPANCY_OCCUPIED_ENABLED=false` (jalon M6).
+La page ne propose **que** la déclaration BANC, qui ne nomme aucun passager. Une séance
+manuelle « personne à bord » (`occupied`) n'existe que par l'API, et elle est refusée
+tant que `OCCUPANCY_OCCUPIED_ENABLED=false` (jalon M6). Depuis ANH-84 elle nomme en plus
+un passager de la liste du tableau de bord (`subject_id`, section 9), vérifié par la
+route puis par la boucle à l'armement ; l'enregistrement et la séance déclarée au
+tableau de bord portent son identifiant.
 
 Pastille à côté du titre : `inactif`, `demarrage`, puis le libellé de l'occupation
 (`BANC - personne a bord : NON`).
@@ -1275,8 +1278,10 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 | `Profil` (liste) | les profils stockés, affichés `nom (id)` |
 | `Duree totale (minutes, vide = celle du profil)` | surcharge optionnelle de la durée |
 | `Operateur` | obligatoire |
-| `Age du passager (ans, obligatoire)` | une séance programmée refuse un âge inconnu ou inférieur à `MIN_RIDER_AGE` (18 par défaut) |
-| `Previsualiser` | `POST /api/plan/preview` : résout le profil **sans rien démarrer** (fonctionne même pendant une séance). Message : `plan resolu ; rien n'a ete demarre` |
+| `Passager (liste du tableau de bord, obligatoire)` (liste) | les passagers que le tableau de bord donne à cette machine (`GET /api/roster`, section « Le passager » plus bas), affichés par leur nom. Première ligne `- choisir le passager -` (ou `- aucun passager propose -` quand la liste est vide ou absente) |
+| ligne sous la liste | ce que le site a réglé pour le passager choisi : `age <n> ans · FC max <n> bpm (reglees sur le site par un gestionnaire, non modifiables ici)`. En rouge, suivie de la phrase de refus, quand une valeur manque sur le site (`FC max inconnue`, `age inconnu`). `aucun passager choisi` sinon ; `le passager choisi n'est plus dans la liste du tableau de bord : en choisir un`, en rouge, quand une liste plus récente ne le porte plus |
+| ligne suivante | l'état de la liste : `liste du tableau de bord recue il y a <n> s` (ou `min`) ; en rouge, la raison pour laquelle personne n'est proposé, ou la dernière demande restée sans réponse |
+| `Previsualiser` | `POST /api/plan/preview` : résout le profil **sans rien démarrer** (fonctionne même pendant une séance), ajusté à la FC max du passager choisi s'il y en a un. Message : `plan resolu ; rien n'a ete demarre` |
 | `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la console à la demande de cet écran, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` à l'événement `taken` de cette demande, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge à son événement `refused`, ou `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` en rouge à son événement `cancelled`. `pris` s'efface à la fin de la séance. Liaison coupée entre le clic et la réponse : en rouge, `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.`, jusqu'à ce que la console ait redit le sort de la demande ; liaison coupée après `pris` : en rouge, `la machine a pris le demarrage demande par cet ecran (start <profil>), mais sa liaison a ete coupee depuis : cet ecran ne sait pas si la seance en cours est encore celle-la.`, jusqu'à la réponse du statut. Si la durée demandée n'est pas celle du profil, elle suit le nom du profil dans la note (`start <profil> over <secondes> s`). Un démarrage refusé tout de suite par la console (un autre démarrage attend, un reset attend) : la phrase de la console, en rouge (section 6, « Refus immédiat »). Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
@@ -1290,18 +1295,63 @@ Pour qu'une séance programmée puisse partir, **toutes** ces conditions doivent
 (dans l'ordre où la console les vérifie, `LocalPanel._start_programme`) :
 
 1. `PROGRAMS_ENABLED=true` ;
-2. âge du passager connu et ≥ `MIN_RIDER_AGE` ;
-3. `OCCUPANCY_OCCUPIED_ENABLED=true` (une séance programmée a toujours une personne à bord) ;
-4. le profil existe et se résout (ajusté à la FC max du passager si elle est connue, pour
-   une séance lancée depuis le tableau de bord) ;
-5. le plafond du profil (`max_rpm`) est sous le plafond « personne à bord » ;
-6. la caméra, si configurée, ne bloque pas le démarrage ;
-7. les contrôles du runtime : attestation, aucun verdict en attente, paliers cardiaques du
+2. un passager de la liste du tableau de bord, que la liste tenue **au moment où la
+   boucle arme** porte encore, avec sa FC max et son année de naissance renseignées sur
+   le site ; pour un lancement venu du tableau de bord, les valeurs que porte le
+   lancement ;
+3. âge du passager (calculé depuis l'année de naissance, comme le site) ≥ `MIN_RIDER_AGE` ;
+4. `OCCUPANCY_OCCUPIED_ENABLED=true` (une séance programmée a toujours une personne à bord) ;
+5. le profil existe et se résout, ajusté à la FC max de ce passager : tous les contrôles
+   cardiaques sont refaits pour lui (zone haute ≤ 90 % de sa FC max, palier dur ≤ sa FC max) ;
+6. le plafond du profil (`max_rpm`) est sous le plafond « personne à bord » ;
+7. la caméra, si configurée, ne bloque pas le démarrage ;
+8. les contrôles du runtime : attestation, aucun verdict en attente, paliers cardiaques du
    profil égaux à ceux du superviseur (`HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM`), variateur
    disponible, pas en défaut, pas déjà en marche.
 
-Avec la configuration par défaut, les points 1 et 3 sont faux : **aucune séance
+Avec la configuration par défaut, les points 1 et 4 sont faux : **aucune séance
 programmée ne démarre** (403). Cela a été vérifié en simulation.
+
+La route vérifie le passager avant de mettre la demande dans la boîte aux lettres, et
+répond tout de suite : 422 sans passager, ou avec un âge saisi (`subject_age` n'est plus
+lu : `l'age du passager ne se saisit plus a la console : il vient du site, avec sa FC
+max, regles par un gestionnaire. Choisir le passager dans la liste (subject_id).`) ; 409
+pour un passager que la liste ne porte pas, une liste trop ancienne ou absente, une
+valeur manquante sur le site ; 422 pour un profil que la FC max de ce passager refuse.
+La boucle refait la vérification quand elle arme : une liste reçue entre le clic et
+l'armement qui ne porte plus le passager fait refuser le départ.
+
+### Le passager : la liste du tableau de bord (ANH-84)
+
+La console demande au tableau de bord la liste de ses passagers
+(`GET /api/machine/roster`) à son démarrage, puis toutes les 60 s **tant qu'aucune
+séance ne tourne**. La liste porte, pour chaque personne qui détient le droit de
+lancement sur cette machine et reste membre active de son organisation : son
+identifiant, son nom, sa FC max et son année de naissance, réglées sur le site par un
+gestionnaire. La console les affiche et ne permet pas de les modifier.
+
+| Ce qui arrive | Ce que la console fait de la liste |
+|---|---|
+| une réponse | elle remplace la liste tenue, en entier : un passager absent de la nouvelle n'est plus proposé, et un départ qui le nomme est refusé |
+| pas de réponse (réseau, erreur du serveur, réponse illisible) | la dernière liste reçue est gardée, en mémoire, **60 minutes** au plus après sa réception ; au-delà, personne n'est proposé (`liste des passagers perimee`) jusqu'à la réponse suivante |
+| clé de la machine refusée (401, 403) | la liste est vidée tout de suite : une machine que le tableau de bord ne reconnaît plus ne propose personne |
+| console sans tableau de bord (`MACHINE_API_KEY` vide) | aucune liste : personne n'est proposé, et seules les séances de banc partent |
+| redémarrage de la console | rien n'est gardé : la liste revient à la première réponse |
+
+La liste ne vit qu'en mémoire. Le **nom** d'un passager est montré sur cette page pour que
+l'opérateur choisisse la bonne personne ; il n'est écrit nulle part sur le disque (ni
+dans l'enregistrement, ni dans le journal hors séance, ni dans les journaux de la
+console) et aucune phrase de refus ne le cite. L'enregistrement de séance porte
+l'identifiant du passager (`subject_id`), un pseudonyme. La durée de 60 minutes est une
+valeur prudente par défaut (une ou deux séances sans réseau, pas une journée), à
+confirmer par le responsable de la machine.
+
+Ce que la liste ne garantit pas : un droit retiré sur le site après la dernière réponse
+n'est vu qu'à la réponse suivante. Le tableau de bord revérifie le droit quand la
+séance lui est déclarée et ne l'attribue pas à un passager qui ne l'a plus (mention
+`Passenger attribution unavailable at registration`, [convex.md](convex.md)). La
+revérification de l'identité et des droits à l'armement est le ticket ANH-144 ;
+l'aptitude et le consentement (ANH-143) ne sont pas encore servis par la liste.
 
 ### Carte « Ce que ce programme ferait »
 
@@ -1310,7 +1360,9 @@ Limites du profil : `zone` (bpm), `max absolu` (palier dur), `critique`, `FC max
 (Hz), `total`, `palier` (durée du HOLD). Après prévisualisation s'ajoutent : `charge au
 plafond` (g et tr/min de sortie), `charge echauffement`, `charge minimum`, `duree modifiee`,
 et le tableau des phases (`baseline`, `warmup`, `hold`, `cooldown`, `recovery`, avec début,
-fin, durée).
+fin, durée). `FC max du sujet` est celle du profil stocké tant que rien n'est prévisualisé ;
+une prévisualisation faite avec un passager choisi montre le profil ajusté à sa FC max, celui
+qu'un départ pour lui armerait.
 
 Exemple vérifié (`standard_30_min`) : zone 118 à 138 bpm, plafond 276 tr/min moteur =
 5,54 tr/min de sortie = 10 Hz = 0,052 g à 1,5 m. Ce plafond est trop bas pour atteindre la
@@ -1834,7 +1886,17 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : plus assez de fichiers libres pour l'enregistrement de seance : <n> inodes libres sous <dossier>, 36016 requis (une seance cree des milliers de petits fichiers). Liberer de l'espace` | il reste des octets, mais plus assez d'inodes libres pour les fichiers d'une séance ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus` | aucune mesure du disque depuis plus de 15 s, sans rien d'annoncé |
 | `demarrage refuse : enregistrement de seance impossible pour l'instant : la fermeture d'un enregistrement est en cours sous <dossier>, derniere mesure de l'espace libre il y a <n> s. Reessayer dans un instant` | la console finit de fermer l'enregistrement précédent (ou `la purge des enregistrements deposes est en cours`) et une étape a duré plus de 15 s |
-| `demarrage refuse : age du passager requis pour une seance programmee` | âge vide |
+| `demarrage refuse : passager requis avec une personne a bord, a choisir dans la liste du tableau de bord` | aucun passager choisi (séance programmée, ou manuelle avec personne à bord) |
+| `demarrage refuse : ce passager n'est pas dans la derniere liste du tableau de bord (droit retire, ou liste changee) : le choisir de nouveau` | la liste tenue ne porte pas (ou plus) ce passager |
+| `demarrage refuse : liste des passagers pas encore recue du tableau de bord` | aucune réponse depuis le démarrage de la console |
+| `demarrage refuse : liste des passagers perimee : recue il y a <n> min, au-dela de 60 min personne n'est propose` | dernière réponse trop ancienne |
+| `demarrage refuse : aucun tableau de bord configure sur cette console : la liste des passagers vient du site` | console sans `MACHINE_API_KEY` |
+| `demarrage refuse : le tableau de bord refuse la cle de cette machine : aucun passager n'est propose` | clé refusée (401, 403) à la dernière demande de liste |
+| `demarrage refuse : FC max du passager non renseignee sur le site (a regler par un gestionnaire)` | séance programmée, FC max absente sur le site |
+| `demarrage refuse : annee de naissance du passager non renseignee sur le site (a regler par un gestionnaire)` | séance programmée, année de naissance absente sur le site |
+| `demarrage refuse : age du passager incalculable avec l'horloge de cette machine` | l'horloge du Pi et l'année de naissance ne donnent pas un âge plausible |
+| `demarrage refuse : une seance de banc n'a personne a bord, donc aucun passager` | séance de banc qui nomme un passager |
+| `demarrage refuse : age du passager requis pour une seance programmee` | lancement venu du tableau de bord sans âge |
 | `demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)` | passager trop jeune |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) |
 | `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil rejeté pour la FC max du passager (zone au-dessus de 90 % de la FC max, etc.) |
@@ -1960,7 +2022,7 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | GET | `/api/profiles` | - | profils stockés et révision | 200 |
 | PUT | `/api/profiles/{profile_id}?rev=<n>` | document de profil JSON (son `profile_id` doit égaler l'URL) | crée ou remplace ; validé par `parse_profile` | 200 ; 400 (id incohérent, document mal formé) ; 422 (profil rejeté, toutes les violations listées) ; 409 (révision dépassée) ; 500 (écriture impossible) |
 | DELETE | `/api/profiles/{profile_id}?rev=<n>` | - | supprime un profil | 200 ; 404 ; 409 ; 500 |
-| POST | `/api/plan/preview` | `{"profile_id", "total_duration_s"?}` | résout sans rien démarrer : phases et vitesses exprimées en moteur, sortie, Hz, g | 200 ; 404 ; 422 |
+| POST | `/api/plan/preview` | `{"profile_id", "total_duration_s"?, "subject_id"?}` | résout sans rien démarrer, ajusté à la FC max du passager nommé : phases et vitesses exprimées en moteur, sortie, Hz, g | 200 ; 404 ; 422 ; 409 (passager refusé) |
 
 La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles que par l'API.
 
@@ -1968,7 +2030,8 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_age"?}` | démarre une séance programmée | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 ; 409 (dont : variateur en défaut) ; 412 |
+| GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}]}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
+| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_id"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi) ; 409 (dont : passager refusé, variateur en défaut) ; 412 |
 | POST | `/api/session/stop` | `{"operator", "reason"?}` | fin sur la rampe mise en service | 202 `{kind, operator, detail, at, request_id}` ; 400 ; 409 |
 | POST | `/api/session/estop` | `{"operator"?, "reason"?}` | verrouille l'arrêt d'urgence, **jamais refusé** | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
 
@@ -1976,7 +2039,7 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator"}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue) ; 400 ; 409 (dont : variateur en défaut) ; 412 |
+| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator", "subject_id"?}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois ; `occupied` nomme un passager de la liste, `bench` n'en nomme aucun | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue, passager manquant ou nommé sur le banc) ; 409 (dont : passager absent de la liste, variateur en défaut) ; 400 ; 412 |
 | POST | `/api/manual/target` | `{"output_rpm", "operator"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 (même corps) ; 422 (négatif, non fini) ; 400 ; 409 |
 | POST | `/api/drive/fault-reset` | `{"operator"}` | reset nommé d'un défaut variateur | 202 (même corps) ; 400 ; 409 |
 
@@ -2161,7 +2224,12 @@ répondu à temps. Détail dans
   demande E-STOP sans réponse, le verrou d'arrêt d'urgence dans `/api/status`, le
   bandeau de reprise automatique, les pastilles barrées et `perime` en orange.
 - La page ne permet de déclarer que l'occupation BANC. L'API accepte `occupied`, refusée
-  tant que `OCCUPANCY_OCCUPIED_ENABLED=false`.
+  tant que `OCCUPANCY_OCCUPIED_ENABLED=false`, avec un passager de la liste.
+- La liste des passagers de la page Seance n'a été montrée par aucun navigateur : elle est
+  tenue par les tests de la page (`raspberry-pi/tests/web/panel_rider.test.mjs`) et de la
+  console (`raspberry-pi/tests/test_panel_rider.py`, `test_roster.py`). Le bouton
+  **Demarrer la seance** n'est pas désactivé sans passager : la console refuse (422) et la
+  note le dit.
 - La page n'a pas d'éditeur de profils, alors que l'API en fournit un (`PUT`/`DELETE`).
 - L'estimation de rotation du capteur LUX ne suit pas le variateur simulé en simulation.
 

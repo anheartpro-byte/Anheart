@@ -51,6 +51,7 @@ from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, MotorRpm, Seconds, UnixMillis
 from src.wall_clock import WallClockProbe
 from src.web.app import create_app
+from tests.roster_support import RIDER_ID, listed
 
 TICK: Final[Seconds] = Seconds(0.2)
 OPERATOR: Final[str] = "dr. attending"
@@ -366,6 +367,8 @@ def make_rig(
         transport=transport,
         journal=journal,
         wall_clock=wall_clock,
+        # The rider a programme names: the list a linked console would hold.
+        roster=listed(clock),
     )
     rig = Rig(clock=clock, panel=panel, simulator=sim, watcher=panel.hub.subscribe(), config=config)
     return rig, wrapper
@@ -433,7 +436,7 @@ async def start_programme(session: httpx.AsyncClient) -> None:
             "profile_id": SHORT_PROFILE,
             "operator": OPERATOR,
             "total_duration_s": None,
-            "subject_age": 30,
+            "subject_id": RIDER_ID,
         },
     )
     if started.status_code != 202:

@@ -52,6 +52,7 @@ from src.panel_status import PanelSource
 from src.presence.monitor import PresenceDecision, PresenceMonitor
 from src.record.export import RecordExporter
 from src.result import Result
+from src.roster import Roster
 from src.sensors.base import SensorKind, SensorReading
 from src.service_state import NotOutOfService, ServiceStatus
 from src.telemetry import TelemetryHub
@@ -572,6 +573,10 @@ class Services:
     The runtime on the console. ``None``: the supervisor alone is read, which
     is everything there is when nothing else can latch.
     """
+
+    roster: Roster | None = None
+    """The riders' list (``GET /api/roster``), which a start with a person on board
+    names one of. ``None``: this interface has none, and refuses such a start."""
 
     instance: str = field(default_factory=new_instance)
     """What this run of the console calls itself (:func:`new_instance`).

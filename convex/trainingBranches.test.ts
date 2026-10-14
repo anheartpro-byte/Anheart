@@ -915,26 +915,48 @@ describe("launch rights are granted once and revoked quietly", () => {
     expect(
       await w.t.query(internal.training.getRoster, { machineId: w.machine }),
     ).toEqual([
-      { userId: w.otherPatient, name: "otherPatient Synthetic", hrMax: null },
-      { userId: w.patient, name: "patient Synthetic", hrMax: 180 },
-      { userId: w.stranger, name: "stranger Synthetic", hrMax: 182 },
+      {
+        userId: w.otherPatient,
+        name: "otherPatient Synthetic",
+        hrMax: null,
+        birthYear: null,
+      },
+      {
+        userId: w.patient,
+        name: "patient Synthetic",
+        hrMax: 180,
+        birthYear: 1990,
+      },
+      {
+        userId: w.stranger,
+        name: "stranger Synthetic",
+        hrMax: 182,
+        birthYear: turning(37),
+      },
     ]);
   });
 
-  it.each<[string, Physiology]>([
-    ["a birth year that is not a number", { birthYear: Number.NaN }],
-    ["a fraction of a year as birth year", { birthYear: turning(37) + 0.5 }],
+  // The birth year the machine is served alongside (ANH-84): a whole number, or null.
+  it.each<[string, Physiology, number | null]>([
+    ["a birth year that is not a number", { birthYear: Number.NaN }, null],
+    [
+      "a fraction of a year as birth year",
+      { birthYear: turning(37) + 0.5 },
+      null,
+    ],
     [
       "a max heart rate that is not a number",
       { hrMax: Number.NaN, birthYear: turning(37) },
+      turning(37),
     ],
     [
       "a fraction of a beat as max heart rate",
       { hrMax: 180.5, birthYear: turning(37) },
+      turning(37),
     ],
   ])(
     "ANH-205: gives no max heart rate, wherever one is shown or served, for a rider with %s on record",
-    async (_name, physiology) => {
+    async (_name, physiology, birthYear) => {
       const w = await seedWorld(modules);
       await withPhysiology(w, w.patient, physiology);
 
@@ -963,7 +985,12 @@ describe("launch rights are granted once and revoked quietly", () => {
       expect(
         await w.t.query(internal.training.getRoster, { machineId: w.machine }),
       ).toEqual([
-        { userId: w.patient, name: "patient Synthetic", hrMax: null },
+        {
+          userId: w.patient,
+          name: "patient Synthetic",
+          hrMax: null,
+          birthYear,
+        },
       ]);
     },
   );
