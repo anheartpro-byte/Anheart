@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { isAnheartAdmin } from "@/lib/organizationAccess";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
@@ -56,7 +57,8 @@ export default function MachinesPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
 
-  const isAdmin = user?.role === "admin";
+  // Deleted machines and creation are the Anheart admin's.
+  const isAdmin = isAnheartAdmin(user?.role);
 
   // For admin: always fetch all machines (including deleted) and filter client-side
   // For others: fetch only non-deleted machines
@@ -73,7 +75,7 @@ export default function MachinesPage() {
     return allMachines;
   }, [allMachines, isAdmin, showDeleted]);
 
-  const canCreate = user?.role === "admin"; // Only admin can create machines
+  const canCreate = isAdmin;
 
   const columns = useMemo<ColumnDef<Machine>[]>(
     () => [

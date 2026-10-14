@@ -4,19 +4,21 @@
  * Editing a machine calls `machines.updateMachine` (admin, or a gestionnaire
  * of the machine). Choosing the machine's gestionnaires is a separate call,
  * `machines.assignMachineToGestionnaires`, which the server reserves to an
- * admin. These functions decide when the form makes that second call, and
- * make it. They take the mutation as an argument so the rule is tested
- * without a browser.
+ * admin: the Anheart admin, or the admin of the machine's organisation. These
+ * functions decide when the form makes that second call, and make it. They
+ * take the mutation as an argument so the rule is tested without a browser.
  */
+import { isOrganizationAdmin } from "./organizationAccess";
 
 /**
  * Whether this role may choose a machine's gestionnaires in the form.
  *
- * Admin only today. This is the single place to extend when another role may
- * do it. An unknown role (account not loaded yet) may not.
+ * An admin: the Anheart admin, or an organisation admin (whose machines are
+ * all of their organisation). This is the single place to extend when another
+ * role may do it. An unknown role (account not loaded yet) may not.
  */
 export function canAssignGestionnaires(role: string | undefined): boolean {
-  return role === "admin";
+  return isOrganizationAdmin(role);
 }
 
 /**

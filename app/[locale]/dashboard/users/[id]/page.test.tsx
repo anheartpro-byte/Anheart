@@ -237,6 +237,23 @@ describe("user page: what the visitor may do to the account", () => {
     expect(propsOf<EditWindow>("PatientFormModal").open).toBe(false);
   });
 
+  it("lets the admin of a client organisation do the same to a patient of the organisation", async () => {
+    // ANH-187: the server lets this role manage the members of its organisation.
+    answer(api.sessions.listSessions, []);
+    await open("org_admin");
+
+    expect(screen.getByRole("button", editButton)).toBeTruthy();
+    expect(screen.getByRole("button", deleteButton)).toBeTruthy();
+    expect(propsOf("PhysiologyCard")).toEqual({ userId, user: patient });
+  });
+
+  it("lets the admin of a client organisation delete a manager of the organisation, but not edit them as a patient", async () => {
+    await open("org_admin", manager);
+
+    expect(screen.getByRole("button", deleteButton)).toBeTruthy();
+    expect(screen.queryByRole("button", editButton)).toBeNull();
+  });
+
   it("lets a manager do the same to a patient", async () => {
     answer(api.sessions.listSessions, []);
     await open("gestionnaire");
@@ -304,10 +321,6 @@ describe("user page: what the visitor may do to the account", () => {
 
   it.each([
     ["a patient", "user"],
-    // What the page does today: the admin of a client organisation, whom the
-    // server lets manage the accounts of that organisation, gets none of the
-    // controls here.
-    ["the admin of a client organisation", "org_admin"],
     ["an account without a row", null],
   ] as const)(
     "shows %s the account and nothing to act on it",

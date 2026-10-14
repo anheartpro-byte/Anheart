@@ -115,8 +115,13 @@ describe("dashboard home: what each role sees", () => {
     expect(screen.getByText("Welcome, Paul")).toBeTruthy();
   });
 
-  it("shows an admin the machines online and the way to the users", async () => {
-    signedInAs("admin");
+  it.each([
+    ["an admin", "admin"],
+    // ANH-187: the admin of a client organisation manages its machines and
+    // its members, as the server lets them.
+    ["the admin of a client organisation", "org_admin"],
+  ] as const)("shows %s the machines online and the way to the users", async (_name, role) => {
+    signedInAs(role);
     answer(api.machines.listMachines, [machine("A")]);
     answer(api.sessions.listSessions, []);
     await renderPage(<DashboardPage />);
@@ -138,12 +143,7 @@ describe("dashboard home: what each role sees", () => {
     expect(screen.queryByText(fr.nav.users)).toBeNull();
   });
 
-  it.each([
-    ["a patient", "user"],
-    // What the page does today: the admin of a client organisation, who
-    // manages its machines and its members on the server, sees neither card.
-    ["the admin of a client organisation", "org_admin"],
-  ] as const)(
+  it.each([["a patient", "user"]] as const)(
     "shows %s the active sessions only, neither machines nor people",
     async (_name, role) => {
       signedInAs(role);

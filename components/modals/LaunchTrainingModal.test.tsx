@@ -309,16 +309,20 @@ describe("ANH-203 launch window: who can be chosen as rider", () => {
     expect(asks("users:getPatientsForGestionnaire")).toEqual(["skip"]);
   });
 
-  it("an organisation administrator is offered no rider but himself (what the window does today)", () => {
-    // The server lets this role launch for someone else; the window does not offer it.
+  it("an organisation administrator is offered himself and the patients of the organisation", () => {
+    // ANH-187: the server lets this role launch for a member of its
+    // organisation, and lists those members to it (users.listUsers).
     signedInAs("org_admin");
     machine();
+    answer("users:listUsers", [PATIENT]);
+    answer("training:listLaunchRights", []);
 
     const { screen } = open();
 
-    expect(options(screen)).toEqual([ENDURANCE_OPTION, SPRINT_OPTION]);
-    expect(asks("users:listUsers")).toEqual(["skip"]);
+    expect(options(screen).slice(2)).toEqual([MYSELF_OPTION, PATIENT_OPTION]);
+    expect(asks("users:listUsers")).toEqual([{ role: "user" }]);
     expect(asks("users:getPatientsForGestionnaire")).toEqual(["skip"]);
+    expect(asks("training:listLaunchRights")).toEqual([{ machineId }]);
   });
 
   it("shows no patient while the list of patients is still loading", () => {

@@ -285,3 +285,27 @@ describe("settings: changing the role of an account", () => {
     expect(screen.queryAllByRole("option")).toEqual([]);
   });
 });
+
+describe("ANH-187 settings: once Clerk carries the roles", () => {
+  it("offers no change of role, and sends the admin to the Members page instead", async () => {
+    const me = signedInAs("admin", { rolesManagedInClerk: true });
+    answer(api.users.listUsers, [listed(me._id, me.firstName, "admin"), gaston]);
+    await renderPage(<SettingsPage />);
+
+    const roles = card(fr.settings.roleManagement);
+    expect(roles.getByText(fr.settings.rolesInClerk)).toBeTruthy();
+    expect(
+      roles.getByRole("link", { name: fr.settings.openMembers }).getAttribute("href"),
+    ).toBe("/dashboard/members");
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("button", updateButton)).toBeNull();
+  });
+
+  it("still shows the admin's account and the facts of the application", async () => {
+    signedInAs("admin", { rolesManagedInClerk: true });
+    await renderPage(<SettingsPage />);
+
+    expect(screen.getByText(fr.settings.yourAccount)).toBeTruthy();
+    expect(screen.getByText(fr.settings.systemInfo)).toBeTruthy();
+  });
+});

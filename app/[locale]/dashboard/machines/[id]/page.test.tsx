@@ -83,6 +83,7 @@ function machine(overrides: Partial<Machine> = {}): Machine {
   return {
     _id: machineId,
     _creationTime: CREATED,
+    organizationId: "org-centre-a" as Id<"organizations">,
     name: "Centri Paris",
     status: "online",
     lastHeartbeat: NOW - 5_000,
@@ -283,12 +284,21 @@ describe("machine page: what each role may do", () => {
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: false });
   });
 
+  it("lets the admin of a client organisation do the same, choosing among all the patients of the organisation, without restoring", async () => {
+    // ANH-187: the server lets this role manage the machines of its
+    // organisation; restoring a deleted machine stays the Anheart admin's.
+    await open("org_admin");
+
+    expect(screen.getByRole("button", launchButton)).toBeTruthy();
+    expect(screen.getByRole("button", editButton)).toBeTruthy();
+    expect(screen.getByRole("button", regenerateButton)).toBeTruthy();
+    expect(screen.getByRole("button", deleteButton)).toBeTruthy();
+    expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
+    expect(screen.queryByRole("button", restoreButton)).toBeNull();
+  });
+
   it.each([
     ["a patient", "user"],
-    // What the page does today: the admin of a client organisation, whom the
-    // server lets manage the machines of that organisation, gets none of the
-    // controls here.
-    ["the admin of a client organisation", "org_admin"],
     ["an account without a row", null],
   ] as const)(
     "shows %s the machine and nothing to act on it",
@@ -324,6 +334,13 @@ describe("machine page: a deleted machine", () => {
     expect(wasMounted("MachineLiveCard")).toBe(false);
     expect(wasMounted("MachineProgramsCard")).toBe(false);
     expect(wasMounted("LaunchRightsCard")).toBe(false);
+  });
+
+  it("leaves the admin of a client organisation nothing to act on a deleted machine", async () => {
+    await open("org_admin", deleted());
+
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("shows a dash when the date of the deletion is unknown", async () => {

@@ -174,7 +174,9 @@ describe("patient page: which patient it shows", () => {
 });
 
 describe("patient page: what each role may do", () => {
-  it.each(["admin", "gestionnaire"] as const)(
+  // ANH-187: the admin of a client organisation manages its accounts, as the
+  // server lets them.
+  it.each(["admin", "org_admin", "gestionnaire"] as const)(
     "lets a %s edit and delete the account, and set the physiology of this patient",
     async (role) => {
       answer(api.sessions.listSessions, []);
@@ -191,10 +193,6 @@ describe("patient page: what each role may do", () => {
 
   it.each([
     ["a patient", "user"],
-    // What the page does today: the admin of a client organisation, whom the
-    // server lets manage the accounts of that organisation, gets none of the
-    // controls here.
-    ["the admin of a client organisation", "org_admin"],
     ["an account without a row", null],
   ] as const)(
     "shows %s the account and nothing to act on it",

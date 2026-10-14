@@ -3,6 +3,7 @@
 import { useState, use, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { isOrganizationAdmin } from "@/lib/organizationAccess";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
@@ -41,7 +42,7 @@ export default function GestionnaireDetailPage({
 
   const gestionnaireId = id as Id<"users">;
   const user = useQuery(api.users.getCurrentUser);
-  const gestionnaires = useQuery(api.users.listGestionnaires);
+  const gestionnaires = useQuery(api.users.listGestionnaires, {});
   const allMachines = useQuery(api.machines.listMachines, {
     includeDeleted: false,
   });
@@ -88,7 +89,7 @@ export default function GestionnaireDetailPage({
     }
   }, [gestionnairePatients]);
 
-  // Only admin can access this page
+  // The account and the lists are still loading.
   if (
     user === undefined ||
     gestionnaires === undefined ||
@@ -97,11 +98,13 @@ export default function GestionnaireDetailPage({
     return <GestionnaireDetailSkeleton />;
   }
 
-  if (user?.role !== "admin") {
+  if (!isOrganizationAdmin(user?.role)) {
     return (
       <div className="text-center py-12">
         <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-        <p className="text-muted-foreground">Admin access required</p>
+        <p className="text-muted-foreground">
+          {t("gestionnaires.accessDenied")}
+        </p>
       </div>
     );
   }
@@ -109,7 +112,7 @@ export default function GestionnaireDetailPage({
   if (!gestionnaire) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">Gestionnaire not found</p>
+        <p className="text-muted-foreground">{t("gestionnaires.notFound")}</p>
         <Link
           href="/dashboard/gestionnaires"
           className="text-primary hover:underline mt-2 inline-block"

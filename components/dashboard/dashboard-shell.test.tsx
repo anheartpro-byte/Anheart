@@ -81,9 +81,24 @@ vi.mock("@/components/ui/avatar", () => ({
   ),
 }));
 // The three controls of the header have their own tests: the header only has to hold them.
+// Clerk's organisation switcher is drawn by Clerk: the menu only places it.
+const clerk = vi.hoisted(() => ({ orgId: "org_centre_a" as string | null }));
 vi.mock("@clerk/nextjs", () => ({
+  useAuth: () => ({ isLoaded: true, orgId: clerk.orgId }),
   UserButton: (props: { afterSwitchSessionUrl?: string }) => (
     <div data-user-button="" data-after-switch={props.afterSwitchSessionUrl} />
+  ),
+  OrganizationSwitcher: (props: {
+    hidePersonal?: boolean;
+    afterSelectOrganizationUrl?: string;
+    afterLeaveOrganizationUrl?: string;
+  }) => (
+    <div
+      data-organization-switcher=""
+      data-hide-personal={props.hidePersonal}
+      data-after-select={props.afterSelectOrganizationUrl}
+      data-after-leave={props.afterLeaveOrganizationUrl}
+    />
   ),
 }));
 vi.mock("@/components/LanguageSwitcher", () => ({
@@ -96,13 +111,19 @@ vi.mock("@/components/ThemeToggle", () => ({
 const fr = messages.fr;
 const nav = fr.nav;
 
-function signedInAs(role: string | undefined) {
+/**
+ * The account `users.getCurrentUser` answers: `access` is how the server took
+ * the organisation of the call ("granted" unless a test says otherwise).
+ */
+function signedInAs(role: string | undefined, access = "granted") {
   answer(
     "users:getCurrentUser",
     role === undefined
       ? undefined
       : {
           role,
+          organizationAccess: access,
+          organizationClaim: "org_centre_a",
           firstName: "Ada",
           lastName: "Lovelace",
           email: "ada@anheart.test",
@@ -134,9 +155,13 @@ const MANAGER_ENTRIES = [
   [nav.sessions, "/dashboard/sessions"],
   [nav.reports, "/dashboard/reports"],
 ];
-const ADMIN_ENTRIES = [
+const ORGANIZATION_ADMIN_ENTRIES = [
   [nav.gestionnaires, "/dashboard/gestionnaires"],
+  [nav.members, "/dashboard/members"],
   [nav.users, "/dashboard/users"],
+];
+const ADMIN_ENTRIES = [
+  ...ORGANIZATION_ADMIN_ENTRIES,
   [nav.settings, "/dashboard/settings"],
 ];
 const PATIENT_ENTRIES = [
@@ -148,6 +173,7 @@ const PATIENT_ENTRIES = [
 beforeEach(() => {
   resetConvex();
   here.pathname = "/dashboard";
+  clerk.orgId = "org_centre_a";
 });
 
 describe("ANH-203 dashboard menu: what each role is shown", () => {
@@ -186,9 +212,25 @@ describe("ANH-203 dashboard menu: what each role is shown", () => {
     ]);
   });
 
+  it("an organisation administrator is shown the administration of the organisation, without the settings, and the management", () => {
+    signedInAs("org_admin");
+
+    const screen = render(<AppSidebar />);
+
+    expect(sections(screen)).toEqual([
+      fr.sidebar.main,
+      fr.sidebar.administration,
+      fr.sidebar.management,
+    ]);
+    expect(entries(screen)).toEqual([
+      HOME,
+      ...ORGANIZATION_ADMIN_ENTRIES,
+      ...MANAGER_ENTRIES,
+    ]);
+  });
+
   it.each([
     ["someone whose account is still loading", undefined],
-    ["an organisation administrator (what the menu does today)", "org_admin"],
     ["a role this version of the site does not know", "auditor"],
   ])("%s is shown the home entry only", (_who, role) => {
     signedInAs(role);
@@ -197,6 +239,52 @@ describe("ANH-203 dashboard menu: what each role is shown", () => {
 
     expect(sections(screen)).toEqual([fr.sidebar.main]);
     expect(entries(screen)).toEqual([HOME]);
+  });
+
+  it.each(["no_active_organization", "organization_not_synchronized"])(
+    "an account whose organisation the server refused (%s) is shown the home entry only, whatever its role",
+    (access) => {
+      signedInAs("admin", access);
+
+      const screen = render(<AppSidebar />);
+
+      expect(sections(screen)).toEqual([fr.sidebar.main]);
+      expect(entries(screen)).toEqual([HOME]);
+    },
+  );
+
+  it("shows the home entry only while a switch of organisation reaches the server", () => {
+    // Clerk shows centre B; the role was read with centre A's token.
+    signedInAs("admin");
+    clerk.orgId = "org_centre_b";
+
+    const screen = render(<AppSidebar />);
+
+    expect(sections(screen)).toEqual([fr.sidebar.main]);
+    expect(entries(screen)).toEqual([HOME]);
+  });
+
+  it("offers the organisation switcher to a signed-in visitor, without personal account, back to the dashboard of the locale", () => {
+    signedInAs("gestionnaire");
+
+    const screen = render(<AppSidebar />);
+
+    const [switcher] = screen.all((element) =>
+      element.hasAttribute("data-organization-switcher"),
+    );
+    expect(switcher?.getAttribute("data-hide-personal")).toBe("true");
+    expect(switcher?.getAttribute("data-after-select")).toBe("/fr/dashboard");
+    expect(switcher?.getAttribute("data-after-leave")).toBe("/fr/dashboard");
+  });
+
+  it("offers no organisation switcher while the account is loading", () => {
+    signedInAs(undefined);
+
+    const screen = render(<AppSidebar />);
+
+    expect(
+      screen.all((element) => element.hasAttribute("data-organization-switcher")),
+    ).toEqual([]);
   });
 
   it("shows who is signed in at the foot of the menu: initials, name and email", () => {
@@ -304,6 +392,7 @@ describe("ANH-203 breadcrumb of a dashboard page", () => {
     ["edit", fr.breadcrumb.edit],
     ["patients", nav.patients],
     ["users", nav.users],
+    ["members", nav.members],
     ["settings", nav.settings],
     ["reports", nav.reports],
   ])("the level « %s » reads « %s »", (segment, label) => {

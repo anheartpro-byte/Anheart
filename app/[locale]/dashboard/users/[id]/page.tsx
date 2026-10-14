@@ -3,6 +3,7 @@
 import { useState, use } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { isOrganizationAdmin, isStaff } from "@/lib/organizationAccess";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
@@ -74,10 +75,9 @@ export default function UserDetailPage({
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
-  const canManage =
-    currentUser?.role === "admin" || currentUser?.role === "gestionnaire";
+  const canManage = isStaff(currentUser?.role);
   const canDelete =
-    currentUser?.role === "admin" ||
+    isOrganizationAdmin(currentUser?.role) ||
     (currentUser?.role === "gestionnaire" && user?.role === "user");
 
   const handleDelete = async () => {

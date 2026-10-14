@@ -2,6 +2,7 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { isOrganizationAdmin, isStaff } from "@/lib/organizationAccess";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +42,7 @@ export default function DashboardPage() {
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {(user?.role === "admin" || user?.role === "gestionnaire") && (
+        {isStaff(user?.role) && (
           <Link href="/dashboard/machines">
             <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -79,10 +80,10 @@ export default function DashboardPage() {
           </Card>
         </Link>
 
-        {(user?.role === "admin" || user?.role === "gestionnaire") && (
+        {isStaff(user?.role) && (
           <Link
             href={
-              user?.role === "admin"
+              isOrganizationAdmin(user?.role)
                 ? "/dashboard/users"
                 : "/dashboard/patients"
             }
@@ -90,7 +91,9 @@ export default function DashboardPage() {
             <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium">
-                  {user?.role === "admin" ? t("nav.users") : t("nav.patients")}
+                  {isOrganizationAdmin(user?.role)
+                    ? t("nav.users")
+                    : t("nav.patients")}
                 </CardTitle>
                 <Users className="h-4 w-4 text-muted-foreground" />
               </CardHeader>

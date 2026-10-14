@@ -95,19 +95,13 @@ describe("gestionnaires list: who may read it", () => {
   it.each([
     ["a manager", "gestionnaire"],
     ["a patient", "user"],
-    // What the page does today: the admin of a client organisation, whom the
-    // server lets list the managers of that organisation, is refused here.
-    ["the admin of a client organisation", "org_admin"],
   ] as const)("refuses %s, and shows none of the list", async (_name, role) => {
     signedInAs(role);
     // Whatever the server would answer, nothing of it is drawn.
     answer(api.users.listGestionnaires, [gaston]);
     await renderPage(<GestionnairesPage />);
 
-    // What the page writes today: half of the sentence is not translated.
-    expect(
-      screen.getByText(`${fr.common.error}: Admin access required`),
-    ).toBeTruthy();
+    expect(screen.getByText(fr.gestionnaires.accessDenied)).toBeTruthy();
     expect(screen.queryByRole("heading")).toBeNull();
     expect(screen.queryByText("Gaston Lagaffe")).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
@@ -118,8 +112,31 @@ describe("gestionnaires list: who may read it", () => {
     answer(api.users.listGestionnaires, []);
     await renderPage(<GestionnairesPage />);
 
-    expect(screen.getByText(/Admin access required/)).toBeTruthy();
+    expect(screen.getByText(fr.gestionnaires.accessDenied)).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("shows the admin of a client organisation the managers the server lists for it", async () => {
+    // ANH-187: the server lists the managers of that organisation only.
+    signedInAs("org_admin");
+    answer(api.users.listGestionnaires, [gaston]);
+    await renderPage(<GestionnairesPage />);
+
+    expect(
+      screen.getByRole("heading", { name: fr.gestionnaires.title }),
+    ).toBeTruthy();
+    expect(listedNames()).toEqual(["Gaston Lagaffe"]);
+  });
+
+  it("sends the visitor to the Members page to add or remove a manager", async () => {
+    signedInAs("org_admin");
+    answer(api.users.listGestionnaires, []);
+    await renderPage(<GestionnairesPage />);
+
+    expect(screen.getByText(fr.gestionnaires.membersInClerk, { exact: false })).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: fr.nav.members }).getAttribute("href"),
+    ).toBe("/dashboard/members");
   });
 });
 

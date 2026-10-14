@@ -8,6 +8,8 @@ import {
 describe("ANH-155 canAssignGestionnaires", () => {
   it.each([
     { role: "admin", allowed: true },
+    // ANH-187: the server lets the admin of the machine's organisation do it.
+    { role: "org_admin", allowed: true },
     { role: "gestionnaire", allowed: false },
     { role: "user", allowed: false },
     { role: undefined, allowed: false },

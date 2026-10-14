@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { isOrganizationAdmin } from "@/lib/organizationAccess";
 
 import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
@@ -25,21 +26,23 @@ export default function GestionnairesPage() {
   const t = useTranslations();
   const router = useRouter();
   const user = useQuery(api.users.getCurrentUser);
-  const gestionnaires = useQuery(api.users.listGestionnaires);
+  const gestionnaires = useQuery(api.users.listGestionnaires, {});
 
   const [searchFilter, setSearchFilter] = useState("");
 
-  // Only admin can access this page
+  // The account and the lists are still loading.
   if (user === undefined || gestionnaires === undefined) {
     return <GestionnairesSkeleton />;
   }
 
-  if (user?.role !== "admin") {
+  // The Anheart admin, or the admin of the organisation: the server lists the
+  // gestionnaires of that organisation only (`users.listGestionnaires`).
+  if (!isOrganizationAdmin(user?.role)) {
     return (
       <div className="text-center py-12">
         <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
         <p className="text-muted-foreground">
-          {t("common.error")}: Admin access required
+          {t("gestionnaires.accessDenied")}
         </p>
       </div>
     );
@@ -62,6 +65,17 @@ export default function GestionnairesPage() {
           </p>
         </div>
       </div>
+
+      {/* Who is a gestionnaire is decided in Clerk, on the Members page. */}
+      <p className="text-sm text-muted-foreground">
+        {t("gestionnaires.membersInClerk")}{" "}
+        <Link
+          href="/dashboard/members"
+          className="text-primary hover:underline"
+        >
+          {t("nav.members")}
+        </Link>
+      </p>
 
       {/* Search */}
       <div className="relative max-w-sm">

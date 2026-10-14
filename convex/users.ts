@@ -29,6 +29,11 @@ import {
   findMembership,
   findUnlinkedDefaultOrganization,
   inScope,
+  MALFORMED_ORGANIZATION_CLAIM,
+  NO_ACTIVE_ORGANIZATION,
+  NO_ORGANIZATION,
+  ORGANIZATION_NOT_SYNCHRONIZED,
+  UNKNOWN_ORGANIZATION_ROLE,
   organizationFromClaims,
   organizationRoleOf,
   requireGestionnaireAdmin,
@@ -152,6 +157,27 @@ export const getOrCreateUser = mutation({
   },
 });
 
+const organizationAccessValidator = v.union(
+  v.literal("granted"),
+  v.literal("no_active_organization"),
+  v.literal("organization_not_synchronized"),
+  v.literal("unknown_organization_role"),
+  v.literal("malformed_organization_claim"),
+  v.literal("no_organization"),
+);
+
+/** Why the server accepts no organisation for a call, as the site names it. */
+const ORGANIZATION_ACCESS_OF_REFUSAL = new Map<
+  string,
+  Exclude<Infer<typeof organizationAccessValidator>, "granted">
+>([
+  [NO_ACTIVE_ORGANIZATION, "no_active_organization"],
+  [ORGANIZATION_NOT_SYNCHRONIZED, "organization_not_synchronized"],
+  [UNKNOWN_ORGANIZATION_ROLE, "unknown_organization_role"],
+  [MALFORMED_ORGANIZATION_CLAIM, "malformed_organization_claim"],
+  [NO_ORGANIZATION, "no_organization"],
+]);
+
 /**
  * Get current authenticated user
  *
@@ -159,6 +185,14 @@ export const getOrCreateUser = mutation({
  * identity. When the server accepts no organisation for the call (no active
  * organisation, unknown organisation or role), `organization` is null and
  * `role` is "user": every organisation-scoped function then refuses.
+ *
+ * Three fields tell the site what to show around that:
+ * - `organizationAccess`: "granted", or why no organisation was accepted;
+ * - `organizationClaim`: the Clerk organisation the call named (`org_id`),
+ *   accepted or not, so the site knows whether this answer already follows
+ *   the organisation Clerk shows as active;
+ * - `rolesManagedInClerk`: true once `ANHEART_ORG_ID` is set, when a role is
+ *   changed in Clerk Organizations only (`updateUserRole` refuses).
  */
 export const getCurrentUser = query({
   args: {},
@@ -181,6 +215,9 @@ export const getCurrentUser = query({
         }),
         v.null(),
       ),
+      organizationAccess: organizationAccessValidator,
+      organizationClaim: v.union(v.string(), v.null()),
+      rolesManagedInClerk: v.boolean(),
       gestionnaireId: v.optional(v.id("users")),
       firstName: v.string(),
       lastName: v.string(),
@@ -195,7 +232,7 @@ export const getCurrentUser = query({
   handler: async (ctx) => {
     const current = await getUserFromCtx(ctx);
     if (!current) return null;
-    const { user, session } = current;
+    const { user, session, refusal, organizationClaim } = current;
     return {
       _id: user._id,
       _creationTime: user._creationTime,
@@ -208,6 +245,13 @@ export const getCurrentUser = query({
             slug: session.organization.slug,
           }
         : null,
+      organizationAccess:
+        refusal === null
+          ? ("granted" as const)
+          : // An unnamed refusal is no organisation: it never opens more.
+            (ORGANIZATION_ACCESS_OF_REFUSAL.get(refusal) ?? "no_organization"),
+      organizationClaim,
+      rolesManagedInClerk: anheartClerkOrganizationId() !== null,
       gestionnaireId: user.gestionnaireId,
       firstName: user.firstName,
       lastName: user.lastName,
@@ -901,10 +945,15 @@ export const getGestionnairesForPatient = query({
 
 /**
  * List all gestionnaires (admin only): every organisation for the Anheart
- * admin, their own organisation for an organisation admin
+ * admin, their own organisation for an organisation admin.
+ *
+ * `organizationId` narrows the list to the gestionnaires of one organisation
+ * (the machine form asks for those of the organisation a new machine goes
+ * to). An organisation admin naming another organisation than theirs gets an
+ * empty list, as for an organisation that does not exist.
  */
 export const listGestionnaires = query({
-  args: {},
+  args: { organizationId: v.optional(v.id("organizations")) },
   returns: v.array(
     v.object({
       _id: v.id("users"),
@@ -916,21 +965,30 @@ export const listGestionnaires = query({
       patientCount: v.number(),
     }),
   ),
-  handler: async (ctx) => {
+  handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
 
     if (!ORGANIZATION_ADMIN_ROLES.includes(currentUser.role)) {
       return [];
     }
+    if (
+      args.organizationId !== undefined &&
+      !inScope(currentUser, args.organizationId)
+    ) {
+      return [];
+    }
 
     // Get all active members with role gestionnaire
+    const organizationId =
+      args.organizationId ??
+      (currentUser.role === "admin" ? undefined : currentUser.organizationId);
     const memberships =
-      currentUser.role === "admin"
+      organizationId === undefined
         ? await ctx.db.query("memberships").collect()
         : await ctx.db
             .query("memberships")
             .withIndex("by_organization", (q) =>
-              q.eq("organizationId", currentUser.organizationId),
+              q.eq("organizationId", organizationId),
             )
             .collect();
     const gestionnaireIds = new Set(
@@ -938,6 +996,10 @@ export const listGestionnaires = query({
         .filter((m) => m.active && m.role === "gestionnaire")
         .map((m) => m.userId),
     );
+    // A link counts in the organisation listed: every one for the Anheart
+    // admin listing them all.
+    const listedHere = (r: { organizationId?: Id<"organizations"> }) =>
+      organizationId === undefined || r.organizationId === organizationId;
 
     // Get machine and patient counts for each
     const result = [];
@@ -961,12 +1023,8 @@ export const listGestionnaires = query({
         lastName: g.lastName,
         email: g.email,
         createdAt: g.createdAt,
-        machineCount: machineRelations.filter((r) =>
-          inScope(currentUser, r.organizationId),
-        ).length,
-        patientCount: patientRelations.filter((r) =>
-          inScope(currentUser, r.organizationId),
-        ).length,
+        machineCount: machineRelations.filter(listedHere).length,
+        patientCount: patientRelations.filter(listedHere).length,
       });
     }
 

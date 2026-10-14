@@ -6,7 +6,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { attachExistingRowsToAnheart } from "./migrations/multiOrganization";
+import {
+  ANHEART_ORGANIZATION_DUPLICATED,
+  attachExistingRowsToAnheart,
+} from "./migrations/multiOrganization";
 import {
   configureAnheartOrganization,
   modules,
@@ -364,6 +367,38 @@ describe("EX-4 migration: link with the Clerk organisation named by ANHEART_ORG_
     expect(await organizations(w)).toHaveLength(1);
     const machine = await w.t.run((ctx) => ctx.db.get(w.machine));
     expect(machine?.organizationId).toBe(mirrored);
+  });
+
+  // ANH-187 review: the Clerk webhook received the Anheart organisation before
+  // ANHEART_ORG_ID was set, so it created its own row. Linking that empty row would
+  // leave every existing machine, session and account outside Anheart.
+  it("refuses, and changes nothing, when the webhook mirrored the Clerk organisation before ANHEART_ORG_ID was set", async () => {
+    const w = await seedLegacyWorld(modules);
+    const { organizationId: defaultOrganization } = await migrate(w);
+    await w.t.mutation(internal.clerkWebhook.applyEvent, {
+      eventId: "evt_anheart_created",
+      event: {
+        kind: "organization",
+        deleted: false,
+        organization: {
+          id: "org_synthetic_anheart",
+          name: "Anheart",
+          slug: "anheart",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+        occurredAt: NOW,
+        updatedAt: NOW,
+      },
+    });
+    const before = await organizations(w);
+    configureAnheartOrganization("org_synthetic_anheart");
+
+    await expect(migrate(w)).rejects.toThrow(ANHEART_ORGANIZATION_DUPLICATED);
+
+    expect(await organizations(w)).toEqual(before);
+    const machine = await w.t.run((ctx) => ctx.db.get(w.machine));
+    expect(machine?.organizationId).toBe(defaultOrganization);
   });
 
   it("does not take a client organisation whose slug is the default one", async () => {

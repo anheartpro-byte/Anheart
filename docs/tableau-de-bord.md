@@ -66,16 +66,21 @@ Sommaire :
 
 ## 2. Rôles et accès
 
-Trois rôles. Un rôle se tient **dans une organisation** (un client) : Convex le
-lit dans le jeton Clerk ou, tant que Clerk Organizations n'est pas configuré,
-dans l'appartenance du compte (table `memberships`) ; `users.role` n'en est
-qu'un miroir pour l'affichage (voir
-[convex.md §3](convex.md#3-règles-dautorisation)). Les libellés affichés sont
-« Administrateur », « Gestionnaire », « Patient ».
+Trois rôles dans Clerk (`org:admin`, `org:gestionnaire`, `org:patient`), quatre
+pour le site : l'admin de l'organisation Anheart est **admin**, l'admin de toute
+autre organisation est **admin d'organisation** (`org_admin`). Un rôle se tient
+**dans une organisation** (un client) : Convex le lit dans le jeton Clerk ou,
+tant que Clerk Organizations n'est pas configuré, dans l'appartenance du compte
+(table `memberships`) ; `users.role` n'en est qu'un miroir pour l'affichage
+(voir [convex.md §3](convex.md#3-règles-dautorisation)). Les libellés affichés
+sont « Administrateur », « Administrateur d'organisation », « Gestionnaire »,
+« Patient ». Un rôle que le site ne connaît pas n'ouvre rien de plus qu'à un
+patient : ni entrée de menu, ni bouton (`lib/organizationAccess.ts`).
 
 | Rôle | Peut |
 |---|---|
-| **admin** | Tout voir et tout gérer. Créer les machines. Changer les rôles. Gérer les gestionnaires. Lancer une séance auto sur toute machine, pour lui-même ou pour n'importe quel patient. |
+| **admin** | Tout voir et tout gérer, dans toutes les organisations. Créer et restaurer les machines, dans l'organisation choisie. Changer les rôles tant que Clerk ne les porte pas. Gérer les gestionnaires. Lancer une séance auto sur toute machine, pour lui-même ou pour n'importe quel patient. |
+| **admin d'organisation** | Tout voir et tout gérer **dans son organisation** : machines (sauf créer et restaurer), patients, gestionnaires et leurs liens, membres (page Membres). Lancer une séance auto sur une machine de l'organisation, pour lui-même ou un patient de l'organisation. Pas de page Paramètres. |
 | **gestionnaire** | Voir et gérer **ses** machines (liées par l'admin) et **ses** patients. Créer des patients. Régler leur physiologie. Accorder / retirer le droit de lancement sur ses machines, **à ses patients**. Lancer une séance auto sur ses machines, pour lui-même ou un de ses patients. |
 | **user** (patient) | Voir ses propres séances et rapports. Lancer une séance auto **pour lui-même seulement**, sur les machines où un gestionnaire ou un admin lui a donné le droit. Arrêter sa propre séance. |
 
@@ -94,11 +99,42 @@ l'ont déjà par leur rôle.
 un gestionnaire ne voit ni machine, ni patient, ni séance d'un autre client,
 et un patient ne reçoit un droit que sur une machine de sa propre
 organisation. Le rôle **admin** ci-dessus est celui de l'organisation Anheart,
-la seule qui voit tous les clients. Convex connaît aussi l'admin d'une
-organisation cliente, qui gère tout dans la sienne sauf créer ou restaurer une
-machine. Sur un déploiement à un seul client, rien ne change à l'écran. Le
-site n'a pas encore de sélecteur d'organisation ni de page de membres : ils
-arrivent avec la suite du multi-organisation.
+la seule qui voit tous les clients.
+
+On travaille dans **une organisation à la fois**, celle que Clerk tient pour
+active. Le **sélecteur d'organisation** de Clerk (`OrganizationSwitcher`, sans
+compte personnel) est en haut de la barre latérale ; il est masqué quand la
+barre est repliée en icônes. Choisir une autre organisation ramène au tableau
+de bord. Toutes les réponses de Convex sont alors celles de cette organisation,
+puisque le serveur lit l'organisation dans le jeton. Entre le choix et l'arrivée
+du nouveau jeton au serveur, le site n'affiche **aucune** page, seulement
+« Changement d'organisation en cours. Le tableau de bord s'affichera dès que le
+serveur l'aura pris en compte. », pour ne pas montrer sous le nom de la
+nouvelle organisation des données de la précédente (`OrganizationGate`, règle
+`organizationView` de `lib/organizationAccess.ts`).
+
+Quand le serveur n'accepte aucune organisation pour l'appel, le site n'affiche
+pas les pages et dit pourquoi, avec le sélecteur pour en choisir une :
+
+| Cas | Message |
+|---|---|
+| Aucune organisation active (après `ANHEART_ORG_ID`) | « Choisissez une organisation pour continuer. » |
+| Organisation pas encore reçue par le webhook | « Cette organisation n'est pas encore connue du serveur. Réessayez dans quelques instants. » |
+| Rôle Clerk inconnu de Convex (`org:member` par exemple) | « Votre rôle dans cette organisation n'est pas reconnu. Demandez à son administrateur de vérifier votre rôle. » |
+| Revendication d'organisation illisible | « Votre session ne permet pas d'identifier votre organisation. Déconnectez-vous puis reconnectez-vous. » |
+| Compte sans appartenance (avant `ANHEART_ORG_ID`) | « Votre compte n'appartient à aucune organisation. Demandez une invitation à votre administrateur. » |
+
+La barre latérale ne montre alors que « Tableau de bord », comme pendant un
+changement d'organisation. Tant que `ANHEART_ORG_ID` n'est pas définie et que
+personne n'a d'organisation active dans Clerk, les pages s'affichent comme
+avant ; le sélecteur et l'entrée Membres apparaissent déjà.
+
+**Membres.** Inviter, retirer un membre et changer son rôle se font dans Clerk,
+depuis la page **Membres** (admins) ou l'entrée « Gérer » du sélecteur. Clerk
+envoie chaque changement à Convex par son webhook. Un gestionnaire est donc un
+membre invité avec le rôle Gestionnaire ; la page Gestionnaires décide ensuite
+de ses machines et de ses patients. Une fois `ANHEART_ORG_ID` définie, la page
+Paramètres ne propose plus de changer un rôle et renvoie vers Membres.
 
 **Protection des pages.** `proxy.ts` (middleware Clerk + next-intl) exige une
 connexion pour `/{locale}/dashboard/...`. Les contrôles par rôle se font dans
@@ -110,6 +146,57 @@ webhook Clerk. L'accueil affiche le lien vers le tableau de bord sans créer de
 compte. Le premier admin est invité dans l'organisation Clerk Anheart avec
 `org:admin` ; `ANHEART_ORG_ID` identifie cette organisation côté Convex. Aucun
 champ `role` n'est à modifier en base (voir [convex.md §8](convex.md#8-déployer)).
+
+### Amorçage d'un déploiement
+
+À faire une fois par déploiement (développement, puis production), **dans cet
+ordre**. Le détail des réglages est dans
+[convex.md, « Activer le multi-organisation »](convex.md#activer-le-multi-organisation).
+
+1. **Convex** : déployer, puis lancer la migration
+   `migrations/multiOrganization:attachExistingRowsToAnheart`. Elle crée
+   l'organisation par défaut « Anheart » et y range toutes les lignes
+   existantes. Le site fonctionne alors comme avant, en une seule organisation.
+2. **Clerk, sans webhook pour l'instant** : activer Organizations ;
+   désactiver la création d'organisations par les utilisateurs (sinon
+   n'importe quel compte peut créer la sienne et en devenir l'admin) ; créer
+   les rôles `org:gestionnaire` et `org:patient` à côté d'`org:admin`, avec
+   `org:patient` pour rôle par défaut ; ne donner les permissions système des
+   membres (lire, gérer) qu'à `org:admin`, sinon l'entrée « Gérer » du
+   sélecteur montre à un gestionnaire ou à un patient le nom et l'adresse de
+   tous les membres ; ajouter `org_id` et `org_role` au modèle de jeton
+   `convex`. Sans `org_id` dans le modèle, le site reste sur « Changement
+   d'organisation en cours » pour qui a une organisation active : le serveur
+   ne voit jamais l'organisation choisie.
+3. **Site** : mettre en ligne cette version, qui porte le sélecteur
+   d'organisation et la page Membres. Organizations doit déjà être activé : sur
+   une instance de développement, Clerk lève une erreur au montage du
+   sélecteur sinon.
+4. **Créer l'organisation Anheart dans Clerk** et noter son identifiant
+   (`org_…`). Le webhook ne doit **pas** encore être configuré : il créerait
+   une seconde organisation « Anheart », vide, au lieu de reprendre celle de
+   l'étape 1.
+5. **Poser `ANHEART_ORG_ID`** sur le déploiement Convex
+   (`npx convex env set ANHEART_ORG_ID org_…`), puis relancer la migration :
+   elle relie l'organisation par défaut à celle de Clerk. Vérifier dans le
+   tableau de bord Convex qu'il n'existe **qu'une** organisation « anheart »,
+   avec ce `clerkOrgId`. Si le webhook l'avait déjà reçue, la migration
+   s'arrête sans rien écrire (« Two Anheart organisations… »). Dès cette étape,
+   un jeton sans organisation est refusé, seuls les `org:admin` d'Anheart sont
+   admins Anheart, et les rôles ne se changent plus que dans Clerk.
+6. **Webhook** : créer l'endpoint Clerk vers `/clerk/webhook` et poser son
+   secret dans `CLERK_WEBHOOK_SIGNING_SECRET`. Il reconnaît désormais
+   l'organisation Anheart comme celle de l'étape 1.
+7. **Comptes** : inviter le premier admin avec `org:admin`, et faire entrer
+   chaque compte existant dans son organisation Clerk avec le rôle qu'il a dans
+   Convex. Entre l'étape 5 et son entrée, un compte existant ne voit que
+   « Choisissez une organisation » ou « Votre compte n'appartient à aucune
+   organisation » : enchaîner les étapes 5 à 7 dans une même fenêtre annoncée.
+8. **Chaque client** : l'admin Anheart crée son organisation dans Clerk et y
+   invite son premier `org:admin`, qui invite à son tour gestionnaires et
+   patients depuis la page Membres (ou crée ses patients depuis la page
+   Patients). L'admin Anheart crée les machines du client en choisissant son
+   organisation dans le formulaire.
 
 **Version du site.** Le pied de page de l'accueil et de la FAQ affiche la
 version du site, par exemple `web-0.1.0` (`web-0.0.0-dev` tant qu'aucune release
@@ -127,11 +214,17 @@ Barre latérale (`components/dashboard/AppSidebar.tsx`) :
 | Section | Entrées | Visible pour |
 |---|---|---|
 | Principal | Tableau de bord | tous |
-| Administration | Gestionnaires, Utilisateurs, Paramètres | admin |
-| Gestion | Patients, Machines, Mes machines, Sessions, Rapports | admin, gestionnaire |
+| Administration | Gestionnaires, Membres, Utilisateurs | admin, admin d'organisation |
+| Administration | Paramètres | admin |
+| Gestion | Patients, Machines, Mes machines, Sessions, Rapports | admin, admin d'organisation, gestionnaire |
 | Ma Santé | Mes machines, Sessions, Rapports | patient |
 
-En haut : un fil d'Ariane, le sélecteur de langue et le thème clair / sombre.
+Tant que le compte se charge, ou quand le serveur n'accepte aucune
+organisation pour l'appel (§2), seule l'entrée « Tableau de bord » est
+affichée. La règle est `navigationFor` dans `lib/organizationAccess.ts`.
+
+Sous le logo : le sélecteur d'organisation (§2). En haut : un fil d'Ariane, le
+sélecteur de langue et le thème clair / sombre.
 
 ---
 
@@ -171,7 +264,12 @@ Admin et gestionnaire. Tableau des machines (nom, lieu, statut, dernier signal).
 Le statut et « Dernier signal » sont recalculés chaque seconde (§6).
 Recherche ; l'admin peut afficher les machines supprimées.
 
-- **Nouvelle machine** (admin seulement) : nom, lieu, gestionnaires. À la
+- **Nouvelle machine** (admin Anheart seulement) : nom, lieu, **organisation**
+  (la sienne par défaut, ou celle d'un client : `organizations.listOrganizations`),
+  gestionnaires. Seuls les gestionnaires de l'organisation choisie sont
+  proposés ; changer d'organisation décoche ceux déjà cochés. À la modification
+  d'une machine, la liste est celle des gestionnaires de l'organisation de la
+  machine, et un admin d'organisation peut la changer comme l'admin Anheart. À la
   création, la **clé API** s'affiche **une seule fois** (« Cette clé ne sera
   affichée qu'une seule fois! ») avec un bouton Copier. Elle va dans la
   configuration de la machine (`MACHINE_API_KEY` dans `/etc/anheart/anheart.env`
@@ -299,14 +397,22 @@ Fiche patient : identité, séances, bouton Modifier, suppression, et la carte
 
 ### Utilisateurs : `/fr/dashboard/users` et `/fr/dashboard/users/{id}`
 
-Admin (entrée de menu). Tous les comptes, filtre par rôle, recherche. La fiche
-affiche le rôle, les séances ; pour un patient : Modifier, Physiologie ;
-suppression (admin : tous sauf soi ; gestionnaire : ses patients seulement).
+Admin et admin d'organisation (entrée de menu). Tous les comptes pour l'admin,
+les membres actifs de son organisation pour un admin d'organisation ; filtre
+par rôle, recherche. La fiche affiche le rôle, les séances ; pour un patient :
+Modifier, Physiologie ; suppression (admin : tous sauf soi ; admin
+d'organisation : les membres de son organisation sauf soi, retirés de cette
+organisation seulement ; gestionnaire : ses patients seulement).
 
 ### Gestionnaires : `/fr/dashboard/gestionnaires` et `/{id}`
 
-Admin seulement (sinon message d'accès refusé). Liste des gestionnaires avec
-leurs nombres de machines et de patients. Fiche : **Assigner des machines** et
+Admin et admin d'organisation (sinon « Accès refusé. Réservé aux
+administrateurs de l'organisation. »). C'est la gestion des liens entre
+gestionnaires, machines et patients **dans l'organisation** : l'admin
+d'organisation n'y voit que les gestionnaires, machines et patients de la
+sienne. Devenir gestionnaire, ou cesser de l'être, se fait dans Clerk : la page
+le rappelle et renvoie vers **Membres**. Liste des gestionnaires avec leurs
+nombres de machines et de patients. Fiche : **Assigner des machines** et
 **Assigner des patients**.
 
 **Assigner des machines** : une case par machine non supprimée, cochée si le
@@ -355,11 +461,22 @@ durée, et le bouton **Voir** qui ouvre le détail. Il n'y a plus de rapport PDF
 l'ancien, construit sur les données ECG, a été retiré avec le mode
 d'enregistrement ; le rapport de séance d'entraînement est à faire (ANH-89).
 
+### Membres : `/fr/dashboard/members`
+
+Admin et admin d'organisation (sinon « Accès refusé. Réservé aux
+administrateurs de l'organisation. »). Le panneau de Clerk
+(`OrganizationProfile`) de l'organisation active : membres, invitations,
+rôles. Clerk applique ses propres droits dans ce panneau. Sans organisation
+active dans Clerk (déploiement avant `ANHEART_ORG_ID`), la page propose d'abord
+d'en choisir une.
+
 ### Paramètres : `/fr/dashboard/settings`
 
 Admin seulement (« Accès refusé. Réservé aux administrateurs. »). Votre compte ;
 **Gestion des rôles** (choisir un utilisateur, un nouveau rôle, « Mettre à jour
-le Rôle ») ; informations système (valeurs affichées, pas des réglages).
+le Rôle ») tant que `ANHEART_ORG_ID` n'est pas définie ; ensuite, la carte dit
+que les rôles se gèrent dans l'organisation et renvoie vers **Membres** ;
+informations système (valeurs affichées, pas des réglages).
 
 ---
 
@@ -838,7 +955,8 @@ Pièges :
 | Pratiquant d'une séance démarrée à la machine | Le Pi ne l'envoie pas : « Unknown » dans les listes. |
 | Rapport d'une séance d'entraînement | Pas de rapport PDF sur le site : l'ancien rapport ECG est retiré, celui des séances d'entraînement reste à faire (ANH-89). |
 | Pages retouchées au retrait de l'ancien mode ECG (Sessions, vue en direct, détail, Rapports, fenêtre machine) | Compilées et couvertes par `npm run test:lib` ; **pas rouvertes dans un navigateur** depuis. |
-| Textes encore en anglais | Messages du serveur, nom « Unknown », motif « Cancelled before start by … », fiches d'un administrateur ou d'un gestionnaire, messages d'accès des pages Gestionnaires, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
+| Textes encore en anglais | Messages du serveur, nom « Unknown », motif « Cancelled before start by … », fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
+| Sélecteur d'organisation, page Membres | Composants de Clerk, couverts par des tests unitaires qui les remplacent. Le changement d'organisation de bout en bout (deux organisations, données qui changent) relève du test navigateur ANH-83 et de la recette sur l'instance Clerk de développement. |
 | Compte avec FC max ou année de naissance renseignée | Risque d'échec de `users.getCurrentUser` (validateur incomplet), donc de pages vides pour ce compte. **À vérifier en premier** sur un déploiement. Voir [convex.md §9](convex.md#9-défauts-connus-et-reste-à-faire). |
 
 Pour la sécurité d'ensemble, voir [securite.md](securite.md).

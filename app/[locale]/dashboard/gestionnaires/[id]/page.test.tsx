@@ -238,10 +238,6 @@ describe("gestionnaire page: who may read it", () => {
   it.each([
     ["a manager", "gestionnaire"],
     ["a patient", "user"],
-    // What the page does today: the admin of a client organisation, whom the
-    // server lets assign the machines and patients of that organisation, is
-    // refused here.
-    ["the admin of a client organisation", "org_admin"],
     ["an account without a row", null],
   ] as const)(
     "refuses %s, and shows nothing of the manager",
@@ -249,20 +245,33 @@ describe("gestionnaire page: who may read it", () => {
       given();
       await open(role);
 
-      // Written in English whatever the visitor's language: what the page does today.
-      expect(screen.getByText("Admin access required")).toBeTruthy();
+      expect(screen.getByText(fr.gestionnaires.accessDenied)).toBeTruthy();
       expect(screen.queryByText("gaston@centre.test")).toBeNull();
       expect(screen.queryByRole("button")).toBeNull();
     },
   );
+
+  it("shows the admin of a client organisation the manager, to assign the machines and patients of that organisation", async () => {
+    // ANH-187: the server lets this role assign within its organisation, and
+    // lists only that organisation's machines, patients and managers.
+    given();
+    await open("org_admin");
+
+    expect(screen.getByText("gaston@centre.test")).toBeTruthy();
+    expect(
+      card(fr.nav.machines).getByRole("button", editButton),
+    ).toBeTruthy();
+    expect(
+      card(fr.nav.patients).getByRole("button", editButton),
+    ).toBeTruthy();
+  });
 
   it("says the manager is not found, with the way back, when the list does not hold them", async () => {
     given();
     answer(api.users.listGestionnaires, []);
     await open();
 
-    // Written in English whatever the visitor's language: what the page does today.
-    expect(screen.getByText("Gestionnaire not found")).toBeTruthy();
+    expect(screen.getByText(fr.gestionnaires.notFound)).toBeTruthy();
     expect(
       screen.getByText(fr.common.back).closest("a")?.getAttribute("href"),
     ).toBe("/dashboard/gestionnaires");
