@@ -398,7 +398,8 @@
       "nameRequired": "Le nom est obligatoire",
       "organization": "Organisation",
       "organizationDescription": "La machine appartient à cette organisation ; seuls ses gestionnaires peuvent lui être assignés.",
-      "organizationPlaceholder": "Choisir une organisation..."
+      "organizationPlaceholder": "Choisir une organisation...",
+      "noOrganization": "Cette machine n'appartient encore à aucune organisation : elle garde ses gestionnaires actuels, qui pourront être changés ici une fois la migration multi-organisation passée."
     }
   },
   "sessions": {

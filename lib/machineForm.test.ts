@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canAssignGestionnaires,
   gestionnaireIdsToSubmit,
+  offersGestionnaireChoice,
   submitGestionnaireList,
 } from "./machineForm";
 
@@ -15,6 +16,22 @@ describe("ANH-155 canAssignGestionnaires", () => {
     { role: undefined, allowed: false },
   ])("is $allowed for the role $role", ({ role, allowed }) => {
     expect(canAssignGestionnaires(role)).toBe(allowed);
+  });
+});
+
+describe("ANH-225 offersGestionnaireChoice", () => {
+  it("offers the choice when a machine is created: it always gets an organisation", () => {
+    expect(offersGestionnaireChoice(undefined)).toBe(true);
+  });
+
+  it("offers the choice for a machine of an organisation", () => {
+    expect(offersGestionnaireChoice({ organizationId: "org-a" })).toBe(true);
+  });
+
+  it("offers none for a machine written before the multi-organisation migration", () => {
+    // The server would remove its gestionnaires and assign none of the list.
+    expect(offersGestionnaireChoice({})).toBe(false);
+    expect(offersGestionnaireChoice({ organizationId: undefined })).toBe(false);
   });
 });
 
