@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useQuery } from "convex/react";
+import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations, useLocale } from "next-intl";
@@ -45,7 +45,10 @@ type Session = {
   machineName: string;
 };
 
-type StatusFilter = "all" | "active" | "completed" | "failed";
+type StatusFilter = "all" | "pending" | "active" | "completed" | "failed";
+
+/** Sessions asked for at once: the first page, then each "Show more". */
+const PAGE_SIZE = 50;
 
 export default function SessionsPage() {
   const t = useTranslations();
@@ -55,17 +58,20 @@ export default function SessionsPage() {
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting, setSorting] = useState<SortingState>([]);
 
-  // Fetch all sessions once and filter client-side to avoid skeleton on tab change
-  const allSessions = useQuery(api.sessions.listSessions, {
-    limit: 100,
-  });
-
-  // Filter sessions client-side based on selected tab
-  const sessions = useMemo(() => {
-    if (!allSessions) return undefined;
-    if (statusFilter === "all") return allSessions;
-    return allSessions.filter((s) => s.status === statusFilter);
-  }, [allSessions, statusFilter]);
+  // The server lists the sessions of the tab, newest start first, page by
+  // page: an older session of any status is reached with "Show more", never
+  // cut off by the sessions of other tabs.
+  const {
+    results: sessions,
+    status,
+    loadMore,
+  } = usePaginatedQuery(
+    api.sessions.listSessionsPaginated,
+    statusFilter === "all" ? {} : { status: statusFilter },
+    { initialNumItems: PAGE_SIZE },
+  );
+  const loading = status === "LoadingFirstPage";
+  const canGrow = status === "CanLoadMore" || status === "LoadingMore";
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
@@ -150,7 +156,7 @@ export default function SessionsPage() {
   );
 
   const table = useReactTable({
-    data: sessions ?? [],
+    data: sessions,
     columns,
     state: {
       globalFilter,
@@ -163,17 +169,19 @@ export default function SessionsPage() {
     getSortedRowModel: getSortedRowModel(),
   });
 
-  if (allSessions === undefined) {
-    return <SessionsSkeleton />;
-  }
-
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">{t("sessions.title")}</h1>
-        <p className="text-muted-foreground">
-          {sessions?.length ?? 0} {t("nav.sessions").toLowerCase()}
-        </p>
+        {loading ? (
+          <Skeleton className="h-4 w-24 mt-2" />
+        ) : (
+          <p className="text-muted-foreground">
+            {/* "50+": more sessions than those loaded so far. */}
+            {sessions.length}
+            {canGrow ? "+" : ""} {t("nav.sessions").toLowerCase()}
+          </p>
+        )}
       </div>
 
       {/* Filters */}
@@ -184,6 +192,7 @@ export default function SessionsPage() {
         >
           <TabsList>
             <TabsTrigger value="all">{t("common.all")}</TabsTrigger>
+            <TabsTrigger value="pending">{t("sessions.pending")}</TabsTrigger>
             <TabsTrigger value="active">{t("sessions.active")}</TabsTrigger>
             <TabsTrigger value="completed">
               {t("sessions.completed")}
@@ -202,13 +211,22 @@ export default function SessionsPage() {
         </div>
       </div>
 
-      {table.getRowModel().rows.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Activity className="h-12 w-12 text-muted-foreground mb-4" />
-            <p className="text-muted-foreground">{t("sessions.noSessions")}</p>
-          </CardContent>
-        </Card>
+      {loading ? (
+        <TableSkeleton />
+      ) : table.getRowModel().rows.length === 0 ? (
+        // A page can come back empty while older sessions remain (the
+        // server split it, or left out a row): "none" only once the list is
+        // done; until then "Show more" alone.
+        status === "Exhausted" && (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <Activity className="h-12 w-12 text-muted-foreground mb-4" />
+              <p className="text-muted-foreground">
+                {t("sessions.noSessions")}
+              </p>
+            </CardContent>
+          </Card>
+        )
       ) : (
         <Card>
           <CardContent className="p-0">
@@ -260,6 +278,20 @@ export default function SessionsPage() {
           </CardContent>
         </Card>
       )}
+
+      {canGrow && (
+        <div className="flex justify-center">
+          <Button
+            variant="outline"
+            disabled={status === "LoadingMore"}
+            onClick={() => loadMore(PAGE_SIZE)}
+          >
+            {status === "LoadingMore"
+              ? t("common.loading")
+              : t("common.showMore")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -297,26 +329,17 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
-function SessionsSkeleton() {
+/** The table while the first page of the tab is loading. */
+function TableSkeleton() {
   return (
-    <div className="space-y-6">
-      <div>
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-4 w-24 mt-2" />
-      </div>
-      <div className="flex gap-4">
-        <Skeleton className="h-10 w-96" />
-        <Skeleton className="h-10 w-64" />
-      </div>
-      <Card>
-        <CardContent className="p-0">
-          <div className="space-y-2 p-4">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+    <Card>
+      <CardContent className="p-0">
+        <div className="space-y-2 p-4">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      </CardContent>
+    </Card>
   );
 }

@@ -367,7 +367,19 @@ export default defineSchema({
     .index("by_organization", ["organizationId"])
     // The active or pending sessions of one organisation, or of all of them:
     // what the dashboard counts (`dashboard.counters`).
-    .index("by_status_and_organization", ["status", "organizationId"]),
+    .index("by_status_and_organization", ["status", "organizationId"])
+    // The lists of sessions (`convex/sessions.ts`): each one reads a single
+    // range of one of these, most recent start first.
+    .index("by_started", ["startedAt"])
+    .index("by_status_and_started", ["status", "startedAt"])
+    .index("by_organization_and_started", ["organizationId", "startedAt"])
+    .index("by_organization_and_status_and_started", [
+      "organizationId",
+      "status",
+      "startedAt",
+    ])
+    .index("by_user_and_started", ["userId", "startedAt"])
+    .index("by_machine_and_started", ["machineId", "startedAt"]),
 
   // ECG Data - HISTORY of the retired ECG recording mode. Read-only: no
   // function writes to this table any more.

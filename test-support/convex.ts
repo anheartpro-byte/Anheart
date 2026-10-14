@@ -24,16 +24,29 @@
  *   function, a name is not checked to exist (a mistyped name in `answer`
  *   answers nothing), no rule of `convex/` runs;
  * - only what the site imports from `convex/react` today: `useQuery`,
- *   `useQueries`, `useMutation`, `useAction`, `Authenticated`,
- *   `Unauthenticated`, `AuthLoading` and `useConvexAuth`. No paginated query,
- *   no optimistic update.
+ *   `useQueries`, `usePaginatedQuery`, `useMutation`, `useAction`,
+ *   `Authenticated`, `Unauthenticated`, `AuthLoading` and `useConvexAuth`. No
+ *   optimistic update.
  *
  * A query the server failed is answered with an `Error`: `useQuery` throws
  * it, as Convex does, and `useQueries` hands it over as a value.
+ *
+ * A paginated query is answered page by page, as the server answers it: the
+ * answer is a function of the arguments of one page (those of the page, plus
+ * `paginationOpts: {numItems, cursor}`) that returns `{page, isDone,
+ * continueCursor}`, `undefined` for a page still loading, or an `Error`, which
+ * `usePaginatedQuery` throws as `useQuery` does (`pagesOf` in
+ * `test-support/pages.tsx` cuts a list into such pages). The hook asks for
+ * the first page with `initialNumItems`, then for one more page at each
+ * `loadMore`, from the `continueCursor` of the page before; each page it asks
+ * for is recorded by `asks`. New arguments start again from the first page.
+ * What it does not do: split a page, keep the end of a page when the data
+ * changes (a reactive server does both), or send the `id` the real hook adds
+ * to `paginationOpts`.
  */
 
 import { getFunctionName, type FunctionReference } from "convex/server";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { vi, type Mock } from "vitest";
 
 /** What a query answers: a value, or a function of the arguments the page asked with. */
@@ -111,6 +124,44 @@ function answerTo(reference: FunctionReference<"query">, args: unknown): unknown
     : known;
 }
 
+/** One page of a paginated query, as the server answers it. */
+type Page = { page: unknown[]; isDone: boolean; continueCursor: string };
+
+/** Where a paginated list stands, with the names `usePaginatedQuery` gives. */
+type PaginationStatus =
+  | "LoadingFirstPage"
+  | "CanLoadMore"
+  | "LoadingMore"
+  | "Exhausted";
+
+/**
+ * The pages a paginated list holds: the first one, then one per `loadMore`
+ * (`sizes`, the number of items of each), up to the first page still loading.
+ */
+function pagesHeld(
+  reference: FunctionReference<"query">,
+  args: Record<string, unknown>,
+  sizes: number[],
+): { results: unknown[]; status: PaginationStatus } {
+  const results: unknown[] = [];
+  let cursor: string | null = null;
+  let status: PaginationStatus = "LoadingFirstPage";
+  for (const [index, numItems] of sizes.entries()) {
+    const pageArgs = { ...args, paginationOpts: { numItems, cursor } };
+    const page = answerTo(reference, pageArgs) as Page | Error | undefined;
+    if (page instanceof Error) throw page;
+    if (page === undefined) {
+      status = index === 0 ? "LoadingFirstPage" : "LoadingMore";
+      break;
+    }
+    results.push(...page.page);
+    cursor = page.continueCursor;
+    status = page.isDone ? "Exhausted" : "CanLoadMore";
+    if (page.isDone) break;
+  }
+  return { results, status };
+}
+
 /** Draws its content in one state of the session, and nothing in the others. */
 const shownWhen =
   (state: Session) =>
@@ -146,6 +197,42 @@ export const convexReact = {
         answerTo(query, args),
       ]),
     );
+  },
+  usePaginatedQuery(
+    reference: FunctionReference<"query">,
+    args: Record<string, unknown> | "skip",
+    options: { initialNumItems: number },
+  ) {
+    const key = JSON.stringify(args);
+    // The sizes of the pages asked after the first, for these arguments only.
+    const [more, setMore] = useState<{ key: string; sizes: number[] }>({
+      key,
+      sizes: [],
+    });
+    if (args === "skip") {
+      answerTo(reference, args);
+      return {
+        results: [],
+        status: "LoadingFirstPage" as const,
+        isLoading: true,
+        loadMore: () => {},
+      };
+    }
+    const added = more.key === key ? more.sizes : [];
+    const { results, status } = pagesHeld(reference, args, [
+      options.initialNumItems,
+      ...added,
+    ]);
+    return {
+      results,
+      status,
+      isLoading: status === "LoadingFirstPage" || status === "LoadingMore",
+      // As in Convex, a page is added only while the list can grow.
+      loadMore: (numItems: number) => {
+        if (status !== "CanLoadMore") return;
+        setMore({ key, sizes: [...added, numItems] });
+      },
+    };
   },
   useMutation(reference: FunctionReference<"mutation">) {
     const name = getFunctionName(reference);

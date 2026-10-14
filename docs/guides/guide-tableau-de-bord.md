@@ -923,6 +923,8 @@ sur la **vue en direct** de la nouvelle séance, au statut **en attente**.
 
 *Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : la première montre encore le bouton « Nouvelle session », retiré.*
 
+*Captures antérieures à ANH-158 : elles n'ont ni l'onglet « En attente » ni le bouton « Afficher plus ».*
+
 **Adresse** : `/fr/dashboard/sessions`. **Pour qui** : tous (chacun voit ce
 que ses droits permettent).
 
@@ -930,7 +932,7 @@ que ses droits permettent).
 ┌───────────────────────────────────────────────────────────────────────┐
 │ Sessions ECG                                                           │
 │ 12 sessions                                                            │
-│ [ Tous | Actives | Terminées | Échouées ]   🔍 <Rechercher>            │
+│ [ Tous | En attente | Actives | Terminées | Échouées ] 🔍 <Rechercher> │
 │ ┌────────────────────────────────────────────────────────────────────┐│
 │ │Patient │Machine │Type              │Statut     │Démarrée à │Durée │Actions││
 │ │Marie M.│Centri P│(Auto)(Tableau de bord)│(Active) │1 oct. 10:02│12 minutes│[⦿ Voir en direct]││
@@ -946,8 +948,8 @@ seule).
 
 | Élément | Effet |
 |---|---|
-| Onglets **Tous**, **Actives**, **Terminées**, **Échouées** | Filtrent par statut. Il n'y a **pas d'onglet « En attente »** : les séances en attente ne se voient que sous **Tous**. |
-| **Rechercher** | Filtre sur le texte des lignes. |
+| Onglets **Tous**, **En attente**, **Actives**, **Terminées**, **Échouées** | Filtrent par statut : chaque onglet demande au serveur les séances de ce statut. **En attente** : les séances lancées depuis le site que la machine n'a pas encore armées. |
+| **Rechercher** | Filtre sur le texte des lignes **déjà affichées** (voir **Afficher plus** ci-dessous). |
 | Colonne **Patient** | Nom du pratiquant. « Unknown » pour une séance démarrée à la machine sans pratiquant connu. |
 | Colonne **Type** | Badge **Auto** (jauge), **Manuel** (main, ambre) ou **Enregistrement** (courbe) ; badge d'origine **Tableau de bord** (écran) ou **Machine** (puce). |
 | **Démarrée à** | Date et heure. |
@@ -956,8 +958,13 @@ seule).
 | Icône **œil** (autres statuts) | Ouvre le détail. |
 | Clic sur la ligne | Même effet. |
 
-La liste montre au plus les 100 séances les plus récentes. « Aucune session
-trouvée » si vide. Cette page ne crée aucune séance : une séance auto se lance
+Les séances arrivent **par pages de 50**, de la plus récente à la plus
+ancienne (date de début). Le bouton **Afficher plus**, sous la liste, ajoute
+les 50 suivantes ; tant qu'il en reste à charger, le compteur sous le titre se
+termine par « + » (« 50+ sessions »). Changer d'onglet repart des 50 premières.
+Un patient ou un gestionnaire voit toutes ses séances, page après page, quel
+que soit le nombre de séances des autres. « Aucune session trouvée » s'affiche
+quand la liste est vide, une fois toutes les séances chargées. Cette page ne crée aucune séance : une séance auto se lance
 depuis une machine ([§4.8](#48-fenêtre-lancer-une-séance-auto)), une séance
 manuelle depuis la console.
 
@@ -1476,9 +1483,10 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-- Une carte par séance **terminée** (pas les échouées) que vous pouvez voir, au
-  plus parmi les 100 plus récentes. Titre : « Rapport de session » et les 8
-  derniers caractères de l'identifiant.
+- Une carte par séance **terminée** (pas les échouées) que vous pouvez voir, de
+  la plus récente à la plus ancienne, **par pages de 50** : le bouton
+  **Afficher plus** ajoute les 50 suivantes tant qu'il en reste. Titre :
+  « Rapport de session » et les 8 derniers caractères de l'identifiant.
 - **Voir** : ouvre le détail de la séance ([§4.12](#412-détail-dune-séance)).
 - Il n'y a plus de bouton **Télécharger PDF** : l'ancien rapport, construit
   sur les données ECG, a été retiré avec le mode d'enregistrement. Le rapport
@@ -1888,7 +1896,7 @@ patient (pour lui même, avec le droit de lancement).
 
 Séance **en attente** :
 
-1. Ouvrez sa **vue en direct** (depuis **Sessions**, onglet **Tous** →
+1. Ouvrez sa **vue en direct** (depuis **Sessions**, onglet **En attente** →
    ligne → détail → **Voir en direct**).
 2. **Annuler la séance** → confirmez **Annuler la séance**.
 
@@ -2216,7 +2224,7 @@ affichage pour les actions sans encadré : suppressions, rôle, assignations).
 |---|---|---|
 | « Machine is offline » | La machine est hors ligne au moment du lancement. | [§6.3](#63-si-la-machine-est-hors-ligne). |
 | « Machine is already in a session » | Séance en cours sur la machine. | Attendre ou arrêter. |
-| « A session is already waiting for this machine » | Une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). | Dans **Sessions** onglet **Tous**, trouver la séance en attente et l'annuler (P12). Si c'est un « Enregistrement » de l'ancien mode, voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
+| « A session is already waiting for this machine » | Une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). | Dans **Sessions** onglet **En attente**, trouver la séance et l'annuler (P12). Si c'est un « Enregistrement » de l'ancien mode, voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
 | « This machine does not accept programmed sessions yet (manual only, at the machine) » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « This programme is not on the machine » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
 | « The rider's max heart rate (or birth year) must be set by a manager before an auto session » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
@@ -2401,7 +2409,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 8 | Plusieurs actions échouaient **sans message** : suppression de machine, suppression de compte, changement de rôle, assignation de patients. (Corrigé le 6 octobre 2026 pour l'assignation de machines, qui affiche une confirmation ou le message du serveur. Corrigé par ANH-156 pour les autres : chaque action qui écrit dans la base affiche un message de succès ou d'échec en bas à droite de l'écran. Non vérifié dans un navigateur.) | L'utilisateur croyait que rien ne se passait. | Jusqu'au redéploiement : recharger et vérifier. |
 | 9 | Messages du serveur en anglais, et peut être masqués en production. (Depuis ANH-156, un message masqué est remplacé par « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : … ». La traduction des messages du serveur reste à faire.) | Messages peu compréhensibles. | Tableau du §7.2. |
 | 10 | Compteur Utilisateurs / Patients du tableau de bord non programmé ; « Sessions actives » compté sur les 10 dernières séances seulement. | Chiffres faux ou absents. | Regarder les listes. |
-| 11 | Listes des patients et gestionnaires : le serveur prend les 50 à 100 séances **les plus récentes de toute la base**, puis filtre. | Sur une base active, un patient ou un gestionnaire peut ne pas voir ses séances plus anciennes. | Aucun. |
+| 11 | (Corrigé dans le code le 14 octobre 2026, à vérifier au redéploiement.) Listes des patients et gestionnaires : le serveur prenait les 50 à 100 séances **les plus récentes de toute la base**, puis filtrait. Les listes appliquent maintenant les droits avant de couper, et les pages Sessions et Rapports arrivent par pages de 50 avec **Afficher plus** (ANH-158). | Sur une base active, un patient ou un gestionnaire pouvait ne pas voir ses séances plus anciennes. | Jusqu'au redéploiement : aucun. |
 | 12 | (Retirés avec l'ancien mode d'enregistrement ECG.) Le rapport PDF, sans télémétrie, et les cartes ECG, inutiles sur les séances d'entraînement, n'existent plus. Il n'y a pas encore de rapport pour une séance d'entraînement. | Pas de fichier à télécharger. | Utiliser le détail de la séance. |
 | 13 | Textes non traduits. (Corrigé par ANH-123 pour la fiche machine, le fil d'Ariane, les fiches de séance, la fenêtre de régénération de clé, la vue ECG et le rapport.) Restent en anglais : la confirmation de suppression d'un compte, la fiche d'un administrateur ou d'un gestionnaire, les messages d'accès des pages Gestionnaires, les erreurs de saisie du formulaire patient. | Quelques écrans encore mi français mi anglais. | Aucun. |
 | 14 | Motifs de fin bruts (`programme_complete`, `operator_stop`...). (Corrigé par ANH-123 pour les actions de sécurité et l'état du variateur, désormais traduits.) | Moins lisible. | Tableaux des §4.6 et §4.12. |

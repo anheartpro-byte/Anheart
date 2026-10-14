@@ -148,6 +148,11 @@ function asArray(res: unknown): unknown[] {
   return res;
 }
 
+/** The rows of one page of a paginated query (`{page, isDone, continueCursor}`). */
+function pageOf(res: unknown): unknown[] {
+  return asArray((res as { page?: unknown } | null)?.page);
+}
+
 function ids(res: unknown): string[] {
   return asArray(res).map((row) => String((row as { _id: unknown })._id));
 }
@@ -170,7 +175,34 @@ const SESSION_RIDERS_SEEN_BY: Partial<Record<Actor, string[]>> = {
   orgAdmin: ["patient Synthetic", "otherPatient Synthetic"],
   orgBAdmin: ["orgBPatient Synthetic"],
   orgBManager: ["orgBPatient Synthetic"],
+  orgBPatient: ["orgBPatient Synthetic"],
 };
+
+/**
+ * The world of the session lists: one completed session per machine, as
+ * `SESSION_RIDERS_SEEN_BY` describes. With the scope "other", three newer
+ * sessions of `otherPatient` come first and the caller asks for two rows
+ * only: rights come before the cut, so the caller's own session is still
+ * listed (ANH-158).
+ */
+async function seedSessionLists(w: World, scope: Scope): Promise<number> {
+  for (const [machineId, userId] of [
+    [w.machine, w.patient],
+    [w.otherMachine, w.otherPatient],
+    [w.orgBMachine, w.orgBPatient],
+  ] as const) {
+    await addSession(w, { machineId, userId, status: "completed", kind: "auto" });
+  }
+  if (scope !== "other") return 50;
+  for (let i = 0; i < 3; i++)
+    await addSession(w, {
+      machineId: w.otherMachine,
+      userId: w.otherPatient,
+      status: "completed",
+      kind: "auto",
+    });
+  return 2;
+}
 
 async function recentEcgBatch(w: World, sessionId: Id<"sessions">) {
   await w.t.run((ctx) =>
@@ -1422,51 +1454,16 @@ export const MATRIX: Entry[] = [
     ref: api.sessions.listSessions,
     kind: "query",
     build: async (w, _actor, scope) => {
-      await addSession(w, {
-        machineId: w.machine,
-        userId: w.patient,
-        status: "completed",
-        kind: "auto",
-      });
-      await addSession(w, {
-        machineId: w.otherMachine,
-        userId: w.otherPatient,
-        status: "completed",
-        kind: "auto",
-      });
-      await addSession(w, {
-        machineId: w.orgBMachine,
-        userId: w.orgBPatient,
-        status: "completed",
-        kind: "auto",
-      });
+      const limit = await seedSessionLists(w, scope);
       // By direct identifier: a machine of another organisation as the filter.
       if (scope === "foreign") return { machineId: w.machine };
-      if (scope === "other") {
-        // Three newer sessions for another rider push the caller's own out of a
-        // small page: limit is applied BEFORE access filtering (docs section 5).
-        for (let i = 0; i < 3; i++)
-          await addSession(w, {
-            machineId: w.otherMachine,
-            userId: w.otherPatient,
-            status: "completed",
-            kind: "auto",
-          });
-        return { limit: 2 };
-      }
-      return {};
+      return { limit };
     },
     onSuccess: (res) => {
       if (asArray(res).length !== 3)
         throw new Error("Admin should see all sessions, in every organisation");
     },
-    onFiltered: (res, _w, actor, scope) => {
-      if (scope === "other") {
-        // Intended policy: the caller still sees their own session.
-        if (asArray(res).length !== 1)
-          throw new Error("Caller should still see their own session");
-        return;
-      }
+    onFiltered: (res, _w, actor) => {
       expectExactly(
         riders(res),
         SESSION_RIDERS_SEEN_BY[actor] ?? [],
@@ -1477,18 +1474,20 @@ export const MATRIX: Entry[] = [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "admin", expect: ok, note: "all sessions" },
       { actor: "manager", scope: "own", expect: filtered, note: "their machine's sessions" },
+      {
+        actor: "manager",
+        scope: "other",
+        expect: filtered,
+        note: "newer sessions of a machine they do not manage never push theirs out of a small limit",
+      },
       { actor: "patient", scope: "own", expect: filtered, note: "their own sessions" },
       {
         actor: "patient",
         scope: "other",
-        expect: empty,
-        note: "limit applied before access filter hides the caller's own session",
-        knownDefect: {
-          intended: filtered,
-          ticket:
-            "ANH-158 (the listing is rebuilt there, filter before limit); harmless: under-returns, never exposes another user's data",
-        },
+        expect: filtered,
+        note: "newer sessions of another rider never push theirs out of a small limit",
       },
+      { actor: "stranger", scope: "other", expect: empty, note: "[] for a user who rode nothing" },
       { actor: "orgAdmin", scope: "own", expect: filtered, note: "the sessions of centre A only" },
       { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the sessions of centre B only" },
       { actor: "orgBManager", scope: "own", expect: filtered, note: "their machine's sessions, in centre B" },
@@ -1497,6 +1496,69 @@ export const MATRIX: Entry[] = [
         scope: "foreign",
         expect: empty,
         note: "[] when filtering on a machine of another organisation",
+      },
+    ],
+  },
+  {
+    id: "sessions.listSessionsPaginated",
+    ref: api.sessions.listSessionsPaginated,
+    kind: "query",
+    // The same rule as listSessions, page by page. Every page and the order
+    // over 300 sessions are proven in sessionLists.test.ts.
+    build: async (w, actor, scope) => {
+      const numItems = await seedSessionLists(w, scope);
+      const paginationOpts = { numItems, cursor: null };
+      // By direct identifier: a machine, or a rider, of another organisation.
+      if (scope === "foreign")
+        return actor === "orgBAdmin"
+          ? { userId: w.patient, paginationOpts }
+          : { machineId: w.machine, paginationOpts };
+      return { paginationOpts };
+    },
+    onSuccess: (res) => {
+      if (pageOf(res).length !== 3)
+        throw new Error("Admin should see all sessions, in every organisation");
+    },
+    onFiltered: (res, _w, actor) => {
+      expectExactly(
+        riders(pageOf(res)),
+        SESSION_RIDERS_SEEN_BY[actor] ?? [],
+        `Sessions paged to ${actor}`,
+      );
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "all sessions" },
+      { actor: "manager", scope: "own", expect: filtered, note: "their machine's sessions" },
+      {
+        actor: "manager",
+        scope: "other",
+        expect: filtered,
+        note: "newer sessions of a machine they do not manage never push theirs out of a small page",
+      },
+      { actor: "patient", scope: "own", expect: filtered, note: "their own sessions" },
+      {
+        actor: "patient",
+        scope: "other",
+        expect: filtered,
+        note: "newer sessions of another rider never push theirs out of a small page",
+      },
+      { actor: "stranger", scope: "other", expect: empty, note: "an empty page for a user who rode nothing" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the sessions of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the sessions of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "their machine's sessions, in centre B" },
+      { actor: "orgBPatient", scope: "own", expect: filtered, note: "their own sessions, in centre B" },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "an empty page when filtering on a machine of another organisation",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "an empty page when filtering on a rider of another organisation",
       },
     ],
   },

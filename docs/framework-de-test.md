@@ -3347,8 +3347,15 @@ restaurée).
   abonnement), les arguments ne sont pas comparés aux validateurs d'une
   fonction, un nom mal écrit dans `answer` ne répond rien sans le dire, et
   aucune règle de `convex/` ne tourne. Il ne fournit que ce que le site
-  importe de `convex/react` aujourd'hui : ni action, ni requête paginée, ni
-  mise à jour optimiste.
+  importe de `convex/react` aujourd'hui (requêtes, requêtes paginées,
+  mutations, actions, état de connexion) : aucune mise à jour optimiste. Une
+  requête paginée (`usePaginatedQuery`) est servie page par page : la réponse
+  est une fonction des arguments d'une page (`paginationOpts` compris), que
+  `pagesOf(liste)` de `test-support/pages.tsx` écrit pour une liste ; la
+  première page est demandée avec `initialNumItems`, une de plus à chaque
+  `loadMore`. Le remplaçant ne découpe aucune page et ne garde pas les bornes
+  d'une page déjà servie quand les données changent, ce que fait le vrai
+  serveur (ANH-158).
 
 **Ce que le document minimal n'implémente pas.** Un test écrit dessus ne
 prouve donc rien de ce qui suit, quel que soit son résultat :
@@ -3418,7 +3425,7 @@ pour `hooks/` et `components/`.
 
 | Élément | Dans les tests des pages |
 |---|---|
-| Convex (`convex/react`) | le remplaçant de tout le site, `test-support/convex.ts` : il n'y en a qu'un. `test-support/pages.tsx` n'y ajoute qu'une couche qui nomme une fonction par sa référence (`api.machines.getMachine`) au lieu d'un texte : `answer(référence, valeur)`, `argsAsked(référence)` (les arguments donnés par la page, `"skip"` compris ; une requête passée par `useQueries` et que la page ne demande pas n'y laisse aucune trace), `mutation(référence)`, `mutationsSent()` (chaque mutation envoyée, dans l'ordre, avec ses arguments exacts), `sessionIs(état)` |
+| Convex (`convex/react`) | le remplaçant de tout le site, `test-support/convex.ts` : il n'y en a qu'un. `test-support/pages.tsx` n'y ajoute qu'une couche qui nomme une fonction par sa référence (`api.machines.getMachine`) au lieu d'un texte : `answer(référence, valeur)`, `pagesOf(liste)` (la réponse d'une requête paginée qui sert cette liste page par page), `argsAsked(référence)` (les arguments donnés par la page, `"skip"` compris ; une requête passée par `useQueries` et que la page ne demande pas n'y laisse aucune trace ; pour une requête paginée, ceux de chaque page demandée), `mutation(référence)`, `mutationsSent()` (chaque mutation envoyée, dans l'ordre, avec ses arguments exacts), `sessionIs(état)` |
 | Réponses du serveur | celles des **requêtes** sont typées par le type de retour de la fonction Convex (`FunctionReturnType`) : une réponse de test que le serveur ne peut pas rendre ne compile pas (`npx tsc --noEmit`). Celles des mutations ne le sont pas |
 | Échec d'une mutation | sous les formes que le client Convex livre, jamais une erreur nue : une `ConvexError` portant la phrase du serveur quand le serveur formule le refus (lancement, arrêt, rôles, organisation), et sinon l'erreur de serveur masquée en production ou détaillée sur un déploiement de développement (`serverFailures`, qui donne les deux avec le message attendu pour chacune) |
 | Navigation (`@/i18n/navigation`) | remplacée : un lien est une ancre qui porte l'adresse donnée par la page, avant le préfixe de langue ; `router.push` est lu par le test |

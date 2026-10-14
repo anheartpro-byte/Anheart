@@ -97,6 +97,29 @@ export function lastArgsAsked<Q extends Query>(query: Q): unknown {
   return argsAsked(query).at(-1);
 }
 
+/** What a page of a paginated query is asked with: its size and where it starts. */
+type PageRequest = {
+  paginationOpts: { numItems: number; cursor: string | null };
+};
+
+/**
+ * The answer of a paginated query (`usePaginatedQuery`) whose server lists
+ * `rows`, in that order: each page the site asks for is cut from them by its
+ * cursor and its size, as the server cuts its pages. A cursor is a position
+ * in `rows`.
+ */
+export function pagesOf<Row>(rows: Row[]) {
+  return ({ paginationOpts: { numItems, cursor } }: PageRequest) => {
+    const start = cursor === null ? 0 : Number(cursor);
+    const end = start + numItems;
+    return {
+      page: rows.slice(start, end),
+      isDone: end >= rows.length,
+      continueCursor: String(end),
+    };
+  };
+}
+
 /**
  * The function the page receives for a mutation: tell it what the server
  * answers (`mockResolvedValue`, `mockRejectedValue`), read what it was sent.
