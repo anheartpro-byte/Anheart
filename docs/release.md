@@ -19,14 +19,27 @@ machine a le droit de recevoir.
 > pour son état » est écrite et testée, mais rien ne l'applique encore : voir
 > la [section 2](#2-le-niveau-de-validation-dune-version-du-pi).
 >
+> **`main` après la release (relevé du 14 octobre 2026).** Le 13 octobre 2026,
+> `develop` a de nouveau été fusionné dans `main` (PR #80, commit `cb41ac5`),
+> sans nouvelle préparation : `main` porte toujours les versions `1.0.0` et
+> les sections de `CHANGELOG.md` écrites pour le candidat `8d7f08e`, plus les
+> PR fusionnées dans `develop` depuis, jusqu'à `7026ad6`. Aucun tag n'est
+> posé. La pipeline poserait les tags sur la tête de `main`, qui n'est plus le
+> candidat relu pour la release. D'après la lecture de `scripts/release.sh`
+> (étape `tag`, non exécutée sur ce commit), elle s'arrêterait avant les tags :
+> le commit contient des PR de ticket que `CHANGELOG.md` ne cite pas. Ce que
+> contiendra la release `1.0.0` est à décider par le responsable du produit,
+> avec la fenêtre de déploiement.
+>
 > **Règles de `main` (7 octobre 2026).** Une release, c'est fusionner `develop`
 > dans `main` par un commit de fusion, puis poser les tags. Depuis ce jour, plus
 > rien dans la protection de `main` ne s'y oppose : ni historique linéaire, ni
 > branche à jour, ni vérification Vercel n'y sont exigés. Le relevé des deux
 > branches est dans
 > [deploiement.md, section 5.5, étape 4](deploiement.md#55-réglages-à-faire-une-fois-à-la-main).
-> La fusion elle-même a été faite une fois pour de bon, le 10 octobre 2026,
-> pour la première release.
+> La fusion elle-même a été faite pour de bon le 10 octobre 2026, pour la
+> première release, puis le 13 octobre 2026 hors du processus de release
+> (ci-dessus).
 >
 > **Pipeline de release (10 octobre 2026, ANH-219).** Après la fusion dans
 > `main`, un bouton fait le reste dans l'ordre : il teste tout, exige CodeQL
@@ -423,7 +436,12 @@ SHA précis, qui dit qu'un agent indépendant a relu ce commit-là.
   de `main`, lui, est neuf et n'a été relu par personne). Le script ne pose
   jamais ce statut.
 - **Qui le pose.** Aucun document ne le dit aujourd'hui pour une release : à
-  décider avant la première ([section 8](#8-limites-et-reste-à-faire)).
+  décider avant de publier la première, c'est-à-dire avant que ses tags
+  soient posés ([section 8](#8-limites-et-reste-à-faire)). Sans règle écrite,
+  le compte propriétaire du dépôt l'a posé sur `8d7f08e`, candidat
+  de la release `1.0.0`, le 10 octobre 2026, et sur `7026ad6`, le commit de
+  `develop` fusionné dans `main` le 13 octobre 2026 (relevé le 14 octobre 2026
+  dans les statuts GitHub de ces deux commits).
 
 ### Si `develop` a bougé pendant la release
 
@@ -740,7 +758,7 @@ pour une première release.
 
 ```sh
 git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u
-git diff <base>..origin/develop -- $(git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u)
+git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u | tr '\n' '\0' | xargs -0 -r git diff <base>..origin/develop --
 ```
 
 La première commande cherche dans tout le dépôt, sans se limiter à un dossier,
@@ -756,7 +774,13 @@ Le marqueur désigne un fichier, pas une ligne : dans `motion_limits.json` il
 est dans le commentaire d'en-tête, et les valeurs sont sur les lignes
 suivantes. C'est donc le diff entier de ces fichiers qui se relit, pas les
 seules lignes où `[MED]` est écrit. Si la première commande ne liste rien, la
-seconde n'a pas lieu d'être.
+seconde n'a pas lieu d'être, et elle ne montre rien.
+
+La seconde passe la liste à `git diff` par `xargs -0`, un chemin par
+argument : un chemin qui contient une espace n'est pas coupé en deux, ce qui
+arrivait à la forme précédente (`git diff ... -- $(...)`), qui le sautait sans
+rien dire. Le dépôt n'a aujourd'hui aucun chemin de ce genre ; un chemin qui
+contient un retour à la ligne n'est pas pris en charge.
 
 Cette check-list ne vaut pas autorisation de personne à bord : cette décision
 appartient à la revue M6.
@@ -885,14 +909,14 @@ n'a changé.
 |---|---|
 | Publier la première release (`pi-1.0.0`, `cloud-1.0.0`, `web-1.0.0`), fusionnée dans `main` le 10 octobre 2026 : fixer la fenêtre de déploiement, puis poser les tags et déployer par la pipeline | le responsable du produit, [section 3](#3-le-déroulé), étapes 7 à 9 |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
-| Dire qui pose `agent-review/R1` sur le candidat d'une release ([section 3](#lavis-indépendant-sur-une-release)) | le chef de projet, avant la première release |
-| Une release d'un seul composant fait entrer dans `main` les changements des autres composants, sous leur ancienne version : l'accepter, ou exiger une version pour chaque composant modifié | le chef de projet, avant la première release partielle |
+| Dire qui pose `agent-review/R1` sur le candidat d'une release ([section 3](#lavis-indépendant-sur-une-release)) | le chef de projet, avant de publier la première release (de poser ses tags) |
+| Une release d'un seul composant fait entrer dans `main` les changements des autres composants, sous leur ancienne version : l'accepter, ou exiger une version pour chaque composant modifié | le chef de projet, avant de préparer la première release partielle |
 | Refuser à la fusion, et non à la release, une PR de revert au titre par défaut | non outillé : le titre d'une PR peut changer après la CI ; le refus est fait par `scripts/release.sh` ([section 3](#un-revert-porte-un-titre-de-ticket)) |
 | Tenir `REQUIRED_CHECKS` égal aux jobs de la CI | toute PR qui renomme un job de `ci.yml` (ANH-184 a gardé les six noms) |
 | Versionner une correction urgente partie de `main` (`hotfix/…`) | non outillé : `prepare` ne part que de `develop` ; à décider au premier cas |
 | Lancer la pipeline de release une première fois, à blanc puis pour de bon : aucun de ses déploiements, ni son push de tags depuis GitHub Actions, n'a été essayé | le chef de projet, une fois la première release fusionnée dans `main` et les réglages de [deploiement.md, section 5.5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main) faits |
 | Enregistrer les versions dans Convex depuis la pipeline, au lieu des lignes qu'elle écrit pour un admin ([section 6](#6-enregistrer-la-version-dans-convex)) | à décider : au nom de quel compte, ou par quelle fonction sans compte |
-| Une release réelle demande quatre approbations, une par écriture, et attend une personne entre Convex et le site | à décider après la première release : le garder, ou regrouper Convex et le site sous une seule approbation |
+| Une release réelle demande quatre approbations, une par écriture, et attend une personne entre Convex et le site | à décider après la première release publiée : le garder, ou regrouper Convex et le site sous une seule approbation |
 | Mettre les machines à jour à distance : l'étape 6 de la pipeline ne fait que dire comment le faire à la main | ANH-116, ANH-168 à ANH-171 |
 | Déployer une préversion de Convex par PR, publier les rapports de test | ANH-126 |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |
