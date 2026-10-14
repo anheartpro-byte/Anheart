@@ -22,6 +22,23 @@ export function canAssignGestionnaires(role: string | undefined): boolean {
 }
 
 /**
+ * Whether the form offers to choose the gestionnaires of this machine
+ * (`undefined` when it creates one).
+ *
+ * Not for a machine written before the multi-organisation migration, which has
+ * no organisation yet (ANH-225). The server assigns only gestionnaires of the
+ * machine's organisation (`machines.assignMachineToGestionnaires`): a list
+ * sent for such a machine would remove its gestionnaires and add none, and the
+ * only list the form could offer is every gestionnaire of every organisation.
+ * A new machine always gets an organisation.
+ */
+export function offersGestionnaireChoice(
+  machine: { organizationId?: string } | undefined,
+): boolean {
+  return machine === undefined || machine.organizationId !== undefined;
+}
+
+/**
  * The gestionnaire list to send after a machine edit, or `null` when
  * `machines.assignMachineToGestionnaires` must not be called.
  *

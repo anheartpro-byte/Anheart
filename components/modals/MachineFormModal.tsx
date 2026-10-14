@@ -9,7 +9,10 @@ import { api } from "@/convex/_generated/api";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
-import { submitGestionnaireList } from "@/lib/machineForm";
+import {
+  offersGestionnaireChoice,
+  submitGestionnaireList,
+} from "@/lib/machineForm";
 import { isAnheartAdmin } from "@/lib/organizationAccess";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -99,10 +102,16 @@ export function MachineFormModal({
       ? (chosenOrganization ?? currentUser?.organization?._id)
       : undefined;
   // Only the gestionnaires of the machine's organisation can be assigned: the
-  // server leaves out any other, so the form does not offer them.
+  // server leaves out any other, so the form does not offer them, and offers
+  // none for a machine that has no organisation yet (lib/machineForm.ts).
+  const choosesGestionnaires = offersGestionnaireChoice(machine);
   const gestionnaires = useQuery(
     api.users.listGestionnaires,
-    machineOrganization ? { organizationId: machineOrganization } : {},
+    !choosesGestionnaires
+      ? "skip"
+      : machineOrganization
+        ? { organizationId: machineOrganization }
+        : {},
   );
   const createMachine = useMutationWithFeedback(api.machines.createMachine);
   const updateMachine = useMutationWithFeedback(api.machines.updateMachine);
@@ -152,19 +161,22 @@ export function MachineFormModal({
       );
       if (!updated.ok) return showFailure(updated.message);
       // The gestionnaire list is an admin-only call. Whether it is made is
-      // decided in lib/machineForm.ts, never here: only for a caller
-      // allowed to choose the gestionnaires, and only when the list
-      // changed. A gestionnaire saving the name or the place never makes it.
-      const assigned = await submitGestionnaireList({
-        role: currentUser?.role,
-        current: machine.gestionnaires?.map((g) => g._id) ?? [],
-        selected: values.gestionnaireIds as Id<"users">[] | undefined,
-        assign: (gestionnaireIds) =>
-          assignMachineToGestionnaires({
-            machineId: machine._id,
-            gestionnaireIds,
-          }),
-      });
+      // decided in lib/machineForm.ts, never here: only for a machine whose
+      // gestionnaires the form offers, for a caller allowed to choose them,
+      // and only when the list changed. A gestionnaire saving the name or
+      // the place never makes it.
+      const assigned = choosesGestionnaires
+        ? await submitGestionnaireList({
+            role: currentUser?.role,
+            current: machine.gestionnaires?.map((g) => g._id) ?? [],
+            selected: values.gestionnaireIds as Id<"users">[] | undefined,
+            assign: (gestionnaireIds) =>
+              assignMachineToGestionnaires({
+                machineId: machine._id,
+                gestionnaireIds,
+              }),
+          })
+        : null;
       // `assigned` is null when the call was not made: nothing was refused.
       if (assigned && !assigned.ok) return showFailure(assigned.message);
       onOpenChange(false);
@@ -327,6 +339,13 @@ export function MachineFormModal({
                   {t("machines.form.organizationDescription")}
                 </FormDescription>
               </FormItem>
+            )}
+
+            {/* A machine from before the multi-organisation migration */}
+            {!choosesGestionnaires && (
+              <p className="text-sm text-muted-foreground">
+                {t("machines.form.noOrganization")}
+              </p>
             )}
 
             {/* Gestionnaire Assignment (for admin creating/editing) */}

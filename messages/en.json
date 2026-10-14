@@ -398,7 +398,8 @@
       "nameRequired": "Name is required",
       "organization": "Organization",
       "organizationDescription": "The machine belongs to this organization; only its managers can be assigned to it.",
-      "organizationPlaceholder": "Choose an organization..."
+      "organizationPlaceholder": "Choose an organization...",
+      "noOrganization": "This machine does not belong to an organization yet: it keeps its current managers, who can be changed here once the multi-organization migration has run."
     }
   },
   "sessions": {

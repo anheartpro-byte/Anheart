@@ -62,6 +62,8 @@ const UPDATE = "machines:updateMachine";
 const ASSIGN = "machines:assignMachineToGestionnaires";
 
 const machineId = "machine-1" as Id<"machines">;
+/** The organisation of the machines edited below. */
+const organizationId = "org-anheart" as Id<"organizations">;
 const ANNA = {
   _id: "anna" as Id<"users">,
   firstName: "Anna",
@@ -78,6 +80,7 @@ const BORIS = {
 /** The machine being edited: Anna is its only gestionnaire, and so its owner. */
 const MACHINE = {
   _id: machineId,
+  organizationId,
   name: "Centri Paris",
   location: "Salle 2",
   gestionnaires: [{ ...ANNA, isOwner: true }],
@@ -472,7 +475,7 @@ describe("ANH-203 machine window: editing", () => {
     answer("users:listGestionnaires", [ANNA]);
 
     const { screen } = open({
-      machine: { _id: machineId, name: "Centri Lyon" },
+      machine: { _id: machineId, organizationId, name: "Centri Lyon" },
     });
 
     expect(field(screen, "location").value).toBe("");
@@ -483,7 +486,7 @@ describe("ANH-203 machine window: editing", () => {
     signedInAs("admin");
     answer("users:listGestionnaires", [ANNA, BORIS]);
     const { screen } = open({
-      machine: { _id: machineId, name: "Centri Lyon" },
+      machine: { _id: machineId, organizationId, name: "Centri Lyon" },
     });
     await click(box(screen, BORIS));
 
@@ -640,5 +643,60 @@ describe("ANH-187 machine window: the organisation of the machine", () => {
       organizationId: CENTRE_A._id,
     });
     expect(screen.text()).toContain("Boris Noir");
+  });
+});
+
+describe("ANH-225 machine window: a machine from before the multi-organisation migration", () => {
+  /** Anna manages it since before organisations existed; it has none yet. */
+  const LEGACY = {
+    _id: machineId,
+    name: "Centri Paris",
+    location: "Salle 2",
+    gestionnaires: [{ ...ANNA, isOwner: true }],
+  };
+
+  it("asks for no list of gestionnaires and says why", () => {
+    signedInAs("admin");
+    // Without an organisation, the server would list every gestionnaire.
+    answer("users:listGestionnaires", [ANNA, BORIS]);
+
+    const { screen } = open({ machine: LEGACY });
+
+    // Every render skips the question.
+    expect(asks("users:listGestionnaires")).not.toEqual([]);
+    expect(
+      asks("users:listGestionnaires").filter((args) => args !== "skip"),
+    ).toEqual([]);
+    expect(screen.text()).toContain(t.form.noOrganization);
+    expect(screen.text()).not.toContain(t.assignGestionnaires);
+    expect(
+      screen.all((element) => element.getAttribute("role") === "checkbox"),
+    ).toEqual([]);
+  });
+
+  it("saves the name and the place and keeps its gestionnaires: the list is never sent", async () => {
+    signedInAs("admin");
+    const { screen, onOpenChange, onSuccess } = open({ machine: LEGACY });
+    await type(field(screen, "name"), "Centri Paris Nord");
+
+    await submit(screen.form());
+
+    expect(mutationCalls()).toEqual({
+      [UPDATE]: [
+        [{ machineId, name: "Centri Paris Nord", location: "Salle 2" }],
+      ],
+    });
+    expect(onOpenChange.mock.calls).toEqual([[false]]);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing of the kind for a machine of an organisation", () => {
+    signedInAs("admin");
+    answer("users:listGestionnaires", [ANNA, BORIS]);
+
+    const { screen } = open({ machine: MACHINE });
+
+    expect(screen.text()).not.toContain(t.form.noOrganization);
+    expect(asks("users:listGestionnaires").at(-1)).toEqual({ organizationId });
   });
 });
