@@ -406,6 +406,7 @@
   "sessions": {
     "title": "ECG Sessions",
     "active": "Active",
+    "interrupted": "Interrupted",
     "completed": "Completed",
     "failed": "Failed",
     "pending": "Pending",

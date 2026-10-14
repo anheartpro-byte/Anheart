@@ -405,7 +405,8 @@ Tous, **En attente** (lancée du site, la machine ne l'a pas encore armée),
 Actives, **Interrompues** (aucune nouvelle depuis 10 min, fin inconnue),
 Terminées, Échouées. Colonnes : patient, machine,
 **Type** (badges Auto / Manuel / Enregistrement et origine), statut, début,
-durée. Un clic ouvre la vue en direct (séance active) ou le détail.
+durée (« Fin inconnue » pour une séance interrompue). Un clic ouvre la vue
+en direct (séance active) ou le détail.
 
 La liste est servie **par pages de 50**, du début le plus récent au plus ancien
 (`sessions.listSessionsPaginated`, [convex.md §5](convex.md#sessionsts-lectures-seulement)).

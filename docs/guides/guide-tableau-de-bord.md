@@ -467,8 +467,8 @@ Badges de statut d'une séance, ici et dans toutes les listes :
 | **Terminée** (gris) | Finie normalement. |
 | **Échouée** (rouge) | Refusée, annulée, ou finie sur un incident. |
 
-Les onglets de la page **Sessions** gardent le pluriel (Actives, Terminées,
-Échouées). Un statut que le site ne connaît pas s'afficherait tel quel.
+Les onglets de la page **Sessions** gardent le pluriel (Actives, Interrompues,
+Terminées, Échouées). Un statut que le site ne connaît pas s'afficherait tel quel.
 
 ### 4.4 Machines (liste)
 
@@ -954,7 +954,7 @@ seule).
 | Colonne **Patient** | Nom du pratiquant. « Unknown » pour une séance démarrée à la machine sans pratiquant connu. |
 | Colonne **Type** | Badge **Auto** (jauge), **Manuel** (main, ambre) ou **Enregistrement** (courbe) ; badge d'origine **Tableau de bord** (écran) ou **Machine** (puce). |
 | **Démarrée à** | Date et heure. |
-| **Durée** | Séance finie : durée (« 25m 3s »). Séance non finie : temps écoulé depuis le début (« 12 minutes »). |
+| **Durée** | Séance finie : durée (« 25m 3s »). Séance interrompue : « Fin inconnue ». Autre séance non finie : temps écoulé depuis le début (« 12 minutes »). |
 | **Voir en direct** (séance active) | Ouvre la vue en direct. |
 | Icône **œil** (autres statuts) | Ouvre le détail. |
 | Clic sur la ligne | Même effet. |

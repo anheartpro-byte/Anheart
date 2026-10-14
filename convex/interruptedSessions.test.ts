@@ -457,16 +457,52 @@ describe("ANH-216 EX-1 who may read and stop an interrupted session", () => {
     },
   );
 
-  it("is listed under its own status, apart from the active ones", async () => {
-    const { w, sessionId } = await interruptedWorld();
-    const manager = as(w.t, "manager");
-    const interrupted = await manager.query(api.sessions.listSessions, {
-      status: "interrupted",
-    });
-    const active = await manager.query(api.sessions.listSessions, {
-      status: "active",
-    });
-    expect(interrupted.map((s) => s._id)).toEqual([sessionId]);
-    expect(active.map((s) => s._id)).not.toContain(sessionId);
-  });
+  it.each([
+    ["patient", true],
+    ["manager", true],
+    ["orgAdmin", true],
+    ["admin", true],
+    ["otherManager", false],
+    ["stranger", false],
+    ["orgBAdmin", false],
+    ["orgBManager", false],
+    ["orgBPatient", false],
+  ] as const)(
+    "lists a session the job marked to %s (%s) under its own status and under all, never as active",
+    async (actor, readable) => {
+      const w = await seedWorld(modules);
+      const sessionId = await addSession(w, {
+        machineId: w.machine,
+        userId: w.patient,
+        status: "active",
+        kind: "auto",
+      });
+      await jobAt(w, NOW + SESSION_SILENCE_MS + SECOND);
+      expect((await sessionOf(w, sessionId))?.status).toBe("interrupted");
+
+      const reader = as(w.t, actor);
+      const page = async (status?: "active" | "interrupted") =>
+        (
+          await reader.query(api.sessions.listSessionsPaginated, {
+            ...(status === undefined ? {} : { status }),
+            paginationOpts: { numItems: 50, cursor: null },
+          })
+        ).page.map((row) => row._id);
+      const short = async (status?: "active" | "interrupted") =>
+        (
+          await reader.query(
+            api.sessions.listSessions,
+            status === undefined ? {} : { status },
+          )
+        ).map((row) => row._id);
+
+      const shown = readable ? [sessionId] : [];
+      expect(await page("interrupted")).toEqual(shown);
+      expect(await page()).toEqual(shown);
+      expect(await short("interrupted")).toEqual(shown);
+      expect(await short()).toEqual(shown);
+      expect(await page("active")).toEqual([]);
+      expect(await short("active")).toEqual([]);
+    },
+  );
 });

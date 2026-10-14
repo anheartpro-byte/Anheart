@@ -406,6 +406,7 @@
   "sessions": {
     "title": "Sessions ECG",
     "active": "Actives",
+    "interrupted": "Interrompues",
     "completed": "Terminées",
     "failed": "Échouées",
     "pending": "En attente",

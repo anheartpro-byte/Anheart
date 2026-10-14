@@ -14,6 +14,9 @@
  * sessions of their own organisation only, an organisation admin all of them,
  * a gestionnaire those of the machines they manage and those they ride, a user
  * those they ride.
+ *
+ * Every status is in the world, `interrupted` too (ANH-216: a session the
+ * server has had no news of, its end unknown): it is read like any other.
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import type { FunctionReturnType } from "convex/server";
@@ -31,7 +34,7 @@ import {
 
 type UserActor = (typeof USER_ACTORS)[number];
 type MachineName = "machine" | "otherMachine" | "orgBMachine";
-type Status = "pending" | "active" | "completed" | "failed";
+type Status = "pending" | "active" | "interrupted" | "completed" | "failed";
 
 /** One seeded session, as the rule reads it. */
 type Seeded = {
@@ -45,7 +48,13 @@ type Seeded = {
 };
 
 const MACHINES: MachineName[] = ["machine", "otherMachine", "orgBMachine"];
-const STATUSES: Status[] = ["completed", "failed", "active", "pending"];
+const STATUSES: Status[] = [
+  "completed",
+  "failed",
+  "active",
+  "pending",
+  "interrupted",
+];
 /** Who rides each machine, in turn. `null`: started at the machine, no rider. */
 const RIDERS: Record<MachineName, (UserActor | null)[]> = {
   // otherManager rides a machine they do not manage.
@@ -96,7 +105,7 @@ async function seedSessions(w: World): Promise<Seeded[]> {
     const machine = MACHINES[rank % 3];
     const turn = Math.floor(rank / 3);
     const rider = RIDERS[machine][turn % RIDERS[machine].length];
-    const status = STATUSES[(rank + turn) % 4];
+    const status = STATUSES[(rank + turn) % STATUSES.length];
     // A shuffle of 250 instants: the start order is not the writing order,
     // and 50 sessions share their start with another one.
     const startedAt = NOW - ((rank * 7919) % 250) * 60_000;
@@ -183,6 +192,12 @@ describe("ANH-158 lists of sessions: 300 sessions, 3 machines, 2 centres", () =>
     expect(new Set(seeded.map((s) => s.startedAt)).size).toBe(250);
     const byStart = [...seeded].sort(newestFirst).map((s) => s.rank);
     expect(byStart).not.toEqual([...byStart].sort((a, b) => b - a));
+    // Every status, for a reader of each kind.
+    for (const actor of ["admin", "orgAdmin", "manager", "patient"] as const) {
+      expect(new Set(readableBy(actor).map((s) => s.status))).toEqual(
+        new Set(STATUSES),
+      );
+    }
   });
 
   it.each(USER_ACTORS)(
