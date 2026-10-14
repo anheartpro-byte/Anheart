@@ -67,9 +67,10 @@ répertoire : sa télémétrie à 1 Hz, ses événements et sa fin, et rien d'au
 journal hors séance `logbook/`). Cela vaut
 aussi pour un enregistrement fait **pendant qu'aucun tableau de bord n'était
 configuré**, s'il est postérieur à ce premier démarrage : il part au premier
-démarrage où une clé est de nouveau en place. Les enregistrements antérieurs
-à ce premier démarrage ne partent jamais. Le détail, et le seul moyen de
-garder locaux les seconds, sont dans
+démarrage où une clé est de nouveau en place, et aucun réglage ne l'en
+empêche (décision du chef de projet du 14 octobre 2026). Les enregistrements
+antérieurs à ce premier démarrage ne partent jamais. Le détail, et le seul
+moyen, manuel, de garder locaux les seconds, sont dans
 [raspberry-pi.md §8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console).
 
 **Fichiers complets.** Après acquittement de la fin de séance, les nouveaux

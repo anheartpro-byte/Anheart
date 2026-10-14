@@ -1622,7 +1622,7 @@ mesure.
 | Ce n'est pas la vérité, seulement une économie | un curseur **tronqué, illisible, d'une autre version ou qui ne correspond pas à son fichier** fait renvoyer l'enregistrement **depuis son début** ; le tableau de bord ne stocke qu'une fois ce qu'il a déjà (un point est connu par `(séance, t)`, un événement par `(séance, rang)`) |
 | Un curseur dont le dossier n'existe plus | retiré par la purge de rétention, puis retenté à la purge suivante si la suppression est refusée. Le nettoyage au démarrage le retire aussi, avec les fichiers temporaires laissés par une console tuée pendant une écriture. Les fichiers temporaires en cours d'écriture ne sont jamais touchés par la purge périodique ([15.5](#155-rétention--rien-nest-purgé-sans-dépôt-confirmé)) |
 | Un enregistrement **sans aucun curseur**, déjà là quand la synchronisation a listé le dossier pour la première fois | n'est pas envoyé : il a été fait avant que cette console tourne pour la première fois avec un tableau de bord configuré (version antérieure de ce logiciel, ou pas de clé). Leur liste est écrite une fois à côté des enregistrements (`.sync-baseline.json`, privé, écrit comme un curseur), et la console dit alors combien elle en met de côté (plus bas) |
-| Un enregistrement **sans aucun curseur**, apparu depuis | est envoyé, depuis son début, au démarrage suivant de la console : il n'a jamais été lié à son curseur (console tuée dans la première seconde de la séance, ou disque qui a refusé le curseur). Le journal le dit (`was never tied to a cursor`). Supprimer un curseur à la main fait donc **renvoyer** l'enregistrement |
+| Un enregistrement **sans aucun curseur**, apparu depuis | est envoyé, depuis son début, au démarrage suivant de la console : il n'a jamais été lié à son curseur (console tuée dans la première seconde de la séance, disque qui a refusé le curseur, ou séance faite pendant qu'aucune clé n'était posée, [8.4](#84-après-un-redémarrage-de-la-console)). Le journal le dit (`was never tied to a cursor`). Supprimer un curseur à la main fait donc **renvoyer** l'enregistrement |
 
 **La télémétrie à 1 Hz.** `ticks.csv` est écrit à 5 Hz. Le point d'une seconde
 de la séance est son **premier tic**. La règle ne dépend que du fichier :
@@ -1756,11 +1756,22 @@ met de côté ([8.1](#81-ce-qui-est-envoyé-vient-du-disque)).
 | fait depuis, tableau de bord configuré | oui, pendant la séance, et au démarrage suivant pour ce qui restait |
 | fait depuis, **sans** tableau de bord configuré (clé retirée entre-temps) | **oui**, au premier démarrage où une clé est de nouveau configurée : il n'a pas de curseur et n'est pas sur la liste. La séance apparaît alors sur le tableau de bord de la machine que désigne cette clé, sous l'alias de l'opérateur |
 
-Aucun réglage ne permet de garder locaux les enregistrements de la troisième
-ligne. Le seul moyen, console arrêtée et avant de la relancer avec une clé,
-est de supprimer `.sync-baseline.json` : la liste est refaite de tout ce qui
-n'a pas de curseur, ces enregistrements y entrent, et la console dit combien
-elle en a mis de côté, qu'un autre enregistrement porte un curseur ou non.
+**Aucun réglage ne permet de garder locaux les enregistrements de la
+troisième ligne**, et il n'y en aura pas : c'est la décision du chef de
+projet du 14 octobre 2026 (ANH-216). Une séance faite pendant qu'aucune clé
+n'était posée part donc au tableau de bord dès qu'une clé l'est de nouveau,
+sans que la console le demande : sa télémétrie, ses événements et sa fin,
+puis, une fois sa fin acquittée, l'enregistrement entier s'il porte
+l'inventaire `files` (dépôt dans Convex Storage,
+[enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex)). Le seul levier est manuel, **console
+arrêtée** et avant de la relancer avec une clé : supprimer
+`.sync-baseline.json`. La liste est alors refaite de tout ce qui n'a pas de
+curseur, ces enregistrements y entrent et ne seront jamais envoyés, et la
+console dit combien elle en a mis de côté, qu'un autre enregistrement porte
+un curseur ou non. Le levier ne trie pas : un enregistrement fait avec une
+clé mais jamais lié à son curseur (console tuée dans la première seconde,
+disque qui refusait le curseur) entre aussi dans la liste et n'est plus
+envoyé non plus.
 
 ### 8.5 Les dates
 
@@ -1877,7 +1888,16 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
     route inconnue), il est refait 15 s plus tard, et pas avant ; de même une
     déclaration acquittée sans identifiant de séance, ou refusée sans code
     définitif. Tant qu'il n'a pas abouti, l'étape d'envoi n'envoie rien
-    d'aucune séance.
+    d'aucune séance ;
+  - une question d'arrêt sur la séance précédente encore en vol quand la
+    suivante est armée : la tâche de veille fait une chose à la fois, et le
+    premier contact de la nouvelle séance attend le retour de cette question,
+    3 s au plus. C'était déjà le cas avant cette tâche à part.
+
+  Une requête de l'étape d'envoi encore en vol quand une séance est armée
+  n'en fait pas partie : si sa réponse est une retenue, elle retient l'étape
+  d'envoi pendant 15 s, et le premier contact de la séance armée part quand
+  même au regard suivant de la veille.
 
   Tant que le tableau de bord ne tient pas la séance pour démarrée, sa réponse
   à la question se lirait comme une demande d'arrêt : elle n'est donc pas
@@ -1957,16 +1977,44 @@ lequel la même requête serait encore refusée.
   pas de curseur, et la console le dit 10 s après le départ (8.1). Sa fin
   part de la mémoire de la console, avec la raison du runtime, quand la séance
   finit. **Si la console s'arrête avant** (coupure, processus tué, sortie
-  ordinaire), **rien ne clôt cette séance côté tableau de bord** : elle y
-  reste active, sans mesures. Aucune fonction du serveur ne clôt une séance
-  sans la fin envoyée par la console : un arrêt demandé sur le site n'est
-  qu'une demande faite à la machine, et une machine passée hors ligne garde
-  ses séances. La console n'envoie cette fin à un démarrage suivant que si
-  l'enregistrement se lit de nouveau : sans curseur et absent de la liste des
-  enregistrements antérieurs, il est alors envoyé depuis son début, puis clos
+  ordinaire), le tableau de bord n'en reçoit pas la fin : la séance y reste
+  active, sans mesures, jusqu'à ce que le serveur la marque **« interrompue,
+  fin inconnue »**, faute de nouvelles d'elle pendant 10 min (plus bas).
+  Aucune fonction du serveur ne termine une séance active sans la fin
+  envoyée par la console : cette marque n'est pas une fin, un arrêt demandé
+  sur le site n'est qu'une demande faite à la machine, et le passage hors
+  ligne d'une machine (90 s) ne touche pas à ses séances. La console
+  n'envoie cette fin à un démarrage suivant que si l'enregistrement se lit
+  de nouveau : sans curseur et absent de la liste des enregistrements
+  antérieurs, il est alors envoyé depuis son début, puis clos
   ([8.4](#84-après-un-redémarrage-de-la-console)). Tant qu'il ne se lit pas,
   il est laissé à chaque démarrage, et le journal le dit
   (`cannot be read (...): left until the next start`).
+- **Une séance dont le serveur n'a plus de nouvelles** (ANH-216). Une séance
+  active dont le serveur n'a rien appris pendant **10 min** passe
+  `interrupted`, « interrompue, fin inconnue » sur le site : aucun battement
+  de cœur de sa machine ne l'a nommée comme la séance en cours, aucun point
+  ni événement d'elle n'est arrivé, et elle n'a pas été déclarée ou confirmée
+  dans ce délai. C'est la tâche de Convex qui passe toutes les minutes
+  ([convex.md, Tâche planifiée](convex.md#7-tâche-planifiée)). Sont concernées
+  une console tuée ou une machine jamais rallumée, une séance dont
+  l'enregistrement ne se lit pas et dont la console a redémarré (la machine
+  répond de nouveau, mais ne la nomme plus), et aussi une séance qui tourne
+  encore sur une machine dont le lien est coupé depuis 10 min. C'est
+  pourquoi la marque ne la clôt pas : la console n'en sait rien et n'a rien
+  à faire. La question de l'arrêt reçoit toujours `active: true` pour une
+  telle séance, elle n'est donc jamais arrêtée par cette marque ; un arrêt
+  demandé sur le site lui parvient si elle tourne encore quand le lien
+  revient ; le premier battement de cœur qui la nomme la rend de nouveau
+  active ; et sa fin, envoyée même des heures plus tard, la clôt avec la
+  raison et la date de l'enregistrement. Ses points et ses événements
+  envoyés entre-temps sont stockés. Une console dont le contrat n'est plus
+  servi voit ses battements de cœur refusés (426) : sa séance en cours passe
+  interrompue au bout de 10 min, et la question de l'arrêt, qui répond sous
+  tous les contrats, continue de lui dire `active: true`. Ce comportement
+  est celui du Convex de ce dépôt : il n'avait été déployé sur aucun Convex
+  quand ces lignes ont été écrites, et la production l'attend du
+  redéploiement ANH-82.
 - Une séance déclarée sans son enregistrement, dont l'enregistrement
   n'apparaît qu'après la fin de la séance, est envoyée au démarrage suivant
   sous la référence de son manifeste : le tableau de bord en garde alors deux
@@ -2591,7 +2639,11 @@ console redemande toutes les 15 s. Quand le serveur sert de nouveau la majeure
 de la console (ou que la console, mise à jour et redémarrée, parle celle du
 serveur), la séance est déclarée, envoyée entière et **close avec sa raison**.
 D'ici là elle reste `active` côté Convex pour une séance lancée du site, et
-inconnue de Convex pour une séance démarrée à la machine.
+inconnue de Convex pour une séance démarrée à la machine. Avec le Convex de
+ce dépôt, la première passe `interrupted` (« interrompue, fin inconnue ») au
+bout de 10 min, ses battements de cœur étant refusés eux aussi ; la question
+de l'arrêt lui répond toujours `active: true`, et l'envoi la close avec sa
+raison ([8.7](#87-limites)).
 
 Le cas d'un changement de majeure **au milieu** d'une séance est rejoué sur la
 console entière, en simulation, par

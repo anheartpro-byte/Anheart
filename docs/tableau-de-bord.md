@@ -292,7 +292,7 @@ elle mène liste, rien de plus.
 | Carte | Pour | Chiffre | Sous le chiffre |
 |---|---|---|---|
 | **Machines en ligne** | admin, admin d'organisation, gestionnaire | Machines affichées « En ligne » ou « En session », jugées comme leur badge (§6) : une machine n'y compte plus 90 s après son dernier signal, même si Convex la dit encore en ligne. Admin : celles de l'organisation (toutes pour l'admin Anheart) ; gestionnaire : les siennes. | « / N au total » (machines non supprimées), puis « dont N en session » s'il y en a. |
-| **Sessions actives** | tous | Séances actives que l'on peut ouvrir : toutes celles de l'organisation pour un admin, celles de ses machines ou qu'il pratique pour un gestionnaire, les siennes pour un patient. | « N en attente », ou « Aucune en attente ». |
+| **Sessions actives** | tous | Séances actives que l'on peut ouvrir : toutes celles de l'organisation pour un admin, celles de ses machines ou qu'il pratique pour un gestionnaire, les siennes pour un patient. Une séance « Interrompue, fin inconnue » n'y compte pas. | « N en attente », ou « Aucune en attente ». |
 | **Utilisateurs** | admin, admin d'organisation | Membres actifs de l'organisation (de toutes pour l'admin Anheart, un compte membre de deux organisations compté dans chacune). | Par rôle : « 2 administrateurs · 3 gestionnaires · 11 patients ». |
 | **Patients** | gestionnaire | Ses patients, encore patients actifs de l'organisation, comme la page Patients les liste. Jamais un chiffre de toute l'organisation. | « Patients que vous suivez ». |
 
@@ -402,7 +402,8 @@ patient = celles où il a le droit.
 
 Pour tous (chacun voit ce que ses droits permettent). Onglets par statut :
 Tous, **En attente** (lancée du site, la machine ne l'a pas encore armée),
-Actives, Terminées, Échouées. Colonnes : patient, machine,
+Actives, **Interrompues** (aucune nouvelle depuis 10 min, fin inconnue),
+Terminées, Échouées. Colonnes : patient, machine,
 **Type** (badges Auto / Manuel / Enregistrement et origine), statut, début,
 durée. Un clic ouvre la vue en direct (séance active) ou le détail.
 
@@ -436,6 +437,14 @@ d'enregistrement ECG, retiré.
   dans les 20 dernières secondes (rattrapage après une coupure, horloge de la
   machine déréglée), il affiche un autre bandeau et ne montre aucune valeur
   comme actuelle (§6).
+- Séance d'entraînement **interrompue, fin inconnue** (le serveur n'en a eu
+  aucune nouvelle pendant 10 min, [convex.md](convex.md#7-tâche-planifiée)) :
+  le même panneau, avec le bandeau orange « Séance interrompue, fin
+  inconnue », aucune valeur donnée pour actuelle (indicateurs grisés, « - »),
+  le temps écoulé compté jusqu'à son dernier point, le bouton **Arrêter la
+  séance** (§5.4) et le bouton **Voir le détail**. Elle redevient active, et
+  la page avec elle, dès que la machine la nomme de nouveau ; la fin envoyée
+  par la machine, même tard, la clôt.
 - Séance d'entraînement **finie** : le même panneau, figé, et le bouton
   **Voir le détail**.
 - La page n'affiche rien d'autre : la console locale n'envoie pas l'ECG brut au
@@ -447,7 +456,10 @@ d'enregistrement ECG, retiré.
 ### Détail d'une séance : `/fr/dashboard/sessions/{id}`
 
 Nom du pratiquant (ou « Pratiquant non précisé »), machine, statut, bandeau
-d'échec avec la raison. Pour une séance d'entraînement, la carte
+d'échec avec la raison. Pour une séance **interrompue, fin inconnue** : un
+bandeau orange qui le dit, avec la date à laquelle le serveur l'a marquée,
+la durée « Fin inconnue » au lieu de « En cours », et le bouton **Voir en
+direct**, d'où son arrêt peut encore être demandé. Pour une séance d'entraînement, la carte
 **Entraînement** : type, origine, programme, zone cible, durée prévue, FC max du
 pratiquant, opérateur, motif de fin, et les courbes de télémétrie. Suivent les
 cartes « Informations patient », « Chronologie de la session » et, s'il y en a,
@@ -647,6 +659,10 @@ admin / gestionnaire de la machine.
   sécurité. La séance se terminera quand la machine confirmera l'arrêt. » Le
   bandeau « Arrêt demandé, décélération en cours… » reste jusqu'à ce que le Pi
   signale la fin. Le bras tourne encore pendant ce temps.
+- **Interrompue, fin inconnue** → **Arrêter la séance** : la même demande. Le
+  serveur la garde ; la machine la lit si elle revient avec la séance encore
+  en cours, et l'arrête alors sur sa rampe. Le bouton reste grisé, mais le
+  bandeau de décélération ne s'affiche pas : on ne sait rien de la machine.
 
 Une séance **manuelle** peut aussi être arrêtée ainsi : le Pi l'arrête sur sa
 rampe. En revanche elle ne peut pas être démarrée depuis le site.
@@ -667,7 +683,7 @@ rampe. En revanche elle ne peut pas être démarrée depuis le site.
 | **Tableau de bord** / **Machine** | Origine : lancée depuis le site, ou démarrée à la console. |
 | **En direct** (point vert) / **Données périmées** (gris) | État de la machine reçu par le serveur il y a moins de 90 s / 90 s ou plus. Périmé : les valeurs sont grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Détail d'une machine et Mes machines. Voir « Fraîcheur » ci-dessous. |
 | **En ligne** / **En session** / **Hors ligne** | Statut d'une machine. « Hors ligne » dès que son dernier signal a 90 s, à la même seconde que « Données périmées », quel que soit le statut encore écrit dans Convex. Liste des machines, détail d'une machine, Mes machines, fiche d'un gestionnaire. Voir « Fraîcheur » ci-dessous. |
-| Statut de séance | En attente, Active, Terminée, Échouée (les onglets de la liste gardent le pluriel). Un statut inconnu s'affiche tel quel. |
+| Statut de séance | En attente, Active, Interrompue, fin inconnue, Terminée, Échouée (les onglets de la liste gardent le pluriel). Un statut inconnu s'affiche tel quel. |
 
 ### Fraîcheur recalculée à l'horloge
 
@@ -839,8 +855,9 @@ Cinq gros indicateurs :
 | Écoulé / Restant | Chronomètre et temps restant de la durée prévue. |
 
 Bandeaux : en attente, arrêt demandé, séance échouée (avec motif), séance
-terminée (avec motif), et pour le manuel « Manuel : uniquement depuis la console
-de la machine ».
+terminée (avec motif), séance interrompue, fin inconnue (à la place du bandeau
+« Aucun signal récent… » : rien n'y est donné pour actuel), et pour le manuel
+« Manuel : uniquement depuis la console de la machine ».
 
 **Quand une valeur est actuelle.** Sur une séance active, le panneau n'affiche
 la fréquence cardiaque, la vitesse et la charge du dernier point (celui de plus

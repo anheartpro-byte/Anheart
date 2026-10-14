@@ -463,6 +463,7 @@ Badges de statut d'une séance, ici et dans toutes les listes :
 |---|---|
 | **En attente** (contour) | Créée, pas encore démarrée par la machine. |
 | **Active** (plein) | En cours. |
+| **Interrompue, fin inconnue** (contour) | Le serveur n'a eu aucune nouvelle de la séance pendant 10 minutes (console arrêtée, machine éteinte ou liaison coupée) : sa fin n'a pas été reçue. Elle redevient **Active** si la machine la signale de nouveau en cours, et passe **Terminée** ou **Échouée** quand la machine envoie sa fin, même tard. |
 | **Terminée** (gris) | Finie normalement. |
 | **Échouée** (rouge) | Refusée, annulée, ou finie sur un incident. |
 
@@ -948,7 +949,7 @@ seule).
 
 | Élément | Effet |
 |---|---|
-| Onglets **Tous**, **En attente**, **Actives**, **Terminées**, **Échouées** | Filtrent par statut : chaque onglet demande au serveur les séances de ce statut. **En attente** : les séances lancées depuis le site que la machine n'a pas encore armées. |
+| Onglets **Tous**, **En attente**, **Actives**, **Interrompues**, **Terminées**, **Échouées** | Filtrent par statut : chaque onglet demande au serveur les séances de ce statut. **En attente** : les séances lancées depuis le site que la machine n'a pas encore armées. **Interrompues** : les séances dont le serveur n'a plus de nouvelles, fin inconnue ; elles sont aussi sous **Tous**. |
 | **Rechercher** | Filtre sur le texte des lignes **déjà affichées** (voir **Afficher plus** ci-dessous). |
 | Colonne **Patient** | Nom du pratiquant. « Unknown » pour une séance démarrée à la machine sans pratiquant connu. |
 | Colonne **Type** | Badge **Auto** (jauge), **Manuel** (main, ambre) ou **Enregistrement** (courbe) ; badge d'origine **Tableau de bord** (écran) ou **Machine** (puce). |
@@ -1115,6 +1116,11 @@ machine confirmera l'arrêt. », **Annuler** ou **Arrêter la séance**. Ensuite
 - quand la machine confirme, la séance passe au statut **Terminée** et le
   panneau affiche « Séance terminée ».
 
+Sur une séance **interrompue, fin inconnue**, le bouton fait la même demande :
+le serveur la garde, et la machine l'exécute si elle revient avec la séance
+encore en cours. Le bandeau de décélération ne s'affiche pas, puisque rien
+n'est connu de la machine.
+
 > **Ce bouton n'est pas un arrêt d'urgence.** En cas de danger, utilisez
 > l'arrêt d'urgence **sur la machine**.
 
@@ -1179,7 +1185,8 @@ direct.
 
 | Bloc | Contenu |
 |---|---|
-| En tête | Flèche retour (vers **Sessions**), nom du pratiquant, badge de statut (Active, Terminée, En attente, Échouée), badges de type et d'origine, machine et date. **Voir en direct** si la séance d'entraînement est active ou en attente. |
+| En tête | Flèche retour (vers **Sessions**), nom du pratiquant, badge de statut (Active, Interrompue fin inconnue, Terminée, En attente, Échouée), badges de type et d'origine, machine et date. **Voir en direct** si la séance d'entraînement est active, en attente ou interrompue (son arrêt peut encore y être demandé). |
+| « Séance interrompue, fin inconnue » | Si interrompue : bandeau orange qui dit pourquoi et ce qui la clôt, avec la date à laquelle le serveur l'a marquée. La **Durée** vaut « Fin inconnue ». |
 | « Session échouée » | Si échouée : texte générique et **motif précis** en police fixe. |
 | « En attente de l'appareil » | Séance d'entraînement en attente : « En attente que la machine arme la séance… ». |
 | Carte **Entraînement** (séances auto et manuelles) | **Programme**, **Zone cible**, **Durée prévue**, **FC max du pratiquant**, **Opérateur**, **Origine** (Tableau de bord / Machine), encadré **Motif de fin** (rouge si échouée), puis **Télémétrie** : les mêmes deux courbes que la vue en direct, pour toute la séance (jusqu'à 2 heures). « Aucune télémétrie reçue pour l'instant. » si rien n'a été reçu. |
