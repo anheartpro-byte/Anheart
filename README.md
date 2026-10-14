@@ -39,6 +39,12 @@ rapide, puis exécuter `npm install` et `npm run dev` à la racine.
 `npm run dev` lance Next.js et Convex ; son étape `predev` synchronise les
 fonctions Convex et ouvre le tableau de bord Convex.
 
+Les invitations patient nécessitent Clerk Organizations, le rôle `org:patient`,
+`CLERK_SECRET_KEY` et `CLERK_WEBHOOK_SIGNING_SECRET` dans Convex, ainsi que le
+webhook `/clerk/webhook`. Le premier admin est un membre `org:admin` de
+l'organisation identifiée par `ANHEART_ORG_ID` ; aucun rôle à éditer en base.
+Voir la [procédure Clerk et Convex](docs/convex.md#activer-le-multi-organisation).
+
 ## Vérifier une modification
 
 - Pi, depuis `raspberry-pi/` : `./scripts/check.sh`.

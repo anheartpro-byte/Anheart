@@ -1,11 +1,19 @@
 import {
   query,
   mutation,
+  action,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
+import {
+  invitationResult,
+  normalizedEmail,
+  patientInvitationArgs,
+  sendPatientInvitation,
+} from "./lib/patientInvitation";
 import { effectiveHrMax } from "./training";
 import {
   ORGANIZATION_ADMIN_ROLES,
@@ -83,6 +91,8 @@ export const getOrCreateUser = mutation({
     const claimed = await organizationFromClaims(ctx, identity);
 
     if (existing) {
+      if (existing.clerkDeletedAt !== undefined)
+        throw new ConvexError("profile_pending");
       if (claimed.kind === "claimed") {
         await mirrorMembership(
           ctx,
@@ -93,6 +103,15 @@ export const getOrCreateUser = mutation({
       }
       return existing._id;
     }
+
+    if (
+      identity.email &&
+      (await ctx.db.query("users").collect()).some(
+        (user) =>
+          normalizedEmail(user.email) === normalizedEmail(identity.email ?? ""),
+      )
+    )
+      throw new ConvexError("profile_pending");
 
     let home: {
       organizationId: Id<"organizations">;
@@ -397,97 +416,35 @@ export const listUsers = query({
 /**
  * Create a patient (gestionnaire or admin), in the caller's organisation
  */
-export const createPatient = mutation({
-  args: {
-    firstName: v.string(),
-    lastName: v.string(),
-    email: v.string(),
-    language: v.optional(v.union(v.literal("fr"), v.literal("en"))),
-    gestionnaireIds: v.optional(v.array(v.id("users"))), // Admin can assign multiple gestionnaires
-  },
-  returns: v.id("users"),
-  handler: async (ctx, args) => {
-    const currentUser = await requireRole(ctx, STAFF_ROLES);
-    const organizationId = currentUser.organizationId;
-
-    // Validate email format (basic check)
-    if (!args.email.includes("@")) {
-      throw new Error("Invalid email format");
-    }
-
-    // Check email not already in use
-    const existingUsers = await ctx.db.query("users").collect();
-    const conflictingUser = existingUsers.find(
-      (u) => u.email.toLowerCase() === args.email.toLowerCase(),
+export const createPatient = action({
+  args: patientInvitationArgs,
+  returns: invitationResult,
+  handler: async (ctx, args): Promise<Infer<typeof invitationResult>> => {
+    const prepared = await ctx.runMutation(
+      internal.patientInvitations.prepare,
+      args,
     );
-    if (conflictingUser) {
-      if (!(await canAccessUser(ctx, conflictingUser._id, currentUser))) {
-        throw new Error("Email already in use");
-      }
-      const conflictingRole =
-        currentUser.role === "admin"
-          ? conflictingUser.role
-          : await organizationRoleOf(ctx, conflictingUser._id, organizationId);
-      if (conflictingRole === null) {
-        throw new Error("Email already in use");
-      }
-      throw new Error(
-        `Email already in use by an existing ${conflictingRole} account (${conflictingUser.firstName} ${conflictingUser.lastName})`,
-      );
-    }
-
-    const now = Date.now();
-
-    // Create patient (no gestionnaireId on user - using relation table instead)
-    const userId = await ctx.db.insert("users", {
-      clerkId: "", // Will be set when patient accepts Clerk invitation
-      role: "user",
-      organizationId,
-      firstName: args.firstName,
-      lastName: args.lastName,
-      email: args.email,
-      language: args.language ?? "fr",
-      createdAt: now,
-    });
-    await ctx.db.insert("memberships", {
-      userId,
-      organizationId,
-      role: "user",
-      active: true,
-    });
-
-    // Create user-gestionnaire relations
-    if (currentUser.role === "gestionnaire") {
-      // Gestionnaire creating patient - auto-assign themselves
-      await ctx.db.insert("user_gestionnaires", {
-        organizationId,
-        userId,
-        gestionnaireId: currentUser._id,
-        createdAt: now,
-        createdBy: currentUser._id,
+    if (!prepared.sent) {
+      const secret = process.env.CLERK_SECRET_KEY;
+      const clerkInvitationId = secret
+        ? await sendPatientInvitation(
+            secret,
+            prepared.clerkOrganizationId,
+            prepared.email,
+          )
+        : null;
+      await ctx.runMutation(internal.patientInvitations.finish, {
+        invitationId: prepared.invitationId,
+        clerkInvitationId,
       });
-    } else if (args.gestionnaireIds) {
-      // Admin can assign multiple gestionnaires
-      for (const gestionnaireId of args.gestionnaireIds) {
-        // Verify the gestionnaire has the gestionnaire role in this organisation
-        const role = await organizationRoleOf(
-          ctx,
-          gestionnaireId,
-          organizationId,
-        );
-        if (role === "gestionnaire") {
-          await ctx.db.insert("user_gestionnaires", {
-            organizationId,
-            userId,
-            gestionnaireId,
-            createdAt: now,
-            createdBy: currentUser._id,
-          });
-        }
-      }
+      if (clerkInvitationId === null)
+        throw new ConvexError("invitation_failed");
     }
-
-    return userId;
+    return {
+      invitationId: prepared.invitationId,
+      email: prepared.email,
+      status: "sent" as const,
+    };
   },
 });
 
@@ -726,6 +683,11 @@ export const linkPatientToClerk = mutation({
   returns: v.union(v.id("users"), v.null()),
   handler: async (ctx, args) => {
     const identity = await requireAuth(ctx);
+    const linked = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+      .unique();
+    if (linked) return null;
 
     // Linking requires the caller's verified address
     if (!identity.email || identity.emailVerified !== true) {
@@ -743,7 +705,7 @@ export const linkPatientToClerk = mutation({
 
     // Find user by verified email with empty clerkId
     const users = await ctx.db.query("users").collect();
-    const user = users.find(
+    const candidates = users.filter(
       (u) =>
         asciiLowerCase(u.email) === verifiedEmail &&
         u.clerkId === "" &&
@@ -751,9 +713,10 @@ export const linkPatientToClerk = mutation({
           u.organizationId === claimed.organization._id),
     );
 
-    if (!user) {
+    if (candidates.length !== 1) {
       return null;
     }
+    const user = candidates[0];
 
     // Link the Clerk account
     await ctx.db.patch(user._id, {

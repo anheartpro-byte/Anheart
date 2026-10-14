@@ -1,4 +1,11 @@
 {
+  "errors": {
+    "invitation_failed": "The invitation delivery was not confirmed. Please retry.",
+    "invalid_invitation": "Check the name and email address.",
+    "invitation_unavailable": "This invitation cannot be created. Check your permissions and organization members.",
+    "profile_reconciliation_required": "An administrator must review the profile before it can be linked.",
+    "profile_pending": "The profile is awaiting confirmation from Clerk. Please try again shortly."
+  },
   "sessionRecord": {
     "next": "Next page",
     "previous": "Previous page",
@@ -108,6 +115,7 @@
     "userDeleted": "Account deleted.",
     "roleUpdated": "Role updated.",
     "patientCreated": "Patient created.",
+    "invitationSent": "An invitation was sent to {email}. The profile will be available after acceptance.",
     "patientUpdated": "Patient updated.",
     "launchRightGranted": "Launch right granted.",
     "launchRightRevoked": "Launch right revoked.",
@@ -447,7 +455,7 @@
     "createPatientDescription": "Add a new patient to your organization",
     "editPatient": "Edit Patient",
     "editPatientDescription": "Update patient information",
-    "patientInviteNote": "The patient will receive an email invitation to set up their account.",
+    "patientInviteNote": "An email invitation will be sent. The profile will be available after acceptance.",
     "firstName": "First Name",
     "lastName": "Last Name",
     "email": "Email",

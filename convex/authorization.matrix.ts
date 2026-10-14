@@ -67,8 +67,8 @@ export type Case = {
 
 export type Entry = {
   id: string;
-  ref: FunctionReference<"query" | "mutation", "public">;
-  kind: "query" | "mutation";
+  ref: FunctionReference<"query" | "mutation" | "action", "public">;
+  kind: "query" | "mutation" | "action";
   cases: Case[];
   build: (
     w: World,
@@ -340,14 +340,20 @@ export const MATRIX: Entry[] = [
   {
     id: "users.createPatient",
     ref: api.users.createPatient,
-    kind: "mutation",
+    kind: "action",
     build: async (_w, actor) => ({
       firstName: "New",
       lastName: "Patient",
       email: `np-${actor}@example.invalid`,
     }),
     onSuccess: async (res, w, actor) => {
-      const created = res as Id<"users">;
+      const result = res as { invitationId: Id<"patient_invitations"> };
+      const invitation = await w.t.run((ctx) =>
+        ctx.db.get(result.invitationId),
+      );
+      if (!invitation?.userId || invitation.status !== "sent")
+        throw new Error("Invitation was not sent");
+      const created = invitation.userId;
       const { row, memberships } = await w.t.run(async (ctx) => ({
         row: await ctx.db.get(created),
         memberships: await ctx.db
@@ -362,17 +368,33 @@ export const MATRIX: Entry[] = [
         memberships.length !== 1 ||
         memberships[0].organizationId !== organizationId ||
         memberships[0].role !== "user" ||
-        !memberships[0].active
+        memberships[0].active
       )
         throw new Error("Patient not created in the caller's organisation");
     },
     cases: [
-      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
-      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot create patients" },
-      { actor: "manager", expect: ok, note: "manager creates and self-links" },
+      {
+        actor: "anonymous",
+        expect: refuse(NOT_AUTH),
+        note: "sign-in required",
+      },
+      {
+        actor: "patient",
+        expect: refuse(UNAUTHORIZED),
+        note: "a user cannot create patients",
+      },
+      {
+        actor: "manager",
+        expect: ok,
+        note: "manager invites; linking waits for acceptance",
+      },
       { actor: "admin", expect: ok, note: "admin creates" },
       { actor: "orgAdmin", expect: ok, note: "creates in centre A" },
-      { actor: "orgBManager", expect: ok, note: "creates in centre B, never elsewhere" },
+      {
+        actor: "orgBManager",
+        expect: ok,
+        note: "creates in centre B, never elsewhere",
+      },
     ],
   },
   {
@@ -505,6 +527,7 @@ export const MATRIX: Entry[] = [
     // not authoritative. Whenever nothing is linked the result is null. Each
     // cell adds the email claims to its actor's identity.
     build: async (w) => {
+      await w.t.run((ctx) => ctx.db.patch(w.stranger, { clerkId: "previous-stranger" }));
       await w.t.run((ctx) =>
         ctx.db.insert("users", {
           clerkId: "",

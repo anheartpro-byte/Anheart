@@ -11,7 +11,11 @@
  * - what a machine writes through the machine routes;
  * - rows that have no organisation yet.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  acceptPatientInvitation,
+  mockClerkInvitations,
+} from "./patientInvitation.fixtures";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
@@ -34,7 +38,10 @@ import {
 
 afterEach(() => {
   configureAnheartOrganization(null);
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
+beforeEach(mockClerkInvitations);
 
 const LIVE = {
   runMode: "seance",
@@ -692,7 +699,7 @@ describe("EX-5 a machine and an account of two different organisations never com
 
   it("writes a launch right in the machine's organisation", async () => {
     const w = await seedWorld(modules);
-    const newcomer = await as(w.t, "orgBManager").mutation(
+    const invitation = await as(w.t, "orgBManager").action(
       api.users.createPatient,
       {
         firstName: "New",
@@ -700,6 +707,7 @@ describe("EX-5 a machine and an account of two different organisations never com
         email: "new-rider@example.invalid",
       },
     );
+    const newcomer = await acceptPatientInvitation(w, invitation.invitationId);
 
     // The Anheart admin acts in centre B on centre B's machine and account.
     await as(w.t, "admin").mutation(api.training.grantLaunchRight, {
@@ -866,7 +874,7 @@ describe("EX-5 a machine and an account of two different organisations never com
       gestionnaireId: w.manager,
       patientIds: [w.stranger, w.stranger, w.orgBPatient, w.otherManager],
     });
-    const created = await as(w.t, "orgAdmin").mutation(
+    const invitation = await as(w.t, "orgAdmin").action(
       api.users.createPatient,
       {
         firstName: "New",
@@ -875,6 +883,7 @@ describe("EX-5 a machine and an account of two different organisations never com
         gestionnaireIds: [w.manager, w.orgBManager],
       },
     );
+    const created = await acceptPatientInvitation(w, invitation.invitationId);
 
     const links = await w.t.run((ctx) =>
       ctx.db.query("user_gestionnaires").collect(),
@@ -958,23 +967,17 @@ describe("EX-5 a machine and an account of two different organisations never com
     ).rejects.toThrow(/Target user is not a gestionnaire/);
   });
 
-  it("names the account that holds an email only to a caller with access", async () => {
+  it("never discloses another account's name when inviting an email", async () => {
     const w = await seedWorld(modules);
     const create = (actor: Actor, email: string) =>
-      as(w.t, actor).mutation(api.users.createPatient, {
+      as(w.t, actor).action(api.users.createPatient, {
         firstName: "Dup",
         lastName: "Licate",
         email,
       });
 
-    // Same organisation: named, with the role held in that organisation.
     await expect(create("manager", "PATIENT@example.invalid")).rejects.toThrow(
-      /Email already in use by an existing user account \(patient Synthetic\)/,
-    );
-    await expect(
-      create("admin", "orgBPatient@example.invalid"),
-    ).rejects.toThrow(
-      /Email already in use by an existing user account \(orgBPatient Synthetic\)/,
+      /invitation_unavailable/,
     );
     const unrelated = await create(
       "manager",
@@ -983,16 +986,20 @@ describe("EX-5 a machine and an account of two different organisations never com
       () => "created",
       (error: Error) => error.message,
     );
-    expect(unrelated).toMatch(/Email already in use$/);
+    expect(unrelated).toMatch(/invitation_unavailable/);
     expect(unrelated).not.toMatch(/otherPatient|Synthetic|user account/);
-    // Another organisation: refused without a name or a role.
     for (const actor of ["manager", "orgAdmin"] as const) {
-      const outcome = await create(actor, "orgBManager@example.invalid").then(
-        () => "created",
-        (error: Error) => error.message,
-      );
-      expect(outcome).toMatch(/Email already in use$/);
-      expect(outcome).not.toMatch(/orgBManager Synthetic|gestionnaire/);
+      const outcome = await create(actor, "orgBManager@example.invalid");
+      expect(outcome).toEqual({
+        invitationId: expect.any(String),
+        email: "orgbmanager@example.invalid",
+        status: "sent",
+      });
+      expect(
+        await as(w.t, actor).query(api.users.getUserById, {
+          userId: w.orgBManager,
+        }),
+      ).toBeNull();
     }
   });
 });

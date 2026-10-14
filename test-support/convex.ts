@@ -24,8 +24,8 @@
  *   function, a name is not checked to exist (a mistyped name in `answer`
  *   answers nothing), no rule of `convex/` runs;
  * - only what the site imports from `convex/react` today: `useQuery`,
- *   `useMutation`, `Authenticated`, `Unauthenticated`, `AuthLoading` and
- *   `useConvexAuth`. No `useAction`, no paginated query, no optimistic update.
+ *   `useMutation`, `useAction`, `Authenticated`, `Unauthenticated`, `AuthLoading`
+ *   and `useConvexAuth`. No paginated query, no optimistic update.
  */
 
 import { getFunctionName, type FunctionReference } from "convex/server";
@@ -104,6 +104,15 @@ const shownWhen =
 
 /** What stands for the `convex/react` module in a test. */
 export const convexReact = {
+  useAction(reference: FunctionReference<"action">) {
+    const name = getFunctionName(reference);
+    let caller = callers.get(name);
+    if (caller === undefined) {
+      caller = (...args: unknown[]) => mutation(name)(...args);
+      callers.set(name, caller);
+    }
+    return caller;
+  },
   useQuery(reference: FunctionReference<"query">, args?: unknown) {
     const name = getFunctionName(reference);
     asked.push({ name, args });

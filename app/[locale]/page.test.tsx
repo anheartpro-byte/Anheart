@@ -9,14 +9,11 @@ import {
   answer,
   argsAsked,
   feedbackShown,
-  mutation,
   mutationsSent,
   propsOf,
   renderPage,
-  serverFailures,
   sessionIs,
   signedInAs,
-  takeLoggedFailures,
   wasMounted,
 } from "@/test-support/pages";
 import Home from "./page";
@@ -134,19 +131,18 @@ describe("landing page: a visitor who is signed in", () => {
     expect(wasMounted("SignInButton")).toBe(false);
   });
 
-  it("creates the row of an account that has none yet, once", async () => {
+  it("offers the dashboard while waiting for the webhook without creating a profile", async () => {
     answer(api.users.getCurrentUser, null);
     const view = await renderPage(<Home />);
 
-    expect(mutationsSent()).toEqual([
-      { name: "users:getOrCreateUser", args: undefined },
-    ]);
+    expect(mutationsSent()).toEqual([]);
     expect(feedbackShown()).toEqual([]);
 
     // The page is drawn again before the server has pushed the new row.
     await view.refresh();
     await view.refresh();
-    expect(mutationsSent()).toHaveLength(1);
+    expect(mutationsSent()).toHaveLength(0);
+    expect(links()).toEqual(["/dashboard", "/dashboard"]);
   });
 
   it("creates nothing for an account that has its row", async () => {
@@ -165,21 +161,6 @@ describe("landing page: a visitor who is signed in", () => {
     // The way to the dashboard does not wait for the answer.
     expect(links()).toEqual(["/dashboard", "/dashboard"]);
   });
-
-  it.each(serverFailures(api.users.getOrCreateUser, "Not authenticated"))(
-    "says so when the row could not be created $where",
-    async ({ error, shown }) => {
-      answer(api.users.getCurrentUser, null);
-      mutation(api.users.getOrCreateUser).mockRejectedValue(error);
-      await renderPage(<Home />);
-
-      expect(feedbackShown()).toEqual([{ kind: "error", message: shown }]);
-      expect(takeLoggedFailures()).toEqual(["users:getOrCreateUser"]);
-      // The way to the dashboard stays, and nothing is sent again.
-      expect(links()).toEqual(["/dashboard", "/dashboard"]);
-      expect(mutationsSent()).toHaveLength(1);
-    },
-  );
 });
 
 describe("landing page: the presentation", () => {

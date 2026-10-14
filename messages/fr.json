@@ -1,4 +1,11 @@
 {
+  "errors": {
+    "invitation_failed": "L'envoi de l'invitation n'a pas été confirmé. Réessayez.",
+    "invalid_invitation": "Vérifiez le nom et l'adresse e-mail.",
+    "invitation_unavailable": "Cette invitation ne peut pas être créée. Vérifiez vos droits et les membres de votre organisation.",
+    "profile_reconciliation_required": "Le rattachement du profil nécessite une vérification par un administrateur.",
+    "profile_pending": "Le profil attend la confirmation de Clerk. Réessayez dans quelques instants."
+  },
   "sessionRecord": {
     "next": "Page suivante",
     "previous": "Page précédente",
@@ -108,6 +115,7 @@
     "userDeleted": "Compte supprimé.",
     "roleUpdated": "Rôle mis à jour.",
     "patientCreated": "Patient créé.",
+    "invitationSent": "Une invitation a été envoyée à {email}. La fiche sera accessible après acceptation.",
     "patientUpdated": "Patient mis à jour.",
     "launchRightGranted": "Droit de lancement accordé.",
     "launchRightRevoked": "Droit de lancement retiré.",
@@ -447,7 +455,7 @@
     "createPatientDescription": "Ajouter un nouveau patient à votre organisation",
     "editPatient": "Modifier le patient",
     "editPatientDescription": "Mettre à jour les informations du patient",
-    "patientInviteNote": "Le patient recevra une invitation par email pour configurer son compte.",
+    "patientInviteNote": "Une invitation sera envoyée par e-mail. La fiche sera accessible après acceptation.",
     "firstName": "Prénom",
     "lastName": "Nom",
     "email": "Email",

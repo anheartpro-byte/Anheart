@@ -105,13 +105,11 @@ connexion pour `/{locale}/dashboard/...`. Les contrôles par rôle se font dans
 Convex : une page ouverte sans le bon rôle reçoit des listes vides ou un refus.
 Quelques pages affichent aussi un message « accès refusé » (voir §4).
 
-**Premier compte.** À la première connexion, un compte reçoit le rôle `user`
-(ou, quand son jeton Clerk porte une organisation, le rôle qu'il y tient).
-La ligne Convex n'est créée que lorsque l'utilisateur connecté passe par la
-**page d'accueil** (bouton « Accéder au tableau de bord »). Tant que Clerk
-Organizations n'est pas configuré, il n'y a pas d'amorçage automatique du
-premier admin : il faut le nommer dans le tableau de bord Convex (voir
-[convex.md §8](convex.md#8-déployer)).
+**Premier compte.** La fiche est préparée par l'invitation ou créée par le
+webhook Clerk. L'accueil affiche le lien vers le tableau de bord sans créer de
+compte. Le premier admin est invité dans l'organisation Clerk Anheart avec
+`org:admin` ; `ANHEART_ORG_ID` identifie cette organisation côté Convex. Aucun
+champ `role` n'est à modifier en base (voir [convex.md §8](convex.md#8-déployer)).
 
 **Version du site.** Le pied de page de l'accueil et de la FAQ affiche la
 version du site, par exemple `web-0.1.0` (`web-0.0.0-dev` tant qu'aucune release
@@ -143,7 +141,7 @@ En haut : un fil d'Ariane, le sélecteur de langue et le thème clair / sombre.
 
 | Adresse | Contenu |
 |---|---|
-| `/fr` (accueil) | Page de présentation « Gaura » (principe, fréquence cardiaque, cas d'usage, bénéfices, marchés). Boutons Clerk « Commencer » (inscription) et « Se connecter ». Connecté : « Accéder au tableau de bord », qui crée aussi la ligne `users` si besoin. |
+| `/fr` (accueil) | Page de présentation « Gaura » (principe, fréquence cardiaque, cas d'usage, bénéfices, marchés). Boutons Clerk « Commencer » (inscription) et « Se connecter ». Connecté : « Accéder au tableau de bord ». |
 | `/fr/faq` | Questions fréquentes. |
 | `/fr/privacy`, `/fr/terms` | Confidentialité, conditions. |
 
@@ -290,8 +288,11 @@ Le tracé n'est plus affiché.
 ### Patients : `/fr/dashboard/patients` et `/fr/dashboard/patients/{id}`
 
 Admin et gestionnaire. Liste avec recherche, **Nouveau patient** (prénom, nom,
-e-mail, langue). La fenêtre annonce « Le patient recevra une invitation par
-email… » : **aucun e-mail n'est envoyé** par le code.
+e-mail, langue). Le formulaire envoie une invitation Clerk avec le rôle patient.
+Il confirme l'adresse après l'envoi ; un échec garde le formulaire ouvert pour
+réessayer. La fiche apparaît dans la liste après acceptation et rattachement
+par le webhook. Un compte déjà présent ailleurs rejoint cette organisation
+sans créer un deuxième dossier ni écraser ses champs communs.
 
 Fiche patient : identité, séances, bouton Modifier, suppression, et la carte
 **Physiologie** (voir §5.1).
@@ -831,7 +832,7 @@ Pièges :
 | Fraîcheur et horloges | Jugée sur l'horloge du serveur (§6) : l'horloge du poste ne date rien. Pire cas chiffré sur une page qui vient de s'ouvrir : 107 s pour une machine, 37 s pour le panneau (cache de Convex, 17 s d'après son code source), plus le transit de la réponse et un onglet suspendu, **non mesurés**. Panneau, quand l'horloge du Pi date la mesure (console d'une version antérieure, serveur au contrat 1.0, ou enregistrement envoyé après un redémarrage du système) : en retard de plus de 15 s environ, ou en avance de plus de 5 s environ, elle affiche le bandeau alors que la machine envoie (sens sûr) ; en avance de X, un point renvoyé en retard peut passer pour actuel jusqu'à 20 s + X après sa mesure (ANH-163). Pour une séance en cours de la console de ce dépôt face à un serveur 1.1, l'horloge du Pi ne date pas la mesure. |
 | Statut « En ligne » et « Dernier signal » | Recalculés chaque seconde par le site (§6). Convex n'écrit `offline` qu'au passage de sa tâche (jusqu'à 2,5 min) : le refus d'un lancement par le serveur et la fenêtre de lancement lisent encore ce statut écrit (ANH-144). |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |
-| Invitation des patients par e-mail | Annoncée à l'écran, **pas implémentée**. Un patient pré-créé qui s'inscrit obtient une seconde ligne `users` (la liaison `linkPatientToClerk` n'est appelée nulle part). |
+| Invitation des patients par e-mail | Implémentée avec Clerk Organizations et liaison par webhook. La recette doit être effectuée sur l'instance configurée avant déploiement. |
 | Compteur « Utilisateurs / Patients » du tableau de bord | Pas implémenté (« - »). |
 | Libellés des actions de sécurité et de l'état du variateur | Traduits (`freeze`, `quick_stop`, `go_silent` compris). Le vocabulaire français (« Vitesse figée », « Arrêt rapide (rampe du variateur) », « Mise en silence (arrêt par le variateur) »…) reste à relire par l'équipe. |
 | Pratiquant d'une séance démarrée à la machine | Le Pi ne l'envoie pas : « Unknown » dans les listes. |

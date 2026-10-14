@@ -487,6 +487,27 @@ après 30 secondes; les seuils d'avertissement sont CPU > 70 °C, disque < 1 Gio
 
 ## 3. Règles d'autorisation
 
+### Invitations et identité du patient
+
+`users.createPatient` est une action : elle prépare une fiche et une invitation
+privée, puis appelle Clerk avec le rôle `org:patient`. Elle annonce l'envoi
+seulement après confirmation de Clerk. Un échec garde la préparation pour une
+reprise sans seconde fiche. L'appartenance et les liens gestionnaires restent
+inactifs jusqu'à l'acceptation.
+
+Le webhook vérifie auprès de l'API Clerk les adresses vérifiées du compte avant
+de relier une fiche pré-créée dans l'organisation. Une adresse présente dans
+une autre organisation peut recevoir une invitation sans révéler son nom,
+son rôle ni son identifiant Convex ; son compte existant est réutilisé après
+acceptation. Les champs communs ne sont pas remplacés par ceux de l'invitation.
+Plusieurs anciennes fiches ne produisent pas de refus distinct à l'invitation :
+la préparation reste sans fiche attribuée. L'acceptation peut sélectionner un
+compte déjà relié à l'identifiant Clerk vérifié ; sinon le conflit exige une
+réconciliation humaine. Aucune fusion de dossiers ni réattribution de séances
+n'est automatique.
+`user.deleted` conserve la fiche et rend ses appartenances inactives ; un
+événement ancien ne réactive pas ce compte. L'accueil ne crée plus de fiche.
+
 ### D'où viennent l'organisation et le rôle d'un appel
 
 Chaque appel se fait **dans une organisation, avec un rôle**. Les deux viennent
@@ -783,12 +804,12 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `getOrCreateUser` (mutation) | connecté | Crée la ligne `users` au premier passage (langue `fr`), dans l'organisation et avec le rôle du jeton (voir [§3](#3-règles-dautorisation)), et met à jour le miroir de l'appartenance. Appelée **uniquement** par la page d'accueil quand l'utilisateur connecté n'a pas encore de ligne. |
+| `getOrCreateUser` (mutation) | connecté | Compatibilité historique ; aucun appel depuis l'accueil. Refuse de créer une seconde fiche lorsqu'une adresse correspond déjà à un compte ou à une invitation. Les nouveaux parcours passent par le webhook. |
 | `getCurrentUser` (query) | - | Le compte courant ou `null`, avec `role` (rôle de l'appel : `admin`, `org_admin`, `gestionnaire`, `user`) et `organization` (`{_id, name, slug}`, ou `null` si le serveur n'accepte aucune organisation pour l'appel). |
 | `updateUserRole` | admin Anheart, pendant la transition seulement | Change le rôle d'un membre de son organisation. Refuse dès que `ANHEART_ORG_ID` est définie. |
 | `updateUserProfile` | connecté | Prénom, nom, langue de soi-même. |
 | `listUsers` | connecté | admin Anheart : tous (ou ceux d'un gestionnaire) ; admin d'organisation : les membres actifs de son organisation ; gestionnaire : ses patients dans son organisation ; user : lui-même. Filtre `role` optionnel. `role` est le rôle tenu dans l'organisation de l'appelant. |
-| `createPatient` | admin, gestionnaire | Crée un patient (`clerkId` vide) **dans l'organisation de l'appelant**, avec son appartenance. Un gestionnaire s'y lie automatiquement ; un admin peut lier plusieurs gestionnaires de cette organisation. Refuse un e-mail déjà utilisé. **Aucun e-mail d'invitation n'est envoyé**, malgré le texte affiché par le site. |
+| `createPatient` (action) | admin, admin d'organisation, gestionnaire | Prépare puis envoie une invitation Clerk dans l'organisation de l'appelant. Retourne l'identifiant d'invitation, l'adresse et `status: sent`. Lie les gestionnaires autorisés après acceptation. Un membre déjà actif de cette organisation est refusé sans divulgation de nom. |
 | `updatePatient` | admin, gestionnaire du patient | Modifie un patient. |
 | `getUserById` | `canAccessUser` | Profil, y compris `hrMax`, `birthYear` et `effectiveHrMax`. |
 | `deleteUser` | admin ; gestionnaire pour ses patients seulement | Retrait de l'organisation de l'appelant, ou suppression partout pour l'admin Anheart (voir [§3](#3-règles-dautorisation)). Pas soi-même. |
@@ -1114,11 +1135,10 @@ celles d'un projet **neuf**.
 5. Créer l'organisation par défaut : lancer une fois la migration
    (`npx convex run migrations/multiOrganization:attachExistingRowsToAnheart '{}'`, voir
    [ci-dessous](#activer-le-multi-organisation)).
-6. Nommer le premier admin : se connecter une fois sur le site (page d'accueil),
-   puis passer `role` à `admin` dans le tableau de bord Convex, sur la ligne
-   `memberships` du compte et sur sa ligne `users`. Avec Clerk Organizations
-   configuré, cette étape disparaît : le premier admin est le premier
-   `org:admin` de l'organisation Anheart dans Clerk.
+6. Configurer Organizations et le webhook selon la procédure ci-dessous.
+   Inviter le premier admin dans l'organisation Clerk Anheart avec `org:admin`,
+   dont l'identifiant est `ANHEART_ORG_ID`. Le webhook crée sa fiche et son
+   appartenance ; son jeton porte le rôle. Aucun champ de base à éditer.
 7. Créer la machine sur le site (admin), copier la clé affichée **une seule
    fois**, et la mettre dans la configuration de la machine
    (`/etc/anheart/anheart.env` sur un Pi installé, `raspberry-pi/.env` sur un
@@ -1359,7 +1379,8 @@ l'événement n'a pas été reçu, une organisation inconnue reste refusée.
 ### Webhook Clerk vers le miroir
 
 `POST /clerk/webhook` reçoit `organization.created`, `organization.updated`,
-`organization.deleted` et `organizationMembership.created|updated|deleted`.
+`organization.deleted`, `organizationMembership.created|updated|deleted`
+et `user.deleted`.
 La route vérifie la signature Svix HMAC-SHA256 sur le corps brut avec WebCrypto,
 avant de décoder le JSON. Les trois en-têtes `svix-id`, `svix-timestamp` et
 `svix-signature` sont requis ; l'horodatage de livraison doit être à moins de
@@ -1377,7 +1398,7 @@ l'identifiant reçu correspond à `ANHEART_ORG_ID`.
 
 **À configurer par le responsable du déploiement** : créer un endpoint Clerk
 vers l'URL `.convex.site/clerk/webhook` de l'environnement choisi, activer
-les six événements ci-dessus et poser son secret dans
+les sept événements ci-dessus et poser son secret dans
 `CLERK_WEBHOOK_SIGNING_SECRET` sur le même déploiement Convex. Ne pas utiliser
 le secret de production pour la recette. Envoyer ensuite un événement signé
 de test et vérifier les lignes du miroir, puis rejouer la livraison : une seule
@@ -1391,8 +1412,26 @@ pour le roster et les nouveaux liens de séance, qui lisent les appartenances
 actives ; une appartenance révoquée n'est pas réactivée par une reconnexion avec
 un ancien jeton. Une organisation supprimée est refusée dès réception.
 
-Le parcours d'invitation et la neutralité du refus d'une adresse déjà utilisée
-restent traités dans ANH-157 ; le webhook ne remplace pas ce parcours.
+Poser également `CLERK_SECRET_KEY` dans les variables Convex, pour l'envoi des
+invitations et la vérification des adresses par l'API Clerk. Cette clé appartient
+à la même instance que le webhook et l'émetteur JWT. Sans réponse vérifiable,
+une création ou mise à jour de membre répond 503 et attend une nouvelle livraison.
+Les retraits ne dépendent pas de cet appel externe.
+
+Pour une recette, utiliser l'instance Clerk de développement et une adresse
+`qa-…+clerk_test@example.com` : inviter depuis Patients, accepter l'invitation,
+ouvrir « Mes machines » et vérifier que l'identifiant Convex est celui de la
+fiche pré-créée. Rejouer la livraison pour vérifier l'absence de doublon.
+Configurer aussi l'URL d'accueil et les redirections du portail Clerk pour
+l'environnement du site. Sans cette configuration, le portail de développement
+confirme l'acceptation mais affiche « Start building » ; le patient doit alors
+revenir sur le site et s'y connecter pour ouvrir « Mes machines ».
+
+`createPatient` passe de mutation à action : déployer Convex et le site pendant
+la même fenêtre ANH-82, puis recharger les anciens onglets. Un ancien site ne
+peut pas appeler cette action comme une mutation. Contrôler les éventuelles
+anciennes fiches en conflit avant cette opération ; ne pas les fusionner sur
+la seule égalité d'adresse.
 
 Références du protocole : [vérification Svix](https://docs.svix.com/receiving/verifying-payloads/how-manual)
 et [ordre des événements Clerk](https://clerk.com/docs/guides/development/webhooks/overview).
@@ -1452,7 +1491,7 @@ régressions locales exécutables.
 | 5 | **`/api/machine/roster` inutilisé.** | La liste des pratiquants autorisés n'arrive pas sur la console locale. |
 | 6 | **Libellés d'actions de sécurité.** Le Pi envoie `freeze`, `quick_stop`, `go_silent` ; les traductions du site connaissent `hold`, `stop`, `estop`. Le commentaire du schéma cite aussi `"hold"`. | Ces trois actions s'affichent en valeur brute. |
 | 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG, pas de résumé et pas de rapport pour une séance auto/manuelle : le résumé et le rapport viendront de l'enregistrement de séance (ANH-89). |
-| 8 | **Pas d'amorçage d'admin ni d'invitation.** | Voir [§3](#3-règles-dautorisation) et `createPatient`. Un patient pré-créé qui s'inscrit reçoit une **seconde** ligne `users`, car `linkPatientToClerk` n'est jamais appelé. |
+| 8 | **Logiciel d'invitation et d'amorçage ANH-157.** | Action Clerk, liaison par webhook à adresse vérifiée et premier admin `org:admin`. La configuration et la recette de l'environnement sont requises avant mise en production (§8). |
 | 9 | **Corrigé par ANH-148 : historique borné.** | Heartbeats conservés 24 h, santé agrégée par 5 min conservée 90 jours. Purge quotidienne et par machine active, sans purge de télémétrie. |
 | 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
 | 11 | **Séance orpheline.** Si la console s'arrête pendant une séance (arrêt du conteneur, coupure), elle n'envoie pas `/training/end` à ce moment-là. Trouvé à l'essai du 1er octobre 2026. Une console qui synchronise par relecture du journal envoie cette fin à son démarrage suivant, en relisant l'enregistrement ([raspberry-pi.md, 8.4](raspberry-pi.md#84-après-un-redémarrage-de-la-console)). | Jusqu'à ce démarrage, la séance reste `active` dans Convex. Elle le reste indéfiniment si la console ne redémarre pas, ou si l'enregistrement est introuvable ou ne se lit pas ([raspberry-pi.md, 8.7](raspberry-pi.md#87-limites)) : aucune fonction Convex ne clôt une séance sans la fin envoyée par la console. La machine repasse `online` au redémarrage. |

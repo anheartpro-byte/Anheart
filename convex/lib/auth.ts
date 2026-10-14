@@ -260,10 +260,11 @@ async function sessionOf(
 }
 
 async function userOf(ctx: Ctx, identity: UserIdentity) {
-  return await ctx.db
+  const user = await ctx.db
     .query("users")
     .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
     .unique();
+  return user?.clerkDeletedAt === undefined ? user : null;
 }
 
 /**
