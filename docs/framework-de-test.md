@@ -1301,9 +1301,17 @@ la retire et la raison. Une ligne mal formée ou expirée fait échouer le job :
 la première étape la refuse, et les étapes qui lisent le tableau échouent
 aussi plutôt que de sauter quoi que ce soit. Pour npm, le script n'est
 consulté que si `npm audit` a trouvé quelque chose : sans exception écrite, le
-verdict reste celui de npm.
-Une exception npm ne vaut que pour le paquet qu'elle nomme ; `pip-audit` reçoit
-les identifiants Python par `--ignore-vuln`. Aucune exception au 14 octobre
+verdict reste celui de npm, et un rapport que le script ne peut pas lire en
+entier (forme inconnue, `metadata` absente ou dont les comptes ne sont pas ceux
+des entrées, entrée haute ou critique qu'aucun avis haut ou critique
+n'explique) ne fait rien sauter. Une exception npm ne vaut que pour l'avis
+qu'elle nomme, dans le paquet qu'elle nomme. Une exception pip n'est liée ni au
+paquet ni à l'environnement : `pip-audit` reçoit l'identifiant par
+`--ignore-vuln` et saute toute vulnérabilité qui le porte comme identifiant ou
+comme alias, dans les cinq environnements ; un `CVE-...`, alias possible
+d'avis de plusieurs paquets, est donc refusé pour pip. Seules comptent les
+lignes du tableau lui-même : une ligne en dehors, dans un bloc de code ou un
+commentaire HTML de la section est refusée. Aucune exception au 14 octobre
 2026.
 
 **Essai du 14 octobre 2026, sur un poste, pas en CI.** Les commandes exactes
@@ -1319,6 +1327,8 @@ des fichiers de dépendances ; rien de vulnérable n'a été commité.
 | `lodash@4.17.11` ajouté au site | étape npm en échec : un avis critique et trois hauts, chacun « NOT EXCEPTED » |
 | Les quatre écrits en exceptions, puis l'un d'eux retiré | verte, puis en échec sur celui qui manque |
 | `lodash` retiré, aucune exception | étape verte (« found 0 vulnerabilities ») |
+| Après la revue indépendante, l'une des quatre lignes npm déplacée dans un commentaire HTML de la section | lecture du tableau et étape npm en échec (« holds a code block or an HTML comment ») |
+| Après la même revue, `CVE-2019-11324` écrit en exception pip pour `urllib3` | refusé (« is not one pip-audit prints ») : l'étape Python échoue sans rien sauter |
 
 Que le job rougisse sur GitHub n'est pas constaté ici : il le sera à la
 première PR qui fait entrer une vulnérabilité connue.
@@ -1326,8 +1336,10 @@ première PR qui fait entrer une vulnérabilité connue.
 **Dependabot.** [`.github/dependabot.yml`](../.github/dependabot.yml) ouvre des
 PR vers `develop`, une fois par mois : npm à la racine, pip pour
 `raspberry-pi/`, `deploy/simulation-vercel/` et `simulation/cad/`, et les
-actions des workflows. Les versions mineures et correctives sont groupées en
-une PR par entrée, une version majeure vient seule. Les actions restent
+actions des workflows. Pour npm et pip, les versions mineures et correctives
+sont groupées en une PR par entrée, et une version majeure vient seule ; les
+actions, elles, sont toutes groupées en une PR, versions majeures comprises,
+pour qu'une action garde le même commit dans tous les workflows. Elles restent
 épinglées par commit complet : Dependabot change le commit et la version en
 commentaire ensemble, dans tous les workflows à la fois. Une PR sur le Pi se
 termine à la main : `requirements-base.txt`, ses verrous et la table de
@@ -1354,9 +1366,7 @@ l'exécution. La pipeline de release appelle ce workflow sur le commit qu'elle
 tague : l'artefact `sbom` de son exécution est la nomenclature de la release
 ([release.md](release.md#la-pipeline-de-release)). La simulation hébergée n'en
 a pas : sans verrou, une liste faite en CI ne serait pas ce que Vercel a
-installé. Ce qui reste, pour
-[ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) :
-joindre ces fichiers à un
+installé. Ce qui reste, pour [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) et [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la) : joindre ces fichiers à un
 objet qui dure plus que 90 jours (une « release » GitHub sur le tag, par
 exemple, ce qui demande au job des tags un droit d'écriture de plus), les
 signer ou les attester, et produire celle de la simulation hébergée quand elle
@@ -1365,7 +1375,7 @@ aura un verrou.
 **Ce qui reste, hors de ce lot.** L'environnement des tests et de la CI n'est
 ni entièrement figé ni installé avec ses empreintes ; la simulation hébergée n'a
 pas de verrou. Les figer changerait l'installation de toutes les gates Python
-et le déploiement de la simulation : à faire par un ticket à part.
+et le déploiement de la simulation : c'est [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la).
 
 ### Gate Pi en parallèle (ANH-72)
 

@@ -930,7 +930,7 @@ n'a changé.
 | Une release réelle demande quatre approbations, une par écriture, et attend une personne entre Convex et le site | à décider après la première release publiée : le garder, ou regrouper Convex et le site sous une seule approbation |
 | Mettre les machines à jour à distance : l'étape 6 de la pipeline ne fait que dire comment le faire à la main | ANH-116, ANH-168 à ANH-171 |
 | Déployer une préversion de Convex par PR, publier les rapports de test | ANH-126 |
-| Joindre la nomenclature des composants à un objet qui dure plus que les 90 jours de l'artefact `sbom` (une « release » GitHub sur le tag, par exemple, ce qui donne au job des tags un droit d'écriture de plus), la signer ou l'attester, et produire celle de la simulation hébergée quand elle aura un verrou | [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |
+| Joindre la nomenclature des composants à un objet qui dure plus que les 90 jours de l'artefact `sbom` (une « release » GitHub sur le tag, par exemple, ce qui donne au job des tags un droit d'écriture de plus), la signer ou l'attester, et produire celle de la simulation hébergée quand elle aura un verrou | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |
 
 [Sommaire](README.md) · [Déploiement](deploiement.md) · [Menaces](menaces.md) · [Roadmap](roadmap.md)

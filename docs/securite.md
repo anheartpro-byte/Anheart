@@ -1751,9 +1751,9 @@ ticket : **ils ne sont pas faits.**
 | Limite | Conséquence, et à qui elle revient |
 |---|---|
 | **Un audit ne voit que les vulnérabilités publiées.** Un paquet malveillant sans avis passe | [MEN-06](menaces.md#men-06-compromission-dun-paquet-pip-ou-npm) reste ouverte ; revue de provenance et audit externe d'ANH-153 |
-| **L'environnement des tests et de la CI, et la simulation hébergée, ne sont pas installés avec leurs empreintes** ; ce qui est audité pour eux est une résolution faite le jour de l'audit | ticket à part : les figer change l'installation de toutes les gates Python et le déploiement de la simulation |
+| **L'environnement des tests et de la CI, et la simulation hébergée, ne sont pas installés avec leurs empreintes** ; ce qui est audité pour eux est une résolution faite le jour de l'audit | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la) : les figer change l'installation de toutes les gates Python et le déploiement de la simulation |
 | **Dependabot n'agit qu'une fois son fichier sur `main`** ; ses alertes et ses mises à jour de sécurité sont des réglages du dépôt, désactivés au 14 octobre 2026 | le chef de projet |
 | **Aucune procédure de rotation n'a été essayée** | le chef de projet, avec les vrais comptes ([secrets.md](secrets.md#5-ce-qui-reste)) |
 | **L'analyse des secrets de GitHub et sa protection au push sont désactivées** ; gitleaks juge après le push | le chef de projet (réglage du dépôt) |
 | **Aucun compte à privilèges n'exige un second facteur** ; la durée des sessions est celle de Clerk ; un rôle retiré dans Clerk vaut jusqu'à l'expiration du jeton en cours | [MEN-07](menaces.md#men-07-prise-de-compte-clerk) ; lot Clerk d'ANH-153, réglages de Clerk au chef de projet |
-| **La nomenclature n'est ni durable (90 jours d'artefact) ni signée** | [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |
+| **La nomenclature n'est ni durable (90 jours d'artefact) ni signée**, et la simulation hébergée n'en a pas | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |

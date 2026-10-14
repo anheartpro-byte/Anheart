@@ -208,7 +208,7 @@ F7, F8 · Livraison/Pi/site/Convex · T, E · Critique, personne potentiellement
 
 **Existant vérifié dans le source.** [`ci.yml`, jobs audit/web/python](../.github/workflows/ci.yml) utilise `npm ci`, npm audit, pip-audit, actions épinglées par SHA et tests ; [`package-lock.json`](../package-lock.json) fige le graphe npm, seul verrou JavaScript du dépôt depuis le premier lot d'ANH-153 (`bun.lock` supprimé). Le job Python installe des requirements sans exiger leurs hashes ; les hashes générés pour l'audit ne sécurisent pas rétroactivement l'installation. L'image de la console d'un Pi installé part, elle, d'une image de base figée par son empreinte et n'installe que les paquets Python de ses fichiers de verrouillage, empreintes exigées ([`Dockerfile`](../raspberry-pi/Dockerfile), [pi-image.md](pi-image.md#2-versions-figées)) ; les paquets du système n'y sont figés que par leur série. Depuis le premier lot d'ANH-153, le job `audit`, vérification obligatoire lancée sur chaque PR, chaque push et chaque exécution de nuit, audite chaque environnement Python installé à part : les deux verrous de l'image du Pi tels quels, puis l'environnement des tests, la simulation hébergée et l'extracteur CAO, chacun résolu avec ses dépendances transitives. Une vulnérabilité haute ou critique npm, ou toute vulnérabilité Python connue, le fait échouer ; seules les exceptions datées et bornées de [`.github/audit-exceptions.md`](../.github/audit-exceptions.md) sont sautées, et une exception expirée le fait échouer aussi. Que la vérification rougisse sur une dépendance vulnérable puis reverdisse après son retrait a été constaté sur un poste, avec les commandes du workflow, pas encore sur une PR ([framework-de-test.md](framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153)). Un fichier Dependabot propose chaque mois les mises à jour npm, pip et des actions ; il n'agit qu'une fois sur `main`, et les alertes et mises à jour de sécurité de Dependabot sont des réglages du dépôt, désactivés au 14 octobre 2026. Chaque exécution écrit la nomenclature CycloneDX de ce qui s'installe depuis un verrou (artefact `sbom`), sans la signer. Un audit de vulnérabilités ne détecte pas tout code malveillant.
 
-**Manquant.** L'environnement des tests et de la CI et la simulation hébergée n'ont pas de verrou et ne s'installent pas avec leurs empreintes : un ticket de suite d'ANH-153 les porte ([framework-de-test.md](framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153)). [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite) porte encore la revue de provenance d'un paquet et l'audit externe ; la nomenclature n'est ni durable ni signée ([release.md](release.md#8-limites-et-reste-à-faire)) ; [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de) la livraison liée aux gates et ses droits.
+**Manquant.** L'environnement des tests et de la CI et la simulation hébergée n'ont pas de verrou et ne s'installent pas avec leurs empreintes : [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), suite d'ANH-153, les porte, avec la nomenclature de la simulation hébergée ([framework-de-test.md](framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153)). [ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite) porte encore la revue de provenance d'un paquet et l'audit externe ; la nomenclature n'est ni durable ni signée ([release.md](release.md#8-limites-et-reste-à-faire)) ; [ANH-126](https://linear.app/anheart/issue/ANH-126/cicd-deploiement-vercel-et-convex-automatise-rapports-du-framework-de) la livraison liée aux gates et ses droits.
 
 **Preuve de fermeture attendue.** Altération d'une dépendance détectée avant livraison ; vulnérabilité bloquante et secret synthétique refusés ; provenance et contenu du paquet revus.
 
@@ -468,7 +468,7 @@ chaque lien Linear de la page est comparé au registre, où qu'il soit.
 Il compare les liens au [registre Linear vérifié](../scripts/ci/men-linear-issues.tsv)
 (clé, UUID, date de lecture, URL canonique), constitué par lectures réelles
 `get_issue`. Chaque ligne porte sa date de lecture, la plus récente quand le
-ticket a été relu : 2026-10-10 pour 31 lignes, 2026-10-14 pour 14 lignes,
+ticket a été relu : 2026-10-10 pour 31 lignes, 2026-10-14 pour 15 lignes,
 2026-10-15 pour 1 ligne.
 La revue de release du 10 octobre 2026 n'avait relu
 aucun ticket ; la relecture a suivi le même jour, et son résultat, ticket par
@@ -490,7 +490,9 @@ au registre ; les deux liens vers ANH-186 portaient une adresse tronquée,
 remplacée par celle que Linear rend. Le même jour, neuf tickets déjà inscrits
 ont été relus, description seule, pour constater leur section « Traçabilité
 des menaces » (paragraphe suivant) : identifiant, UUID et adresse n'ont pas
-changé, et leur ligne porte cette date. Le validateur refuse désormais tout ticket
+changé, et leur ligne porte cette date. ANH-230, que MEN-06 nomme depuis le
+même jour, a été lu dans Linear ce jour-là (identifiant, UUID, adresse et
+description) et inscrit au registre. Le validateur refuse désormais tout ticket
 nommé par cette page et absent du registre. Le fichier de tests vérifie que la
 phrase qui donne ces dates nomme celles que porte le registre, avec le nombre
 de lignes de chacune, et aucune autre. Aucun jeton Linear n'est requis en CI.

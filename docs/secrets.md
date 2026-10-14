@@ -50,9 +50,9 @@ projet de les tenir.
 | Mot de passe du Wi-Fi de la console | le réseau que le Pi crée pour les tablettes | `/etc/anheart/wifi-password` (root, mode 600) ; la fiche privée de mise en service | root du Pi ; le technicien ; chaque tablette jointe | [3.3](#33-mot-de-passe-du-wi-fi-de-la-console) |
 | Clé du volume chiffré des données du Pi | les enregistrements de séance au repos | `/etc/anheart/data.key` (root, mode 600), sur la même carte que le volume ([pi-stockage.md](pi-stockage.md)) | root du Pi ; quiconque a la carte SD | aucune procédure écrite ([section 5](#5-ce-qui-reste)) |
 | Clés de signature « médical » et « catalogue » | prouver qu'un fichier de paramètres médicaux ou un programme a été signé par la personne habilitée | **n'existent pas encore** dans le code de `develop` | - | [3.4](#34-clés-de-signature) |
-| Clé de déploiement Convex de **production** | déployer le backend de production, lire et écrire ses données et ses variables | secret `CONVEX_DEPLOY_KEY` de l'environnement GitHub `production` ; `CONVEX_DEPLOY_KEY_PROD` dans `.env.local` du poste du responsable | le job `convex` de la pipeline de release ; les administrateurs du dépôt (remplacer, pas relire) ; les membres de l'équipe Convex ; le poste qui a `.env.local` | [3.5](#35-clés-de-déploiement-convex) |
+| Clé de déploiement Convex de **production** | déployer le backend de production, lire et écrire ses données et ses variables | prévue comme secret `CONVEX_DEPLOY_KEY` de l'environnement GitHub `production`, mais **pas encore créée** ([état au 14 octobre 2026](#ce-que-github-porte-aujourdhui)) ; `CONVEX_DEPLOY_KEY_PROD` dans `.env.local` du poste du responsable | une fois le secret créé : le job `convex` de la pipeline de release, et les administrateurs du dépôt (remplacer, pas relire) ; les membres de l'équipe Convex ; le poste qui a `.env.local` | [3.5](#35-clés-de-déploiement-convex) |
 | Clé de déploiement Convex de développement | la même chose sur le déploiement de développement | `CONVEX_DEPLOY_KEY` dans `.env.local` | les membres de l'équipe Convex ; le poste qui a `.env.local` | [3.5](#35-clés-de-déploiement-convex) |
-| Jeton Vercel, `VERCEL_TOKEN` | déployer le site **et** la simulation hébergée, en production comme en préversion ; lire les variables des deux projets ([MEN-21](menaces.md#men-21-service-de-simulation-hébergé-ouvert-à-internet)) | secret des environnements GitHub `production` **et** `preview` | les jobs des deux boutons de déploiement et de la pipeline ; les administrateurs du dépôt (remplacer) ; le compte Vercel qui l'a créé | [3.6](#36-jeton-et-connexion-vercel) |
+| Jeton Vercel, `VERCEL_TOKEN` | déployer le site **et** la simulation hébergée, en production comme en préversion ; lire les variables des deux projets ([MEN-21](menaces.md#men-21-service-de-simulation-hébergé-ouvert-à-internet)) | prévu comme secret des environnements GitHub `production` **et** `preview`, mais **pas encore créé** ([état au 14 octobre 2026](#ce-que-github-porte-aujourdhui)) | une fois le secret créé : les jobs des deux boutons de déploiement et de la pipeline, et les administrateurs du dépôt (remplacer) ; le compte Vercel qui crée le jeton | [3.6](#36-jeton-et-connexion-vercel) |
 | Connexion de la CLI Vercel | la même chose, depuis un poste | `.vercel-cli/` à la racine du dépôt cloné, sur le poste ([deploiement.md, 2](deploiement.md#2-les-clés-et-où-elles-sont-rangées)) | le poste | [3.6](#36-jeton-et-connexion-vercel) |
 | Clé secrète Clerk de **production**, `CLERK_SECRET_KEY` | l'API d'administration de l'instance Clerk : comptes, sessions, organisations | variable du projet Vercel `anheart` (le site, côté serveur) ; variable du déploiement Convex de production (`convex/users.ts`, `convex/lib/clerkWebhook.ts`) | les membres du projet Vercel et de l'équipe Convex ; les administrateurs de Clerk ; aujourd'hui aussi chaque préversion du site, qui reçoit les valeurs de production ([deploiement.md, 5.2](deploiement.md#52-les-préversions-pointent-sur-la-production)) | [3.7](#37-clé-secrète-clerk) |
 | Clé secrète Clerk de développement | la même chose sur l'instance de développement | `.env.local` ; variable du déploiement Convex de développement | le poste ; l'équipe Convex | [3.7](#37-clé-secrète-clerk) |
@@ -69,8 +69,20 @@ qui peut écrire les variables de l'hébergement peut le faire.
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `NEXT_PUBLIC_CONVEX_URL` | projet Vercel `anheart`, `.env.local` ; figées dans le site à sa construction | publiques par nature : le navigateur les reçoit. Elles désignent l'instance Clerk et le déploiement Convex que le site utilise |
 | `CLERK_JWT_ISSUER_DOMAIN` | déploiement Convex (lue par `convex/auth.config.ts`) ; le projet Vercel l'a aussi, le site ne la lit pas | l'émetteur dont Convex accepte les jetons |
 | `ANHEART_ORG_ID` | déploiement Convex | l'organisation dont les admins sont admins Anheart, sur toutes les organisations ([MEN-16](menaces.md#men-16-secrets-ci-ou-artefacts-de-livraison-compromis), [convex.md](convex.md#activer-le-multi-organisation)) |
-| `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID_SITE`, `VERCEL_PROJECT_ID_SIMULATION` | secrets des environnements GitHub `production` et `preview` | des identifiants, rangés en secrets avec le jeton ; ils ne changent que si l'équipe ou un projet Vercel est recréé |
+| `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID_SITE`, `VERCEL_PROJECT_ID_SIMULATION` | prévus comme secrets des environnements GitHub `production` et `preview`, pas encore créés | des identifiants, rangés en secrets avec le jeton ; ils ne changent que si l'équipe ou un projet Vercel est recréé |
 | La clé publiable de test de la CI (`ci-fixture.clerk.accounts.dev`) | `.github/workflows/ci.yml` | synthétique : elle ne désigne aucune instance réelle. Seule exception de gitleaks pour une valeur ([section 4](#4-détection-dans-le-dépôt)) |
+
+### Ce que GitHub porte aujourd'hui
+
+Lu par l'API de GitHub le 14 octobre 2026 : les environnements `Production` et
+`Preview` existent (GitHub ne distingue pas les majuscules dans ces noms),
+ainsi que `Preview – anheart` et `Preview – anheart-simulation` ; aucun n'a de
+règle de protection, **aucun ne porte de secret, et le dépôt non plus**. Les
+boutons de déploiement et la pipeline de release ne sont donc pas encore
+configurés ([deploiement.md, 5.5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main),
+étapes 1 et 2). Sur incident, il n'y a rien à remplacer dans GitHub tant que
+ces étapes ne sont pas faites ; les clés vivent alors dans les comptes Convex
+et Vercel, et sur le poste du responsable.
 
 ## 3. Changer un secret
 
@@ -161,11 +173,23 @@ Non essayée.
    `.env.local`.
 4. Retirer l'ancienne clé dans la même page du tableau de bord. Que l'écran
    permette de retirer une clé précise n'a pas été vérifié.
-5. Vérifier sans rien écrire, depuis le poste :
-   `CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" npx convex data`
-   liste les tables. Au premier lancement réel de la pipeline, son job
-   `convex` refuse une clé qui ne vise pas le déploiement de production
-   attendu, sans rien en afficher.
+5. Vérifier sans rien écrire, depuis le poste, à la racine du dépôt :
+
+   ```sh
+   key="$(node -e 'process.stdout.write(require("node:util").parseEnv(require("node:fs").readFileSync(".env.local", "utf8")).CONVEX_DEPLOY_KEY_PROD ?? "")')"
+   case "$key" in
+     "prod:clean-giraffe-153|"?*) CONVEX_DEPLOY_KEY="$key" npx convex data ;;
+     *) echo "CONVEX_DEPLOY_KEY_PROD absente, ou qui ne vise pas la production" ;;
+   esac
+   ```
+
+   La valeur est lue comme la lit la CLI, guillemets éventuels retirés
+   (`util.parseEnv` de Node), et jamais affichée. Une valeur vide ou qui vise
+   un autre déploiement est refusée avant d'appeler la CLI : vide, la CLI
+   prendrait la clé de développement de `.env.local`. La commande liste les
+   tables de la production. Au premier lancement réel de la pipeline, son job
+   `convex` refuse de même une clé qui ne vise pas la production, sans rien en
+   afficher.
 
 **Développement.** Les mêmes étapes sur le déploiement de développement, pour
 `CONVEX_DEPLOY_KEY` dans `.env.local` ; la CLI la lit seule.

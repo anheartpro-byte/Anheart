@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { COLUMNS, FILE, MAX_DAYS, SECTION, judgeNpm, main, parse, pipAuditArgs } from "./audit-exceptions.mjs";
+import { COLUMNS, FILE, MAX_DAYS, SECTION, judgeNpm, main, parse, pipAuditArgs, readNpmReport } from "./audit-exceptions.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const atRoot = (/** @type {string} */ path) => readFileSync(join(root, path), "utf8");
@@ -45,7 +45,7 @@ test("the committed table of exceptions follows the rules and holds no expired e
 
 test("a well-formed exception is read, and pip-audit is told to skip the Python ones only", () => {
   const pip = row({ id: "PYSEC-2019-132", ecosystem: "pip", name: "urllib3" });
-  const { exceptions, problems } = parse(table([row(), pip, row({ id: "CVE-2026-12345", ecosystem: "pip", name: "numpy" })]), TODAY);
+  const { exceptions, problems } = parse(table([row(), pip, row({ id: "GHSA-aaaa-bbbb-cccc", ecosystem: "pip", name: "numpy" })]), TODAY);
   assert.deepEqual(problems, []);
   assert.deepEqual(exceptions[0], {
     id: "GHSA-jf85-cpcp-j695",
@@ -56,7 +56,7 @@ test("a well-formed exception is read, and pip-audit is told to skip the Python 
     ticket: "ANH-153",
     reason: "corrigé par ANH-153",
   });
-  assert.equal(pipAuditArgs(exceptions), "--ignore-vuln PYSEC-2019-132 --ignore-vuln CVE-2026-12345");
+  assert.equal(pipAuditArgs(exceptions), "--ignore-vuln PYSEC-2019-132 --ignore-vuln GHSA-aaaa-bbbb-cccc");
   assert.equal(pipAuditArgs([]), "");
   // An empty table is the usual case.
   assert.deepEqual(parse(table([]), TODAY), { exceptions: [], problems: [] });
@@ -78,6 +78,8 @@ for (const [name, cells, refusal] of /** @type {const} */ ([
   ["an unknown ecosystem", { ecosystem: "pypi" }, /ecosystem "pypi", npm or pip expected/],
   ["an npm exception named as pip-audit names one", { id: "PYSEC-2019-132" }, /is not one npm audit prints/],
   ["a Python exception named by no identifier pip-audit prints", { id: "urllib3-1", ecosystem: "pip" }, /is not one pip-audit prints/],
+  // pip-audit would skip every advisory that carries the CVE as an alias, in any package.
+  ["a Python exception named by a CVE", { id: "CVE-2019-11324", ecosystem: "pip", name: "urllib3" }, /is not one pip-audit prints/],
   ["no package", { name: "" }, /package ""/],
   ["a date that does not exist", { added: "2026-02-30" }, /added "2026-02-30" is not a date/],
   ["a date written otherwise", { expires: "01/12/2026" }, /expires "01\/12\/2026" is not a date/],
@@ -111,6 +113,29 @@ test("a file without the section, the header or the separator of its table is re
   assert.throws(() => parse(table([]), "14/10/2026"), /not a day/);
 });
 
+test("only the rows of the one table count: a row hidden from the rendered page, or standing apart, is refused", () => {
+  const around = (/** @type {string} */ before, /** @type {string} */ after) =>
+    parse(`${SECTION}\n\n${before}${HEAD}${row({ id: "GHSA-35jh-r3h4-6jhm" })}\n${after}\n## Après\n`, TODAY);
+  for (const [name, before, after, refusal] of [
+    ["in a fenced code block", "", "\n```\n" + row() + "\n```\n", /holds a code block or an HTML comment \("```"\)/],
+    ["in a code block fenced by tildes", "", "\n~~~md\n" + row() + "\n~~~\n", /holds a code block or an HTML comment \("~~~md"\)/],
+    ["in an HTML comment", "", "\n<!--\n" + row() + "\n-->\n", /holds a code block or an HTML comment \("<!--"\)/],
+    ["in an HTML comment on one line", "", `\n<!-- ${row()} -->\n`, /holds a code block or an HTML comment/],
+    ["after a blank line, under the table", "", `\n${row()}\n`, /begins like a row but is not a row of the table/],
+    ["after a sentence, in a second table", "", `\nAutre :\n\n${HEAD}${row()}\n`, /begins like a row but is not a row of the table/],
+    ["indented, as a code block", "", `\n    ${row()}\n`, /begins like a row but is not a row of the table/],
+    ["indented, as the table itself", "  ", "", /begins like a row but is not a row of the table/],
+  ]) {
+    const { exceptions, problems } = around(String(before), String(after));
+    assert.deepEqual(exceptions, [], String(name));
+    assert.ok(problems.length > 0 && problems.every((problem) => refusal instanceof RegExp && refusal.test(problem)), `${name}: ${problems.join(" / ")}`);
+  }
+  // The table followed by text, then the next section, is read as usual.
+  assert.deepEqual(around("Avant.\n\n", "\nAprès le tableau.\n").exceptions.map(({ id }) => id), ["GHSA-35jh-r3h4-6jhm"]);
+  // A comment or a code block elsewhere in the file changes nothing.
+  assert.deepEqual(parse(`# Exceptions\n\n<!-- note -->\n\n\`\`\`sh\nnode x\n\`\`\`\n\n${table([row()])}`, TODAY).problems, []);
+});
+
 // --- The verdict on npm -------------------------------------------------------
 
 /** An advisory as `npm audit --json` lists it in a `via` list. @param {string} id @param {string} severity @param {string} name */
@@ -125,20 +150,32 @@ const advisory = (id, severity, name = "lodash") => ({
   cvss: { score: 7.2, vectorString: "CVSS:3.1/AV:N" },
   range: "<4.17.21",
 });
-/** A report of `npm audit --json` (npm 11). @param {object[]} via @param {Record<string, number>} counts */
-const report = (via, counts) => ({
-  auditReportVersion: 2,
-  vulnerabilities: {
-    lodash: { name: "lodash", severity: "critical", isDirect: true, via, effects: ["lodash-wrapper"], range: "<=4.17.23", nodes: ["node_modules/lodash"], fixAvailable: true },
-    // A package that is vulnerable through another names it, and holds no advisory of its own.
-    "lodash-wrapper": { name: "lodash-wrapper", severity: "critical", isDirect: false, via: ["lodash"], effects: [], range: "*", nodes: ["node_modules/lodash-wrapper"], fixAvailable: true },
-  },
-  metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0, ...counts } },
-});
-const LODASH = report(
-  [advisory("GHSA-35jh-r3h4-6jhm", "high"), advisory("GHSA-jf85-cpcp-j695", "critical"), advisory("GHSA-29mw-wpgm-hmr9", "moderate")],
-  { critical: 2, total: 2 },
-);
+const SEVERITY = ["info", "low", "moderate", "high", "critical"];
+/**
+ * A report of `npm audit --json`, with the shape npm 10 and 11 give it: lodash holds the advisories, and
+ * lodash-wrapper is vulnerable through it. Each entry has the severity of its worst advisory, and the
+ * counts of `metadata` are those of the entries, unless `counts` says otherwise.
+ * @param {object[]} via @param {Record<string, number>} [counts]
+ */
+const report = (via, counts) => {
+  const worst = via.reduce((max, item) => Math.max(max, SEVERITY.indexOf(String(/** @type {{severity?: string}} */ (item).severity))), -1);
+  const severity = SEVERITY[worst] ?? "info";
+  const vulnerabilities =
+    via.length === 0
+      ? {}
+      : {
+          lodash: { name: "lodash", severity, isDirect: true, via, effects: ["lodash-wrapper"], range: "<=4.17.23", nodes: ["node_modules/lodash"], fixAvailable: true },
+          // A package that is vulnerable through another names it, and holds no advisory of its own.
+          "lodash-wrapper": { name: "lodash-wrapper", severity, isDirect: false, via: ["lodash"], effects: [], range: "*", nodes: ["node_modules/lodash-wrapper"], fixAvailable: true },
+        };
+  const listed = Object.fromEntries(SEVERITY.map((name) => [name, Object.values(vulnerabilities).filter((entry) => entry.severity === name).length]));
+  return {
+    auditReportVersion: 2,
+    vulnerabilities,
+    metadata: { vulnerabilities: { ...listed, total: Object.keys(vulnerabilities).length, ...counts }, dependencies: { prod: 1, dev: 0, total: 1 } },
+  };
+};
+const LODASH = report([advisory("GHSA-35jh-r3h4-6jhm", "high"), advisory("GHSA-jf85-cpcp-j695", "critical"), advisory("GHSA-29mw-wpgm-hmr9", "moderate")]);
 const excepted = (/** @type {string[]} */ rows) => parse(table(rows), TODAY).exceptions;
 
 test("npm: a high or critical advisory fails the audit unless it is an exception for that same package", () => {
@@ -160,35 +197,60 @@ test("npm: a high or critical advisory fails the audit unless it is an exception
 });
 
 test("npm: moderate and low advisories fail nothing, and an unused exception is said", () => {
-  const mild = report([advisory("GHSA-29mw-wpgm-hmr9", "moderate"), advisory("GHSA-aaaa-bbbb-cccc", "low")], { moderate: 1, low: 1, total: 2 });
+  const mild = report([advisory("GHSA-29mw-wpgm-hmr9", "moderate"), advisory("GHSA-aaaa-bbbb-cccc", "low")]);
   const verdict = judgeNpm(mild, excepted([row()]));
   assert.equal(verdict.ok, true);
   assert.match(verdict.lines.join("\n"), /exception GHSA-jf85-cpcp-j695 for lodash matches no high or critical advisory/);
-  assert.equal(judgeNpm(report([], {}), []).ok, true);
+  assert.equal(judgeNpm(report([]), []).ok, true);
 });
 
-test("npm: a report that cannot be read excepts nothing", () => {
-  for (const unread of [
-    { error: { code: "ENOLOCK", summary: "This command requires an existing lockfile." } },
-    { message: "registry down" },
-    [],
-    null,
-    // npm counts a high vulnerability, and no advisory explains it: the report changed shape.
-    { ...report([], { high: 1, total: 1 }) },
-    { ...report([{ name: "lodash", severity: "critical" }], { critical: 1, total: 1 }) },
+test("npm: a report that cannot be read whole excepts nothing", () => {
+  const whole = structuredClone(LODASH);
+  assert.equal("unread" in readNpmReport(whole), false);
+  const without = (/** @type {(copy: any) => void} */ change) => {
+    const copy = structuredClone(LODASH);
+    change(copy);
+    return copy;
+  };
+  for (const [name, unread, said] of [
+    ["an error of npm", { error: { code: "ENOLOCK", summary: "This command requires an existing lockfile." } }, /npm answered This command requires an existing lockfile/],
+    ["a message and nothing else", { message: "registry down" }, /auditReportVersion is undefined/],
+    ["a list", [], /not a JSON object/],
+    ["null", null, /not a JSON object/],
+    ["another version of the format", without((copy) => { copy.auditReportVersion = 1; }), /auditReportVersion is 1, 2 expected/],
+    ["no metadata", without((copy) => { delete copy.metadata; }), /no `metadata.vulnerabilities` object/],
+    ["no counts in the metadata", without((copy) => { delete copy.metadata.vulnerabilities; }), /no `metadata.vulnerabilities` object/],
+    ["a count missing", without((copy) => { delete copy.metadata.vulnerabilities.high; }), /metadata counts undefined high/],
+    ["a count written as text", without((copy) => { copy.metadata.vulnerabilities.critical = "2"; }), /metadata counts "2" critical/],
+    ["counts that are not those of the entries", report(LODASH.vulnerabilities.lodash.via, { critical: 1 }), /metadata counts 1 critical vulnerabilities, the report lists 2/],
+    ["no `vulnerabilities`", without((copy) => { delete copy.vulnerabilities; }), /no `vulnerabilities` object/],
+    ["an entry of an unknown severity", without((copy) => { copy.vulnerabilities.lodash.severity = "severe"; }), /entry of lodash has no known severity/],
+    ["an entry without its `via` list", without((copy) => { delete copy.vulnerabilities["lodash-wrapper"].via; }), /entry of lodash-wrapper has no known severity or no `via` list/],
+    ["a package vulnerable through one that has no entry", without((copy) => { copy.vulnerabilities["lodash-wrapper"].via = ["dep"]; }), /lodash-wrapper is vulnerable through dep, which has no entry/],
+    ["an advisory without its address", without((copy) => { delete copy.vulnerabilities.lodash.via[0].url; }), /an advisory of lodash has no known severity, package or address/],
+    ["an advisory of an unknown severity", without((copy) => { copy.vulnerabilities.lodash.via[1].severity = "urgent"; }), /an advisory of lodash has no known severity/],
+    ["counts that call moderate entries critical", report([advisory("GHSA-29mw-wpgm-hmr9", "moderate")], { moderate: 0, critical: 2 }), /metadata counts/],
+    ["a critical entry whose advisories are all moderate", without((copy) => { copy.vulnerabilities.lodash.via = [advisory("GHSA-29mw-wpgm-hmr9", "moderate")]; }), /lodash is critical, and no high or critical advisory explains it/],
+    // Reported by the independent review: no metadata, and a `via` list of names only.
+    ["a critical entry reached through a name only", { vulnerabilities: { lodash: { severity: "critical", via: ["dep"] } } }, /auditReportVersion is undefined/],
   ]) {
-    assert.equal(judgeNpm(unread, excepted([row()])).ok, false, JSON.stringify(unread));
+    const verdict = judgeNpm(unread, excepted([row(), row({ id: "GHSA-35jh-r3h4-6jhm" })]));
+    assert.equal(verdict.ok, false, String(name));
+    assert.ok(said instanceof RegExp && said.test(verdict.lines.join("\n")), `${name}: ${verdict.lines.join(" / ")}`);
+    assert.match(verdict.lines.join("\n"), /^npm audit: the report cannot be read whole \(.*\)\. Nothing is excepted\.$/, String(name));
   }
-  assert.match(judgeNpm({ error: { summary: "no lockfile" } }, []).lines.join(), /npm audit gave no report: no lockfile/);
+  // Two packages vulnerable through each other are explained by the advisory one of them holds.
+  const cycle = without((copy) => { copy.vulnerabilities.lodash.via.push("lodash-wrapper"); });
+  assert.equal(judgeNpm(cycle, excepted([row(), row({ id: "GHSA-35jh-r3h4-6jhm" })])).ok, true);
   // An advisory with no GitHub identifier is named by its npm number, and cannot be excepted.
-  const unnamed = report([{ ...advisory("GHSA-jf85-cpcp-j695", "high"), url: "https://www.npmjs.com/advisories/1179" }], { high: 1 });
+  const unnamed = report([{ ...advisory("GHSA-jf85-cpcp-j695", "high"), url: "https://www.npmjs.com/advisories/1179" }]);
   assert.match(judgeNpm(unnamed, excepted([row()])).lines.join("\n"), /^NOT EXCEPTED: npm-1106913 \(high\)/m);
 });
 
 // --- The command line, as the `audit` job runs it ---------------------------
 
 /** Run `main` in a throwaway root holding this table, its output captured. @param {import("node:test").TestContext} context */
-function run(context, /** @type {string[]} */ argv, /** @type {string | undefined} */ text, audit = () => JSON.stringify(report([], {}))) {
+function run(context, /** @type {string[]} */ argv, /** @type {string | undefined} */ text, audit = () => JSON.stringify(report([]))) {
   const directory = mkdtempSync(join(tmpdir(), "anheart-audit-exceptions-"));
   context.after(() => rmSync(directory, { recursive: true, force: true }));
   if (text !== undefined) {

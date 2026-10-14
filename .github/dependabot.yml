@@ -13,9 +13,11 @@
 # workflow at once (the tests of scripts/ci/ require one commit per action,
 # the same in every workflow).
 #
-# Once a month, minor and patch versions grouped in one pull request per
-# entry: each such pull request runs every gate and needs a review. A major
-# version comes alone. The security updates of Dependabot, when they are turned
+# Once a month. For npm and pip, minor and patch versions grouped in one pull
+# request per entry, and a major version alone: each such pull request runs
+# every gate and needs a review. The actions are all grouped in one pull
+# request, major versions included, so that an action keeps one commit across
+# the workflows. The security updates of Dependabot, when they are turned
 # on in the settings of the repository, follow no schedule; the nightly run of
 # the `audit` job fails on a new vulnerability whatever this file says.
 version: 2

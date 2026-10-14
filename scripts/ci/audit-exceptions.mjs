@@ -38,10 +38,16 @@ export const MAX_DAYS = 90;
 /** The severities of npm that fail the audit (`npm audit --audit-level=high`). */
 export const BLOCKING = ["high", "critical"];
 
-/** What an advisory is named, per ecosystem: what `npm audit` and `pip-audit` print. */
+/**
+ * What an advisory is named, per ecosystem: what `npm audit` and `pip-audit`
+ * print. pip-audit skips a finding whose identifier, or one of whose aliases,
+ * is the one it is given, whatever the package and in every environment: a
+ * CVE is refused here because it is the alias of advisories of several
+ * packages, when a vulnerable library is shipped by more than one.
+ */
 const IDENTIFIERS = {
   npm: /^GHSA(-[0-9a-z]{4}){3}$/,
-  pip: /^(GHSA(-[0-9a-z]{4}){3}|PYSEC-\d{4}-\d+|CVE-\d{4}-\d{4,})$/,
+  pip: /^(GHSA(-[0-9a-z]{4}){3}|PYSEC-\d{4}-\d+)$/,
 };
 const TICKET = /^\[(ANH-[1-9]\d*)\]\(https:\/\/linear\.app\/anheart\/issue\/(ANH-[1-9]\d*)(\/[a-z0-9-]+)?\)$/;
 const PACKAGE = /^[@a-zA-Z0-9][\w.@/-]*$/;
@@ -80,7 +86,22 @@ export function parse(text, today) {
   if (start < 0) return { exceptions, problems: [`${FILE}: no section "${SECTION}"`] };
   const after = lines.slice(start + 1);
   const end = after.findIndex((line) => line.startsWith("## "));
-  const rows = (end < 0 ? after : after.slice(0, end)).filter((line) => line.trimStart().startsWith("|"));
+  const section = end < 0 ? after : after.slice(0, end);
+  // What the rendered page does not show must not hold a row: no code block, no HTML comment.
+  const hiding = section.find((line) => /^\s*(```|~~~)/.test(line) || line.includes("<!--"));
+  if (hiding !== undefined) {
+    return { exceptions, problems: [`${FILE}: the section "${SECTION}" holds a code block or an HTML comment ("${hiding.trim()}"): only the table and plain text may stand there`] };
+  }
+  // The table is one block of rows, one after another, from its header on. Any other line that
+  // begins like a row is refused: it would be read by no one, or shown as another table.
+  const first = section.findIndex((line) => line.trimStart().startsWith("|"));
+  let last = first;
+  while (first >= 0 && section[last + 1]?.startsWith("|")) last += 1;
+  const rows = first < 0 ? [] : section.slice(first, last + 1);
+  const stray = section.filter((line, index) => line.trimStart().startsWith("|") && (index > last || !line.startsWith("|")));
+  if (stray.length > 0) {
+    return { exceptions, problems: stray.map((line) => `${FILE}: "${line.trim()}" begins like a row but is not a row of the table of exceptions: one table, its rows one after another, none indented`) };
+  }
   const [header, separator, ...body] = rows;
   if (header === undefined || cellsOf(header).join("|") !== COLUMNS.join("|")) {
     return { exceptions, problems: [`${FILE}: the table must start with | ${COLUMNS.join(" | ")} |`] };
@@ -140,34 +161,72 @@ export const pipAuditArgs = (exceptions) =>
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
 const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** The severities npm gives, from the lowest. */
+const SEVERITIES = ["info", "low", "moderate", "high", "critical"];
+
 /**
- * The advisories of a report of `npm audit --json` (npm 7 and later), each
- * once. An advisory is an object of a `via` list; a name in such a list is a
- * package that depends on a vulnerable one, not an advisory of its own.
- * @param {Record<string, unknown>} vulnerabilities
- * @returns {Advisory[]}
+ * A report of `npm audit --json` (npm 7 to 11, `auditReportVersion` 2), read
+ * whole, or what in it could not be read. Every entry and every advisory must
+ * have the shape npm gives them, the counts of `metadata` must be those of the
+ * entries, and every high or critical entry must lead, through the packages it
+ * names, to a high or critical advisory. Anything else is refused: a report
+ * that is not read whole excepts nothing.
+ * @param {unknown} report the parsed JSON
+ * @returns {{ advisories: Advisory[] } | { unread: string }}
  */
-function advisoriesOf(vulnerabilities) {
+export function readNpmReport(report) {
+  if (!isRecord(report)) return { unread: "the report is not a JSON object" };
+  if (report.error !== undefined) {
+    const said = isRecord(report.error) && typeof report.error.summary === "string" ? report.error.summary : "an error";
+    return { unread: `npm answered ${said}` };
+  }
+  if (report.auditReportVersion !== 2) return { unread: `auditReportVersion is ${JSON.stringify(report.auditReportVersion)}, 2 expected` };
+  const { vulnerabilities, metadata } = report;
+  if (!isRecord(vulnerabilities)) return { unread: "no `vulnerabilities` object" };
+  const counts = isRecord(metadata) && isRecord(metadata.vulnerabilities) ? metadata.vulnerabilities : undefined;
+  if (counts === undefined) return { unread: "no `metadata.vulnerabilities` object" };
   /** @type {Map<string, Advisory>} */
   const found = new Map();
-  for (const entry of Object.values(vulnerabilities)) {
-    const via = isRecord(entry) && Array.isArray(entry.via) ? entry.via : [];
-    for (const item of via) {
-      if (!isRecord(item)) continue;
-      const url = typeof item.url === "string" ? item.url : "";
+  /** @type {Record<string, number>} */
+  const entries = Object.fromEntries(SEVERITIES.map((severity) => [severity, 0]));
+  for (const [name, entry] of Object.entries(vulnerabilities)) {
+    if (!isRecord(entry) || typeof entry.severity !== "string" || !SEVERITIES.includes(entry.severity) || !Array.isArray(entry.via)) {
+      return { unread: `the entry of ${name} has no known severity or no \`via\` list` };
+    }
+    entries[entry.severity] = (entries[entry.severity] ?? 0) + 1;
+    for (const item of entry.via) {
+      if (typeof item === "string") {
+        if (!isRecord(vulnerabilities[item])) return { unread: `${name} is vulnerable through ${item}, which has no entry` };
+        continue;
+      }
+      if (!isRecord(item) || typeof item.severity !== "string" || !SEVERITIES.includes(item.severity) || typeof item.name !== "string" || typeof item.url !== "string") {
+        return { unread: `an advisory of ${name} has no known severity, package or address` };
+      }
       // An advisory without a GitHub identifier cannot be excepted: it is named after its npm number.
-      const id = /\/advisories\/(GHSA(?:-[0-9a-z]{4}){3})$/.exec(url)?.[1] ?? `npm-${String(item.source)}`;
-      const advisory = {
-        id,
-        severity: typeof item.severity === "string" ? item.severity : "unknown",
-        package: typeof item.name === "string" ? item.name : "",
-        title: typeof item.title === "string" ? item.title : "",
-        url,
-      };
-      found.set(`${id} ${advisory.package}`, advisory);
+      const id = /\/advisories\/(GHSA(?:-[0-9a-z]{4}){3})$/.exec(item.url)?.[1] ?? `npm-${String(item.source)}`;
+      found.set(`${id} ${item.name}`, { id, severity: item.severity, package: item.name, title: typeof item.title === "string" ? item.title : "", url: item.url });
     }
   }
-  return [...found.values()];
+  for (const severity of [...SEVERITIES, "total"]) {
+    const expected = severity === "total" ? Object.keys(vulnerabilities).length : entries[severity];
+    if (counts[severity] !== expected) {
+      return { unread: `metadata counts ${JSON.stringify(counts[severity])} ${severity} vulnerabilities, the report lists ${expected}` };
+    }
+  }
+  /** @param {string} name @param {Set<string>} seen @returns {boolean} */
+  const explained = (name, seen) => {
+    const entry = /** @type {{ via: unknown[] }} */ (vulnerabilities[name]);
+    seen.add(name);
+    return entry.via.some((item) =>
+      typeof item === "string" ? !seen.has(item) && explained(item, seen) : isRecord(item) && BLOCKING.includes(String(item.severity)),
+    );
+  };
+  for (const [name, entry] of Object.entries(vulnerabilities)) {
+    if (isRecord(entry) && BLOCKING.includes(String(entry.severity)) && !explained(name, new Set())) {
+      return { unread: `${name} is ${String(entry.severity)}, and no high or critical advisory explains it` };
+    }
+  }
+  return { advisories: [...found.values()] };
 }
 
 /**
@@ -177,17 +236,11 @@ function advisoriesOf(vulnerabilities) {
  * @returns {{ ok: boolean, lines: string[] }}
  */
 export function judgeNpm(report, exceptions) {
-  if (!isRecord(report) || report.error !== undefined || !isRecord(report.vulnerabilities)) {
-    const error = isRecord(report) && isRecord(report.error) ? report.error : {};
-    const said = typeof error.summary === "string" ? `: ${error.summary}` : "";
-    return { ok: false, lines: [`npm audit gave no report${said}. Nothing is excepted.`] };
+  const read = readNpmReport(report);
+  if ("unread" in read) {
+    return { ok: false, lines: [`npm audit: the report cannot be read whole (${read.unread}). Nothing is excepted.`] };
   }
-  const counts = isRecord(report.metadata) && isRecord(report.metadata.vulnerabilities) ? report.metadata.vulnerabilities : {};
-  const counted = BLOCKING.reduce((sum, severity) => sum + (typeof counts[severity] === "number" ? counts[severity] : 0), 0);
-  const blocking = advisoriesOf(report.vulnerabilities).filter((advisory) => BLOCKING.includes(advisory.severity));
-  if (counted > 0 && blocking.length === 0) {
-    return { ok: false, lines: [`npm audit counts ${counted} high or critical vulnerabilities, and this script found none of their advisories: its report is not read as it should be. Nothing is excepted.`] };
-  }
+  const blocking = read.advisories.filter((advisory) => BLOCKING.includes(advisory.severity));
   const npm = exceptions.filter((exception) => exception.ecosystem === "npm");
   /** @type {string[]} */
   const lines = [];
