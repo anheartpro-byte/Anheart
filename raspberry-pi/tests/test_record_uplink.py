@@ -837,6 +837,49 @@ async def test_a_session_that_ends_while_it_is_being_declared_is_not_declared_tw
     assert uplink.owed == 0
 
 
+@pytest.mark.parametrize(
+    "held",
+    [Held("sans code (HTTP 503): later", refused=True), Held("no route to host")],
+    ids=["a 503", "no answer"],
+)
+@pytest.mark.parametrize("remote", [None, "k17remote"], ids=["at the machine", "launched"])
+async def test_a_batch_on_its_way_when_a_session_is_armed_does_not_hold_its_first_words(
+    tmp_path: Path, held: Held, remote: str | None
+) -> None:
+    """A batch of an older session is on its way when a session is armed, and its answer,
+    one that cannot be used, comes back before the first words of that session are said.
+
+    The hold is the batch's: the sending waits fifteen seconds from that answer, and the
+    first words of the session that runs by then go at once all the same (ANH-216, EX-3).
+    """
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-old")
+    left.tick(3.0)
+    left.close()
+    tie(left.path, Cursor(session_id="cloud-old"))
+    old.clock.advance(Seconds(3600.0))
+    link = Link()
+    late = Late(link, TELEMETRY_PATH, held)
+    b = bench(tmp_path, clock=old.clock, link=link, sender=late)
+    sending = asyncio.create_task(b.uplink.step())
+    await late.asked.wait()
+    assert link.paths() == ["telemetry"], "a batch of the older session is on its way"
+
+    b.clock.advance(Seconds(1.0))
+    b.uplink.begin(armed(b.clock, remote=remote))
+    record = recording(tmp_path, b.clock, "ref-now", remote=remote)
+    b.disk.current = record.path
+    late.release.set()
+    await asyncio.gather(sending)
+    await b.uplink.greet()
+
+    assert link.paths() == ["telemetry", "local" if remote is None else "start"]
+    assert b.following() == ("cloud-1" if remote is None else "k17remote")
+    # The sending is held by the batch's answer: nothing else goes before its fifteen seconds.
+    await b.uplink.step()
+    assert len(link.sent) == 2
+
+
 async def test_a_stop_forwarded_is_kept_with_its_session_and_gone_with_it(tmp_path: Path) -> None:
     """It neither hides a stop asked for in the next session nor stands for one."""
     b = bench(tmp_path, recording=False)

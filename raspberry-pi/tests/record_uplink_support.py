@@ -31,6 +31,7 @@ from src.record_uplink import (
     Declaration,
     RecordSource,
     RecordUplink,
+    Sender,
 )
 from src.result import Ok
 from src.units import Monotonic, Seconds, UnixMillis
@@ -155,7 +156,10 @@ def bench(
     boot_id: str | None = BOOT,
     io: RecordIo | None = None,
     recording: bool = True,
+    sender: Sender | None = None,
 ) -> Bench:
+    """``sender``: what the uplink sends through, when it is not ``link`` itself (a
+    wrapper that holds an answer back, say); ``link`` still keeps every request."""
     clock = ManualClock(Monotonic(100.0), UnixMillis(EPOCH_MS)) if clock is None else clock
     link = Link() if link is None else link
     disk = Disk(root)
@@ -173,7 +177,7 @@ def bench(
     said: list[str] = []
     uplink = RecordUplink(
         clock=clock,
-        sender=link,
+        sender=link if sender is None else sender,
         source=source,
         start_refused=cancelled.append,
         said=said.append,
