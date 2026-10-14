@@ -163,7 +163,8 @@ ne le peut pas.
 5. Lisez **FC max retenue** : c'est la valeur que le site utilisera. Elle est
    « mesurée » si vous avez saisi une valeur. Sinon elle est « estimée
    (208 − 0,7 × âge) » : c'est un calcul du logiciel à partir de l'âge.
-6. Cliquez **Enregistrer**. Le bouton affiche « Enregistré ».
+6. Cliquez **Enregistrer**. La notification « Physiologie enregistrée. »
+   s'affiche en bas à droite de l'écran.
 
 Pour effacer une valeur : videz le champ, puis **Enregistrer**.
 

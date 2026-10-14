@@ -573,14 +573,19 @@ pendant 2 s) et gardez la en lieu sûr. Une fois la fenêtre fermée, **personne
 pourra la relire**, pas même un administrateur. Elle doit être recopiée dans le
 fichier de configuration du Raspberry Pi (voir [procédure P5](#p5-enregistrer-une-machine-et-installer-sa-clé)).
 
-**Après « Enregistrer »** (modification), la fenêtre se ferme et la carte
-Configuration du détail affiche « Machine mise à jour avec succès ». Un
-gestionnaire enregistre ainsi le nom et le lieu de sa machine sans erreur. La
-liste **Assigner aux Gestionnaires** n'est envoyée au serveur que par un
-administrateur, et seulement s'il l'a changée. L'ordre compte : un
-gestionnaire décoché puis recoché passe en fin de liste, et le premier de la
-liste devient « Propriétaire ». Si le serveur refuse, son message s'affiche en
-rouge en haut de la fenêtre, qui reste ouverte.
+**Après « Enregistrer »** (modification), la fenêtre se ferme et une
+notification en bas à droite de l'écran dit « Machine mise à jour avec
+succès ». Un gestionnaire enregistre ainsi le nom et le lieu de sa machine
+sans erreur. La liste **Assigner aux Gestionnaires** n'est envoyée au serveur
+que par un administrateur, et seulement s'il l'a changée. L'ordre compte : la
+fenêtre s'ouvre avec le « Propriétaire » en tête, un gestionnaire décoché puis
+recoché passe en fin de liste, et le premier de la liste devient
+« Propriétaire » (décocher puis recocher le propriétaire lui retire donc ce
+badge). Si le serveur refuse, son message s'affiche en rouge en haut de la
+fenêtre, qui reste ouverte. S'il refuse seulement la liste des gestionnaires,
+la fenêtre le dit : « Le nom et le lieu sont enregistrés, mais pas la liste
+des gestionnaires : » suivi du motif. Ce que vous tapez n'est pas effacé quand
+la machine envoie un signal de vie pendant que la fenêtre est ouverte.
 
 > **Attention (gestionnaire qui modifie une machine) : corrigé dans le code le
 > 6 octobre 2026, pas encore en production.** Tant que le redéploiement n'a
@@ -931,7 +936,7 @@ que ses droits permettent).
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│ Sessions ECG                                                           │
+│ Sessions                                                               │
 │ 12 sessions                                                            │
 │ [ Tous | En attente | Actives | Terminées | Échouées ] 🔍 <Rechercher> │
 │ ┌────────────────────────────────────────────────────────────────────┐│
@@ -943,9 +948,9 @@ que ses droits permettent).
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-Le titre dit « Sessions ECG » (hérité), mais la page liste **toutes** les
-séances : auto, manuelles, et les anciens enregistrements ECG (en lecture
-seule).
+La page liste **toutes** les séances : auto, manuelles, et les anciens
+enregistrements ECG (en lecture seule). Son titre, « Sessions ECG » sur la
+capture d'origine, est « Sessions » depuis ANH-194.
 
 | Élément | Effet |
 |---|---|
@@ -1315,7 +1320,7 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 | **FC max mesurée (bpm)** | Nombre entier entre 100 et 220, sinon « La FC max doit être comprise entre 100 et 220 bpm ». Vide : pas de FC max mesurée. |
 | **Année de naissance** | Nombre entier. L'âge obtenu (année en cours moins année saisie) doit être entre 10 et 100 ans, sinon « Année de naissance invalide ». |
 | **FC max retenue** | Aperçu de ce que le serveur utilisera : la FC max mesurée si elle existe (« mesurée »), sinon l'estimation par l'âge (« estimée (208 − 0,7 × âge) »), sinon « Non renseignée ». Une valeur déjà enregistrée qui n'est pas un nombre entier compte comme non renseignée : son champ affiche son message d'erreur (lignes ci-dessus), et **Enregistrer** reste inactif tant qu'il n'est pas corrigé ou vidé. |
-| **Enregistrer** | Actif seulement après une modification valide. N'envoie que les champs touchés. Pendant l'envoi : sablier ; après : « Enregistré » avec une coche. Une erreur du serveur s'affiche en rouge en haut de la carte. |
+| **Enregistrer** | Actif seulement après une modification valide. N'envoie que les champs touchés. Pendant l'envoi : sablier ; après : la notification « Physiologie enregistrée. » en bas à droite de l'écran, et le bouton redevient inactif jusqu'à la modification suivante. Une erreur du serveur s'affiche en rouge en haut de la carte. |
 
 Pour **effacer** une valeur : videz le champ, puis **Enregistrer**.
 
@@ -1429,22 +1434,29 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   (avec son statut : En ligne, Hors ligne, En session), **Annuler** /
   **Enregistrer**. Les cases cochées deviennent la liste des machines de ce
   gestionnaire : cocher une machine la lui attribue, la décocher la lui
-  retire. Les autres gestionnaires de ces machines gardent leur accès. La
-  fiche confirme ensuite, par exemple « Machines enregistrées : 1 ajoutée,
-  1 retirée. ». Si le serveur refuse, son message s'affiche en rouge dans la
-  fenêtre, qui reste ouverte.
+  retire. Les autres gestionnaires de ces machines gardent leur accès. Une
+  machine supprimée n'a pas de case et n'est ni comptée ni listée sur la
+  fiche ; son lien est gardé, et revient si la machine est restaurée. Une
+  notification confirme ensuite, par exemple « Machines enregistrées :
+  1 ajoutée, 1 retirée. ». Si le serveur refuse, son message s'affiche en
+  rouge dans la fenêtre, qui reste ouverte.
 - **Modifier** (Patients) : fenêtre **Assigner des Patients**, « Sélectionner
   les patients que ce gestionnaire peut gérer », une case par patient,
   **Annuler** / **Enregistrer**. La fenêtre s'ouvre toujours sur les patients
   que le gestionnaire a **à ce moment** : après **Annuler**, elle ne garde
   rien de ce que vous aviez coché ou décoché. Les cases cochées deviennent la
   liste des patients de ce gestionnaire : cocher un patient le lui rattache,
-  le décocher le lui retire, et les autres ne changent pas. La fiche confirme
-  ensuite, par exemple « Patients enregistrés : 1 ajouté, 1 retiré. ». Si le
-  serveur refuse, son message s'affiche en rouge dans la fenêtre, qui reste
-  ouverte.
-- Tant que les patients ne sont pas chargés, la carte Patients affiche
-  « Chargement... » et son bouton **Modifier** est inactif.
+  le décocher le lui retire, et les autres ne changent pas. Une notification
+  confirme ensuite, par exemple « Patients enregistrés : 1 ajouté, 1 retiré. ».
+  Si le serveur refuse, son message s'affiche en rouge dans la fenêtre, qui
+  reste ouverte.
+- Dans les deux fenêtres, une case que vous avez cliquée garde votre choix
+  tant que la fenêtre est ouverte, même si le serveur répond de nouveau (un
+  signal de vie d'une machine suffit) ; une case que vous n'avez pas touchée
+  suit le serveur : ce qui est enregistré est ce qui est affiché.
+- Tant que les machines ou les patients ne sont pas chargés, la carte
+  correspondante affiche « Chargement... » et son bouton **Modifier** est
+  inactif.
 - « Aucune machine assignée », « Aucun patient assigné » si vide.
 
 > **Attention : corrigé dans le code le 8 octobre 2026, pas encore en
@@ -1516,8 +1528,8 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 │ │ 👤 Votre Compte     │ │ 🛡 Gestion des Rôles     │ │ 🌐 Informations  ││
 │ │ Informations de     │ │ Modifier les rôles des  │ │ Système          ││
 │ │ votre compte admin. │ │ utilisateurs du système │ │ Application :    ││
-│ │ Nom   Jean Dupont   │ │ Sélectionner un Utilisateur│ Gaura ECG Monitoring│
-│ │ Email jean@ex.fr    │ │ <Choisir un utilisateur...▾>│ Version 1.0.0   ││
+│ │ Nom   Jean Dupont   │ │ Sélectionner un Utilisateur│ Tableau de bord Gaura│
+│ │ Email jean@ex.fr    │ │ <Choisir un utilisateur...▾>│ Version web-…   ││
 │ │ Rôle (Administrateur)│ │ Nouveau Rôle            │ │ Langue par défaut││
 │ │ Langue FR           │ │ <Choisir un rôle...▾>   │ │ Français (fr)    ││
 │ │                     │ │ [ 💾 Mettre à jour le Rôle ]│ Langues supportées│
@@ -1532,7 +1544,7 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 |---|---|
 | **Votre Compte** | Vos nom, adresse, rôle, langue. Lecture seule. |
 | **Gestion des Rôles** | **Sélectionner un Utilisateur** (tous les comptes sauf vous, « Nom - Rôle »), **Nouveau Rôle** (Administrateur, Gestionnaire, Patient), bouton **Mettre à jour le Rôle** (« Chargement... » pendant l'envoi). En cas de succès, les deux listes se vident et le message « Rôle mis à jour. » s'affiche en bas à droite de l'écran ; en cas d'échec, un message d'échec s'affiche au même endroit. |
-| **Informations Système** | Valeurs affichées pour information, **pas des réglages** : nom de l'application, version, langues, « Délai d'expiration du heartbeat: 90s ». |
+| **Informations Système** | Valeurs affichées pour information, **pas des réglages** : nom de l'application, version du site (`web-X.Y.Z`, celle du pied de page des pages publiques, depuis ANH-194), langues, « Délai d'expiration du heartbeat: 90s ». |
 
 Il n'y a **aucun autre réglage** sur le site : ni notifications, ni mot de passe
 (géré par Clerk, menu de l'avatar), ni réglage de machine (fait sur la
@@ -1727,7 +1739,7 @@ le faire lui même.**
 5. Vérifiez **FC max retenue**.
 6. **Enregistrer**.
 
-**Ce que vous devez voir** : le bouton affiche « Enregistré » avec une coche.
+**Ce que vous devez voir** : la notification « Physiologie enregistrée. » en bas à droite de l'écran ; le bouton **Enregistrer** redevient inactif.
 Dans le détail de chaque machine où le patient a le droit de lancement, la
 ligne affiche « FC max : N bpm ».
 
@@ -2221,11 +2233,16 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « Année de naissance invalide » | Physiologie | Âge hors de 10 à 100 ans. | Corriger. |
 | « Cette clé ne sera affichée qu'une seule fois! » | Création ou régénération de clé | Avertissement. | Copier la clé maintenant. |
 
-### 7.2 Messages du serveur (en anglais, affichés tels quels)
+### 7.2 Messages du serveur
 
 Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée
 et, depuis ANH-156, dans un message d'échec en bas à droite de l'écran (le seul
 affichage pour les actions sans encadré : suppressions, rôle, assignations).
+Un message d'échec reste affiché jusqu'à ce que vous le fermiez par sa croix,
+même quand une fenêtre est ouverte. Depuis ANH-194, les refus des machines, des
+comptes, des gestionnaires et des rôles arrivent avec un code stable et
+s'affichent dans la langue du site : ce sont les lignes en français du tableau.
+Les autres messages, en anglais, s'affichent tels quels.
 
 | Message | Signification | Quoi faire |
 |---|---|---|
@@ -2251,7 +2268,7 @@ affichage pour les actions sans encadré : suppressions, rôle, assignations).
 | « Only an admin or a manager of this machine can grant launch rights » / « ... revoke launch rights » | Machine non attribuée à vous. | P6. |
 | « Launch rights are granted to users; managers and admins already have them » | La personne n'est pas Patient. | Inutile de lui donner le droit. |
 | « You do not manage this user » | Patient non rattaché à vous. | P4. |
-| « User not found » | Compte supprimé. | Recharger. |
+| « Compte introuvable. Il a peut-être été supprimé. » | Compte supprimé. | Recharger. |
 | « Only a manager can set physiology » | Un patient a tenté de saisir sa physiologie. | Demander au gestionnaire. |
 | « Max heart rate must be a whole number of bpm » | FC max qui n'est pas un nombre entier. | Corriger. |
 | « Max heart rate must be within 100-220 bpm » | FC max hors bornes. | Corriger. |
@@ -2259,20 +2276,23 @@ affichage pour les actions sans encadré : suppressions, rôle, assignations).
 | « Birth year gives an implausible age » | Âge hors de 10 à 100 ans. | Corriger. |
 | « Email already in use by an existing ... account (...) » | Adresse déjà utilisée. | Retrouver la fiche existante. |
 | « Invalid email format » | Adresse sans « @ ». | Corriger. |
-| « Unauthorized. Required roles: admin. Your role: gestionnaire » | Action réservée à l'administrateur. Sur le site en ligne, tant que le redéploiement n'a pas eu lieu, ce message s'affiche aussi à la fin de **Modifier** une machine par un gestionnaire, alors que la modification est enregistrée (voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
-| « Not authorized to manage this machine » | Machine non attribuée à vous. | P6. |
-| « Cannot delete machine with active session » / « Cannot delete machine with pending sessions » | Suppression impossible (message d'échec en bas à droite de l'écran, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
-| « Cannot delete your own account » | Tentative de suppression de soi. | Demander à un autre administrateur. |
+| « Votre rôle ne permet pas cette action. » | Action réservée à un autre rôle (l'administrateur, le plus souvent). Sur le site en ligne, tant que le redéploiement n'a pas eu lieu, c'est encore « Unauthorized. Required roles: admin. Your role: gestionnaire », qui s'affiche aussi à la fin de **Modifier** une machine par un gestionnaire, alors que la modification est enregistrée (voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
+| « Vous ne gérez pas cette machine. » | Machine non attribuée à vous. | P6. |
+| « Machine introuvable. Elle a peut-être été supprimée. » | Machine supprimée ou inexistante (modification, clé, gestionnaires). | Vérifier dans **Machines**. |
+| « La machine est en séance : elle ne peut pas être supprimée maintenant. » / « Une séance attend son départ sur cette machine : annulez-la avant de supprimer la machine. » | Suppression impossible (message d'échec en bas à droite de l'écran, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
+| « Vous ne pouvez pas supprimer votre propre compte. » | Tentative de suppression de soi. | Demander à un autre administrateur. |
 | « User not found in database. Please complete registration. » | Votre fiche n'existe pas encore. | Revenir sur `/fr`, attendre quelques secondes ([§3.1](#31-se-connecter-clerk)). |
 | « Not authenticated » | Session Clerk expirée. | Se reconnecter. |
 
 > **En production**, Convex peut masquer le texte des erreurs qui ne sont pas
 > déclarées comme messages destinés à l'utilisateur. Les messages du
-> lancement, de l'arrêt, des droits et de la physiologie restent lisibles ; les
-> autres (création de patient, machines, rôles) perdent alors leur texte :
-> depuis ANH-156 le site affiche à la place « L'action a échoué. Réessayez.
-> Référence à transmettre si le problème persiste : … », la référence étant
-> l'identifiant de requête Convex. Non vérifié, faute de déploiement.
+> lancement, de l'arrêt, des droits et de la physiologie, et depuis ANH-194
+> ceux des machines, des comptes et des rôles, restent lisibles. « Not
+> authenticated » et « User not found in database. Please complete
+> registration. » perdent leur texte : le site affiche à la place « L'action a
+> échoué. Réessayez. Référence à transmettre si le problème persiste : … », la
+> référence étant l'identifiant de requête Convex. Non vérifié, faute de
+> déploiement.
 
 ### 7.3 Motifs de refus envoyés par la machine
 
@@ -2479,7 +2499,7 @@ retrait de l'ancien mode d'enregistrement ECG (le bloc ECG n'existe plus).
 | 5 | Le **motif de fin** s'affiche tel que la machine l'envoie : `operator_stop: arret demande depuis le tableau de bord`. Une séance annulée affiche « Cancelled before start by Claire Martin ». | Vue en direct, détail |
 | 6 | Une séance **annulée avant le départ** est rangée dans « Échouées », avec un bandeau rouge « Séance échouée ». | Sessions, vue en direct |
 | 7 | Une séance démarrée à la machine a pour patient **« Unknown »** dans la liste, et « Pratiquant non précisé » dans la vue en direct. | Sessions |
-| 8 | La page s'appelle **« Sessions ECG »** alors qu'elle liste aussi les séances d'entraînement. Les statuts de la colonne sont au pluriel (« Terminées », « Échouées »). | Sessions |
+| 8 | (Titre corrigé dans le code le 14 octobre 2026, ANH-194 : « Sessions ».) La page s'appelait **« Sessions ECG »** alors qu'elle liste aussi les séances d'entraînement. Les statuts de la colonne sont au pluriel (« Terminées », « Échouées »). | Sessions |
 | 9 | Fenêtre de lancement ouverte par un administrateur : le pratiquant proposé d'abord est **lui-même**. S'il n'a pas de FC max, l'avertissement « La FC max… n'est pas renseignée » s'affiche dès l'ouverture, avant qu'il ait choisi un patient. | Lancer une séance auto |
 | 10 | Sur le détail d'une machine **hors ligne**, le bouton **Lancer une séance auto** reste affiché en bleu, comme s'il était utilisable (sur **Mes machines** il est grisé). Il n'a pas été cliqué ; le serveur refuse de toute façon une machine hors ligne. | Détail d'une machine |
 | 11 | En développement, chaque page signale une différence entre le rendu serveur et le rendu navigateur (« hydration mismatch »). Sans effet visible. | Toutes |

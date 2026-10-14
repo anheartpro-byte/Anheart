@@ -607,14 +607,14 @@ ressource qui n'existe pas.
 |---|---|
 | `requireAuth` | Un jeton Clerk valide est présent (sinon `Not authenticated`). |
 | `getCurrentUserOrThrow` | Une ligne `users` existe pour ce `clerkId` (sinon « User not found in database. Please complete registration. ») et l'appel a une organisation acceptée (voir ci-dessus). Renvoie le compte avec le rôle et l'organisation **de l'appel**. |
-| `requireRole(r)` | Le rôle de l'appel est dans `r`. |
+| `requireRole(r)` | Le rôle de l'appel est dans `r` (sinon le code `not_authorized`). |
 | `inScope(organisation)` | admin Anheart ; ou la ligne appartient à l'organisation de l'appelant. Une ligne sans organisation n'est dans le périmètre que de l'admin Anheart. |
 | `canManageUser(cible)` | admin Anheart ; ou, si la cible est **membre actif de l'organisation de l'appelant** : admin de cette organisation, ou gestionnaire lié à la cible dans `user_gestionnaires` **dans cette organisation**. |
 | `canAccessUser(cible)` | soi-même, ou `canManageUser`. |
 | `canAccessMachine(m)` | admin Anheart ; ou, si la machine appartient à l'organisation de l'appelant : admin de cette organisation, ou gestionnaire lié à `m` dans `machine_gestionnaires`. **Un `user` n'a jamais accès par cette règle.** |
 | `canManageMachine(m)` | Identique à `canAccessMachine`. |
 | `canAccessSession(s)` | admin Anheart ; ou, si la séance appartient à l'organisation de l'appelant : son pratiquant, ou qui a accès à sa machine. |
-| `requireGestionnaireAdmin(g)` | admin Anheart, ou admin de l'organisation de `g` ; et `g` tient le rôle `gestionnaire` dans l'organisation où la décision s'applique : celle de l'appelant, ou, pour l'admin Anheart, l'organisation principale de `g`. Sinon « Gestionnaire not found » (compte inconnu, ou, pour un admin d'organisation, compte qui n'est pas membre actif de la sienne : même réponse) ou « Target user is not a gestionnaire ». Le rôle de l'appelant est vérifié avant toute lecture de `g`, et le rôle de `g` est lu dans son appartenance, pas dans le miroir `users.role`. Renvoie l'appelant, `g` et cette organisation. |
+| `requireGestionnaireAdmin(g)` | admin Anheart, ou admin de l'organisation de `g` ; et `g` tient le rôle `gestionnaire` dans l'organisation où la décision s'applique : celle de l'appelant, ou, pour l'admin Anheart, l'organisation principale de `g`. Sinon le code `gestionnaire_not_found` (compte inconnu, ou, pour un admin d'organisation, compte qui n'est pas membre actif de la sienne : même réponse) ou `not_a_gestionnaire`. Le rôle de l'appelant est vérifié avant toute lecture de `g`, et le rôle de `g` est lu dans son appartenance, pas dans le miroir `users.role`. Renvoie l'appelant, `g` et cette organisation. |
 
 Ce que fait un **admin d'organisation** (`org_admin`) : dans son organisation,
 il lit et gère toutes les machines, tous les membres et toutes les séances sans
@@ -819,6 +819,33 @@ renvoie avec leur code stable (voir [section 6](#6-routes-http-machine-convexhtt
 
 ## 5. Autres fonctions publiques
 
+### Codes d'erreur des fonctions du site (ANH-194)
+
+Convex masque en production le texte d'une `Error` simple : le site n'afficherait
+qu'une phrase générique avec une référence. Les refus de `users.ts`, de
+`machines.ts` et des contrôles de rôle de `convex/lib/auth.ts`
+(`requireRole`, `requireGestionnaireAdmin`, `requireSharedProfileAuthority`)
+sont donc des `ConvexError` dont la donnée est un **code stable**, par
+exemple `machine_in_session` : `throw refusal("machine_in_session")`. La table
+des codes et de leur sens est unique, `convex/lib/errors.ts`, avec les codes
+déjà levés ailleurs (invitations, profil en attente). Le site traduit chaque
+code par la clé `errors.<code>` de `messages/fr.json` et `messages/en.json`
+(`lib/feedback.ts`). `convex/errors.test.ts` vérifie que chaque code a ses
+deux traductions, qu'aucune traduction n'est sans code, et qu'aucun code levé
+par une source du dossier n'est absent de la table.
+
+Restent hors de la table : les phrases anglaises de `training.ts`, de
+`softwareReleases.ts` et des refus d'organisation de `lib/auth.ts` (des
+`ConvexError`, donc lisibles en production, mais en anglais), « Not
+authenticated » et « User not found in database. Please complete
+registration. » (des `Error` simples, masquées en production), et
+`machines.recordHeartbeat`, interne, dont l'erreur est lue par la route du
+heartbeat et répondue à la machine avec les codes du contrat (§6). La suite
+est ANH-90. Les codes de l'API machine sont une autre liste, partagée avec le
+Pi : `contracts/machine-api.json`.
+
+### Fonctions par fichier
+
 Résumé des fonctions les plus utilisées par le site. Dans ces tableaux,
 « admin » sans précision veut dire l'admin Anheart **ou** l'admin de
 l'organisation concernée, et toute lecture ou liste est limitée à
@@ -840,7 +867,7 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 | `deleteUser` | admin ; gestionnaire pour ses patients seulement | Retrait de l'organisation de l'appelant, ou suppression partout pour l'admin Anheart (voir [§3](#3-règles-dautorisation)). Pas soi-même. |
 | `linkPatientToClerk` | connecté, e-mail vérifié | Lie un patient pré-créé (`clerkId` vide) au compte Clerk, uniquement si l'e-mail **vérifié** de l'appelant est celui du dossier (voir [§3](#3-règles-dautorisation)). **Aucune page ne l'appelle aujourd'hui.** |
 | `assignGestionnaireToUser` / `removeGestionnaireFromUser` | admin ; un gestionnaire pour lui-même | Lien patient ↔ gestionnaire, dans l'organisation de l'appelant ; le patient et le gestionnaire doivent tous deux en être membres actifs, avec ces rôles. Pour l'admin Anheart, le lien se crée dans l'organisation principale du patient. |
-| `listGestionnaires` | admin | Les gestionnaires (tous pour l'admin Anheart, ceux de son organisation pour un admin d'organisation), avec leurs nombres de machines et de patients. `[]` pour tout autre rôle. Option `organizationId` : les gestionnaires de cette organisation seulement, liens comptés dans celle-ci (le formulaire de machine la passe) ; `[]` pour un admin d'organisation qui en nomme une autre que la sienne. |
+| `listGestionnaires` | admin | Les gestionnaires (tous pour l'admin Anheart, ceux de son organisation pour un admin d'organisation), avec leurs nombres de machines (machines supprimées non comptées) et de patients. `[]` pour tout autre rôle. Option `organizationId` : les gestionnaires de cette organisation seulement, liens comptés dans celle-ci (le formulaire de machine la passe) ; `[]` pour un admin d'organisation qui en nomme une autre que la sienne. |
 | `assignPatientsToGestionnaire` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des patients d'**un gestionnaire**, **dans une organisation** (celle de l'appelant ; pour l'admin Anheart, l'organisation principale du gestionnaire) : compare la liste demandée à ses lignes `user_gestionnaires` de cette organisation, insère les liens manquants et supprime ceux qui ne sont plus demandés. Un lien déjà présent n'est pas réécrit (il garde son auteur et sa date), et la même liste envoyée deux fois n'écrit rien. Seules les lignes de ce gestionnaire dans cette organisation sont lues et écrites : ses patients d'une autre organisation ne bougent pas. Seul un patient actif de cette organisation est lié ; tout autre identifiant (compte inconnu, patient d'une autre organisation, compte qui n'est pas un patient) est laissé de côté, avec la même réponse dans les trois cas. Un identifiant répété ne crée qu'un lien. Retourne `{added, removed}` : ce qui a été écrit. Une mutation Convex est une transaction sérialisable : deux appels concurrents sur le même gestionnaire s'appliquent l'un après l'autre, et la liste du dernier s'applique en entier. |
 | `getPatientsForGestionnaire`, `getGestionnairesForPatient` | admin / gestionnaire concerné | Lectures. |
 
@@ -897,10 +924,10 @@ n'est pas utilisé, et le seuil de volume où il deviendrait nécessaire n'a pas
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu. |
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
 | `restoreMachine` | admin Anheart | Annule la suppression. |
-| `assignMachineToGestionnaires` | admin | Remplace la liste complète des gestionnaires d'**une machine**, pris dans l'organisation de la machine. |
-| `setGestionnaireMachines` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des machines d'**un gestionnaire**, **dans une organisation** (celle de l'appelant ; pour l'admin Anheart, l'organisation principale du gestionnaire) : compare la liste demandée à ses lignes `machine_gestionnaires` de cette organisation, insère les liens manquants (`isOwner: false`, dans cette organisation) et supprime ceux qui ne sont plus demandés. Seules les lignes de ce gestionnaire dans cette organisation sont lues et écrites : les liens des autres gestionnaires ne bougent pas, ce que le gestionnaire gère dans une autre organisation non plus, et un lien déjà présent n'est pas modifié. Une machine inconnue, ou d'une autre organisation (même réponse), fait refuser l'appel sans rien écrire. Retourne `{added, removed}`. |
+| `assignMachineToGestionnaires` | admin | Fixe la liste complète des gestionnaires d'**une machine**, pris dans l'organisation de la machine ; le premier gardé est propriétaire. N'écrit que la différence : un gestionnaire qui reste garde sa ligne (auteur, date ; son `isOwner` suit la nouvelle première place), un identifiant répété ne fait qu'une ligne, et une seconde ligne laissée pour un même gestionnaire est supprimée (ANH-194). `createMachine` applique la même règle à la création. |
+| `setGestionnaireMachines` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des machines d'**un gestionnaire**, **dans une organisation** (celle de l'appelant ; pour l'admin Anheart, l'organisation principale du gestionnaire) : compare la liste demandée à ses lignes `machine_gestionnaires` de cette organisation, insère les liens manquants (`isOwner: false`, dans cette organisation) et supprime ceux qui ne sont plus demandés. Seules les lignes de ce gestionnaire dans cette organisation sont lues et écrites : les liens des autres gestionnaires ne bougent pas, ce que le gestionnaire gère dans une autre organisation non plus, et un lien déjà présent n'est pas modifié. Une machine inconnue, supprimée, ou d'une autre organisation (même réponse, `machine_not_found`), fait refuser l'appel sans rien écrire. Le lien vers une machine supprimée reste hors de la décision : il n'est jamais retiré, nommé ou non, et ne compte pas dans `{added, removed}` (ANH-194). Retourne `{added, removed}`. |
 | `assignGestionnaireToMachine` / `removeGestionnaireFromMachine` | admin ; gestionnaire de la machine | Lien machine ↔ gestionnaire. Le gestionnaire doit être membre actif de l'organisation de la machine. |
-| `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. `getMachinesForGestionnaire` renvoie aussi `serverNow`. |
+| `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. `getMachinesForGestionnaire` renvoie aussi `serverNow` et laisse de côté les machines supprimées. `getMachine` liste le propriétaire en tête de ses gestionnaires. |
 
 ### `sessions.ts` (lectures seulement)
 
@@ -1956,7 +1983,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
-| `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). |
+| `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |
+| `convex/errors.test.ts` | La table `convex/lib/errors.ts` : chaque code a sa traduction française et anglaise, aucune traduction sans code, aucun code levé hors de la table, plus aucune `Error` simple dans `users.ts` et `machines.ts` hors du heartbeat interne (ANH-194). |
 | `convex/gestionnairePatients.test.ts` | `users.assignPatientsToGestionnaire` : ajout seul, retrait seul, les deux, liste inchangée (aucune ligne réécrite), identifiant répété, patient d'une autre organisation traité comme un compte inconnu, admin d'une autre organisation refusé comme pour un gestionnaire inconnu, deux enregistrements successifs (ANH-208). |
 | `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |
 | `convex/cloudVersion.test.ts` | La constante `CLOUD_VERSION` est celle de `convex/VERSION` et celle que répond le code déployé (ANH-134). |
@@ -1981,11 +2009,12 @@ organisation, désignée par son identifiant).
 
 Les résultats :
 
-- `refuse` : l'appel lève une erreur (avec, si utile, un extrait du message ;
-  les fonctions publiques n'ont **pas de code d'erreur stable** pour leurs
-  refus, seulement des messages anglais, à deux exceptions près : le code
-  `rate_limited` d'un compte au-delà de sa limite (section 6) et ceux des
-  invitations ; les routes machine en ont, section 6) ;
+- `refuse` : l'appel lève une erreur, avec, si utile, ce qu'elle doit dire :
+  le code stable pour `users.ts`, `machines.ts`, les contrôles de rôle et le
+  code `rate_limited` d'un compte au-delà de sa limite (table
+  `convex/lib/errors.ts`, [§5](#5-autres-fonctions-publiques) ; limites en
+  section 6), un extrait du message anglais pour les autres ; les routes
+  machine ont leurs propres codes, section 6 ;
 - `success` : l'effet ou la donnée renvoyée est vérifié ;
 - `empty` : la requête renvoie `null`, `[]` ou une page vide (pas d'accès, rien
   n'est exposé) ;

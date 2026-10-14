@@ -275,8 +275,13 @@ se règle par la vitesse de rotation, dans les limites fixées par le logiciel d
 la machine. » Pour mémoire, le plafond logiciel est la vitesse nominale moteur
 (27,7 tr/min bras, environ 2,1 g au bout des jambes), et beaucoup moins avec une
 personne à bord. Voir [securite.md](securite.md). Tout chiffre publié sur le site
-dépend de la décision médicale (ANH-98). La FAQ nomme les six canaux du
-logiciel : ECG, EDA, SpO2, RESP, EMG et LUX.
+dépend de la décision médicale (ANH-98). La FAQ dit ce que la machine mesure,
+d'après [raspberry-pi.md](raspberry-pi.md) section 9 : l'ECG d'un capteur
+BITalino, dont la machine tire la fréquence cardiaque ; les autres voies
+(EDA, respiration, EMG, lumière, pouls) affichées sur la console pour
+surveillance seulement, aucune ne commandant la machine ; pas de mesure de la
+saturation en oxygène (ANH-194, elle annonçait six canaux d'un « système de
+surveillance ECG »).
 
 ### Tableau de bord : `/fr/dashboard`
 
@@ -363,14 +368,26 @@ La liste des gestionnaires de la machine, que seul un admin voit dans la
 fenêtre, part dans un second appel réservé à l'admin
 (`machines.assignMachineToGestionnaires`) : la fenêtre ne le fait que si
 l'appelant est admin **et** si la liste a changé. L'ordre fait partie de la
-liste, car le serveur fait du premier gestionnaire le « Propriétaire » : un
-gestionnaire décoché puis recoché passe en fin de liste, et la liste est alors
-envoyée. Un gestionnaire qui modifie le nom ou le lieu ne fait donc que le
-premier appel, et un admin qui ne touche pas aux cases ne réécrit pas la
-liste. Après l'enregistrement, la
-fenêtre se ferme et la carte Configuration affiche « Machine mise à jour avec
-succès » ; si le serveur refuse, son message s'affiche en rouge en haut de la
-fenêtre, qui reste ouverte. La règle d'envoi est dans `lib/machineForm.ts`.
+liste, car le serveur fait du premier gestionnaire le « Propriétaire » ; la
+fenêtre s'ouvre avec le propriétaire en tête. Un gestionnaire décoché puis
+recoché passe en fin de liste et la liste est alors envoyée : si c'est le
+propriétaire, le premier des autres gestionnaires cochés devient propriétaire.
+Le serveur n'écrit que la différence : un gestionnaire qui reste garde sa
+ligne, avec son auteur et sa date, et un identifiant envoyé deux fois ne fait
+qu'une ligne. Un gestionnaire qui modifie le nom ou le lieu ne fait donc que
+le premier appel, et un admin qui ne touche pas aux cases ne réécrit pas la
+liste.
+
+La fenêtre est remplie à son ouverture, et seulement alors : la machine que
+lit la page change à chaque signal de vie d'une machine en ligne, et la saisie
+en cours, les cases et le message d'erreur restent tels quels (ANH-194).
+« Machine mise à jour avec succès » ne s'affiche, en notification, qu'une fois
+les deux appels passés. Si le serveur refuse le premier, rien n'est enregistré
+et son message s'affiche en rouge en haut de la fenêtre, qui reste ouverte.
+S'il refuse la liste, le nom et le lieu sont déjà enregistrés : la fenêtre le
+dit (« Le nom et le lieu sont enregistrés, mais pas la liste des
+gestionnaires : » suivi du motif) et reste ouverte. La règle d'envoi est dans
+`lib/machineForm.ts`.
 
 Une machine écrite avant la migration multi-organisation n'a pas encore
 d'organisation ; seul l'admin Anheart la voit. Sa fenêtre ne demande alors
@@ -504,17 +521,28 @@ le rappelle et renvoie vers **Membres**. Liste des gestionnaires avec leurs
 nombres de machines et de patients. Fiche : **Assigner des machines** et
 **Assigner des patients**.
 
+La carte **Machines** de la fiche et le nombre de machines de la liste
+laissent de côté les machines supprimées (`machines.getMachinesForGestionnaire`
+et `users.listGestionnaires`), et la carte affiche « Chargement... » tant que
+ses machines ne sont pas arrivées.
+
 **Assigner des machines** : une case par machine non supprimée, cochée si le
 gestionnaire la gère déjà. **Enregistrer** applique exactement les cases à ce
 gestionnaire, par `machines.setGestionnaireMachines` : cocher ajoute le lien,
 décocher le retire. Les autres gestionnaires d'une machine gardent leur lien,
 et un lien déjà présent n'est pas modifié (il garde son badge
-« Propriétaire »). Une machine supprimée n'a pas de case : son lien n'est pas
-retiré. La fenêtre s'ouvre toujours sur les machines actuelles du
-gestionnaire. Après l'enregistrement, la fiche confirme, par exemple
-« Machines enregistrées : 1 ajoutée, 1 retirée. » ; en cas de refus, le
-message du serveur s'affiche dans la fenêtre, qui reste ouverte. La règle des
-cases est dans `lib/gestionnaireMachines.ts`.
+« Propriétaire »). Une machine supprimée reste hors de la décision, côté
+serveur : son lien n'est jamais retiré, qu'elle soit nommée ou non, il
+retrouve sa machine si elle est restaurée, et une machine supprimée n'est
+jamais liée (refus « Machine introuvable »). La fenêtre s'ouvre toujours sur
+les machines actuelles du gestionnaire. Une case que l'admin a cliquée garde
+son choix jusqu'à la fermeture ; les autres suivent le serveur, de sorte qu'un
+signal de vie des machines n'annule rien et qu'un lien ajouté ou retiré
+entre-temps par un autre admin apparaît dans la fenêtre (ANH-194). Après
+l'enregistrement, une notification confirme, par exemple « Machines
+enregistrées : 1 ajoutée, 1 retirée. » ; en cas de refus, le message du
+serveur s'affiche dans la fenêtre, qui reste ouverte. La règle des cases est
+dans `lib/gestionnaireMachines.ts`.
 
 **Assigner des patients** : une case par patient de la liste de l'admin,
 cochée si le gestionnaire le gère déjà. La fenêtre se comporte comme celle des
@@ -522,8 +550,9 @@ machines :
 
 - elle s'ouvre toujours sur les patients actuels du gestionnaire, jamais sur
   les cases d'une modification annulée ; si ces patients changent sur le
-  serveur pendant qu'elle est ouverte, les cases reprennent celles du serveur
-  (une modification en cours et pas encore enregistrée est alors à refaire) ;
+  serveur pendant qu'elle est ouverte, une case déjà cliquée garde le choix de
+  l'admin et les autres prennent l'état du serveur : ce qui est enregistré est
+  ce qui est affiché ;
 - tant que les patients du gestionnaire ou la liste des patients à choisir ne
   sont pas chargés, **Modifier** et **Enregistrer** sont inactifs, et la carte
   affiche « Chargement... » au lieu de « Aucun patient assigné » ;
@@ -531,16 +560,19 @@ machines :
   qui n'écrit que la différence : cocher ajoute le lien, décocher le retire, un
   lien déjà présent n'est pas réécrit. Un patient du gestionnaire qui n'a pas
   de case dans la fenêtre garde son lien ;
-- après l'enregistrement, la fiche confirme ce que le serveur a écrit, par
-  exemple « Patients enregistrés : 1 ajouté, 1 retiré. » ; en cas de refus, le
-  message du serveur s'affiche dans la fenêtre, qui reste ouverte avec ses
-  cases.
+- après l'enregistrement, une notification confirme ce que le serveur a
+  écrit, par exemple « Patients enregistrés : 1 ajouté, 1 retiré. » ; en cas
+  de refus, le message du serveur s'affiche dans la fenêtre, qui reste ouverte
+  avec ses cases.
 
 Le serveur ne lie que les patients actifs de l'organisation du gestionnaire :
 un patient d'une autre organisation coché par l'admin Anheart n'est pas lié, et
 le décompte affiché ne le compte pas. Il n'y a ni journal ni annulation de ces
 changements. Deux admins qui enregistrent l'un après l'autre : la liste du
-dernier enregistrement s'applique en entier. La règle des cases est dans
+dernier enregistrement s'applique en entier ; la fenêtre réduit ce risque en
+suivant le serveur pour les cases que l'admin n'a pas touchées, mais un
+changement fait entre le dernier rafraîchissement de la fenêtre et
+l'enregistrement peut encore être défait. La règle des cases est dans
 `lib/gestionnairePatients.ts`.
 
 ### Rapports : `/fr/dashboard/reports`
@@ -922,23 +954,37 @@ données, lui, est calculé par le site (« Fraîcheur » plus haut). Voir le
 
 ### Messages de succès et d'échec
 
-Aucune **mutation** du site n'échoue en silence. Cela vaut pour les mutations
-seulement : une lecture Convex qui échoue, la copie d'une clé dans le
-presse-papiers ou toute action qui n'écrit rien ne passent pas par ce mécanisme
-et ne sont pas couvertes.
+Aucune **mutation** ni **action** Convex du site n'échoue en silence. Cela ne
+vaut que pour elles : une lecture Convex qui échoue, la copie d'une clé dans le
+presse-papiers ou un geste de la page qui n'écrit rien ne passent pas par ce
+mécanisme et ne sont pas couverts.
 
-Toute mutation Convex appelée depuis `app/` ou `components/` passe par le hook
-`useMutationWithFeedback` (`hooks/use-mutation-with-feedback.ts`) : il exécute
-la mutation, ne lève jamais d'exception et rend `{ ok: true, value }` ou
-`{ ok: false, message, code, requestId }`. Le message s'affiche en bas à droite
-de l'écran (`components/FeedbackToaster.tsx`, monté dans
-`app/[locale]/layout.tsx`), au-dessus des fenêtres ; il part seul (5 s pour un
-succès, 12 s pour un échec) ou par sa croix.
+Toute mutation Convex appelée depuis `app/`, `components/`, `lib/` ou `hooks/`
+passe par le hook `useMutationWithFeedback`
+(`hooks/use-mutation-with-feedback.ts`), et toute action par
+`useActionWithFeedback` (`hooks/use-action-with-feedback.ts`) : ils exécutent
+l'appel, ne lèvent jamais d'exception (même quand le texte de succès fourni
+par l'appelant ne peut pas être composé : le succès s'affiche alors comme
+« Action effectuée. ») et rendent `{ ok: true, value }` ou
+`{ ok: false, message, code, requestId }`. Le message s'affiche en bas à
+droite de l'écran (`components/FeedbackToaster.tsx`, monté dans
+`app/[locale]/layout.tsx`), au-dessus des fenêtres. Un succès part seul au
+bout de 5 s ; un échec reste jusqu'à ce qu'on le ferme par sa croix, car il
+est parfois le seul endroit où son motif s'affiche. Au plus quatre messages
+sont visibles : un succès plus ancien part avant un échec. La croix reste
+cliquable quand une fenêtre est ouverte, sans fermer la fenêtre
+(`components/ui/dialog.tsx` ne prend pas ce clic pour un clic à l'extérieur).
+Les succès sont annoncés dans une région `role="status"` (polie), les échecs
+dans une région `role="alert"` (immédiate) ; les deux existent avant le
+premier message. Pendant qu'une fenêtre modale est ouverte, Radix masque le
+reste de la page aux lecteurs d'écran, ces deux régions comprises
+(comportement documenté par Radix, non vérifié ici) : les fenêtres qui
+affichent leur propre encadré d'erreur le donnent aussi dans la fenêtre.
 
 | Cas | Ce qui s'affiche |
 |---|---|
-| Succès | Le texte fourni par l'appelant, en français ou en anglais (`feedback.*`, `machines.*Success`, `gestionnaires.machinesSaved` et `gestionnaires.patientsSaved` dans `messages/*.json`). L'appelant donne un texte, ou une fonction qui le compose à partir de la réponse de la mutation (le décompte de « Machines enregistrées : … » et de « Patients enregistrés : … »). Une mutation de fond (création de la ligne du compte à l'arrivée sur la page d'accueil) n'en fournit pas, pas plus que la liste des gestionnaires envoyée après une modification de machine : leur succès reste muet, leur échec non. |
-| Échec avec un code stable | La traduction du code si `messages/*.json` contient la clé `errors.<code>`. Le code est lu dans la `ConvexError` du serveur : la chaîne elle-même, ou le champ `code` (à défaut `error`) d'un objet. |
+| Succès | Le texte fourni par l'appelant, en français ou en anglais (`feedback.*`, `machines.*Success`, `gestionnaires.machinesSaved` et `gestionnaires.patientsSaved` dans `messages/*.json`). L'appelant donne un texte, ou une fonction qui le compose à partir de la réponse de la mutation (le décompte de « Machines enregistrées : … » et de « Patients enregistrés : … »). Une mutation de fond (création de la ligne du compte à l'arrivée sur la page d'accueil) n'en fournit pas : son succès reste muet, son échec non. La modification d'une machine par un admin annonce « Machine mise à jour avec succès » une fois ses deux appels passés, jamais pour la moitié. |
+| Échec avec un code stable | La traduction du code, clé `errors.<code>` de `messages/*.json`. Le code est lu dans la `ConvexError` du serveur : la chaîne elle-même, ou le champ `code` (à défaut `error`) d'un objet. Les codes des fonctions du site sont dans une seule table, `convex/lib/errors.ts` (voir [convex.md](convex.md)) ; chacun a sa traduction française et anglaise. |
 | Échec avec un texte | Sans traduction du code, le texte du serveur : la chaîne de la `ConvexError`, le champ `message` de l'objet, ou sur un déploiement de développement la ligne « Uncaught Error: … ». Ces textes sont encore en anglais. |
 | Échec masqué | En production, Convex masque le texte d'une erreur qui n'est pas une `ConvexError` (comportement documenté par Convex, pas encore observé sur ce projet). Le site affiche alors « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : {identifiant}. » |
 
@@ -948,13 +994,11 @@ retrouver l'erreur dans les journaux du déploiement.
 
 Les fenêtres et les cartes qui affichaient déjà l'erreur dans un encadré rouge
 (lancement, arrêt, droits de lancement, physiologie, formulaires machine et
-patient, fenêtre « Assigner des machines ») le gardent : il reçoit le même
-message que la notification. La fenêtre « Assigner des patients » a le même
-encadré depuis ANH-208. De même, trois écrans gardent leur propre confirmation
-durable en plus de la notification : « Machines enregistrées : … » et
-« Patients enregistrés : … » sur la fiche d'un gestionnaire, « Machine mise à
-jour avec succès » sur la fiche d'une machine, et le bouton « Enregistré » de la
-carte Physiologie.
+patient, fenêtres « Assigner des machines » et « Assigner des patients ») le
+gardent : il reçoit le même message que la notification. Un succès, lui,
+n'est dit qu'une fois, par la notification : la fiche d'un gestionnaire, la
+fiche d'une machine et la carte Physiologie n'ont plus leur propre ligne de
+confirmation (ANH-194).
 
 **Arrêter ou annuler une séance** donne un seul message, quel que soit l'état
 que la page affichait : « Demande envoyée. L'état de la séance s'affiche sur
@@ -966,21 +1010,31 @@ panneau qui disent ce qui s'est passé.
 
 Limites :
 
-- aucune clé `errors.<code>` n'existe encore : les codes stables arrivent côté
-  serveur avec ANH-133 et leurs traductions avec ANH-90 ;
-- `convex/machines.ts` et `convex/users.ts` lèvent des `Error` simples : en
-  production, leurs refus (suppression d'une machine en séance, par exemple)
-  donnent le message masqué ci-dessus, pas leur motif ;
+- les refus de `convex/machines.ts`, de `convex/users.ts` et des contrôles de
+  rôle de `convex/lib/auth.ts` (`requireRole`, `requireGestionnaireAdmin`,
+  profil partagé) portent un code traduit depuis ANH-194. Les autres restent
+  en anglais : les phrases de `convex/training.ts` (droits de lancement,
+  physiologie, lancement et arrêt) et des refus d'organisation de
+  `convex/lib/auth.ts` (ce sont des `ConvexError` : leur texte arrive, en
+  anglais) ; « Not authenticated » et « User not found in database » sont des
+  `Error` simples, donc masquées en production. La suite est ANH-90 ;
 - le test de bout en bout dans un navigateur (suppression refusée d'une machine
   en séance) attend l'infrastructure d'ANH-83.
 
-Tests, dans `npm run test:site` : `hooks/use-mutation-with-feedback.test.tsx`
-(succès, erreur codée, erreur brute, erreur masquée, journal),
+Tests : `hooks/use-mutation-with-feedback.test.tsx` (succès, texte de succès
+qui ne peut pas être composé, erreur codée, erreur brute, erreur masquée,
+journal), `lib/feedback.test.ts` (durée de vie et limite de la liste),
+`components/feedback-over-dialog.test.tsx` (la croix d'un message ferme le
+message et pas la fenêtre ouverte dessous, avec le vrai composant Radix),
 `components/training/stop-feedback.test.tsx` (le message d'arrêt est le même
-que la page ait cru la séance en attente, active ou finie) et
-`hooks/no-silent-mutation.test.ts`, qui refuse dans `app/` et `components/` un
-appel direct à `useMutation` ainsi qu'un `catch` vide ou réduit à un
-`console.error` dans un fichier qui appelle une mutation.
+que la page ait cru la séance en attente, active ou finie),
+`convex/errors.test.ts` (chaque code de `convex/lib/errors.ts` a ses deux
+traductions, aucune traduction sans code, aucun code levé hors de la table) et
+`hooks/no-silent-mutation.test.ts`, qui refuse dans `app/`, `components/`,
+`lib/` et `hooks/` un appel direct à `useMutation` ou à `useAction` (hors des
+deux hooks qui les enveloppent), une écriture par un client Convex
+(`useConvex().mutation(...)`, `.action(...)`), ainsi qu'un `catch` vide ou
+réduit à un `console.error` dans un fichier qui fait un de ces appels.
 
 ---
 

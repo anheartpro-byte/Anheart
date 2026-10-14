@@ -1,5 +1,11 @@
 # Suivi des tickets logiciels
 
+> **Instantané figé du 2 octobre 2026, plus tenu à jour** (constat d'ANH-194).
+> Les états, l'ordre et les dépendances des tickets sont dans Linear, projet
+> **Roadmap Software**, et la logique des jalons dans [roadmap.md](roadmap.md).
+> Ce fichier reste comme historique : rien de ce qu'il dit des états n'est à
+> prendre pour l'état actuel.
+
 Instantane du 2 octobre 2026. Linear reste la source de verite des etats et des dependances.
 
 ## Perimetre
