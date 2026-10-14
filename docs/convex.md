@@ -828,7 +828,8 @@ qu'une phrase générique avec une référence. Les refus de `users.ts`, de
 sont donc des `ConvexError` dont la donnée est un **code stable**, par
 exemple `machine_in_session` : `throw refusal("machine_in_session")`. La table
 des codes et de leur sens est unique, `convex/lib/errors.ts`, avec les codes
-déjà levés ailleurs (invitations, profil en attente). Le site traduit chaque
+déjà levés ailleurs (invitations, profil en attente, `rate_limited` du
+limiteur par compte, levé comme un objet `{code, message, retryAfterMs}`). Le site traduit chaque
 code par la clé `errors.<code>` de `messages/fr.json` et `messages/en.json`
 (`lib/feedback.ts`). `convex/errors.test.ts` vérifie que chaque code a ses
 deux traductions, qu'aucune traduction n'est sans code, et qu'aucun code levé

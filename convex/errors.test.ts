@@ -66,17 +66,19 @@ describe("ANH-194 EX-5 the table of error codes", () => {
   });
 
   it("is where every code thrown by the backend comes from", () => {
-    // A code written in place, `new ConvexError("some_code")`, must be in the
-    // table too: otherwise the site would show the bare code.
+    // A code written in place, `new ConvexError("some_code")` or
+    // `new ConvexError({ code: "some_code", ... })`, must be in the table
+    // too: otherwise the site would show the bare code.
     const thrown = new Set<string>();
     for (const text of Object.values(sources)) {
       for (const match of text.matchAll(
-        /new ConvexError(?:<[^>]*>)?\(\s*"([a-z][a-z0-9_]*)"\s*\)/g,
+        /new ConvexError(?:<[^>]*>)?\(\s*(?:\{\s*code:\s*)?"([a-z][a-z0-9_]*)"/g,
       )) {
         thrown.add(match[1]);
       }
     }
-    expect(thrown.size).toBeGreaterThan(0);
+    // The account limiter's code is one of them (ANH-166).
+    expect(thrown).toContain("rate_limited");
     expect(
       [...thrown].filter((code) => !(code in DASHBOARD_ERRORS)),
     ).toEqual([]);

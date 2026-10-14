@@ -577,7 +577,7 @@ describe("ANH-166 EX-1 per account", () => {
           userId: w.patient,
           role: "admin",
         }),
-      ).rejects.toThrow(/Unauthorized/);
+      ).rejects.toThrow(/not_authorized/);
     }
 
     await me.mutation(api.users.updateUserProfile, { firstName: "still" });

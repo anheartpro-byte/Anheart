@@ -32,6 +32,8 @@ export const DASHBOARD_ERRORS = {
     "The profile belongs to several organisations: only an Anheart administrator may change it.",
   organization_not_found:
     "The organisation does not exist, or was deleted in Clerk.",
+  rate_limited:
+    "The account is over its write limit: retry later. Thrown by `limitUser` (convex/lib/rateLimits.ts) as `{code, message, retryAfterMs}`.",
 
   // Accounts, patients and gestionnaires.
   user_not_found: "The account does not exist (any more).",
