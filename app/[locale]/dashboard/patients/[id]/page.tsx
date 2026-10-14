@@ -50,6 +50,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { PatientFormModal } from "@/components/modals/PatientFormModal";
 import { PhysiologyCard } from "@/components/training/PhysiologyCard";
+import { RiderHistoryCard } from "@/components/training/RiderHistoryCard";
 
 export default function PatientDetailPage({
   params,
@@ -285,6 +286,9 @@ export default function PatientDetailPage({
           </div>
         )}
       </div>
+
+      {/* History and progression of the rider's finished sessions (ANH-89) */}
+      <RiderHistoryCard userId={patientId} />
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>

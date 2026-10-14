@@ -39,6 +39,11 @@ vi.mock("@/components/training/SessionRecordCard", async () => ({
     "SessionRecordCard",
   ),
 }));
+vi.mock("@/components/training/SessionSummaryCard", async () => ({
+  SessionSummaryCard: (await import("@/test-support/pages")).standIn(
+    "SessionSummaryCard",
+  ),
+}));
 
 /** The detail of one session, running or over, of training or of the former recording mode. */
 
@@ -213,6 +218,29 @@ describe("session detail: a training session", () => {
     // Only the former recording mode has ECG batches: nothing is asked.
     expect(argsAsked(api.ecgData.getSessionDataStats)).toEqual(["skip"]);
   });
+
+  // ANH-89: a finished session has its summary and its report on its page.
+  it.each(["completed", "failed"] as const)(
+    "mounts the summary card of a %s session",
+    async (status) => {
+      answer(api.sessions.getSession, session({ status }));
+      answer(api.training.getTrainingSession, training({ status }));
+      await open();
+
+      expect(propsOf("SessionSummaryCard")).toEqual({ sessionId });
+    },
+  );
+
+  it.each(["pending", "active"] as const)(
+    "mounts no summary card while the session is %s",
+    async (status) => {
+      answer(api.sessions.getSession, session({ status, endedAt: undefined }));
+      answer(api.training.getTrainingSession, training({ status }));
+      await open();
+
+      expect(wasMounted("SessionSummaryCard")).toBe(false);
+    },
+  );
 
   it("dates the start and the end, and gives the length of a finished session", async () => {
     answer(api.sessions.getSession, session({ endedAt: STARTED + 3_725_000 }));
@@ -502,6 +530,7 @@ describe("session detail: a session of the former recording mode", () => {
     expect(screen.getByText(fr.sessionDetail.legacyDescription)).toBeTruthy();
     expect(screen.getByText(fr.training.kind.recording)).toBeTruthy();
     expect(wasMounted("TrainingDetailsCard")).toBe(false);
+    expect(wasMounted("SessionSummaryCard")).toBe(false);
   });
 
   it("lists the recorded channels, the batches, the length and the hours of the data", async () => {

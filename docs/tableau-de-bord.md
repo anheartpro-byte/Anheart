@@ -477,11 +477,54 @@ Nom du pratiquant (ou « Pratiquant non précisé »), machine, statut, bandeau
 d'échec avec la raison. Pour une séance **interrompue, fin inconnue** : un
 bandeau orange qui le dit, avec la date à laquelle le serveur l'a marquée,
 la durée « Fin inconnue » au lieu de « En cours », et le bouton **Voir en
-direct**, d'où son arrêt peut encore être demandé. Pour une séance d'entraînement, la carte
+direct**, d'où son arrêt peut encore être demandé. Pour une séance
+d'entraînement terminée (`completed` ou `failed`), la carte **Résumé de la
+séance** (ANH-89, ci-dessous) ; une séance interrompue n'est pas terminée et
+n'en a pas. Pour toute séance d'entraînement, la carte
 **Entraînement** : type, origine, programme, zone cible, durée prévue, FC max du
 pratiquant, opérateur, motif de fin, et les courbes de télémétrie. Suivent les
 cartes « Informations patient », « Chronologie de la session » et, s'il y en a,
 « Notes de session ».
+
+**Résumé de la séance** (`components/training/SessionSummaryCard.tsx`, lu par
+`sessionReports.getSummary`, sous les droits de la séance) : durée, temps en
+zone (et sa part de la durée, avec le temps en dessous et au-dessus), FC
+confirmée min / moyenne / max, vitesse max du bras et du moteur, g max et
+variation de g max au rayon de référence et à la pointe du pied, verdicts de
+sécurité (règle, action, instant), raison et règle de fin, avertissements de
+l'enregistrement. Le badge dit d'où il vient : **Provisoire** tant qu'il est
+calculé sur la télémétrie à 1 Hz (sans g à la pointe du pied ni variation de
+g, qu'on ne lit que dans l'enregistrement), **Enregistrement** une fois
+l'enregistrement déposé et vérifié. Si l'enregistrement n'a pas pu être lu, la
+carte le dit avec la raison et garde le résumé provisoire. Tant qu'aucun
+résumé n'est calculé, elle le dit. Les définitions de chaque chiffre et leurs
+sources sont dans [convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89).
+Le bouton **Rapport PDF** ouvre le rapport de la séance.
+
+### Rapport d'une séance : `/fr/dashboard/sessions/{id}/report`
+
+Le rapport d'une séance d'entraînement, mis en page pour l'impression (ANH-89) :
+pratiquant, machine, début, type, programme, zone, statut, puis le résumé
+(mêmes chiffres que la carte, avec la date du calcul), les courbes de
+télémétrie à 1 Hz (FC face à la zone, vitesse du bras), et ce qui n'y est pas
+encore : le résultat du pré-vol (ANH-142) et le retour du passager (ANH-146).
+Il ne lit que ce que lit la page de la séance (`sessions.getSession`,
+`training.getTrainingSession`, `training.getSessionTelemetry`,
+`sessionReports.getSummary`), sous les mêmes droits, et n'en montre pas
+l'adresse du pratiquant ni l'opérateur. Les courbes sont dessinées à la
+largeur mesurée à l'écran, 640 px au plus pour tenir dans la page A4 : elles
+ne sont pas redessinées pour l'impression.
+
+- **Télécharger en PDF** ouvre l'impression du navigateur : y choisir
+  « Enregistrer au format PDF ». Le menu, l'en-tête et les boutons de la page
+  ne sont pas imprimés, la page est en A4 et claire même en thème sombre
+  (`app/globals.css`, `print:hidden`). Aucune bibliothèque PDF n'est ajoutée :
+  le fichier est celui du navigateur, et sa mise en page dépend de lui. Le
+  bouton n'est actif qu'une fois la séance terminée.
+- **Français / English** rouvre le même rapport dans l'autre langue.
+
+Le rapport est disponible pour chaque séance terminée, même avant que son
+résumé soit calculé (il le dit alors).
 
 Pour une séance de l'ancien mode d'enregistrement ECG (historique, lecture
 seule), la carte **Ancien enregistrement ECG** remplace la carte Entraînement :
@@ -498,8 +541,18 @@ réessayer. La fiche apparaît dans la liste après acceptation et rattachement
 par le webhook. Un compte déjà présent ailleurs rejoint cette organisation
 sans créer un deuxième dossier ni écraser ses champs communs.
 
-Fiche patient : identité, séances, bouton Modifier, suppression, et la carte
-**Physiologie** (voir §5.1).
+Fiche patient : identité, séances, bouton Modifier, suppression, la carte
+**Physiologie** (voir §5.1) et la carte **Historique et progression** (ANH-89,
+`components/training/RiderHistoryCard.tsx`). Celle-ci liste les séances
+terminées du pratiquant que le visiteur peut lire, 100 au plus, les plus
+récentes d'abord (`sessionReports.riderHistory`, sous les droits de chaque
+séance : un gestionnaire n'y voit que les séances des machines qu'il gère) :
+date, programme et machine, statut, durée, temps en zone et sa part, FC
+moyenne, et le lien vers le rapport. Au-dessus, le temps en zone de chaque
+séance programmée, en minutes, de la plus ancienne à la plus récente ; une
+séance sans temps en zone (manuelle, ou sans résumé encore) n'y a pas de barre.
+La nausée et le ressenti du passager n'y sont pas encore : ils viendront
+d'ANH-146, et la carte le dit.
 
 ### Utilisateurs : `/fr/dashboard/users` et `/fr/dashboard/users/{id}`
 
@@ -578,13 +631,16 @@ l'enregistrement peut encore être défait. La règle des cases est dans
 ### Rapports : `/fr/dashboard/reports`
 
 Séances terminées visibles par l'utilisateur : pratiquant, machine, date,
-durée, et le bouton **Voir** qui ouvre le détail. Elles sont servies par pages
+durée, le bouton **Voir** qui ouvre le détail et le bouton **Rapport PDF** qui
+ouvre le rapport de la séance (ANH-89). Elles sont servies par pages
 de 50, de la plus récente à la plus ancienne (`sessions.listSessionsPaginated`
 avec le statut `completed`), avec le bouton **Afficher plus** tant qu'il en
 reste ; comme pour la page Sessions, la page ne se coupe qu'après les droits.
-Il n'y a plus de rapport PDF :
-l'ancien, construit sur les données ECG, a été retiré avec le mode
-d'enregistrement ; le rapport de séance d'entraînement est à faire (ANH-89).
+L'ancien rapport PDF, construit sur les données ECG, a été retiré avec le mode
+d'enregistrement ; le rapport d'une séance d'entraînement est la page
+[Rapport d'une séance](#rapport-dune-séance--frdashboardsessionsidreport). La
+page Rapports ne liste que les séances `completed` ; une séance `failed` a
+aussi son rapport, depuis sa page et l'historique du pratiquant.
 
 ### Membres : `/fr/dashboard/members`
 
@@ -1106,7 +1162,7 @@ Pièges :
 | Compteurs du tableau de bord | Calculés par `dashboard.counters` et vérifiés par des tests Convex (deux organisations) et des tests de la page sans navigateur. Leur affichage dans un navigateur, avec une console simulée, relève de la suite de bout en bout ANH-83. Coût des lectures non mesuré sur un déploiement ([convex.md](convex.md#dashboardts-compteurs-du-tableau-de-bord-anh-159)). |
 | Libellés des actions de sécurité et de l'état du variateur | Traduits (`freeze`, `quick_stop`, `go_silent` compris). Le vocabulaire français (« Vitesse figée », « Arrêt rapide (rampe du variateur) », « Mise en silence (arrêt par le variateur) »…) reste à relire par l'équipe. |
 | Pratiquant d'une séance démarrée à la machine | Le Pi ne l'envoie pas : « Unknown » dans les listes. |
-| Rapport d'une séance d'entraînement | Pas de rapport PDF sur le site : l'ancien rapport ECG est retiré, celui des séances d'entraînement reste à faire (ANH-89). |
+| Rapport d'une séance d'entraînement (ANH-89) | Page testée dans le DOM simulé, Convex remplacé. **Jamais imprimée dans un navigateur** : la mise en page A4, le masquage du menu et le thème clair à l'impression ne sont pas vérifiés, ni le fichier PDF obtenu. Le calcul du résumé est testé en mémoire, et comparé le 14 octobre 2026 aux chiffres de la simulation sur quatre scénarios ([convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89)) ; jamais sur l'enregistrement d'une vraie séance. |
 | Pages retouchées au retrait de l'ancien mode ECG (Sessions, vue en direct, détail, Rapports, fenêtre machine) | Compilées et couvertes par `npm run test:lib` ; **pas rouvertes dans un navigateur** depuis. |
 | Pages Sessions et Rapports servies par pages (ANH-158) | Le serveur est testé en mémoire (`convex/sessionLists.test.ts`), les deux pages dans le DOM simulé, où Convex est remplacé par une doublure qui sert les pages d'une liste. **Pas ouvertes dans un navigateur, ni contre un vrai serveur** : ce que deviennent des pages déjà affichées quand une séance arrive ou change de statut pendant la lecture repose sur Convex et n'est pas rejoué. |
 | Textes encore en anglais | Messages du serveur, nom « Unknown », motif « Cancelled before start by … », fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |

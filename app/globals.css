@@ -159,6 +159,30 @@
     --sidebar-ring: oklch(0.551 0.027 264.364);
 }
 
+/*
+ * A printed page (the report of a session, ANH-89): A4, light whatever the
+ * theme on screen, without the dashboard's sidebar. What else is not printed
+ * says so itself (`print:hidden`).
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+  [data-slot="sidebar"] {
+    display: none !important;
+  }
+  .dark {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.13 0.028 261.692);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.13 0.028 261.692);
+    --muted: oklch(0.967 0.003 264.542);
+    --muted-foreground: oklch(0.45 0.027 264.364);
+    --border: oklch(0.85 0.006 264.531);
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
