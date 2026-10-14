@@ -24,12 +24,12 @@ import {
   type World,
 } from "./test.setup";
 
+/** Nothing returned: null, `[]`, or a page of a paginated query with no row. */
 function isEmpty(res: unknown): boolean {
-  return (
-    res === null ||
-    res === undefined ||
-    (Array.isArray(res) && res.length === 0)
-  );
+  if (res === null || res === undefined) return true;
+  if (Array.isArray(res)) return res.length === 0;
+  const page = (res as { page?: unknown }).page;
+  return Array.isArray(page) && page.length === 0;
 }
 
 beforeEach(mockClerkInvitations);

@@ -275,7 +275,7 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Pour une séance dont la machine dit l'âge, ce que fait la console de ce dépôt pour toute séance en cours, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). Avec une console antérieure, qui ne le dit pas : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. |
 | `machineStartedAt` | Le début tel que **la machine** l'a daté, sur son horloge (ms Unix), pour une séance dont la machine a dit l'âge. Présent seulement dans ce cas : c'est ce champ qui dit qu'une séance a un axe machine ([Deux horloges](#deux-horloges)). |
 | `channels`, `sampleRate`, `notes` | `channels` vaut `["ECG"]` pour une séance d'entraînement. `sampleRate` n'est plus écrit : il ne reste que sur les séances de l'ancien mode. `notes` contient `Occupancy: bench/occupied` pour une séance locale qui déclare l'occupation ; une attribution indisponible à l'enregistrement est également tracée. |
-| `kind` | `auto` \| `manual`. **Absent** = séance de l'ancien mode d'enregistrement ECG (historique) : `getSession`, `listSessions` et `getTrainingSession` la rapportent `recording`. Le schéma refuse d'écrire cette valeur. |
+| `kind` | `auto` \| `manual`. **Absent** = séance de l'ancien mode d'enregistrement ECG (historique) : `getSession`, `listSessions`, `listSessionsPaginated` et `getTrainingSession` la rapportent `recording`. Le schéma refuse d'écrire cette valeur. |
 | `origin` | `remote` (site) \| `local` (machine). |
 | `profileId`, `profileName`, `zoneLowBpm`, `zoneHighBpm`, `totalDurationS` | Programme lancé. |
 | `subjectHrMax`, `subjectAge`, `subjectLabel` | FC max retenue, âge, nom du pratiquant. |
@@ -285,9 +285,16 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `endReason` | Raison de fin donnée par le Pi (ou « Cancelled before start by … »). |
 
 Index : `by_user`, `by_machine`, `by_machine_and_status`,
-`by_machine_and_local_ref`, `by_started_by`, `by_status_and_organization`
-(les séances actives ou en attente d'une organisation, ou de toutes : ce que
-compte `dashboard.counters`).
+`by_machine_and_local_ref`, `by_started_by`, `by_organization`,
+`by_status_and_organization` (les séances actives ou en attente d'une
+organisation, ou de toutes : ce que compte `dashboard.counters`). Pour les
+listes de séances (ANH-158, [§5](#sessionsts-lectures-seulement)), six index
+qui finissent tous par `startedAt` : `by_started`, `by_status_and_started`,
+`by_organization_and_started`, `by_organization_and_status_and_started`,
+`by_user_and_started`, `by_machine_and_started`. Convex les construit au
+déploiement, sur les séances déjà présentes ; aucune migration n'est à lancer.
+Ils n'ont encore été poussés sur aucun déploiement : seuls les tests en mémoire
+les ont lus.
 
 Pour une nouvelle séance locale, l'attribution suit les droits courants du roster
 de la machine. Si elle ne peut pas être confirmée, la séance est conservée sans
@@ -898,9 +905,52 @@ routes d'entraînement.
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `getSession` | pratiquant ou accès machine | Détail avec patient et machine. |
-| `listSessions` | connecté | admin Anheart : toutes ; admin d'organisation : celles de son organisation ; user : les siennes ; gestionnaire : celles de ses machines. Retourne `kind` et `origin`. La limite (`limit`, 50 par défaut) s'applique **avant** le filtrage par droits, mais **dans l'organisation de l'appelant** : les séances d'une autre organisation ne remplissent jamais sa page. |
+| `listSessions` | connecté | Les `limit` (50 par défaut) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status`, `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
+| `listSessionsPaginated` | connecté | Les mêmes séances, avec les mêmes filtres, **page par page** (`paginationOpts`, pour `usePaginatedQuery`). Page Sessions (un statut par onglet) et page Rapports (`status: "completed"`). |
 | `getActiveSessionForMachine` | accès machine | Séance active. |
-| `getCompletedSessionsForUser` | connecté | Séances `completed` visibles (page Rapports). |
+| `getCompletedSessionsForUser` | connecté | Les 100 séances `completed` les plus récentes que l'appelant peut lire. Plus appelée par le site de cette version (la page Rapports lit `listSessionsPaginated`) ; gardée pour le site de la version précédente, qui l'appelle encore entre le déploiement de Convex et celui du site. |
+
+**Les droits avant la limite (ANH-158).** Les trois listes lisent la même
+requête : qui peut lire quelles séances fait partie de la requête, et la
+limite ou la page ne se coupe qu'ensuite. Une page de 50 contient donc
+50 séances que l'appelant peut lire (moins à la fin de la liste), jamais les
+50 dernières de la base filtrées après coup. Avant ce ticket, une séance d'un
+patient ou d'un gestionnaire pouvait manquer à sa liste parce que des séances
+plus récentes d'autres personnes remplissaient la page.
+
+| Appelant | Ce qu'il lit | Index lu |
+|---|---|---|
+| admin Anheart | toutes les séances, de toutes les organisations | `by_started` (ou `by_status_and_started` avec un statut) |
+| admin d'organisation | les séances de son organisation | `by_organization_and_started` (ou `by_organization_and_status_and_started`) |
+| gestionnaire | dans son organisation, celles des machines qu'il gère (`machine_gestionnaires`, machines de cette organisation) et celles dont il est le pratiquant | le même index que l'admin d'organisation, avec ce filtre dans la requête |
+| user | dans son organisation, celles dont il est le pratiquant | `by_user_and_started` |
+
+Avec `machineId`, la requête lit `by_machine_and_started` ; avec `userId`,
+`by_user_and_started` ; les droits ci-dessus s'appliquent de la même façon.
+L'ordre est toujours le début de la séance (`startedAt`) du plus récent au plus
+ancien, puis la date d'écriture pour deux séances commencées au même instant.
+Chaque séance de la page est encore passée par `canAccessSession`, la règle de
+toutes les autres lectures d'une séance ([§3](#les-règles)) : le filtre de la
+requête est cette même règle, donc ce contrôle n'enlève rien tant que les deux
+s'accordent ; s'ils divergeaient, une séance serait omise plutôt que montrée.
+Une séance sans organisation (antérieure à la migration) n'est lue que par
+l'admin Anheart, et une séance dont la machine n'existe plus non plus.
+
+*Le cas du gestionnaire.* Le ticket proposait de lire `by_machine` pour chaque
+machine du gestionnaire et de fusionner les flux par date. Ce n'est pas ce que
+fait le code : une fusion de plusieurs index se pagine avec un curseur écrit à
+la main, que Convex ne sait pas garder stable quand une séance arrive pendant
+la lecture (la page déjà affichée change de bornes, et une séance peut
+disparaître entre deux pages jusqu'au rechargement). La requête lit donc
+l'index de l'organisation, du plus récent au plus ancien, et garde au passage
+les séances de ses machines et les siennes ; la pagination reste celle de
+Convex, qui garde les pages contiguës. Le coût : pour remplir une page, Convex
+lit aussi les séances de l'organisation que le gestionnaire ne voit pas. Dans
+un centre où il gère la plupart des machines, c'est presque rien ; dans un
+centre où il en gère une sur vingt, une page lit environ vingt fois plus de
+séances qu'elle n'en montre. Quand une page lit trop, le serveur Convex demande
+de la couper en deux, ce que fait `usePaginatedQuery`. Ce coût n'a été mesuré
+sur aucun déploiement.
 
 ### `ecgData.ts` et `sessionSummaries.ts` (historique, lecture seule)
 
@@ -1615,6 +1665,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
+| `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). |
 | `convex/gestionnairePatients.test.ts` | `users.assignPatientsToGestionnaire` : ajout seul, retrait seul, les deux, liste inchangée (aucune ligne réécrite), identifiant répété, patient d'une autre organisation traité comme un compte inconnu, admin d'une autre organisation refusé comme pour un gestionnaire inconnu, deux enregistrements successifs (ANH-208). |
 | `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |
@@ -1644,16 +1695,19 @@ Les résultats :
   les fonctions publiques n'ont **aucun code d'erreur stable**, seulement des
   messages anglais ; seules les routes machine en ont, section 6) ;
 - `success` : l'effet ou la donnée renvoyée est vérifié ;
-- `empty` : la requête renvoie `null` ou `[]` (pas d'accès, rien n'est exposé) ;
+- `empty` : la requête renvoie `null`, `[]` ou une page vide (pas d'accès, rien
+  n'est exposé) ;
 - `filtered` : la liste renvoyée contient la donnée du demandeur et exclut
   celle des autres.
 
 Une cellule marquée `knownDefect` est un **défaut inoffensif connu** : le test
 affirme la politique **voulue** et tourne avec `it.fails`, donc il passe tant
 que le défaut existe et échoue bruyamment le jour où le comportement est corrigé.
-Une seule cellule l'est encore : `sessions.listSessions` applique la limite
-avant le filtre par droits, ce qui peut cacher à un patient sa propre séance
-sans rien montrer d'autrui (la liste est refaite par ANH-158). Celles de
+Aucune cellule ne l'est plus. La dernière, `sessions.listSessions` qui
+appliquait la limite avant le filtre par droits et pouvait cacher à un patient
+sa propre séance, est une cellule ordinaire depuis ANH-158 : avec une limite de
+deux et trois séances plus récentes d'un autre pratiquant, le patient et son
+gestionnaire voient encore la leur. Celles de
 `sessionSummaries.getSummaryWithEcg` ne le sont plus depuis ANH-183 : la
 requête renvoyait le document stocké, que son validateur de retour refusait,
 et échouait pour tout lecteur autorisé ; elle renvoie maintenant les champs

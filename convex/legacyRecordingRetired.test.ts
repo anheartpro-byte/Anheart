@@ -98,13 +98,14 @@ describe("ANH-135 no function belongs to the recording mode any more", () => {
     expect(Object.keys(sources)).toContain(MIGRATION);
   });
 
-  it("keeps the sessions module to its four readers", async () => {
+  it("keeps the sessions module to its five readers", async () => {
     const sessions = await import("./sessions");
     expect(Object.keys(sessions).sort()).toEqual([
       "getActiveSessionForMachine",
       "getCompletedSessionsForUser",
       "getSession",
       "listSessions",
+      "listSessionsPaginated",
     ]);
   });
 
