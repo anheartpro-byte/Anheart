@@ -170,31 +170,46 @@ ordre**. Le détail des réglages est dans
    ne voit jamais l'organisation choisie.
 3. **Site** : mettre en ligne cette version, qui porte le sélecteur
    d'organisation et la page Membres. Activer Organizations avant (étape 2).
-   Ce que fait le sélecteur sur une instance où Organizations est désactivé
-   (erreur, avertissement ou rien) **n'est pas vérifié** : les paquets npm du
-   site (`@clerk/nextjs` 6.39, `@clerk/clerk-react` 5.61, `@clerk/shared` 3.48)
-   ne contrôlent pas ce réglage ; `OrganizationSwitcher` confie l'affichage à
-   `clerk-js`, que le navigateur charge à l'exécution depuis l'API Frontend de
-   l'instance (`/npm/@clerk/clerk-js@5/dist/clerk.browser.js`), et c'est ce
-   script qui décide. Aucune instance sans Organizations n'a été essayée.
+   Les paquets npm du site (`@clerk/nextjs` 6.39, `@clerk/clerk-react` 5.61,
+   `@clerk/shared` 3.48) ne contrôlent pas ce réglage : `OrganizationSwitcher`
+   confie l'affichage à `clerk-js`, que le navigateur charge à l'exécution
+   depuis l'API Frontend de l'instance
+   (`/npm/@clerk/clerk-js@5/dist/clerk.browser.js`, la 5.128.0 au
+   2026-10-14). D'après le code de cette version, **lu et non observé** :
+   quand Organizations est désactivé, le sélecteur n'est pas monté. Sur une
+   instance de développement, une fenêtre propose d'activer Organizations (la
+   page se recharge si on l'active), et la fermer lève une erreur (« The
+   <OrganizationSwitcher/> cannot be rendered when the feature is turned
+   off… ») ; sur une instance de production, rien ne s'affiche. La page
+   Membres (`OrganizationProfile`) passe par le même contrôle. Aucune instance
+   sans Organizations n'a été essayée, et une autre version 5 peut faire
+   autrement.
 4. **Créer l'organisation Anheart dans Clerk** et noter son identifiant
    (`org_…`). Le webhook ne doit **pas** encore être configuré : il créerait
-   une seconde organisation « Anheart », vide, au lieu de reprendre celle de
-   l'étape 1. **N'y ajouter personne avant l'étape 6**, pas même un
-   propriétaire choisi à la création : Clerk n'envoie un événement qu'aux
-   endpoints qui existent quand il se produit, et ne rejoue pas les
-   précédents. Convex ne connaît pas l'appartenance d'un membre ajouté plus
-   tôt ; un gestionnaire, par exemple, ne peut alors recevoir ni machine ni
-   patient. Si c'est déjà fait : après l'étape 6, changer le rôle de ce membre
-   dans Clerk puis le remettre ; chaque changement est un événement, et le
-   premier crée l'appartenance dans Convex.
+   pour elle une seconde organisation « Anheart », distincte de celle de
+   l'étape 1 qui porte les données existantes. **N'y ajouter personne avant
+   l'étape 6**, pas même un propriétaire choisi à la création : Clerk n'envoie
+   un événement qu'aux endpoints qui existent quand il se produit, et ne
+   rejoue pas les précédents. Convex ne connaît pas l'appartenance d'un membre
+   ajouté plus tôt ; un gestionnaire, par exemple, ne peut alors recevoir ni
+   machine ni patient. Si c'est déjà fait : après l'étape 6, changer le rôle
+   de ce membre dans Clerk puis le remettre. Chaque changement est un
+   événement ; le premier crée l'appartenance dans Convex, ou met à jour celle
+   que la migration avait donnée à un compte existant. Si ce membre est le
+   seul admin de l'organisation (le propriétaire choisi à la création, par
+   exemple), inviter d'abord un second admin (étape 7) : Clerk peut refuser
+   de retirer son rôle au dernier membre qui gère les membres (non vérifié).
 5. **Poser `ANHEART_ORG_ID`** sur le déploiement Convex
    (`npx convex env set ANHEART_ORG_ID org_…`), puis relancer la migration :
    elle relie l'organisation par défaut à celle de Clerk. Vérifier dans le
-   tableau de bord Convex qu'il n'existe **qu'une** organisation « anheart »,
-   avec ce `clerkOrgId`. Si le webhook l'avait déjà reçue, la migration
-   s'arrête sans rien écrire (« Two Anheart organisations… ») : la sortie est
-   décrite dans
+   tableau de bord Convex qu'**une seule** organisation porte ce `clerkOrgId`
+   (c'est lui qui compte : le slug peut devenir celui de Clerk, par exemple
+   après une réparation) et qu'aucune n'a le slug `anheart` sans
+   `clerkOrgId`. Si le webhook l'avait déjà reçue, la migration
+   s'arrête sans rien écrire (« Two Anheart organisations… ») : la sortie,
+   une description sans écriture puis une application qui recopie le nom de
+   l'organisation décrite, après avoir vérifié dans Clerk que c'est bien
+   celle d'Anheart, est dans
    [convex.md, « Sortir de deux organisations Anheart »](convex.md#sortir-de-deux-organisations-anheart).
    Dès cette étape, un jeton sans organisation est refusé, seuls les
    `org:admin` d'Anheart sont admins Anheart, et les rôles ne se changent plus

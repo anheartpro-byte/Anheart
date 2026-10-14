@@ -1497,8 +1497,9 @@ mono-organisation.
 
 **Avant de configurer le webhook décrit plus bas.** Un webhook actif avant
 `ANHEART_ORG_ID` reçoit l'organisation Anheart de Clerk comme une organisation
-quelconque et lui crée sa propre ligne, vide. La migration de l'étape 2
-s'arrête alors sans rien écrire (« Two Anheart organisations… ») au lieu de
+quelconque et lui crée sa propre ligne, distincte de l'organisation par
+défaut qui porte les données existantes (avec ses membres si on en a ajouté
+dans Clerk). La migration de l'étape 2 s'arrête alors sans rien écrire (« Two Anheart organisations… ») au lieu de
 relier la mauvaise ligne : les machines, séances et comptes existants restent
 dans l'organisation par défaut. Pour en sortir :
 [« Sortir de deux organisations Anheart »](#sortir-de-deux-organisations-anheart).
@@ -1515,8 +1516,10 @@ Ordre complet, côté site compris :
 2. Relancer la migration (même commande qu'en A) : elle relie l'organisation
    par défaut à cette organisation Clerk (`clerkOrgId`) au lieu d'en créer une
    autre. Sans cela, les jetons de l'organisation Anheart sont refusés (« This
-   organization is not known to the server yet »). Vérifier qu'il n'existe
-   qu'une organisation de slug `anheart`, avec ce `clerkOrgId`.
+   organization is not known to the server yet »). Vérifier qu'**une seule**
+   organisation porte ce `clerkOrgId` (c'est lui qui compte : le slug peut
+   devenir celui de Clerk, par exemple après une réparation) et qu'aucune n'a
+   le slug `anheart` sans `clerkOrgId`.
 3. Configurer le webhook ([ci-dessous](#webhook-clerk-vers-le-miroir)), puis
    seulement inviter le premier admin dans l'organisation Anheart depuis
    Clerk, avec le rôle `org:admin`, et faire entrer chaque compte existant
@@ -1538,16 +1541,46 @@ l'événement n'a pas été reçu, une organisation inconnue reste refusée.
 
 Si le webhook a reçu l'organisation Anheart de Clerk avant que
 `ANHEART_ORG_ID` soit définie, il lui a créé sa propre ligne, et la migration
-s'arrête (« Two Anheart organisations… »). `ANHEART_ORG_ID` étant posée,
-lancer :
+s'arrête (« Two Anheart organisations… »). La réparation se fait en deux
+temps, `ANHEART_ORG_ID` étant posée. C'est une mutation **interne** (le site
+ne peut pas l'appeler).
+
+**1. Décrire, sans rien écrire** :
 
 ```bash
 npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{}'
 ```
 
-C'est une mutation **interne** (le site ne peut pas l'appeler), en une seule
-transaction. Elle n'agit que si la ligne créée par le webhook ne porte que ce
-que le webhook écrit, des appartenances et des comptes. Alors :
+La réponse `status: "dry_run"` dit ce que la réparation ferait :
+
+- `absorbs` : la ligne qui serait absorbée, celle dont `clerkOrgId` vaut
+  `ANHEART_ORG_ID` (`name`, `slug`, `clerkOrgId`, nombre d'appartenances
+  `memberships` et d'admins actifs `admins`) ;
+- `links` : l'organisation par défaut qui serait reliée à Clerk (`name`,
+  `slug`, en principe « Anheart » et `anheart`) ;
+- `movedMemberships`, `mergedMemberships`, `movedUsers` : les nombres
+  d'appartenances déplacées ou fusionnées et de comptes déplacés.
+
+**Avant d'appliquer, vérifier dans le tableau de bord Clerk que `absorbs`
+est bien l'organisation Anheart** : même nom, même slug, même identifiant,
+et des admins qui sont ceux d'Anheart. Rien dans la base ne distingue
+l'organisation Anheart d'une organisation cliente : si `ANHEART_ORG_ID`
+désigne par erreur une cliente déjà reçue par le webhook, la migration
+s'arrête de la même façon, et appliquer la réparation absorberait ce client,
+dont l'identifiant Clerk désignerait ensuite toutes les données d'avant la
+migration, données de santé comprises. Dans ce cas, ne pas appliquer :
+corriger `ANHEART_ORG_ID` (`npx convex env set ANHEART_ORG_ID org_…`) et
+relancer la description.
+
+**2. Appliquer**, en recopiant exactement le nom que la description a donné
+dans `absorbs.name` :
+
+```bash
+npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{"apply": true, "expectedName": "<absorbs.name>"}'
+```
+
+Sans `expectedName`, ou avec un autre nom, elle refuse sans rien écrire.
+Sinon, en une seule transaction :
 
 - chaque appartenance de cette ligne passe à l'organisation par défaut. Un
   compte qui y avait déjà la sienne (la migration en a donné une à chaque
@@ -1561,16 +1594,15 @@ que le webhook écrit, des appartenances et des comptes. Alors :
   le webhook avait reçus. Son slug devient donc celui de Clerk, qui peut ne
   pas être `anheart`.
 
-Elle répond `repaired: true` avec le nombre d'appartenances déplacées
-(`movedMemberships`), fusionnées (`mergedMemberships`) et de comptes déplacés
-(`movedUsers`). Relancer ensuite la migration (même commande qu'en A) : elle
-doit répondre avec le même `organizationId`. Vérifier dans le tableau de bord
-Convex qu'une seule organisation porte ce `clerkOrgId` et qu'aucune n'a le
-slug `anheart` sans `clerkOrgId`. Les webhooks suivants écrivent dans
-l'organisation par défaut ; une livraison plus ancienne que ce qu'elle a
-repris ne change rien.
+Elle répond `status: "repaired"`, avec l'`organizationId` de l'organisation
+par défaut et les mêmes trois nombres. Relancer ensuite la migration (même
+commande qu'en A) : elle doit répondre avec le même `organizationId`.
+Vérifier dans le tableau de bord Convex qu'une seule organisation porte ce
+`clerkOrgId` et qu'aucune n'a le slug `anheart` sans `clerkOrgId`. Les
+webhooks suivants écrivent dans l'organisation par défaut ; une livraison
+plus ancienne que ce qu'elle a repris ne change rien.
 
-Elle refuse, sans rien écrire :
+La description comme l'application refusent, sans rien écrire :
 
 - si `ANHEART_ORG_ID` n'est pas définie ;
 - si Clerk a supprimé l'organisation que nomme `ANHEART_ORG_ID` : vérifier la
@@ -1583,9 +1615,9 @@ Elle refuse, sans rien écrire :
   procédure n'est écrite pour ce cas, qui revient au responsable produit.
 
 Relancée après une réparation, ou quand l'ordre de l'amorçage a été suivi,
-elle répond `repaired: false` et ne change rien. Comme la migration, elle n'a
-tourné qu'en mémoire, dans les tests (`convex/multiOrganizationMigration.test.ts`),
-sur aucun déploiement.
+elle répond `status: "nothing_to_repair"` et ne change rien. Comme la
+migration, elle n'a tourné qu'en mémoire, dans les tests
+(`convex/multiOrganizationMigration.test.ts`), sur aucun déploiement.
 
 ### Webhook Clerk vers le miroir
 
