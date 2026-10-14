@@ -100,7 +100,8 @@
     "all": "Tous",
     "actions": "Actions",
     "view": "Voir",
-    "name": "Nom"
+    "name": "Nom",
+    "showMore": "Afficher plus"
   },
   "auth": {
     "signIn": "Se connecter",

@@ -8,8 +8,10 @@ import en from "@/messages/en.json";
 import fr from "@/messages/fr.json";
 import {
   answer,
+  argsAsked,
   lastArgsAsked,
   NOW,
+  pagesOf,
   renderPage,
   signedInAs,
 } from "@/test-support/pages";
@@ -24,11 +26,13 @@ vi.mock(
   async () => (await import("@/test-support/pages")).navigation,
 );
 
-/** The completed sessions the visitor may read, each leading to its detail. */
+/**
+ * The completed sessions the visitor may read, each leading to its detail.
+ * The server lists them page by page, newest start first (ANH-158).
+ */
 
-type Completed = FunctionReturnType<
-  typeof api.sessions.getCompletedSessionsForUser
->[number];
+const LIST = api.sessions.listSessionsPaginated;
+type Completed = FunctionReturnType<typeof LIST>["page"][number];
 
 const STARTED = NOW - 86_400_000;
 
@@ -39,11 +43,17 @@ function completed(id: string, overrides: Partial<Completed> = {}): Completed {
     startedAt: STARTED,
     endedAt: STARTED + 30 * 60_000,
     channels: [],
-    notes: undefined,
     patientName: "Rose Rider",
     machineName: "Centri Paris",
+    kind: "auto",
+    origin: "remote",
     ...overrides,
   };
+}
+
+/** The server lists these completed sessions. */
+function serverLists(...sessions: Completed[]) {
+  answer(LIST, pagesOf(sessions));
 }
 
 /** The card of the report whose title ends with `reference`. */
@@ -53,15 +63,18 @@ function report(reference: string) {
 }
 
 describe("reports", () => {
-  it("asks for the completed sessions of the visitor, and shows nothing until they and the visitor are known", async () => {
+  it("asks for the 50 newest completed sessions of the visitor, and shows nothing until they and the visitor are known", async () => {
     signedInAs("user");
-    answer(api.sessions.getCompletedSessionsForUser, undefined);
+    answer(LIST, undefined);
     const view = await renderPage(<ReportsPage />);
-    expect(lastArgsAsked(api.sessions.getCompletedSessionsForUser)).toEqual({});
+    expect(lastArgsAsked(LIST)).toEqual({
+      status: "completed",
+      paginationOpts: { numItems: 50, cursor: null },
+    });
     expect(screen.queryByRole("heading")).toBeNull();
     expect(screen.queryByText(fr.reports.noReports)).toBeNull();
 
-    answer(api.sessions.getCompletedSessionsForUser, []);
+    serverLists();
     answer(api.users.getCurrentUser, undefined);
     await view.refresh();
     expect(screen.queryByRole("heading")).toBeNull();
@@ -75,7 +88,7 @@ describe("reports", () => {
 
   it("says so when there is no report", async () => {
     signedInAs("user");
-    answer(api.sessions.getCompletedSessionsForUser, []);
+    serverLists();
     await renderPage(<ReportsPage />);
 
     expect(screen.getByText(fr.reports.noReports)).toBeTruthy();
@@ -84,14 +97,14 @@ describe("reports", () => {
 
   it("shows each session with a reference, its rider, its machine, its date and its length", async () => {
     signedInAs("gestionnaire");
-    answer(api.sessions.getCompletedSessionsForUser, [
+    serverLists(
       completed("k57abcd1234efgh5678"),
       completed("k57zzzz0000yyyy1111", {
         patientName: "Remi Martin",
         machineName: "Centri Lyon",
         endedAt: STARTED + 44 * 60_000 + 40_000,
       }),
-    ]);
+    );
     await renderPage(<ReportsPage />);
 
     const first = report("EFGH5678");
@@ -111,9 +124,7 @@ describe("reports", () => {
 
   it("leads from each report to the detail of its session", async () => {
     signedInAs("user");
-    answer(api.sessions.getCompletedSessionsForUser, [
-      completed("k57abcd1234efgh5678"),
-    ]);
+    serverLists(completed("k57abcd1234efgh5678"));
     await renderPage(<ReportsPage />);
 
     const link = report("EFGH5678").getByRole("link");
@@ -130,9 +141,7 @@ describe("reports", () => {
     "shows a dash for the length of a session that %s",
     async (_name, overrides) => {
       signedInAs("user");
-      answer(api.sessions.getCompletedSessionsForUser, [
-        completed("k57abcd1234efgh5678", overrides),
-      ]);
+      serverLists(completed("k57abcd1234efgh5678", overrides));
       await renderPage(<ReportsPage />);
 
       expect(report("EFGH5678").getByText("-")).toBeTruthy();
@@ -142,9 +151,7 @@ describe("reports", () => {
 
   it("writes the date as the visitor's language does", async () => {
     signedInAs("user");
-    answer(api.sessions.getCompletedSessionsForUser, [
-      completed("k57abcd1234efgh5678"),
-    ]);
+    serverLists(completed("k57abcd1234efgh5678"));
     await renderPage(<ReportsPage />, { locale: "en" });
 
     const card = within(
@@ -166,12 +173,63 @@ describe("reports", () => {
     "shows a %s the sessions the server lists for them",
     async (role) => {
       signedInAs(role);
-      answer(api.sessions.getCompletedSessionsForUser, [
-        completed("k57abcd1234efgh5678"),
-      ]);
+      serverLists(completed("k57abcd1234efgh5678"));
       await renderPage(<ReportsPage />);
 
       expect(report("EFGH5678").getByText("Rose Rider")).toBeTruthy();
     },
   );
+});
+
+describe("reports: page by page", () => {
+  /** 70 completed sessions, newest first, as the server lists them. */
+  const many = Array.from({ length: 70 }, (_, i) =>
+    completed(`k57report${String(i).padStart(10, "0")}`, {
+      startedAt: STARTED - i * 60_000,
+    }),
+  );
+  const cards = () => screen.getAllByText(fr.reports.view);
+
+  it("shows the first 50 reports, then the next ones at 'Show more'", async () => {
+    signedInAs("gestionnaire");
+    serverLists(...many);
+    const { user } = await renderPage(<ReportsPage />);
+    expect(cards()).toHaveLength(50);
+
+    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+
+    expect(argsAsked(LIST).at(-1)).toEqual({
+      status: "completed",
+      paginationOpts: { numItems: 50, cursor: "50" },
+    });
+    expect(cards()).toHaveLength(70);
+    expect(
+      screen.queryByRole("button", { name: fr.common.showMore }),
+    ).toBeNull();
+  });
+
+  it("keeps the reports shown and offers nothing more while the next page loads", async () => {
+    signedInAs("user");
+    answer(LIST, (args) =>
+      args.paginationOpts.cursor === null ? pagesOf(many)(args) : undefined,
+    );
+    const { user } = await renderPage(<ReportsPage />);
+
+    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+
+    expect(cards()).toHaveLength(50);
+    const waiting = screen.getByRole("button", { name: fr.common.loading });
+    expect((waiting as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("offers no 'Show more' when every report is shown", async () => {
+    signedInAs("user");
+    serverLists(...many.slice(0, 50));
+    await renderPage(<ReportsPage />);
+
+    expect(cards()).toHaveLength(50);
+    expect(
+      screen.queryByRole("button", { name: fr.common.showMore }),
+    ).toBeNull();
+  });
 });

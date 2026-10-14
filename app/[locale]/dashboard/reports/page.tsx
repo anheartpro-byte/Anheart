@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations, useLocale } from "next-intl";
-import { useQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,12 +10,26 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { FileText, Calendar, Clock, User, Cpu, Eye } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 
+/** Reports asked for at once: the first page, then each "Show more". */
+const PAGE_SIZE = 50;
+
 export default function ReportsPage() {
   const t = useTranslations("reports");
+  const tCommon = useTranslations("common");
   const user = useQuery(api.users.getCurrentUser);
-  const sessions = useQuery(api.sessions.getCompletedSessionsForUser);
+  // The completed sessions the visitor may read, newest start first, page by
+  // page: an older one is reached with "Show more".
+  const {
+    results: sessions,
+    status,
+    loadMore,
+  } = usePaginatedQuery(
+    api.sessions.listSessionsPaginated,
+    { status: "completed" },
+    { initialNumItems: PAGE_SIZE },
+  );
 
-  if (user === undefined || sessions === undefined) {
+  if (user === undefined || status === "LoadingFirstPage") {
     return <ReportsPageSkeleton />;
   }
 
@@ -26,7 +40,7 @@ export default function ReportsPage() {
         <p className="text-muted-foreground">{t("description")}</p>
       </div>
 
-      {sessions && sessions.length > 0 ? (
+      {sessions.length > 0 ? (
         <div className="grid gap-4">
           {sessions.map((session) => (
             <SessionReportCard key={session._id} session={session} />
@@ -39,6 +53,20 @@ export default function ReportsPage() {
             <p className="text-muted-foreground">{t("noReports")}</p>
           </CardContent>
         </Card>
+      )}
+
+      {(status === "CanLoadMore" || status === "LoadingMore") && (
+        <div className="flex justify-center">
+          <Button
+            variant="outline"
+            disabled={status === "LoadingMore"}
+            onClick={() => loadMore(PAGE_SIZE)}
+          >
+            {status === "LoadingMore"
+              ? tCommon("loading")
+              : tCommon("showMore")}
+          </Button>
+        </div>
       )}
     </div>
   );

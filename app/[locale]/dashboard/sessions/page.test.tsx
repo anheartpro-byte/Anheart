@@ -13,6 +13,7 @@ import {
   answer,
   argsAsked,
   NOW,
+  pagesOf,
   renderPage,
   router,
   takeConsoleErrors,
@@ -30,10 +31,34 @@ vi.mock(
 
 /**
  * The list of sessions: what a manager opens to find a session that is
- * running, and the way into its live view.
+ * running, and the way into its live view. The server lists them page by
+ * page, newest start first, the sessions of one status per tab (ANH-158).
  */
 
-type Listed = FunctionReturnType<typeof api.sessions.listSessions>[number];
+const LIST = api.sessions.listSessionsPaginated;
+type Listed = FunctionReturnType<typeof LIST>["page"][number];
+
+/** The server lists these sessions, whatever the tab. */
+function serverLists(...sessions: Listed[]) {
+  answer(LIST, pagesOf(sessions));
+}
+
+/** The server lists these sessions, each tab those of its status. */
+function serverListsByStatus(...sessions: Listed[]) {
+  answer(LIST, (args) =>
+    pagesOf(
+      sessions.filter(
+        (s) => args.status === undefined || s.status === args.status,
+      ),
+    )(args),
+  );
+}
+
+/** What the page asked of the server for a first page, with these filters. */
+const firstPage = (filters: object = {}) => ({
+  ...filters,
+  paginationOpts: { numItems: 50, cursor: null },
+});
 
 function listed(name: string, overrides: Partial<Listed> = {}): Listed {
   return {
@@ -83,31 +108,44 @@ function patientsListed(): string[] {
 }
 
 describe("sessions list: what it asks and shows", () => {
-  it("asks for the last 100 sessions, once for all tabs", async () => {
-    answer(api.sessions.listSessions, [running]);
+  it("asks for the 50 newest sessions, then for those of the status of the tab chosen", async () => {
+    serverLists(running);
     const { user } = await renderPage(<SessionsPage />);
+    expect(argsAsked(LIST)).toContainEqual(firstPage());
+    expect(argsAsked(LIST)).not.toContainEqual(
+      firstPage({ status: "completed" }),
+    );
+
     await user.click(screen.getByRole("tab", { name: fr.sessions.completed }));
 
+    expect(argsAsked(LIST).at(-1)).toEqual(firstPage({ status: "completed" }));
+    // Only first pages were asked: nobody asked for more.
     expect(
-      new Set(
-        argsAsked(api.sessions.listSessions).map((a) => JSON.stringify(a)),
+      argsAsked(LIST).every(
+        (args) =>
+          (args as ReturnType<typeof firstPage>).paginationOpts.cursor === null,
       ),
-    ).toEqual(new Set([JSON.stringify({ limit: 100 })]));
+    ).toBe(true);
   });
 
-  it("shows no table and no count while the list is loading", async () => {
-    answer(api.sessions.listSessions, undefined);
+  it("shows the title and the tabs, but no table and no count, while the first page loads", async () => {
+    answer(LIST, undefined);
     await renderPage(<SessionsPage />);
 
     expect(
-      screen.queryByRole("heading", { name: fr.sessions.title }),
-    ).toBeNull();
+      screen.getByRole("heading", { name: fr.sessions.title }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("tab")).toHaveLength(5);
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByText(fr.sessions.noSessions)).toBeNull();
+    expect(screen.queryByText(/sessions$/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: fr.common.showMore }),
+    ).toBeNull();
   });
 
   it("says so when there is no session", async () => {
-    answer(api.sessions.listSessions, []);
+    serverLists();
     await renderPage(<SessionsPage />);
 
     expect(screen.getByText(fr.sessions.noSessions)).toBeTruthy();
@@ -116,7 +154,7 @@ describe("sessions list: what it asks and shows", () => {
   });
 
   it("shows each session with its rider, machine, kind, origin and status", async () => {
-    answer(api.sessions.listSessions, [running, failed]);
+    serverLists(running, failed);
     await renderPage(<SessionsPage />);
 
     expect(screen.getByText("2 sessions")).toBeTruthy();
@@ -134,14 +172,14 @@ describe("sessions list: what it asks and shows", () => {
   it("shows a status the catalog does not know as the server sent it", async () => {
     // A status a later server could add: the list declares it a plain string.
     const unknown = "aborted" as Listed["status"];
-    answer(api.sessions.listSessions, [listed("E", { status: unknown })]);
+    serverLists(listed("E", { status: unknown }));
     await renderPage(<SessionsPage />);
 
     expect(within(rowOf("Patient E")).getByText("aborted")).toBeTruthy();
   });
 
   it("dates the start in the visitor's language", async () => {
-    answer(api.sessions.listSessions, [finished]);
+    serverLists(finished);
     const french = await renderPage(<SessionsPage />);
     expect(
       within(rowOf("Patient B")).getByText(
@@ -168,12 +206,12 @@ describe("sessions list: what it asks and shows", () => {
   ])(
     "shows the length of a finished session (%s)",
     async (_name, ms, shown) => {
-      answer(api.sessions.listSessions, [
+      serverLists(
         listed("B", {
           startedAt: NOW - 7_200_000,
           endedAt: NOW - 7_200_000 + ms,
         }),
-      ]);
+      );
       await renderPage(<SessionsPage />);
 
       expect(within(rowOf("Patient B")).getByText(shown)).toBeTruthy();
@@ -183,7 +221,7 @@ describe("sessions list: what it asks and shows", () => {
   // Known and filed: the time since the start is counted on this computer's
   // clock, not on the server's. This is what the page does today.
   it("counts the time since the start of a session that has not ended, on this computer's clock", async () => {
-    answer(api.sessions.listSessions, [running]);
+    serverLists(running);
     await renderPage(<SessionsPage />);
 
     const since = formatDistanceToNow(running.startedAt, { locale: frLocale });
@@ -216,7 +254,7 @@ describe("sessions list: when the server refuses the list", () => {
   // page under app/ has an error screen of its own: the error reaches
   // whatever surrounds the page.
   it("has no error state of its own: the failure reaches what surrounds the page", async () => {
-    answer(api.sessions.listSessions, () => {
+    answer(LIST, () => {
       throw new Error("User not found");
     });
     await renderPage(
@@ -235,7 +273,7 @@ describe("sessions list: when the server refuses the list", () => {
 
 describe("sessions list: the way to a session", () => {
   it("offers the live view of an active session, and the detail of any other", async () => {
-    answer(api.sessions.listSessions, [running, finished, failed, waiting]);
+    serverLists(running, finished, failed, waiting);
     await renderPage(<SessionsPage />);
 
     const live = within(rowOf("Patient A")).getByRole("link");
@@ -255,7 +293,7 @@ describe("sessions list: the way to a session", () => {
   });
 
   it("opens the live view when the row of an active session is clicked", async () => {
-    answer(api.sessions.listSessions, [running, finished]);
+    serverLists(running, finished);
     const { user } = await renderPage(<SessionsPage />);
 
     await user.click(screen.getByText("Machine A"));
@@ -272,7 +310,7 @@ describe("sessions list: the way to a session", () => {
   ])(
     "opens the detail when the row of a %s session is clicked",
     async (_name, session) => {
-      answer(api.sessions.listSessions, [session]);
+      serverLists(session);
       const { user } = await renderPage(<SessionsPage />);
 
       await user.click(screen.getByText(session.machineName));
@@ -290,38 +328,48 @@ describe("sessions list: tabs and search", () => {
       "all",
       fr.common.all,
       ["Patient A", "Patient B", "Patient C", "Patient D"],
+      {},
     ],
-    ["active", fr.sessions.active, ["Patient A"]],
-    ["completed", fr.sessions.completed, ["Patient B"]],
-    ["failed", fr.sessions.failed, ["Patient C"]],
+    ["pending", fr.sessions.pending, ["Patient D"], { status: "pending" }],
+    ["active", fr.sessions.active, ["Patient A"], { status: "active" }],
+    [
+      "completed",
+      fr.sessions.completed,
+      ["Patient B"],
+      { status: "completed" },
+    ],
+    ["failed", fr.sessions.failed, ["Patient C"], { status: "failed" }],
   ])(
-    "the %s tab lists the sessions of that status and counts them",
-    async (_name, tab, expected) => {
-      answer(api.sessions.listSessions, [running, finished, failed, waiting]);
+    "the %s tab asks the server for the sessions of that status, lists them and counts them",
+    async (_name, tab, expected, filters) => {
+      serverListsByStatus(running, finished, failed, waiting);
       const { user } = await renderPage(<SessionsPage />);
 
       await user.click(screen.getByRole("tab", { name: tab }));
 
+      expect(argsAsked(LIST).at(-1)).toEqual(firstPage(filters));
       expect(patientsListed()).toEqual(expected);
       expect(screen.getByText(`${expected.length} sessions`)).toBeTruthy();
     },
   );
 
-  it("has no tab for the sessions waiting for the machine: they are under 'all' only", async () => {
-    answer(api.sessions.listSessions, [waiting]);
+  it("has a tab for the sessions waiting for the machine, after 'all'", async () => {
+    serverListsByStatus(waiting);
     await renderPage(<SessionsPage />);
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       fr.common.all,
+      fr.sessions.pending,
       fr.sessions.active,
       fr.sessions.completed,
       fr.sessions.failed,
     ]);
+    expect(fr.sessions.pending).toBe("En attente");
     expect(patientsListed()).toEqual(["Patient D"]);
   });
 
   it("says there is no session when a tab is empty", async () => {
-    answer(api.sessions.listSessions, [finished]);
+    serverListsByStatus(finished);
     const { user } = await renderPage(<SessionsPage />);
 
     await user.click(screen.getByRole("tab", { name: fr.sessions.failed }));
@@ -331,7 +379,7 @@ describe("sessions list: tabs and search", () => {
   });
 
   it("keeps the rows that match the search, by rider or by machine", async () => {
-    answer(api.sessions.listSessions, [running, finished, failed]);
+    serverLists(running, finished, failed);
     const { user } = await renderPage(<SessionsPage />);
     const search = screen.getByPlaceholderText(fr.common.search);
 
@@ -345,5 +393,70 @@ describe("sessions list: tabs and search", () => {
     await user.clear(search);
     await user.type(search, "nobody");
     expect(screen.getByText(fr.sessions.noSessions)).toBeTruthy();
+  });
+});
+
+describe("sessions list: page by page", () => {
+  /** 120 finished sessions, newest first, as the server lists them. */
+  const many = Array.from({ length: 120 }, (_, i) =>
+    listed(String(i).padStart(3, "0"), { startedAt: NOW - (i + 1) * 60_000 }),
+  );
+
+  it("shows the first 50 sessions, says there are more, and adds 50 at each 'Show more'", async () => {
+    serverLists(...many);
+    const { user } = await renderPage(<SessionsPage />);
+
+    expect(patientsListed()).toEqual(
+      many.slice(0, 50).map((s) => s.patientName),
+    );
+    expect(screen.getByText("50+ sessions")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+    expect(argsAsked(LIST).at(-1)).toEqual({
+      paginationOpts: { numItems: 50, cursor: "50" },
+    });
+    expect(patientsListed()).toEqual(
+      many.slice(0, 100).map((s) => s.patientName),
+    );
+    expect(screen.getByText("100+ sessions")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+    expect(patientsListed()).toEqual(many.map((s) => s.patientName));
+    expect(screen.getByText("120 sessions")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: fr.common.showMore }),
+    ).toBeNull();
+  });
+
+  it("keeps the sessions shown and offers nothing more while the next page loads", async () => {
+    // The server has answered the first page only.
+    answer(LIST, (args) =>
+      args.paginationOpts.cursor === null ? pagesOf(many)(args) : undefined,
+    );
+    const { user } = await renderPage(<SessionsPage />);
+
+    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+
+    expect(patientsListed()).toHaveLength(50);
+    const waitingButton = screen.getByRole("button", {
+      name: fr.common.loading,
+    });
+    expect((waitingButton as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.queryByRole("button", { name: fr.common.showMore }),
+    ).toBeNull();
+  });
+
+  it("starts again from the first page of a tab when the tab changes", async () => {
+    serverListsByStatus(...many);
+    const { user } = await renderPage(<SessionsPage />);
+    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+    expect(patientsListed()).toHaveLength(100);
+
+    await user.click(screen.getByRole("tab", { name: fr.sessions.completed }));
+
+    expect(argsAsked(LIST).at(-1)).toEqual(firstPage({ status: "completed" }));
+    expect(patientsListed()).toHaveLength(50);
+    expect(screen.getByText("50+ sessions")).toBeTruthy();
   });
 });

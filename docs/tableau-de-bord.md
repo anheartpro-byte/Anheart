@@ -357,10 +357,23 @@ patient = celles où il a le droit.
 
 ### Sessions : `/fr/dashboard/sessions`
 
-Pour tous (chacun voit ce que ses droits permettent). Onglets par statut
-(Tous, Actives, Terminées, Échouées ; pas d'onglet « En attente »), colonnes : patient, machine,
+Pour tous (chacun voit ce que ses droits permettent). Onglets par statut :
+Tous, **En attente** (lancée du site, la machine ne l'a pas encore armée),
+Actives, Terminées, Échouées. Colonnes : patient, machine,
 **Type** (badges Auto / Manuel / Enregistrement et origine), statut, début,
 durée. Un clic ouvre la vue en direct (séance active) ou le détail.
+
+La liste est servie **par pages de 50**, du début le plus récent au plus ancien
+(`sessions.listSessionsPaginated`, [convex.md §5](convex.md#sessionsts-lectures-seulement)).
+Chaque onglet demande au serveur les séances de son statut : une séance en
+attente ou échouée ancienne se trouve dans son onglet, même si cinquante
+séances plus récentes d'un autre statut existent. Le bouton **Afficher plus**
+ajoute les 50 suivantes ; tant qu'il reste des séances à charger, le compteur
+sous le titre se termine par « + » (« 50+ sessions »). Changer d'onglet repart
+de la première page. Le serveur n'applique la page qu'après les droits : un
+patient ou un gestionnaire voit toutes ses séances, page après page, quel que
+soit le nombre de séances des autres. La recherche ne porte que sur les
+séances déjà chargées.
 
 Cette page ne crée aucune séance : une séance auto se lance depuis une machine
 (« Lancer une séance auto », §5), une séance manuelle depuis la console. Le
@@ -475,7 +488,11 @@ dernier enregistrement s'applique en entier. La règle des cases est dans
 ### Rapports : `/fr/dashboard/reports`
 
 Séances terminées visibles par l'utilisateur : pratiquant, machine, date,
-durée, et le bouton **Voir** qui ouvre le détail. Il n'y a plus de rapport PDF :
+durée, et le bouton **Voir** qui ouvre le détail. Elles sont servies par pages
+de 50, de la plus récente à la plus ancienne (`sessions.listSessionsPaginated`
+avec le statut `completed`), avec le bouton **Afficher plus** tant qu'il en
+reste ; comme pour la page Sessions, la page ne se coupe qu'après les droits.
+Il n'y a plus de rapport PDF :
 l'ancien, construit sur les données ECG, a été retiré avec le mode
 d'enregistrement ; le rapport de séance d'entraînement est à faire (ANH-89).
 
@@ -974,6 +991,7 @@ Pièges :
 | Pratiquant d'une séance démarrée à la machine | Le Pi ne l'envoie pas : « Unknown » dans les listes. |
 | Rapport d'une séance d'entraînement | Pas de rapport PDF sur le site : l'ancien rapport ECG est retiré, celui des séances d'entraînement reste à faire (ANH-89). |
 | Pages retouchées au retrait de l'ancien mode ECG (Sessions, vue en direct, détail, Rapports, fenêtre machine) | Compilées et couvertes par `npm run test:lib` ; **pas rouvertes dans un navigateur** depuis. |
+| Pages Sessions et Rapports servies par pages (ANH-158) | Le serveur est testé en mémoire (`convex/sessionLists.test.ts`), les deux pages dans le DOM simulé, où Convex est remplacé par une doublure qui sert les pages d'une liste. **Pas ouvertes dans un navigateur, ni contre un vrai serveur** : ce que deviennent des pages déjà affichées quand une séance arrive ou change de statut pendant la lecture repose sur Convex et n'est pas rejoué. |
 | Textes encore en anglais | Messages du serveur, nom « Unknown », motif « Cancelled before start by … », fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
 | Sélecteur d'organisation, page Membres | Composants de Clerk, couverts par des tests unitaires qui les remplacent. Le changement d'organisation de bout en bout (deux organisations, données qui changent) relève du test navigateur ANH-83 et de la recette sur l'instance Clerk de développement. |
 | Compte avec FC max ou année de naissance renseignée | Risque d'échec de `users.getCurrentUser` (validateur incomplet), donc de pages vides pour ce compte. **À vérifier en premier** sur un déploiement. Voir [convex.md §9](convex.md#9-défauts-connus-et-reste-à-faire). |

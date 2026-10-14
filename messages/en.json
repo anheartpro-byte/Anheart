@@ -100,7 +100,8 @@
     "all": "All",
     "actions": "Actions",
     "view": "View",
-    "name": "Name"
+    "name": "Name",
+    "showMore": "Show more"
   },
   "auth": {
     "signIn": "Sign in",
