@@ -1992,10 +1992,17 @@ lequel la même requête serait encore refusée.
   (`cannot be read (...): left until the next start`).
 - **Une séance dont le serveur n'a plus de nouvelles** (ANH-216). Une séance
   active dont le serveur n'a rien appris pendant **10 min** passe
-  `interrupted`, « interrompue, fin inconnue » sur le site : aucun battement
-  de cœur de sa machine ne l'a nommée comme la séance en cours, aucun point
-  ni événement d'elle n'est arrivé, et elle n'a pas été déclarée ou confirmée
-  dans ce délai. C'est la tâche de Convex qui passe toutes les minutes
+  `interrupted`, « interrompue, fin inconnue » sur le site, quand trois
+  conditions tiennent ensemble. Aucun battement de cœur de sa machine ne l'a
+  nommée comme la séance en cours dans ces 10 min. Son point de plus grand
+  `t` et son événement de plus grand rang ont été reçus il y a plus de
+  10 min, ou jamais : un point ou un événement renvoyé et déjà stocké ne
+  compte pas, ni un point d'un `t` plus petit, ou un événement d'un rang
+  plus petit, que le plus grand déjà reçu. Sa première déclaration (séance
+  démarrée à la machine) ou la confirmation de son départ (lancement du
+  site) date de plus de 10 min ; une déclaration refaite ne compte pas. Toutes ces dates sont celles du serveur : la date de
+  début que la machine a écrite n'est pas lue. C'est la tâche de Convex qui
+  passe toutes les minutes
   ([convex.md, Tâche planifiée](convex.md#7-tâche-planifiée)). Sont concernées
   une console tuée ou une machine jamais rallumée, une séance dont
   l'enregistrement ne se lit pas et dont la console a redémarré (la machine

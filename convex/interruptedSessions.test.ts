@@ -201,6 +201,25 @@ describe("ANH-216 EX-1 a session the server has no news of is marked interrupted
     expect((await sessionOf(w, sessionId))?.status).toBe("interrupted");
   });
 
+  it("dates a session started at the machine from its registration, not from the start its clock wrote", async () => {
+    // A console that says no age, its clock a day ahead: the start it wrote
+    // is stored as the session's start, and is no news of the session.
+    const w = await machineWorld();
+    const { sessionId } = await post(w, "/api/machine/training/local", {
+      localRef: "record-ahead",
+      kind: "manual",
+      startedAt: NOW + 24 * 60 * MINUTE,
+      operatorName: "op-0123456789abcdef",
+    });
+    const id = sessionId as Id<"sessions">;
+    expect((await sessionOf(w, id))?.startedAt).toBe(NOW + 24 * 60 * MINUTE);
+
+    await jobAt(w, NOW + SESSION_SILENCE_MS - SECOND);
+    expect((await sessionOf(w, id))?.status).toBe("active");
+    await jobAt(w, NOW + SESSION_SILENCE_MS + SECOND);
+    expect((await sessionOf(w, id))?.status).toBe("interrupted");
+  });
+
   it("leaves alone what is not an active training session", async () => {
     const w = await machineWorld();
     const ids = await w.t.run(async (ctx) => {
