@@ -339,7 +339,14 @@
     "recentSessions": "Sessions récentes",
     "noActiveSessions": "Aucune session active",
     "noMachines": "Aucune machine",
-    "noPatients": "Aucun patient"
+    "noPatients": "Aucun patient",
+    "machinesTotal": "/ {total} au total",
+    "machinesInSession": "dont {count} en session",
+    "pendingSessions": "{count, plural, =0 {Aucune en attente} one {# en attente} other {# en attente}}",
+    "membersByRole": "{admins, plural, one {# administrateur} other {# administrateurs}} · {managers, plural, one {# gestionnaire} other {# gestionnaires}} · {patients, plural, one {# patient} other {# patients}}",
+    "ownPatients": "Patients que vous suivez",
+    "allOrganizations": "Les compteurs portent sur toutes les organisations.",
+    "counterUnavailable": "Compteur indisponible"
   },
   "machines": {
     "title": "Gestion des machines",

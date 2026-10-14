@@ -11,8 +11,9 @@ import {
   LastSignal,
   MachineStatusBadge,
   MachineStatusText,
-  OnlineMachinesCount,
+  useConnectedMachines,
   VersionsSeen,
+  type MachineSignal,
 } from "./machines/MachineSignal";
 import { LaunchableMachineCard } from "./training/LaunchableMachineCard";
 import { MachineLiveCard } from "./training/MachineLiveCard";
@@ -285,8 +286,11 @@ describe("machine status, count and last signal", () => {
     },
   );
 
-  it("counts online the machines the hook calls fresh, and none when it says stale", () => {
-    const count = <OnlineMachinesCount machines={[heardNow, heardAnHourAgo]} />;
+  it("counts connected the machines the hook calls fresh, and none when it says stale", () => {
+    function Count({ machines }: { machines: MachineSignal[] }) {
+      return <>{useConnectedMachines(machines).connected}</>;
+    }
+    const count = <Count machines={[heardNow, heardAnHourAgo]} />;
     expect(paint(count).trim()).toBe("2");
     expect(hook.calls).toEqual([
       [SERVER, SERVER + 7],

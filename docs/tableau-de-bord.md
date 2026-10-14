@@ -250,11 +250,29 @@ logiciel : ECG, EDA, SpO2, RESP, EMG et LUX.
 
 Pour tous. Titre « Tableau de bord », « Bienvenue, {prénom} ».
 
-- Carte **Machines en ligne** (admin, gestionnaire) : nombre en ligne / total.
-  Une machine n'y compte plus 90 s après son dernier signal (§6).
-- Carte **Sessions actives**.
-- Carte **Utilisateurs** (admin) ou **Patients** (gestionnaire) : affiche
-  toujours « - » et « Chargement… », **le compteur n'est pas implémenté**.
+Les chiffres des cartes viennent d'une seule query, `dashboard.counters`
+([convex.md](convex.md#dashboardts-compteurs-du-tableau-de-bord-anh-159)),
+comptés par le serveur dans l'organisation de l'appel ; pour l'admin Anheart,
+dans toutes, ce que la page dit sous le titre (« Les compteurs portent sur
+toutes les organisations. »). Chaque carte compte ce que la page vers laquelle
+elle mène liste, rien de plus.
+
+| Carte | Pour | Chiffre | Sous le chiffre |
+|---|---|---|---|
+| **Machines en ligne** | admin, admin d'organisation, gestionnaire | Machines affichées « En ligne » ou « En session », jugées comme leur badge (§6) : une machine n'y compte plus 90 s après son dernier signal, même si Convex la dit encore en ligne. Admin : celles de l'organisation (toutes pour l'admin Anheart) ; gestionnaire : les siennes. | « / N au total » (machines non supprimées), puis « dont N en session » s'il y en a. |
+| **Sessions actives** | tous | Séances actives que l'on peut ouvrir : toutes celles de l'organisation pour un admin, celles de ses machines ou qu'il pratique pour un gestionnaire, les siennes pour un patient. | « N en attente », ou « Aucune en attente ». |
+| **Utilisateurs** | admin, admin d'organisation | Membres actifs de l'organisation (de toutes pour l'admin Anheart, un compte membre de deux organisations compté dans chacune). | Par rôle : « 2 administrateurs · 3 gestionnaires · 11 patients ». |
+| **Patients** | gestionnaire | Ses patients, encore patients actifs de l'organisation, comme la page Patients les liste. Jamais un chiffre de toute l'organisation. | « Patients que vous suivez ». |
+
+Pendant le chargement, chaque carte affiche un emplacement grisé (et
+« Chargement... » pour un lecteur d'écran). Si le serveur refuse ou échoue, ou
+ne renvoie pas le chiffre d'une carte, la carte affiche « - » et « Compteur
+indisponible » ; le reste de la page s'affiche, et les chiffres reviennent dès
+que la query répond de nouveau. C'est aussi ce qu'affiche ce site face à un
+Convex antérieur, qui n'a pas cette query : Convex se déploie avant le site
+([deploiement.md](deploiement.md)). Un patient ne voit que **Sessions actives** :
+le serveur ne lui renvoie ni machine ni membre.
+
 - **Sessions récentes** : les 5 dernières, avec statut et ancienneté. Un clic
   ouvre la vue en direct (séance active) ou le détail.
 
@@ -620,8 +638,9 @@ redémarrage du système, dont elle ne sait plus compter l'âge.
   `t` placé par le serveur sur sa propre horloge ; sinon, c'est le `t` tel
   que le Pi l'a écrit.
 - **Chaque réponse porte l'horloge du serveur.** `getMachineLive`,
-  `listLaunchableMachines`, `getTrainingSession`, `getMachine`, `listMachines`
-  et `getMachinesForGestionnaire` renvoient `serverNow` : l'heure du serveur au
+  `listLaunchableMachines`, `getTrainingSession`, `getMachine`, `listMachines`,
+  `getMachinesForGestionnaire` et `dashboard.counters` renvoient `serverNow` :
+  l'heure du serveur au
   moment où la réponse est calculée. L'âge d'une donnée est
   `serverNow - date`, plus le temps que le site a **compté** depuis qu'il a vu
   cette réponse pour la première fois (`lib/server-clock.ts`). L'horloge du
@@ -950,7 +969,7 @@ Pièges :
 | Statut « En ligne » et « Dernier signal » | Recalculés chaque seconde par le site (§6). Convex n'écrit `offline` qu'au passage de sa tâche (jusqu'à 2,5 min) : le refus d'un lancement par le serveur et la fenêtre de lancement lisent encore ce statut écrit (ANH-144). |
 | Lancement auto de bout en bout (site → Convex → Pi → moteur) | **Jamais exécuté.** Le contrat HTTP est testé de chaque côté séparément : côté Pi contre un faux transport, côté Convex dans `convex/httpRoutes.test.ts`. |
 | Invitation des patients par e-mail | Implémentée avec Clerk Organizations et liaison par webhook. La recette doit être effectuée sur l'instance configurée avant déploiement. |
-| Compteur « Utilisateurs / Patients » du tableau de bord | Pas implémenté (« - »). |
+| Compteurs du tableau de bord | Calculés par `dashboard.counters` et vérifiés par des tests Convex (deux organisations) et des tests de la page sans navigateur. Leur affichage dans un navigateur, avec une console simulée, relève de la suite de bout en bout ANH-83. Coût des lectures non mesuré sur un déploiement ([convex.md](convex.md#dashboardts-compteurs-du-tableau-de-bord-anh-159)). |
 | Libellés des actions de sécurité et de l'état du variateur | Traduits (`freeze`, `quick_stop`, `go_silent` compris). Le vocabulaire français (« Vitesse figée », « Arrêt rapide (rampe du variateur) », « Mise en silence (arrêt par le variateur) »…) reste à relire par l'équipe. |
 | Pratiquant d'une séance démarrée à la machine | Le Pi ne l'envoie pas : « Unknown » dans les listes. |
 | Rapport d'une séance d'entraînement | Pas de rapport PDF sur le site : l'ancien rapport ECG est retiré, celui des séances d'entraînement reste à faire (ANH-89). |

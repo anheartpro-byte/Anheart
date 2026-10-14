@@ -9,10 +9,11 @@ import { useFreshness, useFreshnessJudge } from "@/hooks/use-freshness";
 import { shownMachineStatus } from "@/lib/training";
 
 /**
- * A machine's status and last signal as every page shows them: read through
- * the freshness hook, so a machine that has stopped sending is "offline" 90 s
- * after its last signal, at the same second as its data turn "stale", and not
- * a minute or two later when the server's job writes it.
+ * A machine's status and last signal as every page shows them, and the count
+ * of machines connected on the dashboard: read through the freshness hook, so
+ * a machine that has stopped sending is "offline" 90 s after its last signal,
+ * at the same second as its data turn "stale", and not a minute or two later
+ * when the server's job writes it.
  */
 
 /** What an answer says of a machine's signal: all three come from the server. */
@@ -139,17 +140,25 @@ export function VersionsSeen({
   return <>{t("versionSeen", { when: useTimeAgo(at, serverNow) })}</>;
 }
 
-/** How many machines are shown "online" right now. */
-export function OnlineMachinesCount({
-  machines,
-}: {
-  machines: ReadonlyArray<MachineSignal>;
-}) {
+/**
+ * How many machines are shown connected right now, "En ligne" or "En
+ * session", and how many of them "En session": judged again every second, so
+ * that a machine leaves the count 90 s after its last signal, at the same
+ * second as its badge turns "Hors ligne".
+ */
+export function useConnectedMachines(
+  machines: ReadonlyArray<MachineSignal>,
+): { connected: number; inSession: number } {
   const judge = useFreshnessJudge();
-  const online = machines.filter(
-    (m) =>
-      shownMachineStatus(m.status, judge(m.lastHeartbeat, m.serverNow).fresh) ===
-      "online",
-  );
-  return <>{online.length}</>;
+  let connected = 0;
+  let inSession = 0;
+  for (const m of machines) {
+    const shown = shownMachineStatus(
+      m.status,
+      judge(m.lastHeartbeat, m.serverNow).fresh,
+    );
+    if (shown === "online" || shown === "in_session") connected += 1;
+    if (shown === "in_session") inSession += 1;
+  }
+  return { connected, inSession };
 }

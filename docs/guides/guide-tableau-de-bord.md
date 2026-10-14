@@ -428,8 +428,9 @@ Ces pages ne demandent pas de connexion et n'ont aucune action.
 │                                                                        │
 │ ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐│
 │ │ Machines en ligne ▢ │ │ Sessions actives  ∿ │ │ Utilisateurs     👥 ││
-│ │ 2                   │ │ 1                   │ │ -                   ││
-│ │ / 3 total           │ │ Actives             │ │ Chargement...       ││
+│ │ 2                   │ │ 1                   │ │ 16                  ││
+│ │ / 3 au total, dont  │ │ Aucune en attente   │ │ 2 administrateurs · ││
+│ │ 1 en session        │ │                     │ │ 3 gestionnaires ... ││
 │ └─────────────────────┘ └─────────────────────┘ └─────────────────────┘│
 │  (admin, gestionnaire)       (tous)            (admin : Utilisateurs,  │
 │                                                 gestionnaire : Patients)│
@@ -445,10 +446,16 @@ Ces pages ne demandent pas de connexion et n'ont aucune action.
 
 | Bloc | Contenu | Clic |
 |---|---|---|
-| **Machines en ligne** (administrateur, gestionnaire) | Nombre de machines affichées « En ligne », puis « / N total ». Une machine **en séance** n'est **pas** comptée comme en ligne, et une machine sort du compte 90 s après son dernier signal. | Ouvre **Machines**. |
-| **Sessions actives** | Nombre de séances actives **parmi les 10 plus récentes** que vous pouvez voir. Sous le nombre : « Actives ». | Ouvre **Sessions**. |
-| **Utilisateurs** (administrateur) ou **Patients** (gestionnaire) | Affiche toujours « - » et « Chargement... » : **ce compteur n'est pas programmé**. | Ouvre **Utilisateurs** ou **Patients**. |
+| **Machines en ligne** (administrateur, gestionnaire) | Nombre de machines affichées « En ligne » ou « En session » (une machine en séance est en ligne), puis « / N au total » et, s'il y en a, « dont N en session ». Une machine sort du compte 90 s après son dernier signal, à la même seconde que son badge passe à « Hors ligne ». Gestionnaire : vos machines seulement. | Ouvre **Machines**. |
+| **Sessions actives** | Nombre de toutes les séances actives que vous pouvez ouvrir (celles de l'organisation pour un administrateur, de vos machines ou que vous pratiquez pour un gestionnaire, les vôtres pour un patient). Sous le nombre : combien sont en attente. | Ouvre **Sessions**. |
+| **Utilisateurs** (administrateur) ou **Patients** (gestionnaire) | Administrateur : nombre de membres actifs de l'organisation, puis le détail par rôle (administrateurs, gestionnaires, patients). Gestionnaire : nombre de vos patients, « Patients que vous suivez ». | Ouvre **Utilisateurs** ou **Patients**. |
 | **Sessions récentes** | Les 5 dernières séances visibles : nom du pratiquant, machine, badge de statut, ancienneté (« il y a 3 minutes »). « Aucune session trouvée » s'il n'y en a pas. | Séance active : ouvre la **vue en direct**. Sinon (en attente, terminée, échouée) : ouvre le **détail**. |
+
+L'administrateur Anheart lit sous le titre « Les compteurs portent sur toutes
+les organisations. » : ses chiffres couvrent tous les clients. Pendant le
+chargement, chaque carte affiche un emplacement grisé ; si le serveur ne peut
+pas répondre, elle affiche « - » et « Compteur indisponible », et le reste de
+la page reste utilisable.
 
 Badges de statut d'une séance, ici et dans toutes les listes :
 

@@ -56,10 +56,14 @@ export const NOW = 1_800_000_000_000;
 
 type Query = FunctionReference<"query">;
 type Mutation = FunctionReference<"mutation">;
-/** What a query answers: a value, or a value worked out from its arguments. */
+/**
+ * What a query answers: a value, or a value worked out from its arguments, or
+ * the `Error` of a query the server failed.
+ */
 type Answer<Q extends Query> =
   | FunctionReturnType<Q>
   | undefined
+  | Error
   | ((args: FunctionArgs<Q>) => FunctionReturnType<Q> | undefined);
 
 /** Stands in for `convex/react`: the stand-in of the whole site. */
@@ -71,7 +75,8 @@ export const sessionIs = convex.sessionIs;
 /**
  * What a query answers from now on, typed by what the server returns for it.
  * `undefined` is a query still loading, as in Convex. A query nobody answered
- * is loading too.
+ * is loading too. An `Error` is a query the server failed: `useQuery` throws
+ * it, as Convex does; `useQueries` returns it.
  */
 export function answer<Q extends Query>(query: Q, value: Answer<Q>): void {
   convex.answer(getFunctionName(query), value);

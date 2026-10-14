@@ -1,25 +1,37 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
-import { isOrganizationAdmin, isStaff } from "@/lib/organizationAccess";
+import {
+  isAnheartAdmin,
+  isOrganizationAdmin,
+  isStaff,
+} from "@/lib/organizationAccess";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "@/i18n/navigation";
-import { Cpu, Activity, Users, Clock } from "lucide-react";
+import { Cpu, Activity, Users, Clock, type LucideIcon } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { useLocale } from "next-intl";
-import { OnlineMachinesCount } from "@/components/machines/MachineSignal";
+import { useConnectedMachines } from "@/components/machines/MachineSignal";
+import { useQueryOutcome, type QueryOutcome } from "@/hooks/use-query-outcome";
+
+type Counters = FunctionReturnType<typeof api.dashboard.counters>;
 
 export default function DashboardPage() {
   const t = useTranslations();
   const locale = useLocale();
   const user = useQuery(api.users.getCurrentUser);
-  const machines = useQuery(api.machines.listMachines, user ? {} : "skip");
+  // The figures of the cards: counted by the server, for the caller's
+  // organisation (every organisation for the Anheart admin). A failure leaves
+  // the cards saying so, and the rest of the page standing.
+  const counters = useQueryOutcome(api.dashboard.counters, user ? {} : "skip");
   const sessions = useQuery(api.sessions.listSessions, user ? { limit: 10 } : "skip");
 
   const dateLocale = locale === "fr" ? fr : enUS;
@@ -28,9 +40,6 @@ export default function DashboardPage() {
     return <DashboardSkeleton />;
   }
 
-  const activeSessions =
-    sessions?.filter((s) => s.status === "active").length ?? 0;
-
   return (
     <div className="space-y-6">
       <div>
@@ -38,73 +47,80 @@ export default function DashboardPage() {
         <p className="text-muted-foreground">
           {t("dashboard.welcome", { name: user?.firstName || "" })}
         </p>
+        {isAnheartAdmin(user?.role) && (
+          <p className="text-xs text-muted-foreground">
+            {t("dashboard.allOrganizations")}
+          </p>
+        )}
       </div>
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {isStaff(user?.role) && (
-          <Link href="/dashboard/machines">
-            <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">
-                  {t("dashboard.onlineMachines")}
-                </CardTitle>
-                <Cpu className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  <OnlineMachinesCount machines={machines ?? []} />
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  / {machines?.length ?? 0} total
-                </p>
-              </CardContent>
-            </Card>
-          </Link>
+          <CounterCard
+            href="/dashboard/machines"
+            title={t("dashboard.onlineMachines")}
+            icon={Cpu}
+          >
+            <Counter
+              outcome={counters}
+              pick={(c) =>
+                c.machines && { ...c.machines, serverNow: c.serverNow }
+              }
+            >
+              {(machines) => <MachinesFigure {...machines} />}
+            </Counter>
+          </CounterCard>
         )}
 
-        <Link href="/dashboard/sessions">
-          <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium">
-                {t("dashboard.activeSessions")}
-              </CardTitle>
-              <Activity className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{activeSessions}</div>
-              <p className="text-xs text-muted-foreground">
-                {t("sessions.active")}
-              </p>
-            </CardContent>
-          </Card>
-        </Link>
+        <CounterCard
+          href="/dashboard/sessions"
+          title={t("dashboard.activeSessions")}
+          icon={Activity}
+        >
+          <Counter outcome={counters} pick={(c) => c.sessions}>
+            {(open) => (
+              <Figure
+                value={open.active}
+                detail={t("dashboard.pendingSessions", { count: open.pending })}
+              />
+            )}
+          </Counter>
+        </CounterCard>
 
-        {isStaff(user?.role) && (
-          <Link
-            href={
-              isOrganizationAdmin(user?.role)
-                ? "/dashboard/users"
-                : "/dashboard/patients"
-            }
+        {isOrganizationAdmin(user?.role) && (
+          <CounterCard
+            href="/dashboard/users"
+            title={t("nav.users")}
+            icon={Users}
           >
-            <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">
-                  {isOrganizationAdmin(user?.role)
-                    ? t("nav.users")
-                    : t("nav.patients")}
-                </CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">-</div>
-                <p className="text-xs text-muted-foreground">
-                  {t("common.loading")}
-                </p>
-              </CardContent>
-            </Card>
-          </Link>
+            <Counter outcome={counters} pick={(c) => c.members}>
+              {(members) => (
+                <Figure
+                  value={members.admin + members.gestionnaire + members.user}
+                  detail={t("dashboard.membersByRole", {
+                    admins: members.admin,
+                    managers: members.gestionnaire,
+                    patients: members.user,
+                  })}
+                />
+              )}
+            </Counter>
+          </CounterCard>
+        )}
+
+        {isStaff(user?.role) && !isOrganizationAdmin(user?.role) && (
+          <CounterCard
+            href="/dashboard/patients"
+            title={t("nav.patients")}
+            icon={Users}
+          >
+            <Counter outcome={counters} pick={(c) => c.patients}>
+              {(patients) => (
+                <Figure value={patients} detail={t("dashboard.ownPatients")} />
+              )}
+            </Counter>
+          </CounterCard>
         )}
       </div>
 
@@ -164,6 +180,99 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** A card of figures, leading to the page that lists what it counts. */
+function CounterCard({
+  href,
+  title,
+  icon: Icon,
+  children,
+}: {
+  href: string;
+  title: string;
+  icon: LucideIcon;
+  children: ReactNode;
+}) {
+  return (
+    <Link href={href}>
+      <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
+        <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardTitle className="text-sm font-medium">{title}</CardTitle>
+          <Icon className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>{children}</CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+/**
+ * One figure of the counters as it stands: a placeholder while they load, a
+ * dash and "unavailable" when the server failed them (or sent none for this
+ * card), the figure otherwise.
+ */
+function Counter<T>({
+  outcome,
+  pick,
+  children,
+}: {
+  outcome: QueryOutcome<Counters>;
+  pick: (counters: Counters) => T | null;
+  children: (value: T) => ReactNode;
+}) {
+  const t = useTranslations();
+  if (outcome.status === "loading") {
+    return (
+      <div role="status">
+        <Skeleton className="h-8 w-12" />
+        <Skeleton className="mt-2 h-3 w-24" />
+        <span className="sr-only">{t("common.loading")}</span>
+      </div>
+    );
+  }
+  const value = outcome.status === "ready" ? pick(outcome.value) : null;
+  if (value === null) {
+    return <Figure value="-" detail={t("dashboard.counterUnavailable")} />;
+  }
+  return <>{children(value)}</>;
+}
+
+function Figure({ value, detail }: { value: ReactNode; detail: string }) {
+  return (
+    <>
+      <div className="text-2xl font-bold">{value}</div>
+      <p className="text-xs text-muted-foreground">{detail}</p>
+    </>
+  );
+}
+
+/**
+ * The machines shown connected ("En ligne" or "En session") out of all of
+ * them, judged every second on the server's clock like their badges: a silent
+ * machine leaves the count 90 s after its last signal, whatever its record
+ * still says.
+ */
+function MachinesFigure({
+  total,
+  signals,
+  serverNow,
+}: NonNullable<Counters["machines"]> & { serverNow: number }) {
+  const t = useTranslations("dashboard");
+  const { connected, inSession } = useConnectedMachines(
+    signals.map((signal) => ({ ...signal, serverNow })),
+  );
+  const all = t("machinesTotal", { total });
+  return (
+    <Figure
+      value={connected}
+      detail={
+        inSession > 0
+          ? `${all}, ${t("machinesInSession", { count: inSession })}`
+          : all
+      }
+    />
   );
 }
 

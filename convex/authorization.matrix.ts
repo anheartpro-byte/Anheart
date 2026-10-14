@@ -25,6 +25,7 @@
  *
  * The file name has two dots so the Convex bundler never deploys it.
  */
+import { isDeepStrictEqual } from "node:util";
 import { api } from "./_generated/api";
 import type { FunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
@@ -2368,6 +2369,34 @@ export const MATRIX: Entry[] = [
   },
 
   // =========================================================================
+  // dashboard.ts
+  // =========================================================================
+  {
+    id: "dashboard.counters",
+    ref: api.dashboard.counters,
+    kind: "query",
+    build: async (w) => {
+      await seedCountedWorld(w);
+      return {};
+    },
+    onSuccess: (res, w, actor) => expectCounters(res, actor),
+    onFiltered: (res, w, actor) => expectCounters(res, actor),
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "members, machines and sessions of every organisation" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "members, machines and sessions of centre A only" },
+      { actor: "manager", scope: "own", expect: filtered, note: "their patients, machines and sessions; no member count" },
+      { actor: "otherManager", scope: "own", expect: filtered, note: "their patients, machines and sessions; no member count" },
+      { actor: "patient", scope: "self", expect: filtered, note: "their own sessions only; no machine, no member" },
+      { actor: "otherPatient", scope: "self", expect: filtered, note: "their own sessions only" },
+      { actor: "stranger", scope: "self", expect: filtered, note: "no session of their own: zero" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "members, machines and sessions of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "their patient, machine and session of centre B" },
+      { actor: "orgBPatient", scope: "self", expect: filtered, note: "their own session of centre B only" },
+    ],
+  },
+
+  // =========================================================================
   // sessionSummaries.ts  (read-only history)
   // =========================================================================
   {
@@ -2441,6 +2470,132 @@ function summaryCases(): Case[] {
     { actor: "orgBManager", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
     { actor: "orgBPatient", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
   ];
+}
+
+/**
+ * What `dashboard.counters` must count, on top of the seeded world: open
+ * sessions in both centres, a completed one, a machine offline, one in a
+ * session, a deleted machine and a removed member, none of the last three
+ * counted by anyone.
+ */
+async function seedCountedWorld(w: World): Promise<void> {
+  await addSession(w, { machineId: w.machine, userId: w.patient, status: "active", kind: "auto" });
+  await addSession(w, { machineId: w.machine, userId: w.patient, status: "completed", kind: "auto" });
+  await addSession(w, { machineId: w.otherMachine, userId: w.otherPatient, status: "pending", kind: "auto" });
+  await addSession(w, { machineId: w.orgBMachine, userId: w.orgBPatient, status: "active", kind: "auto" });
+  await w.t.run(async (ctx) => {
+    await ctx.db.patch(w.otherMachine, { status: "offline" });
+    await ctx.db.patch(w.orgBMachine, { status: "in_session" });
+    await ctx.db.insert("machines", {
+      organizationId: w.orgA,
+      name: "Deleted machine",
+      apiKey: "synthetic-hash",
+      status: "offline",
+      lastHeartbeat: NOW,
+      createdAt: NOW,
+      isDeleted: true,
+    });
+    const removed = await ctx.db.insert("users", {
+      clerkId: "removed",
+      role: "user",
+      organizationId: w.orgA,
+      firstName: "removed",
+      lastName: "Synthetic",
+      email: "removed@example.invalid",
+      language: "en",
+      createdAt: NOW,
+    });
+    await ctx.db.insert("memberships", {
+      userId: removed,
+      organizationId: w.orgA,
+      role: "user",
+      active: false,
+    });
+  });
+}
+
+type Counted = {
+  members: { admin: number; gestionnaire: number; user: number } | null;
+  patients: number | null;
+  machines: { total: number; signals: string[] } | null;
+  sessions: { active: number; pending: number };
+};
+
+/** What each actor is counted in the world of `seedCountedWorld`. */
+const COUNTED: Partial<Record<Actor, Counted>> = {
+  admin: {
+    // Anheart: 1 admin. Centre A: 1 admin, 2 gestionnaires, 3 patients.
+    // Centre B: 1 of each.
+    members: { admin: 3, gestionnaire: 3, user: 4 },
+    patients: null,
+    machines: { total: 3, signals: ["in_session", "online"] },
+    sessions: { active: 2, pending: 1 },
+  },
+  orgAdmin: {
+    members: { admin: 1, gestionnaire: 2, user: 3 },
+    patients: null,
+    machines: { total: 2, signals: ["online"] },
+    sessions: { active: 1, pending: 1 },
+  },
+  manager: {
+    members: null,
+    patients: 1,
+    machines: { total: 1, signals: ["online"] },
+    sessions: { active: 1, pending: 0 },
+  },
+  otherManager: {
+    members: null,
+    patients: 1,
+    machines: { total: 1, signals: [] },
+    sessions: { active: 0, pending: 1 },
+  },
+  patient: { members: null, patients: null, machines: null, sessions: { active: 1, pending: 0 } },
+  otherPatient: { members: null, patients: null, machines: null, sessions: { active: 0, pending: 1 } },
+  stranger: { members: null, patients: null, machines: null, sessions: { active: 0, pending: 0 } },
+  orgBAdmin: {
+    members: { admin: 1, gestionnaire: 1, user: 1 },
+    patients: null,
+    machines: { total: 1, signals: ["in_session"] },
+    sessions: { active: 1, pending: 0 },
+  },
+  orgBManager: {
+    members: null,
+    patients: 1,
+    machines: { total: 1, signals: ["in_session"] },
+    sessions: { active: 1, pending: 0 },
+  },
+  orgBPatient: { members: null, patients: null, machines: null, sessions: { active: 1, pending: 0 } },
+};
+
+/** Fail unless the counters are exactly those of `COUNTED` for this actor. */
+function expectCounters(res: unknown, actor: Actor): void {
+  const expected = COUNTED[actor];
+  if (expected === undefined) throw new Error(`No counters expected for ${actor}`);
+  const answer = res as {
+    serverNow: unknown;
+    members: Counted["members"];
+    patients: Counted["patients"];
+    machines: { total: number; signals: { status: string }[] } | null;
+    sessions: Counted["sessions"];
+  };
+  if (typeof answer.serverNow !== "number")
+    throw new Error("The counters carry no server clock");
+  const seen: Counted = {
+    members: answer.members,
+    patients: answer.patients,
+    machines:
+      answer.machines === null
+        ? null
+        : {
+            total: answer.machines.total,
+            signals: answer.machines.signals.map((s) => s.status).sort(),
+          },
+    sessions: answer.sessions,
+  };
+  if (!isDeepStrictEqual(seen, expected))
+    throw new Error(
+      `Counters of ${actor}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(seen)}`,
+    );
 }
 
 /**

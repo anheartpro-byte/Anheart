@@ -24,8 +24,12 @@
  *   function, a name is not checked to exist (a mistyped name in `answer`
  *   answers nothing), no rule of `convex/` runs;
  * - only what the site imports from `convex/react` today: `useQuery`,
- *   `useMutation`, `useAction`, `Authenticated`, `Unauthenticated`, `AuthLoading`
- *   and `useConvexAuth`. No paginated query, no optimistic update.
+ *   `useQueries`, `useMutation`, `useAction`, `Authenticated`,
+ *   `Unauthenticated`, `AuthLoading` and `useConvexAuth`. No paginated query,
+ *   no optimistic update.
+ *
+ * A query the server failed is answered with an `Error`: `useQuery` throws
+ * it, as Convex does, and `useQueries` hands it over as a value.
  */
 
 import { getFunctionName, type FunctionReference } from "convex/server";
@@ -49,7 +53,7 @@ const asked: { name: string; args: unknown }[] = [];
 const callers = new Map<string, (...args: unknown[]) => unknown>();
 let session: Session = "signed-in";
 
-/** Sets what a query answers from now on. `undefined` is "still loading". */
+/** Sets what a query answers from now on. `undefined` is "still loading", an `Error` a failure of the server. */
 export function answer(name: string, value: Answer) {
   answers.set(name, value);
 }
@@ -96,6 +100,17 @@ export function resetConvex() {
   session = "signed-in";
 }
 
+/** What a query answers to these arguments, the question noted. */
+function answerTo(reference: FunctionReference<"query">, args: unknown): unknown {
+  const name = getFunctionName(reference);
+  asked.push({ name, args });
+  if (args === "skip") return undefined;
+  const known = answers.get(name);
+  return typeof known === "function"
+    ? known((args ?? {}) as Record<string, unknown>)
+    : known;
+}
+
 /** Draws its content in one state of the session, and nothing in the others. */
 const shownWhen =
   (state: Session) =>
@@ -114,13 +129,23 @@ export const convexReact = {
     return caller;
   },
   useQuery(reference: FunctionReference<"query">, args?: unknown) {
-    const name = getFunctionName(reference);
-    asked.push({ name, args });
-    if (args === "skip") return undefined;
-    const known = answers.get(name);
-    return typeof known === "function"
-      ? known((args ?? {}) as Record<string, unknown>)
-      : known;
+    const answered = answerTo(reference, args);
+    if (answered instanceof Error) throw answered;
+    return answered;
+  },
+  /** Each query of the request, by key: its answer, `undefined` while it loads, or its `Error`. */
+  useQueries(
+    request: Record<
+      string,
+      { query: FunctionReference<"query">; args: Record<string, unknown> }
+    >,
+  ) {
+    return Object.fromEntries(
+      Object.entries(request).map(([key, { query, args }]) => [
+        key,
+        answerTo(query, args),
+      ]),
+    );
   },
   useMutation(reference: FunctionReference<"mutation">) {
     const name = getFunctionName(reference);

@@ -116,7 +116,10 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_organization", ["organizationId"])
-    .index("by_user_and_organization", ["userId", "organizationId"]),
+    .index("by_user_and_organization", ["userId", "organizationId"])
+    // The active members of one organisation, or of all of them: what the
+    // dashboard counts (`dashboard.counters`) without reading a removal.
+    .index("by_active_and_organization", ["active", "organizationId"]),
 
   clerk_webhook_events: defineTable({
     eventId: v.string(),
@@ -361,7 +364,10 @@ export default defineSchema({
     .index("by_machine", ["machineId"])
     .index("by_machine_and_status", ["machineId", "status"])
     .index("by_started_by", ["startedById"])
-    .index("by_organization", ["organizationId"]),
+    .index("by_organization", ["organizationId"])
+    // The active or pending sessions of one organisation, or of all of them:
+    // what the dashboard counts (`dashboard.counters`).
+    .index("by_status_and_organization", ["status", "organizationId"]),
 
   // ECG Data - HISTORY of the retired ECG recording mode. Read-only: no
   // function writes to this table any more.

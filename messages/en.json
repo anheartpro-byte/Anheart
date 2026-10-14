@@ -339,7 +339,14 @@
     "recentSessions": "Recent sessions",
     "noActiveSessions": "No active sessions",
     "noMachines": "No machines",
-    "noPatients": "No patients"
+    "noPatients": "No patients",
+    "machinesTotal": "/ {total} in total",
+    "machinesInSession": "including {count} in session",
+    "pendingSessions": "{count, plural, =0 {None pending} other {# pending}}",
+    "membersByRole": "{admins, plural, one {# admin} other {# admins}} · {managers, plural, one {# manager} other {# managers}} · {patients, plural, one {# patient} other {# patients}}",
+    "ownPatients": "Patients you follow",
+    "allOrganizations": "These counts cover every organization.",
+    "counterUnavailable": "Count unavailable"
   },
   "machines": {
     "title": "Machine Management",
