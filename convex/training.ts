@@ -39,6 +39,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import {
   canAccessMachine,
   canAccessSession,
@@ -1267,8 +1268,14 @@ export const endTrainingSession = internalMutation({
       interruptedAt: undefined,
     });
     await ctx.db.patch(args.machineId, { status: "online" });
-    // Nothing is scheduled here: the summary of a training session will be
-    // built from its record (ANH-89), not from ECG batches.
+    // The provisional summary of the session, from its telemetry (ANH-89):
+    // the machine sends the end once its points are acknowledged. The
+    // deposited record replaces it (`sessionReports.summarizeRecord`).
+    await ctx.scheduler.runAfter(
+      0,
+      internal.sessionReports.summarizeTelemetry,
+      { sessionId: args.sessionId },
+    );
     return null;
   },
 });
