@@ -1374,6 +1374,16 @@ nomme la rend `active`, et la fin qu'elle envoie, même tard, la passe
 absent). Le passage rend `{checkedCount, markedOfflineCount,
 interruptedSessionCount}`.
 
+**Avec les limites de débit (ANH-166).** Un heartbeat, un lot de points ou
+d'événements refusé en 429 n'écrit rien, il n'est donc pas une nouvelle.
+Une console qui fonctionne comme prévu n'atteint aucune de ces limites : un
+heartbeat toutes les 10 s pour une limite d'un par 5 s, et ses lots de
+télémétrie et d'événements sous les leurs. Une console qui en envoie trop
+voit les requêtes en trop refusées, pas les autres : il en passe toujours
+au moins une par 5 s. La déclaration, la confirmation du départ, la fin, la
+question de l'arrêt (`getTrainingStatus`) et `requestStop` ne sont pas
+limitées, ni la tâche planifiée.
+
 ---
 
 ## 8. Déployer
