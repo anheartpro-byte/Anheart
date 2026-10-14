@@ -131,6 +131,7 @@ describe("ANH-132 completeness of the authorization matrix", () => {
       .map((entry) => entry.id)
       .sort();
     expect(withoutForeignCell).toEqual([
+      "dashboard.counters", // counts in the caller's organisation, takes no identifier
       "machines.createMachine", // Anheart admin only; refused to centre B by role
       "machines.listMachines",
       "organizations.listOrganizations", // Anheart admin only; [] to centre B

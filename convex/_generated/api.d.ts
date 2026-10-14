@@ -11,6 +11,7 @@
 import type * as clerkWebhook from "../clerkWebhook.js";
 import type * as cloudVersion from "../cloudVersion.js";
 import type * as crons from "../crons.js";
+import type * as dashboard from "../dashboard.js";
 import type * as ecgData from "../ecgData.js";
 import type * as http from "../http.js";
 import type * as lib_auth from "../lib/auth.js";
@@ -49,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   clerkWebhook: typeof clerkWebhook;
   cloudVersion: typeof cloudVersion;
   crons: typeof crons;
+  dashboard: typeof dashboard;
   ecgData: typeof ecgData;
   http: typeof http;
   "lib/auth": typeof lib_auth;

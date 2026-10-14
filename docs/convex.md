@@ -93,7 +93,9 @@ organisations.
 | `role` | `"admin"` \| `"gestionnaire"` \| `"user"` : le rôle tenu **dans cette organisation** (miroir de `org:admin`, `org:gestionnaire`, `org:patient`). |
 | `active` | `false` garde la trace d'un retrait. Une appartenance inactive ne compte plus pour les autres (le compte n'est plus un membre qu'on peut lister, lier ou désigner) ni pour le compte lui-même pendant la transition sans jeton d'organisation. Elle **ne coupe pas** un appelant dont le jeton nomme encore l'organisation : le jeton fait foi, et le retrait prend effet quand Clerk cesse de délivrer la revendication, c'est-à-dire à l'expiration du jeton en cours. |
 
-Index : `by_user`, `by_organization`, `by_user_and_organization`.
+Index : `by_user`, `by_organization`, `by_user_and_organization`,
+`by_active_and_organization` (les membres actifs d'une organisation, ou de
+toutes : ce que compte `dashboard.counters`).
 
 ### `organizationId` : à quelle organisation appartient une ligne
 
@@ -283,7 +285,9 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | `endReason` | Raison de fin donnée par le Pi (ou « Cancelled before start by … »). |
 
 Index : `by_user`, `by_machine`, `by_machine_and_status`,
-`by_machine_and_local_ref`, `by_started_by`.
+`by_machine_and_local_ref`, `by_started_by`, `by_status_and_organization`
+(les séances actives ou en attente d'une organisation, ou de toutes : ce que
+compte `dashboard.counters`).
 
 Pour une nouvelle séance locale, l'attribution suit les droits courants du roster
 de la machine. Si elle ne peut pas être confirmée, la séance est conservée sans
@@ -831,6 +835,43 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `listOrganizations` (query) | admin Anheart | Les organisations connues du serveur et non supprimées dans Clerk, triées par nom : celles où l'admin Anheart peut créer une machine. `[]` pour tout autre rôle. |
+
+### `dashboard.ts` (compteurs du tableau de bord, ANH-159)
+
+| Fonction | Autorisation | Rôle |
+|---|---|---|
+| `counters` (query) | connecté | Les chiffres des cartes de la première page du site. Chaque chiffre compte ce que l'appelant peut déjà lister ailleurs, rien de plus. `members` : les membres **actifs** par rôle (`admin`, `gestionnaire`, `user`), pour un admin d'organisation dans la sienne, pour l'admin Anheart dans toutes (un compte membre de deux organisations compte dans chacune) ; `null` pour un gestionnaire ou un patient. `patients` : pour un gestionnaire, ses patients encore patients actifs de son organisation, comme la page Patients les liste ; `null` sinon. `machines` : `total`, les machines non supprimées que l'appelant liste (`listMachines`), et `signals`, le statut (`online` ou `in_session`) et `lastHeartbeat` de chacune de celles que leur fiche dit connectées ; `null` pour un patient. `sessions` : `active` et `pending`, les séances que l'appelant peut ouvrir (`canAccessSession` : toutes pour l'admin Anheart, celles de l'organisation pour son admin, celles de ses machines ou qu'il pratique pour un gestionnaire, les siennes pour un patient). `serverNow` : l'heure du serveur dans la réponse. |
+
+**Machines en ligne.** Le serveur ne décide pas qu'une machine est en ligne :
+sa fiche garde `online` ou `in_session` jusqu'au passage de la tâche
+`checkOfflineMachines` (jusqu'à 2,5 min après le dernier signal), et une query
+qui ne lit que des données inchangées ne se relance pas quand le temps passe.
+`counters` renvoie donc le dernier signal de chaque machine que sa fiche dit
+connectée, avec `serverNow`, et le site compte celles dont le signal a moins
+de 90 s, revu chaque seconde sur l'horloge du serveur, comme il affiche leur
+badge ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)).
+Une machine dont la fiche dit `offline` n'est jamais comptée.
+
+**Coût.** Chaque chiffre est lu par un index, jamais par le parcours d'une
+table entière : `memberships.by_active_and_organization`,
+`sessions.by_status_and_organization`, `machines.by_organization` (admin
+d'organisation) ou `machines.by_is_deleted` (admin Anheart, machines jamais
+supprimées ou restaurées), `machine_gestionnaires.by_gestionnaire` et
+`user_gestionnaires.by_gestionnaire` (gestionnaire). Un appel lit les lignes
+qu'il compte (tous les membres actifs pour l'admin Anheart, ceux d'une
+organisation pour son admin, les machines et les séances actives ou en attente
+de son périmètre), plus quelques-unes qu'il écarte : les machines supprimées
+de l'organisation pour son admin, les séances ouvertes de toute
+l'organisation pour un gestionnaire ou un patient. La query se relance
+à chaque changement d'une ligne lue, donc à chaque heartbeat d'une machine
+comptée (toutes les 10 s par machine). Pour quelques machines et quelques
+dizaines de comptes, c'est négligeable ; rien n'a été mesuré sur un
+déploiement. Le composant d'agrégation de Convex
+(`@convex-dev/aggregate`) tiendrait les comptes sans lire les lignes, mais il
+se monte par un `convex.config.ts` que `scripts/ci/convex-generated-api.mjs`
+refuse aujourd'hui ([§8](#convex_generatedapidts--tenu-par-un-script)) : il
+n'est pas utilisé, et le seuil de volume où il deviendrait nécessaire n'a pas
+été mesuré.
 
 ### `machines.ts`
 
@@ -1570,6 +1611,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
+| `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée, membre de deux organisations compté dans chacune), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
