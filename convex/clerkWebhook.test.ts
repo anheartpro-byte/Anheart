@@ -360,6 +360,26 @@ describe("Clerk webhook signature and persistence", () => {
 });
 
 describe("membership boundaries", () => {
+  it("preserves the account owner's name and language edits across memberships", async () => {
+    const w = await seedWorld(modules);
+    await w.t.run((ctx) =>
+      ctx.db.insert("memberships", {
+        userId: w.patient,
+        organizationId: w.orgB,
+        role: "user",
+        active: true,
+      }),
+    );
+    await as(w.t, "patient").mutation(api.users.updateUserProfile, {
+      firstName: "Owner",
+      language: "en",
+    });
+    expect(await w.t.run((ctx) => ctx.db.get(w.patient))).toMatchObject({
+      firstName: "Owner",
+      language: "en",
+    });
+  });
+
   it("keeps signed membership ordering and does not overwrite it from a token", async () => {
     const t = makeTest();
     await send(

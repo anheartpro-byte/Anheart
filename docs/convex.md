@@ -618,8 +618,10 @@ Autres règles notables :
   Une appartenance inactive n'est jamais réactivée par ce passage ; un miroir
   déjà reçu par webhook n'est pas réécrit depuis les revendications du jeton.
 - **Compte partagé entre organisations** : les champs communs du dossier
-  (nom, langue, FC maximale et année de naissance) sont modifiables par
-  l'admin Anheart seulement tant que plusieurs appartenances actives existent.
+  (nom, langue, FC maximale et année de naissance) ne peuvent être modifiés
+  par le personnel pour un autre utilisateur que par l'admin Anheart tant que
+  plusieurs appartenances actives existent. Le titulaire conserve la possibilité
+  de modifier lui-même son nom et sa langue.
   Les gestionnaires conservent leurs droits habituels sur un compte qui n'a
   qu'une organisation active. Les données ne sont pas dupliquées par organisation.
 - **Demander l'arrêt de sa séance** : le passager peut le demander depuis une
