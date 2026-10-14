@@ -37,7 +37,7 @@ export const EVERYTHING = [
   {
     name: "dependency manifest or lockfile",
     test: (path) =>
-      ["package.json", "package-lock.json", "bun.lock", "requirements.txt", "pyproject.toml"].includes(path) ||
+      ["package.json", "package-lock.json", "requirements.txt", "pyproject.toml"].includes(path) ||
       /^(raspberry-pi|simulation|deploy)\/(.*\/)?(requirements[^/]*\.txt|pyproject\.toml)$/.test(path),
   },
   {

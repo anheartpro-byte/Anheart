@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -900,4 +900,107 @@ test("the workflow gives no token more than read access, and each action is pinn
     );
     pins.set(action, `${commit} ${version}`);
   }
+});
+
+// --- The dependency audit (ANH-153) ---
+//
+// `audit` is a required check that runs on every event. What it audits, the
+// one place its exceptions are written, and the bill of materials it leaves.
+// The exceptions themselves, Dependabot and the lock files of JavaScript are
+// held by scripts/ci/dependency-audit.test.mjs.
+
+/** The step of `audit` with this name. @param {string} name */
+const auditStep = (name) => stepsOf("audit").find((text) => text.startsWith(`name: ${name}\n`)) ?? "";
+
+test("the audit reads its exceptions first, and every audit it runs fails the required check on what it finds", () => {
+  const titles = stepsOf("audit").map((step) => titleOf(step).replace(/^name: /, ""));
+  const order = [
+    "run: npm ci",
+    "Read the exceptions of the audit",
+    "Audit npm dependencies",
+    "Verify dependency stack-depth guards",
+    "Audit Python dependencies",
+    "Scan all Git history",
+    "Write the bill of materials",
+    "Keep the bill of materials",
+    "Keep the numbers for the quality report",
+  ];
+  assert.deepEqual(titles.slice(-order.length), order);
+  assert.match(auditStep("Read the exceptions of the audit"), /^ {8}run: node scripts\/ci\/audit-exceptions\.mjs check$/m);
+  // npm alone decides when it finds nothing; the exceptions are read only when it finds something.
+  assert.equal(
+    script("audit", "Audit npm dependencies"),
+    "if npm audit --audit-level=high; then\n  exit 0\nfi\nnode scripts/ci/audit-exceptions.mjs npm\n",
+  );
+  // Each step runs after an earlier one failed, never on a cancelled run, and nothing lets one pass that failed.
+  for (const name of order.slice(1, -1)) {
+    assert.equal(stepCondition("audit", name), "${{ !cancelled() }}", name);
+    assert.ok(!softened(auditStep(name)), `${name} can pass though it failed`);
+  }
+  // An exception is written in the table and nowhere else.
+  for (const file of readdirSync(new URL("../../.github/workflows/", import.meta.url))) {
+    assert.doesNotMatch(atRoot(`.github/workflows/${file}`), /--ignore-vuln|--omit[= ]dev|audit-level=(moderate|low|info|critical|none)/, file);
+  }
+});
+
+/** The words of one `for <name> in ...; do` line of a script. @param {string} text @param {string} name */
+const loopOver = (text, name) => new RegExp(`^for ${name} in (.+); do$`, "m").exec(text)?.[1]?.split(" ") ?? [];
+
+test("pip-audit audits every Python environment the project installs, skipping only the exceptions of the table", () => {
+  const python = script("audit", "Audit Python dependencies");
+  assert.match(python, /^skipped="\$\(node scripts\/ci\/audit-exceptions\.mjs pip-audit-args\)"\nread -r -a ignore <<< "\$skipped"$/m);
+  assert.equal(python.split("pip-audit==").length - 1, 1, "pip-audit is called once, by the function every environment goes through");
+  assert.match(python, /uv tool run pip-audit==\d+\.\d+\.\d+ --disable-pip --require-hashes "\$\{ignore\[@\]\}" -r "\$2" \|\| failed\+=\("\$1"\)/);
+  assert.match(python, /^if \(\( \$\{#failed\[@\]\} > 0 \)\); then\n.*\n {2}exit 1\nfi\n$/m);
+  const locks = loopOver(python, "lock");
+  const sets = loopOver(python, "set");
+  assert.deepEqual(locks, ["raspberry-pi/requirements-lock.txt", "raspberry-pi/requirements-build-lock.txt"]);
+  assert.deepEqual(sets, ["raspberry-pi/requirements-dev.txt", "deploy/simulation-vercel/requirements.txt", "simulation/cad/requirements.txt"]);
+  assert.match(python, /^ {2}uv pip compile "\$set" --python-version 3\.12 --generate-hashes --quiet --output-file "\$resolved"$/m);
+  // A lock file audited as it is fixes every version and every hash: pip-audit reads nothing it would resolve.
+  for (const lock of locks) {
+    const requirements = atRoot(lock).split("\n").filter((line) => /^[A-Za-z0-9]/.test(line));
+    assert.ok(requirements.length > 0 && requirements.every((line) => /^[\w.-]+==[\w.+!-]+ \\$/.test(line)), lock);
+    assert.equal(atRoot(lock).split("--hash=sha256:").length - 1 >= requirements.length, true, lock);
+  }
+  // Every requirements file of the repository is one of those, is included by one (`-r`), or is
+  // the file a lock was compiled from (the command at its top).
+  /** @type {Set<string>} */
+  const reached = new Set();
+  const visit = (/** @type {string} */ path) => {
+    if (reached.has(path)) return;
+    reached.add(path);
+    const text = atRoot(path);
+    for (const [, included = ""] of text.matchAll(/^-r +(\S+)$/gm)) visit(join(dirname(path), included));
+    const compiled = /^# {4}uv pip compile (\S+) /m.exec(text)?.[1];
+    if (compiled) visit(join(dirname(path), compiled));
+  };
+  for (const path of [...locks, ...sets]) visit(path);
+  const files = spawnSync("git", ["ls-files", "-z", "--", "*requirements*.txt"], { encoding: "utf8", cwd: new URL("../..", import.meta.url) })
+    .stdout.split("\0")
+    .filter(Boolean);
+  assert.ok(files.length >= 10, "the requirements files of the repository were not read");
+  for (const path of files) {
+    const text = atRoot(path);
+    // A file that only includes others, like the requirements.txt of the root, adds nothing to audit.
+    const own = text.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#"));
+    const onlyIncludes = own.every((line) => /^-r +\S+$/.test(line)) && own.every((line) => reached.has(join(dirname(path), line.slice(3).trim())));
+    assert.ok(reached.has(path) || onlyIncludes, `${path} is installed somewhere and audited nowhere`);
+  }
+});
+
+test("the bill of materials is written from the lock files on every run, and kept with the run", () => {
+  const written = script("audit", "Write the bill of materials");
+  assert.match(written, /^npm sbom --sbom-format cyclonedx --package-lock-only > "\$RUNNER_TEMP\/sbom\/site-convex\.cdx\.json"$/m);
+  assert.deepEqual(loopOver(written, "lock"), ["requirements-lock", "requirements-build-lock"]);
+  assert.match(written, /uv tool run --from cyclonedx-bom==\d+\.\d+\.\d+ cyclonedx-py requirements "raspberry-pi\/\$lock\.txt" --output-format JSON --output-file "\$RUNNER_TEMP\/sbom\/pi-\$lock\.cdx\.json"$/m);
+  const kept = auditStep("Keep the bill of materials");
+  assert.match(kept, /^ {8}uses: actions\/upload-artifact@/m);
+  assert.deepEqual(
+    kept.split("\n").filter((line) => /^ {10}\S/.test(line)).map((line) => line.trim()),
+    ["name: sbom", "retention-days: 90", "if-no-files-found: error", "overwrite: true", "path: ${{ runner.temp }}/sbom"],
+  );
+  // The release pipeline calls this workflow, so its run keeps the bill of materials of the commit it tags.
+  assert.match(atRoot(".github/workflows/release.yml"), /^ {4}uses: \.\/\.github\/workflows\/ci\.yml$/m);
+  assert.match(atRoot("docs/release.md"), /artefact `sbom`/);
 });

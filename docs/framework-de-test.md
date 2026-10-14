@@ -1117,7 +1117,7 @@ par un commit de fusion
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; puis les tests du moteur de simulation hébergé, `deploy/simulation-vercel/tests` (depuis ANH-218 : aucun job ne les lançait) ; `coverage.xml`, `report.json` et `report.html` |
 | `convex-tests` | `convex/_generated/api.d.ts`, versionné, comparé à ce que les fichiers de `convex/` impliquent (`node scripts/ci/convex-generated-api.mjs`, sans déploiement ni réseau : voir [convex.md](convex.md#convex_generatedapidts--tenu-par-un-script)) ; types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
-| `audit` | `npm audit`, `pip-audit` et `gitleaks` sur l'historique Git ; aucun secret de production requis |
+| `audit` | `npm audit` (avis hauts et critiques), `pip-audit` sur chaque environnement Python installé, `gitleaks` sur l'historique Git ; seules les exceptions datées de `.github/audit-exceptions.md` sont sautées ; artefact `sbom`, la nomenclature CycloneDX de ce qui s'installe depuis un verrou (voir [Dépendances](#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153)) ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown ; les tests de ce qui décide les gates (règle de chemins, ce workflow, workflow CodeQL, les deux workflows de déploiement, la pipeline de release, rapport de qualité, script qui tient `convex/_generated/api.d.ts`) ; résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub ([release.md](release.md#7-tests)) ; puis, après `npm ci`, le test qui lit tous les fichiers du dépôt (`lib/legacyModeReferences.test.ts`). Tous sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés : voir [Ce que le job docs lance à chaque exécution](#ce-que-le-job-docs-lance-à-chaque-exécution-anh-183) |
 | `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
 
@@ -1216,7 +1216,7 @@ publiés avec leurs fichiers cachés. Ils ne contiennent que le dossier
 d'enregistrements créé par le lanceur.
 
 Les dépendances npm et Python sont mises en cache. Chaque exécution garde ses
-artefacts pendant 14 jours. Les runs nocturnes et manuels ajoutent `--dsp` au
+artefacts pendant 14 jours, sauf `quality-report` et `sbom` : 90 jours. Les runs nocturnes et manuels ajoutent `--dsp` au
 rapport synthétique. Les séances enregistrées de `simulation/scenarios/real/`
 n'ont pas d'étape nocturne à part : `test_real_records.py` les rejoue dans la
 batterie, à chaque exécution (voir [16.5](#165-la-bibliothèque-simulationscenariosreal)).
@@ -1232,11 +1232,8 @@ sûreté du moteur. Aucun scénario, seuil de couverture ou contrôle n'est
 retiré ; la génération et la publication du rapport restent obligatoires :
 `simulation-gate` échoue si `simulation (report)` échoue.
 
-L'audit Python résout d'abord les dépendances transitives pour Python 3.12 avec
-`uv pip compile --generate-hashes`, puis audite cette liste entièrement épinglée
-avec `--disable-pip --require-hashes`. Les dépendances transitives restent donc
-incluses. Cela évite un second environnement pip temporaire non utilisé par les
-gates. La liste d'audit résolue n'est pas un verrou de release.
+Ce que les audits de dépendances couvrent, leurs exceptions et Dependabot :
+[Dépendances](#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153).
 
 `.gitleaksignore` conserve deux empreintes historiques vérifiées :
 `YOUR_API_KEY` dans un exemple README et `invalid-key` dans un test HTTP refusé.
@@ -1250,6 +1247,125 @@ vrai scanner épinglé avant le scan de tout l'historique. Il couvre la fusion
 squash, le déplacement de ligne et le refus d'une autre valeur, d'un autre
 chemin ou d'un secret voisin ; les autres détecteurs restent actifs.
 Ces faux positifs ne sont pas des secrets réels. Aucun audit n'est désactivé.
+
+### Dépendances : un gestionnaire, des versions figées, un audit (ANH-153)
+
+**Un seul gestionnaire de paquets JavaScript : npm, avec
+`package-lock.json`.** C'est ce que la CI, la pipeline de release et les deux
+boutons de déploiement installent (`npm ci` ; `vercel build` choisit son
+gestionnaire d'après les fichiers de verrou du dépôt, et il n'en reste qu'un).
+`bun.lock`, que rien ne lisait et qui listait encore des paquets retirés, a été
+supprimé le 14 octobre 2026. `scripts/ci/dependency-audit.test.mjs` refuse tout
+autre fichier de verrou JavaScript et toute commande `bun`, `yarn` ou `pnpm`
+dans un workflow ou une page de la documentation.
+
+**Python : ce qui est figé, et où.**
+
+| Environnement | Fichier installé | Versions | Empreintes vérifiées à l'installation |
+|---|---|---|---|
+| Image du Pi | `raspberry-pi/requirements-lock.txt`, compilé depuis `requirements-prod.txt` (donc `requirements-base.txt`), et `requirements-build-lock.txt` pour les outils qui construisent l'image | toutes, dépendances transitives comprises | oui : le `Dockerfile` installe avec `--require-hashes` ([pi-image.md](pi-image.md#2-versions-figées)) |
+| Tests, simulation locale, CI | `raspberry-pi/requirements-dev.txt` | celles de `requirements-base.txt` ; les outils de test et d'analyse (`pytest`, `hypothesis`, `ruff`, `mypy`, `basedpyright`...) par une borne basse ; les dépendances transitives libres | non : la CI installe par `uv pip install -r`, sans empreintes |
+| Simulation hébergée | `deploy/simulation-vercel/requirements.txt` (le `requirements.txt` et le `pyproject.toml` de la racine le répètent) | bornes basses, deux bornes hautes | non : Vercel résout les versions quand il déploie |
+| Extracteur CAO, en CI seulement | `simulation/cad/requirements.txt` | `cadquery-ocp` seul | non |
+
+**Ce que le job `audit` audite.** C'est une vérification obligatoire, lancée à
+chaque exécution : PR, push sur `develop` ou `main`, exécution de nuit (qui
+tourne sur `main`, la branche par défaut). Une vulnérabilité publiée après une
+fusion fait donc rougir la PR suivante, quelle qu'elle soit, et l'exécution de
+nuit dès que `main` porte le paquet, tant qu'elle n'est pas corrigée ou
+exceptée.
+
+| Quoi | Outil | Ce qui fait échouer |
+|---|---|---|
+| `package-lock.json` (site et Convex), paquets de développement compris | `npm audit --audit-level=high` | un avis de gravité haute ou critique ; un avis modéré ou faible est affiché, sans faire échouer |
+| Image du Pi : ses deux verrous, tels quels | `pip-audit --disable-pip --require-hashes` | toute vulnérabilité connue, quelle que soit sa gravité (`pip-audit` ne lit pas la gravité) |
+| Tests et CI, simulation hébergée, extracteur CAO : chacun résolu à part pour Python 3.12 avec ses dépendances transitives (`uv pip compile --generate-hashes`), comme il s'installe | le même | le même |
+| Tout l'historique Git | gitleaks | un secret (voir plus haut) |
+
+Chaque environnement est audité même quand un autre a échoué, et le message
+d'erreur les nomme. Pour un environnement qui n'est pas figé, l'audit porte sur
+ce que la résolution choisit ce jour-là sur un runner Linux : pas forcément ce
+qu'un poste a installé, ni ce que Vercel a installé à son dernier déploiement.
+Les paquets réservés à macOS (`pyobjc`) ne sont pas audités. Un audit ne voit
+que les vulnérabilités publiées : il ne détecte pas un paquet malveillant
+([menaces.md, MEN-06](menaces.md#men-06-compromission-dun-paquet-pip-ou-npm)).
+`scripts/ci/ci-workflow.test.mjs` vérifie que chaque fichier `requirements*.txt`
+du dépôt est audité, directement, par inclusion (`-r`) ou comme source d'un
+verrou.
+
+**Exceptions.** Le seul endroit où un avis peut être sauté est le tableau de
+[`.github/audit-exceptions.md`](../.github/audit-exceptions.md), lu à chaque
+exécution par `scripts/ci/audit-exceptions.mjs` : un avis, son écosystème, le
+paquet, la date d'ajout, la date d'expiration (90 jours au plus), le ticket qui
+la retire et la raison. Une ligne mal formée ou expirée fait échouer le job :
+la première étape la refuse, et les étapes qui lisent le tableau échouent
+aussi plutôt que de sauter quoi que ce soit. Pour npm, le script n'est
+consulté que si `npm audit` a trouvé quelque chose : sans exception écrite, le
+verdict reste celui de npm.
+Une exception npm ne vaut que pour le paquet qu'elle nomme ; `pip-audit` reçoit
+les identifiants Python par `--ignore-vuln`. Aucune exception au 14 octobre
+2026.
+
+**Essai du 14 octobre 2026, sur un poste, pas en CI.** Les commandes exactes
+des étapes du workflow, extraites du fichier, ont tourné sur une copie jetable
+des fichiers de dépendances ; rien de vulnérable n'a été commité.
+
+| Essai | Résultat |
+|---|---|
+| `urllib3==1.24.1` ajouté à la simulation hébergée | étape Python en échec : 13 vulnérabilités dans cet environnement, nommé dans le message ; les quatre autres environnements audités quand même, sans rien trouver |
+| Les 13 identifiants écrits en exceptions | étape verte, « 13 ignored » |
+| Le même tableau lu à la date d'expiration de ses lignes | refusé, ligne par ligne (« expired on ... ») |
+| La ligne retirée, aucune exception | étape verte |
+| `lodash@4.17.11` ajouté au site | étape npm en échec : un avis critique et trois hauts, chacun « NOT EXCEPTED » |
+| Les quatre écrits en exceptions, puis l'un d'eux retiré | verte, puis en échec sur celui qui manque |
+| `lodash` retiré, aucune exception | étape verte (« found 0 vulnerabilities ») |
+
+Que le job rougisse sur GitHub n'est pas constaté ici : il le sera à la
+première PR qui fait entrer une vulnérabilité connue.
+
+**Dependabot.** [`.github/dependabot.yml`](../.github/dependabot.yml) ouvre des
+PR vers `develop`, une fois par mois : npm à la racine, pip pour
+`raspberry-pi/`, `deploy/simulation-vercel/` et `simulation/cad/`, et les
+actions des workflows. Les versions mineures et correctives sont groupées en
+une PR par entrée, une version majeure vient seule. Les actions restent
+épinglées par commit complet : Dependabot change le commit et la version en
+commentaire ensemble, dans tous les workflows à la fois. Une PR sur le Pi se
+termine à la main : `requirements-base.txt`, ses verrous et la table de
+[pi-image.md](pi-image.md#2-versions-figées) changent ensemble
+(`tests/test_pi_install.py` échoue tant qu'ils ne concordent pas). Trois
+limites :
+
+* GitHub ne lit ce fichier que sur la branche par défaut, `main` : il n'agit
+  qu'une fois arrivé sur `main` avec une release ;
+* les alertes Dependabot et ses mises à jour de sécurité sont des réglages du
+  dépôt, désactivés à la lecture du 14 octobre 2026 (API de GitHub). Les
+  activer revient au chef de projet. D'après la documentation de GitHub, une
+  mise à jour de sécurité vise la branche par défaut, `main`, et non `develop`
+  (non vérifié ici) : à décider avant de les activer ;
+* rien n'est ignoré : un paquet volontairement figé, comme `pymodbus`
+  (`requirements-base.txt` dit pourquoi), recevra des PR à refuser.
+
+**Nomenclature des composants (SBOM).** L'étape « Write the bill of materials »
+écrit, au format CycloneDX : `site-convex.cdx.json`
+(`npm sbom --package-lock-only`, paquets de développement marqués comme tels),
+`pi-requirements-lock.cdx.json` et `pi-requirements-build-lock.cdx.json`
+(`cyclonedx-py`, version figée), gardés 90 jours dans l'artefact `sbom` de
+l'exécution. La pipeline de release appelle ce workflow sur le commit qu'elle
+tague : l'artefact `sbom` de son exécution est la nomenclature de la release
+([release.md](release.md#la-pipeline-de-release)). La simulation hébergée n'en
+a pas : sans verrou, une liste faite en CI ne serait pas ce que Vercel a
+installé. Ce qui reste, pour
+[ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) :
+joindre ces fichiers à un
+objet qui dure plus que 90 jours (une « release » GitHub sur le tag, par
+exemple, ce qui demande au job des tags un droit d'écriture de plus), les
+signer ou les attester, et produire celle de la simulation hébergée quand elle
+aura un verrou.
+
+**Ce qui reste, hors de ce lot.** L'environnement des tests et de la CI n'est
+ni entièrement figé ni installé avec ses empreintes ; la simulation hébergée n'a
+pas de verrou. Les figer changerait l'installation de toutes les gates Python
+et le déploiement de la simulation : à faire par un ticket à part.
 
 ### Gate Pi en parallèle (ANH-72)
 
@@ -1907,7 +2023,7 @@ Passent avant ces listes et lancent tout :
 
 * `.github/` et `scripts/ci/` ;
 * les manifestes et verrous de dépendances : `package.json`,
-  `package-lock.json`, `bun.lock`, `requirements.txt` et `pyproject.toml` à la
+  `package-lock.json`, `requirements.txt` et `pyproject.toml` à la
   racine, ainsi que les `requirements*.txt` et `pyproject.toml` de
   `raspberry-pi/`, `simulation/` et `deploy/` ;
 * les fichiers de la console testés des deux côtés :
@@ -1994,7 +2110,8 @@ contrôles de la documentation :
 * **les tests de ce qui décide les gates** : `gates-for-changes.test.mjs`,
   `ci-workflow.test.mjs`, `analysis-workflows.test.mjs`,
   `deploy-workflows.test.mjs`, `release-workflow.test.mjs`,
-  `quality-report.test.mjs` et
+  `quality-report.test.mjs`, `dependency-audit.test.mjs` (exceptions de
+  l'audit, Dependabot, verrou JavaScript, fichiers de secrets ignorés) et
   `convex-generated-api.test.mjs`, tous dans
   `scripts/ci`. Ils tournaient dans `changes`, que la protection de branche
   n'exige pas : un test de workflow en échec n'empêchait aucune fusion. Ils

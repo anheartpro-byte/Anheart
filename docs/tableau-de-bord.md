@@ -1201,7 +1201,7 @@ défaut, voir [enregistrement.md](enregistrement.md#dépôt-vérifié-dans-conve
 
 ## 7. Lancer le site en local
 
-Prérequis : Node.js, les dépendances (`npm install` ou `bun install`), un
+Prérequis : Node.js, les dépendances (`npm ci`), un
 compte Convex et une application Clerk.
 
 Scripts de `package.json` :

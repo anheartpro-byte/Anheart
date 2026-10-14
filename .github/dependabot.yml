@@ -1,0 +1,75 @@
+# Dependabot: pull requests that move the dependencies, against `develop`
+# (docs/framework-de-test.md, "Dépendances : un gestionnaire, des versions
+# figées, un audit"). GitHub reads this file on the default branch only, `main`:
+# it acts once it gets there with a release.
+#
+# One entry per directory the project installs from, the ones the `audit` job
+# audits: the site and Convex (npm), the image and the tests of the Pi, the
+# hosted simulation, the CAD extractor (pip). The requirements.txt and
+# pyproject.toml of the root repeat the hosted simulation for the Git layout of
+# Vercel, which `vercel.json` turns off: they have no entry of their own. And
+# the actions of the workflows, pinned to a full commit with their version in
+# a comment: Dependabot moves the commit and the comment together, in every
+# workflow at once (the tests of scripts/ci/ require one commit per action,
+# the same in every workflow).
+#
+# Once a month, minor and patch versions grouped in one pull request per
+# entry: each such pull request runs every gate and needs a review. A major
+# version comes alone. The security updates of Dependabot, when they are turned
+# on in the settings of the repository, follow no schedule; the nightly run of
+# the `audit` job fails on a new vulnerability whatever this file says.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  # requirements-base.txt, its lock files and the table of docs/pi-image.md
+  # move together (raspberry-pi/tests/test_pi_install.py fails while they
+  # disagree): a pull request here is finished by hand, with the command
+  # written at the top of requirements-lock.txt.
+  - package-ecosystem: pip
+    directory: /raspberry-pi
+    target-branch: develop
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      pi-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /deploy/simulation-vercel
+    target-branch: develop
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      simulation-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /simulation/cad
+    target-branch: develop
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      cad-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        update-types: [major, minor, patch]

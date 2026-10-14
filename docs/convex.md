@@ -1751,7 +1751,7 @@ environnements, les clés et les commandes réellement utilisées sont dans
 [deploiement.md](deploiement.md#3-déployer-convex). Les étapes ci-dessous sont
 celles d'un projet **neuf**.
 
-1. Installer les dépendances à la racine : `npm install` (ou `bun install`).
+1. Installer les dépendances à la racine : `npm ci`.
 2. Créer un déploiement de développement et générer `convex/_generated/` :
    ```bash
    npx convex dev

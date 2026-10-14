@@ -151,7 +151,6 @@ test("the CI itself, manifests, lockfiles and files tested on both sides run eve
     "scripts/ci/notes.md",
     "package.json",
     "package-lock.json",
-    "bun.lock",
     "requirements.txt",
     "pyproject.toml",
     "raspberry-pi/pyproject.toml",

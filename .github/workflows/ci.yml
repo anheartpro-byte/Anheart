@@ -677,6 +677,12 @@ jobs:
           overwrite: true
           path: ${{ runner.temp }}/quality
 
+  # The dependencies and the history of the repository (docs/framework-de-test.md,
+  # "Dépendances : un gestionnaire, des versions figées, un audit"). Each audit
+  # fails this required check on what it finds: npm on a high or critical
+  # advisory, pip-audit on any known vulnerability, gitleaks on a secret. The
+  # only advisories skipped are the exceptions written, each with its expiry
+  # day, in .github/audit-exceptions.md, read by scripts/ci/audit-exceptions.mjs.
   audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -695,8 +701,21 @@ jobs:
           python-version: '3.12'
           enable-cache: true
       - run: npm ci
+      # A malformed table, or an exception from its expiry day on, fails the
+      # job whatever the audits find.
+      - name: Read the exceptions of the audit
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/audit-exceptions.mjs check
+      # npm decides alone unless it finds something. Then the exceptions are
+      # read, and the step passes only if every high or critical advisory is
+      # one of them. Moderate and low advisories are printed and fail nothing.
       - name: Audit npm dependencies
-        run: npm audit --audit-level=high
+        if: ${{ !cancelled() }}
+        run: |
+          if npm audit --audit-level=high; then
+            exit 0
+          fi
+          node scripts/ci/audit-exceptions.mjs npm
       # The test file of `npm run test:dependency-security`, run directly so
       # that it can be told where to keep its JUnit file.
       - name: Verify dependency stack-depth guards
@@ -704,11 +723,38 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/quality"
           node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-dependency-guard.xml" scripts/ci/braces-depth-guard.test.mjs
+      # Each Python environment the project installs, audited on its own, as
+      # it is installed. The image of the Pi: its two lock files, as they are,
+      # every version and hash fixed. Then, each resolved first for Python 3.12
+      # with the packages it pulls in, since their files fix only some
+      # versions: the tests, the local simulation and the CI
+      # (raspberry-pi/requirements-dev.txt), the hosted simulation
+      # (deploy/simulation-vercel/requirements.txt, which the requirements.txt
+      # of the root includes) and the CAD extractor. pip-audit fails on any
+      # known vulnerability, whatever its severity, except the Python
+      # exceptions. Every environment is audited, even after one has failed.
       - name: Audit Python dependencies
         if: ${{ !cancelled() }}
         run: |
-          uv pip compile raspberry-pi/requirements-dev.txt requirements.txt --python-version 3.12 --generate-hashes --output-file "$RUNNER_TEMP/audit-requirements.txt"
-          uv tool run pip-audit==2.9.0 --disable-pip --require-hashes -r "$RUNNER_TEMP/audit-requirements.txt"
+          skipped="$(node scripts/ci/audit-exceptions.mjs pip-audit-args)"
+          read -r -a ignore <<< "$skipped"
+          failed=()
+          audit() {
+            echo "pip-audit: $1"
+            uv tool run pip-audit==2.9.0 --disable-pip --require-hashes "${ignore[@]}" -r "$2" || failed+=("$1")
+          }
+          for lock in raspberry-pi/requirements-lock.txt raspberry-pi/requirements-build-lock.txt; do
+            audit "$lock" "$lock"
+          done
+          for set in raspberry-pi/requirements-dev.txt deploy/simulation-vercel/requirements.txt simulation/cad/requirements.txt; do
+            resolved="$RUNNER_TEMP/audit-${set//\//-}"
+            uv pip compile "$set" --python-version 3.12 --generate-hashes --quiet --output-file "$resolved"
+            audit "$set" "$resolved"
+          done
+          if (( ${#failed[@]} > 0 )); then
+            echo "::error title=Vulnérabilité Python::pip-audit a trouvé une vulnérabilité connue dans : ${failed[*]}. Prendre une version corrigée, ou écrire une exception datée dans .github/audit-exceptions.md."
+            exit 1
+          fi
       - name: Scan all Git history
         if: ${{ !cancelled() }}
         run: |
@@ -717,6 +763,32 @@ jobs:
           mkdir -p "$RUNNER_TEMP/quality"
           ANHEART_GITLEAKS_BIN="$anheart_gitleaks_bin" node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-gitleaks-fixture.xml" scripts/ci/gitleaks-fixture.test.mjs
           "$anheart_gitleaks_bin" git --redact --log-opts='--all'
+      # The bill of materials, in the CycloneDX format, of what is installed
+      # from a lock file: the npm packages of the site and of Convex
+      # (package-lock.json, development packages marked as such), the Python
+      # packages of the image of the Pi and the tools that build it. The hosted
+      # simulation has none: Vercel resolves its packages when it deploys, and
+      # a list made here would not be what runs. Written on every run,
+      # including the run of the release pipeline, which calls this workflow on
+      # the commit it tags: the artifact `sbom` of that run is the bill of
+      # materials of the release (docs/release.md).
+      - name: Write the bill of materials
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbom"
+          npm sbom --sbom-format cyclonedx --package-lock-only > "$RUNNER_TEMP/sbom/site-convex.cdx.json"
+          for lock in requirements-lock requirements-build-lock; do
+            uv tool run --from cyclonedx-bom==7.4.0 cyclonedx-py requirements "raspberry-pi/$lock.txt" --output-format JSON --output-file "$RUNNER_TEMP/sbom/pi-$lock.cdx.json"
+          done
+      - name: Keep the bill of materials
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: sbom
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
+          path: ${{ runner.temp }}/sbom
       # Only the JUnit files of the two test files above: how many tests they
       # hold and whether they pass. Nothing of what the audits or the scan
       # found leaves this job.
@@ -751,14 +823,15 @@ jobs:
           jobSummary: false
       # Part of the gate: the tests of what decides the gates themselves (the
       # path rule, this workflow, the analysis and deployment workflows, the
-      # release pipeline, the quality report). In this job because it is a required check that runs
+      # release pipeline, the quality report, the exceptions of the dependency
+      # audit and what Dependabot watches). In this job because it is a required check that runs
       # on every event, whatever the files changed: a workflow test that fails
       # blocks the merge. They install nothing and read the files as text.
       - name: Test the path rule, the workflows and the quality report
         if: ${{ !cancelled() }}
         run: |
           mkdir -p "$RUNNER_TEMP/quality"
-          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/release-workflow.test.mjs scripts/ci/quality-report.test.mjs scripts/ci/convex-generated-api.test.mjs
+          node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-ci.xml" scripts/ci/gates-for-changes.test.mjs scripts/ci/ci-workflow.test.mjs scripts/ci/analysis-workflows.test.mjs scripts/ci/deploy-workflows.test.mjs scripts/ci/release-workflow.test.mjs scripts/ci/quality-report.test.mjs scripts/ci/dependency-audit.test.mjs scripts/ci/convex-generated-api.test.mjs
       - name: Resolve threat identifiers
         if: ${{ !cancelled() }}
         run: |
