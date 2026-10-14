@@ -1552,7 +1552,7 @@ exactement pareil, sans tableau de bord.
 | Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur | `POST /api/machine/profiles` | quand la révision du magasin change |
 | Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance | `POST /api/machine/training/local` | dès que le dossier de son enregistrement existe, par la tâche de veille (8.6), avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
 | Pi → Convex | confirmation du départ d'une séance lancée à distance, avec les deux mêmes dates | `POST /api/machine/training/start` | dès que la séance est armée, par la tâche de veille (8.6) ; refaite tant qu'elle est retenue |
-| Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 2 s quand elle a du retard |
+| Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 3 s quand elle a du retard |
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, chacun avec son rang dans le fichier | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
 | Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance), avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos |
@@ -1674,10 +1674,13 @@ Pour une séance : la **déclaration** (ou la confirmation du départ) d'abord,
 puis la télémétrie, les événements, et la **fin** quand l'enregistrement est
 fermé et sa télémétrie acquittée.
 
-Débit : **jamais deux lots de télémétrie à moins de 2 s l'un de l'autre,
-quelles que soient les séances, chacun de 300 points au plus.** Une séance en
+Débit : **jamais deux lots de télémétrie à moins de 3 s l'un de l'autre,
+quelles que soient les séances, chacun de 300 points au plus**
+(`CATCH_UP_PERIOD`). C'est sous la limite que Convex pose sur cette route,
+deux lots toutes les 5 s par machine (contrat 1.4, ANH-166) ; 3 s plutôt que
+2,5 s parce que l'étape d'envoi revient une fois par seconde. Une séance en
 cours qui est à jour envoie toutes les 5 s ce qu'elle a mesuré depuis ; si un
-lot de rattrapage vient de partir, elle attend son tour, 2 s au plus. Une
+lot de rattrapage vient de partir, elle attend son tour, 3 s au plus. Une
 séance en retard n'est pas même relue avant son tour. Ne portent pas de
 télémétrie et n'attendent donc pas ce rythme : une déclaration, une fin sans
 enregistrement (un lancement refusé), et la fin d'une séance dont tous les
@@ -1688,9 +1691,9 @@ points sont déjà partis.
 | Réponse | Cas | Effet |
 |---|---|---|
 | **Acquittée** | 200 | Le curseur avance après tout ce que la requête portait, stocké ou non. Le serveur compte ce qu'il n'a pas stocké parce que daté hors de la séance (`rejected`) : ce nombre est écrit dans le journal de la console (`N points of session ... acknowledged but not stored`) et cumulé dans le curseur (`rejected_points`, `rejected_events`). Ces points sont derrière le curseur : les renvoyer donnerait la même réponse. |
-| **Retenue** | pas de réponse (réseau, délai de 3 s), 401, 403, 408, 425, **426**, 429, 5xx | Rien n'a été reçu. **Le curseur ne bouge pas et rien n'est abandonné.** L'étape d'envoi n'envoie plus rien pendant 15 s, puis la même requête est refaite. Le premier contact de la séance en cours (déclaration ou confirmation du départ) et la question de l'arrêt ne sont pas de cette étape et n'attendent pas cette retenue : ils n'attendent que leurs propres échecs ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)). |
+| **Retenue** | pas de réponse (réseau, délai de 3 s), 401, 403, 408, 425, **426**, 429, 5xx | Rien n'a été reçu. **Le curseur ne bouge pas et rien n'est abandonné.** L'étape d'envoi n'envoie plus rien pendant 15 s, puis la même requête est refaite. Le premier contact de la séance en cours (déclaration ou confirmation du départ) et la question de l'arrêt ne sont pas de cette étape et n'attendent pas cette retenue : ils n'attendent que leurs propres échecs ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)). Un 429 retient en plus sa route aussi longtemps que le serveur le demande (fin de [8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)). |
 | **Route inconnue** | 404 sans code stable | Pour les événements (un Convex antérieur au contrat 1.1) : ils restent dus, et la télémétrie et la fin continuent sans eux. La route est redemandée une fois par minute tant que la séance s'envoie ; une fois sa fin partie, l'enregistrement est mis de côté jusqu'au démarrage suivant de la console, qui redemande. Pour toute autre route : comme « retenue ». |
-| **Refusée** | tout autre refus | Avec un code qui dit que la même requête sera toujours refusée (`invalid_request`, `session_not_found`, `session_not_pending`, `machine_not_found`) : passée tout de suite. Sinon (`request_failed`, ou pas de code) : essayée **trois fois en tout**, à 15 s d'intervalle, puis passée. Une requête passée est comptée dans le curseur (`refused`) et écrite dans le journal ; ce qui la suit n'est pas retenu. |
+| **Refusée** | tout autre refus | Avec un code qui dit que la même requête sera toujours refusée (`invalid_request`, `session_not_found`, `session_not_pending`, `machine_not_found`, `payload_too_large`) : passée tout de suite. Sinon (`request_failed`, ou pas de code) : essayée **trois fois en tout**, à 15 s d'intervalle, puis passée. Une requête passée est comptée dans le curseur (`refused`) et écrite dans le journal ; ce qui la suit n'est pas retenu. |
 
 Une déclaration acquittée sans identifiant de séance ne sert à rien : elle est
 refaite toutes les 15 s. Ni la séance en cours, ni celle qui vient de finir,
@@ -1885,6 +1888,42 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
   annulée avant l'arrêt du variateur ; une étape qui attendait le disque ou le
   réseau rend la main à l'instant, et le fil de lecture, démon, ne retient pas
   le processus. L'ordre de sortie reste : variateur arrêté d'abord.
+
+**Quand le tableau de bord demande d'attendre (contrat 1.4, ANH-166).**
+Convex limite le débit de cinq routes par machine : heartbeat, interrogation
+des lancements, télémétrie, événements et réservation d'un fichier de dépôt
+(les limites sont dans `contracts/machine-api.json`, `rate_limits`, et
+expliquées dans [convex.md](convex.md#limitation-de-débit-et-taille-des-corps-anh-166)).
+Au-delà, il répond 429 `rate_limited` avec `retryAfterMs`, le délai avant
+lequel la même requête serait encore refusée.
+
+- **La console n'y arrive pas d'elle-même.** Ses cadences sont sous ces
+  limites, et `tests/test_cloud_rate_limit.py` les y épingle : heartbeat
+  toutes les 10 s pour une limite d'un toutes les 5 s, interrogation toutes
+  les 3 s pour une toutes les 2 s, télémétrie toutes les 3 s au plus vite pour
+  deux lots toutes les 5 s, événements une fois par étape (1 s) pour dix par
+  seconde, 64 réservations par étape du dépôt pour une réserve de 64. Les
+  tailles aussi : 300 points et 200 événements par lot, un heartbeat de moins
+  de 16 Kio, chacun sous la taille de sa route.
+- **Si elle y arrive quand même** (un rattrapage de dépôt sur un lien rapide,
+  un serveur réglé plus bas), `PacedTransport` (`src/cloud_sync.py`) retient
+  la route : jusqu'à la fin de l'attente demandée, aucune requête de cette
+  route ne part, qui que ce soit qui la demande (heartbeat, interrogation,
+  envoi des séances, dépôt) ; elle reçoit sur place le même refus 429, sans
+  réseau. L'attente est celle de `retryAfterMs`, bornée à 5 min
+  (`MAX_RATE_WAIT`) ; 15 s quand le serveur n'en dit pas (`RATE_WAIT_UNSAID`).
+  Chaque retenue est écrite une fois dans le journal, au début, avec la route
+  et sa durée (`dashboard: /api/machine/heartbeat refused for its rate (HTTP
+  429, rate_limited): not asked again for 4.2 s`). Les autres routes ne sont
+  pas retenues.
+- **Rien n'est perdu.** Un 429 est une réponse retenue (8.3) : le curseur ne
+  bouge pas, la même requête est refaite après l'attente ; pour le dépôt, le
+  fichier reste sur le disque et la purge locale attend toujours sa
+  vérification. La pastille **Serveur** lit `en erreur` pendant ce temps.
+- **La question de l'arrêt n'est jamais retenue**, et Convex ne la limite pas.
+- Un corps trop grand reçoit 413 `payload_too_large` : la même requête serait
+  toujours refusée, elle est passée (8.3). La console n'en envoie pas : ses
+  lots sont sous ces tailles.
 
 ### 8.7 Limites
 
@@ -2396,14 +2435,14 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.3`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.4`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.3`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.4`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. Les deux derniers valent `null` :
@@ -2534,7 +2573,9 @@ Enregistrement et limites :
   `dashboard:` ([15.1](#151-où-et-quand)).
 * Le contrat 1.3 a été vérifié contre Convex de développement avec une console
   en simulation, programmes désactivés : annonce du serveur reçue et état
-  `joignable`. Cette recette ne vaut pas déploiement de production.
+  `joignable`. Cette recette ne vaut pas déploiement de production. Le contrat
+  1.4 (limites de débit et de taille, ANH-166) n'a été vérifié que par les
+  tests des deux côtés, contre aucun déploiement.
 * La pastille **Serveur** dit l'état du lien, pas ce qu'il reste à envoyer :
   le nombre de séances que le tableau de bord n'a pas encore reçues entières
   n'est pas montré sur la page.

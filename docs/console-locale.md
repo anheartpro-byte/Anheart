@@ -392,10 +392,10 @@ lit `incompatible` tout de suite.
 | `injoignable` | rouge | depuis 25 s, rien de reconnaissable n'est revenu : pas de réseau, délai dépassé, ou une réponse qui n'est pas celle du tableau de bord (un 404 ou un 400 sans code stable, une page HTML) | vérifier le réseau du Pi, puis `CONVEX_URL` si le motif dit `pas une reponse du tableau de bord`. La machine fonctionne comme sans tableau de bord ; ce qu'une séance lui doit reste sur le disque et part au retour du lien |
 | `incompatible` | rouge | le tableau de bord n'est pas de la même majeure de contrat : il l'a répondu (426), ou la console l'a lu dans la version qu'il annonce. Affiché dès la première réponse qui le dit | mettre à jour le côté en retard. Aucun lancement distant n'est armé tant que cela dure ; un arrêt demandé du tableau de bord, lui, passe toujours |
 | `cle refusee` | rouge | le tableau de bord refuse la clé de la machine (401 ou 403). Affiché dès la première réponse qui le dit | vérifier `MACHINE_API_KEY` : la machine a pu être supprimée ou désactivée sur le tableau de bord, ou sa clé remplacée |
-| `en erreur` | rouge | le tableau de bord est là, et depuis 25 s il ne prend rien de ce que la console envoie : il ne répond que par des erreurs de son côté (5xx) ou des demandes d'attendre (408, 425, 429), ou bien il répond encore à la question d'arrêt d'une séance alors que le heartbeat et les envois échouent | attendre ; si cela dure, la panne est du côté du tableau de bord, pas du réseau. Pendant ce temps le tableau de bord ne reçoit rien de la machine |
+| `en erreur` | rouge | le tableau de bord est là, et depuis 25 s il ne prend rien de ce que la console envoie : il ne répond que par des erreurs de son côté (5xx) ou des demandes d'attendre (408, 425, 429 ; un 429 retient aussi sa route le temps demandé, [raspberry-pi.md 8.6](raspberry-pi.md#86-ce-que-la-synchronisation-ne-peut-pas-coûter)), ou bien il répond encore à la question d'arrêt d'une séance alors que le heartbeat et les envois échouent | attendre ; si cela dure, la panne est du côté du tableau de bord, pas du réseau. Pendant ce temps le tableau de bord ne reçoit rien de la machine |
 
 La ligne sous les pastilles donne le motif, puis l'âge de la dernière réponse :
-`serveur incompatible (contrat 1.3 vs 2) · derniere reponse il y a 2 s`,
+`serveur incompatible (contrat 1.4 vs 2) · derniere reponse il y a 2 s`,
 `HTTP 401 (unauthorized) · derniere reponse il y a 4 s`,
 `HTTP 500 · derniere reponse il y a 2 s`,
 `HTTP 404 : pas une reponse du tableau de bord`,
