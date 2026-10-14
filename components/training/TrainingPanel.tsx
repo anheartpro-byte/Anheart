@@ -48,6 +48,7 @@ import {
 import {
   SessionKindBadge,
   SessionOriginBadge,
+  useEndReason,
   useTrainingLabel,
 } from "./TrainingBadges";
 import { TelemetryCharts } from "./TelemetryCharts";
@@ -59,6 +60,7 @@ import { TelemetryCharts } from "./TelemetryCharts";
 export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   const t = useTranslations();
   const label = useTrainingLabel();
+  const endReasonOf = useEndReason();
 
   const training = useQuery(api.training.getTrainingSession, { sessionId });
   const telemetry = useQuery(api.training.getSessionTelemetry, {
@@ -98,6 +100,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   }
   if (training === null) return null;
 
+  const endReason = endReasonOf(training);
   const isActive = training.status === "active";
   const isPending = training.status === "pending";
   // No news of it for SESSION_SILENCE_MS: its end is unknown, and it may
@@ -261,10 +264,8 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
             <span className="font-semibold">
               {t("training.session.failed")}
             </span>
-            {training.endReason && (
-              <span className="block font-mono text-xs mt-1">
-                {training.endReason}
-              </span>
+            {endReason && (
+              <span className="block font-mono text-xs mt-1">{endReason}</span>
             )}
           </Banner>
         )}

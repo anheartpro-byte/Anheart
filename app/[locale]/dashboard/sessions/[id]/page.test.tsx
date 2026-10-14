@@ -113,6 +113,7 @@ function training(overrides: Partial<Training> = {}): Training {
     endedAt: STARTED + 1_800_000,
     stopRequestedAt: undefined,
     endReason: undefined,
+    endCode: undefined,
     interruptedAt: undefined,
     canStop: false,
     ...overrides,
@@ -445,6 +446,31 @@ describe("session detail: a failed session", () => {
     expect(screen.getByText(fr.sessionDetail.failedTitle)).toBeTruthy();
     expect(screen.getByText(fr.sessionDetail.failedDescription)).toBeTruthy();
     expect(screen.getByText("drive_fault")).toBeTruthy();
+  });
+
+  it("ANH-144: says in words why a launch was refused before its start", async () => {
+    answer(api.sessions.getSession, session(failed));
+    answer(
+      api.training.getTrainingSession,
+      training({
+        ...failed,
+        endReason: "launch right withdrawn before the machine armed it",
+        endCode: "right_revoked_before_start",
+      }),
+    );
+    await open();
+
+    expect(screen.getByText(fr.sessionDetail.failedTitle)).toBeTruthy();
+    expect(
+      screen.getByText(fr.sessionDetail.failedBeforeStartDescription),
+    ).toBeTruthy();
+    expect(screen.queryByText(fr.sessionDetail.failedDescription)).toBeNull();
+    expect(
+      screen.getByText(fr.training.endCode.right_revoked_before_start),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("launch right withdrawn before the machine armed it"),
+    ).toBeNull();
   });
 
   it("gives the reason written in the notes of a session of the former mode", async () => {

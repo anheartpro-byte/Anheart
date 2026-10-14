@@ -19,6 +19,22 @@ export function useTrainingLabel() {
       : value;
 }
 
+/**
+ * Why a session ended, for a person: the sentence of its stable end code
+ * (`training.endCode.<code>`: a launch refused before its machine armed it,
+ * ANH-144), else the reason as it was written (the machine's words or the
+ * server's), else nothing.
+ */
+export function useEndReason() {
+  const messages = useMessages();
+  const t = useTranslations("training");
+  return (training: { endCode?: string; endReason?: string }) =>
+    training.endCode !== undefined &&
+    hasOwnMessage(messages, ["training", "endCode", training.endCode])
+      ? t(`endCode.${training.endCode}`)
+      : training.endReason;
+}
+
 export function SessionKindBadge({ kind }: { kind: string | undefined }) {
   const t = useTranslations("training.kind");
   const k = kind ?? "recording";

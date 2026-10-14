@@ -197,6 +197,22 @@ describe("ANH-203 session detail card", () => {
     ).not.toContain("red");
   });
 
+  it("ANH-144: words the end of a launch refused before its start from its code", () => {
+    session({
+      status: "failed",
+      endReason: "expired before the machine armed it",
+      endCode: "expired_before_start",
+    });
+    answer("training:getSessionTelemetry", []);
+
+    const screen = render(<TrainingDetailsCard sessionId={sessionId} />);
+
+    expect(screen.text()).toContain(
+      `${t.session.endReason} ${t.endCode.expired_before_start}`,
+    );
+    expect(screen.text()).not.toContain("expired before the machine armed it");
+  });
+
   it("shows no end reason while there is none, and says where a manual session is driven from", () => {
     session({ kind: "manual", origin: "local" });
     answer("training:getSessionTelemetry", []);
