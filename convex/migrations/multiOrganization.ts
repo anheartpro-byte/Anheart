@@ -12,6 +12,12 @@
  * organisation yet, works in bounded batches and reschedules itself until
  * nothing is left, so running it twice, or again after an interruption, gives
  * the same result. A row that already has an organisation is never moved.
+ *
+ * `repairDuplicatedAnheartOrganization` is the way out of the state where the
+ * migration refuses (`ANHEART_ORGANIZATION_DUPLICATED`), also internal and run
+ * by hand (ANH-225):
+ *
+ *     npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{}'
  */
 import { ConvexError, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "../_generated/server";
@@ -49,7 +55,48 @@ export const ANHEART_ORGANIZATION_DUPLICATED =
   "Two Anheart organisations: the Clerk organisation named by ANHEART_ORG_ID " +
   "already has its own row while the default organisation is not linked to " +
   "it. Nothing was changed. Set ANHEART_ORG_ID before the Clerk webhook " +
-  "receives that organisation (docs/convex.md, Activer le multi-organisation).";
+  "receives that organisation (docs/convex.md, Activer le multi-organisation). " +
+  "To repair: npx convex run " +
+  "migrations/multiOrganization:repairDuplicatedAnheartOrganization '{}'.";
+
+/** The repair cannot tell which row is the Anheart organisation. */
+export const ANHEART_ORG_ID_REQUIRED =
+  "ANHEART_ORG_ID is not set on this deployment, so no row is known as the " +
+  "Clerk Anheart organisation. Nothing was changed.";
+
+/** ANHEART_ORG_ID names an organisation Clerk has deleted. */
+export const ANHEART_ORGANIZATION_DELETED_IN_CLERK =
+  "The Clerk organisation named by ANHEART_ORG_ID was deleted in Clerk. " +
+  "Nothing was changed: check ANHEART_ORG_ID.";
+
+/**
+ * The row the webhook created for the Anheart organisation already holds data
+ * of its own: merging it would need a decision row by row, so the repair
+ * leaves it to the operator.
+ */
+export function duplicateHoldsData(table: string): string {
+  return (
+    `The row the Clerk webhook created for the Anheart organisation holds ` +
+    `data (table ${table}). Nothing was changed: it cannot be merged ` +
+    `automatically (docs/convex.md, Sortir de deux organisations Anheart).`
+  );
+}
+
+/**
+ * Tables whose rows belong to an organisation and would be lost with it. The
+ * repair refuses while any of them points to the duplicate. Three more tables
+ * carry an organisation (`machine_health_history`, `session_record_files`,
+ * `session_record_uploads`) but have no index on it: they are written with the
+ * organisation of their machine or of their session, and a machine or a
+ * session of the duplicate already stops the repair. Memberships and accounts
+ * are not in this list: they are what the webhook writes, and the repair moves
+ * them.
+ */
+const ORGANIZATION_DATA_TABLES = [
+  "machines",
+  ...MACHINE_TABLES,
+  "user_gestionnaires",
+] as const;
 
 /**
  * The default organisation, created on first run. When `ANHEART_ORG_ID` is
@@ -197,5 +244,126 @@ export const attachExistingRowsToAnheart = internalMutation({
       );
     }
     return { organizationId: anheart, attached, done };
+  },
+});
+
+/**
+ * Way out of `ANHEART_ORGANIZATION_DUPLICATED` (ANH-225): the Clerk webhook
+ * received the Anheart organisation before `ANHEART_ORG_ID` was set and gave it
+ * its own row, while the default organisation, which holds every row written
+ * before organisations existed, is still unlinked.
+ *
+ * Only when that row holds nothing but what the webhook writes (memberships,
+ * accounts): its memberships go to the default organisation, an account whose
+ * main organisation it was now has the default one, the row is deleted and the
+ * default organisation is linked to the Clerk organisation, with the name, the
+ * slug and the dates the webhook had received for it. That is the state the
+ * webhook would have left had the default organisation been linked first.
+ *
+ * A member already in the default organisation (the migration gave every
+ * existing account a membership) keeps that one membership, which takes the
+ * role, the state and the Clerk identifiers the webhook received: from
+ * `ANHEART_ORG_ID` on, Clerk is the authority on roles.
+ *
+ * It refuses, and changes nothing, when that row holds any other data, when
+ * Clerk deleted that organisation, or when `ANHEART_ORG_ID` is unset. Run again
+ * once repaired, it finds nothing to do.
+ */
+export const repairDuplicatedAnheartOrganization = internalMutation({
+  args: {},
+  returns: v.union(
+    v.object({ repaired: v.literal(false) }),
+    v.object({
+      repaired: v.literal(true),
+      organizationId: v.id("organizations"),
+      movedMemberships: v.number(),
+      mergedMemberships: v.number(),
+      movedUsers: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const clerkOrgId = anheartClerkOrganizationId();
+    if (clerkOrgId === null) throw new ConvexError(ANHEART_ORG_ID_REQUIRED);
+    const duplicate = await ctx.db
+      .query("organizations")
+      .withIndex("by_clerk_org_id", (q) => q.eq("clerkOrgId", clerkOrgId))
+      .unique();
+    const anheart = await findUnlinkedDefaultOrganization(ctx);
+    if (duplicate === null || anheart === null) {
+      return { repaired: false as const };
+    }
+    if (duplicate.deletedAt !== undefined) {
+      throw new ConvexError(ANHEART_ORGANIZATION_DELETED_IN_CLERK);
+    }
+    for (const table of ORGANIZATION_DATA_TABLES) {
+      const row = await ctx.db
+        .query(table)
+        .withIndex("by_organization", (q) =>
+          q.eq("organizationId", duplicate._id),
+        )
+        .first();
+      if (row !== null) throw new ConvexError(duplicateHoldsData(table));
+    }
+    const invitation = await ctx.db
+      .query("patient_invitations")
+      .withIndex("by_organization_and_email", (q) =>
+        q.eq("organizationId", duplicate._id),
+      )
+      .first();
+    if (invitation !== null) {
+      throw new ConvexError(duplicateHoldsData("patient_invitations"));
+    }
+
+    let movedMemberships = 0;
+    let mergedMemberships = 0;
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_organization", (q) =>
+        q.eq("organizationId", duplicate._id),
+      )
+      .collect();
+    for (const membership of memberships) {
+      const held = await findMembership(ctx, membership.userId, anheart._id);
+      if (held === null) {
+        await ctx.db.patch(membership._id, { organizationId: anheart._id });
+        movedMemberships++;
+        continue;
+      }
+      await ctx.db.patch(held._id, {
+        role: membership.role,
+        active: membership.active,
+        clerkMembershipId: membership.clerkMembershipId,
+        clerkUpdatedAt: membership.clerkUpdatedAt,
+        clerkEventAt: membership.clerkEventAt,
+      });
+      await ctx.db.delete(membership._id);
+      mergedMemberships++;
+    }
+
+    const users = await ctx.db
+      .query("users")
+      .withIndex("by_organization", (q) =>
+        q.eq("organizationId", duplicate._id),
+      )
+      .collect();
+    for (const user of users) {
+      await ctx.db.patch(user._id, { organizationId: anheart._id });
+    }
+
+    await ctx.db.delete(duplicate._id);
+    await ctx.db.patch(anheart._id, {
+      clerkOrgId,
+      name: duplicate.name,
+      slug: duplicate.slug,
+      clerkUpdatedAt: duplicate.clerkUpdatedAt,
+      clerkEventAt: duplicate.clerkEventAt,
+    });
+    return {
+      repaired: true as const,
+      organizationId: anheart._id,
+      movedMemberships,
+      mergedMemberships,
+      movedUsers: users.length,
+    };
   },
 });
