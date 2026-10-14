@@ -91,7 +91,8 @@ describe("ANH-187 organisation gate", () => {
     "says why the server refused the organisation (%s), draws nothing of the page, and offers to choose one",
     (reason) => {
       clerk.orgId = reason === "no_active_organization" ? null : "org_x";
-      account(reason, clerk.orgId);
+      // The server reads a malformed `org_id` as no claim.
+      account(reason, reason === "malformed_organization_claim" ? null : clerk.orgId);
 
       const screen = open();
 

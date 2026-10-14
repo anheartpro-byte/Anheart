@@ -107,8 +107,9 @@ compte personnel) est en haut de la barre latérale ; il est masqué quand la
 barre est repliée en icônes. Choisir une autre organisation ramène au tableau
 de bord. Toutes les réponses de Convex sont alors celles de cette organisation,
 puisque le serveur lit l'organisation dans le jeton. Entre le choix et l'arrivée
-du nouveau jeton au serveur, le site n'affiche **aucune** page : seulement
-« Changement d'organisation en cours… », pour ne pas montrer sous le nom de la
+du nouveau jeton au serveur, le site n'affiche **aucune** page, seulement
+« Changement d'organisation en cours. Le tableau de bord s'affichera dès que le
+serveur l'aura pris en compte. », pour ne pas montrer sous le nom de la
 nouvelle organisation des données de la précédente (`OrganizationGate`, règle
 `organizationView` de `lib/organizationAccess.ts`).
 
@@ -123,8 +124,10 @@ pas les pages et dit pourquoi, avec le sélecteur pour en choisir une :
 | Revendication d'organisation illisible | « Votre session ne permet pas d'identifier votre organisation. Déconnectez-vous puis reconnectez-vous. » |
 | Compte sans appartenance (avant `ANHEART_ORG_ID`) | « Votre compte n'appartient à aucune organisation. Demandez une invitation à votre administrateur. » |
 
-La barre latérale ne montre alors que « Tableau de bord ». Sur un déploiement
-où Clerk Organizations n'est pas encore configuré, rien ne change à l'écran.
+La barre latérale ne montre alors que « Tableau de bord », comme pendant un
+changement d'organisation. Tant que `ANHEART_ORG_ID` n'est pas définie et que
+personne n'a d'organisation active dans Clerk, les pages s'affichent comme
+avant ; le sélecteur et l'entrée Membres apparaissent déjà.
 
 **Membres.** Inviter, retirer un membre et changer son rôle se font dans Clerk,
 depuis la page **Membres** (admins) ou l'entrée « Gérer » du sélecteur. Clerk
@@ -146,33 +149,50 @@ champ `role` n'est à modifier en base (voir [convex.md §8](convex.md#8-déploy
 
 ### Amorçage d'un déploiement
 
-À faire une fois par déploiement (développement, puis production), dans cet
-ordre. Le détail des réglages est dans
+À faire une fois par déploiement (développement, puis production), **dans cet
+ordre**. Le détail des réglages est dans
 [convex.md, « Activer le multi-organisation »](convex.md#activer-le-multi-organisation).
 
 1. **Convex** : déployer, puis lancer la migration
-   `migrations/multiOrganization:attachExistingRowsToAnheart`. Le site
-   fonctionne alors comme avant, en une seule organisation.
-2. **Site** : mettre en ligne cette version, qui porte le sélecteur
-   d'organisation et la page Membres. Prérequis côté Clerk : Organizations
-   activé sur l'instance, sinon Clerk refuse d'afficher le sélecteur sur une
-   instance de développement.
-3. **Clerk** : rôles `org:admin`, `org:gestionnaire`, `org:patient`
-   (`org:patient` par défaut), modèle de jeton `convex` avec `org_id` et
-   `org_role`, webhook vers `/clerk/webhook` et son secret dans
-   `CLERK_WEBHOOK_SIGNING_SECRET`. Sans `org_id` dans le modèle, le site reste
-   sur « Changement d'organisation en cours… » pour qui a une organisation
-   active : le serveur ne voit jamais l'organisation choisie.
+   `migrations/multiOrganization:attachExistingRowsToAnheart`. Elle crée
+   l'organisation par défaut « Anheart » et y range toutes les lignes
+   existantes. Le site fonctionne alors comme avant, en une seule organisation.
+2. **Clerk, sans webhook pour l'instant** : activer Organizations ;
+   désactiver la création d'organisations par les utilisateurs (sinon
+   n'importe quel compte peut créer la sienne et en devenir l'admin) ; créer
+   les rôles `org:gestionnaire` et `org:patient` à côté d'`org:admin`, avec
+   `org:patient` pour rôle par défaut ; ne donner les permissions système des
+   membres (lire, gérer) qu'à `org:admin`, sinon l'entrée « Gérer » du
+   sélecteur montre à un gestionnaire ou à un patient le nom et l'adresse de
+   tous les membres ; ajouter `org_id` et `org_role` au modèle de jeton
+   `convex`. Sans `org_id` dans le modèle, le site reste sur « Changement
+   d'organisation en cours » pour qui a une organisation active : le serveur
+   ne voit jamais l'organisation choisie.
+3. **Site** : mettre en ligne cette version, qui porte le sélecteur
+   d'organisation et la page Membres. Organizations doit déjà être activé : sur
+   une instance de développement, Clerk lève une erreur au montage du
+   sélecteur sinon.
 4. **Créer l'organisation Anheart dans Clerk** et noter son identifiant
-   (`org_…`). Le webhook la reçoit.
-5. **Inviter le premier admin** dans cette organisation, avec `org:admin`. Il
-   accepte, se connecte, choisit « Anheart » dans le sélecteur.
-6. **Poser `ANHEART_ORG_ID`** sur le déploiement Convex
+   (`org_…`). Le webhook ne doit **pas** encore être configuré : il créerait
+   une seconde organisation « Anheart », vide, au lieu de reprendre celle de
+   l'étape 1.
+5. **Poser `ANHEART_ORG_ID`** sur le déploiement Convex
    (`npx convex env set ANHEART_ORG_ID org_…`), puis relancer la migration :
-   elle relie l'organisation par défaut à celle de Clerk. Dès lors, un jeton
-   sans organisation est refusé, seuls les `org:admin` d'Anheart sont admins
-   Anheart, et les rôles ne se changent plus que dans Clerk.
-7. **Chaque client** : l'admin Anheart crée son organisation dans Clerk et y
+   elle relie l'organisation par défaut à celle de Clerk. Vérifier dans le
+   tableau de bord Convex qu'il n'existe **qu'une** organisation « anheart »,
+   avec ce `clerkOrgId`. Si le webhook l'avait déjà reçue, la migration
+   s'arrête sans rien écrire (« Two Anheart organisations… »). Dès cette étape,
+   un jeton sans organisation est refusé, seuls les `org:admin` d'Anheart sont
+   admins Anheart, et les rôles ne se changent plus que dans Clerk.
+6. **Webhook** : créer l'endpoint Clerk vers `/clerk/webhook` et poser son
+   secret dans `CLERK_WEBHOOK_SIGNING_SECRET`. Il reconnaît désormais
+   l'organisation Anheart comme celle de l'étape 1.
+7. **Comptes** : inviter le premier admin avec `org:admin`, et faire entrer
+   chaque compte existant dans son organisation Clerk avec le rôle qu'il a dans
+   Convex. Entre l'étape 5 et son entrée, un compte existant ne voit que
+   « Choisissez une organisation » ou « Votre compte n'appartient à aucune
+   organisation » : enchaîner les étapes 5 à 7 dans une même fenêtre annoncée.
+8. **Chaque client** : l'admin Anheart crée son organisation dans Clerk et y
    invite son premier `org:admin`, qui invite à son tour gestionnaires et
    patients depuis la page Membres (ou crée ses patients depuis la page
    Patients). L'admin Anheart crée les machines du client en choisissant son

@@ -82,7 +82,9 @@ vi.mock("@/components/ui/avatar", () => ({
 }));
 // The three controls of the header have their own tests: the header only has to hold them.
 // Clerk's organisation switcher is drawn by Clerk: the menu only places it.
+const clerk = vi.hoisted(() => ({ orgId: "org_centre_a" as string | null }));
 vi.mock("@clerk/nextjs", () => ({
+  useAuth: () => ({ isLoaded: true, orgId: clerk.orgId }),
   UserButton: (props: { afterSwitchSessionUrl?: string }) => (
     <div data-user-button="" data-after-switch={props.afterSwitchSessionUrl} />
   ),
@@ -171,6 +173,7 @@ const PATIENT_ENTRIES = [
 beforeEach(() => {
   resetConvex();
   here.pathname = "/dashboard";
+  clerk.orgId = "org_centre_a";
 });
 
 describe("ANH-203 dashboard menu: what each role is shown", () => {
@@ -249,6 +252,17 @@ describe("ANH-203 dashboard menu: what each role is shown", () => {
       expect(entries(screen)).toEqual([HOME]);
     },
   );
+
+  it("shows the home entry only while a switch of organisation reaches the server", () => {
+    // Clerk shows centre B; the role was read with centre A's token.
+    signedInAs("admin");
+    clerk.orgId = "org_centre_b";
+
+    const screen = render(<AppSidebar />);
+
+    expect(sections(screen)).toEqual([fr.sidebar.main]);
+    expect(entries(screen)).toEqual([HOME]);
+  });
 
   it("offers the organisation switcher to a signed-in visitor, without personal account, back to the dashboard of the locale", () => {
     signedInAs("gestionnaire");

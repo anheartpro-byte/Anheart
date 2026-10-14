@@ -730,7 +730,6 @@
     }
   },
   "organization": {
-    "title": "Organisation",
     "switching": "Changement d'organisation en cours. Le tableau de bord s'affichera dès que le serveur l'aura pris en compte.",
     "refused": {
       "no_active_organization": "Choisissez une organisation pour continuer.",
@@ -738,8 +737,7 @@
       "unknown_organization_role": "Votre rôle dans cette organisation n'est pas reconnu. Demandez à son administrateur de vérifier votre rôle.",
       "malformed_organization_claim": "Votre session ne permet pas d'identifier votre organisation. Déconnectez-vous puis reconnectez-vous.",
       "no_organization": "Votre compte n'appartient à aucune organisation. Demandez une invitation à votre administrateur."
-    },
-    "chooseBelow": "Organisation active :"
+    }
   },
   "members": {
     "title": "Membres",

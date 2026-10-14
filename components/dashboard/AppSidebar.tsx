@@ -2,10 +2,10 @@
 
 import { useLocale, useTranslations } from "next-intl";
 import { useQuery } from "convex/react";
-import { OrganizationSwitcher } from "@clerk/nextjs";
+import { OrganizationSwitcher, useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import { Link, usePathname } from "@/i18n/navigation";
-import { navigationFor } from "@/lib/organizationAccess";
+import { navigationFor, organizationView } from "@/lib/organizationAccess";
 import {
   Sidebar,
   SidebarContent,
@@ -66,10 +66,13 @@ export function AppSidebar() {
   const locale = useLocale();
   const pathname = usePathname();
   const user = useQuery(api.users.getCurrentUser);
+  const { isLoaded, orgId } = useAuth();
 
   // Which sections and entries a role is given: lib/organizationAccess.ts.
-  // Nothing beyond the dashboard while the server accepts no organisation.
-  const navigation = navigationFor(user);
+  // Nothing beyond the dashboard while the server accepts no organisation,
+  // nor during a switch, when the role read is the previous organisation's.
+  const view = organizationView(user, { isLoaded, activeOrganization: orgId });
+  const navigation = navigationFor(view.state === "ready" ? user : null);
   const items = (keys: string[]) => keys.map((key) => ENTRIES[key]);
   const adminNavigation = items(navigation.administration);
   const managerNavigation = items(navigation.management);

@@ -8,6 +8,7 @@ import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { useTranslations } from "next-intl";
 import { Archive, Download, ExternalLink } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import { isOrganizationAdmin } from "@/lib/organizationAccess";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   Card,
@@ -236,7 +237,7 @@ export function SessionRecordCard({
                 <ExternalLink className="size-4" aria-hidden="true" />
                 {t("viewer")}
               </Button>
-              {(user?.role === "admin" || user?.role === "org_admin") &&
+              {isOrganizationAdmin(user?.role) &&
                 data.files.length > 0 && (
                   <Button
                     variant="outline"

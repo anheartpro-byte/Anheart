@@ -48,7 +48,10 @@ export const createMachine = mutation({
     const currentUser = await requireRole(ctx, ["admin"]);
 
     const organizationId = args.organizationId ?? currentUser.organizationId;
-    if (!(await ctx.db.get(organizationId))) {
+    // An organisation deleted in Clerk takes no new machine: its members are
+    // inactive and none of them could use it.
+    const organization = await ctx.db.get(organizationId);
+    if (!organization || organization.deletedAt !== undefined) {
       throw new Error("Organization not found");
     }
 

@@ -151,6 +151,25 @@ describe("the organisations a machine can be created in", () => {
     expect(listed.map((o) => o._id)).not.toContain(gone);
   });
 
+  it("never take a new machine once deleted in Clerk", async () => {
+    const w = await seedWorld(modules);
+    await w.t.run((ctx) => ctx.db.patch(w.orgB, { deletedAt: NOW }));
+
+    await expect(
+      as(w.t, "admin").mutation(api.machines.createMachine, {
+        name: "Centri Lyon",
+        organizationId: w.orgB,
+      }),
+    ).rejects.toThrow("Organization not found");
+    const inB = await w.t.run((ctx) =>
+      ctx.db
+        .query("machines")
+        .withIndex("by_organization", (q) => q.eq("organizationId", w.orgB))
+        .collect(),
+    );
+    expect(inB.map((m) => m.name)).not.toContain("Centri Lyon");
+  });
+
   it("are none for an organisation admin, who creates no machine", async () => {
     const w = await seedWorld(modules);
 

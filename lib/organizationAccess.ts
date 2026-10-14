@@ -119,6 +119,11 @@ export function organizationView(
 ): OrganizationView {
   if (!clerk.isLoaded || account === undefined) return { state: "loading" };
   if (account === null) return { state: "signed-out" };
+  // An `org_id` the server cannot read comes back as no claim at all: it can
+  // never match Clerk's organisation, so it is a refusal, not a switch.
+  if (account.organizationAccess === "malformed_organization_claim") {
+    return { state: "refused", reason: account.organizationAccess };
+  }
   if ((clerk.activeOrganization ?? null) !== account.organizationClaim) {
     return { state: "switching" };
   }

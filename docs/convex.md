@@ -836,7 +836,7 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `createMachine` | admin Anheart | Crée la machine, statut `offline`, dans l'organisation `organizationId` (par défaut celle de l'admin). Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. |
+| `createMachine` | admin Anheart | Crée la machine, statut `offline`, dans l'organisation `organizationId` (par défaut celle de l'admin) ; refusée pour une organisation inconnue ou supprimée dans Clerk. Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. |
 | `regenerateApiKey` | admin, gestionnaire de la machine | Nouvelle clé ; l'ancienne cesse de fonctionner. |
 | `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `organizationId` (l'organisation de la machine, dont seuls les gestionnaires peuvent lui être assignés), `softwareVersion`, `contractVersion` et `lastVersionSeenAt`. Les deux renvoient `serverNow`, l'heure du serveur dans la réponse, sur laquelle le site vieillit `lastHeartbeat` ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). |
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu. |
@@ -1148,7 +1148,8 @@ celles d'un projet **neuf**.
 5. Créer l'organisation par défaut : lancer une fois la migration
    (`npx convex run migrations/multiOrganization:attachExistingRowsToAnheart '{}'`, voir
    [ci-dessous](#activer-le-multi-organisation)).
-6. Configurer Organizations et le webhook selon la procédure ci-dessous.
+6. Configurer Organizations puis le webhook selon la procédure ci-dessous,
+   dans son ordre : le webhook après `ANHEART_ORG_ID` et la migration relancée.
    Inviter le premier admin dans l'organisation Clerk Anheart avec `org:admin`,
    dont l'identifiant est `ANHEART_ORG_ID`. Le webhook crée sa fiche et son
    appartenance ; son jeton porte le rôle. Aucun champ de base à éditer.
@@ -1350,6 +1351,12 @@ mono-organisation.
    encore les permissions. Choisir `org:patient` comme rôle par défaut des
    nouveaux membres : Convex refuse tout autre rôle que ces trois-là, donc le
    rôle `org:member` que Clerk propose par défaut ne donne accès à rien.
+   Ne donner les permissions **système** des membres (`org:sys_memberships:read`,
+   `org:sys_memberships:manage`) qu'à `org:admin` : le panneau « Gérer » du
+   sélecteur d'organisation du site les applique, et un gestionnaire ou un
+   patient qui les aurait verrait le nom et l'adresse de tous les membres.
+   Désactiver la création d'organisations par les utilisateurs : sinon
+   n'importe quel compte crée la sienne et en devient `org_admin`.
 3. Créer l'organisation « Anheart » et noter son identifiant (`org_…`).
 4. Dans le modèle JWT nommé `convex`, ajouter aux revendications existantes
    (`email`, `email_verified`…) :
@@ -1368,6 +1375,14 @@ mono-organisation.
 
 **C. Dans Convex (le site sait choisir une organisation depuis ANH-187)**
 
+**Avant de configurer le webhook décrit plus bas.** Un webhook actif avant
+`ANHEART_ORG_ID` reçoit l'organisation Anheart de Clerk comme une organisation
+quelconque et lui crée sa propre ligne, vide. La migration de l'étape 2
+s'arrête alors sans rien écrire (« Two Anheart organisations… ») au lieu de
+relier la mauvaise ligne : les machines, séances et comptes existants restent
+dans l'organisation par défaut. Ordre complet, côté site compris :
+[tableau-de-bord.md, « Amorçage d'un déploiement »](tableau-de-bord.md#amorçage-dun-déploiement).
+
 1. Définir la variable d'environnement du déploiement :
    ```bash
    npx convex env set ANHEART_ORG_ID org_…
@@ -1377,9 +1392,13 @@ mono-organisation.
 2. Relancer la migration (même commande qu'en A) : elle relie l'organisation
    par défaut à cette organisation Clerk (`clerkOrgId`) au lieu d'en créer une
    autre. Sans cela, les jetons de l'organisation Anheart sont refusés (« This
-   organization is not known to the server yet »).
-3. Inviter le premier admin dans l'organisation Anheart depuis Clerk, avec le
-   rôle `org:admin`.
+   organization is not known to the server yet »). Vérifier qu'il n'existe
+   qu'une organisation de slug `anheart`, avec ce `clerkOrgId`.
+3. Configurer le webhook ([ci-dessous](#webhook-clerk-vers-le-miroir)), puis
+   inviter le premier admin dans l'organisation Anheart depuis Clerk, avec le
+   rôle `org:admin`, et faire entrer chaque compte existant dans son
+   organisation Clerk avec son rôle. Jusque-là, un compte existant n'a plus
+   accès à rien : enchaîner les étapes 1 à 3 dans une même fenêtre annoncée.
 
 Ne définir `ANHEART_ORG_ID` qu'une fois en ligne la version du site qui porte
 le sélecteur d'organisation (ANH-187) : sans organisation active dans sa
@@ -1411,7 +1430,8 @@ peut créer l'organisation et le compte manquants ; il ne remplace pas les champ
 communs d'un compte existant. L'organisation Anheart par défaut est reliée quand
 l'identifiant reçu correspond à `ANHEART_ORG_ID`.
 
-**À configurer par le responsable du déploiement** : créer un endpoint Clerk
+**À configurer par le responsable du déploiement**, une fois `ANHEART_ORG_ID`
+posée et la migration relancée (C ci-dessus) : créer un endpoint Clerk
 vers l'URL `.convex.site/clerk/webhook` de l'environnement choisi, activer
 les sept événements ci-dessus et poser son secret dans
 `CLERK_WEBHOOK_SIGNING_SECRET` sur le même déploiement Convex. Ne pas utiliser

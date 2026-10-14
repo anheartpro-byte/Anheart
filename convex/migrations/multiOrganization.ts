@@ -13,7 +13,7 @@
  * nothing is left, so running it twice, or again after an interruption, gives
  * the same result. A row that already has an organisation is never moved.
  */
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
@@ -39,9 +39,24 @@ const MACHINE_TABLES = [
 ] as const;
 
 /**
+ * Why the migration stops without writing anything: the Clerk organisation
+ * named by `ANHEART_ORG_ID` already has its own row (the webhook received it
+ * before the variable was set), while the default organisation, which holds
+ * the rows written before organisations existed, is still unlinked. Taking
+ * either would leave the other's rows out of the Anheart organisation.
+ */
+export const ANHEART_ORGANIZATION_DUPLICATED =
+  "Two Anheart organisations: the Clerk organisation named by ANHEART_ORG_ID " +
+  "already has its own row while the default organisation is not linked to " +
+  "it. Nothing was changed. Set ANHEART_ORG_ID before the Clerk webhook " +
+  "receives that organisation (docs/convex.md, Activer le multi-organisation).";
+
+/**
  * The default organisation, created on first run. When `ANHEART_ORG_ID` is
  * set, the organisation is the mirror of that Clerk organisation: an existing
- * unlinked default organisation is linked to it rather than duplicated.
+ * unlinked default organisation is linked to it rather than duplicated. When
+ * both the mirror and the unlinked default organisation exist, it refuses
+ * (`ANHEART_ORGANIZATION_DUPLICATED`).
  */
 async function ensureAnheartOrganization(
   ctx: MutationCtx,
@@ -52,7 +67,12 @@ async function ensureAnheartOrganization(
       .query("organizations")
       .withIndex("by_clerk_org_id", (q) => q.eq("clerkOrgId", clerkOrgId))
       .unique();
-    if (linked) return linked._id;
+    if (linked) {
+      if ((await findUnlinkedDefaultOrganization(ctx)) !== null) {
+        throw new ConvexError(ANHEART_ORGANIZATION_DUPLICATED);
+      }
+      return linked._id;
+    }
   }
   const unlinked = await findUnlinkedDefaultOrganization(ctx);
   if (unlinked) {

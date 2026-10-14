@@ -730,7 +730,6 @@
     }
   },
   "organization": {
-    "title": "Organization",
     "switching": "Switching organization. The dashboard will show as soon as the server has taken it into account.",
     "refused": {
       "no_active_organization": "Choose an organization to continue.",
@@ -738,8 +737,7 @@
       "unknown_organization_role": "Your role in this organization is not recognized. Ask its admin to check your role.",
       "malformed_organization_claim": "Your session does not identify your organization. Sign out, then sign in again.",
       "no_organization": "Your account does not belong to any organization. Ask your admin for an invitation."
-    },
-    "chooseBelow": "Active organization:"
+    }
   },
   "members": {
     "title": "Members",

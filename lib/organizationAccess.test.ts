@@ -153,6 +153,21 @@ describe("ANH-187 whether the dashboard may draw the active organisation", () =>
     expect(organizationView(legacy, clerk(null))).toEqual({ state: "ready" });
   });
 
+  it("says the claim is unreadable instead of waiting for a switch that never comes", () => {
+    // The server reports a malformed `org_id` as no claim at all, while Clerk
+    // has an active organisation: the two never match.
+    expect(
+      organizationView(
+        {
+          role: "user",
+          organizationAccess: "malformed_organization_claim",
+          organizationClaim: null,
+        },
+        clerk("org_centre_a"),
+      ),
+    ).toEqual({ state: "refused", reason: "malformed_organization_claim" });
+  });
+
   it("says why the server refused the organisation the token named", () => {
     expect(
       organizationView(
