@@ -1851,7 +1851,8 @@ function commandsUnder(heading) {
 
 // ANH-221: the command the check-list gave looked at two directories, and at
 // one end. The limits of motion (all of them [MED]) and the example
-// environment were outside it, and so was any file that lost the marker.
+// environment were outside it, and so was any file that lost the marker. Its
+// diff then split a path that holds a space, and skipped that file in silence.
 test("ANH-221 the [MED] commands of docs/release.md find every file that carries the marker, at either end of a release", (t) => {
   // Given: a release tagged with the marker in code, configuration, an example and a page...
   const fx = fixture(t, [
@@ -1865,6 +1866,7 @@ test("ANH-221 the [MED] commands of docs/release.md find every file that carries
         "simulation/limits.py": "CEILING_G = 1.2  # [MED]\n",
         "docs/securite.md": "Plafond de 1,2 g [MED].\n",
         "raspberry-pi/src/clock.py": "TICK_S = 0.2\n",
+        "raspberry-pi/config/seat limits.json": '{"_comment": "All values are [MED]", "max_tilt_deg": 30}\n',
       },
     ],
   ]);
@@ -1876,6 +1878,7 @@ test("ANH-221 the [MED] commands of docs/release.md find every file that carries
     "simulation/limits.py": "CEILING_G = 1.5\n",
     "deploy/pi.env": "# [MED]\nMIN_RIDER_AGE=16\n",
     "raspberry-pi/src/clock.py": "TICK_S = 0.1\n",
+    "raspberry-pi/config/seat limits.json": '{"_comment": "All values are [MED]", "max_tilt_deg": 45}\n',
   });
   // When: the two commands run as the page writes them, `<base>` being the previous tag of the Pi.
   const [list, diff] = commandsUnder("#### Lister les fichiers qui portent le marqueur").map((line) =>
@@ -1883,7 +1886,7 @@ test("ANH-221 the [MED] commands of docs/release.md find every file that carries
   );
   const sh = (command) => execFileSync("sh", ["-c", command], { cwd: fx.work, env: GIT_ENV, encoding: "utf8" });
   const listed = sh(list).trim().split("\n").sort();
-  const shown = [...sh(diff).matchAll(/^diff --git a\/(\S+) b\//gm)].map((match) => match[1]).sort();
+  const shown = [...sh(diff).matchAll(/^diff --git a\/(.+) b\/\1$/gm)].map((match) => match[1]).sort();
   // Then: the first lists every file that carries the marker at one end or the other, once each
   // (the release template of the fixture is the real one, whose check-list names the marker)...
   assert.deepEqual(
@@ -1895,10 +1898,16 @@ test("ANH-221 the [MED] commands of docs/release.md find every file that carries
       "docs/securite.md",
       "raspberry-pi/.env.example",
       "raspberry-pi/config/motion_limits.json",
+      "raspberry-pi/config/seat limits.json",
       "raspberry-pi/src/local_config.py",
       "simulation/limits.py",
     ],
   );
-  // ...and the second shows what changed in them, and in them only.
-  assert.deepEqual(shown, ["deploy/pi.env", "raspberry-pi/config/motion_limits.json", "simulation/limits.py"]);
+  // ...and the second shows what changed in them, and in them only, a path that holds a space included.
+  assert.deepEqual(shown, [
+    "deploy/pi.env",
+    "raspberry-pi/config/motion_limits.json",
+    "raspberry-pi/config/seat limits.json",
+    "simulation/limits.py",
+  ]);
 });
