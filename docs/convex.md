@@ -1085,6 +1085,8 @@ changer. La liste des codes est dans `contracts/machine-api.json` :
 | `session_not_pending` | 400 | `training/start` sur une séance qui n'attend plus son départ. |
 | `machine_not_found` | 400 | La machine a disparu entre l'authentification et l'écriture. |
 | `request_failed` | 400 | Toute autre erreur levée pendant le traitement ; `message` porte son texte. |
+| `rate_limited` | 429 | La machine a dépassé la limite de débit de la route ; la réponse porte `retryAfterMs` et l'en-tête `Retry-After` (contrat 1.4, [ci-dessous](#limitation-de-débit-et-taille-des-corps-anh-166)). |
+| `payload_too_large` | 413 | Corps au-delà de la taille de la route, ou lot de plus de 600 points ou 200 événements, refusé avant d'être parcouru (contrat 1.4). |
 
 Côté Pi, une absence de réponse devient `Unreachable`, toute réponse ≥ 400
 devient `Refused`, et son code est journalisé. Pour ce que la console envoie
@@ -1093,15 +1095,18 @@ quatre suites : acquitté ; **retenu** (pas de réponse, 401, 403, 408, 425,
 426, 429, 5xx : rien n'est reçu, rien n'est abandonné, la même requête est
 refaite après 15 s) ; route inconnue (404 sans code) ; refusé (tout autre
 cas, définitif quand le code est `invalid_request`, `session_not_found`,
-`session_not_pending` ou `machine_not_found`). Détail :
+`session_not_pending`, `machine_not_found` ou `payload_too_large`). Un 429
+retient de plus sa route, côté console, jusqu'à la fin de l'attente qu'il
+annonce. Détail :
 [raspberry-pi.md](raspberry-pi.md#83-ce-que-chaque-réponse-fait-au-curseur).
 
 **Corps** : les sept routes `POST` attendent un objet JSON. Un corps qui n'en
 est pas un est refusé par **400** `invalid_request`, et rien n'est écrit :
 du texte qui n'est pas du JSON (un objet tronqué compris), ou du JSON valide
 qui n'est pas un objet (`null`, un nombre, une chaîne, un booléen, un
-tableau). La clé est jugée d'abord, puis le contrat, puis le corps : 401, 426,
-400, dans cet ordre. Un test tient la règle pour chaque route `POST` du
+tableau). La clé est jugée d'abord, puis le contrat, puis, sur les routes
+limitées, le débit (429) et la taille du corps (413), puis le corps : 401,
+426, 429, 413, 400, dans cet ordre. Un test tient la règle pour chaque route `POST` du
 routeur, celles qui s'y ajouteront comprises (`convex/httpRoutes.test.ts`).
 
 Le heartbeat a une seule tolérance que les autres n'ont pas : un corps
@@ -1115,18 +1120,113 @@ champs gardent leur règle, dite plus bas : un `live` mal formé est ignoré, un
 `software_version` mal formé est effacé, un champ inconnu à la racine du corps
 n'est pas lu.
 
+### Limitation de débit et taille des corps (ANH-166)
+
+Une machine ou un compte qui envoie trop est arrêté avant que ce qu'il envoie
+soit lu ou écrit. Pas de serveur à tenir : c'est le composant Convex
+[`@convex-dev/rate-limiter`](https://www.npmjs.com/package/@convex-dev/rate-limiter)
+(version `0.3.2`, épinglée exactement dans `package.json`), monté par
+`convex/convex.config.ts` sous le nom `rateLimiter`. Son état vit dans la
+table de ce composant, hors du schéma de l'application : un seau à jetons par
+limite et par clé. Un appel refusé n'y écrit rien ; seul un appel accepté
+prend un jeton. Les limites sont nommées dans `convex/lib/rateLimits.ts`.
+
+**Par machine** (clé : la machine authentifiée), en seau à jetons. Les
+valeurs sont lues dans le contrat partagé (`contracts/machine-api.json`,
+`rate_limits`), auquel les tests du Pi épinglent ses cadences : une console
+qui fonctionne comme prévu ne les atteint jamais.
+
+| Route | Limite | Réserve | Cadence de la console |
+|---|---|---|---|
+| `POST /api/machine/heartbeat` | 1 toutes les 5 s | 1 | toutes les 10 s |
+| `GET /api/machine/training/poll` | 1 toutes les 2 s | 1 | toutes les 3 s au repos |
+| `POST /api/machine/training/telemetry` | 2 lots toutes les 5 s | 2 | un lot toutes les 3 s au plus vite |
+| `POST /api/machine/training/events` | 10 par seconde | 10 | une fois par étape du lien (1 s) |
+| `POST /api/machine/records/upload-url` | 10 par seconde | 64 | 64 fichiers par étape du dépôt, 4 transferts à la fois |
+
+Au-delà : **429** `{"error": "rate_limited", "message": "…", "retryAfterMs": <ms>}`
+et l'en-tête `Retry-After` (en secondes, arrondi au-dessus). La limite est
+prise après la clé et le contrat, et **avant** que le corps soit lu : une
+rafale de requêtes énormes coûte une lecture de clé et un appel au composant
+chacune, rien de plus. `retryAfterMs` est le délai avant lequel la même
+requête serait encore refusée ; la console ne redemande pas la route avant
+([raspberry-pi.md](raspberry-pi.md#86-ce-que-la-synchronisation-ne-peut-pas-coûter)).
+
+Écart au ticket, à confirmer : le ticket demandait **10 réservations par
+minute** pour `upload-url`. Le dépôt d'ANH-130, écrit depuis, réserve un
+fichier par appel, et un programme de deux heures en compte environ 36 000
+([enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex)) : à 10 par
+minute, son dépôt prendrait 60 heures. La limite est donc de 10 par seconde
+avec une réserve de 64 (une étape du dépôt), soit une heure pour une telle
+séance. La valeur est une ligne du contrat partagé.
+
+**Jamais limitées** : la demande d'arrêt (`GET /api/machine/training/status`),
+pour qu'un arrêt passe toujours, et les routes appelées une fois par séance ou
+par fichier (`profiles`, `roster`, `training/start`, `training/local`,
+`training/end`, `records/commit`, `records/status`). Une requête sans clé
+valide est refusée (401) avant toute limite : Convex ne voit pas l'adresse de
+l'appelant, il n'y a donc rien sur quoi limiter un appel anonyme. Chacun coûte
+une lecture d'index.
+
+**Taille des corps**, vérifiée avant toute lecture du JSON : d'abord
+l'en-tête `Content-Length`, puis les octets reçus, la lecture s'arrêtant au
+premier octet de trop (un `Content-Length` plus petit que le corps ne fait
+rien passer). Au-delà : **413** `payload_too_large`, rien n'est écrit.
+
+| Route | Corps | Éléments |
+|---|---|---|
+| `POST /api/machine/heartbeat` | 16 Kio (16 384 octets) | - |
+| `POST /api/machine/training/telemetry` | 300 Kio (307 200 octets) | 600 points |
+| `POST /api/machine/training/events` | 2,5 Mio (2 621 440 octets) | 200 événements |
+
+Le nombre d'éléments est vérifié aussitôt le JSON lu, avant d'en examiner un
+seul : 601 points ou 201 événements reçoivent 413 (400 avant le contrat 1.4).
+Les tailles laissent passer le plus grand lot valide : 200 événements de
+2 000 caractères écrits `\uXXXX` (6 octets chacun), comme la console écrit un
+caractère non ASCII, tiennent sous 2,5 Mio ; 600 points aux nombres les plus
+longs sous 300 Kio ; le plus grand heartbeat de la console (128 codes de
+défaut du variateur) fait environ 8 Kio. Les autres routes `POST` n'ont pas
+de taille propre ; seule la limite de Convex sur le corps d'une action HTTP
+les borne (20 Mio selon sa documentation publique, non vérifiée ici).
+
+**Bornes des événements** (revue d'ANH-129) : `seq` vaut au plus 999 999, ce
+qui borne aussi le nombre d'événements d'une séance (un événement est un
+`(sessionId, seq)`) ; `t` est un nombre entier de millisecondes.
+
+**Par compte** (clé : le sujet du jeton Clerk) :
+
+| Quoi | Limite |
+|---|---|
+| `training.launchAutoSession` | 5 par minute (et compté aussi dans la ligne suivante) |
+| toute mutation publique qui écrit, et l'action `users.createPatient` | 60 par minute, ensemble |
+| `training.requestStop` | **jamais limitée** : refuser un arrêt n'est jamais le côté sûr |
+
+Au-delà, l'appel lève une `ConvexError`
+`{code: "rate_limited", message, retryAfterMs}` ; le site l'affiche par le
+texte `errors.rate_limited` de `messages/*.json`. Dans une mutation, le jeton
+pris est rendu si la mutation échoue ensuite (la transaction entière est
+annulée) : seule une écriture qui a lieu compte. Un appel sans identité n'en
+prend pas : la fonction le refuse d'elle-même sans rien écrire. Dans l'action
+`createPatient`, le jeton est pris avant l'appel à Clerk et reste pris.
+
+Ce qui reste ouvert : le plafond de lignes de télémétrie par séance pour une
+console qui ne dit pas l'âge de sa séance (contrat 1.0, aucune date n'y est
+refusée) n'existe pas ; le débit par machine le borne seul. Le comportement
+du composant n'a été vérifié qu'en mémoire (`convex-test`), contre aucun
+déploiement.
+
 ### Routes utilisées par la console locale (`raspberry-pi/src/cloud_sync.py`)
 
 | Méthode et chemin | Corps / paramètres | Réponse 200 | Cadence côté Pi |
 |---|---|---|---|
-| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
+| `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) ; 16 Kio max | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` | une fois, quand le Pi a armé un lancement distant ; la console envoie les deux champs facultatifs |
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
-| `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points max) | `{stored, duplicates, rejected}` | lots de 300 points max : toutes les 5 s pour une séance à jour, toutes les 2 s pour ce qui est en retard |
-| `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements max, 2000 caractères de texte par événement) | `{stored, duplicates, rejected}` | avec la télémétrie, 200 événements max par envoi |
+| `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points et 300 Kio max) | `{stored, duplicates, rejected}` | lots de 300 points max : toutes les 5 s pour une séance à jour, toutes les 3 s pour ce qui est en retard |
+| `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements et 2,5 Mio max, 2000 caractères de texte par événement) | `{stored, duplicates, rejected}` | avec la télémétrie, 200 événements max par envoi |
 | `POST /api/machine/training/end` | `{sessionId, failed, reason, endedAt?}` | `{success: true}` | quand l'enregistrement de la séance est fermé et sa télémétrie acquittée ; sans `endedAt` pour un lancement que la machine a refusé |
 
 Détails du contrat :
@@ -1198,7 +1298,8 @@ Détails du contrat :
   nombre n'est pas lue. C'est la présence de `sessionAgeMs` qui change ce que
   le serveur fait des dates : [Deux horloges](#deux-horloges). La console de
   ce dépôt l'envoie toujours quand elle peut le compter.
-- **Événements** : `seq` entier positif ou nul, `t` nombre, `kind` de 64
+- **Événements** : `seq` entier de 0 à 999 999, `t` nombre entier (de
+  millisecondes), `kind` de 64
   caractères au plus (minuscules, chiffres, `_`, une lettre d'abord), `detail`
   de 2000 caractères au plus, `actor` de 1 à 64 caractères parmi lettres,
   chiffres, `_` et `-`. Un événement mal formé refuse tout le lot (400
@@ -1311,12 +1412,29 @@ Le job `convex-tests` lance la première forme avant le contrôle des types :
 une PR qui ajoute, retire ou renomme un module sans réécrire le fichier est
 refusée. Après avoir ajouté un fichier à `convex/`, lancer la seconde.
 
-Limites : le script refuse un backend qui monte un composant Convex (un
-`convex.config.ts` sous `convex/`), dont les liaisons viennent du déploiement
-et non de l'arbre ; il ne juge que `api.d.ts`, pas les quatre autres fichiers
-de `convex/_generated/`, qui ne dépendent pas de la liste des modules. Si une
-version ultérieure du paquet écrit ce fichier autrement, le script doit suivre
-dans la même PR.
+Les composants (ANH-166) : le script lit `convex/convex.config.ts` sous une
+seule forme, `import <nom> from "<paquet>/convex.config.js";` puis
+`app.use(<nom>, { name: "<composant>" });`, le nom écrit en clair, et écrit
+pour chacun la ligne que la commande Convex écrit
+(`<composant>: import("<paquet>/_generated/component.js").ComponentApi<"<composant>">;`).
+La sortie a été comparée à celle de `npx convex codegen` pour le limiteur de
+débit : identique. Un `use` sans nom (la commande prendrait celui du paquet,
+qui n'est pas dans l'arbre), un composant défini dans l'arbre (un
+`convex.config.ts` dans un dossier sous `convex/`, ou importé par un chemin
+relatif) ou deux composants du même nom sont refusés.
+
+Limites : le script ne juge que `api.d.ts`, pas les quatre autres fichiers de
+`convex/_generated/`, qui ne dépendent ni de la liste des modules ni des
+composants montés. Si une version ultérieure du paquet écrit ce fichier
+autrement, le script doit suivre dans la même PR.
+
+### Composant de limitation de débit (ANH-166)
+
+Le premier `npx convex deploy` (ou `npx convex dev`) de ce code installe le
+composant `rateLimiter` et sa table ; rien n'est à lancer à la main, et aucune
+donnée existante n'est touchée. Ses lignes, une par limite et par machine ou
+compte, ne sont jamais purgées : leur nombre est borné par le nombre de
+machines et de comptes. Cela n'a été vérifié contre aucun déploiement.
 
 ### Migration du retrait de l'ancien mode ECG
 
@@ -1778,6 +1896,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/journalTrace.test.ts` | Le test d'acceptation de la synchronisation, côté Convex : il rejoue, dans l'ordre et aux mêmes instants, **les requêtes que la console du Pi a réellement envoyées** pendant son propre test d'acceptation (`contracts/fixtures/journal-sync-trace.json` : séance, coupure réseau à 3 min, console tuée à 5 min, retour du réseau à 8 min, machine datée de 1970). Convex doit répondre à chacune comme la trace l'a noté, et détenir à la fin chaque point 1 Hz et chaque événement une seule fois, et la fin avec sa raison. Le test du Pi échoue si le fichier n'est plus ce que la console envoie. |
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance, et les deux mutations de migration. |
+| `convex/rateLimits.test.ts`, `convex/rateLimitsSource.test.ts` | La limitation de débit et la taille des corps (ANH-166) : chaque limite du contrat partagé sur sa route (sa réserve, puis 429 avec l'attente, puis de nouveau acceptée, une autre machine jamais retenue), rien d'écrit pour un heartbeat refusé, la limite avant le corps, la demande d'arrêt jamais limitée, **1000 heartbeats en 10 s** limités sans erreur (2 acceptés, 998 refusés 429), les tailles (16 Kio exactement accepté, un octet de plus refusé, octets et non caractères, `Content-Length` trop grand ou trop petit), 601 points refusés avant d'en lire un, le plus grand lot valide accepté ; par compte, 60 écritures puis `rate_limited`, un refus rend son jeton, 5 lancements par minute, l'arrêt jamais limité, et **chaque** mutation et action publique de la matrice refusée une fois les écritures de son acteur épuisées, l'arrêt excepté. Le second fichier remplace `contracts/machine-api.json` par un autre et vérifie que les limites et les tailles le suivent, et que le module refuse de se charger sans la limite ou la taille d'une route qu'il borne. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
@@ -1812,8 +1931,10 @@ organisation, désignée par son identifiant).
 Les résultats :
 
 - `refuse` : l'appel lève une erreur (avec, si utile, un extrait du message ;
-  les fonctions publiques n'ont **aucun code d'erreur stable**, seulement des
-  messages anglais ; seules les routes machine en ont, section 6) ;
+  les fonctions publiques n'ont **pas de code d'erreur stable** pour leurs
+  refus, seulement des messages anglais, à deux exceptions près : le code
+  `rate_limited` d'un compte au-delà de sa limite (section 6) et ceux des
+  invitations ; les routes machine en ont, section 6) ;
 - `success` : l'effet ou la donnée renvoyée est vérifié ;
 - `empty` : la requête renvoie `null`, `[]` ou une page vide (pas d'accès, rien
   n'est exposé) ;
@@ -1909,6 +2030,7 @@ de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.4` | Deux codes d'erreur : `rate_limited` (429, avec `retryAfterMs` et `Retry-After`) sur cinq routes limitées par machine, et `payload_too_large` (413) pour un corps au-delà de la taille de sa route ou un lot de plus de 600 points ou 200 événements (400 avant). Bornes de `seq` (999 999) et de `t` (entier) d'un événement. La liste des limites et des tailles est dans le contrat partagé (`rate_limits`, `max_body_bytes`). |
 | `1.3` | Le heartbeat annonce `server_contract_version`. La console vérifie cette annonce pour son état de liaison, même sans programmes. Une réponse sans version lisible affiche un contrat inconnu. |
 | `1.2` | `POST /api/machine/records/upload-url`, `POST /api/machine/records/commit` et `GET /api/machine/records/status` : dépôt complet et vérification des enregistrements clos. Les consoles antérieures restent compatibles mais ne déposent pas les fichiers. |
 | `1.1` | La route `POST /api/machine/training/events`. La réponse `{stored, duplicates, rejected}` de `training/telemetry` (au lieu de `{stored}`), qui n'écrit plus deux fois le même point. Les champs facultatifs `startedAt` et `sessionAgeMs` de `training/start`, et `sessionAgeMs` de `training/local` : c'est `sessionAgeMs` qui fait dater la séance par le serveur et borner ses points ([Deux horloges](#deux-horloges)). |
@@ -1920,7 +2042,14 @@ n'appelle pas la route des événements. Ses séances sont datées, stockées et
 servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
 plus stocké deux fois.
 
-La console de ce dépôt est en `1.3`. Face à un serveur antérieur sans version dans
+La console de ce dépôt est en `1.4`. Face à un serveur `1.3`, rien ne change
+pour elle : il ne répond ni 429 ni 413. Une console `1.3` face à un serveur
+`1.4` lit un 429 comme elle l'a toujours lu (réponse retenue, la même requête
+refaite 15 s plus tard, rien d'abandonné), sans tenir compte de
+`retryAfterMs` ; ses cadences et ses lots sont les mêmes, sauf le rattrapage
+de télémétrie (un lot toutes les 2 s), que la réserve de deux lots et l'attente
+de 15 s après un 429 ramènent sous la limite. Un 413 ne la touche pas : ses
+lots sont sous les tailles. Face à un serveur antérieur sans version dans
 le heartbeat, elle conserve les échanges mais affiche un contrat serveur inconnu.
 Déployer Convex avant la console permet de maintenir une indication compatible.
 Elle conserve les ajouts de `1.1` : elle envoie les événements,

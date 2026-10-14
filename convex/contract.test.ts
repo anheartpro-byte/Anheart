@@ -12,9 +12,12 @@
  * - EX-4 (server half): the poll answer names the server's contract version;
  * - EX-5: every refusal is `{error: <stable code>, message: <words>}`;
  * - EX-6: each heartbeat stores what the machine announced.
+ *
+ * ANH-166 adds two codes to the list: `rate_limited` (429) and
+ * `payload_too_large` (413), each reached here by a route that answers it.
  */
 import { ConvexError } from "convex/values";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharedText from "../contracts/machine-api.json?raw";
 import { api, internal } from "./_generated/api";
 import http from "./http";
@@ -499,8 +502,8 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
     },
     {
       name: "training/telemetry: more than 600 points",
-      status: 400,
-      code: "invalid_request",
+      status: 413,
+      code: "payload_too_large",
       run: (w) =>
         post(w, "/api/machine/training/telemetry", {
           sessionId: "x",
@@ -535,8 +538,8 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
     },
     {
       name: "training/events: more than 200 events",
-      status: 400,
-      code: "invalid_request",
+      status: 413,
+      code: "payload_too_large",
       run: (w) =>
         post(w, "/api/machine/training/events", {
           sessionId: "x",
@@ -560,6 +563,15 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
             { seq: 0, t: NOW, kind: "phase", detail: "hold", actor: "system" },
           ],
         }),
+    },
+    {
+      name: "heartbeat: a second one within 5 s",
+      status: 429,
+      code: "rate_limited",
+      run: async (w) => {
+        await post(w, "/api/machine/heartbeat", {});
+        return post(w, "/api/machine/heartbeat", {});
+      },
     },
     {
       name: "any route: an unknown key",
@@ -653,6 +665,16 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
 });
 
 describe("ANH-133 EX-6 each heartbeat stores what the machine announced", () => {
+  // The server's clock is set, and moved by a heartbeat period between two
+  // heartbeats: a machine takes one every 5 s (ANH-166).
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("stores the software version, the contract version and when they were seen", async () => {
     const w = await world();
     const started = Date.now();
@@ -703,6 +725,7 @@ describe("ANH-133 EX-6 each heartbeat stores what the machine announced", () => 
     async ({ body }) => {
       const w = await world();
       await post(w, "/api/machine/heartbeat", { software_version: "pi-0.4.2" });
+      vi.setSystemTime(NOW + 10_000);
       const response = await post(w, "/api/machine/heartbeat", body);
       expect(response.status).toBe(200);
       const machine = await w.t.run((ctx) => ctx.db.get(w.machine));

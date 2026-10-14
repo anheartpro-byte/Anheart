@@ -154,6 +154,7 @@ from src.cloud_sync import (
     CloudTransport,
     DepositTask,
     HttpxTransport,
+    PacedTransport,
     SessionKind,
     SessionListener,
     StartedSession,
@@ -1750,9 +1751,12 @@ def build_panel(
 
         if transport is None:
             owned = HttpxTransport(config.cloud)
-            link: CloudTransport = owned
+            sent: CloudTransport = owned
         else:
-            link = transport(config.cloud)
+            sent = transport(config.cloud)
+        # One transport for the link and the deposit: a route the dashboard
+        # asks to wait for is held for both (contract 1.4).
+        link = PacedTransport(sent, clock)
         cloud = CloudSync(
             clock=clock,
             transport=link,
@@ -1773,7 +1777,7 @@ def build_panel(
                 else (
                     None
                     if journal is None or owned is None
-                    else RecordDeposit(journal.root, clock, owned, owned.upload)
+                    else RecordDeposit(journal.root, clock, link, owned.upload)
                 )
             ),
         )

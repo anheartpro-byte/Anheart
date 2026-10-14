@@ -142,6 +142,35 @@ describe("ANH-156 EX-1 useMutationWithFeedback", () => {
     expect(outcome).toMatchObject({ ok: false, message: "Traduction du code" });
   });
 
+  it.each([
+    [
+      "fr",
+      "Trop de demandes en peu de temps. Patientez un instant, puis réessayez.",
+    ],
+    ["en", "Too many requests in a short time. Wait a moment, then try again."],
+  ] as const)(
+    "an account over its rate limit reads the catalogue's words (%s), not the server's",
+    async (locale, words) => {
+      // What convex/lib/rateLimits.ts throws (ANH-166).
+      serverMutation.mockRejectedValue(
+        new ConvexError({
+          code: "rate_limited",
+          message: "Too many requests: retry later",
+          retryAfterMs: 1000,
+        }),
+      );
+
+      const outcome = await renderHook(locale)({ machineId: "m1" });
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        code: "rate_limited",
+        message: words,
+      });
+      expect(shown()).toEqual([{ kind: "error", message: words }]);
+    },
+  );
+
   it("coded error without a translation: the server text is shown", async () => {
     serverMutation.mockRejectedValue(
       new ConvexError({

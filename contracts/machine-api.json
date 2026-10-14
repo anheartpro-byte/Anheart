@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.3",
+  "contract_version": "1.4",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "heartbeat_response_fields": ["success", "serverTime", "server_contract_version"],
@@ -13,6 +13,24 @@
     "medical_parameters_version",
     "config_hash"
   ],
+  "rate_limits": {
+    "description": "Limites de débit par machine (clé : la machine authentifiée), en seau à jetons : `rate` requêtes acceptées par `period_ms`, au plus `capacity` d'avance. Au-delà : 429 `rate_limited`. Les routes absentes de cette liste ne sont pas limitées ; la demande d'arrêt (`GET /api/machine/training/status`) ne l'est jamais. Lu par convex/lib/rateLimits.ts ; les tests du Pi y épinglent ses cadences.",
+    "routes": {
+      "POST /api/machine/heartbeat": { "rate": 1, "period_ms": 5000, "capacity": 1 },
+      "GET /api/machine/training/poll": { "rate": 1, "period_ms": 2000, "capacity": 1 },
+      "POST /api/machine/training/telemetry": { "rate": 2, "period_ms": 5000, "capacity": 2 },
+      "POST /api/machine/training/events": { "rate": 10, "period_ms": 1000, "capacity": 10 },
+      "POST /api/machine/records/upload-url": { "rate": 10, "period_ms": 1000, "capacity": 64 }
+    }
+  },
+  "max_body_bytes": {
+    "description": "Taille maximale du corps, en octets, vérifiée avant toute lecture du JSON (en-tête Content-Length, puis octets reçus). Au-delà : 413 `payload_too_large`. Le nombre d'éléments d'un lot est vérifié aussitôt après, avant d'en lire un seul : 600 points, 200 événements.",
+    "routes": {
+      "POST /api/machine/heartbeat": 16384,
+      "POST /api/machine/training/telemetry": 307200,
+      "POST /api/machine/training/events": 2621440
+    }
+  },
   "error_codes": {
     "contract_unsupported": {
       "statuses": [426],
@@ -41,6 +59,14 @@
     "request_failed": {
       "statuses": [400],
       "meaning": "Toute autre erreur levée pendant le traitement ; `message` porte le texte."
+    },
+    "rate_limited": {
+      "statuses": [429],
+      "meaning": "La machine a dépassé la limite de débit de cette route. La réponse porte `retryAfterMs`, le délai en millisecondes avant lequel la même requête serait refusée de nouveau, et l'en-tête `Retry-After` en secondes. Rien n'a été lu ni écrit."
+    },
+    "payload_too_large": {
+      "statuses": [413],
+      "meaning": "Le corps dépasse la taille maximale de la route : refusé avant d'être parcouru, rien n'est écrit. La même requête sera refusée de nouveau."
     }
   }
 }

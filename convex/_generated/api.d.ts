@@ -22,6 +22,7 @@ import type * as lib_machineAuth from "../lib/machineAuth.js";
 import type * as lib_machineHealth from "../lib/machineHealth.js";
 import type * as lib_machineHttpAuth from "../lib/machineHttpAuth.js";
 import type * as lib_patientInvitation from "../lib/patientInvitation.js";
+import type * as lib_rateLimits from "../lib/rateLimits.js";
 import type * as lib_recordStorage from "../lib/recordStorage.js";
 import type * as lib_releaseValidation from "../lib/releaseValidation.js";
 import type * as lib_trainingPrivacy from "../lib/trainingPrivacy.js";
@@ -61,6 +62,7 @@ declare const fullApi: ApiFromModules<{
   "lib/machineHealth": typeof lib_machineHealth;
   "lib/machineHttpAuth": typeof lib_machineHttpAuth;
   "lib/patientInvitation": typeof lib_patientInvitation;
+  "lib/rateLimits": typeof lib_rateLimits;
   "lib/recordStorage": typeof lib_recordStorage;
   "lib/releaseValidation": typeof lib_releaseValidation;
   "lib/trainingPrivacy": typeof lib_trainingPrivacy;
@@ -106,4 +108,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+};

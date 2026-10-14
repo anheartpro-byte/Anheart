@@ -1,6 +1,5 @@
-import { convexTest } from "convex-test";
 import { api, internal } from "./_generated/api";
-import schema from "./schema";
+import { backendOf } from "./test.setup";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 
 /**
@@ -12,7 +11,7 @@ export async function machineFixture(
   modules: Record<string, () => Promise<unknown>>,
 ) {
   delete process.env.ANHEART_ORG_ID;
-  const t = convexTest(schema, modules);
+  const t = backendOf(modules);
   await t.run(async (ctx) => {
     await ctx.db.insert("users", {
       clerkId: "machine-admin",

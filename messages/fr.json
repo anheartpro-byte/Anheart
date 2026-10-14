@@ -4,7 +4,8 @@
     "invalid_invitation": "Vérifiez le nom et l'adresse e-mail.",
     "invitation_unavailable": "Cette invitation ne peut pas être créée. Vérifiez vos droits et les membres de votre organisation.",
     "profile_reconciliation_required": "Le rattachement du profil nécessite une vérification par un administrateur.",
-    "profile_pending": "Le profil attend la confirmation de Clerk. Réessayez dans quelques instants."
+    "profile_pending": "Le profil attend la confirmation de Clerk. Réessayez dans quelques instants.",
+    "rate_limited": "Trop de demandes en peu de temps. Patientez un instant, puis réessayez."
   },
   "sessionRecord": {
     "next": "Page suivante",

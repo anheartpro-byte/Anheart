@@ -117,8 +117,11 @@ describe("ANH-148 machine health", () => {
 
   it("accepts authenticated health and refuses malformed measurements without a write", async () => {
     const w = await seedMachineWorld(modules);
-    const send = (health: unknown) =>
-      w.t.fetch("/api/machine/heartbeat", {
+    // Each heartbeat 10 s after the one before, as the console sends them: a
+    // machine takes one every 5 s (ANH-166).
+    const send = (health: unknown) => {
+      vi.setSystemTime(Date.now() + 10_000);
+      return w.t.fetch("/api/machine/heartbeat", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${w.machineKey}`,
@@ -126,6 +129,7 @@ describe("ANH-148 machine health", () => {
         },
         body: JSON.stringify({ health }),
       });
+    };
     expect((await send(reading(65))).status).toBe(200);
     for (const health of [
       { ...reading(65), mem_used_pct: 101 },

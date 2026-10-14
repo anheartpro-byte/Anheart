@@ -14,6 +14,13 @@ and everything it accepts back. The two sides must share the **major**:
 A different **minor** is fine in both directions: within one major each side
 relies only on what every minor of it provides.
 
+Since 1.4 the dashboard may answer a machine route "wait": 429
+:data:`RATE_LIMITED`, with how long in ``retryAfterMs``
+(:mod:`src.cloud_sync` keeps to it), or 413 :data:`PAYLOAD_TOO_LARGE` for a
+body over the route's size. A console of an earlier minor reads the first as
+a refusal about the link, as it always read a 429: nothing is dropped, and the
+same request is made again later.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -56,7 +63,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.3")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.4")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -68,6 +75,12 @@ SERVER_VERSION_FIELD: Final[str] = "server_contract_version"
 CONTRACT_UNSUPPORTED: Final[ErrorCode] = ErrorCode("contract_unsupported")
 """The code of the 426 a server answers to a major it does not serve."""
 
+RATE_LIMITED: Final[ErrorCode] = ErrorCode("rate_limited")
+"""The code of the 429 a server answers a machine over a route's rate limit."""
+
+PAYLOAD_TOO_LARGE: Final[ErrorCode] = ErrorCode("payload_too_large")
+"""The code of the 413 a server answers a body over a route's size."""
+
 STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
     {
         CONTRACT_UNSUPPORTED,
@@ -77,6 +90,8 @@ STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("session_not_pending"),
         ErrorCode("machine_not_found"),
         ErrorCode("request_failed"),
+        RATE_LIMITED,
+        PAYLOAD_TOO_LARGE,
     }
 )
 """Every stable code the dashboard refuses a request under. Pinned to the shared file.

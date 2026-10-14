@@ -1,6 +1,5 @@
-import { convexTest } from "convex-test";
 import { internal } from "./_generated/api";
-import schema from "./schema";
+import { backendOf } from "./test.setup";
 
 export const now = 1_800_000_000_000;
 
@@ -16,7 +15,7 @@ export async function trainingFixture(
   modules: Record<string, () => Promise<unknown>>,
 ) {
   delete process.env.ANHEART_ORG_ID;
-  const t = convexTest(schema, modules);
+  const t = backendOf(modules);
   const ids = await t.run(async (ctx) => {
     const users = await Promise.all(
       (

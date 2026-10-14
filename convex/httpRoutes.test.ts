@@ -315,8 +315,9 @@ describe("ANH-195 EX-3 a body a machine route cannot read is refused with 400", 
   it("still takes a heartbeat without a body, and one whose body is an empty object", async () => {
     const w = await world();
 
+    // One heartbeat per machine: a machine takes one every 5 s (ANH-166).
     const empty = await sendRaw(w, w.machineKey, "POST", "/api/machine/heartbeat", "");
-    const object = await sendRaw(w, w.machineKey, "POST", "/api/machine/heartbeat", "{}");
+    const object = await sendRaw(w, w.otherKey, "POST", "/api/machine/heartbeat", "{}");
     const beats = await w.t.run((ctx) =>
       ctx.db.query("machine_heartbeats").collect(),
     );

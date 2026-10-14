@@ -18,6 +18,15 @@ import {
   softwareVersionOf,
   type MachineErrorCode,
 } from "./lib/contract";
+import {
+  boundedText,
+  limitMachine,
+  MAX_EVENTS_BYTES,
+  MAX_HEARTBEAT_BYTES,
+  MAX_TELEMETRY_BYTES,
+  payloadTooLarge,
+  type MachineLimit,
+} from "./lib/rateLimits";
 
 const http = httpRouter();
 http.route({
@@ -55,7 +64,8 @@ http.route({
  * POST /api/machine/heartbeat
  * The local panel sends this with what the machine is doing, every 10 seconds,
  * with its software version and the contract it speaks (stored on the machine
- * for the dashboard to show).
+ * for the dashboard to show). One every 5 s per machine at most, 16 KiB of
+ * body at most (`contracts/machine-api.json`).
  */
 http.route({
   path: "/api/machine/heartbeat",
@@ -67,6 +77,8 @@ http.route({
       return authResult.error;
     }
     const { machine } = authResult;
+    const limited = await limitMachine(ctx, "machineHeartbeat", machine._id);
+    if (limited) return limited;
 
     // Parse optional body
     let body: {
@@ -82,7 +94,11 @@ http.route({
     // before anything is recorded, unless it is a JSON object whose stored
     // fields have their type: text that is not JSON, JSON that is not an
     // object, a battery level that is not a number.
-    const sent = await readOptionalJson(req);
+    const text = await boundedText(req, MAX_HEARTBEAT_BYTES);
+    if (text === null) {
+      return payloadTooLarge("A heartbeat is 16384 bytes at most");
+    }
+    const sent = optionalJsonOf(text);
     if (sent === null || !validHeartbeatFields(sent)) {
       return refuse(
         400,
@@ -187,22 +203,38 @@ async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
-/**
- * The body of a route that may be sent without one: `{}` for an empty body,
- * the object it carries, or null for anything else (text that is not JSON,
- * JSON that is not an object).
- */
-async function readOptionalJson(
-  req: Request,
-): Promise<Record<string, unknown> | null> {
+/** The object a body of JSON carries, or null (text that is not JSON, JSON that is not an object). */
+function jsonObjectOf(text: string): Record<string, unknown> | null {
   try {
-    const text = await req.text();
-    if (text === "") return {};
     const parsed: unknown = JSON.parse(text);
     return isJsonObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * The body of a route that may be sent without one: `{}` for an empty body,
+ * the object it carries, or null for anything else (text that is not JSON,
+ * JSON that is not an object).
+ */
+function optionalJsonOf(text: string): Record<string, unknown> | null {
+  return text === "" ? {} : jsonObjectOf(text);
+}
+
+/**
+ * A batch route's body: its object, or the 413 of a body over `max` bytes,
+ * answered before the JSON is read. A body that is not an object is null.
+ */
+async function readBoundedJson(
+  req: Request,
+  max: number,
+): Promise<Record<string, unknown> | null | Response> {
+  const text = await boundedText(req, max);
+  if (text === null) {
+    return payloadTooLarge(`This route takes ${max} bytes of body at most`);
+  }
+  return jsonObjectOf(text);
 }
 
 function isNum(x: unknown): x is number {
@@ -240,23 +272,32 @@ function validLive(live: unknown): live is Infer<typeof liveStateValidator> {
 
 type Machine = { _id: string };
 
+type MachineHandler = (
+  ctx: Parameters<Parameters<typeof httpAction>[0]>[0],
+  req: Request,
+  machineId: Id<"machines">,
+) => Promise<Response>;
+
 /**
- * Pass the gate (by default the key, then the contract), then run `handle`;
- * any thrown error becomes a 400 carrying its stable code (`request_failed`
- * when it has none). Only the stop request's route passes another gate.
+ * Pass the gate (by default the key, then the contract), then the machine's
+ * rate limit of the route when it has one, then run `handle`; any thrown
+ * error becomes a 400 carrying its stable code (`request_failed` when it has
+ * none). Only the stop request's route passes another gate, and it has no
+ * limit: a stop is never held back.
  */
 function machineRoute(
-  handle: (
-    ctx: Parameters<Parameters<typeof httpAction>[0]>[0],
-    req: Request,
-    machineId: Id<"machines">,
-  ) => Promise<Response>,
+  handle: MachineHandler,
   gate: typeof authenticateMachineRequest = validateMachineAuth,
+  limit?: MachineLimit,
 ) {
   return httpAction(async (ctx, req) => {
     const auth = await gate(ctx, req);
     if ("error" in auth) return auth.error;
     const machine: Machine = auth.machine;
+    if (limit !== undefined) {
+      const limited = await limitMachine(ctx, limit, machine._id);
+      if (limited) return limited;
+    }
     try {
       return await handle(ctx, req, machine._id as Id<"machines">);
     } catch (error: unknown) {
@@ -264,6 +305,11 @@ function machineRoute(
       return refuse(400, code, message);
     }
   });
+}
+
+/** A machine route under one of the machine limits (ANH-166), before its body is read. */
+function limitedRoute(limit: MachineLimit, handle: MachineHandler) {
+  return machineRoute(handle, validateMachineAuth, limit);
 }
 
 function sessionIdOf(
@@ -281,7 +327,7 @@ function sessionIdOf(
 http.route({
   path: "/api/machine/training/poll",
   method: "GET",
-  handler: machineRoute(async (ctx, _req, machineId) => {
+  handler: limitedRoute("machinePoll", async (ctx, _req, machineId) => {
     const session = await ctx.runQuery(
       internal.training.getPendingTrainingSession,
       { machineId },
@@ -496,22 +542,31 @@ http.route({
   }, authenticateMachineRequest),
 });
 
+/** Points accepted in one request. */
+const MAX_POINTS_PER_BATCH = 600;
+
 /**
  * POST /api/machine/training/telemetry {sessionId, points[]}
  * -> {stored, duplicates, rejected}
  *
  * A point is one `(sessionId, t)`: sent again, it is counted in `duplicates`
  * and stored once. A 200 acknowledges every point of the batch, stored or
- * not: the machine has nothing to send again.
+ * not: the machine has nothing to send again. Two batches every 5 s per
+ * machine at most; 300 KiB of body and 600 points at most, both refused (413)
+ * before a point is read.
  */
 http.route({
   path: "/api/machine/training/telemetry",
   method: "POST",
-  handler: machineRoute(async (ctx, req, machineId) => {
-    const b = await readJson(req);
+  handler: limitedRoute("machineTelemetry", async (ctx, req, machineId) => {
+    const b = await readBoundedJson(req, MAX_TELEMETRY_BYTES);
+    if (b instanceof Response) return b;
     const sessionId = sessionIdOf(ctx, b?.sessionId);
     if (!b || !sessionId || !Array.isArray(b.points)) {
       return refuse(400, "invalid_request", "Expected {sessionId, points}");
+    }
+    if (b.points.length > MAX_POINTS_PER_BATCH) {
+      return payloadTooLarge("At most 600 points per batch");
     }
     const points = [];
     for (const raw of b.points as unknown[]) {
@@ -544,8 +599,6 @@ http.route({
         safetyAction: p.safetyAction,
       });
     }
-    if (points.length > 600)
-      return refuse(400, "invalid_request", "At most 600 points per batch");
     const result = await ctx.runMutation(internal.training.storeTelemetry, {
       machineId,
       sessionId,
@@ -557,6 +610,11 @@ http.route({
 
 /** Events accepted in one request. */
 const MAX_EVENTS_PER_BATCH = 200;
+/**
+ * The highest rank of an event: an event is one `(sessionId, seq)`, so this
+ * is also the most events one session can hold.
+ */
+const MAX_EVENT_SEQ = 999_999;
 /** Characters of free text accepted in one event. */
 const MAX_EVENT_DETAIL = 2000;
 /** A kind of the record's vocabulary: lower case, digits and underscores. */
@@ -575,7 +633,9 @@ function eventOf(raw: unknown) {
     !isNum(seq) ||
     !Number.isInteger(seq) ||
     seq < 0 ||
+    seq > MAX_EVENT_SEQ ||
     !isNum(t) ||
+    !Number.isSafeInteger(t) ||
     !isStr(kind) ||
     !EVENT_KIND.test(kind) ||
     !isStr(detail) ||
@@ -593,21 +653,24 @@ function eventOf(raw: unknown) {
  * -> {stored, duplicates, rejected}
  *
  * The events of the session's local record, each `{seq, t, kind, detail,
- * actor}`: `seq` is its rank in the record, and an event is one
- * `(sessionId, seq)`, stored once however many times it is sent. Sizes are
- * bounded here: 200 events per request, 2000 characters of text per event.
+ * actor}`: `seq` is its rank in the record (999 999 at most), `t` a whole
+ * number of ms, and an event is one `(sessionId, seq)`, stored once however
+ * many times it is sent. Sizes are bounded here: 2.5 MiB of body and 200
+ * events per request, both refused (413) before an event is read; 2000
+ * characters of text per event. Ten requests a second per machine at most.
  */
 http.route({
   path: "/api/machine/training/events",
   method: "POST",
-  handler: machineRoute(async (ctx, req, machineId) => {
-    const b = await readJson(req);
+  handler: limitedRoute("machineEvents", async (ctx, req, machineId) => {
+    const b = await readBoundedJson(req, MAX_EVENTS_BYTES);
+    if (b instanceof Response) return b;
     const sessionId = sessionIdOf(ctx, b?.sessionId);
     if (!b || !sessionId || !Array.isArray(b.events)) {
       return refuse(400, "invalid_request", "Expected {sessionId, events}");
     }
     if (b.events.length > MAX_EVENTS_PER_BATCH) {
-      return refuse(400, "invalid_request", "At most 200 events per batch");
+      return payloadTooLarge("At most 200 events per batch");
     }
     const events = [];
     for (const raw of b.events as unknown[]) {

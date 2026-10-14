@@ -1,3 +1,4 @@
+import { limitUser } from "./lib/rateLimits";
 import {
   query,
   mutation,
@@ -86,6 +87,7 @@ export const getOrCreateUser = mutation({
   args: {},
   returns: v.id("users"),
   handler: async (ctx) => {
+    await limitUser(ctx);
     const identity = await requireAuth(ctx);
 
     // Check if user already exists
@@ -279,6 +281,7 @@ export const updateUserRole = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await requireRole(ctx, ["admin"]);
 
     if (anheartClerkOrganizationId() !== null) {
@@ -311,6 +314,7 @@ export const updateUserProfile = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await getCurrentUserOrThrow(ctx);
 
     const updates: Record<string, string> = {};
@@ -464,6 +468,7 @@ export const createPatient = action({
   args: patientInvitationArgs,
   returns: invitationResult,
   handler: async (ctx, args): Promise<Infer<typeof invitationResult>> => {
+    await limitUser(ctx);
     const prepared = await ctx.runMutation(
       internal.patientInvitations.prepare,
       args,
@@ -504,6 +509,7 @@ export const updatePatient = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await requireRole(ctx, STAFF_ROLES);
 
     // Check access rights
@@ -606,6 +612,7 @@ export const deleteUser = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await getCurrentUserOrThrow(ctx);
 
     // Cannot delete self
@@ -726,6 +733,7 @@ export const linkPatientToClerk = mutation({
   },
   returns: v.union(v.id("users"), v.null()),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const identity = await requireAuth(ctx);
     const linked = await ctx.db
       .query("users")
@@ -799,6 +807,7 @@ export const assignGestionnaireToUser = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await requireRole(ctx, STAFF_ROLES);
 
     const organizationId =
@@ -867,6 +876,7 @@ export const removeGestionnaireFromUser = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await requireRole(ctx, STAFF_ROLES);
 
     // Check permissions
@@ -1059,6 +1069,7 @@ export const assignPatientsToGestionnaire = mutation({
     removed: v.number(),
   }),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     // Verify the caller administers this gestionnaire, and in which organisation
     const { currentUser, organizationId } = await requireGestionnaireAdmin(
       ctx,

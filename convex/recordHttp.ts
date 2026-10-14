@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { validateMachineAuth } from "./lib/machineHttpAuth";
 import { machineErrorResponse } from "./lib/contract";
 import { commitRequest, uploadRequest } from "./lib/recordStorage";
+import { limitMachine } from "./lib/rateLimits";
 
 async function requestBody(req: Request): Promise<unknown> {
   try {
@@ -20,9 +21,12 @@ function json(body: unknown, status = 200): Response {
     },
   });
 }
+/** One reservation per file; ten a second per machine at most, 64 in a row (ANH-166). */
 export const uploadUrl = httpAction(async (ctx, req) => {
   const auth = await validateMachineAuth(ctx, req);
   if ("error" in auth) return auth.error;
+  const limited = await limitMachine(ctx, "machineUploadUrl", auth.machine._id);
+  if (limited) return limited;
   const parsed = uploadRequest.safeParse(await requestBody(req));
   if (!parsed.success)
     return machineErrorResponse(

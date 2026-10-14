@@ -1,3 +1,4 @@
+import { limitUser } from "./lib/rateLimits";
 import { v } from "convex/values";
 import {
   internalMutation,
@@ -585,6 +586,7 @@ export const remove = mutation({
   args: { sessionId: v.id("sessions") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const user = await requireRole(ctx, ["admin", "org_admin"]);
     const session = await ctx.db.get(args.sessionId);
     if (!session || !(await canAccessMachine(ctx, session.machineId, user)))

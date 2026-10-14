@@ -4,9 +4,12 @@
 //     node scripts/ci/convex-generated-api.mjs --write    rewrite the committed file
 //
 // The file is committed because the site and the Convex functions do not
-// type-check without it. It lists the modules of convex/, one import each, and
-// nothing in it depends on a deployment as long as the backend mounts no
-// component: its last line is then `export declare const components: {};`.
+// type-check without it. It lists the modules of convex/, one import each,
+// then the components the root convex.config.ts mounts, one line each that
+// points at the types the component's package ships
+// (`<package>/_generated/component.js`). Nothing in it depends on a
+// deployment: with no component its last line is
+// `export declare const components: {};`.
 //
 // The Convex command that writes it (`npx convex dev`, `npx convex codegen`)
 // needs a deployment to talk to: since version 1.28 of the package, generating
@@ -24,8 +27,17 @@
 // rewrite the file differently: the check then fails on the developer's diff,
 // and this script must follow in the same pull request.
 //
-// A backend that mounts a component (a `convex.config.ts` under convex/) is
-// refused: its `components` block comes from the deployment, not from the tree.
+// The components (ANH-166) are read from convex/convex.config.ts in one form
+// only: `import <name> from "<package>/convex.config.js";` then
+// `app.use(<name>, { name: "<component>" });`, the name written out. The
+// Convex command names a component it is not told the name of after its
+// package's own definition, which is not in the tree: such a `use` is
+// refused, like a component defined in the tree itself (a `convex.config.ts`
+// in a directory under convex/, or imported by a relative path), whose
+// bindings come from the deployment. The line of each component is
+// `componentApiLines`, src/cli/codegen_templates/component_api.ts, with the
+// import specifier as `bundle.ts` (src/cli/lib/components/definition/) keeps
+// it: the package, without `/convex.config...`.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -93,9 +105,6 @@ export function modulesOf(directory) {
       found.push(path);
     }
   };
-  if (existsSync(join(directory, "convex.config.ts"))) {
-    throw new Error("convex.config.ts mounts components: their bindings come from a deployment");
-  }
   walk("");
   return found.sort(byCodeUnit);
 }
@@ -120,12 +129,57 @@ const UNQUOTED =
 /** A property name as Prettier leaves it: quoted only when it has to be. @param {string} path */
 const keyOf = (path) => (UNQUOTED.test(path) ? path : `"${path}"`);
 
+/** An import of a component's definition: `import rateLimiter from "@convex-dev/rate-limiter/convex.config.js";`. */
+const COMPONENT_IMPORT = /^import ([$_A-Za-z][$\w]*) from "([^"]+)\/convex\.config(?:\.js)?";$/gm;
+
+/** One `use` of the app, with the component's name written out. */
+const NAMED_USE = /^app\.use\(([$_A-Za-z][$\w]*), \{ name: "([$_A-Za-z][$\w]*)" \}\);$/;
+
 /**
- * The text of api.d.ts for these modules.
+ * The components the root `convex.config.ts` mounts, in the order it mounts
+ * them; none without that file.
+ * @param {string} directory the functions directory (convex/)
+ * @returns {{ name: string, from: string }[]} `from`: the package its types are imported from
+ */
+export function componentsOf(directory) {
+  const file = join(directory, "convex.config.ts");
+  if (!existsSync(file)) return [];
+  const text = readFileSync(file, "utf8");
+  /** @type {Map<string, string>} */
+  const imported = new Map();
+  for (const [, identifier = "", from = ""] of text.matchAll(COMPONENT_IMPORT)) imported.set(identifier, from);
+  const uses = text.split("\n").filter((line) => line.includes(".use("));
+  /** @type {{ name: string, from: string }[]} */
+  const found = [];
+  for (const line of uses) {
+    const [, identifier = "", name = ""] = NAMED_USE.exec(line.trim()) ?? [];
+    const from = imported.get(identifier);
+    if (!name) {
+      throw new Error(
+        `convex.config.ts: \`${line.trim()}\` does not name its component as \`app.use(<import>, { name: "<name>" });\`: the name would come from the package, not from the tree`,
+      );
+    }
+    if (from === undefined) {
+      throw new Error(`convex.config.ts: ${identifier} is not imported as \`import ${identifier} from "<package>/convex.config.js";\``);
+    }
+    if (from.startsWith(".")) {
+      throw new Error(`convex.config.ts: ${identifier} is a component of this tree: its bindings come from a deployment`);
+    }
+    if (found.some((component) => component.name === name)) {
+      throw new Error(`convex.config.ts: the name ${name} is given to two components`);
+    }
+    found.push({ name, from });
+  }
+  return found;
+}
+
+/**
+ * The text of api.d.ts for these modules and components.
  * @param {readonly string[]} modules as `modulesOf` returns them
+ * @param {readonly { name: string, from: string }[]} [components] as `componentsOf` returns them
  * @returns {string}
  */
-export function render(modules) {
+export function render(modules, components = []) {
   const imports = modules.map((module) => `import type * as ${identifierOf(module)} from "../${importPath(module)}.js";`);
   const members = modules.map((module) => `  ${keyOf(importPath(module))}: typeof ${identifierOf(module)};`);
   return [
@@ -177,7 +231,16 @@ export function render(modules) {
     '  FunctionReference<any, "internal">',
     ">;",
     "",
-    "export declare const components: {};",
+    ...(components.length === 0
+      ? ["export declare const components: {};"]
+      : [
+          "export declare const components: {",
+          ...components.map(
+            ({ name, from }) =>
+              `  ${keyOf(name)}: import("${from}/_generated/component.js").ComponentApi<"${name}">;`,
+          ),
+          "};",
+        ]),
     "",
   ].join("\n");
 }
@@ -194,7 +257,7 @@ export function importedBy(text) {
  */
 export function check(root) {
   const modules = modulesOf(join(root, "convex"));
-  const expected = render(modules);
+  const expected = render(modules, componentsOf(join(root, "convex")));
   const file = join(root, GENERATED);
   const committed = existsSync(file) ? readFileSync(file, "utf8") : "";
   if (committed === expected) {

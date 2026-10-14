@@ -797,7 +797,7 @@ Limites :
     Un cas a été mesuré en revue : si l'horloge de la machine avançait alors
     d'exactement le retard de cet envoi, ses points sont lus comme mesurés à
     l'instant, et la séance s'affiche en direct jusqu'à l'arrivée de sa fin,
-    soit le temps de l'envoyer (un lot de 300 points toutes les 2 s).
+    soit le temps de l'envoyer (un lot de 300 points toutes les 3 s).
 
   Dans ces trois cas, les conséquences sont :
   - en retard de plus de 15 s environ : le bandeau « mesures pas datées de
@@ -862,7 +862,7 @@ serveur, au seuil de la télémétrie : 20 s (`TELEMETRY_FRESH_MS`,
 La réception seule ne suffit pas : après une coupure de liaison, ou après son
 propre redémarrage, la console relit sur son disque ce que le serveur n'a pas
 acquitté et l'envoie par paquets de 300 points, **les plus anciens d'abord**,
-un paquet toutes les 2 s. Chaque paquet est une réception fraîche de mesures
+un paquet toutes les 3 s. Chaque paquet est une réception fraîche de mesures
 anciennes. Le panneau relit aussi le `t` du point qu'il imprime, quoi que
 dise la séance.
 

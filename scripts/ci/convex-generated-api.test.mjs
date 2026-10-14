@@ -9,7 +9,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { GENERATED, check, identifierOf, importedBy, main, modulesOf, render } from "./convex-generated-api.mjs";
+import {
+  GENERATED,
+  check,
+  componentsOf,
+  identifierOf,
+  importedBy,
+  main,
+  modulesOf,
+  render,
+} from "./convex-generated-api.mjs";
 
 const MODULE = "export const value = 1;\n";
 
@@ -189,20 +198,104 @@ test("EX-11 the check refuses a file that is missing, and --write creates it", (
   assert.equal(readFileSync(join(root, GENERATED), "utf8"), render(["machines.ts"]));
 });
 
-test("EX-11 a backend that mounts a component is refused: its bindings are not in the tree", (context) => {
-  const mounted = tree(context, { "convex/machines.ts": MODULE, "convex/convex.config.ts": MODULE });
+/** A root convex.config.ts mounting these `use` lines, each import declared first. */
+function config(/** @type {string[]} */ imports, /** @type {string[]} */ uses) {
+  return [
+    'import { defineApp } from "convex/server";',
+    ...imports,
+    "",
+    "const app = defineApp();",
+    ...uses,
+    "",
+    "export default app;",
+    "",
+  ].join("\n");
+}
+
+const RATE_LIMITER = 'import rateLimiter from "@convex-dev/rate-limiter/convex.config.js";';
+
+test("ANH-166 a component named in convex.config.ts gets the line the Convex command writes", (context) => {
+  const root = tree(context, {
+    "convex/machines.ts": MODULE,
+    "convex/convex.config.ts": config(
+      [RATE_LIMITER, 'import workpool from "@convex-dev/workpool/convex.config";'],
+      ['app.use(rateLimiter, { name: "rateLimiter" });', 'app.use(workpool, { name: "emails" });'],
+    ),
+  });
+
+  const components = componentsOf(join(root, "convex"));
+  const text = render(modulesOf(join(root, "convex")), components);
+
+  // convex.config.ts is not a module: two dots in its name.
+  assert.deepEqual(modulesOf(join(root, "convex")), ["machines.ts"]);
+  assert.deepEqual(components, [
+    { name: "rateLimiter", from: "@convex-dev/rate-limiter" },
+    { name: "emails", from: "@convex-dev/workpool" },
+  ]);
+  assert.ok(
+    text.endsWith(
+      [
+        "export declare const components: {",
+        '  rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;',
+        '  emails: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"emails">;',
+        "};",
+        "",
+      ].join("\n"),
+    ),
+    text,
+  );
+  assert.equal(run(["--write"], root).status, 0);
+  assert.equal(readFileSync(join(root, GENERATED), "utf8"), text);
+  assert.equal(run([], root).status, 0);
+});
+
+test("ANH-166 a component the check cannot name from the tree is refused, and so is one it lost", (context) => {
+  const unnamed = tree(context, {
+    "convex/machines.ts": MODULE,
+    "convex/convex.config.ts": config([RATE_LIMITER], ["app.use(rateLimiter);"]),
+  });
+  const relative = tree(context, {
+    "convex/machines.ts": MODULE,
+    "convex/convex.config.ts": config(
+      ['import billing from "./billing/convex.config.js";'],
+      ['app.use(billing, { name: "billing" });'],
+    ),
+  });
+  const unknown = tree(context, {
+    "convex/machines.ts": MODULE,
+    "convex/convex.config.ts": config([], ['app.use(rateLimiter, { name: "rateLimiter" });']),
+  });
+  const twice = tree(context, {
+    "convex/machines.ts": MODULE,
+    "convex/convex.config.ts": config(
+      [RATE_LIMITER],
+      ['app.use(rateLimiter, { name: "limits" });', 'app.use(rateLimiter, { name: "limits" });'],
+    ),
+  });
   const nested = tree(context, { "convex/machines.ts": MODULE, "convex/billing/convex.config.ts": MODULE });
   const reserved = tree(context, { "convex/machines.ts": MODULE, "convex/_deps/left.ts": MODULE });
 
-  const answers = [mounted, nested, reserved].map((root) => run([], root));
+  const answers = [unnamed, relative, unknown, twice, nested, reserved].map((root) => run([], root));
 
   assert.deepEqual(
     answers.map(({ status }) => status),
-    [1, 1, 1],
+    [1, 1, 1, 1, 1, 1],
   );
-  assert.match(answers[0]?.output ?? "", /convex\.config\.ts mounts components/);
-  assert.match(answers[1]?.output ?? "", /billing\/convex\.config\.ts defines a component/);
-  assert.match(answers[2]?.output ?? "", /_deps directory is reserved/);
+  assert.match(answers[0]?.output ?? "", /does not name its component/);
+  assert.match(answers[1]?.output ?? "", /billing is a component of this tree/);
+  assert.match(answers[2]?.output ?? "", /rateLimiter is not imported/);
+  assert.match(answers[3]?.output ?? "", /the name limits is given to two components/);
+  assert.match(answers[4]?.output ?? "", /billing\/convex\.config\.ts defines a component/);
+  assert.match(answers[5]?.output ?? "", /_deps directory is reserved/);
+
+  // A component removed from convex.config.ts, its line left in the file.
+  const removed = tree(context, {
+    "convex/machines.ts": MODULE,
+    [GENERATED]: render(["machines.ts"], [{ name: "rateLimiter", from: "@convex-dev/rate-limiter" }]),
+  });
+  const stale = run([], removed);
+  assert.equal(stale.status, 1);
+  assert.match(stale.output, /same modules, another text/);
 });
 
 test("EX-11 an argument the script does not know is refused before anything is read", (context) => {

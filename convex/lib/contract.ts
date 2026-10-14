@@ -44,8 +44,9 @@ export function machineErrorResponse(
   code: MachineErrorCode,
   message: string,
   extra: Record<string, unknown> = {},
+  headers: Record<string, string> = {},
 ): Response {
-  return Response.json({ error: code, message, ...extra }, { status });
+  return Response.json({ error: code, message, ...extra }, { status, headers });
 }
 
 /**

@@ -110,8 +110,12 @@ _logger: Final[logging.Logger] = logging.getLogger(__name__)
 TELEMETRY_PERIOD: Final[Seconds] = Seconds(5.0)
 """How often a running session that is up to date sends what it has measured since."""
 
-CATCH_UP_PERIOD: Final[Seconds] = Seconds(2.0)
-"""The least time between two batches of telemetry, whichever sessions they are of."""
+CATCH_UP_PERIOD: Final[Seconds] = Seconds(3.0)
+"""The least time between two batches of telemetry, whichever sessions they are of.
+
+Under the dashboard's limit on the telemetry route, two batches every 5 s
+(``contracts/machine-api.json``, ``rate_limits``; the tests pin this to it),
+and a whole number of the console's steps, which come once a second."""
 
 RETRY_PERIOD: Final[Seconds] = Seconds(15.0)
 """After the link held a request, or refused one it may accept later: the wait."""

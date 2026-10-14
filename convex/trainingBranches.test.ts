@@ -1485,10 +1485,13 @@ describe("what a machine reports through its routes", () => {
       programsEnabled: true,
     });
 
-    // A setting that is not a boolean is no setting either.
+    // A setting that is not a boolean is no setting either. Each heartbeat
+    // 10 s after the one before: a machine takes one every 5 s (ANH-166).
+    vi.setSystemTime(NOW + 20_000);
     await beat({ live: LIVE, programsEnabled: "no" });
     expect((await rowOf(w, w.machine))?.programsEnabled).toBe(true);
     // The machine's own word is taken.
+    vi.setSystemTime(NOW + 30_000);
     await beat({ live: LIVE, programsEnabled: false });
     expect((await rowOf(w, w.machine))?.programsEnabled).toBe(false);
   });
