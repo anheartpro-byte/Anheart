@@ -1,11 +1,10 @@
 /// <reference types="vite/client" />
-import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./_generated/api";
-import schema from "./schema";
 import { verifyClerkSignature } from "./lib/clerkWebhook";
 import {
   as,
+  backendOf,
   configureAnheartOrganization,
   modules,
   NOW,
@@ -14,7 +13,7 @@ import {
 } from "./test.setup";
 
 const secret = `whsec_${btoa("synthetic-webhook-signing-key")}`;
-const makeTest = () => convexTest(schema, modules);
+const makeTest = () => backendOf(modules);
 type Test = ReturnType<typeof makeTest>;
 const org = {
   id: "org_qa_webhook",

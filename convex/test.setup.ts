@@ -14,6 +14,7 @@
  * organisation, by direct identifier.
  */
 import { convexTest } from "convex-test";
+import rateLimiterTest from "@convex-dev/rate-limiter/test";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -29,6 +30,17 @@ export const modules = import.meta.glob([
   "!./**/*.setup.ts",
   "!./**/*.matrix.ts",
 ]);
+
+/**
+ * An in-memory backend with the components `convex/convex.config.ts` mounts
+ * (ANH-166: the rate limiter, under the name the app gives it). Every world
+ * of these tests is built on one.
+ */
+export function backendOf(mods: Record<string, () => Promise<unknown>>) {
+  const t = convexTest(schema, mods);
+  rateLimiterTest.register(t, "rateLimiter");
+  return t;
+}
 
 /** Clerk organisation identifiers of the synthetic world. */
 export const ANHEART_CLERK_ORG = "org_synthetic_anheart";
@@ -206,7 +218,7 @@ const ORGANIZATION_SETTINGS = {
  */
 export async function seedWorld(mods: Record<string, () => Promise<unknown>>) {
   configureAnheartOrganization(ANHEART_CLERK_ORG);
-  const t = convexTest(schema, mods);
+  const t = backendOf(mods);
   const ids = await t.run(async (ctx) => {
     const mkOrganization = (clerkOrgId: string, name: string, slug: string) =>
       ctx.db.insert("organizations", {
@@ -367,7 +379,7 @@ export async function seedMachineWorld(
   mods: Record<string, () => Promise<unknown>>,
 ) {
   configureAnheartOrganization(ANHEART_CLERK_ORG);
-  const t = convexTest(schema, mods);
+  const t = backendOf(mods);
   const { adminId, organizationId } = await t.run(async (ctx) => {
     const organizationId = await ctx.db.insert("organizations", {
       clerkOrgId: ANHEART_CLERK_ORG,
@@ -480,7 +492,7 @@ export async function seedLegacyWorld(
   mods: Record<string, () => Promise<unknown>>,
 ) {
   configureAnheartOrganization(null);
-  const t = convexTest(schema, mods);
+  const t = backendOf(mods);
   const ids = await t.run(async (ctx) => {
     const mkUser = (clerkId: string, role: "admin" | "gestionnaire" | "user") =>
       ctx.db.insert("users", {

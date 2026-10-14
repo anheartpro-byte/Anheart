@@ -16,6 +16,7 @@
  * "admin" here is the admin of the Anheart organisation. The admin of a client
  * organisation (`org_admin`) neither reads nor writes it.
  */
+import { limitUser } from "./lib/rateLimits";
 import { ConvexError, v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import {
@@ -79,6 +80,7 @@ export const recordRelease = mutation({
   },
   returns: v.id("software_releases"),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const admin = await requireRole(ctx, ["admin"]);
 
     if (!isReleaseVersion(args.component, args.version)) {

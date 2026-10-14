@@ -398,10 +398,6 @@ describe("ANH-129 EX-1 POST /api/machine/training/events stores the events of th
     ["an empty session identifier", { sessionId: "", events: [] }],
     ["no events", { sessionId: "x" }],
     ["events that are not a list", { sessionId: "x", events: "all" }],
-    [
-      "more than 200 events",
-      { sessionId: "x", events: events(NOW, 0, 201) },
-    ],
   ])("refuses a request with %s", async (_name, body) => {
     const w = await world();
 
@@ -413,6 +409,24 @@ describe("ANH-129 EX-1 POST /api/machine/training/events stores the events of th
     );
   });
 
+  it("refuses more than 200 events with 413, before reading one, and stores none", async () => {
+    const w = await world();
+    const sessionId = await localSession(w, { startedAt: NOW });
+
+    const response = await send(w, EVENTS, {
+      sessionId,
+      // The 201st is not even an event: the count is refused before any is read.
+      events: [...events(NOW, 0, 200), "not an event"],
+    });
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      error: "payload_too_large",
+      message: "At most 200 events per batch",
+    });
+    expect(await eventsOf(w, sessionId)).toEqual([]);
+  });
+
   it.each([
     ["null in place of an event", null],
     ["text in place of an event", "phase"],
@@ -421,8 +435,11 @@ describe("ANH-129 EX-1 POST /api/machine/training/events stores the events of th
     ["a rank that is not whole", { ...event(NOW, 0), seq: 1.5 }],
     ["a negative rank", { ...event(NOW, 0), seq: -1 }],
     ["a rank that is not finite", { ...event(NOW, 0), seq: "Infinity" }],
+    ["a rank past 999 999", { ...event(NOW, 0), seq: 1_000_000 }],
     ["no date", { ...event(NOW, 0), t: undefined }],
     ["a date that is text", { ...event(NOW, 0), t: "now" }],
+    ["a date that is not a whole number of ms", { ...event(NOW, 0), t: NOW + 0.5 }],
+    ["a date past the safe integers", { ...event(NOW, 0), t: 2 ** 53 }],
     ["no kind", { ...event(NOW, 0), kind: undefined }],
     ["a kind that is not of the vocabulary's form", { ...event(NOW, 0), kind: "Phase!" }],
     ["a kind of 65 characters", { ...event(NOW, 0), kind: "k".repeat(65) }],

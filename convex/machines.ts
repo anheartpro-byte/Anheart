@@ -1,3 +1,4 @@
+import { limitUser } from "./lib/rateLimits";
 import {
   query,
   mutation,
@@ -45,6 +46,7 @@ export const createMachine = mutation({
     apiKey: v.string(),
   }),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await requireRole(ctx, ["admin"]);
 
     const organizationId = args.organizationId ?? currentUser.organizationId;
@@ -111,6 +113,7 @@ export const assignMachineToGestionnaires = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await requireRole(ctx, ORGANIZATION_ADMIN_ROLES);
 
     const machine = await ctx.db.get(args.machineId);
@@ -174,6 +177,7 @@ export const setGestionnaireMachines = mutation({
     removed: v.number(),
   }),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const { currentUser, organizationId } = await requireGestionnaireAdmin(
       ctx,
       args.gestionnaireId,
@@ -241,6 +245,7 @@ export const regenerateApiKey = mutation({
     apiKey: v.string(),
   }),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await getCurrentUserOrThrow(ctx);
     const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
@@ -466,6 +471,7 @@ export const updateMachine = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await getCurrentUserOrThrow(ctx);
     const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
@@ -498,6 +504,7 @@ export const deleteMachine = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await getCurrentUserOrThrow(ctx);
     const canManage = await canManageMachine(ctx, args.machineId, currentUser);
     if (!canManage) {
@@ -547,6 +554,7 @@ export const restoreMachine = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     await requireRole(ctx, ["admin"]);
 
     const machine = await ctx.db.get(args.machineId);
@@ -762,6 +770,7 @@ export const assignGestionnaireToMachine = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await requireRole(ctx, STAFF_ROLES);
 
     // Check permissions - the machine is one the caller manages
@@ -823,6 +832,7 @@ export const removeGestionnaireFromMachine = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const currentUser = await requireRole(ctx, STAFF_ROLES);
 
     // Check permissions

@@ -1260,8 +1260,8 @@ async def test_the_end_is_the_record_s_sent_after_its_last_point_and_closes_the_
     record.close("operator_stop", stop="operator pressed STOP")
     b.uplink.finished(RuntimeEnd(failed=True, reason="what the runtime said, unused"))
 
-    # Its last points wait their turn, two seconds after the batch before them.
-    await b.step()
+    # Its last points wait their turn, a catch-up period after the batch before them.
+    await b.run(int(CATCH_UP_PERIOD) - 1)
     assert b.link.paths() == ["local", "telemetry"]
     await b.step()
 
@@ -1693,7 +1693,9 @@ async def test_ex4_what_earlier_runs_left_is_taken_up_oldest_first_after_the_run
     b.disk.current = live.path
     live.tick(1.0)
     await b.step()
-    for _ in range(8):
+    # One batch for each record left, a catch-up period apart, and the running
+    # session's own every TELEMETRY_PERIOD in between.
+    for _ in range(6 * int(CATCH_UP_PERIOD)):
         live.tick(1.0)
         await b.step()
 
@@ -2122,7 +2124,7 @@ async def test_a_cursor_that_does_not_match_its_record_starts_again_from_the_beg
 # =========================================================================
 
 
-async def test_ex5_catching_up_sends_at_most_one_batch_of_300_points_every_2_s(
+async def test_ex5_catching_up_sends_at_most_one_batch_of_300_points_every_catch_up_period(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     old = bench(tmp_path)
@@ -2142,7 +2144,7 @@ async def test_ex5_catching_up_sends_at_most_one_batch_of_300_points_every_2_s(
 
     b = old.restarted()
     times: list[float] = []
-    for _ in range(12):
+    for _ in range(4 * int(CATCH_UP_PERIOD) + 2):
         before = len(b.link.to(TELEMETRY_PATH))
         await b.step()
         if len(b.link.to(TELEMETRY_PATH)) > before:
@@ -2173,7 +2175,7 @@ async def test_ex5_nothing_of_an_older_session_is_sent_while_the_running_one_is_
     live = recording(tmp_path, b.clock, "ref-now")
     b.disk.current = live.path
     live.tick(2 * MAX_POINTS + 20.0, hertz=1)
-    await b.run(10)
+    await b.run(4 * int(CATCH_UP_PERIOD) + 1)
 
     order = [body["sessionId"] for body in b.link.to(TELEMETRY_PATH)]
     assert order == ["cloud-1", "cloud-1", "cloud-1", "cloud-old", "cloud-old"]
@@ -2291,7 +2293,7 @@ async def batch_times(b: Bench, steps: int) -> list[tuple[float, str, int]]:
     return seen
 
 
-async def test_ex5_never_two_batches_less_than_2_s_apart_when_the_running_session_catches_up(
+async def test_ex5_no_two_batches_within_the_catch_up_period_when_the_running_session_catches_up(
     tmp_path: Path,
 ) -> None:
     """The last batch of a session that was behind, then an older record: not in one step."""
@@ -2319,10 +2321,10 @@ async def test_ex5_never_two_batches_less_than_2_s_apart_when_the_running_sessio
     assert gaps == [float(CATCH_UP_PERIOD)] * 3
 
 
-async def test_ex5_never_two_batches_less_than_2_s_apart_when_a_session_ends_and_is_handed_over(
+async def test_ex5_no_two_batches_within_the_catch_up_period_when_a_session_ends_and_is_handed_over(
     tmp_path: Path,
 ) -> None:
-    """Its points of the last seconds wait two seconds after the batch it sent while running."""
+    """Its last seconds of points wait a catch-up period after its batch sent while running."""
     b = bench(tmp_path)
     b.uplink.begin(armed(b.clock))
     record = recording(tmp_path, b.clock)
@@ -2345,7 +2347,7 @@ async def test_ex5_never_two_batches_less_than_2_s_apart_when_a_session_ends_and
 async def test_ex5_a_running_session_up_to_date_waits_its_turn_behind_a_batch_of_catching_up(
     tmp_path: Path,
 ) -> None:
-    """One pace for all: its five seconds of points go two seconds after an older batch."""
+    """One pace for all: its five seconds of points go a catch-up period after an older batch."""
     old = bench(tmp_path)
     left = recording(tmp_path, old.clock, "ref-old")
     left.tick(4 * MAX_POINTS + 0.0, hertz=1)
@@ -2358,7 +2360,7 @@ async def test_ex5_a_running_session_up_to_date_waits_its_turn_behind_a_batch_of
     live = recording(tmp_path, b.clock, "ref-now")
     b.disk.current = live.path
     seen: list[tuple[float, str, int]] = []
-    for _ in range(14):
+    for _ in range(8 * int(CATCH_UP_PERIOD)):
         live.tick(1.0)
         seen += await batch_times(b, 1)
 

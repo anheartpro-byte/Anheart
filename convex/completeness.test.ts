@@ -22,10 +22,12 @@ type Registration = {
 };
 
 // Every top-level Convex module, eagerly, minus the test-only files (which must
-// never be imported here, or their top-level suites would run again).
+// never be imported here, or their top-level suites would run again) and the
+// components file, which defines no function and runs only in Convex.
 const topLevel = import.meta.glob(
   [
     "./*.ts",
+    "!./convex.config.ts",
     "!./*.test.ts",
     "!./*.fixtures.ts",
     "!./*.setup.ts",

@@ -4,7 +4,8 @@
     "invalid_invitation": "Check the name and email address.",
     "invitation_unavailable": "This invitation cannot be created. Check your permissions and organization members.",
     "profile_reconciliation_required": "An administrator must review the profile before it can be linked.",
-    "profile_pending": "The profile is awaiting confirmation from Clerk. Please try again shortly."
+    "profile_pending": "The profile is awaiting confirmation from Clerk. Please try again shortly.",
+    "rate_limited": "Too many requests in a short time. Wait a moment, then try again."
   },
   "sessionRecord": {
     "next": "Next page",

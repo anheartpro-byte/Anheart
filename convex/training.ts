@@ -22,6 +22,7 @@
  * standing safety verdict, a drive fault...). A refusal comes back as a
  * failed session with the Pi's reason.
  */
+import { limitUser } from "./lib/rateLimits";
 import { ConvexError, v } from "convex/values";
 import {
   internalMutation,
@@ -189,6 +190,7 @@ export const grantLaunchRight = mutation({
   args: { machineId: v.id("machines"), userId: v.id("users") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const me = await getCurrentUserOrThrow(ctx);
     if (!(await canManageMachine(ctx, args.machineId, me))) {
       throw new ConvexError(
@@ -228,6 +230,7 @@ export const revokeLaunchRight = mutation({
   args: { machineId: v.id("machines"), userId: v.id("users") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const me = await getCurrentUserOrThrow(ctx);
     if (!(await canManageMachine(ctx, args.machineId, me))) {
       throw new ConvexError(
@@ -299,6 +302,7 @@ export const setUserPhysiology = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    await limitUser(ctx);
     const me = await getCurrentUserOrThrow(ctx);
     if (me.role === "user")
       throw new ConvexError("Only a manager can set physiology");
@@ -478,6 +482,8 @@ export const launchAutoSession = mutation({
   },
   returns: v.id("sessions"),
   handler: async (ctx, args) => {
+    await limitUser(ctx, "launchAutoSession");
+    await limitUser(ctx);
     const me = await getCurrentUserOrThrow(ctx);
     const riderId = args.userId ?? me._id;
 
@@ -602,6 +608,7 @@ export const requestStop = mutation({
   args: { sessionId: v.id("sessions") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    // Never rate limited (ANH-166): refusing a stop is never the safe side.
     const me = await getCurrentUserOrThrow(ctx);
     // A session of another organisation is a session that does not exist.
     const session = await ctx.db.get(args.sessionId);

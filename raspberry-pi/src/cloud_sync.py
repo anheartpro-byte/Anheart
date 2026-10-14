@@ -72,6 +72,15 @@ what was sent (a success, or a refusal under one of its stable codes), on a
 route that carries the heartbeat or the session. The stop question's answers
 say the dashboard is there and nothing more.
 
+The dashboard may ask the console to wait
+-----------------------------------------
+A route the console calls more often than the dashboard takes (contract 1.4)
+is answered 429 ``rate_limited`` with the wait in ``retryAfterMs``.
+:class:`PacedTransport` keeps to it: nothing more is sent on that route until
+the wait is over, whoever asks and however often, and the wait is logged. A
+console that works as designed never meets these limits: its cadences are
+pinned to them by its tests. The stop question is never held.
+
 One thing crosses every contract: **a stop**. "Stop" means the same under any
 version, and refusing one is never the safe side. The status route answers
 whatever contract the console announces, and its answer ends the session
@@ -88,9 +97,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from abc import abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, unique
 from typing import Final, Protocol, assert_never, cast
 
@@ -101,6 +111,7 @@ from src.contract import (
     CONTRACT_HEADER,
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
+    RATE_LIMITED,
     SERVER_VERSION_FIELD,
     STABLE_CODES,
     UNKNOWN_SOFTWARE_VERSION,
@@ -160,9 +171,25 @@ The event list is only sent to the screens connected at that moment, so a
 standing condition said once at startup would never reach a page opened later.
 """
 
-HELD_STATUSES: Final[frozenset[int]] = frozenset({401, 403, 408, 425, 426, 429})
+TOO_MANY_REQUESTS: Final[int] = 429
+"""The status of a request the dashboard asks to wait for (``rate_limited``)."""
+
+HELD_STATUSES: Final[frozenset[int]] = frozenset({401, 403, 408, 425, 426, TOO_MANY_REQUESTS})
 """Refusals that are about the link, not about what was sent: the key is not accepted,
 the contract is not served, the server asks to wait. A 5xx is one too."""
+
+MAX_RATE_WAIT: Final[Seconds] = Seconds(300.0)
+"""The longest a 429 keeps the console from a route: a longer ``retryAfterMs`` is read as
+this. The longest back-off of the deposit too; the dashboard's own waits are seconds."""
+
+RATE_WAIT_UNSAID: Final[Seconds] = RETRY_PERIOD
+"""How long a 429 that names no readable wait keeps the console from its route."""
+
+STATUS_PATH: Final[str] = "/api/machine/training/status"
+"""The stop question's route: never held by :class:`PacedTransport`."""
+
+HELD_HERE: Final[str] = "not sent: the dashboard asked this console to wait on this route"
+"""The words of a refusal :class:`PacedTransport` gives without asking the dashboard."""
 
 SERVER_ERROR: Final[int] = 500
 
@@ -170,7 +197,13 @@ KEY_STATUSES: Final[frozenset[int]] = frozenset({401, 403})
 """Among those, the refusals that say this machine's key is not accepted."""
 
 FINAL_CODES: Final[frozenset[str]] = frozenset(
-    {"invalid_request", "session_not_found", "session_not_pending", "machine_not_found"}
+    {
+        "invalid_request",
+        "session_not_found",
+        "session_not_pending",
+        "machine_not_found",
+        "payload_too_large",
+    }
 )
 """Stable codes that say the same request will always be refused
 (``contracts/machine-api.json``). ``request_failed`` is not one: it also covers a
@@ -208,6 +241,11 @@ class Refused:
 
     supported: tuple[str, ...] = ()
     """With ``contract_unsupported``: the contract majors the dashboard serves."""
+
+    retry_after: Seconds | None = field(default=None, compare=False)
+    """With ``rate_limited``: how long the dashboard asks to wait (``retryAfterMs``), at
+    most :data:`MAX_RATE_WAIT`; ``None`` when it said nothing readable. Not part of what
+    makes two refusals the same one: the wait is different at each."""
 
 
 type CloudError = Unreachable | Refused
@@ -377,7 +415,96 @@ def _refusal(status: int, document: Document | None) -> Refused:
         detail=message if isinstance(message, str) else found,
         code=error_code_of(found),
         supported=majors_of(document.get("supported")),
+        retry_after=retry_after_of(document.get("retryAfterMs")),
     )
+
+
+def retry_after_of(value: object) -> Seconds | None:
+    """The wait in an untrusted ``retryAfterMs``; ``None`` unless a number of ms, 0 or more.
+
+    Bounded by :data:`MAX_RATE_WAIT`, whatever was sent.
+    """
+    if (
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        return None
+    return Seconds(min(value / 1000, MAX_RATE_WAIT))
+
+
+class PacedTransport:
+    """A :class:`CloudTransport` that keeps to the waits the dashboard asks for (contract 1.4).
+
+    A 429 holds its route until the wait it names is over (``retryAfterMs``,
+    at most :data:`MAX_RATE_WAIT`; :data:`RATE_WAIT_UNSAID` when it names
+    none): a request to that route meanwhile is not sent, and is answered here
+    as the dashboard answered it. Whoever asks (the heartbeat, the poll, the
+    sending of the records, the deposit) and however often, nothing reaches
+    the dashboard on that route before the wait is over: there is no tight
+    loop to make. Every hold is logged once, when it begins, with its route
+    and its length. The other routes are not held, and the stop question
+    never is: the dashboard never limits it, and a stop is never the side
+    that waits. Never raises.
+    """
+
+    __slots__ = ("_clock", "_held", "_inner")
+
+    def __init__(self, inner: CloudTransport, clock: Clock) -> None:
+        self._inner: CloudTransport = inner
+        self._clock: Clock = clock
+        # Route -> when it may be asked again. Mutable on purpose, and only by
+        # this object's own calls, all on the event loop. At most one entry
+        # per route of the machine API: a hold that is over is overwritten by
+        # the next, never needed again otherwise.
+        self._held: dict[str, Monotonic] = {}
+
+    async def get(
+        self, path: str, params: Mapping[str, str] | None = None
+    ) -> Result[Document, CloudError]:
+        waiting = self._waiting(path)
+        if waiting is not None:
+            return Err(waiting)
+        return self._heard(path, await self._inner.get(path, params))
+
+    async def post(self, path: str, body: Mapping[str, JsonValue]) -> Result[Document, CloudError]:
+        waiting = self._waiting(path)
+        if waiting is not None:
+            return Err(waiting)
+        return self._heard(path, await self._inner.post(path, body))
+
+    def _waiting(self, path: str) -> Refused | None:
+        """The refusal a held route is answered with, without asking; ``None`` when it is free."""
+        until = self._held.get(path)
+        now = self._clock.monotonic()
+        if until is None or now >= until:
+            return None
+        return Refused(
+            status=TOO_MANY_REQUESTS,
+            detail=HELD_HERE,
+            code=RATE_LIMITED,
+            retry_after=Seconds(until - now),
+        )
+
+    def _heard(
+        self, path: str, result: Result[Document, CloudError]
+    ) -> Result[Document, CloudError]:
+        """Hold ``path`` when the dashboard answered it 429. The answer goes on unchanged."""
+        if path == STATUS_PATH or isinstance(result, Ok):
+            return result
+        refused = result.error
+        if not isinstance(refused, Refused) or refused.status != TOO_MANY_REQUESTS:
+            return result
+        wait = RATE_WAIT_UNSAID if refused.retry_after is None else refused.retry_after
+        self._held[path] = Monotonic(self._clock.monotonic() + wait)
+        _logger.warning(
+            "dashboard: %s refused for its rate (HTTP 429, %s): not asked again for %.1f s",
+            path,
+            "sans code" if refused.code is None else refused.code,
+            wait,
+        )
+        return result
 
 
 LOGGED_WORDS_LIMIT: Final[int] = 200
@@ -968,7 +1095,7 @@ class CloudSync:
         if session_id is None or not _due(self._last_status, now, STATUS_PERIOD):
             return
         self._last_status = now
-        sent = await self._transport.get("/api/machine/training/status", {"sessionId": session_id})
+        sent = await self._transport.get(STATUS_PATH, {"sessionId": session_id})
         # This route answers under every contract: its answers say nothing of
         # whether the dashboard serves this console's.
         self._note(sent, contract=False)
