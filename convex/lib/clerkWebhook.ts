@@ -6,7 +6,7 @@ const identifier = z.string().min(1).max(256);
 const organization = z.object({
   id: identifier,
   name: z.string().min(1).max(1024),
-  slug: z.string().min(1).max(256),
+  slug: z.string().min(1).max(256).nullable(),
   created_at: time,
   updated_at: time,
 });
@@ -32,6 +32,12 @@ const snapshot = v.object({
 });
 export const clerkEventValidator = v.union(
   v.object({
+    kind: v.literal("userDeleted"),
+    userId: v.string(),
+    occurredAt: v.number(),
+    updatedAt: v.number(),
+  }),
+  v.object({
     kind: v.literal("organization"),
     deleted: v.boolean(),
     organization: snapshot,
@@ -49,6 +55,7 @@ export const clerkEventValidator = v.union(
     firstName: v.string(),
     lastName: v.string(),
     email: v.string(),
+    verifiedEmails: v.optional(v.array(v.string())),
     role: v.union(
       v.literal("admin"),
       v.literal("gestionnaire"),
@@ -62,7 +69,7 @@ function snapshotOf(value: z.infer<typeof organization>) {
   return {
     id: value.id,
     name: value.name,
-    slug: value.slug,
+    slug: value.slug ?? value.id,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };
@@ -74,6 +81,17 @@ export function parseClerkEvent(value: unknown): ClerkEvent | "ignored" | null {
     .safeParse(value);
   if (!envelope.success) return null;
   const { type, timestamp, data } = envelope.data;
+  if (type === "user.deleted") {
+    const parsed = z.object({ id: identifier }).safeParse(data);
+    return parsed.success
+      ? {
+          kind: "userDeleted",
+          userId: parsed.data.id,
+          occurredAt: timestamp,
+          updatedAt: timestamp,
+        }
+      : null;
+  }
   if (type === "organization.deleted") {
     const parsed = z.object({ id: identifier }).safeParse(data);
     if (!parsed.success) return null;
@@ -134,6 +152,40 @@ export function parseClerkEvent(value: unknown): ClerkEvent | "ignored" | null {
     };
   }
   return "ignored";
+}
+
+export async function verifiedClerkEmails(
+  userId: string,
+): Promise<string[] | null> {
+  const secret = process.env.CLERK_SECRET_KEY;
+  if (!secret) return null;
+  try {
+    const response = await fetch(
+      `https://api.clerk.com/v1/users/${encodeURIComponent(userId)}`,
+      {
+        headers: { Authorization: `Bearer ${secret}` },
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    if (!response.ok) return null;
+    const result = z
+      .object({
+        id: identifier,
+        email_addresses: z.array(
+          z.object({
+            email_address: z.email(),
+            verification: z.object({ status: z.string() }).nullable(),
+          }),
+        ),
+      })
+      .safeParse(await response.json());
+    if (!result.success || result.data.id !== userId) return null;
+    return result.data.email_addresses
+      .filter((email) => email.verification?.status === "verified")
+      .map((email) => email.email_address);
+  } catch {
+    return null;
+  }
 }
 
 function unbase64(text: string): Uint8Array<ArrayBuffer> | null {

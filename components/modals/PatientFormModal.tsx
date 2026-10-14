@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { api } from "@/convex/_generated/api";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
+import { useActionWithFeedback } from "@/hooks/use-action-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
@@ -65,7 +66,7 @@ export function PatientFormModal({
   const t = useTranslations();
   const isEditing = !!patient;
 
-  const createPatient = useMutationWithFeedback(api.users.createPatient);
+  const createPatient = useActionWithFeedback(api.users.createPatient);
   const updatePatient = useMutationWithFeedback(api.users.updatePatient);
 
   const form = useForm<PatientFormValues>({
@@ -109,7 +110,10 @@ export function PatientFormModal({
               email: values.email,
               language: values.language,
             },
-            { success: t("feedback.patientCreated") },
+            {
+              success: (result) =>
+                t("feedback.invitationSent", { email: result.email }),
+            },
           );
     if (!result.ok) {
       form.setError("root", { message: result.message });

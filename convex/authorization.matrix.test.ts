@@ -10,13 +10,11 @@
  * organisation claims of a Clerk token, so each cell also proves that its
  * function answers inside the caller's organisation only.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClerkInvitations } from "./patientInvitation.fixtures";
 import { api } from "./_generated/api";
-import {
-  MATRIX,
-  type Entry,
-  type Expectation,
-} from "./authorization.matrix";
+import { getFunctionName, makeFunctionReference } from "convex/server";
+import { MATRIX, type Entry, type Expectation } from "./authorization.matrix";
 import {
   as,
   modules,
@@ -34,18 +32,37 @@ function isEmpty(res: unknown): boolean {
   );
 }
 
+beforeEach(mockClerkInvitations);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
 function invoke(
   entry: Entry,
   reader: ReturnType<typeof as>,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  // The matrix holds heterogeneous function references; the per-cell `build`
-  // produces the matching args, so a single untyped dispatch is used here.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const r = reader as any;
-  return entry.kind === "query"
-    ? r.query(entry.ref, args)
-    : r.mutation(entry.ref, args);
+  const name = getFunctionName(entry.ref);
+  switch (entry.kind) {
+    case "query":
+      return reader.query(
+        makeFunctionReference<"query", Record<string, unknown>, unknown>(name),
+        args,
+      );
+    case "mutation":
+      return reader.mutation(
+        makeFunctionReference<"mutation", Record<string, unknown>, unknown>(
+          name,
+        ),
+        args,
+      );
+    case "action":
+      return reader.action(
+        makeFunctionReference<"action", Record<string, unknown>, unknown>(name),
+        args,
+      );
+  }
 }
 
 for (const entry of MATRIX) {
@@ -60,10 +77,14 @@ for (const entry of MATRIX) {
         const args = await entry.build(w, c.actor, scope);
         const claims = entry.claims?.(w, c.actor, scope) ?? null;
         const reader = as(w.t, c.actor, claims);
-        const exp: Expectation = c.knownDefect ? c.knownDefect.intended : c.expect;
+        const exp: Expectation = c.knownDefect
+          ? c.knownDefect.intended
+          : c.expect;
 
         if (exp.outcome === "refuse") {
-          await expect(invoke(entry, reader, args)).rejects.toThrow(exp.message);
+          await expect(invoke(entry, reader, args)).rejects.toThrow(
+            exp.message,
+          );
           return;
         }
 
@@ -224,6 +245,9 @@ const linkCases: Array<{
 describe("users.linkPatientToClerk verified-address rule", () => {
   it.each(linkCases)("$name", async ({ record, claims, argument, linked }) => {
     const w = await seedWorld(modules);
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.stranger, { clerkId: "previous-stranger" }),
+    );
     const recordId = await w.t.run((ctx) =>
       ctx.db.insert("users", {
         clerkId: record.clerkId,

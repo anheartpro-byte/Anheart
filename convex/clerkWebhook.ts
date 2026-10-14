@@ -1,17 +1,24 @@
-import { httpAction, internalMutation } from "./_generated/server";
+import {
+  httpAction,
+  internalMutation,
+  internalQuery,
+} from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import {
   anheartClerkOrganizationId,
   findUnlinkedDefaultOrganization,
+  organizationRoleOf,
 } from "./lib/auth";
+import { normalizedEmail } from "./lib/patientInvitation";
 import {
   clerkEventValidator,
   parseClerkEvent,
   readWebhookBody,
   verifyClerkSignature,
+  verifiedClerkEmails,
   type ClerkEvent,
 } from "./lib/clerkWebhook";
 
@@ -29,7 +36,7 @@ function stale(
 
 async function organizationFor(
   ctx: MutationCtx,
-  event: ClerkEvent,
+  event: Exclude<ClerkEvent, { kind: "userDeleted" }>,
 ): Promise<Doc<"organizations">> {
   const input = event.organization;
   let held = await ctx.db
@@ -65,6 +72,37 @@ export const applyEvent = internalMutation({
         .unique()
     )
       return null;
+    if (event.kind === "userDeleted") {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_clerk_id", (q) => q.eq("clerkId", event.userId))
+        .unique();
+      if (user) {
+        await ctx.db.patch(user._id, { clerkDeletedAt: event.occurredAt });
+        const memberships = await ctx.db
+          .query("memberships")
+          .withIndex("by_user", (q) => q.eq("userId", user._id))
+          .collect();
+        for (const row of memberships)
+          await ctx.db.patch(row._id, { active: false });
+      } else {
+        await ctx.db.insert("users", {
+          clerkId: event.userId,
+          clerkDeletedAt: event.occurredAt,
+          firstName: "",
+          lastName: "",
+          email: "",
+          role: "user",
+          language: "fr",
+          createdAt: event.occurredAt,
+        });
+      }
+      await ctx.db.insert("clerk_webhook_events", {
+        eventId,
+        receivedAt: Date.now(),
+      });
+      return null;
+    }
     const organization = await organizationFor(ctx, event);
     if (event.kind === "organization") {
       if (organization.deletedAt === undefined && !stale(organization, event)) {
@@ -96,12 +134,48 @@ export const applyEvent = internalMutation({
         .query("users")
         .withIndex("by_clerk_id", (q) => q.eq("clerkId", event.userId))
         .unique();
+      const verifiedEmails = (event.verifiedEmails ?? []).map(normalizedEmail);
+      const verifiedEmailSet = new Set(verifiedEmails);
+      const invitations = await ctx.db
+        .query("patient_invitations")
+        .withIndex("by_organization_and_email", (q) =>
+          q.eq("organizationId", organization._id),
+        )
+        .collect();
+      const invitationsForUser = invitations.filter((row) =>
+        verifiedEmailSet.has(row.email),
+      );
+      if (!event.deleted && user?.clerkDeletedAt === undefined) {
+        const candidates = (await ctx.db.query("users").collect()).filter(
+          (row) =>
+            row.clerkId === "" &&
+            verifiedEmailSet.has(normalizedEmail(row.email)) &&
+            (row.organizationId === organization._id ||
+              invitationsForUser.some(
+                (invitation) => invitation.userId === row._id,
+              )),
+        );
+        if (candidates.length > 1 || (user && candidates.length > 0))
+          throw new ConvexError("profile_reconciliation_required");
+        if (!user && candidates[0]) {
+          user = candidates[0];
+          await ctx.db.patch(user._id, { clerkId: event.userId });
+        }
+        if (
+          invitationsForUser.some(
+            (invitation) => user && invitation.userId !== user._id,
+          )
+        )
+          throw new ConvexError("profile_reconciliation_required");
+      }
       if (!user) {
         const id = await ctx.db.insert("users", {
           clerkId: event.userId,
           firstName: event.firstName,
           lastName: event.lastName,
-          email: event.email,
+          email: verifiedEmails.includes(normalizedEmail(event.email))
+            ? normalizedEmail(event.email)
+            : (verifiedEmails[0] ?? ""),
           role: event.role,
           organizationId: organization._id,
           language: "fr",
@@ -110,6 +184,11 @@ export const applyEvent = internalMutation({
         user = await ctx.db.get(id);
       }
       if (!user) throw new Error("User insert did not persist");
+      if (
+        !event.deleted &&
+        invitationsForUser.some((invitation) => invitation.userId !== user._id)
+      )
+        throw new ConvexError("profile_reconciliation_required");
       const row = await ctx.db
         .query("memberships")
         .withIndex("by_user_and_organization", (q) =>
@@ -119,7 +198,7 @@ export const applyEvent = internalMutation({
       const values = {
         clerkMembershipId: event.membershipId,
         role: event.role,
-        active: !event.deleted,
+        active: !event.deleted && user.clerkDeletedAt === undefined,
         clerkUpdatedAt: event.updatedAt,
         clerkEventAt: event.occurredAt,
       };
@@ -137,6 +216,54 @@ export const applyEvent = internalMutation({
       ) {
         await ctx.db.patch(row._id, values);
       }
+      const active = await ctx.db
+        .query("memberships")
+        .withIndex("by_user_and_organization", (q) =>
+          q.eq("userId", user._id).eq("organizationId", organization._id),
+        )
+        .unique();
+      if (
+        !event.deleted &&
+        active?.active &&
+        active.clerkMembershipId === event.membershipId
+      ) {
+        for (const invitation of invitationsForUser) {
+          if (
+            invitation.userId !== user._id ||
+            invitation.status === "accepted"
+          )
+            continue;
+          await ctx.db.patch(invitation._id, {
+            status: "accepted",
+            updatedAt: Date.now(),
+          });
+          for (const gestionnaireId of invitation.gestionnaireIds) {
+            if (event.role !== "user") continue;
+            if (
+              (await organizationRoleOf(
+                ctx,
+                gestionnaireId,
+                organization._id,
+              )) !== "gestionnaire"
+            )
+              continue;
+            const links = await ctx.db
+              .query("user_gestionnaires")
+              .withIndex("by_user_and_gestionnaire", (q) =>
+                q.eq("userId", user._id).eq("gestionnaireId", gestionnaireId),
+              )
+              .collect();
+            if (!links.some((link) => link.organizationId === organization._id))
+              await ctx.db.insert("user_gestionnaires", {
+                userId: user._id,
+                gestionnaireId,
+                organizationId: organization._id,
+                createdAt: Date.now(),
+                createdBy: invitation.requestedBy,
+              });
+          }
+        }
+      }
     }
     await ctx.db.insert("clerk_webhook_events", {
       eventId,
@@ -144,6 +271,16 @@ export const applyEvent = internalMutation({
     });
     return null;
   },
+});
+
+export const wasProcessed = internalQuery({
+  args: { eventId: v.string() },
+  returns: v.boolean(),
+  handler: async (ctx, { eventId }) =>
+    (await ctx.db
+      .query("clerk_webhook_events")
+      .withIndex("by_event_id", (q) => q.eq("eventId", eventId))
+      .unique()) !== null,
 });
 
 export const receive = httpAction(async (ctx, request) => {
@@ -167,6 +304,14 @@ export const receive = httpAction(async (ctx, request) => {
   }
   const event = parseClerkEvent(value);
   if (event === null) return new Response("Invalid payload", { status: 400 });
+  if (await ctx.runQuery(internal.clerkWebhook.wasProcessed, { eventId }))
+    return new Response(null, { status: 204 });
+  if (event !== "ignored" && event.kind === "membership" && !event.deleted) {
+    const emails = await verifiedClerkEmails(event.userId);
+    if (emails === null || emails.length === 0)
+      return new Response("Identity verification unavailable", { status: 503 });
+    event.verifiedEmails = emails;
+  }
   if (event !== "ignored")
     await ctx.runMutation(internal.clerkWebhook.applyEvent, { eventId, event });
   return new Response(null, { status: 204 });

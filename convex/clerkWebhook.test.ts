@@ -45,9 +45,25 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   vi.stubEnv("CLERK_WEBHOOK_SIGNING_SECRET", secret);
+  vi.stubEnv("CLERK_SECRET_KEY", "sk_test_synthetic");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      Response.json({
+        id: url.split("/").slice(-1)[0],
+        email_addresses: [
+          {
+            email_address: "qa@example.invalid",
+            verification: { status: "verified" },
+          },
+        ],
+      }),
+    ),
+  );
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
   configureAnheartOrganization(null);
 });
@@ -88,6 +104,69 @@ async function send(t: Test, value: unknown, id = "msg_qa"): Promise<Response> {
 }
 
 describe("Clerk webhook signature and persistence", () => {
+  it("accepts organizations with slugs disabled in Clerk", async () => {
+    const t = makeTest();
+    expect((await send(t, event("organization.created", { ...org, slug: null }))).status).toBe(204);
+    expect((await t.run((ctx) => ctx.db.query("organizations").unique()))?.slug).toBe(org.id);
+  });
+  it("retries verification failures without recording or linking the event", async () => {
+    const t = makeTest();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          id: "user_qa",
+          email_addresses: [
+            {
+              email_address: "qa@example.invalid",
+              verification: { status: "unverified" },
+            },
+          ],
+        }),
+      ),
+    );
+    expect(
+      (await send(t, event("organizationMembership.created", member))).status,
+    ).toBe(503);
+    expect(await t.run((ctx) => ctx.db.query("users").collect())).toEqual([]);
+    expect(
+      await t.run((ctx) => ctx.db.query("clerk_webhook_events").collect()),
+    ).toEqual([]);
+  });
+
+  it("acknowledges a duplicate without needing the provider after account deletion", async () => {
+    const t = makeTest();
+    expect(
+      (
+        await send(
+          t,
+          event("organizationMembership.created", member),
+          "original",
+        )
+      ).status,
+    ).toBe(204);
+    expect(
+      (await send(t, event("user.deleted", { id: "user_qa" }), "deletion"))
+        .status,
+    ).toBe(204);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
+    expect(
+      (
+        await send(
+          t,
+          event("organizationMembership.created", member),
+          "original",
+        )
+      ).status,
+    ).toBe(204);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(
+      (await t.run((ctx) => ctx.db.query("users").unique()))?.clerkDeletedAt,
+    ).toBe(NOW);
+  });
   it("matches the published Svix verification vector", async () => {
     expect(
       await verifyClerkSignature(
@@ -421,7 +500,7 @@ describe("membership boundaries", () => {
     ).toBe("Latest");
   });
 
-  it("does not treat a non-email Clerk identifier as an email", async () => {
+  it("uses a verified Clerk email when the public identifier is a username", async () => {
     const t = makeTest();
     await send(
       t,
@@ -434,7 +513,7 @@ describe("membership boundaries", () => {
       }),
     );
     expect((await t.run((ctx) => ctx.db.query("users").unique()))?.email).toBe(
-      "",
+      "qa@example.invalid",
     );
   });
 

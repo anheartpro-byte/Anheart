@@ -83,6 +83,11 @@ function shown() {
 beforeEach(() => {
   vi.useFakeTimers();
   resetConvex();
+  mutation(CREATE).mockImplementation(async (args: { email: string }) => ({
+    invitationId: "invitation-1",
+    email: args.email,
+    status: "sent",
+  }));
 });
 afterEach(() => {
   for (const toast of getFeedbackToasts()) dismissFeedback(toast.id);
@@ -156,7 +161,13 @@ describe("ANH-203 patient window: creating", () => {
       ],
     });
     expect(shown()).toEqual([
-      { kind: "success", message: fr.feedback.patientCreated },
+      {
+        kind: "success",
+        message: fr.feedback.invitationSent.replace(
+          "{email}",
+          "lina@anheart.test",
+        ),
+      },
     ]);
     expect(onOpenChange.mock.calls).toEqual([[false]]);
     expect(onSuccess).toHaveBeenCalledTimes(1);

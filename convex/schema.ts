@@ -123,9 +123,27 @@ export default defineSchema({
     receivedAt: v.number(),
   }).index("by_event_id", ["eventId"]),
 
+  patient_invitations: defineTable({
+    organizationId: v.id("organizations"),
+    userId: v.id("users"),
+    email: v.string(),
+    requestedBy: v.id("users"),
+    gestionnaireIds: v.array(v.id("users")),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("sent"),
+      v.literal("accepted"),
+      v.literal("failed"),
+    ),
+    clerkInvitationId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_organization_and_email", ["organizationId", "email"]),
+
   // Users - Extended Clerk user data with roles and relationships
   users: defineTable({
     clerkId: v.string(),
+    clerkDeletedAt: v.optional(v.number()),
     // Read-only mirror of the role held in the organisation below. It is
     // never read to authorise the caller: see `convex/lib/auth.ts`.
     role: organizationRoleValidator,

@@ -1,9 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
-import { Authenticated, Unauthenticated, useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
+import { Authenticated, Unauthenticated } from "convex/react";
 import { SignUpButton, SignInButton } from "@clerk/nextjs";
 import { useTranslations } from "next-intl";
 import { Link } from "@/i18n/navigation";
@@ -108,15 +105,6 @@ function HeroSection() {
 
 function AuthenticatedHero() {
   const t = useTranslations("home");
-  const user = useQuery(api.users.getCurrentUser);
-  const syncUser = useMutationWithFeedback(api.users.getOrCreateUser);
-
-  useEffect(() => {
-    if (user === null) {
-      syncUser();
-    }
-  }, [user, syncUser]);
-
   return (
     <Link href="/dashboard">
       <Button size="lg" className="px-8">
@@ -266,12 +254,24 @@ function UseCasesSection() {
 
   return (
     <section id="usecases" className="py-24 lg:py-32 relative overflow-hidden">
-      <BorderBeam size={350} duration={18} colorFrom="#8b5cf6" colorTo="#6366f1" className="opacity-25" />
+      <BorderBeam
+        size={350}
+        duration={18}
+        colorFrom="#8b5cf6"
+        colorTo="#6366f1"
+        className="opacity-25"
+      />
       <div className="container mx-auto px-4 relative">
         <div className="max-w-3xl mb-16 lg:mb-20">
-          <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">{t("badge")}</p>
-          <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">{t("title")}</h2>
-          <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed">{t("description")}</p>
+          <p className="text-sm font-medium text-primary tracking-wide uppercase mb-4">
+            {t("badge")}
+          </p>
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight mb-6">
+            {t("title")}
+          </h2>
+          <p className="text-lg sm:text-xl text-muted-foreground leading-relaxed">
+            {t("description")}
+          </p>
         </div>
 
         {/* Maintain physical activity */}
@@ -280,7 +280,9 @@ function UseCasesSection() {
           <p className="text-muted-foreground mb-8">{t("maintainDesc")}</p>
           <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-6 lg:gap-8">
             <div className="p-6 lg:p-8 rounded-2xl bg-card">
-              <h4 className="text-lg font-semibold mb-4">{t("injuredAthletes")}</h4>
+              <h4 className="text-lg font-semibold mb-4">
+                {t("injuredAthletes")}
+              </h4>
               <ul className="space-y-2 text-muted-foreground">
                 <li>{t("injuredAthletes1")}</li>
                 <li>{t("injuredAthletes2")}</li>
@@ -318,7 +320,9 @@ function UseCasesSection() {
           </ul>
           <div className="grid sm:grid-cols-2 gap-6 lg:gap-8">
             <div className="p-6 lg:p-8 rounded-2xl bg-card">
-              <h4 className="text-lg font-semibold mb-4">{t("eliteAthletes")}</h4>
+              <h4 className="text-lg font-semibold mb-4">
+                {t("eliteAthletes")}
+              </h4>
               <ul className="space-y-2 text-muted-foreground">
                 <li>{t("eliteAthletes1")}</li>
                 <li>{t("eliteAthletes2")}</li>
@@ -326,7 +330,9 @@ function UseCasesSection() {
               </ul>
             </div>
             <div className="p-6 lg:p-8 rounded-2xl bg-card">
-              <h4 className="text-lg font-semibold mb-4">{t("regularAthletes")}</h4>
+              <h4 className="text-lg font-semibold mb-4">
+                {t("regularAthletes")}
+              </h4>
               <ul className="space-y-2 text-muted-foreground">
                 <li>{t("regularAthletes1")}</li>
                 <li>{t("regularAthletes2")}</li>
@@ -338,7 +344,9 @@ function UseCasesSection() {
 
         {/* Bottom paragraph */}
         <div className="p-6 lg:p-8 rounded-2xl bg-primary/5 border border-primary/10">
-          <p className="text-muted-foreground leading-relaxed">{t("ambition")}</p>
+          <p className="text-muted-foreground leading-relaxed">
+            {t("ambition")}
+          </p>
         </div>
       </div>
     </section>
