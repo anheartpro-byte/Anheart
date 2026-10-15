@@ -2648,7 +2648,8 @@ sur une copie du dépôt où `g_per_s` vaut `0.6`.
   la même phrase, et son manifeste dit `medical_parameters_version:
   unsigned-sha256:<empreinte du fichier>` ;
 * le heartbeat envoie `programsEnabled: false` et
-  `medical_parameters_version: null` ;
+  `medical_parameters_version: null` : le refus affiché sur le site dépend de
+  la version inscrite sur le serveur ([securite.md, 13.3](securite.md#133-ce-que-fait-la-console-au-démarrage)) ;
 * le journal de la console le dit au démarrage :
   `medical parameters: parametres medicaux non signes (...)`.
 
