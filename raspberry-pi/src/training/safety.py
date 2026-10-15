@@ -452,13 +452,12 @@ class SafetyLimits:
     Also the age up to which the level rules (``hr_hard_max``, ``hr_critical``)
     go on judging the last usable rate once the readings that follow it carry
     none (:meth:`SafetySupervisor._level_rate`): one definition of "stale".
-    ``hr_stale`` counts from the last usable reading the supervisor was shown
-    on a tick, which is never later than the one those rules judge, so it has
-    begun by the time they give that rate up. One case is outside that: a
-    supervisor that was never shown a usable reading on a tick counts from the
-    session's start, so a rate kept from before that start is given up before
-    ``hr_stale`` begins, and for those seconds neither rule speaks - exactly
-    as when no rate was kept at all. Must exceed :attr:`hr_hard_max_dwell`.
+    ``hr_stale`` counts from that reading's own measurement instant, even if
+    it was overtaken before the tick. This includes a reading kept from before
+    the session's start: its age is already running, so losing the level
+    evidence to staleness cannot leave a gap before ``hr_stale`` begins.
+    Only when no usable reading has ever been supplied does that clock start
+    at the session's start. Must exceed :attr:`hr_hard_max_dwell`.
     """
 
     hr_stale_reduce_after: Seconds = Seconds(30.0)
@@ -868,15 +867,17 @@ class SafetyObservation:
     here even when a fresh one with no rate has followed it before the tick.
     The same sample as :attr:`heart_rate` whenever that one is usable.
 
-    Read by the level rules only (``hr_hard_max``, ``hr_critical``), and only
-    when :attr:`heart_rate` carries no usable rate: they then judge this one
+    The level rules (``hr_hard_max``, ``hr_critical``) read it only when
+    :attr:`heart_rate` carries no usable rate: they then judge this one
     until it is stale (:meth:`SafetySupervisor._level_rate`), so that a reading
     with no rate neither restarts a dwell nor erases an excess that was
-    measured. It can only ADD a verdict: no rule is quieter for it being set.
-    ``hr_stale`` and the trend rules never read it; their clock and their
-    history are fed by :attr:`heart_rate` alone. Defaults to ``None``: an
-    observation that states no such sample is judged on :attr:`heart_rate`
-    alone.
+    measured. ``hr_stale`` and the trend rules ingest it once, through their
+    own sequence gate, at its measurement instant. A later reading with no
+    rate therefore neither ages the signal prematurely nor erases trend
+    evidence. If several usable readings arrive between ticks, only the last
+    is carried here and enters the trend history; this is not a queue of all
+    intervening readings. Defaults to ``None``: an observation that states no
+    such sample is judged on :attr:`heart_rate` alone.
     """
 
     drive_state: DriveState
@@ -1455,6 +1456,7 @@ class SafetySupervisor:
         "_last_good_at",
         "_last_seq",
         "_last_tick_at",
+        "_last_usable_seq",
         "_limits",
         "_live",
         "_silenced",
@@ -1488,6 +1490,7 @@ class SafetySupervisor:
         self._last_tick_at: Monotonic | None = None
         self._tick_gap: Seconds | None = None
         self._last_seq: int | None = None
+        self._last_usable_seq: int | None = None
         self._last_good_at: Monotonic | None = None
 
     @property
@@ -1836,7 +1839,7 @@ class SafetySupervisor:
         self._tick_gap = None if previous is None else elapsed(previous, now)
 
     def _ingest(self, observation: SafetyObservation) -> None:
-        """Retain this tick's heart rate, if and only if it is genuinely new.
+        """Retain the last usable heart rate, if and only if it is genuinely new.
 
         **The gate that matters in this whole module.**
         ``src/signal_processing.py`` keeps a ``_last_metrics`` dict and
@@ -1852,9 +1855,18 @@ class SafetySupervisor:
           ever see samples whose ``seq`` strictly advanced. Without that gate
           the same sample would be appended five times a second, flattening
           every slope and making a fall impossible to see.
-        * ``hr_stale`` measures age from the last sample that passed BOTH this
-          gate and ``usable_bpm``, so a dead pipeline shows up as an absence of
-          evidence rather than as a stable heart rate.
+        * ``hr_stale`` measures age from that sample's measurement instant,
+          not this tick, so a dead pipeline shows up as an absence of evidence
+          rather than as a stable heart rate.
+
+        The latest reading advances its own sequence watermark even when it
+        carries no rate. The last usable reading has a separate watermark: a
+        later reading with no rate must not prevent evidence overtaken before
+        the tick from entering the history. Both routes share that usable
+        watermark, so a reading shown in both fields or on several ticks is
+        counted once, and repeated or decreasing sequences never add evidence.
+        Only the last usable reading between ticks is carried, not a queue;
+        intermediate usable readings cannot enter the trend history here.
 
         Note the asymmetry, which is deliberate: the *level* rules
         (``hr_hard_max``, ``hr_critical``) judge the latest usable reading
@@ -1865,19 +1877,23 @@ class SafetySupervisor:
         That holds for both ways a rate stops being confirmed: a pipeline that
         re-emits (the reading stays the latest one) and a pipeline that goes on
         producing fresh readings with no rate in them (:meth:`_level_rate`).
-        Nothing here is changed by the second: this method's clock and history
-        are fed by :attr:`SafetyObservation.heart_rate` alone.
         """
         self._prune(observation.now)
         sample = observation.heart_rate
+        usable = observation.last_usable_heart_rate
+        if sample is not None and sample.is_new_evidence_after(self._last_seq):
+            self._last_seq = sample.seq
+            if sample.usable_bpm is not None:
+                usable = sample
+        sample = usable
         if sample is None:
             return
-        if not sample.is_new_evidence_after(self._last_seq):
+        if not sample.is_new_evidence_after(self._last_usable_seq):
             return
-        self._last_seq = sample.seq
         bpm = sample.usable_bpm
         if bpm is None:
             return
+        self._last_usable_seq = sample.seq
         self._last_good_at = sample.at
         self._history.append(
             _HrPoint(
@@ -2040,11 +2056,10 @@ class SafetySupervisor:
         is given up - a rate from another minute, or from the previous
         session's occupant, is not this heart's - and the lost signal is
         ``hr_stale``'s to answer. Its clock starts at the last usable reading
-        this supervisor was shown on a tick, never later than the one judged
-        here, so it has already begun; only a supervisor that was shown none
-        counts from the session's start, and may then begin after a rate kept
-        from before that start has been given up. Nothing in this method
-        touches that clock. Inside the bound the rate is judged whatever
+        supplied in either observation field, including one kept from before
+        the session's start, so it has already begun. Only when no usable
+        reading has ever been supplied does it count from the session's start.
+        Nothing in this method touches that clock. Inside the bound the rate is judged whatever
         session it was read in: a session started a few seconds after a
         reading above a level, with nothing measured since, is judged on it.
         :class:`SafetyLimits` refuses a hard-maximum dwell that is not shorter
@@ -2426,10 +2441,12 @@ class SafetySupervisor:
         with no heart rate is a session that cannot be supervised at all,
         whatever the machine happens to be doing.
 
-        The age is measured from the last sample that passed both the sequence
-        gate and the quality gate (see :meth:`_ingest`), and from the start of
-        the session when no such sample has ever arrived - a reading that has
-        never happened is not a recent one.
+        The age is measured from the measurement instant of the last usable
+        sample in either observation field that passed its sequence gate
+        (see :meth:`_ingest`), even when it was overtaken before the tick or
+        kept from before the session's start. Only when no such sample has
+        ever been supplied is it measured from the session's start: a reading
+        that has never happened is not a recent one.
 
         The first two levels are unlatched, so a pipeline that comes back
         releases them; the third latches, because deciding to end a session is
