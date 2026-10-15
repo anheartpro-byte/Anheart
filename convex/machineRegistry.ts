@@ -37,6 +37,7 @@ import {
   machineValidationLevelValidator,
   machineValidationValidator,
 } from "./schema";
+import { ARMING_REFUSAL_CODES } from "./training";
 
 const configurationKeyValidator = v.union(
   v.literal("PROGRAMS_ENABLED"),
@@ -242,13 +243,22 @@ async function alertsOf(
     .withIndex("by_machine_and_started", (q) => q.eq("machineId", machine._id))
     .order("desc")
     .take(50);
-  const unvalidated = sessions.filter(
-    (session) =>
+  const unvalidated = sessions.filter((session) => {
+    if (session.status === "pending") return false;
+    if (
+      session.status === "failed" &&
+      (ARMING_REFUSAL_CODES.some((code) => code === session.endCode) ||
+        (session.endCode === undefined &&
+          session.endReason?.startsWith("Cancelled before start by")))
+    )
+      return false;
+    return (
       personOnBoard(session) &&
       validationRank(
         levelAt(registry?.validation ?? emptyValidation, session.startedAt),
-      ) < validationRank("occupied"),
-  );
+      ) < validationRank("occupied")
+    );
+  });
   if (unvalidated.length > 0)
     alerts.push({
       code: "person_on_board_without_occupied",

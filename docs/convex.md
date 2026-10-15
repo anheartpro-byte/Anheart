@@ -1587,10 +1587,12 @@ par ANH-141. Le badge `configurationStatus` vaut donc `unavailable`, pas
 Il n'y a aucun verrou supplémentaire au lancement distant : décision du
 chef de projet, suivie par ANH-102 et ANH-107.
 
-`versionStatus` vaut `unknown` sans version annoncée ou attendue,
+`versionStatus` vaut d'abord `unknown` sans version annoncée, puis
 `not_validated` si la version annoncée ne satisfait pas
-`releaseAllowedOnMachine`, `up_to_date` si elle égale l'attendue, sinon
-`outdated`. Une version absente des releases n'a aucun niveau enregistré.
+`releaseAllowedOnMachine`, même sans version attendue. Si la version annoncée
+est autorisée, le statut vaut `unknown` sans version attendue, `up_to_date`
+si elle égale l'attendue, sinon `outdated`. Une version absente des releases
+n'a aucun niveau enregistré.
 `expectedVersionAllowed` applique la même règle à l'attendue et vaut `null`
 si aucune n'est définie. `medicalKeyIsTest` expose le blocage médical.
 
@@ -1599,7 +1601,12 @@ signale `machines.programsEnabled === true` sous le niveau `auto`.
 `person_on_board_without_occupied` compte, parmi les 50 séances les plus
 récentes de la machine, celles avec une personne à bord alors que le niveau
 historique au début était inférieur à `occupied`, et donne la date de la
-plus récente. Une séance `auto` a toujours une personne à bord ; pour les
+plus récente. Les séances `pending` sont exclues, ainsi que les séances
+`failed` avec un `endCode` de `ARMING_REFUSAL_CODES` (refus à l'armement,
+expiration comprise), ou sans `endCode` et dont `endReason` commence par
+`Cancelled before start by` (annulation par `requestStop` avant départ).
+Une séance armée reste comptée même si elle échoue ensuite.
+Une séance `auto` a toujours une personne à bord ; pour les
 autres, un segment des notes séparé par `; ` doit valoir exactement
 `Occupancy: occupied`. Les revues et descentes permettent de retrouver le
 niveau à cet instant. À date égale, l'ordre est celui des transitions valides

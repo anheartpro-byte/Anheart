@@ -82,8 +82,7 @@ export const DASHBOARD_ERRORS = {
   gestionnaire_not_found: "The gestionnaire account does not exist here.",
   not_a_gestionnaire:
     "The account is not a gestionnaire of the organisation concerned.",
-  gestionnaire_self_only:
-    "A gestionnaire may only add or remove themselves.",
+  gestionnaire_self_only: "A gestionnaire may only add or remove themselves.",
   gestionnaire_already_assigned: "The gestionnaire already has this link.",
   gestionnaire_not_assigned: "The gestionnaire has no such link.",
 
@@ -94,7 +93,8 @@ export const DASHBOARD_ERRORS = {
   machine_in_session: "The machine is in a session: it cannot be deleted.",
   machine_has_pending_session:
     "A session waits for this machine: it cannot be deleted before it is cancelled.",
-  machine_not_deleted: "The machine is not deleted: there is nothing to restore.",
+  machine_not_deleted:
+    "The machine is not deleted: there is nothing to restore.",
   last_gestionnaire:
     "The caller is the machine's only gestionnaire: they cannot leave it.",
 
@@ -131,7 +131,8 @@ export const DASHBOARD_ERRORS = {
     "The lifetime of a new machine key is not a whole number of minutes between 60 (one hour) and 5256000 (ten years).",
 
   // Patient invitations.
-  invalid_invitation: "The name or the e-mail address of the invitation is not valid.",
+  invalid_invitation:
+    "The name or the e-mail address of the invitation is not valid.",
   invitation_unavailable:
     "The invitation cannot be created for this caller and this address.",
   invitation_failed: "Clerk did not confirm that the invitation was sent.",
@@ -184,16 +185,25 @@ export const DASHBOARD_ERRORS = {
   level_change_needs_notes:
     "Changing the validation level of a recorded version needs notes.",
 
+  // The machine registry (convex/machineRegistry.ts, ANH-147).
   invalid_registry_field: "A machine registry field has an invalid value.",
-  contact_not_in_organization: "A contact is not an active member of the machine's organisation.",
+  contact_not_in_organization:
+    "A contact is not an active member of the machine's organisation.",
   unknown_software_version: "The Pi software version is not registered.",
-  unknown_medical_parameters_version: "The medical parameters version is not registered.",
-  invalid_registry_file: "The attachment is missing, invalid, too old or already referenced.",
-  validation_level_not_next: "A review must grant exactly the next validation level.",
-  validation_level_not_lower: "The target validation level must be lower than the current level.",
-  downgrade_reason_required: "Lowering validation requires a reason of 3 to 500 characters.",
-  occupied_requires_signed_medical_parameters: "Occupied validation requires a production medical key and a medical parameters version.",
-  machine_validation_insufficient: "The machine's validation level does not permit this configuration.",
+  unknown_medical_parameters_version:
+    "The medical parameters version is not registered.",
+  invalid_registry_file:
+    "The attachment is missing, invalid, too old or already referenced.",
+  validation_level_not_next:
+    "A review must grant exactly the next validation level.",
+  validation_level_not_lower:
+    "The target validation level must be lower than the current level.",
+  downgrade_reason_required:
+    "Lowering validation requires a reason of 3 to 500 characters.",
+  occupied_requires_signed_medical_parameters:
+    "Occupied validation requires a production medical key and a medical parameters version.",
+  machine_validation_insufficient:
+    "The machine's validation level does not permit this configuration.",
 
   // Alerts to the gestionnaires (convex/notifications.ts).
   notification_not_found:

@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { as, modules, NOW, seedWorld, type World } from "./test.setup";
+import {
+  as,
+  modules,
+  NOW,
+  seedLaunchWorld,
+  seedWorld,
+  type World,
+} from "./test.setup";
 import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
 import { levelAt } from "./lib/machineRegistry";
+import { pendingSessionTtlMs } from "./training";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -554,6 +562,121 @@ describe("ANH-147 machine registry", () => {
     );
     expect((await read(w))?.versionStatus).toBe("not_validated");
   });
+
+  it("flags bench software on an auto machine without an expected version in the registry and badges", async () => {
+    const w = await seedWorld(modules);
+    await bench(w);
+    await review(w, "auto");
+    await registryRelease(w, "pi-0.2.0", "bench");
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.machine, { softwareVersion: "pi-0.2.0" }),
+    );
+    const registry = await read(w);
+    expect(registry?.expectedSoftwareVersion).toBeUndefined();
+    expect(registry).toMatchObject({
+      versionStatus: "not_validated",
+      expectedVersionAllowed: null,
+    });
+    expect(
+      (
+        await as(w.t, "admin").query(api.machineRegistry.listRegistryBadges, {})
+      ).find((entry) => entry.machineId === w.machine)?.versionStatus,
+    ).toBe("not_validated");
+  });
+
+  it.each([
+    "pending",
+    "cancelled",
+    "expired",
+    "active",
+    "completed",
+    "failed",
+  ] as const)(
+    "counts a remote auto session only after arming: %s",
+    async (state) => {
+      const w = await seedLaunchWorld(modules);
+      await bench(w);
+      await review(w, "auto");
+      const sessionId = await as(w.t, "manager").mutation(
+        api.training.launchAutoSession,
+        {
+          machineId: w.machine,
+          profileId: w.profileId,
+          userId: w.patient,
+        },
+      );
+      expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+        kind: "auto",
+        origin: "remote",
+        status: "pending",
+      });
+      if (state === "cancelled") {
+        await as(w.t, "manager").mutation(api.training.requestStop, {
+          sessionId,
+        });
+        const cancelled = await w.t.run((ctx) => ctx.db.get(sessionId));
+        expect(cancelled).toMatchObject({
+          status: "failed",
+          endReason: "Cancelled before start by manager Synthetic",
+        });
+        expect(cancelled?.endCode).toBeUndefined();
+      } else if (state === "expired") {
+        vi.setSystemTime(NOW + pendingSessionTtlMs() + 1);
+        expect(
+          await w.t.mutation(internal.training.markTrainingStarted, {
+            machineId: w.machine,
+            sessionId,
+          }),
+        ).toMatchObject({ armed: false, code: "expired_before_start" });
+        expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+          status: "failed",
+          endCode: "expired_before_start",
+        });
+      } else if (
+        state === "active" ||
+        state === "completed" ||
+        state === "failed"
+      ) {
+        expect(
+          await w.t.mutation(internal.training.markTrainingStarted, {
+            machineId: w.machine,
+            sessionId,
+          }),
+        ).toEqual({ armed: true });
+        if (state !== "active")
+          await w.t.mutation(internal.training.endTrainingSession, {
+            machineId: w.machine,
+            sessionId,
+            failed: state === "failed",
+            reason: "TEST end after arming",
+          });
+        expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+          status: state,
+        });
+      }
+      const ran =
+        state === "active" || state === "completed" || state === "failed";
+      expect((await read(w))?.alerts).toEqual(
+        ran
+          ? [
+              {
+                code: "person_on_board_without_occupied",
+                count: 1,
+                mostRecentAt: NOW,
+              },
+            ]
+          : [],
+      );
+      expect(
+        (
+          await as(w.t, "admin").query(
+            api.machineRegistry.listRegistryBadges,
+            {},
+          )
+        ).find((entry) => entry.machineId === w.machine)?.alerts,
+      ).toEqual(ran ? ["person_on_board_without_occupied"] : []);
+    },
+  );
 
   it("reports programs and historical rider sessions, not an occupied session before a downgrade", async () => {
     const w = await seedWorld(modules);

@@ -132,9 +132,10 @@ export function versionStatus({
   reportedReleaseLevel: ValidationLevel | undefined;
   machineLevel: MachineValidationLevel;
 }): "unknown" | "not_validated" | "up_to_date" | "outdated" {
-  if (!reported || !expected) return "unknown";
+  if (!reported) return "unknown";
   if (!releaseAllowedOnMachine(reportedReleaseLevel, machineLevel))
     return "not_validated";
+  if (!expected) return "unknown";
   return reported === expected ? "up_to_date" : "outdated";
 }
 

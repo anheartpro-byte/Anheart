@@ -216,12 +216,30 @@ describe("machine registry rules", () => {
       machineLevel: "bench" as const,
     };
     expect(versionStatus({ ...base, reported: undefined })).toBe("unknown");
+    expect(
+      versionStatus({
+        ...base,
+        reported: undefined,
+        reportedReleaseLevel: undefined,
+      }),
+    ).toBe("unknown");
     expect(versionStatus({ ...base, expected: undefined })).toBe("unknown");
     expect(versionStatus({ ...base, reportedReleaseLevel: undefined })).toBe(
       "not_validated",
     );
     expect(versionStatus(base)).toBe("up_to_date");
     expect(versionStatus({ ...base, expected: "pi-0.2.0" })).toBe("outdated");
+  });
+
+  it("flags bench software on an auto machine even without an expected version", () => {
+    expect(
+      versionStatus({
+        reported: "pi-0.1.0",
+        expected: undefined,
+        reportedReleaseLevel: "bench",
+        machineLevel: "auto",
+      }),
+    ).toBe("not_validated");
   });
 
   it("recognizes a rider only in auto sessions or an exact occupancy segment", () => {
