@@ -181,9 +181,9 @@ async def test_past_the_route_the_loop_says_the_value_missing_on_the_site(tmp_pa
         await recorded.tick(0.4)
     assert recorded.rig.refusals() == [
         "demarrage refuse : FC max du passager non renseignee sur le site "
-        "(a regler par un gestionnaire)",
+        + "(a regler par un gestionnaire)",
         "demarrage refuse : annee de naissance du passager non renseignee sur le site "
-        "(a regler par un gestionnaire)",
+        + "(a regler par un gestionnaire)",
     ]
     assert state_of(recorded) is RuntimeState.IDLE
     await recorded.rig.panel.close()
