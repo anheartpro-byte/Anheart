@@ -27,6 +27,7 @@ import {
   payloadTooLarge,
   type MachineLimit,
 } from "./lib/rateLimits";
+import { isMedicalVersion } from "./lib/medicalParameters";
 
 const http = httpRouter();
 http.route({
@@ -248,19 +249,11 @@ function isStr(x: unknown): x is string {
   return typeof x === "string";
 }
 
-const MEDICAL_PARAMETERS_VERSION_PATTERN =
-  /^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$/;
-
 function medicalParametersVersionOf(
   value: unknown,
 ): string | null | undefined {
   if (value === null) return null;
-  if (
-    typeof value !== "string" ||
-    !MEDICAL_PARAMETERS_VERSION_PATTERN.test(value)
-  ) {
-    return undefined;
-  }
+  if (!isMedicalVersion(value)) return undefined;
   return value;
 }
 

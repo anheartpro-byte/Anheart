@@ -39,6 +39,10 @@ const MEDICAL_VERSION_PATTERN =
 const SIGNER_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 
+export function isMedicalVersion(value: unknown): value is string {
+  return typeof value === "string" && MEDICAL_VERSION_PATTERN.test(value);
+}
+
 /** Validated fields Convex reads from a signed medical parameter document. */
 export type ParsedMedicalDocument = MedicalParameters &
   Readonly<{ version: string; issuedAt: string; signedBy: string }>;
@@ -203,10 +207,7 @@ export function parseMedicalDocument(content: string): ParsedMedicalDocument {
   ) {
     throw new Error("document._comment must be text");
   }
-  if (
-    typeof document.version !== "string" ||
-    !MEDICAL_VERSION_PATTERN.test(document.version)
-  ) {
+  if (!isMedicalVersion(document.version)) {
     throw new Error("document.version must be MAJOR.MINOR.PATCH");
   }
   if (typeof document.issued_at !== "string" || !validDate(document.issued_at)) {
