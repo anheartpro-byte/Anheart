@@ -231,6 +231,16 @@ def assert_private_words_absent(
         assert pattern.search(caplog.text.encode("utf-8")) is None
 
 
+def expected_dashboard_refusal(detail: str, launch: Mapping[str, JsonValue]) -> str:
+    profile_id = launch.get("profileId")
+    if isinstance(profile_id, str):
+        detail = detail.replace(repr(profile_id), "[retire]")
+    age = launch.get("subjectAge")
+    if isinstance(age, int) and not isinstance(age, bool):
+        detail = detail.replace(f"passager de {age} ans", "[retire]")
+    return f"refusee par la machine : {detail}"
+
+
 NO: Final[Reply] = Err(Refused(400, "no"))
 
 
@@ -899,7 +909,8 @@ async def test_confirmation_refuses_a_passenger_absent_from_the_current_roster(
     view = r.sync.current_remote_launch()
     assert view is not None
     assert view.passenger_name is None
-    assert view.reason == rejected.error.detail
+    assert view.reason is None
+    assert view.passenger_reason == rejected.error.detail
     assert view.stage is LaunchStage.WAITING_CONFIRMATION
     await r.step()
     assert r.dashboard.to(START) == []
@@ -908,6 +919,8 @@ async def test_confirmation_refuses_a_passenger_absent_from_the_current_roster(
     recovered = r.sync.current_remote_launch()
     assert recovered is not None
     assert recovered.passenger_name == RIDER_NAME
+    assert recovered.passenger_reason is None
+    assert recovered.reason is None
     assert recovered.stage is LaunchStage.WAITING_CONFIRMATION
     assert r.dashboard.to(START) == []
     assert r.dashboard.to("/api/machine/training/end") == []
@@ -940,7 +953,9 @@ async def test_a_roster_refresh_removing_the_rider_abandons_the_queued_confirmat
     assert unavailable is not None
     assert unavailable.stage is LaunchStage.WAITING_CONFIRMATION
     assert unavailable.passenger_name is None
-    assert "n'est pas dans" in str(unavailable.reason)
+    assert unavailable.reason is None
+    assert unavailable.passenger_reason is not None
+    assert "n'est pas dans" in unavailable.passenger_reason
     assert r.dashboard.to(START) == []
     assert r.dashboard.to("/api/machine/training/end") == []
 
@@ -1110,6 +1125,79 @@ async def test_a_late_2xx_cannot_reuse_a_confirmation_after_a_local_session(
     )
 
 
+async def test_a_late_2xx_while_a_local_session_runs_keeps_the_failed_end(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = linked(tmp_path, record_root=tmp_path / "records")
+    assert r.panel.recorder is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.run(0.2)
+    confirm_linked(r.panel)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_post = r.dashboard.post
+
+    async def post(path: str, body: Mapping[str, JsonValue]) -> Reply:
+        if path == START:
+            entered.set()
+            await release.wait()
+        return await original_post(path, body)
+
+    monkeypatch.setattr(r.dashboard, "post", post)
+    request = asyncio.create_task(r.panel.cloud_step())
+    await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+    local = r.panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+    assert isinstance(local, Ok)
+    r.clock.advance(TICK)
+    r.panel.surface.note_presence(OPERATOR)
+    await r.panel.ecg_step()
+    await r.panel.control_step()
+    assert state_of(r.panel) is RuntimeState.RUNNING
+
+    release.set()
+    await asyncio.wait_for(request, timeout=1.0)
+
+    assert state_of(r.panel) is RuntimeState.RUNNING
+    assert r.panel.surface.pending is None
+    assert r.panel.cloud is not None
+    assert r.panel.cloud.current_session_id is None
+    assert len(r.dashboard.to(START)) == 1
+    assert not any(
+        end["sessionId"] == "remote-1" for end in r.dashboard.to("/api/machine/training/end")
+    )
+
+    ended = r.panel.surface.submit_end(operator=OPERATOR, reason="local stop")
+    assert isinstance(ended, Ok)
+    for _ in range(50):
+        r.clock.advance(TICK)
+        r.panel.surface.note_presence(OPERATOR)
+        await r.panel.ecg_step()
+        await r.panel.control_step()
+        if state_of(r.panel) is RuntimeState.FINISHED:
+            break
+    assert state_of(r.panel) is RuntimeState.FINISHED
+
+    await r.run(30.0)
+    ends = [
+        end for end in r.dashboard.to("/api/machine/training/end") if end["sessionId"] == "remote-1"
+    ]
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    assert "confirmation distante abandonnee" in str(ends[0]["reason"])
+    assert "the end of remote-1 could not be delivered and is given up" not in caplog.text
+    await r.panel.close()
+    recorder = r.panel.recorder
+    assert recorder is not None
+    recorder.journal.drain()
+    assert_private_words_absent(
+        recorder.journal.root,
+        caplog,
+        (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+    )
+
+
 async def test_a_confirmation_racing_with_a_running_session_is_not_sent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1168,6 +1256,7 @@ async def test_a_changed_offer_invalidates_a_confirmation_queued_for_the_previou
     tmp_path: Path,
 ) -> None:
     r = rig(tmp_path)
+    client = r.panel.hub.subscribe()
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
     await r.step()
     r.confirm_offer()
@@ -1183,6 +1272,9 @@ async def test_a_changed_offer_invalidates_a_confirmation_queued_for_the_previou
     assert offer.reason == "l'offre a change, une nouvelle confirmation est requise"
     assert r.dashboard.to(START) == []
     assert r.dashboard.to("/api/machine/training/end") == []
+    payload = await client.next_payload()
+    assert payload.event is not None
+    assert payload.event.detail == offer.reason
     assert isinstance(r.sync.confirm_remote_launch("remote-1", OPERATOR), Ok)
 
 
@@ -1323,7 +1415,7 @@ async def test_a_reply_for_a_replaced_offer_cannot_submit_or_arm_it(
     await r.panel.close()
 
 
-async def test_a_refusal_after_the_offer_was_removed_keeps_the_safe_dashboard_reason(
+async def test_a_refusal_after_the_offer_was_removed_keeps_its_reason(
     tmp_path: Path,
 ) -> None:
     r = rig(tmp_path)
@@ -1341,7 +1433,36 @@ async def test_a_refusal_after_the_offer_was_removed_keeps_the_safe_dashboard_re
     assert r.sync.current_remote_launch() is None
     (end,) = r.dashboard.to("/api/machine/training/end")
     assert end["failed"] is True
-    assert end["reason"] == "refusee par la machine : demarrage distant refuse par la console"
+    assert end["reason"] == "refusee par la machine : surface occupee"
+
+
+async def test_a_loop_refusal_redacts_private_words_after_the_offer_is_removed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.confirm_offer()
+    r.dashboard.answer(START, ok())
+    await r.step()
+    assert pending_start(r.panel.surface) is not None
+
+    r.dashboard.answer(POLL_PATH, launch_answer(None))
+    await r.step(POLL_PERIOD)
+    assert r.sync.current_remote_launch() is None
+
+    detail = f"demarrage refuse : programme {PROFILE!r} inconnu; passager de 30 ans"
+    r.sync.start_refused("remote-1", detail)
+    await r.step()
+
+    (end,) = r.dashboard.to("/api/machine/training/end")
+    assert end["reason"] == (
+        "refusee par la machine : demarrage refuse : programme [retire] inconnu; [retire]"
+    )
+    r.journal.drain()
+    assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans"))
 
 
 async def test_a_launch_the_surface_refuses_comes_back_failed(
@@ -1370,13 +1491,13 @@ async def test_a_launch_the_surface_refuses_comes_back_failed(
     assert ends[0]["sessionId"] == "remote-1"
     assert ends[0]["failed"] is True
     reason = ends[0]["reason"]
-    assert reason == "refusee par la machine : demarrage distant refuse par la console"
     confirmation = await client.next_payload()
     assert confirmation.event is not None
     assert confirmation.event.kind is EventKind.LAUNCH_CONFIRMED
     refusal = await client.next_payload()
     assert refusal.event is not None
     assert "non atteste" in refusal.event.detail
+    assert reason == f"refusee par la machine : {refusal.event.detail}"
     r.journal.drain()
     assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
@@ -1400,10 +1521,10 @@ async def test_a_locked_surface_verdict_prevents_the_confirmation_request(
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
     refusal = await client.next_payload()
     assert refusal.event is not None
     assert "verdict de securite" in refusal.event.detail
+    assert ends[0]["reason"] == f"refusee par la machine : {refusal.event.detail}"
     r.journal.drain()
     assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
@@ -1429,10 +1550,10 @@ async def test_a_waiting_surface_command_prevents_the_confirmation_request(
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
     refusal = await client.next_payload()
     assert refusal.event is not None
     assert "console occupee" in refusal.event.detail
+    assert ends[0]["reason"] == f"refusee par la machine : {refusal.event.detail}"
     r.journal.drain()
     assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
@@ -1455,10 +1576,10 @@ async def test_a_panel_with_programmes_disabled_refuses_before_confirmation(
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
     refusal = await client.next_payload()
     assert refusal.event is not None
     assert "PROGRAMS_ENABLED=false" in refusal.event.detail
+    assert ends[0]["reason"] == f"refusee par la machine : {refusal.event.detail}"
     r.journal.drain()
     assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
@@ -1717,6 +1838,7 @@ async def test_a_local_preflight_refusal_keeps_private_words_off_disk_and_end(
     assert ends[0]["failed"] is True
     reason = ends[0]["reason"]
     assert isinstance(reason, str)
+    assert reason == expected_dashboard_refusal(visible_words, launch)
     payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
     assert payload.event is not None
     assert visible_words in payload.event.detail
@@ -1756,7 +1878,10 @@ async def test_short_profile_ids_and_age_words_never_corrupt_the_end_reason(
     assert len(ends) == 1
     reason = ends[0]["reason"]
     assert isinstance(reason, str)
-    assert reason == "refusee par la machine : demarrage distant refuse par la console"
+    assert (
+        reason == "refusee par la machine : demarrage refuse : [retire], minimum 18 ans "
+        "(min_rider_age des parametres medicaux)"
+    )
     assert "passager de 10 ans" not in reason
     r.journal.drain()
     assert_private_words_absent(
@@ -1859,8 +1984,8 @@ async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> No
     await r.step()
     reasons = [body["reason"] for body in r.dashboard.to("/api/machine/training/end")]
     assert reasons == [
-        "refusee par la machine : demarrage distant refuse par la console",
-        "refusee par la machine : demarrage distant refuse par la console",
+        "refusee par la machine : not this one",
+        "refusee par la machine : variateur en defaut",
     ]
     # The wait is over, so the machine polls again.
     await r.step(5.0)
@@ -2361,14 +2486,9 @@ async def test_an_unobserved_end_is_closed_when_the_next_session_starts(tmp_path
     assert r.sync.current_session_id == "second"
 
 
-async def test_only_one_end_without_a_record_waits_and_no_launch_is_asked_meanwhile(
+async def test_failed_launch_ends_wait_in_order_and_no_launch_is_asked_meanwhile(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """No queue: an end that has no record to be taken up from waits alone.
-
-    A refused launch is still ``pending`` on the dashboard: until it is told,
-    the dashboard is not asked for a launch, which would hand the same one back.
-    """
     r = rig(tmp_path)
     r.dashboard.answer("/api/machine/training/end", DOWN)
     r.sync.start_refused("s0", "offline")
@@ -2376,17 +2496,15 @@ async def test_only_one_end_without_a_record_waits_and_no_launch_is_asked_meanwh
     assert r.sync.owed == 1
     assert r.dashboard.to(POLL_PATH) == []
     r.sync.start_refused("s1", "offline")
-    assert r.sync.owed == 1
-    assert "the end of s0 could not be delivered and is given up" in caplog.text
+    assert r.sync.owed == 2
+    assert "the end of s0 could not be delivered and is given up" not in caplog.text
     r.dashboard.answer("/api/machine/training/end", ok())
     await r.step(RETRY_PERIOD)
+    await r.step()
     ends = r.dashboard.to("/api/machine/training/end")
-    # A launch that never started is dated by the dashboard, not by this console.
-    assert ends[-1] == {
-        "sessionId": "s1",
-        "failed": True,
-        "reason": "refusee par la machine : demarrage distant refuse par la console",
-    }
+    assert [end["sessionId"] for end in ends] == ["s0", "s0", "s1"]
+    assert all(end["failed"] is True for end in ends)
+    assert all(end["reason"] == "refusee par la machine : offline" for end in ends)
     assert r.sync.owed == 0
     await r.step(POLL_PERIOD)
     assert len(r.dashboard.to(POLL_PATH)) == 1
@@ -2751,10 +2869,11 @@ async def test_the_arm_rechecks_a_roster_removed_or_expired_after_2xx(
     assert len(ends) == 1
     assert ends[0]["sessionId"] == "remote-1"
     assert ends[0]["failed"] is True
-    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
     offer = r.panel.cloud.current_remote_launch() if r.panel.cloud is not None else None
     assert offer is not None
     assert offer.stage is LaunchStage.REFUSED
+    assert offer.reason is not None
+    assert ends[0]["reason"] == f"refusee par la machine : {offer.reason}"
     recorder = r.panel.recorder
     assert recorder is not None
     await r.panel.close()
@@ -2789,7 +2908,6 @@ async def refused_launch(
     ends = rig_.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
     expected = EventKind.REFUSED if after_confirmation else EventKind.DASHBOARD
     refusal = None
     for _ in range(5):
@@ -2798,6 +2916,7 @@ async def refused_launch(
             refusal = payload.event
             break
     assert refusal is not None
+    assert ends[0]["reason"] == expected_dashboard_refusal(refusal.detail, launch)
     recorder = rig_.panel.recorder
     await rig_.panel.close()
     recorder.journal.drain()
@@ -2883,7 +3002,9 @@ async def test_a_launch_that_reached_a_panel_without_programmes_is_refused(
     (end,) = rig_.dashboard.to("/api/machine/training/end")
     assert end["failed"] is True
     reason = end["reason"]
-    assert reason == "refusee par la machine : demarrage distant refuse par la console"
+    assert isinstance(reason, str)
+    assert reason.startswith("refusee par la machine : seances programmees desactivees")
+    assert "PROGRAMS_ENABLED=false" in reason
     await rig_.panel.close()
 
 

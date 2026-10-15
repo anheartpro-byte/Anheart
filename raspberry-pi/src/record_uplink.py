@@ -3,9 +3,11 @@
 What the dashboard receives of a session (its 1 Hz telemetry, its events, its
 end) is read back from the session's local record
 (:mod:`src.record.upload`), from the place the dashboard last acknowledged
-(:mod:`src.record.cursor`). Nothing of a session waits in memory: what is not
-acknowledged yet is on disk, and stays there across a lost link, a dashboard
-of another contract, or a console that restarts, by choice or not.
+(:mod:`src.record.cursor`). Nothing of a recorded session waits in memory:
+what is not acknowledged yet is on disk, and stays there across a lost link,
+a dashboard of another contract, or a console that restarts, by choice or not.
+A refused launch has no record; its due end stays in memory until the link can
+take it.
 
 One session, in order
 ---------------------
@@ -510,6 +512,7 @@ class RecordUplink:
         "_io",
         "_last_batch",
         "_live",
+        "_owed_queue",
         "_said",
         "_scan_at",
         "_scanned",
@@ -545,6 +548,7 @@ class RecordUplink:
         self._live: _Owed | None = None
         self._catching: _Owed | None = None
         self._backlog: tuple[str, ...] = ()
+        self._owed_queue: tuple[_Owed, ...] = ()
         self._scanned: bool = False
         self._scan_at: Monotonic | None = None
         self._held_until: Monotonic | None = None
@@ -590,14 +594,21 @@ class RecordUplink:
         waiting, and would hand it out again.
         """
         owed = self._catching
-        return owed is not None and owed.refused_launch
+        return (owed is not None and owed.refused_launch) or any(
+            queued.refused_launch for queued in self._owed_queue
+        )
 
     @property
     def owed(self) -> int:
         """Sessions the dashboard has not acknowledged whole, as far as this run knows."""
         live = self._live
         running = 0 if live is None or live.cursor.state == "complete" else 1
-        return running + (0 if self._catching is None else 1) + len(self._backlog)
+        return (
+            running
+            + (0 if self._catching is None else 1)
+            + len(self._owed_queue)
+            + len(self._backlog)
+        )
 
     # --- what the link tells it ------------------------------------------
 
@@ -711,8 +722,10 @@ class RecordUplink:
         """Make ``owed`` the session being caught up: the one that just ended comes first."""
         waiting = self._catching
         if waiting is not None:
+            if waiting.refused_launch:
+                self._owed_queue = (*self._owed_queue, owed)
+                return
             if waiting.record is None:
-                # No record to take it up from later, and one slot: the older is given up.
                 _logger.warning(
                     "dashboard: the end of %s could not be delivered and is given up",
                     waiting.cursor.session_id or waiting.local_ref,
@@ -752,7 +765,11 @@ class RecordUplink:
     async def _catch_up(self, now: Monotonic) -> None:
         owed = self._catching
         if owed is None:
-            owed = await self._next(now)
+            if self._owed_queue:
+                owed = self._owed_queue[0]
+                self._owed_queue = self._owed_queue[1:]
+            else:
+                owed = await self._next(now)
             if owed is None:
                 return
             self._catching = owed

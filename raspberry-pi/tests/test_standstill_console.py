@@ -284,13 +284,17 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         assert refused[0]["failed"] is True
         reason = refused[0]["reason"]
         assert isinstance(reason, str)
-        assert reason == "refusee par la machine : demarrage distant refuse par la console"
-        assert any(
-            event.kind is EventKind.DASHBOARD
-            and RULE_SESSION_STANDSTILL in event.detail
-            and "a acquitter a la console" in event.detail
+        dashboard_reasons = [
+            event.detail
             for event in run.rig.events
-        )
+            if (
+                event.kind is EventKind.DASHBOARD
+                and RULE_SESSION_STANDSTILL in event.detail
+                and "a acquitter a la console" in event.detail
+            )
+        ]
+        assert len(dashboard_reasons) == 1
+        assert reason == f"refusee par la machine : {dashboard_reasons[0]}"
 
         # Somebody at the machine acknowledges, by name.
         acknowledged = await session.post(

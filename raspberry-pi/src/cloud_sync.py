@@ -830,6 +830,7 @@ class CloudSync:
     __slots__ = (
         "_awaiting",
         "_clock",
+        "_confirmed_launch",
         "_confirmed_launch_id",
         "_deposit",
         "_health",
@@ -930,6 +931,7 @@ class CloudSync:
         )
         self._awaiting: _Awaiting | None = None
         self._confirmed_launch_id: str | None = None
+        self._confirmed_launch: Launch | None = None
         self._offered_launch: Launch | None = None
         self._offer_generation: int = 0
         self._offer_state: LaunchOfferState = OfferWaiting()
@@ -1019,7 +1021,7 @@ class CloudSync:
         found = self._rider_for_launch(launch)
         if isinstance(found, Err):
             detail = describe_passenger_refusal(found.error)
-            self._offer_state = OfferWaiting(detail)
+            self._offer_state = OfferWaiting()
             return Err(ConfirmationRefusal(ConfirmationCode.PASSENGER_UNAVAILABLE, detail))
         self._offer_state = OfferConfirmationQueued(operator, self._offer_generation)
         return Ok(None)
@@ -1052,20 +1054,32 @@ class CloudSync:
                 start_confirmed=confirmed,
             )
         )
+        if confirmed:
+            self._confirmed_launch = None
         if self._awaiting is not None and self._awaiting.cloud_session_id == remote:
             self._awaiting = None
 
     def start_refused(self, cloud_session_id: str, detail: str) -> None:
         """A launch the loop refused becomes a failed session on the dashboard."""
         self._refused_launch = cloud_session_id
-        launch = self._offered_launch
-        if launch is not None and launch.session_id == cloud_session_id:
+        launch = self._confirmed_launch
+        if launch is None or launch.session_id != cloud_session_id:
+            launch = self._offered_launch
+        matching_launch = (
+            launch if launch is not None and launch.session_id == cloud_session_id else None
+        )
+        if matching_launch is not None:
             self._invalidate_offer_state(OfferRefused(detail))
         if self._confirmed_launch_id == cloud_session_id:
             self._confirmed_launch_id = None
         if self._awaiting is not None and self._awaiting.cloud_session_id == cloud_session_id:
             self._awaiting = None
-        self._owe_refusal(cloud_session_id, _safe_launch_refusal(detail))
+        if (
+            self._confirmed_launch is not None
+            and self._confirmed_launch.session_id == cloud_session_id
+        ):
+            self._confirmed_launch = None
+        self._owe_refusal(cloud_session_id, _safe_launch_refusal(detail, matching_launch))
 
     # --- the step ----------------------------------------------------------
 
@@ -1283,9 +1297,9 @@ class CloudSync:
                 self._offered_launch = launch
                 self._offer_generation += 1
                 if not isinstance(self._offer_state, OfferRefused):
-                    self._offer_state = OfferWaiting(
-                        "l'offre a change, une nouvelle confirmation est requise"
-                    )
+                    detail = "l'offre a change, une nouvelle confirmation est requise"
+                    self._offer_state = OfferWaiting(detail)
+                    self._surface.note_remote_refusal(detail)
             self._offered_launch = launch
             return
         if launch.session_id == self._refused_launch:
@@ -1321,7 +1335,7 @@ class CloudSync:
         found = self._rider_for_launch(launch)
         if isinstance(found, Err):
             detail = describe_passenger_refusal(found.error)
-            self._invalidate_offer_state(OfferWaiting(detail))
+            self._invalidate_offer_state(OfferWaiting())
             self._surface.note_remote_refusal(detail)
             _logger.warning("dashboard launch %s is unavailable: %s", launch.session_id, detail)
             return
@@ -1404,6 +1418,7 @@ class CloudSync:
             self._refuse_local_launch(launch, describe_surface_refusal(submitted.error))
             return
         self._confirmed_launch_id = launch.session_id
+        self._confirmed_launch = launch
         _logger.info("dashboard launch %s submitted", launch.session_id)
         self._awaiting = _Awaiting(launch.session_id, now)
 
@@ -1644,8 +1659,13 @@ def _launch_of(document: Document) -> Launch | None:
     )
 
 
-def _safe_launch_refusal(_detail: str) -> str:
-    return "demarrage distant refuse par la console"
+def _safe_launch_refusal(detail: str, launch: Launch | None) -> str:
+    if launch is None:
+        return detail
+    safe = detail.replace(repr(launch.profile_id), "[retire]")
+    if launch.subject_age is not None:
+        safe = safe.replace(f"passager de {launch.subject_age} ans", "[retire]")
+    return safe
 
 
 def _due(last: Monotonic | None, now: Monotonic, period: Seconds) -> bool:
