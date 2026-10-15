@@ -90,6 +90,69 @@ async function readableMachine(ctx: QueryCtx, machineId: Id<"machines">) {
   return machine !== null && canRead(user, machine) ? { user, machine } : null;
 }
 
+async function contactOf(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  organizationId: Id<"organizations"> | undefined,
+) {
+  const contact = await ctx.db.get(userId);
+  if (contact === null || contact.clerkDeletedAt !== undefined) return null;
+  const role = await organizationRoleOf(ctx, userId, organizationId);
+  return role === null
+    ? null
+    : {
+        userId,
+        firstName: contact.firstName,
+        lastName: contact.lastName,
+        role,
+      };
+}
+
+export const listContactCandidates = query({
+  args: { machineId: v.id("machines") },
+  returns: v.array(
+    v.object({
+      userId: v.id("users"),
+      firstName: v.string(),
+      lastName: v.string(),
+      role: v.union(
+        v.literal("admin"),
+        v.literal("gestionnaire"),
+        v.literal("user"),
+      ),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    await requireRole(ctx, ["admin"]);
+    const machine = await ctx.db.get(args.machineId);
+    if (machine === null || machine.isDeleted)
+      throw refusal("machine_not_found");
+    const organizationId = machine.organizationId;
+    if (organizationId === undefined) return [];
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_organization", (q) =>
+        q.eq("organizationId", organizationId),
+      )
+      .collect();
+    const contacts = [];
+    for (const userId of new Set(
+      memberships
+        .filter((member) => member.active)
+        .map((member) => member.userId),
+    )) {
+      const contact = await contactOf(ctx, userId, machine.organizationId);
+      if (contact !== null) contacts.push(contact);
+    }
+    return contacts.sort(
+      (a, b) =>
+        a.lastName.localeCompare(b.lastName) ||
+        a.firstName.localeCompare(b.firstName) ||
+        a.userId.localeCompare(b.userId),
+    );
+  },
+});
+
 async function editableMachine(ctx: MutationCtx, machineId: Id<"machines">) {
   await limitUser(ctx);
   const admin = await requireRole(ctx, ["admin"]);
@@ -329,12 +392,8 @@ export const getRegistry = query({
     ) => ({ ...sheet, url: await ctx.storage.getUrl(sheet.storageId) });
     const contacts = [];
     for (const userId of registry?.contacts ?? []) {
-      const contact = await ctx.db.get(userId);
-      if (
-        contact !== null &&
-        contact.clerkDeletedAt === undefined &&
-        (await organizationRoleOf(ctx, userId, machine.organizationId)) !== null
-      )
+      const contact = await contactOf(ctx, userId, machine.organizationId);
+      if (contact !== null)
         contacts.push({
           userId,
           firstName: contact.firstName,
@@ -523,15 +582,8 @@ export const updateIdentity = mutation({
       if (contacts.length > 20 || new Set(contacts).size !== contacts.length)
         throw refusal("invalid_registry_field");
       for (const userId of contacts) {
-        const contact = await ctx.db.get(userId);
         if (
-          contact === null ||
-          contact.clerkDeletedAt !== undefined ||
-          (await organizationRoleOf(
-            ctx,
-            userId,
-            state.machine.organizationId,
-          )) === null
+          (await contactOf(ctx, userId, state.machine.organizationId)) === null
         )
           throw refusal("contact_not_in_organization");
       }

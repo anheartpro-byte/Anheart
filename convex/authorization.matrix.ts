@@ -247,6 +247,32 @@ async function machineKeyOf(
 
 export const MATRIX: Entry[] = [
   {
+    id: "machineRegistry.listContactCandidates", ref: api.machineRegistry.listContactCandidates, kind: "query",
+    build: async (w, actor, scope) => ({ machineId: actor === "admin" && scope === "other" ? w.orgBMachine : w.machine }),
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", scope: "own", expect: ok, note: "members of centre A" },
+      { actor: "admin", scope: "other", expect: ok, note: "members of centre B" },
+      ...(["orgAdmin", "manager", "otherManager", "patient", "otherPatient", "stranger", "orgBAdmin", "orgBManager", "orgBPatient"] as const)
+        .flatMap((actor) => (["own", "foreign"] as const).map((scope) => ({ actor, scope, expect: refuse(UNAUTHORIZED), note: "only Anheart admins select contacts" }))),
+    ],
+    onSuccess: async (res, w, _actor, scope) => {
+      const rows = res as Array<{ userId: string; firstName: string; lastName: string; role: string }>;
+      const organizationId = scope === "other" ? w.orgB : w.orgA;
+      const expected = await w.t.run(async (ctx) => {
+        const memberships = await ctx.db.query("memberships").withIndex("by_organization", (q) => q.eq("organizationId", organizationId)).collect();
+        const contacts = [];
+        for (const member of memberships.filter((member) => member.active)) {
+          const user = await ctx.db.get(member.userId);
+          if (user !== null && user.clerkDeletedAt === undefined)
+            contacts.push({ userId: user._id, firstName: user.firstName, lastName: user.lastName, role: member.role });
+        }
+        return contacts.sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName) || a.userId.localeCompare(b.userId));
+      });
+      if (JSON.stringify(rows) !== JSON.stringify(expected)) throw new Error("Contact candidates differ from active organisation members");
+    },
+  },
+  {
     id: "machineRegistry.getRegistry", ref: api.machineRegistry.getRegistry, kind: "query",
     cases: registryReadCases(),
     build: async (w, actor, scope) => ({ machineId: registryTarget(w, actor, scope) }),
