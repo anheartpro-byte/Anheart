@@ -2356,7 +2356,7 @@ deux n'a encore tourné : ils ne peuvent être lancés qu'une fois sur `main`.
 | Déclencheur | `workflow_dispatch`, et l'appel de la pipeline de release (`workflow_call`), qui lance ces mêmes jobs après Convex | `workflow_dispatch`, et aucun autre |
 | Branche acceptée | `main` | `develop` |
 | Ce qui est demandé | quoi déployer (`site`, `simulation`, `site et simulation`) ; le mot `production`, à saisir | quoi déployer ; si le site est choisi, les mots `données de production`, à saisir |
-| Ce que le formulaire, le nom de l'exécution et le haut de sa page rappellent | le site de production ne se déploie que dans la fenêtre du déploiement de Convex, jamais pendant une séance ; les gates du commit ne sont pas vérifiées | une préversion du site lit et écrit les données de production tant que les variables Preview de Vercel ne sont pas séparées |
+| Ce que le formulaire, le nom de l'exécution et le haut de sa page rappellent | le site de production ne se déploie que dans la fenêtre du déploiement de Convex, jamais pendant une séance ; les gates du commit ne sont pas vérifiées par le bouton. Appelé par la pipeline, le haut de sa page rappelle la réussite des étapes 1 (tests) et 2 (CodeQL) sur ce commit ; le nom d'exécution ne s'applique qu'au bouton manuel | une préversion du site lit et écrit les données de production tant que les variables Preview de Vercel ne sont pas séparées |
 | Environnement GitHub | `production` | `preview` |
 | Environnement Vercel visé | Production | Preview |
 | Jobs | `Vérifier la demande (production)`, `Déployer le site (production)`, `Déployer la simulation (production)` | les trois mêmes, suffixés `(préversion)` |
@@ -2433,6 +2433,11 @@ n'appelle Vercel. Il vérifie :
   bouton et refuse les autres références (autre branche, tag du même nom, PR) ;
 * que la production exige le mot `production` exact, et que son formulaire, le
   nom de son exécution et le haut de sa page disent ce qu'elle ne vérifie pas ;
+* que `from_release` est un booléen facultatif de l'appel seulement, faux par
+  défaut et passé à `true` par les deux appels de `release.yml` ; le rappel
+  exécuté avec `true` dit que les étapes 1 (tests) et 2 (CodeQL) ont réussi sur
+  ce commit avant le déploiement ; vide ou `false`, il garde le rappel du
+  bouton sur les gates non vérifiées (S-5 (d)) ;
 * que la préversion exige l'accord saisi dès que le site est choisi, et jamais
   pour la simulation seule ;
 * les noms des environnements, les groupes de concurrence, l'absence de toute

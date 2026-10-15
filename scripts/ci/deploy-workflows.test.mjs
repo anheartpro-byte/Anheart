@@ -253,16 +253,16 @@ test("each button has its French name, and starts by hand and from nothing else"
   }
 });
 
-test("the production button can be called by the release pipeline alone, with the two inputs a person gives it", () => {
+test("the production button can be called by the release pipeline alone, with its inputs and release marker", () => {
   // The same jobs then run, behind the same guards: the pipeline deploys production to Vercel by them, not by a copy.
   const call = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_call:\n"), PRODUCTION.text.indexOf("\npermissions:"));
   assert.deepEqual(keysUnder(call, "  workflow_call"), ["inputs"], "the call declares a secret or an output");
-  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string"]);
+  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string", "from_release:", "type: boolean", "required: false", "default: false"]);
   // What the pipeline passes for `project` is one of the choices of the button: each of its jobs reads it by name.
   const release = workflow("release.yml");
   const passed = [
     ...release.matchAll(
-      /^ {4}uses: \.\/\.github\/workflows\/deploy-production\.yml\n {4}with:\n {6}project: (.*)\n {6}confirmation: \$\{\{ inputs\.confirmation \}\}\n {4}secrets: inherit$/gm,
+      /^ {4}uses: \.\/\.github\/workflows\/deploy-production\.yml\n {4}with:\n {6}project: (.*)\n {6}confirmation: \$\{\{ inputs\.confirmation \}\}\n {6}from_release: true\n {4}secrets: inherit$/gm,
     ),
   ].map((match) => match[1] ?? "");
   assert.deepEqual(passed, ["site", "simulation"]);
@@ -272,6 +272,27 @@ test("the production button can be called by the release pipeline alone, with th
     assert.doesNotMatch(workflow(file), /uses: \.\/\.github\/workflows\/deploy-/, file);
   }
   assert.doesNotMatch(release, /deploy-preview\.yml/);
+});
+
+test("S-5 (d) only a true from_release call replaces the manual gate reminder with the successful release stages", () => {
+  const call = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_call:\n"), PRODUCTION.text.indexOf("\npermissions:"));
+  assert.deepEqual(keysUnder(call, "    inputs"), ["project", "confirmation", "from_release"]);
+  assert.deepEqual(block(call, "      from_release"), ["type: boolean", "required: false", "default: false"]);
+  const dispatch = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_dispatch:\n"), PRODUCTION.text.indexOf("\n  workflow_call:\n"));
+  assert.deepEqual(keysUnder(dispatch, "    inputs"), ["project", "confirmation"]);
+  const request = jobsOf(PRODUCTION.text).get("request") ?? "";
+  assert.deepEqual(block(stepNamed(request, REMIND), "        env"), ["PROJECT: ${{ inputs.project }}", "FROM_RELEASE: ${{ inputs.from_release }}"]);
+  const pipeline = "Ce bouton est appelé par la pipeline de release : ses étapes 1 (tests) et 2 (CodeQL) ont réussi sur ce commit avant ce déploiement.";
+  for (const from of ["true", "", "false", "TRUE", "1"]) {
+    const result = run(script(request, REMIND), { ...shared(PRODUCTION.text), PROJECT: "site", GITHUB_SHA: OLDER, FROM_RELEASE: from });
+    assert.equal(result.status, 0, result.said);
+    assert.equal(result.summary, ["### Production : à lire avant d'approuver", "", `- Demandé : site, branche \`main\`, commit \`${OLDER}\`.`, `- ${WINDOW}`, `- ${from === "true" ? pipeline : GATES}`, ""].join("\n"), from);
+    assert.deepEqual(result.calls, []);
+  }
+  const release = jobsOf(workflow("release.yml"));
+  for (const [id, project] of [["vercel-site", "site"], ["vercel-simulation", "simulation"]]) {
+    assert.deepEqual(block(release.get(id) ?? "", "    with"), [`project: ${project}`, "confirmation: ${{ inputs.confirmation }}", "from_release: true"]);
+  }
 });
 
 test("S-5 (c) the documented secrets inheritance matches the release calls and environment secrets of the production jobs", () => {
@@ -479,7 +500,7 @@ test("production asks for a typed confirmation, and says where it is pressed wha
   assert.doesNotMatch(PREVIEW.text, /confirmation|CONFIRMATION/);
 
   // At the top of the run, written before anyone is asked to approve.
-  assert.deepEqual(block(stepNamed(request, REMIND), "        env"), ["PROJECT: ${{ inputs.project }}"]);
+  assert.deepEqual(block(stepNamed(request, REMIND), "        env"), ["PROJECT: ${{ inputs.project }}", "FROM_RELEASE: ${{ inputs.from_release }}"]);
   const reminded = run(script(request, REMIND), { ...shared(PRODUCTION.text), PROJECT: "site et simulation", GITHUB_SHA: OLDER });
   assert.equal(reminded.status, 0, reminded.said);
   assert.equal(

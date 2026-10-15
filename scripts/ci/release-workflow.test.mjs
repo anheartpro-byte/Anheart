@@ -1174,16 +1174,16 @@ test("EX-5 the versions are not recorded by the pipeline: it prints, once Convex
 // ---------------------------------------------------------------------------
 
 test("EX-6 the site and the simulation are deployed by the jobs of deploy-production.yml, and by no copy of them", () => {
-  // The button can be called, with the two inputs it asks of a person, and declares no secret: its jobs read their own.
+  // The button accepts the two manual inputs and the release marker, and declares no secret: its jobs read their own.
   assert.deepEqual(keysUnder(PRODUCTION, "on"), ["workflow_dispatch", "workflow_call"]);
   const call = PRODUCTION.slice(PRODUCTION.indexOf("\n  workflow_call:\n"), PRODUCTION.indexOf("\npermissions:"));
   assert.deepEqual(keysUnder(call, "  workflow_call"), ["inputs"]);
-  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string"]);
+  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string", "from_release:", "type: boolean", "required: false", "default: false"]);
   // Called once for each project, by name, the site first; the word the person typed is checked again by the button.
   for (const [id, project] of [["vercel-site", "site"], ["vercel-simulation", "simulation"]]) {
     const text = job(id ?? "");
     assert.equal(own(text, "uses"), "./.github/workflows/deploy-production.yml", id);
-    assert.deepEqual(block(text, "    with"), [`project: ${project}`, "confirmation: ${{ inputs.confirmation }}"], id);
+    assert.deepEqual(block(text, "    with"), [`project: ${project}`, "confirmation: ${{ inputs.confirmation }}", "from_release: true"], id);
     assert.equal(own(text, "secrets"), "inherit", id);
     assert.deepEqual(block(text, "    permissions"), ["contents: read"], id);
     // The choice named is one the button knows: its job runs, the other is skipped.

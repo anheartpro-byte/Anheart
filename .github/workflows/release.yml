@@ -623,6 +623,7 @@ jobs:
     with:
       project: site
       confirmation: ${{ inputs.confirmation }}
+      from_release: true
     secrets: inherit
 
   # The address of a deployment is behind the login of Vercel. Its generated
@@ -710,6 +711,7 @@ jobs:
     with:
       project: simulation
       confirmation: ${{ inputs.confirmation }}
+      from_release: true
     secrets: inherit
 
   # The viewer page names its own script and its own style by their hash: a
