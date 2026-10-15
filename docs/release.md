@@ -363,8 +363,10 @@ même si sa version ou sa page est identique : la pipeline compare aussi le SHA
 servi par `commit.txt`. Si, après six essais, le fichier manque ou nomme un
 autre commit, « Re-run failed jobs » relance la vérification, pas le déploiement
 déjà réussi. Si l'adresse a pu tarder à basculer, relancer ce contrôle suffit ;
-si elle sert toujours un autre SHA, redéployer avec « Re-run all jobs » ou le
-bouton de production correspondant.
+si elle sert toujours un autre SHA, vérifier d'abord dans Vercel quel déploiement
+porte le domaine de production du projet concerné. Si un redéploiement est
+nécessaire, utiliser le bouton « Déployer en production (main) » avec le projet
+correspondant (`site` ou `simulation`).
 
 | Où la chaîne s'arrête | Ce qui est en place | Quoi faire |
 |---|---|---|
@@ -374,8 +376,8 @@ bouton de production correspondant.
 | Étape 3, `scripts/release.sh tag` refuse | Aucun tag : il les pose tous ou aucun | Lire son message. Avis indépendant absent : le faire poser sur le candidat. Une vérification d'une **autre** exécution du même commit en échec ou en cours : voir [section 4](#la-pipeline-de-release-et-le-script). Puis « Re-run failed jobs » |
 | Étape 3, deux exécutions de la pipeline échouent sur le même commit | Les vérifications en échec de chaque exécution empêchent `tag` de reprendre l'autre ; une nouvelle exécution voit les deux | « Re-run failed jobs » sur l'une est refusé par `tag` à cause des vérifications en échec de l'autre, et inversement ; une nouvelle exécution est refusée par les deux. Dans l'onglet Actions, supprimer une exécution (« Delete workflow run »), puis lancer « Re-run failed jobs » sur l'autre |
 | Les tags sont posés, Convex n'est pas déployé | Les tags sont sur `origin`, la production est inchangée | Rien n'est cassé : l'ancien site tourne contre l'ancien Convex. Corriger la cause (secret absent, « Mauvaise clé », schéma refusé par les données : `convex deploy` ne modifie alors rien), puis « Re-run failed jobs » : l'étape 4 repart, les tags ne sont pas retouchés |
-| Convex est déployé, le site ne l'est pas | Le nouveau Convex sert l'ancien site : des pages de l'ancien site échouent ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production), point 2) | **Le plus urgent des cas.** Si l'étape 4 a échoué sur une de ses vérifications d'après déploiement, ou l'étape 5 sur une panne ou un SHA servi absent ou différent : « Re-run failed jobs » (redéployer le même code sur Convex ne change rien). Si la reprise ne passe pas : déployer le site par le bouton « Déployer en production (main) », qui ne dépend pas de la pipeline |
-| Le site est déployé, la simulation ne l'est pas | Convex et le site sont à jour ; la simulation hébergée sert l'ancienne version ou son SHA servi ne correspond pas | Sans urgence : elle ne lit aucune donnée. « Re-run failed jobs », ou le bouton de production avec `simulation` |
+| Convex est déployé, le site ne l'est pas | Le nouveau Convex sert l'ancien site : des pages de l'ancien site échouent ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production), point 2) | **Le plus urgent des cas.** Si l'étape 4 a échoué sur une de ses vérifications d'après déploiement, ou l'étape 5 sur une panne ou un SHA servi absent ou différent : « Re-run failed jobs » (redéployer le même code sur Convex ne change rien). Si le site sert toujours un autre SHA après ce contrôle, vérifier dans Vercel quel déploiement porte son domaine de production. Si un redéploiement est nécessaire, utiliser le bouton « Déployer en production (main) » avec `site`, qui ne dépend pas de la pipeline |
+| Le site est déployé, la simulation ne l'est pas | Convex et le site sont à jour ; la simulation hébergée sert l'ancienne version ou son SHA servi ne correspond pas | Sans urgence : elle ne lit aucune donnée. « Re-run failed jobs » ; si la simulation sert toujours un autre SHA après ce contrôle, vérifier dans Vercel quel déploiement porte son domaine de production. Si un redéploiement est nécessaire, utiliser le bouton de production avec `simulation` |
 | « Exécution périmée » | `main` a avancé depuis le lancement : la pipeline n'agit que sur la tête de `main` | Ne pas relancer cette exécution. Si les tags étaient déjà posés et qu'un déploiement manque : le faire à la main depuis le commit tagué ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), ou publier une nouvelle version |
 
 Deux releases ne tournent jamais en même temps : une seconde exécution, à blanc
