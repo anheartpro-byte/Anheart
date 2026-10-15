@@ -13,6 +13,7 @@
     "launch_for_self_only": "You can only launch a session for yourself.",
     "launch_right_missing": "You have not been given the right to launch sessions on this machine.",
     "machine_offline": "The machine is offline: it cannot take a session right now.",
+    "medical_parameters_unavailable": "No medical parameters version is registered on the server, so remote launches are not possible.",
     "rider_not_allowed": "This rider is not an active member of this machine's organization.",
     "programs_disabled": "Auto programmes are disabled on this machine: only manual sessions, from the machine's console, are possible.",
     "programme_not_on_machine": "This programme is no longer on the machine. Reload the page and choose another one.",

@@ -1,5 +1,5 @@
 import { internal } from "./_generated/api";
-import { backendOf } from "./test.setup";
+import { backendOf, registerShippedMedicalParameters } from "./test.setup";
 
 export const now = 1_800_000_000_000;
 
@@ -16,6 +16,7 @@ export async function trainingFixture(
 ) {
   delete process.env.ANHEART_ORG_ID;
   const t = backendOf(modules);
+  await registerShippedMedicalParameters(t);
   const ids = await t.run(async (ctx) => {
     const users = await Promise.all(
       (

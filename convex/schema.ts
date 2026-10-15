@@ -274,6 +274,18 @@ export default defineSchema({
     decidedAt: v.number(), // unix ms
   }).index("by_release", ["releaseId"]),
 
+  medical_parameters_versions: defineTable({
+    version: v.string(),
+    issuedAt: v.string(),
+    storageId: v.id("_storage"),
+    signedBy: v.string(),
+    signature: v.string(),
+    zoneCeilingFraction: v.number(),
+    minRiderAge: v.number(),
+    hrMaxFormula: v.literal("tanaka"),
+    registeredAt: v.number(),
+  }).index("by_version", ["version"]),
+
   // Training presets, mirrored from each Pi. The Pi is the authority; this
   // table is replaced wholesale on every sync.
   machine_profiles: defineTable({

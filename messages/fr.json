@@ -13,6 +13,7 @@
     "launch_for_self_only": "Vous ne pouvez lancer une séance que pour vous-même.",
     "launch_right_missing": "Vous n'avez pas reçu le droit de lancer des séances sur cette machine.",
     "machine_offline": "La machine est hors ligne : elle ne peut pas recevoir de séance pour l'instant.",
+    "medical_parameters_unavailable": "Aucune version des paramètres médicaux n'est enregistrée sur le serveur : aucun lancement à distance n'est possible.",
     "rider_not_allowed": "Ce pratiquant n'est pas membre actif de l'organisation de cette machine.",
     "programs_disabled": "Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles.",
     "programme_not_on_machine": "Ce programme n'est plus sur la machine. Rechargez la page et choisissez-en un autre.",

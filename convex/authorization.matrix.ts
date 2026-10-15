@@ -2505,6 +2505,42 @@ export const MATRIX: Entry[] = [
       { actor: "orgBAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
     ],
   },
+  {
+    id: "medicalParameters.current",
+    ref: api.medicalParameters.current,
+    kind: "query",
+    build: async () => ({}),
+    onSuccess: (res) => {
+      const current = res as {
+        version: string;
+        issuedAt: string;
+        signedBy: string;
+        zoneCeilingFraction: number;
+        minRiderAge: number;
+        hrMaxFormula: string;
+      } | null;
+      if (
+        current?.version !== "0.1.0" ||
+        current.issuedAt !== "2026-10-14" ||
+        current.signedBy !== "cle-de-test" ||
+        current.zoneCeilingFraction !== 0.9 ||
+        current.minRiderAge !== 18 ||
+        current.hrMaxFormula !== "tanaka"
+      ) {
+        throw new Error("Expected the current signed medical parameters");
+      }
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "Anheart admin reads the global current version" },
+      { actor: "orgAdmin", expect: ok, note: "centre A reads the global current version" },
+      { actor: "manager", expect: ok, note: "a manager reads the global current version" },
+      { actor: "patient", expect: ok, note: "a patient reads the global current version" },
+      { actor: "orgBAdmin", expect: ok, note: "centre B reads the global current version" },
+      { actor: "orgBManager", expect: ok, note: "a centre B manager reads the global current version" },
+      { actor: "orgBPatient", expect: ok, note: "a centre B patient reads the global current version" },
+    ],
+  },
 
   // =========================================================================
   // organizations.ts

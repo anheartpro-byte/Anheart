@@ -24,6 +24,7 @@ import {
   configureAnheartOrganization,
   modules,
   NOW,
+  registerShippedMedicalParameters,
   seedLegacyWorld,
   seedWorld,
   type LegacyWorld,
@@ -560,6 +561,7 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
 
   it("serves the single organisation as before once the migration has run", async () => {
     const w = await seedLegacyWorld(modules);
+    await registerShippedMedicalParameters(w.t);
     const { organizationId } = await migrate(w);
 
     // The admin of the default organisation is the Anheart admin.

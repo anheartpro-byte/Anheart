@@ -541,33 +541,33 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
     [{ birthYear: Number.NEGATIVE_INFINITY }, null],
     [{ birthYear: turning(37) + 0.5 }, null],
   ])("effectiveHrMax(%o) is %s", (physiology, expected) => {
-    expect(effectiveHrMax(physiology, NOW)).toBe(expected);
+    expect(effectiveHrMax(physiology, NOW, "tanaka")).toBe(expected);
   });
 
   it("refuses a zone above 90% of the max heart rate, rounded down, then a hard maximum above it", () => {
     // 90% of 181 bpm is 162.9: the ceiling is 162, never 163.
-    expect(zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 181 }, 181)).toBeNull();
-    expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 181 }, 181)).toBe(
+    expect(zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 181 }, 181, 0.9)).toBeNull();
+    expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 181 }, 181, 0.9)).toBe(
       "zone_above_ceiling",
     );
-    expect(zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 182 }, 181)).toBe(
+    expect(zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 182 }, 181, 0.9)).toBe(
       "hard_max_above_hr_max",
     );
     // Both at once: the zone is told first.
-    expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 182 }, 181)).toBe(
+    expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 182 }, 181, 0.9)).toBe(
       "zone_above_ceiling",
     );
   });
 
   it("ANH-205: refuses a zone when the max heart rate, the top of the zone or the hard maximum is not a number", () => {
     const fits = { zoneHighBpm: 162, hardMaxBpm: 181 };
-    expect(zoneRefusal(fits, 181)).toBeNull();
+    expect(zoneRefusal(fits, 181, 0.9)).toBeNull();
 
-    expect(zoneRefusal(fits, Number.NaN)).toBe("zone_above_ceiling");
-    expect(zoneRefusal({ ...fits, zoneHighBpm: Number.NaN }, 181)).toBe(
+    expect(zoneRefusal(fits, Number.NaN, 0.9)).toBe("zone_above_ceiling");
+    expect(zoneRefusal({ ...fits, zoneHighBpm: Number.NaN }, 181, 0.9)).toBe(
       "zone_above_ceiling",
     );
-    expect(zoneRefusal({ ...fits, hardMaxBpm: Number.NaN }, 181)).toBe(
+    expect(zoneRefusal({ ...fits, hardMaxBpm: Number.NaN }, 181, 0.9)).toBe(
       "hard_max_above_hr_max",
     );
   });
@@ -588,10 +588,15 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
     expect(ageFrom(turning(37), lastInstantOfLastYear)).toBe(35);
     expect(ageFrom(undefined, NOW)).toBeNull();
     // The estimate reads the same year.
-    expect(effectiveHrMax({ birthYear: turning(37) }, NOW)).toBe(182);
+    expect(effectiveHrMax({ birthYear: turning(37) }, NOW, "tanaka")).toBe(182);
     expect(
-      effectiveHrMax({ birthYear: turning(37) }, lastInstantOfLastYear),
+      effectiveHrMax({ birthYear: turning(37) }, lastInstantOfLastYear, "tanaka"),
     ).toBe(183);
+  });
+
+  it("keeps a valid measured maximum but omits an estimate without a medical version", () => {
+    expect(effectiveHrMax({ hrMax: 180, birthYear: turning(37) }, NOW, null)).toBe(180);
+    expect(effectiveHrMax({ birthYear: turning(37) }, NOW, null)).toBeNull();
   });
 });
 

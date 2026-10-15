@@ -17,8 +17,10 @@ import { convexTest } from "convex-test";
 import rateLimiterTest from "@convex-dev/rate-limiter/test";
 import resendTest from "@convex-dev/resend/test";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import shippedMedicalContent from "../raspberry-pi/config/medical_parameters.json?raw";
+import shippedMedicalSignatureUrl from "../raspberry-pi/config/medical_parameters.sig?url&inline";
 
 /** Fixed clock so every expectation is deterministic (2027-01-15 UTC). */
 export const NOW = 1_800_000_000_000;
@@ -31,6 +33,22 @@ export const modules = import.meta.glob([
   "!./**/*.setup.ts",
   "!./**/*.matrix.ts",
 ]);
+
+const shippedMedicalSignature = /^data:[^,]*;base64,([A-Za-z0-9+/=]+)$/.exec(
+  shippedMedicalSignatureUrl,
+)?.[1];
+
+export async function registerShippedMedicalParameters(
+  t: ReturnType<typeof backendOf>,
+) {
+  if (!shippedMedicalSignature) {
+    throw new Error("The shipped medical signature was not inlined as base64");
+  }
+  return await t.action(internal.medicalParameters.registerVersion, {
+    content: shippedMedicalContent,
+    signatureBase64: shippedMedicalSignature,
+  });
+}
 
 /**
  * An in-memory backend with the components `convex/convex.config.ts` mounts,
@@ -223,6 +241,7 @@ const ORGANIZATION_SETTINGS = {
 export async function seedWorld(mods: Record<string, () => Promise<unknown>>) {
   configureAnheartOrganization(ANHEART_CLERK_ORG);
   const t = backendOf(mods);
+  await registerShippedMedicalParameters(t);
   const ids = await t.run(async (ctx) => {
     const mkOrganization = (clerkOrgId: string, name: string, slug: string) =>
       ctx.db.insert("organizations", {
@@ -384,6 +403,7 @@ export async function seedMachineWorld(
 ) {
   configureAnheartOrganization(ANHEART_CLERK_ORG);
   const t = backendOf(mods);
+  await registerShippedMedicalParameters(t);
   const { adminId, organizationId } = await t.run(async (ctx) => {
     const organizationId = await ctx.db.insert("organizations", {
       clerkOrgId: ANHEART_CLERK_ORG,

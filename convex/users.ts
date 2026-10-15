@@ -16,6 +16,7 @@ import {
   sendPatientInvitation,
 } from "./lib/patientInvitation";
 import { effectiveHrMax } from "./training";
+import { currentMedicalParameters } from "./lib/medicalParameters";
 import { refusal } from "./lib/errors";
 import {
   ORGANIZATION_ADMIN_ROLES,
@@ -560,6 +561,7 @@ export const getUserById = query({
 
     const user = await ctx.db.get(args.userId);
     if (!user) return null;
+    const medical = await currentMedicalParameters(ctx);
 
     // The role held in the caller's organisation; the stored mirror for the
     // Anheart admin, who reads across organisations.
@@ -583,7 +585,11 @@ export const getUserById = query({
       createdAt: user.createdAt,
       hrMax: user.hrMax,
       birthYear: user.birthYear,
-      effectiveHrMax: effectiveHrMax(user, Date.now()),
+      effectiveHrMax: effectiveHrMax(
+        user,
+        Date.now(),
+        medical?.hrMaxFormula ?? null,
+      ),
     };
   },
 });
