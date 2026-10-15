@@ -73,6 +73,25 @@ export default function MachineDetailPage({
   const restoreMachine = useMutationWithFeedback(api.machines.restoreMachine);
 
   const dateLocale = locale === "fr" ? fr : enUS;
+  const medicalStatusText =
+    machine === undefined || machine === null
+      ? null
+      : {
+          unknown: null,
+          unsigned: t("machines.medicalParametersUnsigned"),
+          no_reference: t("machines.medicalParametersNoReference"),
+          current: t("machines.medicalParametersCurrent"),
+          obsolete: t("machines.medicalParametersObsolete", {
+            reference: machine.medicalParametersReferenceVersion ?? "-",
+          }),
+          ahead: t("machines.medicalParametersAhead"),
+        }[machine.medicalParametersStatus];
+  const medicalStatusIsAlert =
+    machine !== undefined &&
+    machine !== null &&
+    ["obsolete", "unsigned", "ahead"].includes(
+      machine.medicalParametersStatus,
+    );
 
   const canManage = isStaff(user?.role);
   // Restoring a machine is the Anheart admin's; the other admin rights are
@@ -182,7 +201,7 @@ export default function MachineDetailPage({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <p className="text-sm text-muted-foreground">
                   {t("machines.status")}
@@ -222,6 +241,22 @@ export default function MachineDetailPage({
                   {t("machines.contractVersion")}
                 </p>
                 <p className="font-medium">{machine.contractVersion ?? "-"}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">
+                  {t("machines.medicalParametersVersion")}
+                </p>
+                <p className="font-medium">
+                  {machine.medicalParametersVersion ?? "-"}
+                </p>
+                {medicalStatusText &&
+                  (medicalStatusIsAlert ? (
+                    <Badge variant="destructive">{medicalStatusText}</Badge>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      {medicalStatusText}
+                    </p>
+                  ))}
               </div>
             </div>
             {machine.lastVersionSeenAt !== undefined && (

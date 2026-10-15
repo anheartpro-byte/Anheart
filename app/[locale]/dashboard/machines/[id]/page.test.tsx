@@ -134,6 +134,14 @@ async function open(
   if (role === null) answer(api.users.getCurrentUser, null);
   else signedInAs(role);
   answer(api.machines.getMachine, shown === "loading" ? undefined : shown);
+  answer(api.medicalParameters.current, {
+    version: "0.1.0",
+    issuedAt: "2026-01-01",
+    signedBy: "test",
+    zoneCeilingFraction: 0.9,
+    minRiderAge: 18,
+    hrMaxFormula: "tanaka",
+  });
   return renderPage(
     <MachineDetailPage params={routeParams({ id: machineId })} />,
     { locale },
@@ -195,6 +203,45 @@ describe("machine page: which machine it shows", () => {
       screen.getByText("Versions annoncées il y a 2 minutes"),
     ).toBeTruthy();
   });
+
+  it.each([
+    ["fr", "unknown", undefined, "0.1.0", null, false],
+    ["fr", "unsigned", null, "0.1.0", fr.machines.medicalParametersUnsigned, true],
+    ["fr", "no_reference", "0.1.0", null, fr.machines.medicalParametersNoReference, false],
+    ["fr", "current", "0.1.0", "0.1.0", fr.machines.medicalParametersCurrent, false],
+    ["fr", "obsolete", "0.0.9", "0.1.0", "version médicale obsolète (référence : 0.1.0)", true],
+    ["fr", "ahead", "0.2.0", "0.1.0", fr.machines.medicalParametersAhead, true],
+    ["en", "unknown", undefined, "0.1.0", null, false],
+    ["en", "unsigned", null, "0.1.0", en.machines.medicalParametersUnsigned, true],
+    ["en", "no_reference", "0.1.0", null, en.machines.medicalParametersNoReference, false],
+    ["en", "current", "0.1.0", "0.1.0", en.machines.medicalParametersCurrent, false],
+    ["en", "obsolete", "0.0.9", "0.1.0", "obsolete medical version (server reference: 0.1.0)", true],
+    ["en", "ahead", "0.2.0", "0.1.0", en.machines.medicalParametersAhead, true],
+  ] as const)(
+    "shows the %s medical-version status %s and its alert style",
+    async (locale, status, version, reference, expected, alert) => {
+      const screen = await open(
+        "admin",
+        machine({
+          medicalParametersVersion: version,
+          medicalParametersStatus: status,
+          medicalParametersReferenceVersion: reference,
+        }),
+        locale,
+      );
+
+      expect(valueUnder((locale === "fr" ? fr : en).machines.medicalParametersVersion)).toBe(
+        version ?? "-",
+      );
+      if (expected === null) {
+        expect(screen.queryByText(/unknown|inconnue|à jour|up to date/)).toBeNull();
+      } else {
+        const statusText = screen.getByText(expected);
+        expect(statusText).toBeTruthy();
+        expect(statusText.className.includes("destructive")).toBe(alert);
+      }
+    },
+  );
 
   it("dates in English for an English visitor", async () => {
     await open("admin", deleted(), "en");

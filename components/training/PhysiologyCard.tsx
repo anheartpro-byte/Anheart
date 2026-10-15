@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { Id } from "@/convex/_generated/dataModel";
@@ -34,6 +35,7 @@ export function PhysiologyCard({
   user: object;
 }) {
   const t = useTranslations();
+  const medicalParameters = useQuery(api.medicalParameters.current);
   const setPhysiology = useMutationWithFeedback(api.training.setUserPhysiology);
 
   const currentHrMax = readOptionalNumber(user, "hrMax");
@@ -72,6 +74,7 @@ export function PhysiologyCard({
     dirty.hrMax ? hrMaxValue : currentHrMax,
     dirty.birthYear ? birthYearValue : currentBirthYear,
     nowMs,
+    medicalParameters ?? null,
   );
 
   const canSave =

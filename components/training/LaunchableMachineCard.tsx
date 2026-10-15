@@ -47,6 +47,10 @@ export function LaunchableMachineCard({
   const signalFresh = judge(m.lastHeartbeat, m.serverNow).fresh;
   const status = shownMachineStatus(m.status, signalFresh);
   const stale = !signalFresh || !judge(m.live?.updatedAt, m.serverNow).fresh;
+  const medicalParametersStatus =
+    m.medicalParametersReferenceVersion === null
+      ? "no_reference"
+      : m.medicalParametersStatus;
 
   return (
     <Card>
@@ -98,6 +102,7 @@ export function LaunchableMachineCard({
           <ProfileList
             profiles={m.profiles}
             programsEnabled={m.programsEnabled}
+            medicalParametersStatus={medicalParametersStatus}
           />
         </div>
         <div className="flex gap-2 pt-2">
@@ -107,6 +112,8 @@ export function LaunchableMachineCard({
             disabled={
               status !== "online" ||
               !m.programsEnabled ||
+              medicalParametersStatus === "unsigned" ||
+              medicalParametersStatus === "no_reference" ||
               m.profiles.length === 0
             }
           >

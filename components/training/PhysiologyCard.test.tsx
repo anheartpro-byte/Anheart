@@ -7,7 +7,12 @@ import {
   type,
 } from "@/test-support/render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mutation, mutationCalls, resetConvex } from "@/test-support/convex";
+import {
+  answer,
+  mutation,
+  mutationCalls,
+  resetConvex,
+} from "@/test-support/convex";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dismissFeedback, getFeedbackToasts } from "@/lib/feedback";
 import { PhysiologyCard } from "./PhysiologyCard";
@@ -38,6 +43,14 @@ beforeEach(() => {
   // The middle of 2026: the age of a rider born in 1986 is 40.
   vi.setSystemTime(new Date("2026-07-01T12:00:00Z"));
   resetConvex();
+  answer("medicalParameters:current", {
+    version: "0.1.0",
+    issuedAt: "2026-01-01",
+    signedBy: "test",
+    zoneCeilingFraction: 0.9,
+    minRiderAge: 18,
+    hrMaxFormula: "tanaka",
+  });
 });
 afterEach(() => {
   for (const toast of getFeedbackToasts()) dismissFeedback(toast.id);
@@ -73,6 +86,22 @@ describe("ANH-203 physiology card: what it shows", () => {
     // 208 - 0.7 x 40
     expect(screen.field("phys-hrmax").value).toBe("");
     expect(screen.text()).toContain(`${t.effective} 180 bpm (${t.estimated})`);
+  });
+
+  it("does not estimate from age without a server reference, but keeps a measured maximum", () => {
+    answer("medicalParameters:current", null);
+    const estimated = render(
+      <PhysiologyCard userId={userId} user={{ birthYear: 1986 }} />,
+    );
+
+    expect(estimated.text()).toContain(`${t.effective} ${t.notSet}`);
+    expect(estimated.text()).not.toContain("bpm (");
+    estimated.unmount();
+
+    const measured = render(
+      <PhysiologyCard userId={userId} user={{ hrMax: 185, birthYear: 1986 }} />,
+    );
+    expect(measured.text()).toContain(`${t.effective} 185 bpm (${t.measured})`);
   });
 
   it("says the max heart rate is not set when the server holds neither value", () => {

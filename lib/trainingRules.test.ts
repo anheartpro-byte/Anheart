@@ -1,18 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   armRpm,
-  effectiveHrMax,
+  effectiveHrMax as calculateEffectiveHrMax,
   formatClock,
   formatMinutes,
   GEAR_RATIO,
   isTrainingKind,
   isWholeNumber,
-  MIN_RIDER_AGE,
   readOptionalNumber,
   readOptionalString,
-  ZONE_CEILING_FRACTION,
   zoneCeiling,
 } from "./training";
+import type { MedicalParameters } from "./medicalParameters";
 
 /**
  * The rules the site applies before it asks the server to launch a session,
@@ -25,8 +24,30 @@ import {
 
 /** 1 July 2026, noon UTC: a rider born in 1986 is 40. */
 const NOW = Date.UTC(2026, 6, 1, 12);
+const REFERENCE = {
+  zoneCeilingFraction: 0.9,
+  minRiderAge: 18,
+  hrMaxFormula: "tanaka",
+} satisfies MedicalParameters;
+
+function effectiveHrMax(
+  hrMax: number | undefined | null,
+  birthYear: number | undefined | null,
+  now: number,
+  medicalParameters: MedicalParameters | null = REFERENCE,
+) {
+  return calculateEffectiveHrMax(hrMax, birthYear, now, medicalParameters);
+}
 
 describe("ANH-203 effectiveHrMax: the max heart rate a launch is vetted against", () => {
+  it("does not estimate from a birth year when the server has no reference", () => {
+    expect(effectiveHrMax(undefined, 1986, NOW, null)).toBeNull();
+    expect(effectiveHrMax(185, 1986, NOW, null)).toEqual({
+      value: 185,
+      source: "measured",
+    });
+  });
+
   it.each([100, 172, 220])(
     "keeps a measured value of %i bpm, whatever the birth year",
     (hrMax) => {
@@ -159,16 +180,16 @@ describe("ANH-205 a max heart rate and a birth year count only as finite whole n
 });
 
 describe("ANH-203 zoneCeiling: the highest zone a rider may be given", () => {
-  it("is 90 % of the max heart rate, rounded down", () => {
-    expect(ZONE_CEILING_FRACTION).toBe(0.9);
-    expect(zoneCeiling(180)).toBe(162);
-    // 166.5 is not rounded up: a zone of 167 would be above 90 %.
-    expect(zoneCeiling(185)).toBe(166);
-    expect(zoneCeiling(100)).toBe(90);
+  it("uses the current reference fraction and rounds down", () => {
+    expect(zoneCeiling(180, REFERENCE)).toBe(162);
+    expect(zoneCeiling(185, REFERENCE)).toBe(166);
+    expect(zoneCeiling(100, REFERENCE)).toBe(90);
   });
 
-  it("an auto launch asks for an adult", () => {
-    expect(MIN_RIDER_AGE).toBe(18);
+  it("uses a changed reference fraction", () => {
+    expect(
+      zoneCeiling(180, { ...REFERENCE, zoneCeilingFraction: 0.75 }),
+    ).toBe(135);
   });
 });
 
