@@ -17,6 +17,7 @@ class ConfirmationCode(Enum):
     NOT_PENDING = "launch_not_pending"
     IN_PROGRESS = "launch_in_progress"
     PASSENGER_UNAVAILABLE = "passenger_unavailable"
+    REFUSED = "launch_refused"
 
 
 @dataclass(frozen=True, slots=True)

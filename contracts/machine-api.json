@@ -32,7 +32,7 @@
     }
   },
   "arming_refusals": {
-    "description": "Depuis 1.5, `POST /api/machine/training/start` peut répondre 409 avec l'un de ces codes : Convex a revérifié le lancement au moment où la machine l'arme (droits, organisation, machine, âge, FC max, passager libre, délai d'attente) et le refuse. La séance est alors échouée avec ce code (champ `endCode`), `/api/machine/training/poll` ne l'offre plus, et la même réponse revient si la confirmation est répétée. La console ne fait pas tourner la machine pour une séance refusée ainsi. La console actuelle arme avant de confirmer : elle arrête aussitôt, sur la rampe ordinaire, la séance qu'elle vient d'armer, comme pour tout refus de sa confirmation ; ne pas armer du tout est la couche Pi d'ANH-144. Le poll n'offre déjà pas un lancement que ces contrôles refuseraient, ni un lancement qui expire dans moins de 45 s, et une tâche de Convex échoue chaque minute ceux qui attendent encore.",
+    "description": "Depuis 1.5, `POST /api/machine/training/start` peut répondre 409 avec l'un de ces codes : Convex a revérifié le lancement au moment où la machine l'arme (droits, organisation, machine, âge, FC max, passager libre, délai d'attente) et le refuse. La séance est alors échouée avec ce code (champ `endCode`), `/api/machine/training/poll` ne l'offre plus, et la même réponse revient si la confirmation est répétée. La console ne fait pas tourner la machine pour une séance refusée ainsi. La console de ce dépôt demande le départ après la confirmation de son opérateur, avant d'armer, et n'arme que sur un 2xx de `training/start`. Sur un 409, elle n'arme pas et n'envoie pas de fin ; une console antérieure, qui arme avant de confirmer, s'arrête aussitôt sur la rampe ordinaire. Le poll n'offre déjà pas un lancement que ces contrôles refuseraient, ni un lancement qui expire dans moins de 45 s, et une tâche de Convex échoue chaque minute ceux qui attendent encore.",
     "route": "POST /api/machine/training/start",
     "status": 409,
     "codes": [
@@ -84,7 +84,7 @@
     },
     "expired_before_start": {
       "statuses": [409],
-      "meaning": "Refus à la confirmation avant armement (voir `arming_refusals`) : le lancement a expiré avant que la console, après confirmation explicite de son opérateur, ne puisse confirmer le départ. Le comportement livré par la couche Pi d'ANH-144 reste non armé sans réponse 2xx de `training/start`."
+      "meaning": "Refus à l'armement (voir `arming_refusals`) : le lancement attendait depuis plus de `PENDING_SESSION_TTL_S` secondes (300 par défaut) sans que la machine en confirme le départ. Une console qui arme avant de confirmer a pu démarrer."
     },
     "right_revoked_before_start": {
       "statuses": [409],

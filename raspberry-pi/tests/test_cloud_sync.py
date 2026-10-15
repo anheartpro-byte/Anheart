@@ -878,6 +878,36 @@ async def test_a_second_confirmation_is_refused_while_the_first_is_queued(
     assert r.dashboard.to(START) == []
 
 
+async def test_a_queued_confirmation_is_abandoned_when_another_session_arms(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    queued = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+    assert isinstance(queued, Ok)
+    assert r.dashboard.to(START) == []
+
+    r.runtime.state = RuntimeState.RUNNING
+    r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "local-session"}))
+    r.sync.session_started(manual(r.clock))
+    await r.step()
+    assert r.dashboard.to(START) == []
+
+    r.runtime.state = RuntimeState.FINISHED
+    r.runtime.end_reason = EndReason.OPERATOR_STOP
+    r.runtime.stop_reason = "fini"
+    await r.step()
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step(POLL_PERIOD)
+
+    offered = r.sync.current_remote_launch()
+    assert offered is not None
+    assert offered.stage is LaunchStage.WAITING_CONFIRMATION
+    await r.step()
+    assert r.dashboard.to(START) == []
+
+
 async def test_a_confirmation_racing_with_a_running_session_is_not_sent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -940,6 +970,13 @@ async def test_a_launch_the_surface_refuses_comes_back_failed(tmp_path: Path) ->
     await r.step()
     assert r.dashboard.to(START) == []
     assert r.panel.surface.pending is None
+    refused_offer = r.sync.current_remote_launch()
+    assert refused_offer is not None
+    assert refused_offer.stage is LaunchStage.REFUSED
+    retry = r.sync.confirm_remote_launch(refused_offer.session_id, OPERATOR)
+    assert isinstance(retry, Err)
+    assert retry.error.code is ConfirmationCode.REFUSED
+    assert retry.error.detail == refused_offer.reason
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["sessionId"] == "remote-1"
@@ -1115,6 +1152,16 @@ async def test_another_start_refusal_is_shown_without_arming_or_ending(
     await r.step(POLL_PERIOD)
     assert len(r.dashboard.to(START)) == 1
     assert r.dashboard.to("/api/machine/training/end") == []
+    refused_offer = r.sync.current_remote_launch()
+    assert refused_offer is not None
+    assert refused_offer.stage is LaunchStage.REFUSED
+    retry = r.sync.confirm_remote_launch(refused_offer.session_id, OPERATOR)
+    assert isinstance(retry, Err)
+    assert retry.error.code is ConfirmationCode.REFUSED
+    assert retry.error.detail == refused_offer.reason
+    await r.step()
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
 
 
 async def test_an_unknown_confirmation_answer_fails_loudly(
@@ -1187,19 +1234,20 @@ async def test_an_unconfirmed_start_stays_unarmed_and_has_no_end(
         pytest.param(
             {**LAUNCH, "profileId": "private-program-71"},
             ("private-program-71", "passager de 30 ans", RIDER_NAME, "Dr Manager"),
-            "programme 'programme' inconnu",
+            "demarrage refuse : programme 'private-program-71' inconnu sur cette machine",
             id="unknown-program",
         ),
         pytest.param(
             {**LAUNCH, "profileId": "private-program-72", "subjectAge": 10},
             ("private-program-72", "passager de 10 ans", RIDER_NAME, "Dr Manager"),
-            "passager, minimum 18 ans",
+            "demarrage refuse : passager de 10 ans, minimum 18 ans "
+            "(min_rider_age des parametres medicaux)",
             id="too-young",
         ),
         pytest.param(
             {**LAUNCH, "profileId": "private-program-73", "subjectLabel": ""},
             ("private-program-73", "passager de 30 ans", "Dr Manager"),
-            "programme 'programme' inconnu",
+            "demarrage refuse : programme 'private-program-73' inconnu sur cette machine",
             id="unknown-program-without-label",
         ),
     ],
@@ -1233,6 +1281,15 @@ async def test_a_local_preflight_refusal_keeps_private_words_off_disk_and_end(
     payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
     assert payload.event is not None
     assert visible_words in payload.event.detail
+    offer = r.sync.current_remote_launch()
+    assert offer is not None
+    assert offer.stage is LaunchStage.REFUSED
+    assert offer.reason == visible_words
+    retry = r.sync.confirm_remote_launch(offer.session_id, OPERATOR)
+    assert isinstance(retry, Err)
+    assert retry.error.code is ConfirmationCode.REFUSED
+    assert retry.error.detail == visible_words
+    assert r.dashboard.to(START) == []
 
     r.journal.drain()
     logbook = (r.journal.root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
@@ -1293,6 +1350,30 @@ async def test_held_and_missing_start_routes_do_not_log_launch_words(
         assert private_word not in caplog.text
 
 
+async def test_a_held_start_can_be_confirmed_again_once(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r.dashboard.answer(START, DOWN)
+
+    await r.step()
+    r.confirm_offer()
+    await r.step()
+
+    held_offer = r.sync.current_remote_launch()
+    assert held_offer is not None
+    assert held_offer.stage is LaunchStage.UNCONFIRMED
+    assert len(r.dashboard.to(START)) == 1
+
+    r.dashboard.answer(START, ok())
+    retry = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+    assert isinstance(retry, Ok)
+    await r.step()
+
+    assert len(r.dashboard.to(START)) == 2
+    assert pending_start(r.panel.surface) is not None
+
+
 async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> None:
     r = rig(tmp_path)
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
@@ -1303,6 +1384,10 @@ async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> No
     await r.step()
     assert len(r.dashboard.to("/api/machine/training/poll")) == 1
     r.sync.start_refused("remote-1", "variateur en defaut")
+    refused = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+    assert isinstance(refused, Err)
+    assert refused.error.code is ConfirmationCode.REFUSED
+    assert refused.error.detail == "variateur en defaut"
     await r.step()
     reasons = [body["reason"] for body in r.dashboard.to("/api/machine/training/end")]
     assert reasons == [

@@ -986,6 +986,14 @@ class CloudSync:
                     "ce lancement n'est plus propose par le tableau de bord",
                 )
             )
+        if self._offer_stage is LaunchStage.REFUSED:
+            detail = cast("str", self._offer_reason)
+            return Err(
+                ConfirmationRefusal(
+                    ConfirmationCode.REFUSED,
+                    detail,
+                )
+            )
         if (
             self._offer_stage is LaunchStage.REQUESTING
             or self._awaiting is not None
@@ -1362,8 +1370,8 @@ class CloudSync:
         self._refused_launch = launch.session_id
         safe_detail = _safe_launch_refusal(launch, detail)
         self._offer_stage = LaunchStage.REFUSED
-        self._offer_reason = safe_detail
-        self._surface.note_remote_refusal(safe_detail)
+        self._offer_reason = detail
+        self._surface.note_remote_refusal(detail)
         self._owe_refusal(launch.session_id, safe_detail)
 
     def _refuse_server(self, sentence: str, launch: Launch | None) -> None:
