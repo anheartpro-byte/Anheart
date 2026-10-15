@@ -101,7 +101,7 @@ export const depositManifest = z
     occupancy: z.enum(["bench", "occupied"]).optional(),
     operator: z.string().optional(),
     subject_id: z.string().nullable().optional(),
-    profile: recordProfile.nullable().optional(),
+    profile: recordProfile.partial().nullable().optional(),
     config_hash: z.string().optional(),
     software_version: z.string().optional(),
     contract_version: z.string().optional(),
