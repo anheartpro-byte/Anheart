@@ -35,6 +35,7 @@ import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { isTrainingKind, SESSION_SILENCE_MS } from "@/lib/training";
 import { TrainingDetailsCard } from "@/components/training/TrainingDetailsCard";
 import { SessionRecordCard } from "@/components/training/SessionRecordCard";
+import { SessionSummaryCard } from "@/components/training/SessionSummaryCard";
 import {
   SessionKindBadge,
   SessionOriginBadge,
@@ -207,6 +208,12 @@ export default function SessionDetailPage({
           </CardContent>
         </Card>
       )}
+
+      {/* The summary of a finished training session, with its report (ANH-89) */}
+      {isTraining &&
+        (session.status === "completed" || session.status === "failed") && (
+          <SessionSummaryCard sessionId={sessionId} />
+        )}
 
       {/* Training parameters, end reason and telemetry (auto / manual) */}
       {isTraining && <TrainingDetailsCard sessionId={sessionId} />}

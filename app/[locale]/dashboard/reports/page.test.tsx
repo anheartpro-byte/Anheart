@@ -122,16 +122,20 @@ describe("reports", () => {
     expect(screen.queryByText(fr.reports.noReports)).toBeNull();
   });
 
-  it("leads from each report to the detail of its session", async () => {
+  it("leads from each report to the detail of its session and to its printable report", async () => {
     signedInAs("user");
     serverLists(completed("k57abcd1234efgh5678"));
     await renderPage(<ReportsPage />);
 
-    const link = report("EFGH5678").getByRole("link");
-    expect(link.getAttribute("href")).toBe(
+    const [detail, printable] = report("EFGH5678").getAllByRole("link");
+    expect(detail.getAttribute("href")).toBe(
       "/dashboard/sessions/k57abcd1234efgh5678",
     );
-    expect(link.textContent).toBe(fr.reports.view);
+    expect(detail.textContent).toBe(fr.reports.view);
+    expect(printable.getAttribute("href")).toBe(
+      "/dashboard/sessions/k57abcd1234efgh5678/report",
+    );
+    expect(printable.textContent).toBe(fr.sessionReport.openReport);
   });
 
   it.each([

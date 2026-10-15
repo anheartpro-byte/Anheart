@@ -390,6 +390,7 @@ describe("ANH-203 breadcrumb of a dashboard page", () => {
   it.each([
     ["new", fr.breadcrumb.new],
     ["edit", fr.breadcrumb.edit],
+    ["report", fr.breadcrumb.report],
     ["patients", nav.patients],
     ["users", nav.users],
     ["members", nav.members],

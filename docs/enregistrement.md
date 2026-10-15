@@ -707,3 +707,18 @@ retirés par lots de 100. La séance et sa télémétrie restent présentes. Les
 réservations sont gardées comme tombstones pour reconnaître et supprimer les
 envois tardifs effectués avec d'anciennes URL signées. Les durées de conservation
 et la décision relative aux données de santé restent du ressort d'ANH-172.
+
+## Résumé de séance calculé dans Convex (ANH-89)
+
+Dès que `manifest.json`, `ticks.csv` et `events.jsonl` d'un dépôt sont
+vérifiés, Convex calcule le résumé final de la séance à partir de ces trois
+fichiers seulement : les blocs bruts, `drive_frames.jsonl`, `sensors.csv` et
+`checksums.sha256` ne sont pas lus. Il remplace le résumé provisoire calculé à
+la fin de la séance sur la télémétrie à 1 Hz. Il lit les colonnes de
+`ticks.csv` par leur nom dans l'en-tête, ne compte que les tics de la séance
+(`t > 0`), ignore une ligne qui n'est pas un tic ou un événement en le
+signalant, et note `record_degraded` quand l'enregistrement dit lui-même qu'il
+lui manque des données. Les définitions des chiffres, et le texte de la
+console ou de la simulation dont chacune vient, sont dans
+[convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89).
+Le format de l'enregistrement ne change pas.

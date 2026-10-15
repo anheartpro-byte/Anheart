@@ -36,6 +36,7 @@ export function DashboardBreadcrumb() {
       new: tBreadcrumb("new"),
       live: tBreadcrumb("live"),
       edit: tBreadcrumb("edit"),
+      report: tBreadcrumb("report"),
     };
 
     // Known pages first: "gestionnaires" is long enough to look like an ID

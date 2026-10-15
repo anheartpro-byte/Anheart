@@ -2497,7 +2497,121 @@ export const MATRIX: Entry[] = [
     },
     cases: summaryCases(),
   },
+
+  // =========================================================================
+  // sessionReports.ts  (ANH-89: summaries of training sessions, health data)
+  // =========================================================================
+  {
+    id: "sessionReports.getSummary",
+    ref: api.sessionReports.getSummary,
+    kind: "query",
+    // The rule of every read of a session (`canAccessSession`): its rider,
+    // whoever can access its machine in its organisation, the Anheart admin.
+    build: async (w) => ({
+      sessionId: await addSummarizedSession(w, w.machine, w.patient),
+    }),
+    onSuccess: (res) => {
+      const summary = res as {
+        provisional: boolean;
+        figures: { durationS: number | null };
+      } | null;
+      if (summary === null) throw new Error("Expected the summary");
+      if (summary.provisional || summary.figures.durationS !== 600)
+        throw new Error("Expected the final summary of the session");
+    },
+    cases: summaryCases(),
+  },
+  {
+    id: "sessionReports.riderHistory",
+    ref: api.sessionReports.riderHistory,
+    kind: "query",
+    // One finished session with its summary per machine (`patient` on
+    // `machine`, `otherPatient` on `otherMachine`, `orgBPatient` on
+    // `orgBMachine`). The rider asked for is `patient`, by identifier, unless
+    // the cell asks for the caller's own history or for another rider.
+    build: async (w, actor, scope) => {
+      await addSummarizedSession(w, w.machine, w.patient);
+      await addSummarizedSession(w, w.otherMachine, w.otherPatient);
+      await addSummarizedSession(w, w.orgBMachine, w.orgBPatient);
+      if (scope === "self") return { userId: userId(w, actor) };
+      if (actor === "patient" && scope === "other")
+        return { userId: w.otherPatient };
+      return { userId: w.patient };
+    },
+    onSuccess: (res) => {
+      const rows = asArray(res) as { summary: unknown }[];
+      if (rows.length !== 1 || rows[0].summary === null)
+        throw new Error("Expected the rider's session with its summary");
+    },
+    onFiltered: (res, w, actor, scope) => {
+      const rider = scope === "self" ? userId(w, actor) : w.patient;
+      const rows = asArray(res) as { sessionId: Id<"sessions">; summary: unknown }[];
+      if (rows.length !== 1 || rows[0].summary === null)
+        throw new Error("Expected exactly one session, with its summary");
+      return w.t.run(async (ctx) => {
+        const session = await ctx.db.get(rows[0].sessionId);
+        if (session?.userId !== rider)
+          throw new Error(`History of ${actor} lists another rider's session`);
+      });
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "any rider, in every organisation" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "a rider of their organisation" },
+      { actor: "manager", scope: "own", expect: filtered, note: "the sessions on the machine they manage" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "[] for a rider who rode none of their machines" },
+      { actor: "patient", scope: "self", expect: filtered, note: "their own history" },
+      { actor: "patient", scope: "other", expect: empty, note: "[] for another rider" },
+      { actor: "stranger", scope: "other", expect: empty, note: "[] for a rider they have nothing to do with" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "[] for a rider of another organisation" },
+      { actor: "orgBManager", scope: "foreign", expect: empty, note: "[] for a rider of another organisation" },
+      { actor: "orgBPatient", scope: "foreign", expect: empty, note: "[] for a rider of another organisation" },
+      { actor: "orgBPatient", scope: "self", expect: filtered, note: "their own history, in centre B" },
+    ],
+  },
 ];
+
+/**
+ * A completed auto session of `riderId` on `machineId`, with the final
+ * summary of its record: ten minutes, in a 130-150 bpm zone.
+ */
+async function addSummarizedSession(
+  w: World,
+  machineId: Id<"machines">,
+  riderId: Id<"users">,
+): Promise<Id<"sessions">> {
+  const sessionId = await addSession(w, {
+    machineId,
+    userId: riderId,
+    status: "completed",
+    kind: "auto",
+  });
+  await w.t.run(async (ctx) => {
+    const session = await ctx.db.get(sessionId);
+    await ctx.db.insert("session_summaries_v2", {
+      organizationId: session?.organizationId,
+      sessionId,
+      source: "record",
+      computedAt: NOW,
+      figures: {
+        durationS: 600,
+        samples: 3000,
+        heartRate: { minBpm: 90, meanBpm: 138.5, maxBpm: 152, samples: 2900 },
+        zone: { lowBpm: 130, highBpm: 150, inZoneS: 420, aboveZoneS: 12, belowZoneS: 140 },
+        maxOutputRpm: 27.5,
+        maxMotorRpm: 1369,
+        reference: { maxG: 1.2, maxGRate: 0.02, radiusM: null },
+        legTip: { maxG: 1.5, maxGRate: 0.025, radiusM: null, measured: null },
+        verdicts: [],
+        verdictsOmitted: 0,
+        endReason: "programme_complete",
+        endRule: null,
+        warnings: [],
+      },
+    });
+  });
+  return sessionId;
+}
 
 function summaryBuild(w: World) {
   return (async () => {

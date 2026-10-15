@@ -1,5 +1,9 @@
 import { defineSchema, defineTable } from "convex/server";
 import { recordState } from "./lib/recordStorage";
+import {
+  summaryFiguresValidator,
+  summarySourceValidator,
+} from "./lib/sessionSummary";
 import { v } from "convex/values";
 import {
   machineHealthValidator,
@@ -19,7 +23,9 @@ export const liveStateValidator = v.object({
   motorRpm: v.number(), // measured, motor shaft
   outputRpm: v.number(), // measured, arm (motor / 49.79)
   setpointMotorRpm: v.number(),
-  gLoad: v.number(), // resultant g at the configured radius
+  // Centripetal g at the reference radius, not the resultant felt with
+  // gravity (`SpeedView.g_load`, raspberry-pi/src/training/types.py).
+  gLoad: v.number(),
   safetyAction: v.string(), // "none" | "hold" | "reduce" | "ramp_down" | ...
   driveState: v.optional(v.string()),
   sessionId: v.optional(v.string()),
@@ -424,7 +430,8 @@ export default defineSchema({
   }).index("by_session_and_timestamp", ["sessionId", "timestamp"]),
 
   // Session Summaries - HISTORY of the retired ECG recording mode. Read-only:
-  // nothing computes or stores a summary any more.
+  // nothing computes or stores a summary here any more. The summaries of the
+  // training sessions are in `session_summaries_v2`.
   session_summaries: defineTable({
     sessionId: v.id("sessions"),
     duration: v.number(), // seconds
@@ -443,6 +450,26 @@ export default defineSchema({
     reportFileId: v.optional(v.id("_storage")), // PDF report
     createdAt: v.number(),
   }).index("by_session", ["sessionId"]),
+
+  // The summary of a finished training session (ANH-89), one row per
+  // session, written only by `sessionReports` (internal functions). The
+  // provisional one comes from the 1 Hz telemetry when the session ends
+  // (`source: "telemetry"`); the one of the deposited record replaces it for
+  // good (`source: "record"`). Health data: it is read only through
+  // `sessionReports.getSummary` and `sessionReports.riderHistory`, under the
+  // rights of the session it belongs to (`canAccessSession`).
+  session_summaries_v2: defineTable({
+    organizationId, // Always the session's organisation
+    sessionId: v.id("sessions"),
+    source: summarySourceValidator,
+    computedAt: v.number(),
+    // Why the deposited record could not be summarised, as a code; the
+    // provisional summary then stays. Absent on every other row.
+    recordProblem: v.optional(v.string()),
+    figures: summaryFiguresValidator,
+  })
+    .index("by_session", ["sessionId"])
+    .index("by_organization", ["organizationId"]),
 
   // Training telemetry, ~1 Hz, as the Pi reads it back from the session's
   // local record. One row per (sessionId, t): a point sent twice is stored

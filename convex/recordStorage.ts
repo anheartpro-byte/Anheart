@@ -27,6 +27,8 @@ import {
   uploadMediaType,
   uploadRequest,
 } from "./lib/recordStorage";
+import { SUMMARY_FILES } from "./lib/sessionSummary";
+import { scheduleRecordSummary } from "./sessionReports";
 
 const fileMetadata = v.object({
   id: v.id("session_record_files"),
@@ -482,6 +484,13 @@ export const finishVerification = internalMutation({
       verified: !args.rejection,
       rejection: args.rejection,
     });
+    // The final summary of the session (ANH-89) reads three files only: it
+    // is computed once they are all verified, raw blocks or not.
+    if (
+      !args.rejection &&
+      (SUMMARY_FILES as readonly string[]).includes(file.path)
+    )
+      await scheduleRecordSummary(ctx, file.sessionId);
     return null;
   },
 });

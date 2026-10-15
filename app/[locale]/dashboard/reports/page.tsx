@@ -7,7 +7,15 @@ import { Id } from "@/convex/_generated/dataModel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FileText, Calendar, Clock, User, Cpu, Eye } from "lucide-react";
+import {
+  FileText,
+  FileDown,
+  Calendar,
+  Clock,
+  User,
+  Cpu,
+  Eye,
+} from "lucide-react";
 import { Link } from "@/i18n/navigation";
 
 /** Reports asked for at once: the first page, then each "Show more". */
@@ -85,9 +93,10 @@ interface SessionReportCardProps {
   };
 }
 
-/** One completed session, with a link to its detail page. */
+/** One completed session, with links to its detail page and its report. */
 function SessionReportCard({ session }: SessionReportCardProps) {
   const t = useTranslations("reports");
+  const tReport = useTranslations("sessionReport");
   const locale = useLocale();
 
   const duration = session.endedAt
@@ -102,12 +111,20 @@ function SessionReportCard({ session }: SessionReportCardProps) {
             <FileText className="h-4 w-4 text-muted-foreground" />
             {t("sessionReport")} - {session._id.slice(-8).toUpperCase()}
           </CardTitle>
-          <Link href={`/dashboard/sessions/${session._id}`}>
-            <Button variant="ghost" size="sm">
-              <Eye className="h-4 w-4 mr-2" />
-              {t("view")}
-            </Button>
-          </Link>
+          <div className="flex gap-2">
+            <Link href={`/dashboard/sessions/${session._id}`}>
+              <Button variant="ghost" size="sm">
+                <Eye className="h-4 w-4 mr-2" />
+                {t("view")}
+              </Button>
+            </Link>
+            <Link href={`/dashboard/sessions/${session._id}/report`}>
+              <Button variant="outline" size="sm">
+                <FileDown className="h-4 w-4 mr-2" />
+                {tReport("openReport")}
+              </Button>
+            </Link>
+          </div>
         </div>
       </CardHeader>
       <CardContent>

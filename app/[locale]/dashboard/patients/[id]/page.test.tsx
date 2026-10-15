@@ -48,6 +48,12 @@ vi.mock("@/components/training/PhysiologyCard", async () => ({
     "PhysiologyCard",
   ),
 }));
+// The history card asks its own query, under the rights of each session.
+vi.mock("@/components/training/RiderHistoryCard", async () => ({
+  RiderHistoryCard: (await import("@/test-support/pages")).standIn(
+    "RiderHistoryCard",
+  ),
+}));
 
 /** The page of one patient: who they are, their sessions, and what a manager does to the account. */
 
@@ -131,6 +137,7 @@ describe("patient page: which patient it shows", () => {
     ).toBe("/dashboard/patients");
     expect(screen.queryByRole("button")).toBeNull();
     expect(wasMounted("PhysiologyCard")).toBe(false);
+    expect(wasMounted("RiderHistoryCard")).toBe(false);
   });
 
   it("shows who the patient is", async () => {
@@ -188,6 +195,18 @@ describe("patient page: what each role may do", () => {
         userId: patientId,
         user: rose,
       });
+    },
+  );
+
+  // ANH-89: the history is the server's, under the rights of each session:
+  // every visitor of the page is given it, for this patient.
+  it.each(["admin", "org_admin", "gestionnaire", "user"] as const)(
+    "shows a %s the history and progression of this patient",
+    async (role) => {
+      answer(api.sessions.listSessions, []);
+      await open(role);
+
+      expect(propsOf("RiderHistoryCard")).toEqual({ userId: patientId });
     },
   );
 

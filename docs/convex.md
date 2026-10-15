@@ -108,7 +108,8 @@ Huit tables portent un champ `organizationId` et un index `by_organization` :
 `users` (organisation principale du compte), `machines`, `sessions`,
 `training_telemetry`, `machine_profiles`, `machine_user_permissions`,
 `machine_gestionnaires` et `user_gestionnaires`. Toute table créée ensuite le
-porte aussi, sauf une table **commune à tous les clients**.
+porte aussi, sauf une table **commune à tous les clients** : `training_events`
+et `session_summaries_v2` (ANH-89) le portent, copié de leur séance.
 
 Les tables qui ne le portent pas : `software_releases`, le registre des
 versions, commun à tous les clients et réservé à l'admin Anheart ; et
@@ -358,6 +359,75 @@ table : la machine l'écrit, les tests la lisent. Seuls les événements d'une
 séance y arrivent, ceux de son enregistrement : rien de ce que la console
 noterait hors séance n'est envoyé.
 
+### `session_summaries_v2` : résumé d'une séance d'entraînement (ANH-89)
+
+Une ligne par séance terminée (`completed` ou `failed`) d'entraînement (`auto`
+ou `manual`), écrite par les seules fonctions internes de `sessionReports.ts` :
+`organizationId` (celui de la séance), `sessionId`, `source`, `computedAt`,
+`recordProblem` facultatif, `figures`. Index `by_session` et
+`by_organization`. L'ancienne table `session_summaries` reste en lecture seule
+([plus bas](#historique-de-lancien-mode-denregistrement-ecg-lecture-seule)).
+
+**Deux sources, une seule ligne.**
+
+1. **Provisoire** (`source: "telemetry"`) : quand la machine envoie la fin de
+   la séance, `endTrainingSession` planifie `summarizeTelemetry`, qui lit la
+   télémétrie à 1 Hz (par pages de 1000 points, 22 pages au plus, soit six
+   heures) et les événements `verdict` (par pages de 500, 20 pages au plus).
+   La console n'envoie la fin qu'une fois sa télémétrie acquittée
+   ([raspberry-pi.md, 8.2](raspberry-pi.md#82-dans-quel-ordre)) ; un point
+   arrivé après la fin n'entre pas dans le résumé provisoire.
+2. **Final** (`source: "record"`) : dès que les trois fichiers qu'il lit
+   (`manifest.json`, `ticks.csv`, `events.jsonl`) de l'enregistrement déposé
+   sont vérifiés, `recordStorage.finishVerification` planifie
+   `summarizeRecord`, sans attendre les blocs bruts. Il remplace le résumé
+   provisoire ; un résumé provisoire ne remplace jamais un résumé final.
+
+Les deux calculs sont idempotents : recalculés sur les mêmes lignes ou les
+mêmes fichiers vérifiés (immuables), ils donnent le même résumé, seule
+`computedAt` change. Le calcul final est borné quelle que soit la taille de
+l'enregistrement : le manifeste (2 Mio au plus) est lu entier, `ticks.csv` et
+`events.jsonl` (16 Mio au plus chacun) tranche par tranche de 1 Mio et ligne
+par ligne, et aucun bloc brut n'est ouvert, qu'il y en ait 3 ou 36 000. Un
+enregistrement illisible (fichier absent du stockage, trop grand, manifeste
+qui n'est pas un objet JSON, octets qui ne sont pas de l'UTF-8, en-tête de
+`ticks.csv` sans les colonnes lues) laisse le résumé provisoire, avec la raison
+dans `recordProblem` (un code, jamais un contenu). La suppression d'un dépôt
+(`recordStorage.remove`, rétention) ne supprime pas le résumé, comme elle
+laisse la séance et sa télémétrie ; la durée de conservation relève d'ANH-172.
+
+**Ce que contient `figures`, et d'où vient chaque définition**
+(`convex/lib/sessionSummary.ts` les cite une par une) :
+
+| Champ | Définition | Source de la définition |
+|---|---|---|
+| `durationS` | `t` du dernier tic de séance (`t > 0`), horloge monotone de l'enregistrement | [enregistrement.md, Tics](enregistrement.md#tics-5-hz) |
+| `heartRate` | min, moyenne arithmétique, max de `hr_confirmed` sur les tics qui la portent (provisoire : `bpm` des points) | `TelemetrySnapshot.live_bpm` (`raspberry-pi/src/training/types.py`), écrit par `_row` (`raspberry-pi/src/record/session.py`) |
+| `zone` | temps dans, au-dessus et en dessous de `[zone_low_bpm, zone_high_bpm]`, bornes comprises : chaque tic ajoute le temps écoulé depuis le tic précédent selon sa FC ; un tic sans FC confirmée ne compte nulle part ; `null` sans programme (séance manuelle) | `TrainingRuntime._accumulate` (`raspberry-pi/src/training/runtime.py`), `ZoneCounters` (`types.py`) |
+| `maxOutputRpm`, `maxMotorRpm` | maximum de la vitesse mesurée du bras et du moteur, en valeur absolue | colonnes `output_rpm`, `measured_motor_rpm` |
+| `reference.maxG`, `legTip.maxG` | maximum de `g_reference` et `g_leg_tip` : accélération **centripète** ω²r/9,80665 au rayon de référence et à la pointe du pied, pas la résultante avec la pesanteur (provisoire : `gLoad`, au rayon de référence seulement) | `output_rpm_to_g` (`raspberry-pi/src/units.py`) |
+| `reference.maxGRate`, `legTip.maxGRate` | variation de g max : sur chaque fenêtre de 1 s (5 intervalles, 6 tics consécutifs) dont tous les tics sont jugés (mesure fraîche, pas de silence, ni `QUICK_STOP` ni `GO_SILENT`, variateur `OPERATION_ENABLED`, vitesse moteur au moins la consigne minimale du programme, 55 tr/min sans programme), \|g fin − g début\| / durée ; `null` dans le résumé provisoire | `arm_windows` (`simulation/invariants.py`) ; 55 tr/min : `min_run_motor_rpm` de `raspberry-pi/config/motion_limits.json` |
+| `radiusM`, `legTip.measured` | rayons et rayon de la pointe mesuré ou estimé, si le manifeste porte la géométrie (la simulation ; la console écrit `geometry: null`) | [enregistrement.md, Contexte commun](enregistrement.md#contexte-commun-aux-deux-producteurs) |
+| `verdicts`, `verdictsOmitted` | chaque règle de sécurité apparue sur un tic de séance, dans l'ordre d'apparition, avec l'action la plus sévère vue avec elle (32 règles gardées, les autres comptées) ; provisoire : les événements `verdict` | `rules_seen` (`simulation/invariants.py`), ordre de `SafetyAction` (`types.py`) |
+| `endReason`, `endRule` | `end_reason` du manifeste (provisoire : `endReason` de la séance) ; pour une fin `safety_verdict`, la règle du premier tic `ending` ou `finished` | `EndReason` (`raspberry-pi/src/training/runtime.py`) |
+| `warnings` | `record_degraded` (l'enregistrement dit lui-même qu'il lui manque des données), `lines_skipped` (lignes illisibles ignorées), `telemetry_truncated` | [enregistrement.md, Événements](enregistrement.md#événements) |
+
+Deux écarts connus avec la console, vérifiés le 14 octobre 2026 sur quatre
+scénarios de la simulation (`auto_jog_150_nominal`,
+`auto_jog_150_leg_tip_estimate`, `hr_critical`, `estop_manual_27`) : le temps
+en zone est classé ici sur la FC confirmée que l'enregistrement contient, la
+console classe la FC filtrée de son suivi (`HeartRateTracker.usable`), qui
+n'est pas enregistrée (1 s d'écart sur 1212 s pour `hr_critical`, aucun pour
+`auto_jog_150_nominal`) ; la variation de g est calculée sur les colonnes g
+écrites à quatre décimales, la simulation sur la vitesse moteur (écart au
+quatrième chiffre). Les maxima de vitesse et de g, les règles et la règle de
+fin y sont identiques.
+
+**Pas encore dans le résumé** : le résultat du pré-vol (ANH-142) et le retour
+du passager (ANH-146), que rien n'enregistre aujourd'hui. Chacun sera un champ
+de `figures` calculé par `convex/lib/sessionSummary.ts` ; le rapport dit déjà
+qu'ils manquent.
+
 ### Deux horloges
 
 Un Raspberry Pi n'a pas d'horloge sauvegardée. Démarré sans réseau, il date ce
@@ -468,7 +538,7 @@ pour une erreur d'âge, et le site écarte déjà ce cas de l'affichage.
 | Table | Contenu |
 |---|---|
 | `ecg_data` | Lots d'ECG **déjà traité** sur le Pi (`values` en mV à `sampleRate` Hz) et métriques par canal (`heartRate`, `hrv`, `quality`…), écrits autrefois par l'enregistreur. **Plus aucune fonction n'y écrit.** Les lectures de `ecgData.ts` restent pour consulter l'existant. La console locale n'a jamais envoyé ces lots. |
-| `session_summaries` | Résumé calculé autrefois à la fin d'une séance d'enregistrement (FC moyenne/min/max, HRV, ECG sous-échantillonné). **Plus rien n'en calcule ni n'en écrit** ; `getSummary` et `getSummaryWithEcg` lisent l'existant. Le résumé d'une séance d'entraînement viendra de son enregistrement (ANH-89). |
+| `session_summaries` | Résumé calculé autrefois à la fin d'une séance d'enregistrement (FC moyenne/min/max, HRV, ECG sous-échantillonné). **Plus rien n'en calcule ni n'en écrit** ; `getSummary` et `getSummaryWithEcg` lisent l'existant. Le résumé d'une séance d'entraînement est dans `session_summaries_v2` (ANH-89). |
 
 ### `machine_heartbeats`
 
@@ -805,7 +875,7 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine, au format attendu par le Pi. |
 | `markTrainingStarted` | `pending` → `active`, `startedAt` = maintenant, machine `in_session`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Refuse une séance d'une autre machine ou non `pending`. |
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
-| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Ne planifie rien : aucun résumé n'est calculé à la fin d'une séance. |
+| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Planifie le résumé provisoire de la séance (`sessionReports.summarizeTelemetry`, ANH-89) ; rien d'autre. |
 | `getTrainingStatus` | `{status, active, stopRequested}`. `active` vaut vrai pour une séance `active` **et** pour une séance `interrupted` : le Pi arrête sa séance sur `active: false`, et Convex ne demande jamais l'arrêt d'une séance faute d'en avoir des nouvelles. |
 | `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; pour une séance qui a un axe machine, un point daté hors de la séance est compté dans `rejected` ; ni l'un ni l'autre n'est écrit. Retourne `{stored, duplicates, rejected}`. |
 | `storeEvents` | La même chose pour les événements : un événement est un `(sessionId, seq)`. Retourne `{stored, duplicates, rejected}`. |
@@ -1011,6 +1081,21 @@ ce pratiquant, et rien n'est montré. Reste à faire, dans un ticket de suite :
 pour `take`, la fusion bornée des index de chaque machine (le problème de
 curseur ne s'y pose pas), et une borne de lecture imposée par le serveur à la
 page du gestionnaire.
+
+### `sessionReports.ts` (résumés de séance et historique, ANH-89)
+
+Le résumé est une donnée de santé : il n'est lu que par ces deux fonctions,
+sous les droits de sa séance, et rien de lui n'est écrit dans les journaux.
+
+| Fonction | Autorisation | Rôle |
+|---|---|---|
+| `getSummary` | `canAccessSession` : pratiquant, accès à la machine dans l'organisation de la séance, admin Anheart | Le résumé de la séance (`provisional`, `computedAt`, `recordProblem`, `figures`), ou `null` : séance inconnue, non lisible par l'appelant, ou sans résumé encore. |
+| `riderHistory` | connecté | Les séances terminées (`completed`, `failed`) d'entraînement d'un pratiquant que l'appelant peut lire, les plus récentes d'abord, 100 au plus, avec les chiffres clés de leur résumé (durée, temps en zone, zone, FC moyenne et max, g max de référence) ou `null` s'il n'est pas encore calculé. Ce sont les séances de `listSessions` pour ce pratiquant (`readableSessions` par statut, puis `canAccessSession` sur chacune) : un gestionnaire lit celles des machines qu'il gère, un pratiquant les siennes, une autre organisation rien. |
+
+Fonctions internes : `summarizeTelemetry` et `summarizeRecord` (actions),
+`telemetryInput`, `telemetryPage`, `verdictPage`, `recordInput` (queries),
+`storeSummary` et `noteRecordProblem` (mutations). La table et les définitions
+sont décrites [au §2](#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89).
 
 ### `ecgData.ts` et `sessionSummaries.ts` (historique, lecture seule)
 
@@ -1932,7 +2017,7 @@ régressions locales exécutables.
 | 4 | **Séances locales sans pratiquant.** Le Pi n'envoie ni `userId` ni `subjectLabel` à `/training/local` (le champ existe côté Convex). | Une séance démarrée à la machine apparaît sans pratiquant (« Unknown » dans les listes). Le patient ne la voit pas dans ses séances. |
 | 5 | **`/api/machine/roster` inutilisé.** | La liste des pratiquants autorisés n'arrive pas sur la console locale. |
 | 6 | **Libellés d'actions de sécurité.** Le Pi envoie `freeze`, `quick_stop`, `go_silent` ; les traductions du site connaissent `hold`, `stop`, `estop`. Le commentaire du schéma cite aussi `"hold"`. | Ces trois actions s'affichent en valeur brute. |
-| 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG, pas de résumé et pas de rapport pour une séance auto/manuelle : le résumé et le rapport viendront de l'enregistrement de séance (ANH-89). |
+| 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG pour une séance auto/manuelle. Son résumé et son rapport existent depuis ANH-89, calculés sur la télémétrie puis sur l'enregistrement déposé, sans ECG. |
 | 8 | **Logiciel d'invitation et d'amorçage ANH-157.** | Action Clerk, liaison par webhook à adresse vérifiée et premier admin `org:admin`. La configuration et la recette de l'environnement sont requises avant mise en production (§8). |
 | 9 | **Corrigé par ANH-148 : historique borné.** | Heartbeats conservés 24 h, santé agrégée par 5 min conservée 90 jours. Purge quotidienne et par machine active, sans purge de télémétrie. |
 | 10 | **Tests automatisés Convex présents**, dont authentification machine et confidentialité des séances ; déploiement ANH-82 encore requis. | `npm run test:convex` rejoue les scénarios synthétiques ; ce n'est pas une preuve de production. |
@@ -1973,7 +2058,9 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/httpRoutes.test.ts` | Les 10 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
 | `convex/journalTrace.test.ts` | Le test d'acceptation de la synchronisation, côté Convex : il rejoue, dans l'ordre et aux mêmes instants, **les requêtes que la console du Pi a réellement envoyées** pendant son propre test d'acceptation (`contracts/fixtures/journal-sync-trace.json` : séance, coupure réseau à 3 min, console tuée à 5 min, retour du réseau à 8 min, machine datée de 1970). Convex doit répondre à chacune comme la trace l'a noté, et détenir à la fin chaque point 1 Hz et chaque événement une seule fois, et la fin avec sa raison. Le test du Pi échoue si le fichier n'est plus ce que la console envoie. |
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
-| `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance, et les deux mutations de migration. |
+| `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance que le résumé provisoire d'ANH-89, et les deux mutations de migration. |
+| `convex/sessionSummary.test.ts` | Les chiffres d'un résumé (ANH-89) sur des enregistrements de fixture écrits comme la console les écrit : durée, FC absente ou présente, temps en zone et ses bornes, vitesse, g aux deux rayons avec et sans géométrie, fenêtres de variation de g et chaque raison de ne pas juger un tic, verdicts et règle de fin, colonnes trouvées par leur nom, lignes illisibles, fichiers refusés. |
+| `convex/sessionReports.test.ts` | Le résumé de bout en bout (ANH-89) : provisoire à la fin, final après le dépôt des trois fichiers, jamais remplacé par le provisoire, idempotent, enregistrement illisible, séance non terminée ou de l'ancien mode ; et qui lit le résumé et l'historique d'un pratiquant. |
 | `convex/rateLimits.test.ts`, `convex/rateLimitsSource.test.ts` | La limitation de débit et la taille des corps (ANH-166) : chaque limite du contrat partagé sur sa route (sa réserve, puis 429 avec l'attente, puis de nouveau acceptée, une autre machine jamais retenue), rien d'écrit pour un heartbeat refusé, la limite avant le corps, la demande d'arrêt jamais limitée, **1000 heartbeats en 10 s** limités sans erreur (2 acceptés, 998 refusés 429), les tailles (16 Kio exactement accepté, un octet de plus refusé, octets et non caractères, `Content-Length` trop grand ou trop petit), 601 points refusés avant d'en lire un, le plus grand lot valide accepté ; par compte, 60 écritures puis `rate_limited`, un refus rend son jeton, 5 lancements par minute, l'arrêt jamais limité, et **chaque** mutation et action publique de la matrice refusée une fois les écritures de son acteur épuisées, l'arrêt excepté. Le second fichier remplace `contracts/machine-api.json` par un autre et vérifie que les limites et les tailles le suivent, et que le module refuse de se charger sans la limite ou la taille d'une route qu'il borne. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines`. |
@@ -2099,7 +2186,9 @@ doit être vérifié avant les autres fichiers. La vérification asynchrone lit 
 octets Storage et compare taille et SHA-256 ; elle n'efface jamais un objet dont
 la réservation n'est pas propriétaire. `recordStorage.list` et le téléchargement
 JWT `/api/records/download` contrôlent l'utilisateur et l'accès à la machine.
-La suppression exige `admin` ou `org_admin`. Les limites, la reprise, la purge
+La suppression exige `admin` ou `org_admin`. Quand le manifeste, `ticks.csv`
+et `events.jsonl` d'une séance sont tous vérifiés, son résumé final est
+calculé ([`session_summaries_v2`](#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89)). Les limites, la reprise, la purge
 et les réservations conservées sont détaillées dans
 [enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex).
 

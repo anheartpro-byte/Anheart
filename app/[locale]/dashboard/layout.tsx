@@ -27,9 +27,11 @@ export default function DashboardLayout({
   return (
     <SidebarProvider defaultOpen={defaultOpen}>
       <AppSidebar />
-      <SidebarInset className="flex flex-col h-screen overflow-hidden relative">
+      {/* Printed (a session report, ANH-89): the page alone, at full height.
+          The sidebar is hidden by app/globals.css, the header by itself. */}
+      <SidebarInset className="flex flex-col h-screen overflow-hidden relative print:h-auto print:overflow-visible">
         <LightRays
-          className="absolute inset-0 pointer-events-none z-0"
+          className="absolute inset-0 pointer-events-none z-0 print:hidden"
           count={4}
           color="rgba(99, 102, 241, 0.08)"
           blur={60}
@@ -37,7 +39,7 @@ export default function DashboardLayout({
           length="50vh"
         />
         <Header />
-        <main className="flex-1 overflow-y-auto p-6 relative z-10">
+        <main className="flex-1 overflow-y-auto p-6 relative z-10 print:overflow-visible print:p-0">
           <OrganizationGate>{children}</OrganizationGate>
         </main>
       </SidebarInset>
