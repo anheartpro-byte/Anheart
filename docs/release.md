@@ -360,8 +360,11 @@ commit sur Convex ou sur Vercel ne change pas ce qui est servi.
 
 À l'étape 5, une adresse peut encore répondre avec le déploiement précédent,
 même si sa version ou sa page est identique : la pipeline compare aussi le SHA
-servi par `commit.txt`. Si le fichier manque ou nomme un autre commit, la
-vérification échoue et la reprise repart de ce contrôle après le déploiement.
+servi par `commit.txt`. Si, après six essais, le fichier manque ou nomme un
+autre commit, « Re-run failed jobs » relance la vérification, pas le déploiement
+déjà réussi. Si l'adresse a pu tarder à basculer, relancer ce contrôle suffit ;
+si elle sert toujours un autre SHA, redéployer avec « Re-run all jobs » ou le
+bouton de production correspondant.
 
 | Où la chaîne s'arrête | Ce qui est en place | Quoi faire |
 |---|---|---|

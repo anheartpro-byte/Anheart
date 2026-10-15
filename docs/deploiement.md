@@ -1168,8 +1168,8 @@ complet, en minuscules, du checkout, suivi d'un saut de ligne, dans
 ne contiennent rien d'autre et ne sont jamais commitées. Elles rendent le même
 fichier accessible à `/viewer/commit.txt` : la première depuis les fichiers
 publics servis par le CDN, la seconde depuis le montage `/viewer` de `app.py`.
-Ce montage lit `ROOT / "viewer"` (`deploy/simulation-vercel/app.py:50`) ;
-`ROOT` désigne `simulation/` (`simulation/live.py:43-44`). La pipeline exige
+Ce montage lit `ROOT / "viewer"` dans `deploy/simulation-vercel/app.py` ;
+`ROOT` désigne `simulation/` dans `simulation/live.py`. La pipeline exige
 ensuite le SHA exact, y compris si la page du visualiseur est identique à celle
 du déploiement précédent.
 

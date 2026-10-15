@@ -364,6 +364,10 @@ test("S-1 each button writes only the full checkout SHA to its deployed commit f
           return result.stdout.trim();
         };
         git("init", "--quiet");
+        git("config", "gc.auto", "0");
+        git("config", "gc.autoDetach", "false");
+        git("config", "maintenance.auto", "false");
+        git("config", "maintenance.autoDetach", "false");
         git("add", "-A");
         git("commit", "--quiet", "-m", "fixture");
         const head = git("rev-parse", "HEAD");

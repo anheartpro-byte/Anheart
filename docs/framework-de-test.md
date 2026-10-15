@@ -2447,10 +2447,9 @@ n'appelle Vercel. Il vérifie :
 * que rien n'affiche ni n'envoie ce que `vercel pull` écrit sur le runner ;
 * les commandes passées à la CLI pour chaque cible, le refus d'un déploiement
   qui échoue ou ne rend pas d'adresse, et le contenu du résumé ;
-* **S-1** que les deux boutons écrivent le SHA complet du checkout dans le bon
-  fichier avant la construction ou le déploiement, sans env, secret ou autre
-  modification du dépôt temporaire (`S-1 each button writes only the full
-  checkout SHA to its deployed commit files`) ;
+* que les deux boutons écrivent le SHA complet du checkout dans le bon fichier
+  avant la construction ou le déploiement, sans variable de secret ni autre
+  modification du dépôt temporaire ;
 * que les jobs de déploiement des deux workflows exécutent les mêmes scripts :
   ils ne diffèrent que par trois variables, par la branche du checkout et par
   ce que chaque bouton demande avant de déployer.
@@ -2550,12 +2549,10 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
   machine sont exigés, la réponse de l'ancien backend étant refusée ;
 * que le site et la simulation sont déployés par les jobs de
   `deploy-production.yml` et par aucune copie, le site d'abord, et que chacun
-  est ensuite vérifié à son adresse de production ; **S-1** vérifie que le SHA
-  servi correspond au commit de la release, refuse un marqueur absent ou
-  différent même avec une page identique, refuse les versions du site qui ne
-  sont pas un mot entier et garde la comparaison du visualiseur octet pour
-  octet et la liste des scénarios (`S-1 the site and simulation must serve this
-  commit, with the exact site version and viewer page`) ;
+  est ensuite vérifié à son adresse de production : la release exige le SHA
+  exact du commit, même si la page n'a pas changé ; elle refuse les versions du
+  site qui ne sont pas un mot entier et exige que le visualiseur serve la page
+  de ce commit, octet pour octet, et la liste des scénarios ;
 * que l'étape des machines n'appelle rien qui puisse en atteindre une, et
   redonne les commandes de [deploiement.md, section 7.6](deploiement.md#76-arrêter-mettre-à-jour) ;
 * **les permissions de chaque job**, une à une : un seul peut écrire dans le
