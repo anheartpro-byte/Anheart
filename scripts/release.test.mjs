@@ -245,24 +245,34 @@ function fixture(t, history = HISTORY) {
      * `createExit` makes `gh pr create` fail; `openPr` is the address of a
      * pull request already open for the branch.
      */
-    run(args, { checks = GREEN, apiExit = "0", statusExit = "0", createExit = "0", openPr = "", env = {} } = {}) {
+    run(args, {
+      checks = GREEN,
+      apiExit = "0",
+      statusExit = "0",
+      createExit = "0",
+      openPr = "",
+      env = {},
+      unsetEnv = [],
+    } = {}) {
       rmSync(log, { force: true });
       rmSync(`${log}.body`, { force: true });
+      const childEnv = {
+        ...GIT_ENV,
+        PATH: `${bin}:${process.env.PATH}`,
+        FAKE_GH_LOG: log,
+        FAKE_GH_CHECKS: checks,
+        FAKE_GH_API_EXIT: apiExit,
+        FAKE_GH_STATUSES: statuses,
+        FAKE_GH_STATUS_EXIT: statusExit,
+        FAKE_GH_CREATE_EXIT: createExit,
+        FAKE_GH_OPEN_PR: openPr,
+        ...env,
+      };
+      for (const key of unsetEnv) delete childEnv[key];
       const result = spawnSync("bash", [SCRIPT, ...args], {
         cwd: work,
         encoding: "utf8",
-        env: {
-          ...GIT_ENV,
-          PATH: `${bin}:${process.env.PATH}`,
-          FAKE_GH_LOG: log,
-          FAKE_GH_CHECKS: checks,
-          FAKE_GH_API_EXIT: apiExit,
-          FAKE_GH_STATUSES: statuses,
-          FAKE_GH_STATUS_EXIT: statusExit,
-          FAKE_GH_CREATE_EXIT: createExit,
-          FAKE_GH_OPEN_PR: openPr,
-          ...env,
-        },
+        env: childEnv,
       });
       return {
         status: result.status,
@@ -890,33 +900,112 @@ function merged(t) {
   return fx;
 }
 
+test("S-3 --pipeline-run only skips checks from the GITHUB_RUN_ID that launched tag", (t) => {
+  const fx = merged(t);
+  const before = fx.state();
+  const missingIds = [
+    { received: "absente", unsetEnv: ["GITHUB_RUN_ID"] },
+    { received: "vide", env: { GITHUB_RUN_ID: "" } },
+    { received: "78", env: { GITHUB_RUN_ID: "78" } },
+  ];
+  for (const missing of missingIds) {
+    for (const dryRun of [false, true]) {
+      const args = ["tag", ...(dryRun ? ["--dry-run"] : []), "--pipeline-run", "77"];
+      const result = fx.run(args, { checks: PUSHED + PIPELINE, env: missing.env, unsetEnv: missing.unsetEnv });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(
+        result.stderr,
+        new RegExp(
+          `release\\.sh : --pipeline-run 77 ne vaut que dans l'exécution GitHub Actions qu'il désigne \\(GITHUB_RUN_ID reçu : ${missing.received}\\)`,
+        ),
+      );
+      assert.deepEqual(result.gh, []);
+      assert.equal(fx.state(), before);
+    }
+  }
+
+  const dry = fx.run(["tag", "--dry-run", "--pipeline-run", "77"], {
+    checks: PUSHED + PIPELINE,
+    env: { GITHUB_RUN_ID: "77" },
+  });
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(fx.state(), before);
+  const done = fx.run(["tag", "--pipeline-run", "77"], {
+    checks: PUSHED + PIPELINE,
+    env: { GITHUB_RUN_ID: "77" },
+  });
+  assert.equal(done.status, 0, done.stderr);
+  assert.equal(git(fx.origin, "tag", "-l"), "cloud-0.1.0\npi-0.1.0\nweb-0.1.0");
+
+  const pipelineRunRow = real("docs/release.md").split("\n").find((line) => line.startsWith("| `--pipeline-run"));
+  assert.ok(pipelineRunRow, "docs/release.md has no --pipeline-run table row");
+  assert.match(pipelineRunRow, /GITHUB_RUN_ID/);
+  assert.match(pipelineRunRow, /lancement à la main/);
+  assert.match(pipelineRunRow, /autre exécution/);
+});
+
+test("ANH-219 failed pipeline executions on the same commit block one another", (t) => {
+  const fx = merged(t);
+  const before = fx.state();
+  const failedCheck = (run) => `3. Tags de release\tcompleted\tfailure\t${jobOf(run, 3)}\n`;
+  const runningCheck = (run) => `3. Tags de release\tin_progress\t\t${jobOf(run, 3)}\n`;
+
+  refuses(
+    fx.run(["tag", "--pipeline-run", "77"], {
+      checks: PUSHED + PIPELINE + failedCheck(78),
+      env: { GITHUB_RUN_ID: "77" },
+    }),
+    /main n'est pas vert[\s\S]*3\. Tags de release : completed failure/,
+  );
+  refuses(
+    fx.run(["tag", "--pipeline-run", "78"], {
+      checks: PUSHED + runningCheck(78) + failedCheck(77),
+      env: { GITHUB_RUN_ID: "78" },
+    }),
+    /main n'est pas vert[\s\S]*3\. Tags de release : completed failure/,
+  );
+  assert.equal(fx.state(), before);
+});
+
 test("ANH-219 tag run by the pipeline does not judge the checks of its own run, and judges every other", (t) => {
   const fx = merged(t);
   // Without the option, the job that runs the script is a check in progress like any other.
   refuses(fx.run(["tag"], { checks: PUSHED + PIPELINE }), /main n'est pas vert[\s\S]*3\. Tags de release : in_progress/);
-  // The number of another run sets nothing aside: neither run 78, nor run 7, nor run 771.
+  // Another run number cannot be used to set aside any of the current run's checks.
   for (const other of ["78", "7", "771"]) {
-    refuses(fx.run(["tag", "--pipeline-run", other], { checks: PUSHED + PIPELINE }), /main n'est pas vert[\s\S]*3\. Tags de release : in_progress/);
+    refuses(
+      fx.run(["tag", "--pipeline-run", other], { checks: PUSHED + PIPELINE, env: { GITHUB_RUN_ID: "77" } }),
+      /--pipeline-run \d+ ne vaut que dans l'exécution GitHub Actions qu'il désigne \(GITHUB_RUN_ID reçu : 77\)/,
+    );
   }
   // A check of another run still decides: a deployment button that waits, a gate of the push that failed.
   const button = `Déployer le site (production)\twaiting\t\t${jobOf(90, 1)}\n`;
-  refuses(fx.run(["tag", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE + button }), /main n'est pas vert[\s\S]*Déployer le site \(production\) : waiting/);
+  refuses(
+    fx.run(["tag", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE + button, env: { GITHUB_RUN_ID: "77" } }),
+    /main n'est pas vert[\s\S]*Déployer le site \(production\) : waiting/,
+  );
   const red = PUSHED.replace("web\tcompleted\tsuccess", "web\tcompleted\tfailure");
-  refuses(fx.run(["tag", "--pipeline-run", "77"], { checks: red + PIPELINE }), /main n'est pas vert[\s\S]*web : completed failure/);
+  refuses(
+    fx.run(["tag", "--pipeline-run", "77"], { checks: red + PIPELINE, env: { GITHUB_RUN_ID: "77" } }),
+    /main n'est pas vert[\s\S]*web : completed failure/,
+  );
   // The pipeline does not vouch for itself: a gate that passed in its own run only is a gate that is missing.
   const inside = GATES.map((gate, index) => `${gate}\tcompleted\tsuccess\t${jobOf(77, index + 10)}\n`).join("");
   refuses(
-    fx.run(["tag", "--pipeline-run", "77"], { checks: inside + PIPELINE + VERCEL }),
+    fx.run(["tag", "--pipeline-run", "77"], { checks: inside + PIPELINE + VERCEL, env: { GITHUB_RUN_ID: "77" } }),
     /main n'est pas vert[\s\S]*gates absentes ou non réussies : pi-gate simulation-gate convex-tests web audit docs/,
   );
-  refuses(fx.run(["tag", "--pipeline-run", "77"], { checks: inside + PIPELINE }), /n'a pas d'autre vérification que celles de l'exécution 77/);
+  refuses(
+    fx.run(["tag", "--pipeline-run", "77"], { checks: inside + PIPELINE, env: { GITHUB_RUN_ID: "77" } }),
+    /n'a pas d'autre vérification que celles de l'exécution 77/,
+  );
   assert.equal(git(fx.origin, "tag", "-l"), "");
 
   const before = fx.state();
-  const dry = fx.run(["tag", "--dry-run", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE });
+  const dry = fx.run(["tag", "--dry-run", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE, env: { GITHUB_RUN_ID: "77" } });
   assert.equal(dry.status, 0, dry.stderr);
   assert.equal(fx.state(), before);
-  const done = fx.run(["tag", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE });
+  const done = fx.run(["tag", "--pipeline-run", "77"], { checks: PUSHED + PIPELINE, env: { GITHUB_RUN_ID: "77" } });
   assert.equal(done.status, 0, done.stderr);
   assert.match(
     done.stdout,
@@ -938,12 +1027,12 @@ test("ANH-219 tag refuses a main that is no longer at the commit the pipeline te
   // Only a whole commit and a run number are read, and only by tag.
   refuses(fx.run(["tag", "--expect-commit", main.slice(0, 12)]), /commit invalide après --expect-commit/);
   refuses(fx.run(["tag", "--expect-commit", "main"]), /commit invalide après --expect-commit/);
-  refuses(fx.run(["tag", "--pipeline-run", "77/job"]), /numéro d'exécution invalide après --pipeline-run/);
-  refuses(fx.run(["tag", "--pipeline-run", ""]), /numéro d'exécution invalide après --pipeline-run/);
-  refuses(fx.run(["tag", "--pipeline-run"]), /valeur manquante après --pipeline-run/);
+  refuses(fx.run(["tag", "--pipeline-run", "77/job"], { env: { GITHUB_RUN_ID: "77" } }), /numéro d'exécution invalide après --pipeline-run/);
+  refuses(fx.run(["tag", "--pipeline-run", ""], { env: { GITHUB_RUN_ID: "77" } }), /numéro d'exécution invalide après --pipeline-run/);
+  refuses(fx.run(["tag", "--pipeline-run"], { env: { GITHUB_RUN_ID: "77" } }), /valeur manquante après --pipeline-run/);
   for (const step of ["prepare", "pr"]) {
     refuses(fx.run([step, "--expect-commit", main]), /--expect-commit ne s'applique qu'à tag/);
-    refuses(fx.run([step, "--pipeline-run", "77"]), /--pipeline-run ne s'applique qu'à tag/);
+    refuses(fx.run([step, "--pipeline-run", "77"], { env: { GITHUB_RUN_ID: "77" } }), /--pipeline-run ne s'applique qu'à tag/);
   }
   assert.equal(git(fx.origin, "tag", "-l"), "");
   // At the commit that was tested, with what a runner has for an identity: a tagger, and no author.

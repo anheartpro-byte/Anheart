@@ -362,6 +362,7 @@ commit sur Convex ou sur Vercel ne change pas ce qui est servi.
 |---|---|---|
 | Étape 0, 1 ou 2 (demande refusée, test en échec, alerte ouverte) | Rien n'a été écrit | Corriger. Une panne passagère (runner, réseau) : « Re-run failed jobs ». Un défaut du code ou une alerte : une PR, donc un nouveau commit de `main` et une nouvelle exécution |
 | Étape 3, `scripts/release.sh tag` refuse | Aucun tag : il les pose tous ou aucun | Lire son message. Avis indépendant absent : le faire poser sur le candidat. Une vérification d'une **autre** exécution du même commit en échec ou en cours : voir [section 4](#la-pipeline-de-release-et-le-script). Puis « Re-run failed jobs » |
+| Étape 3, deux exécutions de la pipeline échouent sur le même commit | Les vérifications en échec de chaque exécution empêchent `tag` de reprendre l'autre ; une nouvelle exécution voit les deux | « Re-run failed jobs » sur l'une est refusé par `tag` à cause des vérifications en échec de l'autre, et inversement ; une nouvelle exécution est refusée par les deux. Dans l'onglet Actions, supprimer une exécution (« Delete workflow run »), puis lancer « Re-run failed jobs » sur l'autre |
 | Les tags sont posés, Convex n'est pas déployé | Les tags sont sur `origin`, la production est inchangée | Rien n'est cassé : l'ancien site tourne contre l'ancien Convex. Corriger la cause (secret absent, « Mauvaise clé », schéma refusé par les données : `convex deploy` ne modifie alors rien), puis « Re-run failed jobs » : l'étape 4 repart, les tags ne sont pas retouchés |
 | Convex est déployé, le site ne l'est pas | Le nouveau Convex sert l'ancien site : des pages de l'ancien site échouent ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production), point 2) | **Le plus urgent des cas.** Si l'étape 4 a échoué sur une de ses vérifications d'après déploiement, ou l'étape 5 sur une panne : « Re-run failed jobs » (redéployer le même code sur Convex ne change rien). Si la reprise ne passe pas : déployer le site par le bouton « Déployer en production (main) », qui ne dépend pas de la pipeline |
 | Le site est déployé, la simulation ne l'est pas | Convex et le site sont à jour ; la simulation hébergée sert l'ancienne version | Sans urgence : elle ne lit aucune donnée. « Re-run failed jobs », ou le bouton de production avec `simulation` |
@@ -661,7 +662,7 @@ GitHub Actions, avec deux options qu'elle est seule à passer :
 | Option | Effet |
 |---|---|
 | `--expect-commit <SHA>` | `tag` refuse si `origin/main` n'est plus à ce commit, celui que la pipeline a testé : aucun tag ne va sur un commit qu'elle n'a pas testé. |
-| `--pipeline-run <numéro>` | Les vérifications de cette exécution de GitHub Actions ne sont pas jugées. Le job qui lance `tag` est lui-même une vérification du commit, en cours tant que le script tourne : sans cette option, `tag` se refuserait lui-même. Rien n'est perdu : les étapes précédentes de cette exécution ont dû réussir pour que ce job démarre. |
+| `--pipeline-run <numéro>` | Le numéro doit être celui de l'exécution GitHub Actions qui lance `tag` (`GITHUB_RUN_ID`) : le script refuse toute autre valeur. Un lancement à la main ne peut pas s'en servir pour éviter de juger les vérifications d'une autre exécution. Les vérifications de cette exécution ne sont pas jugées : le job qui lance `tag` est lui-même une vérification du commit, en cours tant que le script tourne, et les étapes précédentes ont dû réussir pour que ce job démarre. |
 
 Le reste ne change pas, et deux conséquences sont à connaître :
 
@@ -676,7 +677,8 @@ Le reste ne change pas, et deux conséquences sont à connaître :
   à 6 sont ignorés (`skipped`). Une exécution en échec, annulée ou encore en
   cours fait refuser `tag`. Avant une release réelle, faire réussir
   l'exécution à blanc précédente (« Re-run failed jobs ») ou la supprimer
-  (« Delete workflow run »).
+  (« Delete workflow run »). Si deux exécutions échouées se bloquent sur le
+  même commit, voir [Échec et reprise](#échec-et-reprise).
 
 Une exécution se reconnaît à l'adresse de ses vérifications
 (`.../actions/runs/<numéro>/job/...`).
