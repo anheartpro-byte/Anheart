@@ -1,5 +1,17 @@
+// Read workflow concurrency settings for ci-workflow.test.mjs and
+// analysis-workflows.test.mjs. The evaluator accepts `${{ ... }}` expressions
+// in values, dotted context properties, `||`, and `==` with single-quoted
+// strings. An unsupported expression form throws and fails the test.
+
 import assert from "node:assert/strict";
 
+/**
+ * Evaluate a dotted context property, `||`, or equality with a single-quoted
+ * string.
+ * @param {string} source
+ * @param {Record<string, unknown>} context
+ * @returns {unknown}
+ */
 export const evaluateExpression = (source, context) => {
   const expression = source.trim();
   const equality = /^([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\s*==\s*'([^']*)'$/.exec(expression);
@@ -17,6 +29,12 @@ export const evaluateExpression = (source, context) => {
   return expression.split(".").reduce((value, part) => value?.[part], context);
 };
 
+/**
+ * Evaluate a literal or a string containing `${{ ... }}` expressions.
+ * @param {string} source
+ * @param {Record<string, unknown>} context
+ * @returns {unknown}
+ */
 export const evaluateWorkflowValue = (source, context) => {
   if (source === "true") return true;
   if (source === "false") return false;
@@ -32,6 +50,10 @@ export const evaluateWorkflowValue = (source, context) => {
   return result;
 };
 
+/** Read the top-level concurrency fields from a workflow source.
+ * @param {string} source
+ * @returns {Record<string, string>}
+ */
 export const concurrencyOf = (source) => {
   const head = source.slice(0, source.indexOf("\njobs:\n"));
   const block = /^concurrency:\n((?: {2}[^\n]*\n)+)/m.exec(head)?.[1] ?? "";
@@ -40,4 +62,8 @@ export const concurrencyOf = (source) => {
   return fields;
 };
 
+/** Read a workflow's top-level `name:` value.
+ * @param {string} source
+ * @returns {string | undefined}
+ */
 export const workflowName = (source) => /^name:[ \t]*(.+)$/m.exec(source)?.[1];
