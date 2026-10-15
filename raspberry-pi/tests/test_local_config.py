@@ -2,12 +2,14 @@
 
 Every key is exercised through :func:`load_local_config` with a plain dict, so
 nothing here reads the process environment, opens a port or needs a ``.env``.
+The medical parameters are given as a status (:mod:`tests.medical_support`)
+where a test is about them; elsewhere they are the shipped file's, verified.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
+from dataclasses import replace
 from typing import Final, cast
 
 import pytest
@@ -16,9 +18,8 @@ from hypothesis import strategies as st
 
 from src.local_config import (
     BENCH_CONSOLE_PORT,
-    DEFAULT_MOTION_LIMITS_PATH,
     DEFAULT_MOTOR_MAX_RPM,
-    DEFAULT_TIERS,
+    MEDICAL_KEYS,
     CardiacTiers,
     CloudConfig,
     ConfigProblem,
@@ -30,10 +31,13 @@ from src.local_config import (
     build_drive_link,
     load_local_config,
 )
+from src.medical import SHIPPED_PARAMETERS, MedicalStatus
 from src.motor.ftdi_link import SCHNEIDER_CABLE_URL, Parity
 from src.result import Err, Ok
+from src.training.motion import DEFAULT_MOTION_LIMITS
 from src.training.types import Occupancy, OccupancyRefused
-from src.units import Bpm, MotorRpm
+from src.units import Bpm, GLoadPerSecond, MotorRpm, ResultantG
+from tests.medical_support import signed, unsigned
 
 #: The owner's documented bench .env for the real hardware.
 BENCH_ENV: Final[Mapping[str, str]] = {
@@ -54,20 +58,22 @@ SIM_ENV: Final[Mapping[str, str]] = {
 }
 
 
-def _load(env: Mapping[str, str]) -> LocalConfig:
-    loaded = load_local_config(env)
+def _load(env: Mapping[str, str], medical: MedicalStatus | None = None) -> LocalConfig:
+    loaded = load_local_config(env, medical)
     assert isinstance(loaded, Ok), f"unexpected problems: {loaded!r}"
     return loaded.value
 
 
-def _problems(env: Mapping[str, str]) -> tuple[ConfigProblem, ...]:
-    loaded = load_local_config(env)
+def _problems(
+    env: Mapping[str, str], medical: MedicalStatus | None = None
+) -> tuple[ConfigProblem, ...]:
+    loaded = load_local_config(env, medical)
     assert isinstance(loaded, Err), f"accepted a bad configuration: {loaded!r}"
     return loaded.error
 
 
-def _keys(env: Mapping[str, str]) -> set[str]:
-    return {problem.key for problem in _problems(env)}
+def _keys(env: Mapping[str, str], medical: MedicalStatus | None = None) -> set[str]:
+    return {problem.key for problem in _problems(env, medical)}
 
 
 def _with(base: Mapping[str, str], **changes: str) -> dict[str, str]:
@@ -104,7 +110,8 @@ def test_the_bench_env_loads_as_documented() -> None:
     assert config.web.port == 8090
     assert config.web.host == "127.0.0.1"
     assert config.web.token is None
-    assert config.motion_limits_path == DEFAULT_MOTION_LIMITS_PATH
+    assert config.medical.signed
+    assert config.motion == DEFAULT_MOTION_LIMITS
 
 
 def test_the_simulation_env_needs_no_hardware_key() -> None:
@@ -126,7 +133,6 @@ def test_paths_and_a_token_can_be_set() -> None:
     config = _load(
         _with(
             SIM_ENV,
-            MOTION_LIMITS_PATH="/etc/anheart/motion.json",
             UI_HOST="0.0.0.0",  # noqa: S104  # the refusal path is the next test's
             UI_TOKEN="a-sixteen-char-token",  # noqa: S106  # a test value
             # Off loopback the console serves TLS or does not start (ANH-151):
@@ -135,7 +141,6 @@ def test_paths_and_a_token_can_be_set() -> None:
             UI_TLS_KEY="/etc/anheart/tls/console.key",
         )
     )
-    assert config.motion_limits_path == Path("/etc/anheart/motion.json")
     assert config.web.token == "a-sixteen-char-token"  # noqa: S105  # a test value
 
 
@@ -202,7 +207,18 @@ def test_once_enabled_a_person_on_board_gets_the_lower_ceiling(max_rpm: str, exp
     """Gr 1.2 at 1.5 m is 990 motor rpm, and MOTOR_MAX_RPM still binds below it."""
     config = _load(_with(SIM_ENV, OCCUPANCY_OCCUPIED_ENABLED="true", MOTOR_MAX_RPM=max_rpm))
     assert config.occupied_enabled is True
+    assert config.medical.parameters.occupied_ceiling_g == 1.2
     assert config.ceiling_for(Occupancy.OCCUPIED) == Ok(MotorRpm(expected))
+
+
+def test_the_ceiling_with_a_person_on_board_is_the_medical_file_s() -> None:
+    """A lower signed ceiling lowers it: 1.1 g is about 788 motor rpm at 1.5 m, not 990."""
+    lower = signed(replace(SHIPPED_PARAMETERS, occupied_ceiling_g=ResultantG(1.1)))
+    config = _load(_with(SIM_ENV, OCCUPANCY_OCCUPIED_ENABLED="true", MOTOR_MAX_RPM="1380"), lower)
+    ceiling = config.ceiling_for(Occupancy.OCCUPIED)
+    assert ceiling == Ok(config.geometry.motor_rpm_for(ResultantG(1.1)))
+    assert isinstance(ceiling, Ok)
+    assert ceiling.value < 990
 
 
 @pytest.mark.parametrize(("text", "expected"), [("1", True), ("YES", True), ("off", False)])
@@ -341,9 +357,7 @@ def test_a_serial_backend_with_a_bad_link_is_refused_even_if_the_rest_is_fine() 
 def test_programmes_tiers_and_the_link_default_to_off() -> None:
     config = _load(SIM_ENV)
     assert not config.programs_enabled
-    assert config.tiers == DEFAULT_TIERS
-    assert config.tiers.hard_max_bpm == 148
-    assert config.tiers.critical_bpm == 158
+    assert config.tiers == CardiacTiers(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
     assert config.cloud is None
 
 
@@ -352,25 +366,115 @@ def test_programmes_are_a_flag() -> None:
     assert _keys(_with(SIM_ENV, PROGRAMS_ENABLED="maybe")) == {"PROGRAMS_ENABLED"}
 
 
-def test_the_tiers_can_be_set_for_a_screened_population() -> None:
-    config = _load(_with(SIM_ENV, HR_HARD_MAX_BPM="165", HR_CRITICAL_BPM="175"))
-    assert config.tiers == CardiacTiers(hard_max_bpm=Bpm(165), critical_bpm=Bpm(175))
+# =========================================================================
+# The medical parameters (ANH-139): one signed file, no key
+# =========================================================================
+
+MEDICAL: Final[str] = "config/medical_parameters.json"
+
+
+def test_the_tiers_and_the_minimum_age_are_the_medical_file_s() -> None:
+    """Today's values, read from the shipped file: 148 / 158 bpm, 18 years."""
+    config = _load(SIM_ENV)
+    assert config.tiers == CardiacTiers(
+        hard_max_bpm=SHIPPED_PARAMETERS.hr_hard_max_bpm,
+        critical_bpm=SHIPPED_PARAMETERS.hr_critical_bpm,
+    )
+    assert config.min_rider_age == SHIPPED_PARAMETERS.min_rider_age == 18
+    screened = signed(
+        replace(SHIPPED_PARAMETERS, hr_hard_max_bpm=Bpm(165), hr_critical_bpm=Bpm(175))
+    )
+    assert _load(SIM_ENV, screened).tiers == CardiacTiers(Bpm(165), Bpm(175))
+    assert _load(SIM_ENV, signed(replace(SHIPPED_PARAMETERS, min_rider_age=16))).min_rider_age == 16
+
+
+@pytest.mark.parametrize("key", sorted(MEDICAL_KEYS))
+def test_a_key_that_used_to_set_a_medical_value_stops_the_console(key: str) -> None:
+    """Two sources for one medical value is how the unsigned one gets applied."""
+    problems = _problems(_with(SIM_ENV, **{key: "148"}))
+    assert [problem.key for problem in problems] == [key]
+    assert MEDICAL in problems[0].detail
+    assert MEDICAL_KEYS[key] in problems[0].detail
+
+
+def test_a_blank_medical_key_sets_nothing_and_is_not_refused() -> None:
+    """As dotenv leaves ``HR_HARD_MAX_BPM=``: no value, no second source."""
+    assert _load(_with(SIM_ENV, **dict.fromkeys(MEDICAL_KEYS, "  "))).medical.signed
 
 
 @pytest.mark.parametrize(
-    ("changes", "key"),
+    ("hard", "critical", "members"),
     [
-        ({"HR_HARD_MAX_BPM": "abc"}, "HR_HARD_MAX_BPM"),
-        ({"HR_HARD_MAX_BPM": "99"}, "HR_HARD_MAX_BPM"),
-        ({"HR_CRITICAL_BPM": "221"}, "HR_CRITICAL_BPM"),
-        ({"HR_CRITICAL_BPM": "abc"}, "HR_CRITICAL_BPM"),
-        # Inverted or equal tiers would let the two rules swap places.
-        ({"HR_HARD_MAX_BPM": "160", "HR_CRITICAL_BPM": "160"}, "HR_CRITICAL_BPM"),
-        ({"HR_HARD_MAX_BPM": "170", "HR_CRITICAL_BPM": "160"}, "HR_CRITICAL_BPM"),
+        (99, 158, {"hr_hard_max_bpm"}),
+        (148, 221, {"hr_critical_bpm"}),
+        (90, 230, {"hr_hard_max_bpm", "hr_critical_bpm"}),
     ],
 )
-def test_implausible_or_inverted_tiers_are_refused(changes: dict[str, str], key: str) -> None:
-    assert _keys({**SIM_ENV, **changes}) == {key}
+def test_signed_tiers_outside_the_believable_heart_rates_are_refused(
+    hard: int, critical: int, members: set[str]
+) -> None:
+    """The bounds the ``.env`` keys had: a signature does not make 99 bpm a typo-free number."""
+    medical = signed(
+        replace(SHIPPED_PARAMETERS, hr_hard_max_bpm=Bpm(hard), hr_critical_bpm=Bpm(critical))
+    )
+    assert _keys(SIM_ENV, medical) == {f"{MEDICAL}:{member}" for member in members}
+
+
+@pytest.mark.parametrize("age", [5, 101])
+def test_a_signed_minimum_age_the_formula_does_not_hold_for_is_refused(age: int) -> None:
+    medical = signed(replace(SHIPPED_PARAMETERS, min_rider_age=age))
+    assert _keys(SIM_ENV, medical) == {f"{MEDICAL}:min_rider_age"}
+
+
+def test_signed_motion_limits_outside_the_limiter_s_bounds_are_refused_with_the_rest() -> None:
+    """Every problem at once: the motion limits and a tier, and the .env's own."""
+    motion = replace(SHIPPED_PARAMETERS.motion_limits, g_per_s=GLoadPerSecond(0.9))
+    medical = signed(replace(SHIPPED_PARAMETERS, motion_limits=motion, hr_hard_max_bpm=Bpm(99)))
+    problems = _problems(_with(SIM_ENV, MIN_RIDER_AGE="16"), medical)
+    assert {problem.key for problem in problems} == {
+        "MIN_RIDER_AGE",
+        f"{MEDICAL}:hr_hard_max_bpm",
+        f"{MEDICAL}:motion_limits",
+    }
+    assert any("g_rate" in problem.detail for problem in problems)
+
+
+def test_unsigned_parameters_start_the_console_in_bench_mode_only() -> None:
+    """Whatever the .env says: no programme, nobody on board, and the reason said."""
+    config = _load(
+        _with(SIM_ENV, PROGRAMS_ENABLED="true", OCCUPANCY_OCCUPIED_ENABLED="true"), unsigned()
+    )
+    assert not config.medical.signed
+    assert config.programs_enabled is False
+    assert config.occupied_enabled is False
+    assert config.ceiling_for(Occupancy.BENCH) == Ok(DEFAULT_MOTOR_MAX_RPM)
+    refused = config.ceiling_for(Occupancy.OCCUPIED)
+    assert isinstance(refused, Err)
+    assert refused.error.detail.startswith(
+        "personne a bord refusee : parametres medicaux non signes"
+    )
+    # The values still govern the bench: the motion limits are the file's.
+    assert config.motion == DEFAULT_MOTION_LIMITS
+
+
+def test_signed_parameters_leave_both_flags_to_the_env() -> None:
+    config = _load(_with(SIM_ENV, PROGRAMS_ENABLED="true", OCCUPANCY_OCCUPIED_ENABLED="true"))
+    assert config.programs_enabled is True
+    assert config.occupied_enabled is True
+
+
+@pytest.mark.parametrize("flag", ["programs_enabled", "occupied_enabled"])
+def test_no_configuration_lets_unsigned_parameters_near_a_person(flag: str) -> None:
+    """The bench mode is a property of every LocalConfig, not of one function."""
+    bench = _load(SIM_ENV, unsigned())
+
+    def enabled() -> LocalConfig:
+        if flag == "programs_enabled":
+            return replace(bench, programs_enabled=True)
+        return replace(bench, occupied_enabled=True)
+
+    with pytest.raises(ValueError, match="parametres medicaux non signes"):
+        enabled()
 
 
 def test_no_key_no_link_even_with_the_example_url() -> None:
@@ -391,13 +495,6 @@ def test_a_key_links_to_an_https_or_local_url(url: str) -> None:
 @pytest.mark.parametrize("url", ["", "http://abc.convex.site", "abc.convex.site"])
 def test_a_key_with_no_url_or_plain_http_is_refused(url: str) -> None:
     assert _keys(_with(SIM_ENV, MACHINE_API_KEY="k", CONVEX_URL=url)) == {"CONVEX_URL"}
-
-
-def test_the_minimum_rider_age_defaults_to_adults_and_is_bounded() -> None:
-    assert _load(SIM_ENV).min_rider_age == 18
-    assert _load(_with(SIM_ENV, MIN_RIDER_AGE="16")).min_rider_age == 16
-    assert _keys(_with(SIM_ENV, MIN_RIDER_AGE="5")) == {"MIN_RIDER_AGE"}
-    assert _keys(_with(SIM_ENV, MIN_RIDER_AGE="abc")) == {"MIN_RIDER_AGE"}
 
 
 def test_the_leg_tip_radius_is_optional_and_never_inside_the_arm() -> None:

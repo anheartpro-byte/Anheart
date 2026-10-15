@@ -264,10 +264,10 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 
 | Zone | Contenu |
 |---|---|
-| Bandeaux en haut | Six rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4) ; `VARIATEUR EN DEFAUT`, tant que le variateur signale un défaut (section 6). Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
+| Bandeaux en haut | Sept rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4) ; `VARIATEUR EN DEFAUT`, tant que le variateur signale un défaut (section 6) ; `PARAMETRES MEDICAUX NON SIGNES`, tant que la console tourne en mode banc parce que la signature de son fichier médical ne s'est pas vérifiée au démarrage, suivi de la raison ([raspberry-pi.md, 12.6](raspberry-pi.md#126-les-paramètres-médicaux-signés-anh-139)) ; il ne part qu'avec un fichier signé de nouveau et un redémarrage. Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
 | Barre latérale (à gauche) | la marque, neuf pastilles (six sur l'état de la machine, puis **Serveur**, **Version** et **Service** sur la console elle-même), la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
-| Pied de page fixe | l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages. La page et la barre latérale s'arrêtent au-dessus de lui : sa hauteur est mesurée par la page (`--footer-h`), plus déclarée dans la feuille de style |
+| Pied de page fixe | la version des paramètres médicaux (`parametres medicaux 0.1.0`, en rouge avec `NON SIGNES` en mode banc), l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages. La page et la barre latérale s'arrêtent au-dessus de lui : sa hauteur est mesurée par la page (`--footer-h`), plus déclarée dans la feuille de style |
 
 Sur un écran étroit, la barre latérale se replie derrière un bouton `☰ Menu`. Une barre
 mobile affiche alors le mode, l'état de rotation et l'état du lien avec le tableau de
@@ -567,7 +567,11 @@ Le titre de l'onglet suit la page affichée : `Tableau de bord - AnHeart`,
 
 ## 5. Pied de page : STOP et E-STOP
 
-Présent sur **toutes** les pages. À gauche, un résumé : `liaison ouverte · manuel · hold`
+Présent sur **toutes** les pages. Tout à gauche, la version des paramètres médicaux
+que la console applique, lue au démarrage : `parametres medicaux 0.1.0`, ou en rouge
+`parametres medicaux 0.1.0 NON SIGNES` quand leur signature ne s'est pas vérifiée
+(mode banc seulement, voir le bandeau du même nom) ; `parametres medicaux -` tant que la
+console ne l'a pas dite. Puis un résumé : `liaison ouverte · manuel · hold`
 (mode et phase de l'instantané). Au repos, aucune phase n'est en cours et le résumé
 s'arrête au mode : `liaison ouverte · repos`.
 
@@ -849,14 +853,17 @@ Si l'avertissement se lève avant l'arrêt, la consigne remonte vers la cible (b
 
 La page ne propose **que** la déclaration BANC, qui ne nomme aucun passager. Une séance
 manuelle « personne à bord » (`occupied`) n'existe que par l'API, et elle est refusée
-tant que `OCCUPANCY_OCCUPIED_ENABLED=false` (jalon M6). Depuis ANH-84 elle nomme en plus
+tant que `OCCUPANCY_OCCUPIED_ENABLED=false` (jalon M6) ou que les paramètres médicaux ne
+sont pas signés (mode banc). Depuis ANH-84 elle nomme en plus
 un passager de la liste du tableau de bord (`subject_id`, section 9), vérifié par la
 route puis par la boucle à l'armement ; l'enregistrement et la séance déclarée au
-tableau de bord portent son identifiant. L'âge minimum `MIN_RIDER_AGE` s'y applique
+tableau de bord portent son identifiant. L'âge minimum (`min_rider_age` du fichier
+médical signé, 18 ans) s'y applique
 comme à une séance programmée (décision du responsable produit, 15 octobre 2026),
 compté de la même façon depuis l'année de naissance réglée sur le site : sans année de
 naissance, la route répond 409 ; un passager trop jeune est refusé par la boucle
-(`demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)`). La FC max
+(`demarrage refuse : passager de <n> ans, minimum <m> ans (min_rider_age des parametres
+medicaux)`). La FC max
 n'est pas demandée : rien n'y est ajusté en manuel.
 
 Pastille à côté du titre : `inactif`, `demarrage`, puis le libellé de l'occupation
@@ -876,8 +883,9 @@ Pastille à côté du titre : `inactif`, `demarrage`, puis le libellé de l'occu
 Règles de la cible :
 
 - La cible est une **destination**, jamais une consigne directe. La machine y marche aux
-  limites anti-nausée (accélération angulaire et variation de g, fichier
-  `config/motion_limits.json`). Tout verdict de sécurité reste prioritaire.
+  limites anti-nausée (accélération angulaire et variation de g, `motion_limits`
+  du fichier médical signé `config/medical_parameters.json`). Tout verdict de
+  sécurité reste prioritaire.
 - Domaine accepté : `0`, ou entre le minimum de rotation et le plafond. En simulation
   avec les valeurs par défaut : minimum 55 tr/min moteur (≈ 1,10 tr/min de sortie),
   plafond `MOTOR_MAX_RPM` = 300 tr/min moteur (≈ 6,03 tr/min de sortie).
@@ -1299,19 +1307,22 @@ Elle a sa propre ligne : le résultat d'une prévisualisation s'affiche sous ell
 Pour qu'une séance programmée puisse partir, **toutes** ces conditions doivent tenir
 (dans l'ordre où la console les vérifie, `LocalPanel._start_programme`) :
 
-1. `PROGRAMS_ENABLED=true` ;
+1. paramètres médicaux signés, puis `PROGRAMS_ENABLED=true` (en mode banc, le refus
+   dit `parametres medicaux non signes`) ;
 2. un passager de la liste du tableau de bord, que la liste tenue **au moment où la
    boucle arme** porte encore, avec sa FC max et son année de naissance renseignées sur
    le site ; pour un lancement venu du tableau de bord, les valeurs que porte le
    lancement ;
-3. âge du passager (calculé depuis l'année de naissance, comme le site) ≥ `MIN_RIDER_AGE` ;
+3. âge du passager (calculé depuis l'année de naissance, comme le site) ≥ `min_rider_age`
+   du fichier médical signé ;
 4. `OCCUPANCY_OCCUPIED_ENABLED=true` (une séance programmée a toujours une personne à bord) ;
 5. le profil existe et se résout, ajusté à la FC max de ce passager : tous les contrôles
    cardiaques sont refaits pour lui (zone haute ≤ 90 % de sa FC max, palier dur ≤ sa FC max) ;
 6. le plafond du profil (`max_rpm`) est sous le plafond « personne à bord » ;
 7. la caméra, si configurée, ne bloque pas le démarrage ;
 8. les contrôles du runtime : attestation, aucun verdict en attente, paliers cardiaques du
-   profil égaux à ceux du superviseur (`HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM`), variateur
+   profil égaux à ceux du superviseur (`hr_hard_max_bpm` / `hr_critical_bpm` du fichier
+   médical), variateur
    disponible, pas en défaut, pas déjà en marche.
 
 Avec la configuration par défaut, les points 1 et 4 sont faux : **aucune séance
@@ -1886,7 +1897,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : la machine est deja <état>` | une séance existe déjà |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante |
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente |
-| `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` |
+| `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ ceux du fichier médical (`hr_hard_max_bpm` / `hr_critical_bpm`) |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
 | `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent quand la boucle relit le variateur pour armer. Depuis le 11 octobre 2026 un démarrage demandé depuis la page est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un défaut apparu entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord |
 | `demarrage refuse : console hors service : 3 demarrages apres un arret non propre en moins de 10 min. Faire verifier la machine, puis la remettre en service depuis cette page, par un operateur nomme` | la console est hors service ([section 4](#pastille-service--en-service-ou-hors-service)) ; aucun départ, manuel ou programmé, n'est armé, avant toute autre porte |
@@ -1906,7 +1917,8 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : age du passager incalculable avec l'horloge de cette machine` | l'horloge du Pi et l'année de naissance ne donnent pas un âge plausible |
 | `demarrage refuse : une seance de banc n'a personne a bord, donc aucun passager` | séance de banc qui nomme un passager |
 | `demarrage refuse : age du passager requis pour une seance programmee` | lancement venu du tableau de bord sans âge |
-| `demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)` | passager trop jeune (séance programmée, ou manuelle avec personne à bord) |
+| `demarrage refuse : passager de <n> ans, minimum <m> ans (min_rider_age des parametres medicaux)` | passager trop jeune (séance programmée, ou manuelle avec personne à bord) |
+| `parametres medicaux non signes (<raison>) : console en mode banc seulement, aucune seance programmee ni personne a bord` | la signature du fichier médical ne s'est pas vérifiée au démarrage : séance programmée et personne à bord refusées ([raspberry-pi.md, 12.6](raspberry-pi.md#126-les-paramètres-médicaux-signés-anh-139)) |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) |
 | `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil rejeté pour la FC max du passager (zone au-dessus de 90 % de la FC max, etc.) |
 | `demarrage refuse : programme a <n> tr/min moteur, au-dessus du plafond personne a bord (<m> tr/min)` | profil trop rapide pour une personne à bord |
@@ -2048,7 +2060,7 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator", "subject_id"?}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois ; `occupied` nomme un passager de la liste, d'au moins `MIN_RIDER_AGE` (vérifié par la boucle), `bench` n'en nomme aucun | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue, passager manquant ou nommé sur le banc) ; 409 (dont : passager absent de la liste, année de naissance absente, variateur en défaut) ; 400 ; 412 |
+| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator", "subject_id"?}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois ; `occupied` nomme un passager de la liste, d'au moins `min_rider_age` du fichier médical (vérifié par la boucle), `bench` n'en nomme aucun | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue, passager manquant ou nommé sur le banc) ; 409 (dont : passager absent de la liste, année de naissance absente, variateur en défaut) ; 400 ; 412 |
 | POST | `/api/manual/target` | `{"output_rpm", "operator"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 (même corps) ; 422 (négatif, non fini) ; 400 ; 409 |
 | POST | `/api/drive/fault-reset` | `{"operator"}` | reset nommé d'un défaut variateur | 202 (même corps) ; 400 ; 409 |
 

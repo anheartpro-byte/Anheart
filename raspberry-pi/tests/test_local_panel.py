@@ -24,7 +24,7 @@ from typing import Final, cast
 
 import pytest
 
-from src import local_panel
+from src import local_config, local_panel
 from src.bitalino_client import BITalinoClient, LinkStats, SampleBatch
 from src.clock import Clock, ManualClock
 from src.control_surface import ControlSurface, RunState, StartSession
@@ -54,6 +54,7 @@ from src.local_panel import (
     main,
     run_console,
 )
+from src.medical import SHIPPED_PARAMETERS, MedicalStatus
 from src.motor.atv320 import ATV320Drive, FtdiModbusClient
 from src.motor.drive import DriveFault, DriveState, LowSpeedNotZero, describe_fault
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
@@ -89,6 +90,7 @@ from src.training.types import Occupancy, Phase, SafetyAction, SafetyVerdict, Te
 from src.units import Bpm, Hertz, Monotonic, MotorRpm, OutputRpm, RawRegister, Seconds
 from src.wall_clock import WallClockProbe
 from src.web.deps import Services
+from tests.medical_support import signed, unsigned
 from tests.test_ecg_pipeline import FakeTreatment
 from tests.test_runtime import FakeDrive
 from tests.test_web_api import free_port
@@ -214,7 +216,10 @@ def test_describe_config_names_the_link_or_the_simulator() -> None:
     banner = describe_config(config_from(SERIAL_ENV))
     assert "ftdi://schneider:rs485/1" in banner
     assert "rfcomm:98-d3-91-fe-4e-9f" in banner
-    assert "MANUEL BANC (plafond 300 tr/min moteur; paliers 148/158 bpm)" in banner
+    assert (
+        "MANUEL BANC (plafond 300 tr/min moteur; paliers 148/158 bpm; "
+        "parametres medicaux 0.1.0 signes)"
+    ) in banner
     assert "tableau de bord: aucun" in banner
     linked = describe_config(
         config_from(
@@ -228,6 +233,9 @@ def test_describe_config_names_the_link_or_the_simulator() -> None:
     )
     assert "MANUEL + PROGRAMMES" in linked
     assert "tableau de bord: https://x.convex.site" in linked
+    loaded = load_local_config(BASE_ENV, unsigned())
+    assert isinstance(loaded, Ok)
+    assert "parametres medicaux 0.1.0 NON SIGNES" in describe_config(loaded.value)
 
 
 # =========================================================================
@@ -656,6 +664,26 @@ def test_ex7_the_exit_deadline_ends_the_process_with_its_code_when_nothing_else_
     assert Seconds(5.0) == EXIT_GRACE, "what the console gives itself when nobody says otherwise"
 
 
+def test_ex3_main_says_the_bench_mode_when_it_starts_in_it(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    seen: list[LocalConfig] = []
+
+    async def fake(
+        config: LocalConfig, *, stopped: Callable[[int], object], notify_socket: str | None
+    ) -> int:
+        del stopped, notify_socket
+        seen.append(config)
+        return EXIT_OK
+
+    monkeypatch.setattr(local_panel, "run_console", fake)
+    monkeypatch.setattr(local_config, "shipped_status", unsigned)
+    assert main(ENABLED_ENV) == EXIT_OK
+    assert seen[0].programs_enabled is False
+    assert seen[0].occupied_enabled is False
+    assert "medical parameters: parametres medicaux non signes" in caplog.text
+
+
 def test_main_reads_the_environment_when_none_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(local_panel, "load_environment", lambda: {"ARM_RADIUS_M": "x"})
     assert main() == EXIT_CONFIG
@@ -854,20 +882,90 @@ async def test_an_idle_fault_is_reset_through_the_mailbox(tmp_path: Path) -> Non
     await panel.close()
 
 
-def test_unusable_motion_limits_refuse_to_build_the_console(tmp_path: Path) -> None:
-    config = replace(config_from(BASE_ENV), motion_limits_path=tmp_path / "absent.json")
-    with pytest.raises(ValueError, match="motion limits"):
-        build_panel(config, clock=ManualClock(), profiles_path=tmp_path / "p.json")
-    absolute = tmp_path / "limits.json"
-    absolute.write_text(
-        '{"output_rpm_per_s": 0.5, "g_per_s": 0.03, "min_run_motor_rpm": 55}', encoding="utf-8"
+# =========================================================================
+# ANH-139: the medical parameters at the console
+# =========================================================================
+
+#: Everything the .env can enable: in bench mode, none of it holds.
+ENABLED_ENV: Final[Mapping[str, str]] = {
+    **BASE_ENV,
+    "PROGRAMS_ENABLED": "true",
+    "OCCUPANCY_OCCUPIED_ENABLED": "true",
+}
+
+
+def medical_panel(
+    tmp_path: Path, medical: MedicalStatus, **env: str
+) -> tuple[LocalPanel, ManualClock]:
+    loaded = load_local_config({**ENABLED_ENV, **env}, medical)
+    assert isinstance(loaded, Ok), loaded
+    clock = ManualClock()
+    panel = build_panel(loaded.value, clock=clock, profiles_path=tmp_path / "p.json")
+    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    return panel, clock
+
+
+async def test_ex3_in_bench_mode_a_programmed_start_is_refused_for_its_parameters(
+    tmp_path: Path,
+) -> None:
+    """Said before PROGRAMS_ENABLED: the medical parameters are why it is off."""
+    panel, clock = medical_panel(tmp_path, unsigned())
+    spy = EventSpy(panel)
+    submitted = panel.surface.submit_start(
+        profile_id="standard_30_min", operator=OPERATOR, total_duration_s=None, subject_age=30
     )
-    panel = build_panel(
-        replace(config, motion_limits_path=absolute),
-        clock=ManualClock(),
-        profiles_path=tmp_path / "p.json",
+    assert isinstance(submitted, Ok)
+    await _tick(panel, clock)
+    assert panel.runtime.state is RuntimeState.IDLE
+    said = await spy.drain()
+    assert any("parametres medicaux non signes" in detail for detail in said), said
+    assert not any("PROGRAMS_ENABLED" in detail for detail in said), said
+    await panel.close()
+
+
+async def test_ex3_in_bench_mode_nobody_rides_and_a_bench_session_still_runs(
+    tmp_path: Path,
+) -> None:
+    panel, clock = medical_panel(tmp_path, unsigned())
+    spy = EventSpy(panel)
+    assert isinstance(
+        panel.surface.submit_start_manual(occupancy=Occupancy.OCCUPIED, operator=OPERATOR), Ok
     )
-    assert panel.runtime.manual is None
+    await _tick(panel, clock)
+    assert panel.runtime.state is RuntimeState.IDLE
+    assert any("parametres medicaux non signes" in detail for detail in await spy.drain())
+    assert isinstance(
+        panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+    )
+    await _tick(panel, clock)
+    assert _state(panel) is RuntimeState.RUNNING
+    await panel.close()
+
+
+async def test_the_runtime_walks_the_medical_file_s_motion_limits(tmp_path: Path) -> None:
+    """A slowest setpoint above the bench ceiling: the manual start is refused, by the runtime."""
+    motion = replace(SHIPPED_PARAMETERS.motion_limits, min_run_motor_rpm=MotorRpm(150))
+    medical = signed(replace(SHIPPED_PARAMETERS, motion_limits=motion))
+    panel, clock = medical_panel(tmp_path, medical, MOTOR_MAX_RPM="120")
+    spy = EventSpy(panel)
+    assert isinstance(
+        panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+    )
+    await _tick(panel, clock)
+    assert panel.runtime.state is RuntimeState.IDLE
+    assert any("[150," in detail for detail in await spy.drain())
+    await panel.close()
+
+
+@pytest.mark.parametrize("medical", [signed(), unsigned()], ids=["signed", "unsigned"])
+def test_ex4_the_panel_reports_the_medical_parameters_it_runs_with(
+    tmp_path: Path, medical: MedicalStatus
+) -> None:
+    panel, _clock = medical_panel(tmp_path, medical)
+    status = panel.reporter.panel_status()
+    assert status.medical == medical
+    assert status.programs_enabled is medical.signed
+    assert panel.services.medical_refusal == medical.warning
 
 
 def _verdict(rule: str) -> SafetyVerdict:

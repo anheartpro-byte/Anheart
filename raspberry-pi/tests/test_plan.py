@@ -49,11 +49,15 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from src.medical import SHIPPED_PARAMETERS, HrMaxFormula
 from src.result import Err, Ok, Result
+from src.training import plan
 from src.training.plan import (
     COMMISSIONED_DECEL_S,
+    HR_MAX_FORMULA,
     INITIAL_REV,
     MAX_SUBJECT_AGE_YEARS,
+    MIN_COOLDOWN_S,
     MIN_RECOVERY_S,
     MIN_SUBJECT_AGE_YEARS,
     NAMEPLATE_MOTOR_RPM,
@@ -298,6 +302,10 @@ REFUSALS: Final[tuple[tuple[Violation, Callable[[], TrainingProfile]], ...]] = (
         lambda: replace(BASE, cooldown_s=Seconds(2.0)),
     ),
     (
+        Violation.COOLDOWN_TOO_SHORT,
+        lambda: replace(BASE, cooldown_s=Seconds(MIN_COOLDOWN_S - 0.5)),
+    ),
+    (
         Violation.RECOVERY_TOO_SHORT,
         lambda: replace(BASE, recovery_s=Seconds(30.0)),
     ),
@@ -512,7 +520,25 @@ def test_a_cooldown_faster_than_the_measured_ramp_is_refused() -> None:
     assert replace(BASE, cooldown_s=COMMISSIONED_DECEL_S).cooldown_s == COMMISSIONED_DECEL_S
     just_under = Seconds(COMMISSIONED_DECEL_S - 0.5)
     violations = _refusal(lambda: replace(BASE, cooldown_s=just_under))
-    assert violations == (Violation.COOLDOWN_FASTER_THAN_DRIVE_RAMP,)
+    # The medical floor is the drive's ramp in the shipped file: both are said.
+    assert violations == (
+        Violation.COOLDOWN_FASTER_THAN_DRIVE_RAMP,
+        Violation.COOLDOWN_TOO_SHORT,
+    )
+
+
+def test_the_medical_cooldown_floor_is_the_signed_file_s_and_applies_on_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``cooldown_min_s`` of the medical file, 4 s today: the value the code applied before.
+
+    A longer floor signed one day refuses a cooldown the drive could manage,
+    under its own name: the two reasons stay apart.
+    """
+    assert MIN_COOLDOWN_S == SHIPPED_PARAMETERS.cooldown_min_s == COMMISSIONED_DECEL_S == 4.0
+    monkeypatch.setattr(plan, "MIN_COOLDOWN_S", Seconds(120.0))
+    violations = _refusal(lambda: replace(BASE, cooldown_s=Seconds(60.0)))
+    assert violations == (Violation.COOLDOWN_TOO_SHORT,)
 
 
 def test_the_recovery_phase_may_not_be_cut_short() -> None:
@@ -522,6 +548,7 @@ def test_the_recovery_phase_may_not_be_cut_short() -> None:
     stops watching the moment the shaft stops is refused. The floor itself is
     allowed.
     """
+    assert MIN_RECOVERY_S == SHIPPED_PARAMETERS.recovery_min_s == 60.0
     at_floor = replace(BASE, recovery_s=MIN_RECOVERY_S)
     assert at_floor.recovery_s == MIN_RECOVERY_S
     just_under = Seconds(MIN_RECOVERY_S - 1.0)
@@ -688,6 +715,18 @@ def test_the_age_estimate_matches_the_published_formula(age: int, expected: int)
     docstring and the shipped defaults are built on.
     """
     assert _ok(hr_max_from_age(age)) == Bpm(expected)
+
+
+def test_the_formula_and_the_zone_ceiling_are_the_medical_file_s() -> None:
+    """``tanaka`` and 0.9 in the shipped file: the values the code held before."""
+    assert HR_MAX_FORMULA is SHIPPED_PARAMETERS.hr_max_formula is HrMaxFormula.TANAKA
+    assert ZONE_CEILING_FRACTION == SHIPPED_PARAMETERS.zone_ceiling_fraction == 0.9
+
+
+def test_a_formula_the_code_does_not_know_fails_loudly() -> None:
+    """The guard after the ``match``: a new formula must be written out, not fall through."""
+    with pytest.raises(AssertionError):
+        hr_max_from_age(30, cast("HrMaxFormula", "astrand"))
 
 
 @pytest.mark.parametrize("age", [MIN_SUBJECT_AGE_YEARS - 1, MAX_SUBJECT_AGE_YEARS + 1, 0, -5, 300])
@@ -2411,10 +2450,11 @@ def test_the_plan_depends_only_on_the_vocabulary_and_the_units() -> None:
     In particular it does not import the drive, the control law or the safety
     supervisor. A profile is a document about a session, not a participant in
     one, and keeping the dependency thin is what lets the store be loaded at
-    startup before any hardware exists.
+    startup before any hardware exists. The medical parameters are the one
+    other source it reads: the floors and the zone ceiling it checks are theirs.
     """
     project_imports = {name for name in _imported_modules(PLAN_SOURCE) if name.startswith("src.")}
-    assert project_imports == {"src.result", "src.training.types", "src.units"}
+    assert project_imports == {"src.medical", "src.result", "src.training.types", "src.units"}
 
 
 def test_the_plan_never_reads_a_clock() -> None:

@@ -261,8 +261,7 @@ l'emporte sur `.env`.**
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
 | `PROGRAMS_ENABLED` | non (défaut `false`) | `true` / `false` | autorise les séances programmées (jalon M5) |
 | `OCCUPANCY_OCCUPIED_ENABLED` | non (défaut `false`) | `true` / `false` | autorise « personne à bord » (jalon M6, accords ingénierie et médical requis) |
-| `MIN_RIDER_AGE` | non (défaut `18`) | | âge minimal du passager à bord (séance programmée, ou manuelle avec personne à bord) |
-| `HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM` | non (défaut `148` / `158`) | | paliers cardiaques du superviseur ; chaque profil doit porter les mêmes |
+| `MIN_RIDER_AGE`, `HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM`, `MOTION_LIMITS_PATH` | **à ne pas mettre** | | plus lues : l'âge minimal, les paliers cardiaques et les limites anti-nausée sont dans le fichier médical signé `config/medical_parameters.json`. Une de ces lignes encore présente empêche la console de démarrer |
 | `MACHINE_API_KEY`, `CONVEX_URL` | non | | liaison au tableau de bord distant. Clé vide = console purement locale |
 
 Si une variable est fausse ou manque, la console **refuse de démarrer**, liste tous
@@ -396,8 +395,13 @@ Repères de la capture (barre latérale, de haut en bas) :
    tableau ci-dessous.
 9. Navigation : **Tableau de bord**, **Capteurs** (avec un point de couleur par
    capteur, et son canal `A1` à `A6`), **Seance**, **Configuration**, **Securite**.
-10. Pied de page, à gauche : `liaison ouverte · repos` (liaison et mode). Pendant une
-    séance, la phase s'ajoute : par exemple `liaison ouverte · manuel · hold`.
+10. Pied de page, à gauche : `parametres medicaux 0.1.0`, la version des paramètres
+    médicaux signés que la console applique (en rouge avec `NON SIGNES` : la console
+    est en mode banc seulement, un bandeau rouge `PARAMETRES MEDICAUX NON SIGNES` le
+    dit en haut de toutes les pages ; seules les séances de banc sont possibles,
+    prévenir la personne qui administre le Pi). Puis `liaison ouverte · repos`
+    (liaison et mode). Pendant une séance, la phase s'ajoute : par exemple
+    `liaison ouverte · manuel · hold`.
 11. **STOP** (orange, « rampe controlee ») et **E-STOP** (rouge, « verrouille
     immediatement »).
 
@@ -575,8 +579,8 @@ Repères :
 Règles de la cible :
 
 * La cible est une **destination**. La machine y va aux limites anti nausée
-  (accélération du bras et vitesse de variation des g, fichier
-  `config/motion_limits.json`). Toute règle de sécurité reste prioritaire.
+  (accélération du bras et vitesse de variation des g, fichier médical signé
+  `config/medical_parameters.json`). Toute règle de sécurité reste prioritaire.
 * Les boutons gardent le brouillon dans le domaine permis : ils ne dépassent jamais le
   plafond, et sautent directement au minimum de rotation en montant depuis 0.
 * Après n'importe quel arrêt (STOP, E-STOP, règle de sécurité), la cible vaut 0.
@@ -1378,7 +1382,8 @@ Pas à pas :
     **remonte seule** quand il se lève.
 
 Âge du passager, constaté avant ANH-84 avec l'ancien champ : à 15 ans,
-`demarrage refuse : passager de 15 ans, minimum 18 ans (MIN_RIDER_AGE)`. Depuis ANH-84
+`demarrage refuse : passager de 15 ans, minimum 18 ans (MIN_RIDER_AGE)` ; depuis ANH-139
+la parenthèse dit `(min_rider_age des parametres medicaux)`. Depuis ANH-84
 l'âge vient de l'année de naissance réglée sur le site ; les refus liés au passager
 (aucun choisi, absent de la liste, valeur manquante sur le site) sont listés au §14 et
 dans [la référence](../console-locale.md#9-page--seance-). Ils sont tenus par les tests,
@@ -1980,7 +1985,8 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `configuration: BITALINO_ADDRESS: ... ECG_SOURCE=serial attend un port serie (/dev/rfcomm0, COM4) ou une adresse MAC` | adresse du boîtier manquante ou au mauvais format | corriger `BITALINO_ADDRESS` |
 | `configuration: MOTOR_MAX_RPM: <n> tr/min hors de 0..1380 (plaque signaletique)` | plafond supérieur à la plaque moteur | rester entre 0 et 1380 |
 | `configuration: SENSORS: ECG obligatoire : la frequence cardiaque pilote le moteur` | ECG retiré de la liste | remettre `ECG` |
-| `configuration: HR_CRITICAL_BPM: <n> bpm doit etre au-dessus de HR_HARD_MAX_BPM` | paliers cardiaques incohérents | décision médicale : corriger les deux valeurs |
+| `configuration: MIN_RIDER_AGE: n'est plus lue : la valeur est parameters.min_rider_age de config/medical_parameters.json, signe ; retirer cette cle du .env` (de même pour `HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM`, `MOTION_LIMITS_PATH`) | une valeur médicale encore réglée dans le `.env` | retirer la ligne du `.env` ; changer la valeur est une décision médicale, à signer dans le fichier médical |
+| `configuration: config/medical_parameters.json:<membre>: ...` | une valeur du fichier médical hors des bornes que la console accepte | faire corriger et signer de nouveau le fichier par le signataire médical |
 | `configuration: CONVEX_URL: ... attendu https://<deploiement>.convex.site avec MACHINE_API_KEY` | clé du tableau de bord sans adresse valable | vider `MACHINE_API_KEY` ou corriger l'URL (`.convex.site`) |
 | `drive cable already owned`, suivi du numéro de processus (PID) du programme qui tient la liaison | un autre programme de cet ordinateur possède déjà la liaison avec le variateur : celui lancé en second est refusé avant toute ouverture du câble. `scripts/probe_atv320.py` et `scripts/scan_modbus.py` l'écrivent après `REFUS:` et s'arrêtent, `scripts/bench_console.py` après `liaison NON etablie:` ; la console le répète dans la ligne `derniere erreur` de sa carte Variateur | fermer le programme qui tient la liaison, puis relancer |
 
@@ -2050,7 +2056,8 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `demarrage refuse : la machine est deja <état>` | une séance existe déjà | STOP d'abord (§13.5) |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante | §13.1 |
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente | §13.6 |
-| `demarrage refuse : seuil <nom> different de celui du superviseur` | les paliers cardiaques du profil ne sont pas ceux de `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM` | corriger le profil ou la configuration (décision médicale) |
+| `demarrage refuse : seuil <nom> different de celui du superviseur` | les paliers cardiaques du profil ne sont pas ceux du fichier médical signé | corriger le profil ; changer les paliers du fichier est une décision médicale |
+| `parametres medicaux non signes (<raison>) : console en mode banc seulement, aucune seance programmee ni personne a bord` (aussi dans le bandeau rouge `PARAMETRES MEDICAUX NON SIGNES`) | la signature du fichier médical ne s'est pas vérifiée au démarrage | séances de banc seulement ; prévenir la personne qui administre le Pi : le fichier doit être signé de nouveau, puis la console redémarrée |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | le variateur tournait déjà (ancien programme mort) | attendre l'arrêt, acquitter |
 | `demarrage refuse : variateur en defaut (<code>, LFT <n>)` | défaut variateur présent au moment où la machine arme la séance. Depuis la page, la console refuse en général avant, au clic (tableau précédent) | §13.9 |
 | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sur le disque du Pi pour enregistrer la séance | exporter les enregistrements utiles, puis libérer de la place sur le Pi ([référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale)) |
@@ -2063,7 +2070,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `demarrage refuse : FC max du passager non renseignee sur le site (a regler par un gestionnaire)` ou `... annee de naissance ...` | valeur absente sur le site | la faire régler sur le site par un gestionnaire |
 | `demarrage refuse : liste des passagers perimee : ...`, `... pas encore recue ...`, `... aucun tableau de bord configure ...` | la console n'a pas de liste à jour | vérifier le lien avec le tableau de bord (pastille **Serveur**) |
 | `demarrage refuse : age du passager requis pour une seance programmee` | lancement venu du tableau de bord sans âge | régler l'année de naissance sur le site |
-| ✔ `demarrage refuse : passager de 15 ans, minimum 18 ans (MIN_RIDER_AGE)` | passager trop jeune | refus voulu (décision médicale pour changer) |
+| ✔ `demarrage refuse : passager de 15 ans, minimum 18 ans (min_rider_age des parametres medicaux)` | passager trop jeune | refus voulu (décision médicale pour changer) |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) | enregistrer le profil sur le Pi |
 | `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil incompatible avec la FC max du passager | changer de profil |
 | `demarrage refuse : programme a <n> tr/min moteur, au-dessus du plafond personne a bord (<m> tr/min)` | profil trop rapide pour une personne à bord | changer de profil |

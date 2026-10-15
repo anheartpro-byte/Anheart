@@ -17,7 +17,9 @@ something does not work:
   writes (:mod:`src.wall_clock`);
 * whether the console is in service, what its last stop was
   (:mod:`src.service_state`), and whether it tells the service manager it is
-  alive (:mod:`src.service_watchdog`).
+  alive (:mod:`src.service_watchdog`);
+* which medical parameters it runs with, and whether their signature holds
+  (:mod:`src.medical`).
 
 These are plain frozen records. The composition root
 (:mod:`src.local_panel`) builds one on request through :class:`PanelSource`;
@@ -35,6 +37,7 @@ from src.bitalino_client import LinkStats
 from src.contract import SoftwareVersion
 from src.ecg_pipeline import EcgBridgeStats
 from src.link_state import LinkStatus
+from src.medical import MedicalStatus
 from src.service_state import IN_SERVICE, ServiceStatus
 from src.service_watchdog import WatchdogStatus
 from src.training.runtime import IdleLink, RiseHold
@@ -150,6 +153,10 @@ class PanelStatus:
 
     watchdog: WatchdogStatus = NOT_SUPERVISED
     """What the console has told the service manager of its control loop."""
+
+    medical: MedicalStatus | None = None
+    """The medical parameters and the verdict of their signature, read at startup;
+    ``None`` on a source that has none to report (a test of something else)."""
 
 
 class PanelSource(Protocol):

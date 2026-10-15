@@ -40,8 +40,8 @@ from simulation.invariants import Metrics, Violation, check_expectations, check_
 from simulation.scenario import SCENARIO_DIR, SIM_PROFILES_PATH, Scenario, parse_scenario
 from simulation.tracefile import JsonValue
 from src.geometry import CONFIRMED_GEAR_RATIO
-from src.local_config import DEFAULT_MIN_RIDER_AGE
 from src.local_panel import rider_age_refusal
+from src.medical import SHIPPED_PARAMETERS
 from src.result import Err
 from src.training.plan import (
     SHIPPED_DEFAULTS_PATH,
@@ -140,7 +140,7 @@ def eligibility(subject: CohortSubject, session: SessionType) -> Eligibility | N
         return None
     profile_id, defaults = spec
     store = _store(defaults)
-    too_young = rider_age_refusal(subject.age_years, DEFAULT_MIN_RIDER_AGE)
+    too_young = rider_age_refusal(subject.age_years, SHIPPED_PARAMETERS.min_rider_age)
     expected = too_young is not None or base_profile(profile_id, defaults).zone_high_bpm > (
         ZONE_CEILING_FRACTION * subject.hr_max
     )
@@ -249,7 +249,10 @@ def expectations_for(subject: CohortSubject, profile: TrainingProfile) -> dict[s
 
 def known_defect_for(subject: CohortSubject, session: SessionType) -> str | None:
     """The documented defect this pair is expected to show, if any."""
-    if session is not SessionType.MANUAL_BENCH and subject.age_years < DEFAULT_MIN_RIDER_AGE:
+    if (
+        session is not SessionType.MANUAL_BENCH
+        and subject.age_years < SHIPPED_PARAMETERS.min_rider_age
+    ):
         return None  # refused by the console's age gate: nothing runs, nothing to show
     evidence = KNOWN_VASOVAGAL_ONSET.get((subject.subject_id, session))
     if evidence is not None:

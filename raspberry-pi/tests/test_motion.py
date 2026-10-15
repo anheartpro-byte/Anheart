@@ -8,11 +8,9 @@ never moves more than the rate allows - the 0 <-> min_run passage excepted.
 
 from __future__ import annotations
 
-import json
 import math
 from abc import abstractmethod
 from dataclasses import FrozenInstanceError, replace
-from pathlib import Path
 from typing import Final, Protocol, cast
 
 import pytest
@@ -20,16 +18,15 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from src.geometry import MachineGeometry
-from src.result import Err, Ok
+from src.medical import SHIPPED_PARAMETERS
 from src.training.motion import (
     DEFAULT_MOTION_LIMITS,
     MotionLimits,
     carry_after,
     count_reversals,
-    load_motion_limits,
+    limits_of,
     motor_rate_limit,
     next_setpoint,
-    parse_motion_limits,
     ramp_duration,
 )
 from src.units import (
@@ -370,55 +367,17 @@ def test_reversals_are_counted_across_holds(setpoints: tuple[int, ...], expected
 
 
 # =========================================================================
-# Loading
+# From the medical file
 # =========================================================================
 
-GOOD_DOCUMENT: Final[dict[str, object]] = {
-    "output_rpm_per_s": 0.25,
-    "g_per_s": 0.03,
-    "min_run_motor_rpm": 55,
-    "max_interval_s": 1.0,
-}
+
+def test_the_limits_are_those_the_medical_file_signed() -> None:
+    """The four numbers come from ``config/medical_parameters.json``, none from this module."""
+    assert limits_of(SHIPPED_PARAMETERS.motion_limits) == LIMITS
 
 
-def test_the_shipped_file_loads_the_defaults() -> None:
-    shipped = Path(__file__).resolve().parent.parent / "config" / "motion_limits.json"
-    assert load_motion_limits(shipped) == Ok(LIMITS)
-
-
-def test_the_interval_is_optional() -> None:
-    document = {key: value for key, value in GOOD_DOCUMENT.items() if key != "max_interval_s"}
-    assert parse_motion_limits(document) == Ok(LIMITS)
-
-
-@pytest.mark.parametrize(
-    ("document", "match"),
-    [
-        ([], "JSON object"),
-        ({**GOOD_DOCUMENT, "g_per_s": True}, "g_per_s must be a number"),
-        ({**GOOD_DOCUMENT, "output_rpm_per_s": "fast"}, "output_rpm_per_s must be a number"),
-        ({key: v for key, v in GOOD_DOCUMENT.items() if key != "g_per_s"}, "g_per_s"),
-        ({**GOOD_DOCUMENT, "min_run_motor_rpm": 55.5}, "whole number"),
-        ({**GOOD_DOCUMENT, "output_rpm_per_s": 9.0}, "output_accel"),
-    ],
-)
-def test_a_bad_document_is_refused_in_words(document: object, match: str) -> None:
-    parsed = parse_motion_limits(document)
-    assert isinstance(parsed, Err)
-    assert match in parsed.error
-
-
-def test_a_file_that_cannot_be_read_or_parsed_is_refused(tmp_path: Path) -> None:
-    missing = load_motion_limits(tmp_path / "absent.json")
-    assert isinstance(missing, Err)
-    assert "cannot read" in missing.error
-    garbage = tmp_path / "garbage.json"
-    garbage.write_text("{not json", encoding="utf-8")
-    broken = load_motion_limits(garbage)
-    assert isinstance(broken, Err)
-    assert "not valid JSON" in broken.error
-    wrong = tmp_path / "wrong.json"
-    wrong.write_text(json.dumps({**GOOD_DOCUMENT, "g_per_s": -1}), encoding="utf-8")
-    refused = load_motion_limits(wrong)
-    assert isinstance(refused, Err)
-    assert str(wrong) in refused.error
+def test_a_signed_value_outside_the_limiter_s_bounds_is_refused() -> None:
+    """A signature vouches for who decided, not that 2.5 was not meant to be 0.25."""
+    values = replace(SHIPPED_PARAMETERS.motion_limits, output_rpm_per_s=OutputRpmPerSecond(2.5))
+    with pytest.raises(ValueError, match="output_accel"):
+        limits_of(values)

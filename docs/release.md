@@ -775,15 +775,22 @@ git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u | tr '\n' 
 La première commande cherche dans tout le dépôt, sans se limiter à un dossier,
 et aux deux bouts : un fichier qui portait le marqueur à `<base>` et ne le
 porte plus sur `origin/develop` y figure aussi. Outre le code
-(`raspberry-pi/src`, `convex`), elle trouve
-`raspberry-pi/config/motion_limits.json`, dont toutes les valeurs sont `[MED]`,
-et `raspberry-pi/.env.example`. Les pages de `docs/`, le modèle de PR de
+(`convex`), elle trouve `raspberry-pi/config/medical_parameters.json`, qui
+porte toutes les valeurs `[MED]` du Pi depuis ANH-139, et, pour une release
+dont la base précède ANH-139, les fichiers qui les portaient avant lui
+(`raspberry-pi/src`, `raspberry-pi/config/motion_limits.json`,
+`raspberry-pi/.env.example`). Une valeur de `medical_parameters.json` qui
+change sans que `medical_parameters.sig` change avec elle met la console en
+mode banc : `python scripts/sign_medical_parameters.py verify`, lancé depuis
+`raspberry-pi/` sur le candidat, dit si la signature tient
+([securite.md, section 13](securite.md#13-décisions-médicales--un-fichier-signé-anh-139)).
+Les pages de `docs/`, le modèle de PR de
 release et les tests qui nomment le marqueur sortent avec eux : ils ne règlent
 rien, mais une page qui annonce une autre valeur que le code est à corriger.
 
-Le marqueur désigne un fichier, pas une ligne : dans `motion_limits.json` il
-est dans le commentaire d'en-tête, et les valeurs sont sur les lignes
-suivantes. C'est donc le diff entier de ces fichiers qui se relit, pas les
+Le marqueur désigne un fichier, pas une ligne : dans `medical_parameters.json`
+il est dans le commentaire d'en-tête (`_comment`), et les valeurs sont sur les
+lignes suivantes. C'est donc le diff entier de ces fichiers qui se relit, pas les
 seules lignes où `[MED]` est écrit. Si la première commande ne liste rien, la
 seconde n'a pas lieu d'être, et elle ne montre rien.
 

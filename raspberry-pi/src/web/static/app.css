@@ -425,6 +425,18 @@ canvas {
 
 .footer-status { color: var(--ink-dim); font-family: var(--mono); font-size: 0.8rem; margin-right: auto; }
 
+/* The medical parameters' version: dim when signed, red when not (the banner says why). */
+.footer-medical {
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.footer-medical.bad { color: var(--bad); font-weight: 700; }
+
 .btn-stop {
   min-width: 9rem;
   padding: 0.6rem 1rem;

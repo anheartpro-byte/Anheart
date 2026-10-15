@@ -241,11 +241,14 @@ policy.
 * **MANUAL**: the operator sets the speed. Only ever started at the console.
   Nothing on the dashboard can start one; it only shows it.
 
-**Cardiac tiers.** The supervisor's `HR_HARD_MAX_BPM` / `HR_CRITICAL_BPM`
-(default 148 / 158) must equal every preset's `hard_max_bpm` /
+**Cardiac tiers.** The supervisor's tiers, `hr_hard_max_bpm` /
+`hr_critical_bpm` of the signed medical file `config/medical_parameters.json`
+(148 / 158 as shipped), must equal every preset's `hard_max_bpm` /
 `critical_bpm`. Presets that disagree are refused at start and are not
-offered on the dashboard. A zone around 150 bpm needs higher tiers than the
-defaults, which is a decision for the medical side, made in `.env`.
+offered on the dashboard. A zone around 150 bpm needs higher tiers, which is
+a decision for the medical side, signed in that file (docs/securite.md,
+section 13); no `.env` key sets them any more. Without a valid signature the
+console starts in bench mode only.
 
 ---
 

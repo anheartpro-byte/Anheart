@@ -1410,6 +1410,32 @@ function doRestoreService() {
     });
 }
 
+/*
+  The medical parameters the console runs with, from /api/panel: the version
+  in the footer of every page, and, when their signature did not verify at
+  startup, the red banner of the bench mode. Both standing states: they
+  change only with a restart of the console.
+*/
+function renderMedical(medical) {
+  var footer = el("footer-medical");
+  if (!medical) {
+    text(footer, "parametres medicaux -");
+    footer.classList.remove("bad");
+    showBanner(el("medical-banner"), false, false);
+    return;
+  }
+  text(
+    footer,
+    "parametres medicaux " + medical.version + (medical.signed ? "" : " NON SIGNES")
+  );
+  footer.classList.toggle("bad", !medical.signed);
+  var detail = el("medical-banner-detail");
+  var notice = medical.warning || "";
+  var reworded = detail.textContent !== notice;
+  text(detail, notice);
+  showBanner(el("medical-banner"), !medical.signed, reworded);
+}
+
 function renderPanel(panel) {
   state.panel = panel;
   state.panelAt = performance.now();
@@ -1419,6 +1445,7 @@ function renderPanel(panel) {
     return;
   }
   pill(el("software-version"), panel.software_version, "");
+  renderMedical(panel.medical_parameters);
   renderDashboardLink(panel.dashboard);
   if (panel.wall_clock) {
     renderWallClock(panel.wall_clock);

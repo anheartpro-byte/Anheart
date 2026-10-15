@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from simulation.harness import (
-    MOTION_LIMITS_PATH,
     PANEL_SAFETY,
     RUNTIME_LIMITS,
     TICK,
@@ -34,26 +33,18 @@ from src.units import Bpm, Monotonic, MotorRpm, Seconds
 def test_the_harness_mirrors_the_console_it_stands_in_for() -> None:
     """Drift detector: the harness's constants are the composition root's."""
     from src import local_panel  # noqa: PLC0415  # heavy import, this test only
-    from src.local_config import DEFAULT_MOTION_LIMITS_PATH  # noqa: PLC0415
+    from src.local_config import load_local_config  # noqa: PLC0415
 
     assert local_panel.RUNTIME_LIMITS == RUNTIME_LIMITS
     assert local_panel.CONTROL_PERIOD == TICK
-    assert PANEL_SAFETY.hard_max_bpm == local_panel.PANEL_HARD_MAX_BPM
-    assert PANEL_SAFETY.critical_bpm == local_panel.PANEL_CRITICAL_BPM
-    assert MOTION_LIMITS_PATH == local_panel.PROJECT_ROOT / DEFAULT_MOTION_LIMITS_PATH
+    loaded = load_local_config({"MOTOR_BACKEND": "sim", "ECG_SOURCE": "sim", "ARM_RADIUS_M": "1.5"})
+    assert isinstance(loaded, Ok)
+    config = loaded.value
+    assert config.medical.signed
+    assert PANEL_SAFETY.hard_max_bpm == config.tiers.hard_max_bpm == 148
+    assert PANEL_SAFETY.critical_bpm == config.tiers.critical_bpm == 158
+    assert load_motion() == config.motion
     assert load_motion().min_run == 55
-
-
-def test_an_unusable_motion_file_refuses_to_start(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    from simulation import harness  # noqa: PLC0415
-
-    broken = tmp_path / "limits.json"
-    broken.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(harness, "MOTION_LIMITS_PATH", broken)
-    with pytest.raises(ValueError, match="motion limits unusable"):
-        harness.load_motion()
 
 
 # -- the DIRECT sensor ---------------------------------------------------------

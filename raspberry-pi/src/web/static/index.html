@@ -102,6 +102,18 @@
     <strong>VARIATEUR EN DEFAUT</strong>
     <span id="drive-fault-banner-detail">aucun demarrage n'est accepte tant que le variateur signale un defaut</span>
   </div>
+  <!--
+    The medical parameters (config/medical_parameters.json) are not proven
+    signed: the console started in bench mode only. A standing state from
+    /api/panel, read at startup, on every page for as long as the console
+    runs: nothing at the console lifts it, only a file signed again and a
+    restart. Red, under the drive's fault and above the orange notice: a
+    programmed session and a person on board are refused.
+  -->
+  <div id="medical-banner" class="banner hidden" role="alert" aria-live="assertive">
+    <strong>PARAMETRES MEDICAUX NON SIGNES</strong>
+    <span id="medical-banner-detail">mode banc seulement : aucune seance programmee ni personne a bord</span>
+  </div>
   <div id="resume-banner" class="banner banner-warn hidden" role="status" aria-live="polite">
     <strong>REPRISE AUTOMATIQUE POSSIBLE</strong>
     <span id="resume-banner-detail">un avertissement non verrouille se leve seul : la vitesse remonte alors sans aucun clic</span>
@@ -589,7 +601,9 @@
 
 <!--
   The footer is fixed and present on EVERY page, because the moment somebody
-  needs to stop the machine is not a moment for finding the right page.
+  needs to stop the machine is not a moment for finding the right page. It
+  also names the medical parameters the console runs with (their version, and
+  whether their signature holds), so every page says which ones apply.
 
   The E-stop asks for nothing: no confirmation dialog, no name, no reason. One
   that asks "are you sure?" is not an emergency stop. It is also, and the page
@@ -598,6 +612,7 @@
   failed. The stop that does not depend on software is the wired mushroom.
 -->
 <footer id="footer" class="footer">
+  <span id="footer-medical" class="footer-medical">parametres medicaux -</span>
   <span id="footer-status" class="footer-status">&mdash;</span>
   <button id="stop" class="btn btn-stop" type="button">STOP<small>rampe controlee</small></button>
   <button id="estop" class="btn btn-estop" type="button">E-STOP<small>verrouille immediatement</small></button>

@@ -22,20 +22,28 @@ The drive-link keys (``MOTOR_PORT``, ``MOTOR_SLAVE_ID``, ``MODBUS_*``,
 scripts (``scripts/drive_link.py``) call too, so the console and the scripts
 cannot disagree about how the ATV320 is reached.
 
-Three keys gate what the machine may do, and all three default to "no":
+Two keys gate what the machine may do, and both default to "no":
 
 * ``PROGRAMS_ENABLED`` (default false): programmed sessions, where the heart
   rate drives the speed. Milestone M5. A programmed session always has a
   person on board, so it also needs the occupied ceiling
   (``OCCUPANCY_OCCUPIED_ENABLED``, milestone M6) and must fit under it.
-* ``HR_HARD_MAX_BPM`` / ``HR_CRITICAL_BPM`` (default 148 / 158): the cardiac
-  tiers of the ONE safety supervisor. They come from the medical screening of
-  the riders this machine is set up for, and every programme must carry the
-  same two numbers (the runtime refuses a mismatch). A jog zone around
-  150 bpm needs higher tiers than the defaults: that is a medical decision,
-  made here, deliberately, and never by a dashboard.
 * ``MACHINE_API_KEY`` + ``CONVEX_URL``: the dashboard link. Blank key, no link,
   and the console runs exactly as it does offline.
+
+No key sets a medical value. The cardiac tiers of the ONE safety supervisor,
+the youngest rider a programme accepts, the resultant-g ceiling with a person
+on board and the anti-nausea motion limits come from
+``config/medical_parameters.json``, read and verified by :mod:`src.medical`
+(:attr:`LocalConfig.medical`). The keys that used to set some of them
+(:data:`MEDICAL_KEYS`) are a configuration error when still set: two sources
+for one medical value is how the unsigned one ends up applied. When the
+file's signature does not verify, the console starts in **bench mode only**:
+``PROGRAMS_ENABLED`` and ``OCCUPANCY_OCCUPIED_ENABLED`` are forced to false,
+whatever the ``.env`` says (:class:`LocalConfig` refuses the other
+combination). The values are checked here against the bounds the rest of the
+console holds them to, and a value outside them is a configuration problem,
+signed or not.
 
 The session record (the local black box) has its own keys, all optional:
 ``RECORD_ROOT`` (default ``data/records``, relative to ``raspberry-pi/``),
@@ -59,7 +67,9 @@ start, as it does not start without ``UI_TOKEN``. Only the two paths are read
 here; the files are opened when the console starts (:mod:`src.web.tls`).
 
 Nothing here opens a port or reads a clock. ``env`` is passed in, so the whole
-module is testable with a dict.
+module is testable with a dict; so is the medical status, which is otherwise
+the shipped file's, verified when :func:`load_local_config` is called (the
+two small files of the signature are the only thing it reads).
 """
 
 from __future__ import annotations
@@ -73,6 +83,7 @@ from pathlib import Path
 from typing import Final, assert_never
 
 from src.geometry import CONFIRMED_GEAR_RATIO, MachineGeometry
+from src.medical import PARAMETERS_PATH, MedicalStatus, shipped_status
 from src.motor.atv320 import (
     DEFAULT_BAUDRATE,
     DEFAULT_SLAVE_ADDRESS,
@@ -85,6 +96,7 @@ from src.panel_status import EcgSource as _EcgSource
 from src.panel_status import MotorBackend as _MotorBackend
 from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind, parse_kind
+from src.training.motion import MotionLimits, limits_of
 from src.training.plan import (
     MAX_SUBJECT_AGE_YEARS,
     MIN_SUBJECT_AGE_YEARS,
@@ -93,7 +105,7 @@ from src.training.plan import (
     SUBJECT_HR_MAX_MIN,
 )
 from src.training.types import Occupancy, OccupancyRefused
-from src.units import Bpm, GearRatio, Metres, MotorRpm, ResultantG, Seconds
+from src.units import Bpm, GearRatio, Metres, MotorRpm, Seconds
 from src.web.deps import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -139,6 +151,22 @@ KEY_RECORD_MACHINE_ID: Final[str] = "RECORD_MACHINE_ID"
 KEY_RECORD_ORGANIZATION_ID: Final[str] = "RECORD_ORGANIZATION_ID"
 KEY_RECORD_DRIVE_SDK_FRAMES: Final[str] = "RECORD_DRIVE_SDK_FRAMES"
 
+MEDICAL_FILE: Final[str] = f"config/{PARAMETERS_PATH.name}"
+"""How a problem with a medical value names where it is: ``<this>:<member>``."""
+
+MEDICAL_KEYS: Final[Mapping[str, str]] = {
+    KEY_HR_HARD_MAX_BPM: "parameters.hr_hard_max_bpm",
+    KEY_HR_CRITICAL_BPM: "parameters.hr_critical_bpm",
+    KEY_MIN_RIDER_AGE: "parameters.min_rider_age",
+    KEY_MOTION_LIMITS_PATH: "parameters.motion_limits",
+}
+"""Keys that used to set a medical value, each with the member of the signed file that does now.
+
+Unlike :data:`RETIRED_KEYS`, a value still set for one of them is a
+configuration error, not a warning: the console does not start while a
+``.env`` says a medical value of its own.
+"""
+
 RETIRED_KEYS: Final[Mapping[str, str]] = {
     "ANHEART_SOFTWARE_VERSION": (
         "the session records are stamped with the VERSION file of the build, like the "
@@ -161,8 +189,6 @@ MAX_ARM_RADIUS_M: Final[float] = 5.0
 BENCH_CONSOLE_PORT: Final[int] = 8123
 """``scripts/bench_console.py`` listens here; the console must not collide with it."""
 
-DEFAULT_MOTION_LIMITS_PATH: Final[Path] = Path("config/motion_limits.json")
-
 DEFAULT_RECORD_ROOT: Final[Path] = Path("data/records")
 """One directory per session, under ``raspberry-pi/`` (``data/`` is git-ignored)."""
 
@@ -181,22 +207,6 @@ TLS_NAME: Final[re.Pattern[str]] = re.compile(
 )
 """An IPv4 address or a host name, in lower case: what a tablet types before
 the port, and nothing else (no scheme, no port, no path)."""
-
-OCCUPIED_INITIAL_RESULTANT_G: Final[ResultantG] = ResultantG(1.2)
-"""First-trial ceiling with a person on board, about 990 motor rpm at 1.5 m.
-
-[MED][ING] placeholder: unreachable until ``OCCUPANCY_OCCUPIED_ENABLED`` is set,
-which milestone M6 gates on written engineering and medical sign-off.
-"""
-
-DEFAULT_HR_HARD_MAX_BPM: Final[Bpm] = Bpm(148)
-DEFAULT_HR_CRITICAL_BPM: Final[Bpm] = Bpm(158)
-"""The tiers of ``config/profiles.default.json``, screened for a 65-year-old."""
-
-DEFAULT_MIN_RIDER_AGE: Final[int] = 18
-"""Youngest rider a PROGRAMMED session accepts. [MED] A conservative default: the
-simulation battery showed a 10-year-old accepted on the adult ceiling with nothing
-to stop it. Lowering it is a medical decision, made here, never by a dashboard."""
 
 _LOCAL_HOSTS: Final[tuple[str, ...]] = ("http://localhost", "http://127.0.0.1")
 
@@ -272,11 +282,6 @@ class CardiacTiers:
     critical_bpm: Bpm
 
 
-DEFAULT_TIERS: Final[CardiacTiers] = CardiacTiers(
-    hard_max_bpm=DEFAULT_HR_HARD_MAX_BPM, critical_bpm=DEFAULT_HR_CRITICAL_BPM
-)
-
-
 @dataclass(frozen=True, slots=True)
 class CloudConfig:
     """Where the dashboard lives and this machine's key. The key never appears in a repr."""
@@ -324,12 +329,18 @@ class LocalConfig:
     geometry: MachineGeometry
     motor_max_rpm: MotorRpm
     occupied_enabled: bool
-    web: WebConfig
-    motion_limits_path: Path
-    programs_enabled: bool = False
-    """Programmed (heart-rate-driven) sessions. See the module docstring."""
+    """A person on board may be accepted. Never ``True`` with unsigned medical parameters."""
 
-    tiers: CardiacTiers = DEFAULT_TIERS
+    web: WebConfig
+    medical: MedicalStatus
+    """The medical parameters and the verdict of their signature (:mod:`src.medical`)."""
+
+    motion: MotionLimits
+    """The anti-nausea limits of the medical file, checked against the limiter's bounds."""
+
+    programs_enabled: bool = False
+    """Programmed (heart-rate-driven) sessions. Never ``True`` with unsigned medical parameters."""
+
     cloud: CloudConfig | None = None
     """``None``: no dashboard link, the console is purely local."""
 
@@ -337,9 +348,6 @@ class LocalConfig:
     """The BITalino channels acquired and shown (``SENSORS``). Always contains ECG."""
 
     camera: CameraSource = CameraSource.NONE
-    min_rider_age: int = DEFAULT_MIN_RIDER_AGE
-    """Programmed sessions refuse a rider younger than this, or of unknown age."""
-
     leg_tip_radius: Metres | None = None
     """The rider's farthest point from the axis (``LEG_TIP_RADIUS_M``); the anti-nausea
     g-rate limit is judged there. ``None``: judged at ``ARM_RADIUS_M``, which
@@ -348,17 +356,48 @@ class LocalConfig:
     record: RecordConfig = DEFAULT_RECORD_CONFIG
     """The local black box: where it writes and what it stamps."""
 
+    def __post_init__(self) -> None:
+        """Refuse a configuration that would let unsigned medical parameters near a person.
+
+        :func:`load_local_config` never builds one; this makes the bench mode a
+        property of every :class:`LocalConfig`, not of one function. Raises
+        ``ValueError``, at startup, with nothing turning.
+        """
+        if not self.medical.signed and (self.programs_enabled or self.occupied_enabled):
+            raise ValueError(
+                f"{self.medical.warning} : PROGRAMS_ENABLED et "
+                "OCCUPANCY_OCCUPIED_ENABLED doivent etre faux"
+            )
+
+    @property
+    def tiers(self) -> CardiacTiers:
+        """The supervisor's two cardiac tiers, from the medical file."""
+        parameters = self.medical.parameters
+        return CardiacTiers(
+            hard_max_bpm=parameters.hr_hard_max_bpm, critical_bpm=parameters.hr_critical_bpm
+        )
+
+    @property
+    def min_rider_age(self) -> int:
+        """Programmed sessions refuse a rider younger than this, or of unknown age."""
+        return self.medical.parameters.min_rider_age
+
     def ceiling_for(self, occupancy: Occupancy) -> Result[MotorRpm, OccupancyRefused]:
         """The motor-rpm ceiling for ``occupancy``, or why motion is refused.
 
         BENCH: ``MOTOR_MAX_RPM``, which is never above the nameplate. OCCUPIED:
-        refused while ``OCCUPANCY_OCCUPIED_ENABLED`` is false; once enabled, the
-        lower of ``MOTOR_MAX_RPM`` and the first-trial resultant-g ceiling.
+        refused while the medical parameters are not signed, and while
+        ``OCCUPANCY_OCCUPIED_ENABLED`` is false; once enabled, the lower of
+        ``MOTOR_MAX_RPM`` and the medical file's resultant-g ceiling with a
+        person on board.
         """
         match occupancy:
             case Occupancy.BENCH:
                 return Ok(self.motor_max_rpm)
             case Occupancy.OCCUPIED:
+                warning = self.medical.warning
+                if warning is not None:
+                    return Err(OccupancyRefused(occupancy, f"personne a bord refusee : {warning}"))
                 if not self.occupied_enabled:
                     return Err(
                         OccupancyRefused(
@@ -367,7 +406,7 @@ class LocalConfig:
                             "(jalon M6, accords ingenierie et medical requis)",
                         )
                     )
-                trial = self.geometry.motor_rpm_for(OCCUPIED_INITIAL_RESULTANT_G)
+                trial = self.geometry.motor_rpm_for(self.medical.parameters.occupied_ceiling_g)
                 return Ok(MotorRpm(min(self.motor_max_rpm, trial)))
         raise assert_never(occupancy)
 
@@ -569,37 +608,6 @@ def _flag(env: Mapping[str, str], key: str) -> Result[bool, ConfigProblem]:
     return Err(ConfigProblem(key, f"{text!r} : attendu true ou false"))
 
 
-def _bpm(env: Mapping[str, str], key: str, default: Bpm) -> Result[Bpm, ConfigProblem]:
-    value = _int(_text(env, key, str(default)), key)
-    if isinstance(value, Err):
-        return value
-    if not SUBJECT_HR_MAX_MIN <= value.value <= SUBJECT_HR_MAX_MAX:
-        return Err(
-            ConfigProblem(
-                key, f"{value.value} bpm hors de {SUBJECT_HR_MAX_MIN}..{SUBJECT_HR_MAX_MAX}"
-            )
-        )
-    return Ok(Bpm(value.value))
-
-
-def _tiers(env: Mapping[str, str]) -> Result[CardiacTiers, ConfigProblem]:
-    hard = _bpm(env, KEY_HR_HARD_MAX_BPM, DEFAULT_HR_HARD_MAX_BPM)
-    if isinstance(hard, Err):
-        return hard
-    critical = _bpm(env, KEY_HR_CRITICAL_BPM, DEFAULT_HR_CRITICAL_BPM)
-    if isinstance(critical, Err):
-        return critical
-    if critical.value <= hard.value:
-        return Err(
-            ConfigProblem(
-                KEY_HR_CRITICAL_BPM,
-                f"{critical.value} bpm doit etre au-dessus de {KEY_HR_HARD_MAX_BPM} "
-                f"({hard.value} bpm)",
-            )
-        )
-    return Ok(CardiacTiers(hard_max_bpm=hard.value, critical_bpm=critical.value))
-
-
 def _cloud(env: Mapping[str, str]) -> Result[CloudConfig | None, ConfigProblem]:
     """No key, no link. A key needs an https URL (plain http only to this host)."""
     key = _text(env, KEY_MACHINE_API_KEY, "")
@@ -634,18 +642,55 @@ def _sensors(env: Mapping[str, str]) -> Result[tuple[SensorKind, ...], ConfigPro
     return Ok(tuple(kinds))
 
 
-def _min_rider_age(env: Mapping[str, str]) -> Result[int, ConfigProblem]:
-    value = _int(_text(env, KEY_MIN_RIDER_AGE, str(DEFAULT_MIN_RIDER_AGE)), KEY_MIN_RIDER_AGE)
-    if isinstance(value, Err):
-        return value
-    if not MIN_SUBJECT_AGE_YEARS <= value.value <= MAX_SUBJECT_AGE_YEARS:
-        return Err(
+def _medical_keys(env: Mapping[str, str]) -> tuple[ConfigProblem, ...]:
+    """Every :data:`MEDICAL_KEYS` still given a value: one problem each."""
+    return tuple(
+        ConfigProblem(
+            key,
+            f"n'est plus lue : la valeur est {member} de {MEDICAL_FILE}, signe ; "
+            "retirer cette cle du .env",
+        )
+        for key, member in MEDICAL_KEYS.items()
+        if env.get(key, "").strip()
+    )
+
+
+def _medical_values(medical: MedicalStatus) -> Result[MotionLimits, tuple[ConfigProblem, ...]]:
+    """The medical values held to the bounds the console holds every value to.
+
+    The same bounds the ``.env`` keys had: a heart rate the profile checks can
+    believe, an age the formula holds for, and the motion limiter's own
+    limits. Signed or not: a signature vouches for who decided, not that the
+    number was typed right.
+    """
+    parameters = medical.parameters
+    problems = [
+        ConfigProblem(
+            f"{MEDICAL_FILE}:{member}",
+            f"{bpm} bpm hors de {SUBJECT_HR_MAX_MIN}..{SUBJECT_HR_MAX_MAX}",
+        )
+        for member, bpm in (
+            ("hr_hard_max_bpm", parameters.hr_hard_max_bpm),
+            ("hr_critical_bpm", parameters.hr_critical_bpm),
+        )
+        if not SUBJECT_HR_MAX_MIN <= bpm <= SUBJECT_HR_MAX_MAX
+    ]
+    if not MIN_SUBJECT_AGE_YEARS <= parameters.min_rider_age <= MAX_SUBJECT_AGE_YEARS:
+        problems.append(
             ConfigProblem(
-                KEY_MIN_RIDER_AGE,
-                f"{value.value} ans hors de {MIN_SUBJECT_AGE_YEARS}..{MAX_SUBJECT_AGE_YEARS}",
+                f"{MEDICAL_FILE}:min_rider_age",
+                f"{parameters.min_rider_age} ans hors de "
+                f"{MIN_SUBJECT_AGE_YEARS}..{MAX_SUBJECT_AGE_YEARS}",
             )
         )
-    return Ok(value.value)
+    try:
+        motion = limits_of(parameters.motion_limits)
+    except ValueError as error:
+        problems.append(ConfigProblem(f"{MEDICAL_FILE}:motion_limits", str(error)))
+        return Err(tuple(problems))
+    if problems:
+        return Err(tuple(problems))
+    return Ok(motion)
 
 
 def _leg_tip(env: Mapping[str, str], arm: Metres | None) -> Result[Metres | None, ConfigProblem]:
@@ -838,8 +883,17 @@ def retired_keys(env: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(key for key in RETIRED_KEYS if env.get(key, "").strip())
 
 
-def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[ConfigProblem, ...]]:
-    """Every key validated; every problem reported, not only the first."""
+def load_local_config(
+    env: Mapping[str, str], medical: MedicalStatus | None = None
+) -> Result[LocalConfig, tuple[ConfigProblem, ...]]:
+    """Every key validated; every problem reported, not only the first.
+
+    ``medical``: the medical parameters and their verdict; ``None``, which is
+    what the console passes, verifies the shipped file now
+    (:func:`~src.medical.shipped_status`). Unsigned, the configuration is the
+    bench mode's: programmes and a person on board off, whatever ``env`` says.
+    """
+    status = shipped_status() if medical is None else medical
     backend = _backend(env)
     link: Result[DriveLink | None, ConfigProblem] = (
         drive_link_from_env(env)
@@ -856,13 +910,12 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
     occupied = _flag(env, KEY_OCCUPIED_ENABLED)
     web = _web(env)
     programs = _flag(env, KEY_PROGRAMS_ENABLED)
-    tiers = _tiers(env)
     cloud = _cloud(env)
     sensors = _sensors(env)
     presence = _presence(env)
-    min_age = _min_rider_age(env)
     leg_tip = _leg_tip(env, radius.value if isinstance(radius, Ok) else None)
     record = _record(env)
+    motion = _medical_values(status)
 
     problems = (
         tuple(
@@ -877,17 +930,17 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
                 max_rpm,
                 occupied,
                 programs,
-                tiers,
                 cloud,
                 sensors,
                 presence,
-                min_age,
                 leg_tip,
             )
             if isinstance(result, Err)
         )
         + (web.error if isinstance(web, Err) else ())
         + (record.error if isinstance(record, Err) else ())
+        + _medical_keys(env)
+        + (motion.error if isinstance(motion, Err) else ())
     )
     if (
         problems
@@ -902,12 +955,11 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
         or isinstance(occupied, Err)
         or isinstance(web, Err)
         or isinstance(programs, Err)
-        or isinstance(tiers, Err)
         or isinstance(cloud, Err)
         or isinstance(sensors, Err)
         or isinstance(presence, Err)
-        or isinstance(min_age, Err)
         or isinstance(leg_tip, Err)
+        or isinstance(motion, Err)
     ):
         return Err(problems)
     return Ok(
@@ -918,17 +970,15 @@ def load_local_config(env: Mapping[str, str]) -> Result[LocalConfig, tuple[Confi
             bitalino_address=address.value,
             geometry=MachineGeometry(radius=radius.value, ratio=ratio.value),
             motor_max_rpm=max_rpm.value,
-            occupied_enabled=occupied.value,
+            # The bench mode: unsigned medical parameters switch both gates off.
+            occupied_enabled=occupied.value and status.signed,
             web=web.value,
-            motion_limits_path=Path(
-                _text(env, KEY_MOTION_LIMITS_PATH, str(DEFAULT_MOTION_LIMITS_PATH))
-            ),
-            programs_enabled=programs.value,
-            tiers=tiers.value,
+            medical=status,
+            motion=motion.value,
+            programs_enabled=programs.value and status.signed,
             cloud=cloud.value,
             sensors=sensors.value,
             camera=presence.value,
-            min_rider_age=min_age.value,
             leg_tip_radius=leg_tip.value,
             record=record.value,
         )

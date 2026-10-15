@@ -5,17 +5,17 @@ for a PI loop. A setpoint an operator types in, or a session step, is a
 different animal: it is a *jump* in the target, and walking the machine to it
 has to respect the two things that make a rotating person sick - how fast the
 arm's speed changes, and how fast the load they feel changes. This module is
-that walk, and nothing else. It is pure: no clock, no I/O except the one JSON
-loader, no drive. The runtime owns the time base and hands it ``dt``.
+that walk, and nothing else. It is pure: no clock, no I/O, no drive. The
+runtime owns the time base and hands it ``dt``.
 
 The two limits, and why both
 ----------------------------
 
 * **angular acceleration** of the arm, :attr:`MotionLimits.output_accel`
-  (0.25 output rpm/s by default: 12.4 motor rpm/s through i = 49.79). Bounds
+  (0.25 output rpm/s in the shipped file: 12.4 motor rpm/s through i = 49.79). Bounds
   the Coriolis cross-coupling a head movement produces while the speed is
   changing, which is what nauseates at LOW speed.
-* **g-dot**, :attr:`MotionLimits.g_rate` (0.03 g/s of centripetal load).
+* **g-dot**, :attr:`MotionLimits.g_rate` (0.03 g/s of centripetal load, shipped).
   ``Gc`` is quadratic in speed, so the same angular acceleration changes the
   load faster the faster the arm turns: at high speed this is the binding one.
   See :func:`~src.units.g_rate_to_motor_slew`.
@@ -55,25 +55,25 @@ except for the one 0 <-> ``min_run`` passage, and ``next`` is in the domain and
 between ``current`` and the target. ``rate`` is evaluated at the FASTER end of
 the step because the g-dot bound tightens with speed.
 
-All numbers here are [MED]: to be signed off by the medical side before
-anybody rides. See ``config/motion_limits.json``.
+The four numbers are medical decisions, and none of them is written here:
+they are the ``motion_limits`` of ``config/medical_parameters.json``, signed
+(:mod:`src.medical`). This module holds the walk, and the bounds below which
+refuse a value no signature makes sensible.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import pairwise
-from pathlib import Path
-from typing import Final, cast
+from typing import Final
 
 from src.geometry import MachineGeometry
-from src.result import Err, Ok, Result
+from src.medical import SHIPPED_PARAMETERS, MotionLimitValues
 from src.units import (
     GLoadPerSecond,
     MotorRpm,
@@ -85,7 +85,7 @@ from src.units import (
 )
 
 MAX_OUTPUT_ACCEL: Final[OutputRpmPerSecond] = OutputRpmPerSecond(2.0)
-"""Refused above this: 100 motor rpm/s, already far past anything [MED] would sign."""
+"""Refused above this: 100 motor rpm/s, already far past anything a medical sign-off allows."""
 
 MAX_G_RATE: Final[GLoadPerSecond] = GLoadPerSecond(0.5)
 """Refused above this: half a g per second is a jolt, not a ramp."""
@@ -118,7 +118,7 @@ def _finite_in(name: str, value: float, high: float) -> None:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MotionLimits:
-    """The anti-nausea limits every non-emergency setpoint change obeys. All [MED].
+    """The anti-nausea limits every non-emergency setpoint change obeys. All medical decisions.
 
     Keyword-only and frozen: four numbers in four units, and a limit that could
     be edited mid-rotation would make a session log stop being evidence of what
@@ -135,7 +135,7 @@ class MotionLimits:
     min_run: MotorRpm
     """The slowest non-zero setpoint, motor rpm: the domain's lower edge."""
 
-    max_interval: Seconds = Seconds(1.0)
+    max_interval: Seconds
     """The longest interval one step may be paid for with (see the module docstring)."""
 
     def __post_init__(self) -> None:
@@ -148,12 +148,18 @@ class MotionLimits:
         )
 
 
-DEFAULT_MOTION_LIMITS: Final[MotionLimits] = MotionLimits(
-    output_accel=OutputRpmPerSecond(0.25),
-    g_rate=GLoadPerSecond(0.03),
-    min_run=MotorRpm(55),
-)
-"""The plan's numbers, all [MED]: 0.25 output rpm/s, 0.03 g/s, 55 motor rpm."""
+def limits_of(values: MotionLimitValues) -> MotionLimits:
+    """The limits the medical file signed. Raises ``ValueError`` outside the bounds above."""
+    return MotionLimits(
+        output_accel=values.output_rpm_per_s,
+        g_rate=values.g_per_s,
+        min_run=values.min_run_motor_rpm,
+        max_interval=values.max_interval_s,
+    )
+
+
+DEFAULT_MOTION_LIMITS: Final[MotionLimits] = limits_of(SHIPPED_PARAMETERS.motion_limits)
+"""The shipped file's limits: 0.25 output rpm/s, 0.03 g/s, 55 motor rpm, 1 s."""
 
 
 def motor_rate_limit(speed: MotorRpm, limits: MotionLimits, geometry: MachineGeometry) -> float:
@@ -355,58 +361,3 @@ def count_reversals(setpoints: Sequence[MotorRpm]) -> int:
             reversals += 1
         direction = moving
     return reversals
-
-
-# =========================================================================
-# Loading
-# =========================================================================
-
-
-def parse_motion_limits(document: object) -> Result[MotionLimits, str]:
-    """Build limits from a decoded JSON object, or say in words why not.
-
-    Keys: ``output_rpm_per_s``, ``g_per_s``, ``min_run_motor_rpm`` and the
-    optional ``max_interval_s``. Every value must be a real number (a JSON
-    ``true`` is not 1), and the record's own validation then applies.
-    """
-    if not isinstance(document, dict):
-        return Err("the motion limits must be a JSON object")
-    # json.loads builds str keys; the values are still unknown and checked below.
-    entries = cast("dict[str, object]", document)
-    fields: dict[str, float] = {}
-    for key in ("output_rpm_per_s", "g_per_s", "min_run_motor_rpm", "max_interval_s"):
-        value = entries.get(key)
-        if value is None and key == "max_interval_s":
-            continue
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            return Err(f"{key} must be a number, got {value!r}")
-        fields[key] = float(value)
-    min_run = fields["min_run_motor_rpm"]
-    if not min_run.is_integer():
-        return Err(f"min_run_motor_rpm must be a whole number of rpm, got {min_run}")
-    try:
-        limits = MotionLimits(
-            output_accel=OutputRpmPerSecond(fields["output_rpm_per_s"]),
-            g_rate=GLoadPerSecond(fields["g_per_s"]),
-            min_run=MotorRpm(int(min_run)),
-            max_interval=Seconds(fields.get("max_interval_s", 1.0)),
-        )
-    except ValueError as error:
-        return Err(str(error))
-    return Ok(limits)
-
-
-def load_motion_limits(path: Path) -> Result[MotionLimits, str]:
-    """Read and validate ``config/motion_limits.json``. Startup only."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as error:
-        return Err(f"cannot read {path}: {error}")
-    try:
-        document: object = json.loads(text)  # pyright: ignore[reportAny]  # narrowed below
-    except json.JSONDecodeError as error:
-        return Err(f"{path} is not valid JSON: {error}")
-    parsed = parse_motion_limits(document)
-    if isinstance(parsed, Err):
-        return Err(f"{path}: {parsed.error}")
-    return parsed

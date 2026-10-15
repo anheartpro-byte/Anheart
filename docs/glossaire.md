@@ -176,8 +176,9 @@ Séance où l'opérateur fixe la vitesse cible en tr/min. Elle ne se lance
 
 **[MED]**\
 Marque, dans le code et la configuration, d'une valeur qui relève d'une
-décision médicale non encore prise (par exemple `MIN_RIDER_AGE=18`, les
-paliers cardiaques).
+décision médicale non encore prise (par exemple l'âge minimum de 18 ans, les
+paliers cardiaques). Sur le Pi, toutes ces valeurs sont dans le fichier signé
+`config/medical_parameters.json` ([securite.md, section 13](securite.md#13-décisions-médicales--un-fichier-signé-anh-139)).
 
 **min_run**\
 La plus petite vitesse moteur non nulle acceptée (55 tr/min moteur). Entre 0
@@ -208,8 +209,10 @@ freine plus vite que la rampe réglée : le bus n'absorbe qu'environ 11 J sur le
 ~420 J stockés dans le bras en rotation. Le variateur passe alors en
 [roue libre](#roue-libre).
 
-**Palier hard max / palier critique** (`HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM`)\
-Deux seuils de fréquence cardiaque du superviseur (défaut 148 et 158 bpm).
+**Palier hard max / palier critique** (`hr_hard_max_bpm`, `hr_critical_bpm`)\
+Deux seuils de fréquence cardiaque du superviseur (148 et 158 bpm dans le
+fichier médical signé ; les clés `.env` `HR_HARD_MAX_BPM` et `HR_CRITICAL_BPM`
+ne sont plus lues).
 Au-dessus du hard max pendant 5 s : RAMP_DOWN (`hr_hard_max`). Au palier
 critique ou au-dessus : QUICK_STOP (`hr_critical`). Les deux règles jugent la
 dernière FC utilisable, tant qu'elle a 10 s au plus. Chaque profil doit porter exactement les mêmes

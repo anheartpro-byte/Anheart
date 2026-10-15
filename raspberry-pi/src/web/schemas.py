@@ -50,6 +50,7 @@ from src.control_surface import (
     StartSession,
 )
 from src.link_state import LinkStatus, label_of
+from src.medical import MedicalStatus
 from src.motor.drive import FaultReport
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.monitor import (
@@ -773,6 +774,35 @@ class WatchdogRow:
 
 
 @dataclass(frozen=True, slots=True)
+class MedicalRow:
+    """The medical parameters the console runs with: the page's footer and its banner."""
+
+    version: str
+    """The version the file declares; vouched for only when ``signed``."""
+
+    signed: bool
+    """Whether the file's signature was verified at startup. ``False``: bench mode only."""
+
+    issued_at: str
+    signed_by: str
+    warning: str | None
+    """The sentence of the bench mode (``parametres medicaux non signes (...) : ...``);
+    ``None`` when signed."""
+
+    @classmethod
+    def of(cls, status: MedicalStatus) -> MedicalRow:
+        """Render a :class:`~src.medical.MedicalStatus`."""
+        document = status.document
+        return cls(
+            version=document.version,
+            signed=status.signed,
+            issued_at=document.issued_at,
+            signed_by=document.signed_by,
+            warning=status.warning,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PanelRow:
     """The local console's link panel. ``GET /api/panel``."""
 
@@ -798,11 +828,15 @@ class PanelRow:
     wall_clock: WallClockRow | None
     """Null on a console that does not judge its clock."""
 
+    medical_parameters: MedicalRow | None
+    """Null on a source that reports none; the console always does."""
+
     @classmethod
     def of(cls, status: PanelStatus) -> PanelRow:
         """Render a :class:`~src.panel_status.PanelStatus`."""
         hold = status.manual_rise_hold
         wall_clock = status.wall_clock
+        medical = status.medical
         return cls(
             motion_enabled=status.motion_enabled,
             programs_enabled=status.programs_enabled,
@@ -819,6 +853,7 @@ class PanelRow:
             wall_clock=None if wall_clock is None else WallClockRow.of(wall_clock),
             service=ServiceRow.of(status.service),
             watchdog=WatchdogRow.of(status.watchdog),
+            medical_parameters=None if medical is None else MedicalRow.of(medical),
         )
 
 

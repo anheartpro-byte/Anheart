@@ -371,9 +371,9 @@ def age_of(rider: Rider, at: UnixMillis) -> Result[int, PassengerRefusal]:
     """The age ``rider`` is counted at ``at``, from the birth year the site set.
 
     What every session with somebody on board is vetted on, manual or
-    programmed: the console's minimum age (``MIN_RIDER_AGE``) is applied to it
-    after. No birth year on the site, or none this clock makes an age of: a
-    refusal, never an age made up.
+    programmed: the console's minimum age (``min_rider_age`` of the signed
+    medical parameters) is applied to it after. No birth year on the site, or
+    none this clock makes an age of: a refusal, never an age made up.
     """
     birth_year = rider.birth_year
     if birth_year is None:
@@ -386,7 +386,8 @@ def passenger_of(rider: Rider, at: UnixMillis) -> Result[Passenger, PassengerRef
     """``rider`` with what a programmed session is vetted on, or the value that is missing.
 
     Both come from the site; a missing one is a refusal, as on the site. The
-    minimum age is the console's own gate (``MIN_RIDER_AGE``), applied after.
+    minimum age is the console's own gate (``min_rider_age`` of the signed
+    medical parameters), applied after.
     Fitness and consent (ANH-143) will be checked here.
     """
     hr_max = rider.hr_max

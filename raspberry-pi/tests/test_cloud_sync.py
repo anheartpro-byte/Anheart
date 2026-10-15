@@ -68,6 +68,7 @@ from src.control_surface import (
 )
 from src.local_config import CardiacTiers, CloudConfig, LocalConfig, load_local_config
 from src.local_panel import LocalPanel, build_panel, describe_resolve_error
+from src.medical import SHIPPED_PARAMETERS, MedicalStatus
 from src.record_uplink import (
     MAX_REFUSALS,
     SUCCESSFUL_ENDS,
@@ -83,6 +84,7 @@ from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, Seconds, UnixMillis
+from tests.medical_support import signed, unsigned
 from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, listed, roster_document
 from tests.test_contract import shared
 
@@ -111,8 +113,8 @@ LAUNCH: Final[Mapping[str, JsonValue]] = {
 }
 
 
-def config_of(**changes: str) -> LocalConfig:
-    loaded = load_local_config({**LINKED_ENV, **changes})
+def config_of(medical: MedicalStatus | None = None, **changes: str) -> LocalConfig:
+    loaded = load_local_config({**LINKED_ENV, **changes}, medical)
     assert isinstance(loaded, Ok), loaded
     return loaded.value
 
@@ -231,6 +233,7 @@ def rig(
     programs: bool = True,
     tiers: CardiacTiers | None = None,
     records: RecordSource | None = None,
+    medical: MedicalStatus | None = None,
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
@@ -248,6 +251,7 @@ def rig(
         store=panel.services.store,
         tiers=config.tiers if tiers is None else tiers,
         programs_enabled=programs,
+        medical=medical,
         records=records,
     )
     return Rig(clock=clock, panel=panel, dashboard=dashboard, runtime=runtime, sync=sync)
@@ -659,6 +663,20 @@ async def test_the_heartbeat_reports_the_machine_every_period(tmp_path: Path) ->
     assert r.sync.online
 
 
+@pytest.mark.parametrize(
+    ("medical", "announced"), [(signed(), "0.1.0"), (unsigned(), None), (None, None)]
+)
+async def test_the_heartbeat_announces_the_signed_medical_version_and_no_other(
+    tmp_path: Path, medical: MedicalStatus | None, announced: str | None
+) -> None:
+    """ANH-139 EX-4: the file's version when its signature holds; null otherwise."""
+    r = rig(tmp_path, medical=medical)
+    await r.step()
+    (beat,) = r.dashboard.to("/api/machine/heartbeat")
+    assert beat["medical_parameters_version"] == announced
+    assert "medical_parameters_version" in beat
+
+
 async def test_the_heartbeat_names_the_running_session(tmp_path: Path) -> None:
     r = rig(tmp_path)
     r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-9"}))
@@ -801,9 +819,18 @@ async def test_a_blank_operator_and_odd_duration_are_tolerated(tmp_path: Path) -
 
 
 async def test_no_poll_without_programmes(tmp_path: Path) -> None:
-    r = rig(tmp_path, programs=False)
+    r = rig(tmp_path, programs=False, medical=signed())
     await r.step()
     assert r.dashboard.to("/api/machine/training/poll") == []
+
+
+async def test_in_bench_mode_a_launch_is_still_asked_for_so_that_it_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Programmes are off because the parameters are unsigned: a waiting launch gets that reason."""
+    r = rig(tmp_path, programs=False, medical=unsigned())
+    await r.step()
+    assert len(r.dashboard.to("/api/machine/training/poll")) == 1
 
 
 @pytest.mark.parametrize("state", [RuntimeState.RUNNING, RuntimeState.ENDING])
@@ -1305,11 +1332,11 @@ def state_of(panel: LocalPanel) -> RuntimeState:
     return panel.runtime.state
 
 
-def linked(tmp_path: Path, **changes: str) -> Linked:
+def linked(tmp_path: Path, medical: MedicalStatus | None = None, **changes: str) -> Linked:
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     dashboard = Dashboard()
     panel = build_panel(
-        config_of(**changes),
+        config_of(medical, **changes),
         clock=clock,
         profiles_path=tmp_path / "p.json",
         transport=lambda _c: dashboard,
@@ -1337,8 +1364,13 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(tmp_path: Pa
     await rig_.panel.close()
 
 
-async def refused_launch(tmp_path: Path, launch: Mapping[str, JsonValue], **env: str) -> str:
-    rig_ = linked(tmp_path, **env)
+async def refused_launch(
+    tmp_path: Path,
+    launch: Mapping[str, JsonValue],
+    medical: MedicalStatus | None = None,
+    **env: str,
+) -> str:
+    rig_ = linked(tmp_path, medical, **env)
     rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(launch)))
     await rig_.run(3.0)
     assert rig_.panel.runtime.state is RuntimeState.IDLE
@@ -1374,8 +1406,19 @@ async def test_a_preset_faster_than_the_occupied_ceiling_is_refused(tmp_path: Pa
 async def test_tiers_that_disagree_with_the_preset_are_refused_by_the_runtime(
     tmp_path: Path,
 ) -> None:
-    reason = await refused_launch(tmp_path, LAUNCH, HR_HARD_MAX_BPM="150", HR_CRITICAL_BPM="160")
+    screened = signed(
+        replace(SHIPPED_PARAMETERS, hr_hard_max_bpm=Bpm(150), hr_critical_bpm=Bpm(160))
+    )
+    reason = await refused_launch(tmp_path, LAUNCH, screened)
     assert "demarrage refuse" in reason
+
+
+async def test_a_launch_to_a_console_in_bench_mode_is_refused_for_its_medical_parameters(
+    tmp_path: Path,
+) -> None:
+    """ANH-139 EX-3: unsigned parameters, whatever the .env enables: the reason goes back."""
+    reason = await refused_launch(tmp_path, LAUNCH, unsigned())
+    assert reason.startswith("refusee par la machine : parametres medicaux non signes")
 
 
 async def test_a_launch_that_reached_a_panel_without_programmes_is_refused(
@@ -1597,5 +1640,6 @@ async def test_a_boolean_age_is_not_an_age(tmp_path: Path) -> None:
 
 
 async def test_the_minimum_age_is_configurable(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, {**LAUNCH, "subjectAge": 30}, MIN_RIDER_AGE="40")
+    older = signed(replace(SHIPPED_PARAMETERS, min_rider_age=40))
+    reason = await refused_launch(tmp_path, {**LAUNCH, "subjectAge": 30}, older)
     assert "minimum 40 ans" in reason

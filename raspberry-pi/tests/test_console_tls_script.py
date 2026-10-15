@@ -614,3 +614,18 @@ def test_ex3_the_preflight_passes_a_network_address_with_its_certificate(tmp_pat
     # On loopback nothing is asked: clear HTTP stays possible there.
     loopback = preflight(tmp_path, "MOTOR_BACKEND=sim\nECG_SOURCE=sim\nARM_RADIUS_M=1.5\n")
     assert loopback.returncode == 0, loopback.stdout
+
+
+def test_anh139_the_preflight_refuses_a_medical_value_left_in_the_env(tmp_path: Path) -> None:
+    """A Pi installed before ANH-139 has MIN_RIDER_AGE=18 in its .env: said before the start."""
+    base = "MOTOR_BACKEND=sim\nECG_SOURCE=sim\nARM_RADIUS_M=1.5\n"
+    done = preflight(tmp_path, base + "MIN_RIDER_AGE=18\nHR_HARD_MAX_BPM=148\nHR_CRITICAL_BPM=\n")
+    assert done.returncode == 1
+    for key in ("MIN_RIDER_AGE", "HR_HARD_MAX_BPM"):
+        assert (
+            f"FAIL  {key} is no longer read: the medical values are in "
+            "config/medical_parameters.json, signed; remove this line"
+        ) in done.stdout
+    # Blank, it sets nothing, as the console reads it.
+    assert "HR_CRITICAL_BPM" not in done.stdout
+    assert "PREFLIGHT FAILED: 2 blocking" in done.stdout

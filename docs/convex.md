@@ -854,7 +854,7 @@ fonctions internes des routes machine refusent avec les codes du contrat
 | `ZONE_CEILING_FRACTION` | 0,9 | La zone haute ne doit pas dépasser 90 % de la FC max du pratiquant. |
 | FC max admise | 100 à 220 bpm | Hors bornes = refusée. |
 | Âge admis pour l'estimation | 10 à 100 ans | Hors bornes = pas d'estimation. |
-| `MIN_RIDER_AGE` | 18 | Âge minimum d'un lancement auto distant. **[MED]** : l'abaisser est une décision médicale. Le Pi a sa propre valeur (`MIN_RIDER_AGE` dans `.env`) et fait foi. |
+| `MIN_RIDER_AGE` | 18 | Âge minimum d'un lancement auto distant. **[MED]** : l'abaisser est une décision médicale. Le Pi a sa propre valeur (`min_rider_age` de son fichier médical signé, `config/medical_parameters.json`) et fait foi ; Convex ne lit pas encore ce fichier (seconde PR d'ANH-139). |
 | `LIVE_FRESH_MS` | 90 000 ms | Au-delà, l'état en direct est « périmé » et la machine « hors ligne ». Une seule définition, dans `lib/training.ts`, importée par `convex/training.ts`, par la tâche `checkOfflineMachines` de `convex/machines.ts` et par le site, qui recalcule la fraîcheur chaque seconde sur l'horloge du serveur ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). `lib/training.ts` doit donc rester sans import `@/` ni code réservé au navigateur. |
 
 **Valeur utilisable.** Une FC max et une année de naissance sont des **entiers
@@ -2704,4 +2704,8 @@ Limites à connaître :
   La comparaison et son badge viendront avec le registre machine (ticket
   ANH-147).
 - `medical_parameters_version` et `config_hash` sont acceptés dans le heartbeat
-  et **ne sont pas stockés** : le Pi n'en a pas encore (il envoie `null`).
+  et **ne sont pas stockés**. Depuis ANH-139 (couche Pi), le Pi envoie dans
+  `medical_parameters_version` la version de son fichier médical quand sa
+  signature s'est vérifiée au démarrage, `null` sinon ; Convex la garde, la
+  compare à la version attendue et l'affiche dans la seconde PR du ticket
+  (couche Convex). `config_hash` vaut toujours `null`.

@@ -1156,7 +1156,13 @@ PROGRAMS_DISABLED_DETAIL: Final[str] = (
 
 
 def _require_programs_enabled(services: Services) -> None:
-    """Refuse a programmed session with a 403 while this build has none."""
+    """Refuse a programmed session with a 403 while this build has none.
+
+    Unsigned medical parameters first: they are why the console is in bench
+    mode, and the operator must read that rather than a milestone.
+    """
+    if services.medical_refusal is not None:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=services.medical_refusal)
     if not services.programs_enabled:
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=PROGRAMS_DISABLED_DETAIL)
 
@@ -1334,9 +1340,10 @@ def _require_rider_for(services: Services, occupancy: Occupancy, subject_id: str
     """Who rides a manual session: nobody on the bench, a rider of the list on board.
 
     On board, a rider with a birth year on the site this clock makes an age of
-    (409 otherwise); the loop applies ``MIN_RIDER_AGE`` to it when it arms, as
-    for a programme. On the bench, :data:`~src.control_surface.LOCAL_SUBJECT`
-    names nobody, as it does for the loop.
+    (409 otherwise); the loop applies the medical file's ``min_rider_age`` to it
+    when it arms, as for a programme. On the bench,
+    :data:`~src.control_surface.LOCAL_SUBJECT` names nobody, as it does for the
+    loop.
     """
     if occupancy is Occupancy.BENCH:
         if subject_id and subject_id != LOCAL_SUBJECT:

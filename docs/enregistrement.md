@@ -100,7 +100,7 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | `config_hash` | SHA-256 hexadécimal minuscule de la configuration appliquée |
 | `software_version` | version du logiciel qui a écrit l'enregistrement : le contenu de `raspberry-pi/VERSION`, pour la console du Pi comme pour les scénarios de la simulation (`pi-unknown` si le fichier manque ou est mal formé). Aucune variable d'environnement ne la règle. Les enregistrements exportés dans la bibliothèque de la simulation portent `unversioned`, exprès, pour rester reproductibles d'une version à l'autre |
 | `contract_version` | version du contrat d'enregistrement, `2` actuellement |
-| `medical_parameters_version` | version fournie par l'appelant ; SHA-256 du fichier de programmes livré en simulation |
+| `medical_parameters_version` | version fournie par l'appelant. La console du Pi y écrit la version de son fichier médical signé (`config/medical_parameters.json`, `0.1.0` aujourd'hui), ou `unsigned-sha256:` suivi de l'empreinte du fichier quand sa signature ne s'est pas vérifiée au démarrage, l'enregistrement s'ouvrant alors sur un événement `warning` (ANH-139). La simulation y écrit le SHA-256 du fichier de programmes livré |
 | `clocks` | objet décrit ci-dessous |
 | `started_at` | horodatage ISO 8601 UTC terminé par `Z` |
 | `ended_at` | horodatage UTC `Z`, ou `null` avant fermeture |
