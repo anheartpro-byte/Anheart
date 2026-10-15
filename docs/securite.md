@@ -1851,30 +1851,29 @@ en **mode banc seulement**.
   raison.
 * Un lancement venu du tableau de bord est refusé. En mode banc, le heartbeat
   annonce `programsEnabled: false` et `medical_parameters_version: null`.
-  Avec le code actuel, si une version médicale signée est inscrite sur le
-  serveur, la fiche machine affiche « paramètres médicaux non signés (mode
-  banc uniquement) ». La carte et la fenêtre de lancement disent « Paramètres
-  médicaux non signés : la machine est en mode banc uniquement. » et empêchent
-  le départ. Convex refuse avec `medical_parameters_unsigned` avant
-  `programs_disabled`. Si un appel à `launchAutoSession` reçoit ce refus, le
-  site affiche « Paramètres médicaux non signés : la machine est en mode banc
-  seulement, aucune séance programmée ni personne à bord. ».
-  Tant qu'aucune version médicale signée n'est inscrite sur le serveur, tout
-  lancement distant est d'abord refusé avec `medical_parameters_unavailable` :
+  Si une version médicale signée est inscrite sur le serveur, la fiche machine
+  affiche « paramètres médicaux non signés (mode banc uniquement) ». La carte
+  dit « Paramètres médicaux non signés : la machine est en mode banc
+  uniquement. » et bloque le départ ; la fenêtre aussi si la machine est
+  accessible, en ligne et libre. La carte peut aussi montrer un refus
+  d'aptitude ou de consentement ; la fenêtre les contrôle après le motif médical.
+  Dans `launchAutoSession`, les refus médicaux suivent les droits d'accès,
+  l'appartenance du passager (`rider_not_allowed`), son aptitude
+  (`rider_not_fit`, `fitness_expired`), son consentement (`consent_missing`),
+  puis `machine_offline`. Sans version serveur : `medical_parameters_unavailable`,
   « Aucune version des paramètres médicaux n'est enregistrée sur le serveur :
-  aucun lancement à distance n'est possible. ». Ces contrôles viennent après
-  ceux des droits d'accès et de machine hors ligne. Une console antérieure à
-  la PR #103 annonce aussi `null` : elle est présentée comme en mode banc.
-  Une version absente ou mal formée n'est pas retenue comme `null` : son statut
-  est `unknown`, sans libellé sur la fiche. Si les programmes sont désactivés,
-  une fois la version serveur inscrite, cette console reçoit le refus
-  générique `programs_disabled` : « Programmes auto désactivés sur cette
-  machine : seules les séances manuelles, depuis la console de la machine,
-  sont possibles. ». Si un lancement parvient à la console en mode banc, elle
-  le refuse elle-même : « refusee par la machine : parametres medicaux non
+  aucun lancement à distance n'est possible. ». Sinon, `medical_parameters_unsigned` :
+  « Paramètres médicaux non signés : la machine est en mode banc seulement,
+  aucune séance programmée ni personne à bord. », avant `programs_disabled`.
+  Une console antérieure à la PR #103 annonce aussi `null` : elle est
+  présentée comme en mode banc. Une annonce absente ou mal formée donne
+  `unknown`, sans libellé sur la fiche ; programmes désactivés et version
+  serveur inscrite, le refus est `programs_disabled` : « Programmes auto
+  désactivés sur cette machine : seules les séances manuelles, depuis la
+  console de la machine, sont possibles. ». Au contrôle médical local en mode
+  banc, la console refuse : « refusee par la machine : parametres medicaux non
   signes (raison) : console en mode banc seulement, aucune seance programmee
-  ni personne a bord ». Ses textes sont écrits sans accents, comme tous ses
-  messages.
+  ni personne a bord ». Ses messages sont sans accents.
 * Une séance manuelle sans personne à bord reste possible : la machine
   n'emporte alors personne.
 
