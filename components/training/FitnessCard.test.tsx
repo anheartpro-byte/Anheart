@@ -10,7 +10,11 @@ import {
   submit,
   type,
 } from "@/test-support/render";
-import { CURRENT_QUESTIONNAIRE } from "@/lib/fitnessQuestionnaire";
+import {
+  CURRENT_QUESTIONNAIRE,
+  LATEST_FITNESS_DATE,
+  LATEST_FITNESS_MILLIS,
+} from "@/lib/fitnessQuestionnaire";
 import { forgetServerAnswers } from "@/lib/server-clock";
 import { dismissFeedback, getFeedbackToasts } from "@/lib/feedback";
 import { answer, mutation, mutationCalls, resetConvex } from "@/test-support/convex";
@@ -325,6 +329,27 @@ describe("FitnessCard questionnaire and validation", () => {
         },
       ],
     ]);
+  });
+
+  it("blocks dates beyond the console limit and submits the exact boundary", async () => {
+    const screen = show(readiness({ canValidate: true, fitness: assessment() }));
+    const dateField = screen.field("fitness-valid-until");
+    expect(dateField.getAttribute("max")).toBe(LATEST_FITNESS_DATE);
+    const forms = screen.all((element) => element.localName === "form");
+
+    await type(dateField, "2101-01-02");
+    expect(screen.button(fr.training.fitness.validateSubmit).hasAttribute("disabled")).toBe(true);
+    expect(dateField.getAttribute("aria-invalid")).toBe("true");
+    await submit(forms[1]);
+    expect(mutationCalls()).toEqual({});
+
+    await type(dateField, LATEST_FITNESS_DATE);
+    expect(dateField.getAttribute("aria-invalid")).toBe("false");
+    await submit(forms[1]);
+    expect(mutationCalls()[VALIDATE]).toEqual([[{
+      assessmentId: "assessment-1",
+      validUntil: LATEST_FITNESS_MILLIS,
+    }]]);
   });
 
   it("validates other outcomes without a validity date", async () => {

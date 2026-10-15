@@ -10,7 +10,11 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { useLocalClock } from "@/hooks/use-local-clock";
 import { serverClockAt } from "@/lib/server-clock";
-import { CURRENT_QUESTIONNAIRE } from "@/lib/fitnessQuestionnaire";
+import {
+  CURRENT_QUESTIONNAIRE,
+  LATEST_FITNESS_DATE,
+  LATEST_FITNESS_MILLIS,
+} from "@/lib/fitnessQuestionnaire";
 import {
   Card,
   CardContent,
@@ -26,7 +30,7 @@ import { AlertTriangle, HeartPulse, Loader2 } from "lucide-react";
 
 function endOfLocalDay(dateValue: string): number | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue);
-  if (!match) return null;
+  if (!match || dateValue > LATEST_FITNESS_DATE) return null;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
@@ -38,7 +42,7 @@ function endOfLocalDay(dateValue: string): number | null {
   ) {
     return null;
   }
-  return localDate.getTime();
+  return Math.min(localDate.getTime(), LATEST_FITNESS_MILLIS);
 }
 
 export function FitnessCard({ userId }: { userId: Id<"users"> }) {
@@ -296,6 +300,7 @@ export function FitnessCard({ userId }: { userId: Id<"users"> }) {
                 <Input
                   id="fitness-valid-until"
                   type="date"
+                  max={LATEST_FITNESS_DATE}
                   required
                   aria-invalid={invalidValidity}
                   aria-describedby={

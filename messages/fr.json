@@ -904,7 +904,7 @@
       "validated": "Aptitude validée.",
       "validate": "Valider la saisie",
       "validUntil": "Valide jusqu'au",
-      "validityRequired": "Choisissez une date dont la fin de journée est dans le futur selon l'heure du serveur.",
+      "validityRequired": "Choisissez une date future selon l'heure du serveur, au plus tard le 1er janvier 2101.",
       "validateSubmit": "Valider l'aptitude"
     },
     "consent": {

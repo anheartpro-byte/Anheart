@@ -904,7 +904,7 @@
       "validated": "Fitness validated.",
       "validate": "Validate submission",
       "validUntil": "Valid through",
-      "validityRequired": "Choose a date whose end is in the future according to the server clock.",
+      "validityRequired": "Choose a future date according to the server clock, no later than January 1, 2101.",
       "validateSubmit": "Validate fitness"
     },
     "consent": {
