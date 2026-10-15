@@ -1,0 +1,96 @@
+{
+  "version": "0.1.0",
+  "provisional": true,
+  "medicalStatus": "[MED] Questions de prudence génériques, provisoires, sans validité médicale : à remplacer par le contenu signé d’ANH-98",
+  "description": "Questionnaire versionné lu par lib/fitnessQuestionnaire.ts pour Convex et le site ; l’outcome est le plus sévère des résultats attribués aux réponses.",
+  "validity": {
+    "maxDays": null,
+    "note": "[MED] Aucun plafond fixe de validité n’est défini dans cette version ; cette règle doit être remplacée avec le contenu signé d’ANH-98."
+  },
+  "outcomes": ["fit", "needs_medical_opinion", "unfit"],
+  "severity": ["fit", "needs_medical_opinion", "unfit"],
+  "questions": [
+    {
+      "id": "heart_condition",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Un médecin vous a-t-il déjà dit que vous aviez un problème cardiaque ?",
+        "en": "[MED] Has a doctor ever told you that you have a heart condition?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    },
+    {
+      "id": "chest_pain",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Ressentez-vous des douleurs dans la poitrine, au repos ou à l’effort ?",
+        "en": "[MED] Do you feel chest pain, at rest or during physical effort?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    },
+    {
+      "id": "fainting_or_dizziness",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Avez-vous déjà perdu connaissance, ou eu des vertiges importants ?",
+        "en": "[MED] Have you ever lost consciousness or had significant dizziness?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    },
+    {
+      "id": "blood_pressure_or_heart_treatment",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Prenez-vous un traitement pour la tension artérielle ou pour le cœur ?",
+        "en": "[MED] Do you take medication for blood pressure or for your heart?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    },
+    {
+      "id": "epilepsy_or_seizure",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Avez-vous déjà fait une crise d’épilepsie ou des convulsions ?",
+        "en": "[MED] Have you ever had an epileptic seizure or convulsions?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    },
+    {
+      "id": "balance_or_inner_ear",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Avez-vous des troubles de l’équilibre ou de l’oreille interne ?",
+        "en": "[MED] Do you have balance or inner ear problems?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    },
+    {
+      "id": "pregnancy",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Êtes-vous enceinte, ou pensez-vous l’être ?",
+        "en": "[MED] Are you pregnant, or do you think you may be?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    },
+    {
+      "id": "recent_surgery_or_injury",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Avez-vous été opéré, hospitalisé ou blessé récemment ?",
+        "en": "[MED] Have you recently had surgery, been hospitalized, or been injured?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    },
+    {
+      "id": "physician_advised_against",
+      "type": "yes_no",
+      "label": {
+        "fr": "[MED] Un médecin vous a-t-il déconseillé une activité physique ou un manège à sensations ?",
+        "en": "[MED] Has a doctor advised you against physical activity or riding a thrill ride?"
+      },
+      "outcomes": { "yes": "needs_medical_opinion", "no": "fit" }
+    }
+  ],
+  "rule": "Chaque question reçoit exactement une réponse permise ; chaque réponse donne un outcome ; l’outcome du questionnaire est le plus sévère des outcomes obtenus ; des réponses incomplètes, en trop, d’un type non permis ou pour une autre version ne donnent aucun outcome et sont refusées."
+}
