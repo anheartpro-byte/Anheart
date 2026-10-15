@@ -558,6 +558,11 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
     screen.button(t.launch.button);
 
   it("capitalizes unsigned medical parameter launch reasons in both locales", () => {
+    expect(Object.keys(messages.fr.training.launch).sort()).toEqual(
+      Object.keys(messages.en.training.launch).sort(),
+    );
+    expect(messages.fr.training.launch).not.toHaveProperty("zoneTooHigh");
+    expect(messages.en.training.launch).not.toHaveProperty("zoneTooHigh");
     expect(messages.fr.training.launch.medicalParametersUnsigned).toMatch(
       /^Paramètres médicaux non signés :/,
     );
