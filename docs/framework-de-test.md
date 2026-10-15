@@ -2428,12 +2428,12 @@ n'appelle Vercel. Il vérifie :
   secrets de déploiement sont dans l'environnement `production` : chacun de
   ses jobs de déploiement y lit ceux dont il a besoin, après approbation. Le
   job de la pipeline qui appelle ne passe par aucun environnement ; le test
-  S-5 (c) vérifie l'accord entre cette description et l'appel ;
+  d'héritage des secrets vérifie l'accord entre cette description et l'appel ;
 * que la garde de branche est la première étape, qu'elle accepte la branche du
   bouton et refuse les autres références (autre branche, tag du même nom, PR) ;
 * que la production refuse un projet inconnu juste après la garde de branche :
   seules les valeurs exactes `site`, `simulation`, `site et simulation` passent.
-  Le test S-5 (e) refuse aussi la casse différente, la valeur vide, la virgule,
+  Le test de la garde de projet refuse aussi la casse différente, la valeur vide, la virgule,
   l'espace final et une valeur contenant un saut de ligne suivi de `::error::x`,
   sans recopier la valeur reçue dans une commande de workflow ;
 * que la production exige le mot `production` exact, et que son formulaire, le
@@ -2442,7 +2442,7 @@ n'appelle Vercel. Il vérifie :
   défaut et passé à `true` par les deux appels de `release.yml` ; le rappel
   exécuté avec `true` dit que les étapes 1 (tests) et 2 (CodeQL) ont réussi sur
   ce commit avant le déploiement ; vide ou `false`, il garde le rappel du
-  bouton sur les gates non vérifiées (S-5 (d)) ;
+  bouton sur les gates non vérifiées ;
 * que la préversion exige l'accord saisi dès que le site est choisi, et jamais
   pour la simulation seule ;
 * les noms des environnements, les groupes de concurrence, l'absence de toute
@@ -2533,7 +2533,7 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
 * qu'une release réelle exige un relecteur requis, aucun contournement
   administrateur, « Selected branches and tags » et exactement la seule
   branche `main` de type `branch` (`total_count: 1`) ; à blanc, les mêmes
-  défauts donnent un avertissement. Le test S-5 (a) passe par le vrai `jq` :
+  défauts donnent un avertissement. Le test des protections de production passe par le vrai `jq` :
   réglages conformes, contournement permis, branches protégées, `main` et
   `develop`, tag `main`, motif `release/*`, liste vide, illisible ou incohérente,
   environnement sans règle de branche. La liste n'est lue que si les règles
@@ -2563,7 +2563,7 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
   jamais par l'installation des paquets npm ; que celle-ci est exactement
   `npm ci --ignore-scripts`, sans `env` ni secret, et qu'aucun job de
   `release.yml` qui lit un secret ne lance `npm ci` ou `npm install` sans
-  `--ignore-scripts` (S-5 (b)) ; qu'une clé de développement, de
+  `--ignore-scripts` ; qu'une clé de développement, de
   préversion, de projet, d'un autre déploiement ou mal formée est refusée, et
   qu'aucune partie de la clé n'est jamais affichée ;
 * qu'après le déploiement de Convex la version servie et le refus de l'API
@@ -2588,7 +2588,7 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
   un Convex antérieur au contrat ; entre deux majeures versionnées, une release dont Convex sert
   les deux majeures d'abord, puis les consoles, puis le retrait de l'ancienne
   majeure quand plus aucune console ne la parle ; Convex d'abord pour une
-  mineure ou sans changement du contrat. Le test S-2 tient les refus 426 dans
+  mineure ou sans changement du contrat. Le test de l'ordre des mises à jour tient les refus 426 dans
   les deux sens, `SUPPORTED_MAJORS` et la limite du lancement distant pendant
   la transition. Il exige aussi le même moment de mise à jour des consoles,
   mot pour mot, en 3.3, en 3.4 et dans les deux résumés de `release.yml`
@@ -2607,7 +2607,7 @@ documentation et de réponses réelles de son API, lues le 9 octobre 2026. Le
 premier lancement à blanc est la première vraie preuve.
 
 Le premier vrai `npx convex deploy`, avec les dépendances installées par
-`npm ci --ignore-scripts`, reste à vérifier en S-7, hors de ce lancement à
+`npm ci --ignore-scripts`, reste à vérifier au premier `convex deploy` réel, hors de ce lancement à
 blanc. La lecture de `generateBinPath()` dans `node_modules/esbuild/lib/main.js`
 montre qu'esbuild résout le binaire de son paquet de plateforme à l'exécution,
 sans son postinstall ; elle ne remplace pas ce déploiement réel.
