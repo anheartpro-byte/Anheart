@@ -241,6 +241,15 @@ la copie de `raspberry-pi/config/medical.pub` dans
 `medicalParametersStore.insertVersion` ; si cette insertion échoue, elle
 supprime le fichier du stockage.
 
+`insertVersion` refuse l'inscription tant qu'un lancement distant `pending`
+non expiré existe. Le contrôle et l'insertion sont dans la même transaction :
+le message donne leur nombre et invite à réessayer après leur armement ou leur
+expiration ; le délai effectif est celui de `PENDING_SESSION_TTL_S` (300 s par
+défaut, jusqu'à 600 s si configuré). Cette règle empêche la fraction de zone
+courante de changer entre la création et l'armement d'un lancement. La zone
+courante reste appliquée aux nouveaux lancements, et n'est donc pas recalculée
+à l'armement ; le pratiquant, son âge minimum et sa FC max restent revérifiés.
+
 ### `machine_profiles` : programmes synchronisés depuis le Pi
 
 Copie en lecture seule du `ProfileStore` du Pi. **Remplacée en bloc** à chaque
@@ -277,7 +286,7 @@ programme que le Pi refuserait n'est jamais proposé sur le site.
 | `softwareVersion` | Version logicielle annoncée par le Pi dans son heartbeat (tag git, par exemple `pi-0.4.2`). Absente tant qu'aucun heartbeat ne l'a donnée, et effacée si le dernier heartbeat n'en portait pas de bien formée. |
 | `contractVersion` | Version du contrat machine annoncée par le Pi : l'en-tête `X-Anheart-Contract` du dernier heartbeat accepté. |
 | `lastVersionSeenAt` | ms Unix du dernier heartbeat qui a actualisé les versions rapportées. |
-| `medicalParametersVersion` | Version médicale annoncée par `medical_parameters_version` dans le heartbeat. Une chaîne est la version que le Pi annonce après sa vérification locale du fichier signé ; `null` signifie qu'il est en mode banc car la signature manque ou échoue ; l'absence signifie qu'aucune version bien formée n'a été retenue. |
+| `medicalParametersVersion` | Version médicale annoncée par `medical_parameters_version` dans le heartbeat. Une chaîne est la version que le Pi annonce après sa vérification locale du fichier signé ; `null` est classé non signé ; l'absence signifie qu'aucune version bien formée n'a été retenue. |
 
 Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelector` (lu seulement pour une clé pas encore déplacée dans `machine_api_keys`), `by_status`, `by_is_deleted`.
 
@@ -1249,7 +1258,7 @@ n'est pas utilisé, et le seuil de volume où il deviendrait nécessaire n'a pas
 | `setGestionnaireMachines` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des machines d'**un gestionnaire**, **dans une organisation** (celle de l'appelant ; pour l'admin Anheart, l'organisation principale du gestionnaire) : compare la liste demandée à ses lignes `machine_gestionnaires` de cette organisation, insère les liens manquants (`isOwner: false`, dans cette organisation) et supprime ceux qui ne sont plus demandés. Seules les lignes de ce gestionnaire dans cette organisation sont lues et écrites : les liens des autres gestionnaires ne bougent pas, ce que le gestionnaire gère dans une autre organisation non plus, et un lien déjà présent n'est pas modifié. Une machine inconnue, supprimée, ou d'une autre organisation (même réponse, `machine_not_found`), fait refuser l'appel sans rien écrire. Le lien vers une machine supprimée reste hors de la décision : il n'est jamais retiré, nommé ou non, et ne compte pas dans `{added, removed}` (ANH-194). Retourne `{added, removed}`. |
 | `assignGestionnaireToMachine` / `removeGestionnaireFromMachine` | admin ; gestionnaire de la machine | Lien machine ↔ gestionnaire. Le gestionnaire doit être membre actif de l'organisation de la machine. |
 | `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. `getMachinesForGestionnaire` renvoie aussi `serverNow` et laisse de côté les machines supprimées. `getMachine` liste le propriétaire en tête de ses gestionnaires. |
-| `recordHeartbeat` | mutation interne, appelée par la route HTTP | Enregistre la version médicale bien formée annoncée par le Pi dans `machines.medicalParametersVersion` ; garde `null` comme annonce explicite du mode banc. Les réponses calculent ensuite son statut face à la version courante. |
+| `recordHeartbeat` | mutation interne, appelée par la route HTTP | Enregistre la version médicale bien formée annoncée par le Pi dans `machines.medicalParametersVersion` ; garde `null` comme annonce explicite de paramètres non signés. Les réponses calculent ensuite son statut face à la version courante. |
 
 `regenerateApiKey` (« Régénérer la clé », ouverte aussi au gestionnaire de la
 machine) est retirée par ANH-165 : les clés se créent et se révoquent par
@@ -1771,7 +1780,9 @@ Détails du contrat :
   `medical_parameters_version` dans `machines.medicalParametersVersion` : une
   version bien formée est gardée comme chaîne, `null` est gardé comme annonce
   explicite de paramètres non signés, et un champ absent ou mal formé ne donne
-  pas de version. `medicalParametersStatus` et
+  pas de version. Une console antérieure à la PR #103 envoie aussi `null` :
+  elle est classée non signée et le refus de lancement est correct, mais le
+  libellé « mode banc » ne la décrit pas. `medicalParametersStatus` et
   `medicalParametersReferenceVersion` sont calculés ensuite à la lecture.
 - **Serveur d'un autre contrat** : `server_contract_version` vaut la version
   servie par Convex. Le Pi n'arme rien d'une réponse dont la majeure n'est
@@ -1955,12 +1966,20 @@ interne. Elle doit rendre la version inscrite. Ne pas relancer la même version
 ni en inscrire une version égale ou plus ancienne.
 
 ```bash
-npx convex run medicalParameters:registerVersion "$(node -e 'const fs = require("node:fs"); const content = fs.readFileSync("raspberry-pi/config/medical_parameters.json", "utf8"); const signatureBase64 = fs.readFileSync("raspberry-pi/config/medical_parameters.sig", "utf8").trim(); process.stdout.write(JSON.stringify({ content, signatureBase64 }));')"
+npx convex run medicalParameters:registerVersion "$(node -e 'const fs = require("node:fs"); const content = fs.readFileSync("raspberry-pi/config/medical_parameters.json", "utf8"); const signatureBase64 = fs.readFileSync("raspberry-pi/config/medical_parameters.sig").toString("base64"); process.stdout.write(JSON.stringify({ content, signatureBase64 }));')"
 ```
 
-Le support Ed25519 du runtime Convex de production reste à vérifier au premier
-enregistrement en production. Cette commande est une procédure opérateur ; elle
-n'a pas été lancée ici.
+Inscrire le fichier signé livré dès le premier déploiement de développement qui
+contient cette action, avant de mettre le code en production. Si ce runtime ne
+prend pas en charge Ed25519, l'enregistrement échoue fermé ; le repli est une
+action avec la directive `"use node"` qui vérifie la signature avec
+`node:crypto`.
+
+Inscrire la version aussitôt après le déploiement. Un lancement distant laissé
+en attente par le code précédent peut alors échouer à l'armement avec
+`age_refused_before_start` si aucune version n'est encore inscrite, ou avec
+`hr_max_changed_before_start` si l'arrondi de Tanaka a changé la FC max estimée
+(notamment aux âges de 25, 45, 65 et 85 ans).
 
 1. Installer les dépendances à la racine : `npm ci`.
 2. Créer un déploiement de développement et générer `convex/_generated/` :
@@ -2497,7 +2516,7 @@ et [ordre des événements Clerk](https://clerk.com/docs/guides/development/webh
 
 ## 9. Défauts connus et reste à faire
 
-### Migration des credentials avec ANH-82 - opération à réaliser
+### Migration des credentials avec ANH-82 : opération à réaliser
 
 Le correctif logiciel refuse les credentials historiques dès son déploiement.
 Il ne transforme pas les clés existantes et ne les accepte jamais en secours.
@@ -2805,13 +2824,11 @@ Limites à connaître :
   branche qui l'interroge n'arme donc **aucun lancement distant** (réponse sans
   version). C'est le cas tant que le nouveau code n'est pas déployé ; mettre
   les deux côtés à niveau relève du redéploiement (ticket ANH-82).
-- La « version attendue » d'une machine n'est définie nulle part aujourd'hui :
+- La version logicielle attendue d'une machine n'est définie nulle part aujourd'hui :
   la fiche machine du site **affiche** la version annoncée, sans la comparer.
   La comparaison et son badge viendront avec le registre machine (ticket
   ANH-147).
-- `medical_parameters_version` et `config_hash` sont acceptés dans le heartbeat
-  et **ne sont pas stockés**. Depuis ANH-139 (couche Pi), le Pi envoie dans
-  `medical_parameters_version` la version de son fichier médical quand sa
-  signature s'est vérifiée au démarrage, `null` sinon ; Convex la garde, la
-  compare à la version attendue et l'affiche dans la seconde PR du ticket
-  (couche Convex). `config_hash` vaut toujours `null`.
+- `medical_parameters_version` et `config_hash` sont acceptés dans le heartbeat.
+  Depuis ANH-139, Convex stocke et compare la version médicale annoncée à la
+  référence courante, puis l'affiche sur la fiche machine. `config_hash` garde
+  son statut : il vaut toujours `null` et n'est pas stocké.

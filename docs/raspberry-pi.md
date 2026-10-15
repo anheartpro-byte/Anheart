@@ -2583,8 +2583,8 @@ page de la console, au heartbeat (`medical_parameters_version`, voir
 enregistrement ; la bannière de démarrage du journal la cite
 (`parametres medicaux 0.1.0 signes`). `GET /api/panel` la sert dans
 `medical_parameters` (`version`, `signed`, `issued_at`, `signed_by`, `warning`).
-La fiche machine du site et la comparaison à la version attendue relèvent de la
-seconde PR du ticket (couche Convex) : rien ne les affiche aujourd'hui.
+La fiche machine du site affiche la version annoncée par la console et son
+statut par rapport à la version médicale de référence du serveur.
 
 **Mettre à jour un Pi déjà installé.** Le `.env` d'un Pi installé avant ce
 changement porte `MIN_RIDER_AGE=18` (le modèle `.env.pi.example` l'écrivait) et

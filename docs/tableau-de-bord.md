@@ -363,7 +363,7 @@ Admin et gestionnaire de la machine.
 | **Version médicale** | Version annoncée par le Pi, ou `-` s'il n'en a pas annoncé. Le statut calculé par rapport à la référence serveur est `unknown` (pas d'annonce ; pas de libellé dans la fiche), `unsigned` (fichier absent ou signature non vérifiée, mode banc), `no_reference` (pas de version de référence serveur), `current` (à jour), `obsolete` (ancienne, référence affichée) ou `ahead` (version inconnue du serveur). | lecture |
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
-| **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». « Programmes auto désactivés sur cette machine » si le Pi le dit. | lecture |
+| **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
 | **Clés de la machine** | Les clés de la machine, la plus récente en tête : préfixe, état, création et son auteur, dernière utilisation, expiration ; boutons **Nouvelle clé** et **Révoquer** (ci-dessous). Pas affichée pour une machine supprimée. | admin Anheart, admin de l'organisation (ANH-165) |
 | Zone de danger | **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
@@ -459,7 +459,9 @@ patient = celles où il a le droit.
 - Par machine : nom, lieu, statut, état en direct avec son badge
   « En direct » / « Données périmées » (§6), nombre de programmes, bouton
   **Lancer une séance auto**, lien **Détails**. 90 s après le dernier
-  signal, la carte affiche « Hors ligne » et grise le bouton (§6).
+  signal, la carte affiche « Hors ligne » et grise le bouton (§6). Elle le grise
+aussi si la machine annonce des paramètres médicaux non signés ou si aucune
+version de référence n'est enregistrée, avec la raison affichée.
 
 ### Sessions : `/fr/dashboard/sessions`
 
@@ -806,7 +808,7 @@ un entier, pour un patient comme pour « Moi-même »), ou le pratiquant est plu
 jeune que l'âge minimum de la version médicale courante. L'absence de version
 de référence affiche « Aucune version des paramètres médicaux n'est enregistrée
 sur le serveur : aucun lancement à distance n'est possible. » Le mode banc
-affiche « paramètres médicaux non signés : la machine est en mode banc
+affiche « Paramètres médicaux non signés : la machine est en mode banc
 uniquement. » Elle **avertit** si la zone dépasse la fraction de FC max fixée
 par la version courante ou si la FC limite du programme dépasse la FC max
 (« Le serveur refusera ce lancement. »).
