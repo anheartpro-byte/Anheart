@@ -70,8 +70,8 @@ try:
 except ValueError as error:
     if __name__ != "__main__":
         raise
-    print(f"refuse : {error}", file=sys.stderr)
-    raise SystemExit(1) from None
+    # The interpreter writes the SystemExit message without a module-level print.
+    raise SystemExit(f"refuse : {error}") from None
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 """The root of the repository: no private key is ever written under it."""
