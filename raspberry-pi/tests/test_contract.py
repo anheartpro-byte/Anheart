@@ -36,6 +36,7 @@ from src.contract import (
     UNKNOWN_SOFTWARE_VERSION,
     VERSION_PATH,
     ContractVersion,
+    ErrorCode,
     error_code_of,
     incompatible_server,
     major_of,
@@ -64,6 +65,7 @@ def shared() -> dict[str, object]:
 
 def test_ex1_the_contract_version_is_the_shared_file_s() -> None:
     assert shared()["contract_version"] == CONTRACT_VERSION
+    assert CONTRACT_VERSION == "1.6"
     assert version_of(CONTRACT_VERSION) == CONTRACT_VERSION
 
 
@@ -93,6 +95,11 @@ def test_ex1_the_refusals_of_a_start_are_the_shared_file_s() -> None:
     assert isinstance(codes, list)
     assert set(cast("list[str]", codes)) == ARMING_REFUSALS
     assert ARMING_REFUSALS <= STABLE_CODES
+    assert {
+        ErrorCode("rider_not_fit"),
+        ErrorCode("fitness_expired"),
+        ErrorCode("consent_missing"),
+    } <= ARMING_REFUSALS
 
 
 # =========================================================================

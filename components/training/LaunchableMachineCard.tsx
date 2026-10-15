@@ -44,13 +44,18 @@ export function LaunchableMachineCard({
   const judge = useFreshnessJudge();
   // One clock reading for the status, its badge, the launch button and the
   // values: they cannot disagree.
-  const signalFresh = judge(m.lastHeartbeat, m.serverNow).fresh;
+  const { fresh: signalFresh, now: serverNow } = judge(m.lastHeartbeat, m.serverNow);
   const status = shownMachineStatus(m.status, signalFresh);
   const stale = !signalFresh || !judge(m.live?.updatedAt, m.serverNow).fresh;
   const medicalParametersStatus =
     m.medicalParametersReferenceVersion === null
       ? "no_reference"
       : m.medicalParametersStatus;
+  const launchRefusal =
+    m.myFitnessValidUntil !== null && m.myFitnessValidUntil <= serverNow
+      ? "fitness_expired"
+      : m.myLaunchRefusal;
+  const launchRefusalText = launchRefusal ? t(`errors.${launchRefusal}`) : null;
 
   return (
     <Card>
@@ -114,7 +119,8 @@ export function LaunchableMachineCard({
               !m.programsEnabled ||
               medicalParametersStatus === "unsigned" ||
               medicalParametersStatus === "no_reference" ||
-              m.profiles.length === 0
+              m.profiles.length === 0 ||
+              (isUser && launchRefusal !== null)
             }
           >
             <Play className="h-4 w-4 mr-2" />
@@ -137,6 +143,17 @@ export function LaunchableMachineCard({
         {status === "offline" && (
           <p className="text-xs text-muted-foreground">
             {t("training.launch.offline")}
+          </p>
+        )}
+        {launchRefusalText && (
+          <p className="text-xs text-amber-800 dark:text-amber-200">
+            {isUser
+              ? t("training.myMachines.myReadinessBlocked", {
+                  reason: launchRefusalText,
+                })
+              : t("training.myMachines.myReadinessInfo", {
+                  reason: launchRefusalText,
+                })}
           </p>
         )}
       </CardContent>

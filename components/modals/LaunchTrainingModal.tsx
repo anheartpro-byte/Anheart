@@ -5,6 +5,8 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { isOrganizationAdmin, isStaff } from "@/lib/organizationAccess";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
+import { useLocalClock } from "@/hooks/use-local-clock";
+import { serverClockAt } from "@/lib/server-clock";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/navigation";
@@ -131,6 +133,17 @@ function LaunchForm({
   const [error, setError] = useState<string | null>(null);
 
   const riderIsPatient = isManager && rider !== SELF && rider !== "";
+  const readinessUserId = me
+    ? riderIsPatient
+      ? (rider as Id<"users">)
+      : me._id
+    : null;
+  const readiness = useQuery(
+    api.fitness.getRiderReadiness,
+    readinessUserId ? { userId: readinessUserId, machineId } : "skip",
+  );
+  const clock = useLocalClock();
+  const serverNow = readiness ? serverClockAt(readiness.serverNow, clock) : 0;
   const riderDoc = useQuery(
     api.users.getUserById,
     riderIsPatient ? { userId: rider as Id<"users"> } : "skip",
@@ -216,6 +229,21 @@ function LaunchForm({
     blocker = t("training.launch.programsDisabled");
   else if (machine.profiles.length === 0)
     blocker = t("training.launch.noPrograms");
+  else if (readiness === undefined)
+    blocker = t("training.launch.readinessLoading");
+  else if (readiness === null)
+    blocker = t("training.launch.readinessUnavailable");
+  else if (
+    readiness.fitness?.current &&
+    readiness.fitness.validated &&
+    readiness.fitness.outcome === "fit" &&
+    readiness.fitness.validUntil !== undefined &&
+    (Number.isNaN(new Date(readiness.fitness.validUntil).getTime()) ||
+      readiness.fitness.validUntil <= serverNow)
+  )
+    blocker = t("errors.fitness_expired");
+  else if (readiness.launchRefusal !== null)
+    blocker = t(`errors.${readiness.launchRefusal}`);
   else if (riderHrMax.state === "missing" || notWholeOnRecord("hrMax"))
     blocker = t("training.launch.hrMaxMissing");
   else if (notWholeOnRecord("birthYear"))

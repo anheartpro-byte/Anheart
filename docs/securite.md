@@ -178,6 +178,22 @@ préalables :
    fichier `config/medical_parameters.json` (ANH-98, [section 13](#13-décisions-médicales--un-fichier-signé-anh-139)).
 5. Brancher une vraie caméra (écrire `detector_link.py`) et la mettre en service.
 6. Refaire les essais sur le banc réel, puis capsule vide, avant tout passager.
+7. Le serveur refuse tout lancement depuis le site sans aptitude « apte »
+   validée et consentement actif. Depuis le contrat 1.6, il refuse aussi à
+   l'armement un passager devenu non prêt pendant l'attente, avec le code
+   `rider_not_fit`, `fitness_expired` ou `consent_missing` (ANH-143).
+   Toutes les consoles doivent parler le contrat 1.6 avant une personne à bord.
+   La console vérifie le roster et l'échéance avant tout départ avec personne
+   à bord, manuel ou programmé, et revérifie un lancement distant à l'armement.
+   Un retrait de consentement ou une nouvelle saisie n'est vu qu'à la liste
+   suivante : 60 s en ligne au repos, jusqu'à 15 min sans réseau. Seule
+   l'échéance déjà reçue est jugée hors ligne par l'horloge du Pi. La durée de
+   validité reste laissée au valideur, sans plafond médical, jusqu'au contenu
+   signé d'ANH-98 ; la borne de représentation est le 1er janvier 2101. Le
+   questionnaire 0.1.0 et le texte de consentement 0.1.0 sont provisoires ;
+   remplacer le premier par le contenu médical signé (ANH-98), et le second par
+   le texte valide après ANH-87b et ANH-172. Dès que leur version change, une
+   aptitude ou un consentement signé pour l'ancienne version ne compte plus.
 
 ## 7. Décisions des 5 et 6 octobre 2026 sur les reprises automatiques
 

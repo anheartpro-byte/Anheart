@@ -28,9 +28,12 @@ import { isDeepStrictEqual } from "node:util";
 import { api } from "./_generated/api";
 import type { FunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
+import { CONSENT_TEXT_VERSION } from "../lib/consentText";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 import { notifyMachine } from "./lib/notifications";
 import {
   addSession,
+  makeRiderReady,
   NOW,
   ROLE_OF,
   type Actor,
@@ -133,6 +136,15 @@ function userId(w: World, actor: Actor): Id<"users"> {
 function organizationOf(w: World, actor: Actor): Id<"organizations"> {
   if (actor === "admin") return w.anheartOrg;
   return actor.startsWith("orgB") ? w.orgB : w.orgA;
+}
+
+function fitAnswers(): Record<string, boolean> {
+  return Object.fromEntries(
+    CURRENT_QUESTIONNAIRE.questions.map((question) => [
+      question.id,
+      question.outcomes.yes === "fit",
+    ]),
+  );
 }
 
 /** Fail unless `seen` holds exactly `expected`, in any order. */
@@ -2030,6 +2042,12 @@ export const MATRIX: Entry[] = [
     ref: api.training.launchAutoSession,
     kind: "mutation",
     build: async (w, actor, scope) => {
+      if (!(actor === "admin" && scope === "other")) {
+        await makeRiderReady(w.t, w.patient, w.orgA, {
+          now: NOW,
+          validUntil: Date.UTC(2100, 0, 1),
+        });
+      }
       const base = { machineId: w.machine, profileId: w.profileId };
       if (actor === "patient")
         return scope === "other" ? { ...base, userId: w.otherPatient } : base;
@@ -2040,11 +2058,16 @@ export const MATRIX: Entry[] = [
           userId: scope === "other" ? w.otherPatient : w.patient,
         };
       if (actor === "otherManager") return { ...base, userId: w.otherPatient };
+      if (actor === "admin" && scope === "other") {
+        return { ...base, userId: w.otherPatient };
+      }
       return { ...base, userId: w.patient }; // admin
     },
-    onSuccess: async (res, w) => {
+    onSuccess: async (res, w, actor, _scope, args) => {
       const s = await w.t.run((ctx) => ctx.db.get(res as Id<"sessions">));
-      if (s?.kind !== "auto" || s.status !== "pending" || s.userId !== w.patient)
+      const riderId =
+        (args.userId as Id<"users"> | undefined) ?? userId(w, actor);
+      if (s?.kind !== "auto" || s.status !== "pending" || s.userId !== riderId)
         throw new Error("Auto session not queued for the intended rider");
     },
     cases: [
@@ -2076,6 +2099,12 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", scope: "own", expect: ok, note: "admin launches for a rider" },
+      {
+        actor: "admin",
+        scope: "other",
+        expect: refuse(/rider_not_fit/),
+        note: "an admin receives the refusal for a passenger who is not ready",
+      },
       {
         actor: "orgAdmin",
         scope: "own",
@@ -2848,6 +2877,552 @@ export const MATRIX: Entry[] = [
       { actor: "orgAdmin", scope: "self", expect: ok, note: "their own choice" },
       { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient receives no alert" },
       { actor: "orgBManager", scope: "self", expect: ok, note: "their own choice" },
+    ],
+  },
+  {
+    id: "fitness.submitFitnessAnswers",
+    ref: api.fitness.submitFitnessAnswers,
+    kind: "mutation",
+    build: async (w, actor, scope) => {
+      const ownUserId = actor === "anonymous" ? undefined : userId(w, actor);
+      const targetId =
+        scope === "self" && actor !== "anonymous"
+          ? userId(w, actor)
+          : scope === "other" && actor === "patient"
+            ? w.otherPatient
+            : w.patient;
+      return {
+        ...(targetId === ownUserId ? {} : { userId: targetId }),
+        questionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+        answers: fitAnswers(),
+      };
+    },
+    onSuccess: async (res, w, actor, scope) => {
+      const result = res as {
+        assessmentId: Id<"fitness_assessments">;
+        outcome: string;
+      };
+      const targetId =
+        scope === "self" && actor !== "anonymous"
+          ? userId(w, actor)
+          : scope === "other"
+            ? w.otherPatient
+            : w.patient;
+      const row = await w.t.run((ctx) => ctx.db.get(result.assessmentId));
+      if (
+        !row ||
+        row.userId !== targetId ||
+        row.submittedBy !== userId(w, actor) ||
+        row.outcome !== result.outcome ||
+        row.validatedAt !== undefined
+      ) {
+        throw new Error(
+          "Fitness answers were not submitted as a new assessment",
+        );
+      }
+    },
+    cases: [
+      {
+        actor: "anonymous",
+        expect: refuse(NOT_AUTH),
+        note: "sign-in required",
+      },
+      {
+        actor: "patient",
+        scope: "self",
+        expect: ok,
+        note: "a passenger submits for themselves",
+      },
+      {
+        actor: "otherPatient",
+        scope: "self",
+        expect: ok,
+        note: "another passenger submits for themselves",
+      },
+      {
+        actor: "patient",
+        scope: "other",
+        expect: refuse(/user_not_managed/),
+        note: "a passenger cannot submit for another",
+      },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: ok,
+        note: "their manager submits for them",
+      },
+      {
+        actor: "otherManager",
+        scope: "other",
+        expect: refuse(/user_not_managed/),
+        note: "an unrelated manager cannot submit",
+      },
+      {
+        actor: "stranger",
+        scope: "other",
+        expect: refuse(/user_not_managed/),
+        note: "an unrelated user cannot submit",
+      },
+      {
+        actor: "admin",
+        scope: "own",
+        expect: ok,
+        note: "the Anheart admin submits for a centre A passenger",
+      },
+      {
+        actor: "orgAdmin",
+        scope: "own",
+        expect: ok,
+        note: "the centre A admin submits for a passenger",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/user_not_managed/),
+        note: "centre B cannot submit for centre A",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/user_not_managed/),
+        note: "centre B cannot submit for centre A",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: refuse(/user_not_managed/),
+        note: "a centre B passenger cannot submit for centre A",
+      },
+    ],
+  },
+  {
+    id: "fitness.validateFitnessAssessment",
+    ref: api.fitness.validateFitnessAssessment,
+    kind: "mutation",
+    build: async (w) => ({
+      assessmentId: await w.t.run((ctx) =>
+        ctx.db.insert("fitness_assessments", {
+          userId: w.patient,
+          organizationId: w.orgA,
+          questionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+          answers: fitAnswers(),
+          outcome: "fit",
+          submittedBy: w.patient,
+          submittedAt: NOW,
+        }),
+      ),
+      validUntil: NOW + 60_000,
+      notes: "Reviewed by synthetic manager",
+    }),
+    onSuccess: async (_res, w, actor, _scope, args) => {
+      const row = await w.t.run((ctx) =>
+        ctx.db.get(args.assessmentId as Id<"fitness_assessments">),
+      );
+      if (
+        row?.validatedBy !== userId(w, actor) ||
+        row.validatedAt === undefined ||
+        row.validUntil !== args.validUntil ||
+        row.outcome !== "fit"
+      ) {
+        throw new Error(
+          "Assessment validation changed its outcome or missed its review",
+        );
+      }
+    },
+    cases: [
+      {
+        actor: "anonymous",
+        expect: refuse(NOT_AUTH),
+        note: "sign-in required",
+      },
+      {
+        actor: "patient",
+        scope: "self",
+        expect: refuse(/fitness_self_validation/),
+        note: "a passenger cannot validate themselves",
+      },
+      {
+        actor: "otherPatient",
+        scope: "other",
+        expect: refuse(/user_not_managed/),
+        note: "a passenger cannot validate another",
+      },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: ok,
+        note: "the passenger's manager validates",
+      },
+      {
+        actor: "otherManager",
+        scope: "other",
+        expect: refuse(/user_not_managed/),
+        note: "an unrelated manager cannot validate",
+      },
+      {
+        actor: "admin",
+        scope: "own",
+        expect: ok,
+        note: "the Anheart admin validates across organisations",
+      },
+      {
+        actor: "orgAdmin",
+        scope: "own",
+        expect: ok,
+        note: "the passenger's organisation admin validates",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/fitness_assessment_not_found/),
+        note: "centre B cannot access a centre A assessment",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/fitness_assessment_not_found/),
+        note: "centre B cannot access a centre A assessment",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: refuse(/fitness_assessment_not_found/),
+        note: "a centre B passenger cannot access a centre A assessment",
+      },
+    ],
+  },
+  {
+    id: "fitness.signConsent",
+    ref: api.fitness.signConsent,
+    kind: "mutation",
+    build: async (_w, _actor, scope) => ({
+      textVersion:
+        scope === "foreign"
+          ? `${CONSENT_TEXT_VERSION}-outdated`
+          : CONSENT_TEXT_VERSION,
+    }),
+    onSuccess: async (res, w, actor) => {
+      const row = await w.t.run((ctx) => ctx.db.get(res as Id<"consents">));
+      if (
+        row?.userId !== userId(w, actor) ||
+        row.organizationId !== organizationOf(w, actor) ||
+        row.textVersion !== CONSENT_TEXT_VERSION ||
+        row.signedVia !== "site"
+      ) {
+        throw new Error(
+          "Consent was not signed for the caller in their organisation",
+        );
+      }
+    },
+    cases: [
+      {
+        actor: "anonymous",
+        expect: refuse(NOT_AUTH),
+        note: "sign-in required",
+      },
+      {
+        actor: "patient",
+        scope: "self",
+        expect: ok,
+        note: "a passenger signs their own consent",
+      },
+      {
+        actor: "otherPatient",
+        scope: "self",
+        expect: ok,
+        note: "another passenger signs their own consent",
+      },
+      {
+        actor: "manager",
+        scope: "self",
+        expect: ok,
+        note: "a manager signs their own consent",
+      },
+      {
+        actor: "orgAdmin",
+        scope: "self",
+        expect: ok,
+        note: "an organisation admin signs their own consent",
+      },
+      {
+        actor: "admin",
+        scope: "self",
+        expect: ok,
+        note: "the Anheart admin signs their own consent",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "self",
+        expect: ok,
+        note: "a centre B admin signs their own consent",
+      },
+      {
+        actor: "orgBManager",
+        scope: "self",
+        expect: ok,
+        note: "a centre B manager signs their own consent",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "self",
+        expect: ok,
+        note: "a centre B passenger signs their own consent",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: refuse(/consent_text_outdated/),
+        note: "a text version outside the current contract is refused",
+      },
+    ],
+  },
+  {
+    id: "fitness.withdrawConsent",
+    ref: api.fitness.withdrawConsent,
+    kind: "mutation",
+    build: async (w, actor, scope) => {
+      const targetId = scope === "self" ? userId(w, actor) : w.patient;
+      const organizationId =
+        scope === "self" ? organizationOf(w, actor) : w.orgA;
+      await w.t.run((ctx) =>
+        ctx.db.insert("consents", {
+          userId: targetId,
+          organizationId,
+          textVersion: CONSENT_TEXT_VERSION,
+          signedAt: NOW,
+          signedVia: "site",
+        }),
+      );
+      return scope === "self" ? {} : { userId: targetId };
+    },
+    onSuccess: async (_res, w, actor, scope) => {
+      const targetId = scope === "self" ? userId(w, actor) : w.patient;
+      const organizationId =
+        scope === "self" ? organizationOf(w, actor) : w.orgA;
+      const rows = await w.t.run((ctx) =>
+        ctx.db
+          .query("consents")
+          .withIndex("by_user_and_organization", (q) =>
+            q.eq("userId", targetId).eq("organizationId", organizationId),
+          )
+          .collect(),
+      );
+      if (
+        rows.length === 0 ||
+        rows.some(
+          (row) =>
+            row.withdrawnAt === undefined || row.withdrawnBy === undefined,
+        )
+      ) {
+        throw new Error("Consent withdrawal did not mark every active consent");
+      }
+    },
+    cases: [
+      {
+        actor: "anonymous",
+        expect: refuse(NOT_AUTH),
+        note: "sign-in required",
+      },
+      {
+        actor: "patient",
+        scope: "self",
+        expect: ok,
+        note: "a passenger withdraws their own consent",
+      },
+      {
+        actor: "manager",
+        scope: "self",
+        expect: ok,
+        note: "a manager withdraws their own consent",
+      },
+      {
+        actor: "orgAdmin",
+        scope: "self",
+        expect: ok,
+        note: "an organisation admin withdraws their own consent",
+      },
+      {
+        actor: "admin",
+        scope: "self",
+        expect: ok,
+        note: "the Anheart admin withdraws their own consent",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "self",
+        expect: ok,
+        note: "a centre B admin withdraws their own consent",
+      },
+      {
+        actor: "orgBManager",
+        scope: "self",
+        expect: ok,
+        note: "a centre B manager withdraws their own consent",
+      },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: ok,
+        note: "a manager withdraws their passenger's consent",
+      },
+      {
+        actor: "otherManager",
+        scope: "other",
+        expect: refuse(/user_not_managed/),
+        note: "an unrelated manager cannot withdraw",
+      },
+      {
+        actor: "otherPatient",
+        scope: "other",
+        expect: refuse(/user_not_managed/),
+        note: "another passenger cannot withdraw",
+      },
+      {
+        actor: "admin",
+        scope: "own",
+        expect: ok,
+        note: "the Anheart admin withdraws for a centre A passenger",
+      },
+      {
+        actor: "orgAdmin",
+        scope: "own",
+        expect: ok,
+        note: "the centre A admin withdraws for a passenger",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/user_not_managed/),
+        note: "centre B cannot withdraw for centre A",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/user_not_managed/),
+        note: "centre B cannot withdraw for centre A",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: refuse(/user_not_managed/),
+        note: "a centre B passenger cannot withdraw for centre A",
+      },
+    ],
+  },
+  {
+    id: "fitness.getRiderReadiness",
+    ref: api.fitness.getRiderReadiness,
+    kind: "query",
+    build: async (w) => {
+      await makeRiderReady(w.t, w.patient, w.orgA, {
+        now: NOW,
+        validUntil: NOW + 60_000,
+      });
+      return { userId: w.patient };
+    },
+    onSuccess: (res, _w, actor) => {
+      const readiness = res as {
+        serverNow: number;
+        fitness: { answers?: Record<string, boolean>; notes?: string } | null;
+        launchRefusal: string | null;
+        canValidate: boolean;
+      };
+      if (
+        typeof readiness.serverNow !== "number" ||
+        readiness.launchRefusal !== null
+      ) {
+        throw new Error("Expected current rider readiness");
+      }
+      if (actor === "patient") {
+        if (
+          readiness.fitness?.answers !== undefined ||
+          readiness.fitness?.notes !== undefined ||
+          readiness.canValidate
+        ) {
+          throw new Error("Passenger received answers or review notes");
+        }
+      } else if (
+        !readiness.fitness?.answers ||
+        readiness.fitness.notes !== "Synthetic review note" ||
+        !readiness.canValidate
+      ) {
+        throw new Error(
+          "Manager did not receive fitness answers and review notes",
+        );
+      }
+      if (
+        readiness.fitness?.answers &&
+        Object.keys(readiness.fitness.answers).length !==
+          CURRENT_QUESTIONNAIRE.questions.length
+      ) {
+        throw new Error("Manager received incomplete fitness answers");
+      }
+      if (actor === "admin" && !readiness.canValidate) {
+        throw new Error(
+          "Anheart admin did not resolve the passenger's primary organisation",
+        );
+      }
+    },
+    cases: [
+      {
+        actor: "anonymous",
+        expect: refuse(NOT_AUTH),
+        note: "sign-in required",
+      },
+      {
+        actor: "patient",
+        scope: "self",
+        expect: ok,
+        note: "passenger sees status without answers or notes",
+      },
+      {
+        actor: "otherPatient",
+        scope: "other",
+        expect: empty,
+        note: "another passenger receives null",
+      },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: ok,
+        note: "the manager sees answers and notes",
+      },
+      {
+        actor: "otherManager",
+        scope: "other",
+        expect: empty,
+        note: "an unrelated manager receives null",
+      },
+      {
+        actor: "admin",
+        scope: "own",
+        expect: ok,
+        note: "the Anheart admin sees a centre A passenger's data",
+      },
+      {
+        actor: "orgAdmin",
+        scope: "own",
+        expect: ok,
+        note: "the centre A admin sees the passenger's data",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: empty,
+        note: "centre B receives null for a centre A passenger",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: empty,
+        note: "centre B receives null for a centre A passenger",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: empty,
+        note: "a centre B passenger receives null for centre A",
+      },
     ],
   },
 ];

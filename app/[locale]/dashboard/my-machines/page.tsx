@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Cpu, HeartPulse, KeyRound } from "lucide-react";
 import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
+import { ConsentCard } from "@/components/training/ConsentCard";
+import { FitnessCard } from "@/components/training/FitnessCard";
 import { LaunchableMachineCard } from "@/components/training/LaunchableMachineCard";
 
 export default function MyMachinesPage() {
@@ -90,6 +92,18 @@ export default function MyMachinesPage() {
             />
           ))}
         </div>
+      )}
+
+      {user && (
+        <section aria-labelledby="my-readiness-title" className="space-y-3">
+          <h2 id="my-readiness-title" className="text-xl font-semibold">
+            {t("training.myMachines.readinessTitle")}
+          </h2>
+          <div className="grid gap-6 xl:grid-cols-2">
+            <FitnessCard userId={user._id} />
+            <ConsentCard userId={user._id} />
+          </div>
+        </section>
       )}
 
       {launchFor && (

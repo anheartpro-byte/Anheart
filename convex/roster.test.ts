@@ -5,11 +5,13 @@
  * `launchAutoSession` does on the site, and cannot change them: an absent or
  * unusable value is served as null, never replaced by another.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
-import { modules, NOW, seedMachineWorld } from "./test.setup";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
+import machineApi from "../contracts/machine-api.json";
+import { makeRiderReady, modules, NOW, seedMachineWorld } from "./test.setup";
 
 type World = Awaited<ReturnType<typeof seedMachineWorld>>;
 type Rider = {
@@ -17,6 +19,10 @@ type Rider = {
   name: string;
   hrMax: number | null;
   birthYear: number | null;
+  fit: boolean;
+  fitnessValidUntil: number | null;
+  consent: boolean;
+  fitnessQuestionnaireVersion: string | null;
 };
 
 /** A rider of the machine's organisation holding the launch right, with `physiology`. */
@@ -42,6 +48,13 @@ async function rider(
       organizationId: w.organizationId,
       role: "user",
       active: true,
+    });
+    await ctx.db.insert("user_gestionnaires", {
+      organizationId: w.organizationId,
+      userId: id,
+      gestionnaireId: w.adminId,
+      createdAt: NOW,
+      createdBy: w.adminId,
     });
     await ctx.db.insert("machine_user_permissions", {
       organizationId: w.organizationId,
@@ -76,6 +89,10 @@ describe("ANH-84 roster: the values a console vets a programme with", () => {
         name: "Synthetic Patient",
         hrMax: 180,
         birthYear: 1990,
+        fit: true,
+        fitnessValidUntil: Date.UTC(2100, 0, 1),
+        consent: true,
+        fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
       },
     ]);
   });
@@ -89,6 +106,10 @@ describe("ANH-84 roster: the values a console vets a programme with", () => {
       name: "Synthetic roster-bare",
       hrMax: null,
       birthYear: null,
+      fit: false,
+      fitnessValidUntil: null,
+      consent: false,
+      fitnessQuestionnaireVersion: null,
     });
   });
 
@@ -132,5 +153,115 @@ describe("ANH-84 roster: the values a console vets a programme with", () => {
       for (const row of rows) await ctx.db.delete(row._id);
     });
     expect(await served(w)).toEqual([]);
+  });
+});
+
+describe("ANH-143 roster: fitness and consent", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("serves only launch status for ready, unvalidated, expired, and unsigned riders", async () => {
+    const w = await seedMachineWorld(modules);
+    const unvalidated = await rider(w, "roster-unvalidated", {});
+    const expired = await rider(w, "roster-expired", {});
+    const noConsent = await rider(w, "roster-no-consent", {});
+    const assessment = (userId: Id<"users">, validated: boolean) =>
+      w.t.run((ctx) =>
+        ctx.db.insert("fitness_assessments", {
+          userId,
+          organizationId: w.organizationId,
+          questionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+          answers: {},
+          outcome: "fit",
+          submittedBy: userId,
+          submittedAt: NOW,
+          ...(validated ? { validatedBy: w.adminId, validatedAt: NOW } : {}),
+          validUntil: NOW + 60_000,
+        }),
+      );
+    await assessment(unvalidated, false);
+    await makeRiderReady(w.t, expired, w.organizationId, {
+      now: NOW,
+      validUntil: Date.now() - 1,
+    });
+    await assessment(noConsent, true);
+
+    const roster = await w.t.query(internal.training.getRoster, {
+      machineId: w.machine,
+    });
+    const ready = roster.find((r) => r.userId === w.patient);
+    expect(Object.keys(ready ?? {}).sort()).toEqual(
+      [
+        "userId",
+        "name",
+        "hrMax",
+        "birthYear",
+        "fit",
+        "fitnessValidUntil",
+        "consent",
+        "fitnessQuestionnaireVersion",
+      ].sort(),
+    );
+    expect(ready).toMatchObject({
+      fit: true,
+      consent: true,
+      fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+    });
+    expect(roster.find((r) => r.userId === unvalidated)).toMatchObject({
+      fit: false,
+      fitnessValidUntil: null,
+      consent: false,
+      fitnessQuestionnaireVersion: null,
+    });
+    expect(roster.find((r) => r.userId === expired)).toMatchObject({
+      fit: false,
+      fitnessValidUntil: null,
+      consent: true,
+      fitnessQuestionnaireVersion: null,
+    });
+    expect(roster.find((r) => r.userId === noConsent)).toMatchObject({
+      fit: true,
+      fitnessValidUntil: NOW + 60_000,
+      consent: false,
+      fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+    });
+    for (const row of roster) {
+      expect(Object.keys(row).sort()).toEqual(Object.keys(ready ?? {}).sort());
+      expect(Object.keys(row).sort()).toEqual(
+        Object.keys(machineApi.roster.rider_fields).sort(),
+      );
+      expect(row).not.toHaveProperty("answers");
+      expect(row).not.toHaveProperty("notes");
+    }
+  });
+
+  it("serves no questionnaire version after fitness expires during the wait", async () => {
+    const w = await seedMachineWorld(modules);
+    const { assessmentId } = await makeRiderReady(w.t, w.patient, w.organizationId, {
+      now: NOW,
+      validUntil: NOW + 60_000,
+    });
+    expect((await served(w))[0]).toMatchObject({
+      fit: true,
+      fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+    });
+    vi.setSystemTime(NOW + 60_000);
+    expect((await served(w))[0]).toMatchObject({
+      fit: false,
+      fitnessValidUntil: null,
+      fitnessQuestionnaireVersion: null,
+      consent: true,
+    });
+    await w.t.run((ctx) => ctx.db.patch(assessmentId, {
+      questionnaireVersion: "outdated",
+      validUntil: NOW + 120_000,
+    }));
+    expect((await served(w))[0]).toMatchObject({
+      fit: false,
+      fitnessQuestionnaireVersion: null,
+    });
   });
 });

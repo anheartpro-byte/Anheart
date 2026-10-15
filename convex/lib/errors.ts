@@ -57,6 +57,24 @@ export const DASHBOARD_ERRORS = {
   user_not_found: "The account does not exist (any more).",
   user_not_managed: "The caller does not manage this account.",
   patient_not_managed: "The caller does not manage this patient.",
+  fitness_answers_invalid:
+    "The answers do not match the current questionnaire.",
+  questionnaire_outdated: "The questionnaire version is not current.",
+  fitness_assessment_not_found:
+    "The fitness assessment does not exist or is outside the caller's scope.",
+  fitness_self_validation:
+    "A passenger cannot validate their own fitness assessment.",
+  fitness_assessment_superseded:
+    "A newer fitness assessment has been submitted.",
+  fitness_already_validated:
+    "This fitness assessment has already been validated.",
+  invalid_validity: "The fitness validity date is missing or invalid.",
+  fitness_notes_too_long: "Fitness review notes exceed 1000 characters.",
+  consent_text_outdated: "The consent text version is not current.",
+  consent_not_active: "No active consent exists to withdraw.",
+  rider_not_fit: "The rider has no current, validated fit assessment.",
+  fitness_expired: "The rider's fitness assessment has expired.",
+  consent_missing: "The rider has no active consent for the current text.",
   cannot_delete_self: "An account cannot delete itself.",
   only_patients_deletable: "A gestionnaire deletes patient accounts only.",
   not_a_patient:

@@ -263,6 +263,9 @@ def test_ex9_a_manual_session_has_the_same_structure_on_the_console_and_in_simul
     assert _manifest(console)["profile"] is None
     assert _manifest(simulation)["profile"] is None
     assert (_manifest(console)["kind"], _manifest(simulation)["kind"]) == ("manual", "manual")
+    for record in (console, simulation):
+        assert _manifest(record)["subject_fit"] is None
+        assert _manifest(record)["fitness_questionnaire_version"] is None
 
 
 def test_anh210_a_scenario_record_is_stamped_with_the_version_of_the_build(
@@ -321,6 +324,10 @@ def test_ex9_a_programme_has_the_same_profile_keys_and_raw_block_headers(tmp_pat
     _assert_same_structure(console, simulation)
     ours, theirs = _manifest(console), _manifest(simulation)
     assert (ours["kind"], theirs["kind"]) == ("auto", "auto")
+    assert ours["subject_fit"] is True
+    assert ours["fitness_questionnaire_version"] == "0.1.0"
+    assert theirs["subject_fit"] is None
+    assert theirs["fitness_questionnaire_version"] is None
     assert _keys(ours["profile"]) == _keys(theirs["profile"])
     block_keys = ("channels", "n_samples", "sample_rate", "seq", "t_first")
     assert _block_header_keys(console) == {block_keys}

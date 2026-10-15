@@ -9,7 +9,7 @@ import {
   modules,
   NOW,
   registerShippedMedicalParameters,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   backendOf,
 } from "./test.setup";
 import { estimateHrMax } from "../lib/medicalParameters";

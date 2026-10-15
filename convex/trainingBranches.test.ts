@@ -16,6 +16,7 @@ import { ConvexError } from "convex/values";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { CONTRACT_VERSION } from "./lib/contract";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 import { machineHeaders } from "./machineAuth.fixtures";
 import { ageFrom, effectiveHrMax, zoneRefusal } from "./training";
 import {
@@ -26,7 +27,7 @@ import {
   modules,
   NOW,
   seedMachineWorld,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   type World,
 } from "./test.setup";
 
@@ -923,18 +924,30 @@ describe("launch rights are granted once and revoked quietly", () => {
         name: "otherPatient Synthetic",
         hrMax: null,
         birthYear: null,
+        fit: true,
+        fitnessValidUntil: Date.UTC(2100, 0, 1),
+        consent: true,
+        fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
       },
       {
         userId: w.patient,
         name: "patient Synthetic",
         hrMax: 180,
         birthYear: 1990,
+        fit: true,
+        fitnessValidUntil: Date.UTC(2100, 0, 1),
+        consent: true,
+        fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
       },
       {
         userId: w.stranger,
         name: "stranger Synthetic",
         hrMax: 182,
         birthYear: turning(37),
+        fit: false,
+        fitnessValidUntil: null,
+        consent: false,
+        fitnessQuestionnaireVersion: null,
       },
     ]);
   });
@@ -993,6 +1006,10 @@ describe("launch rights are granted once and revoked quietly", () => {
           name: "patient Synthetic",
           hrMax: null,
           birthYear,
+          fit: true,
+          fitnessValidUntil: Date.UTC(2100, 0, 1),
+          consent: true,
+          fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
         },
       ]);
     },

@@ -13,6 +13,7 @@ import ast
 import logging
 import math
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Final, cast
 
@@ -71,6 +72,10 @@ def entry(**fields: object) -> dict[str, object]:
         "name": RIDER_NAME,
         "hrMax": 190,
         "birthYear": 1940,
+        "fit": True,
+        "fitnessValidUntil": RIDER.fitness_valid_until,
+        "consent": True,
+        "fitnessQuestionnaireVersion": "0.1.0",
     }
     for key, value in fields.items():
         if value is None:
@@ -172,7 +177,7 @@ def test_an_entry_that_names_nobody_the_console_can_offer_is_dropped_and_counted
     row: object,
 ) -> None:
     assert listing_of(row, entry(userId="kept")) == Listing(
-        riders=(Rider(user_id="kept", name=RIDER_NAME, hr_max=Bpm(190), birth_year=1940),),
+        riders=(replace(RIDER, user_id="kept"),),
         dropped=1,
     )
 

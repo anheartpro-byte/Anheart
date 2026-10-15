@@ -1407,8 +1407,42 @@ l'ancienne année. Au repos, la réponse suivante arrive dans la minute ; sans r
 valeur ancienne sert au plus **15 minutes**, puis personne n'est proposé. Le tableau de bord revérifie le droit quand la
 séance lui est déclarée et ne l'attribue pas à un passager qui ne l'a plus (mention
 `Passenger attribution unavailable at registration`, [convex.md](convex.md)). La
-revérification de l'identité et des droits à l'armement est le ticket ANH-144 ;
-l'aptitude et le consentement (ANH-143) ne sont pas encore servis par la liste.
+revérification de l'identité et des droits à l'armement est assurée par ANH-144.
+
+Depuis le contrat 1.6, la liste porte aussi `fit`, `fitnessValidUntil`, `consent`
+et `fitnessQuestionnaireVersion`. Seul le booléen JSON `true` rend `fit` ou
+`consent` vrai : un champ absent, `null`, `1` ou `"true"` reste faux. L'échéance
+doit être un nombre entier de millisecondes Unix entre 0 et le 1er janvier 2101 ;
+une valeur inutilisable reste inconnue. La version doit respecter
+`[0-9A-Za-z.+-]{1,32}`, sinon elle reste inconnue. Une réponse d'un tableau de bord
+1.5 sans ces champs refuse donc tout départ avec personne à bord.
+
+La console vérifie cette porte pour une séance programmée locale et une séance
+manuelle `occupied`, au moment d'armer. Pour un lancement distant, elle la vérifie
+avant `training/start`, puis de nouveau à l'armement après la réponse du serveur.
+L'horloge murale injectée sert à comparer l'échéance : à égalité, l'aptitude est
+expirée, même si la liste est encore récente. Une horloge non fiable refuse
+toujours une personne à bord. Une séance de banc reste sans passager.
+
+| Refus | Phrase montrée à l'opérateur |
+|---|---|
+| aptitude fausse, échéance ou version inconnue | `demarrage refuse : aptitude du passager non validee, a valider par un gestionnaire sur le site` |
+| aptitude expirée | `demarrage refuse : aptitude du passager expiree, a valider par un gestionnaire sur le site` |
+| consentement absent | `demarrage refuse : consentement du passager absent, a signer par le passager sur le site` |
+
+La porte juge la liste tenue : un retrait du consentement ou une nouvelle
+saisie sur le site n'est vu qu'à la liste suivante, dans les 60 s en ligne au
+repos, jusqu'à 15 min sans réseau. Seule l'échéance déjà reçue est jugée hors
+ligne par l'horloge du Pi. « Aptitude expirée » devient « aptitude non validée »
+dès la liste suivante : Convex sert alors `fit: false` et
+`fitnessValidUntil: null`. Une aptitude qui expire pendant une séance en cours
+ne l'arrête pas : cette porte s'applique au départ seulement (EX-5).
+
+Un refus local distant est renvoyé comme fin échouée. Un 409 du serveur portant
+`rider_not_fit`, `fitness_expired` ou `consent_missing` montre sa raison et n'arme
+pas. Les phrases ne portent ni nom, ni réponses, ni notes, ni valeur de santé.
+Le manifeste conserve seulement `subject_fit: true` et la version du questionnaire
+du passager admis ; le banc les laisse à `null` ([enregistrement.md](enregistrement.md)).
 
 ### Carte « Ce que ce programme ferait »
 

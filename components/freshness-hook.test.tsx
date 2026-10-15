@@ -170,6 +170,8 @@ describe("my machines: one card per machine", () => {
         live,
         profiles: [],
         myHrMax: null,
+        myLaunchRefusal: null,
+        myFitnessValidUntil: null,
       }}
       isUser={false}
       onLaunch={() => {}}

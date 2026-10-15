@@ -18,7 +18,7 @@ import {
   modules,
   NOW,
   registerShippedMedicalParameters,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   type World,
 } from "./test.setup";
 

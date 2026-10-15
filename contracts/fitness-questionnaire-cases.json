@@ -1,0 +1,289 @@
+{
+  "questionnaireVersion": "0.1.0",
+  "cases": [
+    {
+      "name": "toutes les réponses non donnent fit",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "fit" }
+    },
+    {
+      "name": "oui à heart_condition",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": true,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "oui à chest_pain",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": true,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "oui à fainting_or_dizziness",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": true,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "oui à blood_pressure_or_heart_treatment",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": true,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "oui à epilepsy_or_seizure",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": true,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "oui à balance_or_inner_ear",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": true,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "oui à pregnancy",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": true,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "oui à recent_surgery_or_injury",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": true,
+        "physician_advised_against": false
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "oui à physician_advised_against",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": true
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "toutes les réponses oui",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": true,
+        "chest_pain": true,
+        "fainting_or_dizziness": true,
+        "blood_pressure_or_heart_treatment": true,
+        "epilepsy_or_seizure": true,
+        "balance_or_inner_ear": true,
+        "pregnancy": true,
+        "recent_surgery_or_injury": true,
+        "physician_advised_against": true
+      },
+      "expected": { "outcome": "needs_medical_opinion" }
+    },
+    {
+      "name": "réponse manquante",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false
+      },
+      "expected": { "refused": "missing_answer" }
+    },
+    {
+      "name": "clé inconnue en plus",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false,
+        "unknown_question": false
+      },
+      "expected": { "refused": "unknown_question" }
+    },
+    {
+      "name": "réponse textuelle non booléenne",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": "yes",
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "refused": "invalid_answer" }
+    },
+    {
+      "name": "réponse numérique non booléenne",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": 1,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "refused": "invalid_answer" }
+    },
+    {
+      "name": "réponse nulle non booléenne",
+      "version": "0.1.0",
+      "answers": {
+        "heart_condition": null,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "refused": "invalid_answer" }
+    },
+    {
+      "name": "réponses nulles",
+      "version": "0.1.0",
+      "answers": null,
+      "expected": { "refused": "not_an_object" }
+    },
+    {
+      "name": "réponses tableau",
+      "version": "0.1.0",
+      "answers": [],
+      "expected": { "refused": "not_an_object" }
+    },
+    {
+      "name": "version différente",
+      "version": "0.2.0",
+      "answers": {
+        "heart_condition": false,
+        "chest_pain": false,
+        "fainting_or_dizziness": false,
+        "blood_pressure_or_heart_treatment": false,
+        "epilepsy_or_seizure": false,
+        "balance_or_inner_ear": false,
+        "pregnancy": false,
+        "recent_surgery_or_injury": false,
+        "physician_advised_against": false
+      },
+      "expected": { "refused": "version_mismatch" }
+    }
+  ]
+}

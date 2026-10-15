@@ -19,6 +19,8 @@ import resendTest from "@convex-dev/resend/test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
+import { CONSENT_TEXT_VERSION } from "../lib/consentText";
 import shippedMedicalContent from "../raspberry-pi/config/medical_parameters.json?raw";
 import shippedMedicalSignatureUrl from "../raspberry-pi/config/medical_parameters.sig?url&inline";
 
@@ -392,6 +394,76 @@ export async function seedWorld(mods: Record<string, () => Promise<unknown>>) {
   return { t, ...ids };
 }
 
+export async function makeRiderReady(
+  t: ReturnType<typeof backendOf>,
+  userId: Id<"users">,
+  organizationId: Id<"organizations">,
+  options: Readonly<{
+    now: number;
+    validUntil: number;
+    validatedBy?: Id<"users">;
+  }>,
+) {
+  return await t.run(async (ctx) => {
+    let validatedBy = options.validatedBy;
+    if (validatedBy === undefined) {
+      const relation = await ctx.db
+        .query("user_gestionnaires")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .filter((q) => q.eq(q.field("organizationId"), organizationId))
+        .first();
+      if (relation === null)
+        throw new Error("Rider needs a manager in the test world");
+      validatedBy = relation.gestionnaireId;
+    }
+
+    const answers: Record<string, boolean> = {};
+    for (const question of CURRENT_QUESTIONNAIRE.questions) {
+      if (question.outcomes.no === "fit") answers[question.id] = false;
+      else if (question.outcomes.yes === "fit") answers[question.id] = true;
+      else throw new Error("Current questionnaire has no fit answer");
+    }
+    const assessmentId = await ctx.db.insert("fitness_assessments", {
+      userId,
+      organizationId,
+      questionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+      answers,
+      outcome: "fit",
+      submittedBy: userId,
+      submittedAt: options.now,
+      validatedBy,
+      validatedAt: options.now,
+      validUntil: options.validUntil,
+      notes: "Synthetic review note",
+    });
+    const consentId = await ctx.db.insert("consents", {
+      userId,
+      organizationId,
+      textVersion: CONSENT_TEXT_VERSION,
+      signedAt: options.now,
+      signedVia: "site",
+    });
+    return { assessmentId, consentId };
+  });
+}
+
+export async function seedLaunchWorld(
+  mods: Record<string, () => Promise<unknown>>,
+) {
+  const w = await seedWorld(mods);
+  for (const [userId, organizationId] of [
+    [w.patient, w.orgA],
+    [w.otherPatient, w.orgA],
+    [w.orgBPatient, w.orgB],
+  ] as const) {
+    await makeRiderReady(w.t, userId, organizationId, {
+      now: NOW,
+      validUntil: Date.UTC(2100, 0, 1),
+    });
+  }
+  return w;
+}
+
 /**
  * A world for the machine HTTP routes: two machines each with a REAL credential
  * issued by `createMachine`, both online with programmes enabled, a patient
@@ -460,6 +532,13 @@ export async function seedMachineWorld(
       role: "user",
       active: true,
     });
+    await ctx.db.insert("user_gestionnaires", {
+      organizationId,
+      userId: id,
+      gestionnaireId: adminId,
+      createdAt: NOW,
+      createdBy: adminId,
+    });
     for (const machineId of [first.machineId, second.machineId]) {
       await ctx.db.patch(machineId, {
         status: "online",
@@ -490,6 +569,10 @@ export async function seedMachineWorld(
       createdAt: NOW,
     });
     return id;
+  });
+  await makeRiderReady(t, patient, organizationId, {
+    now: NOW,
+    validUntil: Date.UTC(2100, 0, 1),
   });
   return {
     t,

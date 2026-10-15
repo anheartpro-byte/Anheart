@@ -1,5 +1,6 @@
 import { click, messages, render } from "@/test-support/render";
 import type { ReactNode } from "react";
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { answer, asks, resetConvex } from "@/test-support/convex";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -566,12 +567,37 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
       live: live(),
       profiles: [ENDURANCE],
       myHrMax: 185,
+      myFitnessValidUntil: null,
+      myLaunchRefusal: null,
       ...over,
     };
   }
 
   const launch = (screen: ReturnType<typeof render>) =>
     screen.button(t.launch.button);
+
+  it.each([600_000, -600_000])(
+    "blocks an expired aptitude without new data with browser clock offset %i ms",
+    async (offset) => {
+      vi.setSystemTime(NOW + offset);
+      const onLaunch = vi.fn();
+      const screen = render(
+        <LaunchableMachineCard
+          machine={machine({ myFitnessValidUntil: NOW + 2_000 })}
+          isUser
+          onLaunch={onLaunch}
+        />,
+      );
+      expect(launch(screen).hasAttribute("disabled")).toBe(false);
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(launch(screen).hasAttribute("disabled")).toBe(false);
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(launch(screen).hasAttribute("disabled")).toBe(true);
+      expect(screen.text()).toContain(messages.fr.errors.fitness_expired);
+      await click(launch(screen));
+      expect(onLaunch).not.toHaveBeenCalled();
+    },
+  );
 
   it("capitalizes unsigned medical parameter launch reasons in both locales", () => {
     expect(Object.keys(messages.fr.training.launch).sort()).toEqual(

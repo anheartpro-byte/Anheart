@@ -38,7 +38,7 @@ import {
   modules,
   NOW,
   seedMachineWorld,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   type World,
 } from "./test.setup";
 

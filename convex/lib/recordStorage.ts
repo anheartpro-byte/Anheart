@@ -33,12 +33,94 @@ export const uploadRequest = z
 export const commitRequest = uploadRequest.safeExtend({
   storageId: z.string().min(1),
 });
+const recordProfile = z.strictObject({
+  total_duration_s: z.number(),
+  baseline_s: z.number(),
+  warmup_max_s: z.number(),
+  hold_min_s: z.number(),
+  cooldown_s: z.number(),
+  recovery_s: z.number(),
+  zone_low_bpm: z.number(),
+  zone_high_bpm: z.number(),
+  hard_max_bpm: z.number(),
+  critical_bpm: z.number(),
+  subject_hr_max: z.number(),
+  min_run_rpm: z.number(),
+  max_rpm: z.number(),
+  warmup_rpm_ceiling_fraction: z.number(),
+  channels: z.array(z.string()),
+  allow_above_nameplate: z.boolean(),
+  source_rev: z.number(),
+  resolved_at: z.number(),
+  total_overridden: z.boolean(),
+});
+const recordClocks = z.strictObject({
+  monotonic_start: z.number(),
+  utc_start: z.string(),
+  ntp_offset_s: z.number().nullable(),
+  wall_trusted: z.boolean().nullable().optional(),
+});
+const recordGeometry = z.strictObject({
+  reference_radius_m: z.number(),
+  leg_tip_radius_m: z.number(),
+  leg_tip_measured: z.boolean(),
+  arm_tip_radius_m: z.number(),
+  capsule_near_radius_m: z.number(),
+  capsule_far_radius_m: z.number(),
+  counterweight_radius_m: z.number(),
+  gear_ratio: z.number(),
+  nominal_motor_rpm: z.number(),
+  base_hz: z.number(),
+});
+const endObservation = z.strictObject({
+  t: z.number(),
+  runtime_state: z.string().nullable().optional(),
+  drive_state: z.string().nullable().optional(),
+  runtime_output_enabled: z.boolean().nullable().optional(),
+  runtime_applied_rpm: z.number().nullable().optional(),
+  lfrd_motor_rpm: z.number().nullable().optional(),
+  shaft_motor_rpm: z.number().nullable().optional(),
+  energised: z.boolean().nullable().optional(),
+  silent: z.boolean().nullable().optional(),
+  stop_reason: z.string().nullable().optional(),
+  shutdown_detail: z.string().nullable().optional(),
+});
 export const depositManifest = z
   .object({
     schema_version: z.literal(2),
     ended_at: z.string().min(1),
     files: z.array(recordPath).min(3).max(MAX_RECORD_FILES),
+    record_id: z.string().optional(),
+    machine_id: z.string().optional(),
+    organization_id: z.string().optional(),
+    session_id: z.string().nullable().optional(),
+    local_ref: z.string().optional(),
+    kind: z.enum(["auto", "manual"]).optional(),
+    occupancy: z.enum(["bench", "occupied"]).optional(),
+    operator: z.string().optional(),
+    subject_id: z.string().nullable().optional(),
+    profile: recordProfile.partial().nullable().optional(),
+    config_hash: z.string().optional(),
+    software_version: z.string().optional(),
+    contract_version: z.string().optional(),
+    medical_parameters_version: z.string().optional(),
+    clocks: recordClocks.optional(),
+    started_at: z.string().optional(),
+    end_reason: z.string().nullable().optional(),
+    preflight: z
+      .array(z.strictObject({ check: z.string(), passed: z.boolean() }))
+      .nullable()
+      .optional(),
+    geometry: recordGeometry.nullable().optional(),
+    end_observation: endObservation.nullable().optional(),
+    subject_fit: z.literal(true).nullable().optional(),
+    fitness_questionnaire_version: z
+      .string()
+      .regex(/^[0-9A-Za-z.+-]{1,32}$/)
+      .nullable()
+      .optional(),
   })
+  .strict()
   .refine(
     ({ files }) =>
       new Set(files).size === files.length &&

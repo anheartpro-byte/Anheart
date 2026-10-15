@@ -39,10 +39,11 @@ import {
   addSession,
   as,
   configureAnheartOrganization,
+  makeRiderReady,
   modules,
   NOW,
   seedMachineWorld,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   type World,
 } from "./test.setup";
 
@@ -924,14 +925,25 @@ describe("ANH-144 the same rules in centre B, and across organisations", () => {
 
   it("refuses in centre B a rider shared with centre A who rides there, and names nothing of centre A", async () => {
     const w = await seedWorld(modules);
-    await w.t.run((ctx) =>
-      ctx.db.insert("memberships", {
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("memberships", {
         userId: w.patient,
         organizationId: w.orgB,
         role: "user",
         active: true,
-      }),
-    );
+      });
+      await ctx.db.insert("user_gestionnaires", {
+        organizationId: w.orgB,
+        userId: w.patient,
+        gestionnaireId: w.orgBManager,
+        createdAt: NOW,
+        createdBy: w.orgBAdmin,
+      });
+    });
+    await makeRiderReady(w.t, w.patient, w.orgB, {
+      now: NOW,
+      validUntil: Date.UTC(2100, 0, 1),
+    });
     await addSession(w, {
       machineId: w.machine,
       userId: w.patient,

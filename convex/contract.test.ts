@@ -121,6 +121,7 @@ async function startAfter(
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
   it("serves the version, header and error codes of the shared file", () => {
     expect(CONTRACT_VERSION).toBe(shared.contract_version);
+    expect(CONTRACT_VERSION).toBe("1.6");
     expect(CONTRACT_HEADER).toBe(shared.header);
     expect(MACHINE_ERROR_CODES).toEqual(Object.keys(shared.error_codes));
     expect(MACHINE_ERROR_CODES.length).toBeGreaterThan(0);
@@ -496,6 +497,32 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
           }),
         ),
     },
+    ...(["rider_not_fit", "fitness_expired", "consent_missing"] as const).map(
+      (code) => ({
+        name: `training/start: ${code} while pending`,
+        status: 409,
+        code,
+        run: (w: MachineWorld) =>
+          startAfter(w, () =>
+            w.t.run(async (ctx) => {
+              if (code === "consent_missing") {
+                for (const consent of await ctx.db.query("consents").collect()) {
+                  await ctx.db.patch(consent._id, { withdrawnAt: Date.now() });
+                }
+              } else {
+                const assessment = await ctx.db.query("fitness_assessments").first();
+                if (assessment === null) throw new Error("Missing test fitness");
+                await ctx.db.patch(
+                  assessment._id,
+                  code === "rider_not_fit"
+                    ? { validatedAt: undefined }
+                    : { validUntil: Date.now() },
+                );
+              }
+            }),
+          ),
+      }),
+    ),
     {
       name: "training/start: a birth year that now gives a minor",
       status: 409,

@@ -28,7 +28,7 @@ import {
   modules,
   NOW,
   seedMachineWorld,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   WORLD_MACHINE_COUNT,
 } from "./test.setup";
 

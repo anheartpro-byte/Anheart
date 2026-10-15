@@ -16,11 +16,10 @@
  *   manual session it has already started (`registerLocalSession`) so the
  *   dashboard can show it.
  *
- * The Pi remains the authority on safety: everything checked here (rights,
- * zone against the rider's max heart rate, machine state) is checked again on
- * the Pi, which can still refuse the start (e-stop wiring not attested, a
- * standing safety verdict, a drive fault...). A refusal comes back as a
- * failed session with the Pi's reason.
+ * The Pi remains the authority on safety: it checks rights, zone against the
+ * rider's max heart rate and machine state, and can still refuse the start
+ * (e-stop wiring not attested, a standing safety verdict, a drive fault...).
+ * A refusal comes back as a failed session with the Pi's reason.
  *
  * Only the machine ends a session it started. A session of which the server
  * has had no news for `SESSION_SILENCE_MS` is marked `interrupted` (end
@@ -29,12 +28,15 @@
  * machine sends, however late, closes it (`interruptSilentSessions`).
  *
  * A launch is checked again when the machine arms it (ANH-144), not only when
- * it is made: whoever made it can still make it, the rider still may ride,
- * the machine is the one it was, and the launch has not waited longer than
+ * it is made: whoever made it can still make it, the rider still has the
+ * launch right, the machine is the one it was, and it has waited no longer than
  * `PENDING_SESSION_TTL_S` (`armingRefusal`). One that fails becomes a failed
- * session with a stable code (`endCode`), the machine's start is answered 409
- * with that code, and the poll never offers it. A rider has one session at a
- * time, on any machine, and a machine one launch at a time (`launchAutoSession`).
+ * session with a stable code (`endCode`), its start is answered 409 with it, and
+ * the poll never offers it. A rider has one session at a time, on any machine,
+ * and a machine one launch at a time (`launchAutoSession`).
+ * Aptitude and consent are checked both at launch from the site and again at
+ * arming (ANH-143, contract 1.6). The console also checks its held roster and
+ * the fitness deadline before every occupied start.
  */
 import { limitUser } from "./lib/rateLimits";
 import { v } from "convex/values";
@@ -61,6 +63,7 @@ import {
   sameOrganization,
   type CurrentUser,
 } from "./lib/auth";
+import { riderFitness, riderLaunchRefusal } from "./lib/fitness";
 import { liveStateValidator, machineProfileFields } from "./schema";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
 import { machineError, type MachineErrorCode } from "./lib/contract";
@@ -432,9 +435,10 @@ export const listMachineProfiles = query({
 
 /**
  * Machines the current user may launch an auto session on, with their live
- * state and presets. Anheart admin: every machine. Inside the caller's
- * organisation only: every machine for its admin, the ones they manage for a
- * gestionnaire, the ones they hold the launch right for for a user.
+ * state, presets, and `myLaunchRefusal` for that machine's organisation.
+ * Anheart admin: every machine. Inside the caller's organisation only: every
+ * machine for its admin, the ones they manage for a gestionnaire, the ones
+ * they hold the launch right for for a user.
  */
 export const listLaunchableMachines = query({
   args: {},
@@ -463,6 +467,13 @@ export const listLaunchableMachines = query({
       live: v.union(liveStateValidator, v.null()),
       profiles: v.array(profileValidator),
       myHrMax: v.union(v.number(), v.null()),
+      myFitnessValidUntil: v.union(v.number(), v.null()),
+      myLaunchRefusal: v.union(
+        v.literal("rider_not_fit"),
+        v.literal("fitness_expired"),
+        v.literal("consent_missing"),
+        v.null(),
+      ),
     }),
   ),
   handler: async (ctx) => {
@@ -500,7 +511,10 @@ export const listLaunchableMachines = query({
     for (const id of machineIds) {
       const machine = await ctx.db.get(id);
       if (!machine || machine.isDeleted) continue;
-      if (!inScope(me, machine.organizationId)) continue;
+      const organizationId = machine.organizationId;
+      if (organizationId === undefined || !inScope(me, organizationId))
+        continue;
+      const fitness = await riderFitness(ctx, me._id, organizationId, now);
       result.push({
         _id: machine._id,
         name: machine.name,
@@ -521,6 +535,13 @@ export const listLaunchableMachines = query({
             : null,
         profiles: await profilesFor(ctx, id),
         myHrMax: effectiveHrMax(me, now, medical?.hrMaxFormula ?? null),
+        myFitnessValidUntil: fitness.fitnessValidUntil,
+        myLaunchRefusal: await riderLaunchRefusal(
+          ctx,
+          me._id,
+          organizationId,
+          now,
+        ),
       });
     }
     return result;
@@ -593,6 +614,9 @@ export const ARMING_REFUSALS = {
     "the machine left the session's organisation before it armed the launch",
   right_revoked_before_start:
     "launch right withdrawn before the machine armed it",
+  rider_not_fit: "the rider no longer has a valid, approved fitness assessment",
+  fitness_expired: "the rider's fitness assessment expired before arming",
+  consent_missing: "the rider no longer has active consent for the current text",
   age_refused_before_start: "the rider's age no longer allows an auto session",
   hr_max_changed_before_start:
     "the rider's max heart rate changed before the machine armed the launch",
@@ -748,8 +772,8 @@ async function riderStillAllowed(
  * 3. it is still in the session's organisation;
  * 4. whoever made the launch could still make it, and the rider is still a
  *    member of that organisation (`riderStillAllowed`);
- * 5. (ANH-143, to come) the rider's aptitude and consent are valid: checked
- *    here, with a code of its own, once that ticket stores them;
+ * 5. the rider's latest assessment is fit and validated for the current
+ *    questionnaire, has not expired, and consent for the current text is active;
  * 6. the rider's age is known and at least the current medical minimum;
  * 7. the rider's max heart rate is known and is the one the launch carried,
  *    which the machine fits the programme to: a changed value is refused,
@@ -767,14 +791,22 @@ async function armingRefusal(
     return refusalFor("machine_deleted_before_start");
   if (machine.organizationId !== session.organizationId)
     return refusalFor("organization_changed_before_start");
+  if (session.organizationId === undefined)
+    return refusalFor("right_revoked_before_start");
   const rider = await riderStillAllowed(ctx, session, machine);
   if (rider === null) return refusalFor("right_revoked_before_start");
+  const fitnessRefusal = await riderLaunchRefusal(
+    ctx,
+    rider._id,
+    session.organizationId,
+    now,
+  );
+  if (fitnessRefusal !== null) return refusalFor(fitnessRefusal);
   const medical = await currentMedicalParameters(ctx);
   if (medical === null) {
     // A launch left pending across deployment can reach this before registration.
     return refusalFor("age_refused_before_start");
   }
-  // ANH-143: aptitude and consent are checked here.
   const age = ageFrom(rider.birthYear, now);
   if (age === null || age < medical.minRiderAge)
     return refusalFor("age_refused_before_start");
@@ -915,6 +947,8 @@ async function expireWaitingLaunches(
  *
  * A user launches for themselves only; an admin or a gestionnaire launches
  * for a rider they manage (or for themselves).
+ * The rider must have a current, validated fit assessment and active consent;
+ * launch refusals are `rider_not_fit`, `fitness_expired`, and `consent_missing`.
  *
  * One session at a time (ANH-144): refused with the stable code `rider_busy`
  * when the rider has a session that may still hold them on any machine, of
@@ -949,12 +983,22 @@ export const launchAutoSession = mutation({
     const machine = await ctx.db.get(args.machineId);
     if (!machine || machine.isDeleted)
       throw refusal("machine_not_found");
+    const organizationId = machine.organizationId;
     // The rider is an active member of the machine's organisation.
     if (
-      (await organizationRoleOf(ctx, riderId, machine.organizationId)) === null
+      organizationId === undefined ||
+      (await organizationRoleOf(ctx, riderId, organizationId)) === null
     ) {
       throw refusal("rider_not_allowed");
     }
+    const now = Date.now();
+    const launchRefusal = await riderLaunchRefusal(
+      ctx,
+      riderId,
+      organizationId,
+      now,
+    );
+    if (launchRefusal !== null) throw refusal(launchRefusal);
     if (machine.status === "offline") throw refusal("machine_offline");
     const medical = await currentMedicalParameters(ctx);
     if (medical === null) throw refusal("medical_parameters_unavailable");
@@ -964,7 +1008,6 @@ export const launchAutoSession = mutation({
     if (!machine.programsEnabled) {
       throw refusal("programs_disabled");
     }
-    const now = Date.now();
     await expireWaitingLaunches(ctx, riderId, args.machineId, now);
     if (
       machine.status === "in_session" ||
@@ -1498,10 +1541,12 @@ export const syncProfiles = internalMutation({
  *   from the birth year), null when neither is usable;
  * - `birthYear`: a whole number, or null. The console computes the age from
  *   it the way `ageFrom` does.
+ * - `fit`, `fitnessValidUntil`, `consent`, `fitnessQuestionnaireVersion`: the
+ *   launchable status for the machine's organisation and, only when fit, the
+ *   validated questionnaire version. Never answers or review notes.
  *
  * Both values are set on the site by a manager (`setUserPhysiology`); the
- * console shows them and cannot change them. Fitness and consent (ANH-143)
- * are not served yet.
+ * console shows them and cannot change them.
  */
 export const getRoster = internalQuery({
   args: { machineId: v.id("machines") },
@@ -1511,6 +1556,10 @@ export const getRoster = internalQuery({
       name: v.string(),
       hrMax: v.union(v.number(), v.null()),
       birthYear: v.union(v.number(), v.null()),
+      fit: v.boolean(),
+      fitnessValidUntil: v.union(v.number(), v.null()),
+      consent: v.boolean(),
+      fitnessQuestionnaireVersion: v.union(v.string(), v.null()),
     }),
   ),
   handler: async (ctx, args) => {
@@ -1519,23 +1568,25 @@ export const getRoster = internalQuery({
       .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
       .collect();
     const machine = await ctx.db.get(args.machineId);
-    if (!machine) return [];
+    if (!machine || machine.organizationId === undefined) return [];
+    const organizationId = machine.organizationId;
     const medical = await currentMedicalParameters(ctx);
     const now = Date.now();
     const result = [];
     for (const row of rows) {
-      const role = await organizationRoleOf(
-        ctx,
-        row.userId,
-        machine.organizationId,
-      );
+      const role = await organizationRoleOf(ctx, row.userId, organizationId);
       const user = role === null ? null : await ctx.db.get(row.userId);
       if (!user) continue;
+      const fitness = await riderFitness(ctx, user._id, organizationId, now);
       result.push({
         userId: user._id,
         name: fullName(user),
         hrMax: effectiveHrMax(user, now, medical?.hrMaxFormula ?? null),
         birthYear: isWholeNumber(user.birthYear) ? user.birthYear : null,
+        fit: fitness.fit,
+        fitnessValidUntil: fitness.fitnessValidUntil,
+        consent: fitness.consent,
+        fitnessQuestionnaireVersion: fitness.fitnessQuestionnaireVersion,
       });
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));

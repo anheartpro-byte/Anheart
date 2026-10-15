@@ -15,37 +15,47 @@ would answer first.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 
-from src.control_surface import LOCAL_SUBJECT
-from src.result import Ok
-from src.roster import ROSTER_MAX_AGE, Rider
+from src.control_surface import LOCAL_SUBJECT, StartManual, StartRefusal, StartSession
+from src.result import Ok, Result
+from src.roster import (
+    ROSTER_MAX_AGE,
+    FitnessExpired,
+    NoConsent,
+    NotFit,
+    PassengerRefusal,
+    Rider,
+    describe_passenger_refusal,
+)
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy, SignalQuality
-from src.units import Bpm, Seconds
+from src.units import Bpm, Seconds, UnixMillis
 from tests.record_console_support import RecordedRig, recorded_rig
 from tests.roster_support import CHILD, RIDER, RIDER_ID, RIDER_NAME
 from tests.test_failure_rig import OPERATOR, PROGRAMME_ENV, SHORT_PROFILE, attest
 
-FITTING: Final[Rider] = Rider(
-    user_id="k17fitting0synthetic", name="Fitting Rider", hr_max=Bpm(160), birth_year=1980
+FITTING: Final[Rider] = replace(
+    RIDER, user_id="k17fitting0synthetic", name="Fitting Rider", hr_max=Bpm(160), birth_year=1980
 )
 """A rider whose maximum heart rate the short programme fits: 90 % of 160 is 144, over its 138."""
 
-TOO_LOW: Final[Rider] = Rider(
-    user_id="k17toolow0synthetic", name="Too Low Rider", hr_max=Bpm(150), birth_year=1980
+TOO_LOW: Final[Rider] = replace(
+    RIDER, user_id="k17toolow0synthetic", name="Too Low Rider", hr_max=Bpm(150), birth_year=1980
 )
 """A rider whose maximum heart rate is under the short programme's zone: 90 % of 150 is 135."""
 
-NO_HR_MAX: Final[Rider] = Rider(
-    user_id="k17nohr0synthetic", name="No Hr Rider", hr_max=None, birth_year=1980
+NO_HR_MAX: Final[Rider] = replace(
+    RIDER, user_id="k17nohr0synthetic", name="No Hr Rider", hr_max=None, birth_year=1980
 )
-NO_BIRTH_YEAR: Final[Rider] = Rider(
-    user_id="k17noyear0synthetic", name="No Year Rider", hr_max=Bpm(180), birth_year=None
+NO_BIRTH_YEAR: Final[Rider] = replace(
+    RIDER, user_id="k17noyear0synthetic", name="No Year Rider", hr_max=Bpm(180), birth_year=None
 )
 
 EVERYONE: Final[tuple[Rider, ...]] = (RIDER, FITTING, TOO_LOW, NO_HR_MAX, NO_BIRTH_YEAR, CHILD)
@@ -105,6 +115,8 @@ async def test_a_programme_runs_for_the_rider_named_and_the_record_names_them_by
     manifest = recorded.recording().manifest
     # The dashboard's identifier, written as it is: the record's pseudonym.
     assert manifest.subject_id == FITTING.user_id
+    assert manifest.subject_fit is True
+    assert manifest.fitness_questionnaire_version == FITTING.questionnaire_version
     # The programme was fitted to the rider's maximum heart rate, from the site.
     assert manifest.profile is not None
     assert manifest.profile.subject_hr_max == 160
@@ -259,6 +271,8 @@ async def test_a_manual_session_with_a_person_on_board_names_its_rider_in_the_re
     assert state_of(recorded) is RuntimeState.RUNNING, recorded.rig.refusals()
     manifest = recorded.recording().manifest
     assert (manifest.occupancy, manifest.subject_id) == ("occupied", RIDER_ID)
+    assert manifest.subject_fit is True
+    assert manifest.fitness_questionnaire_version == RIDER.questionnaire_version
     assert RIDER_NAME.encode() not in recorded.everything_on_disk()
     await recorded.rig.panel.close()
 
@@ -281,6 +295,110 @@ async def test_a_bench_session_names_nobody(tmp_path: Path) -> None:
     assert state_of(recorded) is RuntimeState.RUNNING
     manifest = recorded.recording().manifest
     assert (manifest.occupancy, manifest.subject_id) == ("bench", None)
+    assert manifest.subject_fit is None
+    assert manifest.fitness_questionnaire_version is None
+    await recorded.rig.panel.close()
+
+
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize(
+    ("rider", "refusal"),
+    [
+        (replace(RIDER, fit=False), NotFit()),
+        (replace(RIDER, fitness_valid_until=UnixMillis(1_699_000_000_000)), FitnessExpired()),
+        (replace(RIDER, consent=False), NoConsent()),
+    ],
+)
+async def test_unready_passengers_never_arm_and_refusals_keep_personal_data_off_disk(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    manual: bool,
+    rider: Rider,
+    refusal: PassengerRefusal,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    recorded = console(tmp_path)
+    row: dict[str, object] = {
+        "userId": rider.user_id,
+        "name": rider.name,
+        "hrMax": 190,
+        "birthYear": 1940,
+        "fit": rider.fit,
+        "fitnessValidUntil": rider.fitness_valid_until,
+        "consent": rider.consent,
+        "fitnessQuestionnaireVersion": rider.questionnaire_version,
+        "answers": {"private": "synthetic-private-answer"},
+        "notes": "synthetic-private-note",
+        "outcome": "synthetic-private-outcome",
+    }
+    recorded.rig.panel.roster.heard({"riders": [row]}, recorded.clock.monotonic())
+    surface = recorded.rig.panel.surface
+    assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
+    asked: Result[StartManual | StartSession, StartRefusal]
+    if manual:
+        asked = surface.submit_start_manual(
+            occupancy=Occupancy.OCCUPIED,
+            operator=OPERATOR,
+            subject_id=rider.user_id,
+        )
+    else:
+        asked = surface.submit_start(
+            profile_id=SHORT_PROFILE,
+            operator=OPERATOR,
+            total_duration_s=None,
+            subject_id=rider.user_id,
+        )
+    assert isinstance(asked, Ok)
+    await recorded.tick(1.0)
+    assert state_of(recorded) is RuntimeState.IDLE
+    assert recorded.rig.simulator.commanded_setpoint == 0
+    assert not recorded.rig.panel.runtime.output_enabled
+    assert recorded.rig.refusals() == [describe_passenger_refusal(refusal)]
+    assert recorded.records() == []
+    await recorded.rig.panel.close()
+    on_disk = recorded.everything_on_disk()
+    assert b"refusal" in on_disk
+    for private in (
+        rider.name,
+        "synthetic-private-answer",
+        "synthetic-private-note",
+        "synthetic-private-outcome",
+        "0.1.0",
+        str(rider.fitness_valid_until),
+    ):
+        assert private.encode() not in on_disk
+        assert private not in caplog.text
+
+
+@pytest.mark.parametrize("manual", [False, True])
+async def test_fitness_expiring_in_the_mailbox_is_refused_at_arming(
+    tmp_path: Path,
+    manual: bool,
+) -> None:
+    recorded = console(tmp_path)
+    rider = replace(RIDER, fitness_valid_until=UnixMillis(recorded.clock.unix_millis() + 200))
+    recorded.rig.panel.roster.adopt((rider,), recorded.clock.monotonic())
+    surface = recorded.rig.panel.surface
+    assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
+    asked: Result[StartManual | StartSession, StartRefusal]
+    if manual:
+        asked = surface.submit_start_manual(
+            occupancy=Occupancy.OCCUPIED,
+            operator=OPERATOR,
+            subject_id=rider.user_id,
+        )
+    else:
+        asked = surface.submit_start(
+            profile_id=SHORT_PROFILE,
+            operator=OPERATOR,
+            total_duration_s=None,
+            subject_id=rider.user_id,
+        )
+    assert isinstance(asked, Ok)
+    await recorded.tick(0.2)
+    assert state_of(recorded) is RuntimeState.IDLE
+    assert recorded.rig.refusals() == [describe_passenger_refusal(FitnessExpired())]
+    assert recorded.rig.simulator.commanded_setpoint == 0
     await recorded.rig.panel.close()
 
 

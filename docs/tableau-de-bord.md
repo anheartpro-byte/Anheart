@@ -462,6 +462,12 @@ patient = celles où il a le droit.
   signal, la carte affiche « Hors ligne » et grise le bouton (§6). Elle le grise
   aussi si la machine annonce des paramètres médicaux non signés ou si aucune
   version de référence n'est enregistrée, avec la raison affichée.
+- La section **Mon aptitude et mon consentement** est disponible à tous les
+  rôles, y compris sans machine. Le passager y remplit ou met à jour son
+  questionnaire et signe lui-même le texte de consentement.
+- Si le passager ne peut pas lancer, la carte de machine affiche le code de
+  refus traduit et renvoie à cette section. Un gestionnaire ou un admin valide
+  l'aptitude depuis la fiche Patient ; il peut aussi y retirer le consentement.
 
 ### Sessions : `/fr/dashboard/sessions`
 
@@ -589,8 +595,9 @@ réessayer. La fiche apparaît dans la liste après acceptation et rattachement
 par le webhook. Un compte déjà présent ailleurs rejoint cette organisation
 sans créer un deuxième dossier ni écraser ses champs communs.
 
-Fiche patient : identité, séances, bouton Modifier, suppression, la carte
-**Physiologie** (voir §5.1) et la carte **Historique et progression** (ANH-89,
+Fiche patient : identité, séances, bouton Modifier, suppression, les cartes
+**Physiologie** (voir §5.1), **Aptitude** et **Consentement**, et la carte
+**Historique et progression** (ANH-89,
 `components/training/RiderHistoryCard.tsx`). Celle-ci liste les séances
 terminées du pratiquant que le visiteur peut lire, 100 au plus, les plus
 récentes d'abord (`sessionReports.riderHistory`, sous les droits de chaque
@@ -846,6 +853,9 @@ Après **Lancer** :
    | Raison affichée | Cause |
    |---|---|
    | Droit retiré avant le départ | Le droit de lancement du patient a été retiré, le gestionnaire ne gère plus la machine ou le patient, une adhésion a été désactivée, ou un compte supprimé. |
+   | Le passager n'a pas de saisie d'aptitude valide et approuvée. | `rider_not_fit` : la dernière saisie n'est plus apte, validée et de la version courante. |
+   | La saisie d'aptitude du passager a expiré. | `fitness_expired` : l'échéance de validité a été atteinte pendant l'attente. |
+   | Le passager n'a pas de consentement actif pour le texte courant. | `consent_missing` : le consentement a été retiré ou porte sur une ancienne version du texte. |
    | Expirée : départ non confirmé à temps | La machine n'en a pas confirmé le départ en 5 min (`PENDING_SESSION_TTL_S`, [convex.md](convex.md#revérification-à-larmement-anh-144)) : machine hors ligne, par exemple. Passée échouée dans la minute qui suit. La console de ce dépôt demande le départ après la confirmation de son opérateur, avant d'armer, n'arme que sur un 2xx et n'envoie pas de fin sur 409 ; une console antérieure, qui arme d'abord, s'arrête aussitôt sur la rampe ordinaire sur un refus. Le lancement n'est plus offert à la machine 45 s avant l'échéance. |
    | FC max du pratiquant modifiée avant le départ | La FC max retenue n'est plus celle du lancement : relancer la séance. |
    | Âge du pratiquant refusé avant le départ | L'année de naissance a été effacée, ou donne moins de 18 ans. |
@@ -859,8 +869,12 @@ Après **Lancer** :
    confirmation de son opérateur, avant d'armer, et n'arme que sur un 2xx.
    Sur ce 409, elle n'arme pas et n'envoie pas de fin ; une console
    antérieure, qui arme avant de confirmer, s'arrête aussitôt sur la rampe
-   ordinaire. Le contrôle de l'aptitude et du consentement (ANH-143) n'est pas
-   encore fait.
+   ordinaire. Pour l'aptitude et le consentement (ANH-143), le serveur refuse
+   le lancement depuis le site sans aptitude valide ou sans consentement actif.
+   Depuis le contrat 1.6, il refuse aussi à l'armement un passager devenu non
+   prêt pendant l'attente : `rider_not_fit`, `fitness_expired` ou `consent_missing`.
+   La console applique aussi sa porte `cleared_to_board` avant tout départ
+   avec personne à bord ([console-locale.md](console-locale.md)).
 
 **Important** : avec la configuration livrée (`raspberry-pi/.env.example`),
 `PROGRAMS_ENABLED=false` et `OCCUPANCY_OCCUPIED_ENABLED=false`. Le site affiche
@@ -888,6 +902,34 @@ Une séance **manuelle** peut aussi être arrêtée ainsi : le Pi l'arrête sur 
 rampe. En revanche elle ne peut pas être démarrée depuis le site.
 
 **Ce bouton n'est pas un arrêt d'urgence.** L'arrêt d'urgence est à la machine.
+
+### 5.5 Aptitude et consentement avant un lancement
+
+1. Le passager ouvre **Mes machines** et la section **Mon aptitude et mon
+   consentement**. Il répond oui ou non à chaque question puis envoie sa saisie.
+   Une saisie d'une ancienne version doit être refaite.
+2. Un admin ou le gestionnaire du passager ouvre **Patients** → le passager,
+   puis **Aptitude**. Il lit les réponses que le serveur lui présente et valide
+   le résultat calculé. Pour le résultat « apte », il fixe une date de fin de
+   validité ; les autres résultats n'ont pas de date. Un résultat « avis
+   médical nécessaire » ne devient apte que par une nouvelle saisie validée.
+   Le parcours de l'avis médical relève d'ANH-98.
+3. Le passager lit le texte affiché dans **Consentement**, coche « J'ai lu ce
+   texte et j'y consens », puis signe avec l'identité de son compte connecté.
+   Un gestionnaire ne peut pas signer à sa place.
+4. Avant le lancement, **Mes machines** et la fenêtre de lancement indiquent
+   la raison traduite si l'aptitude n'est pas valide ou si le consentement
+   manque. Le bouton reste désactivé tant que le serveur ne confirme pas que le
+   passager peut lancer.
+5. Le passager peut retirer son consentement depuis **Mes machines**. Un
+   gestionnaire peut le retirer depuis la fiche Patient après confirmation.
+   Après retrait, expiration ou changement de version, le prochain lancement
+   est refusé avec sa raison.
+
+Le questionnaire 0.1.0 et le texte de consentement 0.1.0 sont provisoires. Ils
+ne permettent pas d'accueillir une personne à bord ; voir
+[securite.md, section 6](securite.md#6-avant-la-première-personne-à-bord) et
+[consentement.md](consentement.md).
 
 ---
 
@@ -1304,5 +1346,10 @@ Pièges :
 | Alertes aux gestionnaires (ANH-90) | Écrites et lues par Convex, testées en mémoire ; la page et la cloche testées dans le DOM simulé. **Jamais vues dans un navigateur ni contre un vrai serveur** : le délai de moins d'une minute repose sur le heartbeat de 10 s de la console et l'abonnement de Convex, **non mesuré**. **Aucun e-mail n'a été envoyé** : le compte Resend, sa clé, le domaine d'envoi et l'adresse du site sont à fournir par le responsable produit ([convex.md §8](convex.md#composant-denvoi-de-mails-anh-90)). Les alertes d'un incident attendent ANH-145. |
 | Sélecteur d'organisation, page Membres | Composants de Clerk, couverts par des tests unitaires qui les remplacent. Le changement d'organisation de bout en bout (deux organisations, données qui changent) relève du test navigateur ANH-83 et de la recette sur l'instance Clerk de développement. |
 | Compte avec FC max ou année de naissance renseignée | Risque d'échec de `users.getCurrentUser` (validateur incomplet), donc de pages vides pour ce compte. **À vérifier en premier** sur un déploiement. Voir [convex.md §9](convex.md#9-défauts-connus-et-reste-à-faire). |
+| Questionnaire d'aptitude | Le questionnaire 0.1.0 contient des questions provisoires [MED] ; le médecin doit les remplacer par le contenu signé (ANH-98). |
+| Texte de consentement | Le texte 0.1.0 est provisoire et non valide juridiquement ; il doit être remplacé après ANH-87b. Les avis d'hébergement et de rétention des réponses restent à traiter dans ANH-172. |
+| Signature à la console | La signature est disponible sur le site seulement. La console ne propose pas de signer un consentement. |
+| Aptitude et consentement à l'armement | Depuis le contrat 1.6, le serveur les contrôle au lancement depuis le site et à l'armement. Un passager devenu non prêt pendant l'attente est refusé avec sa raison (ANH-143). Tests en mémoire, jamais sur une vraie machine. |
+| Aptitude et consentement au départ de la console | Depuis le contrat 1.6, la console les contrôle avant tout départ avec personne à bord, pour un programme ou une séance manuelle `occupied`. Tests avec variateur simulé, jamais sur une vraie machine ; limites de fraîcheur dans [console-locale.md](console-locale.md). |
 
 Pour la sécurité d'ensemble, voir [securite.md](securite.md).

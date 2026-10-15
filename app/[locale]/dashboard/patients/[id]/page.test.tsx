@@ -48,6 +48,12 @@ vi.mock("@/components/training/PhysiologyCard", async () => ({
     "PhysiologyCard",
   ),
 }));
+vi.mock("@/components/training/FitnessCard", async () => ({
+  FitnessCard: (await import("@/test-support/pages")).standIn("FitnessCard"),
+}));
+vi.mock("@/components/training/ConsentCard", async () => ({
+  ConsentCard: (await import("@/test-support/pages")).standIn("ConsentCard"),
+}));
 // The history card asks its own query, under the rights of each session.
 vi.mock("@/components/training/RiderHistoryCard", async () => ({
   RiderHistoryCard: (await import("@/test-support/pages")).standIn(
@@ -195,6 +201,8 @@ describe("patient page: what each role may do", () => {
         userId: patientId,
         user: rose,
       });
+      expect(propsOf("FitnessCard")).toEqual({ userId: patientId });
+      expect(propsOf("ConsentCard")).toEqual({ userId: patientId });
     },
   );
 
@@ -225,6 +233,8 @@ describe("patient page: what each role may do", () => {
       expect(screen.queryByRole("button", editButton)).toBeNull();
       expect(screen.queryByRole("button", deleteButton)).toBeNull();
       expect(wasMounted("PhysiologyCard")).toBe(false);
+      expect(wasMounted("FitnessCard")).toBe(false);
+      expect(wasMounted("ConsentCard")).toBe(false);
     },
   );
 });

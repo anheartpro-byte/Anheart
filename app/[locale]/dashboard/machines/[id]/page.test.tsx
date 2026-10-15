@@ -621,10 +621,21 @@ describe("machine page: launching a session on the machine", () => {
           },
         ],
         myHrMax: 180,
+        myLaunchRefusal: null,
+        myFitnessValidUntil: null,
       },
     ]);
     answer(api.users.getPatientsForGestionnaire, []);
     answer(api.training.listLaunchRights, []);
+    answer(api.fitness.getRiderReadiness, {
+      serverNow: NOW,
+      questionnaireVersion: "0.1.0",
+      consentTextVersion: "0.1.0",
+      fitness: null,
+      consent: { active: null, latestSigned: null, lastWithdrawnAt: undefined },
+      launchRefusal: null,
+      canValidate: false,
+    });
     mutation(api.training.launchAutoSession).mockResolvedValue(newSession);
     const { user } = await open("gestionnaire");
     expect(screen.queryByRole("dialog")).toBeNull();

@@ -13,6 +13,7 @@ import http from "./http";
 import { modules, NOW, seedMachineWorld } from "./test.setup";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 
 const world = () => seedMachineWorld(modules);
 type MachineWorld = Awaited<ReturnType<typeof world>>;
@@ -562,9 +563,27 @@ describe("ANH-132 /api/machine/roster", () => {
     const response = await send(w, w.machineKey, "GET", "/api/machine/roster");
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
-      riders: Array<{ userId: string }>;
+      riders: Array<{
+        userId: string;
+        name: string;
+        hrMax: number | null;
+        birthYear: number | null;
+        fit: boolean;
+        fitnessValidUntil: number | null;
+        consent: boolean;
+        fitnessQuestionnaireVersion: string | null;
+      }>;
     };
-    expect(payload.riders.map((r) => r.userId)).toContain(w.patient);
+    expect(payload.riders).toContainEqual({
+      userId: w.patient,
+      name: "Synthetic Patient",
+      hrMax: 180,
+      birthYear: 1990,
+      fit: true,
+      fitnessValidUntil: Date.UTC(2100, 0, 1),
+      consent: true,
+      fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+    });
   });
 });
 

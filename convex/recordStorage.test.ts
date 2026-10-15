@@ -9,10 +9,11 @@ import {
   seedMachineWorld,
   type World,
 } from "./test.setup";
-import { sha256, uploadRequest } from "./lib/recordStorage";
+import { depositManifest, sha256, uploadRequest } from "./lib/recordStorage";
 import { makeFunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+import completePiManifest from "../raspberry-pi/tests/fixtures/complete_manifest_v2.json";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -97,6 +98,113 @@ async function upload(
   return args;
 }
 describe("ANH-130 verified session deposits", () => {
+  it("accepts the complete manifest written by the Pi and rejects an extra key", () => {
+    expect(depositManifest.safeParse(completePiManifest).success).toBe(true);
+    expect(depositManifest.safeParse({
+      ...completePiManifest,
+      future_optional_metric: 1,
+    }).success).toBe(false);
+  });
+
+  it.each(["0.1.0", null])(
+    "accepts the two fitness manifest fields (%s)",
+    async (version) => {
+      const w = await fixture();
+      await upload(
+        w,
+        w.sessionId,
+        "manifest.json",
+        JSON.stringify({
+          schema_version: 2,
+          ended_at: "2026-10-13T10:00:00Z",
+          files: expected,
+          subject_fit: version === null ? null : true,
+          fitness_questionnaire_version: version,
+          record_id: "opaque",
+          machine_id: "machine",
+          organization_id: "org",
+          session_id: null,
+          local_ref: "local",
+          kind: "manual",
+          occupancy: "bench",
+          operator: "opaque-operator",
+          subject_id: null,
+          profile: null,
+          config_hash: "a".repeat(64),
+          software_version: "1.0.0",
+          contract_version: "2",
+          medical_parameters_version: "0.1.0",
+          started_at: "2026-10-13T09:00:00Z",
+          clocks: {
+            monotonic_start: 0,
+            utc_start: "2026-10-13T09:00:00Z",
+            ntp_offset_s: null,
+          },
+          preflight: null,
+          geometry: null,
+          end_reason: "operator_stop",
+          end_observation: null,
+        }),
+      );
+      const file = await w.t.run(
+        async (ctx) => await ctx.db.query("session_record_files").first(),
+      );
+      expect(file?.verified).toBe(true);
+      expect(file?.rejection).toBeUndefined();
+    },
+  );
+
+  it.each([
+    "answers",
+    "notes",
+    "outcome",
+    "fit",
+    "consent",
+    "fitnessValidUntil",
+  ])("rejects a manifest carrying private fitness key %s", async (key) => {
+    const w = await fixture();
+    await upload(
+      w,
+      w.sessionId,
+      "manifest.json",
+      JSON.stringify({
+        schema_version: 2,
+        ended_at: "2026-10-13T10:00:00Z",
+        files: expected,
+        subject_fit: true,
+        fitness_questionnaire_version: "0.1.0",
+        [key]: "private",
+      }),
+    );
+    const file = await w.t.run(
+      async (ctx) => await ctx.db.query("session_record_files").first(),
+    );
+    expect(file?.rejection).toBe("invalid_manifest");
+    expect(file?.verified).toBe(false);
+  });
+
+  it.each(["answers", "notes", "outcome"])(
+    "rejects private key %s inside a manifest object",
+    async (key) => {
+      const w = await fixture();
+      await upload(
+        w,
+        w.sessionId,
+        "manifest.json",
+        JSON.stringify({
+          schema_version: 2,
+          ended_at: "2026-10-13T10:00:00Z",
+          files: expected,
+          end_observation: { t: 1, [key]: "private" },
+        }),
+      );
+      const file = await w.t.run(
+        async (ctx) => await ctx.db.query("session_record_files").first(),
+      );
+      expect(file?.rejection).toBe("invalid_manifest");
+    },
+  );
+
   it("verifies an inventory larger than the native 8192-element limit using bounded pages", async () => {
     const w = await fixture();
     const paths = [
