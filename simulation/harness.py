@@ -92,6 +92,7 @@ from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.sim.physiology import Physiology, SubjectState
+from src.training.hr_control import HeartRateRejection, TrackerReading
 from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits
 from src.training.plan import INITIAL_REV, Program, TrainingProfile
 from src.training.runtime import (
@@ -102,8 +103,9 @@ from src.training.runtime import (
     TrainingRuntime,
 )
 from src.training.safety import SafetyLimits
-from src.training.types import Occupancy, TelemetrySnapshot
+from src.training.types import Occupancy, SignalQuality, TelemetrySnapshot, ZoneCounters
 from src.units import (
+    Bpm,
     Metres,
     Millivolts,
     Monotonic,
@@ -135,6 +137,8 @@ RUNTIME_LIMITS: Final[RuntimeLimits] = RuntimeLimits(
     slew=RpmPerSecond(15.0), start_hysteresis_rpm=MotorRpm(10)
 )
 """Mirrors ``src.local_panel.RUNTIME_LIMITS`` (asserted equal in the tests)."""
+
+EMPTY_COUNTERS: Final = ZoneCounters(Seconds(0), Seconds(0), Seconds(0))
 
 PANEL_SAFETY: Final[SafetyLimits] = SafetyLimits(
     hard_max_bpm=SHIPPED_PARAMETERS.hr_hard_max_bpm,
@@ -361,6 +365,40 @@ class RunResult:
     requests: tuple[RequestOutcome, ...] = ()
     messages: tuple[OperatorMessage, ...] = ()
     preroll: PrerollView = PrerollView(peak_motor_rpm=0, final_motor_rpm=0, rules=())
+    readings: tuple[EcgObservation, ...] = ()
+    counters: ZoneCounters = EMPTY_COUNTERS
+
+
+@dataclass(frozen=True, slots=True)
+class EcgObservation:
+    """Every call received by the runtime, including rejected and pre-start readings.
+
+    ``t`` is the reading instant relative to START, not the next control tick.
+    ``accepted`` is the real tracker's result, including its sequence and jump gates.
+    """
+
+    t: Seconds
+    seq: int
+    quality: SignalQuality
+    bpm: Bpm | None
+    accepted: bool
+
+
+@final
+class _ObservedHeartRate:
+    def __init__(self, runtime: TrainingRuntime) -> None:
+        self.runtime: TrainingRuntime = runtime
+        # Single-loop measurement buffer, owned by this harness run.
+        self.readings: list[EcgObservation] = []
+
+    def observe_ecg(
+        self, now: Monotonic, seq: int, quality: SignalQuality, heart_rate: Bpm | None
+    ) -> Result[TrackerReading, HeartRateRejection]:
+        result = self.runtime.observe_ecg(now, seq, quality, heart_rate)
+        self.readings.append(
+            EcgObservation(Seconds(now), seq, quality, heart_rate, isinstance(result, Ok))
+        )
+        return result
 
 
 type RowSink = Callable[[Row], Awaitable[None]]
@@ -434,7 +472,11 @@ class _EcgWiring:
 
 
 def _wire_ecg(
-    scenario: Scenario, rig: RigGeometry, clock: Clock, runtime: TrainingRuntime, capture: Capture
+    scenario: Scenario,
+    rig: RigGeometry,
+    clock: Clock,
+    runtime: _ObservedHeartRate,
+    capture: Capture,
 ) -> _EcgWiring:
     """The DIRECT sensor model, or the production path (BITalino sim -> DSP -> bridge)."""
     origin = clock.monotonic()
@@ -496,6 +538,7 @@ class Session:
         "_bridge",
         "_capture",
         "_ceiling",
+        "_counters",
         "_drive",
         "_events",
         "_faulty",
@@ -509,6 +552,7 @@ class Session:
         "_manifest",
         "_messages",
         "_motion",
+        "_observed_hr",
         "_pending",
         "_preamble",
         "_preroll_final",
@@ -594,7 +638,9 @@ class Session:
             else tuple(SensorKind(channel.value) for channel in scenario.profile.channels)
         )
         self._capture: Capture = Capture(clock, kinds)
-        ecg = _wire_ecg(scenario, rig, clock, self._runtime, self._capture)
+        self._observed_hr: _ObservedHeartRate = _ObservedHeartRate(self._runtime)
+        self._counters: ZoneCounters = ZoneCounters(Seconds(0), Seconds(0), Seconds(0))
+        ecg = _wire_ecg(scenario, rig, clock, self._observed_hr, self._capture)
         self._sensor: DirectSensor | None = ecg.sensor
         self._bitalino: SimulatedBitalinoClient | None = ecg.bitalino
         self._bridge: EcgBridge | None = ecg.bridge
@@ -740,6 +786,7 @@ class Session:
             self._message(now, "shutdown", report.detail)
             return False
         self._last_measured = snapshot.measured.motor_rpm
+        self._counters = snapshot.counters
         self._note_messages(now, snapshot)
         if not record:
             self._note_preroll(snapshot)
@@ -765,7 +812,7 @@ class Session:
         if sensor is not None:
             reading = sensor.sample(now, self._truth.heart_rate, float(self._truth.g_load))
             if reading is not None:
-                self._runtime.observe_ecg(now, reading.seq, reading.quality, reading.bpm)
+                self._observed_hr.observe_ecg(now, reading.seq, reading.quality, reading.bpm)
         bitalino = self._bitalino
         bridge = self._bridge
         if bitalino is not None and bridge is not None and bitalino.is_acquiring:
@@ -1171,6 +1218,11 @@ class Session:
                 final_motor_rpm=self._preroll_final,
                 rules=tuple(self._preroll_rules),
             ),
+            readings=tuple(
+                replace(reading, t=Seconds(reading.t - self._start_at))
+                for reading in self._observed_hr.readings
+            ),
+            counters=self._counters,
         )
 
     def meta(self) -> dict[str, str | float | int | bool | list[str] | None]:
