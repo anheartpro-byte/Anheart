@@ -1,5 +1,15 @@
 {
   "errors": {
+    "invalid_registry_field": "Valeur invalide dans le registre machine.",
+    "contact_not_in_organization": "Le contact doit être membre actif de l'organisation de la machine.",
+    "unknown_software_version": "Cette version logicielle du Pi n'est pas enregistrée.",
+    "unknown_medical_parameters_version": "Cette version des paramètres médicaux n'est pas enregistrée.",
+    "invalid_registry_file": "Pièce jointe absente, invalide, trop ancienne ou déjà utilisée.",
+    "validation_level_not_next": "Une revue doit accorder exactement le niveau de validation suivant.",
+    "validation_level_not_lower": "Le niveau demandé doit être inférieur au niveau actuel.",
+    "downgrade_reason_required": "La descente de niveau exige un motif de 3 à 500 caractères.",
+    "occupied_requires_signed_medical_parameters": "Le niveau occupied exige une clé médicale de production et une version des paramètres médicaux.",
+    "machine_validation_insufficient": "Le niveau de validation de la machine ne permet pas cette configuration.",
     "not_authenticated": "Votre session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour continuer.",
     "account_not_registered": "Votre compte n'est pas encore prêt sur le serveur. Patientez quelques instants, puis reconnectez-vous si le message persiste.",
     "no_active_organization": "Choisissez une organisation pour continuer.",

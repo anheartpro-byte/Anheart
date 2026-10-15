@@ -31,8 +31,10 @@ import type { Id } from "./_generated/dataModel";
 import { CONSENT_TEXT_VERSION } from "../lib/consentText";
 import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 import { notifyMachine } from "./lib/notifications";
+import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
 import {
   addSession,
+  as,
   makeRiderReady,
   NOW,
   ROLE_OF,
@@ -244,6 +246,46 @@ async function machineKeyOf(
 }
 
 export const MATRIX: Entry[] = [
+  {
+    id: "machineRegistry.getRegistry", ref: api.machineRegistry.getRegistry, kind: "query",
+    cases: registryReadCases(),
+    build: async (w, actor, scope) => ({ machineId: registryTarget(w, actor, scope) }),
+    onSuccess: (res, w, actor) => {
+      const row = res as { machineId: string; validation: { level: string }; canEdit: boolean };
+      if (row.machineId !== w.machine || row.validation.level !== "none" || row.canEdit !== (actor === "admin"))
+        throw new Error("Registry visibility or empty state differs");
+    },
+  },
+  {
+    id: "machineRegistry.checkConfigurationLock", ref: api.machineRegistry.checkConfigurationLock, kind: "query",
+    cases: registryReadCases(),
+    build: async (w, actor, scope) => ({ machineId: registryTarget(w, actor, scope), key: "PROGRAMS_ENABLED", value: true }),
+    onSuccess: (res) => {
+      const verdict = res as { allowed: boolean; reachedLevel: string; requiredLevel: string; message: string };
+      if (verdict.allowed || verdict.reachedLevel !== "none" || verdict.requiredLevel !== "auto" || verdict.message !== "machine validée jusqu'au niveau none")
+        throw new Error("Missing registry must refuse programs");
+    },
+  },
+  {
+    id: "machineRegistry.listRegistryBadges", ref: api.machineRegistry.listRegistryBadges, kind: "query",
+    build: async () => ({}),
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "all active machines" },
+      { actor: "orgAdmin", expect: ok, note: "centre A only" },
+      { actor: "orgBAdmin", expect: ok, note: "centre B only" },
+      ...(["manager", "otherManager", "patient", "otherPatient", "stranger", "orgBManager", "orgBPatient"] as const)
+        .map((actor) => ({ actor, expect: empty, note: "registry not visible to this role" })),
+    ],
+    onSuccess: (res, w, actor) => {
+      const rows = res as Array<{ machineId: string; level: string; versionStatus: string; configurationStatus: string; alerts: string[] }>;
+      const expected = actor === "admin" ? [w.machine, w.otherMachine, w.orgBMachine] : actor === "orgAdmin" ? [w.machine, w.otherMachine] : [w.orgBMachine];
+      expectExactly(rows.map((row) => row.machineId), expected, "registry badge machines");
+      if (rows.some((row) => row.level !== "none" || row.versionStatus !== "unknown" || row.configurationStatus !== "unavailable" || row.alerts.join() !== "programs_enabled_without_auto"))
+        throw new Error("Empty registry badges differ");
+    },
+  },
+  ...registryMutationEntries(),
   // =========================================================================
   // users.ts
   // =========================================================================
@@ -3426,6 +3468,101 @@ export const MATRIX: Entry[] = [
     ],
   },
 ];
+
+function registryTarget(w: World, actor: Actor, scope: Scope) {
+  return actor === "orgAdmin" && scope === "foreign" ? w.orgBMachine : w.machine;
+}
+
+function registryReadCases(): Case[] {
+  return [
+    { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+    { actor: "admin", scope: "own", expect: ok, note: "Anheart reads every machine" },
+    { actor: "orgAdmin", scope: "own", expect: ok, note: "organisation admin reads their registry" },
+    { actor: "orgAdmin", scope: "foreign", expect: empty, note: "another organisation is invisible" },
+    ...(["manager", "otherManager", "patient", "otherPatient", "stranger"] as const)
+      .map((actor) => ({ actor, scope: "own" as const, expect: empty, note: "registry not visible to this role" })),
+    ...(["orgBAdmin", "orgBManager", "orgBPatient"] as const)
+      .map((actor) => ({ actor, scope: "foreign" as const, expect: empty, note: "centre A is invisible from centre B" })),
+  ];
+}
+
+function registryMutationEntries(): Entry[] {
+  const entries: Array<Omit<Entry, "cases" | "kind">> = [
+    {
+      id: "machineRegistry.generateUploadUrl", ref: api.machineRegistry.generateUploadUrl,
+      build: async () => ({}),
+      onSuccess: (res) => {
+        if (typeof res !== "string" || !/^https?:\/\//.test(res)) throw new Error("Upload URL missing");
+      },
+    },
+    {
+      id: "machineRegistry.updateIdentity", ref: api.machineRegistry.updateIdentity,
+      build: async (w) => ({ machineId: w.machine, serialPi: " TEST-PI-0001 ", contacts: [w.manager] }),
+      onSuccess: async (_res, w) => {
+        const row = await registryRow(w);
+        if (row?.serialPi !== "TEST-PI-0001" || row.contacts.join() !== w.manager || row.updatedBy !== w.admin || row.organizationId !== w.orgA)
+          throw new Error("Identity or attribution not stored");
+      },
+    },
+    {
+      id: "machineRegistry.recordRadii", ref: api.machineRegistry.recordRadii,
+      build: async (w) => ({ machineId: w.machine, armRadiusM: 1.234, legTipRadiusM: 2.345, measuredAt: Date.now(), measuredBy: "TEST mesureur" }),
+      onSuccess: async (_res, w, _actor, _scope, args) => {
+        const row = await registryRow(w);
+        if (row?.armRadiusM !== 1.234 || row.legTipRadiusM !== 2.345 || row.radiiMeasuredBy !== "TEST mesureur" || row.radiiMeasuredAt !== args.measuredAt)
+          throw new Error("Measurements not stored");
+      },
+    },
+    {
+      id: "machineRegistry.attachDriveParameterSheet", ref: api.machineRegistry.attachDriveParameterSheet,
+      build: async (w) => ({ machineId: w.machine, storageId: await registryUpload(w), version: "TEST-v1", signedBy: "TEST signataire", at: Date.now() }),
+      onSuccess: async (_res, w, _actor, _scope, args) => {
+        const row = await registryRow(w);
+        if (!row?.driveParameterSheet || row.driveParameterSheet.storageId !== args.storageId || row.driveParameterSheet.attachedBy !== w.admin || row.driveParameterSheet.version !== "TEST-v1")
+          throw new Error("Sheet not attached");
+      },
+    },
+    {
+      id: "machineRegistry.addValidationReview", ref: api.machineRegistry.addValidationReview,
+      build: async (w) => {
+        await registryRelease(w);
+        return { machineId: w.machine, level: "bench", reportStorageId: await registryUpload(w), softwareVersion: "pi-0.1.0", medicalParametersVersion: null };
+      },
+      onSuccess: async (_res, w, _actor, _scope, args) => {
+        const row = await registryRow(w);
+        if (row?.validation.level !== "bench" || row.validation.reviews.length !== 1 || row.validation.reviews[0].reportStorageId !== args.reportStorageId || row.validation.reviews[0].by !== w.admin)
+          throw new Error("Review did not raise the level with its report");
+      },
+    },
+    {
+      id: "machineRegistry.lowerValidationLevel", ref: api.machineRegistry.lowerValidationLevel,
+      build: async (w) => {
+        await registryRelease(w);
+        await as(w.t, "admin").mutation(api.machineRegistry.addValidationReview, {
+          machineId: w.machine, level: "bench", reportStorageId: await registryUpload(w), softwareVersion: "pi-0.1.0", medicalParametersVersion: null,
+        });
+        return { machineId: w.machine, level: "none", reason: "TEST: nouvel essai requis" };
+      },
+      onSuccess: async (_res, w) => {
+        const row = await registryRow(w);
+        if (row?.validation.level !== "none" || row.validation.reviews.length !== 1 || row.validation.downgrades[0]?.by !== w.admin || row.validation.downgrades[0]?.reason !== "TEST: nouvel essai requis")
+          throw new Error("Downgrade did not preserve its author, reason and review");
+      },
+    },
+  ];
+  return entries.map((entry) => ({ ...entry, kind: "mutation", cases: [
+    { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+    { actor: "admin", expect: ok, note: "only Anheart admins write the registry" },
+    ...(["orgAdmin", "manager", "otherManager", "patient", "otherPatient", "stranger"] as const)
+      .map((actor) => ({ actor, scope: "own" as const, expect: refuse(UNAUTHORIZED), note: "not an Anheart admin" })),
+    ...(["orgBAdmin", "orgBManager", "orgBPatient"] as const)
+      .map((actor) => ({ actor, ...(entry.id === "machineRegistry.generateUploadUrl" ? {} : { scope: "foreign" as const }), expect: refuse(UNAUTHORIZED), note: "not an Anheart admin" })),
+  ] }));
+}
+
+async function registryRow(w: World) {
+  return await w.t.run((ctx) => ctx.db.query("machine_registry").withIndex("by_machine", (q) => q.eq("machineId", w.machine)).unique());
+}
 
 /**
  * A completed auto session of `riderId` on `machineId`, with the final

@@ -134,6 +134,8 @@ describe("ANH-132 completeness of the authorization matrix", () => {
       .sort();
     expect(withoutForeignCell).toEqual([
       "dashboard.counters", // counts in the caller's organisation, takes no identifier
+      "machineRegistry.generateUploadUrl",
+      "machineRegistry.listRegistryBadges",
       "machines.createMachine", // Anheart admin only; refused to centre B by role
       "machines.listMachines",
       "medicalParameters.current",

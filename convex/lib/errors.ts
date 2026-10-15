@@ -184,6 +184,17 @@ export const DASHBOARD_ERRORS = {
   level_change_needs_notes:
     "Changing the validation level of a recorded version needs notes.",
 
+  invalid_registry_field: "A machine registry field has an invalid value.",
+  contact_not_in_organization: "A contact is not an active member of the machine's organisation.",
+  unknown_software_version: "The Pi software version is not registered.",
+  unknown_medical_parameters_version: "The medical parameters version is not registered.",
+  invalid_registry_file: "The attachment is missing, invalid, too old or already referenced.",
+  validation_level_not_next: "A review must grant exactly the next validation level.",
+  validation_level_not_lower: "The target validation level must be lower than the current level.",
+  downgrade_reason_required: "Lowering validation requires a reason of 3 to 500 characters.",
+  occupied_requires_signed_medical_parameters: "Occupied validation requires a production medical key and a medical parameters version.",
+  machine_validation_insufficient: "The machine's validation level does not permit this configuration.",
+
   // Alerts to the gestionnaires (convex/notifications.ts).
   notification_not_found:
     "The notification does not exist, or is not the caller's in this organisation.",

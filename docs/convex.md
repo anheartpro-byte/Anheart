@@ -246,10 +246,10 @@ programmées (M5) ne reçoit qu'une version `auto_validated` ou
 `occupied_validated` ; une machine validée pour une personne à bord (M6) ne
 reçoit qu'une version `occupied_validated`. Un état de machine que la règle ne
 connaît pas ne reçoit aucune version. La règle est codée dans
-`convex/lib/releaseValidation.ts` (`releaseAllowedOnMachine`) et testée, mais
-**aucune fonction ne l'appelle encore** : l'état de validation d'une machine
-n'existe pas dans le schéma. Le registre machine (ANH-147) et la mise à jour à
-distance (ANH-116, ANH-168) l'appliqueront. Détail dans
+`convex/lib/releaseValidation.ts` (`releaseAllowedOnMachine`) : le registre
+machine (ANH-147) l'appelle pour comparer les versions annoncée et attendue
+au niveau de la machine. Le refus d'installation par la mise à jour à
+distance reste bloqué par ANH-116. Détail dans
 [release.md](release.md#2-le-niveau-de-validation-dune-version-du-pi).
 
 Ces deux tables ne sont déployées sur aucun déploiement.
@@ -309,6 +309,42 @@ synchronisation (`syncProfiles`).
 Le Pi n'envoie que les programmes dont les paliers égalent ceux de son
 superviseur (`runnable_profiles` dans `raspberry-pi/src/cloud_sync.py`) : un
 programme que le Pi refuserait n'est jamais proposé sur le site.
+
+### `machine_registry` : identité, mesures et validation (ANH-147)
+
+Une ligne liée à une seule machine par `machineId`, sans modifier les données
+envoyées par le Pi. Les index sont `by_machine` et `by_organization`.
+`organizationId` est recopié depuis la machine à chaque écriture, comme pour
+`machine_profiles`. Une machine sans ligne a un registre vide et le niveau
+`none` ; aucune mesure ni pièce jointe n'est inventée.
+
+| Champs | Contenu |
+|---|---|
+| `serialPi`, `serialDrive`, `serialMotor`, `serialGearbox`, `bitalinoAddress` | Identité matérielle optionnelle ; adresse BITalino au format MAC, normalisée en majuscules. |
+| `armRadiusM`, `legTipRadiusM`, `radiiMeasuredAt`, `radiiMeasuredBy` | Rayons mesurés en mètres, date Unix en ms et nom du mesureur. Valeurs finies strictement positives et au plus 10 m : borne de plausibilité contre une erreur d'unité, pas une limite de sûreté. |
+| `commissionedAt`, `site`, `contacts` | Date de mise en service, adresse texte, au plus 20 identifiants de membres actifs de l'organisation, sans doublon. Aucun e-mail dans la lecture du registre. |
+| `expectedSoftwareVersion` | Tag `pi-X.Y.Z` présent dans `software_releases`. Une version insuffisamment validée est signalée et reste sélectionnable. |
+| `driveParameterSheet` | Fiche variateur avec `storageId`, `contentType` (PDF ou JSON), `version`, `signedBy`, `at`, `attachedBy`, `attachedAt`. |
+| `driveParameterSheetHistory` | Toutes les fiches remplacées, conservées avec leur fichier. |
+| `validation` | `level` (`none`, `bench`, `auto`, `occupied`), `reviews` et `downgrades`. |
+| `updatedAt`, `updatedBy` | Date et administrateur de la dernière écriture. |
+
+Une revue contient `level`, `by`, `at`, `reportStorageId`, `softwareVersion`
+et `medicalParametersVersion` (version enregistrée ou `null`). Une descente
+contient `from`, `to`, `by`, `at`, `reason`. Ces historiques ne sont jamais
+effacés par les mutations. Le niveau monte uniquement par une revue jointe,
+exactement au niveau suivant. `occupied` exige une version médicale et reste
+refusé tant que `MEDICAL_PUBLIC_KEY_PEM` est la clé de test `cle-de-test` ;
+ANH-98 doit la remplacer. Seul l'admin Anheart descend le niveau, avec un
+motif de 3 à 500 caractères après suppression des espaces extérieurs.
+
+Les chaînes sont nettoyées et limitées à 200 caractères (adresse : 500,
+version de fiche : 50). Les dates saisies sont des entiers Unix en ms entre
+le 1er janvier 2024 UTC et maintenant plus 24 h. Une pièce jointe doit
+exister dans Convex Storage, être un PDF ou JSON de 10 Mio au plus, avoir
+été téléversée depuis moins d'une heure et ne figurer dans aucun registre,
+ni comme fiche courante, ni dans un historique, ni comme compte rendu.
+Aucune donnée de santé ne doit être déposée dans le registre ou la fiche.
 
 ### `machines`
 
@@ -1516,6 +1552,60 @@ organisation cliente est refusé, en lecture comme en écriture.
 `npx convex run softwareReleases:deployedCloudVersion`. `scripts/release.sh`
 écrit cette constante en même temps que `convex/VERSION`, et
 `convex/cloudVersion.test.ts` échoue si les deux diffèrent.
+
+### `machineRegistry.ts` : fiche et règles du registre (ANH-147)
+
+| Fonction | Droits et effet |
+|---|---|
+| `getRegistry` (query) | Admin Anheart : toute machine, même supprimée. `org_admin` : machine non supprimée de sa propre organisation. Autres cas : `null` ; anonyme : `not_authenticated`. Retourne les champs du registre, contacts résolus en `{userId, firstName, lastName}`, URL de la fiche, de son historique et des comptes rendus, et `canEdit`. |
+| `listRegistryBadges` (query) | Machines non supprimées de toutes les organisations pour l'admin Anheart, de sa propre organisation pour `org_admin`, `[]` pour les autres rôles ; anonyme refusé. Par machine : niveau, statut de version, statut de configuration et codes d'alerte. |
+| `checkConfigurationLock` (query) | Même accès que la fiche ; verdict `{allowed, requiredLevel, reachedLevel, message}` pour une clé et sa valeur booléenne. Point d'entrée prévu pour ANH-141. |
+| `generateUploadUrl` (mutation) | Admin Anheart uniquement ; URL de dépôt Convex Storage. |
+| `updateIdentity` (mutation) | Admin Anheart uniquement ; champ absent inchangé, `null` efface ; contrôle des contacts et de la version attendue. |
+| `recordRadii` (mutation) | Admin Anheart uniquement ; enregistre ensemble les deux rayons, la date et le nom du mesureur. |
+| `attachDriveParameterSheet` (mutation) | Admin Anheart uniquement ; vérifie la pièce jointe et conserve l'ancienne fiche dans l'historique. |
+| `addValidationReview` (mutation) | Admin Anheart uniquement ; compte rendu joint et versions enregistrées, montée d'un seul niveau. |
+| `lowerValidationLevel` (mutation) | Admin Anheart uniquement ; niveau strictement inférieur avec motif conservé. |
+
+Toutes les mutations visant une machine refusent une machine absente ou
+supprimée (`machine_not_found`). Les refus métier sont des codes traduits
+`errors.<code>` ; les autres rôles ne peuvent écrire (`not_authorized`).
+
+`configurationLocks` expose le verdict pour activer `PROGRAMS_ENABLED`
+(niveau requis `auto`) et `OCCUPANCY_OCCUPIED_ENABLED` (niveau requis
+`occupied`). Désactiver une clé est autorisé pour tout niveau connu ; un
+niveau corrompu refuse toute valeur. Le message de refus est exactement
+`machine validée jusqu'au niveau auto` pour une machine au niveau `auto`.
+`requireConfigurationAllowed` dans `convex/lib/machineRegistry.ts` fournit
+le garde serveur, avec le refus `machine_validation_insufficient`.
+
+`configurationProposal` propose `ARM_RADIUS_M` et `LEG_TIP_RADIUS_M` depuis
+les mesures du registre, ou `null` si elles manquent. L'écriture de la
+configuration centralisée et sa consommation des rayons restent bloquées
+par ANH-141. Le badge `configurationStatus` vaut donc `unavailable`, pas
+« appliquée » ou « en attente ». Le refus OTA reste bloqué par ANH-116.
+Il n'y a aucun verrou supplémentaire au lancement distant : décision du
+chef de projet, suivie par ANH-102 et ANH-107.
+
+`versionStatus` vaut `unknown` sans version annoncée ou attendue,
+`not_validated` si la version annoncée ne satisfait pas
+`releaseAllowedOnMachine`, `up_to_date` si elle égale l'attendue, sinon
+`outdated`. Une version absente des releases n'a aucun niveau enregistré.
+`expectedVersionAllowed` applique la même règle à l'attendue et vaut `null`
+si aucune n'est définie. `medicalKeyIsTest` expose le blocage médical.
+
+Deux alertes sont calculées à la lecture. `programs_enabled_without_auto`
+signale `machines.programsEnabled === true` sous le niveau `auto`.
+`person_on_board_without_occupied` compte, parmi les 50 séances les plus
+récentes de la machine, celles avec une personne à bord alors que le niveau
+historique au début était inférieur à `occupied`, et donne la date de la
+plus récente. Une séance `auto` a toujours une personne à bord ; pour les
+autres, un segment des notes séparé par `; ` doit valoir exactement
+`Occupancy: occupied`. Les revues et descentes permettent de retrouver le
+niveau à cet instant. À date égale, l'ordre est celui des transitions valides
+en conservant l'ordre de chaque historique ; un historique incohérent est lu
+comme `none`. Une descente ultérieure ne dénonce pas une séance
+qui avait commencé au niveau `occupied`.
 
 ### `notifications.ts` (alertes aux gestionnaires, ANH-90)
 
@@ -2932,10 +3022,9 @@ Limites à connaître :
   branche qui l'interroge n'arme donc **aucun lancement distant** (réponse sans
   version). C'est le cas tant que le nouveau code n'est pas déployé ; mettre
   les deux côtés à niveau relève du redéploiement (ticket ANH-82).
-- La version logicielle attendue d'une machine n'est définie nulle part aujourd'hui :
-  la fiche machine du site **affiche** la version annoncée, sans la comparer.
-  La comparaison et son badge viendront avec le registre machine (ticket
-  ANH-147).
+- La version logicielle attendue se renseigne dans `machine_registry`
+  (ANH-147). Le serveur compare l'annoncée à l'attendue et au niveau de
+  validation de la machine ; le refus d'installation OTA attend ANH-116.
 - `medical_parameters_version` et `config_hash` sont acceptés dans le heartbeat.
   Depuis ANH-139, Convex stocke et compare la version médicale annoncée à la
   référence courante, puis l'affiche sur la fiche machine. `config_hash` garde

@@ -1,5 +1,15 @@
 {
   "errors": {
+    "invalid_registry_field": "Invalid machine registry value.",
+    "contact_not_in_organization": "The contact must be an active member of the machine's organization.",
+    "unknown_software_version": "This Pi software version is not registered.",
+    "unknown_medical_parameters_version": "This medical parameters version is not registered.",
+    "invalid_registry_file": "The attachment is missing, invalid, too old or already used.",
+    "validation_level_not_next": "A review must grant exactly the next validation level.",
+    "validation_level_not_lower": "The requested level must be lower than the current level.",
+    "downgrade_reason_required": "Lowering validation requires a reason of 3 to 500 characters.",
+    "occupied_requires_signed_medical_parameters": "Occupied validation requires a production medical key and a medical parameters version.",
+    "machine_validation_insufficient": "The machine's validation level does not permit this configuration.",
     "not_authenticated": "Your session has expired or you are signed out. Sign in again to continue.",
     "account_not_registered": "Your account is not ready on the server yet. Wait a few moments, then sign in again if this message persists.",
     "no_active_organization": "Choose an organization to continue.",
