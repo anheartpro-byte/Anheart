@@ -30,7 +30,11 @@ import {
   type CurrentUser,
 } from "./lib/auth";
 import { refusal } from "./lib/errors";
-import { NOTIFICATION_RETENTION_MS, emailChoices } from "./lib/notifications";
+import {
+  NOTIFICATION_RETENTION_MS,
+  emailChoices,
+  notifyMachine,
+} from "./lib/notifications";
 import { emailSettings } from "./lib/notificationEmail";
 import { notificationTypeValidator } from "./schema";
 
@@ -67,8 +71,11 @@ const notificationRow = v.object({
   // A machine-side code: the drive's fault mnemonic, or a verdict's action.
   detail: v.optional(v.string()),
   // Why a failed session ended, as the session holds it now: what the page
-  // of the session shows to the same people.
+  // of the session shows to the same people. `reasonCode` is its stable
+  // code when it has one (a launch refused before its machine armed it,
+  // ANH-144), which the site words in place of the sentence.
   reason: v.optional(v.string()),
+  reasonCode: v.optional(v.string()),
   count: v.number(),
   createdAt: v.number(),
   updatedAt: v.number(),
@@ -110,6 +117,10 @@ export const list = query({
         reason:
           readable && row.type === "session_failed"
             ? session.endReason
+            : undefined,
+        reasonCode:
+          readable && row.type === "session_failed"
+            ? session.endCode
             : undefined,
         count: row.count,
         createdAt: row.createdAt,
@@ -257,6 +268,31 @@ export const updateSettings = mutation({
       await ctx.db.patch(settings._id, { email, updatedAt: now });
     }
     return null;
+  },
+});
+
+/**
+ * Write the alert `scheduleAlert` asked for (convex/lib/notifications.ts), in
+ * a transaction of its own. Nothing for a machine whose row is gone. Returns
+ * how many alerts were written.
+ */
+export const deliver = internalMutation({
+  args: {
+    machineId: v.id("machines"),
+    type: notificationTypeValidator,
+    sessionId: v.optional(v.id("sessions")),
+    detail: v.optional(v.string()),
+    count: v.number(),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const machine = await ctx.db.get(args.machineId);
+    if (machine === null) return 0;
+    return await notifyMachine(ctx, machine, args.type, {
+      sessionId: args.sessionId,
+      detail: args.detail,
+      count: args.count,
+    });
   },
 });
 

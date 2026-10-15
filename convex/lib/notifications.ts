@@ -2,18 +2,25 @@
  * Alerts to the gestionnaires (ANH-90): who receives one, how a new event
  * folds into an alert not read yet, and the e-mail that may go with a new one.
  *
- * Written by the server where it detects the event, never by a client:
+ * Asked for by the server where it detects the event, never by a client:
  * - `machine_offline`: `machines.checkOfflineMachines`, when it marks a
  *   machine offline (no heartbeat for `LIVE_FRESH_MS`, checked every minute);
  * - `drive_fault`: `training.updateLive`, when a heartbeat says the drive is
  *   in fault and the heartbeat before did not; and `training.storeEvents`,
  *   for a `drive_fault` event of a session's record;
  * - `session_failed`: `training.endTrainingSession`, when the machine ends a
- *   session as failed;
+ *   session as failed, and every launch failed before its machine armed it
+ *   (ANH-144: the sweep, the start route, a launch that expired);
  * - `safety_verdict`: `training.storeEvents`, for a `verdict` event whose
  *   action ends the session (`RAMP_DOWN`, `QUICK_STOP`, `GO_SILENT`, or an
  *   action this server does not know). `FREEZE` and `REDUCE`, which keep the
  *   session going, are the regulation at work: no alert.
+ *
+ * Each of them only schedules the alert (`scheduleAlert`), written at once by
+ * a mutation of its own (`notifications.deliver`): whatever happens while it
+ * is written, or the e-mail queued, never fails nor undoes the heartbeat, the
+ * batch of events, the end, the start, the sweep or the offline check that
+ * asked for it.
  *
  * Recipients: the gestionnaires linked to the machine who are still active
  * gestionnaires of its organisation, and the active admins of that
@@ -22,10 +29,10 @@
  *
  * Extension point: an incident on a machine (ANH-145) is one more type
  * (`notificationTypeValidator` in convex/schema.ts, `NOTIFICATION_TYPES`
- * below, two translations) and one call of `notifyMachine` where the
- * incident is created. A session failed before its machine armed it
- * (ANH-144) is a call of `notifyMachine(..., "session_failed", ...)` there.
+ * below, two translations) and one call of `scheduleAlert` where the
+ * incident is created.
  */
+import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { organizationRoleOf } from "./auth";
@@ -292,3 +299,24 @@ export async function notifyMachine(
 
 /** How long an alert is kept, read or not. */
 export const NOTIFICATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
+ * Ask for an alert about this machine, written at once by a mutation of its
+ * own (`notifications.deliver`, which calls `notifyMachine`), not by the one
+ * that saw the event: a failure there can neither fail nor undo the caller.
+ * Only identifiers and a machine-side code are passed on, never a sentence.
+ */
+export async function scheduleAlert(
+  ctx: MutationCtx,
+  machineId: Id<"machines">,
+  type: NotificationType,
+  event: MachineEvent = {},
+): Promise<void> {
+  await ctx.scheduler.runAfter(0, internal.notifications.deliver, {
+    machineId,
+    type,
+    sessionId: event.sessionId,
+    detail: event.detail ?? undefined,
+    count: event.count ?? 1,
+  });
+}

@@ -25,7 +25,7 @@ import {
 import { generateApiKey } from "./lib/crypto";
 import { refusal } from "./lib/errors";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
-import { notifyMachine } from "./lib/notifications";
+import { scheduleAlert } from "./lib/notifications";
 import { interruptSilentSessions, resumeNamedSession } from "./training";
 // One threshold for the server's job and for the dashboard, which reads the
 // age of `lastHeartbeat` on `serverNow` (hooks/use-freshness.ts).
@@ -754,7 +754,7 @@ export const checkOfflineMachines = internalMutation({
       if (machine.lastHeartbeat < cutoff) {
         await ctx.db.patch(machine._id, { status: "offline" });
         markedOfflineCount++;
-        await notifyMachine(ctx, machine, "machine_offline");
+        await scheduleAlert(ctx, machine._id, "machine_offline");
 
         console.log(
           `Machine ${machine.name} marked offline (last heartbeat: ${new Date(machine.lastHeartbeat).toISOString()})`,

@@ -47,6 +47,7 @@ function alert(id: string, overrides: Partial<Alert> = {}): Alert {
     sessionId: undefined,
     detail: undefined,
     reason: undefined,
+    reasonCode: undefined,
     count: 1,
     createdAt: NOW - 60_000,
     updatedAt: NOW - 60_000,
@@ -161,6 +162,37 @@ describe("the alerts page", () => {
     ).toBe("/dashboard/machines/machine-1");
 
     expect(item(fr.notifications.types.machine_offline).getByText(/Banc 2/)).toBeTruthy();
+  });
+
+  it("words the code of a launch refused before its machine armed it, not its sentence", async () => {
+    signedInAs("gestionnaire");
+    serverHas([
+      alert("a1", {
+        type: "session_failed",
+        sessionId: "session-1" as Id<"sessions">,
+        reason: "expired before the machine armed it",
+        reasonCode: "expired_before_start",
+      }),
+      alert("a2", {
+        type: "session_failed",
+        reason: "refusee par la machine : capsule ouverte",
+        reasonCode: "a_code_this_site_does_not_know",
+      }),
+    ]);
+
+    await renderPage(<NotificationsPage />);
+
+    const [coded, unknown] = screen.getAllByRole("listitem");
+    expect(within(coded).getByText(
+      fr.notifications.reason.replace("{reason}", fr.errors.expired_before_start),
+    )).toBeTruthy();
+    expect(within(coded).queryByText(/expired before/)).toBeNull();
+    expect(within(unknown).getByText(
+      fr.notifications.reason.replace(
+        "{reason}",
+        "refusee par la machine : capsule ouverte",
+      ),
+    )).toBeTruthy();
   });
 
   it("marks one alert, or all of them, as read", async () => {

@@ -164,7 +164,7 @@ const BIRTH_YEAR_MISSING = "rider_birth_year_missing";
 
 describe("a launch is refused when the machine cannot take it", () => {
   const UNFIT: Array<[string, Partial<Doc<"machines">>, string]> = [
-    ["is offline", { status: "offline" }, "Machine is offline"],
+    ["is offline", { status: "offline" }, "machine_offline"],
     [
       "is already in a session",
       { status: "in_session" },
@@ -358,7 +358,7 @@ describe("a launch is refused when the rider's physiology does not allow the pro
     // The account row is gone; its membership and its link to the manager stay.
     await w.t.run((ctx) => ctx.db.delete(w.patient));
 
-    await expectNothingQueued(w, () => launch(w), "Rider not found");
+    await expectNothingQueued(w, () => launch(w), "user_not_found");
   });
 
   // ANH-205. A value on record counts only as a finite whole number. Any
@@ -858,7 +858,7 @@ describe("launch rights are granted once and revoked quietly", () => {
           machineId: w.machine,
           profileId: w.profileId,
         }),
-      "You have not been given the right to launch sessions on this machine",
+      "launch_right_missing",
     );
   });
 

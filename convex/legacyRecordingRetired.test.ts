@@ -269,7 +269,7 @@ describe("ANH-135 a training session writes no ECG field and no summary", () => 
   // ANH-89: the only thing scheduled at the end is the provisional summary of
   // the training session, from its telemetry, in `session_summaries_v2`.
   it.each([{ failed: false }, { failed: true }])(
-    "schedules no ECG summary when a training session ends, only its training summary (failed: $failed)",
+    "schedules no ECG summary when a training session ends, only its training summary, and the alert of a failed one (failed: $failed)",
     async ({ failed }) => {
       const w = await seedWorld(modules);
       const sessionId = await addSession(w, {
@@ -287,9 +287,13 @@ describe("ANH-135 a training session writes no ECG field and no summary", () => 
       const scheduled = await w.t.run((ctx) =>
         ctx.db.system.query("_scheduled_functions").collect(),
       );
-      expect(scheduled.map((job) => job.name)).toEqual([
-        "sessionReports:summarizeTelemetry",
-      ]);
+      // A failed session also asks for its alert to the gestionnaires
+      // (ANH-90), written by a mutation of its own.
+      expect(scheduled.map((job) => job.name)).toEqual(
+        failed
+          ? ["sessionReports:summarizeTelemetry", "notifications:deliver"]
+          : ["sessionReports:summarizeTelemetry"],
+      );
       await w.t.finishAllScheduledFunctions(vi.runAllTimers);
       expect(
         await w.t.run((ctx) => ctx.db.query("session_summaries").collect()),

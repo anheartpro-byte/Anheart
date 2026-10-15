@@ -157,12 +157,20 @@ export default function NotificationsPage() {
 /** One alert: its kind, its machine, when, what the machine said, and where to look. */
 function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
   const t = useTranslations("notifications");
+  const tErrors = useTranslations("errors");
   const locale = useLocale();
   const at = (time: number) =>
     new Date(time).toLocaleString(locale, {
       dateStyle: "short",
       timeStyle: "short",
     });
+
+  // A code the site words (a launch refused before its machine armed it),
+  // else the sentence of the session as it is.
+  const reason =
+    alert.reasonCode !== undefined && tErrors.has(alert.reasonCode)
+      ? tErrors(alert.reasonCode)
+      : alert.reason;
 
   let detail: string | null = null;
   if (alert.type === "safety_verdict") {
@@ -193,9 +201,7 @@ function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
               : at(alert.createdAt)}
           </p>
           {detail && <p className="text-sm">{detail}</p>}
-          {alert.reason && (
-            <p className="text-sm">{t("reason", { reason: alert.reason })}</p>
-          )}
+          {reason && <p className="text-sm">{t("reason", { reason })}</p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="ghost" size="sm" asChild>

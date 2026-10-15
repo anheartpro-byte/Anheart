@@ -140,19 +140,11 @@ describe("ANH-90 no English sentence reaches the site", () => {
     ]);
     expect(sentences("./notifications.ts")).toEqual([]);
     expect(plainErrors("./notifications.ts")).toEqual([]);
-    // What is left in training.ts is the rights and the busy machine of
-    // `launchAutoSession`, which ANH-144 rewrites: converted after it.
-    expect(sentences("./training.ts").sort()).toEqual(
-      [
-        "You can only launch a session for yourself",
-        "You have not been given the right to launch sessions on this machine",
-        "Not authorized to use this machine",
-        "Not authorized to launch a session for this rider",
-        "Machine is offline",
-        "Machine is already in a session",
-        "A session is already waiting for this machine",
-        "Rider not found",
-      ].sort(),
-    );
+    // training.ts refuses with codes only (ANH-90, after ANH-144): it builds
+    // no ConvexError of its own. The launcher's refusals are codes too: the
+    // type of `launcherRefusal` is `DashboardErrorCode | null`.
+    expect(sentences("./training.ts")).toEqual([]);
+    expect(sources["./training.ts"]).not.toMatch(/new ConvexError\(/);
+    expect(plainErrors("./training.ts")).toEqual([]);
   });
 });

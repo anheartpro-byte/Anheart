@@ -20,9 +20,7 @@
  *
  * Error codes: every refusal of a function the site calls is a stable code
  * (`ConvexError(code)`, table in `convex/lib/errors.ts`), the sign-in checks
- * included (ANH-90); a refusal cell matches the code. The rights checks of
- * `training.launchAutoSession` still throw an English sentence until ANH-144,
- * which rewrites them, is merged: their cells match a substring of it.
+ * included (ANH-90); a refusal cell matches the code.
  *
  * The file name has two dots so the Convex bundler never deploys it.
  */
@@ -1954,26 +1952,26 @@ export const MATRIX: Entry[] = [
       {
         actor: "patient",
         scope: "other",
-        expect: refuse(/only launch a session for yourself/),
+        expect: refuse(/launch_for_self_only/),
         note: "a user may not launch for someone else",
       },
       {
         actor: "stranger",
         scope: "self",
-        expect: refuse(/have not been given the right/),
+        expect: refuse(/launch_right_missing/),
         note: "no launch right on the machine",
       },
       { actor: "manager", scope: "own", expect: ok, note: "launches for a managed rider" },
       {
         actor: "manager",
         scope: "other",
-        expect: refuse(/Not authorized to launch a session for this rider/),
+        expect: refuse(/user_not_managed/),
         note: "manages the machine but not the rider",
       },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to use this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", scope: "own", expect: ok, note: "admin launches for a rider" },
@@ -1986,19 +1984,19 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to use this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to use this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBPatient",
         scope: "foreign",
-        expect: refuse(/have not been given the right/),
+        expect: refuse(/launch_right_missing/),
         note: "no launch right reaches a machine of another organisation",
       },
     ],

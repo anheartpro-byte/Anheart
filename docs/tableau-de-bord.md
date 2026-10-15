@@ -679,7 +679,9 @@ plus, la page le dit quand la liste est coupée) :
   du variateur coupée ») ; un verdict qui régule sans arrêter n'est pas une
   alerte ;
 - **Séance échouée** : la machine a terminé une séance en échec, avec sa
-  raison (« Raison : … ») ;
+  raison (« Raison : … »), ou le serveur a refusé un lancement avant que la
+  machine l'arme (expiré, droit retiré, physiologie changée…), raison
+  traduite (« Raison : Droit retiré avant le départ ») ;
 - **Machine hors ligne** : aucun heartbeat depuis 90 s, constaté par le
   serveur à la minute.
 
@@ -1146,15 +1148,15 @@ Limites :
 - les refus de `convex/machines.ts`, de `convex/users.ts` et des contrôles de
   rôle de `convex/lib/auth.ts` (`requireRole`, `requireGestionnaireAdmin`,
   profil partagé) portent un code traduit depuis ANH-194 ; depuis ANH-90,
-  ceux de la connexion, de l'organisation, de `convex/training.ts` (droits de
-  lancement, physiologie, programme, zone, âge, durée, arrêt), du registre
+  ceux de la connexion, de l'organisation, de tout `convex/training.ts`
+  (droits de lancement, physiologie, droits du lanceur, machine hors ligne
+  ou occupée, programme, pratiquant, zone, âge, durée, arrêt), du registre
   des versions et des alertes aussi. Une session expirée affiche donc « Votre
   session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour
   continuer. », en production comme en développement, au lieu d'une phrase
-  générique avec une référence. Restent en anglais, en attendant ANH-144 qui
-  réécrit ces lignes : les refus des droits du lanceur, de la machine hors
-  ligne ou occupée et du pratiquant disparu au lancement (des `ConvexError` :
-  leur texte arrive, en anglais) ;
+  générique avec une référence. Plus aucun refus du serveur n'arrive en
+  anglais ; la raison de fin qu'envoie la machine, elle, s'affiche telle
+  quelle ;
 - le test de bout en bout dans un navigateur (suppression refusée d'une machine
   en séance) attend l'infrastructure d'ANH-83.
 
@@ -1246,8 +1248,8 @@ Pièges :
 | Rapport d'une séance d'entraînement (ANH-89) | Page testée dans le DOM simulé, Convex remplacé. **Jamais imprimée dans un navigateur** : la mise en page A4, le masquage du menu et le thème clair à l'impression ne sont pas vérifiés, ni le fichier PDF obtenu. Le calcul du résumé est testé en mémoire, et comparé le 14 octobre 2026 aux chiffres de la simulation sur quatre scénarios ([convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89)) ; jamais sur l'enregistrement d'une vraie séance. |
 | Pages retouchées au retrait de l'ancien mode ECG (Sessions, vue en direct, détail, Rapports, fenêtre machine) | Compilées et couvertes par `npm run test:lib` ; **pas rouvertes dans un navigateur** depuis. |
 | Pages Sessions et Rapports servies par pages (ANH-158) | Le serveur est testé en mémoire (`convex/sessionLists.test.ts`), les deux pages dans le DOM simulé, où Convex est remplacé par une doublure qui sert les pages d'une liste. **Pas ouvertes dans un navigateur, ni contre un vrai serveur** : ce que deviennent des pages déjà affichées quand une séance arrive ou change de statut pendant la lecture repose sur Convex et n'est pas rejoué. |
-| Textes encore en anglais | Huit refus du lancement (droits du lanceur, machine hors ligne ou occupée, pratiquant disparu) en attendant ANH-144, nom « Unknown », motif « Cancelled before start by … », raison de fin envoyée par la machine (affichée telle quelle, dans les alertes aussi), fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
-| Alertes aux gestionnaires (ANH-90) | Écrites et lues par Convex, testées en mémoire ; la page et la cloche testées dans le DOM simulé. **Jamais vues dans un navigateur ni contre un vrai serveur** : le délai de moins d'une minute repose sur le heartbeat de 10 s de la console et l'abonnement de Convex, **non mesuré**. **Aucun e-mail n'a été envoyé** : le compte Resend, sa clé, le domaine d'envoi et l'adresse du site sont à fournir par le responsable produit ([convex.md §8](convex.md#composant-denvoi-de-mails-anh-90)). Les alertes d'un incident (ANH-145) et d'un lancement refusé à l'armement (ANH-144) attendent ces tickets. |
+| Textes encore en anglais | Nom « Unknown », motif « Cancelled before start by … », raison de fin envoyée par la machine (affichée telle quelle, dans les alertes aussi), fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
+| Alertes aux gestionnaires (ANH-90) | Écrites et lues par Convex, testées en mémoire ; la page et la cloche testées dans le DOM simulé. **Jamais vues dans un navigateur ni contre un vrai serveur** : le délai de moins d'une minute repose sur le heartbeat de 10 s de la console et l'abonnement de Convex, **non mesuré**. **Aucun e-mail n'a été envoyé** : le compte Resend, sa clé, le domaine d'envoi et l'adresse du site sont à fournir par le responsable produit ([convex.md §8](convex.md#composant-denvoi-de-mails-anh-90)). Les alertes d'un incident attendent ANH-145. |
 | Sélecteur d'organisation, page Membres | Composants de Clerk, couverts par des tests unitaires qui les remplacent. Le changement d'organisation de bout en bout (deux organisations, données qui changent) relève du test navigateur ANH-83 et de la recette sur l'instance Clerk de développement. |
 | Compte avec FC max ou année de naissance renseignée | Risque d'échec de `users.getCurrentUser` (validateur incomplet), donc de pages vides pour ce compte. **À vérifier en premier** sur un déploiement. Voir [convex.md §9](convex.md#9-défauts-connus-et-reste-à-faire). |
 

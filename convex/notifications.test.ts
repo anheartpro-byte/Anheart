@@ -77,16 +77,27 @@ const event = (seq: number, kind: string, detail: string) => ({
   actor: "system",
 });
 
+/**
+ * Run the alert deliveries scheduled so far (`notifications.deliver`), and
+ * nothing they schedule in turn: the e-mail component's batch stays queued.
+ */
+async function delivered(w: World) {
+  vi.runOnlyPendingTimers();
+  await w.t.finishInProgressScheduledFunctions();
+}
+
 async function storeEvents(
   w: World,
   sessionId: Id<"sessions">,
   events: ReturnType<typeof event>[],
 ) {
-  return await w.t.mutation(internal.training.storeEvents, {
+  const outcome = await w.t.mutation(internal.training.storeEvents, {
     machineId: w.machine,
     sessionId,
     events,
   });
+  await delivered(w);
+  return outcome;
 }
 
 async function markOffline(w: World, machineId: Id<"machines">) {
@@ -94,6 +105,7 @@ async function markOffline(w: World, machineId: Id<"machines">) {
     ctx.db.patch(machineId, { status: "online", lastHeartbeat: NOW - 100_000 }),
   );
   await w.t.mutation(internal.machines.checkOfflineMachines, {});
+  await delivered(w);
 }
 
 function setEmailVariables() {
@@ -237,11 +249,13 @@ describe("a machine that goes offline", () => {
 describe("a drive in fault, as the heartbeat says", () => {
   it("alerts when the drive enters the fault, not while it stays in it", async () => {
     const w = await seedWorld(modules);
-    const report = (driveState: string) =>
-      w.t.mutation(internal.training.updateLive, {
+    const report = async (driveState: string) => {
+      await w.t.mutation(internal.training.updateLive, {
         machineId: w.machine,
         live: live({ driveState }),
       });
+      await delivered(w);
+    };
 
     await report("operation_enabled");
     expect(await alerts(w)).toEqual([]);
@@ -275,6 +289,7 @@ describe("a drive in fault, as the heartbeat says", () => {
       machineId: w.machine,
       live: live({ driveState: "fault", sessionId: own }),
     });
+    await delivered(w);
 
     expect((await alerts(w)).map((row) => row.sessionId)).toEqual([own, own]);
   });
@@ -292,10 +307,12 @@ describe("a drive in fault, as the heartbeat says", () => {
       machineId: w.machine,
       live: live({ driveState: "fault", sessionId: elsewhere }),
     });
+    await delivered(w);
     await w.t.mutation(internal.training.updateLive, {
       machineId: w.otherMachine,
       live: live({ driveState: "fault", sessionId: "not-a-session" }),
     });
+    await delivered(w);
 
     const rows = await alerts(w);
     expect(rows).toHaveLength(4);
@@ -325,13 +342,15 @@ describe("a session the machine ends as failed", () => {
       status: "active",
       kind: "auto",
     });
-    const end = () =>
-      w.t.mutation(internal.training.endTrainingSession, {
+    const end = async () => {
+      await w.t.mutation(internal.training.endTrainingSession, {
         machineId: w.machine,
         sessionId,
         failed: true,
         reason: "safety verdict: ramp down",
       });
+      await delivered(w);
+    };
 
     await end();
     await end();
@@ -360,6 +379,7 @@ describe("a session the machine ends as failed", () => {
       failed: false,
       reason: "programme complete",
     });
+    await delivered(w);
 
     expect(await alerts(w)).toEqual([]);
   });
@@ -379,11 +399,121 @@ describe("a session the machine ends as failed", () => {
         failed: true,
         reason: "emergency stop",
       });
+      await delivered(w);
     }
 
     const managers = (await alerts(w)).filter((row) => row.userId === w.manager);
     expect(managers).toHaveLength(2);
     expect(new Set(managers.map((row) => row.sessionId)).size).toBe(2);
+  });
+});
+
+describe("a launch failed before its machine armed it (ANH-144)", () => {
+  const launch = (w: World) =>
+    as(w.t, "manager").mutation(api.training.launchAutoSession, {
+      machineId: w.machine,
+      profileId: w.profileId,
+      userId: w.patient,
+    });
+  const scheduled = (w: World) =>
+    w.t.run(async (ctx) =>
+      (await ctx.db.system.query("_scheduled_functions").collect())
+        .filter((job) => job.state.kind === "pending")
+        .map((job) => job.name),
+    );
+
+  it("is an alert once the sweep has failed it, written apart from the sweep", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await launch(w);
+    vi.setSystemTime(NOW + 301_000);
+
+    expect(
+      await w.t.mutation(internal.training.sweepPendingSessions, {}),
+    ).toEqual({ failed: 1 });
+    // The sweep has done its work and written no alert: it only asked for one.
+    expect((await w.t.run((ctx) => ctx.db.get(sessionId)))?.status).toBe(
+      "failed",
+    );
+    expect(await alerts(w)).toEqual([]);
+    expect(await scheduled(w)).toEqual(["notifications:deliver"]);
+
+    await delivered(w);
+
+    const rows = await alerts(w);
+    expect(recipients(rows)).toEqual([w.orgAdmin, w.manager].sort());
+    expect(rows.map((row) => [row.type, row.sessionId])).toEqual([
+      ["session_failed", sessionId],
+      ["session_failed", sessionId],
+    ]);
+    const [listed] = await as(w.t, "manager").query(api.notifications.list, {});
+    expect(listed.reasonCode).toBe("expired_before_start");
+  });
+
+  it("is an alert when the start route refuses it, with its code and nothing of the rider", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    const sessionId = await launch(w);
+    await w.t.run((ctx) => ctx.db.patch(w.patient, { hrMax: 171 }));
+
+    expect(
+      await w.t.mutation(internal.training.markTrainingStarted, {
+        machineId: w.machine,
+        sessionId,
+      }),
+    ).toMatchObject({ armed: false, code: "hr_max_changed_before_start" });
+    await delivered(w);
+
+    const rows = await alerts(w);
+    expect(rows.map((row) => row.type)).toEqual([
+      "session_failed",
+      "session_failed",
+    ]);
+    expect(rows.every((row) => row.detail === undefined)).toBe(true);
+    const [listed] = await as(w.t, "manager").query(api.notifications.list, {});
+    expect(listed.reasonCode).toBe("hr_max_changed_before_start");
+    for (const row of rows) {
+      const everything = JSON.stringify(await emailOf(w, row.emailId));
+      for (const forbidden of ["171", "heart", "hr_max", "patient", sessionId]) {
+        expect(everything).not.toContain(forbidden);
+      }
+    }
+    // The same confirmation sent again reads the same, and alerts no more.
+    await w.t.mutation(internal.training.markTrainingStarted, {
+      machineId: w.machine,
+      sessionId,
+    });
+    await delivered(w);
+    expect((await alerts(w)).map((row) => row.count)).toEqual([1, 1]);
+  });
+
+  it("is an alert when a new launch fails the one that waited too long", async () => {
+    const w = await seedWorld(modules);
+    const first = await launch(w);
+    vi.setSystemTime(NOW + 301_000);
+
+    const second = await launch(w);
+    await delivered(w);
+
+    expect(second).not.toBe(first);
+    expect((await alerts(w)).map((row) => row.sessionId)).toEqual([
+      first,
+      first,
+    ]);
+  });
+
+  it("is no alert for a launch the machine armed", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await launch(w);
+
+    expect(
+      await w.t.mutation(internal.training.markTrainingStarted, {
+        machineId: w.machine,
+        sessionId,
+      }),
+    ).toEqual({ armed: true });
+    await delivered(w);
+
+    expect(await alerts(w)).toEqual([]);
   });
 });
 
@@ -468,6 +598,7 @@ describe("the events of a session's record", () => {
       machineId: w.machine,
       live: live({ driveState: "fault" }),
     });
+    await delivered(w);
 
     await storeEvents(w, sessionId, [
       event(1, "drive_fault", "OHF (LFT 17): drive overheat"),
@@ -571,6 +702,7 @@ describe("the alerts a caller reads", () => {
       failed: true,
       reason: "emergency stop",
     });
+    await delivered(w);
 
     const list = await as(w.t, "manager").query(api.notifications.list, {});
 
@@ -615,6 +747,7 @@ describe("the alerts a caller reads", () => {
       failed: true,
       reason: "emergency stop",
     });
+    await delivered(w);
     // The session is moved out of the caller's organisation.
     await w.t.run((ctx) => ctx.db.patch(sessionId, { organizationId: w.orgB }));
 

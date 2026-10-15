@@ -808,11 +808,14 @@ Autres règles notables :
 
 ## 4. Fonctions de `training.ts`
 
-Toutes les erreurs de ces fonctions sont des `ConvexError` : elles arrivent
-intactes dans le navigateur, même en production. La plupart portent une phrase ;
-`rider_busy` et `machine_busy` (ANH-144) sont des codes de la table
-`convex/lib/errors.ts`, levés par `refusal(code)`, et le site affiche leur
-traduction (`errors.<code>` dans `messages/*.json`).
+Toutes les erreurs des fonctions publiques de ce fichier sont des `ConvexError`
+dont la donnée est un code de la table `convex/lib/errors.ts`, levé par
+`refusal(code)` : elles arrivent intactes dans le navigateur, même en
+production, et le site affiche leur traduction (`errors.<code>` dans
+`messages/*.json`). Depuis ANH-90, plus aucune phrase : `convex/errors.test.ts`
+échoue si `training.ts` construit encore une `ConvexError` de lui-même. Les
+fonctions internes des routes machine refusent avec les codes du contrat
+(`machineError`, voir plus bas).
 
 ### Constantes (miroir de `raspberry-pi/src/training/plan.py`)
 
@@ -865,20 +868,25 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
 | `setUserPhysiology` | mutation | `userId`, `hrMax?` (nombre ou `null` pour effacer), `birthYear?` (idem) | pas un `user` ; `canAccessUser` | Pour chaque valeur fournie : `null` l'efface ; sinon elle doit être un entier fini, puis dans ses bornes (FC max 100-220, âge 10-100 ans). Rien n'est écrit si l'une des deux est refusée. Codes de refus (ANH-90) : `not_authorized` (un `user`), `user_not_managed`, `invalid_hr_max` (pas un entier, ou hors bornes), `invalid_birth_year` (idem). |
 | `listMachineProfiles` | query | `machineId` | voir la machine (règle entraînement) | Programmes triés par nom. |
 | `listLaunchableMachines` | query | - | connecté | Machines où l'on peut lancer : admin Anheart = toutes ; dans l'organisation de l'appelant seulement : son admin = toutes, gestionnaire = les siennes, user = celles où il a le droit. Machines supprimées exclues. Pour chacune : `status`, `lastHeartbeat`, `serverNow` (voir `getMachineLive`), `programsEnabled`, `live` (ou `null` si plus vieux que 90 s quand la query s'exécute), `profiles`, `myHrMax` (FC max retenue de l'appelant). |
-| `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles ci-dessous. Depuis ANH-90, leurs refus sont des codes stables, que le site traduit, sauf ceux des droits du lanceur, de la machine hors ligne ou occupée et du compte du pratiquant disparu, encore en anglais jusqu'à ANH-144 : `machine_not_found`, `rider_not_allowed` (pratiquant hors de l'organisation de la machine), `programs_disabled`, `programme_not_on_machine`, `rider_hr_max_missing`, `zone_above_ceiling`, `hard_max_above_hr_max`, `rider_birth_year_missing`, `rider_too_young`, `invalid_duration`. Les phrases citées ci-dessous pour ces contrôles disent leur sens. |
+| `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles et codes de refus ci-dessous. |
 | `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine (sinon `session_not_found` pour une séance d'une autre organisation, `session_not_managed` pour une de la sienne) | `pending` → `failed` avec « Cancelled before start by … » (aucune alerte : c'est une annulation). `active` ou `interrupted` → pose `stopRequestedAt` (une seule fois) ; une séance `interrupted` reste ce qu'elle est, et le Pi lit la demande s'il revient avec la séance encore en cours. Autres statuts : rien. |
 | `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute** : elle ne se relance pas quand une machine se tait, le site recalcule donc la fraîcheur chaque seconde. `serverNow` = l'heure du serveur dans cette réponse : le site vieillit `live.updatedAt` à partir d'elle et du temps qu'il a compté depuis, jamais à partir de l'heure du poste. |
 | `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). Pour une séance dont la machine dit l'âge, le `t` servi et `sinceT` sont sur l'horloge du serveur ; sinon ce sont les dates écrites par la machine ([Deux horloges](#deux-horloges)). |
 | `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, `interruptedAt` pour une séance `interrupted`, `endCode` pour un lancement refusé avant que sa machine l'arme, et `canStop` (statut `pending`, `active` ou `interrupted`, et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), placée sur l'horloge du serveur quand la machine dit l'âge de sa séance ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
 
-**Contrôles de `launchAutoSession`, dans l'ordre** (message renvoyé) :
+**Contrôles de `launchAutoSession`, dans l'ordre** (code de refus, traduit par
+le site) :
 
-1. Droits : « You can only launch a session for yourself », « You have not been
-   given the right to launch sessions on this machine », « Not authorized to use
-   this machine », « Not authorized to launch a session for this rider ».
-2. Machine : « Machine not found » (absente ou supprimée), « Machine is
-   offline », « This machine does not accept programmed sessions yet (manual
-   only, at the machine) ».
+1. Droits (`launcherRefusal`, la même règle que celle revérifiée à
+   l'armement) : `launch_for_self_only` (un patient lance pour un autre),
+   `launch_right_missing` (patient sans droit de lancement sur la machine,
+   dans son organisation), `machine_not_managed` (admin ou gestionnaire qui
+   n'atteint pas la machine), `user_not_managed` (pratiquant qu'il ne gère
+   pas).
+2. Machine : `machine_not_found` (absente ou supprimée), `rider_not_allowed`
+   (pratiquant qui n'est pas membre actif de l'organisation de la machine),
+   `machine_offline` (statut écrit `offline`), `programs_disabled`
+   (programmes auto désactivés : séances manuelles seulement, à la machine).
 3. Une séance à la fois (ANH-144) : `machine_busy` si la machine se dit en
    séance (`in_session`) ou a une séance qui peut la tenir ; puis `rider_busy`
    si le pratiquant en a une, sur
@@ -887,18 +895,18 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
    Avant ces deux contrôles, les lancements de ce pratiquant et de cette
    machine qui ont attendu plus que le délai sont passés `failed` (expirés),
    comme la tâche planifiée l'aurait fait : ils ne tiennent plus personne.
-4. Programme : « This programme is not on the machine ».
-5. Pratiquant : « The rider's max heart rate (or birth year) must be set by a
-   manager before an auto session », puis le refus de zone, puis « The rider's
-   birth year must be set by a manager before an auto session » (l'année est
-   exigée **même** si la FC max est mesurée), puis « Rider is N: auto sessions
-   require at least 18 years ». Une valeur enregistrée qui n'est pas un entier
-   fini compte comme non renseignée (voir « Valeur utilisable » plus haut) : le
-   lancement est refusé par « The rider's max heart rate (or birth year) must
-   be set… » pour la FC max, ou pour l'année de naissance sans FC max mesurée,
-   et par « The rider's birth year must be set… » pour l'année de naissance à
+4. Programme : `programme_not_on_machine`.
+5. Pratiquant : `user_not_found` (compte disparu), puis `rider_hr_max_missing`
+   (ni FC max utilisable ni année de naissance), puis le refus de zone
+   (`zone_above_ceiling`, puis `hard_max_above_hr_max`), puis
+   `rider_birth_year_missing` (l'année est exigée **même** si la FC max est
+   mesurée), puis `rider_too_young` (moins de `MIN_RIDER_AGE` ans). Une valeur
+   enregistrée qui n'est pas un entier fini compte comme non renseignée (voir
+   « Valeur utilisable » plus haut) : le lancement est refusé par
+   `rider_hr_max_missing` pour la FC max, ou pour l'année de naissance sans FC
+   max mesurée, et par `rider_birth_year_missing` pour l'année de naissance à
    côté d'une FC max mesurée. Rien n'est mis en file.
-6. Durée : « Duration must be positive » (un nombre fini, strictement positif).
+6. Durée : `invalid_duration` (un nombre fini, strictement positif).
 
 La séance créée copie le programme (zone, durée, ou la durée demandée),
 `subjectHrMax`, `subjectAge`, `subjectLabel` (nom du pratiquant) et
@@ -908,17 +916,17 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 
 | Fonction | Rôle |
 |---|---|
-| `updateLive` | Écrit `machines.live` (et `programsEnabled` s'il est fourni). |
+| `updateLive` | Écrit `machines.live` (et `programsEnabled` s'il est fourni). Si l'état dit le variateur en défaut et que le précédent ne le disait pas, planifie l'alerte `drive_fault` (ANH-90). Refuse une machine dont la ligne a disparu (`machine_not_found`). |
 | `syncProfiles` | Supprime tous les programmes de la machine, insère la nouvelle liste (dans l'organisation de la machine), met à jour `programsEnabled`. Retourne `{count}`. |
 | `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax, birthYear}`. `hrMax` est celle que `launchAutoSession` utiliserait (mesurée, sinon estimée depuis l'année de naissance ; `null` si aucune n'est utilisable) ; `birthYear` est un entier ou `null`. La console les affiche sans pouvoir les modifier (ANH-84). L'aptitude et le consentement (ANH-143) n'y sont pas encore. |
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine que la revérification à l'armement accepterait, au format attendu par le Pi. Jamais un lancement expiré ni refusé, même avant le passage de la tâche planifiée, ni un lancement qui expire dans moins de `POLL_MARGIN_S` (45 s). |
 | `markTrainingStarted` | Revérifie d'abord le lancement ([ci-dessous](#revérification-à-larmement-anh-144)). Refusé : la séance passe `failed` avec `endCode`, la machine reste comme elle était, et la fonction rend `{armed: false, code, message}`, que la route répond **409**. Une confirmation répétée d'un lancement déjà refusé ainsi reçoit la même réponse. Accepté : `pending` → `active`, `startedAt` = maintenant, machine `in_session`, et `{armed: true}`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Refuse une séance d'une autre machine (`session_not_found`) ou qui n'attend plus son départ pour une autre raison (`session_not_pending` : annulée sur le site, déjà démarrée, terminée). |
-| `sweepPendingSessions` | Tâche planifiée toutes les minutes : passe `failed`, avec `endCode`, tout lancement `pending` (`kind: auto`) que la revérification refuse, expirés compris. Rend `{failed}`. Les séances de l'ancien mode ne sont pas touchées. |
+| `sweepPendingSessions` | Tâche planifiée toutes les minutes : passe `failed`, avec `endCode`, tout lancement `pending` (`kind: auto`) que la revérification refuse, expirés compris, et planifie pour chacun l'alerte `session_failed` (ANH-90). Rend `{failed}`. Les séances de l'ancien mode ne sont pas touchées. |
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
-| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Planifie le résumé provisoire de la séance (`sessionReports.summarizeTelemetry`, ANH-89) ; rien d'autre. |
+| `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Planifie le résumé provisoire de la séance (`sessionReports.summarizeTelemetry`, ANH-89) et, pour une séance `failed`, l'alerte `session_failed` (ANH-90). |
 | `getTrainingStatus` | `{status, active, stopRequested}`. `active` vaut vrai pour une séance `active` **et** pour une séance `interrupted` : le Pi arrête sa séance sur `active: false`, et Convex ne demande jamais l'arrêt d'une séance faute d'en avoir des nouvelles. |
 | `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; pour une séance qui a un axe machine, un point daté hors de la séance est compté dans `rejected` ; ni l'un ni l'autre n'est écrit. Retourne `{stored, duplicates, rejected}`. |
-| `storeEvents` | La même chose pour les événements : un événement est un `(sessionId, seq)`. Retourne `{stored, duplicates, rejected}`. |
+| `storeEvents` | La même chose pour les événements : un événement est un `(sessionId, seq)`. Retourne `{stored, duplicates, rejected}`. Les événements nouvellement stockés peuvent planifier une alerte `safety_verdict` ou `drive_fault` (ANH-90). |
 
 Les refus de `markTrainingStarted`, `registerLocalSession`,
 `endTrainingSession`, `storeTelemetry` et `storeEvents` sont levés par
@@ -955,6 +963,14 @@ est aussi dans la table `convex/lib/errors.ts`, et le site le traduit comme
 tout code de cette table (`errors.<code>`) : « Séance échouée » puis « Droit
 retiré avant le départ », par exemple
 ([tableau-de-bord.md §5.3](tableau-de-bord.md#53-lancer-une-séance-auto)).
+Chaque échec de ce genre, qu'il vienne de la tâche planifiée, de la route de
+départ ou d'un nouveau lancement qui expire le précédent, est aussi une
+alerte `session_failed` à ses gestionnaires (ANH-90,
+[§5](#notificationsts-alertes-aux-gestionnaires-anh-90)) : `failBeforeStart`
+ne fait que la planifier, une mutation à part l'écrit, et rien de ce qui s'y
+passe ne peut faire échouer ni annuler la tâche, la route ou le lancement.
+L'alerte porte l'identifiant de la séance, rien du pratiquant ; la page des
+alertes traduit son `endCode`.
 Une séance échouée ainsi n'est ni active ni en attente pour les compteurs du
 tableau de bord.
 
@@ -1026,19 +1042,13 @@ quelles phrases restent (ci-dessous).
 
 Ce qui lève un code : `users.ts` et `machines.ts` (ANH-194) ; depuis ANH-90,
 la connexion (`not_authenticated`, `account_not_registered`), les refus
-d'organisation (§3), `training.ts` (droit de lancement, physiologie, zone et
-FC limite du programme, âge, durée, arrêt d'une séance), `softwareReleases.ts`,
-`recordStorage.remove` et `notifications.ts`.
-
-Restent en anglais, à convertir quand ANH-144 sera fusionné, qui réécrit ces
-lignes : dans `training.launchAutoSession`, les quatre refus de droits (« You
-can only launch a session for yourself », « You have not been given the right
-to launch sessions on this machine », « Not authorized to use this machine »,
-« Not authorized to launch a session for this rider » pour un pratiquant
-qu'on ne gère pas), « Machine is offline », « Machine is already in a
-session », « A session is already waiting for this machine » et « Rider not
-found ». Ce sont des `ConvexError`, donc lisibles en production, mais en
-anglais. `machines.recordHeartbeat`, interne, garde une `Error` simple : elle
+d'organisation (§3), tout `training.ts` (droit de lancement, physiologie,
+droits du lanceur, machine hors ligne ou occupée, programme, pratiquant,
+zone et FC limite du programme, âge, durée, arrêt d'une séance ; les codes
+`machine_busy`, `rider_busy` et ceux du refus à l'armement viennent
+d'ANH-144), `softwareReleases.ts`, `recordStorage.remove` et
+`notifications.ts`. Aucune fonction que le site appelle ne refuse plus avec
+une phrase anglaise. `machines.recordHeartbeat`, interne, garde une `Error` simple : elle
 est lue par la route du heartbeat et répondue à la machine avec les codes du
 contrat (§6). Les codes de l'API machine sont une autre liste, partagée avec
 le Pi : `contracts/machine-api.json`.
@@ -1257,15 +1267,22 @@ organisation cliente est refusé, en lecture comme en écriture.
 
 ### `notifications.ts` (alertes aux gestionnaires, ANH-90)
 
-**Qui les écrit.** Le serveur, là où il voit l'événement
-(`convex/lib/notifications.ts`, `notifyMachine`), jamais un client :
+**Qui les écrit.** Le serveur, là où il voit l'événement, jamais un client.
+La fonction qui voit l'événement ne fait que **planifier** l'alerte
+(`scheduleAlert`, `convex/lib/notifications.ts`) ; une mutation à part,
+`notifications.deliver` (interne), l'écrit aussitôt (`notifyMachine`). Rien
+de ce qui se passe en l'écrivant, ou en mettant son e-mail en file, ne peut
+faire échouer ni annuler le heartbeat, le lot d'événements, la fin, le
+départ, la tâche planifiée ou le lancement qui l'a demandée. Ne passent que
+des identifiants et un code de la machine.
 
-| Type | Écrit par | Quand |
+| Type | Demandée par | Quand |
 |---|---|---|
 | `machine_offline` | `machines.checkOfflineMachines` (tâche de §7) | La machine passe `offline` : aucun heartbeat depuis 90 s (`LIVE_FRESH_MS`). |
 | `drive_fault` | `training.updateLive` (route du heartbeat) | L'état en direct du heartbeat dit le variateur en défaut (`driveState: "fault"`) et le précédent ne le disait pas. En séance ou non. La séance nommée par l'état est jointe si c'est une séance de cette machine. |
 | `drive_fault` | `training.storeEvents` (route des événements) | Un événement `drive_fault` de l'enregistrement d'une séance, autre que `cleared` ; son mnémonique est gardé (`OHF (LFT 17): …` donne `OHF`). |
 | `session_failed` | `training.endTrainingSession` (route de fin) | La machine termine une séance comme échouée (refus de départ par la machine compris). Une seule fois : une fin renvoyée ne change rien. |
+| `session_failed` | `failBeforeStart` (`training.ts`, ANH-144) | Un lancement refusé avant que sa machine l'arme : par la tâche `sweepPendingSessions` (expiré, droit retiré, physiologie changée…), par la route de départ (`markTrainingStarted`, 409), ou expiré par un nouveau lancement. La liste rend son `endCode` (`reasonCode`), que la page traduit. Une confirmation répétée n'alerte pas de nouveau. |
 | `safety_verdict` | `training.storeEvents` | Un événement `verdict` dont l'action termine la séance : `RAMP_DOWN`, `QUICK_STOP`, `GO_SILENT`, ou une action que ce serveur ne sait pas lire (côté sûr). `FREEZE` et `REDUCE`, qui régulent sans arrêter, et `cleared` ne donnent rien. L'action la plus sévère est gardée. |
 
 Ce que la machine écrit est lu dans le format du Pi
@@ -1289,10 +1306,11 @@ un état de la machine), ou pour la même séance (`session_failed`,
 `safety_verdict`). Une alerte lue n'absorbe plus rien : l'événement suivant
 en écrit une nouvelle. Un e-mail ne part que pour une alerte nouvelle.
 
-**Délai.** Le défaut du variateur est écrit à la réception du heartbeat qui
+**Délai.** Le défaut du variateur est demandé à la réception du heartbeat qui
 le porte (la console en envoie un toutes les 10 s) ou du lot d'événements
-(envoyés à chaque étape du lien, toutes les secondes), dans la même
-mutation ; la cloche du site se met à jour par abonnement, sans attendre.
+(envoyés à chaque étape du lien, toutes les secondes), et écrit par la
+mutation planifiée sans délai (`runAfter(0)`) ; la cloche du site se met à
+jour par abonnement, sans attendre.
 Tant que la console joint Convex, un gestionnaire connecté au site le voit
 donc en moins d'une minute. La machine hors ligne est écrite au passage de
 la tâche qui suit les 90 s sans heartbeat, donc entre 90 s et 150 s après
@@ -1301,7 +1319,7 @@ sans délai garanti. Rien de cela n'a été mesuré contre un déploiement.
 
 | Fonction | Type | Autorisation | Effet / retour |
 |---|---|---|---|
-| `list` | query | connecté ; vide pour un `user` | Les 50 alertes de l'appelant les plus récemment changées, **dans l'organisation de l'appel**, et seulement celles d'une machine qu'il atteint encore (`canAccessMachine`) : un gestionnaire retiré d'une machine ne voit plus ses alertes. Pour chacune : type, machine et son nom, `detail`, `count`, dates, `read` ; la séance (`sessionId`) seulement si l'appelant peut la lire (`canAccessSession`), et pour `session_failed` sa raison de fin, lue sur la séance à ce moment. |
+| `list` | query | connecté ; vide pour un `user` | Les 50 alertes de l'appelant les plus récemment changées, **dans l'organisation de l'appel**, et seulement celles d'une machine qu'il atteint encore (`canAccessMachine`) : un gestionnaire retiré d'une machine ne voit plus ses alertes. Pour chacune : type, machine et son nom, `detail`, `count`, dates, `read` ; la séance (`sessionId`) seulement si l'appelant peut la lire (`canAccessSession`), et pour `session_failed` sa raison de fin et son `endCode` (`reason`, `reasonCode`), lus sur la séance à ce moment. |
 | `unreadCount` | query | jamais de refus | Le nombre d'alertes non lues visibles, 100 au plus ; `null` pour un visiteur déconnecté, un compte inconnu, un appel sans organisation acceptée et un `user`. C'est ce que lit la cloche de l'en-tête, sur toutes les pages. |
 | `markRead` | mutation | admin ou gestionnaire ; sa propre alerte, dans l'organisation de l'appel | Marque l'alerte lue. Celle d'un autre compte ou d'une autre organisation : `notification_not_found`, comme une alerte inexistante. |
 | `markAllRead` | mutation | admin ou gestionnaire | Marque lues toutes ses alertes de l'organisation de l'appel ; renvoie `{marked}`. |
@@ -1323,13 +1341,10 @@ lire. Il est écrit dans la langue du compte (`users.language`). Il n'est mis
 en file que si le déploiement a ses trois variables (§8), que le
 destinataire veut ce type par e-mail et qu'il a une adresse.
 
-**Extension (ANH-145, ANH-144).** Un incident sur une machine sera un type de
-plus (`notificationTypeValidator` et `notificationEmailFields` dans
+**Extension (ANH-145).** Un incident sur une machine sera un type de plus
+(`notificationTypeValidator` et `notificationEmailFields` dans
 `convex/schema.ts`, `NOTIFICATION_TYPES`, deux traductions) et un appel de
-`notifyMachine` là où l'incident est créé. Une séance refusée par le serveur
-au moment où la machine l'arme (ANH-144) est un appel de
-`notifyMachine(..., "session_failed", {sessionId})` là où elle échoue : il
-n'est pas fait ici, ce code n'étant pas encore fusionné.
+`scheduleAlert` là où l'incident est créé.
 
 ---
 
@@ -2330,8 +2345,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |
-| `convex/errors.test.ts` | La table `convex/lib/errors.ts` : chaque code a sa traduction française et anglaise, aucune traduction sans code, aucun code levé hors de la table, plus aucune `Error` simple dans `users.ts` et `machines.ts` hors du heartbeat interne (ANH-194) ; la connexion et les refus d'organisation par code, plus aucune phrase dans `softwareReleases.ts` et `notifications.ts`, et la liste exacte des phrases qui restent dans `training.ts` en attendant ANH-144 (ANH-90). |
-| `convex/notifications.test.ts` | Les alertes aux gestionnaires (ANH-90) : qui les reçoit (gestionnaire de la machine et admin de son organisation, jamais un gestionnaire inactif ou rétrogradé, un compte supprimé dans Clerk, une machine supprimée ou sans organisation), chaque événement qui en écrit une et ceux qui n'en écrivent pas (verdict qui régule, `cleared`, séance terminée, événement renvoyé, fin renvoyée), le regroupement dans l'alerte non lue, ce que lit l'appelant (plus rien d'une machine qu'il ne gère plus, ni séance ni raison qu'il ne peut lire, nombre plafonné), les choix d'e-mail et leurs valeurs par défaut, l'e-mail mis en file une seule fois et **sans donnée de santé** (ni FC, ni nom, ni identifiant de séance, ni règle du verdict), la purge à 90 jours et la suppression avec le compte. Toutes les horloges sont figées : le lot qui enverrait l'e-mail ne tourne jamais. |
+| `convex/errors.test.ts` | La table `convex/lib/errors.ts` : chaque code a sa traduction française et anglaise, aucune traduction sans code, aucun code levé hors de la table, plus aucune `Error` simple dans `users.ts` et `machines.ts` hors du heartbeat interne (ANH-194) ; la connexion et les refus d'organisation par code, plus aucune phrase dans `softwareReleases.ts`, `notifications.ts` et `training.ts`, qui ne construit plus aucune `ConvexError` de lui-même (ANH-90). |
+| `convex/notifications.test.ts` | Les alertes aux gestionnaires (ANH-90) : qui les reçoit (gestionnaire de la machine et admin de son organisation, jamais un gestionnaire inactif ou rétrogradé, un compte supprimé dans Clerk, une machine supprimée ou sans organisation), chaque événement qui en écrit une et ceux qui n'en écrivent pas (verdict qui régule, `cleared`, séance terminée, événement renvoyé, fin renvoyée), le lancement refusé avant son départ (tâche planifiée, route de départ, expiré par un nouveau lancement ; la tâche n'écrit elle-même aucune alerte, elle en planifie une), le regroupement dans l'alerte non lue, ce que lit l'appelant (plus rien d'une machine qu'il ne gère plus, ni séance ni raison qu'il ne peut lire, nombre plafonné), les choix d'e-mail et leurs valeurs par défaut, l'e-mail mis en file une seule fois et **sans donnée de santé** (ni FC, ni nom, ni identifiant de séance, ni règle du verdict), la purge à 90 jours et la suppression avec le compte. Toutes les horloges sont figées : les livraisons planifiées sont lancées une à une, et le lot qui enverrait l'e-mail ne tourne jamais. |
 | `convex/gestionnairePatients.test.ts` | `users.assignPatientsToGestionnaire` : ajout seul, retrait seul, les deux, liste inchangée (aucune ligne réécrite), identifiant répété, patient d'une autre organisation traité comme un compte inconnu, admin d'une autre organisation refusé comme pour un gestionnaire inconnu, deux enregistrements successifs (ANH-208). |
 | `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |
 | `convex/cloudVersion.test.ts` | La constante `CLOUD_VERSION` est celle de `convex/VERSION` et celle que répond le code déployé (ANH-134). |

@@ -118,6 +118,11 @@ export const DASHBOARD_ERRORS = {
     "A birth year is a whole number that gives an age from 10 to 100.",
 
   // A launch from the dashboard (`training.launchAutoSession`).
+  launch_for_self_only: "A patient launches a session for themselves only.",
+  launch_right_missing:
+    "The patient holds no launch right on this machine, in its organisation.",
+  machine_offline:
+    "The machine is offline (no heartbeat for LIVE_FRESH_MS): it cannot take a launch.",
   rider_not_allowed:
     "The rider is not an active member of the machine's organisation.",
   programs_disabled:
