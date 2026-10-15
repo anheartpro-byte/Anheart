@@ -46,12 +46,14 @@ from src.training.safety import SafetyLimits
 from src.training.types import Occupancy
 from src.units import Bpm, Metres, Monotonic, MotorRpm, OutputRpm, RpmPerSecond, UnixMillis
 from tests.record_journal_support import refuse_writes
+from tests.roster_support import RIDER_ID
 from tests.test_cloud_sync import (
     LAUNCH,
     OPERATOR,
     Dashboard,
     Linked,
     config_of,
+    confirm_linked,
     launch_answer,
     status_answer,
 )
@@ -208,7 +210,9 @@ async def test_ex1_a_dashboard_launch_is_recorded_with_its_identifiers_and_remot
 ) -> None:
     rig, dashboard, journal = recording_linked(tmp_path)
     dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
-    await rig.run(2.0)
+    await rig.run(0.2)
+    confirm_linked(rig.panel)
+    await rig.run(1.8)
     assert rig.panel.runtime.state is RuntimeState.RUNNING
     dashboard.answer("/api/machine/training/status", status_answer(stop=True))
     await rig.run(5.0)
@@ -222,7 +226,7 @@ async def test_ex1_a_dashboard_launch_is_recorded_with_its_identifiers_and_remot
     assert recording.warnings == ()
     manifest = recording.manifest
     assert (manifest.kind, manifest.occupancy) == ("auto", "occupied")
-    assert (manifest.session_id, manifest.subject_id) == ("remote-1", "user-1")
+    assert (manifest.session_id, manifest.subject_id) == ("remote-1", RIDER_ID)
     assert manifest.operator == operator_alias("Dr Manager (tableau de bord)")
     assert manifest.profile is not None
     assert manifest.profile.subject_hr_max == 170

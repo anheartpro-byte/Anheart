@@ -1297,6 +1297,34 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 | `Previsualiser` | `POST /api/plan/preview` : résout le profil **sans rien démarrer** (fonctionne même pendant une séance), ajusté à la FC max du passager choisi s'il y en a un. Message : `plan resolu ; rien n'a ete demarre` |
 | `Demarrer la seance` | `POST /api/session/start`. En cas d'accord (202), la page reste sur Seance et la note sous les boutons suit la réponse de la console à la demande de cet écran, comme celle d'un démarrage manuel (section 6) : `demande envoyee : start <profil> - pas encore prise par la machine`, puis `demarrage pris par la machine : start <profil>` à l'événement `taken` de cette demande, ou `refus de la machine (<heure>) : demarrage refuse : …` en rouge à son événement `refused`, ou `demande annulee (<heure>) : un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` en rouge à son événement `cancelled`. `pris` s'efface à la fin de la séance. Liaison coupée entre le clic et la réponse : en rouge, `cet ecran ne sait pas ce que la machine a fait de sa demande de demarrage : sa liaison a ete coupee.`, jusqu'à ce que la console ait redit le sort de la demande ; liaison coupée après `pris` : en rouge, `la machine a pris le demarrage demande par cet ecran (start <profil>), mais sa liaison a ete coupee depuis : cet ecran ne sait pas si la seance en cours est encore celle-la.`, jusqu'à la réponse du statut. Si la durée demandée n'est pas celle du profil, elle suit le nom du profil dans la note (`start <profil> over <secondes> s`). Un démarrage refusé tout de suite par la console (un autre démarrage attend, un reset attend) : la phrase de la console, en rouge (section 6, « Refus immédiat »). Jusqu'au 10 octobre 2026 : `accepte : start <profil>` dès le 202 |
 
+### Carte « Depart distant »
+
+Quand un poll propose un lancement AUTO, la carte **Depart distant** apparaît sur
+Seance. Le poll ne démarre rien : la carte montre le programme, la personne qui l'a
+lancé et le nom associé au `subject_id` dans la liste de passagers que la console
+tient alors. `subject_label` envoyé par le tableau de bord ne sert pas à l'affichage.
+Le nom passe uniquement dans la réponse JSON de `GET /api/remote-launch` vers la page;
+il n'est écrit ni dans l'enregistrement, ni dans `logbook/`, ni dans les journaux du
+processus. Si la liste tenue ne contient pas ce passager, la carte montre
+`indisponible` avec la raison et le bouton reste désactivé. La confirmation revérifie
+la même liste tenue; si le passager en manque, elle est refusée avec cette raison.
+
+L'opérateur renseigne le champ **Operateur** déjà présent dans la carte Programme,
+puis fait un seul geste sur **Cette personne est a bord et prete**. Le bouton envoie
+la confirmation locale; la tâche CloudSync exécute ensuite le contrôle local,
+`training/start`, puis soumet le départ à la boîte de la machine seulement après un
+2xx. L'état indique `en attente de confirmation`, `demande en cours`, `refuse : <raison>`
+ou `non confirme faute de reponse : <raison>`. Après refus ou absence de réponse,
+aucune fin distante n'est envoyée et le lancement n'est pas redemandé; un nouvel essai
+requiert un nouveau clic de l'opérateur tant que le poll le propose encore.
+
+Cette confirmation Pi est le bouton qui sera garanti par le geste physique d'ANH-85;
+elle ne réalise pas ce geste et n'ajoute pas son délai. L'opérateur est le nom que la
+console connaît aujourd'hui; ANH-152 reste hors de ce parcours. Si Convex a pris le
+départ mais que sa réponse 2xx se perd, une nouvelle confirmation reçoit
+`session_not_pending` (400) : la console n'arme pas et la machine peut rester tenue
+jusqu'à l'interruption. Ce suivi d'idempotence relève d'ANH-240.
+
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
 attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.
 Dans ce dernier cas une note dit :
@@ -1959,14 +1987,14 @@ utilisable` et `la frequence cardiaque baisse trop vite`. Les trois raisons de
 fréquence cardiaque ne concernent qu'une séance manuelle « personne à bord », que la
 page ne propose pas (section 6).
 
-Lien avec le tableau de bord (`dashboard`). Ce n'est pas un refus de la boucle :
-le message arrive sous son propre type d'événement, sans nom d'opérateur, et
-n'est jamais écrit dans la note de la carte Mode MANUEL. Une réponse 409 à
-`training/start` arrive avant la demande d'armement : le lancement est déjà
-échoué sur le site, la console affiche le code stable, n'envoie pas de
-`training/end` et ne redemande pas ce même lancement. Une panne ou une route
-inconnue affiche aussi la raison, mais laisse le poll suivant proposer le
-lancement. Hors séance, ces événements vont au `logbook/events.jsonl`.
+Lien avec le tableau de bord (`dashboard`). Une offre distante reste sur Seance
+jusqu'au prochain poll qui ne la propose plus ou jusqu'au démarrage. La confirmation
+est un événement opérateur attribué par alias; hors séance il va au
+`logbook/events.jsonl`, et l'enregistrement armé porte aussi `launch_confirmed` avec
+l'alias du confirmateur. Une réponse 409 ou une demande sans réponse ne soumet pas le
+démarrage à la machine et n'envoie pas `training/end`. Le bouton permet un nouvel essai
+seulement après une nouvelle confirmation explicite si le poll propose encore cette
+offre.
 
 | Message | Sens |
 |---|---|
@@ -1978,8 +2006,8 @@ lancement. Hors séance, ces événements vont au `logbook/events.jsonl`.
 | `age du pratiquant refuse avant le depart (age_refused_before_start)` | l'âge du pratiquant ne permet plus le départ |
 | `FC max du pratiquant modifiee avant le depart (hr_max_changed_before_start)` | la FC max a changé depuis la création du lancement |
 | `pratiquant deja dans une autre seance en attente ou en cours : une seule a la fois (rider_busy)` | le pratiquant est déjà tenu par une autre séance |
-| `depart distant refuse : <code> (HTTP <n>): <message>` | autre refus de `training/start`, avec le code et la raison du tableau de bord |
-| `depart distant non confirme : <raison>` | lien retenu, par exemple réseau, clé, délai, 429 ou 5xx ; aucun départ n'est armé |
+| `depart distant refuse (HTTP <n>, <code>)` (ou `depart distant refuse (HTTP <n>)` sans code) | autre refus de `training/start`; le texte reçu du tableau de bord n'est pas repris |
+| `depart distant non confirme : confirmation indisponible` | lien retenu, par exemple réseau, clé, délai, 429 ou 5xx ; aucun départ n'est armé |
 | `route training/start inconnue` | le serveur ne connaît pas la route ; aucun départ n'est armé |
 
 L'incompatibilité est rappelée toutes les 60 s tant qu'elle dure ; un refus de
@@ -2065,6 +2093,8 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
+| GET | `/api/remote-launch` | - | l'offre du dernier poll pour la carte Seance : `{session_id, profile_id, program, launched_by, passenger_name, passenger_reason, state, reason, can_confirm}` ; `passenger_name` vient du roster tenu par recherche `subject_id`, jamais de `subject_label`; `null` si aucune offre | 200 |
+| POST | `/api/remote-launch/confirm` | `{"session_id", "operator"}` | confirme localement l'offre et attribue l'action à l'opérateur; la route ne fait aucun appel réseau, CloudSync traite ensuite la demande | 202 `{session_id, state}` ; 400 (opérateur vide) ; 409 (`launch_not_pending`, `launch_in_progress`, `passenger_unavailable`) |
 | GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}]}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
 | POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_id"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi) ; 409 (dont : passager refusé, variateur en défaut) ; 412 |
 | POST | `/api/session/stop` | `{"operator", "reason"?}` | fin sur la rampe mise en service | 202 `{kind, operator, detail, at, request_id}` ; 400 ; 409 |

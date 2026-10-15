@@ -69,6 +69,7 @@ from tests.test_cloud_sync import (
     Reply,
     StubRuntime,
     config_of,
+    confirm_linked,
     launch_answer,
     manual,
     ok,
@@ -811,7 +812,9 @@ async def test_on_the_console_a_launch_whose_start_is_not_taken_stays_unarmed(
     dashboard.answer(START, Err(refusal))
     dashboard.answer(STATUS, status_answer(stop=True))
 
-    await seconds(rig_, journal, 3)
+    await seconds(rig_, journal, 1)
+    confirm_linked(rig_.panel)
+    await seconds(rig_, journal, 2)
 
     assert state_of(rig_) is not RuntimeState.RUNNING
     assert rig_.panel.runtime.stop_reason is None

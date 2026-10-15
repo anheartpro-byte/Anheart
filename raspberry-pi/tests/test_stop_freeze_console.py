@@ -162,7 +162,9 @@ async def test_a_stop_sent_from_the_site_under_a_freeze_brings_the_arm_down(
         await attest(session)
         await run.run(10.0)
         run.offer("remote-1")
-        await run.run(TURNING_AT + 4.0)
+        await run.run(3.0)
+        run.confirm("remote-1")
+        await run.run(TURNING_AT + 1.0)
         assert _state(rig) is RuntimeState.RUNNING
         assert runtime.snapshot().measured.motor_rpm > 0, "the arm is not turning yet"
 

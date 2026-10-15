@@ -138,7 +138,7 @@ import os
 import signal
 from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Thread
@@ -930,6 +930,11 @@ class LocalPanel:
         self._cloud = cloud
         self._transport = transport
         self._health = health
+        self._services = replace(
+            self._services,
+            remote_launch_current=cloud.current_remote_launch,
+            remote_launch_confirm=cloud.confirm_remote_launch,
+        )
 
     @property
     def roster(self) -> Roster:
@@ -1249,6 +1254,7 @@ class LocalPanel:
                 program=program,
                 subject_id=command.subject_id,
                 cloud_session_id=command.cloud_session_id,
+                confirmed_by=command.confirmed_by,
                 arming_began=asked,
                 arming_refused=refused,
             )

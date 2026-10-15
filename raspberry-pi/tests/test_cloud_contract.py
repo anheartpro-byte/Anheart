@@ -56,7 +56,7 @@ from src.contract import (
     SoftwareVersion,
     read_software_version,
 )
-from src.control_surface import EventKind, RunState, StartSession
+from src.control_surface import EventKind, RunState
 from src.local_config import CloudConfig
 from src.local_panel import build_panel
 from src.result import Err, Ok
@@ -68,15 +68,18 @@ from tests.test_cloud_sync import (
     OPERATOR,
     POLL_PATH,
     PROFILE,
+    START,
     Dashboard,
     Linked,
     Reply,
     Rig,
     config_of,
+    confirm_linked,
     launch_answer,
     linked,
     manual,
     ok,
+    pending_start,
     rig,
     state_of,
     status_answer,
@@ -315,8 +318,12 @@ async def test_ex4_a_launch_of_this_major_is_armed(tmp_path: Path) -> None:
     await attestation_seen(watcher)
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH), version="1.7"))
     await r.step()
-    pending = r.panel.surface.pending
-    assert isinstance(pending, StartSession)
+    assert r.panel.surface.pending is None
+    assert r.dashboard.to(START) == []
+    r.confirm_offer()
+    await r.step()
+    pending = pending_start(r.panel.surface)
+    assert pending is not None
     assert pending.cloud_session_id == "remote-1"
     assert r.dashboard.to(END) == []
     # START_REQUESTED is the only event: nothing was refused.
@@ -671,7 +678,9 @@ async def running_remote_session(tmp_path: Path) -> Linked:
     """The real simulated console, turning under a launch from a dashboard of this major."""
     rig_ = linked(tmp_path)
     rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
-    await rig_.run(2.0)
+    await rig_.run(0.2)
+    confirm_linked(rig_.panel)
+    await rig_.run(1.8)
     assert state_of(rig_.panel) is RuntimeState.RUNNING
     return rig_
 

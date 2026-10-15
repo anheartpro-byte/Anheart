@@ -312,6 +312,8 @@ class SessionRequest:
     session's. ``None``: not read, and the record counts what it lost to that
     list by its stretch, an upper bound."""
 
+    confirmed_by: str | None = None
+
 
 def manifest_for(
     stamp: Stamp, request: SessionRequest, clock: Clock, wall_trusted: bool | None = None
@@ -468,6 +470,7 @@ def record_kind(kind: SurfaceEvent) -> EventKind | None:
             | SurfaceEvent.END_REQUESTED
             | SurfaceEvent.EMERGENCY_STOP
             | SurfaceEvent.ATTESTED
+            | SurfaceEvent.LAUNCH_CONFIRMED
         ):
             return EventKind.OPERATOR_ACTION
         case SurfaceEvent.ACKNOWLEDGED:
@@ -640,7 +643,11 @@ class SessionRecorder:
             self._journal.close(
                 Closing(clock.unix_millis(), INTERRUPTED, None, just_before(since), refused)
             )
-        live = _Live(origin=origin, names=names_of(request.operator))
+        confirming_names = () if request.confirmed_by is None else names_of(request.confirmed_by)
+        live = _Live(
+            origin=origin,
+            names=tuple(dict.fromkeys((*names_of(request.operator), *confirming_names))),
+        )
         self._live = live
         self._journal.open(
             manifest_for(self._stamp, request, clock, self._wall_trusted()),
@@ -656,6 +663,14 @@ class SessionRecorder:
             f"{kind} session started",
             operator_alias(request.operator),
         )
+        if request.confirmed_by is not None:
+            self._event(
+                live,
+                live.origin,
+                EventKind.OPERATOR_ACTION,
+                "launch_confirmed",
+                operator_alias(request.confirmed_by),
+            )
         warning = self._stamp.medical_warning
         if warning is not None:
             # Every record of a console in bench mode says so, first thing.
@@ -760,7 +775,11 @@ class SessionRecorder:
             actor = REMOTE
             if kind is EventKind.OPERATOR_ACTION:
                 kind = EventKind.REMOTE_COMMAND
-        detail = f"{event.kind.value}: {event.detail}"
+        detail = (
+            event.kind.value
+            if event.kind is SurfaceEvent.LAUNCH_CONFIRMED
+            else f"{event.kind.value}: {event.detail}"
+        )
         if live is not None:
             self._event(live, event.at, kind, detail, actor)
             return

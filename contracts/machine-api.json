@@ -84,7 +84,7 @@
     },
     "expired_before_start": {
       "statuses": [409],
-      "meaning": "Refus à l'armement (voir `arming_refusals`) : le lancement attendait depuis plus de `PENDING_SESSION_TTL_S` secondes (300 par défaut) sans que la machine en confirme le départ. Une console qui arme avant de confirmer a pu démarrer."
+      "meaning": "Refus à la confirmation avant armement (voir `arming_refusals`) : le lancement a expiré avant que la console, après confirmation explicite de son opérateur, ne puisse confirmer le départ. Le comportement livré par la couche Pi d'ANH-144 reste non armé sans réponse 2xx de `training/start`."
     },
     "right_revoked_before_start": {
       "statuses": [409],

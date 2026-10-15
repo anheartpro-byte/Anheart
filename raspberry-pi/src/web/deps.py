@@ -51,6 +51,7 @@ from src.geometry import MachineGeometry
 from src.panel_status import PanelSource
 from src.presence.monitor import PresenceDecision, PresenceMonitor
 from src.record.export import RecordExporter
+from src.remote_launch import ConfirmationRefusal, RemoteLaunchView
 from src.result import Result
 from src.roster import Roster
 from src.sensors.base import SensorKind, SensorReading
@@ -582,6 +583,9 @@ class Services:
     roster: Roster | None = None
     """The riders' list (``GET /api/roster``), which a start with a person on board
     names one of. ``None``: this interface has none, and refuses such a start."""
+
+    remote_launch_current: Callable[[], RemoteLaunchView | None] | None = None
+    remote_launch_confirm: Callable[[str, str], Result[None, ConfirmationRefusal]] | None = None
 
     instance: str = field(default_factory=new_instance)
     """What this run of the console calls itself (:func:`new_instance`).

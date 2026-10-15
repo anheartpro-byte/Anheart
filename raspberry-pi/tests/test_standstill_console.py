@@ -40,6 +40,7 @@ import pytest
 
 from src.bitalino_client import SampleBatch
 from src.ecg_pipeline import EcgFrame, EcgMetrics, Treatment
+from src.result import Ok
 from src.sim.physiology import Physiology, SubjectState
 from src.training.plan import JsonValue
 from src.training.runtime import EndReason, RuntimeState
@@ -143,6 +144,13 @@ class Console:
             return launch_answer(pending.pop() if pending else None)
 
         self.dashboard.handlers[POLL] = poll
+
+    def confirm(self, session_id: str, operator: str = OPERATOR) -> None:
+        cloud = self.rig.panel.cloud
+        assert cloud is not None
+        accepted = cloud.confirm_remote_launch(session_id, operator)
+        assert isinstance(accepted, Ok), accepted
+        self.rig.panel.surface.note_launch_confirmed(operator)
 
     def ended(self, session_id: str) -> list[Mapping[str, object]]:
         return [body for body in self.dashboard.to(END) if body["sessionId"] == session_id]
@@ -264,7 +272,9 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         # A launch waiting on the dashboard: refused, and sent back failed,
         # naming the verdict somebody has to acknowledge at the console.
         run.offer("remote-1")
-        polled = await run.run(8.0)
+        await run.run(3.0)
+        run.confirm("remote-1")
+        polled = await run.run(5.0)
         assert run.state() is RuntimeState.FINISHED
         assert not _moved(polled)
         assert run.dashboard.to(START) == []
@@ -287,7 +297,9 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
 
         # Only now does a dashboard launch run.
         run.offer("remote-2")
-        await run.run(8.0)
+        await run.run(3.0)
+        run.confirm("remote-2")
+        await run.run(5.0)
         assert run.state() is RuntimeState.RUNNING
         # Confirmed once, with the start the console dated and the age of the session.
         (confirmed,) = run.dashboard.to(START)

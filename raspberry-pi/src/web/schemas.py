@@ -60,6 +60,7 @@ from src.presence.monitor import (
     RampDown,
     StartBlocked,
 )
+from src.remote_launch import RemoteLaunchView
 from src.result import Ok
 from src.roster import (
     Rider,
@@ -147,6 +148,47 @@ class StartBody:
     subject_age: int | None = None
     """No longer read: present only so that a page that still sends an age is refused
     with a sentence that says why (422), rather than have its age silently ignored."""
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteLaunchConfirmBody:
+    session_id: str
+    operator: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteLaunchAcceptedRow:
+    session_id: str
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteLaunchRow:
+    session_id: str
+    profile_id: str
+    program: str
+    launched_by: str
+    passenger_name: str | None
+    passenger_reason: str | None
+    state: str
+    reason: str | None
+    can_confirm: bool
+
+    @classmethod
+    def of(cls, view: RemoteLaunchView) -> RemoteLaunchRow:
+        return cls(
+            session_id=view.session_id,
+            profile_id=view.profile_id,
+            program=view.program_name,
+            launched_by=view.launched_by,
+            passenger_name=view.passenger_name,
+            passenger_reason=view.passenger_reason,
+            state=view.stage.value,
+            reason=view.reason,
+            can_confirm=(
+                view.passenger_name is not None and view.stage.value != "request_in_progress"
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)

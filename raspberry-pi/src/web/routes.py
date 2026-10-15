@@ -68,6 +68,7 @@ from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
+from src.remote_launch import ConfirmationCode
 from src.result import Err, Ok
 from src.roster import (
     NoPassenger,
@@ -139,6 +140,9 @@ from src.web.schemas import (
     ProfileRow,
     RecordRow,
     RecordsRow,
+    RemoteLaunchAcceptedRow,
+    RemoteLaunchConfirmBody,
+    RemoteLaunchRow,
     RequestRow,
     RestoreBody,
     RosterRow,
@@ -346,6 +350,7 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_reads(app, services=services, config=config, auth=auth)
     _register_profiles(app, services=services, auth=auth)
     _register_riders(app, services=services, auth=auth)
+    _register_remote_launch(app, services=services, auth=auth)
     _register_session(app, services=services, auth=auth)
     _register_manual(app, services=services, auth=auth)
     _register_safety(app, services=services, auth=auth)
@@ -687,6 +692,46 @@ def _register_riders(app: FastAPI, *, services: Services, auth: Sequence[params.
         now = services.clock.monotonic()
         view = (Roster(linked=False) if held is None else held).view(now)
         return RosterRow.of(view, services.clock.unix_millis())
+
+
+def _register_remote_launch(
+    app: FastAPI, *, services: Services, auth: Sequence[params.Depends]
+) -> None:
+    @app.get("/api/remote-launch", dependencies=auth, tags=["session"])
+    async def read_remote_launch() -> RemoteLaunchRow | None:
+        current = services.remote_launch_current
+        if current is None:
+            return None
+        view = current()
+        return None if view is None else RemoteLaunchRow.of(view)
+
+    @app.post(
+        "/api/remote-launch/confirm",
+        dependencies=auth,
+        status_code=HTTPStatus.ACCEPTED,
+        tags=["session"],
+    )
+    async def confirm_remote_launch(body: RemoteLaunchConfirmBody) -> RemoteLaunchAcceptedRow:
+        operator = _require_operator(body.operator)
+        confirm = services.remote_launch_confirm
+        if confirm is None:
+            raise Refusal(
+                HTTPStatus.CONFLICT,
+                code=ConfirmationCode.NOT_PENDING.value,
+                detail="ce lancement n'est plus propose par le tableau de bord",
+            )
+        accepted = confirm(body.session_id, operator)
+        if isinstance(accepted, Err):
+            raise Refusal(
+                HTTPStatus.CONFLICT,
+                code=accepted.error.code.value,
+                detail=accepted.error.detail,
+            )
+        services.surface.note_launch_confirmed(operator)
+        return RemoteLaunchAcceptedRow(
+            session_id=body.session_id,
+            state="request_in_progress",
+        )
 
 
 def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:

@@ -59,6 +59,7 @@ from src.record.reader import Recording, read
 from src.record.retention import records
 from src.record.schema import EventKind
 from src.result import Err, Ok, Result
+from src.roster import ROSTER_PATH
 from src.training.plan import JsonValue
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
@@ -73,6 +74,7 @@ from tests.test_cloud_sync import (
     Dashboard,
     Reply,
     Rig,
+    confirm_linked,
     launch_answer,
     linked,
     manual,
@@ -92,6 +94,7 @@ SENTENCE: Final[str] = f"serveur incompatible (contrat {CONTRACT_VERSION} vs 2)"
 GATED: Final[tuple[str, ...]] = (
     HEARTBEAT,
     POLL_PATH,
+    ROSTER_PATH,
     "/api/machine/profiles",
     LOCAL,
     "/api/machine/training/start",
@@ -1392,7 +1395,9 @@ async def test_the_indicator_hears_the_greeting_of_a_session_launched_from_the_d
     linked_console = linked(tmp_path)
     dashboard = linked_console.dashboard
     dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
-    await linked_console.run(6.0)
+    await linked_console.run(0.2)
+    confirm_linked(linked_console.panel)
+    await linked_console.run(5.8)
     assert linked_console.panel.runtime.state is RuntimeState.RUNNING
     dashboard.answer(STATUS, status_answer(stop=True))
     await linked_console.run(4.0)

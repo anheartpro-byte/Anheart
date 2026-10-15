@@ -64,6 +64,7 @@ from src.control_surface import (
     ControlSurface,
     EndRefusal,
     EndSession,
+    EventKind,
     StartRefusal,
     StartSession,
 )
@@ -73,6 +74,8 @@ from src.medical import SHIPPED_PARAMETERS, MedicalStatus
 from src.motor.drive import ControlWord, DriveError
 from src.motor.simulated import SimulatedDrive
 from src.record.journal import Journal
+from src.record.reader import read
+from src.record.session import operator_alias
 from src.record_uplink import (
     MAX_REFUSALS,
     SUCCESSFUL_ENDS,
@@ -83,12 +86,14 @@ from src.record_uplink import (
     Refusal,
     RouteMissing,
 )
+from src.remote_launch import ConfirmationCode, LaunchStage
 from src.result import Err, Ok, Result
 from src.roster import ROSTER_PATH, ROSTER_PERIOD, Roster, RosterState
 from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, MotorRpm, Seconds, UnixMillis
+from src.web.app import create_app
 from tests.medical_support import signed, unsigned
 from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, listed, roster_document
 from tests.test_contract import shared
@@ -96,6 +101,7 @@ from tests.test_contract import shared
 TICK: Final[Seconds] = Seconds(0.2)
 OPERATOR: Final[str] = "dr. attending"
 PROFILE: Final[str] = "standard_30_min"
+
 
 LINKED_ENV: Final[Mapping[str, str]] = {
     "MOTOR_BACKEND": "sim",
@@ -111,7 +117,7 @@ LAUNCH: Final[Mapping[str, JsonValue]] = {
     "sessionId": "remote-1",
     "profileId": PROFILE,
     "totalDurationS": None,
-    "subjectId": "user-1",
+    "subjectId": RIDER_ID,
     "subjectHrMax": 170,
     "operatorName": "Dr Manager",
     "subjectAge": 30,
@@ -176,6 +182,7 @@ DOWN: Final[Reply] = Err(Unreachable("no route to host"))
 POLL_PATH: Final[str] = "/api/machine/training/poll"
 START: Final[str] = "/api/machine/training/start"
 STATUS: Final[str] = "/api/machine/training/status"
+WEB_KEY: Final[str] = "console-test-key-long-enough"
 
 
 def ok(document: Document | None = None) -> Reply:
@@ -228,6 +235,10 @@ class Rig:
     sync: CloudSync
     journal: Journal | None = None
 
+    def confirm_offer(self, session_id: str = "remote-1", operator: str = OPERATOR) -> None:
+        accepted = self.sync.confirm_remote_launch(session_id, operator)
+        assert isinstance(accepted, Ok), accepted
+
     async def step(self, seconds: float = 1.0) -> None:
         """One second of the link's two tasks: the stop watch looks before and after
         the sending, as it does on the console, where it looks four times a second."""
@@ -246,6 +257,7 @@ def rig(
     records: RecordSource | None = None,
     medical: MedicalStatus | None = None,
     record_root: Path | None = None,
+    with_roster: bool = True,
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
@@ -271,6 +283,7 @@ def rig(
         medical=medical,
         preflight_start=panel.preflight_remote_start,
         records=records,
+        roster=panel.roster if with_roster else None,
     )
     return Rig(
         clock=clock,
@@ -565,7 +578,7 @@ async def test_the_list_is_not_asked_for_during_a_session(
 
 
 async def test_a_link_without_a_list_asks_for_none(tmp_path: Path) -> None:
-    r = rig(tmp_path)
+    r = rig(tmp_path, with_roster=False)
     await r.step(ROSTER_PERIOD)
     assert roster_asks(r) == 0
 
@@ -769,22 +782,161 @@ async def test_a_launch_is_submitted_through_the_surface_with_the_rider(tmp_path
         "/api/machine/training/poll", launch_answer({**LAUNCH, "totalDurationS": 2700})
     )
     await r.step()
-    pending = r.panel.surface.pending
-    assert isinstance(pending, StartSession)
-    assert pending.profile_id == PROFILE
-    assert pending.subject_id == "user-1"
+    assert r.panel.surface.pending is None
+    assert r.dashboard.to(START) == []
+    offer = r.sync.current_remote_launch()
+    assert offer is not None
+    assert offer.passenger_name == RIDER_NAME
+    assert offer.program_name == "30 min"
+    assert offer.launched_by == "Dr Manager"
+    r.confirm_offer()
+    await r.step()
+    pending = pending_start(r.panel.surface)
+    assert pending is not None
+    requested_profile = LAUNCH["profileId"]
+    assert isinstance(requested_profile, str)
+    assert pending.profile_id == requested_profile
+    assert pending.subject_id == RIDER_ID
     assert pending.subject_hr_max == Bpm(170)
     assert pending.cloud_session_id == "remote-1"
     assert pending.total_duration_s == Seconds(2700.0)
     assert DASHBOARD_OPERATOR in pending.operator
-    # While the loop has not answered, the machine does not ask again.
+    assert pending.confirmed_by == OPERATOR
+    r.dashboard.answer(POLL_PATH, launch_answer(None))
     await r.step(5.0)
-    assert len(r.dashboard.to("/api/machine/training/poll")) == 1
+    assert len(r.dashboard.to("/api/machine/training/poll")) == 2
+
+
+async def test_a_launch_disappears_when_the_poll_no_longer_offers_it(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    assert r.sync.current_remote_launch() is not None
+    r.dashboard.answer(POLL_PATH, launch_answer(None))
+
+    await r.step(POLL_PERIOD)
+
+    assert r.sync.current_remote_launch() is None
+    rejected = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+    assert isinstance(rejected, Err)
+    assert rejected.error.code.value == "launch_not_pending"
+    assert r.dashboard.to(START) == []
+
+
+async def test_a_launch_needs_a_roster_even_when_the_poll_offers_a_passenger(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path, with_roster=False)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+
+    offer = r.sync.current_remote_launch()
+    assert offer is not None
+    assert offer.passenger_name is None
+    refused = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+
+    assert isinstance(refused, Err)
+    assert refused.error.code is ConfirmationCode.PASSENGER_UNAVAILABLE
+    assert r.dashboard.to(START) == []
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+
+async def test_confirmation_refuses_a_passenger_absent_from_the_current_roster(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.panel.roster.adopt((), r.clock.monotonic())
+
+    rejected = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+
+    assert isinstance(rejected, Err)
+    assert rejected.error.code.value == "passenger_unavailable"
+    assert "n'est pas dans" in rejected.error.detail
+    view = r.sync.current_remote_launch()
+    assert view is not None
+    assert view.passenger_name is None
+    assert view.reason == rejected.error.detail
+    await r.step()
+    assert r.dashboard.to(START) == []
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+
+async def test_a_second_confirmation_is_refused_while_the_first_is_queued(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    first = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+    second = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+
+    assert isinstance(first, Ok)
+    assert isinstance(second, Err)
+    assert second.error.code is ConfirmationCode.IN_PROGRESS
+    assert r.dashboard.to(START) == []
+
+
+async def test_a_confirmation_racing_with_a_running_session_is_not_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.confirm_offer()
+    r.clock.advance(POLL_PERIOD)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_get = r.dashboard.get
+
+    async def blocked_get(path: str, params: Mapping[str, str] | None = None) -> Reply:
+        if path == POLL_PATH:
+            entered.set()
+            await release.wait()
+        return await original_get(path, params)
+
+    monkeypatch.setattr(r.dashboard, "get", blocked_get)
+    step = asyncio.create_task(r.sync.step())
+    await asyncio.wait_for(entered.wait(), timeout=0.1)
+    r.runtime.state = RuntimeState.RUNNING
+    release.set()
+    await step
+
+    offer = r.sync.current_remote_launch()
+    assert offer is not None
+    assert offer.stage is LaunchStage.REFUSED
+    assert offer.reason == "une seance est deja en cours"
+    assert r.dashboard.to(START) == []
+
+
+async def test_a_changed_poll_clears_a_waiting_start_before_its_loop_timeout(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r.dashboard.answer(START, ok())
+    await r.step()
+    r.confirm_offer()
+    await r.step()
+    assert len(r.dashboard.to(START)) == 1
+
+    r.dashboard.answer(POLL_PATH, launch_answer({**LAUNCH, "sessionId": "remote-2"}))
+    await r.step(POLL_PERIOD)
+    assert r.sync.current_remote_launch() is None
+    r.dashboard.answer(POLL_PATH, launch_answer(None))
+    await r.step(LAUNCH_TIMEOUT)
+    assert r.sync.current_remote_launch() is None
+    assert len(r.dashboard.to(START)) == 1
 
 
 async def test_a_launch_the_surface_refuses_comes_back_failed(tmp_path: Path) -> None:
     r = rig(tmp_path)  # e-stop wiring NOT attested
     r.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.confirm_offer()
+    r.panel.surface.note_launch_confirmed(OPERATOR)
     await r.step()
     assert r.dashboard.to(START) == []
     assert r.panel.surface.pending is None
@@ -804,6 +956,8 @@ async def test_a_locked_surface_verdict_prevents_the_confirmation_request(tmp_pa
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
 
     await r.step()
+    r.confirm_offer()
+    await r.step()
 
     assert r.dashboard.to(START) == []
     ends = r.dashboard.to("/api/machine/training/end")
@@ -820,6 +974,8 @@ async def test_a_waiting_surface_command_prevents_the_confirmation_request(tmp_p
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
 
     await r.step()
+    r.confirm_offer()
+    await r.step()
 
     assert r.dashboard.to(START) == []
     assert r.panel.surface.pending == reset.value
@@ -834,6 +990,8 @@ async def test_a_panel_with_programmes_disabled_refuses_before_confirmation(tmp_
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
 
+    await r.step()
+    r.confirm_offer()
     await r.step()
 
     assert r.dashboard.to(START) == []
@@ -853,10 +1011,15 @@ async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path:
         store=r.panel.services.store,
         tiers=config_of().tiers,
         programs_enabled=True,
+        roster=r.panel.roster,
     )
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
 
+    r.clock.advance(Seconds(1.0))
+    await sync.step()
+    accepted = sync.confirm_remote_launch("remote-1", OPERATOR)
+    assert isinstance(accepted, Ok)
     r.clock.advance(Seconds(1.0))
     await sync.step()
 
@@ -884,6 +1047,9 @@ async def test_a_409_is_shown_logged_and_never_ended_or_retried(
     )
 
     await r.step()
+    r.confirm_offer()
+    r.panel.surface.note_launch_confirmed(OPERATOR)
+    await r.step()
 
     starts = r.dashboard.to(START)
     assert starts == [
@@ -892,6 +1058,10 @@ async def test_a_409_is_shown_logged_and_never_ended_or_retried(
     assert r.panel.surface.pending is None
     assert r.runtime.state is RuntimeState.IDLE
     assert r.dashboard.to("/api/machine/training/end") == []
+    confirmation = await asyncio.wait_for(client.next_payload(), timeout=0.1)
+    assert confirmation.event is not None
+    assert confirmation.event.kind is EventKind.LAUNCH_CONFIRMED
+    assert confirmation.event.operator == OPERATOR
     payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
     assert payload.event is not None
     assert words in payload.event.detail
@@ -899,6 +1069,8 @@ async def test_a_409_is_shown_logged_and_never_ended_or_retried(
 
     r.journal.drain()
     logbook = (r.journal.root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
+    assert "launch_confirmed" in logbook
+    assert operator_alias(OPERATOR) in logbook
     assert words in logbook
     assert code in logbook
     for private_word in (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"):
@@ -927,6 +1099,8 @@ async def test_another_start_refusal_is_shown_without_arming_or_ending(
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
     r.dashboard.answer(START, Err(refusal))
 
+    await r.step()
+    r.confirm_offer()
     await r.step()
 
     assert r.panel.surface.pending is None
@@ -957,6 +1131,8 @@ async def test_an_unknown_confirmation_answer_fails_loudly(
         return await original_send(sync, path, body)
 
     monkeypatch.setattr(CloudSync, "send", unknown_answer)
+    await r.step()
+    r.confirm_offer()
     with pytest.raises(AssertionError):
         await r.step()
 
@@ -984,6 +1160,8 @@ async def test_an_unconfirmed_start_stays_unarmed_and_has_no_end(
     r.dashboard.answer(START, answer)
 
     await r.step()
+    r.confirm_offer()
+    await r.step()
 
     assert len(r.dashboard.to(START)) == 1
     assert r.panel.surface.pending is None
@@ -992,6 +1170,15 @@ async def test_an_unconfirmed_start_stays_unarmed_and_has_no_end(
     payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
     assert payload.event is not None
     assert payload.event.detail
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step(POLL_PERIOD)
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+    r.dashboard.answer(START, ok())
+    r.confirm_offer()
+    await r.step()
+    assert len(r.dashboard.to(START)) == 2
 
 
 @pytest.mark.parametrize(
@@ -1000,19 +1187,19 @@ async def test_an_unconfirmed_start_stays_unarmed_and_has_no_end(
         pytest.param(
             {**LAUNCH, "profileId": "private-program-71"},
             ("private-program-71", "passager de 30 ans", RIDER_NAME, "Dr Manager"),
-            "programme 'private-program-71' inconnu",
+            "programme 'programme' inconnu",
             id="unknown-program",
         ),
         pytest.param(
             {**LAUNCH, "profileId": "private-program-72", "subjectAge": 10},
             ("private-program-72", "passager de 10 ans", RIDER_NAME, "Dr Manager"),
-            "passager de 10 ans, minimum 18 ans",
+            "passager, minimum 18 ans",
             id="too-young",
         ),
         pytest.param(
             {**LAUNCH, "profileId": "private-program-73", "subjectLabel": ""},
             ("private-program-73", "passager de 30 ans", "Dr Manager"),
-            "programme 'private-program-73' inconnu",
+            "programme 'programme' inconnu",
             id="unknown-program-without-label",
         ),
     ],
@@ -1031,6 +1218,8 @@ async def test_a_local_preflight_refusal_keeps_private_words_off_disk_and_end(
     client = r.panel.hub.subscribe()
     r.dashboard.answer(POLL_PATH, launch_answer(launch))
 
+    await r.step()
+    r.confirm_offer()
     await r.step()
 
     assert r.dashboard.to(START) == []
@@ -1085,6 +1274,8 @@ async def test_held_and_missing_start_routes_do_not_log_launch_words(
 
     monkeypatch.setattr(CloudSync, "send", answer_confirmation)
     await r.step()
+    r.confirm_offer()
+    await r.step()
 
     assert r.panel.surface.pending is None
     assert r.runtime.state is RuntimeState.IDLE
@@ -1128,6 +1319,8 @@ async def test_a_launch_nobody_answers_times_out(tmp_path: Path) -> None:
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await r.step()
+    r.confirm_offer()
+    await r.step()
     await r.step(LAUNCH_TIMEOUT)
     reason = r.dashboard.to("/api/machine/training/end")[0]["reason"]
     assert isinstance(reason, str)
@@ -1162,6 +1355,8 @@ async def test_a_blank_operator_and_odd_duration_are_tolerated(tmp_path: Path) -
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     odd = {**LAUNCH, "operatorName": "", "subjectLabel": None, "totalDurationS": True}
     r.dashboard.answer("/api/machine/training/poll", launch_answer(odd))
+    await r.step()
+    r.confirm_offer()
     await r.step()
     pending = r.panel.surface.pending
     assert isinstance(pending, StartSession)
@@ -1683,17 +1878,41 @@ def state_of(panel: LocalPanel) -> RuntimeState:
     return panel.runtime.state
 
 
-def linked(tmp_path: Path, medical: MedicalStatus | None = None, **changes: str) -> Linked:
+def pending_start(surface: ControlSurface) -> StartSession | None:
+    pending = surface.pending
+    return pending if isinstance(pending, StartSession) else None
+
+
+def linked(
+    tmp_path: Path,
+    medical: MedicalStatus | None = None,
+    *,
+    record_root: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    **changes: str,
+) -> Linked:
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     dashboard = Dashboard()
+    journal = None if record_root is None else Journal(record_root, clock)
+    environment = {} if env is None else dict(env)
+    environment.update(changes)
     panel = build_panel(
-        config_of(medical, **changes),
+        config_of(medical, **environment),
         clock=clock,
         profiles_path=tmp_path / "p.json",
         transport=lambda _c: dashboard,
+        journal=journal,
     )
     assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
     return Linked(clock=clock, panel=panel, dashboard=dashboard)
+
+
+def confirm_linked(panel: LocalPanel, operator: str = OPERATOR) -> None:
+    cloud = panel.cloud
+    assert cloud is not None
+    accepted = cloud.confirm_remote_launch("remote-1", operator)
+    assert isinstance(accepted, Ok), accepted
+    panel.surface.note_launch_confirmed(operator)
 
 
 def observe_dashboard_and_drive(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> list[str]:
@@ -1731,18 +1950,18 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(
     order: list[str] = []
     observe_dashboard_and_drive(monkeypatch, order)
     rig_ = linked(tmp_path)
-    expected_start = int(rig_.clock.unix_millis()) + 200
     rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
-    await rig_.run(2.0)
+    await rig_.run(0.2)
+    confirm_linked(rig_.panel)
+    expected_start = int(rig_.clock.unix_millis()) + 200
+    await rig_.run(1.8)
     assert rig_.panel.runtime.state is RuntimeState.RUNNING
     starts = rig_.dashboard.to("/api/machine/training/start")
-    assert starts == [
-        {
-            "sessionId": "remote-1",
-            "startedAt": expected_start,
-            "sessionAgeMs": 0,
-        }
-    ]
+    assert starts[0]["sessionId"] == "remote-1"
+    assert starts[0]["sessionAgeMs"] == 0
+    started_at = starts[0]["startedAt"]
+    assert isinstance(started_at, int)
+    assert abs(started_at - expected_start) <= 1
     assert order.index("training/start") < order.index("drive")
     assert rig_.panel.cloud is not None
     assert rig_.panel.cloud.current_session_id == "remote-1"
@@ -1752,6 +1971,61 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(
     assert state_of(rig_.panel) is RuntimeState.ENDING
     assert rig_.panel.runtime.stop_reason == "arret demande depuis le tableau de bord"
     await rig_.panel.close()
+
+
+async def test_the_confirming_operator_is_recorded_and_the_roster_name_stays_off_disk(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    confirmer = "Console Operator"
+    caplog.set_level(logging.INFO)
+    rig_ = linked(tmp_path, record_root=tmp_path / "records")
+    rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await rig_.run(0.2)
+    web = replace(config_of().web, token=WEB_KEY)
+    app = create_app(services=rig_.panel.services, config=web)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as session:
+        headers = {"X-Anheart-Token": WEB_KEY}
+        offered = await session.get("/api/remote-launch", headers=headers)
+        assert offered.status_code == 200
+        assert offered.json()["passenger_name"] == RIDER_NAME
+        assert offered.json()["program"] == "30 min"
+        assert offered.json()["launched_by"] == "Dr Manager"
+        response = await session.post(
+            "/api/remote-launch/confirm",
+            headers=headers,
+            json={"session_id": "remote-1", "operator": confirmer},
+        )
+        assert response.status_code == 202
+        assert rig_.dashboard.to(START) == []
+    await rig_.run(1.8)
+    assert rig_.panel.runtime.state is RuntimeState.RUNNING
+    assert rig_.dashboard.to(START)
+    assert rig_.dashboard.to("/api/machine/training/end") == []
+    rig_.dashboard.answer(STATUS, status_answer(stop=True))
+    await rig_.run(5.0)
+    await rig_.panel.close()
+
+    recorder = rig_.panel.recorder
+    assert recorder is not None
+    recorder.journal.drain()
+    root = recorder.journal.root
+    session_events = tuple(
+        path for path in root.rglob("events.jsonl") if path.parent.name != "logbook"
+    )
+    assert len(session_events) == 1
+    loaded = read(session_events[0].parent)
+    assert isinstance(loaded, Ok)
+    confirmations = [event for event in loaded.value.events if event.detail == "launch_confirmed"]
+    assert len(confirmations) == 1
+    assert confirmations[0].actor == operator_alias(confirmer)
+    logbook = (root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
+    assert "launch_confirmed" in logbook
+    assert operator_alias(confirmer) in logbook
+    written = b"\n".join(path.read_bytes() for path in root.rglob("*") if path.is_file())
+    assert RIDER_NAME.encode("utf-8") not in written
+    assert RIDER_NAME not in caplog.text
 
 
 async def test_a_409_never_commands_the_simulated_drive(
@@ -1766,7 +2040,9 @@ async def test_a_409_never_commands_the_simulated_drive(
         Err(Refused(409, "Right revoked", ErrorCode("right_revoked_before_start"))),
     )
 
-    await rig_.run(2.0)
+    await rig_.run(0.2)
+    confirm_linked(rig_.panel)
+    await rig_.run(1.8)
 
     assert rig_.panel.runtime.state is RuntimeState.IDLE
     assert writes == []
@@ -1789,7 +2065,9 @@ async def test_a_rechecked_arm_refusal_after_2xx_ends_without_drive_write(
     rig_.dashboard.handle(START, latch_verdict_before_ack)
     rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
 
-    await rig_.run(3.0)
+    await rig_.run(0.2)
+    confirm_linked(rig_.panel)
+    await rig_.run(2.8)
 
     ends = rig_.dashboard.to("/api/machine/training/end")
     assert len(rig_.dashboard.to(START)) == 1
@@ -1805,11 +2083,13 @@ async def refused_launch(
     launch: Mapping[str, JsonValue],
     medical: MedicalStatus | None = None,
     after_confirmation: bool = False,
-    **env: str,
+    env: Mapping[str, str] | None = None,
 ) -> str:
-    rig_ = linked(tmp_path, medical, **env)
+    rig_ = linked(tmp_path, medical, env=env)
     rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(launch)))
-    await rig_.run(3.0)
+    await rig_.run(0.2)
+    confirm_linked(rig_.panel)
+    await rig_.run(2.8)
     assert rig_.panel.runtime.state is RuntimeState.IDLE
     if not after_confirmation:
         assert rig_.dashboard.to(START) == []
@@ -1823,7 +2103,7 @@ async def refused_launch(
 
 
 async def test_occupied_riding_must_be_enabled_for_a_programme(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, LAUNCH, OCCUPANCY_OCCUPIED_ENABLED="false")
+    reason = await refused_launch(tmp_path, LAUNCH, env={"OCCUPANCY_OCCUPIED_ENABLED": "false"})
     assert "OCCUPANCY_OCCUPIED_ENABLED" in reason
 
 
@@ -1839,7 +2119,7 @@ async def test_a_preset_too_hard_for_the_rider_is_refused(tmp_path: Path) -> Non
 
 
 async def test_a_preset_faster_than_the_occupied_ceiling_is_refused(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, LAUNCH, MOTOR_MAX_RPM="200")
+    reason = await refused_launch(tmp_path, LAUNCH, env={"MOTOR_MAX_RPM": "200"})
     assert "au-dessus du plafond personne a bord" in reason
 
 

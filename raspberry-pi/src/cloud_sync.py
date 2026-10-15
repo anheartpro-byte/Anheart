@@ -154,8 +154,22 @@ from src.record_uplink import (
     RouteMissing,
     RuntimeEnd,
 )
+from src.remote_launch import (
+    ConfirmationCode,
+    ConfirmationRefusal,
+    LaunchStage,
+    RemoteLaunchView,
+)
 from src.result import Err, Ok, Result
-from src.roster import ROSTER_PATH, Roster
+from src.roster import (
+    ROSTER_PATH,
+    NoList,
+    PassengerRefusal,
+    Rider,
+    Roster,
+    RosterState,
+    describe_passenger_refusal,
+)
 from src.training.plan import JsonValue, ProfileStore, TrainingProfile
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import EstopUnattested
@@ -803,6 +817,7 @@ class CloudSync:
     __slots__ = (
         "_awaiting",
         "_clock",
+        "_confirmation_operator",
         "_confirmed_launch_id",
         "_deposit",
         "_health",
@@ -817,6 +832,9 @@ class CloudSync:
         "_link",
         "_medical",
         "_next_profiles",
+        "_offer_reason",
+        "_offer_stage",
+        "_offered_launch",
         "_online",
         "_preflight_start",
         "_programs_enabled",
@@ -900,6 +918,10 @@ class CloudSync:
         )
         self._awaiting: _Awaiting | None = None
         self._confirmed_launch_id: str | None = None
+        self._confirmation_operator: str | None = None
+        self._offered_launch: Launch | None = None
+        self._offer_stage: LaunchStage = LaunchStage.WAITING_CONFIRMATION
+        self._offer_reason: str | None = None
         self._pushed_rev: int | None = None
         self._next_profiles: Monotonic | None = None
         self._last_heartbeat: Monotonic | None = None
@@ -929,10 +951,75 @@ class CloudSync:
         """Sessions the dashboard has not acknowledged whole, as far as this run knows."""
         return self._uplink.owed
 
+    def current_remote_launch(self) -> RemoteLaunchView | None:
+        launch = self._offered_launch
+        if launch is None:
+            return None
+        found = self._rider_for_launch(launch)
+        if isinstance(found, Ok):
+            passenger_name = found.value.name
+            passenger_reason = None
+        else:
+            passenger_name = None
+            passenger_reason = describe_passenger_refusal(found.error)
+        profile = self._store.get(launch.profile_id)
+        program_name = profile.value.name if isinstance(profile, Ok) else launch.profile_id
+        return RemoteLaunchView(
+            session_id=launch.session_id,
+            profile_id=launch.profile_id,
+            program_name=program_name,
+            launched_by=launch.operator,
+            passenger_name=passenger_name,
+            passenger_reason=passenger_reason,
+            stage=self._offer_stage,
+            reason=self._offer_reason,
+        )
+
+    def confirm_remote_launch(
+        self, session_id: str, operator: str
+    ) -> Result[None, ConfirmationRefusal]:
+        launch = self._offered_launch
+        if launch is None or launch.session_id != session_id:
+            return Err(
+                ConfirmationRefusal(
+                    ConfirmationCode.NOT_PENDING,
+                    "ce lancement n'est plus propose par le tableau de bord",
+                )
+            )
+        if (
+            self._offer_stage is LaunchStage.REQUESTING
+            or self._awaiting is not None
+            or self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING)
+            or self._confirmation_operator is not None
+        ):
+            return Err(
+                ConfirmationRefusal(
+                    ConfirmationCode.IN_PROGRESS,
+                    "une demande de depart est deja en cours",
+                )
+            )
+        found = self._rider_for_launch(launch)
+        if isinstance(found, Err):
+            detail = describe_passenger_refusal(found.error)
+            self._offer_stage = LaunchStage.REFUSED
+            self._offer_reason = detail
+            return Err(ConfirmationRefusal(ConfirmationCode.PASSENGER_UNAVAILABLE, detail))
+        self._confirmation_operator = operator
+        self._offer_stage = LaunchStage.REQUESTING
+        self._offer_reason = None
+        return Ok(None)
+
+    def _rider_for_launch(self, launch: Launch) -> Result[Rider, PassengerRefusal]:
+        roster = self._roster
+        if roster is None:
+            return Err(NoList(RosterState.UNLINKED, None))
+        return roster.find(launch.subject_id, self._clock.monotonic())
+
     # --- what the panel calls --------------------------------------------
 
     def session_started(self, started: StartedSession) -> None:
         """Track a session the runtime has just armed. A launch's wait is over."""
+        self._clear_offer()
         remote = started.cloud_session_id
         confirmed = remote is not None and remote == self._confirmed_launch_id
         if confirmed:
@@ -955,6 +1042,10 @@ class CloudSync:
 
     def start_refused(self, cloud_session_id: str, detail: str) -> None:
         """A launch the loop refused becomes a failed session on the dashboard."""
+        launch = self._offered_launch
+        if launch is not None and launch.session_id == cloud_session_id:
+            self._offer_stage = LaunchStage.REFUSED
+            self._offer_reason = _safe_launch_refusal(launch, detail)
         if self._confirmed_launch_id == cloud_session_id:
             self._confirmed_launch_id = None
         if self._awaiting is not None and self._awaiting.cloud_session_id == cloud_session_id:
@@ -976,8 +1067,13 @@ class CloudSync:
         await self._heartbeat(now, snapshot)
         await self._push_profiles(now)
         await self._refresh_roster(now)
-        if not self._uplink.running and self._awaiting is None and not self._uplink.refusal_owed:
+        if (
+            not self._uplink.running
+            and self._runtime.state not in (RuntimeState.RUNNING, RuntimeState.ENDING)
+            and (self._offered_launch is not None or not self._uplink.refusal_owed)
+        ):
             await self._poll(now)
+            await self._process_confirmation(now)
         self._check_launch_timeout(now)
         # The sending last, so a refusal found above goes out in this same step.
         await self._uplink.step()
@@ -1146,7 +1242,7 @@ class CloudSync:
         refusal = server_refusal(polled.value.get(SERVER_VERSION_FIELD))
         self._link.announced(refusal)
         if refusal is not None:
-            # An answer of another major arms nothing here, whatever it carries.
+            self._clear_offer()
             self._refuse_server(refusal, launch)
             return
         self._incompatible = None
@@ -1156,14 +1252,49 @@ class CloudSync:
             if isinstance(incidents, int) and not isinstance(incidents, bool) and incidents >= 0
             else None
         )
-        if launch is None or launch.session_id == self._refused_launch:
+        if launch is None:
+            self._clear_offer()
+            return
+        awaiting = self._awaiting
+        if awaiting is not None and launch.session_id != awaiting.cloud_session_id:
+            self._clear_offer()
+            return
+        self._offer_launch(launch)
+
+    def _offer_launch(self, launch: Launch) -> None:
+        previous = self._offered_launch
+        if previous is not None and previous.session_id == launch.session_id:
+            self._offered_launch = launch
+            return
+        self._offered_launch = launch
+        self._confirmation_operator = None
+        self._offer_stage = LaunchStage.WAITING_CONFIRMATION
+        self._offer_reason = None
+
+    def _clear_offer(self) -> None:
+        self._offered_launch = None
+        self._confirmation_operator = None
+        self._offer_stage = LaunchStage.WAITING_CONFIRMATION
+        self._offer_reason = None
+
+    async def _process_confirmation(self, now: Monotonic) -> None:
+        operator = self._confirmation_operator
+        launch = self._offered_launch
+        if operator is None or launch is None:
+            return
+        self._confirmation_operator = None
+        if self._awaiting is not None or self._runtime.state in (
+            RuntimeState.RUNNING,
+            RuntimeState.ENDING,
+        ):
+            self._offer_stage = LaunchStage.REFUSED
+            self._offer_reason = "une seance est deja en cours"
             return
         admitted = self._preflight_remote_start(launch)
         if isinstance(admitted, Err):
             self._refuse_local_launch(launch, admitted.error)
             return
-
-        await self._confirm_remote_start(launch, now)
+        await self._confirm_remote_start(launch, operator, now)
 
     def _preflight_remote_start(self, launch: Launch) -> Result[None, str]:
         surface_check = self._surface.check_start()
@@ -1174,7 +1305,7 @@ class CloudSync:
             return Err("verification locale indisponible")
         return preflight(launch)
 
-    async def _confirm_remote_start(self, launch: Launch, now: Monotonic) -> None:
+    async def _confirm_remote_start(self, launch: Launch, operator: str, now: Monotonic) -> None:
         started_at = self._clock.unix_millis()
         answer = await self.send(
             START_PATH,
@@ -1186,24 +1317,30 @@ class CloudSync:
         )
         match answer:
             case Acked():
-                self._submit_confirmed_launch(launch, now)
+                self._submit_confirmed_launch(launch, operator, now)
             case Refusal():
                 sentence = _remote_start_refusal(answer)
                 self._refused_launch = launch.session_id
+                self._offer_stage = LaunchStage.REFUSED
+                self._offer_reason = sentence
                 self._surface.note_remote_refusal(sentence)
                 _logger.warning("dashboard launch %s refused: %s", launch.session_id, sentence)
             case Held():
                 sentence = "depart distant non confirme : confirmation indisponible"
+                self._offer_stage = LaunchStage.UNCONFIRMED
+                self._offer_reason = sentence
                 self._surface.note_remote_refusal(sentence)
                 _logger.warning("dashboard launch %s held", launch.session_id)
             case RouteMissing():
                 sentence = "route training/start inconnue"
+                self._offer_stage = LaunchStage.UNCONFIRMED
+                self._offer_reason = sentence
                 self._surface.note_remote_refusal(sentence)
                 _logger.warning("dashboard launch %s held: %s", launch.session_id, sentence)
             case _ as unreachable:
                 assert_never(unreachable)
 
-    def _submit_confirmed_launch(self, launch: Launch, now: Monotonic) -> None:
+    def _submit_confirmed_launch(self, launch: Launch, operator: str, now: Monotonic) -> None:
         submitted = self._surface.submit_start(
             profile_id=launch.profile_id,
             operator=f"{launch.operator} ({DASHBOARD_OPERATOR})",
@@ -1212,6 +1349,7 @@ class CloudSync:
             subject_hr_max=launch.subject_hr_max,
             subject_age=launch.subject_age,
             cloud_session_id=launch.session_id,
+            confirmed_by=operator,
         )
         if isinstance(submitted, Err):
             self._refuse_local_launch(launch, describe_surface_refusal(submitted.error))
@@ -1222,8 +1360,11 @@ class CloudSync:
 
     def _refuse_local_launch(self, launch: Launch, detail: str) -> None:
         self._refused_launch = launch.session_id
-        self._surface.note_remote_refusal(detail)
-        self._owe_refusal(launch.session_id, _safe_launch_refusal(launch, detail))
+        safe_detail = _safe_launch_refusal(launch, detail)
+        self._offer_stage = LaunchStage.REFUSED
+        self._offer_reason = safe_detail
+        self._surface.note_remote_refusal(safe_detail)
+        self._owe_refusal(launch.session_id, safe_detail)
 
     def _refuse_server(self, sentence: str, launch: Launch | None) -> None:
         """The dashboard is of another contract: say so on the console, and fail its launch.
@@ -1254,6 +1395,10 @@ class CloudSync:
             return
         self._awaiting = None
         self._confirmed_launch_id = None
+        launch = self._offered_launch
+        if launch is not None and launch.session_id == awaiting.cloud_session_id:
+            self._offer_stage = LaunchStage.UNCONFIRMED
+            self._offer_reason = "la boucle n'a ni demarre ni refuse"
         self._owe_refusal(awaiting.cloud_session_id, "la boucle n'a ni demarre ni refuse")
 
     # --- a stop from the dashboard ------------------------------------------

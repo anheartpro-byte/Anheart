@@ -210,6 +210,9 @@ main { flex: 1 1 auto; min-width: 0; padding: 1rem; }
   padding: 0.9rem 1rem 1.1rem;
 }
 
+.remote-launch { border-color: var(--warn); }
+.remote-launch .grid { margin: 0.75rem 0; }
+
 .card h2 {
   margin: 0 0 0.7rem;
   font-size: 0.82rem;

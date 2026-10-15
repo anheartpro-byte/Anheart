@@ -221,7 +221,9 @@ async def test_a_programme_launched_from_the_site_then_twice_its_length_at_rest_
         await run.run(10.0)
         await attest(session)
         run.offer("remote-1", QUICK_PROFILE)
-        await run.run(5.0)
+        await run.run(3.0)
+        run.confirm("remote-1")
+        await run.run(2.0)
         assert run.state() is RuntimeState.RUNNING
         assert run.confirmed() == ["remote-1"]
 
@@ -343,7 +345,9 @@ async def test_a_programme_stopped_late_at_the_console_latches_nothing_and_takes
         assert run.standing_rule() is None
 
         run.offer("remote-2", QUICK_PROFILE)
-        await run.run(5.0)
+        await run.run(3.0)
+        run.confirm("remote-2")
+        await run.run(2.0)
         assert run.state() is RuntimeState.RUNNING, rig.refusals()
         assert _mode(run) is RunMode.SEANCE
         assert run.confirmed() == ["remote-2"]
