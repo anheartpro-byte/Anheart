@@ -1276,13 +1276,17 @@ class LocalPanel:
         """What this programmed start is vetted on, or why it has nothing to be vetted on.
 
         A launch from the dashboard carries the rider's values: the dashboard
-        read them when it was launched (ANH-144 re-checks them at the arming).
+        read them when it was launched. The roster is still checked for this
+        identity at the preflight and at the arming, but is not their source.
         A start at the console names a rider and nothing else: the list held
         now must hold them, with a maximum heart rate and a birth year, both
         set on the site. A rider it no longer holds, a list too old, a value
         missing: refused, whatever the page showed when the start was asked.
         """
         if command.cloud_session_id is not None:
+            found = self._roster.find(command.subject_id, self._clock.monotonic())
+            if isinstance(found, Err):
+                return Err(describe_passenger_refusal(found.error))
             return Ok(RiderFacts(command.subject_hr_max, command.subject_age, None))
         found = self._roster.find(command.subject_id, self._clock.monotonic())
         if isinstance(found, Err):

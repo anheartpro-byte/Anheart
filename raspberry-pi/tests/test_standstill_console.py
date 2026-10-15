@@ -15,7 +15,7 @@ One scenario, end to end. A programme is running; the heart rate is lost for
 * a START typed at the console is refused at once (409), with the reason in
   the answer;
 * a launch waiting on the dashboard is refused and goes back as a failed
-  session, naming the verdict to acknowledge;
+  session with a safe reason, while the console names the verdict to acknowledge;
 * a named acknowledgement at the console clears it, and only then does a
   dashboard launch run.
 
@@ -39,6 +39,7 @@ from typing import Final
 import pytest
 
 from src.bitalino_client import SampleBatch
+from src.control_surface import EventKind
 from src.ecg_pipeline import EcgFrame, EcgMetrics, Treatment
 from src.result import Ok
 from src.sim.physiology import Physiology, SubjectState
@@ -283,9 +284,13 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         assert refused[0]["failed"] is True
         reason = refused[0]["reason"]
         assert isinstance(reason, str)
-        assert "refusee par la machine" in reason
-        assert RULE_SESSION_STANDSTILL in reason
-        assert "a acquitter a la console" in reason
+        assert reason == "refusee par la machine : demarrage distant refuse par la console"
+        assert any(
+            event.kind is EventKind.DASHBOARD
+            and RULE_SESSION_STANDSTILL in event.detail
+            and "a acquitter a la console" in event.detail
+            for event in run.rig.events
+        )
 
         # Somebody at the machine acknowledges, by name.
         acknowledged = await session.post(

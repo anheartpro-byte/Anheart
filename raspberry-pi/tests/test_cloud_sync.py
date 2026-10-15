@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import pairwise
@@ -88,7 +89,7 @@ from src.record_uplink import (
 )
 from src.remote_launch import ConfirmationCode, LaunchStage
 from src.result import Err, Ok, Result
-from src.roster import ROSTER_PATH, ROSTER_PERIOD, Roster, RosterState
+from src.roster import ROSTER_MAX_AGE, ROSTER_PATH, ROSTER_PERIOD, Roster, RosterState
 from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
@@ -137,6 +138,15 @@ def config_of(medical: MedicalStatus | None = None, **changes: str) -> LocalConf
 
 type Reply = Result[Document, CloudError]
 type Handler = Callable[[Mapping[str, object]], Reply]
+
+
+@dataclass(frozen=True, slots=True)
+class ReplacedOfferReply:
+    replacement: Mapping[str, JsonValue]
+    reply: Reply
+    expected_session: str
+    expected_stage: LaunchStage
+    end_due: bool
 
 
 @dataclass
@@ -208,6 +218,17 @@ def count(value: object) -> int:
     """The length of a JSON array the fake dashboard received."""
     assert isinstance(value, Sequence)
     return len(cast("Sequence[object]", value))
+
+
+def assert_private_words_absent(
+    root: Path, caplog: pytest.LogCaptureFixture, private_words: Sequence[str]
+) -> None:
+    written = b"\n".join(path.read_bytes() for path in root.rglob("*") if path.is_file())
+    for private_word in private_words:
+        encoded = re.escape(private_word.encode("utf-8"))
+        pattern = re.compile(rb"(?<![A-Za-z0-9_])" + encoded + rb"(?![A-Za-z0-9_])")
+        assert pattern.search(written) is None
+        assert pattern.search(caplog.text.encode("utf-8")) is None
 
 
 NO: Final[Reply] = Err(Refused(400, "no"))
@@ -334,6 +355,25 @@ async def test_get_and_post_speak_json_with_the_machine_key() -> None:
     assert seen[0].url.params["sessionId"] == "s"
     assert seen[0].headers["Authorization"] == "Bearer k"
     assert json.loads(seen[1].content) == {"x": 1}
+    await transport.close()
+
+
+@pytest.mark.parametrize("status", [200, 201, 202, 204, 299])
+async def test_httpx_transport_acknowledges_every_2xx(status: int) -> None:
+    response = httpx.Response(status, content=b"" if status == 204 else b"{}")
+    transport = transport_answering(lambda _request: response)
+    result = await transport.post(START, {"sessionId": "remote-1"})
+    assert isinstance(result, Ok)
+    assert isinstance(answer_of(result), Acked)
+    await transport.close()
+
+
+async def test_httpx_transport_does_not_acknowledge_a_json_redirect() -> None:
+    response = httpx.Response(302, json={}, headers={"Location": "/other"})
+    transport = transport_answering(lambda _request: response)
+    result = await transport.post(START, {"sessionId": "remote-1"})
+    assert isinstance(result, Err)
+    assert isinstance(answer_of(result), Held)
     await transport.close()
 
 
@@ -842,9 +882,11 @@ async def test_a_launch_needs_a_roster_even_when_the_poll_offers_a_passenger(
 
 
 async def test_confirmation_refuses_a_passenger_absent_from_the_current_roster(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    r = rig(tmp_path)
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
     await r.step()
     r.panel.roster.adopt((), r.clock.monotonic())
@@ -858,9 +900,98 @@ async def test_confirmation_refuses_a_passenger_absent_from_the_current_roster(
     assert view is not None
     assert view.passenger_name is None
     assert view.reason == rejected.error.detail
+    assert view.stage is LaunchStage.WAITING_CONFIRMATION
     await r.step()
     assert r.dashboard.to(START) == []
     assert r.dashboard.to("/api/machine/training/end") == []
+    r.panel.roster.adopt((RIDER,), r.clock.monotonic())
+    recovered = r.sync.current_remote_launch()
+    assert recovered is not None
+    assert recovered.passenger_name == RIDER_NAME
+    assert recovered.stage is LaunchStage.WAITING_CONFIRMATION
+    assert r.dashboard.to(START) == []
+    assert r.dashboard.to("/api/machine/training/end") == []
+    r.dashboard.answer(START, ok())
+    reconfirmed = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+    assert isinstance(reconfirmed, Ok)
+    await r.step()
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
+    r.journal.drain()
+    assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
+
+
+async def test_a_roster_refresh_removing_the_rider_abandons_the_queued_confirmation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.clock.advance(ROSTER_PERIOD)
+    r.confirm_offer()
+    r.dashboard.answer(ROSTER_PATH, ok({"riders": []}))
+
+    await r.sync.step()
+
+    unavailable = r.sync.current_remote_launch()
+    assert unavailable is not None
+    assert unavailable.stage is LaunchStage.WAITING_CONFIRMATION
+    assert unavailable.passenger_name is None
+    assert "n'est pas dans" in str(unavailable.reason)
+    assert r.dashboard.to(START) == []
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+    r.dashboard.answer(ROSTER_PATH, ok(roster_document()))
+    r.clock.advance(ROSTER_PERIOD)
+    await r.sync.step()
+    recovered = r.sync.current_remote_launch()
+    assert recovered is not None
+    assert recovered.passenger_name == RIDER_NAME
+    assert recovered.stage is LaunchStage.WAITING_CONFIRMATION
+    assert r.dashboard.to(START) == []
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+    confirmed = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+    assert isinstance(confirmed, Ok)
+    await r.sync.step()
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
+    r.journal.drain()
+    assert_private_words_absent(
+        r.journal.root,
+        caplog,
+        (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+    )
+
+
+async def test_a_stale_roster_refuses_confirmation_without_ending_the_launch(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.panel.roster.adopt(
+        (RIDER,),
+        Monotonic(float(r.clock.monotonic()) - float(ROSTER_MAX_AGE) - 1.0),
+    )
+
+    refused = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+
+    assert isinstance(refused, Err)
+    assert refused.error.code is ConfirmationCode.PASSENGER_UNAVAILABLE
+    assert "perimee" in refused.error.detail
+    offer = r.sync.current_remote_launch()
+    assert offer is not None
+    assert offer.passenger_name is None
+    assert offer.stage is LaunchStage.WAITING_CONFIRMATION
+    assert r.dashboard.to(START) == []
+    assert r.dashboard.to("/api/machine/training/end") == []
+    r.journal.drain()
+    assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
 
 async def test_a_second_confirmation_is_refused_while_the_first_is_queued(
@@ -893,7 +1024,6 @@ async def test_a_queued_confirmation_is_abandoned_when_another_session_arms(
     r.sync.session_started(manual(r.clock))
     await r.step()
     assert r.dashboard.to(START) == []
-
     r.runtime.state = RuntimeState.FINISHED
     r.runtime.end_reason = EndReason.OPERATOR_STOP
     r.runtime.stop_reason = "fini"
@@ -906,6 +1036,78 @@ async def test_a_queued_confirmation_is_abandoned_when_another_session_arms(
     assert offered.stage is LaunchStage.WAITING_CONFIRMATION
     await r.step()
     assert r.dashboard.to(START) == []
+
+
+async def test_a_late_2xx_cannot_reuse_a_confirmation_after_a_local_session(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = linked(tmp_path, record_root=tmp_path / "records")
+    assert r.panel.recorder is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.run(0.2)
+    confirm_linked(r.panel)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_post = r.dashboard.post
+
+    async def post(path: str, body: Mapping[str, JsonValue]) -> Reply:
+        if path == START:
+            entered.set()
+            await release.wait()
+        return await original_post(path, body)
+
+    monkeypatch.setattr(r.dashboard, "post", post)
+    request = asyncio.create_task(r.panel.cloud_step())
+    await asyncio.wait_for(entered.wait(), timeout=1.0)
+
+    local = r.panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+    assert isinstance(local, Ok)
+    r.clock.advance(TICK)
+    r.panel.surface.note_presence(OPERATOR)
+    await r.panel.ecg_step()
+    await r.panel.control_step()
+    assert state_of(r.panel) is RuntimeState.RUNNING
+    recorder = r.panel.recorder
+    assert recorder is not None
+    recorder.journal.drain()
+    assert recorder.journal.status(r.clock.monotonic()).path is not None
+
+    ended = r.panel.surface.submit_end(operator=OPERATOR, reason="local stop")
+    assert isinstance(ended, Ok)
+    for _ in range(50):
+        r.clock.advance(TICK)
+        r.panel.surface.note_presence(OPERATOR)
+        await r.panel.ecg_step()
+        await r.panel.control_step()
+        if state_of(r.panel) is RuntimeState.FINISHED:
+            break
+    assert state_of(r.panel) is RuntimeState.FINISHED
+
+    release.set()
+    await asyncio.wait_for(request, timeout=1.0)
+
+    assert r.panel.surface.pending is None
+    assert state_of(r.panel) is RuntimeState.FINISHED
+    assert len(r.dashboard.to(START)) == 1
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["sessionId"] == "remote-1"
+    assert ends[0]["failed"] is True
+    assert "confirmation distante abandonnee" in str(ends[0]["reason"])
+    assert r.panel.cloud is not None
+    assert r.panel.cloud.current_remote_launch() is None
+    r.clock.advance(TICK)
+    await r.panel.control_step()
+    assert r.panel.runtime.state is RuntimeState.FINISHED
+    assert r.panel.surface.pending is None
+    await r.panel.close()
+    recorder.journal.drain()
+    assert_private_words_absent(
+        recorder.journal.root,
+        caplog,
+        (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+    )
 
 
 async def test_a_confirmation_racing_with_a_running_session_is_not_sent(
@@ -935,9 +1137,10 @@ async def test_a_confirmation_racing_with_a_running_session_is_not_sent(
 
     offer = r.sync.current_remote_launch()
     assert offer is not None
-    assert offer.stage is LaunchStage.REFUSED
+    assert offer.stage is LaunchStage.WAITING_CONFIRMATION
     assert offer.reason == "une seance est deja en cours"
     assert r.dashboard.to(START) == []
+    assert r.dashboard.to("/api/machine/training/end") == []
 
 
 async def test_a_changed_poll_clears_a_waiting_start_before_its_loop_timeout(
@@ -961,10 +1164,195 @@ async def test_a_changed_poll_clears_a_waiting_start_before_its_loop_timeout(
     assert len(r.dashboard.to(START)) == 1
 
 
-async def test_a_launch_the_surface_refuses_comes_back_failed(tmp_path: Path) -> None:
-    r = rig(tmp_path)  # e-stop wiring NOT attested
+async def test_a_changed_offer_invalidates_a_confirmation_queued_for_the_previous_offer(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.confirm_offer()
+    r.dashboard.answer(POLL_PATH, launch_answer({**LAUNCH, "operatorName": "Another operator"}))
+    r.clock.advance(POLL_PERIOD)
+
+    await r.sync.step()
+
+    offer = r.sync.current_remote_launch()
+    assert offer is not None
+    assert offer.launched_by == "Another operator"
+    assert offer.stage is LaunchStage.WAITING_CONFIRMATION
+    assert offer.reason == "l'offre a change, une nouvelle confirmation est requise"
+    assert r.dashboard.to(START) == []
+    assert r.dashboard.to("/api/machine/training/end") == []
+    assert isinstance(r.sync.confirm_remote_launch("remote-1", OPERATOR), Ok)
+
+
+async def test_a_definitive_refusal_is_not_reoffered_after_the_poll_removes_it(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r.dashboard.answer(START, Err(Refused(409, "refused", ErrorCode("right_revoked_before_start"))))
+    await r.step()
+    r.confirm_offer()
+    await r.step()
+
+    assert len(r.dashboard.to(START)) == 1
+    refused = r.sync.current_remote_launch()
+    assert refused is not None
+    assert refused.stage is LaunchStage.REFUSED
+    r.dashboard.answer(POLL_PATH, launch_answer(None))
+    await r.step(POLL_PERIOD)
+    assert r.sync.current_remote_launch() is None
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+
+    await r.step(POLL_PERIOD)
+
+    assert r.sync.current_remote_launch() is None
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+
+async def test_a_changed_poll_does_not_clear_a_definitive_refusal_for_the_same_session(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r.dashboard.answer(START, Err(Refused(409, "refused", ErrorCode("right_revoked_before_start"))))
+    await r.step()
+    r.confirm_offer()
+    await r.step()
+    refused = r.sync.current_remote_launch()
+    assert refused is not None
+    assert refused.stage is LaunchStage.REFUSED
+    reason = refused.reason
+    r.dashboard.answer(POLL_PATH, launch_answer({**LAUNCH, "operatorName": "Another operator"}))
+
+    await r.step(POLL_PERIOD)
+
+    updated = r.sync.current_remote_launch()
+    assert updated is not None
+    assert updated.launched_by == "Another operator"
+    assert updated.stage is LaunchStage.REFUSED
+    assert updated.reason == reason
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            ReplacedOfferReply(
+                {**LAUNCH, "operatorName": "Changed operator"},
+                ok(),
+                "remote-1",
+                LaunchStage.REFUSED,
+                True,
+            ),
+            id="same-session-2xx",
+        ),
+        pytest.param(
+            ReplacedOfferReply(
+                {**LAUNCH, "sessionId": "remote-2"},
+                ok(),
+                "remote-2",
+                LaunchStage.WAITING_CONFIRMATION,
+                True,
+            ),
+            id="replaced-session-2xx",
+        ),
+        pytest.param(
+            ReplacedOfferReply(
+                {**LAUNCH, "operatorName": "Changed operator"},
+                DOWN,
+                "remote-1",
+                LaunchStage.WAITING_CONFIRMATION,
+                False,
+            ),
+            id="same-session-no-2xx",
+        ),
+    ],
+)
+async def test_a_reply_for_a_replaced_offer_cannot_submit_or_arm_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: ReplacedOfferReply,
+) -> None:
+    r = linked(tmp_path)
+    assert r.panel.cloud is not None
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.run(0.2)
+    confirm_linked(r.panel)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_post = r.dashboard.post
+
+    async def post(path: str, body: Mapping[str, JsonValue]) -> Reply:
+        if path == START:
+            r.dashboard.calls.append(("POST", path, body))
+            entered.set()
+            await release.wait()
+            return case.reply
+        return await original_post(path, body)
+
+    monkeypatch.setattr(r.dashboard, "post", post)
+    request = asyncio.create_task(r.panel.cloud_step())
+    await asyncio.wait_for(entered.wait(), timeout=1.0)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(case.replacement)))
+    r.clock.advance(POLL_PERIOD)
+
+    await r.panel.cloud_step()
+
+    release.set()
+    await asyncio.wait_for(request, timeout=1.0)
+
+    assert r.panel.runtime.state is RuntimeState.IDLE
+    assert r.panel.surface.pending is None
+    assert r.panel.cloud.current_session_id is None
+    assert len(r.dashboard.to(START)) == 1
+    offer = r.panel.cloud.current_remote_launch()
+    assert offer is not None
+    assert offer.session_id == case.expected_session
+    assert offer.stage is case.expected_stage
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == int(case.end_due)
+    if case.end_due:
+        assert ends[0]["sessionId"] == "remote-1"
+        assert ends[0]["failed"] is True
+    await r.panel.close()
+
+
+async def test_a_refusal_after_the_offer_was_removed_keeps_the_safe_dashboard_reason(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.dashboard.answer(POLL_PATH, launch_answer(None))
+    await r.step(POLL_PERIOD)
+    assert r.sync.current_remote_launch() is None
+
+    r.sync.start_refused("remote-1", "surface occupee")
+    await r.step()
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step(POLL_PERIOD)
+
+    assert r.sync.current_remote_launch() is None
+    (end,) = r.dashboard.to("/api/machine/training/end")
+    assert end["failed"] is True
+    assert end["reason"] == "refusee par la machine : demarrage distant refuse par la console"
+
+
+async def test_a_launch_the_surface_refuses_comes_back_failed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
     r.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await r.step()
+    client = r.panel.hub.subscribe()
     r.confirm_offer()
     r.panel.surface.note_launch_confirmed(OPERATOR)
     await r.step()
@@ -982,15 +1370,27 @@ async def test_a_launch_the_surface_refuses_comes_back_failed(tmp_path: Path) ->
     assert ends[0]["sessionId"] == "remote-1"
     assert ends[0]["failed"] is True
     reason = ends[0]["reason"]
-    assert isinstance(reason, str)
-    assert "non atteste" in reason
+    assert reason == "refusee par la machine : demarrage distant refuse par la console"
+    confirmation = await client.next_payload()
+    assert confirmation.event is not None
+    assert confirmation.event.kind is EventKind.LAUNCH_CONFIRMED
+    refusal = await client.next_payload()
+    assert refusal.event is not None
+    assert "non atteste" in refusal.event.detail
+    r.journal.drain()
+    assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
 
-async def test_a_locked_surface_verdict_prevents_the_confirmation_request(tmp_path: Path) -> None:
-    r = rig(tmp_path)
+async def test_a_locked_surface_verdict_prevents_the_confirmation_request(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.panel.runtime.supervisor.latch_estop("test verdict")
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    client = r.panel.hub.subscribe()
 
     await r.step()
     r.confirm_offer()
@@ -1000,15 +1400,25 @@ async def test_a_locked_surface_verdict_prevents_the_confirmation_request(tmp_pa
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    assert "verdict de securite" in str(ends[0]["reason"])
+    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
+    refusal = await client.next_payload()
+    assert refusal.event is not None
+    assert "verdict de securite" in refusal.event.detail
+    r.journal.drain()
+    assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
 
-async def test_a_waiting_surface_command_prevents_the_confirmation_request(tmp_path: Path) -> None:
-    r = rig(tmp_path)
+async def test_a_waiting_surface_command_prevents_the_confirmation_request(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     reset = r.panel.surface.submit_fault_reset(operator=OPERATOR)
     assert isinstance(reset, Ok)
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    client = r.panel.hub.subscribe()
 
     await r.step()
     r.confirm_offer()
@@ -1019,13 +1429,23 @@ async def test_a_waiting_surface_command_prevents_the_confirmation_request(tmp_p
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    assert "console occupee" in str(ends[0]["reason"])
+    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
+    refusal = await client.next_payload()
+    assert refusal.event is not None
+    assert "console occupee" in refusal.event.detail
+    r.journal.drain()
+    assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
 
-async def test_a_panel_with_programmes_disabled_refuses_before_confirmation(tmp_path: Path) -> None:
-    r = rig(tmp_path, panel_programs=False)
+async def test_a_panel_with_programmes_disabled_refuses_before_confirmation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    r = rig(tmp_path, panel_programs=False, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    client = r.panel.hub.subscribe()
 
     await r.step()
     r.confirm_offer()
@@ -1035,7 +1455,12 @@ async def test_a_panel_with_programmes_disabled_refuses_before_confirmation(tmp_
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    assert "PROGRAMS_ENABLED=false" in str(ends[0]["reason"])
+    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
+    refusal = await client.next_payload()
+    assert refusal.event is not None
+    assert "PROGRAMS_ENABLED=false" in refusal.event.detail
+    r.journal.drain()
+    assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
 
 async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path: Path) -> None:
@@ -1110,9 +1535,11 @@ async def test_a_409_is_shown_logged_and_never_ended_or_retried(
     assert operator_alias(OPERATOR) in logbook
     assert words in logbook
     assert code in logbook
-    for private_word in (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"):
-        assert private_word not in logbook
-        assert private_word not in caplog.text
+    assert_private_words_absent(
+        r.journal.root,
+        caplog,
+        (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+    )
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
     await r.step(POLL_PERIOD)
     assert r.dashboard.to(START) == starts
@@ -1128,9 +1555,11 @@ async def test_a_409_is_shown_logged_and_never_ended_or_retried(
     ],
 )
 async def test_another_start_refusal_is_shown_without_arming_or_ending(
-    tmp_path: Path, refusal: Refused
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, refusal: Refused
 ) -> None:
-    r = rig(tmp_path)
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     client = r.panel.hub.subscribe()
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
@@ -1162,6 +1591,8 @@ async def test_another_start_refusal_is_shown_without_arming_or_ending(
     await r.step()
     assert len(r.dashboard.to(START)) == 1
     assert r.dashboard.to("/api/machine/training/end") == []
+    r.journal.drain()
+    assert_private_words_absent(r.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME))
 
 
 async def test_an_unknown_confirmation_answer_fails_loudly(
@@ -1198,9 +1629,11 @@ async def test_an_unknown_confirmation_answer_fails_loudly(
     ],
 )
 async def test_an_unconfirmed_start_stays_unarmed_and_has_no_end(
-    tmp_path: Path, answer: Reply
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, answer: Reply
 ) -> None:
-    r = rig(tmp_path)
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
     client = r.panel.hub.subscribe()
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
@@ -1221,6 +1654,12 @@ async def test_an_unconfirmed_start_stays_unarmed_and_has_no_end(
     await r.step(POLL_PERIOD)
     assert len(r.dashboard.to(START)) == 1
     assert r.dashboard.to("/api/machine/training/end") == []
+    r.journal.drain()
+    assert_private_words_absent(
+        r.journal.root,
+        caplog,
+        (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+    )
 
     r.dashboard.answer(START, ok())
     r.confirm_offer()
@@ -1292,11 +1731,39 @@ async def test_a_local_preflight_refusal_keeps_private_words_off_disk_and_end(
     assert r.dashboard.to(START) == []
 
     r.journal.drain()
-    logbook = (r.journal.root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
+    assert_private_words_absent(r.journal.root, caplog, private_words)
     for private_word in private_words:
-        assert private_word not in logbook
-        assert private_word not in caplog.text
         assert private_word not in reason
+
+
+@pytest.mark.parametrize("profile_id", ["de", "e", "passager"])
+async def test_short_profile_ids_and_age_words_never_corrupt_the_end_reason(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, profile_id: str
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    launch = {**LAUNCH, "profileId": profile_id, "subjectAge": 10}
+    r.dashboard.answer(POLL_PATH, launch_answer(launch))
+
+    await r.step()
+    r.confirm_offer()
+    await r.step()
+
+    assert r.dashboard.to(START) == []
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    reason = ends[0]["reason"]
+    assert isinstance(reason, str)
+    assert reason == "refusee par la machine : demarrage distant refuse par la console"
+    assert "passager de 10 ans" not in reason
+    r.journal.drain()
+    assert_private_words_absent(
+        r.journal.root,
+        caplog,
+        (profile_id, "passager de 10 ans", RIDER_NAME),
+    )
 
 
 @pytest.mark.parametrize(
@@ -1344,10 +1811,11 @@ async def test_held_and_missing_start_routes_do_not_log_launch_words(
         assert private_word not in payload.event.detail
 
     r.journal.drain()
-    logbook = (r.journal.root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
-    for private_word in (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"):
-        assert private_word not in logbook
-        assert private_word not in caplog.text
+    assert_private_words_absent(
+        r.journal.root,
+        caplog,
+        (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+    )
 
 
 async def test_a_held_start_can_be_confirmed_again_once(tmp_path: Path) -> None:
@@ -1391,8 +1859,8 @@ async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> No
     await r.step()
     reasons = [body["reason"] for body in r.dashboard.to("/api/machine/training/end")]
     assert reasons == [
-        "refusee par la machine : not this one",
-        "refusee par la machine : variateur en defaut",
+        "refusee par la machine : demarrage distant refuse par la console",
+        "refusee par la machine : demarrage distant refuse par la console",
     ]
     # The wait is over, so the machine polls again.
     await r.step(5.0)
@@ -1410,6 +1878,12 @@ async def test_a_launch_nobody_answers_times_out(tmp_path: Path) -> None:
     reason = r.dashboard.to("/api/machine/training/end")[0]["reason"]
     assert isinstance(reason, str)
     assert "ni demarre ni refuse" in reason
+    offer = r.sync.current_remote_launch()
+    assert offer is not None
+    assert offer.stage is LaunchStage.REFUSED
+    rejected = r.sync.confirm_remote_launch("remote-1", OPERATOR)
+    assert isinstance(rejected, Err)
+    assert rejected.error.code is ConfirmationCode.REFUSED
 
 
 @pytest.mark.parametrize(
@@ -1911,7 +2385,7 @@ async def test_only_one_end_without_a_record_waits_and_no_launch_is_asked_meanwh
     assert ends[-1] == {
         "sessionId": "s1",
         "failed": True,
-        "reason": "refusee par la machine : offline",
+        "reason": "refusee par la machine : demarrage distant refuse par la console",
     }
     assert r.sync.owed == 0
     await r.step(POLL_PERIOD)
@@ -2034,7 +2508,7 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(
 ) -> None:
     order: list[str] = []
     observe_dashboard_and_drive(monkeypatch, order)
-    rig_ = linked(tmp_path)
+    rig_ = linked(tmp_path, record_root=tmp_path / "records")
     rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await rig_.run(0.2)
     confirm_linked(rig_.panel)
@@ -2042,6 +2516,7 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(
     await rig_.run(1.8)
     assert rig_.panel.runtime.state is RuntimeState.RUNNING
     starts = rig_.dashboard.to("/api/machine/training/start")
+    assert len(starts) == 1
     assert starts[0]["sessionId"] == "remote-1"
     assert starts[0]["sessionAgeMs"] == 0
     started_at = starts[0]["startedAt"]
@@ -2055,7 +2530,79 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(
     await rig_.run(5.0)
     assert state_of(rig_.panel) is RuntimeState.ENDING
     assert rig_.panel.runtime.stop_reason == "arret demande depuis le tableau de bord"
+    assert len(rig_.dashboard.to("/api/machine/training/start")) == 1
     await rig_.panel.close()
+
+
+@pytest.mark.parametrize("status", [200, 201, 202, 204, 299])
+async def test_httpx_2xx_arms_the_real_panel(
+    status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = httpx.Response(status, content=b"" if status == 204 else b"{}")
+    http_transport = transport_answering(lambda _request: response)
+    r = linked(tmp_path)
+    original_post = r.dashboard.post
+
+    async def post(path: str, body: Mapping[str, JsonValue]) -> Reply:
+        if path == START:
+            r.dashboard.calls.append(("POST", path, body))
+            return await http_transport.post(path, body)
+        return await original_post(path, body)
+
+    monkeypatch.setattr(r.dashboard, "post", post)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.run(0.2)
+    confirm_linked(r.panel)
+    await r.run(1.8)
+
+    assert r.panel.runtime.state is RuntimeState.RUNNING
+    assert r.panel.cloud is not None
+    assert r.panel.cloud.current_session_id == "remote-1"
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
+    await r.panel.close()
+    await http_transport.close()
+
+
+async def test_httpx_redirect_never_arms_or_ends_the_real_panel(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = httpx.Response(302, json={}, headers={"Location": "/other"})
+    http_transport = transport_answering(lambda _request: response)
+    r = linked(tmp_path, record_root=tmp_path / "records")
+    assert r.panel.recorder is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+    original_post = r.dashboard.post
+
+    async def post(path: str, body: Mapping[str, JsonValue]) -> Reply:
+        if path == START:
+            r.dashboard.calls.append(("POST", path, body))
+            return await http_transport.post(path, body)
+        return await original_post(path, body)
+
+    monkeypatch.setattr(r.dashboard, "post", post)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.run(0.2)
+    confirm_linked(r.panel)
+    await r.run(1.8)
+
+    assert r.panel.runtime.state is RuntimeState.IDLE
+    assert r.panel.cloud is not None
+    assert r.panel.cloud.current_session_id is None
+    assert r.panel.surface.pending is None
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
+    offer = r.panel.cloud.current_remote_launch()
+    assert offer is not None
+    assert offer.stage is LaunchStage.UNCONFIRMED
+    recorder = r.panel.recorder
+    assert recorder is not None
+    recorder.journal.drain()
+    assert_private_words_absent(
+        recorder.journal.root, caplog, (PROFILE, "passager de 30 ans", RIDER_NAME)
+    )
+    await r.panel.close()
+    await http_transport.close()
 
 
 async def test_the_confirming_operator_is_recorded_and_the_roster_name_stays_off_disk(
@@ -2137,11 +2684,12 @@ async def test_a_409_never_commands_the_simulated_drive(
 
 
 async def test_a_rechecked_arm_refusal_after_2xx_ends_without_drive_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     order: list[str] = []
     writes = observe_dashboard_and_drive(monkeypatch, order)
-    rig_ = linked(tmp_path)
+    rig_ = linked(tmp_path, record_root=tmp_path / "records")
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
 
     def latch_verdict_before_ack(_body: Mapping[str, object]) -> Reply:
         rig_.panel.runtime.supervisor.latch_estop("verdict pendant la confirmation")
@@ -2161,16 +2709,76 @@ async def test_a_rechecked_arm_refusal_after_2xx_ends_without_drive_write(
     assert writes == []
     assert order == ["training/start"]
     assert rig_.panel.runtime.state is not RuntimeState.RUNNING
+    await rig_.panel.close()
+    recorder = rig_.panel.recorder
+    assert recorder is not None
+    recorder.journal.drain()
+    assert_private_words_absent(
+        recorder.journal.root,
+        caplog,
+        (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+    )
+
+
+@pytest.mark.parametrize("stale", [False, True], ids=["removed", "expired"])
+async def test_the_arm_rechecks_a_roster_removed_or_expired_after_2xx(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, stale: bool
+) -> None:
+    r = linked(tmp_path, record_root=tmp_path / "records")
+    assert r.panel.recorder is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+
+    def acknowledge_start(_body: Mapping[str, object]) -> Reply:
+        if stale:
+            r.panel.roster.adopt(
+                (RIDER,),
+                Monotonic(float(r.clock.monotonic()) - float(ROSTER_MAX_AGE) - 1.0),
+            )
+        else:
+            r.panel.roster.adopt((), r.clock.monotonic())
+        return ok()
+
+    r.dashboard.handle(START, acknowledge_start)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.run(0.2)
+    confirm_linked(r.panel)
+    await r.run(2.8)
+
+    assert r.panel.runtime.state is RuntimeState.IDLE
+    assert r.panel.surface.pending is None
+    assert len(r.dashboard.to(START)) == 1
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["sessionId"] == "remote-1"
+    assert ends[0]["failed"] is True
+    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
+    offer = r.panel.cloud.current_remote_launch() if r.panel.cloud is not None else None
+    assert offer is not None
+    assert offer.stage is LaunchStage.REFUSED
+    recorder = r.panel.recorder
+    assert recorder is not None
+    await r.panel.close()
+    recorder.journal.drain()
+    assert_private_words_absent(
+        recorder.journal.root,
+        caplog,
+        (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+    )
 
 
 async def refused_launch(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
     launch: Mapping[str, JsonValue],
     medical: MedicalStatus | None = None,
+    *,
     after_confirmation: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> str:
-    rig_ = linked(tmp_path, medical, env=env)
+    rig_ = linked(tmp_path, medical, record_root=tmp_path / "records", env=env)
+    assert rig_.panel.recorder is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+    subscriber = rig_.panel.hub.subscribe()
     rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(launch)))
     await rig_.run(0.2)
     confirm_linked(rig_.panel)
@@ -2181,49 +2789,81 @@ async def refused_launch(
     ends = rig_.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    reason = ends[0]["reason"]
-    assert isinstance(reason, str)
+    assert ends[0]["reason"] == "refusee par la machine : demarrage distant refuse par la console"
+    expected = EventKind.REFUSED if after_confirmation else EventKind.DASHBOARD
+    refusal = None
+    for _ in range(5):
+        payload = await subscriber.next_payload()
+        if payload.event is not None and payload.event.kind is expected:
+            refusal = payload.event
+            break
+    assert refusal is not None
+    recorder = rig_.panel.recorder
     await rig_.panel.close()
-    return reason
+    recorder.journal.drain()
+    profile_id = launch.get("profileId")
+    age = launch.get("subjectAge")
+    private_words = (
+        RIDER_NAME,
+        "Dr Manager",
+        profile_id if isinstance(profile_id, str) else "",
+        f"passager de {age} ans" if isinstance(age, int) and not isinstance(age, bool) else "",
+    )
+    assert_private_words_absent(
+        recorder.journal.root,
+        caplog,
+        tuple(word for word in private_words if word),
+    )
+    return refusal.detail
 
 
-async def test_occupied_riding_must_be_enabled_for_a_programme(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, LAUNCH, env={"OCCUPANCY_OCCUPIED_ENABLED": "false"})
+async def test_occupied_riding_must_be_enabled_for_a_programme(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    reason = await refused_launch(
+        tmp_path, caplog, LAUNCH, env={"OCCUPANCY_OCCUPIED_ENABLED": "false"}
+    )
     assert "OCCUPANCY_OCCUPIED_ENABLED" in reason
 
 
 @pytest.mark.parametrize("profile_id", ["jog_150", ""])
-async def test_an_unknown_preset_is_refused(tmp_path: Path, profile_id: str) -> None:
-    reason = await refused_launch(tmp_path, {**LAUNCH, "profileId": profile_id})
+async def test_an_unknown_preset_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, profile_id: str
+) -> None:
+    reason = await refused_launch(tmp_path, caplog, {**LAUNCH, "profileId": profile_id})
     assert "inconnu" in reason
 
 
-async def test_a_preset_too_hard_for_the_rider_is_refused(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, {**LAUNCH, "subjectHrMax": 140})
+async def test_a_preset_too_hard_for_the_rider_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    reason = await refused_launch(tmp_path, caplog, {**LAUNCH, "subjectHrMax": 140})
     assert "inadapte a ce passager" in reason
 
 
-async def test_a_preset_faster_than_the_occupied_ceiling_is_refused(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, LAUNCH, env={"MOTOR_MAX_RPM": "200"})
+async def test_a_preset_faster_than_the_occupied_ceiling_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    reason = await refused_launch(tmp_path, caplog, LAUNCH, env={"MOTOR_MAX_RPM": "200"})
     assert "au-dessus du plafond personne a bord" in reason
 
 
 async def test_tiers_that_disagree_with_the_preset_are_refused_by_the_runtime(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     screened = signed(
         replace(SHIPPED_PARAMETERS, hr_hard_max_bpm=Bpm(150), hr_critical_bpm=Bpm(160))
     )
-    reason = await refused_launch(tmp_path, LAUNCH, screened, after_confirmation=True)
+    reason = await refused_launch(tmp_path, caplog, LAUNCH, screened, after_confirmation=True)
     assert "demarrage refuse" in reason
 
 
 async def test_a_launch_to_a_console_in_bench_mode_is_refused_for_its_medical_parameters(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """ANH-139 EX-3: unsigned parameters, whatever the .env enables: the reason goes back."""
-    reason = await refused_launch(tmp_path, LAUNCH, unsigned())
-    assert reason.startswith("refusee par la machine : parametres medicaux non signes")
+    reason = await refused_launch(tmp_path, caplog, LAUNCH, unsigned())
+    assert reason.startswith("parametres medicaux non signes")
 
 
 async def test_a_launch_that_reached_a_panel_without_programmes_is_refused(
@@ -2243,8 +2883,7 @@ async def test_a_launch_that_reached_a_panel_without_programmes_is_refused(
     (end,) = rig_.dashboard.to("/api/machine/training/end")
     assert end["failed"] is True
     reason = end["reason"]
-    assert isinstance(reason, str)
-    assert "PROGRAMS_ENABLED=false" in reason
+    assert reason == "refusee par la machine : demarrage distant refuse par la console"
     await rig_.panel.close()
 
 
@@ -2431,22 +3070,30 @@ async def test_an_unknown_heartbeat_result_fails_loudly(tmp_path: Path) -> None:
         await r.step()
 
 
-async def test_a_launch_without_the_rider_s_age_is_refused(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, {**LAUNCH, "subjectAge": None})
+async def test_a_launch_without_the_rider_s_age_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    reason = await refused_launch(tmp_path, caplog, {**LAUNCH, "subjectAge": None})
     assert "age du passager requis" in reason
 
 
-async def test_a_launch_for_a_child_is_refused(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, {**LAUNCH, "subjectAge": 10})
-    assert "passager, minimum 18 ans" in reason
+async def test_a_launch_for_a_child_is_refused(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    reason = await refused_launch(tmp_path, caplog, {**LAUNCH, "subjectAge": 10})
+    assert "passager de 10 ans, minimum 18 ans" in reason
 
 
-async def test_a_boolean_age_is_not_an_age(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, {**LAUNCH, "subjectAge": True})
+async def test_a_boolean_age_is_not_an_age(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    reason = await refused_launch(tmp_path, caplog, {**LAUNCH, "subjectAge": True})
     assert "age du passager requis" in reason
 
 
-async def test_the_minimum_age_is_configurable(tmp_path: Path) -> None:
+async def test_the_minimum_age_is_configurable(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     older = signed(replace(SHIPPED_PARAMETERS, min_rider_age=40))
-    reason = await refused_launch(tmp_path, {**LAUNCH, "subjectAge": 30}, older)
+    reason = await refused_launch(tmp_path, caplog, {**LAUNCH, "subjectAge": 30}, older)
     assert "minimum 40 ans" in reason
