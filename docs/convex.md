@@ -1579,8 +1579,11 @@ supprimée (`machine_not_found`). Les refus métier sont des codes traduits
 
 `configurationLocks` expose le verdict pour activer `PROGRAMS_ENABLED`
 (niveau requis `auto`) et `OCCUPANCY_OCCUPIED_ENABLED` (niveau requis
-`occupied`). Désactiver une clé est autorisé pour tout niveau connu ; un
-niveau corrompu refuse toute valeur. Le message de refus est exactement
+`occupied`). Désactiver une clé est autorisé. Un niveau stocké incohérent
+avec son historique ou inconnu est lu comme `none` : activer est refusé,
+désactiver reste permis. Seule la fonction pure `configurationLockVerdict`,
+appelée directement avec un niveau inconnu, refuse toute valeur.
+Le message de refus est exactement
 `machine validée jusqu'au niveau auto` pour une machine au niveau `auto`.
 `requireConfigurationAllowed` dans `convex/lib/machineRegistry.ts` fournit
 le garde serveur, avec le refus `machine_validation_insufficient`.
@@ -1593,6 +1596,12 @@ Le niveau effectif vaut `validation.level` uniquement s'il égale
 Tous les verdicts, statuts de version, seuils d'alerte, badges et règles de
 montée ou descente utilisent ce niveau effectif. `getRegistry` le renvoie
 à côté du niveau stocké ; la fiche avertit si les deux diffèrent.
+Un registre incohérent peut rester bloqué lorsque son historique n'est pas
+vide, par exemple avec `auto` stocké et une seule revue `bench` : les mutations
+publiques refusent l'ajout d'une revue (`validation_level_not_next`) et la
+descente de niveau (`validation_level_not_lower`). Dans ce cas, seule une
+intervention en base par Anheart permet la réparation ; ce point reste à
+suivre.
 Les auteurs `by`, `attachedBy` et `updatedBy` sont résolus à la lecture en
 `{userId, firstName, lastName}`, sans e-mail. Pour un compte supprimé ou
 absent, seul `{userId}` est renvoyé ; les identifiants stockés sont conservés.

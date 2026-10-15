@@ -169,6 +169,18 @@ describe("ANH-147 registry corrections", () => {
         requireConfigurationAllowed(ctx, w.machine, "PROGRAMS_ENABLED", true),
       ),
     ).rejects.toThrow("machine_validation_insufficient");
+    expect(
+      await admin.query(api.machineRegistry.checkConfigurationLock, {
+        machineId: w.machine,
+        key: "PROGRAMS_ENABLED",
+        value: false,
+      }),
+    ).toMatchObject({ allowed: true, reachedLevel: "none" });
+    await expect(
+      w.t.run((ctx) =>
+        requireConfigurationAllowed(ctx, w.machine, "PROGRAMS_ENABLED", false),
+      ),
+    ).resolves.toBeNull();
   });
 
   it("repairs a stored auto level without reviews through the next effective bench review", async () => {
