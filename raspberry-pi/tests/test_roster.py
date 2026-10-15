@@ -9,9 +9,11 @@ offers nobody, and nothing of a rider but counts reaches the log.
 
 from __future__ import annotations
 
+import ast
 import logging
 import math
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Final, cast
 
 import pytest
@@ -39,6 +41,7 @@ from src.roster import (
     Roster,
     RosterState,
     age_at,
+    age_of,
     describe_passenger_refusal,
     describe_state,
     parse_roster,
@@ -49,6 +52,8 @@ from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, roster_document
 
 NOVEMBER_2023: Final[UnixMillis] = UnixMillis(1_700_000_000_000)
 """The wall clock of the console rigs: 14 November 2023."""
+
+SRC: Final[Path] = Path(__file__).resolve().parent.parent / "src"
 
 OTHER: Final[Rider] = Rider(
     user_id="k17other0synthetic", name="Other Rider", hr_max=Bpm(175), birth_year=1985
@@ -375,6 +380,51 @@ def test_a_clock_left_in_1970_gives_no_age_for_a_rider_born_after() -> None:
     assert age_at(1990, UnixMillis(0)) is None
 
 
+def test_a_clock_left_in_the_past_makes_a_rider_younger_never_older() -> None:
+    """Born in 1940: 29 on a clock left in 1970, 82 in 2023. The error is on the side
+    that refuses (the minimum age), and a clock nobody keeps refuses a person on
+    board anyway (wall clock gate)."""
+    assert age_at(1940, UnixMillis(0)) == 29
+    assert age_at(1940, NOVEMBER_2023) == 82
+
+
+def test_the_age_alone_is_what_a_manual_session_on_board_is_vetted_on() -> None:
+    """No maximum heart rate is needed to count an age: a manual session fits nothing to it."""
+    assert age_of(Rider(RIDER_ID, RIDER_NAME, None, 1990), NOVEMBER_2023) == Ok(32)
+    assert age_of(Rider(RIDER_ID, RIDER_NAME, Bpm(190), None), NOVEMBER_2023) == Err(
+        BirthYearUnknown()
+    )
+    assert age_of(Rider(RIDER_ID, RIDER_NAME, Bpm(190), 2030), NOVEMBER_2023) == Err(
+        AgeUnknowable()
+    )
+
+
+def test_a_list_is_offered_fifteen_minutes_without_a_newer_one() -> None:
+    """The product owner's decision of 15 October 2026, a constant of the code."""
+    assert ROSTER_MAX_AGE == 900.0
+    assert ROSTER_PERIOD == 60.0
+
+
+def test_nothing_in_the_console_holds_a_list_it_was_not_given() -> None:
+    """``Roster.adopt`` is for tests and the simulation: no source file of the console calls
+    it. The only ``adopt`` calls under ``src/`` are the profile store's own."""
+    calls: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        calls.extend(
+            f"{path.relative_to(SRC.parent)}: {ast.unparse(node.func)}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "adopt"
+        )
+    assert calls == [
+        "src/training/plan.py: self.adopt",
+        "src/training/plan.py: self.adopt",
+        "src/web/profile_writer.py: self._store.adopt",
+    ]
+
+
 def test_a_rider_with_both_values_is_a_passenger() -> None:
     assert passenger_of(RIDER, NOVEMBER_2023) == Ok(Passenger(rider=RIDER, hr_max=Bpm(190), age=82))
 
@@ -415,9 +465,9 @@ def test_a_value_missing_on_the_site_is_a_refusal(rider: Rider, refusal: Passeng
             "demarrage refuse : liste des passagers pas encore recue du tableau de bord",
         ),
         (
-            NoList(RosterState.STALE, Seconds(3725.0)),
-            "demarrage refuse : liste des passagers perimee : recue il y a 62 min, "
-            "au-dela de 60 min personne n'est propose",
+            NoList(RosterState.STALE, Seconds(965.0)),
+            "demarrage refuse : liste des passagers perimee : recue il y a 16 min, "
+            "au-dela de 15 min personne n'est propose",
         ),
         (
             NoList(RosterState.UNLINKED, None),

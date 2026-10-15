@@ -261,7 +261,7 @@ l'emporte sur `.env`.**
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
 | `PROGRAMS_ENABLED` | non (défaut `false`) | `true` / `false` | autorise les séances programmées (jalon M5) |
 | `OCCUPANCY_OCCUPIED_ENABLED` | non (défaut `false`) | `true` / `false` | autorise « personne à bord » (jalon M6, accords ingénierie et médical requis) |
-| `MIN_RIDER_AGE` | non (défaut `18`) | | âge minimal du passager en séance programmée |
+| `MIN_RIDER_AGE` | non (défaut `18`) | | âge minimal du passager à bord (séance programmée, ou manuelle avec personne à bord) |
 | `HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM` | non (défaut `148` / `158`) | | paliers cardiaques du superviseur ; chaque profil doit porter les mêmes |
 | `MACHINE_API_KEY`, `CONVEX_URL` | non | | liaison au tableau de bord distant. Clé vide = console purement locale |
 

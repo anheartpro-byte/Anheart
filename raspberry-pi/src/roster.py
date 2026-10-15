@@ -32,9 +32,13 @@ longer recognised has nobody to offer.
 
 What this does not do
 ---------------------
-A right revoked after the list was received is not seen until the next list.
-The re-check of identity and rights at the arming of a launch is ANH-144, on
-the dashboard's side. The dashboard also re-checks the right when it registers
+What changes on the site after the list was received is not seen until the
+next list: a right revoked, and also a maximum heart rate lowered or a birth
+year corrected, which the programme is fitted to and the age counted from.
+At rest the next list comes within :data:`ROSTER_PERIOD`; without a network,
+the list held stops being offered after :data:`ROSTER_MAX_AGE`. The
+re-check of identity and rights at the arming of a launch is ANH-144, on the
+dashboard's side. The dashboard also re-checks the right when it registers
 a session started here: a rider no longer authorised is not attributed the
 session (ANH-180). Fitness and consent (ANH-143) are not served yet:
 :func:`passenger_of` is where their gate goes when they are.
@@ -66,11 +70,15 @@ ROSTER_PATH: Final[str] = "/api/machine/roster"
 ROSTER_PERIOD: Final[Seconds] = Seconds(60.0)
 """How often the list is asked for while no session runs, answered or not."""
 
-ROSTER_MAX_AGE: Final[Seconds] = Seconds(3600.0)
-"""How long a list received is offered without a newer one.
+ROSTER_MAX_AGE: Final[Seconds] = Seconds(900.0)
+"""How long a list received is offered without a newer one: 15 minutes.
 
-A prudent default: a session or two through a lost network, not a day of
-work offline. Past it, the console offers nobody until the dashboard answers.
+Decided by the product owner (15 October 2026). The list carries the maximum
+heart rate a programme is fitted to and the birth year the age is counted
+from: a value lowered or corrected on the site reaches a console without a
+network only with the next list, so this bounds how long an old one can be
+used. Past it, the console offers nobody until the dashboard answers. A
+constant of this code, deliberately not a setting of the machine.
 """
 
 NAME_LIMIT: Final[int] = 80
@@ -341,7 +349,7 @@ def parse_roster(document: Mapping[str, object]) -> Result[Listing, str]:
 
 
 # =========================================================================
-# What a programmed session needs of a rider
+# What a session with somebody on board needs of a rider
 # =========================================================================
 
 
@@ -349,11 +357,29 @@ def age_at(birth_year: int, at: UnixMillis) -> int | None:
     """Age in whole years at ``at``, as the site counts it (``training.ageFrom``).
 
     The later birthday is assumed: never older. ``None`` when this machine's
-    clock and the birth year give no plausible age (a clock left in 1970).
+    clock and the birth year give no age between 0 and :data:`OLDEST_RIDER`:
+    a clock behind the birth year, as a clock left in 1970 is for anybody born
+    after it. A clock left in the past otherwise gives an age that is too
+    young, never too old.
     """
     year = datetime.fromtimestamp(at / 1000, UTC).year
     age = year - birth_year - 1
     return age if 0 <= age <= OLDEST_RIDER else None
+
+
+def age_of(rider: Rider, at: UnixMillis) -> Result[int, PassengerRefusal]:
+    """The age ``rider`` is counted at ``at``, from the birth year the site set.
+
+    What every session with somebody on board is vetted on, manual or
+    programmed: the console's minimum age (``MIN_RIDER_AGE``) is applied to it
+    after. No birth year on the site, or none this clock makes an age of: a
+    refusal, never an age made up.
+    """
+    birth_year = rider.birth_year
+    if birth_year is None:
+        return Err(BirthYearUnknown())
+    age = age_at(birth_year, at)
+    return Err(AgeUnknowable()) if age is None else Ok(age)
 
 
 def passenger_of(rider: Rider, at: UnixMillis) -> Result[Passenger, PassengerRefusal]:
@@ -366,13 +392,10 @@ def passenger_of(rider: Rider, at: UnixMillis) -> Result[Passenger, PassengerRef
     hr_max = rider.hr_max
     if hr_max is None:
         return Err(HrMaxUnknown())
-    birth_year = rider.birth_year
-    if birth_year is None:
-        return Err(BirthYearUnknown())
-    age = age_at(birth_year, at)
-    if age is None:
-        return Err(AgeUnknowable())
-    return Ok(Passenger(rider=rider, hr_max=hr_max, age=age))
+    age = age_of(rider, at)
+    if isinstance(age, Err):
+        return age
+    return Ok(Passenger(rider=rider, hr_max=hr_max, age=age.value))
 
 
 # =========================================================================
@@ -500,7 +523,8 @@ class Roster:
         """Hold ``riders`` as if the dashboard had just listed them.
 
         For a console in a test or a simulation, whose dashboard is a fake: the
-        console's own link only ever calls :meth:`heard`.
+        console's own link only ever calls :meth:`heard`, and nothing under
+        ``src/`` calls this (``tests/test_roster.py`` holds it so).
         """
         self._riders = tuple(riders)
         self._heard_at = now

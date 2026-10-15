@@ -230,6 +230,7 @@ from src.roster import (
     PassengerRefusal,
     Rider,
     Roster,
+    age_of,
     describe_passenger_refusal,
     passenger_of,
 )
@@ -1100,7 +1101,8 @@ class LocalPanel:
 
         Before anything: a console out of service arms nothing. After the
         ceiling, the rider: a person on board is a rider the riders' list
-        holds now, and the bench names nobody (:meth:`_manual_rider`).
+        holds now, at least ``MIN_RIDER_AGE`` (:meth:`_on_board_refusal`), and
+        the bench names nobody (:meth:`_manual_rider`).
         """
         occupancy = command.occupancy
         operator = command.operator
@@ -1117,8 +1119,10 @@ class LocalPanel:
             self._surface.note_refused(command, describe_passenger_refusal(named.error))
             return
         rider = named.value
-        if rider is not None and self._recorder is not None:
-            self._recorder.withhold(rider.name)
+        on_board = None if rider is None else self._on_board_refusal(rider)
+        if on_board is not None:
+            self._surface.note_refused(command, on_board)
+            return
         blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
         if blocked is not None:
             self._surface.note_refused(command, blocked)
@@ -1160,6 +1164,24 @@ class LocalPanel:
                     subject_label=None if rider is None else rider.name,
                 )
             )
+
+    def _on_board_refusal(self, rider: Rider) -> str | None:
+        """Why ``rider`` may not be on board a manual session, or ``None``.
+
+        The minimum age of a programmed session, counted the same way from the
+        birth year the site set (:func:`~src.roster.age_of`), decided by the
+        product owner on 15 October 2026: no birth year, or too young, is a
+        refusal. A manual session needs no maximum heart rate: nothing is
+        fitted to it. The rider's name and age are kept out of what is written.
+        """
+        age = age_of(rider, self._clock.unix_millis())
+        if self._recorder is not None:
+            self._recorder.withhold(
+                rider.name, rider_words(age.value) if isinstance(age, Ok) else ""
+            )
+        if isinstance(age, Err):
+            return describe_passenger_refusal(age.error)
+        return rider_age_refusal(age.value, self._config.min_rider_age)
 
     def _manual_rider(self, command: StartManual) -> Result[Rider | None, PassengerRefusal]:
         """Who rides a manual session: nobody on the bench, a rider of the list on board.
@@ -2134,7 +2156,9 @@ def describe_clock_warning(state: WallClockState) -> str:
 
 
 def rider_age_refusal(age: int | None, minimum: int) -> str | None:
-    """Why a programmed session refuses this rider's age, or ``None`` when it is acceptable.
+    """Why a session with a person on board refuses this rider's age, or ``None``.
+
+    Programmed or manual (the latter since 15 October 2026, a product decision).
 
     Unknown is a refusal, not a pass: the simulation battery found a 10-year-old
     accepted on the adult ceiling because nothing asked. The age comes from the

@@ -28,7 +28,7 @@ from src.training.runtime import RuntimeState
 from src.training.types import Occupancy, SignalQuality
 from src.units import Bpm, Seconds
 from tests.record_console_support import RecordedRig, recorded_rig
-from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME
+from tests.roster_support import CHILD, RIDER, RIDER_ID, RIDER_NAME
 from tests.test_failure_rig import OPERATOR, PROGRAMME_ENV, SHORT_PROFILE, attest
 
 FITTING: Final[Rider] = Rider(
@@ -48,7 +48,7 @@ NO_BIRTH_YEAR: Final[Rider] = Rider(
     user_id="k17noyear0synthetic", name="No Year Rider", hr_max=Bpm(180), birth_year=None
 )
 
-EVERYONE: Final[tuple[Rider, ...]] = (RIDER, FITTING, TOO_LOW, NO_HR_MAX, NO_BIRTH_YEAR)
+EVERYONE: Final[tuple[Rider, ...]] = (RIDER, FITTING, TOO_LOW, NO_HR_MAX, NO_BIRTH_YEAR, CHILD)
 
 
 def console(tmp_path: Path) -> RecordedRig:
@@ -231,7 +231,7 @@ async def test_a_rider_of_a_list_too_old_is_refused_until_the_dashboard_answers(
         stale = await session.post("/api/session/start", json=start_body(RIDER_ID))
         listed = await session.get("/api/roster")
     assert stale.status_code == httpx.codes.CONFLICT
-    assert "liste des passagers perimee : recue il y a 61 min" in stale.text
+    assert "liste des passagers perimee : recue il y a 16 min" in stale.text
     assert listed.json()["state"] == "stale"
     assert listed.json()["riders"] == []
     await recorded.rig.panel.close()
@@ -323,4 +323,73 @@ async def test_a_person_on_board_must_be_a_rider_the_list_holds(tmp_path: Path) 
     assert recorded.rig.refusals()[-1].startswith(
         "demarrage refuse : ce passager n'est pas dans la derniere liste"
     )
+    await recorded.rig.panel.close()
+
+
+async def test_a_child_is_refused_on_board_a_manual_session_and_the_age_is_not_written(
+    tmp_path: Path,
+) -> None:
+    """The minimum age of a programme applies on board a manual session too (product
+    decision, 15 October 2026), counted the same way. The route lets the start through
+    (the age is the loop's gate, as for a programme); the loop refuses it."""
+    recorded = console(tmp_path)
+    pulse = Pulse(recorded)
+    async with recorded.rig.http() as session:
+        await pulse.beat(10)
+        await attest(session)
+        asked = await session.post(
+            "/api/manual/start",
+            json={"occupancy": "occupied", "operator": OPERATOR, "subject_id": CHILD.user_id},
+        )
+        assert asked.status_code == httpx.codes.ACCEPTED, asked.text
+        await pulse.beat(2)
+    assert state_of(recorded) is RuntimeState.IDLE
+    assert recorded.rig.refusals()[-1] == (
+        "demarrage refuse : passager de 9 ans, minimum 18 ans (MIN_RIDER_AGE)"
+    )
+    assert recorded.records() == []
+    on_disk = recorded.everything_on_disk()
+    assert b"9 ans" not in on_disk, "the rider's age is kept out of the logbook"
+    assert CHILD.name.encode() not in on_disk
+    await recorded.rig.panel.close()
+
+
+async def test_a_manual_session_on_board_needs_a_birth_year_not_a_max_heart_rate(
+    tmp_path: Path,
+) -> None:
+    recorded = console(tmp_path)
+    pulse = Pulse(recorded)
+    async with recorded.rig.http() as session:
+        await pulse.beat(10)
+        await attest(session)
+        no_year = await session.post(
+            "/api/manual/start",
+            json={
+                "occupancy": "occupied",
+                "operator": OPERATOR,
+                "subject_id": NO_BIRTH_YEAR.user_id,
+            },
+        )
+        assert no_year.status_code == httpx.codes.CONFLICT
+        assert "annee de naissance du passager non renseignee sur le site" in no_year.text
+        # Past the route, the loop says the same.
+        surface = recorded.rig.panel.surface
+        asked = surface.submit_start_manual(
+            occupancy=Occupancy.OCCUPIED, operator=OPERATOR, subject_id=NO_BIRTH_YEAR.user_id
+        )
+        assert isinstance(asked, Ok)
+        await pulse.beat(1)
+        assert recorded.rig.refusals()[-1] == (
+            "demarrage refuse : annee de naissance du passager non renseignee sur le site "
+            "(a regler par un gestionnaire)"
+        )
+        # A rider without a max heart rate but of age rides a manual session.
+        started = await session.post(
+            "/api/manual/start",
+            json={"occupancy": "occupied", "operator": OPERATOR, "subject_id": NO_HR_MAX.user_id},
+        )
+        assert started.status_code == httpx.codes.ACCEPTED, started.text
+        await pulse.beat(2)
+    assert state_of(recorded) is RuntimeState.RUNNING, recorded.rig.refusals()
+    assert recorded.recording().manifest.subject_id == NO_HR_MAX.user_id
     await recorded.rig.panel.close()

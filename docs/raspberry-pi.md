@@ -114,7 +114,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. Chaque ordre accepté reçoit un identifiant, et son sort (pris, refusé, annulé par un STOP) est publié une fois, sous cet identifiant. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite ; aucun ordre n'en remplace un autre en silence : un départ n'entre que dans une boîte vide au repos, et seul un STOP prend la place de ce qui attend, en le disant ; l'état ne redevient pas `idle` tant qu'un départ ou un arrêt accepté attend ; l'identifiant n'entre dans aucune décision. Table et courses dans [console-locale.md](console-locale.md#la-boîte-aux-lettres--une-demande-un-sort-et-la-console-le-dit), tenues par `tests/test_request_fates.py`. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
-| `src/roster.py` | La liste des passagers que le tableau de bord donne à la machine : lecture de la réponse, liste tenue en mémoire, âge et FC max d'un passager pour une séance programmée ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)). | Une réponse remplace la liste en entier ; sans réponse, la liste n'est plus proposée 60 min après sa réception ; une clé refusée la vide ; une valeur absente du site reste inconnue, jamais remplacée ; le nom n'est jamais écrit ni journalisé. Porte 100 %. |
+| `src/roster.py` | La liste des passagers que le tableau de bord donne à la machine : lecture de la réponse, liste tenue en mémoire, âge d'un passager à bord et FC max pour une séance programmée ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)). | Une réponse remplace la liste en entier ; sans réponse, la liste n'est plus proposée 15 min après sa réception ; une clé refusée la vide ; une valeur absente du site reste inconnue, jamais remplacée ; le nom n'est jamais écrit ni journalisé. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
 | `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure`. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; `joignable` seulement sur une réponse du tableau de bord, dans sa propre forme, qui prend ce que la console envoie, et jamais au-delà de 25 s sans une telle réponse ; jamais changé par une seule requête perdue, ni par les réponses à la question d'arrêt (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/contract.py` | Le contrat versionné de ce lien : version, en-tête, décision « ce serveur est-il de ma majeure ? », lecture de `VERSION`. | Seule une version bien formée de la même majeure est acceptée (test de propriété). Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
@@ -457,7 +457,9 @@ Avant tout mouvement, l'opérateur déclare l'occupation, figée pour la séance
 
 Une séance de banc ne nomme aucun passager : un départ `bench` qui en nomme un
 est refusé. Une séance avec personne à bord en nomme un, que la liste tenue au
-moment de l'armement porte.
+moment de l'armement porte, avec une année de naissance réglée sur le site et un
+âge d'au moins `MIN_RIDER_AGE` ([section 11](#11-lâge-minimum-du-passager)), en
+manuel comme en programmé.
 
 La valeur 1,2 g est marquée `[MED][ING]` dans le code : un paramètre provisoire
 en attente de validation médicale et d'ingénierie (jalon M6).
@@ -512,7 +514,10 @@ aucun.
 * Démarrée **uniquement depuis la console** (`/api/manual/start`). Rien dans le
   lien Convex ne sait en construire une.
 * Refusée si l'opérateur n'est pas nommé, si le plafond est hors de
-  `[min_run, HSP]`, ou (personne à bord) sans FC fiable.
+  `[min_run, HSP]`, ou (personne à bord) sans FC fiable, sans passager de la
+  liste du tableau de bord, sans année de naissance réglée sur le site, ou pour
+  un passager de moins de `MIN_RIDER_AGE`
+  ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)).
 * L'opérateur fixe une **cible en tr/min de sortie** ; elle doit valoir 0 ou,
   convertie en tr/min moteur, être dans `[55, plafond]`. Hors de ce domaine elle
   est **refusée**, jamais arrondie (ex. 0,5 tr/min de sortie = 25 tr/min moteur,
@@ -685,9 +690,10 @@ affiche et ne les modifie pas.
   porte plus n'est plus proposé, et un départ qui le nomme est refusé, par la
   route puis par la boucle à l'armement.
 * **Sans réponse** (réseau, 5xx, 426, 429, route inconnue, réponse illisible),
-  la dernière liste est gardée **60 minutes** au plus après sa réception
-  (`ROSTER_MAX_AGE`, valeur prudente par défaut, à confirmer) ; au-delà, personne
-  n'est proposé jusqu'à la réponse suivante. **Clé refusée** (401, 403) : la liste
+  la dernière liste est gardée **15 minutes** au plus après sa réception
+  (`ROSTER_MAX_AGE`, décision du responsable produit du 15 octobre 2026 ; une
+  constante du logiciel, pas une clé du `.env`) ; au-delà, personne n'est
+  proposé jusqu'à la réponse suivante. **Clé refusée** (401, 403) : la liste
   est vidée aussitôt. Console sans `MACHINE_API_KEY` : aucune liste, donc ni
   séance programmée ni séance manuelle avec personne à bord ; le banc reste
   possible.
@@ -704,17 +710,30 @@ affiche et ne les modifie pas.
   jamais remplacée par une autre ; le passager reste proposé et une séance
   programmée pour lui est refusée pour cette valeur.
 * **Âge** : année de l'horloge murale du Pi − année de naissance − 1, comme
-  `ageFrom` côté Convex (jamais plus vieux). Hors de 0..120 ans (une horloge
-  restée en 1970, par exemple) : refus. Une personne à bord est de toute façon
+  `ageFrom` côté Convex (jamais plus vieux). Un âge hors de 0..120 ans est un
+  refus : c'est le cas d'une horloge en retard sur l'année de naissance (une
+  horloge restée en 1970 pour une personne née après 1970). Une horloge restée
+  dans le passé mais après la naissance donne un âge **trop jeune**, jamais trop
+  vieux (née en 1940, une personne a 29 ans sur une horloge de 1970) : l'erreur
+  va vers le refus de l'âge minimum. Une personne à bord est de toute façon
   refusée sur une horloge murale que personne ne tient (4.2).
+* **Séance manuelle avec personne à bord** : le passager nommé doit être dans la
+  liste, avoir une année de naissance réglée sur le site, et un âge d'au moins
+  `MIN_RIDER_AGE`, compté comme pour un programme (`roster.age_of`,
+  `LocalPanel._on_board_refusal`). La FC max n'est pas demandée : rien n'y est
+  ajusté en manuel.
 * **Séance déclarée** : une séance lancée ici est envoyée à
   `/api/machine/training/local` avec `userId` et, tant que la console l'a en
   mémoire, `subjectLabel` (le nom). Après un redémarrage, elle part avec
   `userId` seul, relu dans le manifeste (`subject_id`). Une séance de banc ne
   porte ni l'un ni l'autre, et `occupancy` vaut `bench`.
 
-Ce que la liste ne fait pas : un droit retiré sur le site après la dernière
-réponse n'est vu qu'à la suivante. Convex revérifie le droit à la déclaration
+Ce que la liste ne fait pas : ce qui change sur le site après la dernière
+réponse n'est vu qu'à la suivante. Un droit retiré, mais aussi une **FC max
+abaissée** ou une **année de naissance corrigée** : jusqu'à la réponse suivante,
+le programme est ajusté à l'ancienne FC max et l'âge compté depuis l'ancienne
+année. Au repos, la réponse suivante arrive dans la minute ; sans réseau, une
+valeur ancienne sert au plus 15 minutes, puis personne n'est proposé. Convex revérifie le droit à la déclaration
 de la séance et ne l'attribue pas à un passager qui ne l'a plus (ANH-180). La
 revérification à l'armement est ANH-144. L'aptitude et le consentement
 (ANH-143 : `fit`, `fitnessValidUntil`, `consent`) ne sont pas encore servis ;
@@ -2178,21 +2197,25 @@ l'acquittement demande « champignon relâché » alors que personne ne l'a touc
 
 ## 11. L'âge minimum du passager
 
-* `MIN_RIDER_AGE` (défaut **18**, bornes 10..100) : âge minimum pour une séance
-  **programmée**. Un âge **inconnu est un refus**.
+* `MIN_RIDER_AGE` (défaut **18**, bornes 10..100) : âge minimum d'un passager à
+  bord, pour une séance **programmée** et, depuis le 15 octobre 2026 (décision du
+  responsable produit), pour une séance **manuelle avec personne à bord**
+  (`occupied`). Un âge **inconnu est un refus**.
 * L'âge vient de l'année de naissance réglée sur le site par un gestionnaire :
   par la liste des passagers pour un départ tapé à la console
   ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)), par le lancement
   pour un départ venu du tableau de bord. Il ne se saisit plus à la console
   (ANH-84) : un `subject_age` envoyé à `/api/session/start` est refusé (422).
 * Messages : « demarrage refuse : annee de naissance du passager non renseignee
-  sur le site (a regler par un gestionnaire) » (départ à la console) ;
+  sur le site (a regler par un gestionnaire) » (départ à la console, programmé
+  ou manuel avec personne à bord) ;
   « demarrage refuse : age du passager requis pour une seance programmee »
   (lancement distant sans âge) ; « demarrage refuse : passager de N ans,
   minimum M ans (MIN_RIDER_AGE) ».
 * Marqué `[MED]` : abaisser ce seuil est une décision médicale, prise dans
   `.env`, jamais depuis le tableau de bord.
-* Ne s'applique pas aux séances manuelles (elles ne portent pas d'âge).
+* Ne s'applique pas aux séances de banc : personne n'est à bord, et elles ne
+  nomment aucun passager.
 
 ---
 
@@ -2229,7 +2252,7 @@ sort avec le code 2.
 | `PROGRAMS_ENABLED` | `false` | autorise les séances programmées (jalon M5) | booléen |
 | `HR_HARD_MAX_BPM` | `148` | palier dur du superviseur | 100..220 |
 | `HR_CRITICAL_BPM` | `158` | palier critique du superviseur | 100..220, > palier dur |
-| `MIN_RIDER_AGE` | `18` | âge minimum en séance programmée | 10..100 |
+| `MIN_RIDER_AGE` | `18` | âge minimum d'un passager à bord (séance programmée, ou manuelle `occupied`) | 10..100 |
 | `PRESENCE_SOURCE` | `none` | caméra | `none`, `sim_empty`, `sim_occupied` |
 | `SENSORS` | `ECG` | voies acquises et affichées | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` ; `ECG` obligatoire |
 | `MACHINE_API_KEY` | vide | clé de la machine sur le tableau de bord ; vide = pas de lien | - |

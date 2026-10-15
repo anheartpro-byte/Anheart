@@ -852,7 +852,12 @@ manuelle « personne à bord » (`occupied`) n'existe que par l'API, et elle est
 tant que `OCCUPANCY_OCCUPIED_ENABLED=false` (jalon M6). Depuis ANH-84 elle nomme en plus
 un passager de la liste du tableau de bord (`subject_id`, section 9), vérifié par la
 route puis par la boucle à l'armement ; l'enregistrement et la séance déclarée au
-tableau de bord portent son identifiant.
+tableau de bord portent son identifiant. L'âge minimum `MIN_RIDER_AGE` s'y applique
+comme à une séance programmée (décision du responsable produit, 15 octobre 2026),
+compté de la même façon depuis l'année de naissance réglée sur le site : sans année de
+naissance, la route répond 409 ; un passager trop jeune est refusé par la boucle
+(`demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)`). La FC max
+n'est pas demandée : rien n'y est ajusté en manuel.
 
 Pastille à côté du titre : `inactif`, `demarrage`, puis le libellé de l'occupation
 (`BANC - personne a bord : NON`).
@@ -1333,7 +1338,7 @@ gestionnaire. La console les affiche et ne permet pas de les modifier.
 | Ce qui arrive | Ce que la console fait de la liste |
 |---|---|
 | une réponse | elle remplace la liste tenue, en entier : un passager absent de la nouvelle n'est plus proposé, et un départ qui le nomme est refusé |
-| pas de réponse (réseau, erreur du serveur, réponse illisible) | la dernière liste reçue est gardée, en mémoire, **60 minutes** au plus après sa réception ; au-delà, personne n'est proposé (`liste des passagers perimee`) jusqu'à la réponse suivante |
+| pas de réponse (réseau, erreur du serveur, réponse illisible) | la dernière liste reçue est gardée, en mémoire, **15 minutes** au plus après sa réception ; au-delà, personne n'est proposé (`liste des passagers perimee`) jusqu'à la réponse suivante |
 | clé de la machine refusée (401, 403) | la liste est vidée tout de suite : une machine que le tableau de bord ne reconnaît plus ne propose personne |
 | console sans tableau de bord (`MACHINE_API_KEY` vide) | aucune liste : personne n'est proposé, et seules les séances de banc partent |
 | redémarrage de la console | rien n'est gardé : la liste revient à la première réponse |
@@ -1342,12 +1347,16 @@ La liste ne vit qu'en mémoire. Le **nom** d'un passager est montré sur cette p
 l'opérateur choisisse la bonne personne ; il n'est écrit nulle part sur le disque (ni
 dans l'enregistrement, ni dans le journal hors séance, ni dans les journaux de la
 console) et aucune phrase de refus ne le cite. L'enregistrement de séance porte
-l'identifiant du passager (`subject_id`), un pseudonyme. La durée de 60 minutes est une
-valeur prudente par défaut (une ou deux séances sans réseau, pas une journée), à
-confirmer par le responsable de la machine.
+l'identifiant du passager (`subject_id`), un pseudonyme. La durée de 15 minutes est une
+décision du responsable produit (15 octobre 2026) ; c'est une constante du logiciel
+(`ROSTER_MAX_AGE`), pas un réglage de la machine : aucune clé du `.env` ne la change.
 
-Ce que la liste ne garantit pas : un droit retiré sur le site après la dernière réponse
-n'est vu qu'à la réponse suivante. Le tableau de bord revérifie le droit quand la
+Ce que la liste ne garantit pas : ce qui change sur le site après la dernière réponse
+n'est vu qu'à la réponse suivante. C'est vrai d'un droit retiré, et aussi d'une **FC max
+abaissée** ou d'une **année de naissance corrigée** par un gestionnaire : jusqu'à la
+réponse suivante, le programme est ajusté à l'ancienne FC max et l'âge compté depuis
+l'ancienne année. Au repos, la réponse suivante arrive dans la minute ; sans réseau, une
+valeur ancienne sert au plus **15 minutes**, puis personne n'est proposé. Le tableau de bord revérifie le droit quand la
 séance lui est déclarée et ne l'attribue pas à un passager qui ne l'a plus (mention
 `Passenger attribution unavailable at registration`, [convex.md](convex.md)). La
 revérification de l'identité et des droits à l'armement est le ticket ANH-144 ;
@@ -1889,15 +1898,15 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : passager requis avec une personne a bord, a choisir dans la liste du tableau de bord` | aucun passager choisi (séance programmée, ou manuelle avec personne à bord) |
 | `demarrage refuse : ce passager n'est pas dans la derniere liste du tableau de bord (droit retire, ou liste changee) : le choisir de nouveau` | la liste tenue ne porte pas (ou plus) ce passager |
 | `demarrage refuse : liste des passagers pas encore recue du tableau de bord` | aucune réponse depuis le démarrage de la console |
-| `demarrage refuse : liste des passagers perimee : recue il y a <n> min, au-dela de 60 min personne n'est propose` | dernière réponse trop ancienne |
+| `demarrage refuse : liste des passagers perimee : recue il y a <n> min, au-dela de 15 min personne n'est propose` | dernière réponse trop ancienne |
 | `demarrage refuse : aucun tableau de bord configure sur cette console : la liste des passagers vient du site` | console sans `MACHINE_API_KEY` |
 | `demarrage refuse : le tableau de bord refuse la cle de cette machine : aucun passager n'est propose` | clé refusée (401, 403) à la dernière demande de liste |
 | `demarrage refuse : FC max du passager non renseignee sur le site (a regler par un gestionnaire)` | séance programmée, FC max absente sur le site |
-| `demarrage refuse : annee de naissance du passager non renseignee sur le site (a regler par un gestionnaire)` | séance programmée, année de naissance absente sur le site |
+| `demarrage refuse : annee de naissance du passager non renseignee sur le site (a regler par un gestionnaire)` | séance programmée, ou manuelle avec personne à bord : année de naissance absente sur le site |
 | `demarrage refuse : age du passager incalculable avec l'horloge de cette machine` | l'horloge du Pi et l'année de naissance ne donnent pas un âge plausible |
 | `demarrage refuse : une seance de banc n'a personne a bord, donc aucun passager` | séance de banc qui nomme un passager |
 | `demarrage refuse : age du passager requis pour une seance programmee` | lancement venu du tableau de bord sans âge |
-| `demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)` | passager trop jeune |
+| `demarrage refuse : passager de <n> ans, minimum <m> ans (MIN_RIDER_AGE)` | passager trop jeune (séance programmée, ou manuelle avec personne à bord) |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) |
 | `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil rejeté pour la FC max du passager (zone au-dessus de 90 % de la FC max, etc.) |
 | `demarrage refuse : programme a <n> tr/min moteur, au-dessus du plafond personne a bord (<m> tr/min)` | profil trop rapide pour une personne à bord |
@@ -2039,7 +2048,7 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator", "subject_id"?}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois ; `occupied` nomme un passager de la liste, `bench` n'en nomme aucun | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue, passager manquant ou nommé sur le banc) ; 409 (dont : passager absent de la liste, variateur en défaut) ; 400 ; 412 |
+| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator", "subject_id"?}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois ; `occupied` nomme un passager de la liste, d'au moins `MIN_RIDER_AGE` (vérifié par la boucle), `bench` n'en nomme aucun | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue, passager manquant ou nommé sur le banc) ; 409 (dont : passager absent de la liste, année de naissance absente, variateur en défaut) ; 400 ; 412 |
 | POST | `/api/manual/target` | `{"output_rpm", "operator"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 (même corps) ; 422 (négatif, non fini) ; 400 ; 409 |
 | POST | `/api/drive/fault-reset` | `{"operator"}` | reset nommé d'un défaut variateur | 202 (même corps) ; 400 ; 409 |
 

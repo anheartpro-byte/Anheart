@@ -55,6 +55,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
 from src.control_surface import (
+    LOCAL_SUBJECT,
     CommandRefusal,
     EndRefusal,
     NothingRunning,
@@ -75,6 +76,7 @@ from src.roster import (
     PassengerRefusal,
     Rider,
     Roster,
+    age_of,
     describe_passenger_refusal,
     passenger_of,
 )
@@ -1329,12 +1331,22 @@ def _require_passenger(services: Services, subject_id: str | None) -> Passenger:
 
 
 def _require_rider_for(services: Services, occupancy: Occupancy, subject_id: str | None) -> str:
-    """Who rides a manual session: nobody on the bench, a rider of the list on board."""
+    """Who rides a manual session: nobody on the bench, a rider of the list on board.
+
+    On board, a rider with a birth year on the site this clock makes an age of
+    (409 otherwise); the loop applies ``MIN_RIDER_AGE`` to it when it arms, as
+    for a programme. On the bench, :data:`~src.control_surface.LOCAL_SUBJECT`
+    names nobody, as it does for the loop.
+    """
     if occupancy is Occupancy.BENCH:
-        if subject_id:
+        if subject_id and subject_id != LOCAL_SUBJECT:
             raise _passenger_failure(OnBench())
         return ""
-    return _require_rider(services, subject_id).user_id
+    rider = _require_rider(services, subject_id)
+    aged = age_of(rider, services.clock.unix_millis())
+    if isinstance(aged, Err):
+        raise _passenger_failure(aged.error)
+    return rider.user_id
 
 
 def _optional_seconds(value: float | None) -> Seconds | None:

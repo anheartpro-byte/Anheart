@@ -15,7 +15,7 @@ from typing import Final
 
 import httpx
 
-from src.control_surface import StartManual, StartSession
+from src.control_surface import LOCAL_SUBJECT, StartManual, StartSession
 from src.result import Ok, Result
 from src.roster import Rider, Roster
 from src.training.types import Occupancy, OccupancyRefused
@@ -197,3 +197,39 @@ async def test_an_occupied_manual_start_carries_its_rider(tmp_path: Path) -> Non
     pending = rig.surface.pending
     assert isinstance(pending, StartManual)
     assert (pending.occupancy, pending.subject_id) == (Occupancy.OCCUPIED, RIDER_ID)
+
+
+async def test_on_board_a_manual_session_needs_a_birth_year_and_on_the_bench_nobody(
+    tmp_path: Path,
+) -> None:
+    rig = build_rig(tmp_path)
+    rig.attest()
+    no_year = Rider(user_id="k17noyear", name="No Year", hr_max=Bpm(180), birth_year=None)
+    async with client(rig, listed(rig.clock, UNSET, no_year)) as session:
+        refused = await session.post(
+            "/api/manual/start",
+            json={"occupancy": "occupied", "operator": OPERATOR, "subject_id": "k17noyear"},
+        )
+        # No max heart rate is needed on board a manual session: nothing is fitted to it.
+        taken = await session.post(
+            "/api/manual/start",
+            json={"occupancy": "occupied", "operator": OPERATOR, "subject_id": UNSET.user_id},
+        )
+    assert refused.status_code == HTTPStatus.CONFLICT
+    assert "annee de naissance du passager non renseignee" in detail(refused)
+    assert taken.status_code == HTTPStatus.ACCEPTED, taken.text
+
+
+async def test_the_bench_takes_the_console_s_own_word_for_nobody(tmp_path: Path) -> None:
+    """``local`` names nobody, at the route as in the loop."""
+    rig = build_rig(tmp_path)
+    rig.attest()
+    async with client(rig, listed(rig.clock)) as session:
+        bench = await session.post(
+            "/api/manual/start",
+            json={"occupancy": "bench", "operator": OPERATOR, "subject_id": LOCAL_SUBJECT},
+        )
+    assert bench.status_code == HTTPStatus.ACCEPTED, bench.text
+    pending = rig.surface.pending
+    assert isinstance(pending, StartManual)
+    assert pending.subject_id == LOCAL_SUBJECT
