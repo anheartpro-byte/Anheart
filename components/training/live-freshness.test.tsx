@@ -250,6 +250,7 @@ describe("my machines: one card per machine", () => {
         },
       ],
       myHrMax: null,
+      myLaunchRefusal: null,
       ...over,
     };
   }

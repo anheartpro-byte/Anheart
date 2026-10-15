@@ -621,6 +621,7 @@ describe("machine page: launching a session on the machine", () => {
           },
         ],
         myHrMax: 180,
+        myLaunchRefusal: null,
       },
     ]);
     answer(api.users.getPatientsForGestionnaire, []);

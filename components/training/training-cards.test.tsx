@@ -566,6 +566,7 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
       live: live(),
       profiles: [ENDURANCE],
       myHrMax: 185,
+      myLaunchRefusal: null,
       ...over,
     };
   }

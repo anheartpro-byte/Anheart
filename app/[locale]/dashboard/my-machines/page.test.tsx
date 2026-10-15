@@ -89,6 +89,7 @@ function machine(
     live: null,
     profiles: [profile("Endurance"), profile("Tonus")],
     myHrMax: 180,
+    myLaunchRefusal: null,
     ...overrides,
   };
 }
