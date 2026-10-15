@@ -144,7 +144,7 @@ export const DASHBOARD_ERRORS = {
   rider_hr_max_missing:
     "The rider has neither a usable max heart rate nor a birth year.",
   zone_above_ceiling:
-    "The programme's zone goes above 90 % of the rider's max heart rate.",
+    "The programme's zone exceeds the current medical ceiling for the rider's max heart rate.",
   hard_max_above_hr_max:
     "The programme's hard maximum is above the rider's max heart rate.",
   rider_birth_year_missing: "The rider's birth year is not set.",

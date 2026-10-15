@@ -19,7 +19,7 @@
     "programs_disabled": "Auto programmes are disabled on this machine: only manual sessions, from the machine's console, are possible.",
     "programme_not_on_machine": "This programme is no longer on the machine. Reload the page and choose another one.",
     "rider_hr_max_missing": "The rider's max heart rate (or birth year) is not set: a manager must enter it before any auto session.",
-    "zone_above_ceiling": "The programme's zone goes above 90% of the rider's max HR. Choose another programme.",
+    "zone_above_ceiling": "The programme's zone exceeds the current medical ceiling for the rider's max HR. Choose another programme.",
     "hard_max_above_hr_max": "The programme's HR limit is above the rider's max HR. Choose another programme.",
     "rider_birth_year_missing": "The rider's birth year is not set: a manager must enter it before any auto session.",
     "rider_too_young": "This rider is under the minimum age for an auto session.",
@@ -845,7 +845,7 @@
     },
     "physiology": {
       "title": "Physiology",
-      "description": "Used to vet the target zone before an auto session (zone high ≤ 90% of max HR).",
+      "description": "Used to vet the target zone before an auto session against the current medical ceiling.",
       "hrMax": "Measured max HR (bpm)",
       "birthYear": "Birth year",
       "effective": "Max HR used",

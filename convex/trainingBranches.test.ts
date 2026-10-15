@@ -307,7 +307,7 @@ describe("a launch is refused when the rider's physiology does not allow the pro
       BIRTH_YEAR_MISSING,
     ],
     [
-      "has a max heart rate whose 90% is below the top of the zone",
+      "has a max heart rate whose current zone ceiling is below the top of the zone",
       { hrMax: 160, birthYear: turning(37) },
       "zone_above_ceiling",
     ],
@@ -544,7 +544,7 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
     expect(effectiveHrMax(physiology, NOW, "tanaka")).toBe(expected);
   });
 
-  it("refuses a zone above 90% of the max heart rate, rounded down, then a hard maximum above it", () => {
+  it("refuses a zone above the current ceiling, rounded down, then a hard maximum above it", () => {
     // 90% of 181 bpm is 162.9: the ceiling is 162, never 163.
     expect(zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 181 }, 181, 0.9)).toBeNull();
     expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 181 }, 181, 0.9)).toBe(

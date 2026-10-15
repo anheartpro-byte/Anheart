@@ -377,6 +377,22 @@ describe("ANH-203 programmes of a machine", () => {
     expect(screen.text()).not.toContain(t.programs.disabled);
   });
 
+  it("shows the missing-reference reason when an unsigned machine has no reference", () => {
+    answer("training:listMachineProfiles", [ENDURANCE]);
+    answer("training:getMachineLive", {
+      programsEnabled: false,
+      live: null,
+      medicalParametersStatus: "unsigned",
+      medicalParametersReferenceVersion: null,
+    });
+
+    const screen = render(<MachineProgramsCard machineId={machineId} />);
+
+    expect(screen.text()).toContain(t.launch.medicalParametersUnavailable);
+    expect(screen.text()).not.toContain(t.launch.medicalParametersUnsigned);
+    expect(screen.text()).not.toContain(t.programs.disabled);
+  });
+
   it("does not grey the programmes of a machine that accepts them", () => {
     const screen = render(
       <ProfileList profiles={[ENDURANCE]} programsEnabled />,

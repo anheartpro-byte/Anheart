@@ -19,7 +19,7 @@
     "programs_disabled": "Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles.",
     "programme_not_on_machine": "Ce programme n'est plus sur la machine. Rechargez la page et choisissez-en un autre.",
     "rider_hr_max_missing": "La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
-    "zone_above_ceiling": "La zone du programme dépasse 90 % de la FC max du pratiquant. Choisissez un autre programme.",
+    "zone_above_ceiling": "La zone du programme dépasse le plafond médical courant pour la FC max du pratiquant. Choisissez un autre programme.",
     "hard_max_above_hr_max": "La FC limite du programme dépasse la FC max du pratiquant. Choisissez un autre programme.",
     "rider_birth_year_missing": "L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
     "rider_too_young": "Ce pratiquant n'a pas l'âge minimum requis pour une séance auto.",
@@ -845,7 +845,7 @@
     },
     "physiology": {
       "title": "Physiologie",
-      "description": "Sert à valider la zone cible avant une séance auto (zone haute ≤ 90 % de la FC max).",
+      "description": "Sert à valider la zone cible avant une séance auto par rapport au plafond médical courant.",
       "hrMax": "FC max mesurée (bpm)",
       "birthYear": "Année de naissance",
       "effective": "FC max retenue",
