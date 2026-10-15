@@ -1068,7 +1068,8 @@ class CloudSync:
         matching_launch = (
             launch if launch is not None and launch.session_id == cloud_session_id else None
         )
-        if matching_launch is not None:
+        offered = self._offered_launch
+        if offered is not None and offered.session_id == cloud_session_id:
             self._invalidate_offer_state(OfferRefused(detail))
         if self._confirmed_launch_id == cloud_session_id:
             self._confirmed_launch_id = None
