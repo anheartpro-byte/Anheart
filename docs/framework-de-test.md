@@ -2476,13 +2476,23 @@ qu'une fois le fichier sur `main`.
 
 Elle ne recopie aucun job. `ci.yml`, `pi-install.yml`, `codeql.yml` et
 `deploy-production.yml` déclarent `workflow_call` et sont appelés tels quels.
-Un workflow appelé voit l'événement de son appelant, ici un lancement manuel :
-dans `ci.yml`, aucune gate n'est sautée par la règle de chemins, le rapport
-synthétique tourne avec ses scénarios `dsp`, et aucune des deux endurances
-nocturnes ne tourne. Celle de l'enregistrement de séance ne tourne, hors de la
-nuit, que sur un lancement manuel de `ci.yml` qui coche sa case, et un
-workflow appelé ne reçoit pas cette case ; celle de la console entière ne
+D'après la [documentation GitHub sur les workflows réutilisables](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations),
+le contexte `github` d'un workflow appelé est celui de son appelant. Pour les
+appels de release, cela donne à `ci.yml` le nom « Release en production
+(main) », l'événement `workflow_dispatch` et la référence `refs/heads/main` ;
+c'est lu dans la documentation, pas encore observé dans une exécution (premier
+lancement à blanc, S-6). Aucune gate n'est sautée par la règle de chemins, le
+rapport synthétique tourne avec ses scénarios `dsp`, et aucune des deux
+endurances nocturnes ne tourne. Celle de l'enregistrement de séance ne tourne,
+hors de la nuit, que sur un lancement manuel de `ci.yml` qui coche sa case, et
+un workflow appelé ne reçoit pas cette case ; celle de la console entière ne
 tourne que la nuit.
+
+Les tests S-4 tiennent les deux groupes de concurrence : la CI appelée par la
+release ne partage pas le groupe de la CI du push ou de la nuit sur `main`,
+alors que CodeQL partage `codeql-<sha>` avec l'analyse du push du même commit.
+L'appel CodeQL attend ; une troisième analyse de ce commit peut remplacer
+l'unique exécution en attente et faire échouer l'étape 2 avant les tags.
 
 **Tests.** `scripts/ci/release-workflow.test.mjs` est lancé par le job `docs` à
 chaque exécution. Il lit le workflow comme du texte et **exécute les scripts de
@@ -2494,6 +2504,11 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
 
 * que la pipeline n'a qu'un déclencheur, le bouton, qu'aucun autre workflow ne
   l'appelle, et que la case « à blanc » est cochée par défaut ;
+* que `scripts/ci/ci-workflow.test.mjs` et
+  `scripts/ci/analysis-workflows.test.mjs` lisent les groupes de concurrence
+  de `ci.yml` et `codeql.yml`, évaluent les contextes du push, de la nuit, de
+  l'appel de release et des PR, et tiennent l'annulation de l'analyse en
+  attente ;
 * que la garde de branche est la première étape du premier job, dont tous les
   autres dépendent, et qu'elle refuse toute référence autre que `main` ;
 * qu'une release réelle demande la case décochée **et** le mot `production`

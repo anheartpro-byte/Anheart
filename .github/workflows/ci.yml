@@ -31,6 +31,11 @@ on:
 permissions:
   contents: read
 
+# Keep `github.workflow` in this group: a reusable workflow sees its caller's
+# workflow name. The release call has its own group, so it neither waits behind
+# nor cancels CI's push or nightly run on `main`; `release.yml` separately
+# allows one release at a time in `release-production`. See
+# `scripts/ci/ci-workflow.test.mjs`.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

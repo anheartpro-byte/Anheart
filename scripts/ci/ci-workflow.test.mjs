@@ -22,8 +22,49 @@ import {
   vitestThresholds,
 } from "./coverage-thresholds.mjs";
 import { COVERAGES, GATES, SUITES } from "./quality-report.mjs";
+import { concurrencyOf, evaluateWorkflowValue, workflowName } from "./workflow-concurrency-test-utils.mjs";
 
 const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+const releaseWorkflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
+
+test("S-4 CI concurrency separates the release call and only cancels pull requests", () => {
+  const ciName = workflowName(workflow);
+  const releaseName = workflowName(releaseWorkflow);
+  assert.equal(ciName, "CI");
+  assert.equal(releaseName, "Release en production (main)");
+  const fields = concurrencyOf(workflow);
+  const evaluate = (eventName, ref, { number, sha = "S", workflow: runWorkflow = ciName } = {}) => {
+    const context = {
+      github: {
+        workflow: runWorkflow,
+        event_name: eventName,
+        ref,
+        sha,
+        event: { pull_request: number === undefined ? undefined : { number } },
+      },
+    };
+    return {
+      group: evaluateWorkflowValue(fields.group ?? "", context),
+      cancel: evaluateWorkflowValue(fields["cancel-in-progress"] ?? "", context),
+    };
+  };
+  const pushMain = evaluate("push", "refs/heads/main");
+  const nightMain = evaluate("schedule", "refs/heads/main");
+  const releaseCall = evaluate("workflow_dispatch", "refs/heads/main", { workflow: releaseName });
+  const pullRequest42 = evaluate("pull_request", "refs/pull/42/merge", { number: 42 });
+  const pullRequest43 = evaluate("pull_request", "refs/pull/43/merge", { number: 43 });
+  const pushDevelop = evaluate("push", "refs/heads/develop");
+
+  assert.notEqual(releaseCall.group, pushMain.group);
+  assert.notEqual(releaseCall.group, nightMain.group);
+  assert.equal(releaseCall.cancel, false);
+  assert.equal(pushMain.cancel, false);
+  assert.equal(nightMain.cancel, false);
+  assert.equal(pullRequest42.cancel, true);
+  assert.equal(pullRequest43.cancel, true);
+  assert.notEqual(pullRequest42.group, pullRequest43.group);
+  assert.notEqual(pushMain.group, pushDevelop.group);
+});
 
 /** Each job's own lines, by job id. @type {Map<string, string>} */
 const jobs = new Map();

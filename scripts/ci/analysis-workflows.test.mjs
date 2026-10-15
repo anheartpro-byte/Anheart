@@ -13,6 +13,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { concurrencyOf, evaluateWorkflowValue, workflowName } from "./workflow-concurrency-test-utils.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const WORKFLOWS = ".github/workflows";
@@ -29,6 +30,45 @@ const workflow = (file) =>
 
 const CI = workflow("ci.yml");
 const CODEQL = workflow("codeql.yml");
+
+test("S-4 CodeQL concurrency shares a commit with its release call and only cancels pull requests", () => {
+  const codeqlName = workflowName(read(`${WORKFLOWS}/codeql.yml`));
+  const releaseName = workflowName(read(`${WORKFLOWS}/release.yml`));
+  assert.equal(codeqlName, "CodeQL");
+  assert.equal(releaseName, "Release en production (main)");
+  const fields = concurrencyOf(CODEQL);
+  const evaluate = (eventName, { number, sha = "S", workflow: runWorkflow = codeqlName } = {}) => {
+    const context = {
+      github: {
+        workflow: runWorkflow,
+        event_name: eventName,
+        ref: "refs/heads/main",
+        sha,
+        event: { pull_request: number === undefined ? undefined : { number } },
+      },
+    };
+    return {
+      group: evaluateWorkflowValue(fields.group ?? "", context),
+      cancel: evaluateWorkflowValue(fields["cancel-in-progress"] ?? "", context),
+    };
+  };
+  const releaseCall = evaluate("workflow_dispatch", { sha: "S", workflow: releaseName });
+  const pushS = evaluate("push", { sha: "S" });
+  const night = evaluate("schedule", { sha: "S" });
+  const pullRequest42 = evaluate("pull_request", { number: 42, sha: "S" });
+  const pullRequest43 = evaluate("pull_request", { number: 43, sha: "S" });
+  const pushT = evaluate("push", { sha: "T" });
+
+  assert.equal(releaseCall.group, "codeql-S");
+  assert.equal(releaseCall.group, pushS.group);
+  assert.equal(releaseCall.cancel, false);
+  assert.equal(pushS.cancel, false);
+  assert.equal(night.cancel, false);
+  assert.equal(pullRequest42.cancel, true);
+  assert.equal(pullRequest43.cancel, true);
+  assert.notEqual(pullRequest42.group, pullRequest43.group);
+  assert.notEqual(pushS.group, pushT.group);
+});
 
 /**
  * Each job's own lines, by job id.
