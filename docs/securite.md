@@ -194,6 +194,14 @@ préalables :
    remplacer le premier par le contenu médical signé (ANH-98), et le second par
    le texte valide après ANH-87b et ANH-172. Dès que leur version change, une
    aptitude ou un consentement signé pour l'ancienne version ne compte plus.
+8. Renseigner le [registre machine](convex.md#machine_registry--identité-mesures-et-validation-anh-147)
+   et joindre les comptes rendus de validation. Le niveau `occupied` est
+   accordé uniquement par une revue jointe après `bench` puis `auto`, et reste
+   refusé tant que la clé médicale embarquée est la clé de test. Les rayons
+   mesurés du registre sont proposés à la configuration centralisée ; les
+   verrous `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` y seront appliqués
+   quand ANH-141 existera. Aucun verrou lié au registre n'est ajouté au
+   lancement distant aujourd'hui (suivi ANH-102 et ANH-107).
 
 ## 7. Décisions des 5 et 6 octobre 2026 sur les reprises automatiques
 

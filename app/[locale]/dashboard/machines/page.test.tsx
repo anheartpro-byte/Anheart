@@ -89,6 +89,84 @@ function machinesListed(): string[] {
 
 const createButton = { name: fr.machines.create };
 
+describe("machine list registry badges", () => {
+  it.each(["admin", "org_admin"] as const)(
+    "shows validation, version and unavailable configuration for %s",
+    async (role) => {
+      signedInAs(role);
+      answer(api.machines.listMachines, [paris, lyon]);
+      answer(api.machineRegistry.listRegistryBadges, [
+        {
+          machineId: paris._id,
+          level: "auto",
+          versionStatus: "not_validated",
+          configurationStatus: "unavailable",
+        },
+      ]);
+      await renderPage(<MachinesPage />);
+      expect(lastArgsAsked(api.machineRegistry.listRegistryBadges)).toEqual({});
+      const scope = rowOf("Paris");
+      expect(scope.getByText("Validation : Automatique")).toBeTruthy();
+      expect(
+        scope.getByText("Version : Non validée pour cette machine"),
+      ).toBeTruthy();
+      expect(
+        scope.getByText(fr.machineRegistry.badges.configuration.unavailable),
+      ).toBeTruthy();
+      expect(
+        rowOf("Lyon").queryByText(
+          fr.machineRegistry.badges.configuration.unavailable,
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it.each(["unknown", "up_to_date", "outdated"] as const)(
+    "shows the %s badge",
+    async (versionStatus) => {
+      signedInAs("admin");
+      answer(api.machines.listMachines, [paris]);
+      answer(api.machineRegistry.listRegistryBadges, [
+        {
+          machineId: paris._id,
+          level: "bench",
+          versionStatus,
+          configurationStatus: "unavailable",
+        },
+      ]);
+      await renderPage(<MachinesPage />);
+      expect(
+        rowOf("Paris").getByText(
+          `Version : ${fr.machineRegistry.versions[versionStatus]}`,
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["gestionnaire", "user"] as const)(
+    "skips badges entirely for %s even if data remains cached",
+    async (role) => {
+      signedInAs(role);
+      answer(api.machines.listMachines, [paris]);
+      answer(api.machineRegistry.listRegistryBadges, [
+        {
+          machineId: paris._id,
+          level: "occupied",
+          versionStatus: "up_to_date",
+          configurationStatus: "unavailable",
+        },
+      ]);
+      await renderPage(<MachinesPage />);
+      expect(lastArgsAsked(api.machineRegistry.listRegistryBadges)).toBe(
+        "skip",
+      );
+      expect(
+        screen.queryByText(fr.machineRegistry.badges.configuration.unavailable),
+      ).toBeNull();
+    },
+  );
+});
+
 describe("machines list: what it asks", () => {
   it("asks for the deleted machines too when the visitor is an admin", async () => {
     signedInAs("admin");

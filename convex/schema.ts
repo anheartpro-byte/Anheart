@@ -5,6 +5,7 @@ import {
   summarySourceValidator,
 } from "./lib/sessionSummary";
 import { v } from "convex/values";
+import { MACHINE_VALIDATION_LEVELS } from "./lib/releaseValidation";
 import {
   machineHealthValidator,
   healthMeasurementsValidator,
@@ -69,6 +70,65 @@ export const validationLevelValidator = v.union(
   v.literal("auto_validated"), // programmed sessions (M5)
   v.literal("occupied_validated"), // a person on board (M6)
 );
+
+export const machineValidationLevelValidator = v.union(
+  ...MACHINE_VALIDATION_LEVELS.map((level) => v.literal(level)),
+);
+export const machineReviewLevelValidator = v.union(
+  v.literal("bench"),
+  v.literal("auto"),
+  v.literal("occupied"),
+);
+export const driveParameterSheetValidator = v.object({
+  storageId: v.id("_storage"),
+  contentType: v.union(
+    v.literal("application/pdf"),
+    v.literal("application/json"),
+  ),
+  version: v.string(),
+  signedBy: v.string(),
+  at: v.number(),
+  attachedBy: v.id("users"),
+  attachedAt: v.number(),
+});
+export const machineValidationValidator = v.object({
+  level: machineValidationLevelValidator,
+  reviews: v.array(
+    v.object({
+      level: machineReviewLevelValidator,
+      by: v.id("users"),
+      at: v.number(),
+      reportStorageId: v.id("_storage"),
+      softwareVersion: v.string(),
+      medicalParametersVersion: v.union(v.string(), v.null()),
+    }),
+  ),
+  downgrades: v.array(
+    v.object({
+      from: machineValidationLevelValidator,
+      to: machineValidationLevelValidator,
+      by: v.id("users"),
+      at: v.number(),
+      reason: v.string(),
+    }),
+  ),
+});
+export const machineRegistryIdentityFields = {
+  serialPi: v.optional(v.string()),
+  serialDrive: v.optional(v.string()),
+  serialMotor: v.optional(v.string()),
+  serialGearbox: v.optional(v.string()),
+  bitalinoAddress: v.optional(v.string()),
+  commissionedAt: v.optional(v.number()),
+  site: v.optional(v.string()),
+  expectedSoftwareVersion: v.optional(v.string()),
+};
+export const machineRegistryRadiiFields = {
+  armRadiusM: v.optional(v.number()),
+  legTipRadiusM: v.optional(v.number()),
+  radiiMeasuredAt: v.optional(v.number()),
+  radiiMeasuredBy: v.optional(v.string()),
+};
 
 /**
  * What an alert to the gestionnaires is about (ANH-90). Another kind (the
@@ -391,6 +451,24 @@ export default defineSchema({
     .index("by_apiKeySelector", ["apiKeySelector"])
     .index("by_status", ["status"])
     .index("by_is_deleted", ["isDeleted"])
+    .index("by_organization", ["organizationId"]),
+
+  // Hardware identity, measured geometry and validation decisions (ANH-147).
+  // One row per machine, written only by Anheart admins. Missing row: level
+  // none. Organisation follows the machine on every write, like profiles.
+  machine_registry: defineTable({
+    organizationId,
+    machineId: v.id("machines"),
+    ...machineRegistryIdentityFields,
+    ...machineRegistryRadiiFields,
+    contacts: v.array(v.id("users")),
+    driveParameterSheet: v.optional(driveParameterSheetValidator),
+    driveParameterSheetHistory: v.array(driveParameterSheetValidator),
+    validation: machineValidationValidator,
+    updatedAt: v.number(),
+    updatedBy: v.id("users"),
+  })
+    .index("by_machine", ["machineId"])
     .index("by_organization", ["organizationId"]),
 
   // The keys of the machines (ANH-165). A machine may hold several valid keys

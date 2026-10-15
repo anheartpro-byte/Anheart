@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { isAnheartAdmin } from "@/lib/organizationAccess";
+import { isAnheartAdmin, isOrganizationAdmin } from "@/lib/organizationAccess";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import { Plus, Cpu, Search, Eye } from "lucide-react";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
+import { MachineRegistryBadges } from "@/components/machines/MachineRegistryBadges";
 import {
   LastSignal,
   MachineStatusBadge,
@@ -59,6 +60,16 @@ export default function MachinesPage() {
 
   // Deleted machines and creation are the Anheart admin's.
   const isAdmin = isAnheartAdmin(user?.role);
+  const showRegistry = isOrganizationAdmin(user?.role);
+  const registryBadges = useQuery(
+    api.machineRegistry.listRegistryBadges,
+    showRegistry ? {} : "skip",
+  );
+  const badgesByMachine = useMemo(
+    () =>
+      new Map((registryBadges ?? []).map((badge) => [badge.machineId, badge])),
+    [registryBadges],
+  );
 
   // For admin: always fetch all machines (including deleted) and filter client-side
   // For others: fetch only non-deleted machines
@@ -82,9 +93,17 @@ export default function MachinesPage() {
       {
         accessorKey: "name",
         header: t("machines.name"),
-        cell: ({ row }) => (
-          <span className="font-medium">{row.original.name}</span>
-        ),
+        cell: ({ row }) => {
+          const badge = badgesByMachine.get(row.original._id);
+          return (
+            <div className="space-y-2">
+              <span className="font-medium">{row.original.name}</span>
+              {showRegistry && badge !== undefined && (
+                <MachineRegistryBadges badge={badge} />
+              )}
+            </div>
+          );
+        },
       },
       {
         accessorKey: "status",
@@ -128,7 +147,7 @@ export default function MachinesPage() {
         ),
       },
     ],
-    [t],
+    [t, showRegistry, badgesByMachine],
   );
 
   const table = useReactTable({

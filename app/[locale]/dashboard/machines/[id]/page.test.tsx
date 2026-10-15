@@ -43,11 +43,18 @@ vi.mock("@/components/training/MachineLiveCard", async () => ({
   ),
 }));
 vi.mock("@/components/machines/MachineHealthCard", async () => ({
-  MachineHealthCard:(await import("@/test-support/pages")).standIn("MachineHealthCard"),
+  MachineHealthCard: (await import("@/test-support/pages")).standIn(
+    "MachineHealthCard",
+  ),
 }));
 vi.mock("@/components/machines/MachineKeysCard", async () => ({
   MachineKeysCard: (await import("@/test-support/pages")).standIn(
     "MachineKeysCard",
+  ),
+}));
+vi.mock("@/components/machines/MachineRegistryCard", async () => ({
+  MachineRegistryCard: (await import("@/test-support/pages")).standIn(
+    "MachineRegistryCard",
   ),
 }));
 vi.mock("@/components/training/ProfileList", async (original) => ({
@@ -206,16 +213,72 @@ describe("machine page: which machine it shows", () => {
 
   it.each([
     ["fr", "unknown", undefined, "0.1.0", null, false],
-    ["fr", "unsigned", null, "0.1.0", fr.machines.medicalParametersUnsigned, true],
-    ["fr", "no_reference", "0.1.0", null, fr.machines.medicalParametersNoReference, false],
-    ["fr", "current", "0.1.0", "0.1.0", fr.machines.medicalParametersCurrent, false],
-    ["fr", "obsolete", "0.0.9", "0.1.0", "version médicale obsolète (référence : 0.1.0)", true],
+    [
+      "fr",
+      "unsigned",
+      null,
+      "0.1.0",
+      fr.machines.medicalParametersUnsigned,
+      true,
+    ],
+    [
+      "fr",
+      "no_reference",
+      "0.1.0",
+      null,
+      fr.machines.medicalParametersNoReference,
+      false,
+    ],
+    [
+      "fr",
+      "current",
+      "0.1.0",
+      "0.1.0",
+      fr.machines.medicalParametersCurrent,
+      false,
+    ],
+    [
+      "fr",
+      "obsolete",
+      "0.0.9",
+      "0.1.0",
+      "version médicale obsolète (référence : 0.1.0)",
+      true,
+    ],
     ["fr", "ahead", "0.2.0", "0.1.0", fr.machines.medicalParametersAhead, true],
     ["en", "unknown", undefined, "0.1.0", null, false],
-    ["en", "unsigned", null, "0.1.0", en.machines.medicalParametersUnsigned, true],
-    ["en", "no_reference", "0.1.0", null, en.machines.medicalParametersNoReference, false],
-    ["en", "current", "0.1.0", "0.1.0", en.machines.medicalParametersCurrent, false],
-    ["en", "obsolete", "0.0.9", "0.1.0", "obsolete medical version (server reference: 0.1.0)", true],
+    [
+      "en",
+      "unsigned",
+      null,
+      "0.1.0",
+      en.machines.medicalParametersUnsigned,
+      true,
+    ],
+    [
+      "en",
+      "no_reference",
+      "0.1.0",
+      null,
+      en.machines.medicalParametersNoReference,
+      false,
+    ],
+    [
+      "en",
+      "current",
+      "0.1.0",
+      "0.1.0",
+      en.machines.medicalParametersCurrent,
+      false,
+    ],
+    [
+      "en",
+      "obsolete",
+      "0.0.9",
+      "0.1.0",
+      "obsolete medical version (server reference: 0.1.0)",
+      true,
+    ],
     ["en", "ahead", "0.2.0", "0.1.0", en.machines.medicalParametersAhead, true],
   ] as const)(
     "shows the %s medical-version status %s and its alert style",
@@ -230,11 +293,15 @@ describe("machine page: which machine it shows", () => {
         locale,
       );
 
-      expect(valueUnder((locale === "fr" ? fr : en).machines.medicalParametersVersion)).toBe(
-        version ?? "-",
-      );
+      expect(
+        valueUnder(
+          (locale === "fr" ? fr : en).machines.medicalParametersVersion,
+        ),
+      ).toBe(version ?? "-");
       if (expected === null) {
-        expect(screen.queryByText(/unknown|inconnue|à jour|up to date/)).toBeNull();
+        expect(
+          screen.queryByText(/unknown|inconnue|à jour|up to date/),
+        ).toBeNull();
       } else {
         const statusText = screen.getByText(expected);
         expect(statusText).toBeTruthy();
@@ -310,11 +377,43 @@ describe("machine page: which machine it shows", () => {
 });
 
 describe("machine page: what each role may do", () => {
-  it.each(["admin","gestionnaire","org_admin"] as const)("shows health to the authorized %s",async(role)=>{
-    await open(role);
-    expect(propsOf("MachineHealthCard")).toEqual({machineId});
+  it.each(["admin", "org_admin"] as const)(
+    "mounts the registry with machine and role for %s",
+    async (role) => {
+      await open(role);
+      expect(propsOf("MachineRegistryCard")).toEqual({
+        machineId,
+        role,
+        readOnly: false,
+      });
+    },
+  );
+
+  it("keeps a deleted machine registry readable without starting editing queries", async () => {
+    await open("admin", deleted());
+    expect(propsOf("MachineRegistryCard")).toEqual({
+      machineId,
+      role: "admin",
+      readOnly: true,
+    });
   });
-  it("keeps machine maintenance health out of the patient page",async()=>{
+
+  it.each(["gestionnaire", "user"] as const)(
+    "keeps the registry out of the %s page",
+    async (role) => {
+      await open(role);
+      expect(wasMounted("MachineRegistryCard")).toBe(false);
+    },
+  );
+
+  it.each(["admin", "gestionnaire", "org_admin"] as const)(
+    "shows health to the authorized %s",
+    async (role) => {
+      await open(role);
+      expect(propsOf("MachineHealthCard")).toEqual({ machineId });
+    },
+  );
+  it("keeps machine maintenance health out of the patient page", async () => {
     await open("user");
     expect(wasMounted("MachineHealthCard")).toBe(false);
   });
@@ -456,9 +555,7 @@ describe("machine page: a deleted machine", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it.each(
-    codedFailures(api.machines.restoreMachine, "machine_not_deleted"),
-  )(
+  it.each(codedFailures(api.machines.restoreMachine, "machine_not_deleted"))(
     "keeps the window open and shows the failure when the restoration fails $where",
     async ({ error, shown }) => {
       mutation(api.machines.restoreMachine).mockRejectedValue(error);
@@ -530,9 +627,7 @@ describe("machine page: deleting the machine", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it.each(
-    codedFailures(api.machines.deleteMachine, "machine_in_session"),
-  )(
+  it.each(codedFailures(api.machines.deleteMachine, "machine_in_session"))(
     "stays on the page, on its question, and shows the failure when the deletion fails $where",
     async ({ error, shown }) => {
       mutation(api.machines.deleteMachine).mockRejectedValue(error);
