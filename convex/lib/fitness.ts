@@ -76,6 +76,7 @@ export async function riderFitness(
   fit: boolean;
   fitnessValidUntil: number | null;
   consent: boolean;
+  fitnessQuestionnaireVersion: string | null;
 }> {
   const assessment = await latestAssessment(ctx, userId, organizationId);
   const fitnessValidUntil =
@@ -88,7 +89,13 @@ export async function riderFitness(
       ? assessment.validUntil
       : null;
   const consent = (await activeConsent(ctx, userId, organizationId)) !== null;
-  return { fit: fitnessValidUntil !== null, fitnessValidUntil, consent };
+  return {
+    fit: fitnessValidUntil !== null,
+    fitnessValidUntil,
+    consent,
+    fitnessQuestionnaireVersion:
+      fitnessValidUntil !== null ? CURRENT_QUESTIONNAIRE.version : null,
+  };
 }
 
 /** Return the stable launch refusal for a rider's current fitness and consent. */

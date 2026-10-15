@@ -257,6 +257,11 @@ ARMING_REFUSAL_WORDS: Final[Mapping[ErrorCode, str]] = MappingProxyType(
             "machine passee dans une autre organisation avant le depart"
         ),
         ErrorCode("right_revoked_before_start"): "droit retire avant le depart",
+        ErrorCode("rider_not_fit"): "le passager n'a pas de saisie d'aptitude valide et approuvee",
+        ErrorCode("fitness_expired"): "la saisie d'aptitude du passager a expire",
+        ErrorCode("consent_missing"): (
+            "le passager n'a pas de consentement actif pour le texte courant"
+        ),
         ErrorCode("age_refused_before_start"): "age du pratiquant refuse avant le depart",
         ErrorCode("hr_max_changed_before_start"): "FC max du pratiquant modifiee avant le depart",
         ErrorCode("rider_busy"): (

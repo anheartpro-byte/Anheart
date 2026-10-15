@@ -179,9 +179,10 @@ préalables :
 5. Brancher une vraie caméra (écrire `detector_link.py`) et la mettre en service.
 6. Refaire les essais sur le banc réel, puis capsule vide, avant tout passager.
 7. Le serveur refuse tout lancement depuis le site sans aptitude « apte »
-   validée et consentement actif. Le refus à l'armement d'un passager devenu
-   non prêt pendant l'attente et la porte de départ de la console arrivent
-   ensuite avec le contrat 1.6 (ANH-143). La durée de validité est laissée au
+   validée et consentement actif. Depuis le contrat 1.6, il refuse aussi à
+   l'armement un passager devenu non prêt pendant l'attente, avec le code
+   `rider_not_fit`, `fitness_expired` ou `consent_missing` (ANH-143).
+   La porte de départ de la console arrive en T06. La durée de validité est laissée au
    valideur, sans plafond, jusqu'au contenu signé d'ANH-98. Le
    questionnaire 0.1.0 et le texte de consentement 0.1.0 sont provisoires ;
    remplacer le premier par le contenu médical signé (ANH-98), et le second par

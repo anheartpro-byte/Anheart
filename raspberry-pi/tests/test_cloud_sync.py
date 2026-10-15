@@ -1613,6 +1613,11 @@ async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path:
     assert r.panel.surface.pending is None
 
 
+def test_every_arming_refusal_has_operator_words() -> None:
+    assert set(ARMING_REFUSAL_WORDS) == ARMING_REFUSALS
+    assert all(words.strip() and words.isascii() for words in ARMING_REFUSAL_WORDS.values())
+
+
 @pytest.mark.parametrize("code", sorted(ARMING_REFUSALS))
 async def test_a_409_is_shown_logged_and_never_ended_or_retried(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, code: ErrorCode
@@ -1672,6 +1677,9 @@ async def test_a_409_is_shown_logged_and_never_ended_or_retried(
     [
         pytest.param(Refused(400, "Not pending", ErrorCode("session_not_pending")), id="400-code"),
         pytest.param(Refused(409, "Not pending", ErrorCode("session_not_pending")), id="409-code"),
+        pytest.param(
+            Refused(409, "Future refusal", ErrorCode("future_refusal")), id="409-unknown-code"
+        ),
         pytest.param(Refused(409, "HTTP 409"), id="409-no-code"),
     ],
 )

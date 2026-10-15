@@ -219,6 +219,9 @@ describe("ANH-143 launch fitness and consent", () => {
         async (ctx) => (await activeConsent(ctx, w.patient, w.orgA)) !== null,
       );
       expect(facts.consent).toBe(consent);
+      expect(facts.fitnessQuestionnaireVersion).toBe(
+        facts.fit ? CURRENT_QUESTIONNAIRE.version : null,
+      );
       expect(launchRefusal === null).toBe(facts.fit && facts.consent);
       expect(launchRefusal).toBe(refusal);
 

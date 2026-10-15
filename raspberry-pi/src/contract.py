@@ -33,6 +33,12 @@ armed session is not confirmed a second time
 (:mod:`src.record_uplink`). An older armed session without that pre-confirmation
 still uses the ordinary confirmation and refusal stop path.
 
+Since 1.6 the dashboard also checks the rider's latest validated fitness and
+active consent at arming: ``rider_not_fit``, ``fitness_expired`` and
+``consent_missing`` are additional 409 refusals. The roster carries the fitness
+status, its expiry and questionnaire version, and consent, never answers or
+review notes.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -75,7 +81,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.5")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.6")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -99,12 +105,15 @@ ARMING_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("machine_deleted_before_start"),
         ErrorCode("organization_changed_before_start"),
         ErrorCode("right_revoked_before_start"),
+        ErrorCode("rider_not_fit"),
+        ErrorCode("fitness_expired"),
+        ErrorCode("consent_missing"),
         ErrorCode("age_refused_before_start"),
         ErrorCode("hr_max_changed_before_start"),
         ErrorCode("rider_busy"),
     }
 )
-"""The codes of the 409 a server answers a start it refuses (contract 1.5,
+"""The codes of the 409 a server answers a start it refuses (contract 1.6,
 ``arming_refusals`` of the shared file). Pinned to the shared file."""
 
 STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(

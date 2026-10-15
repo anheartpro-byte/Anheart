@@ -19,8 +19,7 @@
  * The Pi remains the authority on safety: it checks rights, zone against the
  * rider's max heart rate and machine state, and can still refuse the start
  * (e-stop wiring not attested, a standing safety verdict, a drive fault...).
- * A refusal comes back as a
- * failed session with the Pi's reason.
+ * A refusal comes back as a failed session with the Pi's reason.
  *
  * Only the machine ends a session it started. A session of which the server
  * has had no news for `SESSION_SILENCE_MS` is marked `interrupted` (end
@@ -30,15 +29,13 @@
  *
  * A launch is checked again when the machine arms it (ANH-144), not only when
  * it is made: whoever made it can still make it, the rider still has the
- * launch right,
- * the machine is the one it was, and the launch has not waited longer than
+ * launch right, the machine is the one it was, and it has waited no longer than
  * `PENDING_SESSION_TTL_S` (`armingRefusal`). One that fails becomes a failed
- * session with a stable
- * code (`endCode`), the machine's start is answered 409 with that code, and
+ * session with a stable code (`endCode`), its start is answered 409 with it, and
  * the poll never offers it. A rider has one session at a time, on any machine,
  * and a machine one launch at a time (`launchAutoSession`).
- * Aptitude and consent are checked at launch from the site only (ANH-143).
- * Their arming recheck and console start gate follow with contract 1.6.
+ * Aptitude and consent are checked both at launch from the site and again at
+ * arming (ANH-143, contract 1.6). The console's own start gate follows in T06.
  */
 import { limitUser } from "./lib/rateLimits";
 import { v } from "convex/values";
@@ -616,6 +613,9 @@ export const ARMING_REFUSALS = {
     "the machine left the session's organisation before it armed the launch",
   right_revoked_before_start:
     "launch right withdrawn before the machine armed it",
+  rider_not_fit: "the rider no longer has a valid, approved fitness assessment",
+  fitness_expired: "the rider's fitness assessment expired before arming",
+  consent_missing: "the rider no longer has active consent for the current text",
   age_refused_before_start: "the rider's age no longer allows an auto session",
   hr_max_changed_before_start:
     "the rider's max heart rate changed before the machine armed the launch",
@@ -771,8 +771,8 @@ async function riderStillAllowed(
  * 3. it is still in the session's organisation;
  * 4. whoever made the launch could still make it, and the rider is still a
  *    member of that organisation (`riderStillAllowed`);
- * 5. (ANH-143, to come) the rider's aptitude and consent are valid: checked
- *    here, with a code of its own, once that ticket stores them;
+ * 5. the rider's latest assessment is fit and validated for the current
+ *    questionnaire, has not expired, and consent for the current text is active;
  * 6. the rider's age is known and at least the current medical minimum;
  * 7. the rider's max heart rate is known and is the one the launch carried,
  *    which the machine fits the programme to: a changed value is refused,
@@ -790,14 +790,22 @@ async function armingRefusal(
     return refusalFor("machine_deleted_before_start");
   if (machine.organizationId !== session.organizationId)
     return refusalFor("organization_changed_before_start");
+  if (session.organizationId === undefined)
+    return refusalFor("right_revoked_before_start");
   const rider = await riderStillAllowed(ctx, session, machine);
   if (rider === null) return refusalFor("right_revoked_before_start");
+  const fitnessRefusal = await riderLaunchRefusal(
+    ctx,
+    rider._id,
+    session.organizationId,
+    now,
+  );
+  if (fitnessRefusal !== null) return refusalFor(fitnessRefusal);
   const medical = await currentMedicalParameters(ctx);
   if (medical === null) {
     // A launch left pending across deployment can reach this before registration.
     return refusalFor("age_refused_before_start");
   }
-  // ANH-143: aptitude and consent are checked here.
   const age = ageFrom(rider.birthYear, now);
   if (age === null || age < medical.minRiderAge)
     return refusalFor("age_refused_before_start");
@@ -1532,8 +1540,9 @@ export const syncProfiles = internalMutation({
  *   from the birth year), null when neither is usable;
  * - `birthYear`: a whole number, or null. The console computes the age from
  *   it the way `ageFrom` does.
- * - `fit`, `fitnessValidUntil`, `consent`: the launchable status for the
- *   machine's organisation. The roster never carries answers or review notes.
+ * - `fit`, `fitnessValidUntil`, `consent`, `fitnessQuestionnaireVersion`: the
+ *   launchable status for the machine's organisation and, only when fit, the
+ *   validated questionnaire version. Never answers or review notes.
  *
  * Both values are set on the site by a manager (`setUserPhysiology`); the
  * console shows them and cannot change them.
@@ -1549,6 +1558,7 @@ export const getRoster = internalQuery({
       fit: v.boolean(),
       fitnessValidUntil: v.union(v.number(), v.null()),
       consent: v.boolean(),
+      fitnessQuestionnaireVersion: v.union(v.string(), v.null()),
     }),
   ),
   handler: async (ctx, args) => {
@@ -1575,6 +1585,7 @@ export const getRoster = internalQuery({
         fit: fitness.fit,
         fitnessValidUntil: fitness.fitnessValidUntil,
         consent: fitness.consent,
+        fitnessQuestionnaireVersion: fitness.fitnessQuestionnaireVersion,
       });
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));

@@ -10,6 +10,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
+import machineApi from "../contracts/machine-api.json";
 import { makeRiderReady, modules, NOW, seedMachineWorld } from "./test.setup";
 
 type World = Awaited<ReturnType<typeof seedMachineWorld>>;
@@ -21,6 +22,7 @@ type Rider = {
   fit: boolean;
   fitnessValidUntil: number | null;
   consent: boolean;
+  fitnessQuestionnaireVersion: string | null;
 };
 
 /** A rider of the machine's organisation holding the launch right, with `physiology`. */
@@ -90,6 +92,7 @@ describe("ANH-84 roster: the values a console vets a programme with", () => {
         fit: true,
         fitnessValidUntil: Date.UTC(2100, 0, 1),
         consent: true,
+        fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
       },
     ]);
   });
@@ -106,6 +109,7 @@ describe("ANH-84 roster: the values a console vets a programme with", () => {
       fit: false,
       fitnessValidUntil: null,
       consent: false,
+      fitnessQuestionnaireVersion: null,
     });
   });
 
@@ -198,27 +202,66 @@ describe("ANH-143 roster: fitness and consent", () => {
         "fit",
         "fitnessValidUntil",
         "consent",
+        "fitnessQuestionnaireVersion",
       ].sort(),
     );
-    expect(ready).toMatchObject({ fit: true, consent: true });
+    expect(ready).toMatchObject({
+      fit: true,
+      consent: true,
+      fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+    });
     expect(roster.find((r) => r.userId === unvalidated)).toMatchObject({
       fit: false,
       fitnessValidUntil: null,
       consent: false,
+      fitnessQuestionnaireVersion: null,
     });
     expect(roster.find((r) => r.userId === expired)).toMatchObject({
       fit: false,
       fitnessValidUntil: null,
       consent: true,
+      fitnessQuestionnaireVersion: null,
     });
     expect(roster.find((r) => r.userId === noConsent)).toMatchObject({
       fit: true,
       fitnessValidUntil: NOW + 60_000,
       consent: false,
+      fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
     });
     for (const row of roster) {
+      expect(Object.keys(row).sort()).toEqual(Object.keys(ready ?? {}).sort());
+      expect(Object.keys(row).sort()).toEqual(
+        Object.keys(machineApi.roster.rider_fields).sort(),
+      );
       expect(row).not.toHaveProperty("answers");
       expect(row).not.toHaveProperty("notes");
     }
+  });
+
+  it("serves no questionnaire version after fitness expires during the wait", async () => {
+    const w = await seedMachineWorld(modules);
+    const { assessmentId } = await makeRiderReady(w.t, w.patient, w.organizationId, {
+      now: NOW,
+      validUntil: NOW + 60_000,
+    });
+    expect((await served(w))[0]).toMatchObject({
+      fit: true,
+      fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+    });
+    vi.setSystemTime(NOW + 60_000);
+    expect((await served(w))[0]).toMatchObject({
+      fit: false,
+      fitnessValidUntil: null,
+      fitnessQuestionnaireVersion: null,
+      consent: true,
+    });
+    await w.t.run((ctx) => ctx.db.patch(assessmentId, {
+      questionnaireVersion: "outdated",
+      validUntil: NOW + 120_000,
+    }));
+    expect((await served(w))[0]).toMatchObject({
+      fit: false,
+      fitnessQuestionnaireVersion: null,
+    });
   });
 });

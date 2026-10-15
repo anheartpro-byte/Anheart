@@ -350,7 +350,10 @@ http.route({
 });
 
 /**
- * GET /api/machine/roster -> {riders: [{userId, name, hrMax, birthYear, fit, fitnessValidUntil, consent}]}
+ * GET /api/machine/roster -> {riders: [{userId, name, hrMax, birthYear,
+ * fit, fitnessValidUntil, consent, fitnessQuestionnaireVersion}]}
+ * Contract 1.6: fitness status and its validated questionnaire version only,
+ * never answers or review notes (`contracts/machine-api.json`, `roster`).
  * The riders the local console offers (`training.getRoster`). Not rate
  * limited: the console asks at its start and once a minute at rest.
  */

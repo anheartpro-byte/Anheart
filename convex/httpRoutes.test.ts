@@ -13,6 +13,7 @@ import http from "./http";
 import { modules, NOW, seedMachineWorld } from "./test.setup";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 
 const world = () => seedMachineWorld(modules);
 type MachineWorld = Awaited<ReturnType<typeof world>>;
@@ -570,6 +571,7 @@ describe("ANH-132 /api/machine/roster", () => {
         fit: boolean;
         fitnessValidUntil: number | null;
         consent: boolean;
+        fitnessQuestionnaireVersion: string | null;
       }>;
     };
     expect(payload.riders).toContainEqual({
@@ -580,6 +582,7 @@ describe("ANH-132 /api/machine/roster", () => {
       fit: true,
       fitnessValidUntil: Date.UTC(2100, 0, 1),
       consent: true,
+      fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
     });
   });
 });

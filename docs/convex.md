@@ -1060,7 +1060,7 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 |---|---|
 | `updateLive` | Écrit `machines.live` (et `programsEnabled` s'il est fourni). Si l'état dit le variateur en défaut et que le précédent ne le disait pas, planifie l'alerte `drive_fault` (ANH-90). Refuse une machine dont la ligne a disparu (`machine_not_found`). |
 | `syncProfiles` | Supprime tous les programmes de la machine, insère la nouvelle liste (dans l'organisation de la machine), met à jour `programsEnabled`. Retourne `{count}`. |
-| `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax, birthYear, fit, fitnessValidUntil, consent}`. `hrMax` est celle que `launchAutoSession` utiliserait (mesurée, sinon estimée depuis l'année de naissance ; `null` si aucune n'est utilisable) ; `birthYear` est un entier ou `null`. `fit`, `fitnessValidUntil` et `consent` décrivent l'aptitude et le consentement dans l'organisation de la machine. La console les affiche sans pouvoir les modifier (ANH-84). Aucune réponse au questionnaire ni note de validation n'est envoyée. |
+| `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax, birthYear, fit, fitnessValidUntil, consent, fitnessQuestionnaireVersion}` ([`roster` du contrat 1.6](../contracts/machine-api.json)). `hrMax` est celle que `launchAutoSession` utiliserait (mesurée, sinon estimée depuis l'année de naissance ; `null` si aucune n'est utilisable) ; `birthYear` est un entier ou `null`. `fit`, `fitnessValidUntil` et `consent` décrivent l'aptitude et le consentement dans l'organisation de la machine ; `fitnessQuestionnaireVersion` donne la version de la saisie validée qui rend `fit` vrai, sinon `null`. Aucune réponse au questionnaire ni note de validation n'est envoyée. La console 1.5 ignore ces champs ; leur contrôle local arrive en T06. |
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine que la revérification à l'armement accepterait, au format attendu par le Pi. Jamais un lancement expiré ni refusé, même avant le passage de la tâche planifiée, ni un lancement qui expire dans moins de `POLL_MARGIN_S` (45 s). |
 | `markTrainingStarted` | Revérifie d'abord le lancement ([ci-dessous](#revérification-à-larmement-anh-144)). Refusé : la séance passe `failed` avec `endCode`, la machine reste comme elle était, et la fonction rend `{armed: false, code, message}`, que la route répond **409**. Une confirmation répétée d'un lancement déjà refusé ainsi reçoit la même réponse. Accepté : `pending` → `active`, `startedAt` = maintenant, machine `in_session`, et `{armed: true}`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Refuse une séance d'une autre machine (`session_not_found`) ou qui n'attend plus son départ pour une autre raison (`session_not_pending` : annulée sur le site, déjà démarrée, terminée). |
 | `sweepPendingSessions` | Tâche planifiée toutes les minutes : passe `failed`, avec `endCode`, tout lancement `pending` (`kind: auto`) que la revérification refuse, expirés compris, et planifie pour chacun l'alerte `session_failed` (ANH-90). Rend `{failed}`. Les séances de l'ancien mode ne sont pas touchées. |
@@ -1094,7 +1094,7 @@ stable du refus (`ARMING_REFUSALS`, `convex/training.ts`, et
 | 2 | La machine existe et n'est pas supprimée. Une machine supprimée est refusée à sa clé (401) avant que son départ soit lu : ce code est surtout celui qu'écrit la tâche planifiée. | `machine_deleted_before_start` |
 | 3 | La machine est toujours dans l'organisation de la séance. | `organization_changed_before_start` |
 | 4 | Celui qui a lancé (`startedById`) pourrait lancer **maintenant** cette séance, dans l'organisation de la machine, sous la règle de `launchAutoSession` : un patient pour lui-même, avec son droit de lancement (`machine_user_permissions`) ; un gestionnaire sur une machine qu'il gère, pour un patient qu'il suit ; un admin de l'organisation ; l'admin Anheart. Son rôle est relu dans ses adhésions actives (`rolesHeldNow`, `convex/lib/auth.ts`), pas dans un jeton : personne n'appelle à ce moment-là. Le pratiquant a toujours son compte (ni effacé, ni marqué supprimé dans Clerk) et reste membre actif de l'organisation. Un lancement sans `startedById` est refusé. | `right_revoked_before_start` |
-| 5 | Aptitude et consentement du pratiquant : un passager devenu inapte pendant l'attente sera refusé à l'armement avec le contrat 1.6 (T05). Le contrôle et son code ne font pas encore partie du contrat 1.5. | - |
+| 5 | Depuis 1.6 (ANH-143), la dernière saisie d'aptitude est de la version courante du questionnaire, `fit` et validée, sa validité n'est pas dépassée, puis le consentement au texte courant est actif dans l'organisation de la séance. Un changement pendant l'attente est refusé, dans cet ordre. | `rider_not_fit`, `fitness_expired`, `consent_missing` |
 | 6 | L'âge du pratiquant est connu et atteint l'âge minimum (`minRiderAge`) de la version médicale courante. | `age_refused_before_start` |
 | 7 | La FC max retenue du pratiquant est connue et **égale** à `subjectHrMax`, celle que le lancement a donnée à la machine, qui y ajuste le programme. Une valeur changée, même dans le bon sens, est refusée sans recalcul : la machine ne tourne jamais sur l'ancienne. L'estimation par l'âge peut changer au 1er janvier (UTC), selon l'âge (de 41 à 42 ans, elle reste à 179 bpm) : un lancement en attente à ce moment-là peut être refusé. | `hr_max_changed_before_start` |
 | 8 | Le pratiquant n'a aucune autre séance qui peut le tenir (règle ci-dessous), par exemple une séance démarrée à une autre machine pendant que celle-ci attendait. | `rider_busy` |
@@ -1240,6 +1240,13 @@ autre que `fit` ou une saisie non validée donnent `rider_not_fit`, dans cet
 ordre. Ensuite, `validUntil <= now` donne `fitness_expired`, puis l'absence de
 consentement non retiré pour la version courante donne `consent_missing`.
 Sinon le résultat est `null`.
+
+Ce contrôle est appliqué au lancement depuis le site et à l'armement : le poll,
+la confirmation du départ et la tâche de chaque minute relisent les mêmes faits.
+`riderFitness` rend aussi `fitnessQuestionnaireVersion`, la version de la saisie
+validée qui rend `fit` vrai, sinon `null`. Le roster expose ces seuls faits selon
+[`roster` du contrat machine 1.6](../contracts/machine-api.json), sans réponses
+ni notes de validation.
 
 Dans `getRiderReadiness`, `answers` et `notes` ne sortent que si l'appelant
 gère le passager et n'est pas lui. Le passager voit l'outcome calculé, la
@@ -1702,7 +1709,7 @@ changer. La liste des codes est dans `contracts/machine-api.json` :
 | `request_failed` | 400 | Toute autre erreur levée pendant le traitement ; `message` porte son texte. |
 | `rate_limited` | 429 | La machine a dépassé la limite de débit de la route ; la réponse porte `retryAfterMs` et l'en-tête `Retry-After` (contrat 1.4, [ci-dessous](#limitation-de-débit-et-taille-des-corps-anh-166)). |
 | `payload_too_large` | 413 | Corps au-delà de la taille de la route, ou lot de plus de 600 points ou 200 événements, refusé avant d'être parcouru (contrat 1.4). |
-| `expired_before_start`, `machine_deleted_before_start`, `organization_changed_before_start`, `right_revoked_before_start`, `age_refused_before_start`, `hr_max_changed_before_start`, `rider_busy` | 409 | `training/start` seulement (contrat 1.5) : le lancement, revérifié au moment où la machine l'arme, est refusé ; la séance est `failed` avec ce code, et la machine ne doit pas la faire tourner ([Revérification à l'armement](#revérification-à-larmement-anh-144)). |
+| `expired_before_start`, `machine_deleted_before_start`, `organization_changed_before_start`, `right_revoked_before_start`, `age_refused_before_start`, `hr_max_changed_before_start`, `rider_busy` ; depuis 1.6 : `rider_not_fit`, `fitness_expired`, `consent_missing` | 409 | `training/start` seulement (depuis le contrat 1.5) : le lancement, revérifié au moment où la machine l'arme, est refusé ; la séance est `failed` avec ce code, et la machine ne doit pas la faire tourner ([Revérification à l'armement](#revérification-à-larmement-anh-144)). |
 
 Côté Pi, une absence de réponse devient `Unreachable`, toute réponse ≥ 400
 devient `Refused`, et son code est journalisé. Pour ce que la console envoie
@@ -1839,7 +1846,7 @@ déploiement.
 |---|---|---|---|
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) ; 16 Kio max | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
-| `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent}]}` (`getRoster`) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
+| `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent, fitnessQuestionnaireVersion\|null}]}` (`getRoster`, [`roster` du contrat 1.6](../contracts/machine-api.json)) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local |
@@ -2846,6 +2853,7 @@ de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.6` | Trois refus à l'armement en **409** : `rider_not_fit`, `fitness_expired`, `consent_missing`. Le poll et la tâche de chaque minute appliquent le même contrôle. Le roster ajoute `fit` (booléen), `fitnessValidUntil` (ms Unix ou `null`), `consent` (booléen) et `fitnessQuestionnaireVersion` (chaîne de la saisie validée qui rend `fit` vrai, sinon `null`), sans réponses ni notes. Leur définition est dans [`contracts/machine-api.json`, entrée `roster`](../contracts/machine-api.json) ; une console qui ne reçoit pas ces champs doit considérer le passager non apte et sans consentement (porte locale T06). |
 | `1.5` | `POST /api/machine/training/start` peut répondre **409** avec l'un des sept codes de refus à l'armement (`arming_refusals` du contrat partagé) : le lancement est revérifié au moment où la machine l'arme et la séance passe `failed` avec ce code (ANH-144). Le poll n'offre plus un lancement expiré, qui expire dans moins de 45 s, ou que ces contrôles refuseraient. |
 | `1.4` | Deux codes d'erreur : `rate_limited` (429, avec `retryAfterMs` et `Retry-After`) sur cinq routes limitées par machine, et `payload_too_large` (413) pour un corps au-delà de la taille de sa route ou un lot de plus de 600 points ou 200 événements (400 avant). Bornes de `seq` (999 999) et de `t` (entier) d'un événement. La liste des limites et des tailles est dans le contrat partagé (`rate_limits`, `max_body_bytes`). |
 | `1.3` | Le heartbeat annonce `server_contract_version`. La console vérifie cette annonce pour son état de liaison, même sans programmes. Une réponse sans version lisible affiche un contrat inconnu. |
@@ -2859,7 +2867,7 @@ n'appelle pas la route des événements. Ses séances sont datées, stockées et
 servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
 plus stocké deux fois.
 
-La console de ce dépôt est en `1.5`. Elle connaît les codes de refus à
+La console de ce dépôt est en `1.6`. Elle connaît les codes de refus à
 l'armement et demande le départ après confirmation de son opérateur, avant
 d'armer ; elle n'arme que sur un 2xx de `training/start` et n'envoie pas de
 fin sur un 409. Une console antérieure, qui arme avant de confirmer, s'arrête
@@ -2868,6 +2876,12 @@ face à un serveur `1.5` fait de même : son indicateur de liaison ne
 reconnaît pas le code, et montre un instant une réponse inconnue. Face à un
 serveur `1.4`, une console `1.5` ne reçoit jamais de 409 : rien ne change pour
 elle.
+
+Une console `1.5` face à un serveur `1.6` ignore les nouveaux champs du roster
+(`src/roster.py`, `_rider`, lecture par `entry.get` des seuls champs connus).
+Sur un 409 dont elle ne connaît pas le code, elle n'arme pas et n'envoie pas
+de fin : `_confirm_remote_start` de `src/cloud_sync.py` n'arme que sur `Acked`.
+La phrase est générique ; une console `1.6` nomme les trois nouveaux refus.
 
 Une console `1.4` face à un serveur `1.3` : rien ne change
 pour elle, il ne répond ni 429 ni 413. Une console `1.3` face à un serveur

@@ -868,8 +868,9 @@ Après **Lancer** :
    antérieure, qui arme avant de confirmer, s'arrête aussitôt sur la rampe
    ordinaire. Pour l'aptitude et le consentement (ANH-143), le serveur refuse
    le lancement depuis le site sans aptitude valide ou sans consentement actif.
-   Le refus à l'armement d'un passager devenu non prêt pendant l'attente et la
-   porte de départ de la console arrivent ensuite avec le contrat 1.6.
+   Depuis le contrat 1.6, il refuse aussi à l'armement un passager devenu non
+   prêt pendant l'attente : `rider_not_fit`, `fitness_expired` ou `consent_missing`.
+   La porte de départ de la console arrive en T06.
 
 **Important** : avec la configuration livrée (`raspberry-pi/.env.example`),
 `PROGRAMS_ENABLED=false` et `OCCUPANCY_OCCUPIED_ENABLED=false`. Le site affiche
@@ -1344,7 +1345,7 @@ Pièges :
 | Questionnaire d'aptitude | Le questionnaire 0.1.0 contient des questions provisoires [MED] ; le médecin doit les remplacer par le contenu signé (ANH-98). |
 | Texte de consentement | Le texte 0.1.0 est provisoire et non valide juridiquement ; il doit être remplacé après ANH-87b. Les avis d'hébergement et de rétention des réponses restent à traiter dans ANH-172. |
 | Signature à la console | La signature est disponible sur le site seulement. La console ne propose pas de signer un consentement. |
-| Aptitude et consentement à l'armement | Le serveur les contrôle au lancement depuis le site seulement. Le refus d'un passager devenu non prêt pendant l'attente arrive avec le contrat 1.6 (ANH-143). |
+| Aptitude et consentement à l'armement | Depuis le contrat 1.6, le serveur les contrôle au lancement depuis le site et à l'armement. Un passager devenu non prêt pendant l'attente est refusé avec sa raison (ANH-143). |
 | Aptitude et consentement au départ de la console | La porte de départ avec personne à bord, pour un programme ou une séance manuelle `occupied`, arrive avec le contrat 1.6 (ANH-143). |
 
 Pour la sécurité d'ensemble, voir [securite.md](securite.md).
