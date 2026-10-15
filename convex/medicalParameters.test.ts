@@ -30,7 +30,10 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  delete process.env.PENDING_SESSION_TTL_S;
+});
 
 function parsedShippedDocument() {
   return JSON.parse(shippedContent) as {
@@ -80,7 +83,7 @@ async function insertStoredVersion(
   const storageId = await t.run((ctx) =>
     ctx.storage.store(new Blob([`fixture ${version}`])),
   );
-  return await t.mutation(internal.medicalParametersStore.insertVersion, {
+  const result = await t.mutation(internal.medicalParametersStore.insertVersion, {
     version,
     issuedAt: "2026-10-14",
     storageId,
@@ -90,6 +93,10 @@ async function insertStoredVersion(
     minRiderAge: 18,
     hrMaxFormula: "tanaka",
   });
+  if (typeof result !== "string") {
+    await t.run((ctx) => ctx.storage.delete(storageId));
+  }
+  return result;
 }
 
 async function rejectionLeavesNoWrites(
@@ -424,24 +431,26 @@ describe("medical signatures and version registration", () => {
     expect(await storedFiles(t)).toHaveLength(1);
   });
 
-  it("refuses registration while an unexpired remote launch is pending without adding a row or file", async () => {
+  it("refuses registration while an unexpired launch without origin is pending", async () => {
     const w = await seedWorld(modules);
-    const sessionId = await as(w.t, "manager").mutation(
-      api.training.launchAutoSession,
-      { machineId: w.machine, profileId: w.profileId, userId: w.patient },
-    );
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "pending",
+      kind: "auto",
+    });
     expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       status: "pending",
-      origin: "remote",
     });
     const versionsBefore = await w.t.run((ctx) =>
       ctx.db.query("medical_parameters_versions").collect(),
     );
     const filesBefore = await storedFiles(w.t);
 
-    await expect(registerShippedMedicalParameters(w.t)).rejects.toThrow(
-      /1 remote pending launch; retry after it arms or expires/,
-    );
+    await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toEqual({
+      refusal:
+        "Cannot register a medical parameter version while 1 remote launch is pending; retry once it is armed, failed or expired (pending timeout: 300 s).",
+    });
 
     expect(
       await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
@@ -449,7 +458,7 @@ describe("medical signatures and version registration", () => {
     expect(await storedFiles(w.t)).toEqual(filesBefore);
   });
 
-  it("allows registration when a pending remote launch is expired but not swept", async () => {
+  it("settles an expired launch during registration so a TTL increase cannot revive it", async () => {
     const w = await seedWorld(modules);
     const sessionId = await addSession(w, {
       machineId: w.machine,
@@ -463,11 +472,148 @@ describe("medical signatures and version registration", () => {
     await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toBe("0.2.0");
 
     expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "failed",
+      endedAt: NOW + 300_001,
+      endCode: "expired_before_start",
+      endReason: "expired before the machine armed it",
+    });
+    process.env.PENDING_SESSION_TTL_S = "600";
+    expect(
+      await w.t.query(internal.training.getPendingTrainingSession, {
+        machineId: w.machine,
+      }),
+    ).toBeNull();
+    expect(
+      await w.t.mutation(internal.training.markTrainingStarted, {
+        machineId: w.machine,
+        sessionId,
+      }),
+    ).toEqual({
+      armed: false,
+      code: "expired_before_start",
+      message: "expired before the machine armed it",
+    });
+    expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "failed",
+      endCode: "expired_before_start",
+    });
+    expect(
+      await w.t.run(async (ctx) =>
+        (await ctx.db.system.query("_scheduled_functions").collect()).map(
+          (job) => job.name,
+        ),
+      ),
+    ).toContain("notifications:deliver");
+    expect(
+      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+    ).toHaveLength(2);
+  });
+
+  it("commits expired-launch failures while refusing registration for a live launch", async () => {
+    const w = await seedWorld(modules);
+    const expiredSessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "pending",
+      kind: "auto",
+    });
+    const liveSessionId = await addSession(w, {
+      machineId: w.otherMachine,
+      userId: w.otherPatient,
+      status: "pending",
+      kind: "auto",
+    });
+    await w.t.run((ctx) =>
+      ctx.db.patch(expiredSessionId, { startedAt: NOW - 300_001 }),
+    );
+
+    await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toEqual({
+      refusal:
+        "Cannot register a medical parameter version while 1 remote launch is pending; retry once it is armed, failed or expired (pending timeout: 300 s).",
+    });
+    expect(await w.t.run((ctx) => ctx.db.get(expiredSessionId))).toMatchObject({
+      status: "failed",
+      endCode: "expired_before_start",
+    });
+    expect(await w.t.run((ctx) => ctx.db.get(liveSessionId))).toMatchObject({
       status: "pending",
     });
     expect(
       await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+  });
+
+  it("refuses a shipped-file registration on an empty registry and cleans up its file", async () => {
+    const w = await seedWorld(modules);
+    await w.t.run(async (ctx) => {
+      const versions = await ctx.db.query("medical_parameters_versions").collect();
+      for (const version of versions) {
+        await ctx.db.delete(version._id);
+        await ctx.storage.delete(version.storageId);
+      }
+    });
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "pending",
+      kind: "auto",
+    });
+
+    await expect(registerShippedMedicalParameters(w.t)).rejects.toThrow(
+      "Cannot register a medical parameter version while 1 remote launch is pending; retry once it is armed, failed or expired (pending timeout: 300 s).",
+    );
+
+    expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "pending",
+    });
+    expect(
+      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+    ).toEqual([]);
+    expect(await storedFiles(w.t)).toEqual([]);
+  });
+
+  it("uses the plural refusal when two auto launches are pending", async () => {
+    const w = await seedWorld(modules);
+    await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "pending",
+      kind: "auto",
+    });
+    await addSession(w, {
+      machineId: w.otherMachine,
+      userId: w.otherPatient,
+      status: "pending",
+      kind: "auto",
+    });
+
+    await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toEqual({
+      refusal:
+        "Cannot register a medical parameter version while 2 remote launches are pending; retry once they are armed, failed or expired (pending timeout: 300 s).",
+    });
+  });
+
+  it("counts a 400-second-old launch when the pending TTL is 600 seconds", async () => {
+    process.env.PENDING_SESSION_TTL_S = "600";
+    const w = await seedWorld(modules);
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "pending",
+      kind: "auto",
+    });
+    await w.t.run((ctx) =>
+      ctx.db.patch(sessionId, { startedAt: NOW - 400_000 }),
+    );
+
+    await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toEqual({
+      refusal:
+        "Cannot register a medical parameter version while 1 remote launch is pending; retry once it is armed, failed or expired (pending timeout: 600 s).",
+    });
+    expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "pending",
+      startedAt: NOW - 400_000,
+    });
   });
 
   it("allows registration after a remote launch is already armed", async () => {

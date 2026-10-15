@@ -1054,6 +1054,8 @@ stable du refus (`ARMING_REFUSALS`, `convex/training.ts`, et
 | 7 | La FC max retenue du pratiquant est connue et **égale** à `subjectHrMax`, celle que le lancement a donnée à la machine, qui y ajuste le programme. Une valeur changée, même dans le bon sens, est refusée sans recalcul : la machine ne tourne jamais sur l'ancienne. L'estimation par l'âge peut changer au 1er janvier (UTC), selon l'âge (de 41 à 42 ans, elle reste à 179 bpm) : un lancement en attente à ce moment-là peut être refusé. | `hr_max_changed_before_start` |
 | 8 | Le pratiquant n'a aucune autre séance qui peut le tenir (règle ci-dessous), par exemple une séance démarrée à une autre machine pendant que celle-ci attendait. | `rider_busy` |
 
+La zone cible n'est pas revérifiée à l'armement : aucune version ne peut être inscrite pendant qu'un lancement auto attend, et les lancements déjà expirés sont échoués au moment de l'inscription.
+
 Un lancement refusé passe `failed`, avec `endedAt`, `endReason` (la phrase
 anglaise du refus) et `endCode` (le code). Chaque code de refus à l'armement
 est aussi dans la table `convex/lib/errors.ts`, et le site le traduit comme
@@ -1975,11 +1977,12 @@ prend pas en charge Ed25519, l'enregistrement échoue fermé ; le repli est une
 action avec la directive `"use node"` qui vérifie la signature avec
 `node:crypto`.
 
-Inscrire la version aussitôt après le déploiement. Un lancement distant laissé
-en attente par le code précédent peut alors échouer à l'armement avec
-`age_refused_before_start` si aucune version n'est encore inscrite, ou avec
-`hr_max_changed_before_start` si l'arrondi de Tanaka a changé la FC max estimée
-(notamment aux âges de 25, 45, 65 et 85 ans).
+Inscrire la version aussitôt après le déploiement. Si un lancement laissé en
+attente par le code précédent existe encore, l'inscription est refusée ; le
+balayage l'échoue dans la minute, puis réessayez. Les lancements déjà expirés
+sont échoués à l'inscription avec `expired_before_start`. Si un lancement
+atteint l'armement alors qu'aucune version n'est encore inscrite, il échoue
+avec `age_refused_before_start`.
 
 1. Installer les dépendances à la racine : `npm ci`.
 2. Créer un déploiement de développement et générer `convex/_generated/` :

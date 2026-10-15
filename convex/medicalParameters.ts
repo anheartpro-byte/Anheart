@@ -65,7 +65,7 @@ export const registerVersion = internalAction({
       new Blob([args.content], { type: "application/json" }),
     );
     try {
-      return await ctx.runMutation(internal.medicalParametersStore.insertVersion, {
+      const result = await ctx.runMutation(internal.medicalParametersStore.insertVersion, {
         version: parsed.version,
         issuedAt: parsed.issuedAt,
         storageId,
@@ -75,6 +75,8 @@ export const registerVersion = internalAction({
         minRiderAge: parsed.minRiderAge,
         hrMaxFormula: parsed.hrMaxFormula,
       });
+      if (typeof result !== "string") throw new Error(result.refusal);
+      return result;
     } catch (error) {
       try {
         await ctx.storage.delete(storageId);

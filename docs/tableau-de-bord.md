@@ -460,8 +460,8 @@ patient = celles où il a le droit.
   « En direct » / « Données périmées » (§6), nombre de programmes, bouton
   **Lancer une séance auto**, lien **Détails**. 90 s après le dernier
   signal, la carte affiche « Hors ligne » et grise le bouton (§6). Elle le grise
-aussi si la machine annonce des paramètres médicaux non signés ou si aucune
-version de référence n'est enregistrée, avec la raison affichée.
+  aussi si la machine annonce des paramètres médicaux non signés ou si aucune
+  version de référence n'est enregistrée, avec la raison affichée.
 
 ### Sessions : `/fr/dashboard/sessions`
 

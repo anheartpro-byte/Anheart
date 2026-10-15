@@ -812,6 +812,39 @@ async function failBeforeStart(
 }
 
 /**
+ * Settle expired auto launches before registering a medical parameter version.
+ * The registration invariant is that no pending launch can later be armed
+ * against a version other than the one used when it was created: expired
+ * launches become terminal in the same transaction, and the caller gets the
+ * count of still-waiting launches and must refuse registration if it is not 0.
+ * `kind` covers pending launches written before `origin` was added.
+ */
+export async function settlePendingLaunchesForRegistration(
+  ctx: MutationCtx,
+  now: number,
+): Promise<number> {
+  const pending = await ctx.db
+    .query("sessions")
+    .withIndex("by_status_and_started", (q) => q.eq("status", "pending"))
+    .collect();
+  let pendingCount = 0;
+  for (const session of pending) {
+    if (session.kind !== "auto") continue;
+    if (expired(session, now)) {
+      await failBeforeStart(
+        ctx,
+        session,
+        refusalFor("expired_before_start"),
+        now,
+      );
+    } else {
+      pendingCount += 1;
+    }
+  }
+  return pendingCount;
+}
+
+/**
  * Fail every launch from the dashboard that is still pending and that its
  * machine must no longer arm (`armingRefusal`): one that waited longer than
  * `PENDING_SESSION_TTL_S` (`endReason` "expired before the machine armed

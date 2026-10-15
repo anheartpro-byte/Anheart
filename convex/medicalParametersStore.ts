@@ -8,7 +8,10 @@
 import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 import { compareMedicalVersions, currentMedicalParameters } from "./lib/medicalParameters";
-import { expired, pendingSessionTtlMs } from "./training";
+import {
+  pendingSessionTtlMs,
+  settlePendingLaunchesForRegistration,
+} from "./training";
 
 const registrationValues = {
   version: v.string(),
@@ -24,27 +27,9 @@ const registrationValues = {
 /** Add a unique version that is newer than the current registered version. */
 export const insertVersion = internalMutation({
   args: registrationValues,
-  returns: v.string(),
+  returns: v.union(v.string(), v.object({ refusal: v.string() })),
   handler: async (ctx, args) => {
     const now = Date.now();
-    const recentPending = ctx.db
-      .query("sessions")
-      .withIndex("by_status_and_started", (q) =>
-        q.eq("status", "pending").gte("startedAt", now - pendingSessionTtlMs()),
-      )
-      .filter((q) => q.eq(q.field("origin"), "remote"));
-    let pendingCount = 0;
-    for await (const session of recentPending) {
-      if (!expired(session, now)) pendingCount += 1;
-    }
-    if (pendingCount > 0) {
-      const plural = pendingCount === 1 ? "" : "es";
-      const retry = pendingCount === 1 ? "it arms or expires" : "they arm or expire";
-      throw new Error(
-        `Cannot register a medical parameter version while ${pendingCount} remote pending launch${plural}; retry after ${retry}. Their timeout is ${pendingSessionTtlMs() / 1000} seconds (300 by default, 600 maximum).`,
-      );
-    }
-
     const duplicate = await ctx.db
       .query("medical_parameters_versions")
       .withIndex("by_version", (q) => q.eq("version", args.version))
@@ -61,6 +46,18 @@ export const insertVersion = internalMutation({
         `Medical parameters version ${args.version} is not greater than current version ${current.version}`,
       );
     }
+
+    const pendingCount = await settlePendingLaunchesForRegistration(ctx, now);
+    if (pendingCount > 0) {
+      const singular = pendingCount === 1;
+      const noun = singular ? "launch" : "launches";
+      const verb = singular ? "is" : "are";
+      const pronoun = singular ? "it is" : "they are";
+      return {
+        refusal: `Cannot register a medical parameter version while ${pendingCount} remote ${noun} ${verb} pending; retry once ${pronoun} armed, failed or expired (pending timeout: ${pendingSessionTtlMs() / 1000} s).`,
+      };
+    }
+
     await ctx.db.insert("medical_parameters_versions", {
       ...args,
       registeredAt: Date.now(),

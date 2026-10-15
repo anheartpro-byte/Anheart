@@ -175,11 +175,13 @@ function positiveWhole(
   path: string,
   sourceToken: string | undefined,
 ): number {
+  // The source scanner records every numeric token in valid JSON documents.
   if (
     typeof value !== "number" ||
     !Number.isInteger(value) ||
     value <= 0 ||
-    (sourceToken !== undefined && /[.eE]/.test(sourceToken))
+    sourceToken === undefined ||
+    /[.eE]/.test(sourceToken)
   ) {
     throw new Error(`${path} must be a positive whole number`);
   }
