@@ -1084,9 +1084,10 @@ secondes entières, de 90 à 600. Absente, ou toute autre valeur : 300. Elle
 n'est posée sur aucun déploiement aujourd'hui. La confirmation applique le
 délai à l'instant même ; la tâche planifiée passe le lancement `failed` dans
 la minute qui suit. Le poll cesse de l'offrir **45 s avant** l'échéance
-(`POLL_MARGIN_S`) : la console actuelle arme dès qu'elle lit un lancement, et
-un lancement lu juste avant l'échéance démarrerait, puis serait refusé à sa
-confirmation et arrêté aussitôt. Une confirmation reste acceptée jusqu'à
+(`POLL_MARGIN_S`) : la console de ce dépôt demande le départ après la confirmation
+de son opérateur, avant d'armer, et n'arme que sur un 2xx de `training/start`.
+Sur un 409, elle n'arme pas et n'envoie pas de fin ; une console antérieure, qui
+arme avant de confirmer, s'arrête aussitôt sur la rampe ordinaire. Une confirmation reste acceptée jusqu'à
 l'échéance elle-même. La borne basse de 90 s laisse un lancement offert 45 s
 au moins.
 
@@ -1113,17 +1114,18 @@ pratiquant.
 
 **Limites.** Une séance `interrupted` dont la machine ne revient jamais (et
 dont la fin n'arrive jamais) tient son pratiquant et sa machine sans fin :
-aucune fonction ne la clôt. La console de ce dépôt confirme un lancement
-**après** l'avoir armé : un refus à l'armement l'arrête aussitôt sur la rampe
-ordinaire ([section 6](#6-routes-http-machine-convexhttpts), « Départ non
-pris »), il ne l'empêche pas de démarrer. Le poll n'offrant déjà pas un
-lancement refusé, il reste les secondes entre le poll et la confirmation.
-Et une confirmation restée sans réponse (réseau coupé) laisse la séance
-tourner pendant toute la coupure, sous le seul superviseur local : la
-tâche planifiée passe pendant ce temps le lancement `failed` (expiré, ou
-refusé pour une autre raison), ce qui libère son pratiquant, et le 409
-reçu au retour du réseau arrête alors la séance. Ne pas armer du tout,
-sans réponse comme sur un refus, est la couche Pi d'ANH-144.
+aucune fonction ne la clôt. La console de ce dépôt demande le départ après
+la confirmation de son opérateur et avant d'armer, et n'arme que sur un 2xx
+de `training/start`. Sur un 409, elle n'arme pas et n'envoie pas de fin ;
+une console antérieure, qui arme avant de confirmer, s'arrête aussitôt sur
+la rampe ordinaire. Le poll n'offrant déjà pas un lancement refusé, il reste
+les secondes entre le poll et la confirmation. Une confirmation restée sans
+réponse (réseau coupé) ne fait pas armer la console. La tâche planifiée passe
+pendant ce temps le lancement `failed` (expiré, ou refusé pour une autre
+raison), ce qui libère son pratiquant. Si Convex a accepté la confirmation
+mais que son 2xx s'est perdu, la console reste non armée ; une nouvelle
+confirmation reçoit `session_not_pending` (400), sans armement, et la machine
+peut rester tenue jusqu'à l'interruption.
 
 ---
 
@@ -1761,7 +1763,7 @@ déploiement.
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
 | `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null}]}` (`getRoster`) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
-| `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | une fois, quand le Pi a armé un lancement distant ; la console envoie les deux champs facultatifs. Jamais limitée en débit |
+| `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
 | `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points et 300 Kio max) | `{stored, duplicates, rejected}` | lots de 300 points max : toutes les 5 s pour une séance à jour, toutes les 3 s pour ce qui est en retard |
@@ -1888,9 +1890,10 @@ pendant qu'il attendait ([Revérification à
 l'armement](#revérification-à-larmement-anh-144)). Une machine hors ligne
 10 min : son lancement est expiré dans la minute qui suit ses 5 min
 d'attente, et la machine revenue ne se le voit pas offrir ; si elle l'avait
-lu avant de se taire, elle l'a armé (la console actuelle arme dès la
-lecture), sa confirmation reçoit 409 `expired_before_start` au retour du
-réseau, et elle l'arrête alors. « Expirée » dit donc que le départ n'a pas
+lu avant de se taire, la console ne l'aurait armé qu'après confirmation de
+son opérateur et réponse 2xx de `training/start`. Sur un 409, elle n'arme
+pas et n'envoie pas de fin ; une console antérieure, qui arme avant de
+confirmer, s'arrête aussitôt sur la rampe ordinaire. « Expirée » dit donc que le départ n'a pas
 été confirmé à temps, pas que la machine n'a pas tourné.
 
 `convex/crons.ts` : `check-offline-machines`, **toutes les minutes**. Une machine
@@ -2779,9 +2782,10 @@ servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
 plus stocké deux fois.
 
 La console de ce dépôt est en `1.5`. Elle connaît les codes de refus à
-l'armement, et confirme toujours un lancement après l'avoir armé : sur un 409
-elle arrête la séance aussitôt, comme sur tout refus de sa confirmation. Ne
-pas armer du tout sur ce refus est la couche Pi d'ANH-144. Une console `1.4`
+l'armement et demande le départ après confirmation de son opérateur, avant
+d'armer ; elle n'arme que sur un 2xx de `training/start` et n'envoie pas de
+fin sur un 409. Une console antérieure, qui arme avant de confirmer, s'arrête
+aussitôt sur la rampe ordinaire. Une console `1.4`
 face à un serveur `1.5` fait de même : son indicateur de liaison ne
 reconnaît pas le code, et montre un instant une réponse inconnue. Face à un
 serveur `1.4`, une console `1.5` ne reçoit jamais de 409 : rien ne change pour

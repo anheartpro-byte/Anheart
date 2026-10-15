@@ -3,22 +3,24 @@
 What the dashboard receives of a session (its 1 Hz telemetry, its events, its
 end) is read back from the session's local record
 (:mod:`src.record.upload`), from the place the dashboard last acknowledged
-(:mod:`src.record.cursor`). Nothing of a session waits in memory: what is not
-acknowledged yet is on disk, and stays there across a lost link, a dashboard
-of another contract, or a console that restarts, by choice or not.
+(:mod:`src.record.cursor`). Nothing of a recorded session waits in memory:
+what is not acknowledged yet is on disk, and stays there across a lost link,
+a dashboard of another contract, or a console that restarts, by choice or not.
+A refused launch has no record; its due end stays in memory until the link can
+take it.
 
 One session, in order
 ---------------------
 1. **declared** (a session started at the machine), under the reference its
    record carries, so that declaring it again, even after a restart, gives the
-   same session; or **confirmed** (a launch from the dashboard). Nothing is
-   sent before that. A confirmation the dashboard answers with anything but a
-   yes has the running session stopped at once: the machine does not run on
-   for a session the dashboard does not hold started. For the session that is
-   RUNNING this is :meth:`RecordUplink.greet`, called from the stop watch's
-   task and not from the sending: it is the first thing the dashboard hears
-   of a session and what lets its stop be asked for, so it waits behind no
-   reading of a record and no catching up, and reads nothing from the disk;
+   same session; or **already confirmed** (a launch the poll task confirmed
+   before arming). Older armed launches whose start is not yet confirmed use
+   :meth:`RecordUplink.greet` to confirm before telemetry; a refusal or missing
+   route stops that session at once. For a session that is RUNNING this is
+   called from the stop watch's task and not from the sending: it is the first
+   thing the dashboard hears of a session and what lets its stop be asked for,
+   so it waits behind no reading of a record and no catching up, and reads
+   nothing from the disk;
 2. **telemetry** then **events**, read from the cursor, one bounded batch at a
    time. The cursor moves when the dashboard acknowledges a batch, and is then
    written to disk;
@@ -84,6 +86,7 @@ from typing import Final, Protocol, assert_never
 from uuid import uuid4
 
 from src.clock import Clock
+from src.contract import ErrorCode
 from src.record.cursor import Cursor, UnreadableCursor, store
 from src.record.export import BUSY, TIMEOUT, RecordIo
 from src.record.rows import JsonValue
@@ -220,6 +223,9 @@ class Refusal:
     final: bool
     """Whether its stable code says the same request will always be refused."""
 
+    status: int | None = None
+    code: ErrorCode | None = None
+
 
 type Answer = Acked | Held | RouteMissing | Refusal
 
@@ -274,12 +280,14 @@ class Declaration:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ArmedSession:
-    """A session the runtime has just armed."""
+    """A session the runtime armed, including whether its remote start was already confirmed."""
 
     declaration: Declaration
     started_at: UnixMillis
     cloud_session_id: str | None
     """The launch from the dashboard this answers; ``None`` for a start at the machine."""
+
+    start_confirmed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +512,7 @@ class RecordUplink:
         "_io",
         "_last_batch",
         "_live",
+        "_owed_queue",
         "_said",
         "_scan_at",
         "_scanned",
@@ -539,6 +548,7 @@ class RecordUplink:
         self._live: _Owed | None = None
         self._catching: _Owed | None = None
         self._backlog: tuple[str, ...] = ()
+        self._owed_queue: tuple[_Owed, ...] = ()
         self._scanned: bool = False
         self._scan_at: Monotonic | None = None
         self._held_until: Monotonic | None = None
@@ -584,14 +594,21 @@ class RecordUplink:
         waiting, and would hand it out again.
         """
         owed = self._catching
-        return owed is not None and owed.refused_launch
+        return (owed is not None and owed.refused_launch) or any(
+            queued.refused_launch for queued in self._owed_queue
+        )
 
     @property
     def owed(self) -> int:
         """Sessions the dashboard has not acknowledged whole, as far as this run knows."""
         live = self._live
         running = 0 if live is None or live.cursor.state == "complete" else 1
-        return running + (0 if self._catching is None else 1) + len(self._backlog)
+        return (
+            running
+            + (0 if self._catching is None else 1)
+            + len(self._owed_queue)
+            + len(self._backlog)
+        )
 
     # --- what the link tells it ------------------------------------------
 
@@ -666,7 +683,7 @@ class RecordUplink:
             cursor=Cursor(
                 boot_id=None if source is None else source.boot_id,
                 session_id=remote,
-                start_confirmed=remote is None,
+                start_confirmed=session.start_confirmed or remote is None,
             ),
         )
 
@@ -705,8 +722,10 @@ class RecordUplink:
         """Make ``owed`` the session being caught up: the one that just ended comes first."""
         waiting = self._catching
         if waiting is not None:
+            if waiting.refused_launch:
+                self._owed_queue = (*self._owed_queue, owed)
+                return
             if waiting.record is None:
-                # No record to take it up from later, and one slot: the older is given up.
                 _logger.warning(
                     "dashboard: the end of %s could not be delivered and is given up",
                     waiting.cursor.session_id or waiting.local_ref,
@@ -746,7 +765,11 @@ class RecordUplink:
     async def _catch_up(self, now: Monotonic) -> None:
         owed = self._catching
         if owed is None:
-            owed = await self._next(now)
+            if self._owed_queue:
+                owed = self._owed_queue[0]
+                self._owed_queue = self._owed_queue[1:]
+            else:
+                owed = await self._next(now)
             if owed is None:
                 return
             self._catching = owed
@@ -1037,12 +1060,10 @@ class RecordUplink:
     async def _confirm(self, now: Monotonic, owed: _Owed, session_id: str) -> _Step | None:
         """Confirm the start of a launch from the dashboard. ``None`` once it is settled.
 
-        Anything but a yes or a silence has the running session stopped: the
-        machine is armed for a session the dashboard does not hold started
-        (cancelled there between the poll and the arm, or not taken for a
-        reason of the link's own), and whoever launched it could not stop it.
-        A refusal that is about the link leaves the confirmation owed: it is
-        made again, and the record sent, once the dashboard takes it.
+        For an older armed launch that has no pre-arm confirmation, a refusal
+        or missing route stops the running session because the dashboard
+        cannot stop a session it does not hold started. A link outage leaves
+        the confirmation owed and is retried later.
 
         "The running session" is read AFTER the answer: one that arrives when
         its session has ended is about that session alone, and stops no other.

@@ -846,7 +846,7 @@ Après **Lancer** :
    | Raison affichée | Cause |
    |---|---|
    | Droit retiré avant le départ | Le droit de lancement du patient a été retiré, le gestionnaire ne gère plus la machine ou le patient, une adhésion a été désactivée, ou un compte supprimé. |
-   | Expirée : départ non confirmé à temps | La machine n'en a pas confirmé le départ en 5 min (`PENDING_SESSION_TTL_S`, [convex.md](convex.md#revérification-à-larmement-anh-144)) : machine hors ligne, par exemple. Passée échouée dans la minute qui suit. La console actuelle arme avant de confirmer : elle a pu démarrer, et la confirmation refusée l'arrête alors sur la rampe ordinaire. Le lancement n'est plus offert à la machine 45 s avant l'échéance. |
+   | Expirée : départ non confirmé à temps | La machine n'en a pas confirmé le départ en 5 min (`PENDING_SESSION_TTL_S`, [convex.md](convex.md#revérification-à-larmement-anh-144)) : machine hors ligne, par exemple. Passée échouée dans la minute qui suit. La console de ce dépôt demande le départ après la confirmation de son opérateur, avant d'armer, n'arme que sur un 2xx et n'envoie pas de fin sur 409 ; une console antérieure, qui arme d'abord, s'arrête aussitôt sur la rampe ordinaire sur un refus. Le lancement n'est plus offert à la machine 45 s avant l'échéance. |
    | FC max du pratiquant modifiée avant le départ | La FC max retenue n'est plus celle du lancement : relancer la séance. |
    | Âge du pratiquant refusé avant le départ | L'année de naissance a été effacée, ou donne moins de 18 ans. |
    | Pratiquant déjà dans une autre séance, en attente ou en cours : une seule à la fois. | Une séance a démarré pour lui sur une autre machine pendant l'attente. |
@@ -855,8 +855,10 @@ Après **Lancer** :
 
    Une telle séance n'est comptée ni « active » ni « en attente » sur le
    tableau de bord. Une confirmation de départ qui arriverait quand même est
-   refusée (409) ; la console de ce dépôt confirme un départ juste après
-   avoir armé la machine, elle l'arrête alors aussitôt sur la rampe
+   refusée (409) ; la console de ce dépôt demande le départ après la
+   confirmation de son opérateur, avant d'armer, et n'arme que sur un 2xx.
+   Sur ce 409, elle n'arme pas et n'envoie pas de fin ; une console
+   antérieure, qui arme avant de confirmer, s'arrête aussitôt sur la rampe
    ordinaire. Le contrôle de l'aptitude et du consentement (ANH-143) n'est pas
    encore fait.
 

@@ -68,6 +68,9 @@ var state = {
   programsEnabled: true, // from /api/panel; false until milestone M5
   panel: null,           // the last /api/panel answer
   panelAt: 0,            // performance.now() when it came
+  remoteLaunch: null,
+  remoteLaunchMessage: null,
+  remoteLaunchSubmitting: false,
   status: null,          // the last /api/status answer
   statusAt: 0,           // performance.now() when it came
   statusSent: 0,         // /api/status requests sent so far
@@ -1497,6 +1500,82 @@ function renderPanel(panel) {
 function loadPanel() {
   return api("/api/panel").then(renderPanel).catch(function () {
     /* the banner and the token note already say the API is unreachable */
+  });
+}
+
+function renderRemoteLaunch(offer) {
+  var card = el("remote-launch-card");
+  var confirm = el("remote-launch-confirm");
+  state.remoteLaunch = offer;
+  show(card, Boolean(offer));
+  show(el("start"), !offer);
+  if (!offer) {
+    text(el("remote-launch-status"), "");
+    text(el("remote-launch-passenger-note"), "");
+    state.remoteLaunchMessage = null;
+    return;
+  }
+  grid(el("remote-launch-facts"), [
+    ["passager prevu", offer.passenger_name || "indisponible"],
+    ["programme", offer.program],
+    ["lance par", offer.launched_by],
+  ]);
+  text(el("remote-launch-passenger-note"), offer.passenger_reason || "");
+  var stage = state.remoteLaunchSubmitting ? "request_in_progress" : offer.state;
+  var labels = {
+    waiting_confirmation: "en attente de confirmation",
+    request_in_progress: "demande en cours",
+    refused: "refuse",
+    unconfirmed: "non confirme faute de reponse",
+  };
+  pill(el("remote-launch-state"), labels[stage] || "etat inconnu", stage === "refused" ? "bad" : "warn");
+  var status = state.remoteLaunchMessage;
+  if (!status && stage === "refused" && offer.reason) {
+    status = "refuse : " + offer.reason;
+  } else if (!status && stage === "unconfirmed" && offer.reason) {
+    status = "non confirme faute de reponse : " + offer.reason;
+  } else if (!status && stage === "request_in_progress") {
+    status = "demande en cours";
+  } else if (!status && stage === "waiting_confirmation") {
+    var reason = offer.reason || offer.passenger_reason;
+    status = reason ? labels[stage] + " : " + reason : labels[stage];
+  } else if (!status) {
+    status = labels[stage] || "etat inconnu";
+  }
+  text(el("remote-launch-status"), status);
+  confirm.disabled = !offer.can_confirm || state.remoteLaunchSubmitting;
+}
+
+function loadRemoteLaunch() {
+  return api("/api/remote-launch").then(function (offer) {
+    var previous = state.remoteLaunch;
+    if (!offer || !previous || offer.session_id !== previous.session_id ||
+        offer.state !== previous.state || offer.reason !== previous.reason ||
+        offer.passenger_reason !== previous.passenger_reason) {
+      state.remoteLaunchMessage = null;
+    }
+    renderRemoteLaunch(offer);
+  }).catch(function () {});
+}
+
+function doConfirmRemoteLaunch() {
+  var offer = state.remoteLaunch;
+  if (!offer || state.remoteLaunchSubmitting) {
+    return;
+  }
+  state.remoteLaunchSubmitting = true;
+  state.remoteLaunchMessage = null;
+  renderRemoteLaunch(offer);
+  api("/api/remote-launch/confirm", {
+    method: "POST",
+    body: { session_id: offer.session_id, operator: rememberOperator(el("operator").value) },
+  }).then(function () {
+    state.remoteLaunchSubmitting = false;
+    loadRemoteLaunch();
+  }).catch(function (error) {
+    state.remoteLaunchSubmitting = false;
+    state.remoteLaunchMessage = error.message;
+    renderRemoteLaunch(offer);
   });
 }
 
@@ -3681,6 +3760,7 @@ function start() {
   el("rider").onchange = onRiderChange;
   el("preview").onclick = doPreview;
   el("start").onclick = doStart;
+  el("remote-launch-confirm").onclick = doConfirmRemoteLaunch;
   el("stop").onclick = doStop;
   el("estop").onclick = doEstop;
   el("ack").onclick = doAcknowledge;
@@ -3720,6 +3800,7 @@ function start() {
 
   window.setInterval(refreshLiveness, 500);
   window.setInterval(loadPanel, PANEL_MS);
+  window.setInterval(loadRemoteLaunch, PANEL_MS);
   window.setInterval(loadSensors, SENSORS_MS);
   window.setInterval(loadRoster, ROSTER_MS);
   window.setInterval(loadCamera, 1000);
@@ -3735,6 +3816,7 @@ function start() {
 
 function boot() {
   loadPanel();
+  loadRemoteLaunch();
   loadSensors();
   loadRoster();
   loadStatus()

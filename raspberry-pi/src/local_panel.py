@@ -138,7 +138,7 @@ import os
 import signal
 from abc import abstractmethod
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event as ThreadEvent
 from threading import Thread
@@ -154,6 +154,7 @@ from src.cloud_sync import (
     CloudTransport,
     DepositTask,
     HttpxTransport,
+    Launch,
     PacedTransport,
     SessionKind,
     SessionListener,
@@ -917,6 +918,24 @@ class LocalPanel:
         """The dashboard link, or ``None`` when this console runs unlinked."""
         return self._cloud
 
+    def attach_cloud(
+        self,
+        *,
+        cloud: CloudSync,
+        transport: HttpxTransport | None,
+        health: HealthWatch | None,
+    ) -> None:
+        """Finish wiring the dashboard after construction, once its panel preflight exists."""
+        self._listener = cloud
+        self._cloud = cloud
+        self._transport = transport
+        self._health = health
+        self._services = replace(
+            self._services,
+            remote_launch_current=cloud.current_remote_launch,
+            remote_launch_confirm=cloud.confirm_remote_launch,
+        )
+
     @property
     def roster(self) -> Roster:
         """The riders' list a start with a person on board names one of."""
@@ -1211,18 +1230,7 @@ class LocalPanel:
         """
         operator = command.operator
         rider = self._rider_for(command)
-        if self._recorder is not None:
-            # A refusal below may quote the programme's identifier, or the rider's
-            # age: the operator is shown both, and neither is written to disk.
-            # Nor is the rider's name, which no refusal quotes.
-            facts = rider.value if isinstance(rider, Ok) else None
-            age = None if facts is None else facts.age
-            label = None if facts is None else facts.label
-            self._recorder.withhold(
-                command.profile_id,
-                "" if age is None else rider_words(age),
-                "" if label is None else label,
-            )
+        self._withhold_programme_words(command.profile_id, rider)
         prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
             self._refuse_programme(command, prepared.error)
@@ -1246,6 +1254,7 @@ class LocalPanel:
                 program=program,
                 subject_id=command.subject_id,
                 cloud_session_id=command.cloud_session_id,
+                confirmed_by=command.confirmed_by,
                 arming_began=asked,
                 arming_refused=refused,
             )
@@ -1267,13 +1276,17 @@ class LocalPanel:
         """What this programmed start is vetted on, or why it has nothing to be vetted on.
 
         A launch from the dashboard carries the rider's values: the dashboard
-        read them when it was launched (ANH-144 re-checks them at the arming).
+        read them when it was launched. The roster is still checked for this
+        identity at the preflight and at the arming, but is not their source.
         A start at the console names a rider and nothing else: the list held
         now must hold them, with a maximum heart rate and a birth year, both
         set on the site. A rider it no longer holds, a list too old, a value
         missing: refused, whatever the page showed when the start was asked.
         """
         if command.cloud_session_id is not None:
+            found = self._roster.find(command.subject_id, self._clock.monotonic())
+            if isinstance(found, Err):
+                return Err(describe_passenger_refusal(found.error))
             return Ok(RiderFacts(command.subject_hr_max, command.subject_age, None))
         found = self._roster.find(command.subject_id, self._clock.monotonic())
         if isinstance(found, Err):
@@ -1283,6 +1296,46 @@ class LocalPanel:
             return Err(describe_passenger_refusal(passenger.error))
         listed = passenger.value
         return Ok(RiderFacts(listed.hr_max, listed.age, listed.rider.name))
+
+    def preflight_remote_start(self, launch: Launch) -> Result[None, str]:
+        """Run the panel's start gates without submitting a command or arming."""
+        command = StartSession(
+            profile_id=launch.profile_id,
+            operator=launch.operator,
+            total_duration_s=launch.total_duration_s,
+            at=self._clock.monotonic(),
+            request_id="preflight",
+            subject_id=launch.subject_id,
+            subject_hr_max=launch.subject_hr_max,
+            subject_age=launch.subject_age,
+            cloud_session_id=launch.session_id,
+        )
+        rider = self._rider_for(command)
+        self._withhold_programme_words(command.profile_id, rider, launch.subject_label)
+        prepared = self._prepare_programme(command, rider)
+        if isinstance(prepared, Err):
+            return Err(prepared.error)
+        return Ok(None)
+
+    def _withhold_programme_words(
+        self,
+        profile_id: str,
+        rider: Result[RiderFacts, str],
+        remote_label: str | None = None,
+    ) -> None:
+        recorder = self._recorder
+        if recorder is None:
+            return
+        facts = rider.value if isinstance(rider, Ok) else None
+        age = None if facts is None else facts.age
+        label = (
+            remote_label if remote_label is not None else (None if facts is None else facts.label)
+        )
+        recorder.withhold(
+            profile_id,
+            "" if age is None else rider_words(age),
+            "" if label is None else label,
+        )
 
     def _admitted(self, rider: Result[RiderFacts, str]) -> Result[RiderFacts, str]:
         """Gate 1, before the machine is asked anything: the console is in service
@@ -1858,6 +1911,30 @@ def build_panel(
         verdicts=runtime,
         roster=riders,
     )
+    panel = LocalPanel(
+        clock=clock,
+        config=config,
+        drive=drive,
+        runtime=runtime,
+        watchdog=watchdog,
+        surface=surface,
+        hub=hub,
+        ecg=ecg,
+        sim_ecg=ecg_side.simulator,
+        reporter=reporter,
+        services=services,
+        store=store,
+        sensors=sensor_hub,
+        presence=presence,
+        listener=None,
+        health=health,
+        cloud=None,
+        transport=None,
+        recorder=recorder,
+        wall_clock=watch,
+        service=service,
+        roster=riders,
+    )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
     if config.cloud is not None:
@@ -1889,6 +1966,7 @@ def build_panel(
             tiers=config.tiers,
             programs_enabled=config.programs_enabled,
             medical=config.medical,
+            preflight_start=panel.preflight_remote_start,
             software_version=version,
             record_degraded=None if recorder is None else recorder.is_degraded,
             records=None if journal is None else record_source(journal, clock),
@@ -1906,30 +1984,9 @@ def build_panel(
             ),
             roster=riders,
         )
-    return LocalPanel(
-        clock=clock,
-        config=config,
-        drive=drive,
-        runtime=runtime,
-        watchdog=watchdog,
-        surface=surface,
-        hub=hub,
-        ecg=ecg,
-        sim_ecg=ecg_side.simulator,
-        reporter=reporter,
-        services=services,
-        store=store,
-        sensors=sensor_hub,
-        presence=presence,
-        listener=cloud,
-        health=health,
-        cloud=cloud,
-        transport=owned,
-        recorder=recorder,
-        wall_clock=watch,
-        service=service,
-        roster=riders,
-    )
+    if cloud is not None:
+        panel.attach_cloud(cloud=cloud, transport=owned, health=health)
+    return panel
 
 
 def open_service(journal: Journal, clock: Clock) -> ServiceDesk:

@@ -15,7 +15,7 @@ One scenario, end to end. A programme is running; the heart rate is lost for
 * a START typed at the console is refused at once (409), with the reason in
   the answer;
 * a launch waiting on the dashboard is refused and goes back as a failed
-  session, naming the verdict to acknowledge;
+  session with a safe reason, while the console names the verdict to acknowledge;
 * a named acknowledgement at the console clears it, and only then does a
   dashboard launch run.
 
@@ -39,7 +39,9 @@ from typing import Final
 import pytest
 
 from src.bitalino_client import SampleBatch
+from src.control_surface import EventKind
 from src.ecg_pipeline import EcgFrame, EcgMetrics, Treatment
+from src.result import Ok
 from src.sim.physiology import Physiology, SubjectState
 from src.training.plan import JsonValue
 from src.training.runtime import EndReason, RuntimeState
@@ -143,6 +145,13 @@ class Console:
             return launch_answer(pending.pop() if pending else None)
 
         self.dashboard.handlers[POLL] = poll
+
+    def confirm(self, session_id: str, operator: str = OPERATOR) -> None:
+        cloud = self.rig.panel.cloud
+        assert cloud is not None
+        accepted = cloud.confirm_remote_launch(session_id, operator)
+        assert isinstance(accepted, Ok), accepted
+        self.rig.panel.surface.note_launch_confirmed(operator)
 
     def ended(self, session_id: str) -> list[Mapping[str, object]]:
         return [body for body in self.dashboard.to(END) if body["sessionId"] == session_id]
@@ -264,7 +273,9 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         # A launch waiting on the dashboard: refused, and sent back failed,
         # naming the verdict somebody has to acknowledge at the console.
         run.offer("remote-1")
-        polled = await run.run(8.0)
+        await run.run(3.0)
+        run.confirm("remote-1")
+        polled = await run.run(5.0)
         assert run.state() is RuntimeState.FINISHED
         assert not _moved(polled)
         assert run.dashboard.to(START) == []
@@ -273,9 +284,17 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         assert refused[0]["failed"] is True
         reason = refused[0]["reason"]
         assert isinstance(reason, str)
-        assert "refusee par la machine" in reason
-        assert RULE_SESSION_STANDSTILL in reason
-        assert "a acquitter a la console" in reason
+        dashboard_reasons = [
+            event.detail
+            for event in run.rig.events
+            if (
+                event.kind is EventKind.DASHBOARD
+                and RULE_SESSION_STANDSTILL in event.detail
+                and "a acquitter a la console" in event.detail
+            )
+        ]
+        assert len(dashboard_reasons) == 1
+        assert reason == f"refusee par la machine : {dashboard_reasons[0]}"
 
         # Somebody at the machine acknowledges, by name.
         acknowledged = await session.post(
@@ -287,7 +306,9 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
 
         # Only now does a dashboard launch run.
         run.offer("remote-2")
-        await run.run(8.0)
+        await run.run(3.0)
+        run.confirm("remote-2")
+        await run.run(5.0)
         assert run.state() is RuntimeState.RUNNING
         # Confirmed once, with the start the console dated and the age of the session.
         (confirmed,) = run.dashboard.to(START)

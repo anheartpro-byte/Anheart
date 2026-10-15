@@ -910,6 +910,7 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         (SurfaceEvent.START_REQUESTED, OPERATOR, "manuel bench"),
         (SurfaceEvent.FAULT_RESET_REQUESTED, OPERATOR, "reset defaut"),
         (SurfaceEvent.ATTESTED, OPERATOR, "wiring attested"),
+        (SurfaceEvent.LAUNCH_CONFIRMED, OPERATOR, ""),
         (SurfaceEvent.EMERGENCY_STOP, "", "unattributed: pressed"),
         (SurfaceEvent.ACKNOWLEDGED, OPERATOR, "operator_estop"),
         (SurfaceEvent.REFUSED, OPERATOR, f"consigne refusee par {OPERATOR}"),
@@ -935,6 +936,7 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         ("operator_action", "start_requested: manuel bench", ALIAS),
         ("operator_action", "fault_reset_requested: reset defaut", ALIAS),
         ("operator_action", "attested: wiring attested", ALIAS),
+        ("operator_action", "launch_confirmed", ALIAS),
         ("operator_action", "emergency_stop: unattributed: pressed", "system"),
         ("verdict_ack", "acknowledged: operator_estop", ALIAS),
         ("refusal", "refused: consigne refusee par [redacted]", ALIAS),
@@ -944,6 +946,30 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         ("refusal", f"cancelled: {CANCELLED_BY_STOP}", ALIAS),
     ]
     assert all(event.t == 0.5 for event in loaded.value.events[1:])
+
+
+def test_the_confirming_operator_is_written_in_the_armed_session(tmp_path: Path) -> None:
+    recorder, journal, _clock = bare_recorder(tmp_path)
+    confirmer = "Console Operator"
+    recorder.begin(
+        SessionRequest(
+            occupancy=Occupancy.OCCUPIED,
+            operator=f"Dr Manager ({DASHBOARD_OPERATOR})",
+            subject_id=RIDER_ID,
+            cloud_session_id="remote-session",
+            confirmed_by=confirmer,
+        )
+    )
+    journal.drain()
+    path = journal.status(Monotonic(0.0)).path
+    assert path is not None
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    confirmations = [event for event in loaded.value.events if event.detail == "launch_confirmed"]
+    assert len(confirmations) == 1
+    assert confirmations[0].kind is EventKind.OPERATOR_ACTION
+    assert confirmations[0].actor == operator_alias(confirmer)
+    assert confirmer not in (path / "events.jsonl").read_text(encoding="utf-8")
 
 
 def test_a_long_reason_is_cut_to_a_message_and_a_remote_name_is_known_both_ways(

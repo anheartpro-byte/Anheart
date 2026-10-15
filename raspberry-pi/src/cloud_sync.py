@@ -21,15 +21,14 @@ Up, from this machine to the dashboard:
 Down, from the dashboard to this machine, exactly three things:
 
 * an AUTO launch: a preset id, a rider and the rider's maximum heart rate. It
-  goes through :meth:`~src.control_surface.ControlSurface.submit_start` like a
-  start typed at the console, so the same gates apply (emergency-stop wiring
-  attested this boot, no standing verdict, the surface idle), and then through
-  the panel's own checks (medical parameters signed, programmes enabled,
-  occupied ceiling, the preset re-validated against this rider). Any refusal
-  goes back as a failed session with the reason. With unsigned medical
-  parameters the console still asks for launches, though programmes are off,
-  so that one waiting there is refused with that reason rather than left
-  waiting;
+  first passes the same surface and panel checks as a local start, including a
+  fresh roster check, without submitting or arming. Only then does this task
+  send ``training/start``; ``submit_start`` and the panel re-run every gate
+  after a 2xx before the runtime is asked to arm. A local refusal goes back as a failed session with
+  its reason. A refusal by the dashboard is shown on the console and is not
+  ended again; a missing route or an unavailable link leaves the machine
+  unarmed. If the poll still offers the launch, a later operator confirmation
+  may try again;
 * the list of the riders this machine may offer (:mod:`src.roster`), asked
   for at the start and every :data:`~src.roster.ROSTER_PERIOD` while no
   session runs, kept in memory only. It starts nothing: a start at the
@@ -37,10 +36,9 @@ Down, from the dashboard to this machine, exactly three things:
   rider's maximum heart rate and age from that list;
 * a stop request, forwarded as an ordinary end on the commissioned ramp. It
   is looked for by :meth:`CloudSync.watch_stop`, from a task of its own: the
-  question keeps its cadence whatever the sending waits for. And a launch
-  whose start the dashboard does not take, for any reason it gives, is
-  stopped at once: a session that came from the dashboard never runs on
-  where the dashboard could not stop it.
+  question keeps its cadence whatever the sending waits for. A session armed
+  by an older console or before this handshake is still stopped at once when
+  its start is refused or no longer active on the dashboard.
 
 **Nothing else.** In particular a MANUAL session can never be started from
 the dashboard: nothing here can build one. Manual control needs somebody at
@@ -49,13 +47,13 @@ the machine.
 Why the link can never stop the machine by failing
 --------------------------------------------------
 Every call returns a :class:`~src.result.Result`; a dead network is
-``Err(Unreachable)``, logged and retried later, and the session carries on
-under the local supervisor exactly as it would with no dashboard at all. The
-worst a lost link does is leave the dashboard's picture stale, which the
-dashboard shows as stale. Nothing waits for the link in memory: what it owes
-the dashboard is in the session records, and is sent when the link answers
-again, after a restart of the console too (:func:`answer_of` says what each
-answer does to the sending).
+``Err(Unreachable)``, logged and retried later. A remote launch stays unarmed
+until ``training/start`` answers 2xx; a running session continues under the
+local supervisor when its link is lost. The worst a lost link does is leave
+the dashboard's picture stale, which the dashboard shows as stale. Nothing
+waits for the link in memory: what it owes the dashboard is in the session
+records, and is sent when the link answers again, after a restart of the
+console too (:func:`answer_of` says what each answer does to the sending).
 
 One contract, checked on both sides
 -----------------------------------
@@ -110,12 +108,15 @@ from abc import abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, unique
+from http import HTTPStatus
+from types import MappingProxyType
 from typing import Final, Protocol, assert_never, cast
 
 import httpx
 
 from src.clock import Clock
 from src.contract import (
+    ARMING_REFUSALS,
     CONTRACT_HEADER,
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
@@ -142,6 +143,7 @@ from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
 from src.medical import MedicalStatus
 from src.record_uplink import (
+    START_PATH,
     Acked,
     Answer,
     ArmedSession,
@@ -153,8 +155,27 @@ from src.record_uplink import (
     RouteMissing,
     RuntimeEnd,
 )
+from src.remote_launch import (
+    ConfirmationCode,
+    ConfirmationRefusal,
+    LaunchOfferState,
+    OfferConfirmationQueued,
+    OfferRefused,
+    OfferRequestInFlight,
+    OfferUnconfirmed,
+    OfferWaiting,
+    RemoteLaunchView,
+)
 from src.result import Err, Ok, Result
-from src.roster import ROSTER_PATH, Roster
+from src.roster import (
+    ROSTER_PATH,
+    NoList,
+    PassengerRefusal,
+    Rider,
+    Roster,
+    RosterState,
+    describe_passenger_refusal,
+)
 from src.training.plan import JsonValue, ProfileStore, TrainingProfile
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import EstopUnattested
@@ -227,6 +248,22 @@ failure of the moment."""
 
 DASHBOARD_OPERATOR: Final[str] = "tableau de bord"
 """Who a stop from the dashboard is attributed to in the console's event list."""
+
+ARMING_REFUSAL_WORDS: Final[Mapping[ErrorCode, str]] = MappingProxyType(
+    {
+        ErrorCode("expired_before_start"): "lancement expire : depart non confirme a temps",
+        ErrorCode("machine_deleted_before_start"): "machine supprimee avant le depart",
+        ErrorCode("organization_changed_before_start"): (
+            "machine passee dans une autre organisation avant le depart"
+        ),
+        ErrorCode("right_revoked_before_start"): "droit retire avant le depart",
+        ErrorCode("age_refused_before_start"): "age du pratiquant refuse avant le depart",
+        ErrorCode("hr_max_changed_before_start"): "FC max du pratiquant modifiee avant le depart",
+        ErrorCode("rider_busy"): (
+            "pratiquant deja dans une autre seance en attente ou en cours : une seule a la fois"
+        ),
+    }
+)
 
 
 # =========================================================================
@@ -409,6 +446,13 @@ def _answer(response: httpx.Response) -> Result[Document, CloudError]:
     document = _parse_document(response.text)
     if response.status_code >= httpx.codes.BAD_REQUEST:
         return Err(_refusal(response.status_code, document))
+    if not httpx.codes.OK <= response.status_code < httpx.codes.MULTIPLE_CHOICES:
+        return Err(
+            Unreachable(
+                f"HTTP {response.status_code}: unexpected response status",
+                response.status_code,
+            )
+        )
     if document is None:
         return Err(
             Unreachable(f"HTTP {response.status_code}: not a JSON object", response.status_code)
@@ -552,6 +596,14 @@ def describe_refusal(refused: Refused) -> str:
     """
     code = "sans code" if refused.code is None else refused.code
     return f"{code} (HTTP {refused.status}): {bounded(refused.detail)}"
+
+
+def _remote_start_refusal(refused: Refusal) -> str:
+    code = refused.code
+    if refused.status == HTTPStatus.CONFLICT and code is not None and code in ARMING_REFUSALS:
+        return f"{ARMING_REFUSAL_WORDS[code]} ({code})"
+    named_code = "" if code is None else f", {code}"
+    return f"depart distant refuse (HTTP {refused.status}{named_code})"
 
 
 # =========================================================================
@@ -757,7 +809,12 @@ def answer_of(result: Result[Document, CloudError]) -> Answer:
                 return Held(describe_refusal(error), refused=True)
             if error.status == httpx.codes.NOT_FOUND and error.code is None:
                 return RouteMissing()
-            return Refusal(describe_refusal(error), final=error.code in FINAL_CODES)
+            return Refusal(
+                describe_refusal(error),
+                final=error.code in FINAL_CODES,
+                status=error.status,
+                code=error.code,
+            )
     raise assert_never(error)
 
 
@@ -773,6 +830,8 @@ class CloudSync:
     __slots__ = (
         "_awaiting",
         "_clock",
+        "_confirmed_launch",
+        "_confirmed_launch_id",
         "_deposit",
         "_health",
         "_health_context",
@@ -786,7 +845,11 @@ class CloudSync:
         "_link",
         "_medical",
         "_next_profiles",
+        "_offer_generation",
+        "_offer_state",
+        "_offered_launch",
         "_online",
+        "_preflight_start",
         "_programs_enabled",
         "_pushed_rev",
         "_record_degraded",
@@ -813,6 +876,7 @@ class CloudSync:
         tiers: CardiacTiers,
         programs_enabled: bool,
         medical: MedicalStatus | None = None,
+        preflight_start: Callable[[Launch], Result[None, str]] | None = None,
         software_version: SoftwareVersion = UNKNOWN_SOFTWARE_VERSION,
         record_degraded: Callable[[], bool] | None = None,
         records: RecordSource | None = None,
@@ -844,6 +908,7 @@ class CloudSync:
         self._transport: CloudTransport = transport
         self._runtime: RuntimeView = runtime
         self._surface: ControlSurface = surface
+        self._preflight_start: Callable[[Launch], Result[None, str]] | None = preflight_start
         self._store: ProfileStore = store
         self._tiers: CardiacTiers = tiers
         self._programs_enabled: bool = programs_enabled
@@ -865,6 +930,11 @@ class CloudSync:
             said=surface.note_remote_refusal,
         )
         self._awaiting: _Awaiting | None = None
+        self._confirmed_launch_id: str | None = None
+        self._confirmed_launch: Launch | None = None
+        self._offered_launch: Launch | None = None
+        self._offer_generation: int = 0
+        self._offer_state: LaunchOfferState = OfferWaiting()
         self._pushed_rev: int | None = None
         self._next_profiles: Monotonic | None = None
         self._last_heartbeat: Monotonic | None = None
@@ -894,11 +964,83 @@ class CloudSync:
         """Sessions the dashboard has not acknowledged whole, as far as this run knows."""
         return self._uplink.owed
 
+    def current_remote_launch(self) -> RemoteLaunchView | None:
+        launch = self._offered_launch
+        if launch is None:
+            return None
+        found = self._rider_for_launch(launch)
+        if isinstance(found, Ok):
+            passenger_name = found.value.name
+            passenger_reason = None
+        else:
+            passenger_name = None
+            passenger_reason = describe_passenger_refusal(found.error)
+        profile = self._store.get(launch.profile_id)
+        program_name = profile.value.name if isinstance(profile, Ok) else launch.profile_id
+        return RemoteLaunchView(
+            session_id=launch.session_id,
+            profile_id=launch.profile_id,
+            program_name=program_name,
+            launched_by=launch.operator,
+            passenger_name=passenger_name,
+            passenger_reason=passenger_reason,
+            stage=self._offer_state.stage,
+            reason=self._offer_state.reason,
+        )
+
+    def confirm_remote_launch(
+        self, session_id: str, operator: str
+    ) -> Result[None, ConfirmationRefusal]:
+        launch = self._offered_launch
+        if launch is None or launch.session_id != session_id:
+            return Err(
+                ConfirmationRefusal(
+                    ConfirmationCode.NOT_PENDING,
+                    "ce lancement n'est plus propose par le tableau de bord",
+                )
+            )
+        state = self._offer_state
+        if isinstance(state, OfferRefused):
+            return Err(
+                ConfirmationRefusal(
+                    ConfirmationCode.REFUSED,
+                    state.reason,
+                )
+            )
+        if (
+            isinstance(state, (OfferConfirmationQueued, OfferRequestInFlight))
+            or self._awaiting is not None
+            or self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING)
+        ):
+            return Err(
+                ConfirmationRefusal(
+                    ConfirmationCode.IN_PROGRESS,
+                    "une demande de depart est deja en cours",
+                )
+            )
+        found = self._rider_for_launch(launch)
+        if isinstance(found, Err):
+            detail = describe_passenger_refusal(found.error)
+            self._offer_state = OfferWaiting()
+            return Err(ConfirmationRefusal(ConfirmationCode.PASSENGER_UNAVAILABLE, detail))
+        self._offer_state = OfferConfirmationQueued(operator, self._offer_generation)
+        return Ok(None)
+
+    def _rider_for_launch(self, launch: Launch) -> Result[Rider, PassengerRefusal]:
+        roster = self._roster
+        if roster is None:
+            return Err(NoList(RosterState.UNLINKED, None))
+        return roster.find(launch.subject_id, self._clock.monotonic())
+
     # --- what the panel calls --------------------------------------------
 
     def session_started(self, started: StartedSession) -> None:
         """Track a session the runtime has just armed. A launch's wait is over."""
+        self._clear_offer()
         remote = started.cloud_session_id
+        confirmed = remote is not None and remote == self._confirmed_launch_id
+        if confirmed:
+            self._confirmed_launch_id = None
         # The first question about its stop is asked as soon as it may be,
         # whenever the last one about the session before was.
         self._last_status = None
@@ -909,16 +1051,36 @@ class CloudSync:
                 declaration=declaration_of(started),
                 started_at=started.started_at,
                 cloud_session_id=remote,
+                start_confirmed=confirmed,
             )
         )
+        if confirmed:
+            self._confirmed_launch = None
         if self._awaiting is not None and self._awaiting.cloud_session_id == remote:
             self._awaiting = None
 
     def start_refused(self, cloud_session_id: str, detail: str) -> None:
         """A launch the loop refused becomes a failed session on the dashboard."""
+        self._refused_launch = cloud_session_id
+        launch = self._confirmed_launch
+        if launch is None or launch.session_id != cloud_session_id:
+            launch = self._offered_launch
+        matching_launch = (
+            launch if launch is not None and launch.session_id == cloud_session_id else None
+        )
+        offered = self._offered_launch
+        if offered is not None and offered.session_id == cloud_session_id:
+            self._invalidate_offer_state(OfferRefused(detail))
+        if self._confirmed_launch_id == cloud_session_id:
+            self._confirmed_launch_id = None
         if self._awaiting is not None and self._awaiting.cloud_session_id == cloud_session_id:
             self._awaiting = None
-        self._owe_refusal(cloud_session_id, detail)
+        if (
+            self._confirmed_launch is not None
+            and self._confirmed_launch.session_id == cloud_session_id
+        ):
+            self._confirmed_launch = None
+        self._owe_refusal(cloud_session_id, _safe_launch_refusal(detail, matching_launch))
 
     # --- the step ----------------------------------------------------------
 
@@ -935,8 +1097,13 @@ class CloudSync:
         await self._heartbeat(now, snapshot)
         await self._push_profiles(now)
         await self._refresh_roster(now)
-        if not self._uplink.running and self._awaiting is None and not self._uplink.refusal_owed:
+        if (
+            not self._uplink.running
+            and self._runtime.state not in (RuntimeState.RUNNING, RuntimeState.ENDING)
+            and (self._offered_launch is not None or not self._uplink.refusal_owed)
+        ):
             await self._poll(now)
+            await self._process_confirmation(now)
         self._check_launch_timeout(now)
         # The sending last, so a refusal found above goes out in this same step.
         await self._uplink.step()
@@ -966,7 +1133,7 @@ class CloudSync:
     async def send(self, path: str, body: Mapping[str, JsonValue]) -> Answer:
         """POST for the sending of the records, and say what the answer means for it."""
         sent = await self._transport.post(path, body)
-        self._note(sent)
+        self._note(sent, log_refusal_words=path != START_PATH)
         return answer_of(sent)
 
     # --- heartbeat and presets --------------------------------------------
@@ -1105,7 +1272,7 @@ class CloudSync:
         refusal = server_refusal(polled.value.get(SERVER_VERSION_FIELD))
         self._link.announced(refusal)
         if refusal is not None:
-            # An answer of another major arms nothing here, whatever it carries.
+            self._clear_offer()
             self._refuse_server(refusal, launch)
             return
         self._incompatible = None
@@ -1116,7 +1283,128 @@ class CloudSync:
             else None
         )
         if launch is None:
+            self._clear_offer()
             return
+        awaiting = self._awaiting
+        if awaiting is not None and launch.session_id != awaiting.cloud_session_id:
+            self._clear_offer()
+            return
+        self._offer_launch(launch)
+
+    def _offer_launch(self, launch: Launch) -> None:
+        previous = self._offered_launch
+        if previous is not None and previous.session_id == launch.session_id:
+            if previous != launch:
+                self._offered_launch = launch
+                self._offer_generation += 1
+                if not isinstance(self._offer_state, OfferRefused):
+                    detail = "l'offre a change, une nouvelle confirmation est requise"
+                    self._offer_state = OfferWaiting(detail)
+                    self._surface.note_remote_refusal(detail)
+            self._offered_launch = launch
+            return
+        if launch.session_id == self._refused_launch:
+            self._clear_offer()
+            return
+        self._offer_generation += 1
+        self._offered_launch = launch
+        self._offer_state = OfferWaiting()
+
+    def _clear_offer(self) -> None:
+        self._offer_generation += 1
+        self._offered_launch = None
+        self._offer_state = OfferWaiting()
+
+    def _invalidate_offer_state(self, state: LaunchOfferState) -> None:
+        self._offer_generation += 1
+        self._offer_state = state
+
+    async def _process_confirmation(self, now: Monotonic) -> None:
+        state = self._offer_state
+        launch = self._offered_launch
+        if not isinstance(state, OfferConfirmationQueued) or launch is None:
+            return
+        self._offer_state = OfferRequestInFlight(state.generation)
+        if self._awaiting is not None or self._runtime.state in (
+            RuntimeState.RUNNING,
+            RuntimeState.ENDING,
+        ):
+            detail = "une seance est deja en cours"
+            self._invalidate_offer_state(OfferWaiting(detail))
+            self._surface.note_remote_refusal(detail)
+            return
+        found = self._rider_for_launch(launch)
+        if isinstance(found, Err):
+            detail = describe_passenger_refusal(found.error)
+            self._invalidate_offer_state(OfferWaiting())
+            self._surface.note_remote_refusal(detail)
+            _logger.warning("dashboard launch %s is unavailable: %s", launch.session_id, detail)
+            return
+        admitted = self._preflight_remote_start(launch)
+        if isinstance(admitted, Err):
+            self._refuse_local_launch(launch, admitted.error)
+            return
+        await self._confirm_remote_start(launch, state.operator, now, state.generation)
+
+    def _preflight_remote_start(self, launch: Launch) -> Result[None, str]:
+        surface_check = self._surface.check_start()
+        if isinstance(surface_check, Err):
+            return Err(describe_surface_refusal(surface_check.error))
+        preflight = self._preflight_start
+        if preflight is None:
+            return Err("verification locale indisponible")
+        return preflight(launch)
+
+    async def _confirm_remote_start(
+        self, launch: Launch, operator: str, now: Monotonic, generation: int
+    ) -> None:
+        started_at = self._clock.unix_millis()
+        answer = await self.send(
+            START_PATH,
+            {
+                "sessionId": launch.session_id,
+                "startedAt": int(started_at),
+                "sessionAgeMs": 0,
+            },
+        )
+        if generation != self._offer_generation:
+            if isinstance(answer, Acked):
+                self._abandon_obsolete_confirmation(launch)
+            return
+        match answer:
+            case Acked():
+                self._submit_confirmed_launch(launch, operator, now)
+            case Refusal():
+                sentence = _remote_start_refusal(answer)
+                self._refused_launch = launch.session_id
+                self._invalidate_offer_state(OfferRefused(sentence))
+                self._surface.note_remote_refusal(sentence)
+                _logger.warning("dashboard launch %s refused: %s", launch.session_id, sentence)
+            case Held():
+                sentence = "depart distant non confirme : confirmation indisponible"
+                self._invalidate_offer_state(OfferUnconfirmed(sentence))
+                self._surface.note_remote_refusal(sentence)
+                _logger.warning("dashboard launch %s held", launch.session_id)
+            case RouteMissing():
+                sentence = "route training/start inconnue"
+                self._invalidate_offer_state(OfferUnconfirmed(sentence))
+                self._surface.note_remote_refusal(sentence)
+                _logger.warning("dashboard launch %s held: %s", launch.session_id, sentence)
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    def _abandon_obsolete_confirmation(self, launch: Launch) -> None:
+        reason = "confirmation distante abandonnee avant la reponse de training/start"
+        self._refused_launch = launch.session_id
+        current = self._offered_launch
+        if current is not None and current.session_id == launch.session_id:
+            self._invalidate_offer_state(OfferRefused(reason))
+        self._surface.note_remote_refusal(reason)
+        _logger.warning("dashboard launch %s became obsolete before its reply", launch.session_id)
+        self._observe()
+        self._owe_refusal(launch.session_id, reason)
+
+    def _submit_confirmed_launch(self, launch: Launch, operator: str, now: Monotonic) -> None:
         submitted = self._surface.submit_start(
             profile_id=launch.profile_id,
             operator=f"{launch.operator} ({DASHBOARD_OPERATOR})",
@@ -1125,12 +1413,19 @@ class CloudSync:
             subject_hr_max=launch.subject_hr_max,
             subject_age=launch.subject_age,
             cloud_session_id=launch.session_id,
+            confirmed_by=operator,
         )
         if isinstance(submitted, Err):
-            self._owe_refusal(launch.session_id, describe_surface_refusal(submitted.error))
+            self._refuse_local_launch(launch, describe_surface_refusal(submitted.error))
             return
+        self._confirmed_launch_id = launch.session_id
+        self._confirmed_launch = launch
         _logger.info("dashboard launch %s submitted", launch.session_id)
         self._awaiting = _Awaiting(launch.session_id, now)
+
+    def _refuse_local_launch(self, launch: Launch, detail: str) -> None:
+        self._surface.note_remote_refusal(detail)
+        self.start_refused(launch.session_id, detail)
 
     def _refuse_server(self, sentence: str, launch: Launch | None) -> None:
         """The dashboard is of another contract: say so on the console, and fail its launch.
@@ -1160,6 +1455,11 @@ class CloudSync:
         if awaiting is None or elapsed(awaiting.since, now) < LAUNCH_TIMEOUT:
             return
         self._awaiting = None
+        self._confirmed_launch_id = None
+        launch = self._offered_launch
+        self._refused_launch = awaiting.cloud_session_id
+        if launch is not None and launch.session_id == awaiting.cloud_session_id:
+            self._invalidate_offer_state(OfferRefused("la boucle n'a ni demarre ni refuse"))
         self._owe_refusal(awaiting.cloud_session_id, "la boucle n'a ni demarre ni refuse")
 
     # --- a stop from the dashboard ------------------------------------------
@@ -1215,7 +1515,13 @@ class CloudSync:
         if isinstance(ended, Err):
             _logger.warning("dashboard stop not accepted by the console: %s", ended.error)
 
-    def _note(self, result: Result[Document, CloudError], *, contract: bool = True) -> None:
+    def _note(
+        self,
+        result: Result[Document, CloudError],
+        *,
+        contract: bool = True,
+        log_refusal_words: bool = True,
+    ) -> None:
         """Log what an exchange says of the link, and tell the console's indicator.
 
         ``contract``: the route answers only a console whose major the
@@ -1241,7 +1547,7 @@ class CloudSync:
                 case Refused() as refused:
                     # An answer, even a refusal, is a working link.
                     self._tell_refusal(now, refused, contract=contract)
-                    self._hear_refusal(refused)
+                    self._hear_refusal(refused, include_words=log_refusal_words)
                 case _ as unreachable:
                     assert_never(unreachable)
         else:
@@ -1275,16 +1581,20 @@ class CloudSync:
         else:
             self._link.unrecognised(f"{words} : {NOT_THE_DASHBOARD}", contract=contract)
 
-    def _hear_refusal(self, refused: Refused) -> None:
+    def _hear_refusal(self, refused: Refused, *, include_words: bool = True) -> None:
         """Log a refusal by its stable code, once; a refused contract goes to the console."""
         if refused != self._last_refused:
             self._last_refused = refused
-            _logger.warning(
-                "dashboard refused a request: %s (HTTP %d): %s",
-                "sans code" if refused.code is None else refused.code,
-                refused.status,
-                logged_words(refused.detail),
-            )
+            code = "sans code" if refused.code is None else refused.code
+            if include_words:
+                _logger.warning(
+                    "dashboard refused a request: %s (HTTP %d): %s",
+                    code,
+                    refused.status,
+                    logged_words(refused.detail),
+                )
+            else:
+                _logger.warning("dashboard refused a request: %s (HTTP %d)", code, refused.status)
         if refused.code == CONTRACT_UNSUPPORTED:
             self._refuse_server(unsupported_refusal(refused.supported), None)
 
@@ -1306,6 +1616,7 @@ class Launch:
     operator: str
     subject_age: int | None
     """From the rider's birth year on the dashboard; ``None`` if unknown (the panel refuses)."""
+    subject_label: str | None
 
 
 def _launch_of(document: Document) -> Launch | None:
@@ -1321,6 +1632,7 @@ def _launch_of(document: Document) -> Launch | None:
     operator = session.get("operatorName")
     total = session.get("totalDurationS")
     age = session.get("subjectAge")
+    label = session.get("subjectLabel")
     if (
         not isinstance(session_id, str)
         or not isinstance(profile_id, str)
@@ -1344,7 +1656,17 @@ def _launch_of(document: Document) -> Launch | None:
         subject_hr_max=Bpm(round(hr_max)),
         operator=operator or DASHBOARD_OPERATOR,
         subject_age=age if isinstance(age, int) and not isinstance(age, bool) else None,
+        subject_label=label if isinstance(label, str) else None,
     )
+
+
+def _safe_launch_refusal(detail: str, launch: Launch | None) -> str:
+    if launch is None:
+        return detail
+    safe = detail.replace(repr(launch.profile_id), "[retire]")
+    if launch.subject_age is not None:
+        safe = safe.replace(f"passager de {launch.subject_age} ans", "[retire]")
+    return safe
 
 
 def _due(last: Monotonic | None, now: Monotonic, period: Seconds) -> bool:

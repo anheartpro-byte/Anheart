@@ -253,6 +253,8 @@ include = [
     # The dashboard link: it can submit a start and forward a stop, so every
     # branch that decides either is tested, like the rest of the console.
     "src/cloud_sync.py",
+    # The pending launch decision: a remote start cannot proceed without it.
+    "src/remote_launch.py",
     # What that link has last heard of itself, as the state the operator reads
     # on the console: it must never say reachable of a dashboard that is not.
     "src/link_state.py",
@@ -325,6 +327,7 @@ safety_chain = [
     "src/service_watchdog.py",
     "src/service_state.py",
     "src/cloud_sync.py",
+    "src/remote_launch.py",
     "src/link_state.py",
     "src/record_uplink.py",
     "src/contract.py",

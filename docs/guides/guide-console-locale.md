@@ -848,6 +848,39 @@ Repères, carte **Ce que ce programme ferait** (à droite) :
 > reste sous les boutons jusqu'au clic suivant : la note « desactivees » ne le
 > remplace plus.
 
+### Un départ proposé par le tableau de bord
+
+Quand le tableau de bord propose un départ AUTO, une carte **Depart distant** apparaît
+au-dessus de Programme. Vérifiez le passager affiché, le programme et la personne qui
+a lancé la demande. Le nom vient de la liste des passagers tenue par la console,
+recherché par l'identifiant du passager; le libellé reçu avec le lancement n'est pas
+affiché. Si ce passager ne figure pas dans la liste tenue, la carte donne la raison et
+désactive le bouton.
+
+Saisissez votre nom dans le champ **Operateur** habituel puis cliquez une fois sur
+**Cette personne est a bord et prete**. Le bouton local **Demarrer la seance** est
+masqué tant qu'une offre est affichée. La carte indique `en attente de confirmation`,
+puis `demande en cours`; après un refus elle indique `refuse : <raison>`, ou
+`non confirme faute de reponse : <raison>` sans réponse. Quand la séance démarre, la
+carte d'offre disparaît. Sans 2xx de `training/start`, la machine ne reçoit aucun
+démarrage. Un refus du tableau de bord ou un refus local avant ou après le 2xx est
+définitif : ce lancement ne peut plus être confirmé. Les refus du tableau de bord et
+les demandes sans réponse n'envoient pas `training/end`; un refus local envoie une fin
+échouée. Après une absence de réponse ou un empêchement temporaire (passager absent,
+séance déjà en cours au traitement), un nouvel essai exige un nouveau clic après
+récupération, si le poll propose encore l'offre. Elle ne réessaie jamais toute seule.
+
+Le bouton constitue la confirmation opérateur prévue par ANH-144. Il n'applique pas
+le geste physique ni le délai qu'ANH-85 doit apporter. La console utilise le nom
+d'opérateur déjà demandé par les autres démarrages; l'authentification nommée d'ANH-152
+reste à faire. Le nom du passager ne va que de la réponse JSON vers la page, jamais dans
+un enregistrement ou un journal.
+
+Si le serveur a reçu `training/start` mais que le 2xx s'est perdu, une nouvelle
+confirmation peut recevoir `session_not_pending` (400). La console reste non armée et
+la machine peut garder cette séance jusqu'à son interruption. C'est le suivi
+d'idempotence ANH-240.
+
 Constat sur ce profil : son plafond (276 tr/min moteur = 5,54 tr/min = 0,052 g) est
 très bas. En simulation, la fréquence cardiaque reste sous la zone visée (compteur
 `en dessous` qui monte, capture suivante). C'est un réglage de profil, pas une panne.
@@ -906,7 +939,7 @@ Les types d'événements :
 | `taken` | la machine a pris une demande et l'a exécutée : séance démarrée, cible tenue, reset envoyé au variateur, arrêt engagé. Le détail redit ce qui était demandé (`manuel bench`, `cible 5.00 tr/min de sortie`, `reset defaut`) |
 | `refused` (orange) | la machine a refusé une demande, avec la raison. L'écran qui a fait la demande le lit aussi sous son bouton ; les autres écrans ne le voient qu'ici |
 | `cancelled` (orange) | un STOP est arrivé avant que la machine prenne une demande qui attendait (un démarrage, une cible, un reset) : cette demande n'a pas été exécutée |
-| `dashboard` (orange) | une nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.1 vs 2.0)` : le tableau de bord n'est pas de la même version de contrat, aucun lancement distant n'est armé. Ce n'est pas la réponse à une demande faite ici. La ligne défile avec les autres ; l'état, lui, se lit en permanence sur la pastille **Serveur** (§5) |
+| `dashboard` (orange) | une nouvelle du lien avec le tableau de bord. Un lancement AUTO apparaît d'abord dans la carte **Depart distant**; le poll ne démarre rien. Après confirmation de l'opérateur, un refus à `training/start` ou une réponse manquante laisse la machine non armée, sans fin envoyée au site ni nouvel essai automatique. Ce n'est pas la réponse à une demande faite ici. La ligne défile avec les autres ; l'état, lui, se lit en permanence sur la pastille **Serveur** (§5) |
 | `recording` | l'enregistrement de séance sur le disque du Pi se dégrade (`enregistrement de seance degrade : …`) ou redevient normal (`enregistrement de seance retabli`). La séance et la sécurité continuent dans les deux cas. Non vu pendant la préparation de ce guide : ajouté après les captures, voir la [référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale) |
 
 Important : une demande « envoyée » (démarrage, cible, reset) veut seulement dire

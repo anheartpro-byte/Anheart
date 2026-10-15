@@ -1642,11 +1642,11 @@ exactement pareil, sans tableau de bord.
 | Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle, la version du contrat et, si la console enregistre, `recordDegraded` : l'enregistrement de séance est incomplet ou ne peut pas être écrit ([15.3](#153-quand-le-disque-refuse-se-remplit-ou-se-tait)) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
 | Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur | `POST /api/machine/profiles` | quand la révision du magasin change |
 | Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance, et son passager (`userId`, plus `subjectLabel` tant que la console a son nom en mémoire ; rien pour le banc) | `POST /api/machine/training/local` | dès que le dossier de son enregistrement existe, par la tâche de veille (8.6), avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
-| Pi → Convex | confirmation du départ d'une séance lancée à distance, avec les deux mêmes dates | `POST /api/machine/training/start` | dès que la séance est armée, par la tâche de veille (8.6) ; refaite tant qu'elle est retenue |
+| Pi → Convex | confirmation du départ d'une séance lancée à distance : `startedAt` est l'heure murale lue à la demande, `sessionAgeMs` vaut 0 | `POST /api/machine/training/start` | par la tâche CloudSync après le clic opérateur et les contrôles locaux, avant `submit_start` ; après un 2xx, le curseur évite une seconde confirmation |
 | Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 3 s quand elle a du retard |
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, chacun avec son rang dans le fichier | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
-| Convex → Pi | un lancement AUTO : profil, passager, FC max, âge (déduit de l'année de naissance), avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos |
+| Convex → Pi | le lancement AUTO proposé au dernier poll : profil, identifiant de passager, FC max, âge (déduit de l'année de naissance), libellé reçu pour la retenue locale, avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos, y compris tant qu'une offre attend une décision et qu'aucune séance ne tourne |
 | Convex → Pi | la liste des passagers de la machine : identifiant, nom, FC max, année de naissance ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)), gardée en mémoire seulement | `GET /api/machine/roster` | au démarrage, puis toutes les 60 s au repos |
 | Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | dès que le tableau de bord tient la séance pour démarrée, puis toutes les 3 s tant qu'elle n'est pas finie, par une **tâche à part** (`cloud_stop_step`) : la question ne passe derrière aucun envoi ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)) |
 
@@ -1655,13 +1655,43 @@ Règles :
 * **Rien d'autre ne descend.** Une séance **manuelle ne peut jamais être lancée
   à distance** : le lien ne sait pas en construire une. La liste des passagers
   ne lance rien : elle dit qui un départ tapé à la console peut nommer.
-* Un lancement distant passe par la même boîte aux lettres qu'un départ tapé à
-  la console, donc par les mêmes portes (attestation, pas de verdict, console
-  au repos), puis par celles de la séance programmée (4.4). Tout refus revient
-  comme séance échouée avec la raison, sans date : c'est le serveur qui la
-  date. Un lancement ni démarré ni refusé après 60 s est déclaré échoué. Un
-  seul refus attend à la fois, et aucun lancement n'est demandé tant qu'il
-  n'est pas parti : le serveur rendrait le même.
+* Le poll offre au plus un lancement distant à la fois. Un nouveau résultat
+  remplace l'offre précédente; un résultat réussi sans lancement la retire.
+  Tant qu'elle est offerte, la page Seance montre le nom obtenu par
+  `subject_id` dans le roster tenu à cet instant, le programme, le lanceur et
+  un bouton unique de confirmation opérateur. `subjectLabel` reçu du poll ne
+  sert qu'à retenir ce libellé en mémoire lors de la formulation d'un refus;
+  le nom affiché vient du roster. Le bouton local de démarrage est masqué tant
+  que l'offre est affichée. Si le roster tenu ne contient pas le passager, la
+  page indique la raison et la confirmation est refusée sans fin due; après
+  récupération, un nouveau clic est nécessaire. Ce choix conservateur du côté
+  sûr doit être signalé au chef de projet.
+* Le bouton de confirmation de la page n'envoie aucun appel réseau lui-même :
+  il enregistre l'accord dans CloudSync. La tâche CloudSync revérifie le
+  passager dans le roster tenu, applique les contrôles locaux et ceux du
+  panneau, puis envoie `training/start`. Seulement après un 2xx elle soumet
+  le départ à la boîte de la machine; le Pi rejoue ses contrôles et revérifie
+  le passager au moment de l'armement, en gardant l'âge et la FC max du
+  lancement. Une absence du roster après le 2xx envoie une fin échouée.
+  Sans confirmation, aucun `training/start` ni armement. La
+  confirmation est un événement `operator_action` attribué à l'alias de
+  l'opérateur : au repos il va au journal de bord, et l'enregistrement armé
+  porte aussi `launch_confirmed` avec cet alias. Le nom du passager n'est pas
+  écrit dans l'enregistrement ou un journal et n'est pas envoyé dans la
+  déclaration de séance distante; il ne sort vers la page que dans la réponse
+  JSON de la route locale.
+* Après un refus du tableau de bord, la console n'arme pas et n'envoie pas
+  `training/end`; ce lancement ne peut plus être confirmé. Une demande sans
+  réponse ou un empêchement temporaire garde le lancement récupérable, sans
+  armement ni fin : un nouveau clic explicite est possible après récupération,
+  tant que le poll offre encore ce lancement. Un refus local avant la demande
+  ou après le 2xx envoie une fin échouée et est définitif. Aucun essai n'est
+  automatique. Convex retire l'offre 45 s avant son échéance;
+  la console n'ajoute pas de délai de confirmation. Le libellé visible est
+  `depart distant refuse (HTTP <n>, <code>)` (ou `depart distant refuse
+  (HTTP <n>)` sans code); un 409 `arming_refusals` affiche son message stable.
+  Une absence de réponse dit `depart distant non confirme : confirmation
+  indisponible`, et une route inconnue dit `route training/start inconnue`.
 * Chaque appel renvoie un `Result` ; un réseau mort ne fait que rendre l'image
   du tableau de bord périmée. **Rien de ce qui est dû au tableau de bord
   n'attend en mémoire** : c'est sur le disque, dans les enregistrements de
@@ -1793,18 +1823,56 @@ refaite toutes les 15 s. Ni la séance en cours, ni celle qui vient de finir,
 ni le refus d'un lancement ne l'attendent ; les séances plus anciennes rangées
 derrière elle, si.
 
-Deux requêtes ont un effet propre. La **confirmation d'un départ** : toute
-réponse autre qu'un oui fait arrêter la séance en cours, tout de suite et une
-seule fois. Refusée (séance annulée sur le site entre le poll et l'armement,
-ou, depuis le contrat 1.5, lancement refusé à l'armement : 409 avec un code
-de `arming_refusals`), elle est tenue pour réglée ; retenue par le serveur (426, 401, 403, 5xx), elle
-reste due et est refaite toutes les 15 s, puis l'enregistrement est envoyé,
-quand le serveur l'accepte. Seule l'absence de réponse exploitable (réseau
-coupé, délai dépassé, réponse 2xx qui n'est pas un objet JSON) laisse tourner
-la séance. Une réponse qui arrive après la fin de la séance qu'elle concerne
-n'arrête pas celle qui a été armée entre-temps. Une **déclaration** refusée
-pour de bon clôt l'enregistrement sans
-rien en envoyer : sans séance côté tableau de bord, rien ne peut être reçu.
+Depuis ANH-144, un poll qui porte un lancement l'offre sur la page Seance au lieu
+de l'envoyer à `training/start`. Le roster est recherché par `subject_id` à la
+lecture de la page puis à la confirmation; le nom envoyé en `subjectLabel` par
+Convex sert uniquement à retenir une éventuelle phrase de refus. Sans passager
+dans le roster tenu, la page donne la raison et la confirmation est refusée.
+L'opérateur utilise le champ existant et confirme par le bouton unique. Le clic
+est attribué comme `operator_action`, avec `actor` égal à son alias; sans
+enregistrement, il va au `logbook/events.jsonl`. À l'ouverture de
+l'enregistrement armé, le même alias est écrit dans un événement
+`launch_confirmed`. Aucun nom de passager n'est écrit dans le dossier, le
+journal de bord ou les journaux du processus; le nom affiché sort vers la page
+uniquement dans la réponse JSON locale.
+
+CloudSync traite ensuite l'accord : pré-vérification locale et contrôle du
+roster, puis
+`training/start` avec `startedAt` mural et `sessionAgeMs: 0`. Un 2xx seul
+autorise `submit_start`, qui rejoue les contrôles; l'armement rejoue les portes
+du panneau et revérifie le roster. Le curseur de la séance est marqué confirmé, pour que l'envoi de
+séance ne poste pas `training/start` une seconde fois. Sans confirmation, il
+n'y a ni demande réseau ni armement. Un refus local avant la demande ou au
+moment de l'armement est écrit comme une fin échouée et rend ce lancement
+définitif. Un refus du tableau de bord n'envoie pas `training/end` et ne peut
+plus être confirmé. Une absence de réponse ou un empêchement temporaire ne
+demande pas de fin; après récupération, seul un nouveau clic explicite peut
+refaire une demande si le poll propose toujours la séance.
+
+Les phrases de refus sont celles réellement produites : un autre refus dit
+`depart distant refuse (HTTP <n>, <code>)` (ou sans code), un lien retenu dit
+`depart distant non confirme : confirmation indisponible`, et une route inconnue
+dit `route training/start inconnue`. Les refus 409 avec un code
+`arming_refusals` gardent leur phrase stable. Convex cesse d'offrir le lancement
+45 s avant son échéance; la console n'ajoute pas de délai de confirmation.
+Limite suivie par ANH-240 : si Convex a pris le départ mais que son 2xx se perd,
+la console reste non armée. Une nouvelle confirmation envoie de nouveau
+`training/start`, qui reçoit `session_not_pending` (400); la console n'arme pas,
+et Convex peut garder la séance active jusqu'à son interruption. L'idempotence
+de ce 2xx est hors de ANH-144 et reste un point de suivi ANH-240. ANH-85 doit
+encore apporter le geste physique et son délai; le bouton ne les réalise pas.
+ANH-152 doit encore apporter l'authentification nommée; le parcours reprend le
+nom opérateur déjà connu de la console.
+
+Le chemin ci-dessus ne change pas celui d'une séance déjà armée dont le départ
+n'avait pas été confirmé (compatibilité avec les anciennes consoles). Dans
+`RecordUplink._confirm`, un refus ou une route inconnue arrête aussitôt cette
+séance ; une panne réseau sans réponse laisse la confirmation due. Une réponse
+qui arrive après la fin de la séance qu'elle concerne n'arrête pas celle qui a
+été armée entre-temps. `watch_stop` continue aussi d'arrêter sur
+`stopRequested` ou `active: false`. Une **déclaration** refusée pour de bon
+clôt l'enregistrement sans rien en envoyer : sans séance côté tableau de bord,
+rien ne peut être reçu.
 
 ### 8.4 Après un redémarrage de la console
 
@@ -1886,12 +1954,14 @@ suit ne change pas.
   des durées. La fin est datée de même. Une correction de l'heure murale en
   cours de séance ne déplace donc aucun point, et aucun n'est refusé pour
   elle.
-- **L'âge de la séance** (`sessionAgeMs`) accompagne la déclaration et la
-  confirmation du départ : le temps écoulé depuis le début, sur l'horloge
-  monotone. C'est lui qui fait dater la séance par le serveur, sur sa propre
-  horloge ([convex.md, Deux horloges](convex.md#deux-horloges)) : une console
-  datée de 1970 ne fait apparaître aucune séance en 1970, et ce qu'elle envoie
-  en retard est lu comme mesuré quand il l'a été.
+- **L'âge de la séance** (`sessionAgeMs`) accompagne les déclarations du
+  dossier et les mesures : le temps écoulé sur l'horloge monotone. Pour le
+  `training/start` pré-armement, il vaut intentionnellement 0 et `startedAt`
+  est l'heure murale lue à l'instant de la demande. Le tableau de bord date
+  ainsi le départ à la confirmation. Chaque point et événement est d'abord daté
+  depuis ce début par le temps monotone écoulé, puis Convex les décale tous du
+  même écart sur son axe serveur ([convex.md, Deux horloges](convex.md#deux-horloges)).
+  Une console datée de 1970 ne fait apparaître aucune séance en 1970.
 
 Après un redémarrage **de la console seule** (le système n'a pas redémarré),
 l'horloge monotone est la même : l'âge reste exact. Le curseur retient pour
@@ -2125,10 +2195,12 @@ lequel la même requête serait encore refusée.
 - Face à un Convex antérieur au contrat 1.1 : les événements restent dus, un
   lot renvoyé peut être stocké deux fois, et la séance est datée par la
   console ([deploiement.md](deploiement.md#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)).
-- Une fin sans enregistrement (un lancement refusé, ou une séance sans
-  enregistrement) n'a qu'une place en mémoire : si une seconde arrive avant
-  que la première soit partie, la plus ancienne est abandonnée, et le journal
-  le dit.
+- La fin d'un lancement refusé n'est jamais abandonnée : elle passe en tête,
+  et une séance qui arrive attend derrière. Une fin de séance pas encore liée
+  à son enregistrement, déplacée par celle d'un lancement refusé, est abandonnée
+  en mémoire avec un avertissement ; son enregistrement reste sur le disque.
+  Cas connu : une séance locale démarrée et finie pendant les quelques secondes
+  d'une demande `training/start`, point de suivi hors de cette livraison.
 
 Vérifié par les tests automatiques, en simulation et en temps simulé
 (`tests/test_record_cursor.py`, `test_record_upload.py`,
@@ -2717,15 +2789,14 @@ Ce que fait la console :
   porte (`software_version`). Aucune variable d'environnement ne la règle :
   `ANHEART_SOFTWARE_VERSION`, qui réglait autrefois celle du manifeste seul,
   n'est plus lue ([12.1](#121-clés-lues-par-la-console-srclocal_configpy)).
-* **Un départ refusé à l'armement** (contrat 1.5, ANH-144) : Convex revérifie
-  un lancement quand la console en confirme le départ, et peut répondre 409
-  avec l'un des codes `arming_refusals` du contrat partagé (droit retiré,
-  lancement expiré, âge ou FC max changés, passager dans une autre séance).
-  La console confirme un départ **après** avoir armé la séance ; elle lit ce
-  409 comme tout refus de sa confirmation et arrête la séance aussitôt, sur
-  la rampe ordinaire ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)).
-  Ne pas armer du tout sur ce refus, et afficher le passager à confirmer,
-  est la couche Pi d'ANH-144, à venir.
+* **Un départ revérifié à la confirmation** (contrat 1.5, ANH-144) : Convex
+  revérifie le lancement quand la console demande `training/start`, avant que
+  le Pi soumette ou arme sa commande. Un 409 avec un code `arming_refusals`
+  clôt le lancement côté Convex ; la console affiche le code stable et ne
+  poste pas de `/training/end`. Une réponse retenue ou une route inconnue ne
+  permet pas non plus d'armer ; le poll peut présenter le lancement de nouveau.
+  Après un 2xx, le Pi soumet et arme à travers ses contrôles locaux, puis
+  marque le curseur déjà confirmé ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)).
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les

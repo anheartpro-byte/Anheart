@@ -56,7 +56,8 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveFault, DriveState, FaultReport
-from src.result import Err, Ok
+from src.remote_launch import ConfirmationCode, ConfirmationRefusal, LaunchStage, RemoteLaunchView
+from src.result import Err, Ok, Result
 from src.telemetry import (
     CLIENT_QUEUE_LIMIT,
     DEFAULT_MIN_INTERVAL,
@@ -114,6 +115,8 @@ from src.web.schemas import (
     PresenceRow,
     ProfileListRow,
     ProfileRow,
+    RemoteLaunchAcceptedRow,
+    RemoteLaunchRow,
     SnapshotRow,
     StatusRow,
     WsEnvelope,
@@ -453,6 +456,7 @@ async def test_every_command_endpoint_is_behind_the_token(client: httpx.AsyncCli
         "/api/safety/attest",
         "/api/presence",
         "/api/plan/preview",
+        "/api/remote-launch/confirm",
     ):
         response = await client.post(path, json={})
         assert response.status_code == HTTPStatus.UNAUTHORIZED, path
@@ -461,6 +465,110 @@ async def test_every_command_endpoint_is_behind_the_token(client: httpx.AsyncCli
 # =========================================================================
 # The session flow
 # =========================================================================
+
+
+async def test_remote_launch_reads_and_confirmation_use_the_authenticated_operator(
+    rig: Rig,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    offer = RemoteLaunchView(
+        session_id="remote-session",
+        profile_id=PROFILE_ID,
+        program_name="30 min",
+        launched_by="Dr Manager",
+        passenger_name="Roster Name",
+        passenger_reason=None,
+        stage=LaunchStage.WAITING_CONFIRMATION,
+        reason=None,
+    )
+
+    def confirm(session_id: str, operator: str) -> Result[None, ConfirmationRefusal]:
+        calls.append((session_id, operator))
+        if session_id != "remote-session":
+            return Err(
+                ConfirmationRefusal(
+                    ConfirmationCode.NOT_PENDING,
+                    "ce lancement n'est plus propose par le tableau de bord",
+                )
+            )
+        return Ok(None)
+
+    services = Services(
+        clock=rig.clock,
+        surface=rig.surface,
+        hub=rig.hub,
+        supervisor=rig.supervisor,
+        store=rig.store,
+        ports=StubPorts(),
+        geometry=GEOMETRY,
+        roster=listed(rig.clock),
+        remote_launch_current=lambda: offer,
+        remote_launch_confirm=confirm,
+    )
+    app = create_app(services=services, config=rig.config)
+    transport = httpx.ASGITransport(app=app)
+    subscriber = rig.hub.subscribe()
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as session:
+        unauthorized = await session.get("/api/remote-launch")
+        assert unauthorized.status_code == HTTPStatus.UNAUTHORIZED
+        response = await session.get("/api/remote-launch", headers=auth())
+        assert response.status_code == HTTPStatus.OK
+        row = parse(RemoteLaunchRow, response)
+        assert (row.passenger_name, row.program, row.launched_by) == (
+            "Roster Name",
+            "30 min",
+            "Dr Manager",
+        )
+        assert row.can_confirm
+        assert "subject_label" not in _keys(response)
+        blank = await session.post(
+            "/api/remote-launch/confirm",
+            headers=auth(),
+            json={"session_id": "remote-session", "operator": "  "},
+        )
+        assert blank.status_code == HTTPStatus.BAD_REQUEST
+        stale = await session.post(
+            "/api/remote-launch/confirm",
+            headers=auth(),
+            json={"session_id": "stale", "operator": "Confirming Operator"},
+        )
+        assert stale.status_code == HTTPStatus.CONFLICT
+        assert stale.json()["code"] == ConfirmationCode.NOT_PENDING.value
+        assert calls == [("stale", "Confirming Operator")]
+        accepted = await session.post(
+            "/api/remote-launch/confirm",
+            headers=auth(),
+            json={"session_id": "remote-session", "operator": "Confirming Operator"},
+        )
+        assert accepted.status_code == HTTPStatus.ACCEPTED
+        assert parse(RemoteLaunchAcceptedRow, accepted).state == "request_in_progress"
+    assert calls[-1] == ("remote-session", "Confirming Operator")
+    assert rig.surface.pending is None
+    payload = await subscriber.next_payload()
+    assert payload.event is not None
+    assert payload.event.kind is EventKind.LAUNCH_CONFIRMED
+    assert payload.event.operator == "Confirming Operator"
+    assert "Roster Name" not in payload.event.detail
+
+
+def test_remote_launch_confirmation_follows_typed_offer_stages() -> None:
+    def can_confirm(stage: LaunchStage) -> bool:
+        view = RemoteLaunchView(
+            session_id="remote-session",
+            profile_id=PROFILE_ID,
+            program_name="30 min",
+            launched_by="Dr Manager",
+            passenger_name="Roster Name",
+            passenger_reason=None,
+            stage=stage,
+            reason=None,
+        )
+        return RemoteLaunchRow.of(view).can_confirm
+
+    assert can_confirm(LaunchStage.WAITING_CONFIRMATION)
+    assert can_confirm(LaunchStage.UNCONFIRMED)
+    assert not can_confirm(LaunchStage.REQUESTING)
+    assert not can_confirm(LaunchStage.REFUSED)
 
 
 async def test_a_start_is_refused_until_the_estop_wiring_is_attested(

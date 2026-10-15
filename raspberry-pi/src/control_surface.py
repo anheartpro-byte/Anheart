@@ -202,6 +202,7 @@ class EventKind(Enum):
     EMERGENCY_STOP = "emergency_stop"
     ACKNOWLEDGED = "acknowledged"
     ATTESTED = "attested"
+    LAUNCH_CONFIRMED = "launch_confirmed"
     SESSION_RUNNING = "session_running"
     SESSION_IDLE = "session_idle"
     REFUSED = "refused"
@@ -330,6 +331,8 @@ class StartSession:
 
     cloud_session_id: str | None = None
     """The dashboard session this start answers, or ``None`` for a local start."""
+
+    confirmed_by: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -794,6 +797,7 @@ class ControlSurface:
         subject_hr_max: Bpm | None = None,
         subject_age: int | None = None,
         cloud_session_id: str | None = None,
+        confirmed_by: str | None = None,
     ) -> Result[StartSession, StartRefusal]:
         """Ask for a session to start. Refused unless everything below is true.
 
@@ -814,15 +818,9 @@ class ControlSurface:
         re-resolves it; a start for an unknown profile ends the session
         immediately with a refusal in the log rather than commanding motion.
         """
-        attested = self._supervisor.require_estop_confirmed()
-        if isinstance(attested, Err):
-            return self._refuse_start(attested.error)
-        standing = self._supervisor.standing
-        if standing is not None and standing.latched:
-            return self._refuse_start(SafetyHolding(standing))
-        busy = self._in_the_way_of_a_start()
-        if busy is not None:
-            return self._refuse_start(busy)
+        checked = self.check_start()
+        if isinstance(checked, Err):
+            return self._refuse_start(checked.error)
 
         command = StartSession(
             profile_id=profile_id,
@@ -834,9 +832,23 @@ class ControlSurface:
             subject_hr_max=subject_hr_max,
             subject_age=subject_age,
             cloud_session_id=cloud_session_id,
+            confirmed_by=confirmed_by,
         )
         self._accept_start(command)
         return Ok(command)
+
+    def check_start(self) -> Result[None, StartRefusal]:
+        """Check the three start gates without recording or submitting a request."""
+        attested = self._supervisor.require_estop_confirmed()
+        if isinstance(attested, Err):
+            return Err(attested.error)
+        standing = self._supervisor.standing
+        if standing is not None and standing.latched:
+            return Err(SafetyHolding(standing))
+        busy = self._in_the_way_of_a_start()
+        if busy is not None:
+            return Err(busy)
+        return Ok(None)
 
     def submit_start_manual(
         self, *, occupancy: Occupancy, operator: str, subject_id: str = ""
@@ -1079,6 +1091,9 @@ class ControlSurface:
         screen, which this never is.
         """
         self._publish(EventKind.DASHBOARD, self._clock.monotonic(), "", detail)
+
+    def note_launch_confirmed(self, operator: str) -> None:
+        self._publish(EventKind.LAUNCH_CONFIRMED, self._clock.monotonic(), operator, "")
 
     def note_recording(self, detail: str) -> None:
         """The session record cannot be written as it should, or can again. Say so.
