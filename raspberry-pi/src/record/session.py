@@ -86,7 +86,6 @@ from src.record.journal import (
 from src.record.logbook import note
 from src.record.rows import JsonValue, Row
 from src.record.schema import Clocks, EndObservation, Event, EventKind, Manifest, Profile
-from src.roster import Rider
 from src.sensors.base import SensorReading
 from src.training.motion import MotionLimits
 from src.training.plan import Program
@@ -314,7 +313,8 @@ class SessionRequest:
     list by its stretch, an upper bound."""
 
     confirmed_by: str | None = None
-    rider: Rider | None = None
+    fitness_questionnaire_version: str | None = None
+    """Proof of admission at the start; ``None`` for a bench session."""
 
 
 def manifest_for(
@@ -331,7 +331,9 @@ def manifest_for(
     started = utc_stamp(clock)
     subject = request.subject_id.strip()
     remote = request.cloud_session_id
-    rider = request.rider if request.occupancy is Occupancy.OCCUPIED else None
+    version = (
+        request.fitness_questionnaire_version if request.occupancy is Occupancy.OCCUPIED else None
+    )
     return Manifest(
         schema_version=2,
         record_id=identity,
@@ -343,8 +345,8 @@ def manifest_for(
         occupancy="bench" if request.occupancy is Occupancy.BENCH else "occupied",
         operator=operator_alias(request.operator),
         subject_id=None if subject in ("", LOCAL_SUBJECT) else opaque("subject", subject),
-        subject_fit=None if rider is None else True,
-        fitness_questionnaire_version=None if rider is None else rider.questionnaire_version,
+        subject_fit=None if version is None else True,
+        fitness_questionnaire_version=version,
         profile=None if request.program is None else frozen_profile(request.program),
         config_hash=stamp.config_hash,
         software_version=stamp.software_version,

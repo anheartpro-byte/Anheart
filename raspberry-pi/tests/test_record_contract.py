@@ -3,6 +3,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -10,21 +11,113 @@ from src.clock import ManualClock
 from src.record.codec import JSON, Privacy, encode, mapping
 from src.record.ecg import Header, RawBlock, decode_block, encode_block
 from src.record.reader import read
-from src.record.schema import DriveFrame, Event, EventKind
+from src.record.schema import (
+    DriveFrame,
+    EndObservation,
+    Event,
+    EventKind,
+    GeometrySnapshot,
+    Preflight,
+    Profile,
+)
 from src.record.writer import TICK_COLUMNS, Writer
 from src.result import Err, Ok
 from src.sensors.base import Metric, SensorKind, SensorReading
 from src.training.types import SignalQuality
-from src.units import Monotonic, UnixMillis
+from src.units import Monotonic, Seconds, UnixMillis
 from tests.record_support import manifest, row, writer
+
+MANIFEST_FIXTURE = Path(__file__).with_name("fixtures") / "complete_manifest_v2.json"
+
+
+def complete_manifest_record(root: Path) -> Path:
+    given = replace(
+        manifest(),
+        session_id="session-6",
+        kind="auto",
+        occupancy="occupied",
+        subject_id="subject-7",
+        subject_fit=True,
+        fitness_questionnaire_version="0.1.0",
+        profile=Profile(
+            total_duration_s=420.0,
+            baseline_s=60.0,
+            warmup_max_s=60.0,
+            hold_min_s=60.0,
+            cooldown_s=60.0,
+            recovery_s=60.0,
+            zone_low_bpm=118,
+            zone_high_bpm=138,
+            hard_max_bpm=148,
+            critical_bpm=158,
+            subject_hr_max=190,
+            min_run_rpm=10,
+            max_rpm=276,
+            warmup_rpm_ceiling_fraction=0.5,
+            channels=("ECG",),
+            allow_above_nameplate=False,
+            source_rev=1,
+            resolved_at=1_791_195_072_000,
+            total_overridden=True,
+        ),
+        clocks=replace(manifest().clocks, ntp_offset_s=Seconds(0.0), wall_trusted=True),
+        geometry=GeometrySnapshot(
+            reference_radius_m=1.5,
+            leg_tip_radius_m=1.4,
+            leg_tip_measured=True,
+            arm_tip_radius_m=1.5,
+            capsule_near_radius_m=1.3,
+            capsule_far_radius_m=1.6,
+            counterweight_radius_m=1.0,
+            gear_ratio=49.79,
+            nominal_motor_rpm=1500,
+            base_hz=50.0,
+        ),
+        preflight=(Preflight(check="synthetic-check", passed=True),),
+    )
+    created = Writer.create(root, given)
+    assert isinstance(created, Ok)
+    recording = created.value
+    closed = recording.close(
+        ManualClock(epoch_millis=UnixMillis(1_791_195_100_000)),
+        "operator_stop",
+        EndObservation(
+            t=28.0,
+            runtime_state="IDLE",
+            drive_state="SWITCH_ON_DISABLED",
+            runtime_output_enabled=False,
+            runtime_applied_rpm=0,
+            lfrd_motor_rpm=0,
+            shaft_motor_rpm=0,
+            energised=False,
+            silent=True,
+            stop_reason="operator_stop",
+            shutdown_detail="synthetic-stop-observed",
+        ),
+    )
+    assert isinstance(closed, Ok)
+    return recording.path
+
+
+def test_complete_manifest_fixture_matches_the_writer_and_reads(tmp_path: Path) -> None:
+    """Regenerate from raspberry-pi/: .venv/bin/python -m tests.test_record_contract."""
+    path = complete_manifest_record(tmp_path)
+    assert (path / "manifest.json").read_bytes() == MANIFEST_FIXTURE.read_bytes()
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    assert loaded.value.manifest.subject_fit is True
+    assert loaded.value.manifest.fitness_questionnaire_version == "0.1.0"
+    assert not loaded.value.warnings
 
 
 def test_older_manifest_without_fitness_fields_still_reads(tmp_path: Path) -> None:
     recording = writer(tmp_path)
     path = recording.path / "manifest.json"
     document = dict(mapping(JSON.validate_json(path.read_bytes())))
-    assert document.pop("subject_fit") is None
-    assert document.pop("fitness_questionnaire_version") is None
+    subject_fit = document.pop("subject_fit")
+    questionnaire_version = document.pop("fitness_questionnaire_version")
+    assert subject_fit is None
+    assert questionnaire_version is None
     path.write_text(encode(document, Privacy()), encoding="utf-8")
     loaded = read(recording.path)
     assert isinstance(loaded, Ok)
@@ -217,3 +310,9 @@ def test_ex9_nonfinite_nested_json_is_refused_without_writing() -> None:
         "key": [1, True, None]
     }
     assert json.loads(encode({"name": "x"}, Privacy(("",)))) == {"name": "x"}
+
+
+if __name__ == "__main__":
+    with TemporaryDirectory() as directory:
+        reference = complete_manifest_record(Path(directory)) / "manifest.json"
+        MANIFEST_FIXTURE.write_bytes(reference.read_bytes())

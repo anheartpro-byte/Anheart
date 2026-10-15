@@ -379,7 +379,8 @@ class RiderFacts:
     label: str | None
     """The list's name of the rider, for the dashboard; ``None`` for a launch."""
 
-    rider: Rider
+    fitness_questionnaire_version: str
+    """Proof returned by the occupied start gate, for the record only."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1135,10 +1136,13 @@ class LocalPanel:
             self._surface.note_refused(command, describe_passenger_refusal(named.error))
             return
         rider = named.value
-        on_board = None if rider is None else self._on_board_refusal(rider)
-        if on_board is not None:
-            self._surface.note_refused(command, on_board)
-            return
+        fitness_version = None
+        if rider is not None:
+            on_board = self._on_board_refusal(rider)
+            if isinstance(on_board, Err):
+                self._surface.note_refused(command, on_board.error)
+                return
+            fitness_version = on_board.value
         blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
         if blocked is not None:
             self._surface.note_refused(command, blocked)
@@ -1159,7 +1163,7 @@ class LocalPanel:
                 operator=operator,
                 subject_id=subject,
                 arming_began=asked,
-                rider=rider,
+                fitness_questionnaire_version=fitness_version,
                 arming_refused=refused,
             )
         )
@@ -1182,8 +1186,8 @@ class LocalPanel:
                 )
             )
 
-    def _on_board_refusal(self, rider: Rider) -> str | None:
-        """Why ``rider`` may not be on board a manual session, or ``None``.
+    def _on_board_refusal(self, rider: Rider) -> Result[str, str]:
+        """The admitted questionnaire version, or why this manual start is refused.
 
         The minimum age of a programmed session, counted the same way from the
         birth year the site set (:func:`~src.roster.age_of`), decided by the
@@ -1197,11 +1201,12 @@ class LocalPanel:
                 rider.name, rider_words(age.value) if isinstance(age, Ok) else ""
             )
         if isinstance(age, Err):
-            return describe_passenger_refusal(age.error)
+            return Err(describe_passenger_refusal(age.error))
         cleared = cleared_to_board(rider, self._clock.unix_millis())
         if isinstance(cleared, Err):
-            return describe_passenger_refusal(cleared.error)
-        return rider_age_refusal(age.value, self._config.min_rider_age)
+            return Err(describe_passenger_refusal(cleared.error))
+        too_young = rider_age_refusal(age.value, self._config.min_rider_age)
+        return cleared if too_young is None else Err(too_young)
 
     def _manual_rider(self, command: StartManual) -> Result[Rider | None, PassengerRefusal]:
         """Who rides a manual session: nobody on the bench, a rider of the list on board.
@@ -1262,7 +1267,7 @@ class LocalPanel:
                 subject_id=command.subject_id,
                 cloud_session_id=command.cloud_session_id,
                 confirmed_by=command.confirmed_by,
-                rider=prepared.value.rider.rider,
+                fitness_questionnaire_version=prepared.value.rider.fitness_questionnaire_version,
                 arming_began=asked,
                 arming_refused=refused,
             )
@@ -1298,12 +1303,12 @@ class LocalPanel:
         if isinstance(cleared, Err):
             return Err(describe_passenger_refusal(cleared.error))
         if command.cloud_session_id is not None:
-            return Ok(RiderFacts(command.subject_hr_max, command.subject_age, None, found.value))
+            return Ok(RiderFacts(command.subject_hr_max, command.subject_age, None, cleared.value))
         passenger = passenger_of(found.value, self._clock.unix_millis())
         if isinstance(passenger, Err):
             return Err(describe_passenger_refusal(passenger.error))
         listed = passenger.value
-        return Ok(RiderFacts(listed.hr_max, listed.age, listed.rider.name, listed.rider))
+        return Ok(RiderFacts(listed.hr_max, listed.age, listed.rider.name, cleared.value))
 
     def preflight_remote_start(self, launch: Launch) -> Result[None, str]:
         """Run the panel's start gates without submitting a command or arming."""

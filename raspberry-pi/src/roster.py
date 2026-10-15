@@ -416,8 +416,8 @@ def parse_roster(document: Mapping[str, object]) -> Result[Listing, str]:
 # =========================================================================
 
 
-def cleared_to_board(rider: Rider, at: UnixMillis) -> Result[None, PassengerRefusal]:
-    """Fitness and consent at the start, from the held list; no personal detail in errors."""
+def cleared_to_board(rider: Rider, at: UnixMillis) -> Result[str, PassengerRefusal]:
+    """The admitted questionnaire version, or a refusal without personal details."""
     until = rider.fitness_valid_until
     if not rider.fit or rider.questionnaire_version is None or until is None:
         return Err(NotFit())
@@ -425,7 +425,7 @@ def cleared_to_board(rider: Rider, at: UnixMillis) -> Result[None, PassengerRefu
         return Err(FitnessExpired())
     if not rider.consent:
         return Err(NoConsent())
-    return Ok(None)
+    return Ok(rider.questionnaire_version)
 
 
 def age_at(birth_year: int, at: UnixMillis) -> int | None:

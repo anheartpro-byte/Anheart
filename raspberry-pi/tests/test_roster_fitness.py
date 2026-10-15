@@ -104,6 +104,6 @@ def test_boarding_refusals_are_closed_and_contain_no_personal_values(
 def test_fitness_expires_exactly_at_the_injected_clock_deadline() -> None:
     clock = ManualClock(epoch_millis=UnixMillis(1000))
     rider = replace(RIDER, fitness_valid_until=UnixMillis(2000))
-    assert cleared_to_board(rider, clock.unix_millis()) == Ok(None)
+    assert cleared_to_board(rider, clock.unix_millis()) == Ok("0.1.0")
     clock.advance(Seconds(1.0))
     assert cleared_to_board(rider, clock.unix_millis()) == Err(FitnessExpired())

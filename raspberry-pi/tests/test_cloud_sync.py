@@ -89,7 +89,18 @@ from src.record_uplink import (
 )
 from src.remote_launch import ConfirmationCode, LaunchStage
 from src.result import Err, Ok, Result
-from src.roster import ROSTER_MAX_AGE, ROSTER_PATH, ROSTER_PERIOD, Roster, RosterState
+from src.roster import (
+    ROSTER_MAX_AGE,
+    ROSTER_PATH,
+    ROSTER_PERIOD,
+    FitnessExpired,
+    NoConsent,
+    NotFit,
+    PassengerRefusal,
+    Roster,
+    RosterState,
+    describe_passenger_refusal,
+)
 from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
@@ -2866,11 +2877,15 @@ async def test_a_409_never_commands_the_simulated_drive(
     await rig_.panel.close()
 
 
-@pytest.mark.parametrize("change", ["unfit", "expired", "no-consent"])
+@pytest.mark.parametrize(
+    ("change", "refusal"),
+    [("unfit", NotFit()), ("expired", FitnessExpired()), ("no-consent", NoConsent())],
+)
 async def test_held_roster_refuses_remote_start_before_confirmation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     change: str,
+    refusal: PassengerRefusal,
 ) -> None:
     order: list[str] = []
     writes = observe_dashboard_and_drive(monkeypatch, order)
@@ -2894,7 +2909,7 @@ async def test_held_roster_refuses_remote_start_before_confirmation(
     ends = rig_.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
-    assert "aptitude" in str(ends[0]["reason"]) or "consentement" in str(ends[0]["reason"])
+    assert ends[0]["reason"] == f"refusee par la machine : {describe_passenger_refusal(refusal)}"
     await rig_.panel.close()
 
 
