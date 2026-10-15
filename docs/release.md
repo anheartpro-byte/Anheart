@@ -278,7 +278,7 @@ branche que `main`. Chaque étape attend la réussite de la précédente.
 | `simulation (cohort)`, `simulation (battery 1)` à `(battery 3)`, `simulation (report)`, puis `simulation-gate` | l'extraction CAO, la cohorte, la batterie de scénarios, le rapport synthétique avec ses scénarios `dsp` (comme tout lancement manuel), puis leur combinaison : chaque test une fois, 100 % de branches |
 | `convex-tests` | les liaisons générées, les types, les tests des fonctions Convex et leur couverture (80 %, et 80 % sur chacun des trois fichiers de la chaîne de sécurité) |
 | `web` | types, lint, tests du panneau de la console, tests du site, construction du site, couverture (80 %) |
-| `audit` | dépendances npm et Python, secrets dans tout l'historique Git |
+| `audit` | dépendances npm et Python, secrets dans tout l'historique Git ; écrit la nomenclature des composants (ci-dessous) |
 | `docs` | liens et ancres, tests des workflows (dont ceux de cette pipeline), identifiants de menaces, tests de l'outillage de release, test qui lit tout le dépôt |
 | `pi-install` | l'installation du Pi de bout en bout dans une machine de remplacement, sur un runner arm64 ([pi-image.md](pi-image.md#5-ce-que-la-ci-vérifie)) |
 
@@ -302,6 +302,17 @@ Laissé de côté, exprès :
 - le rejeu des séances réelles et la revue des menaces de la
   [check-list](#5-la-check-list-de-release) : ce sont des preuves que la
   personne joint à la PR de release, avant la fusion.
+
+**La nomenclature des composants (SBOM) de la release.** Le job `audit` de
+l'étape 1 l'écrit au format CycloneDX, comme à chaque exécution de `ci.yml` :
+les paquets npm du site et de Convex, depuis `package-lock.json`, et les paquets
+Python de l'image du Pi, depuis ses deux verrous
+([framework-de-test.md](framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153)).
+Elle est dans l'artefact `sbom` de l'exécution de la pipeline, gardé 90 jours,
+et décrit le commit tagué. Passé ce délai, elle se refait depuis le tag, avec
+les mêmes composants : ses verrous n'ont pas changé. La simulation hébergée n'en a pas :
+elle n'a pas de verrou. Elle n'est jointe à aucun objet durable et n'est pas
+signée (section 8).
 
 `scripts/release.sh tag` exige en plus, à l'étape 3, que les six gates aient
 réussi **dans une autre exécution** que celle de la pipeline : celle du push sur
@@ -919,6 +930,7 @@ n'a changé.
 | Une release réelle demande quatre approbations, une par écriture, et attend une personne entre Convex et le site | à décider après la première release publiée : le garder, ou regrouper Convex et le site sous une seule approbation |
 | Mettre les machines à jour à distance : l'étape 6 de la pipeline ne fait que dire comment le faire à la main | ANH-116, ANH-168 à ANH-171 |
 | Déployer une préversion de Convex par PR, publier les rapports de test | ANH-126 |
+| Joindre la nomenclature des composants à un objet qui dure plus que les 90 jours de l'artefact `sbom` (une « release » GitHub sur le tag, par exemple, ce qui donne au job des tags un droit d'écriture de plus), la signer ou l'attester, et produire celle de la simulation hébergée quand elle aura un verrou | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |
 
 [Sommaire](README.md) · [Déploiement](deploiement.md) · [Menaces](menaces.md) · [Roadmap](roadmap.md)

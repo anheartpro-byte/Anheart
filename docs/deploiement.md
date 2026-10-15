@@ -80,6 +80,8 @@ les requêtes Convex échouent.
 ## 2. Les clés et où elles sont rangées
 
 Aucune clé n'est dans le dépôt. Tous les fichiers ci-dessous sont ignorés par git.
+L'inventaire complet des secrets, qui y a accès et comment changer chacun sont
+dans [secrets.md](secrets.md).
 
 | Fichier | Clé | Rôle |
 |---|---|---|

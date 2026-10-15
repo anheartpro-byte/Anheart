@@ -21,7 +21,7 @@ la racine. Dans un nouveau terminal, revenir à cette racine avant de continuer.
 |---|---|---|
 | Python | 3.12 (le code vise 3.12 : `pythonVersion = "3.12"` dans `raspberry-pi/pyproject.toml`) | le Pi et la simulation |
 | Node.js | 24 (comme la CI dans `.github/workflows/ci.yml`) | le site Next.js et la CLI Convex |
-| npm ou bun | npm 10+ / bun 1.x (les deux fichiers de verrou existent : `package-lock.json` et `bun.lock`) | installer le site |
+| npm | npm 10+ (le seul gestionnaire de paquets JavaScript du dépôt ; son verrou, `package-lock.json`, fait foi) | installer le site |
 | libusb | `brew install libusb` | seulement pour le vrai câble RS485 Schneider sur Mac |
 | Configuration Convex et Clerk de développement | fournie par l'équipe | seulement pour faire tourner le site ; voir section 4 |
 
@@ -124,7 +124,7 @@ garantissent ni la configuration de votre clone ni l'état du backend actuel.
 Depuis la racine du dépôt :
 
 ```sh
-npm install              # ou : bun install
+npm ci                   # exactement les versions de package-lock.json
 npm run dev:frontend     # Next.js uniquement ; aucun déploiement Convex
 ```
 

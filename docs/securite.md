@@ -1725,3 +1725,35 @@ moyen de passer l'avertissement d'un certificat expiré (pas d'en-tête HSTS).
 | **Un avertissement passé à la main.** Un opérateur qui passe l'avertissement d'une autorité non reconnue donne son jeton à qui répond. La console ne peut pas l'empêcher ; installer l'autorité le rend inutile | consigne à écrire par Anheart |
 | **Le nombre de connexions par appareil n'est pas borné par la console**, à dessein : la borne que propose son serveur s'appliquerait aussi aux requêtes d'une page déjà ouverte, STOP compris. Le pare-feu d'ANH-223 limite les nouvelles connexions TLS par adresse IPv4 sans interrompre les connexions établies. Le comportement du processus à la limite de ses ressources **n'a pas été établi par un test** ; d'après le code, les connexions déjà ouvertes continuent et le tic n'ouvre aucun descripteur | pare-feu logiciel livré par ANH-223 ; charge réelle à mesurer au banc, MEN-05 reste ouverte |
 | **Une tablette compromise** voit tout ce que sa page voit, jeton compris. TLS n'y change rien | hors de ce lot |
+
+## 12. Dépendances et secrets (ANH-153, premier lot)
+
+Ticket
+[ANH-153](https://linear.app/anheart/issue/ANH-153/dependances-secrets-authentification-forte-et-audit-de-securite),
+14 octobre 2026. Ce lot traite de la chaîne des dépendances et de l'inventaire
+des secrets. L'authentification forte des comptes du site (MFA, durée de
+session, révocation) et l'audit de sécurité externe sont d'autres lots du même
+ticket : **ils ne sont pas faits.**
+
+### 12.1 Ce que ce lot apporte
+
+| Contrôle | Où |
+|---|---|
+| Une vulnérabilité haute ou critique d'un paquet npm, ou toute vulnérabilité connue d'un paquet Python installé (image du Pi, tests et CI, simulation hébergée, extracteur CAO), fait échouer la vérification obligatoire `audit`, sur chaque PR, chaque push et chaque exécution de nuit | `.github/workflows/ci.yml` ; [framework-de-test.md](framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153) |
+| Le seul moyen de laisser passer un avis est une exception écrite, datée, liée à un ticket, de 90 jours au plus ; expirée, elle fait échouer le même job | [`.github/audit-exceptions.md`](../.github/audit-exceptions.md), `scripts/ci/audit-exceptions.mjs` |
+| Dependabot propose chaque mois les mises à jour npm, pip et des actions des workflows, vers `develop` ; les actions restent épinglées par commit complet | `.github/dependabot.yml` |
+| Un seul gestionnaire de paquets JavaScript, npm, et un seul verrou, `package-lock.json` | `scripts/ci/dependency-audit.test.mjs` |
+| La nomenclature des composants (CycloneDX) de ce qui s'installe depuis un verrou, à chaque exécution de la CI, release comprise | artefact `sbom` ; [release.md](release.md#la-pipeline-de-release) |
+| Chaque secret : ce qu'il ouvre, où il vit, qui y a accès, comment le changer | [secrets.md](secrets.md) |
+
+### 12.2 Ce que ce lot ne couvre pas
+
+| Limite | Conséquence, et à qui elle revient |
+|---|---|
+| **Un audit ne voit que les vulnérabilités publiées.** Un paquet malveillant sans avis passe | [MEN-06](menaces.md#men-06-compromission-dun-paquet-pip-ou-npm) reste ouverte ; revue de provenance et audit externe d'ANH-153 |
+| **L'environnement des tests et de la CI, et la simulation hébergée, ne sont pas installés avec leurs empreintes** ; ce qui est audité pour eux est une résolution faite le jour de l'audit | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la) : les figer change l'installation de toutes les gates Python et le déploiement de la simulation |
+| **Dependabot n'agit qu'une fois son fichier sur `main`** ; ses alertes et ses mises à jour de sécurité sont des réglages du dépôt, désactivés au 14 octobre 2026 | le chef de projet |
+| **Aucune procédure de rotation n'a été essayée** | le chef de projet, avec les vrais comptes ([secrets.md](secrets.md#5-ce-qui-reste)) |
+| **L'analyse des secrets de GitHub et sa protection au push sont désactivées** ; gitleaks juge après le push | le chef de projet (réglage du dépôt) |
+| **Aucun compte à privilèges n'exige un second facteur** ; la durée des sessions est celle de Clerk ; un rôle retiré dans Clerk vaut jusqu'à l'expiration du jeton en cours | [MEN-07](menaces.md#men-07-prise-de-compte-clerk) ; lot Clerk d'ANH-153, réglages de Clerk au chef de projet |
+| **La nomenclature n'est ni durable (90 jours d'artefact) ni signée**, et la simulation hébergée n'en a pas | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |

@@ -36,6 +36,7 @@ Il existe deux sortes de séance :
 | [deploiement.md](deploiement.md) | développeur, exploitant | environnements et clés, déployer Convex, le site, la simulation hébergée, le Raspberry Pi ; ce qui a été vérifié |
 | [pi-image.md](pi-image.md) | développeur, exploitant | installer un Raspberry Pi par script, versions figées, service systemd qui lance la console à l'allumage, sous quel compte elle tourne, durcissement (`scripts/harden.sh`) et sa check-list, ce que la CI en vérifie |
 | [securite.md](securite.md) | tout le monde | ce qui est garanti, ce qui ne l'est pas, défauts corrigés, résiduel |
+| [secrets.md](secrets.md) | chef de projet, exploitant | chaque secret : ce qu'il ouvre, où il vit, qui y a accès, comment le changer ; détection dans le dépôt |
 | [menaces.md](menaces.md) | développeur, reviewer, responsable de jalon | modèle STRIDE, protections vérifiées dans le source, menaces ouvertes et tickets Linear |
 | [release.md](release.md) | responsable de release, développeur | versions `pi`, `cloud` et `web`, `scripts/release.sh`, changelog, check-list de release, version validée par machine |
 | [release-threat-review.md](release-threat-review.md) | responsable de release | preuve de revue du modèle exigée à chaque jalon, release et avant pilote |
