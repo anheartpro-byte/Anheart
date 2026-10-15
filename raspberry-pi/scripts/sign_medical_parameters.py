@@ -14,14 +14,19 @@ the key every console checks the signature against. That key is the medical
 one and no other: never use it to sign anything else (the programme catalogue
 has a key of its own).
 
-``sign`` reads ``config/medical_parameters.json``, refuses it if the console
-would refuse it (the same parser, :func:`src.medical.parse_document`), refuses
-a private key whose public half is not ``config/medical.pub``, then writes the
-detached Ed25519 signature of the file's exact bytes to
-``config/medical_parameters.sig`` and checks it the way the console will.
+``sign`` reads ``config/medical_parameters.json``, refuses it if it is
+malformed (the console's own parser, :func:`src.medical.parse_document`),
+refuses a private key whose public half is not ``config/medical.pub``, then
+writes the detached Ed25519 signature of the file's exact bytes to
+``config/medical_parameters.sig`` and checks it the way the console will. It
+does NOT check the ranges the console holds the values to at startup (heart
+rates 100..220, ages 10..100, the motion limiter's bounds): a file outside them
+is signed, and the console refuses it when it starts (exit code 2). Checking
+them before signing is ANH-235.
 
-``verify`` checks the three files as the console does at startup, and says
-which version is signed, by whom, and with which key.
+``verify`` checks the file's shape and its signature as the console does at
+startup (not those ranges either), and says which version is signed, by whom,
+and with which key.
 
 The same check, without this repository's code (OpenSSL 3)::
 

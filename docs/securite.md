@@ -55,7 +55,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Un tableau de bord d'un autre contrat n'arme rien.** Un lancement venu d'une réponse dont la majeure de contrat n'est pas celle de la console, ou qui n'annonce aucune version, n'atteint jamais la boîte aux lettres : la console l'affiche et le renvoie comme séance échouée. Dans l'autre sens, Convex refuse (426) toute requête d'une machine dont il ne sert pas la majeure, sauf celle qui porte la demande d'arrêt : un arrêt demandé au tableau de bord, ou une séance que le serveur ne tient plus pour active, arrête la séance en cours quelle que soit la version des deux côtés. C'est tout ce que la console retient d'une réponse d'une autre majeure : le pire qu'une telle réponse puisse faire est un arrêt ordinaire. | `contract.py`, `cloud_sync.py`, `convex/lib/contract.ts` |
 | **Les clients sont séparés dans Convex.** Chaque fonction publique répond dans l'organisation de l'appelant, lue dans le jeton vérifié et jamais dans un argument ; une machine, un patient, une séance ou une mesure d'une autre organisation est refusé comme s'il n'existait pas, y compris par identifiant direct. Ce qu'une machine écrit hérite de son organisation. Seul l'admin de l'organisation Anheart lit toutes les organisations. Vérifié en mémoire seulement (voir la limite en §3). | `convex/lib/auth.ts`, `convex/authorization.matrix.ts`, `convex/organizationIsolation.test.ts` |
 | **Hors de la boucle locale, la page de la console n'est servie qu'en TLS, ou la console ne démarre pas.** Un seul port, aucun port en clair à côté, aucune redirection ; la WebSocket n'y accepte que l'origine `https` ; un certificat que la console ne peut pas servir est une erreur de configuration, dite avant qu'elle ne construise quoi que ce soit. La séance, elle, ne dépend pas de TLS : des clients TLS qui ne finissent jamais ne déplacent pas le tic, et un certificat expiré n'empêche ni de servir ni d'arrêter ([section 10](#11-la-console-en-tls-hors-de-la-boucle-locale-anh-151)). Vérifié sur la boucle locale d'une machine de test ; pas sur un Pi installé, ni avec une tablette. | `web/deps.py`, `web/tls.py`, `web/app.py`, `scripts/pi/make_console_tls.sh` |
-| **Âge minimum** : une séance programmée, et depuis le 15 octobre 2026 une séance manuelle avec personne à bord, exige un âge connu et d'au moins `MIN_RIDER_AGE` (18 par défaut), compté depuis l'année de naissance réglée sur le site. Le site et la console refusent tous les deux. | `local_panel.py`, `roster.py`, `convex/training.ts` |
+| **Âge minimum** : une séance programmée, et depuis le 15 octobre 2026 une séance manuelle avec personne à bord, exige un âge connu et d'au moins `min_rider_age` du fichier médical signé (18 ans, `config/medical_parameters.json`, [section 12](#12-décisions-médicales--un-fichier-signé-anh-139)), compté depuis l'année de naissance réglée sur le site. Le site et la console refusent tous les deux. | `local_panel.py`, `roster.py`, `convex/training.ts` |
 | **Réglages prudents par défaut** : personne à bord refusée (`OCCUPANCY_OCCUPIED_ENABLED=false`), séances programmées désactivées (`PROGRAMS_ENABLED=false`), plafond 300 tr/min moteur (≈ 6 tr/min au bras). | `.env.example`, `local_config.py` |
 
 ## 3. Ce que le logiciel ne garantit PAS
@@ -1846,12 +1846,21 @@ Hors du Pi, sur le poste du signataire, depuis `raspberry-pi/` :
 2. Écrire la décision dans `config/medical_parameters.json` : les valeurs, une
    nouvelle `version`, la date (`issued_at`) et l'identifiant du signataire.
 3. `python scripts/sign_medical_parameters.py sign <clé privée>` : refuse un
-   fichier que la console refuserait et une clé privée qui n'est pas celle de
-   `config/medical.pub`, écrit `config/medical_parameters.sig`, puis vérifie
-   comme la console.
+   fichier mal formé (le même analyseur que la console : JSON strict, membres
+   exacts, types, nombres positifs et finis, palier critique au-dessus du palier
+   dur, fraction de zone au plus 1) et une clé privée qui n'est pas celle de
+   `config/medical.pub`, écrit `config/medical_parameters.sig`, puis vérifie la
+   signature comme la console. Il **ne vérifie pas** les bornes que la console
+   applique au démarrage (FC 100..220 bpm, âge 10..100 ans, bornes du limiteur
+   de mouvement) : il signe un fichier qui en sort, et c'est la console qui le
+   refuse au démarrage (problème de configuration
+   `config/medical_parameters.json:<membre>`, code de sortie 2, sur lequel le
+   service ne la relance pas). Vérifier ces bornes avant de signer est prévu
+   par ANH-235.
 4. `python scripts/sign_medical_parameters.py verify` : ce que la console dira
-   au démarrage. Puis une PR ordinaire, relue ; la check-list de release
-   relit toute valeur `[MED]` qui change ([release.md](release.md)).
+   de la signature au démarrage (avec les mêmes limites que `sign` : les bornes
+   ne sont pas vérifiées). Puis une PR ordinaire, relue ; la check-list de
+   release relit toute valeur `[MED]` qui change ([release.md](release.md)).
 
 ### 13.5 Ce que cela ne couvre pas
 
