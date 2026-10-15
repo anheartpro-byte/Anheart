@@ -39,6 +39,7 @@ from src.log_format import JsonLines, json_handler
 from src.training.runtime import RuntimeState
 from src.training.types import SignalQuality
 from src.units import Bpm
+from tests.roster_support import CHILD, RIDER, RIDER_ID, RIDER_NAME
 from tests.test_failure_rig import (
     OPERATOR,
     PROGRAMME_ENV,
@@ -330,6 +331,7 @@ TOO_FAST: Final[int] = 171
 the critical tier (158 bpm)."""
 
 RIDER_AGE: Final[int] = 9
+"""The age of :data:`~tests.roster_support.CHILD` on the rig's clock."""
 
 
 @dataclass
@@ -363,6 +365,7 @@ async def test_ex2_a_session_with_a_rider_leaves_no_health_data_in_the_log(
     runtime = rig.panel.runtime
     with caplog.at_level(logging.DEBUG):
         async with rig.http() as session:
+            rig.panel.roster.adopt((RIDER, CHILD), rig.clock.monotonic())
             await pulse.beat(10, RESTING)
             await attest(session)
             refused = await session.post(
@@ -371,13 +374,14 @@ async def test_ex2_a_session_with_a_rider_leaves_no_health_data_in_the_log(
                     "profile_id": SHORT_PROFILE,
                     "operator": OPERATOR,
                     "total_duration_s": None,
-                    "subject_age": RIDER_AGE,
+                    "subject_id": CHILD.user_id,
                 },
             )
             assert refused.status_code == httpx.codes.ACCEPTED, refused.text
             await rig.tick(0.4)
             started = await session.post(
-                "/api/manual/start", json={"occupancy": "occupied", "operator": OPERATOR}
+                "/api/manual/start",
+                json={"occupancy": "occupied", "operator": OPERATOR, "subject_id": RIDER_ID},
             )
             assert started.status_code == httpx.codes.ACCEPTED, started.text
             await pulse.beat(2, RESTING)
@@ -397,6 +401,9 @@ async def test_ex2_a_session_with_a_rider_leaves_no_health_data_in_the_log(
         assert not re.search(rf"\b({RESTING}|{TOO_FAST})\b", line), line
         assert "bpm" not in line.lower(), line
         assert rider_words(RIDER_AGE) not in line, line
+        # Nor the riders' names, which the page shows from memory and nothing writes.
+        assert RIDER_NAME not in line, line
+        assert CHILD.name not in line, line
         assert SHORT_PROFILE not in line, line
         assert verdict.detail not in line, line
     await rig.panel.close()

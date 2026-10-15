@@ -21,6 +21,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from src.training.runtime import EndReason, RuntimeState
+from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import (
     OPERATOR,
     PROGRAMME_ENV,
@@ -84,7 +85,12 @@ async def test_a_programme_start_during_a_manual_session_is_refused(tmp_path: Pa
         await rig.tick(20.0)
         started = await session.post(
             "/api/session/start",
-            json={"profile_id": SHORT_PROFILE, "operator": OPERATOR, "total_duration_s": None},
+            json={
+                "profile_id": SHORT_PROFILE,
+                "operator": OPERATOR,
+                "total_duration_s": None,
+                "subject_id": RIDER_ID,
+            },
         )
     assert started.status_code == httpx.codes.CONFLICT
     detail_of(started)

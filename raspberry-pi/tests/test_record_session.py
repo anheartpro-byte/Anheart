@@ -76,6 +76,7 @@ from tests.record_console_support import (
     stop,
 )
 from tests.record_journal_support import refuse_writes
+from tests.roster_support import RIDER_ID, RIDER_NAME
 from tests.test_failure_rig import (
     BENCH_ENV,
     OPERATOR,
@@ -196,8 +197,10 @@ async def test_ex1_a_programmed_session_freezes_its_programme_numbers_only(
     assert profile is not None
     assert (profile.zone_low_bpm, profile.zone_high_bpm, profile.max_rpm) == (118, 138, 276)
     assert profile.channels == ("ECG",)
-    assert manifest.subject_id is None, "a start typed at the console names no rider"
+    # The rider chosen at the console, by the dashboard's identifier: a pseudonym.
+    assert manifest.subject_id == RIDER_ID
     on_disk = recorded.everything_on_disk()
+    assert RIDER_NAME.encode() not in on_disk, "the rider's name is not recorded"
     assert SHORT_PROFILE.encode() not in on_disk
     assert b"failure injection" not in on_disk, "the profile's display name is not recorded"
     events = recorded.recording().events

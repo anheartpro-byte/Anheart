@@ -18,7 +18,7 @@ Up, from this machine to the dashboard:
   record on disk by :mod:`src.record_uplink`: what the dashboard has not
   acknowledged is on disk, never in a queue here.
 
-Down, from the dashboard to this machine, exactly two things:
+Down, from the dashboard to this machine, exactly three things:
 
 * an AUTO launch: a preset id, a rider and the rider's maximum heart rate. It
   goes through :meth:`~src.control_surface.ControlSurface.submit_start` like a
@@ -27,6 +27,11 @@ Down, from the dashboard to this machine, exactly two things:
   the panel's own checks (programmes enabled, occupied ceiling, the preset
   re-validated against this rider). Any refusal goes back as a failed session
   with the reason;
+* the list of the riders this machine may offer (:mod:`src.roster`), asked
+  for at the start and every :data:`~src.roster.ROSTER_PERIOD` while no
+  session runs, kept in memory only. It starts nothing: a start at the
+  console names one of them and goes through every gate as before, the
+  rider's maximum heart rate and age from that list;
 * a stop request, forwarded as an ordinary end on the commissioned ramp. It
   is looked for by :meth:`CloudSync.watch_stop`, from a task of its own: the
   question keeps its cadence whatever the sending waits for. And a launch
@@ -122,7 +127,13 @@ from src.contract import (
     server_refusal,
     unsupported_refusal,
 )
-from src.control_surface import ControlSurface, SafetyHolding, StartRefusal, SurfaceBusy
+from src.control_surface import (
+    LOCAL_SUBJECT,
+    ControlSurface,
+    SafetyHolding,
+    StartRefusal,
+    SurfaceBusy,
+)
 from src.health import HealthContext, HealthWatch
 from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
@@ -139,6 +150,7 @@ from src.record_uplink import (
     RuntimeEnd,
 )
 from src.result import Err, Ok, Result
+from src.roster import ROSTER_PATH, Roster
 from src.training.plan import JsonValue, ProfileStore, TrainingProfile
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import EstopUnattested
@@ -559,6 +571,9 @@ class StartedSession:
     operator: str
     started_at: UnixMillis
     subject_id: str
+    """The rider's dashboard identifier; :data:`~src.control_surface.LOCAL_SUBJECT`
+    for a session that names nobody (a bench session)."""
+
     cloud_session_id: str | None
     """The dashboard launch this answers; ``None`` for a start at the machine."""
 
@@ -567,6 +582,9 @@ class StartedSession:
 
     occupancy: Occupancy | None = None
     """Declared for a MANUAL session; ``None`` for AUTO (always occupied)."""
+
+    subject_label: str | None = None
+    """The rider's name as the list gave it, for the dashboard; memory only, never a disk."""
 
 
 class SessionListener(Protocol):
@@ -690,9 +708,14 @@ def end_is_failure(reason: EndReason | None) -> bool:
 
 
 def declaration_of(started: StartedSession) -> Declaration:
-    """What the dashboard is told of a session this console has just armed."""
+    """What the dashboard is told of a session this console has just armed.
+
+    The rider, when one is named: the dashboard's identifier, and the name the
+    list gave, which only the dashboard keeps. A bench session names nobody.
+    """
     profile = started.profile
     occupancy = started.occupancy
+    named = started.subject_id not in ("", LOCAL_SUBJECT)
     return Declaration(
         kind=started.kind.value,
         operator=started.operator,
@@ -703,6 +726,8 @@ def declaration_of(started: StartedSession) -> Declaration:
         total_duration_s=None if profile is None else float(profile.total_duration_s),
         subject_hr_max=None if profile is None else int(profile.subject_hr_max),
         occupancy=None if occupancy is None else occupancy.value,
+        user_id=started.subject_id if named else None,
+        subject_label=started.subject_label if named else None,
     )
 
 
@@ -761,6 +786,7 @@ class CloudSync:
         "_pushed_rev",
         "_record_degraded",
         "_refused_launch",
+        "_roster",
         "_runtime",
         "_said_at",
         "_software_version",
@@ -788,6 +814,7 @@ class CloudSync:
         health: HealthWatch | None = None,
         health_context: Callable[[], HealthContext] = HealthContext,
         deposit: DepositTask | None = None,
+        roster: Roster | None = None,
     ) -> None:
         """``record_degraded``: whether the local session record is incomplete or cannot
         be written, read at every heartbeat; ``None`` when this console records nothing.
@@ -795,9 +822,11 @@ class CloudSync:
         session are read back from; ``None`` on a console that records nothing, which
         then only declares and ends its sessions. ``link``: where what each exchange
         says of the link is kept for the console's page; ``None``: one of this object's
-        own."""
+        own. ``roster``: the riders' list this link keeps up to date; ``None``: no list
+        is asked for."""
         self._clock: Clock = clock
         self._deposit: DepositTask | None = deposit
+        self._roster: Roster | None = roster
         self._health: HealthWatch | None = health
         self._health_context: Callable[[], HealthContext] = health_context
         self._last_rtt: Seconds | None = None
@@ -896,6 +925,7 @@ class CloudSync:
         self._observe()
         await self._heartbeat(now, snapshot)
         await self._push_profiles(now)
+        await self._refresh_roster(now)
         if not self._uplink.running and self._awaiting is None and not self._uplink.refusal_owed:
             await self._poll(now)
         self._check_launch_timeout(now)
@@ -1001,6 +1031,45 @@ class CloudSync:
             self._next_profiles = None
         else:
             self._next_profiles = Monotonic(now + RETRY_PERIOD)
+
+    # --- the riders' list --------------------------------------------------
+
+    async def _refresh_roster(self, now: Monotonic) -> None:
+        """Ask for the riders' list: at the start, then every period, never during a session.
+
+        An answer replaces the list held, whole. No answer keeps it, to age
+        (:data:`~src.roster.ROSTER_MAX_AGE`). A refused key empties it: a
+        machine the dashboard no longer recognises offers nobody.
+        """
+        roster = self._roster
+        if roster is None or not roster.due(now):
+            return
+        if self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING):
+            return
+        fetched = await self._transport.get(ROSTER_PATH)
+        self._hear_roster(roster, fetched, now)
+        self._note(fetched)
+
+    @staticmethod
+    def _hear_roster(roster: Roster, fetched: Result[Document, CloudError], now: Monotonic) -> None:
+        """What one answer, or its absence, does to the list held."""
+        match fetched:
+            case Ok(document):
+                roster.heard(document, now)
+            case Err(error):
+                match error:
+                    case Unreachable():
+                        roster.missed(f"tableau de bord injoignable : {error.detail}", now)
+                    case Refused():
+                        refusal = describe_refusal(error)
+                        if error.status in KEY_STATUSES:
+                            roster.refused(refusal, now)
+                        else:
+                            roster.missed(refusal, now)
+                    case _ as unreachable:
+                        assert_never(unreachable)
+            case _ as unreachable:
+                assert_never(unreachable)
 
     # --- launches from the dashboard ---------------------------------------
 

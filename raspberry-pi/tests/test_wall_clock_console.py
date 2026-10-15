@@ -45,6 +45,7 @@ from src.units import Metres, Monotonic, MotorRpm, Seconds, UnixMillis
 from src.wall_clock import Unreadable, WallClockProbe, WallClockState, WallClockWatch
 from src.web.schemas import PanelRow, WallClockRow
 from tests.record_console_support import RecordedRig, recorded_rig, stop
+from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import (
     BENCH_ENV,
     OPERATOR,
@@ -101,9 +102,11 @@ async def _clock_row(session: httpx.AsyncClient) -> WallClockRow:
 
 
 async def _ask(session: httpx.AsyncClient, occupancy: str) -> None:
-    asked = await session.post(
-        "/api/manual/start", json={"occupancy": occupancy, "operator": OPERATOR}
-    )
+    """A manual start; with a person on board, for the rider of the console's list."""
+    body: dict[str, str] = {"occupancy": occupancy, "operator": OPERATOR}
+    if occupancy == "occupied":
+        body["subject_id"] = RIDER_ID
+    asked = await session.post("/api/manual/start", json=body)
     assert asked.status_code == httpx.codes.ACCEPTED, asked.text
 
 

@@ -225,6 +225,15 @@ from src.record.session import (
 )
 from src.record_uplink import RecordSource
 from src.result import Err, Ok, Result
+from src.roster import (
+    OnBench,
+    PassengerRefusal,
+    Rider,
+    Roster,
+    age_of,
+    describe_passenger_refusal,
+    passenger_of,
+)
 from src.sensors.hub import SensorHub
 from src.service_state import (
     IN_SERVICE,
@@ -360,6 +369,30 @@ A manual session moves at the motion limits instead (``config/motion_limits.json
 PROGRAMS_DISABLED: Final[str] = (
     "seances programmees desactivees (PROGRAMS_ENABLED=false, jalon M5) : utiliser MANUEL"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class RiderFacts:
+    """What a programmed start is vetted on, and where it came from.
+
+    For a launch from the dashboard, what the launch carries. For a start at
+    the console, what the riders' list holds for the rider named, read when
+    the loop arms it: nothing typed at the console counts.
+    """
+
+    hr_max: Bpm | None
+    age: int | None
+    label: str | None
+    """The list's name of the rider, for the dashboard; ``None`` for a launch."""
+
+
+@dataclass(frozen=True, slots=True)
+class Armable:
+    """A programme every gate before the runtime's has passed, and who it is for."""
+
+    program: Program
+    rider: RiderFacts
+
 
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
@@ -775,6 +808,7 @@ class LocalPanel:
         "_presence",
         "_recorder",
         "_reporter",
+        "_roster",
         "_runtime",
         "_sensors",
         "_service",
@@ -813,8 +847,11 @@ class LocalPanel:
         wall_clock: WallClockWatch | None = None,
         service: ServiceDesk | None = None,
         health: HealthWatch | None = None,
+        roster: Roster | None = None,
     ) -> None:
         self._clock: Clock = clock
+        # The riders' list: the link writes it, the routes and the starts read it.
+        self._roster: Roster = Roster(linked=False) if roster is None else roster
         self._watchdog: ServiceWatchdog = watchdog
         self._health: HealthWatch | None = health
         self._service: ServiceDesk | None = service
@@ -886,6 +923,11 @@ class LocalPanel:
     def cloud(self) -> CloudSync | None:
         """The dashboard link, or ``None`` when this console runs unlinked."""
         return self._cloud
+
+    @property
+    def roster(self) -> Roster:
+        """The riders' list a start with a person on board names one of."""
+        return self._roster
 
     @property
     def recorder(self) -> SessionRecorder | None:
@@ -1057,7 +1099,10 @@ class LocalPanel:
     async def _start_manual(self, command: StartManual) -> None:
         """Resolve the occupancy's ceiling from the configuration, then arm, or say why not.
 
-        Before anything: a console out of service arms nothing.
+        Before anything: a console out of service arms nothing. After the
+        ceiling, the rider: a person on board is a rider the riders' list
+        holds now, at least ``MIN_RIDER_AGE`` (:meth:`_on_board_refusal`), and
+        the bench names nobody (:meth:`_manual_rider`).
         """
         occupancy = command.occupancy
         operator = command.operator
@@ -1068,6 +1113,15 @@ class LocalPanel:
         ceiling = self._config.ceiling_for(occupancy)
         if isinstance(ceiling, Err):
             self._surface.note_refused(command, ceiling.error.detail)
+            return
+        named = self._manual_rider(command)
+        if isinstance(named, Err):
+            self._surface.note_refused(command, describe_passenger_refusal(named.error))
+            return
+        rider = named.value
+        on_board = None if rider is None else self._on_board_refusal(rider)
+        if on_board is not None:
+            self._surface.note_refused(command, on_board)
             return
         blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
         if blocked is not None:
@@ -1082,10 +1136,12 @@ class LocalPanel:
             self._surface.note_refused(command, describe_start_refusal(started.error))
             return
         self._surface.note_taken(command)
+        subject = LOCAL_SUBJECT if rider is None else rider.user_id
         self._begin_record(
             SessionRequest(
                 occupancy=occupancy,
                 operator=operator,
+                subject_id=subject,
                 arming_began=asked,
                 arming_refused=refused,
             )
@@ -1102,22 +1158,56 @@ class LocalPanel:
                     kind=SessionKind.MANUAL,
                     operator=operator,
                     started_at=self._clock.unix_millis(),
-                    subject_id=LOCAL_SUBJECT,
+                    subject_id=subject,
                     cloud_session_id=None,
                     occupancy=occupancy,
+                    subject_label=None if rider is None else rider.name,
                 )
             )
+
+    def _on_board_refusal(self, rider: Rider) -> str | None:
+        """Why ``rider`` may not be on board a manual session, or ``None``.
+
+        The minimum age of a programmed session, counted the same way from the
+        birth year the site set (:func:`~src.roster.age_of`), decided by the
+        product owner on 15 October 2026: no birth year, or too young, is a
+        refusal. A manual session needs no maximum heart rate: nothing is
+        fitted to it. The rider's name and age are kept out of what is written.
+        """
+        age = age_of(rider, self._clock.unix_millis())
+        if self._recorder is not None:
+            self._recorder.withhold(
+                rider.name, rider_words(age.value) if isinstance(age, Ok) else ""
+            )
+        if isinstance(age, Err):
+            return describe_passenger_refusal(age.error)
+        return rider_age_refusal(age.value, self._config.min_rider_age)
+
+    def _manual_rider(self, command: StartManual) -> Result[Rider | None, PassengerRefusal]:
+        """Who rides a manual session: nobody on the bench, a rider of the list on board.
+
+        A bench session that names a rider is refused rather than recorded
+        without them: the declaration and the name contradict each other.
+        """
+        subject = command.subject_id
+        if command.occupancy is Occupancy.BENCH:
+            return Ok(None) if subject in ("", LOCAL_SUBJECT) else Err(OnBench())
+        # Anything but the bench is somebody on board: a rider the list holds now.
+        found = self._roster.find(subject, self._clock.monotonic())
+        return found if isinstance(found, Err) else Ok(found.value)
 
     async def _start_programme(self, command: StartSession) -> None:
         """A programmed session: every gate in order of increasing commitment, then arm.
 
         1. programmes enabled in this build (``PROGRAMS_ENABLED``, milestone M5),
-           and a rider of known age at least ``MIN_RIDER_AGE``;
+           a rider whose maximum heart rate and age are known (:meth:`_rider_for`:
+           for a start at the console, a rider the riders' list holds now, with
+           both values set on the site), and an age at least ``MIN_RIDER_AGE``;
         2. a person is on board by definition - the heart rate drives the speed -
            so the OCCUPIED ceiling must exist (``OCCUPANCY_OCCUPIED_ENABLED``,
            milestone M6);
-        3. the profile resolves, fitted to this rider's maximum heart rate when
-           it is known, so every cardiac check re-runs against this person;
+        3. the profile resolves, fitted to this rider's maximum heart rate, so
+           every cardiac check re-runs against this person;
         4. its ``max_rpm`` fits under the occupied ceiling;
         5. the runtime's own gates (attestation, verdicts, tiers, the drive).
 
@@ -1125,16 +1215,25 @@ class LocalPanel:
         sent back to the dashboard as a failed session.
         """
         operator = command.operator
+        rider = self._rider_for(command)
         if self._recorder is not None:
             # A refusal below may quote the programme's identifier, or the rider's
             # age: the operator is shown both, and neither is written to disk.
-            age = command.subject_age
-            self._recorder.withhold(command.profile_id, "" if age is None else rider_words(age))
-        prepared = self._prepare_programme(command)
+            # Nor is the rider's name, which no refusal quotes.
+            facts = rider.value if isinstance(rider, Ok) else None
+            age = None if facts is None else facts.age
+            label = None if facts is None else facts.label
+            self._recorder.withhold(
+                command.profile_id,
+                "" if age is None else rider_words(age),
+                "" if label is None else label,
+            )
+        prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
             self._refuse_programme(command, prepared.error)
             return
-        program = prepared.value
+        program = prepared.value.program
+        label = prepared.value.rider.label
         subject = Subject(subject_id=command.subject_id, operator=operator)
         # Read before the drive is touched: the record's frames start with the arming,
         # and so does the count of those it loses.
@@ -1165,25 +1264,52 @@ class LocalPanel:
                     subject_id=command.subject_id,
                     cloud_session_id=command.cloud_session_id,
                     profile=program.profile,
+                    subject_label=label,
                 )
             )
 
-    def _admission_refusal(self, command: StartSession) -> str | None:
+    def _rider_for(self, command: StartSession) -> Result[RiderFacts, str]:
+        """What this programmed start is vetted on, or why it has nothing to be vetted on.
+
+        A launch from the dashboard carries the rider's values: the dashboard
+        read them when it was launched (ANH-144 re-checks them at the arming).
+        A start at the console names a rider and nothing else: the list held
+        now must hold them, with a maximum heart rate and a birth year, both
+        set on the site. A rider it no longer holds, a list too old, a value
+        missing: refused, whatever the page showed when the start was asked.
+        """
+        if command.cloud_session_id is not None:
+            return Ok(RiderFacts(command.subject_hr_max, command.subject_age, None))
+        found = self._roster.find(command.subject_id, self._clock.monotonic())
+        if isinstance(found, Err):
+            return Err(describe_passenger_refusal(found.error))
+        passenger = passenger_of(found.value, self._clock.unix_millis())
+        if isinstance(passenger, Err):
+            return Err(describe_passenger_refusal(passenger.error))
+        listed = passenger.value
+        return Ok(RiderFacts(listed.hr_max, listed.age, listed.rider.name))
+
+    def _admitted(self, rider: Result[RiderFacts, str]) -> Result[RiderFacts, str]:
         """Gate 1, before the machine is asked anything: the console is in service
         (whether the start is typed here or comes down from the dashboard),
-        programmes are enabled, the rider is old enough."""
+        programmes are enabled, the rider is known and old enough."""
         out = self._service_refusal()
         if out is not None:
-            return out
+            return Err(out)
         if not self._config.programs_enabled:
-            return PROGRAMS_DISABLED
-        return rider_age_refusal(command.subject_age, self._config.min_rider_age)
+            return Err(PROGRAMS_DISABLED)
+        if isinstance(rider, Err):
+            return rider
+        too_young = rider_age_refusal(rider.value.age, self._config.min_rider_age)
+        return rider if too_young is None else Err(too_young)
 
-    def _prepare_programme(self, command: StartSession) -> Result[Program, str]:
+    def _prepare_programme(
+        self, command: StartSession, rider: Result[RiderFacts, str]
+    ) -> Result[Armable, str]:
         """Gates 1-4, the camera and the wall clock: the programme to arm, or why not."""
-        admission = self._admission_refusal(command)
-        if admission is not None:
-            return Err(admission)
+        admitted = self._admitted(rider)
+        if isinstance(admitted, Err):
+            return admitted
         ceiling = self._config.ceiling_for(Occupancy.OCCUPIED)
         if isinstance(ceiling, Err):
             return Err(ceiling.error.detail)
@@ -1191,7 +1317,7 @@ class LocalPanel:
             command.profile_id,
             at=self._clock.unix_millis(),
             total_duration_s=command.total_duration_s,
-            subject_hr_max=command.subject_hr_max,
+            subject_hr_max=admitted.value.hr_max,
         )
         if isinstance(resolved, Err):
             return Err(describe_resolve_error(resolved.error))
@@ -1205,7 +1331,7 @@ class LocalPanel:
         blocked = self._presence_refusal(occupied) or self._clock_refusal(occupied)
         if blocked is not None:
             return Err(blocked)
-        return Ok(program)
+        return Ok(Armable(program=program, rider=admitted.value))
 
     def _service_refusal(self) -> str | None:
         """Why a console out of service refuses every start; ``None`` when it is in service."""
@@ -1582,6 +1708,7 @@ def build_panel(
     service: ServiceDesk | None = None,
     health: HealthWatch | None = None,
     deposit: DepositTask | None = None,
+    roster: Roster | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -1620,8 +1747,13 @@ def build_panel(
     of every completed tick; ``None``: nobody is told. ``service`` is the
     restart state of this console (:func:`open_service` in production);
     ``None``: it keeps none and is always in service.
+
+    ``roster`` is the riders' list (:mod:`src.roster`); ``None``: an empty one,
+    which the dashboard link fills when there is one. A test or a simulation
+    gives one it has filled itself.
     """
     version = read_software_version()
+    riders = Roster(linked=config.cloud is not None) if roster is None else roster
     watch = None if wall_clock is None else WallClockWatch(wall_clock)
     # What the dashboard link hears of itself, for the page. The link writes
     # it from its own task, the page's route reads it: both on the event loop.
@@ -1734,6 +1866,7 @@ def build_panel(
         # The status reads the verdicts where every latch is seen: the runtime
         # holds the ones it latched itself, which the supervisor never sees.
         verdicts=runtime,
+        roster=riders,
     )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
@@ -1780,6 +1913,7 @@ def build_panel(
                     else RecordDeposit(journal.root, clock, link, owned.upload)
                 )
             ),
+            roster=riders,
         )
     return LocalPanel(
         clock=clock,
@@ -1803,6 +1937,7 @@ def build_panel(
         recorder=recorder,
         wall_clock=watch,
         service=service,
+        roster=riders,
     )
 
 
@@ -2021,11 +2156,15 @@ def describe_clock_warning(state: WallClockState) -> str:
 
 
 def rider_age_refusal(age: int | None, minimum: int) -> str | None:
-    """Why a programmed session refuses this rider's age, or ``None`` when it is acceptable.
+    """Why a session with a person on board refuses this rider's age, or ``None``.
+
+    Programmed or manual (the latter since 15 October 2026, a product decision).
 
     Unknown is a refusal, not a pass: the simulation battery found a 10-year-old
-    accepted on the adult ceiling because nothing asked. The age is declared at
-    the console or carried by the dashboard launch (from the rider's birth year).
+    accepted on the adult ceiling because nothing asked. The age comes from the
+    rider's birth year on the site: through the riders' list for a start at the
+    console, carried by the launch for one from the dashboard. It is never typed
+    at the console.
     """
     if age is None:
         return "demarrage refuse : age du passager requis pour une seance programmee"

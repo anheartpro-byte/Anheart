@@ -41,6 +41,7 @@ var STATUS_STALE_MS = 12000;    // two refreshes missed: what the status last sa
 var PANEL_MS = 1000;            // console link panel refresh
 var PANEL_STALE_MS = 3500;      // no /api/panel answer for this long: what it last said is not the present
 var SENSORS_MS = 1000;          // /api/sensors poll
+var ROSTER_MS = 10000;          // riders' list refresh (the console asks the dashboard once a minute)
 var SENSOR_STALE_MS = 3500;     // a channel whose `at` has not moved for this long is stale
 var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
 var STANDSTILL_RPM = 0.05;      // below this, the output shaft is called stopped
@@ -56,6 +57,9 @@ var state = {
   snapshot: null,
   zone: null,            // {low, high} from the chosen profile, for the band
   profiles: [],
+  roster: null,          // the last /api/roster answer: names live here, in this page's memory only
+  rosterShown: null,     // the riders the list shows, as one string: rebuilt only when it changes
+  riderLost: false,      // the rider chosen here is no longer in the list
   ecg: [],               // numbers, with nulls marking a discontinuity
   ecgSeq: 0,
   events: [],
@@ -3137,6 +3141,113 @@ function durationSeconds() {
 
 /* --------------------------------------------------------------- actions  */
 
+/*
+  The rider. The list is the dashboard's (GET /api/roster): who holds the right
+  on this machine, with the age and the max heart rate a manager set on the
+  site. They are shown here and never typed: the console vets a programme on
+  the list's values, when it arms it, whatever this page shows. A rider the
+  list no longer holds is taken out of the choice, and the page says so.
+*/
+function loadRoster() {
+  return api("/api/roster").then(renderRoster).catch(function (error) {
+    problem(el("roster-note"), error);
+  });
+}
+
+function rosterAge(seconds) {
+  if (seconds === null) {
+    return "?";
+  }
+  return seconds < 120 ? Math.round(seconds) + " s" : Math.floor(seconds / 60) + " min";
+}
+
+function renderRoster(roster) {
+  state.roster = roster;
+  var select = el("rider");
+  var chosen = select.value;
+  var shown = roster.riders
+    .map(function (rider) {
+      return rider.user_id + "\u0000" + rider.name;
+    })
+    .join("\u0001");
+  if (shown !== state.rosterShown) {
+    // Rebuilt only when the list changes: a refresh must not close a choice being made.
+    state.rosterShown = shown;
+    select.textContent = "";
+    var none = document.createElement("option");
+    none.value = "";
+    none.textContent = roster.riders.length ? "- choisir le passager -" : "- aucun passager propose -";
+    select.appendChild(none);
+    roster.riders.forEach(function (rider) {
+      var option = document.createElement("option");
+      option.value = rider.user_id;
+      option.textContent = rider.name;
+      select.appendChild(option);
+    });
+  }
+  var kept = selectedRider(chosen) ? chosen : "";
+  if (chosen && !kept) {
+    state.riderLost = true;
+  }
+  select.value = kept;
+  var note = el("roster-note");
+  if (roster.state !== "current") {
+    problem(note, roster.detail);
+  } else if (roster.problem) {
+    problem(
+      note,
+      "liste du tableau de bord recue il y a " + rosterAge(roster.age_s) +
+        " ; derniere demande sans reponse : " + roster.problem
+    );
+  } else {
+    ok(note, "liste du tableau de bord recue il y a " + rosterAge(roster.age_s));
+  }
+  renderRiderFacts();
+}
+
+function selectedRider(id) {
+  var wanted = id === undefined ? el("rider").value : id;
+  var riders = state.roster ? state.roster.riders : [];
+  for (var i = 0; i < riders.length; i += 1) {
+    if (riders[i].user_id === wanted) {
+      return riders[i];
+    }
+  }
+  return null;
+}
+
+function renderRiderFacts() {
+  var node = el("rider-facts");
+  var rider = selectedRider();
+  if (!rider) {
+    if (state.riderLost) {
+      problem(node, "le passager choisi n'est plus dans la liste du tableau de bord : en choisir un");
+    } else {
+      ok(node, "aucun passager choisi");
+    }
+    return;
+  }
+  var facts =
+    "age " + (rider.age === null ? "inconnu" : rider.age + " ans") +
+    " · FC max " + (rider.hr_max === null ? "inconnue" : rider.hr_max + " bpm") +
+    " (reglees sur le site par un gestionnaire, non modifiables ici)";
+  if (rider.programme) {
+    problem(node, facts + " - " + rider.programme);
+  } else {
+    ok(node, facts);
+  }
+}
+
+function onRiderChange() {
+  state.riderLost = false;
+  renderRiderFacts();
+}
+
+function riderId() {
+  // null when none is chosen: the console refuses a programme for nobody, and says so.
+  return el("rider").value || null;
+}
+
 function doPreview() {
   var profile = selectedProfile();
   if (!profile) {
@@ -3144,7 +3255,7 @@ function doPreview() {
   }
   api("/api/plan/preview", {
     method: "POST",
-    body: { profile_id: profile.profile_id, total_duration_s: durationSeconds() },
+    body: { profile_id: profile.profile_id, total_duration_s: durationSeconds(), subject_id: riderId() },
   })
     .then(function (preview) {
       state.zone = { low: preview.profile.zone_low_bpm, high: preview.profile.zone_high_bpm };
@@ -3154,16 +3265,6 @@ function doPreview() {
     .catch(function (error) {
       problem(el("start-note"), error);
     });
-}
-
-function riderAge() {
-  // null when blank: the console refuses a programme for a rider of unknown age.
-  var raw = el("rider-age").value.trim();
-  if (raw === "") {
-    return null;
-  }
-  var age = Number(raw);
-  return Number.isInteger(age) ? age : null;
 }
 
 function doStart() {
@@ -3178,7 +3279,7 @@ function doStart() {
       profile_id: profile.profile_id,
       operator: rememberOperator(el("operator").value),
       total_duration_s: durationSeconds(),
-      subject_age: riderAge(),
+      subject_id: riderId(),
     },
   })
     .then(function (command) {
@@ -3550,6 +3651,7 @@ function start() {
     }
   };
   el("profile").onchange = onProfileChange;
+  el("rider").onchange = onRiderChange;
   el("preview").onclick = doPreview;
   el("start").onclick = doStart;
   el("stop").onclick = doStop;
@@ -3592,6 +3694,7 @@ function start() {
   window.setInterval(refreshLiveness, 500);
   window.setInterval(loadPanel, PANEL_MS);
   window.setInterval(loadSensors, SENSORS_MS);
+  window.setInterval(loadRoster, ROSTER_MS);
   window.setInterval(loadCamera, 1000);
   loadCamera();
   window.setInterval(ping, PRESENCE_MS);
@@ -3606,6 +3709,7 @@ function start() {
 function boot() {
   loadPanel();
   loadSensors();
+  loadRoster();
   loadStatus()
     .then(loadProfiles)
     .then(function () {

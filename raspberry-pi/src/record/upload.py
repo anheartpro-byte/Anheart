@@ -143,6 +143,9 @@ class Head:
     operator: str
     """The operator's stable alias (``op-...``): the record never holds the name."""
 
+    subject_id: str | None
+    """The rider's pseudonym, the dashboard's identifier; ``None`` when nobody was named."""
+
     profile: Profile | None
     start_ms: int
     """The start of the session as the console dated it (unix ms): the origin of its axis."""
@@ -189,6 +192,7 @@ def read_head(record: Path) -> Result[Head, RecordError]:
             kind=manifest.kind,
             occupancy=manifest.occupancy,
             operator=manifest.operator,
+            subject_id=manifest.subject_id,
             profile=manifest.profile,
             start_ms=start_ms,
             monotonic_start=float(manifest.clocks.monotonic_start),

@@ -23,7 +23,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from pathlib import Path
 from typing import Final, cast, override
@@ -78,10 +78,12 @@ from src.record_uplink import (
     RouteMissing,
 )
 from src.result import Err, Ok, Result
+from src.roster import ROSTER_PATH, ROSTER_PERIOD, Roster, RosterState
 from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, Seconds, UnixMillis
+from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, listed, roster_document
 from tests.test_contract import shared
 
 TICK: Final[Seconds] = Seconds(0.2)
@@ -145,6 +147,8 @@ class Dashboard:
             return launch_answer()
         if path == "/api/machine/heartbeat":
             return ok({SERVER_VERSION_FIELD: CONTRACT_VERSION})
+        if path == ROSTER_PATH:
+            return ok(roster_document())
         return ok()
 
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
@@ -433,6 +437,151 @@ def test_a_session_is_declared_with_its_programme_and_its_occupancy(tmp_path: Pa
     assert auto.subject_hr_max == int(profile.subject_hr_max)
     bench = declaration_of(manual(r.clock))
     assert (bench.kind, bench.occupancy, bench.profile_id) == ("manual", "bench", None)
+    # Nobody named, nobody declared.
+    assert (auto.user_id, auto.subject_label) == (None, None)
+    assert (bench.user_id, bench.subject_label) == (None, None)
+
+
+def test_a_session_for_a_rider_is_declared_with_their_identifier_and_name(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    named = declaration_of(
+        StartedSession(
+            kind=SessionKind.MANUAL,
+            operator=OPERATOR,
+            started_at=r.clock.unix_millis(),
+            subject_id=RIDER_ID,
+            cloud_session_id=None,
+            occupancy=Occupancy.OCCUPIED,
+            subject_label=RIDER_NAME,
+        )
+    )
+    assert (named.user_id, named.subject_label) == (RIDER_ID, RIDER_NAME)
+    # A label without a rider names nobody: it is not declared.
+    stray = declaration_of(replace(manual(r.clock), subject_label=RIDER_NAME))
+    assert (stray.user_id, stray.subject_label) == (None, None)
+
+
+# =========================================================================
+# The riders' list
+# =========================================================================
+
+
+def roster_rig(tmp_path: Path, *, programs: bool = True) -> tuple[Rig, Roster]:
+    """The link of :func:`rig`, keeping a riders' list up to date."""
+    r = rig(tmp_path, programs=programs)
+    roster = Roster(linked=True)
+    sync = CloudSync(
+        clock=r.clock,
+        transport=r.dashboard,
+        runtime=r.runtime,
+        surface=r.panel.surface,
+        store=r.panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=programs,
+        roster=roster,
+    )
+    return replace(r, sync=sync), roster
+
+
+def roster_asks(r: Rig) -> int:
+    return len(r.dashboard.to(ROSTER_PATH))
+
+
+async def test_the_list_is_asked_for_at_the_start_then_once_a_period_at_rest(
+    tmp_path: Path,
+) -> None:
+    r, roster = roster_rig(tmp_path)
+    await r.step()
+    assert roster_asks(r) == 1
+    assert roster.find(RIDER_ID, r.clock.monotonic()) == Ok(RIDER)
+    for _ in range(round(ROSTER_PERIOD) - 1):
+        await r.step()
+    assert roster_asks(r) == 1
+    await r.step()
+    assert roster_asks(r) == 2
+
+
+@pytest.mark.parametrize("state", [RuntimeState.RUNNING, RuntimeState.ENDING])
+async def test_the_list_is_not_asked_for_during_a_session(
+    tmp_path: Path, state: RuntimeState
+) -> None:
+    r, roster = roster_rig(tmp_path)
+    r.runtime.state = state
+    await r.step(ROSTER_PERIOD)
+    await r.step(ROSTER_PERIOD)
+    assert roster_asks(r) == 0
+    assert roster.state(r.clock.monotonic()) is RosterState.WAITING
+    r.runtime.state = RuntimeState.FINISHED
+    await r.step()
+    assert roster_asks(r) == 1
+
+
+async def test_a_link_without_a_list_asks_for_none(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    await r.step(ROSTER_PERIOD)
+    assert roster_asks(r) == 0
+
+
+@pytest.mark.parametrize(
+    ("reply", "problem"),
+    [
+        (DOWN, "tableau de bord injoignable : no route to host"),
+        (
+            Err(Refused(status=500, detail="boom", code=ErrorCode("request_failed"))),
+            "request_failed (HTTP 500): boom",
+        ),
+        (Err(Refused(status=404, detail="HTTP 404")), "sans code (HTTP 404): HTTP 404"),
+        (ok({"active": True}), "reponse du tableau de bord sans liste de passagers"),
+    ],
+    ids=["unreachable", "server-error", "route-unknown", "not-a-list"],
+)
+async def test_without_a_list_the_one_held_is_kept(
+    tmp_path: Path, reply: Reply, problem: str
+) -> None:
+    r, roster = roster_rig(tmp_path)
+    await r.step()
+    r.dashboard.answer(ROSTER_PATH, reply)
+    await r.step(ROSTER_PERIOD)
+    view = roster.view(r.clock.monotonic())
+    assert (view.state, view.riders, view.problem) == (RosterState.CURRENT, (RIDER,), problem)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_a_refused_key_empties_the_list(tmp_path: Path, status: int) -> None:
+    r, roster = roster_rig(tmp_path)
+    await r.step()
+    r.dashboard.answer(ROSTER_PATH, Err(Refused(status=status, detail="no")))
+    await r.step(ROSTER_PERIOD)
+    view = roster.view(r.clock.monotonic())
+    assert (view.state, view.riders) == (RosterState.REFUSED, ())
+    assert view.problem == f"sans code (HTTP {status}): no"
+
+
+async def test_the_list_s_answer_says_the_dashboard_is_there(tmp_path: Path) -> None:
+    # Given a link whose every other request of this step goes unanswered
+    # (programmes off: no launch is asked for).
+    r, _roster = roster_rig(tmp_path, programs=False)
+    r.dashboard.answer("/api/machine/heartbeat", DOWN)
+    r.dashboard.answer("/api/machine/profiles", DOWN)
+    # When the list is answered, the link is heard online.
+    await r.step()
+    assert r.sync.online
+    # And when it is not, offline.
+    r.dashboard.answer(ROSTER_PATH, DOWN)
+    await r.step(ROSTER_PERIOD)
+    assert not r.sync.online
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [cast("Reply", Err(cast("CloudError", object()))), cast("Reply", object())],
+    ids=["unknown-error", "not-a-result"],
+)
+async def test_an_unknown_answer_to_the_list_fails_loudly(tmp_path: Path, reply: Reply) -> None:
+    r, _roster = roster_rig(tmp_path)
+    r.dashboard.answer(ROSTER_PATH, reply)
+    with pytest.raises(AssertionError):
+        await r.step()
 
 
 def test_only_presets_on_this_machine_s_tiers_are_offered(tmp_path: Path) -> None:
@@ -1249,18 +1398,25 @@ async def test_a_launch_that_reached_a_panel_without_programmes_is_refused(
     await rig_.panel.close()
 
 
-async def test_a_local_programme_is_registered_as_auto(tmp_path: Path) -> None:
+async def test_a_local_programme_is_registered_as_auto_for_its_rider(tmp_path: Path) -> None:
+    # Given a console that has the dashboard's riders' list.
     rig_ = linked(tmp_path)
     rig_.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-3"}))
+    await rig_.panel.cloud_step()
+    # When a programme is started at the console for a rider of that list.
     submitted = rig_.panel.surface.submit_start(
-        profile_id=PROFILE, operator=OPERATOR, total_duration_s=None, subject_age=30
+        profile_id=PROFILE, operator=OPERATOR, total_duration_s=None, subject_id=RIDER_ID
     )
     assert isinstance(submitted, Ok)
     await rig_.run(2.0)
+    # Then it runs, and the dashboard is told whose session it is.
     assert rig_.panel.runtime.state is RuntimeState.RUNNING
     body = rig_.dashboard.to("/api/machine/training/local")[0]
     assert body["kind"] == "auto"
     assert body["operatorName"] == OPERATOR
+    assert body["userId"] == RIDER_ID
+    assert body["subjectLabel"] == RIDER_NAME
+    assert body["subjectHrMax"] == 190
     await rig_.panel.close()
 
 
@@ -1272,6 +1428,25 @@ async def test_a_manual_session_at_the_machine_is_registered(tmp_path: Path) -> 
     body = rig_.dashboard.to("/api/machine/training/local")[0]
     assert body["kind"] == "manual"
     assert body["occupancy"] == "bench"
+    # Nobody is on the bench: no rider is declared.
+    assert "userId" not in body
+    assert "subjectLabel" not in body
+    await rig_.panel.close()
+
+
+async def test_an_occupied_manual_session_is_registered_for_its_rider(tmp_path: Path) -> None:
+    rig_ = linked(tmp_path)
+    # Long enough for the list, and for the heart rate a person on board needs.
+    await rig_.run(12.0)
+    submitted = rig_.panel.surface.submit_start_manual(
+        occupancy=Occupancy.OCCUPIED, operator=OPERATOR, subject_id=RIDER_ID
+    )
+    assert isinstance(submitted, Ok)
+    await rig_.run(2.0)
+    body = rig_.dashboard.to("/api/machine/training/local")[0]
+    assert body["occupancy"] == "occupied"
+    assert body["userId"] == RIDER_ID
+    assert body["subjectLabel"] == RIDER_NAME
     await rig_.panel.close()
 
 
@@ -1324,14 +1499,41 @@ def test_the_fake_dashboard_is_a_transport() -> None:
     assert transport is not None
 
 
-async def test_an_unlinked_console_still_runs_a_programme(tmp_path: Path) -> None:
+async def test_an_unlinked_console_offers_nobody_and_refuses_a_programme(tmp_path: Path) -> None:
+    # Given a console with no dashboard: the riders' list comes from the site.
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     panel = build_panel(
         config_of(MACHINE_API_KEY=""), clock=clock, profiles_path=tmp_path / "p.json"
     )
+    assert panel.roster.state(clock.monotonic()) is RosterState.UNLINKED
+    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    # When a programme is asked for a rider it cannot know.
+    submitted = panel.surface.submit_start(
+        profile_id=PROFILE, operator=OPERATOR, total_duration_s=None, subject_id=RIDER_ID
+    )
+    assert isinstance(submitted, Ok)
+    clock.advance(TICK)
+    await panel.control_step()
+    # Then nothing turns, and the operator reads why.
+    assert state_of(panel) is RuntimeState.IDLE
+    assert [fate.detail for fate in panel.surface.fates] == [
+        "demarrage refuse : aucun tableau de bord configure sur cette console : "
+        "la liste des passagers vient du site"
+    ]
+    await panel.close()
+
+
+async def test_an_unlinked_console_runs_a_programme_for_a_rider_it_holds(tmp_path: Path) -> None:
+    clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
+    panel = build_panel(
+        config_of(MACHINE_API_KEY=""),
+        clock=clock,
+        profiles_path=tmp_path / "p.json",
+        roster=listed(clock),
+    )
     assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
     submitted = panel.surface.submit_start(
-        profile_id=PROFILE, operator=OPERATOR, total_duration_s=None, subject_age=30
+        profile_id=PROFILE, operator=OPERATOR, total_duration_s=None, subject_id=RIDER_ID
     )
     assert isinstance(submitted, Ok)
     clock.advance(TICK)

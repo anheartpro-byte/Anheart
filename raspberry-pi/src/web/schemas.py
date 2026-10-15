@@ -59,6 +59,15 @@ from src.presence.monitor import (
     RampDown,
     StartBlocked,
 )
+from src.result import Ok
+from src.roster import (
+    Rider,
+    RosterView,
+    age_at,
+    describe_passenger_refusal,
+    describe_state,
+    passenger_of,
+)
 from src.sensors.base import Metric, SensorReading, SensorSpec
 from src.service_state import THRESHOLD, WINDOW, ServiceStatus
 from src.service_watchdog import WatchdogStatus
@@ -75,7 +84,7 @@ from src.training.types import (
     TelemetrySnapshot,
     ZoneCounters,
 )
-from src.units import Monotonic, Seconds
+from src.units import Monotonic, Seconds, UnixMillis
 from src.wall_clock import (
     Synchronised,
     WallClockState,
@@ -128,8 +137,15 @@ class StartBody:
     profile_id: str
     operator: str
     total_duration_s: float | None = None
+    subject_id: str | None = None
+    """The rider, by the identifier the riders' list gives (``GET /api/roster``). Required.
+
+    Their maximum heart rate and age are the list's: set on the site by a
+    manager, never typed here."""
+
     subject_age: int | None = None
-    """The rider's age in years; a programmed session refuses unknown or under MIN_RIDER_AGE."""
+    """No longer read: present only so that a page that still sends an age is refused
+    with a sentence that says why (422), rather than have its age silently ignored."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,12 +153,14 @@ class ManualStartBody:
     """Start a manual session. ``occupancy`` is declared now and frozen for the rotation.
 
     ``bench``: nobody on board (motor uncoupled, or arm coupled with the
-    capsule empty). ``occupied``: a person in the capsule - refused by
-    configuration until milestone M6.
+    capsule empty), and no rider. ``occupied``: a person in the capsule,
+    named by ``subject_id`` from the riders' list - refused by configuration
+    until milestone M6.
     """
 
     occupancy: str
     operator: str
+    subject_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +259,9 @@ class PreviewBody:
 
     profile_id: str
     total_duration_s: float | None = None
+    subject_id: str | None = None
+    """A rider of the list: the profile is fitted to their maximum heart rate, as a start
+    would fit it. ``None``: the profile as it is stored."""
 
 
 # =========================================================================
@@ -1132,6 +1153,64 @@ class ProfileListRow:
 
     rev: int
     profiles: tuple[ProfileRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RiderRow:
+    """One rider the console offers, with what the site set for them.
+
+    ``hr_max`` and ``age`` are shown, never edited here. ``programme`` is
+    ``None`` when a programmed session can be vetted for this rider, else the
+    sentence a start would be refused with (a value missing on the site).
+    """
+
+    user_id: str
+    name: str
+    hr_max: int | None
+    age: int | None
+    programme: str | None
+
+    @classmethod
+    def of(cls, rider: Rider, at: UnixMillis) -> RiderRow:
+        """Render ``rider`` with the age the console counts at ``at``."""
+        birth_year = rider.birth_year
+        vetted = passenger_of(rider, at)
+        return cls(
+            user_id=rider.user_id,
+            name=rider.name,
+            hr_max=None if rider.hr_max is None else int(rider.hr_max),
+            age=None if birth_year is None else age_at(birth_year, at),
+            programme=None if isinstance(vetted, Ok) else describe_passenger_refusal(vetted.error),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RosterRow:
+    """The riders' list as the page shows it (``GET /api/roster``).
+
+    ``state`` is a :class:`~src.roster.RosterState` value; ``detail`` says, when
+    nobody is offered, why. ``age_s``: how old the list held is, ``None`` when
+    none is held. ``problem``: why the last request for a list got none, while
+    that is the latest news (the list held, if any, is still offered until it
+    is too old). Names travel to the page only: nothing here is written.
+    """
+
+    state: str
+    detail: str
+    age_s: float | None
+    problem: str | None
+    riders: tuple[RiderRow, ...]
+
+    @classmethod
+    def of(cls, view: RosterView, at: UnixMillis) -> RosterRow:
+        """Render the list held, as of ``at`` on the wall clock for the ages."""
+        return cls(
+            state=view.state.value,
+            detail=describe_state(view.state, view.age),
+            age_s=None if view.age is None else round(float(view.age), 1),
+            problem=view.problem,
+            riders=tuple(RiderRow.of(rider, at) for rider in view.riders),
+        )
 
 
 # =========================================================================

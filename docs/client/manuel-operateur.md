@@ -529,9 +529,14 @@ fréquence cardiaque du passager dans la zone du programme.
 6. Laissez **Duree totale (minutes, vide = celle du profil)** vide, sauf
    consigne contraire.
 7. Tapez votre nom dans **Operateur**.
-8. Tapez l'âge du passager dans **Age du passager (ans, obligatoire)**. Sans
-   âge, ou en dessous de l'âge minimum réglé sur la machine, le démarrage est
-   refusé.
+8. Choisissez le passager dans la liste **Passager (liste du tableau de bord,
+   obligatoire)**. La liste vient du site : elle porte les personnes qui ont le
+   droit d'utiliser cette machine. Sous la liste, lisez son âge et sa FC max :
+   un gestionnaire les règle sur le site, vous ne pouvez pas les modifier ici.
+   Si la ligne est en rouge, ou si le passager n'est pas dans la liste, ne
+   cherchez pas à contourner : voyez avec le gestionnaire. Sans passager, sans
+   FC max ou année de naissance réglée sur le site, ou en dessous de l'âge
+   minimum réglé sur la machine, le démarrage est refusé.
 9. Cliquez **Previsualiser**. Rien ne démarre. Lisez la carte **Ce que ce
    programme ferait** : « zone » (la zone cardiaque visée), « max absolu » et
    « critique » (les deux seuils cardiaques de sécurité), « plafond » (la
@@ -1247,7 +1252,11 @@ voyez.
 | « demande refusee par la console : un demarrage est deja demande » | Un démarrage est déjà demandé, depuis cet écran ou depuis un autre, et la machine ne l'a pas encore pris. Votre clic n'a pas été envoyé à la machine. | Ne recliquez pas. Regardez **Mode** et la liste **Evenements**. |
 | « seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL » | Les séances programmées ne sont pas autorisées sur cette machine. | Appelez le support. |
 | Un message contenant « personne a bord refusee » | La machine n'est pas autorisée à tourner avec une personne à bord. | Ne cherchez pas à contourner. Appelez le support. |
-| « demarrage refuse : age du passager requis pour une seance programmee » | L'âge n'est pas saisi. | Saisissez l'âge du passager. |
+| « demarrage refuse : passager requis avec une personne a bord, ... » | Aucun passager n'est choisi. | Choisissez le passager dans la liste. |
+| « demarrage refuse : ce passager n'est pas dans la derniere liste du tableau de bord ... » | Le passager n'a plus le droit sur cette machine, ou la liste a changé depuis votre choix. | Choisissez-le de nouveau. S'il n'est plus dans la liste, pas de séance : voyez avec le gestionnaire. |
+| « demarrage refuse : FC max du passager non renseignee sur le site ... » ou « ... annee de naissance du passager non renseignee sur le site ... » | Le gestionnaire n'a pas réglé cette valeur sur le site. | Pas de séance. Demandez au gestionnaire de la régler sur le site. |
+| Un message contenant « liste des passagers » ou « aucun tableau de bord configure » | La machine n'a pas de liste de passagers à jour (lien avec le site coupé, ou pas de site). | Pas de séance avec personne à bord. Appelez le support si cela dure. |
+| « demarrage refuse : age du passager requis pour une seance programmee » | Une séance lancée depuis le site arrive sans âge. | Demandez au gestionnaire de régler l'année de naissance sur le site. |
 | Un message contenant « demarrage refuse : passager de » | Le passager est plus jeune que l'âge minimum réglé sur la machine. | Pas de séance. |
 | Un message contenant « demarrage refuse : programme inadapte a ce passager » | Le programme ne convient pas à ce passager, d'après les contrôles du logiciel. | Pas de séance avec ce programme. Voyez avec le gestionnaire. |
 | Un message contenant « demarrage refuse : variateur en defaut » | Le variateur est en défaut. | [Section 9.5](#95-le-variateur-passe-en-défaut). |

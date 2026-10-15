@@ -1963,8 +1963,11 @@ Pour l'historique d'un seul patient : **Patients** → le patient → carte
 
 - « Session introuvable » : vous n'avez pas accès à cette séance ;
 - une séance démarrée à la machine apparaît avec « Unknown » en patient, et
-  **n'apparaît pas** chez le patient : la machine n'envoie pas encore le
-  pratiquant (voir [§6.4](#64-séances-démarrées-à-la-machine-manuelles-ou-auto)).
+  **n'apparaît pas** chez le patient : en production, la machine n'envoie pas
+  encore le pratiquant (corrigé dans le code par ANH-84, à vérifier au
+  redéploiement) ; après le redéploiement, c'est une séance de banc, ou un
+  passager qui n'avait plus le droit sur la machine (voir
+  [§6.4](#64-séances-démarrées-à-la-machine-manuelles-ou-auto)).
 
 ### P14. Lire les rapports
 
@@ -2143,8 +2146,8 @@ n'apparaît donc pas pareil :
 |---|---|---|
 | Badge d'origine | **Tableau de bord** | **Machine** |
 | Passage par « en attente » | Oui | Non : elle arrive directement **active** |
-| Pratiquant | Toujours connu | **Pas transmis aujourd'hui** : « Unknown » dans les listes, « Pratiquant non précisé » sur la séance |
-| Visible par le patient | Oui, dans ses séances et rapports | **Non** (elle n'est rattachée à aucun patient) |
+| Pratiquant | Toujours connu | Le passager choisi à la console dans la liste de la machine (corrigé dans le code le 15 octobre 2026, ANH-84, à vérifier au redéploiement). Une séance de banc n'en a pas : « Unknown » dans les listes, « Pratiquant non précisé » sur la séance. En production jusqu'au redéploiement : « Unknown » pour toutes |
+| Visible par le patient | Oui, dans ses séances et rapports | Oui, une fois le code ANH-84 déployé, si la séance est attribuée (il avait encore le droit sur la machine quand elle a été déclarée). Une séance de banc : non. En production jusqu'au redéploiement : non |
 | Visible par l'administrateur et le gestionnaire de la machine | Oui | Oui |
 | Arrêt depuis le site | Oui | Oui (la machine décélère), si la machine est joignable |
 | Opérateur | Nom de la personne connectée au site | Nom saisi à la console |
@@ -2366,8 +2369,9 @@ l'anniversaire n'est pas encore passé : quelqu'un né en 2008 est compté 17 an
 pendant toute l'année 2026.
 
 **Pourquoi mon patient ne voit pas la séance qu'il a faite à la machine ?**
-Une séance démarrée à la console n'est pas encore rattachée au patient (§6.4).
-Son gestionnaire la voit, avec « Unknown ».
+En production, une séance démarrée à la console n'est pas encore rattachée au
+patient (§6.4) : son gestionnaire la voit, avec « Unknown ». Le code qui la
+rattache au passager choisi à la console (ANH-84) attend le redéploiement.
 
 **Où est le rapport PDF d'une séance ?**
 Il n'y en a plus : l'ancien rapport ne savait lire que l'ECG, que la console
@@ -2431,7 +2435,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 3 | (Corrigé par le retrait de l'ancien mode d'enregistrement ECG : le bouton **Nouvelle session** n'existe plus.) Une séance « Enregistrement » créée avant ce retrait et restée en attente n'est prise par aucune console, et le site ne sait pas l'annuler. | La machine concernée reste **inlançable** et **non supprimable** tant que la migration n'est pas passée. | Exécuter la migration du retrait de l'ancien mode ([§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg)). |
 | 4 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) Un gestionnaire qui **Modifiait** une machine recevait une erreur alors que la modification était enregistrée. | Confusion. | Jusqu'au redéploiement : vérifier la carte Configuration. |
 | 5 | Pas d'invitation par courriel ; une fiche créée par **Nouveau patient** ne peut jamais servir à se connecter, et une inscription ultérieure crée un doublon. | Données éparpillées sur deux fiches. | Choisir la méthode (P3). |
-| 6 | Séances démarrées à la machine sans pratiquant. | « Unknown », invisibles pour le patient. | Aucun. |
+| 6 | (Corrigé dans le code le 15 octobre 2026 par ANH-84, à vérifier au redéploiement.) Séances démarrées à la machine sans pratiquant. | « Unknown », invisibles pour le patient. Après le correctif : une séance attribuée devient visible du patient ; une séance de banc reste « Unknown ». | Aucun jusqu'au redéploiement. |
 | 7 | Une séance **en attente** n'expire jamais côté serveur. | Si la machine revient en ligne des heures après, elle peut tenter de démarrer une séance oubliée. | Toujours annuler une séance en attente inutile. |
 | 8 | Plusieurs actions échouaient **sans message** : suppression de machine, suppression de compte, changement de rôle, assignation de patients. (Corrigé le 6 octobre 2026 pour l'assignation de machines, qui affiche une confirmation ou le message du serveur. Corrigé par ANH-156 pour les autres : chaque action qui écrit dans la base affiche un message de succès ou d'échec en bas à droite de l'écran. Non vérifié dans un navigateur.) | L'utilisateur croyait que rien ne se passait. | Jusqu'au redéploiement : recharger et vérifier. |
 | 9 | Messages du serveur en anglais, et peut être masqués en production. (Depuis ANH-156, un message masqué est remplacé par « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : … ». La traduction des messages du serveur reste à faire.) | Messages peu compréhensibles. | Tableau du §7.2. |

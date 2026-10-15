@@ -29,6 +29,7 @@ from src.training.types import Occupancy
 from src.units import Monotonic, OutputRpm, UnixMillis
 from src.web.app import create_app
 from src.web.schemas import CameraRow
+from tests.roster_support import RIDER_ID, listed
 
 OPERATOR: Final[str] = "dr. attending"
 CAMERA_ROW: Final[TypeAdapter[CameraRow]] = TypeAdapter(CameraRow)
@@ -50,7 +51,10 @@ def config_of(**changes: str) -> LocalConfig:
 def panel_of(tmp_path: Path, camera: str) -> tuple[LocalPanel, ManualClock]:
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     panel = build_panel(
-        config_of(PRESENCE_SOURCE=camera), clock=clock, profiles_path=tmp_path / "p.json"
+        config_of(PRESENCE_SOURCE=camera),
+        clock=clock,
+        profiles_path=tmp_path / "p.json",
+        roster=listed(clock),
     )
     assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
     return panel, clock
@@ -139,7 +143,10 @@ async def test_a_programme_needs_a_rider_seen_in_the_capsule(tmp_path: Path) -> 
     await run(empty, clock, 2.5)
     assert isinstance(
         empty.surface.submit_start(
-            profile_id="standard_30_min", operator=OPERATOR, total_duration_s=None, subject_age=30
+            profile_id="standard_30_min",
+            operator=OPERATOR,
+            total_duration_s=None,
+            subject_id=RIDER_ID,
         ),
         Ok,
     )
@@ -151,7 +158,10 @@ async def test_a_programme_needs_a_rider_seen_in_the_capsule(tmp_path: Path) -> 
     await run(occupied, clock, 2.5)
     assert isinstance(
         occupied.surface.submit_start(
-            profile_id="standard_30_min", operator=OPERATOR, total_duration_s=None, subject_age=30
+            profile_id="standard_30_min",
+            operator=OPERATOR,
+            total_duration_s=None,
+            subject_id=RIDER_ID,
         ),
         Ok,
     )

@@ -275,7 +275,7 @@ Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelec
 | Champ | Rôle |
 |---|---|
 | `machineId` | Machine. |
-| `userId` | Pratiquant. Toujours présent pour un lancement distant ; **absent** pour une séance démarrée à la machine (le Pi ne l'envoie pas aujourd'hui, voir [§9](#9-défauts-connus-et-reste-à-faire)). |
+| `userId` | Pratiquant. Toujours présent pour un lancement distant. Pour une séance démarrée à la machine, le passager que la console a pris dans le roster (ANH-84) ; **absent** pour une séance de banc, qui ne nomme personne, et quand le passager nommé n'a plus le droit sur la machine à la déclaration de la séance (voir plus bas). |
 | `startedById` | Qui a lancé (site). |
 | `status` | `pending` → `active` → `completed` ou `failed`. Une séance `active` dont Convex n'a plus de nouvelles depuis 10 min passe `interrupted` (fin inconnue) ; elle redevient `active` au premier heartbeat de sa machine qui la nomme, et passe `completed` ou `failed` quand la machine envoie sa fin ([Tâche planifiée](#7-tâche-planifiée)). Un lancement `pending` que Convex refuse avant que la machine l'arme (attente de plus de 5 min, droit retiré...) passe directement `failed`, avec `endCode` ([Revérification à l'armement](#revérification-à-larmement-anh-144)). |
 | `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Pour une séance dont la machine dit l'âge, ce que fait la console de ce dépôt pour toute séance en cours, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). Avec une console antérieure, qui ne le dit pas : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. |
@@ -308,7 +308,9 @@ les ont lus. Il en va de même de `by_user_and_status` et du champ `endCode`
 (ANH-144), facultatif : les séances déjà présentes n'en ont pas.
 
 Pour une nouvelle séance locale, l'attribution suit les droits courants du roster
-de la machine. Si elle ne peut pas être confirmée, la séance est conservée sans
+de la machine. La console locale y nomme le passager qu'elle a pris dans ce roster
+(`userId`, plus `subjectLabel` tant qu'elle a son nom en mémoire), depuis ANH-84 ; une
+séance de banc ne nomme personne. Si elle ne peut pas être confirmée, la séance est conservée sans
 passager ni libellé d'identité déclaré, avec la mention
 `Passenger attribution unavailable at registration` dans `notes`. Les données
 de séance restent disponibles selon les droits habituels sur la machine.
@@ -884,7 +886,7 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 |---|---|
 | `updateLive` | Écrit `machines.live` (et `programsEnabled` s'il est fourni). |
 | `syncProfiles` | Supprime tous les programmes de la machine, insère la nouvelle liste (dans l'organisation de la machine), met à jour `programsEnabled`. Retourne `{count}`. |
-| `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax}`. |
+| `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax, birthYear}`. `hrMax` est celle que `launchAutoSession` utiliserait (mesurée, sinon estimée depuis l'année de naissance ; `null` si aucune n'est utilisable) ; `birthYear` est un entier ou `null`. La console les affiche sans pouvoir les modifier (ANH-84). L'aptitude et le consentement (ANH-143) n'y sont pas encore. |
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine que la revérification à l'armement accepterait, au format attendu par le Pi. Jamais un lancement expiré ni refusé, même avant le passage de la tâche planifiée, ni un lancement qui expire dans moins de `POLL_MARGIN_S` (45 s). |
 | `markTrainingStarted` | Revérifie d'abord le lancement ([ci-dessous](#revérification-à-larmement-anh-144)). Refusé : la séance passe `failed` avec `endCode`, la machine reste comme elle était, et la fonction rend `{armed: false, code, message}`, que la route répond **409**. Une confirmation répétée d'un lancement déjà refusé ainsi reçoit la même réponse. Accepté : `pending` → `active`, `startedAt` = maintenant, machine `in_session`, et `{armed: true}`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Refuse une séance d'une autre machine (`session_not_found`) ou qui n'attend plus son départ pour une autre raison (`session_not_pending` : annulée sur le site, déjà démarrée, terminée). |
 | `sweepPendingSessions` | Tâche planifiée toutes les minutes : passe `failed`, avec `endCode`, tout lancement `pending` (`kind: auto`) que la revérification refuse, expirés compris. Rend `{failed}`. Les séances de l'ancien mode ne sont pas touchées. |
@@ -1376,9 +1378,11 @@ avec une réserve de 64 (une étape du dépôt), soit une heure pour une telle
 séance. La valeur est une ligne du contrat partagé.
 
 **Jamais limitées** : la demande d'arrêt (`GET /api/machine/training/status`),
-pour qu'un arrêt passe toujours, et les routes appelées une fois par séance ou
-par fichier (`profiles`, `roster`, `training/start`, `training/local`,
-`training/end`, `records/commit`, `records/status`). Une requête sans clé
+pour qu'un arrêt passe toujours, les routes appelées une fois par séance ou
+par fichier (`profiles`, `training/start`, `training/local`,
+`training/end`, `records/commit`, `records/status`), et `roster`, que la
+console demande à son démarrage puis au plus une fois par minute au repos
+(ANH-84). Une requête sans clé
 valide est refusée (401) avant toute limite : Convex ne voit pas l'adresse de
 l'appelant, il n'y a donc rien sur quoi limiter un appel anonyme. Chacun coûte
 une lecture d'index.
@@ -1436,6 +1440,7 @@ déploiement.
 |---|---|---|---|
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) ; 16 Kio max | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
+| `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null}]}` (`getRoster`) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | une fois, quand le Pi a armé un lancement distant ; la console envoie les deux champs facultatifs. Jamais limitée en débit |
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local |
@@ -1535,12 +1540,6 @@ Détails du contrat :
   envoie ce qui manque, la séance en cours d'abord, puis les précédentes de
   la plus ancienne à la plus récente, sans limite d'ancienneté ni de nombre
   ([raspberry-pi.md §8](raspberry-pi.md#8-la-synchronisation-avec-le-tableau-de-bord)).
-
-### Route présente mais non appelée par la console locale
-
-| Méthode et chemin | Rôle |
-|---|---|
-| `GET /api/machine/roster` | `{riders: [{userId, name, hrMax}]}` : patients ayant le droit sur la machine. **Aucun code du Pi ne l'appelle.** |
 
 ### Routes retirées
 
@@ -2130,8 +2129,8 @@ régressions locales exécutables.
 | 1 | **Correctif logiciel ANH-121 : digest HMAC-SHA-256 salé.** | Les anciennes valeurs doivent encore être régénérées lors de l'opération ANH-82 ; aucune migration réelle n'est attestée ici. |
 | 2 | **Correctif logiciel ANH-121 : suppression/désactivation refusée.** | Les routes renvoient 401 ; le déploiement reste à effectuer avec ANH-82. |
 | 3 | ~~`users.getCurrentUser` : validateur de retour incomplet.~~ **Corrigé.** Le validateur déclare `hrMax` et `birthYear`. | Vérifié sur le déploiement de développement le 1er octobre 2026 : la query répond après réglage de la FC max du compte. |
-| 4 | **Séances locales sans pratiquant.** Le Pi n'envoie ni `userId` ni `subjectLabel` à `/training/local` (le champ existe côté Convex). | Une séance démarrée à la machine apparaît sans pratiquant (« Unknown » dans les listes). Le patient ne la voit pas dans ses séances. |
-| 5 | **`/api/machine/roster` inutilisé.** | La liste des pratiquants autorisés n'arrive pas sur la console locale. |
+| 4 | ~~Séances locales sans pratiquant.~~ **Corrigé dans le logiciel par ANH-84.** La console envoie `userId` (et `subjectLabel` tant qu'elle a le nom en mémoire) pour une séance lancée à la machine avec un passager ; une séance de banc n'en porte pas, avec `occupancy = bench`. | Une séance lancée à la machine apparaît au nom du passager choisi, s'il a toujours le droit à sa déclaration (ANH-180). Non vérifié sur un déploiement : effet en production avec le redéploiement ANH-82. |
+| 5 | ~~`/api/machine/roster` inutilisé.~~ **Corrigé dans le logiciel par ANH-84.** | La console demande la liste à son démarrage puis toutes les 60 s au repos ; elle y prend le passager, sa FC max et son année de naissance. |
 | 6 | **Libellés d'actions de sécurité.** Le Pi envoie `freeze`, `quick_stop`, `go_silent` ; les traductions du site connaissent `hold`, `stop`, `estop`. Le commentaire du schéma cite aussi `"hold"`. | Ces trois actions s'affichent en valeur brute. |
 | 7 | **Pas d'ECG pour les séances d'entraînement.** La console locale n'envoie que la télémétrie à 1 Hz. | Pas de tracé ECG pour une séance auto/manuelle. Son résumé et son rapport existent depuis ANH-89, calculés sur la télémétrie puis sur l'enregistrement déposé, sans ECG. |
 | 8 | **Logiciel d'invitation et d'amorçage ANH-157.** | Action Clerk, liaison par webhook à adresse vérifiée et premier admin `org:admin`. La configuration et la recette de l'environnement sont requises avant mise en production (§8). |

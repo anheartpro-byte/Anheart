@@ -3220,8 +3220,10 @@ test("a programme start follows the same rule, in the note of the Seance page", 
   const first = await startProgramme(page, 60);
   const note = node("start-note");
   assert.equal(note.textContent, "demande envoyee : start standard_30_min - pas encore prise par la machine");
-  // Refused by the loop: the rider's age is missing.
-  const refused = "demarrage refuse : age du passager requis pour une seance programmee";
+  // Refused by the loop: the rider is no longer in the dashboard's list.
+  const refused =
+    "demarrage refuse : ce passager n'est pas dans la derniere liste du tableau de bord " +
+    "(droit retire, ou liste changee) : le choisir de nouveau";
   context.addEvent(refusal(60.1, refused, "op", first));
   assert.ok(note.textContent.endsWith(") : " + refused), note.textContent);
   assert.ok(note.classes.has("note-bad"));

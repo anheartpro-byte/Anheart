@@ -336,7 +336,11 @@ http.route({
   }),
 });
 
-/** GET /api/machine/roster -> {riders: [{userId, name, hrMax}]} */
+/**
+ * GET /api/machine/roster -> {riders: [{userId, name, hrMax, birthYear}]}
+ * The riders the local console offers (`training.getRoster`). Not rate
+ * limited: the console asks at its start and once a minute at rest.
+ */
 http.route({
   path: "/api/machine/roster",
   method: "GET",

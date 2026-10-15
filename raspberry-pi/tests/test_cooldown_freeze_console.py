@@ -42,6 +42,7 @@ from src.training.safety import (
 )
 from src.training.types import Phase, RunMode, SafetyAction, TelemetrySnapshot
 from src.units import Seconds
+from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import MIN_RUN, OPERATOR, SHORT_PROFILE, TICK, Rig, start_programme
 from tests.test_standstill_console import Console, console
 
@@ -63,7 +64,7 @@ START: Final[dict[str, object]] = {
     "profile_id": SHORT_PROFILE,
     "operator": OPERATOR,
     "total_duration_s": None,
-    "subject_age": 30,
+    "subject_id": RIDER_ID,
 }
 
 

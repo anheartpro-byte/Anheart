@@ -86,6 +86,7 @@ from tests.record_journal_support import (
     watch_tree,
 )
 from tests.record_support import row
+from tests.roster_support import RIDER_ID
 from tests.test_failure_process import FakeWeb
 from tests.test_failure_rig import (
     BENCH_ENV,
@@ -925,7 +926,8 @@ async def test_ex3_record_reads_stuck_on_a_dead_disk_take_nothing_from_an_occupi
 
             await attest(session)
             started = await session.post(
-                "/api/manual/start", json={"occupancy": "occupied", "operator": OPERATOR}
+                "/api/manual/start",
+                json={"occupancy": "occupied", "operator": OPERATOR, "subject_id": RIDER_ID},
             )
             assert started.status_code == 202, started.text
             await asyncio.wait_for(recorded.tick(1.0), 30.0)

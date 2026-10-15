@@ -261,7 +261,7 @@ l'emporte sur `.env`.**
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
 | `PROGRAMS_ENABLED` | non (défaut `false`) | `true` / `false` | autorise les séances programmées (jalon M5) |
 | `OCCUPANCY_OCCUPIED_ENABLED` | non (défaut `false`) | `true` / `false` | autorise « personne à bord » (jalon M6, accords ingénierie et médical requis) |
-| `MIN_RIDER_AGE` | non (défaut `18`) | | âge minimal du passager en séance programmée |
+| `MIN_RIDER_AGE` | non (défaut `18`) | | âge minimal du passager à bord (séance programmée, ou manuelle avec personne à bord) |
 | `HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM` | non (défaut `148` / `158`) | | paliers cardiaques du superviseur ; chaque profil doit porter les mêmes |
 | `MACHINE_API_KEY`, `CONVEX_URL` | non | | liaison au tableau de bord distant. Clé vide = console purement locale |
 
@@ -805,7 +805,12 @@ Repères, carte **Programme** (à gauche) :
    `30 min (standard_30_min)` et `45 min (standard_45_min)`.
 2. **Duree totale (minutes, vide = celle du profil)** : pour raccourcir ou allonger.
 3. **Operateur** : obligatoire.
-4. **Age du passager (ans, obligatoire)** : vide ou inférieur à 18 ans = refus.
+4. **Passager (liste du tableau de bord, obligatoire)** : la personne qui monte, choisie
+   dans la liste que le tableau de bord donne à cette machine. Sous la liste, son âge et
+   sa FC max, réglés sur le site par un gestionnaire : on les lit, on ne les tape pas.
+   Sans passager, sans FC max ou sans année de naissance sur le site, ou à moins de
+   18 ans : refus. La capture date d'avant ce changement (ANH-84, 14 octobre 2026) : elle
+   montre encore l'ancien champ **Age du passager**, qui n'existe plus.
 5. **Previsualiser** : calcule le programme **sans rien démarrer**.
 6. **Demarrer la seance** : démarre. Il est actif seulement si `PROGRAMS_ENABLED=true`,
    une fois l'attestation faite et la machine au repos (c'est le cas sur la capture).
@@ -818,7 +823,8 @@ Repères, carte **Ce que ce programme ferait** (à droite) :
 
 8. `zone` : la plage de fréquence cardiaque visée (118 à 138 bpm).
 9. `max absolu` (148) et `critique` (158) : les paliers cardiaques de sécurité.
-10. `FC max du sujet` : fréquence maximale supposée du passager (162).
+10. `FC max du sujet` : celle du profil enregistré (162) ; après **Previsualiser** avec un
+    passager choisi, la sienne, à laquelle le programme est ajusté.
 11. `plafond` (276 tr/min moteur), `plafond echauffement` (165), `minimum de rotation`
     (55), `HSP variateur` (10 Hz).
 12. `total` (30:00) et `palier` (13:00, durée de la phase de maintien).
@@ -1328,7 +1334,11 @@ Pas à pas :
 4. Choisissez le **Profil** (par exemple `30 min (standard_30_min)`).
 5. Laissez **Duree totale** vide (ou tapez une durée en minutes).
 6. Tapez votre nom dans **Operateur**.
-7. Tapez l'**Age du passager** (obligatoire, au moins 18 ans par défaut).
+7. Choisissez le **Passager** dans la liste. Lisez la ligne dessous : son âge et sa FC
+   max viennent du site. Si elle est en rouge (FC max ou année de naissance non
+   renseignée), un gestionnaire doit les régler sur le site : la console ne les
+   modifie pas. Une liste vide ou en rouge (`aucun tableau de bord configure`,
+   `liste des passagers perimee`, ...) : la console ne peut proposer personne.
 8. Cliquez **Previsualiser**. Lisez la carte **Ce que ce programme ferait** : zone,
    paliers cardiaques, plafond **et la charge en g au plafond**. C'est le moment de
    dire non.
@@ -1338,11 +1348,12 @@ Pas à pas :
    ```sh
    curl -s -X POST http://127.0.0.1:8731/api/session/start \
      -H 'Content-Type: application/json' \
-     -d '{"profile_id":"standard_30_min","operator":"Mohamed","subject_age":34}'
+     -d '{"profile_id":"standard_30_min","operator":"Mohamed","subject_id":"<identifiant>"}'
    ```
 
-   (remplacez le port, le profil, le nom et l'âge). La réponse
-   `{"kind":"start",...}` veut dire « reçu », pas « démarré ».
+   (remplacez le port, le profil, le nom et l'identifiant du passager, lu dans
+   `GET /api/roster`). Un âge envoyé (`subject_age`) est refusé : il vient du site. La
+   réponse `{"kind":"start",...}` veut dire « reçu », pas « démarré ».
 10. Regardez la liste **Evenements** : `start_requested`, puis `taken`, puis
     `session_running`. Un `refused` dit pourquoi la séance n'est pas partie (§14). Sur
     la page, la note sous **Demarrer la seance** dit la même chose pour votre demande.
@@ -1366,9 +1377,12 @@ Pas à pas :
     une vitesse seulement gelée ou baissée par un avertissement non verrouillé
     **remonte seule** quand il se lève.
 
-Âge du passager, constaté : sans âge,
-`demarrage refuse : age du passager requis pour une seance programmee` ; à 15 ans,
-`demarrage refuse : passager de 15 ans, minimum 18 ans (MIN_RIDER_AGE)`.
+Âge du passager, constaté avant ANH-84 avec l'ancien champ : à 15 ans,
+`demarrage refuse : passager de 15 ans, minimum 18 ans (MIN_RIDER_AGE)`. Depuis ANH-84
+l'âge vient de l'année de naissance réglée sur le site ; les refus liés au passager
+(aucun choisi, absent de la liste, valeur manquante sur le site) sont listés au §14 et
+dans [la référence](../console-locale.md#9-page--seance-). Ils sont tenus par les tests,
+pas encore constatés sur une console reliée à un vrai tableau de bord.
 
 Constaté : après STOP d'une séance programmée, le retour à `REPOS` a pris environ
 5 minutes en simulation (la séance passe par ses phases de fin), contre environ 1 min
@@ -2044,7 +2058,11 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `demarrage refuse : enregistrement de seance impossible, espace libre sous <dossier> mesure il y a <n> s : le disque ne repond plus` | le disque du Pi ne répond plus depuis plus de 15 s | ne pas insister ; faire vérifier le disque par la personne qui administre le Pi |
 | `demarrage refuse : plus assez de fichiers libres pour l'enregistrement de seance : <n> inodes libres sous <dossier>, 36016 requis (une seance cree des milliers de petits fichiers). Liberer de l'espace` | le disque du Pi n'a plus assez d'inodes libres pour les fichiers d'une séance, même s'il reste des octets | exporter les enregistrements utiles, puis supprimer leurs dossiers sur le Pi ([référence](../console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible pour l'instant : la fermeture d'un enregistrement est en cours sous <dossier>, derniere mesure de l'espace libre il y a <n> s. Reessayer dans un instant` | la console finit de fermer l'enregistrement de la séance précédente | attendre quelques secondes et redemander le départ ; si le refus dure, faire vérifier le disque |
-| ✔ `demarrage refuse : age du passager requis pour une seance programmee` | âge vide | saisir l'âge |
+| `demarrage refuse : passager requis avec une personne a bord, a choisir dans la liste du tableau de bord` | aucun passager choisi | choisir le passager dans la liste |
+| `demarrage refuse : ce passager n'est pas dans la derniere liste du tableau de bord (droit retire, ou liste changee) : le choisir de nouveau` | le passager n'a plus le droit sur cette machine, ou la liste a changé | le choisir de nouveau ; s'il n'y est plus, voir son gestionnaire |
+| `demarrage refuse : FC max du passager non renseignee sur le site (a regler par un gestionnaire)` ou `... annee de naissance ...` | valeur absente sur le site | la faire régler sur le site par un gestionnaire |
+| `demarrage refuse : liste des passagers perimee : ...`, `... pas encore recue ...`, `... aucun tableau de bord configure ...` | la console n'a pas de liste à jour | vérifier le lien avec le tableau de bord (pastille **Serveur**) |
+| `demarrage refuse : age du passager requis pour une seance programmee` | lancement venu du tableau de bord sans âge | régler l'année de naissance sur le site |
 | ✔ `demarrage refuse : passager de 15 ans, minimum 18 ans (MIN_RIDER_AGE)` | passager trop jeune | refus voulu (décision médicale pour changer) |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) | enregistrer le profil sur le Pi |
 | `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil incompatible avec la FC max du passager | changer de profil |

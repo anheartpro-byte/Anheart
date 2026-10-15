@@ -46,6 +46,7 @@ from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import RULE_HR_STALE, RULE_SESSION_STANDSTILL, SELF_CLEARING
 from src.training.types import RunMode, SafetyAction, SignalQuality, TelemetrySnapshot
 from src.units import Monotonic, MotorRpm
+from tests.roster_support import RIDER_ID
 from tests.test_cloud_sync import LAUNCH, Dashboard, Reply, launch_answer
 from tests.test_failure_rig import (
     OPERATOR,
@@ -244,7 +245,7 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
                 "profile_id": SHORT_PROFILE,
                 "operator": OPERATOR,
                 "total_duration_s": None,
-                "subject_age": 30,
+                "subject_id": RIDER_ID,
             },
         )
         assert typed.status_code == 409, typed.text
