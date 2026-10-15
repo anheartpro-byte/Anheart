@@ -240,6 +240,7 @@ def rig(
     tmp_path: Path,
     *,
     programs: bool = True,
+    panel_programs: bool = True,
     tiers: CardiacTiers | None = None,
     records: RecordSource | None = None,
     medical: MedicalStatus | None = None,
@@ -247,7 +248,7 @@ def rig(
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
-    config = config_of()
+    config = config_of(PROGRAMS_ENABLED="true" if panel_programs else "false")
     dashboard = Dashboard()
     journal = None if record_root is None else Journal(record_root, clock)
     panel = build_panel(
@@ -825,6 +826,20 @@ async def test_a_waiting_surface_command_prevents_the_confirmation_request(tmp_p
     assert len(ends) == 1
     assert ends[0]["failed"] is True
     assert "console occupee" in str(ends[0]["reason"])
+
+
+async def test_a_panel_with_programmes_disabled_refuses_before_confirmation(tmp_path: Path) -> None:
+    r = rig(tmp_path, panel_programs=False)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+
+    await r.step()
+
+    assert r.dashboard.to(START) == []
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    assert "PROGRAMS_ENABLED=false" in str(ends[0]["reason"])
 
 
 async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path: Path) -> None:
@@ -1743,7 +1758,9 @@ async def test_a_launch_that_reached_a_panel_without_programmes_is_refused(
     )
     assert isinstance(submitted, Ok)
     await rig_.run(1.0)
-    reason = rig_.dashboard.to("/api/machine/training/end")[0]["reason"]
+    (end,) = rig_.dashboard.to("/api/machine/training/end")
+    assert end["failed"] is True
+    reason = end["reason"]
     assert isinstance(reason, str)
     assert "PROGRAMS_ENABLED=false" in reason
     await rig_.panel.close()
