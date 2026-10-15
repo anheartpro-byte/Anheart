@@ -662,14 +662,14 @@ describe("EX-5 a machine and an account of two different organisations never com
         machineId: w.otherMachine,
         gestionnaireId: w.manager,
       }),
-    ).rejects.toThrow(/Machine not found/);
+    ).rejects.toThrow(/machine_not_found/);
     // For anyone else it is a machine they have no access to, like a foreign one.
     await expect(
       as(w.t, "otherManager").mutation(api.machines.updateMachine, {
         machineId: w.otherMachine,
         name: "x",
       }),
-    ).rejects.toThrow(/Not authorized to manage this machine/);
+    ).rejects.toThrow(/machine_not_managed/);
     await expect(
       as(w.t, "otherPatient").mutation(api.training.launchAutoSession, {
         machineId: w.otherMachine,
@@ -775,10 +775,10 @@ describe("EX-5 a machine and an account of two different organisations never com
         api.machines.assignGestionnaireToMachine,
         link,
       ),
-    ).rejects.toThrow(/Target user is not a gestionnaire/);
+    ).rejects.toThrow(/not_a_gestionnaire/);
     await expect(
       as(w.t, "admin").mutation(api.machines.assignGestionnaireToMachine, link),
-    ).rejects.toThrow(/Target user is not a gestionnaire/);
+    ).rejects.toThrow(/not_a_gestionnaire/);
     await as(w.t, "orgAdmin").mutation(
       api.machines.assignMachineToGestionnaires,
       {
@@ -847,7 +847,7 @@ describe("EX-5 a machine and an account of two different organisations never com
         name: "Nowhere",
         organizationId: gone,
       }),
-    ).rejects.toThrow(/Organization not found/);
+    ).rejects.toThrow(/organization_not_found/);
   });
 
   it("only links a patient to gestionnaires of the same organisation", async () => {
@@ -861,14 +861,14 @@ describe("EX-5 a machine and an account of two different organisations never com
           userId: w.stranger,
           gestionnaireId: w.orgBManager,
         }),
-      ).rejects.toThrow(/Target user is not a gestionnaire/);
+      ).rejects.toThrow(/not_a_gestionnaire/);
     }
     await expect(
       as(w.t, "admin").mutation(api.users.assignGestionnaireToUser, {
         userId: w.orgBPatient,
         gestionnaireId: w.manager,
       }),
-    ).rejects.toThrow(/Target user is not a gestionnaire/);
+    ).rejects.toThrow(/not_a_gestionnaire/);
 
     await as(w.t, "orgAdmin").mutation(api.users.assignPatientsToGestionnaire, {
       gestionnaireId: w.manager,
@@ -958,13 +958,13 @@ describe("EX-5 a machine and an account of two different organisations never com
         userId: w.stranger,
         gestionnaireId: w.manager,
       }),
-    ).rejects.toThrow(/Can only assign gestionnaires to patients/);
+    ).rejects.toThrow(/not_a_patient/);
     await expect(
       as(w.t, "admin").mutation(api.users.assignPatientsToGestionnaire, {
         gestionnaireId: w.manager,
         patientIds: [w.patient],
       }),
-    ).rejects.toThrow(/Target user is not a gestionnaire/);
+    ).rejects.toThrow(/not_a_gestionnaire/);
   });
 
   it("never discloses another account's name when inviting an email", async () => {
@@ -1107,7 +1107,7 @@ describe("EX-5 an account of two organisations acts in one organisation at a tim
         userId: w.patient,
         firstName: "taken",
       }),
-    ).rejects.toThrow(/Not authorized to edit this patient/);
+    ).rejects.toThrow(/patient_not_managed/);
   });
 
   it("counts a patient linked in two organisations once for the Anheart admin", async () => {
@@ -1178,7 +1178,7 @@ describe("EX-5 an account of two organisations acts in one organisation at a tim
     expect(await inB.query(api.users.listUsers, {})).toEqual([]);
     await expect(
       inB.mutation(api.users.updatePatient, { userId: shared, firstName: "x" }),
-    ).rejects.toThrow(/Not authorized to edit this patient/);
+    ).rejects.toThrow(/patient_not_managed/);
     expect(
       await managerIn(w, ORG_A_CLERK_ORG).query(api.users.getUserById, {
         userId: shared,
@@ -1198,7 +1198,7 @@ describe("EX-5 an account of two organisations acts in one organisation at a tim
           gestionnaireId: w.manager,
         },
       ),
-    ).rejects.toThrow(/already assigned/);
+    ).rejects.toThrow(/gestionnaire_already_assigned/);
     // The Anheart admin removes the pair everywhere.
     await as(w.t, "admin").mutation(api.users.removeGestionnaireFromUser, {
       userId: shared,
@@ -1338,7 +1338,7 @@ describe("EX-5 the machines of a gestionnaire are set inside one organisation", 
     for (const actor of ["orgAdmin", "admin"] as const) {
       await expect(
         setMachines(w, actor, w.manager, [w.otherMachine, w.orgBMachine]),
-      ).rejects.toThrow(/Machine not found/);
+      ).rejects.toThrow(/machine_not_found/);
     }
 
     expect(await linksOf(w, w.manager)).toEqual(before);
@@ -1351,17 +1351,17 @@ describe("EX-5 the machines of a gestionnaire are set inside one organisation", 
     const w = await seedWorld(modules);
 
     await expect(setMachines(w, "orgAdmin", w.orgBManager, [])).rejects.toThrow(
-      /Gestionnaire not found/,
+      /gestionnaire_not_found/,
     );
     // An account of the caller's organisation that is not a gestionnaire.
     await expect(setMachines(w, "orgAdmin", w.patient, [])).rejects.toThrow(
-      /Target user is not a gestionnaire/,
+      /not_a_gestionnaire/,
     );
     // The mirror on the account does not make it one.
     await w.t.run((ctx) => ctx.db.patch(w.patient, { role: "gestionnaire" }));
     for (const actor of ["orgAdmin", "admin"] as const) {
       await expect(setMachines(w, actor, w.patient, [])).rejects.toThrow(
-        /Target user is not a gestionnaire/,
+        /not_a_gestionnaire/,
       );
     }
     expect(await linksOf(w, w.orgBManager)).toHaveLength(1);
@@ -1409,7 +1409,7 @@ describe("EX-5 the machines of a gestionnaire are set inside one organisation", 
     // Centre B cannot give them a machine of centre A.
     await expect(
       setMachines(w, "orgBAdmin", w.manager, [w.orgBMachine, w.machine]),
-    ).rejects.toThrow(/Machine not found/);
+    ).rejects.toThrow(/machine_not_found/);
     // Centre B keeps its own link when it asks for the same list.
     expect(
       await setMachines(w, "orgBAdmin", w.manager, [w.orgBMachine]),
@@ -1424,7 +1424,7 @@ describe("EX-5 the machines of a gestionnaire are set inside one organisation", 
     );
 
     await expect(setMachines(w, "admin", w.manager, [])).rejects.toThrow(
-      /Target user is not a gestionnaire/,
+      /not_a_gestionnaire/,
     );
   });
 });
@@ -1548,10 +1548,10 @@ describe("EX-5 removing an account never reaches another organisation", () => {
       as(w.t, "manager").mutation(api.users.deleteUser, {
         userId: w.otherManager,
       }),
-    ).rejects.toThrow(/Can only delete patient accounts/);
+    ).rejects.toThrow(/only_patients_deletable/);
     await expect(
       as(w.t, "manager").mutation(api.users.deleteUser, { userId: w.manager }),
-    ).rejects.toThrow(/Cannot delete your own account/);
+    ).rejects.toThrow(/cannot_delete_self/);
   });
 
   it("lets the Anheart admin delete an account from every organisation", async () => {
@@ -1581,13 +1581,13 @@ describe("EX-5 removing an account never reaches another organisation", () => {
     });
     await expect(
       as(w.t, "admin").mutation(api.users.deleteUser, { userId: gone }),
-    ).rejects.toThrow(/User not found/);
+    ).rejects.toThrow(/user_not_found/);
     await expect(
       as(w.t, "admin").mutation(api.users.updatePatient, {
         userId: gone,
         firstName: "x",
       }),
-    ).rejects.toThrow(/User not found/);
+    ).rejects.toThrow(/user_not_found/);
   });
 });
 
@@ -1945,7 +1945,7 @@ describe("EX-5 a row that has no organisation is served to the Anheart admin onl
         machineId: rows.machine,
         name: "taken",
       }),
-    ).rejects.toThrow(/Not authorized to manage this machine/);
+    ).rejects.toThrow(/machine_not_managed/);
     // The Anheart admin reaches the machine, but nobody is a member of "no
     // organisation": no gestionnaire and no rider can be attached to it.
     await expect(
@@ -1953,7 +1953,7 @@ describe("EX-5 a row that has no organisation is served to the Anheart admin onl
         machineId: rows.machine,
         gestionnaireId: w.otherManager,
       }),
-    ).rejects.toThrow(/Target user is not a gestionnaire/);
+    ).rejects.toThrow(/not_a_gestionnaire/);
     await expect(
       as(w.t, "admin").mutation(api.training.grantLaunchRight, {
         machineId: rows.machine,

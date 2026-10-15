@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import fr from "@/messages/fr.json";
+import { WEB_VERSION } from "@/lib/version";
 import {
   answer,
   feedbackShown,
@@ -143,16 +144,18 @@ describe("settings: what an admin sees", () => {
     expect(valueUnder(fr.settings.language)).toBe("fr");
   });
 
-  // What the page does today: these four lines are written in the page, not
-  // read from the software. The version is not the site's version (shown in
-  // the footer of the public pages), and the delay is the 90 s after which a
-  // silent machine is shown offline.
-  it("shows a few fixed facts about the application", async () => {
+  // The name is translated and the version is the site's own, the one the
+  // footer of the public pages shows (lib/version.ts); the delay is the 90 s
+  // after which a silent machine is shown offline, still written in the page.
+  it("shows a few facts about the application", async () => {
     asAdmin();
     await renderPage(<SettingsPage />);
 
-    expect(valueUnder(fr.settings.application)).toBe("Gaura ECG Monitoring");
-    expect(valueUnder(fr.settings.version)).toBe("1.0.0");
+    expect(valueUnder(fr.settings.application)).toBe(
+      fr.settings.applicationName,
+    );
+    expect(valueUnder(fr.settings.version)).toBe(WEB_VERSION);
+    expect(screen.queryByText(/ECG/)).toBeNull();
     expect(valueUnder(fr.settings.defaultLanguage)).toBe(fr.settings.french);
     expect(valueUnder(fr.settings.supportedLanguages)).toBe(
       fr.settings.languages,
@@ -236,7 +239,7 @@ describe("settings: changing the role of an account", () => {
     asAdmin();
     // What the server answers once the roles are held by Clerk Organizations.
     mutation(api.users.updateUserRole).mockRejectedValue(
-      new ConvexError("Roles are managed in Clerk Organizations"),
+      new ConvexError("roles_managed_in_clerk"),
     );
     const { user } = await renderPage(<SettingsPage />);
 
@@ -245,7 +248,7 @@ describe("settings: changing the role of an account", () => {
     await user.click(screen.getByRole("button", updateButton));
 
     expect(feedbackShown()).toEqual([
-      { kind: "error", message: "Roles are managed in Clerk Organizations" },
+      { kind: "error", message: fr.errors.roles_managed_in_clerk },
     ]);
     expect(takeLoggedFailures()).toEqual(["users:updateUserRole"]);
     expect(fields().who.textContent).toContain("Gaston Durand");

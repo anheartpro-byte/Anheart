@@ -21,7 +21,7 @@ import {
   renderPage,
   routeParams,
   router,
-  serverFailures,
+  codedFailures,
   signedInAs,
   takeLoggedFailures,
   wasMounted,
@@ -507,7 +507,7 @@ describe("user page: editing and deleting the account", () => {
   });
 
   it.each(
-    serverFailures(api.users.deleteUser, "Can only delete patient accounts"),
+    codedFailures(api.users.deleteUser, "only_patients_deletable"),
   )(
     "stays on the page, on its question, and shows the failure when the deletion fails $where",
     async ({ error, shown }) => {

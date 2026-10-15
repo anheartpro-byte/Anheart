@@ -5,14 +5,36 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Source check for the dashboard: a mutation is only called through
- * `useMutationWithFeedback`, and no handler next to one swallows an error.
+ * `useMutationWithFeedback`, an action through `useActionWithFeedback`, and
+ * no handler next to one swallows an error. A Convex client (`useConvex()`)
+ * may read with `.query`, never write with `.mutation` or `.action`.
  */
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SCANNED_DIRECTORIES = ["app", "components"];
+const SCANNED_DIRECTORIES = ["app", "components", "lib", "hooks"];
 
-const DIRECT_MUTATION = /\buseMutation\b/;
-const ANY_MUTATION = /\buseMutation(WithFeedback)?\b/;
+/** The two hooks that wrap the Convex calls: the only files allowed to make them. */
+const WRAPPERS = [
+  "hooks/use-mutation-with-feedback.ts",
+  "hooks/use-action-with-feedback.ts",
+];
+
+const DIRECT_CALLS: ReadonlyArray<{ pattern: RegExp; problem: string }> = [
+  {
+    pattern: /\buseMutation\b/,
+    problem:
+      "useMutation is used directly: call useMutationWithFeedback instead",
+  },
+  {
+    pattern: /\buseAction\b/,
+    problem: "useAction is used directly: call useActionWithFeedback instead",
+  },
+];
+/** A Convex client held by the page, and what writes through it. */
+const CONVEX_CLIENT = /\b(useConvex|ConvexReactClient|ConvexHttpClient)\b/;
+const CLIENT_WRITE = /\.(mutation|action)\s*\(/;
+const ANY_CALL =
+  /\b(useMutation|useMutationWithFeedback|useAction|useActionWithFeedback|useConvex)\b/;
 
 function withoutComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -89,12 +111,16 @@ function errorHandlers(source: string): string[] {
 /** What is wrong in one source file; empty when nothing is. */
 export function silentMutationProblems(source: string): string[] {
   const problems: string[] = [];
-  if (DIRECT_MUTATION.test(withoutComments(source))) {
+  const code = withoutComments(source);
+  for (const { pattern, problem } of DIRECT_CALLS) {
+    if (pattern.test(code)) problems.push(problem);
+  }
+  if (CONVEX_CLIENT.test(code) && CLIENT_WRITE.test(code)) {
     problems.push(
-      "useMutation is used directly: call useMutationWithFeedback instead",
+      "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
     );
   }
-  if (!ANY_MUTATION.test(source)) return problems;
+  if (!ANY_CALL.test(code)) return problems;
   for (const handler of errorHandlers(source)) {
     if (showsNothing(handler)) {
       problems.push(
@@ -243,7 +269,68 @@ describe("ANH-156 EX-2 detection of a silent mutation", () => {
   });
 });
 
-describe("ANH-156 EX-2 every mutation of app/ and components/", () => {
+describe("ANH-194 EX-3 the other ways to write through Convex", () => {
+  it("refuses useAction( used directly, followed by a silent catch", () => {
+    expect(
+      silentMutationProblems(`
+        const create = useAction(api.users.createPatient);
+        try { await create(args); } catch (e) { console.error(e); }`),
+    ).toEqual([
+      "useAction is used directly: call useActionWithFeedback instead",
+      "an error handler only writes to the console",
+    ]);
+  });
+
+  it.each([
+    [
+      "the client kept in a constant",
+      "const convex = useConvex();\n await convex.mutation(api.machines.deleteMachine, { machineId });",
+    ],
+    [
+      "the client used where it is taken",
+      "await useConvex().mutation(api.machines.deleteMachine, { machineId });",
+    ],
+    [
+      "an action of the client",
+      "const convex = useConvex();\n await convex.action(api.users.createPatient, args);",
+    ],
+    [
+      "a client made by hand",
+      "const client = new ConvexReactClient(url);\n client.mutation(api.x.y, {});",
+    ],
+  ])("refuses a mutation sent by a Convex client: %s", (_label, source) => {
+    expect(silentMutationProblems(source)).toEqual([
+      "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
+    ]);
+  });
+
+  it("accepts a client that only reads, and checks the handlers beside it", () => {
+    const reads =
+      "const convex = useConvex();\n const page = await convex.query(api.recordStorage.list, args);";
+    expect(silentMutationProblems(reads)).toEqual([]);
+    expect(
+      silentMutationProblems(`${reads}\n download().catch(() => {});`),
+    ).toEqual(["an error handler is empty"]);
+  });
+
+  it("checks the handlers beside useActionWithFeedback", () => {
+    expect(
+      silentMutationProblems(`
+        const create = useActionWithFeedback(api.users.createPatient);
+        copyKey().catch(console.error);`),
+    ).toEqual(["an error handler only writes to the console"]);
+  });
+
+  it("does not read a name in a comment as a call", () => {
+    expect(
+      silentMutationProblems(
+        "// useMutation and useAction go through the hooks\nconst x = 1;",
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("ANH-156 EX-2 every mutation of app/, components/, lib/ and hooks/", () => {
   const files = SCANNED_DIRECTORIES.flatMap((directory) =>
     sourceFiles(join(ROOT, directory)),
   ).map((path) => ({
@@ -251,25 +338,44 @@ describe("ANH-156 EX-2 every mutation of app/ and components/", () => {
     source: readFileSync(path, "utf8"),
   }));
 
-  it("goes through useMutationWithFeedback, with no silent error handler", () => {
-    const offenders = files.flatMap(({ path, source }) =>
-      silentMutationProblems(source).map((problem) => `${path}: ${problem}`),
-    );
+  it("goes through useMutationWithFeedback or useActionWithFeedback, with no silent error handler", () => {
+    const offenders = files
+      .filter(({ path }) => !WRAPPERS.includes(path))
+      .flatMap(({ path, source }) =>
+        silentMutationProblems(source).map((problem) => `${path}: ${problem}`),
+      );
     expect(offenders).toEqual([]);
   });
 
-  it("is really looked at: the scan reads the files that call the hook", () => {
-    const calling = files
-      .filter(({ source }) => /\buseMutationWithFeedback\(/.test(source))
-      .map(({ path }) => path);
+  it("lets only the two wrapping hooks call Convex directly, and they do", () => {
+    for (const wrapper of WRAPPERS) {
+      const file = files.find(({ path }) => path === wrapper);
+      expect(file, wrapper).toBeDefined();
+      expect(silentMutationProblems(file?.source ?? "")).toHaveLength(1);
+    }
+  });
+
+  it("is really looked at: the scan reads the files that call the hooks or hold a client", () => {
+    const calling = (pattern: RegExp) =>
+      files
+        .filter(({ source }) => pattern.test(source))
+        .map(({ path }) => path);
     // Among them, the pages that came with their own messages.
     for (const expected of [
       "app/[locale]/dashboard/gestionnaires/[id]/page.tsx",
       "components/modals/MachineFormModal.tsx",
       "components/training/TrainingPanel.tsx",
     ]) {
-      expect(calling, expected).toContain(expected);
+      expect(calling(/\buseMutationWithFeedback\(/), expected).toContain(
+        expected,
+      );
     }
+    expect(calling(/\buseActionWithFeedback\(/)).toContain(
+      "components/modals/PatientFormModal.tsx",
+    );
+    expect(calling(/\buseConvex\(/)).toContain(
+      "components/training/SessionRecordCard.tsx",
+    );
   });
 
   it("leaves the tests out: they replace useMutation by name", () => {

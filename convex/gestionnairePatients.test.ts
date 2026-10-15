@@ -279,7 +279,7 @@ describe("ANH-208 users.assignPatientsToGestionnaire", () => {
     const unknown = await refusal(gone);
 
     // Then the refusal is word for word the same, and no link moved.
-    expect(foreign).toMatch(/Gestionnaire not found/);
+    expect(foreign).toMatch(/gestionnaire_not_found/);
     expect(unknown).toBe(foreign);
     expect(await links(w)).toEqual(before);
   });

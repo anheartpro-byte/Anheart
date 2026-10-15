@@ -17,7 +17,7 @@ const deleteMachine = makeFunctionReference<
   { deleted: boolean }
 >("machines:deleteMachine");
 
-// A code that only this test knows: the real list comes with the server codes.
+// A translation of this test's own, told apart from the catalog's.
 const CODED = { errors: { machine_in_session: "Traduction du code" } };
 
 /** Renders the hook under the real next-intl provider and returns its function. */
@@ -174,7 +174,7 @@ describe("ANH-156 EX-1 useMutationWithFeedback", () => {
   it("coded error without a translation: the server text is shown", async () => {
     serverMutation.mockRejectedValue(
       new ConvexError({
-        error: "machine_in_session",
+        error: "code_without_translation",
         message: "Cannot delete machine with active session",
       }),
     );
@@ -183,7 +183,7 @@ describe("ANH-156 EX-1 useMutationWithFeedback", () => {
 
     expect(outcome).toMatchObject({
       ok: false,
-      code: "machine_in_session",
+      code: "code_without_translation",
       message: "Cannot delete machine with active session",
     });
     expect(shown()).toEqual([
@@ -262,7 +262,7 @@ describe("ANH-156 EX-1 useMutationWithFeedback", () => {
     );
   });
 
-  it("messages leave by themselves, a failure staying longer than a success", async () => {
+  it("a success leaves by itself, a failure stays until it is closed", async () => {
     serverMutation.mockResolvedValueOnce({ deleted: true });
     serverMutation.mockRejectedValueOnce(new ConvexError("Machine is offline"));
     const run = renderHook("fr");
@@ -271,8 +271,30 @@ describe("ANH-156 EX-1 useMutationWithFeedback", () => {
 
     vi.advanceTimersByTime(5_000);
     expect(shown()).toEqual([{ kind: "error", message: "Machine is offline" }]);
-    vi.advanceTimersByTime(7_000);
-    expect(shown()).toEqual([]);
+    vi.advanceTimersByTime(60 * 60_000);
+    expect(shown()).toEqual([{ kind: "error", message: "Machine is offline" }]);
+  });
+
+  it("never rejects when the success message cannot be written: the mutation passed", async () => {
+    // ANH-194 EX-3: the caller's function used to run outside the `try`.
+    serverMutation.mockResolvedValue({ deleted: true });
+    const broken = new Error("missing count");
+
+    const outcome = await renderHook("fr")(
+      { machineId: "m1" },
+      {
+        success: () => {
+          throw broken;
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ ok: true, value: { deleted: true } });
+    expect(shown()).toEqual([{ kind: "success", message: fr.feedback.done }]);
+    expect(logged).toHaveBeenCalledWith(
+      "[mutation] machines:deleteMachine succeeded; its message could not be written",
+      broken,
+    );
   });
 });
 

@@ -79,21 +79,36 @@ afterEach(() => {
 });
 
 describe("ANH-203 messages shown after an action", () => {
-  /** Each message on screen: how it is announced, and what it says. */
+  /** Each message on screen: the live region that announces it, and what it says. */
   const shown = (screen: ReturnType<typeof render>) =>
     screen
-      .all((element) =>
-        ["alert", "status"].includes(element.getAttribute("role") ?? ""),
-      )
-      .map((message) => [message.getAttribute("role"), screen.textOf(message)]);
+      .all((element) => element.hasAttribute("data-kind"))
+      .map((message) => [
+        message.parentElement?.getAttribute("role"),
+        screen.textOf(message),
+      ]);
 
-  it("shows nothing before any action", () => {
+  /** The two live regions, present before any message. */
+  const regions = (screen: ReturnType<typeof render>) =>
+    screen
+      .all((element) => ["alert", "status"].includes(element.getAttribute("role") ?? ""))
+      .map((region) => [
+        region.getAttribute("role"),
+        region.getAttribute("aria-live"),
+        region.getAttribute("aria-atomic"),
+      ]);
+
+  it("shows nothing before any action, in two live regions already there", () => {
     const screen = render(<FeedbackToaster />);
 
     expect(shown(screen)).toEqual([]);
-    expect(screen.container.children[0].getAttribute("aria-live")).toBe(
-      "polite",
-    );
+    // ANH-194 EX-3: a failure is announced at once, a success politely, and
+    // no region sits inside another.
+    expect(regions(screen)).toEqual([
+      ["status", "polite", "false"],
+      ["alert", "assertive", "false"],
+    ]);
+    expect(screen.container.children[0].hasAttribute("aria-live")).toBe(false);
   });
 
   it("shows a message the moment an action reports it, without the page being drawn again", async () => {
@@ -117,11 +132,23 @@ describe("ANH-203 messages shown after an action", () => {
       ["alert", "Machine is offline"],
     ]);
     const [success, failure] = screen.all((element) =>
-      element.hasAttribute("role"),
+      element.hasAttribute("data-kind"),
     );
     expect(success.className).toContain("text-green-700");
     expect(failure.className).toContain("text-destructive");
     expect(success.className).not.toContain("text-destructive");
+  });
+
+  it("can be clicked above a modal window, which turns pointer events off on the page", async () => {
+    const screen = render(<FeedbackToaster />);
+    await settle(() => pushFeedback("error", "Refusé"));
+
+    const [toaster] = screen.all((element) =>
+      element.hasAttribute("data-feedback-toaster"),
+    );
+    const [message] = screen.all((element) => element.hasAttribute("data-kind"));
+    expect(toaster.style.pointerEvents).toBe("none");
+    expect(message.style.pointerEvents).toBe("auto");
   });
 
   it("closes the message whose cross is pressed, and leaves the others", async () => {
@@ -142,7 +169,7 @@ describe("ANH-203 messages shown after an action", () => {
     expect(shown(screen)).toEqual([["alert", "Second"]]);
   });
 
-  it("lets a message leave by itself, a failure staying longer than a success", async () => {
+  it("lets a success leave by itself, and keeps a failure until its cross is pressed", async () => {
     const screen = render(<FeedbackToaster />);
     await settle(() => {
       pushFeedback("success", "Fait");
@@ -151,8 +178,8 @@ describe("ANH-203 messages shown after an action", () => {
 
     await settle(() => vi.advanceTimersByTime(5_000));
     expect(shown(screen)).toEqual([["alert", "Refusé"]]);
-    await settle(() => vi.advanceTimersByTime(7_000));
-    expect(shown(screen)).toEqual([]);
+    await settle(() => vi.advanceTimersByTime(60 * 60_000));
+    expect(shown(screen)).toEqual([["alert", "Refusé"]]);
   });
 
   it("is drawn empty by the server, whatever was reported there: a message belongs to one visitor's page", () => {
@@ -165,8 +192,9 @@ describe("ANH-203 messages shown after an action", () => {
     );
 
     expect(html).not.toContain("Refus");
-    expect(html).not.toContain("role=");
-    expect(html).toContain('aria-live="polite"');
+    expect(html).not.toContain("data-kind");
+    expect(html).toContain('role="status" aria-live="polite"');
+    expect(html).toContain('role="alert" aria-live="assertive"');
   });
 
   it("names its close button in the language of the page", async () => {

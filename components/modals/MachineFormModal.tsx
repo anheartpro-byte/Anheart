@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
+import { pushFeedback } from "@/lib/feedback";
 import { Id } from "@/convex/_generated/dataModel";
 import { useTranslations } from "next-intl";
 import {
@@ -136,9 +137,16 @@ export function MachineFormModal({
     },
   });
 
-  // Reset form when machine changes or modal opens
+  // The form is filled when the window opens, or when it is pointed at another
+  // machine, and only then. The machine object is a new one at every
+  // heartbeat of an online machine (its `lastHeartbeat`, the server's clock):
+  // refilling the form then would erase what is being typed and the error on
+  // screen. `filledFor` is the machine the form was filled for ("" for a new
+  // machine), null while the window is closed.
+  const filledFor = useRef<string | null>(null);
   useEffect(() => {
-    if (open) {
+    const target = open ? (machine?._id ?? "") : null;
+    if (target !== null && target !== filledFor.current) {
       setChosenOrganization(undefined);
       form.reset({
         name: machine?.name ?? "",
@@ -146,19 +154,19 @@ export function MachineFormModal({
         gestionnaireIds: machine?.gestionnaires?.map((g) => g._id) ?? [],
       });
     }
+    filledFor.current = target;
   }, [open, machine, form]);
 
   const onSubmit = async (values: MachineFormValues) => {
     const showFailure = (message: string) => form.setError("root", { message });
     if (isEditing) {
-      const updated = await updateMachine(
-        {
-          machineId: machine._id,
-          name: values.name,
-          location: values.location || undefined,
-        },
-        { success: t("machines.updateSuccess") },
-      );
+      // An admin's edit is two calls. The success is said once both have
+      // passed, below: never for the name and the place alone.
+      const updated = await updateMachine({
+        machineId: machine._id,
+        name: values.name,
+        location: values.location || undefined,
+      });
       if (!updated.ok) return showFailure(updated.message);
       // The gestionnaire list is an admin-only call. Whether it is made is
       // decided in lib/machineForm.ts, never here: only for a machine whose
@@ -178,7 +186,14 @@ export function MachineFormModal({
           })
         : null;
       // `assigned` is null when the call was not made: nothing was refused.
-      if (assigned && !assigned.ok) return showFailure(assigned.message);
+      // When it is refused, the name and the place are already saved: the
+      // window says so, with the reason the list was not.
+      if (assigned && !assigned.ok) {
+        return showFailure(
+          t("machines.form.partiallySaved", { reason: assigned.message }),
+        );
+      }
+      pushFeedback("success", t("machines.updateSuccess"));
       onOpenChange(false);
       onSuccess?.();
     } else {

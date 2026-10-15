@@ -61,9 +61,9 @@ const faqData = {
             "The heartbeat is directly linked to the speed of rotation. By adjusting the rotation speed, practitioners can precisely control the training intensity and achieve specific heart rate targets for optimal results.",
         },
         {
-          question: "What channels does the ECG monitoring system track?",
+          question: "What does the machine measure during a session?",
           answer:
-            "Our ECG monitoring system can track six channels: ECG, EDA, SpO2, RESP, EMG, and LUX. This comprehensive monitoring ensures safe and effective training sessions with real-time feedback.",
+            "A BITalino sensor records the electrocardiogram (ECG), from which the machine works out the heart rate followed during the session. Other signals (electrodermal activity, breathing, muscle activity, light, pulse) can be turned on and shown on the machine's console for monitoring: none of them drives the machine. Blood oxygen saturation is not measured.",
         },
       ],
     },
@@ -130,9 +130,9 @@ const faqData = {
             "Le rythme cardiaque est directement lié à la vitesse de rotation. En ajustant la vitesse de rotation, les praticiens peuvent contrôler précisément l'intensité de l'entraînement et atteindre des objectifs de fréquence cardiaque spécifiques pour des résultats optimaux.",
         },
         {
-          question: "Quels canaux le système de surveillance ECG suit-il?",
+          question: "Que mesure la machine pendant une séance ?",
           answer:
-            "Notre système de surveillance ECG peut suivre six canaux : ECG, EDA, SpO2, RESP, EMG et LUX. Cette surveillance complète garantit des sessions d'entraînement sûres et efficaces avec un retour en temps réel.",
+            "Un capteur BITalino enregistre l'électrocardiogramme (ECG), dont la machine tire la fréquence cardiaque suivie pendant la séance. D'autres signaux (activité électrodermale, respiration, activité musculaire, lumière, pouls) peuvent être activés et affichés sur la console de la machine pour la surveillance : aucun ne commande la machine. La saturation en oxygène du sang n'est pas mesurée.",
         },
       ],
     },

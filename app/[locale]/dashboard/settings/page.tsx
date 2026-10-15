@@ -5,6 +5,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Link } from "@/i18n/navigation";
 import { isAnheartAdmin } from "@/lib/organizationAccess";
+import { WEB_VERSION } from "@/lib/version";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
@@ -232,13 +233,13 @@ export default function SettingsPage() {
                 <Label className="text-muted-foreground">
                   {t("settings.application")}
                 </Label>
-                <p className="font-medium">Gaura ECG Monitoring</p>
+                <p className="font-medium">{t("settings.applicationName")}</p>
               </div>
               <div>
                 <Label className="text-muted-foreground">
                   {t("settings.version")}
                 </Label>
-                <p className="font-medium">1.0.0</p>
+                <p className="font-medium font-mono">{WEB_VERSION}</p>
               </div>
               <div>
                 <Label className="text-muted-foreground">

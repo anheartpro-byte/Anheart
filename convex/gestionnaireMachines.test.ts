@@ -173,14 +173,14 @@ describe("ANH-154 machines.setGestionnaireMachines", () => {
 
     // When / Then the save is refused and no link was added or removed.
     await expect(setMachines(w, w.manager, [w.otherMachine, gone])).rejects.toThrow(
-      /Machine not found/,
+      /machine_not_found/,
     );
     expect(await links(w)).toEqual(before);
   });
 
   it.each([
-    { target: "patient", message: /Target user is not a gestionnaire/ },
-    { target: "admin", message: /Target user is not a gestionnaire/ },
+    { target: "patient", message: /not_a_gestionnaire/ },
+    { target: "admin", message: /not_a_gestionnaire/ },
   ] as const)(
     "refuses a target account that is not a gestionnaire ($target)",
     async ({ target, message }) => {
@@ -199,7 +199,7 @@ describe("ANH-154 machines.setGestionnaireMachines", () => {
     await w.t.run((ctx) => ctx.db.delete(w.stranger));
 
     await expect(setMachines(w, w.stranger, [w.machine])).rejects.toThrow(
-      /Gestionnaire not found/,
+      /gestionnaire_not_found/,
     );
   });
 
@@ -214,6 +214,185 @@ describe("ANH-154 machines.setGestionnaireMachines", () => {
         gestionnaireId: w.stranger,
         machineIds: [],
       }),
-    ).rejects.toThrow(/Unauthorized/);
+    ).rejects.toThrow(/not_authorized/);
+  });
+});
+
+/** Mark a machine deleted, as `machines.deleteMachine` does. */
+async function deleteMachine(w: World, machineId: Id<"machines">) {
+  await w.t.run((ctx) =>
+    ctx.db.patch(machineId, {
+      isDeleted: true,
+      deletedAt: NOW,
+      deletedBy: w.admin,
+      status: "offline" as const,
+    }),
+  );
+}
+
+describe("ANH-194 EX-4 a deleted machine on the gestionnaire's page", () => {
+  it("is neither listed nor counted, and its link is kept for a restore", async () => {
+    // Given `manager` manages `machine` and `otherMachine`, then `otherMachine` is deleted.
+    const w = await seedWorld(modules);
+    await setMachines(w, w.manager, [w.machine, w.otherMachine]);
+    await deleteMachine(w, w.otherMachine);
+
+    // Then the page's two readings leave it out.
+    const listed = await as(w.t, "admin").query(
+      api.machines.getMachinesForGestionnaire,
+      { gestionnaireId: w.manager },
+    );
+    expect(listed.map((m) => m._id)).toEqual([w.machine]);
+    const ownList = await as(w.t, "manager").query(
+      api.machines.getMachinesForGestionnaire,
+      {},
+    );
+    expect(ownList.map((m) => m._id)).toEqual([w.machine]);
+    const card = (
+      await as(w.t, "admin").query(api.users.listGestionnaires, {})
+    ).find((g) => g._id === w.manager);
+    expect(card?.machineCount).toBe(1);
+    // And the link itself is still in the table.
+    expect(linkOf(await links(w), w.otherMachine, w.manager)).toBeDefined();
+  });
+
+  it("keeps its link when the saved list does not name it", async () => {
+    // Given `manager` also manages `otherMachine`, which is then deleted.
+    const w = await seedWorld(modules);
+    await setMachines(w, w.manager, [w.machine, w.otherMachine]);
+    await deleteMachine(w, w.otherMachine);
+    const kept = linkOf(await links(w), w.otherMachine, w.manager);
+
+    // When the page saves the list it can build: the live machines only.
+    const result = await setMachines(w, w.manager, [w.machine]);
+
+    // Then nothing was removed, and the deleted machine's row is the same row.
+    expect(result).toEqual({ added: 0, removed: 0 });
+    expect(linkOf(await links(w), w.otherMachine, w.manager)).toEqual(kept);
+  });
+
+  it("keeps its link when the list names it, without counting it", async () => {
+    const w = await seedWorld(modules);
+    await setMachines(w, w.manager, [w.machine, w.otherMachine]);
+    await deleteMachine(w, w.otherMachine);
+    const before = await links(w);
+
+    const result = await setMachines(w, w.manager, [w.machine, w.otherMachine]);
+
+    expect(result).toEqual({ added: 0, removed: 0 });
+    expect(await links(w)).toEqual(before);
+  });
+
+  it("is never linked, and the refused save writes nothing", async () => {
+    // Given `otherMachine`, not managed by `manager`, is deleted.
+    const w = await seedWorld(modules);
+    await deleteMachine(w, w.otherMachine);
+    const before = await links(w);
+
+    // When an admin names it for `manager`, with `machine` unchecked.
+    await expect(setMachines(w, w.manager, [w.otherMachine])).rejects.toThrow(
+      /machine_not_found/,
+    );
+
+    // Then the save is refused as a whole: `machine` is still linked.
+    expect(await links(w)).toEqual(before);
+  });
+});
+
+describe("ANH-194 EX-4 machines.assignMachineToGestionnaires", () => {
+  function assign(w: World, gestionnaireIds: Id<"users">[]) {
+    return as(w.t, "admin").mutation(api.machines.assignMachineToGestionnaires, {
+      machineId: w.machine,
+      gestionnaireIds,
+    });
+  }
+
+  it("writes one row for an identifier sent twice", async () => {
+    const w = await seedWorld(modules);
+
+    await assign(w, [w.manager, w.otherManager, w.otherManager, w.manager]);
+
+    const rows = (await links(w)).filter((r) => r.machineId === w.machine);
+    expect(
+      rows.map((r) => ({ id: r.gestionnaireId, isOwner: r.isOwner })),
+    ).toEqual([
+      { id: w.manager, isOwner: true },
+      { id: w.otherManager, isOwner: false },
+    ]);
+  });
+
+  it("keeps the row of a gestionnaire who stays, and writes nothing for the same list", async () => {
+    // Given `manager` owns `machine` since the seed.
+    const w = await seedWorld(modules);
+    const owned = linkOf(await links(w), w.machine, w.manager);
+
+    // When the admin adds `otherManager`, then saves the same list again.
+    await assign(w, [w.manager, w.otherManager]);
+    const afterAdd = await links(w);
+    await assign(w, [w.manager, w.otherManager]);
+
+    // Then `manager`'s row was never recreated, and the second save changed nothing.
+    expect(linkOf(afterAdd, w.machine, w.manager)).toEqual(owned);
+    expect(await links(w)).toEqual(afterAdd);
+  });
+
+  it("removes a second row left for the same gestionnaire", async () => {
+    // Given a duplicate row written before this rule.
+    const w = await seedWorld(modules);
+    await w.t.run((ctx) =>
+      ctx.db.insert("machine_gestionnaires", {
+        organizationId: w.orgA,
+        machineId: w.machine,
+        gestionnaireId: w.manager,
+        isOwner: false,
+        createdAt: NOW,
+        createdBy: w.admin,
+      }),
+    );
+
+    await assign(w, [w.manager]);
+
+    const rows = (await links(w)).filter(
+      (r) => r.machineId === w.machine && r.gestionnaireId === w.manager,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].isOwner).toBe(true);
+  });
+
+  it("makes the first gestionnaire kept the owner when the first one sent is not a gestionnaire", async () => {
+    const w = await seedWorld(modules);
+
+    await assign(w, [w.patient, w.otherManager, w.manager]);
+
+    const machine = await as(w.t, "admin").query(api.machines.getMachine, {
+      machineId: w.machine,
+    });
+    expect(
+      machine?.gestionnaires.map((g) => ({ id: g._id, isOwner: g.isOwner })),
+    ).toEqual([
+      { id: w.otherManager, isOwner: true },
+      { id: w.manager, isOwner: false },
+    ]);
+  });
+
+  it("creates a machine with one row for an identifier sent twice", async () => {
+    const w = await seedWorld(modules);
+
+    const { machineId } = await as(w.t, "admin").mutation(
+      api.machines.createMachine,
+      {
+        name: "Banc",
+        organizationId: w.orgA,
+        gestionnaireIds: [w.manager, w.manager, w.otherManager],
+      },
+    );
+
+    const rows = (await links(w)).filter((r) => r.machineId === machineId);
+    expect(
+      rows.map((r) => ({ id: r.gestionnaireId, isOwner: r.isOwner })),
+    ).toEqual([
+      { id: w.manager, isOwner: true },
+      { id: w.otherManager, isOwner: false },
+    ]);
   });
 });

@@ -72,7 +72,6 @@ export default function MachineDetailPage({
   const user = useQuery(api.users.getCurrentUser);
 
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editSaved, setEditSaved] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showRegenerateDialog, setShowRegenerateDialog] = useState(false);
   const [showRestoreDialog, setShowRestoreDialog] = useState(false);
@@ -207,10 +206,7 @@ export default function MachineDetailPage({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    setEditSaved(false);
-                    setShowEditModal(true);
-                  }}
+                  onClick={() => setShowEditModal(true)}
                 >
                   <Pencil className="h-4 w-4 mr-2" />
                   {t("common.edit")}
@@ -219,14 +215,6 @@ export default function MachineDetailPage({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            {editSaved && (
-              <div
-                role="status"
-                className="rounded-md border border-green-500/50 bg-green-50 p-3 text-sm text-green-800 dark:bg-green-950/40 dark:text-green-200"
-              >
-                {t("machines.updateSuccess")}
-              </div>
-            )}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-sm text-muted-foreground">
@@ -487,12 +475,11 @@ export default function MachineDetailPage({
         machineId={machineId}
       />
 
-      {/* Edit Machine Modal */}
+      {/* Edit Machine Modal: its notification says that the machine was saved */}
       <MachineFormModal
         open={showEditModal}
         onOpenChange={setShowEditModal}
         machine={machine}
-        onSuccess={() => setEditSaved(true)}
       />
     </div>
   );

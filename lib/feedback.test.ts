@@ -66,7 +66,8 @@ describe("ANH-203 list of messages", () => {
     ]);
   });
 
-  it("lets a success leave after 5 s and a failure after 12 s", () => {
+  it("lets a success leave after 5 s, and keeps a failure until it is closed", () => {
+    // ANH-194 EX-3: a failure may be the only place its reason is shown.
     pushFeedback("success", "Fait");
     pushFeedback("error", "Refusé");
 
@@ -74,10 +75,47 @@ describe("ANH-203 list of messages", () => {
     expect(messages()).toEqual(["success: Fait", "error: Refusé"]);
     vi.advanceTimersByTime(1);
     expect(messages()).toEqual(["error: Refusé"]);
-    vi.advanceTimersByTime(6_999);
+    vi.advanceTimersByTime(24 * 60 * 60_000);
     expect(messages()).toEqual(["error: Refusé"]);
-    vi.advanceTimersByTime(1);
+
+    dismissFeedback(getFeedbackToasts()[0].id);
     expect(messages()).toEqual([]);
+  });
+
+  it("lets an older success leave before a failure when the list is full", () => {
+    pushFeedback("error", "Refus 1");
+    pushFeedback("success", "Fait 1");
+    pushFeedback("error", "Refus 2");
+    pushFeedback("success", "Fait 2");
+
+    pushFeedback("error", "Refus 3");
+    expect(messages()).toEqual([
+      "error: Refus 1",
+      "error: Refus 2",
+      "success: Fait 2",
+      "error: Refus 3",
+    ]);
+
+    pushFeedback("success", "Fait 3");
+    expect(messages()).toEqual([
+      "error: Refus 1",
+      "error: Refus 2",
+      "error: Refus 3",
+      "success: Fait 3",
+    ]);
+  });
+
+  it("lets the oldest failure leave when only failures are older than the newest message", () => {
+    for (const text of ["1", "2", "3", "4"]) pushFeedback("error", text);
+
+    pushFeedback("success", "Fait");
+
+    expect(messages()).toEqual([
+      "error: 2",
+      "error: 3",
+      "error: 4",
+      "success: Fait",
+    ]);
   });
 
   it("removes the one message dismissed", () => {

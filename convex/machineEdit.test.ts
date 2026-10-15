@@ -62,7 +62,7 @@ describe("ANH-155 a gestionnaire edits the name and the place of a machine", () 
         machineId: w.machine,
         gestionnaireIds: [w.manager],
       }),
-    ).rejects.toThrow(/Unauthorized/);
+    ).rejects.toThrow(/not_authorized/);
 
     // Then nothing moved: the refusal is why the form must not make it.
     expect(await links(w)).toEqual(before);

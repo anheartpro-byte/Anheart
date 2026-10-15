@@ -559,7 +559,7 @@ describe("membership boundaries", () => {
         firstName: "Changed",
       }),
     ).rejects.toThrow(
-      "Shared profile changes require an Anheart administrator",
+      "shared_profile_admin_only",
     );
     await expect(
       as(w.t, "manager").mutation(api.training.setUserPhysiology, {
@@ -567,7 +567,7 @@ describe("membership boundaries", () => {
         hrMax: 180,
       }),
     ).rejects.toThrow(
-      "Shared profile changes require an Anheart administrator",
+      "shared_profile_admin_only",
     );
     await as(w.t, "admin").mutation(api.training.setUserPhysiology, {
       userId: w.patient,

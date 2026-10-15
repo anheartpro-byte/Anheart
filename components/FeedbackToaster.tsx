@@ -8,12 +8,18 @@ import {
   dismissFeedback,
   getFeedbackToasts,
   subscribeFeedback,
+  type FeedbackToast,
 } from "@/lib/feedback";
 
 /**
  * Shows the success and failure messages of the site's mutations, above
- * dialogs. A message leaves by itself; while a dialog is open it cannot be
- * clicked, so that closing a message never closes the dialog under it.
+ * dialogs. A success leaves by itself after 5 s; a failure stays until its
+ * cross is pressed. The cross can be pressed while a dialog is open: the
+ * dialog does not take that click for a click outside it, and stays open
+ * (`isFeedbackElement`, read by `components/ui/dialog.tsx`).
+ *
+ * Two live regions, present before any message: the successes are announced
+ * politely (`role="status"`), the failures at once (`role="alert"`).
  */
 export function FeedbackToaster() {
   const t = useTranslations("common");
@@ -23,15 +29,16 @@ export function FeedbackToaster() {
     () => NO_FEEDBACK,
   );
 
-  return (
-    <div
-      aria-live="polite"
-      className="fixed bottom-4 right-4 z-[100] flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-2"
-    >
-      {toasts.map((toast) => (
+  const list = (kind: FeedbackToast["kind"]) =>
+    toasts
+      .filter((toast) => toast.kind === kind)
+      .map((toast) => (
         <div
           key={toast.id}
-          role={toast.kind === "error" ? "alert" : "status"}
+          data-kind={toast.kind}
+          // A modal dialog turns pointer events off on the page: a message,
+          // drawn above it, turns them on for itself.
+          style={{ pointerEvents: "auto" }}
           className={`flex items-start gap-3 rounded-lg border bg-background p-3 text-sm shadow-lg ${
             toast.kind === "error"
               ? "border-destructive/50 text-destructive"
@@ -53,7 +60,30 @@ export function FeedbackToaster() {
             <X className="h-4 w-4" />
           </button>
         </div>
-      ))}
+      ));
+
+  return (
+    <div
+      data-feedback-toaster=""
+      style={{ pointerEvents: "none" }}
+      className="fixed bottom-4 right-4 z-[100] flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-2"
+    >
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="false"
+        className="flex flex-col gap-2"
+      >
+        {list("success")}
+      </div>
+      <div
+        role="alert"
+        aria-live="assertive"
+        aria-atomic="false"
+        className="flex flex-col gap-2"
+      >
+        {list("error")}
+      </div>
     </div>
   );
 }

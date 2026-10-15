@@ -5,7 +5,28 @@
     "invitation_unavailable": "This invitation cannot be created. Check your permissions and organization members.",
     "profile_reconciliation_required": "An administrator must review the profile before it can be linked.",
     "profile_pending": "The profile is awaiting confirmation from Clerk. Please try again shortly.",
-    "rate_limited": "Too many requests in a short time. Wait a moment, then try again."
+    "rate_limited": "Too many requests in a short time. Wait a moment, then try again.",
+    "not_authorized": "Your role does not allow this action.",
+    "roles_managed_in_clerk": "Roles are changed in Clerk Organizations, no longer on this site.",
+    "shared_profile_admin_only": "This profile belongs to several organizations: only an Anheart administrator can change it.",
+    "organization_not_found": "Organization not found.",
+    "user_not_found": "Account not found. It may have been deleted.",
+    "user_not_managed": "You do not manage this account.",
+    "patient_not_managed": "You do not manage this patient.",
+    "cannot_delete_self": "You cannot delete your own account.",
+    "only_patients_deletable": "A manager can only delete patient accounts.",
+    "not_a_patient": "This account is not a patient in this organization.",
+    "gestionnaire_not_found": "Manager not found.",
+    "not_a_gestionnaire": "This account is not a manager in this organization.",
+    "gestionnaire_self_only": "A manager can only add or remove themselves.",
+    "gestionnaire_already_assigned": "This manager is already assigned.",
+    "gestionnaire_not_assigned": "This manager is not assigned.",
+    "machine_not_found": "Machine not found. It may have been deleted.",
+    "machine_not_managed": "You do not manage this machine.",
+    "machine_in_session": "The machine is in a session: it cannot be deleted now.",
+    "machine_has_pending_session": "A session is waiting to start on this machine: cancel it before deleting the machine.",
+    "machine_not_deleted": "This machine is not deleted: there is nothing to restore.",
+    "last_gestionnaire": "You are the only manager of this machine: delete it rather than leaving it."
   },
   "sessionRecord": {
     "next": "Next page",
@@ -123,7 +144,8 @@
     "launchRightRevoked": "Launch right revoked.",
     "physiologySaved": "Physiology saved.",
     "sessionLaunched": "Session created. It is waiting for the machine to arm it.",
-    "stopRequestSent": "Request sent. This page shows the state of the session."
+    "stopRequestSent": "Request sent. This page shows the state of the session.",
+    "done": "Done."
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -193,7 +215,8 @@
     "saveChanges": "Save Changes",
     "saved": "Settings saved successfully",
     "rolesInClerk": "Roles are managed in the organization, from the Members page.",
-    "openMembers": "Open the Members page"
+    "openMembers": "Open the Members page",
+    "applicationName": "Gaura dashboard"
   },
   "home": {
     "badge": "Gravity for Life",
@@ -400,11 +423,12 @@
       "organization": "Organization",
       "organizationDescription": "The machine belongs to this organization; only its managers can be assigned to it.",
       "organizationPlaceholder": "Choose an organization...",
-      "noOrganization": "This machine does not belong to an organization yet: it keeps its current managers, who can be changed here once the multi-organization migration has run."
+      "noOrganization": "This machine does not belong to an organization yet: it keeps its current managers, who can be changed here once the multi-organization migration has run.",
+      "partiallySaved": "The name and the location are saved, but not the list of managers: {reason}"
     }
   },
   "sessions": {
-    "title": "ECG Sessions",
+    "title": "Sessions",
     "active": "Active",
     "interrupted": "Interrupted",
     "completed": "Completed",
@@ -459,8 +483,8 @@
     "title": "Gestionnaire Management",
     "total": "gestionnaires",
     "noGestionnaires": "No gestionnaires found",
-    "machinesAssigned": "machines assigned",
-    "patientsAssigned": "patients assigned",
+    "machinesAssigned": "{count, plural, =0 {No machine assigned} one {# machine assigned} other {# machines assigned}}",
+    "patientsAssigned": "{count, plural, =0 {No patient assigned} one {# patient assigned} other {# patients assigned}}",
     "noMachinesAssigned": "No machines assigned yet",
     "noPatientsAssigned": "No patients assigned yet",
     "assignMachines": "Assign Machines",
@@ -742,7 +766,6 @@
       "estimated": "estimated (208 − 0.7 × age)",
       "notSet": "Not set",
       "hint": "A measured max HR wins over the age estimate. Leave empty to clear.",
-      "saved": "Saved",
       "invalidHrMax": "Max HR must be between 100 and 220 bpm",
       "invalidBirthYear": "Invalid birth year"
     }
