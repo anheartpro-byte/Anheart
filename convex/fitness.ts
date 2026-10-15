@@ -151,6 +151,7 @@ export const validateFitnessAssessment = mutation({
         args.validUntil === undefined ||
         !Number.isFinite(args.validUntil) ||
         !Number.isInteger(args.validUntil) ||
+        Number.isNaN(new Date(args.validUntil).getTime()) ||
         args.validUntil <= now ||
         (maximum !== null && args.validUntil > maximum)
       ) {
@@ -210,14 +211,13 @@ export const withdrawConsent = mutation({
     await limitUser(ctx);
     const caller = await getCurrentUserOrThrow(ctx);
     const userId = args.userId ?? caller._id;
-    if (userId === caller._id) {
-      const organizationId = await riderOrganizationId(ctx, userId, caller);
-      if (organizationId === null) throw refusal("not_authorized");
-    } else if (!(await canManageUser(ctx, userId, caller))) {
+    if (userId !== caller._id && !(await canManageUser(ctx, userId, caller))) {
       throw refusal("user_not_managed");
     }
     const organizationId = await riderOrganizationId(ctx, userId, caller);
-    if (organizationId === null) throw refusal("user_not_managed");
+    if (organizationId === null) {
+      throw refusal(userId === caller._id ? "not_authorized" : "user_not_managed");
+    }
     const consents = await ctx.db
       .query("consents")
       .withIndex("by_user_and_organization", (q) =>
@@ -262,6 +262,10 @@ export const getRiderReadiness = query({
           }),
           v.null(),
         ),
+        latestSigned: v.union(
+          v.object({ textVersion: v.string(), signedAt: v.number() }),
+          v.null(),
+        ),
         lastWithdrawnAt: v.optional(v.number()),
       }),
       launchRefusal: v.union(
@@ -302,6 +306,14 @@ export const getRiderReadiness = query({
     if (caller._id !== args.userId && !manages) return null;
     const assessment = await latestAssessment(ctx, args.userId, organizationId);
     const consent = await activeConsent(ctx, args.userId, organizationId);
+    const latestSigned = await ctx.db
+      .query("consents")
+      .withIndex("by_user_and_organization", (q) =>
+        q.eq("userId", args.userId).eq("organizationId", organizationId),
+      )
+      .filter((q) => q.eq(q.field("withdrawnAt"), undefined))
+      .order("desc")
+      .first();
     const withdrawnConsent = await ctx.db
       .query("consents")
       .withIndex("by_user_and_organization", (q) =>
@@ -369,6 +381,12 @@ export const getRiderReadiness = query({
       fitness,
       consent: {
         active,
+        latestSigned: latestSigned
+          ? {
+              textVersion: latestSigned.textVersion,
+              signedAt: latestSigned.signedAt,
+            }
+          : null,
         lastWithdrawnAt: withdrawnConsent?.withdrawnAt,
       },
       launchRefusal: await riderLaunchRefusal(

@@ -18,4 +18,4 @@ La durée de conservation de ces données sera précisée. Ce texte est provisoi
 
 ## Maintenance
 
-Ce fichier est la source du texte de consentement. Le site rend le texte compris entre les deux marqueurs. Tout changement du texte impose de changer la version ici et dans `lib/consentText.ts`. Un consentement signé pour une autre version ne compte plus ; cette règle sera appliquée par Convex dans une tâche suivante.
+Ce fichier est la source du texte de consentement. Le site rend le texte compris entre les deux marqueurs. Tout changement du texte impose de changer la version ici et dans `lib/consentText.ts`. Un consentement signé pour une autre version ne compte plus ; cette règle est appliquée par Convex (`activeConsent`, `convex/lib/fitness.ts`).

@@ -866,8 +866,10 @@ Après **Lancer** :
    confirmation de son opérateur, avant d'armer, et n'arme que sur un 2xx.
    Sur ce 409, elle n'arme pas et n'envoie pas de fin ; une console
    antérieure, qui arme avant de confirmer, s'arrête aussitôt sur la rampe
-   ordinaire. Le serveur vérifie désormais l'aptitude valide et le consentement
-   actif du passager (ANH-143).
+   ordinaire. Pour l'aptitude et le consentement (ANH-143), le serveur refuse
+   le lancement depuis le site sans aptitude valide ou sans consentement actif.
+   Le refus à l'armement d'un passager devenu non prêt pendant l'attente et la
+   porte de départ de la console arrivent ensuite avec le contrat 1.6.
 
 **Important** : avec la configuration livrée (`raspberry-pi/.env.example`),
 `PROGRAMS_ENABLED=false` et `OCCUPANCY_OCCUPIED_ENABLED=false`. Le site affiche
@@ -904,7 +906,9 @@ rampe. En revanche elle ne peut pas être démarrée depuis le site.
 2. Un admin ou le gestionnaire du passager ouvre **Patients** → le passager,
    puis **Aptitude**. Il lit les réponses que le serveur lui présente et valide
    le résultat calculé. Pour le résultat « apte », il fixe une date de fin de
-   validité ; les autres résultats n'ont pas de date.
+   validité ; les autres résultats n'ont pas de date. Un résultat « avis
+   médical nécessaire » ne devient apte que par une nouvelle saisie validée.
+   Le parcours de l'avis médical relève d'ANH-98.
 3. Le passager lit le texte affiché dans **Consentement**, coche « J'ai lu ce
    texte et j'y consens », puis signe avec l'identité de son compte connecté.
    Un gestionnaire ne peut pas signer à sa place.
@@ -1340,5 +1344,7 @@ Pièges :
 | Questionnaire d'aptitude | Le questionnaire 0.1.0 contient des questions provisoires [MED] ; le médecin doit les remplacer par le contenu signé (ANH-98). |
 | Texte de consentement | Le texte 0.1.0 est provisoire et non valide juridiquement ; il doit être remplacé après ANH-87b. Les avis d'hébergement et de rétention des réponses restent à traiter dans ANH-172. |
 | Signature à la console | La signature est disponible sur le site seulement. La console ne propose pas de signer un consentement. |
+| Aptitude et consentement à l'armement | Le serveur les contrôle au lancement depuis le site seulement. Le refus d'un passager devenu non prêt pendant l'attente arrive avec le contrat 1.6 (ANH-143). |
+| Aptitude et consentement au départ de la console | La porte de départ avec personne à bord, pour un programme ou une séance manuelle `occupied`, arrive avec le contrat 1.6 (ANH-143). |
 
 Pour la sécurité d'ensemble, voir [securite.md](securite.md).

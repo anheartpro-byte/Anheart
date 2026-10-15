@@ -266,7 +266,10 @@ describe("ANH-143 launch fitness and consent", () => {
     await as(w.t, "patient").mutation(api.fitness.signConsent, {
       textVersion: CONSENT_TEXT_VERSION,
     });
-    expect((await machineState())?.myLaunchRefusal).toBe(null);
+    expect(await machineState()).toMatchObject({
+      myLaunchRefusal: null,
+      myFitnessValidUntil: NOW + 60_000,
+    });
     const sessionId = await launch(w, "patient");
     expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
       userId: w.patient,
@@ -316,5 +319,24 @@ describe("ANH-143 launch fitness and consent", () => {
       inBMachines.find((machine) => machine._id === w.orgBMachine)
         ?.myLaunchRefusal,
     ).toBe("rider_not_fit");
+    await expectCode(
+      inB.mutation(api.training.launchAutoSession, {
+        machineId: w.orgBMachine,
+        profileId: "p1",
+      }),
+      "rider_not_fit",
+    );
+    expect(await w.t.run((ctx) => ctx.db.query("sessions").collect())).toEqual([]);
+  });
+
+  it("does not list a machine without an organisation even for the Anheart admin", async () => {
+    const w = await seedWorld(modules);
+    await w.t.run((ctx) => ctx.db.patch(w.machine, { organizationId: undefined }));
+    const machines = await as(w.t, "admin").query(
+      api.training.listLaunchableMachines,
+      {},
+    );
+    expect(machines.some((machine) => machine._id === w.machine)).toBe(false);
+    expect(machines.some((machine) => machine._id === w.orgBMachine)).toBe(true);
   });
 });

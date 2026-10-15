@@ -5,7 +5,7 @@
  * `launchAutoSession` does on the site, and cannot change them: an absent or
  * unusable value is served as null, never replaced by another.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
@@ -77,7 +77,7 @@ async function served(w: World): Promise<Rider[]> {
   return ((await response.json()) as { riders: Rider[] }).riders;
 }
 
-describe("ANH-143 roster: the values a console vets a programme with", () => {
+describe("ANH-84 roster: the values a console vets a programme with", () => {
   it("serves the max heart rate and the birth year set on the site", async () => {
     const w = await seedMachineWorld(modules);
     const riders = await served(w);
@@ -88,7 +88,7 @@ describe("ANH-143 roster: the values a console vets a programme with", () => {
         hrMax: 180,
         birthYear: 1990,
         fit: true,
-        fitnessValidUntil: Number.MAX_SAFE_INTEGER,
+        fitnessValidUntil: Date.UTC(2100, 0, 1),
         consent: true,
       },
     ]);
@@ -138,6 +138,26 @@ describe("ANH-143 roster: the values a console vets a programme with", () => {
       birthYear: null,
     });
   });
+
+  it("no longer lists a rider whose launch right was revoked", async () => {
+    const w = await seedMachineWorld(modules);
+    await w.t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("machine_user_permissions")
+        .withIndex("by_machine", (q) => q.eq("machineId", w.machine))
+        .collect();
+      for (const row of rows) await ctx.db.delete(row._id);
+    });
+    expect(await served(w)).toEqual([]);
+  });
+});
+
+describe("ANH-143 roster: fitness and consent", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
 
   it("serves only launch status for ready, unvalidated, expired, and unsigned riders", async () => {
     const w = await seedMachineWorld(modules);
@@ -200,17 +220,5 @@ describe("ANH-143 roster: the values a console vets a programme with", () => {
       expect(row).not.toHaveProperty("answers");
       expect(row).not.toHaveProperty("notes");
     }
-  });
-
-  it("no longer lists a rider whose launch right was revoked", async () => {
-    const w = await seedMachineWorld(modules);
-    await w.t.run(async (ctx) => {
-      const rows = await ctx.db
-        .query("machine_user_permissions")
-        .withIndex("by_machine", (q) => q.eq("machineId", w.machine))
-        .collect();
-      for (const row of rows) await ctx.db.delete(row._id);
-    });
-    expect(await served(w)).toEqual([]);
   });
 });

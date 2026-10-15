@@ -2045,7 +2045,7 @@ export const MATRIX: Entry[] = [
       if (!(actor === "admin" && scope === "other")) {
         await makeRiderReady(w.t, w.patient, w.orgA, {
           now: NOW,
-          validUntil: Number.MAX_SAFE_INTEGER,
+          validUntil: Date.UTC(2100, 0, 1),
         });
       }
       const base = { machineId: w.machine, profileId: w.profileId };

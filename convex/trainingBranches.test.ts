@@ -924,7 +924,7 @@ describe("launch rights are granted once and revoked quietly", () => {
         hrMax: null,
         birthYear: null,
         fit: true,
-        fitnessValidUntil: Number.MAX_SAFE_INTEGER,
+        fitnessValidUntil: Date.UTC(2100, 0, 1),
         consent: true,
       },
       {
@@ -933,7 +933,7 @@ describe("launch rights are granted once and revoked quietly", () => {
         hrMax: 180,
         birthYear: 1990,
         fit: true,
-        fitnessValidUntil: Number.MAX_SAFE_INTEGER,
+        fitnessValidUntil: Date.UTC(2100, 0, 1),
         consent: true,
       },
       {
@@ -1003,7 +1003,7 @@ describe("launch rights are granted once and revoked quietly", () => {
           hrMax: null,
           birthYear,
           fit: true,
-          fitnessValidUntil: Number.MAX_SAFE_INTEGER,
+          fitnessValidUntil: Date.UTC(2100, 0, 1),
           consent: true,
         },
       ]);

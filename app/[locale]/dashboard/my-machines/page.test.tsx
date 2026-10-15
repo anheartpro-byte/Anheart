@@ -79,7 +79,7 @@ function machine(
     questionnaireVersion: "0.1.0",
     consentTextVersion: "0.1.0",
     fitness: null,
-    consent: { active: null, lastWithdrawnAt: undefined },
+    consent: { active: null, latestSigned: null, lastWithdrawnAt: undefined },
     launchRefusal: null,
     canValidate: false,
   });
@@ -106,6 +106,7 @@ function machine(
     profiles: [profile("Endurance"), profile("Tonus")],
     myHrMax: 180,
     myLaunchRefusal: null,
+    myFitnessValidUntil: null,
     ...overrides,
   };
 }

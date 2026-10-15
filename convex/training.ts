@@ -16,10 +16,10 @@
  *   manual session it has already started (`registerLocalSession`) so the
  *   dashboard can show it.
  *
- * The Pi remains the authority on safety: everything checked here (rights,
- * zone against the rider's max heart rate, machine state) is checked again on
- * the Pi, which can still refuse the start (e-stop wiring not attested, a
- * standing safety verdict, a drive fault...). A refusal comes back as a
+ * The Pi remains the authority on safety: it checks rights, zone against the
+ * rider's max heart rate and machine state, and can still refuse the start
+ * (e-stop wiring not attested, a standing safety verdict, a drive fault...).
+ * A refusal comes back as a
  * failed session with the Pi's reason.
  *
  * Only the machine ends a session it started. A session of which the server
@@ -29,13 +29,16 @@
  * machine sends, however late, closes it (`interruptSilentSessions`).
  *
  * A launch is checked again when the machine arms it (ANH-144), not only when
- * it is made: whoever made it can still make it, the rider still may ride,
- * has valid aptitude and active consent, the machine is the one it was, and
- * the launch has not waited longer than `PENDING_SESSION_TTL_S`
- * (`armingRefusal`). One that fails becomes a failed session with a stable
+ * it is made: whoever made it can still make it, the rider still has the
+ * launch right,
+ * the machine is the one it was, and the launch has not waited longer than
+ * `PENDING_SESSION_TTL_S` (`armingRefusal`). One that fails becomes a failed
+ * session with a stable
  * code (`endCode`), the machine's start is answered 409 with that code, and
  * the poll never offers it. A rider has one session at a time, on any machine,
  * and a machine one launch at a time (`launchAutoSession`).
+ * Aptitude and consent are checked at launch from the site only (ANH-143).
+ * Their arming recheck and console start gate follow with contract 1.6.
  */
 import { limitUser } from "./lib/rateLimits";
 import { v } from "convex/values";
@@ -466,6 +469,7 @@ export const listLaunchableMachines = query({
       live: v.union(liveStateValidator, v.null()),
       profiles: v.array(profileValidator),
       myHrMax: v.union(v.number(), v.null()),
+      myFitnessValidUntil: v.union(v.number(), v.null()),
       myLaunchRefusal: v.union(
         v.literal("rider_not_fit"),
         v.literal("fitness_expired"),
@@ -512,6 +516,7 @@ export const listLaunchableMachines = query({
       const organizationId = machine.organizationId;
       if (organizationId === undefined || !inScope(me, organizationId))
         continue;
+      const fitness = await riderFitness(ctx, me._id, organizationId, now);
       result.push({
         _id: machine._id,
         name: machine.name,
@@ -532,6 +537,7 @@ export const listLaunchableMachines = query({
             : null,
         profiles: await profilesFor(ctx, id),
         myHrMax: effectiveHrMax(me, now, medical?.hrMaxFormula ?? null),
+        myFitnessValidUntil: fitness.fitnessValidUntil,
         myLaunchRefusal: await riderLaunchRefusal(
           ctx,
           me._id,

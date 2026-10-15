@@ -566,7 +566,7 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
     const { organizationId } = await migrate(w);
     await makeRiderReady(w.t, w.patient, organizationId, {
       now: NOW,
-      validUntil: Number.MAX_SAFE_INTEGER,
+      validUntil: Date.UTC(2100, 0, 1),
     });
 
     // The admin of the default organisation is the Anheart admin.

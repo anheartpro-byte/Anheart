@@ -178,8 +178,11 @@ préalables :
    fichier `config/medical_parameters.json` (ANH-98, [section 13](#13-décisions-médicales--un-fichier-signé-anh-139)).
 5. Brancher une vraie caméra (écrire `detector_link.py`) et la mettre en service.
 6. Refaire les essais sur le banc réel, puis capsule vide, avant tout passager.
-7. La barrière logicielle d'aptitude et de consentement existe : tout lancement
-   est refusé sans aptitude « apte » validée et consentement actif. Le
+7. Le serveur refuse tout lancement depuis le site sans aptitude « apte »
+   validée et consentement actif. Le refus à l'armement d'un passager devenu
+   non prêt pendant l'attente et la porte de départ de la console arrivent
+   ensuite avec le contrat 1.6 (ANH-143). La durée de validité est laissée au
+   valideur, sans plafond, jusqu'au contenu signé d'ANH-98. Le
    questionnaire 0.1.0 et le texte de consentement 0.1.0 sont provisoires ;
    remplacer le premier par le contenu médical signé (ANH-98), et le second par
    le texte valide après ANH-87b et ANH-172. Dès que leur version change, une

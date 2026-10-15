@@ -55,6 +55,9 @@ function readiness(overrides: ReadinessOverrides = {}): Readiness {
     ...rest,
     consent: {
       active: null,
+      latestSigned: consent?.active
+        ? { textVersion: consent.active.textVersion, signedAt: consent.active.signedAt }
+        : null,
       lastWithdrawnAt: undefined,
       ...consent,
     },

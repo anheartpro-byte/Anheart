@@ -398,16 +398,24 @@ export async function makeRiderReady(
   t: ReturnType<typeof backendOf>,
   userId: Id<"users">,
   organizationId: Id<"organizations">,
-  options: Readonly<{ now: number; validUntil: number }>,
+  options: Readonly<{
+    now: number;
+    validUntil: number;
+    validatedBy?: Id<"users">;
+  }>,
 ) {
   return await t.run(async (ctx) => {
-    const relation = await ctx.db
-      .query("user_gestionnaires")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .filter((q) => q.eq(q.field("organizationId"), organizationId))
-      .first();
-    if (relation === null)
-      throw new Error("Rider needs a manager in the test world");
+    let validatedBy = options.validatedBy;
+    if (validatedBy === undefined) {
+      const relation = await ctx.db
+        .query("user_gestionnaires")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .filter((q) => q.eq(q.field("organizationId"), organizationId))
+        .first();
+      if (relation === null)
+        throw new Error("Rider needs a manager in the test world");
+      validatedBy = relation.gestionnaireId;
+    }
 
     const answers: Record<string, boolean> = {};
     for (const question of CURRENT_QUESTIONNAIRE.questions) {
@@ -423,7 +431,7 @@ export async function makeRiderReady(
       outcome: "fit",
       submittedBy: userId,
       submittedAt: options.now,
-      validatedBy: relation.gestionnaireId,
+      validatedBy,
       validatedAt: options.now,
       validUntil: options.validUntil,
       notes: "Synthetic review note",
@@ -450,7 +458,7 @@ export async function seedLaunchWorld(
   ] as const) {
     await makeRiderReady(w.t, userId, organizationId, {
       now: NOW,
-      validUntil: Number.MAX_SAFE_INTEGER,
+      validUntil: Date.UTC(2100, 0, 1),
     });
   }
   return w;
@@ -564,7 +572,7 @@ export async function seedMachineWorld(
   });
   await makeRiderReady(t, patient, organizationId, {
     now: NOW,
-    validUntil: Number.MAX_SAFE_INTEGER,
+    validUntil: Date.UTC(2100, 0, 1),
   });
   return {
     t,

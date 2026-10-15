@@ -391,6 +391,8 @@ describe("ANH-143 fitness assessments", () => {
     ["fit assessment has no validity", undefined, "fit"],
     ["fit assessment is already expired", NOW, "fit"],
     ["fit assessment has a fractional validity", NOW + 1.5, "fit"],
+    ["fit assessment exceeds the Date range", 1e20, "fit"],
+    ["fit assessment exceeds the last representable millisecond", 8.64e15 + 1, "fit"],
     [
       "non-fit assessment has a validity",
       NOW + 60_000,
@@ -421,6 +423,18 @@ describe("ANH-143 fitness assessments", () => {
         notes: ` ${"n".repeat(1001)} `,
       }),
       "fitness_notes_too_long",
+    );
+  });
+
+  it("accepts the last representable Date without a medical validity ceiling", async () => {
+    const w = await seedWorld(modules);
+    const assessmentId = await insertAssessment(w);
+    await as(w.t, "manager").mutation(api.fitness.validateFitnessAssessment, {
+      assessmentId,
+      validUntil: 8.64e15,
+    });
+    expect((await readiness(w, "manager", w.patient))?.fitness?.validUntil).toBe(
+      8.64e15,
     );
   });
 
@@ -661,11 +675,71 @@ describe("ANH-143 passenger consent", () => {
     );
     const view = await readiness(w, "manager", w.patient);
     expect(view?.consent.active).toBe(null);
+    expect(view?.consent.latestSigned).toEqual({
+      textVersion: `${CONSENT_TEXT_VERSION}-old`,
+      signedAt: NOW,
+    });
     expect(view?.launchRefusal).toBe("consent_missing");
+  });
+
+  it("returns the latest non-withdrawn signature across text versions in the rider's organisation", async () => {
+    const w = await seedWorld(modules);
+    const oldSignature = {
+      userId: w.patient,
+      organizationId: w.orgA,
+      textVersion: "0.0.8",
+      signedAt: NOW - 2,
+      signedVia: "site" as const,
+    };
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("consents", oldSignature);
+      await ctx.db.insert("consents", {
+        ...oldSignature,
+        textVersion: "0.0.9",
+        signedAt: NOW - 1,
+      });
+      await ctx.db.insert("consents", {
+        ...oldSignature,
+        signedAt: NOW,
+        withdrawnAt: NOW,
+      });
+      await ctx.db.insert("consents", {
+        ...oldSignature,
+        signedAt: NOW + 1,
+        organizationId: w.orgB,
+      });
+    });
+    expect((await readiness(w, "patient", w.patient))?.consent).toEqual({
+      active: null,
+      latestSigned: { textVersion: "0.0.9", signedAt: NOW - 1 },
+      lastWithdrawnAt: NOW,
+    });
+    await as(w.t, "patient").mutation(api.fitness.withdrawConsent, {});
+    expect((await readiness(w, "patient", w.patient))?.consent.latestSigned).toBe(
+      null,
+    );
   });
 });
 
 describe("ANH-143 readiness visibility and logging", () => {
+  it.each(["manager", "admin"] as const)(
+    "withholds answers and notes when a %s reads their own assessment",
+    async (actor) => {
+      const w = await seedWorld(modules);
+      const userId = actor === "manager" ? w.manager : w.admin;
+      const organizationId = actor === "manager" ? w.orgA : w.anheartOrg;
+      await makeRiderReady(w.t, userId, organizationId, {
+        now: NOW,
+        validUntil: NOW + 60_000,
+        validatedBy: w.orgAdmin,
+      });
+      const view = await readiness(w, actor, userId);
+      expect(view?.fitness).toMatchObject({ outcome: "fit", validated: true });
+      expect(view?.fitness).not.toHaveProperty("answers");
+      expect(view?.fitness).not.toHaveProperty("notes");
+      expect(view?.canValidate).toBe(false);
+    },
+  );
   it("returns sensitive fields to the manager and no answers or notes to the passenger", async () => {
     const w = await seedWorld(modules);
     await makeRiderReady(w.t, w.patient, w.orgA, {

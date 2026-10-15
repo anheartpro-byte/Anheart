@@ -942,7 +942,7 @@ describe("ANH-144 the same rules in centre B, and across organisations", () => {
     });
     await makeRiderReady(w.t, w.patient, w.orgB, {
       now: NOW,
-      validUntil: Number.MAX_SAFE_INTEGER,
+      validUntil: Date.UTC(2100, 0, 1),
     });
     await addSession(w, {
       machineId: w.machine,

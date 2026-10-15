@@ -51,6 +51,7 @@ function readiness(overrides: ReadinessOverrides = {}): Readiness {
       active: null,
       lastWithdrawnAt: undefined,
       ...consent,
+      latestSigned: null,
     },
   };
 }
