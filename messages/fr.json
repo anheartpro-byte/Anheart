@@ -787,7 +787,7 @@
       "inSession": "La machine est déjà en séance.",
       "programsDisabled": "Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles.",
       "medicalParametersUnavailable": "Aucune version des paramètres médicaux n'est enregistrée sur le serveur : aucun lancement à distance n'est possible.",
-      "medicalParametersUnsigned": "paramètres médicaux non signés : la machine est en mode banc uniquement.",
+      "medicalParametersUnsigned": "Paramètres médicaux non signés : la machine est en mode banc uniquement.",
       "zoneTooHighWithFraction": "La zone monte à {zoneHigh} bpm, au-delà de {fraction} % de la FC max du pratiquant ({hrMax} bpm → plafond {ceiling} bpm). Le serveur refusera ce lancement.",
       "noPrograms": "Aucun programme n'a été synchronisé depuis la machine.",
       "pendingNote": "La séance reste « en attente » jusqu'à ce que la machine l'arme. La machine peut encore refuser le départ (sécurité, variateur…).",

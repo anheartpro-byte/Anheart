@@ -557,6 +557,15 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
   const launch = (screen: ReturnType<typeof render>) =>
     screen.button(t.launch.button);
 
+  it("capitalizes unsigned medical parameter launch reasons in both locales", () => {
+    expect(messages.fr.training.launch.medicalParametersUnsigned).toMatch(
+      /^Paramètres médicaux non signés :/,
+    );
+    expect(messages.en.training.launch.medicalParametersUnsigned).toMatch(
+      /^Unsigned medical parameters:/,
+    );
+  });
+
   it("an online machine with programmes can be launched: the click reaches the page", async () => {
     const onLaunch = vi.fn();
     const screen = render(

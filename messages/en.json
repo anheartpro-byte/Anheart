@@ -787,7 +787,7 @@
       "inSession": "The machine is already in a session.",
       "programsDisabled": "Auto programmes are disabled on this machine: only manual sessions, from the machine's console, are possible.",
       "medicalParametersUnavailable": "No medical parameters version is registered on the server, so remote launches are not possible.",
-      "medicalParametersUnsigned": "unsigned medical parameters: the machine is in bench mode only.",
+      "medicalParametersUnsigned": "Unsigned medical parameters: the machine is in bench mode only.",
       "zoneTooHighWithFraction": "The zone goes up to {zoneHigh} bpm, above {fraction}% of the rider's max HR ({hrMax} bpm → ceiling {ceiling} bpm). The server will refuse this launch.",
       "noPrograms": "No programme has been synced from the machine.",
       "pendingNote": "The session stays \"pending\" until the machine arms it. The machine may still refuse to start (safety, drive…).",
