@@ -46,6 +46,7 @@ import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
 import { MachineLiveCard } from "@/components/training/MachineLiveCard";
 import { MachineHealthCard } from "@/components/machines/MachineHealthCard";
 import { MachineKeysCard } from "@/components/machines/MachineKeysCard";
+import { MachineRegistryCard } from "@/components/machines/MachineRegistryCard";
 import { MachineProgramsCard } from "@/components/training/ProfileList";
 import { LaunchRightsCard } from "@/components/training/LaunchRightsCard";
 
@@ -89,9 +90,7 @@ export default function MachineDetailPage({
   const medicalStatusIsAlert =
     machine !== undefined &&
     machine !== null &&
-    ["obsolete", "unsigned", "ahead"].includes(
-      machine.medicalParametersStatus,
-    );
+    ["obsolete", "unsigned", "ahead"].includes(machine.medicalParametersStatus);
 
   const canManage = isStaff(user?.role);
   // Restoring a machine is the Anheart admin's; the other admin rights are
@@ -298,6 +297,14 @@ export default function MachineDetailPage({
           </Card>
         )}
       </div>
+
+      {isOrganizationAdmin(user?.role) && (
+        <MachineRegistryCard
+          machineId={machineId}
+          role={user?.role}
+          readOnly={machine.isDeleted === true}
+        />
+      )}
 
       {/* Training: live state and synced programmes */}
       {!machine.isDeleted && (

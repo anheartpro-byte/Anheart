@@ -323,6 +323,14 @@ Admin et gestionnaire. Tableau des machines (nom, lieu, statut, dernier signal).
 Le statut et « Dernier signal » sont recalculés chaque seconde (§6).
 Recherche ; l'admin peut afficher les machines supprimées.
 
+Les admins Anheart et d'organisation voient aussi trois badges à côté du nom :
+le niveau de validation, le statut de version (**À jour**, **Obsolète**,
+**Non validée pour cette machine**, **Inconnue**) et **Configuration : non
+disponible (ANH-141)**. `machineRegistry.listRegistryBadges` fournit ces badges
+pour les machines non supprimées. Le gestionnaire ne les voit pas et le site
+ne lance pas cette query pour lui. Une réponse encore en chargement n'invente
+aucun badge.
+
 - **Nouvelle machine** (admin Anheart seulement) : nom, lieu, **organisation**
   (la sienne par défaut, ou celle d'un client : `organizations.listOrganizations`),
   gestionnaires. Seuls les gestionnaires de l'organisation choisie sont
@@ -362,11 +370,47 @@ Admin et gestionnaire de la machine.
 | Configuration | Statut (« En ligne », « Hors ligne », « En session ») et dernier signal, recalculés chaque seconde (§6), « Créée le » ; bouton Modifier. | admin, gestionnaire |
 | **Version médicale** | Version annoncée par le Pi, ou `-` s'il n'en a pas annoncé. Le statut calculé par rapport à la référence serveur est `unknown` (pas d'annonce ; pas de libellé dans la fiche), `unsigned` (fichier absent ou signature non vérifiée, mode banc), `no_reference` (pas de version de référence serveur), `current` (à jour), `obsolete` (ancienne, référence affichée) ou `ahead` (version inconnue du serveur). | lecture |
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
+| **Registre de la machine** | Quatre sections : **Identité**, **Mesures**, **Variateur**, **Validation** ; version remontée et attendue, verdicts des verrous, signalements. | admin Anheart en écriture ; admin d'organisation en lecture seule ; aucun registre pour le gestionnaire |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
 | **Clés de la machine** | Les clés de la machine, la plus récente en tête : préfixe, état, création et son auteur, dernière utilisation, expiration ; boutons **Nouvelle clé** et **Révoquer** (ci-dessous). Pas affichée pour une machine supprimée. | admin Anheart, admin de l'organisation (ANH-165) |
 | Zone de danger | **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
+
+**Registre (ANH-147).** `MachineRegistryCard` lit
+`machineRegistry.getRegistry` ; une réponse `null` ne rend rien. L'écriture
+exige le rôle admin Anheart côté site et `canEdit` côté serveur. Un admin
+d'organisation ne reçoit aucun formulaire ni bouton d'édition du registre.
+
+| Section | Lecture et écriture |
+|---|---|
+| **Identité** | Numéros de série Pi, variateur, moteur et réducteur, adresse BITalino, mise en service, adresse du site, contacts, version logicielle attendue. `updateIdentity` enregistre les champs ; un champ vidé est envoyé avec `null`. `listContactCandidates({machineId})`, réservée à l'admin Anheart, propose uniquement les membres actifs de l'organisation de cette machine, avec leur rôle et sans e-mail. |
+| **Mesures** | Deux rayons en mètres, date et auteur : `recordRadii`. La proposition `ARM_RADIUS_M` / `LEG_TIP_RADIUS_M` reprend les mesures sans valeur par défaut. Leur application attend la configuration centralisée (ANH-141). |
+| **Variateur** | Fiche courante et historique téléchargeables, version, signataire et date. Dépôt PDF ou JSON de 10 Mio maximum : `generateUploadUrl`, POST du fichier vers Convex Storage avec son `Content-Type`, puis `attachDriveParameterSheet`. Aucune donnée de santé dans ces pièces. |
+| **Validation** | Niveau courant, revues avec auteur, date, versions logicielle et médicale, compte rendu joint ; historique des descentes avec motif. `addValidationReview` ne propose que le niveau suivant et exige un compte rendu (même dépôt Storage). Version médicale facultative pour les premiers niveaux, obligatoire pour « Personne à bord ». `lowerValidationLevel` propose uniquement un niveau inférieur et exige un motif de 3 à 500 caractères. |
+
+Les niveaux sont **Aucune validation**, **Au banc**, **Automatique**,
+**Personne à bord**. La clé médicale de test bloque le dernier niveau, avec
+une explication ANH-98. Les auteurs des décisions sont les identifiants
+utilisateur conservés par le serveur ; l'auteur d'une mesure est le nom saisi.
+Les refus passent par `useMutationWithFeedback` et les codes traduits de
+`lib/feedback.ts`. Un dépôt manquant, invalide ou échoué affiche également
+une erreur traduite ; aucune mutation d'attachement ne suit un échec du dépôt.
+
+Une version logicielle de niveau inférieur à celui de la machine est marquée
+**Non validée pour cette machine**. Une version attendue insuffisamment
+validée reste enregistrable et provoque un avertissement. Les verdicts de
+`configurationLocks` affichent **Autorisé** ou **Refusé**, avec le niveau
+atteint en cas de refus, pour `PROGRAMS_ENABLED` (au moins `auto`) et
+`OCCUPANCY_OCCUPIED_ENABLED` (au moins `occupied`). Le site précise que
+l'application attend ANH-141 et que le refus OTA attend ANH-116. Il ne
+propose aucune commande d'application. Les deux signalements du serveur,
+`programs_enabled_without_auto` et `person_on_board_without_occupied`, sont
+des alertes visibles ; le second affiche son nombre et sa date la plus récente.
+
+Les scénarios de rôle, saisie, dépôt, transition, version, verrou et badge sont
+exercés dans `components/machines/machine-registry.test.tsx` et les tests des
+deux pages machines. Ces tests utilisent uniquement des données synthétiques.
 
 **Modifier** (carte Configuration) enregistre les champs de la machine, dont
 le nom et le lieu, par `machines.updateMachine`, ouvert à l'admin et au

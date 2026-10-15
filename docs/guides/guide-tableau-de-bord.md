@@ -514,6 +514,21 @@ Badges de statut d'une machine :
 « Dernier signal » vaut « - » tant que la machine n'a jamais envoyé de signal.
 Sinon il avance tout seul, chaque seconde, même quand la machine se tait.
 
+L'admin Anheart et l'admin d'organisation voient également trois badges près
+du nom de chaque machine non supprimée :
+
+| Badge du registre | Sens |
+|---|---|
+| **Validation : Aucune validation / Au banc / Automatique / Personne à bord** | Niveau courant de la machine, obtenu par ses revues et ses éventuelles descentes. |
+| **Version : À jour** | La version remontée correspond à l'attendue et son niveau de validation suffit pour cette machine. |
+| **Version : Obsolète** | La version remontée est autorisée, mais diffère de l'attendue. |
+| **Version : Non validée pour cette machine** | Le niveau de la version remontée est inférieur à celui de la machine. Ce constat ne déclenche pas encore un refus OTA (ANH-116). |
+| **Version : Inconnue** | La machine n'a pas remonté de version, ou aucune version attendue n'est définie pour une version remontée autorisée. |
+| **Configuration : non disponible (ANH-141)** | La configuration centralisée n'est pas encore disponible. Il n'est pas encore possible de distinguer une configuration appliquée d'une configuration en attente. |
+
+Le gestionnaire ne voit pas ces badges. Ouvrir la machine permet aux admins
+de consulter le registre détaillé.
+
 S'il n'y a aucune machine : « Aucune machine trouvée » et, pour
 l'administrateur, un second bouton **Nouvelle machine**.
 
@@ -787,6 +802,61 @@ permet de la changer sans couper la machine. Chaque ligne montre :
 |---|---|
 | **Nouvelle clé** | Fenêtre « Nouvelle clé pour cette machine ». Choisir le **chevauchement avec les clés actuelles** : « 24 heures (recommandé) », « 1 heure », ou « Aucun : révoquer les clés actuelles tout de suite » ; et l'**expiration de la nouvelle clé** : « Jamais », « Dans 90 jours », « Dans un an ». **Créer la clé** : la clé s'affiche **une seule fois**, avec **Copier**. Pendant le chevauchement, l'ancienne et la nouvelle clé fonctionnent toutes les deux ; à la fin, l'ancienne est refusée. |
 | **Révoquer** (clé active ou remplacée) | Fenêtre « Révoquer la clé anh1.… ? » ; **Annuler** / **Révoquer**. La clé est refusée **dès la requête suivante**. Si c'est la seule clé valide, la fenêtre prévient que la machine restera coupée du site sans nouvelle clé. |
+
+#### Registre de la machine
+
+**Pour qui** : l'admin Anheart peut renseigner le registre. L'admin
+d'organisation le consulte pour ses machines, sans bouton ni formulaire de
+modification. Un gestionnaire ne voit pas cette partie.
+
+Le registre contient quatre sections. Une valeur absente est écrite **Non
+renseigné** ; aucun numéro, rayon ou document n'est créé automatiquement.
+
+1. **Identité** : renseignez les numéros de série du Pi, du variateur, du
+   moteur et du réducteur, l'adresse BITalino, la date de mise en service et
+   l'adresse du site. Cochez les contacts parmi les membres actifs de
+   l'organisation de cette machine. Renseignez la **Version logicielle
+   attendue** avec une version Pi déjà enregistrée, puis **Enregistrer
+   l'identité**. Vider un champ l'efface. Une version insuffisamment validée
+   reste sélectionnable : le registre affiche alors un avertissement.
+2. **Mesures** : saisissez le **Rayon du bras (m)**, le **Rayon bout de jambe
+   (m)**, la date et l'auteur de la mesure, puis **Enregistrer les mesures**.
+   Les deux rayons doivent être positifs et au plus égaux à 10 m, borne de
+   plausibilité d'unité. La proposition `ARM_RADIUS_M` / `LEG_TIP_RADIUS_M`
+   reprend ces valeurs. Elle sera utilisée par la configuration centralisée
+   (ANH-141) ; l'enregistrement ne l'applique pas encore à la machine.
+3. **Variateur** : choisissez la fiche PDF ou JSON (10 Mio maximum), sa
+   version, son signataire et sa date, puis **Déposer une fiche variateur**.
+   Le fichier est déposé dans Convex Storage avant son rattachement. La
+   fiche courante et les précédentes restent téléchargeables. Ne joignez
+   aucune donnée de santé. Si le dépôt échoue, une notification l'indique ;
+   choisissez de nouveau le fichier et réessayez.
+4. **Validation** : consultez le niveau courant, les revues et leurs comptes
+   rendus. **Ajouter une revue** ne propose que le niveau suivant : Aucune
+   validation vers Au banc, puis Automatique, puis Personne à bord. Joignez
+   le compte rendu PDF ou JSON (10 Mio maximum), saisissez la version
+   logicielle et la version des paramètres médicaux enregistrées. Pour les
+   premiers niveaux, laissez la version médicale vide pour **Aucune**. Le
+   niveau Personne à bord exige des paramètres médicaux signés et reste
+   impossible avec la clé médicale de test actuelle (ANH-98). L'auteur de
+   la décision et sa date sont conservés par le serveur.
+
+Pour revenir à un niveau inférieur, l'admin Anheart utilise **Abaisser le
+niveau**, choisit le **Niveau cible inférieur**, puis saisit un **Motif de la
+descente** (3 à 500 caractères). Le bouton reste grisé sans motif suffisant.
+La descente et son motif restent dans l'historique ; les revues précédentes
+et leurs pièces jointes sont conservées. Une revue est le seul moyen de
+remonter ensuite au niveau suivant.
+
+Sous ces sections, **Version logicielle et verrous** compare la version
+remontée et l'attendue, et signale une version non validée pour cette machine.
+Les autorisations `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` disent
+**Autorisé** ou **Refusé**, selon les niveaux Automatique et Personne à bord.
+Leur application attend la configuration centralisée (ANH-141) ; le refus
+d'installation par l'OTA attend ANH-116. Ces verdicts n'offrent pas de bouton
+d'application. Deux alertes peuvent signaler des programmes activés sous le
+niveau Automatique ou des séances avec une personne à bord sous le niveau
+requis ; la seconde indique leur nombre et la date la plus récente.
 
 <a id="carte-zone-de-danger"></a>
 
