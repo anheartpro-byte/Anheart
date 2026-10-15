@@ -628,6 +628,11 @@ ou donnée de consentement, ni dans le manifeste ni dans les événements ou le
 journal de bord. Le dépôt Convex accepte les deux champs et refuse les clés
 supplémentaires du manifeste.
 
+Tout champ ajouté au manifeste doit d'abord être accepté par le dépôt Convex,
+déployé avant les consoles qui l'écrivent. La fixture complète produite par le
+writer du Pi est comparée dans ses tests et relue par le validateur du dépôt
+dans les tests Convex.
+
 ## Ce que le format ne contient pas
 
 Pas de nom de passager, d'adresse e-mail, de nom libre de profil, de vidéo,

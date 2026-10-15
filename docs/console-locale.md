@@ -1430,6 +1430,14 @@ toujours une personne à bord. Une séance de banc reste sans passager.
 | aptitude expirée | `demarrage refuse : aptitude du passager expiree, a valider par un gestionnaire sur le site` |
 | consentement absent | `demarrage refuse : consentement du passager absent, a signer par le passager sur le site` |
 
+La porte juge la liste tenue : un retrait du consentement ou une nouvelle
+saisie sur le site n'est vu qu'à la liste suivante, dans les 60 s en ligne au
+repos, jusqu'à 15 min sans réseau. Seule l'échéance déjà reçue est jugée hors
+ligne par l'horloge du Pi. « Aptitude expirée » devient « aptitude non validée »
+dès la liste suivante : Convex sert alors `fit: false` et
+`fitnessValidUntil: null`. Une aptitude qui expire pendant une séance en cours
+ne l'arrête pas : cette porte s'applique au départ seulement (EX-5).
+
 Un refus local distant est renvoyé comme fin échouée. Un 409 du serveur portant
 `rider_not_fit`, `fitness_expired` ou `consent_missing` montre sa raison et n'arme
 pas. Les phrases ne portent ni nom, ni réponses, ni notes, ni valeur de santé.

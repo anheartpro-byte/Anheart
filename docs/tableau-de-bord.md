@@ -853,6 +853,9 @@ Après **Lancer** :
    | Raison affichée | Cause |
    |---|---|
    | Droit retiré avant le départ | Le droit de lancement du patient a été retiré, le gestionnaire ne gère plus la machine ou le patient, une adhésion a été désactivée, ou un compte supprimé. |
+   | Le passager n'a pas de saisie d'aptitude valide et approuvée. | `rider_not_fit` : la dernière saisie n'est plus apte, validée et de la version courante. |
+   | La saisie d'aptitude du passager a expiré. | `fitness_expired` : l'échéance de validité a été atteinte pendant l'attente. |
+   | Le passager n'a pas de consentement actif pour le texte courant. | `consent_missing` : le consentement a été retiré ou porte sur une ancienne version du texte. |
    | Expirée : départ non confirmé à temps | La machine n'en a pas confirmé le départ en 5 min (`PENDING_SESSION_TTL_S`, [convex.md](convex.md#revérification-à-larmement-anh-144)) : machine hors ligne, par exemple. Passée échouée dans la minute qui suit. La console de ce dépôt demande le départ après la confirmation de son opérateur, avant d'armer, n'arme que sur un 2xx et n'envoie pas de fin sur 409 ; une console antérieure, qui arme d'abord, s'arrête aussitôt sur la rampe ordinaire sur un refus. Le lancement n'est plus offert à la machine 45 s avant l'échéance. |
    | FC max du pratiquant modifiée avant le départ | La FC max retenue n'est plus celle du lancement : relancer la séance. |
    | Âge du pratiquant refusé avant le départ | L'année de naissance a été effacée, ou donne moins de 18 ans. |
@@ -870,7 +873,8 @@ Après **Lancer** :
    le lancement depuis le site sans aptitude valide ou sans consentement actif.
    Depuis le contrat 1.6, il refuse aussi à l'armement un passager devenu non
    prêt pendant l'attente : `rider_not_fit`, `fitness_expired` ou `consent_missing`.
-   La porte de départ de la console arrive en T06.
+   La console applique aussi sa porte `cleared_to_board` avant tout départ
+   avec personne à bord ([console-locale.md](console-locale.md)).
 
 **Important** : avec la configuration livrée (`raspberry-pi/.env.example`),
 `PROGRAMS_ENABLED=false` et `OCCUPANCY_OCCUPIED_ENABLED=false`. Le site affiche
@@ -1345,7 +1349,7 @@ Pièges :
 | Questionnaire d'aptitude | Le questionnaire 0.1.0 contient des questions provisoires [MED] ; le médecin doit les remplacer par le contenu signé (ANH-98). |
 | Texte de consentement | Le texte 0.1.0 est provisoire et non valide juridiquement ; il doit être remplacé après ANH-87b. Les avis d'hébergement et de rétention des réponses restent à traiter dans ANH-172. |
 | Signature à la console | La signature est disponible sur le site seulement. La console ne propose pas de signer un consentement. |
-| Aptitude et consentement à l'armement | Depuis le contrat 1.6, le serveur les contrôle au lancement depuis le site et à l'armement. Un passager devenu non prêt pendant l'attente est refusé avec sa raison (ANH-143). |
-| Aptitude et consentement au départ de la console | La porte de départ avec personne à bord, pour un programme ou une séance manuelle `occupied`, arrive avec le contrat 1.6 (ANH-143). |
+| Aptitude et consentement à l'armement | Depuis le contrat 1.6, le serveur les contrôle au lancement depuis le site et à l'armement. Un passager devenu non prêt pendant l'attente est refusé avec sa raison (ANH-143). Tests en mémoire, jamais sur une vraie machine. |
+| Aptitude et consentement au départ de la console | Depuis le contrat 1.6, la console les contrôle avant tout départ avec personne à bord, pour un programme ou une séance manuelle `occupied`. Tests avec variateur simulé, jamais sur une vraie machine ; limites de fraîcheur dans [console-locale.md](console-locale.md). |
 
 Pour la sécurité d'ensemble, voir [securite.md](securite.md).

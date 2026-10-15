@@ -742,10 +742,12 @@ le programme est ajusté à l'ancienne FC max et l'âge compté depuis l'ancienn
 année. Au repos, la réponse suivante arrive dans la minute ; sans réseau, une
 valeur ancienne sert au plus 15 minutes, puis personne n'est proposé. Convex revérifie le droit à la déclaration
 de la séance et ne l'attribue pas à un passager qui ne l'a plus (ANH-180). La
-revérification à l'armement est ANH-144. L'aptitude et le consentement
-(ANH-143 : `fit`, `fitnessValidUntil`, `consent`) ne sont pas encore servis ;
-leur porte ira dans `roster.passenger_of`, appelée pour toute séance programmée
-lancée ici.
+revérification à l'armement est ANH-144. Depuis le contrat 1.6, l'aptitude et le
+consentement sont servis par `fit`, `fitnessValidUntil`, `consent` et
+`fitnessQuestionnaireVersion`. La porte `roster.cleared_to_board`, appelée à
+part de `passenger_of`, les vérifie avant tout départ avec personne à bord,
+manuel ou programmé, et avant la confirmation puis à l'armement d'un lancement
+distant ([console-locale.md](console-locale.md)).
 
 ---
 

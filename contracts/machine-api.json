@@ -57,7 +57,7 @@
       "hrMax": "FC max retenue par le site (nombre) ou null si inconnue.",
       "birthYear": "Année de naissance entière ou null si inconnue.",
       "fit": "Depuis 1.6 : booléen, vrai uniquement pour la dernière saisie validée, apte, de la version courante et non expirée.",
-      "fitnessValidUntil": "Depuis 1.6 : fin de validité de cette aptitude en millisecondes Unix, ou null si fit est faux.",
+      "fitnessValidUntil": "Depuis 1.6 : fin de validité de cette aptitude en millisecondes Unix entières entre 0 et 4133980800000 inclus (2101-01-01T00:00:00Z), ou null si fit est faux. Cette borne de représentation commune au site, à Convex et à la console ne fixe aucune durée de validité médicale.",
       "consent": "Depuis 1.6 : booléen, vrai si le consentement à la version courante du texte est actif dans l'organisation de la machine.",
       "fitnessQuestionnaireVersion": "Depuis 1.6 : chaîne, version du questionnaire de la saisie validée qui rend fit vrai ; null si fit est faux. Aucune réponse au questionnaire."
     }
