@@ -19,6 +19,8 @@ import resendTest from "@convex-dev/resend/test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
+import { CONSENT_TEXT_VERSION } from "../lib/consentText";
 import shippedMedicalContent from "../raspberry-pi/config/medical_parameters.json?raw";
 import shippedMedicalSignatureUrl from "../raspberry-pi/config/medical_parameters.sig?url&inline";
 
@@ -390,6 +392,50 @@ export async function seedWorld(mods: Record<string, () => Promise<unknown>>) {
     };
   });
   return { t, ...ids };
+}
+
+export async function makeRiderReady(
+  t: ReturnType<typeof backendOf>,
+  userId: Id<"users">,
+  organizationId: Id<"organizations">,
+  options: Readonly<{ now: number; validUntil: number }>,
+) {
+  return await t.run(async (ctx) => {
+    const relation = await ctx.db
+      .query("user_gestionnaires")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .filter((q) => q.eq(q.field("organizationId"), organizationId))
+      .first();
+    if (relation === null) throw new Error("Rider needs a manager in the test world");
+
+    const answers: Record<string, boolean> = {};
+    for (const question of CURRENT_QUESTIONNAIRE.questions) {
+      if (question.outcomes.no === "fit") answers[question.id] = false;
+      else if (question.outcomes.yes === "fit") answers[question.id] = true;
+      else throw new Error("Current questionnaire has no fit answer");
+    }
+    const assessmentId = await ctx.db.insert("fitness_assessments", {
+      userId,
+      organizationId,
+      questionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+      answers,
+      outcome: "fit",
+      submittedBy: userId,
+      submittedAt: options.now,
+      validatedBy: relation.gestionnaireId,
+      validatedAt: options.now,
+      validUntil: options.validUntil,
+      notes: "Synthetic review note",
+    });
+    const consentId = await ctx.db.insert("consents", {
+      userId,
+      organizationId,
+      textVersion: CONSENT_TEXT_VERSION,
+      signedAt: options.now,
+      signedVia: "site",
+    });
+    return { assessmentId, consentId };
+  });
 }
 
 /**

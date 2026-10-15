@@ -211,6 +211,44 @@ export default defineSchema({
     .index("by_user_and_gestionnaire", ["userId", "gestionnaireId"])
     .index("by_organization", ["organizationId"]),
 
+  // Passenger fitness answers are health data: only the passenger's managers
+  // and admins may read them through convex/fitness.ts.
+  fitness_assessments: defineTable({
+    userId: v.id("users"),
+    organizationId: v.id("organizations"),
+    questionnaireVersion: v.string(),
+    answers: v.record(v.string(), v.boolean()),
+    outcome: v.union(
+      v.literal("fit"),
+      v.literal("unfit"),
+      v.literal("needs_medical_opinion"),
+    ),
+    submittedBy: v.id("users"),
+    submittedAt: v.number(),
+    validatedBy: v.optional(v.id("users")),
+    validatedAt: v.optional(v.number()),
+    validUntil: v.optional(v.number()),
+    notes: v.optional(v.string()),
+  }).index("by_user_and_organization", [
+    "userId",
+    "organizationId",
+    "submittedAt",
+  ]),
+
+  consents: defineTable({
+    userId: v.id("users"),
+    organizationId: v.id("organizations"),
+    textVersion: v.string(),
+    signedAt: v.number(),
+    signedVia: v.union(v.literal("site"), v.literal("console")),
+    withdrawnAt: v.optional(v.number()),
+    withdrawnBy: v.optional(v.id("users")),
+  }).index("by_user_and_organization", [
+    "userId",
+    "organizationId",
+    "signedAt",
+  ]),
+
   // Machine-Gestionnaire relationship (many-to-many)
   // A machine can be managed by multiple gestionnaires
   // A gestionnaire can manage multiple machines

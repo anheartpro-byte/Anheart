@@ -104,10 +104,13 @@ toutes : ce que compte `dashboard.counters`).
 
 ### `organizationId` : à quelle organisation appartient une ligne
 
-Huit tables portent un champ `organizationId` et un index `by_organization` :
+Dix tables portent un champ `organizationId` :
 `users` (organisation principale du compte), `machines`, `sessions`,
 `training_telemetry`, `machine_profiles`, `machine_user_permissions`,
-`machine_gestionnaires` et `user_gestionnaires`. Toute table créée ensuite le
+`machine_gestionnaires`, `user_gestionnaires`, `fitness_assessments` et
+`consents`. Les huit premières tables ont un index `by_organization` ; les
+deux dernières sont indexées par passager et organisation, puis par date, pour
+lire son historique sans mélanger les centres. Toute table créée ensuite le
 porte aussi, sauf une table **commune à tous les clients** : `training_events`
 et `session_summaries_v2` (ANH-89) le portent, copié de leur séance.
 
@@ -151,6 +154,42 @@ Relation plusieurs-à-plusieurs : `userId` (patient), `gestionnaireId`,
 (`organizationId`) : le même patient et le même gestionnaire peuvent être liés
 dans deux organisations, par deux lignes distinctes, et un lien ne vaut que
 dans la sienne.
+
+### `fitness_assessments` : aptitude du passager (ANH-143)
+
+Chaque soumission ajoute une ligne ; elle ne remplace pas l'historique. L'index
+`by_user_and_organization` porte aussi `submittedAt` : la saisie la plus
+récente est la seule qui décide de l'aptitude au lancement. Une nouvelle
+saisie repasse donc le passager à `rider_not_fit` jusqu'à sa validation.
+
+| Champ | Sens |
+|---|---|
+| `userId`, `organizationId` | Passager et organisation de la saisie. |
+| `questionnaireVersion`, `answers` | Version du questionnaire et réponses booléennes indexées par les identifiants de questions. |
+| `outcome` | Résultat calculé : `fit`, `unfit` ou `needs_medical_opinion`. La validation ne le modifie jamais. |
+| `submittedBy`, `submittedAt` | Compte qui a envoyé la saisie, et date serveur en ms Unix. |
+| `validatedBy`, `validatedAt` | Gestionnaire ou administrateur qui a relu la saisie, et date serveur ; absents avant la validation. |
+| `validUntil` | Fin de validité en ms Unix ; requise pour valider un résultat `fit`, absente pour les autres résultats. |
+| `notes` | Note facultative de validation, limitée à 1000 caractères après suppression des espaces de bord. |
+
+Les réponses et les notes sont des données de santé. `fitness.ts` ne les
+renvoie qu'aux gestionnaires du passager et aux administrateurs, jamais au
+passager lui-même, à un tiers ou à un autre centre. Elles ne sont écrites dans
+aucun journal, événement ou enregistrement de séance.
+
+### `consents` : consentement du passager (ANH-143)
+
+Chaque ligne garde une signature et son retrait éventuel. L'index
+`by_user_and_organization` inclut `signedAt` pour lire les consentements d'un
+passager dans un centre. Le lancement n'accepte que le consentement non retiré
+dont `textVersion` est la version courante.
+
+| Champ | Sens |
+|---|---|
+| `userId`, `organizationId` | Passager et organisation de la signature. |
+| `textVersion` | Version du texte accepté. |
+| `signedAt`, `signedVia` | Date serveur en ms Unix et origine (`site` ou `console`). |
+| `withdrawnAt`, `withdrawnBy` | Date du retrait et compte qui l'a effectué ; absents tant que le consentement reste actif. |
 
 ### `machine_gestionnaires` : quel gestionnaire gère quelle machine
 
@@ -1173,6 +1212,40 @@ Résumé des fonctions les plus utilisées par le site. Dans ces tableaux,
 l'organisation concernée, et toute lecture ou liste est limitée à
 l'organisation de l'appelant, sauf pour l'admin Anheart
 ([§3](#3-règles-dautorisation)).
+
+### `fitness.ts` et `convex/lib/fitness.ts` (ANH-143)
+
+| Fonction | Type et autorisation | Rôle |
+|---|---|---|
+| `submitFitnessAnswers` (mutation) | Connecté ; soi-même, ou gestionnaire / administrateur du passager | Vérifie la version et toutes les réponses avec `CURRENT_QUESTIONNAIRE`, calcule l'outcome, puis ajoute une saisie non validée. Les erreurs sont `questionnaire_outdated` ou `fitness_answers_invalid`. |
+| `validateFitnessAssessment` (mutation) | Gestionnaire du passager ou administrateur ; jamais le passager lui-même | Valide uniquement la dernière saisie courante. Un résultat `fit` exige une date de fin entière, future et dans la limite de `maxValidUntil` si elle existe ; un autre résultat n'en accepte pas. La validation ne change pas l'outcome. |
+| `signConsent` (mutation) | Passager (`user`) pour lui-même | N'accepte que la version courante. Une signature active identique est renvoyée sans nouvelle ligne ; sinon le serveur ajoute une signature `site`. |
+| `withdrawConsent` (mutation) | Passager pour lui-même, ou qui le gère, y compris les administrateurs | Date tous les consentements non retirés du passager dans l'organisation concernée. Sans ligne active, refuse par `consent_not_active`. |
+| `getRiderReadiness` (query) | Le passager, un gestionnaire ou un administrateur autorisé ; sinon `null` | Renvoie les versions courantes, l'état d'aptitude et de consentement, `serverNow`, `canValidate` et le code qui bloquerait un lancement. `machineId` choisit l'organisation de la machine et une machine absente, supprimée ou hors périmètre renvoie `null`. |
+
+Pour un appel de gestion sur un autre passager, l'admin Anheart agit dans
+l'organisation principale du passager, qui doit encore le compter comme membre
+actif. L'admin d'organisation, le gestionnaire et le passager restent dans
+l'organisation active de leur appel. `getRiderReadiness` suit la même règle
+sans `machineId`; avec une machine, il suit l'organisation de cette machine.
+
+`riderLaunchRefusal` dans `convex/lib/fitness.ts` ne consulte que la dernière
+saisie : aucune saisie, une version de questionnaire différente, un outcome
+autre que `fit` ou une saisie non validée donnent `rider_not_fit`, dans cet
+ordre. Ensuite, `validUntil <= now` donne `fitness_expired`, puis l'absence de
+consentement non retiré pour la version courante donne `consent_missing`.
+Sinon le résultat est `null`.
+
+Dans `getRiderReadiness`, `answers` et `notes` ne sortent que si l'appelant
+gère le passager et n'est pas lui. Le passager voit l'outcome calculé, la
+validité et l'état, mais jamais ses réponses ni les notes. Cette règle
+s'applique aussi à l'admin qui consulte sa propre fiche. Aucun appel `console`
+ne reçoit ces champs.
+
+ANH-172 bloque encore la décision d'hébergement, la durée de conservation et
+la purge ; aucune purge n'est codée ici. ANH-98 bloque le contenu définitif du
+questionnaire et sa durée de validité. Le questionnaire actuel reste
+provisoire et ce code ne fixe aucun critère médical.
 
 ### `medicalParameters.ts` et `medicalParametersStore.ts` (ANH-139)
 
