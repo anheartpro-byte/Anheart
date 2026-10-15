@@ -47,12 +47,13 @@ export function ConsentCard({ userId }: { userId: Id<"users"> }) {
   const [error, setError] = useState<string | null>(null);
 
   const activeConsent = readiness?.consent.active ?? null;
+  const latestSigned = readiness?.consent.latestSigned ?? null;
   const self = currentUser?._id === userId;
   const currentConsent = activeConsent?.textVersion === CONSENT_TEXT_VERSION;
   const canSign =
     self && readiness !== undefined && readiness !== null && !currentConsent;
   const canWithdraw =
-    activeConsent !== null && (self || readiness?.canValidate === true);
+    latestSigned !== null && (self || readiness?.canValidate === true);
   const paragraphs = consentParagraphs();
   const signedDate = activeConsent
     ? format(new Date(activeConsent.signedAt), "PPP", { locale: dateLocale })
@@ -63,9 +64,9 @@ export function ConsentCard({ userId }: { userId: Id<"users"> }) {
     status = t("training.consent.loading");
   } else if (readiness === null) {
     status = t("training.consent.unavailable");
-  } else if (activeConsent && !currentConsent) {
+  } else if (latestSigned && !currentConsent) {
     status = t("training.consent.outdated", {
-      version: activeConsent.textVersion,
+      version: latestSigned.textVersion,
     });
   } else if (activeConsent && signedDate) {
     status = t("training.consent.signed", {

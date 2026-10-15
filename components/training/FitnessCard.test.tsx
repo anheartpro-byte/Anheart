@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -10,6 +11,7 @@ import {
   type,
 } from "@/test-support/render";
 import { CURRENT_QUESTIONNAIRE } from "@/lib/fitnessQuestionnaire";
+import { forgetServerAnswers } from "@/lib/server-clock";
 import { dismissFeedback, getFeedbackToasts } from "@/lib/feedback";
 import { answer, mutation, mutationCalls, resetConvex } from "@/test-support/convex";
 import { FitnessCard } from "./FitnessCard";
@@ -49,9 +51,9 @@ function readiness(overrides: ReadinessOverrides = {}): Readiness {
     ...rest,
     consent: {
       active: null,
+      latestSigned: null,
       lastWithdrawnAt: undefined,
       ...consent,
-      latestSigned: null,
     },
   };
 }
@@ -76,6 +78,7 @@ function show(value: Readiness | null) {
 
 beforeEach(() => {
   resetConvex();
+  forgetServerAnswers();
   mutation(SUBMIT).mockResolvedValue({ assessmentId: "assessment-1", outcome: "fit" });
   mutation(VALIDATE).mockResolvedValue(null);
 });
@@ -147,6 +150,34 @@ describe("FitnessCard status", () => {
     expect(screen.text()).toContain(fr.training.fitness.expired.split("{")[0]);
   });
 
+  it.each([600_000, -600_000])(
+    "expires without a new response when the browser clock differs by %i ms",
+    (offset) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(SERVER_NOW + offset);
+      const screen = show(readiness({
+        fitness: assessment({ validated: true, validUntil: SERVER_NOW + 2_000 }),
+        launchRefusal: null,
+      }));
+      expect(screen.text()).toContain(fr.training.fitness.fitUntil.split("{")[0]);
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(screen.text()).not.toContain(fr.training.fitness.expired.split("{")[0]);
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(screen.text()).toContain(fr.training.fitness.expired.split("{")[0]);
+      expect(screen.text()).not.toContain(fr.training.fitness.fitUntil.split("{")[0]);
+    },
+  );
+
+  it("renders an unreadable validity date safely without claiming fitness", () => {
+    const screen = show(readiness({
+      fitness: assessment({ validated: true, validUntil: 1e20 }),
+      launchRefusal: null,
+    }));
+    expect(screen.text()).toContain(fr.training.fitness.unknownDate);
+    expect(screen.text()).toContain(fr.training.fitness.expired.split("{")[0]);
+    expect(screen.text()).not.toContain(fr.training.fitness.fitUntil.split("{")[0]);
+  });
+
   it.each([
     ["medical opinion", "needs_medical_opinion", fr.training.fitness.needsMedicalOpinion],
     ["unfit", "unfit", fr.training.fitness.unfit],
@@ -193,6 +224,26 @@ describe("FitnessCard status", () => {
     expect(visible.text()).toContain(fr.training.fitness.answersTitle);
     expect(visible.text()).toContain(CURRENT_QUESTIONNAIRE.questions[0].label.fr);
     expect(visible.text()).toContain("À vérifier");
+    expect(visible.text()).toContain(fr.training.fitness.reviewNotesValue.replace("{notes}", "À vérifier"));
+  });
+
+  it("renders only the saved keys of an older questionnaire, with known labels or the saved identifier", () => {
+    const known = CURRENT_QUESTIONNAIRE.questions[0];
+    const screen = show(readiness({
+      canValidate: true,
+      fitness: assessment({
+        questionnaireVersion: "0.0.9",
+        current: false,
+        answers: { removed_question: true, [known.id]: false },
+      }),
+    }));
+    const rows = screen.tag("li");
+    expect(rows.map((row) => screen.textOf(row))).toEqual([
+      `removed_question ${fr.training.fitness.yes}`,
+      `${known.label.fr} ${fr.training.fitness.no}`,
+    ]);
+    expect(screen.text()).toContain(fr.training.fitness.answersOutdated.replace("{version}", "0.0.9"));
+    expect(screen.hasButton(fr.training.fitness.validateSubmit)).toBe(false);
   });
 });
 
@@ -226,6 +277,7 @@ describe("FitnessCard questionnaire and validation", () => {
     const screen = show(readiness({ fitness: assessment({ validated: true }) }));
 
     expect(screen.text()).toContain(fr.training.fitness.update);
+    expect(screen.text()).toContain(fr.training.fitness.updateWarning);
     const choices = screen.all(
       (element) => element.localName === "button" && element.getAttribute("aria-pressed") !== null,
     );
@@ -250,6 +302,9 @@ describe("FitnessCard questionnaire and validation", () => {
       readiness({ canValidate: true, fitness: assessment() }),
     );
     expect(screen.button(fr.training.fitness.validateSubmit).hasAttribute("disabled")).toBe(true);
+    const dateField = screen.field("fitness-valid-until");
+    expect(dateField.getAttribute("aria-describedby")).toBe("fitness-valid-until-error");
+    expect(screen.textOf(screen.field("fitness-valid-until-error"))).toBe(fr.training.fitness.validityRequired);
     const forms = screen.all((element) => element.localName === "form");
     await submit(forms[1]);
     expect(mutationCalls()).toEqual({});
@@ -260,6 +315,7 @@ describe("FitnessCard questionnaire and validation", () => {
     expect(mutationCalls()).toEqual({});
 
     await type(screen.field("fitness-valid-until"), "2026-10-20");
+    expect(dateField.getAttribute("aria-describedby")).toBe(null);
     await submit(forms[1]);
     expect(mutationCalls()[VALIDATE]).toEqual([
       [

@@ -8,6 +8,8 @@ import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
+import { useLocalClock } from "@/hooks/use-local-clock";
+import { serverClockAt } from "@/lib/server-clock";
 import { CURRENT_QUESTIONNAIRE } from "@/lib/fitnessQuestionnaire";
 import {
   Card,
@@ -44,6 +46,8 @@ export function FitnessCard({ userId }: { userId: Id<"users"> }) {
   const locale = useLocale();
   const dateLocale = locale === "fr" ? fr : enUS;
   const readiness = useQuery(api.fitness.getRiderReadiness, { userId });
+  const clock = useLocalClock();
+  const serverNow = readiness ? serverClockAt(readiness.serverNow, clock) : 0;
   const submitAnswers = useMutationWithFeedback(api.fitness.submitFitnessAnswers);
   const validateAssessment = useMutationWithFeedback(
     api.fitness.validateFitnessAssessment,
@@ -77,7 +81,7 @@ export function FitnessCard({ userId }: { userId: Id<"users"> }) {
   const needsValidity = fitness?.outcome === "fit";
   const invalidValidity =
     needsValidity &&
-    (selectedValidUntil === null || selectedValidUntil <= (readiness?.serverNow ?? 0));
+    (selectedValidUntil === null || selectedValidUntil <= serverNow);
   const canValidate =
     readiness?.canValidate === true &&
     fitness !== null &&
@@ -88,6 +92,13 @@ export function FitnessCard({ userId }: { userId: Id<"users"> }) {
     const answer = answers[question.id];
     if (typeof answer === "boolean") answersToSubmit[question.id] = answer;
   }
+
+  const displayDate = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime())
+      ? t("training.fitness.unknownDate")
+      : format(date, "PPP", { locale: dateLocale });
+  };
 
   let state: string;
   if (readiness === null) {
@@ -104,21 +115,21 @@ export function FitnessCard({ userId }: { userId: Id<"users"> }) {
     state = t("training.fitness.unfit");
   } else if (!fitness.validated) {
     state = t("training.fitness.pending", {
-      date: format(new Date(fitness.submittedAt), "PPP", { locale: dateLocale }),
+      date: displayDate(fitness.submittedAt),
       name: fitness.submittedByName || t("training.fitness.unknownName"),
     });
   } else if (
     readiness.launchRefusal === "fitness_expired" ||
-    (fitness.validUntil !== undefined && fitness.validUntil <= readiness.serverNow)
+    (fitness.validUntil !== undefined &&
+      (Number.isNaN(new Date(fitness.validUntil).getTime()) ||
+        fitness.validUntil <= serverNow))
   ) {
     state = t("training.fitness.expired", {
-      date: format(new Date(fitness.validUntil ?? readiness.serverNow), "PPP", {
-        locale: dateLocale,
-      }),
+      date: displayDate(fitness.validUntil ?? serverNow),
     });
   } else if (fitness.validUntil !== undefined) {
     state = t("training.fitness.fitUntil", {
-      date: format(new Date(fitness.validUntil), "PPP", { locale: dateLocale }),
+      date: displayDate(fitness.validUntil),
     });
   } else {
     state = t("training.fitness.needsMedicalOpinion");
@@ -188,23 +199,33 @@ export function FitnessCard({ userId }: { userId: Id<"users"> }) {
         {fitness && readiness?.canValidate && fitness.answers && (
           <div className="space-y-2 rounded-md border p-3">
             <p className="font-medium">{t("training.fitness.answersTitle")}</p>
+            {!fitness.current && (
+              <p className="text-sm text-muted-foreground">
+                {t("training.fitness.answersOutdated", {
+                  version: fitness.questionnaireVersion,
+                })}
+              </p>
+            )}
             <ul className="space-y-2 text-sm">
-              {CURRENT_QUESTIONNAIRE.questions.map((question) => (
-                <li key={question.id}>
-                  <span>{question.label[locale === "fr" ? "fr" : "en"]}</span>
-                  <span className="ml-2 font-medium">
-                    {t(
-                      fitness.answers?.[question.id]
-                        ? "training.fitness.yes"
-                        : "training.fitness.no",
-                    )}
-                  </span>
-                </li>
-              ))}
+              {Object.entries(fitness.answers).map(([questionId, answer]) => {
+                const question = CURRENT_QUESTIONNAIRE.questions.find(
+                  (question) => question.id === questionId,
+                );
+                return (
+                  <li key={questionId}>
+                    <span>
+                      {question?.label[locale === "fr" ? "fr" : "en"] ?? questionId}
+                    </span>
+                    <span className="ml-2 font-medium">
+                      {t(answer ? "training.fitness.yes" : "training.fitness.no")}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
             {fitness.notes && (
               <p className="text-sm">
-                {t("training.fitness.reviewNotes")}: {fitness.notes}
+                {t("training.fitness.reviewNotesValue", { notes: fitness.notes })}
               </p>
             )}
           </div>
@@ -223,6 +244,11 @@ export function FitnessCard({ userId }: { userId: Id<"users"> }) {
                 ? t("training.fitness.update")
                 : t("training.fitness.fill")}
             </h3>
+            {fitness && (
+              <p className="text-sm text-muted-foreground">
+                {t("training.fitness.updateWarning")}
+              </p>
+            )}
             <div className="space-y-4">
               {CURRENT_QUESTIONNAIRE.questions.map((question, index) => (
                 <fieldset key={question.id} className="space-y-2">
@@ -271,11 +297,18 @@ export function FitnessCard({ userId }: { userId: Id<"users"> }) {
                   id="fitness-valid-until"
                   type="date"
                   required
+                  aria-invalid={invalidValidity}
+                  aria-describedby={
+                    invalidValidity ? "fitness-valid-until-error" : undefined
+                  }
                   value={validUntilDate}
                   onChange={(event) => setValidUntilDate(event.target.value)}
                 />
                 {invalidValidity && (
-                  <p className="text-xs text-destructive">
+                  <p
+                    id="fitness-valid-until-error"
+                    className="text-xs text-destructive"
+                  >
                     {t("training.fitness.validityRequired")}
                   </p>
                 )}

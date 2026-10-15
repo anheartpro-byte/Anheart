@@ -7,6 +7,8 @@ import {
   type,
 } from "@/test-support/render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { forgetServerAnswers } from "@/lib/server-clock";
 import {
   answer,
   asks,
@@ -120,7 +122,7 @@ function machine(over: Partial<Machine> = {}) {
     questionnaireVersion: "0.1.0",
     consentTextVersion: "0.1.0",
     fitness: null,
-    consent: { active: null, lastWithdrawnAt: undefined },
+    consent: { active: null, latestSigned: null, lastWithdrawnAt: undefined },
     launchRefusal: null,
     canValidate: false,
   });
@@ -178,6 +180,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-01T12:00:00Z"));
   resetConvex();
+  forgetServerAnswers();
   answer("medicalParameters:current", {
     version: "0.1.0",
     issuedAt: "2026-01-01",
@@ -1014,6 +1017,59 @@ describe("ANH-203 launch window: when the server refuses", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
     logged.mockRestore();
   });
+});
+
+describe("ANH-143 launch window: readiness", () => {
+  it("blocks submission when readiness is unavailable", async () => {
+    signedInAs("user");
+    machine();
+    answer(READINESS, null);
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+    expect(screen.text()).toContain(t.readinessUnavailable);
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+  });
+
+  it.each([600_000, -600_000])(
+    "blocks expiry without a new response when the browser clock differs by %i ms",
+    async (offset) => {
+      const serverNow = new Date("2026-07-01T12:00:00Z").getTime();
+      vi.setSystemTime(serverNow + offset);
+      signedInAs("user");
+      machine();
+      answer(READINESS, {
+        serverNow,
+        questionnaireVersion: "0.1.0",
+        consentTextVersion: "0.1.0",
+        fitness: {
+          assessmentId: "assessment-1",
+          questionnaireVersion: "0.1.0",
+          outcome: "fit",
+          submittedAt: serverNow - 60_000,
+          submittedByName: "Ada Lovelace",
+          current: true,
+          validated: true,
+          validUntil: serverNow + 2_000,
+        },
+        consent: {
+          active: { textVersion: "0.1.0", signedAt: serverNow, signedVia: "site" },
+          latestSigned: { textVersion: "0.1.0", signedAt: serverNow },
+        },
+        launchRefusal: null,
+        canValidate: false,
+      });
+      const { screen } = open({ profileId: ENDURANCE.profileId });
+      expect(launchDisabled(screen)).toBe(false);
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(launchDisabled(screen)).toBe(false);
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(screen.text()).toContain(fr.errors.fitness_expired);
+      expect(launchDisabled(screen)).toBe(true);
+      await submit(screen.form());
+      expect(mutationCalls()).toEqual({});
+    },
+  );
 });
 
 describe("ANH-203 launch window: in English", () => {

@@ -128,14 +128,14 @@ describe("ConsentCard text and state", () => {
     expect(screen.text()).toContain(CONSENT_TEXT_VERSION);
   });
 
-  it("marks a signature for an old text version as requiring a new signature", () => {
+  it("marks a signature for an old text version as requiring a new signature", async () => {
     const screen = show(
       readiness({
         consent: {
-          active: {
+          active: null,
+          latestSigned: {
             signedAt: Date.now(),
             textVersion: "0.0.9",
-            signedVia: "site",
           },
         },
       }),
@@ -143,6 +143,12 @@ describe("ConsentCard text and state", () => {
 
     expect(screen.text()).toContain("0.0.9");
     expect(screen.text()).toContain("à signer de nouveau");
+    expect(screen.text()).not.toContain(fr.training.consent.notSigned);
+    expect(screen.hasButton(fr.training.consent.sign)).toBe(true);
+    expect(screen.hasButton(fr.training.consent.withdrawSelf)).toBe(true);
+    await click(screen.button(fr.training.consent.withdrawSelf));
+    await click(screen.button(fr.training.consent.withdrawConfirm));
+    expect(mutationCalls()[WITHDRAW]).toEqual([[{ userId }]]);
   });
 
   it("shows the date of a withdrawn consent", () => {

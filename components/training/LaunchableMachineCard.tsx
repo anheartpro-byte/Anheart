@@ -44,14 +44,17 @@ export function LaunchableMachineCard({
   const judge = useFreshnessJudge();
   // One clock reading for the status, its badge, the launch button and the
   // values: they cannot disagree.
-  const signalFresh = judge(m.lastHeartbeat, m.serverNow).fresh;
+  const { fresh: signalFresh, now: serverNow } = judge(m.lastHeartbeat, m.serverNow);
   const status = shownMachineStatus(m.status, signalFresh);
   const stale = !signalFresh || !judge(m.live?.updatedAt, m.serverNow).fresh;
   const medicalParametersStatus =
     m.medicalParametersReferenceVersion === null
       ? "no_reference"
       : m.medicalParametersStatus;
-  const launchRefusal = m.myLaunchRefusal;
+  const launchRefusal =
+    m.myFitnessValidUntil !== null && m.myFitnessValidUntil <= serverNow
+      ? "fitness_expired"
+      : m.myLaunchRefusal;
   const launchRefusalText = launchRefusal ? t(`errors.${launchRefusal}`) : null;
 
   return (
