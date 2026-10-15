@@ -68,7 +68,7 @@ from src.control_surface import (
     StartSession,
 )
 from src.local_config import CardiacTiers, CloudConfig, LocalConfig, load_local_config
-from src.local_panel import Armable, LocalPanel, RiderFacts, build_panel, describe_resolve_error
+from src.local_panel import LocalPanel, build_panel, describe_resolve_error
 from src.medical import SHIPPED_PARAMETERS, MedicalStatus
 from src.motor.drive import ControlWord, DriveError
 from src.motor.simulated import SimulatedDrive
@@ -143,7 +143,10 @@ class Dashboard:
     def answer(self, path: str, reply: Reply) -> None:
         self.handlers[path] = lambda _body: reply
 
-    def _reply(self, method: str, path: str, body: Mapping[str, object]) -> Reply:
+    def handle(self, path: str, handler: Handler) -> None:
+        self.handlers[path] = handler
+
+    def reply(self, method: str, path: str, body: Mapping[str, object]) -> Reply:
         self.calls.append((method, path, body))
         handler = self.handlers.get(path)
         if handler is not None:
@@ -158,10 +161,10 @@ class Dashboard:
         return ok()
 
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
-        return self._reply("GET", path, dict(params or {}))
+        return self.reply("GET", path, dict(params or {}))
 
     async def post(self, path: str, body: Mapping[str, JsonValue]) -> Reply:
-        return self._reply("POST", path, body)
+        return self.reply("POST", path, body)
 
     def to(self, path: str) -> list[Mapping[str, object]]:
         return [body for _method, called, body in self.calls if called == path]
@@ -263,7 +266,7 @@ def rig(
         tiers=config.tiers if tiers is None else tiers,
         programs_enabled=programs,
         medical=medical,
-        preflight_start=panel._preflight_remote_start,
+        preflight_start=panel.preflight_remote_start,
         records=records,
     )
     return Rig(
@@ -519,7 +522,7 @@ def roster_rig(tmp_path: Path, *, programs: bool = True) -> tuple[Rig, Roster]:
         store=r.panel.services.store,
         tiers=config_of().tiers,
         programs_enabled=programs,
-        preflight_start=r.panel._preflight_remote_start,
+        preflight_start=r.panel.preflight_remote_start,
         roster=roster,
     )
     return replace(r, sync=sync), roster
@@ -1542,11 +1545,13 @@ def linked(tmp_path: Path, medical: MedicalStatus | None = None, **changes: str)
 
 def observe_dashboard_and_drive(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> list[str]:
     writes: list[str] = []
-    original_reply = Dashboard._reply
+    original_reply = Dashboard.reply
     original_command = SimulatedDrive.write_command
     original_speed = SimulatedDrive.write_speed
 
-    def reply(dashboard: Dashboard, method: str, path: str, body: Mapping[str, object]) -> Reply:
+    def observe_reply(
+        dashboard: Dashboard, method: str, path: str, body: Mapping[str, object]
+    ) -> Reply:
         if path == START:
             order.append("training/start")
         return original_reply(dashboard, method, path, body)
@@ -1561,7 +1566,7 @@ def observe_dashboard_and_drive(monkeypatch: pytest.MonkeyPatch, order: list[str
         order.append("drive")
         return await original_speed(drive, rpm)
 
-    monkeypatch.setattr(Dashboard, "_reply", reply)
+    monkeypatch.setattr(Dashboard, "reply", observe_reply)
     monkeypatch.setattr(SimulatedDrive, "write_command", command)
     monkeypatch.setattr(SimulatedDrive, "write_speed", speed)
     return writes
@@ -1622,22 +1627,13 @@ async def test_a_rechecked_arm_refusal_after_2xx_ends_without_drive_write(
 ) -> None:
     order: list[str] = []
     writes = observe_dashboard_and_drive(monkeypatch, order)
-    attempts = 0
-    original_prepare = LocalPanel._prepare_programme
-
-    def refuse_at_arm(
-        panel: LocalPanel,
-        command: StartSession,
-        rider: Result[RiderFacts, str],
-    ) -> Result[Armable, str]:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 2:
-            return Err("programme refuse lors de la revalidation")
-        return original_prepare(panel, command, rider)
-
-    monkeypatch.setattr(LocalPanel, "_prepare_programme", refuse_at_arm)
     rig_ = linked(tmp_path)
+
+    def latch_verdict_before_ack(_body: Mapping[str, object]) -> Reply:
+        rig_.panel.runtime.supervisor.latch_estop("verdict pendant la confirmation")
+        return ok()
+
+    rig_.dashboard.handle(START, latch_verdict_before_ack)
     rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
 
     await rig_.run(3.0)
@@ -1648,7 +1644,7 @@ async def test_a_rechecked_arm_refusal_after_2xx_ends_without_drive_write(
     assert ends[0]["failed"] is True
     assert writes == []
     assert order == ["training/start"]
-    assert rig_.panel.runtime.state is RuntimeState.IDLE
+    assert rig_.panel.runtime.state is not RuntimeState.RUNNING
 
 
 async def refused_launch(

@@ -3471,6 +3471,22 @@ async def test_a_falling_heart_rate_holds_the_setpoint_before_any_verdict() -> N
     assert rig.runtime.applied_rpm > held[-1], "the controller never resumed after the fall"
 
 
+async def test_a_rising_demand_is_held_when_drive_status_is_unreadable() -> None:
+    rig = await _running_rig(safety=_lenient_comms())
+    rig.drive.status_error = BadResponse(detail="short read")
+    rig.fed_bpm = Bpm(65)
+    previous = rig.runtime.applied_rpm
+
+    for _ in range(15):
+        snapshot = await rig.step()
+        current = rig.runtime.applied_rpm
+        if snapshot.drive_status_is_stale and current <= previous:
+            return
+        previous = current
+
+    pytest.fail("the unreadable drive status never held a rising demand")
+
+
 async def test_an_unknown_trend_permits_no_rise() -> None:
     """Too few readings to fit a slope is no licence to accelerate."""
     rig = _rig(tracker_limits=TrackerLimits(max_jump=Bpm(1), reseed_after=1))

@@ -918,6 +918,19 @@ class LocalPanel:
         """The dashboard link, or ``None`` when this console runs unlinked."""
         return self._cloud
 
+    def attach_cloud(
+        self,
+        *,
+        cloud: CloudSync,
+        transport: HttpxTransport | None,
+        health: HealthWatch | None,
+    ) -> None:
+        """Finish wiring the dashboard after construction, once its panel preflight exists."""
+        self._listener = cloud
+        self._cloud = cloud
+        self._transport = transport
+        self._health = health
+
     @property
     def roster(self) -> Roster:
         """The riders' list a start with a person on board names one of."""
@@ -1285,7 +1298,8 @@ class LocalPanel:
         listed = passenger.value
         return Ok(RiderFacts(listed.hr_max, listed.age, listed.rider.name))
 
-    def _preflight_remote_start(self, launch: Launch) -> Result[None, str]:
+    def preflight_remote_start(self, launch: Launch) -> Result[None, str]:
+        """Run the panel's start gates without submitting a command or arming."""
         command = StartSession(
             profile_id=launch.profile_id,
             operator=launch.operator,
@@ -1931,7 +1945,7 @@ def build_panel(
             tiers=config.tiers,
             programs_enabled=config.programs_enabled,
             medical=config.medical,
-            preflight_start=panel._preflight_remote_start,
+            preflight_start=panel.preflight_remote_start,
             software_version=version,
             record_degraded=None if recorder is None else recorder.is_degraded,
             records=None if journal is None else record_source(journal, clock),
@@ -1950,10 +1964,7 @@ def build_panel(
             roster=riders,
         )
     if cloud is not None:
-        panel._listener = cloud
-        panel._cloud = cloud
-        panel._transport = owned
-        panel._health = health
+        panel.attach_cloud(cloud=cloud, transport=owned, health=health)
     return panel
 
 

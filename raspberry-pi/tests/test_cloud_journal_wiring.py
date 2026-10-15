@@ -14,8 +14,8 @@ Three things only the whole console can show:
 * the stop asked for from the dashboard is looked for by a task of its own:
   the question keeps its cadence while record reads and uploads are slow, and
   while a long backlog is caught up;
-* a launch from the dashboard whose start it does not take, whatever it
-  answers, leaves RUNNING at once;
+* a launch from the dashboard whose start it does not take never arms, so
+  there is no running session to stop;
 * the link keeps no queue (EX-7).
 """
 
@@ -803,10 +803,9 @@ async def test_the_console_runs_the_stop_watch_as_a_task_of_its_own(
         pytest.param(Refused(503, "HTTP 503"), id="503"),
     ],
 )
-async def test_on_the_console_a_launch_whose_start_is_not_taken_leaves_running_at_once(
+async def test_on_the_console_a_launch_whose_start_is_not_taken_stays_unarmed(
     tmp_path: Path, refusal: Refused
 ) -> None:
-    """Whatever the dashboard answers to the confirmation, the machine does not run on."""
     rig_, dashboard, journal = recording_linked(tmp_path)
     dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
     dashboard.answer(START, Err(refusal))
@@ -815,9 +814,11 @@ async def test_on_the_console_a_launch_whose_start_is_not_taken_leaves_running_a
     await seconds(rig_, journal, 3)
 
     assert state_of(rig_) is not RuntimeState.RUNNING
-    reason = rig_.panel.runtime.stop_reason
-    assert reason is not None
-    assert reason.startswith("annulee au tableau de bord (")
+    assert rig_.panel.runtime.stop_reason is None
+    assert len(dashboard.to(START)) == 1
+    assert dashboard.to(STATUS) == []
+    assert dashboard.to(END) == []
+    assert records(journal.root) == ()
     await rig_.panel.close()
 
 
