@@ -409,7 +409,9 @@ test("S-1 each button writes only the full checkout SHA to its deployed commit f
         assert.equal(markerIndex, labels.indexOf(ASSEMBLE) + 1, `${file}: simulation marker must follow assembly`);
         assert.ok(markerIndex < labels.indexOf(DEPLOY_SIMULATION), `${file}: simulation marker must precede deployment`);
       }
-      assert.doesNotMatch(marker, /^ {8}(?:env|if):|\$\{\{|secrets\./m, `${file}: ${id} marker takes an env, secret, expression or condition`);
+      assert.doesNotMatch(marker, /^ {8}(?:env|if):/m, `${file}: ${id} marker takes an env or if key`);
+      assert.doesNotMatch(marker, /\$\{\{/, `${file}: ${id} marker takes an expression`);
+      assert.doesNotMatch(marker, /secrets\./, `${file}: ${id} marker takes a secret`);
 
       const tree = mkdtempSync(join(tmpdir(), "anheart-commit-marker-"));
       try {
