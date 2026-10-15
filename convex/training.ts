@@ -64,6 +64,10 @@ import {
 import { liveStateValidator, machineProfileFields } from "./schema";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
 import { machineError, type MachineErrorCode } from "./lib/contract";
+import {
+  refusal as dashboardRefusal,
+  type DashboardErrorCode,
+} from "./lib/errors";
 // A heartbeat older than this means the machine cannot be relied on to answer.
 // The dashboard judges freshness on the same value (hooks/use-freshness.ts).
 import { LIVE_FRESH_MS, SESSION_SILENCE_MS } from "../lib/training";
@@ -525,8 +529,20 @@ function startedNotEnded(status: Doc<"sessions">["status"]): boolean {
 
 /** How long a launch waits for its machine, unless the deployment says otherwise. */
 export const DEFAULT_PENDING_SESSION_TTL_S = 300;
-/** The shortest and the longest wait `PENDING_SESSION_TTL_S` may set. */
-export const PENDING_SESSION_TTL_BOUNDS_S = { min: 30, max: 600 } as const;
+/**
+ * The shortest and the longest wait `PENDING_SESSION_TTL_S` may set. The
+ * shortest leaves a launch offered for `POLL_MARGIN_S` at least.
+ */
+export const PENDING_SESSION_TTL_BOUNDS_S = { min: 90, max: 600 } as const;
+
+/**
+ * How long before its expiry a launch is no longer offered to its machine.
+ * A console of today arms a launch as soon as it reads it, and confirms the
+ * start afterwards: one read just before the expiry would start, then be
+ * refused at its confirmation and stopped at once. The confirmation itself
+ * is accepted until the expiry.
+ */
+export const POLL_MARGIN_S = 45;
 
 /**
  * How long a launch from the dashboard may wait for its machine to arm it, in
@@ -548,8 +564,9 @@ export const EXPIRED_REASON = "expired before the machine armed it";
 
 /**
  * Why a launch is refused when its machine arms it: each one a stable code
- * of the machine API (contracts/machine-api.json, `arming_refusals`), stored
- * on the failed session as `endCode`, with the sentence stored as its
+ * of the machine API (contracts/machine-api.json, `arming_refusals`) and of
+ * the dashboard's table (convex/lib/errors.ts, which the site translates),
+ * stored on the failed session as `endCode`, with the sentence stored as its
  * `endReason`. In the order they are checked.
  */
 export const ARMING_REFUSALS = {
@@ -564,7 +581,9 @@ export const ARMING_REFUSALS = {
     "the rider's max heart rate changed before the machine armed the launch",
   rider_busy:
     "the rider was already in another session when the machine armed the launch",
-} as const satisfies Partial<Record<MachineErrorCode, string>>;
+} as const satisfies Partial<
+  Record<Extract<MachineErrorCode, DashboardErrorCode>, string>
+>;
 
 export type ArmingRefusalCode = keyof typeof ARMING_REFUSALS;
 
@@ -590,6 +609,11 @@ function refusalFor(code: ArmingRefusalCode): ArmingRefusal {
 function expired(session: Doc<"sessions">, now: number): boolean {
   // While pending, `startedAt` is the date of the launch, on the server's clock.
   return now - session.startedAt > pendingSessionTtlMs();
+}
+
+/** A launch that will expire within `POLL_MARGIN_S`: no longer offered. */
+function expiresSoon(session: Doc<"sessions">, now: number): boolean {
+  return now - session.startedAt > pendingSessionTtlMs() - POLL_MARGIN_S * 1000;
 }
 
 /**
@@ -881,16 +905,10 @@ export const launchAutoSession = mutation({
       machine.status === "in_session" ||
       (await machineHeld(ctx, args.machineId, now))
     ) {
-      throw new ConvexError({
-        code: "machine_busy",
-        message: "This machine already has a session waiting or running",
-      });
+      throw dashboardRefusal("machine_busy");
     }
     if (await riderHeld(ctx, riderId, now)) {
-      throw new ConvexError({
-        code: "rider_busy",
-        message: "This rider already has a session waiting or running",
-      });
+      throw dashboardRefusal("rider_busy");
     }
 
     const profile = await ctx.db
@@ -1422,11 +1440,12 @@ export const getPendingTrainingSession = internalQuery({
       .collect();
     // Never a launch the machine would be refused when it arms it (expired,
     // a right withdrawn, the rider's physiology changed...): the sweep fails
-    // it within the minute.
+    // it within the minute. Nor one that expires within `POLL_MARGIN_S`.
     const now = Date.now();
     for (const s of pending) {
       if (
         s.kind !== "auto" ||
+        expiresSoon(s, now) ||
         s.profileId === undefined ||
         s.subjectHrMax === undefined ||
         s.userId === undefined ||

@@ -208,7 +208,7 @@ describe("ANH-203 session detail card", () => {
     const screen = render(<TrainingDetailsCard sessionId={sessionId} />);
 
     expect(screen.text()).toContain(
-      `${t.session.endReason} ${t.endCode.expired_before_start}`,
+      `${t.session.endReason} ${fr.errors.expired_before_start}`,
     );
     expect(screen.text()).not.toContain("expired before the machine armed it");
   });

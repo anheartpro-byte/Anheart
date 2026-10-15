@@ -27,8 +27,14 @@
     "machine_has_pending_session": "Une séance attend son départ sur cette machine : annulez-la avant de supprimer la machine.",
     "machine_not_deleted": "Cette machine n'est pas supprimée : il n'y a rien à restaurer.",
     "last_gestionnaire": "Vous êtes le seul gestionnaire de cette machine : supprimez-la plutôt que de vous en retirer.",
-    "rider_busy": "Ce pratiquant a déjà une séance en attente ou en cours sur une machine : une seule à la fois.",
-    "machine_busy": "Cette machine a déjà une séance en attente ou en cours : une seule à la fois."
+    "rider_busy": "Pratiquant déjà dans une autre séance, en attente ou en cours : une seule à la fois.",
+    "machine_busy": "Cette machine a déjà une séance en attente ou en cours : une seule à la fois.",
+    "expired_before_start": "Expirée : départ non confirmé à temps",
+    "machine_deleted_before_start": "Machine supprimée avant le départ",
+    "organization_changed_before_start": "Machine passée dans une autre organisation avant le départ",
+    "right_revoked_before_start": "Droit retiré avant le départ",
+    "age_refused_before_start": "Âge du pratiquant refusé avant le départ",
+    "hr_max_changed_before_start": "FC max du pratiquant modifiée avant le départ"
   },
   "sessionRecord": {
     "next": "Page suivante",
@@ -772,15 +778,6 @@
       "hint": "Une FC max mesurée prime sur l'estimation par l'âge. Laisser vide pour effacer.",
       "invalidHrMax": "La FC max doit être comprise entre 100 et 220 bpm",
       "invalidBirthYear": "Année de naissance invalide"
-    },
-    "endCode": {
-      "expired_before_start": "Expirée : la machine ne l'a pas armée à temps",
-      "machine_deleted_before_start": "Machine supprimée avant le départ",
-      "organization_changed_before_start": "Machine passée dans une autre organisation avant le départ",
-      "right_revoked_before_start": "Droit retiré avant le départ",
-      "age_refused_before_start": "Âge du pratiquant refusé avant le départ",
-      "hr_max_changed_before_start": "FC max du pratiquant modifiée avant le départ",
-      "rider_busy": "Pratiquant déjà dans une autre séance au moment du départ"
     }
   },
   "organization": {

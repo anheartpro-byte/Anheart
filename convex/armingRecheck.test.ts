@@ -25,12 +25,14 @@ import type { Doc, Id } from "./_generated/dataModel";
 import crons from "./crons";
 import { rolesHeldNow } from "./lib/auth";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+import { DASHBOARD_ERRORS } from "./lib/errors";
 import {
   ARMING_REFUSAL_CODES,
   ARMING_REFUSALS,
   DEFAULT_PENDING_SESSION_TTL_S,
   EXPIRED_REASON,
   pendingSessionTtlMs,
+  POLL_MARGIN_S,
   type ArmingRefusalCode,
 } from "./training";
 import {
@@ -47,6 +49,7 @@ import {
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const TTL = DEFAULT_PENDING_SESSION_TTL_S * SECOND;
+const MARGIN = POLL_MARGIN_S * SECOND;
 const YEAR = new Date(NOW).getUTCFullYear();
 
 const shared = JSON.parse(sharedText) as {
@@ -197,6 +200,12 @@ describe("ANH-144 the arming refusals are codes of the machine contract", () => 
     expect(shared.arming_refusals.codes).toEqual(ARMING_REFUSAL_CODES);
     for (const code of ARMING_REFUSAL_CODES) {
       expect(shared.error_codes[code]?.statuses, code).toEqual([409]);
+    }
+  });
+
+  it("are codes of the dashboard's table too, which the site words", () => {
+    for (const code of ARMING_REFUSAL_CODES) {
+      expect(DASHBOARD_ERRORS[code], code).toBeTruthy();
     }
   });
 
@@ -529,12 +538,20 @@ describe("ANH-144 EX-1 the start route answers a refusal at arming with 409", ()
 // ---------------------------------------------------------------------------
 
 describe("ANH-144 EX-2 a launch waits PENDING_SESSION_TTL_S at most", () => {
-  it("is offered until it has waited exactly the limit, never after, even before the sweep, and its start is then refused", async () => {
+  it("is offered until 45 s before the limit, its start confirmed until the limit, and refused after it, even before the sweep", async () => {
     const w = await seedWorld(modules);
     const sessionId = await launch(w, "manager");
+    expect(MARGIN).toBe(45 * SECOND);
 
-    vi.setSystemTime(NOW + TTL);
+    vi.setSystemTime(NOW + TTL - MARGIN);
     expect((await offered(w, w.machine))?.sessionId).toBe(sessionId);
+
+    // Within the margin: no longer offered, so that a console that arms what
+    // it reads does not start a launch its confirmation would find expired.
+    vi.setSystemTime(NOW + TTL - MARGIN + 1);
+    expect(await offered(w, w.machine)).toBeNull();
+    expect(await sweep(w)).toEqual({ failed: 0 });
+    expect((await rowOf(w, sessionId))?.status).toBe("pending");
 
     vi.setSystemTime(NOW + TTL + 1);
     await expectRefusedAtArming(
@@ -659,25 +676,43 @@ describe("ANH-144 EX-2 a launch waits PENDING_SESSION_TTL_S at most", () => {
     expect((await rowOf(w, sessionId))?.status).toBe("failed");
   });
 
+  it("confirms a launch read just before the margin, until the limit itself", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await launch(w, "manager");
+    vi.setSystemTime(NOW + TTL - MARGIN);
+    expect((await offered(w, w.machine))?.sessionId).toBe(sessionId);
+
+    vi.setSystemTime(NOW + TTL);
+    expect(await arm(w, w.machine, sessionId)).toEqual({ armed: true });
+    expect(await rowOf(w, sessionId)).toMatchObject({
+      status: "active",
+      startedAt: NOW + TTL,
+    });
+  });
+
   it("follows PENDING_SESSION_TTL_S when the deployment sets it", async () => {
-    process.env.PENDING_SESSION_TTL_S = "60";
+    process.env.PENDING_SESSION_TTL_S = "120";
     const w = await seedWorld(modules);
     const sessionId = await launch(w, "manager");
 
-    vi.setSystemTime(NOW + MINUTE);
+    vi.setSystemTime(NOW + 2 * MINUTE - MARGIN);
     expect((await offered(w, w.machine))?.sessionId).toBe(sessionId);
-    vi.setSystemTime(NOW + MINUTE + 1);
+    vi.setSystemTime(NOW + 2 * MINUTE - MARGIN + 1);
+    expect(await offered(w, w.machine)).toBeNull();
+    vi.setSystemTime(NOW + 2 * MINUTE);
+    expect(await sweep(w)).toEqual({ failed: 0 });
+    vi.setSystemTime(NOW + 2 * MINUTE + 1);
     expect(await sweep(w)).toEqual({ failed: 1 });
   });
 
   it.each<[string | undefined, number]>([
     [undefined, 300],
     ["", 300],
-    ["60", 60],
+    ["90", 90],
     [" 120 ", 120],
-    ["30", 30],
     ["600", 600],
-    ["29", 300],
+    ["89", 300],
+    ["60", 300],
     ["601", 300],
     ["0", 300],
     ["-60", 300],
@@ -708,14 +743,10 @@ describe("ANH-144 EX-2 a launch waits PENDING_SESSION_TTL_S at most", () => {
 // EX-3: one session at a time, for a rider and for a machine
 // ---------------------------------------------------------------------------
 
-const RIDER_BUSY = {
-  code: "rider_busy",
-  message: "This rider already has a session waiting or running",
-};
-const MACHINE_BUSY = {
-  code: "machine_busy",
-  message: "This machine already has a session waiting or running",
-};
+// The data of the refusal: the code alone, as `refusal` throws it
+// (convex/lib/errors.ts), which the site translates.
+const RIDER_BUSY = "rider_busy";
+const MACHINE_BUSY = "machine_busy";
 
 describe("ANH-144 EX-3 a rider has one session at a time, on any machine", () => {
   it("refuses a second launch for a rider who has one waiting on another machine, and queues nothing", async () => {

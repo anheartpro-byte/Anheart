@@ -20,18 +20,19 @@ export function useTrainingLabel() {
 }
 
 /**
- * Why a session ended, for a person: the sentence of its stable end code
- * (`training.endCode.<code>`: a launch refused before its machine armed it,
- * ANH-144), else the reason as it was written (the machine's words or the
- * server's), else nothing.
+ * Why a session ended, for a person: the sentence of its stable end code (a
+ * launch refused before its machine armed it, ANH-144), translated like any
+ * code of the server's table (`errors.<code>`, convex/lib/errors.ts), else
+ * the reason as it was written (the machine's words or the server's), else
+ * nothing.
  */
 export function useEndReason() {
   const messages = useMessages();
-  const t = useTranslations("training");
+  const t = useTranslations("errors");
   return (training: { endCode?: string; endReason?: string }) =>
     training.endCode !== undefined &&
-    hasOwnMessage(messages, ["training", "endCode", training.endCode])
-      ? t(`endCode.${training.endCode}`)
+    hasOwnMessage(messages, ["errors", training.endCode])
+      ? t(training.endCode)
       : training.endReason;
 }
 

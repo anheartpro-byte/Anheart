@@ -547,7 +547,7 @@ describe("ANH-203 training panel: what it says of a session", () => {
     [
       "the sentence of its code, not the server's words",
       "right_revoked_before_start",
-      fr.training.endCode.right_revoked_before_start,
+      fr.errors.right_revoked_before_start,
     ],
     [
       "the server's words for a code this site does not know",

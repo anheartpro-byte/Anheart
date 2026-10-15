@@ -466,7 +466,7 @@ describe("session detail: a failed session", () => {
     ).toBeTruthy();
     expect(screen.queryByText(fr.sessionDetail.failedDescription)).toBeNull();
     expect(
-      screen.getByText(fr.training.endCode.right_revoked_before_start),
+      screen.getByText(fr.errors.right_revoked_before_start),
     ).toBeTruthy();
     expect(
       screen.queryByText("launch right withdrawn before the machine armed it"),
