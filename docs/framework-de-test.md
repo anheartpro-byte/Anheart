@@ -2423,8 +2423,12 @@ n'appelle Vercel. Il vérifie :
   contient rien d'autre (les deux projets Vercel lisent ce même fichier) ;
 * que chaque workflow n'a qu'un déclencheur, le bouton, à une exception près :
   le bouton de production peut aussi être appelé, par la pipeline de release
-  et par elle seule, avec les deux saisies qu'une personne lui donne et sans
-  qu'aucun secret lui soit passé ;
+  et par elle seule, avec les deux saisies qu'une personne lui donne et
+  `secrets: inherit` ; le workflow appelé ne déclare aucun secret. Les quatre
+  secrets de déploiement sont dans l'environnement `production` : chacun de
+  ses jobs de déploiement y lit ceux dont il a besoin, après approbation. Le
+  job de la pipeline qui appelle ne passe par aucun environnement ; le test
+  S-5 (c) vérifie l'accord entre cette description et l'appel ;
 * que la garde de branche est la première étape, qu'elle accepte la branche du
   bouton et refuse les autres références (autre branche, tag du même nom, PR) ;
 * que la production exige le mot `production` exact, et que son formulaire, le

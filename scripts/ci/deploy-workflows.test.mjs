@@ -274,6 +274,31 @@ test("the production button can be called by the release pipeline alone, with th
   assert.doesNotMatch(release, /deploy-preview\.yml/);
 });
 
+test("S-5 (c) the documented secrets inheritance matches the release calls and environment secrets of the production jobs", () => {
+  const page = read("docs/framework-de-test.md");
+  const buttons = page.slice(page.indexOf("### Déploiement Vercel par bouton"), page.indexOf("### Pipeline de release"));
+  assert.doesNotMatch(buttons, /aucun secret lui soit passé|sans\s+(?:qu['’])?aucun secret|sans secret/i);
+  assert.match(buttons, /`secrets: inherit`/);
+  assert.match(buttons, /workflow appelé ne déclare aucun secret/);
+  assert.match(buttons, /quatre\s+secrets de déploiement[\s\S]*environnement `production`[\s\S]*chacun[\s\S]*après approbation/);
+  assert.match(buttons, /job de la pipeline qui appelle ne passe par aucun environnement/);
+  const release = jobsOf(workflow("release.yml"));
+  for (const id of ["vercel-site", "vercel-simulation"]) {
+    const caller = release.get(id) ?? "";
+    assert.equal(own(caller, "secrets"), "inherit", id);
+    assert.equal(own(caller, "environment"), undefined, id);
+  }
+  const call = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_call:\n"), PRODUCTION.text.indexOf("\npermissions:"));
+  assert.deepEqual(keysUnder(call, "  workflow_call"), ["inputs"]);
+  const held = new Set();
+  for (const id of ["site", "simulation"]) {
+    const deploy = jobsOf(PRODUCTION.text).get(id) ?? "";
+    assert.equal(block(deploy, "    environment")[0], "name: production");
+    for (const match of deploy.matchAll(/secrets\.([A-Z_]+)/g)) held.add(match[1]);
+  }
+  assert.deepEqual([...held].sort(), SECRETS);
+});
+
 test("the jobs and their steps are the ones this file knows about, the same behind both buttons", () => {
   for (const { file, text, shown, request } of BUTTONS) {
     const jobs = jobsOf(text);
