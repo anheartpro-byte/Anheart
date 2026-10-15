@@ -81,15 +81,23 @@ describe("ANH-121 salted credential storage and migration", () => {
     ]) {
       expect(await f.t.query(query, { apiKey: legacyKey })).toBeNull();
     }
-    // When an authorized operator regenerates its credential via the existing mutation.
-    const replacement = await f.admin.mutation(api.machines.regenerateApiKey, {
-      machineId: f.machineId,
-    });
-    // Then legacy storage is overwritten and only the new credential works.
-    const stored = await f.t.run((ctx) => ctx.db.get(f.machineId));
-    expect(stored?.apiKey === legacyStorage).toBe(false);
-    expect(stored?.apiKey.startsWith("hmac-sha256:1:")).toBe(true);
-    expect(stored?.apiKeySelector?.length).toBe(32);
+    // When an authorized operator creates a new key (ANH-165).
+    const replacement = await f.admin.mutation(
+      api.machineKeys.createMachineKey,
+      { machineId: f.machineId },
+    );
+    // Then the legacy storage is cleared, not moved, and only salted verifiers remain.
+    const stored = await f.t.run(async (ctx) => ({
+      machine: await ctx.db.get(f.machineId),
+      keys: await ctx.db.query("machine_api_keys").collect(),
+    }));
+    expect(stored.machine?.apiKey).toBeUndefined();
+    expect(stored.machine?.apiKeySelector).toBeUndefined();
+    expect(JSON.stringify(stored).includes(legacyStorage)).toBe(false);
+    for (const key of stored.keys) {
+      expect(key.keyHash.startsWith("hmac-sha256:1:")).toBe(true);
+      expect(key.selector.length).toBe(32);
+    }
     const oldResponse = await f.t.fetch("/api/machine/heartbeat", {
       method: "POST",
       headers: { Authorization: `Bearer ${legacyKey}` },
@@ -102,33 +110,53 @@ describe("ANH-121 salted credential storage and migration", () => {
     expect(newResponse.status).toBe(200);
   });
 
-  it.each([
-    { state: "disabled", patch: { authenticationEnabled: false } },
-    { state: "deleted", patch: { isDeleted: true } },
-  ])(
-    "keeps a $state legacy machine revoked when regenerating",
-    async ({ patch }) => {
-      // Given a revoked legacy machine requiring credential cleanup.
-      const f = await machineFixture(modules);
-      await f.t.run((ctx) =>
-        ctx.db.patch(f.machineId, {
-          ...patch,
-          apiKey: "synthetic-legacy-encoding",
-          apiKeySelector: undefined,
-        }),
-      );
-      // When / Then replacement does not reactivate the machine.
-      const replacement = await f.admin.mutation(
-        api.machines.regenerateApiKey,
-        { machineId: f.machineId },
-      );
-      const response = await f.t.fetch("/api/machine/heartbeat", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${replacement.apiKey}` },
-      });
-      expect(response.status).toBe(401);
-    },
-  );
+  it("keeps a disabled legacy machine refused with its new key", async () => {
+    // Given a disabled legacy machine requiring credential cleanup.
+    const f = await machineFixture(modules);
+    await f.t.run((ctx) =>
+      ctx.db.patch(f.machineId, {
+        authenticationEnabled: false,
+        apiKey: "synthetic-legacy-encoding",
+        apiKeySelector: undefined,
+      }),
+    );
+    // When / Then a new key does not reactivate the machine.
+    const replacement = await f.admin.mutation(
+      api.machineKeys.createMachineKey,
+      { machineId: f.machineId },
+    );
+    const response = await f.t.fetch("/api/machine/heartbeat", {
+      method: "POST",
+      headers: machineHeaders(replacement.apiKey),
+    });
+    expect(response.status).toBe(401);
+    const machine = await f.t.run((ctx) => ctx.db.get(f.machineId));
+    expect(machine?.apiKey).toBeUndefined();
+  });
+
+  it("issues no key for a deleted legacy machine", async () => {
+    // Given a deleted legacy machine.
+    const f = await machineFixture(modules);
+    await f.t.run((ctx) =>
+      ctx.db.patch(f.machineId, {
+        isDeleted: true,
+        apiKey: "synthetic-legacy-encoding",
+        apiKeySelector: undefined,
+      }),
+    );
+    const keysBefore = await f.t.run((ctx) =>
+      ctx.db.query("machine_api_keys").collect(),
+    );
+    // When / Then no new key is issued, and nothing is written.
+    await expect(
+      f.admin.mutation(api.machineKeys.createMachineKey, {
+        machineId: f.machineId,
+      }),
+    ).rejects.toThrow(/machine_not_found/);
+    expect(
+      await f.t.run((ctx) => ctx.db.query("machine_api_keys").collect()),
+    ).toEqual(keysBefore);
+  });
 
   it("requires an authorized operator to create or replace credentials", async () => {
     // Given an unauthenticated client that knows a machine ID.
@@ -138,7 +166,9 @@ describe("ANH-121 salted credential storage and migration", () => {
       f.t.mutation(api.machines.createMachine, { name: "Untrusted" }),
     ).rejects.toThrow();
     await expect(
-      f.t.mutation(api.machines.regenerateApiKey, { machineId: f.machineId }),
+      f.t.mutation(api.machineKeys.createMachineKey, {
+        machineId: f.machineId,
+      }),
     ).rejects.toThrow();
   });
 });

@@ -6,9 +6,11 @@ remplacer, et comment le changer. Ticket
 exigence EX-4. Inventaire dressé le 14 octobre 2026, à la lecture du code et
 des pages de ce dépôt.
 
-**Aucune des procédures de rotation de cette page n'a été essayée.** Les
-essayer demande les vrais secrets et les vrais comptes : c'est au chef de
-projet, une fois par secret, en écrivant ici la date et le résultat. Les
+**Une seule procédure de rotation de cette page a été essayée** : celle de la
+clé de la machine, sur le déploiement de développement seulement
+([3.1](#31-clé-de-la-machine)). Les autres demandent les vrais secrets et les
+vrais comptes : c'est au chef de projet, une fois par secret, en écrivant ici
+la date et le résultat. Les
 étapes viennent du code et des autres pages du dépôt ; ce qui en est déduit
 sans être écrit ailleurs est signalé.
 
@@ -44,7 +46,7 @@ projet de les tenir.
 
 | Secret | Ce qu'il ouvre | Où il vit | Qui y a accès | Rotation |
 |---|---|---|---|---|
-| Clé de la machine, `MACHINE_API_KEY` | les routes machine de Convex au nom d'une machine : heartbeat, séances, mesures ([MEN-01](menaces.md#men-01-clé-machine-volée-ou-rejouée)) | sur le Pi, `/etc/anheart/anheart.env` (root, mode 600) ; sur un poste de développement, `raspberry-pi/.env`. Convex ne garde qu'un vérificateur salé (HMAC-SHA-256) et un sélecteur, jamais la clé ([convex.md](convex.md#migration-des-credentials-avec-anh-82--opération-à-réaliser)) | root du Pi ; la personne qui l'installe ; l'admin ou le gestionnaire de la machine qui la crée ou la régénère, à qui elle est montrée une fois | [3.1](#31-clé-de-la-machine) |
+| Clé de la machine, `MACHINE_API_KEY` | les routes machine de Convex au nom d'une machine : heartbeat, séances, mesures ([MEN-01](menaces.md#men-01-clé-machine-volée-ou-rejouée)) | sur le Pi, `/etc/anheart/anheart.env` (root, mode 600) ; sur un poste de développement, `raspberry-pi/.env`. Une machine peut avoir plusieurs clés valides à la fois, pendant le chevauchement d'une rotation ; de chacune, Convex ne garde qu'un sélecteur, un vérificateur salé (HMAC-SHA-256) et un préfixe d'affichage, jamais la clé ([convex.md](convex.md#machine_api_keys--les-clés-des-machines-anh-165)) | root du Pi ; la personne qui l'installe ; l'admin Anheart ou l'admin de l'organisation de la machine qui crée la clé, à qui elle est montrée une fois (l'admin Anheart aussi à la création de la machine) ; qui la crée en ligne de commande, avec la clé de déploiement Convex. Un gestionnaire n'a pas accès aux clés | [3.1](#31-clé-de-la-machine) |
 | Jeton de la page de la console, `UI_TOKEN` (le « jeton d'appareil » du ticket) | la page et l'API de la console ; exigé dès qu'elle écoute hors de la boucle locale ([MEN-05](menaces.md#men-05-appareil-hostile-sur-le-réseau-de-la-console)) | `/etc/anheart/anheart.env` ; chaque tablette qui l'a saisi le garde dans le stockage de session de son navigateur | root du Pi ; chaque opérateur à qui il a été donné | [3.2](#32-jeton-de-la-page-de-la-console) |
 | Clé privée TLS de la console | le certificat que les tablettes acceptent pour cette console | `/var/lib/anheart/tls` sur le Pi, au compte `anheart` ; l'autorité qui l'a signée n'est gardée nulle part | compte `anheart`, root ; quiconque a la carte SD | [pi-image.md, Renouveler](pi-image.md#renouveler) |
 | Mot de passe du Wi-Fi de la console | le réseau que le Pi crée pour les tablettes | `/etc/anheart/wifi-password` (root, mode 600) ; la fiche privée de mise en service | root du Pi ; le technicien ; chaque tablette jointe | [3.3](#33-mot-de-passe-du-wi-fi-de-la-console) |
@@ -98,24 +100,84 @@ pendant une séance** ([deploiement.md](deploiement.md#33-vers-la-production)).
 
 ### 3.1 Clé de la machine
 
-Non essayée. Le code est testé (`convex/machineCredential.test.ts`,
-`convex/machineAuth.test.ts`), sur des clés synthétiques.
+**Essayée le 15 octobre 2026, sur le déploiement de développement seulement**,
+par le coordinateur des tickets, avec une console du Pi en simulation et les
+deux fonctions de ligne de commande ci-dessous, pas avec la fiche du site
+([résultat](https://github.com/anheartpro-byte/Anheart/pull/105#issuecomment-6188669547)).
+Pendant un chevauchement de 3 minutes, l'ancienne et la nouvelle clé ont été
+acceptées ; la console a été redémarrée sur la nouvelle ; Convex a reçu
+25 heartbeats, dont le plus grand écart, 12,3 s, au changement de clé : la
+machine n'a jamais été hors ligne. Après le chevauchement, l'ancienne clé a
+été refusée (401) puis marquée révoquée par la tâche ; une troisième clé,
+révoquée, a été refusée dès la requête suivante. Rien n'a été essayé sur un
+Pi ni en production. Le code est testé sur des clés synthétiques
+(`convex/machineKeys.test.ts`, `convex/machineAuth.test.ts`,
+`convex/machineCredential.test.ts`).
 
-1. Console **au repos**. Dès l'étape 2, la machine ne parle plus au tableau de
-   bord jusqu'à l'étape 3 ; la console, elle, continue de fonctionner seule.
-2. Sur le site, fiche de la machine, zone de danger : **Régénérer la clé**,
-   puis **Confirmer** (admin, ou gestionnaire de la machine). La nouvelle clé
-   s'affiche **une seule fois** ; l'ancienne est refusée aussitôt
-   (`machines.regenerateApiKey` remplace sélecteur et vérificateur ensemble).
-   Perdue avant l'étape 3 : régénérer encore, rien ne se récupère.
+Une machine peut avoir plusieurs clés valides à la fois
+([convex.md](convex.md#machine_api_keys--les-clés-des-machines-anh-165)) :
+la nouvelle s'installe pendant que l'ancienne fonctionne encore. Les clés se
+gèrent sur la fiche de la machine, carte **Clés de la machine**, par l'admin
+Anheart ou l'admin de l'organisation de la machine ; un gestionnaire, même de
+la machine, n'y a pas accès.
+
+Renouveler la clé sans couper la machine :
+
+1. Fiche de la machine, **Clés de la machine**, **Nouvelle clé**. Garder le
+   chevauchement de 24 heures (ou 1 heure) ; choisir une expiration si une
+   règle de rotation l'exige. **Créer la clé**
+   (`machineKeys.createMachineKey`).
+2. Copier la clé affichée **une seule fois**. Perdue avant l'étape 3 : en
+   créer une autre, ou révoquer celle-ci ; rien ne se récupère.
 3. Sur le Pi : `sudo nano /etc/anheart/anheart.env`, remplacer la valeur de
    `MACHINE_API_KEY`, puis `sudo systemctl restart anheart` (au repos
-   seulement).
-4. Vérifier : la machine repasse en ligne sur le site. Une requête avec
-   l'ancienne clé reçoit **401** ([convex.md, procédure ANH-82, étape 4](convex.md#migration-des-credentials-avec-anh-82--opération-à-réaliser)).
+   seulement). Sur un poste de développement : `raspberry-pi/.env`, puis
+   relancer la console. La console ne lit sa clé qu'au démarrage ; elle envoie
+   un heartbeat toutes les 10 s, et le site ne la dit hors ligne qu'après 90 s
+   sans heartbeat : un redémarrage de quelques secondes ne la fait pas passer
+   hors ligne.
+4. Vérifier sur la fiche : la machine reste en ligne, et la nouvelle clé a une
+   « Dernière utilisation » postérieure au redémarrage. Cette date n'est
+   écrite qu'une fois par minute au plus : elle peut retarder d'une minute, et
+   une requête faite avec la clé juste avant le redémarrage l'a peut-être déjà
+   posée. L'ancienne clé est « Remplacée, encore valide » jusqu'à la fin du
+   chevauchement, puis refusée (401) à cette fin ou peu après ; la tâche du
+   serveur la marque « Révoquée » dans les 5 minutes.
+5. Pour couper l'ancienne avant la fin du chevauchement, une fois la nouvelle
+   vue en usage : **Révoquer** sur sa ligne (`machineKeys.revokeMachineKey`).
+   Elle est refusée dès la requête suivante.
 
-L'opération de redéploiement de la production (ANH-82) régénère de cette façon
-la clé de chaque machine ([convex.md](convex.md#migration-des-credentials-avec-anh-82--opération-à-réaliser)).
+Ce qui est coupé : rien, si la nouvelle clé est installée avant la fin du
+chevauchement ; sinon, la machine perd le lien avec le tableau de bord à la
+fin du chevauchement, jusqu'à ce que la nouvelle clé y soit installée. La
+console, elle, continue de fonctionner seule.
+
+Clé compromise : la **Révoquer**. Si c'est la seule clé valide de la machine,
+la fenêtre le dit : la machine reste coupée du tableau de bord jusqu'à ce
+qu'une nouvelle clé y soit installée. Une nouvelle clé avec le chevauchement
+**Aucun** révoque d'un coup toutes les autres. Révoquer la clé qui en a
+remplacé une autre ne prolonge pas celle-ci : elle expire à la fin de son
+chevauchement.
+
+Sans tableau de bord, avec la clé de déploiement du déploiement visé (qui
+donne de toute façon accès à toutes ses données) :
+
+```bash
+npx convex run machineKeys:createKeyByOperator '{"machineId": "<id>", "overlapMinutes": 1440}'
+npx convex run machineKeys:revokeKeyByOperator '{"keyId": "<id>"}'
+```
+
+La première imprime `{keyId, apiKey, prefix}` une fois, dans le terminal : ne
+pas la copier dans un ticket, un journal ou une capture. Le déploiement visé
+est celui de la clé chargée, et l'option `--prod` est ignorée dans ce dépôt
+([convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
+
+Au redéploiement de la production (ANH-82), la migration
+`moveMachineKeysToTable` déplace les clés existantes dans la table sans les
+changer ([convex.md](convex.md#migration-des-clés-machine-anh-165)) ; seules
+les machines dont la valeur est historique (réversible, refusée depuis
+ANH-121) ont besoin d'une nouvelle clé, créée de cette façon
+([convex.md](convex.md#migration-des-credentials-avec-anh-82--opération-à-réaliser)).
 
 ### 3.2 Jeton de la page de la console
 

@@ -147,7 +147,7 @@ un message d'accès refusé.
 | Patients `/fr/dashboard/patients` | Voit tous les patients ; **Nouveau patient** ; **Modifier**. | Voit ses patients ; **Nouveau patient** (rattaché à lui automatiquement) ; **Modifier**. | Pas dans le menu. |
 | Fiche patient `/fr/dashboard/patients/{id}` | **Modifier**, **Supprimer**, **Physiologie**, historique. | Idem pour ses patients. | Pas prévu. |
 | Machines `/fr/dashboard/machines` | Voit toutes les machines ; **Nouvelle machine** ; **Afficher les machines supprimées**. | Voit ses machines, sans création. | Pas dans le menu. Par l'adresse : liste vide. |
-| Détail machine `/fr/dashboard/machines/{id}` | Tout : **Lancer une séance auto**, **Modifier**, **Droits de lancement**, **Régénérer**, **Supprimer**, **Restaurer**. | Ses machines : idem sauf **Restaurer**. | Pas prévu (« Machine not found »). |
+| Détail machine `/fr/dashboard/machines/{id}` | Tout : **Lancer une séance auto**, **Modifier**, **Droits de lancement**, **Clés de la machine**, **Supprimer**, **Restaurer**. | Ses machines : idem sauf **Restaurer** et les **Clés de la machine**. | Pas prévu (« Machine not found »). |
 | Mes machines `/fr/dashboard/my-machines` | Toutes les machines ; **Lancer une séance auto**, **Détails**. | Ses machines ; idem. | Les machines où il a le droit ; **Lancer une séance auto** pour lui même. |
 | Sessions `/fr/dashboard/sessions` | Toutes les séances. | Séances de ses machines. | Ses séances. |
 | Séance en direct `/fr/dashboard/sessions/{id}/live` | Voit ; **Annuler la séance** / **Arrêter la séance**. | Séances de ses machines ; idem. | Ses séances ; idem. |
@@ -614,6 +614,8 @@ la machine envoie un signal de vie pendant que la fenêtre est ouverte.
 
 *Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : la carte Configuration y montre encore la fréquence, l'intervalle et les canaux.*
 
+*Captures antérieures à ANH-165 : la carte « Clés de la machine » n'y figure pas, et la zone de danger y montre encore « Régénérer la clé », retiré depuis.*
+
 **Adresse** : `/fr/dashboard/machines/{id}`. **Pour qui** : administrateur,
 gestionnaire de la machine. Sinon : « Machine introuvable » et lien
 **Retour**.
@@ -648,9 +650,14 @@ gestionnaire de la machine. Sinon : « Machine introuvable » et lien
 │ │ <Choisir un patient ▾>                               [ + Accorder ]│ │
 │ └───────────────────────────────────────────────────────────────────┘ │
 │ ┌───────────────────────────────────────────────────────────────────┐ │
+│ │ 🔑 Clés de la machine (administrateur)          [ + Nouvelle clé ] │ │
+│ │ anh1.3f9c01ab  (Active)                             [ Révoquer ]   │ │
+│ │ Créée le 1 oct. 2026 10:00 par Claire Petit                        │ │
+│ │ Dernière utilisation : 2 oct. 2026 09:41 · Sans expiration         │ │
+│ └───────────────────────────────────────────────────────────────────┘ │
+│ ┌───────────────────────────────────────────────────────────────────┐ │
 │ │ Zone de danger                                                     │ │
 │ │ Ces actions peuvent impacter le fonctionnement de la machine       │ │
-│ │ Régénérer la clé                                    [ ↻ Régénérer ]│ │
 │ │ Supprimer                                           [ 🗑 Supprimer ]│ │
 │ └───────────────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────────────┘
@@ -757,6 +764,30 @@ Visible par l'administrateur et le gestionnaire de la machine. Sous titre :
   **Retirer**.
 - Une erreur du serveur s'affiche dans un encadré rouge en haut de la carte.
 
+#### Carte « Clés de la machine »
+
+**Pour qui** : administrateur (Anheart, ou de l'organisation de la machine).
+Un gestionnaire ne la voit pas. Cachée pour une machine supprimée.
+
+La machine se présente au site avec une **clé** (`MACHINE_API_KEY` sur son
+Raspberry Pi). Elle peut en avoir plusieurs valides à la fois : c'est ce qui
+permet de la changer sans couper la machine. Chaque ligne montre :
+
+- le début de la clé (`anh1.` et 8 caractères ; jamais la clé entière) et son
+  état : **Active** ; **Remplacée, encore valide** (une nouvelle clé l'a
+  remplacée, elle fonctionne jusqu'à la fin du chevauchement) ; **Expirée** ;
+  **Révoquée** ;
+- « Créée le … par … » (sans nom pour une clé créée par l'équipe technique en
+  ligne de commande, ou reprise de l'ancien système) ;
+- « Dernière utilisation : … » (mise à jour au plus une fois par minute) ou
+  « Jamais utilisée », puis « Expire le … », « Expirée le … », « Révoquée le … »
+  ou « Sans expiration ».
+
+| Bouton | Effet |
+|---|---|
+| **Nouvelle clé** | Fenêtre « Nouvelle clé pour cette machine ». Choisir le **chevauchement avec les clés actuelles** : « 24 heures (recommandé) », « 1 heure », ou « Aucun : révoquer les clés actuelles tout de suite » ; et l'**expiration de la nouvelle clé** : « Jamais », « Dans 90 jours », « Dans un an ». **Créer la clé** : la clé s'affiche **une seule fois**, avec **Copier**. Pendant le chevauchement, l'ancienne et la nouvelle clé fonctionnent toutes les deux ; à la fin, l'ancienne est refusée. |
+| **Révoquer** (clé active ou remplacée) | Fenêtre « Révoquer la clé anh1.… ? » ; **Annuler** / **Révoquer**. La clé est refusée **dès la requête suivante**. Si c'est la seule clé valide, la fenêtre prévient que la machine restera coupée du site sans nouvelle clé. |
+
 <a id="carte-zone-de-danger"></a>
 
 #### Carte « Zone de danger »
@@ -765,7 +796,6 @@ Visible par l'administrateur et le gestionnaire de la machine. Sous titre :
 
 | Bouton | Effet |
 |---|---|
-| **Régénérer** (ligne « Régénérer la clé », « Générer une nouvelle clé API. L'ancienne clé cessera de fonctionner. ») | Fenêtre de confirmation (« La clé API actuelle sera invalidée immédiatement. La machine devra être reconfigurée avec la nouvelle clé. »), **Annuler** / **Confirmer**. Après **Confirmer**, la nouvelle clé s'affiche **une seule fois** comme à la création. **La machine cesse aussitôt de communiquer** jusqu'à ce que la nouvelle clé soit installée sur son Raspberry Pi. |
 | **Supprimer** (ligne « Désactiver cette machine. Peut être restaurée par un admin. ») | Grisé si la machine est **En session**. Fenêtre « Supprimer cette machine? », « Cette machine sera désactivée. Un administrateur pourra la restaurer ultérieurement si nécessaire. », **Annuler** / **Supprimer**. En cas de succès, retour à la liste des machines. |
 
 > **Refus de suppression.** Si le serveur refuse (séance en attente sur la
@@ -1697,8 +1727,8 @@ carte **Programmes** liste les programmes de la machine.
 - la machine reste **Hors ligne** : clé mal recopiée, adresse Convex fausse
   (elle finit par `.convex.site`, pas `.convex.cloud`), ou pas d'accès
   Internet ;
-- vous avez perdu la clé : [P16](#p16-régénérer-la-clé-supprimer-restaurer-une-machine),
-  **Régénérer**.
+- vous avez perdu la clé : [P16](#p16-changer-la-clé-supprimer-restaurer-une-machine),
+  **Nouvelle clé** (administrateur).
 
 ### P6. Attribuer des machines à un gestionnaire
 
@@ -1997,20 +2027,26 @@ Précautions :
   tant que patient, mais il obtient les droits d'un gestionnaire (sur **ses**
   machines, à attribuer).
 
-### P16. Régénérer la clé, supprimer, restaurer une machine
+### P16. Changer la clé, supprimer, restaurer une machine
 
-**Qui** : administrateur, ou gestionnaire de la machine (sauf **Restaurer** :
-administrateur).
+**Qui** : administrateur, ou gestionnaire de la machine (sauf **Restaurer** et
+la clé : administrateur).
 
-Régénérer la clé (clé perdue ou compromise) :
+Changer la clé sans couper la machine (rotation, clé perdue) :
 
-1. Détail de la machine → **Zone de danger** → **Régénérer** → **Confirmer**.
-2. Copiez la nouvelle clé (**Copier**), **Fermer**.
-3. Installez la sur le Raspberry Pi (`MACHINE_API_KEY`) et redémarrez sa
-   console.
+1. Détail de la machine → carte **Clés de la machine** → **Nouvelle clé**.
+2. Laissez « 24 heures (recommandé) », puis **Créer la clé**.
+3. Copiez la nouvelle clé (**Copier**), **Fermer** : elle ne s'affichera plus.
+4. Installez la sur le Raspberry Pi (`MACHINE_API_KEY`) et redémarrez sa
+   console, dans les 24 heures.
 
-**Ce que vous devez voir** : la machine repasse **En ligne** après
-l'installation. Entre les deux, elle est coupée du site.
+**Ce que vous devez voir** : la machine reste **En ligne** ; la nouvelle clé a
+une « Dernière utilisation » récente ; l'ancienne est « Remplacée, encore
+valide », puis « Révoquée » après 24 heures.
+
+Clé compromise : sur sa ligne, **Révoquer** → **Révoquer**. Elle est refusée
+tout de suite ; si c'était la seule clé valide, la machine est coupée du site
+jusqu'à ce qu'une nouvelle clé y soit installée.
 
 Supprimer :
 

@@ -51,11 +51,16 @@ describe("ANH-121 machine authentication", () => {
   it("does not store a reversible credential", async () => {
     // Given a newly created synthetic machine.
     const f = await machineFixture(modules);
-    // When reading its persisted record.
-    const stored = await f.t.run((ctx) => ctx.db.get(f.machineId));
+    // When reading its persisted records: the machine and its key (ANH-165).
+    const stored = await f.t.run(async (ctx) =>
+      JSON.stringify([
+        await ctx.db.get(f.machineId),
+        await ctx.db.query("machine_api_keys").collect(),
+      ]),
+    );
     // Then neither plaintext nor the reversible legacy encoding is stored.
-    expect(stored?.apiKey === f.apiKey).toBe(false);
-    expect(stored?.apiKey === btoa(f.apiKey).split("").reverse().join("")).toBe(
+    expect(stored.includes(f.apiKey)).toBe(false);
+    expect(stored.includes(btoa(f.apiKey).split("").reverse().join(""))).toBe(
       false,
     );
   });
@@ -120,12 +125,14 @@ describe("ANH-121 machine authentication", () => {
     expect(beats.map((beat) => beat.machineId)).toEqual([f.machineId]);
   });
 
-  it("rejects the previous key after regeneration", async () => {
-    // Given a machine whose key has been replaced through the real mutation.
+  it("rejects the previous key after a rotation without overlap", async () => {
+    // Given a machine whose key has been replaced through the real mutation,
+    // asked to revoke the previous key at once (ANH-165).
     const f = await machineFixture(modules);
-    const replacement = await f.admin.mutation(api.machines.regenerateApiKey, {
-      machineId: f.machineId,
-    });
+    const replacement = await f.admin.mutation(
+      api.machineKeys.createMachineKey,
+      { machineId: f.machineId, overlapMinutes: 0 },
+    );
     // When the old key reaches every registered authentication entry point.
     for (const [method, path] of machineRoutes) {
       const response = await f.t.fetch(path, {
@@ -140,8 +147,12 @@ describe("ANH-121 machine authentication", () => {
     ]) {
       expect(await f.t.query(query, { apiKey: f.apiKey })).toBeNull();
     }
-    // Then only the replacement key authenticates and retains the one-time response shape.
-    expect(Object.keys(replacement)).toEqual(["apiKey"]);
+    // Then only the replacement key authenticates, and the answer carries it with no other secret.
+    expect(Object.keys(replacement).sort()).toEqual([
+      "apiKey",
+      "keyId",
+      "prefix",
+    ]);
     const response = await f.t.fetch("/api/machine/heartbeat", {
       method: "POST",
       headers: machineHeaders(replacement.apiKey),
@@ -149,21 +160,25 @@ describe("ANH-121 machine authentication", () => {
     expect(response.status).toBe(200);
   });
 
-  it("returns credentials only in creation and regeneration responses, never in reads or logs", async () => {
-    // Given real creation and regeneration while observing application logging.
+  it("returns credentials only in creation and rotation responses, never in reads or logs", async () => {
+    // Given real creation and rotation while observing application logging.
     const logs = [
       vi.spyOn(console, "log"),
       vi.spyOn(console, "warn"),
       vi.spyOn(console, "error"),
     ];
     const f = await machineFixture(modules);
-    const replacement = await f.admin.mutation(api.machines.regenerateApiKey, {
-      machineId: f.machineId,
-    });
+    const replacement = await f.admin.mutation(
+      api.machineKeys.createMachineKey,
+      { machineId: f.machineId },
+    );
     // When all machine detail and list readers are queried.
     const reads = [
       await f.admin.query(api.machines.getMachine, { machineId: f.machineId }),
       await f.admin.query(api.machines.listMachines, {}),
+      await f.admin.query(api.machineKeys.listMachineKeys, {
+        machineId: f.machineId,
+      }),
       await f.t.query(internal.machines.getMachineByApiKey, {
         apiKey: replacement.apiKey,
       }),
@@ -171,7 +186,10 @@ describe("ANH-121 machine authentication", () => {
         apiKey: replacement.apiKey,
       }),
     ];
-    const persisted = await f.t.run((ctx) => ctx.db.get(f.machineId));
+    const persisted = await f.t.run(async (ctx) => [
+      await ctx.db.get(f.machineId),
+      await ctx.db.query("machine_api_keys").collect(),
+    ]);
     // Then neither the original nor replacement credential is available for redisplay or logging.
     for (const output of [
       reads,

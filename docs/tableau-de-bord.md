@@ -333,6 +333,7 @@ Recherche ; l'admin peut afficher les machines supprimées.
   affichée qu'une seule fois! ») avec un bouton Copier. Elle va dans la
   configuration de la machine (`MACHINE_API_KEY` dans `/etc/anheart/anheart.env`
   sur un Pi installé, dans `raspberry-pi/.env` sur un poste de développement).
+  C'est la première ligne de la carte **Clés de la machine**, sans expiration.
 
 ### Détail d'une machine : `/fr/dashboard/machines/{id}`
 
@@ -363,7 +364,8 @@ Admin et gestionnaire de la machine.
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». « Programmes auto désactivés sur cette machine » si le Pi le dit. | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
-| Zone de danger | **Régénérer la clé** (l'ancienne cesse de fonctionner ; la nouvelle s'affiche une fois) ; **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
+| **Clés de la machine** | Les clés de la machine, la plus récente en tête : préfixe, état, création et son auteur, dernière utilisation, expiration ; boutons **Nouvelle clé** et **Révoquer** (ci-dessous). Pas affichée pour une machine supprimée. | admin Anheart, admin de l'organisation (ANH-165) |
+| Zone de danger | **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
 
 **Modifier** (carte Configuration) enregistre les champs de la machine, dont
 le nom et le lieu, par `machines.updateMachine`, ouvert à l'admin et au
@@ -403,6 +405,45 @@ retirerait ses gestionnaires sans en mettre aucun. Elle affiche à la place
 gestionnaires actuels, qui pourront être changés ici une fois la migration
 multi-organisation passée. » Le nom et le lieu s'enregistrent comme pour toute
 machine.
+
+**Clés de la machine (ANH-165).** La machine se présente au tableau de bord
+avec une clé (`MACHINE_API_KEY` sur le Pi) ; elle peut en avoir plusieurs
+valides à la fois. Chaque ligne montre le préfixe de la clé (`anh1.` et
+8 caractères, jamais la clé), son état (« Active » ; « Remplacée, encore
+valide » pendant le chevauchement d'une rotation ; « Expirée » ;
+« Révoquée »), « Créée le {date} par {nom} » (sans nom pour une clé créée en
+ligne de commande ou reprise de l'ancien champ par la migration), « Dernière
+utilisation : {date} » ou « Jamais utilisée », et « Expire le », « Expirée
+le », « Révoquée le » ou « Sans expiration ». La dernière utilisation est
+écrite au plus une fois par minute : elle peut avoir jusqu'à une minute de
+retard. L'état est celui du serveur à la lecture ; une clé dont le
+chevauchement finit pendant que la page est ouverte passe « Révoquée » quand
+la tâche du serveur l'a révoquée, dans les 5 minutes, alors qu'elle est
+refusée à la machine à la fin du chevauchement ou peu après.
+
+- **Nouvelle clé** ouvre une fenêtre : le **chevauchement** avec les clés
+  actuelles (« 24 heures (recommandé) », par défaut ; « 1 heure » ; « Aucun :
+  révoquer les clés actuelles tout de suite ») et l'**expiration** de la
+  nouvelle clé (« Jamais », par défaut ; « Dans 90 jours » ; « Dans un an »).
+  **Créer la clé** affiche la clé **une seule fois**, avec **Copier** et
+  l'avertissement « Cette clé ne sera affichée qu'une seule fois! » ; fermer
+  la fenêtre la fait disparaître pour de bon. Pendant le chevauchement, les
+  anciennes clés et la nouvelle fonctionnent toutes : le temps d'installer la
+  nouvelle sur le Pi sans le couper. Un refus du serveur s'affiche en
+  notification et laisse la fenêtre ouverte, sans clé.
+- **Révoquer** (sur une clé active ou remplacée) demande une confirmation
+  « Révoquer la clé {préfixe} ? » : la clé n'ouvre plus rien dès la requête
+  suivante. Si c'est la seule clé valide de la machine, la fenêtre prévient
+  qu'elle restera coupée du tableau de bord sans nouvelle clé. Révoquer la clé
+  qui en a remplacé une autre ne prolonge pas celle-ci : elle expire à la fin
+  de son chevauchement.
+
+La procédure complète de rotation est dans
+[secrets.md, 3.1](secrets.md#31-clé-de-la-machine). Un gestionnaire ne
+voit pas la carte : le serveur lui refuse les clés, même de ses machines. La
+régénération immédiate d'avant ANH-165 (« Régénérer la clé », ouverte aussi au
+gestionnaire) n'existe plus ; une nouvelle clé avec le chevauchement « Aucun »
+fait la même chose.
 
 ### Mes machines : `/fr/dashboard/my-machines`
 

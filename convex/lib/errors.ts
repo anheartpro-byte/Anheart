@@ -104,6 +104,14 @@ export const DASHBOARD_ERRORS = {
   hr_max_changed_before_start:
     "End code: the rider's max heart rate is no longer the one the launch gave the machine.",
 
+  // Machine keys (ANH-165).
+  machine_key_not_found:
+    "The machine key does not exist, or belongs to a machine the caller does not administer.",
+  invalid_key_overlap:
+    "The overlap of a new machine key is not a whole number of minutes between 0 and 10080 (7 days).",
+  invalid_key_expiry:
+    "The lifetime of a new machine key is not a whole number of minutes between 60 (one hour) and 5256000 (ten years).",
+
   // Patient invitations.
   invalid_invitation: "The name or the e-mail address of the invitation is not valid.",
   invitation_unavailable:
