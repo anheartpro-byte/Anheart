@@ -1225,18 +1225,7 @@ class LocalPanel:
         """
         operator = command.operator
         rider = self._rider_for(command)
-        if self._recorder is not None:
-            # A refusal below may quote the programme's identifier, or the rider's
-            # age: the operator is shown both, and neither is written to disk.
-            # Nor is the rider's name, which no refusal quotes.
-            facts = rider.value if isinstance(rider, Ok) else None
-            age = None if facts is None else facts.age
-            label = None if facts is None else facts.label
-            self._recorder.withhold(
-                command.profile_id,
-                "" if age is None else rider_words(age),
-                "" if label is None else label,
-            )
+        self._withhold_programme_words(command.profile_id, rider)
         prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
             self._refuse_programme(command, prepared.error)
@@ -1311,10 +1300,32 @@ class LocalPanel:
             subject_age=launch.subject_age,
             cloud_session_id=launch.session_id,
         )
-        prepared = self._prepare_programme(command, self._rider_for(command))
+        rider = self._rider_for(command)
+        self._withhold_programme_words(command.profile_id, rider, launch.subject_label)
+        prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
             return Err(prepared.error)
         return Ok(None)
+
+    def _withhold_programme_words(
+        self,
+        profile_id: str,
+        rider: Result[RiderFacts, str],
+        remote_label: str | None = None,
+    ) -> None:
+        recorder = self._recorder
+        if recorder is None:
+            return
+        facts = rider.value if isinstance(rider, Ok) else None
+        age = None if facts is None else facts.age
+        label = (
+            remote_label if remote_label is not None else (None if facts is None else facts.label)
+        )
+        recorder.withhold(
+            profile_id,
+            "" if age is None else rider_words(age),
+            "" if label is None else label,
+        )
 
     def _admitted(self, rider: Result[RiderFacts, str]) -> Result[RiderFacts, str]:
         """Gate 1, before the machine is asked anything: the console is in service

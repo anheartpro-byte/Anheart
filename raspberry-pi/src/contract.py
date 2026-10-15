@@ -27,8 +27,9 @@ the launch expired, the rider's age or maximum heart rate changed, or the rider
 is in another session). The console asks for this confirmation before arming.
 It sends the wall-clock time of the request as ``startedAt`` and
 ``sessionAgeMs: 0``; the dashboard dates the start at confirmation while later
-measurements keep the machine's monotonic time axis. A 2xx is carried into the
-record cursor, so the armed session is not confirmed a second time
+measurements use that start plus monotonic age, shifted by Convex onto its time
+axis with one common offset. A 2xx is carried into the record cursor, so the
+armed session is not confirmed a second time
 (:mod:`src.record_uplink`). An older armed session without that pre-confirmation
 still uses the ordinary confirmation and refusal stop path.
 

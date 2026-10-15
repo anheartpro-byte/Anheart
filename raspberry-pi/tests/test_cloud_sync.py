@@ -115,6 +115,7 @@ LAUNCH: Final[Mapping[str, JsonValue]] = {
     "subjectHrMax": 170,
     "operatorName": "Dr Manager",
     "subjectAge": 30,
+    "subjectLabel": RIDER_NAME,
 }
 
 
@@ -868,15 +869,19 @@ async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path:
 
 @pytest.mark.parametrize("code", sorted(ARMING_REFUSALS))
 async def test_a_409_is_shown_logged_and_never_ended_or_retried(
-    tmp_path: Path, code: ErrorCode
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, code: ErrorCode
 ) -> None:
     r = rig(tmp_path, record_root=tmp_path / "records")
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
     assert r.journal is not None
     words = ARMING_REFUSAL_WORDS[code]
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     client = r.panel.hub.subscribe()
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
-    r.dashboard.answer(START, Err(Refused(409, "Declined", code)))
+    r.dashboard.answer(
+        START,
+        Err(Refused(409, f"Declined {PROFILE} passager de 30 ans {RIDER_NAME}", code)),
+    )
 
     await r.step()
 
@@ -896,6 +901,9 @@ async def test_a_409_is_shown_logged_and_never_ended_or_retried(
     logbook = (r.journal.root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
     assert words in logbook
     assert code in logbook
+    for private_word in (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"):
+        assert private_word not in logbook
+        assert private_word not in caplog.text
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
     await r.step(POLL_PERIOD)
     assert r.dashboard.to(START) == starts
@@ -986,6 +994,114 @@ async def test_an_unconfirmed_start_stays_unarmed_and_has_no_end(
     assert payload.event.detail
 
 
+@pytest.mark.parametrize(
+    ("launch", "private_words", "visible_words"),
+    [
+        pytest.param(
+            {**LAUNCH, "profileId": "private-program-71"},
+            ("private-program-71", "passager de 30 ans", RIDER_NAME, "Dr Manager"),
+            "programme 'private-program-71' inconnu",
+            id="unknown-program",
+        ),
+        pytest.param(
+            {**LAUNCH, "profileId": "private-program-72", "subjectAge": 10},
+            ("private-program-72", "passager de 10 ans", RIDER_NAME, "Dr Manager"),
+            "passager de 10 ans, minimum 18 ans",
+            id="too-young",
+        ),
+        pytest.param(
+            {**LAUNCH, "profileId": "private-program-73", "subjectLabel": ""},
+            ("private-program-73", "passager de 30 ans", "Dr Manager"),
+            "programme 'private-program-73' inconnu",
+            id="unknown-program-without-label",
+        ),
+    ],
+)
+async def test_a_local_preflight_refusal_keeps_private_words_off_disk_and_end(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    launch: Mapping[str, JsonValue],
+    private_words: tuple[str, ...],
+    visible_words: str,
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    client = r.panel.hub.subscribe()
+    r.dashboard.answer(POLL_PATH, launch_answer(launch))
+
+    await r.step()
+
+    assert r.dashboard.to(START) == []
+    assert r.panel.surface.pending is None
+    assert r.runtime.state is RuntimeState.IDLE
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    reason = ends[0]["reason"]
+    assert isinstance(reason, str)
+    payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
+    assert payload.event is not None
+    assert visible_words in payload.event.detail
+
+    r.journal.drain()
+    logbook = (r.journal.root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
+    for private_word in private_words:
+        assert private_word not in logbook
+        assert private_word not in caplog.text
+        assert private_word not in reason
+
+
+@pytest.mark.parametrize(
+    ("answer", "visible_words"),
+    [
+        pytest.param(
+            Held(f"{PROFILE}, passager de 30 ans, {RIDER_NAME}, Dr Manager"),
+            "confirmation indisponible",
+            id="held",
+        ),
+        pytest.param(RouteMissing(), "route training/start inconnue", id="route-missing"),
+    ],
+)
+async def test_held_and_missing_start_routes_do_not_log_launch_words(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: Answer,
+    visible_words: str,
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    caplog.set_level(logging.INFO, logger="src.cloud_sync")
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    client = r.panel.hub.subscribe()
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+
+    async def answer_confirmation(
+        _sync: CloudSync, _path: str, _body: Mapping[str, JsonValue]
+    ) -> Answer:
+        return answer
+
+    monkeypatch.setattr(CloudSync, "send", answer_confirmation)
+    await r.step()
+
+    assert r.panel.surface.pending is None
+    assert r.runtime.state is RuntimeState.IDLE
+    assert r.dashboard.to("/api/machine/training/end") == []
+    payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
+    assert payload.event is not None
+    assert visible_words in payload.event.detail
+    for private_word in (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"):
+        assert private_word not in payload.event.detail
+
+    r.journal.drain()
+    logbook = (r.journal.root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
+    for private_word in (PROFILE, "passager de 30 ans", RIDER_NAME, "Dr Manager"):
+        assert private_word not in logbook
+        assert private_word not in caplog.text
+
+
 async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> None:
     r = rig(tmp_path)
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
@@ -1044,7 +1160,7 @@ async def test_no_launch_or_a_malformed_one_submits_nothing(tmp_path: Path, answ
 async def test_a_blank_operator_and_odd_duration_are_tolerated(tmp_path: Path) -> None:
     r = rig(tmp_path)
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
-    odd = {**LAUNCH, "operatorName": "", "totalDurationS": True}
+    odd = {**LAUNCH, "operatorName": "", "subjectLabel": None, "totalDurationS": True}
     r.dashboard.answer("/api/machine/training/poll", launch_answer(odd))
     await r.step()
     pending = r.panel.surface.pending
@@ -1711,8 +1827,9 @@ async def test_occupied_riding_must_be_enabled_for_a_programme(tmp_path: Path) -
     assert "OCCUPANCY_OCCUPIED_ENABLED" in reason
 
 
-async def test_an_unknown_preset_is_refused(tmp_path: Path) -> None:
-    reason = await refused_launch(tmp_path, {**LAUNCH, "profileId": "jog_150"})
+@pytest.mark.parametrize("profile_id", ["jog_150", ""])
+async def test_an_unknown_preset_is_refused(tmp_path: Path, profile_id: str) -> None:
+    reason = await refused_launch(tmp_path, {**LAUNCH, "profileId": profile_id})
     assert "inconnu" in reason
 
 
@@ -1956,7 +2073,7 @@ async def test_a_launch_without_the_rider_s_age_is_refused(tmp_path: Path) -> No
 
 async def test_a_launch_for_a_child_is_refused(tmp_path: Path) -> None:
     reason = await refused_launch(tmp_path, {**LAUNCH, "subjectAge": 10})
-    assert "passager de 10 ans, minimum 18 ans" in reason
+    assert "passager, minimum 18 ans" in reason
 
 
 async def test_a_boolean_age_is_not_an_age(tmp_path: Path) -> None:

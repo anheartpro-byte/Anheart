@@ -1793,7 +1793,7 @@ refaite toutes les 15 s. Ni la séance en cours, ni celle qui vient de finir,
 ni le refus d'un lancement ne l'attendent ; les séances plus anciennes rangées
 derrière elle, si.
 
-Depuis ANH-241, un lancement reçu par le poll passe d'abord les contrôles de
+Depuis ANH-144, un lancement reçu par le poll passe d'abord les contrôles de
 la surface et du panneau, sans soumettre ni armer. La tâche du poll envoie
 ensuite `training/start` avec `startedAt` mural et `sessionAgeMs: 0`. Un 2xx
 autorise `submit_start`, qui rejoue les contrôles, puis l'armement rejoue les
@@ -1807,7 +1807,8 @@ armée et n'envoie pas de fin ; le poll suivant peut présenter le lancement.
 Limite suivie par ANH-240 : si Convex a pris le départ mais que son 2xx se perd,
 la console reste non armée. Si un `training/start` ultérieur reçoit
 `session_not_pending`, elle l'affiche sans armer ; Convex peut garder la séance
-active jusqu'à son interruption. L'idempotence de ce 2xx n'est pas dans ANH-241.
+active jusqu'à son interruption. L'idempotence de ce 2xx n'est pas dans ANH-144 ;
+point de suivi ANH-240.
 
 Le chemin ci-dessus ne change pas celui d'une séance déjà armée dont le départ
 n'avait pas été confirmé (compatibilité avec les anciennes consoles). Dans
@@ -1903,8 +1904,9 @@ suit ne change pas.
   dossier et les mesures : le temps écoulé sur l'horloge monotone. Pour le
   `training/start` pré-armement, il vaut intentionnellement 0 et `startedAt`
   est l'heure murale lue à l'instant de la demande. Le tableau de bord date
-  ainsi le départ à la confirmation, puis lit les points et événements sur
-  l'axe monotone de la machine ([convex.md, Deux horloges](convex.md#deux-horloges)).
+  ainsi le départ à la confirmation. Chaque point et événement est d'abord daté
+  depuis ce début par le temps monotone écoulé, puis Convex les décale tous du
+  même écart sur son axe serveur ([convex.md, Deux horloges](convex.md#deux-horloges)).
   Une console datée de 1970 ne fait apparaître aucune séance en 1970.
 
 Après un redémarrage **de la console seule** (le système n'a pas redémarré),
@@ -2737,7 +2739,7 @@ Ce que fait la console :
   clôt le lancement côté Convex ; la console affiche le code stable et ne
   poste pas de `/training/end`. Une réponse retenue ou une route inconnue ne
   permet pas non plus d'armer ; le poll peut présenter le lancement de nouveau.
-  Après un 2xx, le Pi soumet et réarme à travers ses contrôles locaux, puis
+  Après un 2xx, le Pi soumet et arme à travers ses contrôles locaux, puis
   marque le curseur déjà confirmé ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)).
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche

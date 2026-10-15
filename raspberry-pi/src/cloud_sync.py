@@ -575,7 +575,8 @@ def _remote_start_refusal(refused: Refusal) -> str:
     code = refused.code
     if refused.status == HTTPStatus.CONFLICT and code is not None and code in ARMING_REFUSALS:
         return f"{ARMING_REFUSAL_WORDS[code]} ({code})"
-    return f"depart distant refuse : {bounded(refused.detail)}"
+    named_code = "" if code is None else f", {code}"
+    return f"depart distant refuse (HTTP {refused.status}{named_code})"
 
 
 # =========================================================================
@@ -1159,7 +1160,7 @@ class CloudSync:
             return
         admitted = self._preflight_remote_start(launch)
         if isinstance(admitted, Err):
-            self._refuse_local_launch(launch.session_id, admitted.error)
+            self._refuse_local_launch(launch, admitted.error)
             return
 
         await self._confirm_remote_start(launch, now)
@@ -1192,9 +1193,9 @@ class CloudSync:
                 self._surface.note_remote_refusal(sentence)
                 _logger.warning("dashboard launch %s refused: %s", launch.session_id, sentence)
             case Held():
-                sentence = f"depart distant non confirme : {answer.detail}"
+                sentence = "depart distant non confirme : confirmation indisponible"
                 self._surface.note_remote_refusal(sentence)
-                _logger.warning("dashboard launch %s held: %s", launch.session_id, answer.detail)
+                _logger.warning("dashboard launch %s held", launch.session_id)
             case RouteMissing():
                 sentence = "route training/start inconnue"
                 self._surface.note_remote_refusal(sentence)
@@ -1213,16 +1214,16 @@ class CloudSync:
             cloud_session_id=launch.session_id,
         )
         if isinstance(submitted, Err):
-            self._refuse_local_launch(launch.session_id, describe_surface_refusal(submitted.error))
+            self._refuse_local_launch(launch, describe_surface_refusal(submitted.error))
             return
         self._confirmed_launch_id = launch.session_id
         _logger.info("dashboard launch %s submitted", launch.session_id)
         self._awaiting = _Awaiting(launch.session_id, now)
 
-    def _refuse_local_launch(self, session_id: str, detail: str) -> None:
-        self._refused_launch = session_id
+    def _refuse_local_launch(self, launch: Launch, detail: str) -> None:
+        self._refused_launch = launch.session_id
         self._surface.note_remote_refusal(detail)
-        self._owe_refusal(session_id, detail)
+        self._owe_refusal(launch.session_id, _safe_launch_refusal(launch, detail))
 
     def _refuse_server(self, sentence: str, launch: Launch | None) -> None:
         """The dashboard is of another contract: say so on the console, and fail its launch.
@@ -1373,10 +1374,9 @@ class CloudSync:
         if refused != self._last_refused:
             self._last_refused = refused
             _logger.warning(
-                "dashboard refused a request: %s (HTTP %d): %s",
+                "dashboard refused a request: %s (HTTP %d)",
                 "sans code" if refused.code is None else refused.code,
                 refused.status,
-                logged_words(refused.detail),
             )
         if refused.code == CONTRACT_UNSUPPORTED:
             self._refuse_server(unsupported_refusal(refused.supported), None)
@@ -1399,6 +1399,7 @@ class Launch:
     operator: str
     subject_age: int | None
     """From the rider's birth year on the dashboard; ``None`` if unknown (the panel refuses)."""
+    subject_label: str | None
 
 
 def _launch_of(document: Document) -> Launch | None:
@@ -1414,6 +1415,7 @@ def _launch_of(document: Document) -> Launch | None:
     operator = session.get("operatorName")
     total = session.get("totalDurationS")
     age = session.get("subjectAge")
+    label = session.get("subjectLabel")
     if (
         not isinstance(session_id, str)
         or not isinstance(profile_id, str)
@@ -1437,7 +1439,21 @@ def _launch_of(document: Document) -> Launch | None:
         subject_hr_max=Bpm(round(hr_max)),
         operator=operator or DASHBOARD_OPERATOR,
         subject_age=age if isinstance(age, int) and not isinstance(age, bool) else None,
+        subject_label=label if isinstance(label, str) else None,
     )
+
+
+def _safe_launch_refusal(launch: Launch, detail: str) -> str:
+    safe = detail
+    if launch.profile_id:
+        safe = safe.replace(launch.profile_id, "programme")
+    age = launch.subject_age
+    if age is not None:
+        safe = safe.replace(f"passager de {age} ans", "passager")
+    label = launch.subject_label
+    if label:
+        safe = safe.replace(label, "passager")
+    return safe.replace(launch.operator, "operateur")
 
 
 def _due(last: Monotonic | None, now: Monotonic, period: Seconds) -> bool:
