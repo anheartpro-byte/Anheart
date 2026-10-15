@@ -41,7 +41,13 @@ from src.cloud_sync import (
     answer_of,
     retry_after_of,
 )
-from src.contract import PAYLOAD_TOO_LARGE, RATE_LIMITED, ErrorCode, SoftwareVersion
+from src.contract import (
+    CONTRACT_VERSION,
+    PAYLOAD_TOO_LARGE,
+    RATE_LIMITED,
+    ErrorCode,
+    SoftwareVersion,
+)
 from src.health import HealthContext, HealthWatch
 from src.local_panel import CLOUD_PERIOD, build_panel
 from src.record.deposit import FILES_PER_STEP
@@ -173,7 +179,7 @@ async def test_a_route_is_not_asked_again_before_the_wait_is_over(
 
     time.advance(Seconds(0.1))
     del dashboard.handlers[HEARTBEAT]
-    assert await paced.post(HEARTBEAT, {}) == ok({"server_contract_version": "1.4"})
+    assert await paced.post(HEARTBEAT, {}) == ok({"server_contract_version": CONTRACT_VERSION})
     assert len(dashboard.to(HEARTBEAT)) == 2
 
 
