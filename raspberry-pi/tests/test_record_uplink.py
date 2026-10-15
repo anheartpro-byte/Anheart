@@ -1573,8 +1573,7 @@ async def test_a_session_the_dashboard_cannot_be_told_of_does_not_stop_launches_
     await b.step()
 
     assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["k17pending"]
-    assert "could not be delivered and is given up" not in caplog.text
-    assert b.uplink.owed == 1
+    assert "could not be delivered and is given up" in caplog.text
     assert not b.refusal_owed()
 
 

@@ -726,7 +726,10 @@ class RecordUplink:
                 self._owed_queue = (*self._owed_queue, owed)
                 return
             if waiting.record is None:
-                self._owed_queue = (*self._owed_queue, waiting)
+                _logger.warning(
+                    "dashboard: the end of %s could not be delivered and is given up",
+                    waiting.cursor.session_id or waiting.local_ref,
+                )
             else:
                 self._queue(waiting.record.name)
         self._catching = owed

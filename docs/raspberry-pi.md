@@ -2195,10 +2195,12 @@ lequel la même requête serait encore refusée.
 - Face à un Convex antérieur au contrat 1.1 : les événements restent dus, un
   lot renvoyé peut être stocké deux fois, et la séance est datée par la
   console ([deploiement.md](deploiement.md#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)).
-- Une fin sans enregistrement (un lancement refusé, ou une séance sans
-  enregistrement) n'a qu'une place en mémoire : si une seconde arrive avant
-  que la première soit partie, la plus ancienne est abandonnée, et le journal
-  le dit.
+- La fin d'un lancement refusé n'est jamais abandonnée : elle passe en tête,
+  et une séance qui arrive attend derrière. Une fin de séance pas encore liée
+  à son enregistrement, déplacée par celle d'un lancement refusé, est abandonnée
+  en mémoire avec un avertissement ; son enregistrement reste sur le disque.
+  Cas connu : une séance locale démarrée et finie pendant les quelques secondes
+  d'une demande `training/start`, point de suivi hors de cette livraison.
 
 Vérifié par les tests automatiques, en simulation et en temps simulé
 (`tests/test_record_cursor.py`, `test_record_upload.py`,
