@@ -41,6 +41,7 @@ const workflow = (file) =>
     .join("\n");
 
 const GUARD = "Refuser toute autre branche";
+const KNOWN_PROJECT = "Refuser un projet inconnu";
 const CONFIRM = "Exiger la confirmation saisie";
 const AGREE = "Exiger l'accord sur les données de production";
 const REMIND = "Rappeler les règles de ce bouton";
@@ -66,7 +67,7 @@ const BUTTONS = [
     // The button, and the release pipeline (release.yml), which calls these jobs after Convex.
     starts: ["workflow_dispatch", "workflow_call"],
     inputs: ["project", "confirmation"],
-    request: [GUARD, CONFIRM, REMIND],
+    request: [GUARD, KNOWN_PROJECT, CONFIRM, REMIND],
     pull: "pull --yes --environment=production",
     build: "build --prod",
     site: "deploy --prebuilt --archive=tgz --prod",
@@ -272,6 +273,30 @@ test("the production button can be called by the release pipeline alone, with it
     assert.doesNotMatch(workflow(file), /uses: \.\/\.github\/workflows\/deploy-/, file);
   }
   assert.doesNotMatch(release, /deploy-preview\.yml/);
+});
+
+test("S-5 (e) production accepts only its three exact project choices and refuses untrusted values without a workflow command injection", () => {
+  const request = jobsOf(PRODUCTION.text).get("request") ?? "";
+  assert.deepEqual(stepsOf(request).map(labelOf).slice(0, 2), [GUARD, KNOWN_PROJECT]);
+  const step = stepNamed(request, KNOWN_PROJECT);
+  assert.deepEqual(block(step, "        env"), ["PROJECT: ${{ inputs.project }}"]);
+  assert.doesNotMatch(step, /^ {8}if:/m);
+  const guard = script(request, KNOWN_PROJECT);
+  for (const project of CHOICES) {
+    const accepted = run(guard, { PROJECT: project });
+    assert.equal(accepted.status, 0, accepted.said);
+    assert.doesNotMatch(accepted.said, /^::/m);
+    assert.deepEqual(accepted.calls, []);
+  }
+  const message = "::error title=Projet inconnu::Rien n'a été déployé. Choisir exactement site, simulation ou site et simulation dans le champ project.";
+  for (const project of ["Site", "", "site,simulation", "site et simulation ", "tout", "untrusted\n::error::x"]) {
+    const refused = run(guard, { PROJECT: project });
+    assert.equal(refused.status, 1, `${JSON.stringify(project)} was accepted`);
+    assert.equal(refused.said, `${message}\n`);
+    assert.deepEqual(refused.said.split("\n").filter((line) => line.startsWith("::")), [message]);
+    assert.equal(refused.summary + refused.output, "");
+    assert.deepEqual(refused.calls, []);
+  }
 });
 
 test("S-5 (d) only a true from_release call replaces the manual gate reminder with the successful release stages", () => {
@@ -657,7 +682,7 @@ test("the secrets are read by name through env, the token by the steps that call
     for (const line of text.split("\n").filter((written) => written.includes("${{"))) {
       assert.match(
         line,
-        /^run-name: '[^$']* \(\$\{\{ inputs\.project \}\}\) : [^$']*'$|^ {4}if: \$\{\{ inputs\.project == '[a-z ]+' \|\| inputs\.project == '[a-z ]+' \}\}$|^ {6}url: \$\{\{ steps\.deploy\.outputs\.url \}\}$|^ {6,10}[A-Z_]+: \$\{\{ (secrets\.[A-Z_]+|github\.ref|inputs\.(project|confirmation|production_data)|steps\.deploy\.outputs\.url) \}\}$/,
+        /^run-name: '[^$']* \(\$\{\{ inputs\.project \}\}\) : [^$']*'$|^ {4}if: \$\{\{ inputs\.project == '[a-z ]+' \|\| inputs\.project == '[a-z ]+' \}\}$|^ {6}url: \$\{\{ steps\.deploy\.outputs\.url \}\}$|^ {6,10}[A-Z_]+: \$\{\{ (secrets\.[A-Z_]+|github\.ref|inputs\.(project|confirmation|production_data|from_release)|steps\.deploy\.outputs\.url) \}\}$/,
         `${file}: ${line.trim()}`,
       );
     }

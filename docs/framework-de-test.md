@@ -2431,6 +2431,11 @@ n'appelle Vercel. Il vérifie :
   S-5 (c) vérifie l'accord entre cette description et l'appel ;
 * que la garde de branche est la première étape, qu'elle accepte la branche du
   bouton et refuse les autres références (autre branche, tag du même nom, PR) ;
+* que la production refuse un projet inconnu juste après la garde de branche :
+  seules les valeurs exactes `site`, `simulation`, `site et simulation` passent.
+  Le test S-5 (e) refuse aussi la casse différente, la valeur vide, la virgule,
+  l'espace final et une valeur contenant un saut de ligne suivi de `::error::x`,
+  sans recopier la valeur reçue dans une commande de workflow ;
 * que la production exige le mot `production` exact, et que son formulaire, le
   nom de son exécution et le haut de sa page disent ce qu'elle ne vérifie pas ;
 * que `from_release` est un booléen facultatif de l'appel seulement, faux par

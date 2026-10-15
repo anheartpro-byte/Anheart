@@ -105,6 +105,19 @@ jobs:
             exit 1
           fi
           echo "Branche acceptée : $DEPLOY_BRANCH"
+      - name: Refuser un projet inconnu
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: |
+          case "$PROJECT" in
+            site | simulation | "site et simulation")
+              echo "Projet accepté."
+              ;;
+            *)
+              echo "::error title=Projet inconnu::Rien n'a été déployé. Choisir exactement site, simulation ou site et simulation dans le champ project."
+              exit 1
+              ;;
+          esac
       - name: Exiger la confirmation saisie
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
