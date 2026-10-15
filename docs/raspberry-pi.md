@@ -1661,25 +1661,32 @@ Règles :
   `subject_id` dans le roster tenu à cet instant, le programme, le lanceur et
   un bouton unique de confirmation opérateur. `subjectLabel` reçu du poll ne
   sert qu'à retenir ce libellé en mémoire lors de la formulation d'un refus;
-  le nom affiché vient du roster. Si le roster tenu ne contient pas le
-  passager, la page indique la raison et la confirmation est refusée. Ce choix
-  conservateur du côté sûr doit être signalé au chef de projet.
+  le nom affiché vient du roster. Le bouton local de démarrage est masqué tant
+  que l'offre est affichée. Si le roster tenu ne contient pas le passager, la
+  page indique la raison et la confirmation est refusée sans fin due; après
+  récupération, un nouveau clic est nécessaire. Ce choix conservateur du côté
+  sûr doit être signalé au chef de projet.
 * Le bouton de confirmation de la page n'envoie aucun appel réseau lui-même :
   il enregistre l'accord dans CloudSync. La tâche CloudSync revérifie le
   passager dans le roster tenu, applique les contrôles locaux et ceux du
   panneau, puis envoie `training/start`. Seulement après un 2xx elle soumet
-  le départ à la boîte de la machine; le Pi rejoue ses contrôles avant
-  l'armement. Sans confirmation, aucun `training/start` ni armement. La
+  le départ à la boîte de la machine; le Pi rejoue ses contrôles et revérifie
+  le passager au moment de l'armement, en gardant l'âge et la FC max du
+  lancement. Une absence du roster après le 2xx envoie une fin échouée.
+  Sans confirmation, aucun `training/start` ni armement. La
   confirmation est un événement `operator_action` attribué à l'alias de
   l'opérateur : au repos il va au journal de bord, et l'enregistrement armé
   porte aussi `launch_confirmed` avec cet alias. Le nom du passager n'est pas
   écrit dans l'enregistrement ou un journal et n'est pas envoyé dans la
   déclaration de séance distante; il ne sort vers la page que dans la réponse
   JSON de la route locale.
-* Après un refus 409 ou une demande sans réponse, la console n'arme pas,
-  n'envoie pas `training/end` et ne redemande rien automatiquement. Une
-  nouvelle demande exige un nouveau clic de confirmation tant que le poll
-  offre encore ce lancement. Convex retire l'offre 45 s avant son échéance;
+* Après un refus du tableau de bord, la console n'arme pas et n'envoie pas
+  `training/end`; ce lancement ne peut plus être confirmé. Une demande sans
+  réponse ou un empechement temporaire garde le lancement récupérable, sans
+  armement ni fin : un nouveau clic explicite est possible après récupération,
+  tant que le poll offre encore ce lancement. Un refus local avant la demande
+  ou après le 2xx envoie une fin échouée et est définitif. Aucun essai n'est
+  automatique. Convex retire l'offre 45 s avant son échéance;
   la console n'ajoute pas de délai de confirmation. Le libellé visible est
   `depart distant refuse (HTTP <n>, <code>)` (ou `depart distant refuse
   (HTTP <n>)` sans code); un 409 `arming_refusals` affiche son message stable.
@@ -1829,16 +1836,18 @@ l'enregistrement armé, le même alias est écrit dans un événement
 journal de bord ou les journaux du processus; le nom affiché sort vers la page
 uniquement dans la réponse JSON locale.
 
-CloudSync traite ensuite l'accord : pré-vérification locale, puis
+CloudSync traite ensuite l'accord : pré-vérification locale et contrôle du
+roster, puis
 `training/start` avec `startedAt` mural et `sessionAgeMs: 0`. Un 2xx seul
 autorise `submit_start`, qui rejoue les contrôles; l'armement rejoue les portes
-du panneau. Le curseur de la séance est marqué confirmé, pour que l'envoi de
+du panneau et revérifie le roster. Le curseur de la séance est marqué confirmé, pour que l'envoi de
 séance ne poste pas `training/start` une seconde fois. Sans confirmation, il
-n'y a ni demande réseau ni armement. Un refus local avant la demande est écrit
-comme une fin échouée; après une réponse 409 ou sans réponse, la console reste
-non armée et n'envoie aucun `training/end`. Ces deux derniers états ne
-redemandent jamais automatiquement le lancement; seul un nouveau clic explicite
-peut refaire une demande si le poll propose toujours la séance.
+n'y a ni demande réseau ni armement. Un refus local avant la demande ou au
+moment de l'armement est écrit comme une fin échouée et rend ce lancement
+définitif. Un refus du tableau de bord n'envoie pas `training/end` et ne peut
+plus être confirmé. Une absence de réponse ou un empechement temporaire ne
+demande pas de fin; après récupération, seul un nouveau clic explicite peut
+refaire une demande si le poll propose toujours la séance.
 
 Les phrases de refus sont celles réellement produites : un autre refus dit
 `depart distant refuse (HTTP <n>, <code>)` (ou sans code), un lien retenu dit

@@ -60,7 +60,7 @@ from src.presence.monitor import (
     RampDown,
     StartBlocked,
 )
-from src.remote_launch import RemoteLaunchView
+from src.remote_launch import LaunchStage, RemoteLaunchView
 from src.result import Ok
 from src.roster import (
     Rider,
@@ -186,7 +186,8 @@ class RemoteLaunchRow:
             state=view.stage.value,
             reason=view.reason,
             can_confirm=(
-                view.passenger_name is not None and view.stage.value != "request_in_progress"
+                view.passenger_name is not None
+                and view.stage in (LaunchStage.WAITING_CONFIRMATION, LaunchStage.UNCONFIRMED)
             ),
         )
 

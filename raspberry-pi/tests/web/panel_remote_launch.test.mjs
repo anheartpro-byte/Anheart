@@ -97,15 +97,29 @@ test("requesting, refused, and unconfirmed states show their reason", () => {
   assert.equal(node("remote-launch-state").textContent, "demande en cours");
   assert.equal(node("remote-launch-confirm").disabled, true);
 
-  context.renderRemoteLaunch(offer({ state: "refused", reason: "depart distant refuse (HTTP 409)" }));
+  context.renderRemoteLaunch(offer({
+    state: "refused",
+    reason: "depart distant refuse (HTTP 409)",
+    can_confirm: false,
+  }));
   assert.equal(node("remote-launch-status").textContent, "refuse : depart distant refuse (HTTP 409)");
-  assert.equal(node("remote-launch-confirm").disabled, false);
+  assert.equal(node("remote-launch-confirm").disabled, true);
 
-  context.renderRemoteLaunch(offer({ state: "unconfirmed", reason: "confirmation indisponible" }));
+  context.renderRemoteLaunch(offer({
+    state: "unconfirmed",
+    reason: "confirmation indisponible",
+    can_confirm: true,
+  }));
   assert.equal(
     node("remote-launch-status").textContent,
     "non confirme faute de reponse : confirmation indisponible",
   );
+  assert.equal(node("remote-launch-confirm").disabled, false);
+});
+
+test("the initial remote launch status uses a plain hyphen", () => {
+  const { node } = page();
+  assert.equal(node("remote-launch-state").textContent, "-");
 });
 
 test("an absent roster passenger is explained and cannot be confirmed", () => {

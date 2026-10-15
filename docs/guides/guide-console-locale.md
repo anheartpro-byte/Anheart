@@ -858,12 +858,17 @@ affiché. Si ce passager ne figure pas dans la liste tenue, la carte donne la ra
 désactive le bouton.
 
 Saisissez votre nom dans le champ **Operateur** habituel puis cliquez une fois sur
-**Cette personne est a bord et prete**. La carte indique `en attente de confirmation`,
+**Cette personne est a bord et prete**. Le bouton local **Demarrer la seance** est
+masqué tant qu'une offre est affichée. La carte indique `en attente de confirmation`,
 puis `demande en cours`; après un refus elle indique `refuse : <raison>`, ou
 `non confirme faute de reponse : <raison>` sans réponse. Quand la séance démarre, la
 carte d'offre disparaît. Sans 2xx de `training/start`, la machine ne reçoit aucun
-démarrage. Après un refus ou une absence de réponse, elle ne réessaie pas toute seule;
-un nouvel essai demande un nouveau clic, si l'offre est encore présente.
+démarrage. Un refus du tableau de bord ou un refus local avant ou après le 2xx est
+définitif : ce lancement ne peut plus être confirmé. Les refus du tableau de bord et
+les demandes sans réponse n'envoient pas `training/end`; un refus local envoie une fin
+échouée. Après une absence de réponse ou un empechement temporaire (passager absent,
+séance déjà en cours au traitement), un nouvel essai exige un nouveau clic après
+récupération, si le poll propose encore l'offre. Elle ne réessaie jamais toute seule.
 
 Le bouton constitue la confirmation opérateur prévue par ANH-144. Il n'applique pas
 le geste physique ni le délai qu'ANH-85 doit apporter. La console utilise le nom

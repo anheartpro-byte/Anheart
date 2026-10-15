@@ -1306,17 +1306,26 @@ tient alors. `subject_label` envoyé par le tableau de bord ne sert pas à l'aff
 Le nom passe uniquement dans la réponse JSON de `GET /api/remote-launch` vers la page;
 il n'est écrit ni dans l'enregistrement, ni dans `logbook/`, ni dans les journaux du
 processus. Si la liste tenue ne contient pas ce passager, la carte montre
-`indisponible` avec la raison et le bouton reste désactivé. La confirmation revérifie
-la même liste tenue; si le passager en manque, elle est refusée avec cette raison.
+`indisponible` avec la raison et le bouton reste désactivé. La route de confirmation
+et l'etape CloudSync revérifient cette liste avant `training/start`; le panneau la
+revérifie encore au moment d'armer. L'absence avant la demande garde l'offre
+récupérable, sans `training/start` ni `training/end`; après le retour du passager,
+un nouveau clic est nécessaire. L'absence après un 2xx refuse l'armement et envoie
+une fin échouée. L'âge et la FC max restent ceux du lancement reçu.
 
 L'opérateur renseigne le champ **Operateur** déjà présent dans la carte Programme,
 puis fait un seul geste sur **Cette personne est a bord et prete**. Le bouton envoie
 la confirmation locale; la tâche CloudSync exécute ensuite le contrôle local,
 `training/start`, puis soumet le départ à la boîte de la machine seulement après un
-2xx. L'état indique `en attente de confirmation`, `demande en cours`, `refuse : <raison>`
-ou `non confirme faute de reponse : <raison>`. Après refus ou absence de réponse,
-aucune fin distante n'est envoyée et le lancement n'est pas redemandé; un nouvel essai
-requiert un nouveau clic de l'opérateur tant que le poll le propose encore.
+2xx. Le bouton **Demarrer la seance** reste masqué tant qu'une offre est affichée.
+L'état indique `en attente de confirmation`, `demande en cours`, `refuse : <raison>`
+ou `non confirme faute de reponse : <raison>`. Un refus du tableau de bord, un refus
+local avant la demande ou un refus local après le 2xx est définitif pour ce lancement;
+il ne peut plus être confirmé. Les refus du tableau de bord et les demandes sans
+réponse n'envoient pas `training/end`; un refus local envoie une fin échouée. Après
+une absence de réponse ou un empechement temporaire (passager absent, séance déjà en
+cours au traitement), un nouveau clic est possible seulement après récupération et
+tant que le poll propose l'offre. Aucun essai n'est automatique.
 
 Cette confirmation Pi est le bouton qui sera garanti par le geste physique d'ANH-85;
 elle ne réalise pas ce geste et n'ajoute pas son délai. L'opérateur est le nom que la
@@ -1988,13 +1997,16 @@ fréquence cardiaque ne concernent qu'une séance manuelle « personne à bord �
 page ne propose pas (section 6).
 
 Lien avec le tableau de bord (`dashboard`). Une offre distante reste sur Seance
-jusqu'au prochain poll qui ne la propose plus ou jusqu'au démarrage. La confirmation
+jusqu'au prochain poll qui ne la propose plus ou jusqu'au démarrage. Le bouton local
+**Demarrer la seance** est masqué tant que l'offre est affichée. La confirmation
 est un événement opérateur attribué par alias; hors séance il va au
 `logbook/events.jsonl`, et l'enregistrement armé porte aussi `launch_confirmed` avec
-l'alias du confirmateur. Une réponse 409 ou une demande sans réponse ne soumet pas le
-démarrage à la machine et n'envoie pas `training/end`. Le bouton permet un nouvel essai
-seulement après une nouvelle confirmation explicite si le poll propose encore cette
-offre.
+l'alias du confirmateur. Un refus du tableau de bord ou une demande sans réponse ne
+soumet pas le démarrage à la machine et n'envoie pas `training/end`. Un refus local
+avant la demande ou après le 2xx envoie une fin échouée; ce lancement est alors
+définitif et le bouton reste désactivé. Après une absence de réponse ou un empechement
+temporaire, un nouvel essai exige une nouvelle confirmation explicite après
+récupération, tant que le poll propose encore cette offre.
 
 | Message | Sens |
 |---|---|

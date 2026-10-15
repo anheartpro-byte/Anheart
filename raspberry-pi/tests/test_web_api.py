@@ -551,6 +551,26 @@ async def test_remote_launch_reads_and_confirmation_use_the_authenticated_operat
     assert "Roster Name" not in payload.event.detail
 
 
+def test_remote_launch_confirmation_follows_typed_offer_stages() -> None:
+    def can_confirm(stage: LaunchStage) -> bool:
+        view = RemoteLaunchView(
+            session_id="remote-session",
+            profile_id=PROFILE_ID,
+            program_name="30 min",
+            launched_by="Dr Manager",
+            passenger_name="Roster Name",
+            passenger_reason=None,
+            stage=stage,
+            reason=None,
+        )
+        return RemoteLaunchRow.of(view).can_confirm
+
+    assert can_confirm(LaunchStage.WAITING_CONFIRMATION)
+    assert can_confirm(LaunchStage.UNCONFIRMED)
+    assert not can_confirm(LaunchStage.REQUESTING)
+    assert not can_confirm(LaunchStage.REFUSED)
+
+
 async def test_a_start_is_refused_until_the_estop_wiring_is_attested(
     client: httpx.AsyncClient,
 ) -> None:
