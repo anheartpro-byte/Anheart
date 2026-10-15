@@ -2433,9 +2433,10 @@ n'appelle Vercel. Il vérifie :
   bouton et refuse les autres références (autre branche, tag du même nom, PR) ;
 * que la production refuse un projet inconnu juste après la garde de branche :
   seules les valeurs exactes `site`, `simulation`, `site et simulation` passent.
-  Le test de la garde de projet refuse aussi la casse différente, la valeur vide, la virgule,
-  l'espace final et une valeur contenant un saut de ligne suivi de `::error::x`,
-  sans recopier la valeur reçue dans une commande de workflow ;
+  Le test de la garde de projet refuse aussi la casse différente, la valeur
+  vide, la virgule, l'espace final et une valeur contenant un saut de ligne
+  suivi de `::error::x`, sans recopier la valeur reçue dans une commande de
+  workflow ;
 * que la production exige le mot `production` exact, et que son formulaire, le
   nom de son exécution et le haut de sa page disent ce qu'elle ne vérifie pas ;
 * que `from_release` est un booléen facultatif de l'appel seulement, faux par
@@ -2510,10 +2511,13 @@ Deux tests tiennent les deux groupes de concurrence
 ([ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a)) :
 `scripts/ci/ci-workflow.test.mjs` vérifie que la CI appelée par la release ne
 partage pas le groupe de la CI du push ou de la nuit sur `main`, et que seules
-les PR sont annulées ; `scripts/ci/analysis-workflows.test.mjs` vérifie que
-CodeQL partage `codeql-<sha>` avec l'analyse du push du même commit. L'appel
-CodeQL attend ; une troisième analyse de ce commit peut remplacer l'unique
-exécution en attente et faire échouer l'étape 2 avant les tags.
+les PR sont annulées. Il vérifie aussi que deux exécutions d'une même PR, ou
+deux push de `main`, partagent un groupe ;
+`scripts/ci/analysis-workflows.test.mjs` vérifie que CodeQL partage
+`codeql-<sha>` avec l'analyse du push du même commit. L'appel CodeQL attend ;
+une troisième analyse de ce commit peut remplacer l'unique exécution en
+attente et faire échouer l'étape 2 avant les tags. L'évaluateur refuse toute
+forme qu'il ne connaît pas, même derrière un `||` déjà vrai.
 
 **Tests.** `scripts/ci/release-workflow.test.mjs` est lancé par le job `docs` à
 chaque exécution. Il lit le workflow comme du texte et **exécute les scripts de
@@ -2533,11 +2537,11 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
 * qu'une release réelle exige un relecteur requis, aucun contournement
   administrateur, « Selected branches and tags » et exactement la seule
   branche `main` de type `branch` (`total_count: 1`) ; à blanc, les mêmes
-  défauts donnent un avertissement. Le test des protections de production passe par le vrai `jq` :
-  réglages conformes, contournement permis, branches protégées, `main` et
-  `develop`, tag `main`, motif `release/*`, liste vide, illisible ou incohérente,
-  environnement sans règle de branche. La liste n'est lue que si les règles
-  personnalisées sont activées ;
+  défauts donnent un avertissement. Le test des protections de production
+  passe par le vrai `jq` : réglages conformes, contournement permis, branches
+  protégées, `main` et `develop`, tag `main`, motif `release/*`, liste vide,
+  illisible ou incohérente, environnement sans règle de branche. La liste
+  n'est lue que si les règles personnalisées sont activées ;
 * **l'ordre des étapes**, par leurs `needs` : chaque étape ne peut démarrer
   qu'après la précédente, aucune fonction d'état (`always()`, `!cancelled()`…)
   ni `continue-on-error` ne lève cette règle, et deux releases ne tournent
@@ -2585,15 +2589,15 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
   [section 1 de deploiement.md](deploiement.md#1-les-environnements), et que
   les sections 3.4 et 3.6 de cette page donnent une seule règle d'ordre :
   consoles d'abord pour le premier déploiement qui exige le contrat, face à
-  un Convex antérieur au contrat ; entre deux majeures versionnées, une release dont Convex sert
-  les deux majeures d'abord, puis les consoles, puis le retrait de l'ancienne
-  majeure quand plus aucune console ne la parle ; Convex d'abord pour une
-  mineure ou sans changement du contrat. Le test de l'ordre des mises à jour tient les refus 426 dans
-  les deux sens, `SUPPORTED_MAJORS` et la limite du lancement distant pendant
-  la transition. Il exige aussi le même moment de mise à jour des consoles,
-  mot pour mot, en 3.3, en 3.4 et dans les deux résumés de `release.yml`
-  exécutés comme par le runner, depuis le commit tagué, et aucune mise à jour
-  des consoles avant de lancer la pipeline.
+  un Convex antérieur au contrat ; entre deux majeures versionnées, une release
+  dont Convex sert les deux majeures d'abord, puis les consoles, puis le retrait
+  de l'ancienne majeure quand plus aucune console ne la parle ; Convex d'abord
+  pour une mineure ou sans changement du contrat. Le test de l'ordre des mises
+  à jour tient les refus 426 dans les deux sens, `SUPPORTED_MAJORS` et la limite
+  du lancement distant pendant la transition. Il exige aussi le même moment
+  de mise à jour des consoles, mot pour mot, en 3.3, en 3.4 et dans les deux
+  résumés de `release.yml` exécutés comme par le runner, depuis le commit
+  tagué, et aucune mise à jour des consoles avant de lancer la pipeline.
 
 `scripts/release.test.mjs` tient les deux options que la pipeline passe à
 `scripts/release.sh tag` ([release.md](release.md#la-pipeline-de-release-et-le-script)).
@@ -2607,10 +2611,10 @@ documentation et de réponses réelles de son API, lues le 9 octobre 2026. Le
 premier lancement à blanc est la première vraie preuve.
 
 Le premier vrai `npx convex deploy`, avec les dépendances installées par
-`npm ci --ignore-scripts`, reste à vérifier au premier `convex deploy` réel, hors de ce lancement à
-blanc. La lecture de `generateBinPath()` dans `node_modules/esbuild/lib/main.js`
-montre qu'esbuild résout le binaire de son paquet de plateforme à l'exécution,
-sans son postinstall ; elle ne remplace pas ce déploiement réel.
+`npm ci --ignore-scripts`, reste à faire, hors de ce lancement à blanc. La
+lecture de `generateBinPath()` dans `node_modules/esbuild/lib/main.js` montre
+qu'esbuild résout le binaire de son paquet de plateforme à l'exécution, sans
+son postinstall ; elle ne remplace pas ce déploiement réel.
 
 ### Rapport de qualité (ANH-199)
 
