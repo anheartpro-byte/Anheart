@@ -121,25 +121,19 @@ describe("ANH-132 machine route authentication edges", () => {
 
   it("records the live panel state from a heartbeat body", async () => {
     const w = await world();
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/heartbeat",
-      {
-        programsEnabled: true,
-        live: {
-          runMode: "seance",
-          phase: "hold",
-          bpm: 140,
-          motorRpm: 1000,
-          outputRpm: 20,
-          setpointMotorRpm: 1000,
-          gLoad: 1.1,
-          safetyAction: "none",
-        },
+    const response = await send(w, w.machineKey, "POST", "/api/machine/heartbeat", {
+      programsEnabled: true,
+      live: {
+        runMode: "seance",
+        phase: "hold",
+        bpm: 140,
+        motorRpm: 1000,
+        outputRpm: 20,
+        setpointMotorRpm: 1000,
+        gLoad: 1.1,
+        safetyAction: "none",
       },
-    );
+    });
     expect(response.status).toBe(200);
     const machine = await w.t.run((ctx) => ctx.db.get(w.machine));
     expect(machine?.live?.phase).toBe("hold");
@@ -147,16 +141,15 @@ describe("ANH-132 machine route authentication edges", () => {
 });
 
 describe("ANH-132 malformed bodies return 400 {error}", () => {
-  it.each([{ path: "/api/machine/profiles", body: "not json at all" }])(
-    "rejects an unparseable body on $path",
-    async ({ path, body }) => {
-      const w = await world();
-      const response = await sendRaw(w, w.machineKey, "POST", path, body);
-      expect(response.status).toBe(400);
-      const payload = (await response.json()) as { error?: string };
-      expect(typeof payload.error).toBe("string");
-    },
-  );
+  it.each([
+    { path: "/api/machine/profiles", body: "not json at all" },
+  ])("rejects an unparseable body on $path", async ({ path, body }) => {
+    const w = await world();
+    const response = await sendRaw(w, w.machineKey, "POST", path, body);
+    expect(response.status).toBe(400);
+    const payload = (await response.json()) as { error?: string };
+    expect(typeof payload.error).toBe("string");
+  });
 
   it.each([
     { path: "/api/machine/training/start", body: {} },
@@ -184,9 +177,7 @@ describe("ANH-132 malformed bodies return 400 {error}", () => {
  */
 const bodyRoutes = http
   .getRoutes()
-  .filter(
-    ([path, method]) => path.startsWith("/api/machine/") && method === "POST",
-  )
+  .filter(([path, method]) => path.startsWith("/api/machine/") && method === "POST")
   .map(([path]) => path)
   .sort();
 
@@ -245,11 +236,7 @@ async function written(w: MachineWorld) {
 }
 
 /** The request is refused as malformed, in the shape of every refusal, and nothing is written. */
-async function expectRefusedUnwritten(
-  w: MachineWorld,
-  path: string,
-  raw: string,
-) {
+async function expectRefusedUnwritten(w: MachineWorld, path: string, raw: string) {
   const before = await written(w);
 
   const response = await sendRaw(w, w.machineKey, "POST", path, raw);
@@ -298,11 +285,7 @@ describe("ANH-195 EX-3 a body a machine route cannot read is refused with 400", 
   it("refuses a number JSON cannot hold as a battery level", async () => {
     const w = await world();
     // 1e999 is valid JSON text and reads as Infinity.
-    await expectRefusedUnwritten(
-      w,
-      "/api/machine/heartbeat",
-      '{"batteryLevel":1e999}',
-    );
+    await expectRefusedUnwritten(w, "/api/machine/heartbeat", '{"batteryLevel":1e999}');
   });
 
   it.each(bodyRoutes)(
@@ -344,20 +327,8 @@ describe("ANH-195 EX-3 a body a machine route cannot read is refused with 400", 
     const w = await world();
 
     // One heartbeat per machine: a machine takes one every 5 s (ANH-166).
-    const empty = await sendRaw(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/heartbeat",
-      "",
-    );
-    const object = await sendRaw(
-      w,
-      w.otherKey,
-      "POST",
-      "/api/machine/heartbeat",
-      "{}",
-    );
+    const empty = await sendRaw(w, w.machineKey, "POST", "/api/machine/heartbeat", "");
+    const object = await sendRaw(w, w.otherKey, "POST", "/api/machine/heartbeat", "{}");
     const beats = await w.t.run((ctx) =>
       ctx.db.query("machine_heartbeats").collect(),
     );
@@ -372,21 +343,15 @@ describe("ANH-195 EX-3 a body a machine route cannot read is refused with 400", 
     const sessionId = await seedSession(w, w.machine, "active", "auto");
     const before = await written(w);
 
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/heartbeat",
-      {
-        batteryLevel: 87,
-        wifiStrength: -55,
-        activeSessionId: sessionId,
-        live: LIVE,
-        // Fields the server does not store are no reason to refuse.
-        medical_parameters_version: null,
-        config_hash: null,
-      },
-    );
+    const response = await send(w, w.machineKey, "POST", "/api/machine/heartbeat", {
+      batteryLevel: 87,
+      wifiStrength: -55,
+      activeSessionId: sessionId,
+      live: LIVE,
+      // Fields the server does not store are no reason to refuse.
+      medical_parameters_version: null,
+      config_hash: null,
+    });
     const after = await written(w);
 
     expect(response.status).toBe(200);
@@ -412,12 +377,7 @@ describe("ANH-132 /api/machine/training/poll", () => {
     await seedPendingAuto(w, w.otherMachine, w.adminId);
     await seedSession(w, w.machine, "pending", "legacy"); // not an auto
 
-    const response = await send(
-      w,
-      w.machineKey,
-      "GET",
-      "/api/machine/training/poll",
-    );
+    const response = await send(w, w.machineKey, "GET", "/api/machine/training/poll");
     expect(response.status).toBe(200);
     const payload = (await response.json()) as {
       session: { sessionId: string } | null;
@@ -428,12 +388,7 @@ describe("ANH-132 /api/machine/training/poll", () => {
   it("returns null when this machine has no pending auto session", async () => {
     const w = await world();
     await seedPendingAuto(w, w.otherMachine);
-    const response = await send(
-      w,
-      w.machineKey,
-      "GET",
-      "/api/machine/training/poll",
-    );
+    const response = await send(w, w.machineKey, "GET", "/api/machine/training/poll");
     const payload = (await response.json()) as { session: unknown };
     expect(payload.session).toBeNull();
   });
@@ -443,15 +398,9 @@ describe("ANH-132 /api/machine/training/start", () => {
   it("starts a pending auto session", async () => {
     const w = await world();
     const sessionId = await seedPendingAuto(w, w.machine);
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/start",
-      {
-        sessionId,
-      },
-    );
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/start", {
+      sessionId,
+    });
     expect(response.status).toBe(200);
     const session = await w.t.run((ctx) => ctx.db.get(sessionId));
     expect(session?.status).toBe("active");
@@ -460,15 +409,9 @@ describe("ANH-132 /api/machine/training/start", () => {
   it("refuses a session that is no longer pending (400)", async () => {
     const w = await world();
     const sessionId = await seedSession(w, w.machine, "active", "auto");
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/start",
-      {
-        sessionId,
-      },
-    );
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/start", {
+      sessionId,
+    });
     expect(response.status).toBe(400);
     const payload = (await response.json()) as {
       error?: string;
@@ -488,29 +431,15 @@ describe("ANH-132 /api/machine/training/local is idempotent", () => {
       startedAt: NOW,
       operatorName: "Synthetic Operator",
     };
-    const first = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/local",
-      body,
-    );
-    const second = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/local",
-      body,
-    );
+    const first = await send(w, w.machineKey, "POST", "/api/machine/training/local", body);
+    const second = await send(w, w.machineKey, "POST", "/api/machine/training/local", body);
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     const a = (await first.json()) as { sessionId: string };
     const b = (await second.json()) as { sessionId: string };
     expect(a.sessionId).toBe(b.sessionId);
     const sessions = await w.t.run((ctx) => ctx.db.query("sessions").collect());
-    expect(sessions.filter((s) => s.localRef === "local-ref-1")).toHaveLength(
-      1,
-    );
+    expect(sessions.filter((s) => s.localRef === "local-ref-1")).toHaveLength(1);
   });
 });
 
@@ -519,20 +448,8 @@ describe("ANH-132 /api/machine/training/end is idempotent", () => {
     const w = await world();
     const sessionId = await seedSession(w, w.machine, "active", "auto");
     const body = { sessionId, failed: false, reason: "programme_complete" };
-    const first = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/end",
-      body,
-    );
-    const second = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/end",
-      body,
-    );
+    const first = await send(w, w.machineKey, "POST", "/api/machine/training/end", body);
+    const second = await send(w, w.machineKey, "POST", "/api/machine/training/end", body);
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     const session = await w.t.run((ctx) => ctx.db.get(sessionId));
@@ -556,37 +473,21 @@ describe("ANH-132 /api/machine/training/telemetry binding", () => {
   it("stores telemetry for this machine's session", async () => {
     const w = await world();
     const sessionId = await seedSession(w, w.machine, "active", "auto");
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/telemetry",
-      {
-        sessionId,
-        points: [point],
-      },
-    );
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      stored: 1,
-      duplicates: 0,
-      rejected: 0,
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/telemetry", {
+      sessionId,
+      points: [point],
     });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ stored: 1, duplicates: 0, rejected: 0 });
   });
 
   it("refuses a session that belongs to another machine (400)", async () => {
     const w = await world();
     const foreign = await seedSession(w, w.otherMachine, "active", "auto");
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/telemetry",
-      {
-        sessionId: foreign,
-        points: [point],
-      },
-    );
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/telemetry", {
+      sessionId: foreign,
+      points: [point],
+    });
     expect(response.status).toBe(400);
     const payload = (await response.json()) as {
       error?: string;
@@ -598,48 +499,26 @@ describe("ANH-132 /api/machine/training/telemetry binding", () => {
 });
 
 describe("ANH-129 /api/machine/training/events binding", () => {
-  const event = {
-    seq: 0,
-    t: NOW,
-    kind: "phase",
-    detail: "hold",
-    actor: "system",
-  };
+  const event = { seq: 0, t: NOW, kind: "phase", detail: "hold", actor: "system" };
 
   it("stores the events of this machine's session", async () => {
     const w = await world();
     const sessionId = await seedSession(w, w.machine, "active", "auto");
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/events",
-      {
-        sessionId,
-        events: [event],
-      },
-    );
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      stored: 1,
-      duplicates: 0,
-      rejected: 0,
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/events", {
+      sessionId,
+      events: [event],
     });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ stored: 1, duplicates: 0, rejected: 0 });
   });
 
   it("refuses a session that belongs to another machine (400)", async () => {
     const w = await world();
     const foreign = await seedSession(w, w.otherMachine, "active", "auto");
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/training/events",
-      {
-        sessionId: foreign,
-        events: [event],
-      },
-    );
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/events", {
+      sessionId: foreign,
+      events: [event],
+    });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: "session_not_found",
@@ -708,30 +587,24 @@ describe("ANH-132 /api/machine/roster", () => {
 describe("ANH-132 /api/machine/profiles", () => {
   it("replaces the machine's profiles and reports the count", async () => {
     const w = await world();
-    const response = await send(
-      w,
-      w.machineKey,
-      "POST",
-      "/api/machine/profiles",
-      {
-        storeRev: 2,
-        programsEnabled: true,
-        profiles: [
-          {
-            profileId: "p9",
-            name: "Programme p9",
-            totalDurationS: 900,
-            zoneLowBpm: 120,
-            zoneHighBpm: 140,
-            hardMaxBpm: 160,
-            criticalBpm: 180,
-            subjectHrMax: 190,
-            minRunRpm: 20,
-            maxRpm: 1400,
-          },
-        ],
-      },
-    );
+    const response = await send(w, w.machineKey, "POST", "/api/machine/profiles", {
+      storeRev: 2,
+      programsEnabled: true,
+      profiles: [
+        {
+          profileId: "p9",
+          name: "Programme p9",
+          totalDurationS: 900,
+          zoneLowBpm: 120,
+          zoneHighBpm: 140,
+          hardMaxBpm: 160,
+          criticalBpm: 180,
+          subjectHrMax: 190,
+          minRunRpm: 20,
+          maxRpm: 1400,
+        },
+      ],
+    });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as { count: number };
     expect(payload.count).toBe(1);
@@ -756,9 +629,7 @@ const sessionRoutes: Array<{
     route: "training/start",
     unknownStatus: 400,
     call: (w, sessionId) =>
-      send(w, w.machineKey, "POST", "/api/machine/training/start", {
-        sessionId,
-      }),
+      send(w, w.machineKey, "POST", "/api/machine/training/start", { sessionId }),
   },
   {
     route: "training/end",
@@ -916,9 +787,8 @@ describe("ANH-177 roster is limited to this machine's riders", () => {
     });
     const response = await send(w, w.machineKey, "GET", "/api/machine/roster");
     expect(response.status).toBe(200);
-    const riders = (
-      (await response.json()) as { riders: Array<{ userId: string }> }
-    ).riders.map((r) => r.userId);
+    const riders = ((await response.json()) as { riders: Array<{ userId: string }> })
+      .riders.map((r) => r.userId);
     expect(riders).toContain(w.patient);
     expect(riders).not.toContain(outsider);
   });

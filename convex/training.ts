@@ -966,7 +966,8 @@ export const launchAutoSession = mutation({
     if (unauthorized !== null) throw refusal(unauthorized);
 
     const machine = await ctx.db.get(args.machineId);
-    if (!machine || machine.isDeleted) throw refusal("machine_not_found");
+    if (!machine || machine.isDeleted)
+      throw refusal("machine_not_found");
     const organizationId = machine.organizationId;
     // The rider is an active member of the machine's organisation.
     if (
@@ -1985,10 +1986,7 @@ export const storeEvents = internalMutation({
           verdicts.detail,
           verdictAction(event.detail),
         );
-      } else if (
-        event.kind === "drive_fault" &&
-        driveFaultAlerts(event.detail)
-      ) {
+      } else if (event.kind === "drive_fault" && driveFaultAlerts(event.detail)) {
         faults.count++;
         faults.detail = foldedDetail(
           "drive_fault",

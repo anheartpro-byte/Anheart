@@ -316,7 +316,11 @@ describe("a launch is refused when the rider's physiology does not allow the pro
       { hrMax: 168, birthYear: turning(37) },
       "hard_max_above_hr_max",
     ],
-    ["is 16", { hrMax: 180, birthYear: turning(17) }, "rider_too_young"],
+    [
+      "is 16",
+      { hrMax: 180, birthYear: turning(17) },
+      "rider_too_young",
+    ],
     [
       "only turns 18 this year (the later birthday is assumed)",
       { hrMax: 180, birthYear: turning(18) },
@@ -542,9 +546,7 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
 
   it("refuses a zone above the current ceiling, rounded down, then a hard maximum above it", () => {
     // 90% of 181 bpm is 162.9: the ceiling is 162, never 163.
-    expect(
-      zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 181 }, 181, 0.9),
-    ).toBeNull();
+    expect(zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 181 }, 181, 0.9)).toBeNull();
     expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 181 }, 181, 0.9)).toBe(
       "zone_above_ceiling",
     );
@@ -588,18 +590,12 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
     // The estimate reads the same year.
     expect(effectiveHrMax({ birthYear: turning(37) }, NOW, "tanaka")).toBe(182);
     expect(
-      effectiveHrMax(
-        { birthYear: turning(37) },
-        lastInstantOfLastYear,
-        "tanaka",
-      ),
+      effectiveHrMax({ birthYear: turning(37) }, lastInstantOfLastYear, "tanaka"),
     ).toBe(183);
   });
 
   it("keeps a valid measured maximum but omits an estimate without a medical version", () => {
-    expect(
-      effectiveHrMax({ hrMax: 180, birthYear: turning(37) }, NOW, null),
-    ).toBe(180);
+    expect(effectiveHrMax({ hrMax: 180, birthYear: turning(37) }, NOW, null)).toBe(180);
     expect(effectiveHrMax({ birthYear: turning(37) }, NOW, null)).toBeNull();
   });
 });
@@ -624,7 +620,9 @@ describe("the physiology a manager sets for a rider", () => {
     async (hrMax) => {
       const w = await seedWorld(modules);
 
-      expect(await refusalOf(set(w, { hrMax }))).toBe("invalid_hr_max");
+      expect(await refusalOf(set(w, { hrMax }))).toBe(
+        "invalid_hr_max",
+      );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
   );
@@ -643,7 +641,9 @@ describe("the physiology a manager sets for a rider", () => {
     async (hrMax) => {
       const w = await seedWorld(modules);
 
-      expect(await refusalOf(set(w, { hrMax }))).toBe("invalid_hr_max");
+      expect(await refusalOf(set(w, { hrMax }))).toBe(
+        "invalid_hr_max",
+      );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
   );
@@ -660,7 +660,9 @@ describe("the physiology a manager sets for a rider", () => {
     async (birthYear) => {
       const w = await seedWorld(modules);
 
-      expect(await refusalOf(set(w, { birthYear }))).toBe("invalid_birth_year");
+      expect(await refusalOf(set(w, { birthYear }))).toBe(
+        "invalid_birth_year",
+      );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
   );
@@ -703,7 +705,9 @@ describe("the physiology a manager sets for a rider", () => {
     async (_name, birthYear) => {
       const w = await seedWorld(modules);
 
-      expect(await refusalOf(set(w, { birthYear }))).toBe("invalid_birth_year");
+      expect(await refusalOf(set(w, { birthYear }))).toBe(
+        "invalid_birth_year",
+      );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
   );

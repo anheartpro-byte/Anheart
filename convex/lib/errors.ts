@@ -82,7 +82,8 @@ export const DASHBOARD_ERRORS = {
   gestionnaire_not_found: "The gestionnaire account does not exist here.",
   not_a_gestionnaire:
     "The account is not a gestionnaire of the organisation concerned.",
-  gestionnaire_self_only: "A gestionnaire may only add or remove themselves.",
+  gestionnaire_self_only:
+    "A gestionnaire may only add or remove themselves.",
   gestionnaire_already_assigned: "The gestionnaire already has this link.",
   gestionnaire_not_assigned: "The gestionnaire has no such link.",
 
@@ -93,8 +94,7 @@ export const DASHBOARD_ERRORS = {
   machine_in_session: "The machine is in a session: it cannot be deleted.",
   machine_has_pending_session:
     "A session waits for this machine: it cannot be deleted before it is cancelled.",
-  machine_not_deleted:
-    "The machine is not deleted: there is nothing to restore.",
+  machine_not_deleted: "The machine is not deleted: there is nothing to restore.",
   last_gestionnaire:
     "The caller is the machine's only gestionnaire: they cannot leave it.",
 
@@ -131,8 +131,7 @@ export const DASHBOARD_ERRORS = {
     "The lifetime of a new machine key is not a whole number of minutes between 60 (one hour) and 5256000 (ten years).",
 
   // Patient invitations.
-  invalid_invitation:
-    "The name or the e-mail address of the invitation is not valid.",
+  invalid_invitation: "The name or the e-mail address of the invitation is not valid.",
   invitation_unavailable:
     "The invitation cannot be created for this caller and this address.",
   invitation_failed: "Clerk did not confirm that the invitation was sent.",

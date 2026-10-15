@@ -203,12 +203,7 @@ async function seedSessionLists(w: World, scope: Scope): Promise<number> {
     [w.otherMachine, w.otherPatient],
     [w.orgBMachine, w.orgBPatient],
   ] as const) {
-    await addSession(w, {
-      machineId,
-      userId,
-      status: "completed",
-      kind: "auto",
-    });
+    await addSession(w, { machineId, userId, status: "completed", kind: "auto" });
   }
   if (scope !== "other") return 50;
   for (let i = 0; i < 3; i++)
@@ -263,20 +258,12 @@ export const MATRIX: Entry[] = [
         throw new Error("Did not return the caller's own account");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "admin", expect: ok, note: "returns the existing row" },
       { actor: "manager", expect: ok, note: "returns the existing row" },
       { actor: "patient", expect: ok, note: "returns the existing row" },
       { actor: "orgAdmin", expect: ok, note: "returns the existing row" },
-      {
-        actor: "orgBManager",
-        expect: ok,
-        note: "returns their own row, in their own organisation",
-      },
+      { actor: "orgBManager", expect: ok, note: "returns their own row, in their own organisation" },
     ],
   },
   {
@@ -306,11 +293,7 @@ export const MATRIX: Entry[] = [
       { actor: "admin", expect: ok, note: "own account" },
       { actor: "manager", expect: ok, note: "own account" },
       { actor: "patient", expect: ok, note: "own account" },
-      {
-        actor: "orgAdmin",
-        expect: ok,
-        note: "own account, as admin of centre A only",
-      },
+      { actor: "orgAdmin", expect: ok, note: "own account, as admin of centre A only" },
       { actor: "orgBManager", expect: ok, note: "own account, in centre B" },
     ],
   },
@@ -323,11 +306,7 @@ export const MATRIX: Entry[] = [
     // before that is covered by `organizations.test.ts`.
     build: async (w) => ({ userId: w.stranger, role: "gestionnaire" }),
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       {
@@ -359,11 +338,7 @@ export const MATRIX: Entry[] = [
         throw new Error("Own profile not updated");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "admin", expect: ok, note: "edits own profile" },
       { actor: "manager", expect: ok, note: "edits own profile" },
       { actor: "patient", expect: ok, note: "edits own profile" },
@@ -383,9 +358,7 @@ export const MATRIX: Entry[] = [
         !seen.includes(String(w.otherPatient)) ||
         !seen.includes(String(w.orgBPatient))
       )
-        throw new Error(
-          "Admin should see every account, in every organisation",
-        );
+        throw new Error("Admin should see every account, in every organisation");
     },
     onFiltered: (res, w, actor) => {
       const seen = ids(res);
@@ -410,29 +383,13 @@ export const MATRIX: Entry[] = [
       );
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "admin", expect: ok, note: "every account" },
       { actor: "manager", expect: filtered, note: "only their patients" },
       { actor: "patient", expect: filtered, scope: "self", note: "only self" },
-      {
-        actor: "orgAdmin",
-        expect: filtered,
-        note: "the members of centre A, nobody else",
-      },
-      {
-        actor: "orgBAdmin",
-        expect: filtered,
-        note: "the members of centre B, nobody of centre A",
-      },
-      {
-        actor: "orgBManager",
-        expect: filtered,
-        note: "only their patient of centre B",
-      },
+      { actor: "orgAdmin", expect: filtered, note: "the members of centre A, nobody else" },
+      { actor: "orgBAdmin", expect: filtered, note: "the members of centre B, nobody of centre A" },
+      { actor: "orgBManager", expect: filtered, note: "only their patient of centre B" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -511,22 +468,9 @@ export const MATRIX: Entry[] = [
       if (row?.firstName !== "Edited") throw new Error("Patient not updated");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        expect: refuse(UNAUTHORIZED),
-        note: "a user cannot edit patients",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this patient",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot edit patients" },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this patient" },
       {
         actor: "otherManager",
         scope: "other",
@@ -534,12 +478,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this patient",
       },
       { actor: "admin", expect: ok, note: "admin edits anyone" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the patient's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the patient's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -567,11 +506,7 @@ export const MATRIX: Entry[] = [
         throw new Error("Wrong user returned");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", scope: "self", expect: ok, note: "own profile" },
       {
         actor: "stranger",
@@ -579,30 +514,15 @@ export const MATRIX: Entry[] = [
         expect: empty,
         note: "null for an unrelated user",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this patient",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this patient" },
       {
         actor: "otherManager",
         scope: "other",
         expect: empty,
         note: "null for a patient they do not manage",
       },
-      {
-        actor: "admin",
-        scope: "other",
-        expect: ok,
-        note: "admin reads anyone",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "other",
-        expect: ok,
-        note: "admin of the patient's organisation",
-      },
+      { actor: "admin", scope: "other", expect: ok, note: "admin reads anyone" },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the patient's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -630,40 +550,21 @@ export const MATRIX: Entry[] = [
       if (row !== null) throw new Error("User not deleted");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
         expect: refuse(/not_authorized/),
         note: "a user cannot delete anyone",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "deletes their own patient",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "deletes their own patient" },
       {
         actor: "otherManager",
         scope: "other",
         expect: refuse(/user_not_managed/),
         note: "not this patient's manager",
       },
-      {
-        actor: "admin",
-        scope: "other",
-        expect: ok,
-        note: "admin deletes a user",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "removes a patient of their organisation",
-      },
+      { actor: "admin", scope: "other", expect: ok, note: "admin deletes a user" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "removes a patient of their organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -687,9 +588,7 @@ export const MATRIX: Entry[] = [
     // not authoritative. Whenever nothing is linked the result is null. Each
     // cell adds the email claims to its actor's identity.
     build: async (w) => {
-      await w.t.run((ctx) =>
-        ctx.db.patch(w.stranger, { clerkId: "previous-stranger" }),
-      );
+      await w.t.run((ctx) => ctx.db.patch(w.stranger, { clerkId: "previous-stranger" }));
       await w.t.run((ctx) =>
         ctx.db.insert("users", {
           clerkId: "",
@@ -722,11 +621,7 @@ export const MATRIX: Entry[] = [
         throw new Error("Record not linked to the caller");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "stranger",
         scope: "self",
@@ -767,16 +662,8 @@ export const MATRIX: Entry[] = [
       if (!rel) throw new Error("Link not created");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        expect: refuse(UNAUTHORIZED),
-        note: "a user cannot assign",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot assign" },
       {
         actor: "manager",
         scope: "self",
@@ -790,11 +677,7 @@ export const MATRIX: Entry[] = [
         note: "a gestionnaire cannot assign another gestionnaire",
       },
       { actor: "admin", expect: ok, note: "admin assigns" },
-      {
-        actor: "orgAdmin",
-        expect: ok,
-        note: "admin of the organisation assigns",
-      },
+      { actor: "orgAdmin", expect: ok, note: "admin of the organisation assigns" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -836,22 +719,9 @@ export const MATRIX: Entry[] = [
       if (rel) throw new Error("Link not removed");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        expect: refuse(UNAUTHORIZED),
-        note: "a user cannot remove",
-      },
-      {
-        actor: "manager",
-        scope: "self",
-        expect: ok,
-        note: "removes themselves",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot remove" },
+      { actor: "manager", scope: "self", expect: ok, note: "removes themselves" },
       {
         actor: "otherManager",
         scope: "other",
@@ -859,11 +729,7 @@ export const MATRIX: Entry[] = [
         note: "cannot remove another gestionnaire",
       },
       { actor: "admin", expect: ok, note: "admin removes" },
-      {
-        actor: "orgAdmin",
-        expect: ok,
-        note: "admin of the organisation removes",
-      },
+      { actor: "orgAdmin", expect: ok, note: "admin of the organisation removes" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -890,36 +756,12 @@ export const MATRIX: Entry[] = [
         throw new Error("Expected the managing gestionnaire");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: ok,
-        note: "own gestionnaires",
-      },
-      {
-        actor: "stranger",
-        scope: "other",
-        expect: empty,
-        note: "[] for an unrelated patient",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this patient",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "self", expect: ok, note: "own gestionnaires" },
+      { actor: "stranger", scope: "other", expect: empty, note: "[] for an unrelated patient" },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this patient" },
       { actor: "admin", scope: "other", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "other",
-        expect: ok,
-        note: "admin of the patient's organisation",
-      },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the patient's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -956,30 +798,13 @@ export const MATRIX: Entry[] = [
       );
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a non-admin" },
       { actor: "manager", expect: empty, note: "[] for a non-admin" },
       { actor: "admin", expect: ok, note: "all gestionnaires" },
-      {
-        actor: "orgAdmin",
-        expect: filtered,
-        note: "the gestionnaires of centre A only",
-      },
-      {
-        actor: "orgBAdmin",
-        expect: filtered,
-        note: "the gestionnaires of centre B only",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "foreign",
-        expect: empty,
-        note: "[] when centre B names centre A",
-      },
+      { actor: "orgAdmin", expect: filtered, note: "the gestionnaires of centre A only" },
+      { actor: "orgBAdmin", expect: filtered, note: "the gestionnaires of centre B only" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "[] when centre B names centre A" },
       { actor: "orgBManager", expect: empty, note: "[] for a non-admin" },
     ],
   },
@@ -987,10 +812,7 @@ export const MATRIX: Entry[] = [
     id: "users.assignPatientsToGestionnaire",
     ref: api.users.assignPatientsToGestionnaire,
     kind: "mutation",
-    build: async (w) => ({
-      gestionnaireId: w.manager,
-      patientIds: [w.stranger],
-    }),
+    build: async (w) => ({ gestionnaireId: w.manager, patientIds: [w.stranger] }),
     onSuccess: async (_res, w) => {
       const rel = await w.t.run((ctx) =>
         ctx.db
@@ -1003,31 +825,18 @@ export const MATRIX: Entry[] = [
       if (!rel) throw new Error("Replacement assignment not applied");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin replaces the list" },
-      {
-        actor: "orgAdmin",
-        expect: ok,
-        note: "admin of the organisation replaces the list",
-      },
+      { actor: "orgAdmin", expect: ok, note: "admin of the organisation replaces the list" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
         expect: refuse(/gestionnaire_not_found/),
         note: "a gestionnaire of another organisation does not exist for them",
       },
-      {
-        actor: "orgBManager",
-        scope: "foreign",
-        expect: refuse(UNAUTHORIZED),
-        note: "not an admin",
-      },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
     ],
   },
   {
@@ -1038,18 +847,11 @@ export const MATRIX: Entry[] = [
       actor === "manager" ? {} : { gestionnaireId: w.manager },
     onSuccess: (res, w) => {
       const seen = ids(res);
-      if (
-        !seen.includes(String(w.patient)) ||
-        seen.includes(String(w.otherPatient))
-      )
+      if (!seen.includes(String(w.patient)) || seen.includes(String(w.otherPatient)))
         throw new Error("Expected only this gestionnaire's patients");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a user" },
       { actor: "manager", scope: "own", expect: ok, note: "own patients" },
       {
@@ -1058,18 +860,8 @@ export const MATRIX: Entry[] = [
         expect: empty,
         note: "[] when asking for another gestionnaire's patients",
       },
-      {
-        actor: "admin",
-        scope: "other",
-        expect: ok,
-        note: "admin reads any gestionnaire",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "other",
-        expect: ok,
-        note: "admin of the gestionnaire's organisation",
-      },
+      { actor: "admin", scope: "other", expect: ok, note: "admin reads any gestionnaire" },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the gestionnaire's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1095,22 +887,14 @@ export const MATRIX: Entry[] = [
     build: async () => ({ name: "New machine" }),
     onSuccess: async (res, w) => {
       const r = res as { machineId: Id<"machines">; apiKey: string };
-      if (!r.apiKey.startsWith("anh1."))
-        throw new Error("No one-time key issued");
+      if (!r.apiKey.startsWith("anh1.")) throw new Error("No one-time key issued");
       const m = await w.t.run((ctx) => ctx.db.get(r.machineId));
-      if (m?.status !== "offline")
-        throw new Error("New machine should be offline");
+      if (m?.status !== "offline") throw new Error("New machine should be offline");
       if (m.organizationId !== w.anheartOrg)
-        throw new Error(
-          "New machine should belong to the admin's organisation",
-        );
+        throw new Error("New machine should belong to the admin's organisation");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin creates" },
@@ -1146,32 +930,18 @@ export const MATRIX: Entry[] = [
       if (!rel) throw new Error("Assignment not applied");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin assigns" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation assigns",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation assigns" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
         expect: refuse(/machine_not_found/),
         note: "a machine of another organisation does not exist for them",
       },
-      {
-        actor: "orgBManager",
-        scope: "foreign",
-        expect: refuse(UNAUTHORIZED),
-        note: "not an admin",
-      },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
     ],
   },
   {
@@ -1189,8 +959,7 @@ export const MATRIX: Entry[] = [
       );
       const linked = (machineId: Id<"machines">, gestionnaireId: Id<"users">) =>
         rows.some(
-          (r) =>
-            r.machineId === machineId && r.gestionnaireId === gestionnaireId,
+          (r) => r.machineId === machineId && r.gestionnaireId === gestionnaireId,
         );
       if (!linked(w.otherMachine, w.manager) || linked(w.machine, w.manager))
         throw new Error("List not applied to this gestionnaire");
@@ -1205,11 +974,7 @@ export const MATRIX: Entry[] = [
         throw new Error("New link not written in the machine's organisation");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       {
         actor: "manager",
@@ -1224,12 +989,7 @@ export const MATRIX: Entry[] = [
         note: "not an admin",
       },
       { actor: "admin", expect: ok, note: "admin sets the exact list" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the gestionnaire's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the gestionnaire's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1261,18 +1021,11 @@ export const MATRIX: Entry[] = [
         throw new Error("The machine's key is not listed");
       if (rows[0].state !== "active") throw new Error("Wrong state listed");
       const listed = JSON.stringify(rows);
-      if (
-        listed.includes("synthetic-verifier") ||
-        listed.includes("ab".repeat(16))
-      )
+      if (listed.includes("synthetic-verifier") || listed.includes("ab".repeat(16)))
         throw new Error("The verifier or the selector of a key is listed");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a user" },
       {
         actor: "manager",
@@ -1281,12 +1034,7 @@ export const MATRIX: Entry[] = [
         note: "[] even to a gestionnaire of the machine: the keys are the admins'",
       },
       { actor: "admin", expect: ok, note: "admin lists" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1321,11 +1069,7 @@ export const MATRIX: Entry[] = [
         throw new Error("The plain key is stored");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       {
         actor: "manager",
@@ -1334,12 +1078,7 @@ export const MATRIX: Entry[] = [
         note: "a gestionnaire of the machine is not an admin",
       },
       { actor: "admin", expect: ok, note: "admin creates" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1366,11 +1105,7 @@ export const MATRIX: Entry[] = [
       if (key?.revokedAt === undefined) throw new Error("Key not revoked");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       {
         actor: "manager",
@@ -1379,12 +1114,7 @@ export const MATRIX: Entry[] = [
         note: "a gestionnaire of the machine is not an admin",
       },
       { actor: "admin", expect: ok, note: "admin revokes" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1409,32 +1139,13 @@ export const MATRIX: Entry[] = [
         throw new Error("Wrong machine returned");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "null for a user" },
       { actor: "stranger", expect: empty, note: "null for a user" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "null for an unrelated machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1469,50 +1180,17 @@ export const MATRIX: Entry[] = [
         orgBAdmin: [w.orgBMachine],
         orgBManager: [w.orgBMachine],
       };
-      expectExactly(
-        ids(res),
-        expected[actor] ?? [],
-        `Machines listed to ${actor}`,
-      );
+      expectExactly(ids(res), expected[actor] ?? [], `Machines listed to ${actor}`);
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a user" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: filtered,
-        note: "only their machines",
-      },
-      {
-        actor: "otherManager",
-        scope: "own",
-        expect: filtered,
-        note: "only their machines",
-      },
+      { actor: "manager", scope: "own", expect: filtered, note: "only their machines" },
+      { actor: "otherManager", scope: "own", expect: filtered, note: "only their machines" },
       { actor: "admin", expect: ok, note: "every machine" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the machines of centre A only",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the machines of centre B only",
-      },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: filtered,
-        note: "only their machine of centre B",
-      },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the machines of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the machines of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "only their machine of centre B" },
     ],
   },
   {
@@ -1525,22 +1203,13 @@ export const MATRIX: Entry[] = [
       if (m?.location !== "Lab") throw new Error("Machine not updated");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
         expect: refuse(/machine_not_managed/),
         note: "a user cannot manage a machine",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
@@ -1548,12 +1217,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin updates" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1578,22 +1242,13 @@ export const MATRIX: Entry[] = [
       if (!m?.isDeleted) throw new Error("Machine not soft-deleted");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
         expect: refuse(/machine_not_managed/),
         note: "a user cannot manage a machine",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
@@ -1601,12 +1256,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin deletes" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1636,11 +1286,7 @@ export const MATRIX: Entry[] = [
       if (m?.isDeleted) throw new Error("Machine not restored");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       {
         actor: "manager",
@@ -1649,11 +1295,7 @@ export const MATRIX: Entry[] = [
         note: "restore is admin-only, even for the machine's manager",
       },
       { actor: "admin", expect: ok, note: "admin restores" },
-      {
-        actor: "orgAdmin",
-        expect: refuse(UNAUTHORIZED),
-        note: "restore is reserved to the Anheart admin",
-      },
+      { actor: "orgAdmin", expect: refuse(UNAUTHORIZED), note: "restore is reserved to the Anheart admin" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1676,35 +1318,15 @@ export const MATRIX: Entry[] = [
       return { machineId: w.machine };
     },
     onSuccess: (res) => {
-      if (asArray(res).length < 1)
-        throw new Error("Expected heartbeat history");
+      if (asArray(res).length < 1) throw new Error("Expected heartbeat history");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a user" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "[] for an unrelated machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "[] for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1723,10 +1345,7 @@ export const MATRIX: Entry[] = [
     id: "machines.assignGestionnaireToMachine",
     ref: api.machines.assignGestionnaireToMachine,
     kind: "mutation",
-    build: async (w) => ({
-      machineId: w.machine,
-      gestionnaireId: w.otherManager,
-    }),
+    build: async (w) => ({ machineId: w.machine, gestionnaireId: w.otherManager }),
     onSuccess: async (_res, w) => {
       const rel = await w.t.run((ctx) =>
         ctx.db
@@ -1739,22 +1358,9 @@ export const MATRIX: Entry[] = [
       if (!rel) throw new Error("Assignment not applied");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        expect: refuse(UNAUTHORIZED),
-        note: "a user cannot assign",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot assign" },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
@@ -1762,12 +1368,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin assigns" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1818,22 +1419,9 @@ export const MATRIX: Entry[] = [
       if (rel) throw new Error("Gestionnaire not removed");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        expect: refuse(UNAUTHORIZED),
-        note: "a user cannot remove",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "removes a co-gestionnaire",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "a user cannot remove" },
+      { actor: "manager", scope: "own", expect: ok, note: "removes a co-gestionnaire" },
       {
         actor: "otherManager",
         scope: "other",
@@ -1841,12 +1429,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine (removing the owner)",
       },
       { actor: "admin", expect: ok, note: "admin removes" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1871,31 +1454,12 @@ export const MATRIX: Entry[] = [
         throw new Error("Expected the machine's gestionnaire");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a user" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "[] for an unrelated machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "[] for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1921,11 +1485,7 @@ export const MATRIX: Entry[] = [
         throw new Error("Expected this gestionnaire's machine");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a user" },
       { actor: "manager", scope: "own", expect: ok, note: "own machines" },
       {
@@ -1934,18 +1494,8 @@ export const MATRIX: Entry[] = [
         expect: empty,
         note: "[] when asking for another gestionnaire's machines",
       },
-      {
-        actor: "admin",
-        scope: "other",
-        expect: ok,
-        note: "admin reads any gestionnaire",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "other",
-        expect: ok,
-        note: "admin of the gestionnaire's organisation",
-      },
+      { actor: "admin", scope: "other", expect: ok, note: "admin reads any gestionnaire" },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the gestionnaire's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -1985,37 +1535,13 @@ export const MATRIX: Entry[] = [
         throw new Error("Wrong session returned");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", scope: "own", expect: ok, note: "the rider" },
-      {
-        actor: "stranger",
-        scope: "other",
-        expect: empty,
-        note: "null for an unrelated user",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "null for an unrelated machine",
-      },
+      { actor: "stranger", scope: "other", expect: empty, note: "null for an unrelated user" },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the session's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -2058,60 +1584,26 @@ export const MATRIX: Entry[] = [
       );
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "admin", expect: ok, note: "all sessions" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: filtered,
-        note: "their machine's sessions",
-      },
+      { actor: "manager", scope: "own", expect: filtered, note: "their machine's sessions" },
       {
         actor: "manager",
         scope: "other",
         expect: filtered,
         note: "newer sessions of a machine they do not manage never push theirs out of a small limit",
       },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: filtered,
-        note: "their own sessions",
-      },
+      { actor: "patient", scope: "own", expect: filtered, note: "their own sessions" },
       {
         actor: "patient",
         scope: "other",
         expect: filtered,
         note: "newer sessions of another rider never push theirs out of a small limit",
       },
-      {
-        actor: "stranger",
-        scope: "other",
-        expect: empty,
-        note: "[] for a user who rode nothing",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the sessions of centre A only",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the sessions of centre B only",
-      },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: filtered,
-        note: "their machine's sessions, in centre B",
-      },
+      { actor: "stranger", scope: "other", expect: empty, note: "[] for a user who rode nothing" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the sessions of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the sessions of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "their machine's sessions, in centre B" },
       {
         actor: "orgBManager",
         scope: "foreign",
@@ -2148,66 +1640,27 @@ export const MATRIX: Entry[] = [
       );
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "admin", expect: ok, note: "all sessions" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: filtered,
-        note: "their machine's sessions",
-      },
+      { actor: "manager", scope: "own", expect: filtered, note: "their machine's sessions" },
       {
         actor: "manager",
         scope: "other",
         expect: filtered,
         note: "newer sessions of a machine they do not manage never push theirs out of a small page",
       },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: filtered,
-        note: "their own sessions",
-      },
+      { actor: "patient", scope: "own", expect: filtered, note: "their own sessions" },
       {
         actor: "patient",
         scope: "other",
         expect: filtered,
         note: "newer sessions of another rider never push theirs out of a small page",
       },
-      {
-        actor: "stranger",
-        scope: "other",
-        expect: empty,
-        note: "an empty page for a user who rode nothing",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the sessions of centre A only",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the sessions of centre B only",
-      },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: filtered,
-        note: "their machine's sessions, in centre B",
-      },
-      {
-        actor: "orgBPatient",
-        scope: "own",
-        expect: filtered,
-        note: "their own sessions, in centre B",
-      },
+      { actor: "stranger", scope: "other", expect: empty, note: "an empty page for a user who rode nothing" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the sessions of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the sessions of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "their machine's sessions, in centre B" },
+      { actor: "orgBPatient", scope: "own", expect: filtered, note: "their own sessions, in centre B" },
       {
         actor: "orgBManager",
         scope: "foreign",
@@ -2236,31 +1689,12 @@ export const MATRIX: Entry[] = [
       return { machineId: w.machine };
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "null for a user" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "null for an unrelated machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -2317,24 +1751,9 @@ export const MATRIX: Entry[] = [
     },
     cases: [
       { actor: "admin", expect: ok, note: "all completed sessions" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: filtered,
-        note: "their machine's completed sessions",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the completed sessions of centre A only",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the completed sessions of centre B only",
-      },
+      { actor: "manager", scope: "own", expect: filtered, note: "their machine's completed sessions" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the completed sessions of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the completed sessions of centre B only" },
       {
         actor: "orgBManager",
         scope: "own",
@@ -2382,22 +1801,13 @@ export const MATRIX: Entry[] = [
       if (!row) throw new Error("Launch right not granted");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
         expect: refuse(/machine_not_managed/),
         note: "a user cannot grant",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages machine and user",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages machine and user" },
       {
         actor: "manager",
         scope: "other",
@@ -2411,11 +1821,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin grants" },
-      {
-        actor: "orgAdmin",
-        expect: ok,
-        note: "admin of the machine's organisation grants",
-      },
+      { actor: "orgAdmin", expect: ok, note: "admin of the machine's organisation grants" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -2447,22 +1853,13 @@ export const MATRIX: Entry[] = [
       if (row) throw new Error("Launch right not revoked");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
         expect: refuse(/machine_not_managed/),
         note: "a user cannot revoke",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
@@ -2470,12 +1867,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin revokes" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation revokes",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation revokes" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -2496,38 +1888,17 @@ export const MATRIX: Entry[] = [
     kind: "query",
     build: async (w) => ({ machineId: w.machine }),
     onSuccess: (res, w) => {
-      const seen = asArray(res).map((r) =>
-        String((r as { userId: unknown }).userId),
-      );
+      const seen = asArray(res).map((r) => String((r as { userId: unknown }).userId));
       if (!seen.includes(String(w.patient)))
         throw new Error("Expected the rider holding the launch right");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: empty, note: "[] for a user" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "[] for an unrelated machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "[] for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -2556,23 +1927,14 @@ export const MATRIX: Entry[] = [
       if (u?.hrMax !== 175) throw new Error("Physiology not set");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
         scope: "self",
         expect: refuse(UNAUTHORIZED),
         note: "a user may never set physiology, not even their own",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this patient",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this patient" },
       {
         actor: "otherManager",
         scope: "other",
@@ -2580,12 +1942,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this patient",
       },
       { actor: "admin", scope: "other", expect: ok, note: "admin sets" },
-      {
-        actor: "orgAdmin",
-        scope: "other",
-        expect: ok,
-        note: "admin of the patient's organisation",
-      },
+      { actor: "orgAdmin", scope: "other", expect: ok, note: "admin of the patient's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -2606,45 +1963,16 @@ export const MATRIX: Entry[] = [
     kind: "query",
     build: async (w) => ({ machineId: w.machine }),
     onSuccess: (res) => {
-      if (asArray(res).length < 1)
-        throw new Error("Expected the machine's profiles");
+      if (asArray(res).length < 1) throw new Error("Expected the machine's profiles");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: ok,
-        note: "holds the launch right",
-      },
-      {
-        actor: "stranger",
-        expect: empty,
-        note: "[] without access or a right",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "[] for an unrelated machine",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "own", expect: ok, note: "holds the launch right" },
+      { actor: "stranger", expect: empty, note: "[] without access or a right" },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "[] for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -2693,43 +2021,14 @@ export const MATRIX: Entry[] = [
       );
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: filtered,
-        note: "machines they hold the right on",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "own", expect: filtered, note: "machines they hold the right on" },
       { actor: "stranger", expect: empty, note: "[] without any launch right" },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: filtered,
-        note: "machines they manage",
-      },
+      { actor: "manager", scope: "own", expect: filtered, note: "machines they manage" },
       { actor: "admin", expect: ok, note: "every machine" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the machines of centre A only",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "the machines of centre B only",
-      },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: filtered,
-        note: "the machine they manage, in centre B",
-      },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the machines of centre A only" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the machines of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "the machine they manage, in centre B" },
       {
         actor: "orgBPatient",
         scope: "own",
@@ -2772,17 +2071,8 @@ export const MATRIX: Entry[] = [
         throw new Error("Auto session not queued for the intended rider");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: ok,
-        note: "launches for themselves with a right",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "self", expect: ok, note: "launches for themselves with a right" },
       {
         actor: "patient",
         scope: "other",
@@ -2795,12 +2085,7 @@ export const MATRIX: Entry[] = [
         expect: refuse(/launch_right_missing/),
         note: "no launch right on the machine",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "launches for a managed rider",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "launches for a managed rider" },
       {
         actor: "manager",
         scope: "other",
@@ -2813,12 +2098,7 @@ export const MATRIX: Entry[] = [
         expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
-      {
-        actor: "admin",
-        scope: "own",
-        expect: ok,
-        note: "admin launches for a rider",
-      },
+      { actor: "admin", scope: "own", expect: ok, note: "admin launches for a rider" },
       {
         actor: "admin",
         scope: "other",
@@ -2872,29 +2152,15 @@ export const MATRIX: Entry[] = [
         throw new Error("Stop was not requested");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: ok,
-        note: "the rider may stop",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "own", expect: ok, note: "the rider may stop" },
       {
         actor: "stranger",
         scope: "other",
         expect: refuse(/session_not_managed/),
         note: "not the rider and no machine access",
       },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
@@ -2902,12 +2168,7 @@ export const MATRIX: Entry[] = [
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin stops" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the session's organisation stops",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation stops" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -2932,117 +2193,41 @@ export const MATRIX: Entry[] = [
     id: "recordStorage.list",
     ref: api.recordStorage.list,
     kind: "query",
-    build: async (w) => ({
-      sessionId: await addSession(w, {
-        machineId: w.machine,
-        status: "completed",
-        kind: "manual",
-      }),
-    }),
+    build: async (w) => ({sessionId:await addSession(w,{machineId:w.machine,status:"completed",kind:"manual"})}),
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      { actor: "admin", expect: ok, note: "Anheart administrator" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "organisation administrator",
-      },
-      { actor: "manager", scope: "own", expect: ok, note: "assigned manager" },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: empty,
-        note: "raw records require maintenance access",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "unassigned manager",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "foreign",
-        expect: empty,
-        note: "other organisation",
-      },
-      {
-        actor: "orgBManager",
-        scope: "foreign",
-        expect: empty,
-        note: "other organisation",
-      },
-      {
-        actor: "orgBPatient",
-        scope: "foreign",
-        expect: empty,
-        note: "other organisation",
-      },
+      {actor:"anonymous",expect:refuse(NOT_AUTH),note:"sign-in required"},
+      {actor:"admin",expect:ok,note:"Anheart administrator"},
+      {actor:"orgAdmin",scope:"own",expect:ok,note:"organisation administrator"},
+      {actor:"manager",scope:"own",expect:ok,note:"assigned manager"},
+      {actor:"patient",scope:"own",expect:empty,note:"raw records require maintenance access"},
+      {actor:"otherManager",scope:"other",expect:empty,note:"unassigned manager"},
+      {actor:"orgBAdmin",scope:"foreign",expect:empty,note:"other organisation"},
+      {actor:"orgBManager",scope:"foreign",expect:empty,note:"other organisation"},
+      {actor:"orgBPatient",scope:"foreign",expect:empty,note:"other organisation"},
     ],
   },
   {
     id: "recordStorage.remove",
     ref: api.recordStorage.remove,
     kind: "mutation",
-    build: async (w) => ({
-      sessionId: await addSession(w, {
-        machineId: w.machine,
-        status: "completed",
-        kind: "manual",
-      }),
-    }),
+    build: async (w) => ({sessionId:await addSession(w,{machineId:w.machine,status:"completed",kind:"manual"})}),
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      { actor: "admin", expect: ok, note: "Anheart administrator" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "organisation administrator",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: refuse(UNAUTHORIZED),
-        note: "admin deletion only",
-      },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: refuse(UNAUTHORIZED),
-        note: "admin deletion only",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "foreign",
-        expect: refuse(/session_not_found/),
-        note: "other organisation",
-      },
-      {
-        actor: "orgBManager",
-        scope: "foreign",
-        expect: refuse(UNAUTHORIZED),
-        note: "other organisation",
-      },
+      {actor:"anonymous",expect:refuse(NOT_AUTH),note:"sign-in required"},
+      {actor:"admin",expect:ok,note:"Anheart administrator"},
+      {actor:"orgAdmin",scope:"own",expect:ok,note:"organisation administrator"},
+      {actor:"manager",scope:"own",expect:refuse(UNAUTHORIZED),note:"admin deletion only"},
+      {actor:"patient",scope:"own",expect:refuse(UNAUTHORIZED),note:"admin deletion only"},
+      {actor:"orgBAdmin",scope:"foreign",expect:refuse(/session_not_found/),note:"other organisation"},
+      {actor:"orgBManager",scope:"foreign",expect:refuse(UNAUTHORIZED),note:"other organisation"},
     ],
-    onSuccess: async (_res, w, _actor, _scope, args) => {
-      if (typeof args.sessionId !== "string")
-        throw Error("Missing session identifier");
-      const rawId = args.sessionId;
-      const row = await w.t.run(async (ctx) => {
-        const id = ctx.db.normalizeId("sessions", rawId);
-        return id === null ? null : await ctx.db.get(id);
+    onSuccess: async (_res,w,_actor,_scope,args) => {
+      if(typeof args.sessionId!=="string") throw Error("Missing session identifier");
+      const rawId=args.sessionId;
+      const row=await w.t.run(async(ctx)=>{
+        const id=ctx.db.normalizeId("sessions",rawId);
+        return id===null?null:await ctx.db.get(id);
       });
-      if (!row?.recordDeleted) throw Error("Deposit deletion was not recorded");
+      if(!row?.recordDeleted) throw Error("Deposit deletion was not recorded");
     },
   },
   {
@@ -3051,50 +2236,16 @@ export const MATRIX: Entry[] = [
     kind: "query",
     build: async (w) => ({ machineId: w.machine }),
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: empty,
-        note: "a launch right does not grant maintenance access",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "own", expect: empty, note: "a launch right does not grant maintenance access" },
       { actor: "stranger", expect: empty, note: "no machine access" },
       { actor: "manager", scope: "own", expect: ok, note: "assigned machine" },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "unassigned machine",
-      },
+      { actor: "otherManager", scope: "other", expect: empty, note: "unassigned machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "same organisation",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "foreign",
-        expect: empty,
-        note: "different organisation",
-      },
-      {
-        actor: "orgBManager",
-        scope: "foreign",
-        expect: empty,
-        note: "different organisation",
-      },
-      {
-        actor: "orgBPatient",
-        scope: "foreign",
-        expect: empty,
-        note: "different organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "same organisation" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "different organisation" },
+      { actor: "orgBManager", scope: "foreign", expect: empty, note: "different organisation" },
+      { actor: "orgBPatient", scope: "foreign", expect: empty, note: "different organisation" },
     ],
   },
   {
@@ -3105,41 +2256,13 @@ export const MATRIX: Entry[] = [
     // here we assert only the access boundary (object vs null).
     build: async (w) => ({ machineId: w.machine }),
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        scope: "own",
-        expect: ok,
-        note: "holds the launch right",
-      },
-      {
-        actor: "stranger",
-        expect: empty,
-        note: "null without access or a right",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "null for an unrelated machine",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "own", expect: ok, note: "holds the launch right" },
+      { actor: "stranger", expect: empty, note: "null without access or a right" },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the machine's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -3195,18 +2318,9 @@ export const MATRIX: Entry[] = [
       if (asArray(res).length < 1) throw new Error("Expected telemetry points");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", scope: "own", expect: ok, note: "the rider" },
-      {
-        actor: "stranger",
-        scope: "other",
-        expect: empty,
-        note: "[] for an unrelated user",
-      },
+      { actor: "stranger", scope: "other", expect: empty, note: "[] for an unrelated user" },
       { actor: "admin", expect: ok, note: "admin reads" },
       {
         actor: "manager",
@@ -3214,12 +2328,7 @@ export const MATRIX: Entry[] = [
         expect: ok,
         note: "manages this machine",
       },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the session's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -3261,37 +2370,13 @@ export const MATRIX: Entry[] = [
         throw new Error("Wrong session returned");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", scope: "own", expect: ok, note: "the rider" },
-      {
-        actor: "stranger",
-        scope: "other",
-        expect: empty,
-        note: "null for an unrelated user",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "manages this machine",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "null for an unrelated machine",
-      },
+      { actor: "stranger", scope: "other", expect: empty, note: "null for an unrelated user" },
+      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
       { actor: "admin", expect: ok, note: "admin reads" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "admin of the session's organisation",
-      },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
@@ -3318,34 +2403,15 @@ export const MATRIX: Entry[] = [
   // =========================================================================
   ...(
     [
-      {
-        id: "ecgData.getSessionAllData",
-        ref: api.ecgData.getSessionAllData,
-        extra: {},
-      },
-      {
-        id: "ecgData.getRecentEcgData",
-        ref: api.ecgData.getRecentEcgData,
-        extra: {},
-      },
+      { id: "ecgData.getSessionAllData", ref: api.ecgData.getSessionAllData, extra: {} },
+      { id: "ecgData.getRecentEcgData", ref: api.ecgData.getRecentEcgData, extra: {} },
       {
         id: "ecgData.getSessionEcgRange",
         ref: api.ecgData.getSessionEcgRange,
-        extra: {
-          startTime: () => Date.now() - 60000,
-          endTime: () => Date.now() + 60000,
-        },
+        extra: { startTime: () => Date.now() - 60000, endTime: () => Date.now() + 60000 },
       },
-      {
-        id: "ecgData.getSessionDataStats",
-        ref: api.ecgData.getSessionDataStats,
-        extra: {},
-      },
-      {
-        id: "ecgData.getLatestEcgBatch",
-        ref: api.ecgData.getLatestEcgBatch,
-        extra: {},
-      },
+      { id: "ecgData.getSessionDataStats", ref: api.ecgData.getSessionDataStats, extra: {} },
+      { id: "ecgData.getLatestEcgBatch", ref: api.ecgData.getLatestEcgBatch, extra: {} },
     ] as const
   ).map(
     (fn): Entry => ({
@@ -3374,55 +2440,16 @@ export const MATRIX: Entry[] = [
         }
       },
       cases: [
-        {
-          actor: "anonymous",
-          expect: refuse(NOT_AUTH),
-          note: "sign-in required",
-        },
+        { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
         { actor: "patient", scope: "own", expect: ok, note: "the rider" },
-        {
-          actor: "stranger",
-          scope: "other",
-          expect: empty,
-          note: "empty for an unrelated user",
-        },
-        {
-          actor: "manager",
-          scope: "own",
-          expect: ok,
-          note: "manages this machine",
-        },
-        {
-          actor: "otherManager",
-          scope: "other",
-          expect: empty,
-          note: "empty for an unrelated machine",
-        },
+        { actor: "stranger", scope: "other", expect: empty, note: "empty for an unrelated user" },
+        { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+        { actor: "otherManager", scope: "other", expect: empty, note: "empty for an unrelated machine" },
         { actor: "admin", expect: ok, note: "admin reads" },
-        {
-          actor: "orgAdmin",
-          scope: "own",
-          expect: ok,
-          note: "admin of the session's organisation",
-        },
-        {
-          actor: "orgBAdmin",
-          scope: "foreign",
-          expect: empty,
-          note: "empty for a session of another organisation",
-        },
-        {
-          actor: "orgBManager",
-          scope: "foreign",
-          expect: empty,
-          note: "empty for a session of another organisation",
-        },
-        {
-          actor: "orgBPatient",
-          scope: "foreign",
-          expect: empty,
-          note: "empty for a session of another organisation",
-        },
+        { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
+        { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "empty for a session of another organisation" },
+        { actor: "orgBManager", scope: "foreign", expect: empty, note: "empty for a session of another organisation" },
+        { actor: "orgBPatient", scope: "foreign", expect: empty, note: "empty for a session of another organisation" },
       ],
     }),
   ),
@@ -3461,24 +2488,12 @@ export const MATRIX: Entry[] = [
         throw new Error("Level decision not recorded for the admin");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin records a version" },
-      {
-        actor: "orgAdmin",
-        expect: refuse(UNAUTHORIZED),
-        note: "the register is Anheart's, not an organisation's",
-      },
-      {
-        actor: "orgBAdmin",
-        expect: refuse(UNAUTHORIZED),
-        note: "the register is Anheart's, not an organisation's",
-      },
+      { actor: "orgAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
+      { actor: "orgBAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
     ],
   },
   {
@@ -3511,24 +2526,12 @@ export const MATRIX: Entry[] = [
         throw new Error("Expected the level history of the version");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "manager", expect: refuse(UNAUTHORIZED), note: "not an admin" },
       { actor: "admin", expect: ok, note: "admin reads the register" },
-      {
-        actor: "orgAdmin",
-        expect: refuse(UNAUTHORIZED),
-        note: "the register is Anheart's, not an organisation's",
-      },
-      {
-        actor: "orgBAdmin",
-        expect: refuse(UNAUTHORIZED),
-        note: "the register is Anheart's, not an organisation's",
-      },
+      { actor: "orgAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
+      { actor: "orgBAdmin", expect: refuse(UNAUTHORIZED), note: "the register is Anheart's, not an organisation's" },
     ],
   },
   {
@@ -3557,46 +2560,14 @@ export const MATRIX: Entry[] = [
       }
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "admin",
-        expect: ok,
-        note: "Anheart admin reads the global current version",
-      },
-      {
-        actor: "orgAdmin",
-        expect: ok,
-        note: "centre A reads the global current version",
-      },
-      {
-        actor: "manager",
-        expect: ok,
-        note: "a manager reads the global current version",
-      },
-      {
-        actor: "patient",
-        expect: ok,
-        note: "a patient reads the global current version",
-      },
-      {
-        actor: "orgBAdmin",
-        expect: ok,
-        note: "centre B reads the global current version",
-      },
-      {
-        actor: "orgBManager",
-        expect: ok,
-        note: "a centre B manager reads the global current version",
-      },
-      {
-        actor: "orgBPatient",
-        expect: ok,
-        note: "a centre B patient reads the global current version",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "Anheart admin reads the global current version" },
+      { actor: "orgAdmin", expect: ok, note: "centre A reads the global current version" },
+      { actor: "manager", expect: ok, note: "a manager reads the global current version" },
+      { actor: "patient", expect: ok, note: "a patient reads the global current version" },
+      { actor: "orgBAdmin", expect: ok, note: "centre B reads the global current version" },
+      { actor: "orgBManager", expect: ok, note: "a centre B manager reads the global current version" },
+      { actor: "orgBPatient", expect: ok, note: "a centre B patient reads the global current version" },
     ],
   },
 
@@ -3616,36 +2587,12 @@ export const MATRIX: Entry[] = [
       );
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "patient",
-        expect: empty,
-        note: "[]: only the Anheart admin creates machines",
-      },
-      {
-        actor: "manager",
-        expect: empty,
-        note: "[]: only the Anheart admin creates machines",
-      },
-      {
-        actor: "admin",
-        expect: ok,
-        note: "every organisation, to create a machine in",
-      },
-      {
-        actor: "orgAdmin",
-        expect: empty,
-        note: "[]: an organisation admin works in their own",
-      },
-      {
-        actor: "orgBAdmin",
-        expect: empty,
-        note: "[]: centre B lists no organisation",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: empty, note: "[]: only the Anheart admin creates machines" },
+      { actor: "manager", expect: empty, note: "[]: only the Anheart admin creates machines" },
+      { actor: "admin", expect: ok, note: "every organisation, to create a machine in" },
+      { actor: "orgAdmin", expect: empty, note: "[]: an organisation admin works in their own" },
+      { actor: "orgBAdmin", expect: empty, note: "[]: centre B lists no organisation" },
     ],
   },
 
@@ -3663,70 +2610,17 @@ export const MATRIX: Entry[] = [
     onSuccess: (res, w, actor) => expectCounters(res, actor),
     onFiltered: (res, w, actor) => expectCounters(res, actor),
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "admin",
-        expect: ok,
-        note: "members, machines and sessions of every organisation",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "members, machines and sessions of centre A only",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: filtered,
-        note: "their patients, machines and sessions; no member count",
-      },
-      {
-        actor: "otherManager",
-        scope: "own",
-        expect: filtered,
-        note: "their patients, machines and sessions; no member count",
-      },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: filtered,
-        note: "their own sessions only; no machine, no member",
-      },
-      {
-        actor: "otherPatient",
-        scope: "self",
-        expect: filtered,
-        note: "their own sessions only",
-      },
-      {
-        actor: "stranger",
-        scope: "self",
-        expect: filtered,
-        note: "no session of their own: zero",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "members, machines and sessions of centre B only",
-      },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: filtered,
-        note: "their patient, machine and session of centre B",
-      },
-      {
-        actor: "orgBPatient",
-        scope: "self",
-        expect: filtered,
-        note: "their own session of centre B only",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "members, machines and sessions of every organisation" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "members, machines and sessions of centre A only" },
+      { actor: "manager", scope: "own", expect: filtered, note: "their patients, machines and sessions; no member count" },
+      { actor: "otherManager", scope: "own", expect: filtered, note: "their patients, machines and sessions; no member count" },
+      { actor: "patient", scope: "self", expect: filtered, note: "their own sessions only; no machine, no member" },
+      { actor: "otherPatient", scope: "self", expect: filtered, note: "their own sessions only" },
+      { actor: "stranger", scope: "self", expect: filtered, note: "no session of their own: zero" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "members, machines and sessions of centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "their patient, machine and session of centre B" },
+      { actor: "orgBPatient", scope: "self", expect: filtered, note: "their own session of centre B only" },
     ],
   },
 
@@ -3757,14 +2651,7 @@ export const MATRIX: Entry[] = [
       const summary = res as Record<string, unknown>;
       expectExactly(
         Object.keys(summary).filter((key) => summary[key] !== undefined),
-        [
-          "_id",
-          "createdAt",
-          "downsampledEcg",
-          "duration",
-          "metrics",
-          "sessionId",
-        ],
+        ["_id", "createdAt", "downsampledEcg", "duration", "metrics", "sessionId"],
         "Fields of the summary with its ECG",
       );
       const ecg = JSON.stringify(summary.downsampledEcg);
@@ -3823,10 +2710,7 @@ export const MATRIX: Entry[] = [
     },
     onFiltered: (res, w, actor, scope) => {
       const rider = scope === "self" ? userId(w, actor) : w.patient;
-      const rows = asArray(res) as {
-        sessionId: Id<"sessions">;
-        summary: unknown;
-      }[];
+      const rows = asArray(res) as { sessionId: Id<"sessions">; summary: unknown }[];
       if (rows.length !== 1 || rows[0].summary === null)
         throw new Error("Expected exactly one session, with its summary");
       return w.t.run(async (ctx) => {
@@ -3836,72 +2720,18 @@ export const MATRIX: Entry[] = [
       });
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "admin", expect: ok, note: "any rider, in every organisation" },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: filtered,
-        note: "a rider of their organisation",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: filtered,
-        note: "the sessions on the machine they manage",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "[] for a rider who rode none of their machines",
-      },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: filtered,
-        note: "their own history",
-      },
-      {
-        actor: "patient",
-        scope: "other",
-        expect: empty,
-        note: "[] for another rider",
-      },
-      {
-        actor: "stranger",
-        scope: "other",
-        expect: empty,
-        note: "[] for a rider they have nothing to do with",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "foreign",
-        expect: empty,
-        note: "[] for a rider of another organisation",
-      },
-      {
-        actor: "orgBManager",
-        scope: "foreign",
-        expect: empty,
-        note: "[] for a rider of another organisation",
-      },
-      {
-        actor: "orgBPatient",
-        scope: "foreign",
-        expect: empty,
-        note: "[] for a rider of another organisation",
-      },
-      {
-        actor: "orgBPatient",
-        scope: "self",
-        expect: filtered,
-        note: "their own history, in centre B",
-      },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "a rider of their organisation" },
+      { actor: "manager", scope: "own", expect: filtered, note: "the sessions on the machine they manage" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "[] for a rider who rode none of their machines" },
+      { actor: "patient", scope: "self", expect: filtered, note: "their own history" },
+      { actor: "patient", scope: "other", expect: empty, note: "[] for another rider" },
+      { actor: "stranger", scope: "other", expect: empty, note: "[] for a rider they have nothing to do with" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "[] for a rider of another organisation" },
+      { actor: "orgBManager", scope: "foreign", expect: empty, note: "[] for a rider of another organisation" },
+      { actor: "orgBPatient", scope: "foreign", expect: empty, note: "[] for a rider of another organisation" },
+      { actor: "orgBPatient", scope: "self", expect: filtered, note: "their own history, in centre B" },
     ],
   },
 
@@ -3918,58 +2748,15 @@ export const MATRIX: Entry[] = [
     },
     onSuccess: (res, w, actor) => expectAlertsOf(res, w, actor),
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "manager",
-        scope: "own",
-        expect: ok,
-        note: "the alert of the machine they manage",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "own",
-        expect: ok,
-        note: "the alert of a machine of their organisation",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: empty,
-        note: "no alert of a machine they do not manage",
-      },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: empty,
-        note: "a patient receives no alert",
-      },
-      {
-        actor: "admin",
-        expect: empty,
-        note: "the Anheart team's alerts are ANH-150's",
-      },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: ok,
-        note: "their centre B alert only",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "own",
-        expect: ok,
-        note: "their centre B alert only",
-      },
-      {
-        actor: "orgBPatient",
-        scope: "self",
-        expect: empty,
-        note: "a patient receives no alert",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "own", expect: ok, note: "the alert of the machine they manage" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "the alert of a machine of their organisation" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "no alert of a machine they do not manage" },
+      { actor: "patient", scope: "self", expect: empty, note: "a patient receives no alert" },
+      { actor: "admin", expect: empty, note: "the Anheart team's alerts are ANH-150's" },
+      { actor: "orgBManager", scope: "own", expect: ok, note: "their centre B alert only" },
+      { actor: "orgBAdmin", scope: "own", expect: ok, note: "their centre B alert only" },
+      { actor: "orgBPatient", scope: "self", expect: empty, note: "a patient receives no alert" },
     ],
   },
   {
@@ -3983,41 +2770,15 @@ export const MATRIX: Entry[] = [
     onSuccess: (res, _w, actor) => {
       const expected = actor === "otherManager" ? 0 : 1;
       if (res !== expected)
-        throw new Error(
-          `Expected ${expected} unread alerts, got ${String(res)}`,
-        );
+        throw new Error(`Expected ${expected} unread alerts, got ${String(res)}`);
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: empty,
-        note: "null: the header asks signed out too",
-      },
+      { actor: "anonymous", expect: empty, note: "null: the header asks signed out too" },
       { actor: "manager", scope: "own", expect: ok, note: "1: their alert" },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: ok,
-        note: "0: none of another machine",
-      },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: empty,
-        note: "null: a patient receives no alert",
-      },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: ok,
-        note: "1: their centre B alert only",
-      },
-      {
-        actor: "orgBPatient",
-        scope: "self",
-        expect: empty,
-        note: "null: a patient receives no alert",
-      },
+      { actor: "otherManager", scope: "other", expect: ok, note: "0: none of another machine" },
+      { actor: "patient", scope: "self", expect: empty, note: "null: a patient receives no alert" },
+      { actor: "orgBManager", scope: "own", expect: ok, note: "1: their centre B alert only" },
+      { actor: "orgBPatient", scope: "self", expect: empty, note: "null: a patient receives no alert" },
     ],
   },
   {
@@ -4037,49 +2798,15 @@ export const MATRIX: Entry[] = [
       if (row?.read !== true) throw new Error("Alert not marked as read");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "manager", scope: "own", expect: ok, note: "their own alert" },
       { actor: "orgAdmin", scope: "own", expect: ok, note: "their own alert" },
-      {
-        actor: "orgAdmin",
-        scope: "other",
-        expect: refuse(/notification_not_found/),
-        note: "another account's alert, same organisation",
-      },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: refuse(/notification_not_found/),
-        note: "another account's alert",
-      },
-      {
-        actor: "admin",
-        scope: "other",
-        expect: refuse(/notification_not_found/),
-        note: "even the Anheart admin reads only their own",
-      },
-      {
-        actor: "patient",
-        scope: "other",
-        expect: refuse(UNAUTHORIZED),
-        note: "a patient has no alert",
-      },
-      {
-        actor: "orgBManager",
-        scope: "foreign",
-        expect: refuse(/notification_not_found/),
-        note: "centre A alert, by identifier",
-      },
-      {
-        actor: "orgBAdmin",
-        scope: "foreign",
-        expect: refuse(/notification_not_found/),
-        note: "centre A alert, by identifier",
-      },
+      { actor: "orgAdmin", scope: "other", expect: refuse(/notification_not_found/), note: "another account's alert, same organisation" },
+      { actor: "otherManager", scope: "other", expect: refuse(/notification_not_found/), note: "another account's alert" },
+      { actor: "admin", scope: "other", expect: refuse(/notification_not_found/), note: "even the Anheart admin reads only their own" },
+      { actor: "patient", scope: "other", expect: refuse(UNAUTHORIZED), note: "a patient has no alert" },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(/notification_not_found/), note: "centre A alert, by identifier" },
+      { actor: "orgBAdmin", scope: "foreign", expect: refuse(/notification_not_found/), note: "centre A alert, by identifier" },
     ],
   },
   {
@@ -4104,24 +2831,10 @@ export const MATRIX: Entry[] = [
         throw new Error("Another account's alert was marked");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "manager", scope: "own", expect: ok, note: "their alert only" },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: refuse(UNAUTHORIZED),
-        note: "a patient has no alert",
-      },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: ok,
-        note: "their centre B alert only, none of centre A",
-      },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient has no alert" },
+      { actor: "orgBManager", scope: "own", expect: ok, note: "their centre B alert only, none of centre A" },
     ],
   },
   {
@@ -4130,48 +2843,18 @@ export const MATRIX: Entry[] = [
     kind: "query",
     build: async () => ({}),
     onSuccess: (res) => {
-      const settings = res as {
-        emailAvailable: boolean;
-        email: Record<string, boolean>;
-      };
+      const settings = res as { emailAvailable: boolean; email: Record<string, boolean> };
       if (settings.emailAvailable !== false)
         throw new Error("No e-mail can be sent without its three variables");
-      if (
-        settings.email.drive_fault !== true ||
-        settings.email.machine_offline !== false
-      )
+      if (settings.email.drive_fault !== true || settings.email.machine_offline !== false)
         throw new Error("Expected the default choices");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
-      {
-        actor: "manager",
-        scope: "self",
-        expect: ok,
-        note: "their own choices",
-      },
-      {
-        actor: "orgAdmin",
-        scope: "self",
-        expect: ok,
-        note: "their own choices",
-      },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: empty,
-        note: "null: a patient receives no alert",
-      },
-      {
-        actor: "orgBManager",
-        scope: "self",
-        expect: ok,
-        note: "their own choices",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "self", expect: ok, note: "their own choices" },
+      { actor: "orgAdmin", scope: "self", expect: ok, note: "their own choices" },
+      { actor: "patient", scope: "self", expect: empty, note: "null: a patient receives no alert" },
+      { actor: "orgBManager", scope: "self", expect: ok, note: "their own choices" },
     ],
   },
   {
@@ -4189,30 +2872,11 @@ export const MATRIX: Entry[] = [
         throw new Error("Choice not recorded");
     },
     cases: [
-      {
-        actor: "anonymous",
-        expect: refuse(NOT_AUTH),
-        note: "sign-in required",
-      },
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       { actor: "manager", scope: "self", expect: ok, note: "their own choice" },
-      {
-        actor: "orgAdmin",
-        scope: "self",
-        expect: ok,
-        note: "their own choice",
-      },
-      {
-        actor: "patient",
-        scope: "self",
-        expect: refuse(UNAUTHORIZED),
-        note: "a patient receives no alert",
-      },
-      {
-        actor: "orgBManager",
-        scope: "self",
-        expect: ok,
-        note: "their own choice",
-      },
+      { actor: "orgAdmin", scope: "self", expect: ok, note: "their own choice" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient receives no alert" },
+      { actor: "orgBManager", scope: "self", expect: ok, note: "their own choice" },
     ],
   },
   {
@@ -4789,13 +3453,7 @@ async function addSummarizedSession(
         durationS: 600,
         samples: 3000,
         heartRate: { minBpm: 90, meanBpm: 138.5, maxBpm: 152, samples: 2900 },
-        zone: {
-          lowBpm: 130,
-          highBpm: 150,
-          inZoneS: 420,
-          aboveZoneS: 12,
-          belowZoneS: 140,
-        },
+        zone: { lowBpm: 130, highBpm: 150, inZoneS: 420, aboveZoneS: 12, belowZoneS: 140 },
         maxOutputRpm: 27.5,
         maxMotorRpm: 1369,
         reference: { maxG: 1.2, maxGRate: 0.02, radiusM: null },
@@ -4883,49 +3541,14 @@ function summaryCases(): Case[] {
   return [
     { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
     { actor: "patient", scope: "own", expect: ok, note: "the rider" },
-    {
-      actor: "stranger",
-      scope: "other",
-      expect: empty,
-      note: "null for an unrelated user",
-    },
-    {
-      actor: "manager",
-      scope: "own",
-      expect: ok,
-      note: "manages this machine",
-    },
-    {
-      actor: "otherManager",
-      scope: "other",
-      expect: empty,
-      note: "null for an unrelated machine",
-    },
+    { actor: "stranger", scope: "other", expect: empty, note: "null for an unrelated user" },
+    { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
+    { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
     { actor: "admin", expect: ok, note: "admin reads" },
-    {
-      actor: "orgAdmin",
-      scope: "own",
-      expect: ok,
-      note: "admin of the session's organisation",
-    },
-    {
-      actor: "orgBAdmin",
-      scope: "foreign",
-      expect: empty,
-      note: "null for a session of another organisation",
-    },
-    {
-      actor: "orgBManager",
-      scope: "foreign",
-      expect: empty,
-      note: "null for a session of another organisation",
-    },
-    {
-      actor: "orgBPatient",
-      scope: "foreign",
-      expect: empty,
-      note: "null for a session of another organisation",
-    },
+    { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation" },
+    { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
+    { actor: "orgBManager", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
+    { actor: "orgBPatient", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
   ];
 }
 
@@ -4936,30 +3559,10 @@ function summaryCases(): Case[] {
  * counted by anyone.
  */
 async function seedCountedWorld(w: World): Promise<void> {
-  await addSession(w, {
-    machineId: w.machine,
-    userId: w.patient,
-    status: "active",
-    kind: "auto",
-  });
-  await addSession(w, {
-    machineId: w.machine,
-    userId: w.patient,
-    status: "completed",
-    kind: "auto",
-  });
-  await addSession(w, {
-    machineId: w.otherMachine,
-    userId: w.otherPatient,
-    status: "pending",
-    kind: "auto",
-  });
-  await addSession(w, {
-    machineId: w.orgBMachine,
-    userId: w.orgBPatient,
-    status: "active",
-    kind: "auto",
-  });
+  await addSession(w, { machineId: w.machine, userId: w.patient, status: "active", kind: "auto" });
+  await addSession(w, { machineId: w.machine, userId: w.patient, status: "completed", kind: "auto" });
+  await addSession(w, { machineId: w.otherMachine, userId: w.otherPatient, status: "pending", kind: "auto" });
+  await addSession(w, { machineId: w.orgBMachine, userId: w.orgBPatient, status: "active", kind: "auto" });
   await w.t.run(async (ctx) => {
     await ctx.db.patch(w.otherMachine, { status: "offline" });
     await ctx.db.patch(w.orgBMachine, { status: "in_session" });
@@ -5026,24 +3629,9 @@ const COUNTED: Partial<Record<Actor, Counted>> = {
     machines: { total: 1, signals: [] },
     sessions: { active: 0, pending: 1 },
   },
-  patient: {
-    members: null,
-    patients: null,
-    machines: null,
-    sessions: { active: 1, pending: 0 },
-  },
-  otherPatient: {
-    members: null,
-    patients: null,
-    machines: null,
-    sessions: { active: 0, pending: 1 },
-  },
-  stranger: {
-    members: null,
-    patients: null,
-    machines: null,
-    sessions: { active: 0, pending: 0 },
-  },
+  patient: { members: null, patients: null, machines: null, sessions: { active: 1, pending: 0 } },
+  otherPatient: { members: null, patients: null, machines: null, sessions: { active: 0, pending: 1 } },
+  stranger: { members: null, patients: null, machines: null, sessions: { active: 0, pending: 0 } },
   orgBAdmin: {
     members: { admin: 1, gestionnaire: 1, user: 1 },
     patients: null,
@@ -5056,19 +3644,13 @@ const COUNTED: Partial<Record<Actor, Counted>> = {
     machines: { total: 1, signals: ["in_session"] },
     sessions: { active: 1, pending: 0 },
   },
-  orgBPatient: {
-    members: null,
-    patients: null,
-    machines: null,
-    sessions: { active: 1, pending: 0 },
-  },
+  orgBPatient: { members: null, patients: null, machines: null, sessions: { active: 1, pending: 0 } },
 };
 
 /** Fail unless the counters are exactly those of `COUNTED` for this actor. */
 function expectCounters(res: unknown, actor: Actor): void {
   const expected = COUNTED[actor];
-  if (expected === undefined)
-    throw new Error(`No counters expected for ${actor}`);
+  if (expected === undefined) throw new Error(`No counters expected for ${actor}`);
   const answer = res as {
     serverNow: unknown;
     members: Counted["members"];
@@ -5107,88 +3689,20 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   path: string;
   tests: string;
 }> = [
-  {
-    method: "POST",
-    path: "/clerk/webhook",
-    tests:
-      "clerkWebhook.test.ts (signature, timestamp, replay, organization and membership ordering)",
-  },
-  {
-    method: "POST",
-    path: "/api/machine/records/upload-url",
-    tests:
-      "recordStorage.test.ts (machine authentication, metadata, closed session); rateLimits.test.ts (limit per machine)",
-  },
-  {
-    method: "POST",
-    path: "/api/machine/records/commit",
-    tests:
-      "recordStorage.test.ts (machine authentication, idempotence, hash mismatch)",
-  },
-  {
-    method: "GET",
-    path: "/api/machine/records/status",
-    tests: "recordStorage.test.ts (machine authentication, session ownership)",
-  },
-  {
-    method: "GET",
-    path: "/api/records/download",
-    tests: "recordStorage.test.ts (Clerk identity, role and organisation)",
-  },
-  {
-    method: "OPTIONS",
-    path: "/api/records/download",
-    tests: "recordStorage.test.ts (CORS preflight contains no data)",
-  },
-  {
-    method: "POST",
-    path: "/api/machine/heartbeat",
-    tests:
-      "machineAuth.test.ts; httpRoutes.test.ts; rateLimits.test.ts (limit per machine, 16 KiB, 1000 heartbeats in 10 s)",
-  },
-  {
-    method: "GET",
-    path: "/api/machine/training/poll",
-    tests:
-      "httpRoutes.test.ts (auto, this machine); rateLimits.test.ts (limit per machine); armingRecheck.test.ts (never a launch refused at arming, expired included)",
-  },
+  { method: "POST", path: "/clerk/webhook", tests: "clerkWebhook.test.ts (signature, timestamp, replay, organization and membership ordering)" },
+  {method:"POST",path:"/api/machine/records/upload-url",tests:"recordStorage.test.ts (machine authentication, metadata, closed session); rateLimits.test.ts (limit per machine)"},
+  {method:"POST",path:"/api/machine/records/commit",tests:"recordStorage.test.ts (machine authentication, idempotence, hash mismatch)"},
+  {method:"GET",path:"/api/machine/records/status",tests:"recordStorage.test.ts (machine authentication, session ownership)"},
+  {method:"GET",path:"/api/records/download",tests:"recordStorage.test.ts (Clerk identity, role and organisation)"},
+  {method:"OPTIONS",path:"/api/records/download",tests:"recordStorage.test.ts (CORS preflight contains no data)"},
+  { method: "POST", path: "/api/machine/heartbeat", tests: "machineAuth.test.ts; httpRoutes.test.ts; rateLimits.test.ts (limit per machine, 16 KiB, 1000 heartbeats in 10 s)" },
+  { method: "GET", path: "/api/machine/training/poll", tests: "httpRoutes.test.ts (auto, this machine); rateLimits.test.ts (limit per machine); armingRecheck.test.ts (never a launch refused at arming, expired included)" },
   { method: "GET", path: "/api/machine/roster", tests: "httpRoutes.test.ts" },
-  {
-    method: "POST",
-    path: "/api/machine/profiles",
-    tests: "httpRoutes.test.ts (malformed body)",
-  },
-  {
-    method: "POST",
-    path: "/api/machine/training/start",
-    tests:
-      "httpRoutes.test.ts (non-pending refused); contract.test.ts and armingRecheck.test.ts (409 with the arming refusal's code)",
-  },
-  {
-    method: "POST",
-    path: "/api/machine/training/local",
-    tests: "httpRoutes.test.ts (idempotent)",
-  },
-  {
-    method: "POST",
-    path: "/api/machine/training/end",
-    tests: "httpRoutes.test.ts (idempotent)",
-  },
-  {
-    method: "GET",
-    path: "/api/machine/training/status",
-    tests: "httpRoutes.test.ts; rateLimits.test.ts (never limited)",
-  },
-  {
-    method: "POST",
-    path: "/api/machine/training/telemetry",
-    tests:
-      "httpRoutes.test.ts (other machine refused); journalSync.test.ts (idempotent, session window); rateLimits.test.ts (limit per machine, body size, 600 points)",
-  },
-  {
-    method: "POST",
-    path: "/api/machine/training/events",
-    tests:
-      "httpRoutes.test.ts (other machine refused); journalSync.test.ts (idempotent, sizes, session window); rateLimits.test.ts (limit per machine, body size, largest batch)",
-  },
+  { method: "POST", path: "/api/machine/profiles", tests: "httpRoutes.test.ts (malformed body)" },
+  { method: "POST", path: "/api/machine/training/start", tests: "httpRoutes.test.ts (non-pending refused); contract.test.ts and armingRecheck.test.ts (409 with the arming refusal's code)" },
+  { method: "POST", path: "/api/machine/training/local", tests: "httpRoutes.test.ts (idempotent)" },
+  { method: "POST", path: "/api/machine/training/end", tests: "httpRoutes.test.ts (idempotent)" },
+  { method: "GET", path: "/api/machine/training/status", tests: "httpRoutes.test.ts; rateLimits.test.ts (never limited)" },
+  { method: "POST", path: "/api/machine/training/telemetry", tests: "httpRoutes.test.ts (other machine refused); journalSync.test.ts (idempotent, session window); rateLimits.test.ts (limit per machine, body size, 600 points)" },
+  { method: "POST", path: "/api/machine/training/events", tests: "httpRoutes.test.ts (other machine refused); journalSync.test.ts (idempotent, sizes, session window); rateLimits.test.ts (limit per machine, body size, largest batch)" },
 ];
