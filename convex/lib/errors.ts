@@ -137,6 +137,8 @@ export const DASHBOARD_ERRORS = {
     "The machine takes manual sessions only, started at the machine.",
   medical_parameters_unavailable:
     "No signed medical parameters version is registered on the server, so remote launches are refused.",
+  medical_parameters_unsigned:
+    "The machine's medical parameters are unsigned: it is in bench mode only, with no programmed session or person on board.",
   programme_not_on_machine:
     "The programme is not, or no longer, among the machine's programmes.",
   rider_hr_max_missing:

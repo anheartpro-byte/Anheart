@@ -66,7 +66,10 @@ import { authorizedMachineLive } from "./lib/trainingPrivacy";
 import { machineError, type MachineErrorCode } from "./lib/contract";
 // The stable codes of the refusals the site words (ANH-90, ANH-144).
 import { refusal, type DashboardErrorCode } from "./lib/errors";
-import { currentMedicalParameters } from "./lib/medicalParameters";
+import {
+  currentMedicalParameters,
+  medicalParametersStatus,
+} from "./lib/medicalParameters";
 import {
   estimateHrMax,
   zoneCeilingBpm,
@@ -447,6 +450,16 @@ export const listLaunchableMachines = query({
       lastHeartbeat: v.number(),
       serverNow: v.number(),
       programsEnabled: v.boolean(),
+      medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
+      medicalParametersStatus: v.union(
+        v.literal("unknown"),
+        v.literal("unsigned"),
+        v.literal("no_reference"),
+        v.literal("current"),
+        v.literal("obsolete"),
+        v.literal("ahead"),
+      ),
+      medicalParametersReferenceVersion: v.union(v.string(), v.null()),
       live: v.union(liveStateValidator, v.null()),
       profiles: v.array(profileValidator),
       myHrMax: v.union(v.number(), v.null()),
@@ -496,6 +509,12 @@ export const listLaunchableMachines = query({
         lastHeartbeat: machine.lastHeartbeat,
         serverNow: now,
         programsEnabled: machine.programsEnabled ?? false,
+        medicalParametersVersion: machine.medicalParametersVersion,
+        medicalParametersStatus: medicalParametersStatus(
+          machine.medicalParametersVersion,
+          medical?.version ?? null,
+        ),
+        medicalParametersReferenceVersion: medical?.version ?? null,
         live:
           machine.live && now - machine.live.updatedAt < LIVE_FRESH_MS
             ? await authorizedMachineLive(ctx, me, machine)
@@ -906,6 +925,9 @@ export const launchAutoSession = mutation({
     if (machine.status === "offline") throw refusal("machine_offline");
     const medical = await currentMedicalParameters(ctx);
     if (medical === null) throw refusal("medical_parameters_unavailable");
+    if (machine.medicalParametersVersion === null) {
+      throw refusal("medical_parameters_unsigned");
+    }
     if (!machine.programsEnabled) {
       throw refusal("programs_disabled");
     }
@@ -1030,6 +1052,16 @@ export const getMachineLive = query({
     v.object({
       status: v.string(),
       programsEnabled: v.boolean(),
+      medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
+      medicalParametersStatus: v.union(
+        v.literal("unknown"),
+        v.literal("unsigned"),
+        v.literal("no_reference"),
+        v.literal("current"),
+        v.literal("obsolete"),
+        v.literal("ahead"),
+      ),
+      medicalParametersReferenceVersion: v.union(v.string(), v.null()),
       live: v.union(liveStateValidator, v.null()),
       stale: v.boolean(),
       // The server's clock in this answer (see listLaunchableMachines).
@@ -1044,9 +1076,16 @@ export const getMachineLive = query({
     if (!machine) return null;
     const live = await authorizedMachineLive(ctx, me, machine);
     const now = Date.now();
+    const medical = await currentMedicalParameters(ctx);
     return {
       status: machine.status,
       programsEnabled: machine.programsEnabled ?? false,
+      medicalParametersVersion: machine.medicalParametersVersion,
+      medicalParametersStatus: medicalParametersStatus(
+        machine.medicalParametersVersion,
+        medical?.version ?? null,
+      ),
+      medicalParametersReferenceVersion: medical?.version ?? null,
       live,
       stale: live === null || now - live.updatedAt > LIVE_FRESH_MS,
       serverNow: now,

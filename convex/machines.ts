@@ -27,6 +27,10 @@ import { insertMachineKey } from "./lib/machineKeys";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
 import { scheduleAlert } from "./lib/notifications";
 import { interruptSilentSessions, resumeNamedSession } from "./training";
+import {
+  currentMedicalParameters,
+  medicalParametersStatus,
+} from "./lib/medicalParameters";
 // One threshold for the server's job and for the dashboard, which reads the
 // age of `lastHeartbeat` on `serverNow` (hooks/use-freshness.ts).
 import { LIVE_FRESH_MS } from "../lib/training";
@@ -302,6 +306,16 @@ export const getMachine = query({
       softwareVersion: v.optional(v.string()),
       contractVersion: v.optional(v.string()),
       lastVersionSeenAt: v.optional(v.number()),
+      medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
+      medicalParametersStatus: v.union(
+        v.literal("unknown"),
+        v.literal("unsigned"),
+        v.literal("no_reference"),
+        v.literal("current"),
+        v.literal("obsolete"),
+        v.literal("ahead"),
+      ),
+      medicalParametersReferenceVersion: v.union(v.string(), v.null()),
       // The server's clock in this answer: what `lastHeartbeat` is aged on.
       serverNow: v.number(),
       gestionnaires: v.array(
@@ -329,6 +343,8 @@ export const getMachine = query({
     if (!hasAccess) {
       return null;
     }
+
+    const medical = await currentMedicalParameters(ctx);
 
     // Get all gestionnaires for this machine
     const relations = await ctx.db
@@ -371,6 +387,12 @@ export const getMachine = query({
       softwareVersion: machine.softwareVersion,
       contractVersion: machine.contractVersion,
       lastVersionSeenAt: machine.lastVersionSeenAt,
+      medicalParametersVersion: machine.medicalParametersVersion,
+      medicalParametersStatus: medicalParametersStatus(
+        machine.medicalParametersVersion,
+        medical?.version ?? null,
+      ),
+      medicalParametersReferenceVersion: medical?.version ?? null,
       serverNow: Date.now(),
       gestionnaires: validGestionnaires,
     };
@@ -617,6 +639,7 @@ export const recordHeartbeat = internalMutation({
     activeSessionId: v.optional(v.string()),
     softwareVersion: v.optional(v.string()),
     contractVersion: v.optional(v.string()),
+    medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
     health: v.optional(machineHealthValidator),
   },
   returns: v.null(),
@@ -649,6 +672,7 @@ export const recordHeartbeat = internalMutation({
         : {
             softwareVersion: args.softwareVersion,
             contractVersion: args.contractVersion,
+            medicalParametersVersion: args.medicalParametersVersion,
             lastVersionSeenAt: now,
           }),
     });

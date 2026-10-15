@@ -1361,6 +1361,8 @@ describe("what the dashboard is shown about machines and sessions", () => {
     ).toEqual({
       status: "online",
       programsEnabled: false,
+      medicalParametersStatus: "unknown",
+      medicalParametersReferenceVersion: "0.1.0",
       live: null,
       stale: true,
       serverNow: NOW,

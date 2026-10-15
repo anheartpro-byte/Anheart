@@ -100,6 +100,9 @@ function machine(overrides: Partial<Machine> = {}): Machine {
     softwareVersion: "pi-1.4.0",
     contractVersion: "2",
     lastVersionSeenAt: NOW - 120_000,
+    medicalParametersVersion: undefined,
+    medicalParametersStatus: "unknown",
+    medicalParametersReferenceVersion: "0.1.0",
     serverNow: NOW,
     gestionnaires: [
       {
@@ -552,6 +555,9 @@ describe("machine page: launching a session on the machine", () => {
         lastHeartbeat: NOW - 5_000,
         serverNow: NOW,
         programsEnabled: true,
+        medicalParametersVersion: undefined,
+        medicalParametersStatus: "unknown",
+        medicalParametersReferenceVersion: "0.1.0",
         live: null,
         profiles: [
           {

@@ -345,6 +345,7 @@ export default defineSchema({
     softwareVersion: v.optional(v.string()),
     contractVersion: v.optional(v.string()),
     lastVersionSeenAt: v.optional(v.number()),
+    medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
     health: v.optional(machineHealthValidator),
     healthUpdatedAt: v.optional(v.number()),
   })

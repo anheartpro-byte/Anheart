@@ -7,6 +7,7 @@ import shippedSignatureUrl from "../raspberry-pi/config/medical_parameters.sig?u
 import {
   compareMedicalVersions,
   MEDICAL_PUBLIC_KEY_PEM,
+  medicalParametersStatus,
   parseMedicalDocument,
   verifyMedicalParametersSignature,
 } from "./lib/medicalParameters";
@@ -383,6 +384,57 @@ describe("medical signatures and version registration", () => {
 });
 
 describe("current medical parameters in training", () => {
+  it("classifies each reported medical version against the reference", () => {
+    const cases = [
+      [undefined, "0.1.0", "unknown"],
+      [null, "0.1.0", "unsigned"],
+      ["0.1.0", null, "no_reference"],
+      ["0.1.0", "0.1.0", "current"],
+      ["0.0.9", "0.1.0", "obsolete"],
+      ["0.1.1", "0.1.0", "ahead"],
+    ] as const;
+    for (const [machineVersion, referenceVersion, expected] of cases) {
+      expect(
+        medicalParametersStatus(machineVersion, referenceVersion),
+      ).toBe(expected);
+    }
+  });
+
+  it("refuses an unsigned machine before checking whether its programmes are enabled", async () => {
+    const w = await seedWorld(modules);
+    const launchArgs = { machineId: w.machine, profileId: w.profileId, userId: w.patient };
+    const sessionsBefore = await w.t.run((ctx) =>
+      ctx.db.query("sessions").collect(),
+    );
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.machine, {
+        medicalParametersVersion: null,
+        programsEnabled: false,
+      }),
+    );
+    await expect(
+      as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs),
+    ).rejects.toThrow(/medical_parameters_unsigned/);
+    expect(
+      await w.t.run((ctx) => ctx.db.query("sessions").collect()),
+    ).toEqual(sessionsBefore);
+  });
+
+  it("does not add a refusal when the machine has not announced a medical version", async () => {
+    const w = await seedWorld(modules);
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.machine, { medicalParametersVersion: undefined }),
+    );
+    const sessionId = await as(w.t, "manager").mutation(
+      api.training.launchAutoSession,
+      { machineId: w.machine, profileId: w.profileId, userId: w.patient },
+    );
+    expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "pending",
+      kind: "auto",
+    });
+  });
+
   it("uses a stored fraction and minimum age for remote launch refusals", async () => {
     const w = await seedWorld(modules);
     await insertFixtureVersion(w.t, "0.2.0", { zoneCeilingFraction: 0.8 });

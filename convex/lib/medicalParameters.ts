@@ -43,6 +43,15 @@ const DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 export type ParsedMedicalDocument = MedicalParameters &
   Readonly<{ version: string; issuedAt: string; signedBy: string }>;
 
+/** Status of a machine's reported medical version against the server reference. */
+export type MedicalParametersStatus =
+  | "unknown"
+  | "unsigned"
+  | "no_reference"
+  | "current"
+  | "obsolete"
+  | "ahead";
+
 function skipWhitespace(text: string, cursor: { value: number }): void {
   while (/\s/.test(text[cursor.value] ?? "")) cursor.value += 1;
 }
@@ -299,6 +308,19 @@ export function compareMedicalVersions(left: string, right: string): number {
     if (difference !== 0) return difference;
   }
   return 0;
+}
+
+/** Classify a reported version, preserving absent and unsigned as distinct states. */
+export function medicalParametersStatus(
+  machineVersion: string | null | undefined,
+  referenceVersion: string | null,
+): MedicalParametersStatus {
+  if (machineVersion === undefined) return "unknown";
+  if (machineVersion === null) return "unsigned";
+  if (referenceVersion === null) return "no_reference";
+  const comparison = compareMedicalVersions(machineVersion, referenceVersion);
+  if (comparison === 0) return "current";
+  return comparison < 0 ? "obsolete" : "ahead";
 }
 
 function decodeBase64(value: string): Uint8Array<ArrayBuffer> | null {
