@@ -1159,6 +1159,7 @@ class LocalPanel:
                 operator=operator,
                 subject_id=subject,
                 arming_began=asked,
+                rider=rider,
                 arming_refused=refused,
             )
         )
@@ -1261,6 +1262,7 @@ class LocalPanel:
                 subject_id=command.subject_id,
                 cloud_session_id=command.cloud_session_id,
                 confirmed_by=command.confirmed_by,
+                rider=prepared.value.rider.rider,
                 arming_began=asked,
                 arming_refused=refused,
             )

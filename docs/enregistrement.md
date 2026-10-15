@@ -97,6 +97,8 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | `operator` | identifiant opaque d'opérateur, jamais son nom affiché |
 | `subject_id` | pseudonyme du passager : son identifiant Convex (`userId`), celui du lancement venu du tableau de bord ou du passager choisi dans la liste de la machine pour une séance lancée à la console ; `null` quand personne n'est nommé (séance de banc). Jamais son nom, qui n'est écrit nulle part dans l'enregistrement |
 | `profile` | programme résolu figé, ou `null` pour une séance manuelle |
+| `subject_fit` | `true` pour le passager admis par la console au départ ; `null` pour le banc ou un producteur qui ne juge pas l'aptitude |
+| `fitness_questionnaire_version` | version du questionnaire du passager admis au départ ; `null` pour le banc ou si le producteur ne la connaît pas |
 | `config_hash` | SHA-256 hexadécimal minuscule de la configuration appliquée |
 | `software_version` | version du logiciel qui a écrit l'enregistrement : le contenu de `raspberry-pi/VERSION`, pour la console du Pi comme pour les scénarios de la simulation (`pi-unknown` si le fichier manque ou est mal formé). Aucune variable d'environnement ne la règle. Les enregistrements exportés dans la bibliothèque de la simulation portent `unversioned`, exprès, pour rester reproductibles d'une version à l'autre |
 | `contract_version` | version du contrat d'enregistrement, `2` actuellement |
@@ -615,6 +617,16 @@ source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du
 schéma 1. `Trace.write_jsonl()` reste un export de compatibilité explicite ;
 la CLI écrit par défaut les dossiers v2. `--csv` conserve l'export CSV
 supplémentaire demandé par l'utilisateur, à côté des dossiers.
+
+Les champs ajoutés au schéma 2, dont `subject_fit` et
+`fitness_questionnaire_version`, sont optionnels à la lecture (absence = `null`)
+et toujours émis par le writer. La version reste 2. Un ancien lecteur qui ne
+connaît pas ces champs refuse le nouveau manifeste, comme toute clé inconnue.
+Pour ANH-143 EX-6, ces deux champs sont les seules données de l'aptitude ajoutées
+à l'enregistrement : aucune réponse, note, résultat détaillé, date de validité
+ou donnée de consentement, ni dans le manifeste ni dans les événements ou le
+journal de bord. Le dépôt Convex accepte les deux champs et refuse les clés
+supplémentaires du manifeste.
 
 ## Ce que le format ne contient pas
 

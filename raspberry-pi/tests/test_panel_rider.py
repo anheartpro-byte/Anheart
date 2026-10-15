@@ -115,6 +115,8 @@ async def test_a_programme_runs_for_the_rider_named_and_the_record_names_them_by
     manifest = recorded.recording().manifest
     # The dashboard's identifier, written as it is: the record's pseudonym.
     assert manifest.subject_id == FITTING.user_id
+    assert manifest.subject_fit is True
+    assert manifest.fitness_questionnaire_version == FITTING.questionnaire_version
     # The programme was fitted to the rider's maximum heart rate, from the site.
     assert manifest.profile is not None
     assert manifest.profile.subject_hr_max == 160
@@ -269,6 +271,8 @@ async def test_a_manual_session_with_a_person_on_board_names_its_rider_in_the_re
     assert state_of(recorded) is RuntimeState.RUNNING, recorded.rig.refusals()
     manifest = recorded.recording().manifest
     assert (manifest.occupancy, manifest.subject_id) == ("occupied", RIDER_ID)
+    assert manifest.subject_fit is True
+    assert manifest.fitness_questionnaire_version == RIDER.questionnaire_version
     assert RIDER_NAME.encode() not in recorded.everything_on_disk()
     await recorded.rig.panel.close()
 
@@ -291,6 +295,8 @@ async def test_a_bench_session_names_nobody(tmp_path: Path) -> None:
     assert state_of(recorded) is RuntimeState.RUNNING
     manifest = recorded.recording().manifest
     assert (manifest.occupancy, manifest.subject_id) == ("bench", None)
+    assert manifest.subject_fit is None
+    assert manifest.fitness_questionnaire_version is None
     await recorded.rig.panel.close()
 
 

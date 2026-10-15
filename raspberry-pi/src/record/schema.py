@@ -126,6 +126,8 @@ class Manifest:
     geometry: GeometrySnapshot | None = None
     end_observation: EndObservation | None = None
     files: tuple[str, ...] | None = None
+    subject_fit: Literal[True] | None = None
+    fitness_questionnaire_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)

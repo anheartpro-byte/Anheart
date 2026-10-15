@@ -19,6 +19,29 @@ from src.units import Monotonic, UnixMillis
 from tests.record_support import manifest, row, writer
 
 
+def test_older_manifest_without_fitness_fields_still_reads(tmp_path: Path) -> None:
+    recording = writer(tmp_path)
+    path = recording.path / "manifest.json"
+    document = dict(mapping(JSON.validate_json(path.read_bytes())))
+    assert document.pop("subject_fit") is None
+    assert document.pop("fitness_questionnaire_version") is None
+    path.write_text(encode(document, Privacy()), encoding="utf-8")
+    loaded = read(recording.path)
+    assert isinstance(loaded, Ok)
+    assert loaded.value.manifest.subject_fit is None
+    assert loaded.value.manifest.fitness_questionnaire_version is None
+
+
+@pytest.mark.parametrize("key", ["answers", "notes", "outcome", "consent", "fitnessValidUntil"])
+def test_manifest_with_private_fitness_field_is_refused(tmp_path: Path, key: str) -> None:
+    recording = writer(tmp_path)
+    path = recording.path / "manifest.json"
+    document = dict(mapping(JSON.validate_json(path.read_bytes())))
+    document[key] = "synthetic-private-value"
+    path.write_text(encode(document, Privacy()), encoding="utf-8")
+    assert isinstance(read(recording.path), Err)
+
+
 def test_ex1_ex2_ex8_closed_record_has_exact_members_and_independent_hashes(tmp_path: Path) -> None:
     recording = writer(tmp_path)
     assert isinstance(recording.tick(row()), Ok)
