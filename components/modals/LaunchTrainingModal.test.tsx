@@ -86,6 +86,13 @@ const SPRINT_OPTION = "Sprint · 150-170 bpm · 1 h 30";
 type Machine = {
   status: string;
   programsEnabled: boolean;
+  medicalParametersStatus:
+    | "unknown"
+    | "unsigned"
+    | "no_reference"
+    | "current"
+    | "obsolete"
+    | "ahead";
   profiles: (typeof ENDURANCE)[];
   myHrMax: number | null;
 };
@@ -100,6 +107,7 @@ function machine(over: Partial<Machine> = {}) {
       lastHeartbeat: 0,
       serverNow: 0,
       programsEnabled: true,
+      medicalParametersStatus: "unknown",
       live: null,
       profiles: [ENDURANCE, SPRINT],
       myHrMax: 185,
@@ -160,6 +168,14 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-01T12:00:00Z"));
   resetConvex();
+  answer("medicalParameters:current", {
+    version: "0.1.0",
+    issuedAt: "2026-01-01",
+    signedBy: "test",
+    zoneCeilingFraction: 0.9,
+    minRiderAge: 18,
+    hrMaxFormula: "tanaka",
+  });
   router.push.mockReset();
   mutation(LAUNCH).mockResolvedValue(sessionId);
 });
@@ -377,6 +393,56 @@ describe("ANH-203 launch window: what stops a launch before the server is asked"
       expect(mutationCalls()).toEqual({});
     },
   );
+
+  it("a bench machine shows the unsigned-parameters reason instead of the disabled-programmes reason", async () => {
+    signedInAs("user");
+    machine({ programsEnabled: false, medicalParametersStatus: "unsigned" });
+
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain(t.medicalParametersUnsigned);
+    expect(screen.text()).not.toContain(t.programsDisabled);
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+  });
+
+  it("a missing server reference blocks launch with its specific message", async () => {
+    signedInAs("user");
+    machine();
+    answer("medicalParameters:current", null);
+
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain(t.medicalParametersUnavailable);
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+  });
+
+  it("uses the current medical fraction and minimum age in warnings and launch refusal", async () => {
+    gestionnaireWithPatient({ hrMax: 180, birthYear: 2006 });
+    answer("medicalParameters:current", {
+      version: "0.2.0",
+      issuedAt: "2026-02-01",
+      signedBy: "test",
+      zoneCeilingFraction: 0.75,
+      minRiderAge: 21,
+      hrMaxFormula: "tanaka",
+    });
+
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+    await choose(screen, PATIENT_OPTION);
+
+    expect(screen.text()).toContain(
+      "La zone monte à 140 bpm, au-delà de 75 % de la FC max du pratiquant (180 bpm → plafond 135 bpm).",
+    );
+    expect(screen.text()).toContain(
+      "Séance auto réservée aux pratiquants d'au moins 21 ans.",
+    );
+    expect(launchDisabled(screen)).toBe(true);
+    expect(mutationCalls()).toEqual({});
+  });
 
   it("a machine that is not launchable shows no programme, no duration and no rider to fill in", () => {
     signedInAs("user");

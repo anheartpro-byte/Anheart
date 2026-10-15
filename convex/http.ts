@@ -27,6 +27,7 @@ import {
   payloadTooLarge,
   type MachineLimit,
 } from "./lib/rateLimits";
+import { isMedicalVersion } from "./lib/medicalParameters";
 
 const http = httpRouter();
 http.route({
@@ -88,6 +89,7 @@ http.route({
       live?: Infer<typeof liveStateValidator>;
       programsEnabled?: boolean;
       software_version?: unknown;
+      medical_parameters_version?: unknown;
     } = {};
 
     // An empty body is a heartbeat without a field. Anything else is refused
@@ -130,6 +132,9 @@ http.route({
       wifiStrength: body.wifiStrength,
       activeSessionId: body.activeSessionId,
       softwareVersion: softwareVersionOf(body.software_version),
+      medicalParametersVersion: medicalParametersVersionOf(
+        body.medical_parameters_version,
+      ),
       // The header's value, which the gate just checked, not the body's copy.
       contractVersion: authResult.contract,
       health: parsedHealth?.data,
@@ -242,6 +247,14 @@ function isNum(x: unknown): x is number {
 }
 function isStr(x: unknown): x is string {
   return typeof x === "string";
+}
+
+function medicalParametersVersionOf(
+  value: unknown,
+): string | null | undefined {
+  if (value === null) return null;
+  if (!isMedicalVersion(value)) return undefined;
+  return value;
 }
 
 /** The fields of a heartbeat that are stored as sent: each absent, or of its type. */

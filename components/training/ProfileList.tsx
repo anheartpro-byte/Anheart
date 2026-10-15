@@ -19,18 +19,34 @@ import { armRpm, formatMinutes, type TrainingProfile } from "@/lib/training";
 export function ProfileList({
   profiles,
   programsEnabled,
+  medicalParametersStatus,
 }: {
   profiles: TrainingProfile[];
   programsEnabled: boolean;
+  medicalParametersStatus?:
+    | "unknown"
+    | "unsigned"
+    | "no_reference"
+    | "current"
+    | "obsolete"
+    | "ahead";
 }) {
   const t = useTranslations("training");
+  const medicalIssue =
+    medicalParametersStatus === "unsigned"
+      ? t("launch.medicalParametersUnsigned")
+      : medicalParametersStatus === "no_reference"
+        ? t("launch.medicalParametersUnavailable")
+        : null;
+  const programsUnavailable = !programsEnabled || medicalIssue !== null;
+  const unavailableMessage = medicalIssue ?? t("programs.disabled");
 
   return (
     <div className="space-y-3">
-      {!programsEnabled && (
+      {programsUnavailable && (
         <div className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-50 dark:bg-amber-950/40 p-3 text-sm text-amber-800 dark:text-amber-200">
           <Ban className="h-4 w-4 mt-0.5 shrink-0" />
-          <span>{t("programs.disabled")}</span>
+          <span>{unavailableMessage}</span>
         </div>
       )}
       {profiles.length === 0 ? (
@@ -40,7 +56,7 @@ export function ProfileList({
           {profiles.map((p) => (
             <div
               key={p.profileId}
-              className={`p-3 ${programsEnabled ? "" : "opacity-60"}`}
+              className={`p-3 ${programsUnavailable ? "opacity-60" : ""}`}
             >
               <p className="font-medium">{p.name}</p>
               <div className="mt-1 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm text-muted-foreground">
@@ -88,6 +104,10 @@ export function MachineProgramsCard({
   const t = useTranslations("training.programs");
   const profiles = useQuery(api.training.listMachineProfiles, { machineId });
   const live = useQuery(api.training.getMachineLive, { machineId });
+  const medicalParametersStatus =
+    live?.medicalParametersReferenceVersion === null
+      ? "no_reference"
+      : live?.medicalParametersStatus;
 
   return (
     <Card>
@@ -110,6 +130,7 @@ export function MachineProgramsCard({
           <ProfileList
             profiles={profiles}
             programsEnabled={live?.programsEnabled ?? false}
+            medicalParametersStatus={medicalParametersStatus}
           />
         )}
       </CardContent>

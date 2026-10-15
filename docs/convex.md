@@ -215,6 +215,42 @@ distance (ANH-116, ANH-168) l'appliqueront. Détail dans
 
 Ces deux tables ne sont déployées sur aucun déploiement.
 
+### `medical_parameters_versions` : registre global des paramètres médicaux
+
+Une ligne par version signée du fichier médical. Ce registre est commun à tous
+les clients : il n'a pas d'`organizationId`.
+
+| Champ | Sens |
+|---|---|
+| `version` | Version `MAJEUR.MINEUR.CORRECTIF`. |
+| `issuedAt`, `signedBy` | Date de décision et identifiant du signataire repris du fichier. |
+| `storageId` | Référence au fichier JSON exact dans le stockage Convex. |
+| `signature` | Signature Ed25519 détachée, encodée en base64. |
+| `zoneCeilingFraction`, `minRiderAge`, `hrMaxFormula` | Valeurs validées que Convex utilise pour la fraction de zone, l'âge minimum et l'estimation Tanaka. |
+| `registeredAt` | Date d'inscription, en ms Unix. |
+
+Index : `by_version`. Les versions sont ajoutées, jamais remplacées ;
+l'inscription refuse un doublon et toute version qui n'est pas supérieure à la
+plus grande déjà inscrite. La version courante est la plus grande dans l'ordre
+sémantique des trois nombres.
+
+`medicalParameters.registerVersion` vérifie la signature sur les octets UTF-8
+exacts du fichier, puis son format et ses bornes. La clé publique utilisée est
+la copie de `raspberry-pi/config/medical.pub` dans
+`convex/lib/medicalParameters.ts`. L'action stocke le fichier puis appelle
+`medicalParametersStore.insertVersion` ; si cette insertion échoue, elle
+supprime le fichier du stockage.
+
+`insertVersion` échoue dans la même transaction les lancements auto `pending`
+déjà expirés. Un lancement auto `pending` non expiré bloque l'inscription. Le
+contrôle et l'insertion sont dans la même transaction : le message donne leur
+nombre et invite à réessayer après leur armement, leur échec ou leur expiration ;
+le délai effectif est celui de `PENDING_SESSION_TTL_S` (300 s par défaut,
+jusqu'à 600 s si configuré). Cette règle empêche la fraction de zone courante
+de changer entre la création et l'armement d'un lancement. La zone courante
+reste appliquée aux nouveaux lancements, et n'est donc pas recalculée à
+l'armement ; le pratiquant, son âge minimum et sa FC max restent revérifiés.
+
 ### `machine_profiles` : programmes synchronisés depuis le Pi
 
 Copie en lecture seule du `ProfileStore` du Pi. **Remplacée en bloc** à chaque
@@ -250,9 +286,19 @@ programme que le Pi refuserait n'est jamais proposé sur le site.
 | `live` | Dernier état rapporté par le Pi (voir ci-dessous). |
 | `softwareVersion` | Version logicielle annoncée par le Pi dans son heartbeat (tag git, par exemple `pi-0.4.2`). Absente tant qu'aucun heartbeat ne l'a donnée, et effacée si le dernier heartbeat n'en portait pas de bien formée. |
 | `contractVersion` | Version du contrat machine annoncée par le Pi : l'en-tête `X-Anheart-Contract` du dernier heartbeat accepté. |
-| `lastVersionSeenAt` | ms Unix du heartbeat qui a porté ces deux valeurs. |
+| `lastVersionSeenAt` | ms Unix du dernier heartbeat qui a actualisé les versions rapportées. |
+| `medicalParametersVersion` | Version médicale annoncée par `medical_parameters_version` dans le heartbeat. Une chaîne est la version que le Pi annonce après sa vérification locale du fichier signé ; `null` est classé non signé ; l'absence signifie qu'aucune version bien formée n'a été retenue. |
 
 Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelector` (lu seulement pour une clé pas encore déplacée dans `machine_api_keys`), `by_status`, `by_is_deleted`.
+
+Les réponses de `machines.getMachine`, `training.listLaunchableMachines` et
+`training.getMachineLive` calculent aussi `medicalParametersStatus` et
+`medicalParametersReferenceVersion` à la lecture ; ces deux valeurs ne sont
+pas stockées dans `machines`. Les statuts sont `unknown` (champ absent),
+`unsigned` (champ `null`), `no_reference` (version de la machine mais aucun
+registre courant), `current` (versions égales), `obsolete` (version de la
+machine plus ancienne) et `ahead` (version de la machine plus récente). La
+référence est la version courante du registre, ou `null`.
 
 **`live`** (validateur `liveStateValidator`) :
 
@@ -847,15 +893,32 @@ production, et le site affiche leur traduction (`errors.<code>` dans
 fonctions internes des routes machine refusent avec les codes du contrat
 (`machineError`, voir plus bas).
 
-### Constantes (miroir de `raspberry-pi/src/training/plan.py`)
+### Paramètres médicaux de la version courante
 
-| Constante | Valeur | Rôle |
-|---|---|---|
-| `ZONE_CEILING_FRACTION` | 0,9 | La zone haute ne doit pas dépasser 90 % de la FC max du pratiquant. |
-| FC max admise | 100 à 220 bpm | Hors bornes = refusée. |
-| Âge admis pour l'estimation | 10 à 100 ans | Hors bornes = pas d'estimation. |
-| `MIN_RIDER_AGE` | 18 | Âge minimum d'un lancement auto distant. **[MED]** : l'abaisser est une décision médicale. Le Pi a sa propre valeur (`min_rider_age` de son fichier médical signé, `config/medical_parameters.json`) et fait foi ; Convex ne lit pas encore ce fichier (seconde PR d'ANH-139). |
-| `LIVE_FRESH_MS` | 90 000 ms | Au-delà, l'état en direct est « périmé » et la machine « hors ligne ». Une seule définition, dans `lib/training.ts`, importée par `convex/training.ts`, par la tâche `checkOfflineMachines` de `convex/machines.ts` et par le site, qui recalcule la fraîcheur chaque seconde sur l'horloge du serveur ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). `lib/training.ts` doit donc rester sans import `@/` ni code réservé au navigateur. |
+`convex/training.ts` ne porte plus de constantes médicales. Il lit dans
+`medical_parameters_versions` la version courante et utilise ses valeurs pour
+les contrôles de lancement :
+
+| Valeur du fichier signé | Usage dans Convex |
+|---|---|
+| `zone_ceiling_fraction` | Plafond de la zone haute, appliqué à la FC max retenue. |
+| `min_rider_age` | Âge minimum d'un lancement auto distant. |
+| `hr_max_formula` | Formule d'estimation de la FC max ; actuellement `tanaka`, arrondie comme sur le Pi. |
+
+Sans version courante, le lancement à distance échoue fermé avec
+`medical_parameters_unavailable`. Les règles de lecture et de validation
+suivent `raspberry-pi/src/medical.py`, `raspberry-pi/src/local_config.py` et
+`raspberry-pi/src/training/motion.py`. Les bornes d'entrée (FC max 100-220 bpm,
+âge 10-100 ans) restent des limites de validation, pas des paramètres
+médicaux modifiables. Les calculs partagés sont dans `lib/medicalParameters.ts` :
+`estimateHrMax` et `zoneCeilingBpm`.
+
+`LIVE_FRESH_MS` (90 000 ms) reste une constante technique de fraîcheur, définie
+dans `lib/training.ts`, importée par `convex/training.ts`, par la tâche
+`checkOfflineMachines` de `convex/machines.ts` et par le site, qui recalcule la
+fraîcheur chaque seconde sur l'horloge du serveur
+([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)).
+`lib/training.ts` reste sans import `@/` ni code réservé au navigateur.
 
 **Valeur utilisable.** Une FC max et une année de naissance sont des **entiers
 finis** : des battements par minute et des années se comptent.
@@ -897,10 +960,10 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
 | `listLaunchRights` | query | `machineId` | admin ou gestionnaire de la machine (sinon `[]`) | `[{userId, name, email, hrMax (retenue ou null), grantedByName, createdAt}]`. |
 | `setUserPhysiology` | mutation | `userId`, `hrMax?` (nombre ou `null` pour effacer), `birthYear?` (idem) | pas un `user` ; `canAccessUser` | Pour chaque valeur fournie : `null` l'efface ; sinon elle doit être un entier fini, puis dans ses bornes (FC max 100-220, âge 10-100 ans). Rien n'est écrit si l'une des deux est refusée. Codes de refus (ANH-90) : `not_authorized` (un `user`), `user_not_managed`, `invalid_hr_max` (pas un entier, ou hors bornes), `invalid_birth_year` (idem). |
 | `listMachineProfiles` | query | `machineId` | voir la machine (règle entraînement) | Programmes triés par nom. |
-| `listLaunchableMachines` | query | - | connecté | Machines où l'on peut lancer : admin Anheart = toutes ; dans l'organisation de l'appelant seulement : son admin = toutes, gestionnaire = les siennes, user = celles où il a le droit. Machines supprimées exclues. Pour chacune : `status`, `lastHeartbeat`, `serverNow` (voir `getMachineLive`), `programsEnabled`, `live` (ou `null` si plus vieux que 90 s quand la query s'exécute), `profiles`, `myHrMax` (FC max retenue de l'appelant). |
+| `listLaunchableMachines` | query | - | connecté | Machines où l'on peut lancer : admin Anheart = toutes ; dans l'organisation de l'appelant seulement : son admin = toutes, gestionnaire = les siennes, user = celles où il a le droit. Machines supprimées exclues. Pour chacune : `status`, `lastHeartbeat`, `serverNow`, `programsEnabled`, `live`, `profiles`, `myHrMax`, `medicalParametersVersion`, `medicalParametersStatus` et `medicalParametersReferenceVersion` (voir §2, `machines`). |
 | `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles et codes de refus ci-dessous. |
 | `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine (sinon `session_not_found` pour une séance d'une autre organisation, `session_not_managed` pour une de la sienne) | `pending` → `failed` avec « Cancelled before start by … » (aucune alerte : c'est une annulation). `active` ou `interrupted` → pose `stopRequestedAt` (une seule fois) ; une séance `interrupted` reste ce qu'elle est, et le Pi lit la demande s'il revient avec la séance encore en cours. Autres statuts : rien. |
-| `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute** : elle ne se relance pas quand une machine se tait, le site recalcule donc la fraîcheur chaque seconde. `serverNow` = l'heure du serveur dans cette réponse : le site vieillit `live.updatedAt` à partir d'elle et du temps qu'il a compté depuis, jamais à partir de l'heure du poste. |
+| `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow, medicalParametersVersion, medicalParametersStatus, medicalParametersReferenceVersion}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute**. `serverNow` = l'heure du serveur dans cette réponse. Les champs médicaux sont calculés comme en §2 (`machines`). |
 | `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). Pour une séance dont la machine dit l'âge, le `t` servi et `sinceT` sont sur l'horloge du serveur ; sinon ce sont les dates écrites par la machine ([Deux horloges](#deux-horloges)). |
 | `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, `interruptedAt` pour une séance `interrupted`, `endCode` pour un lancement refusé avant que sa machine l'arme, et `canStop` (statut `pending`, `active` ou `interrupted`, et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), placée sur l'horloge du serveur quand la machine dit l'âge de sa séance ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
 
@@ -915,9 +978,14 @@ le site) :
    pas).
 2. Machine : `machine_not_found` (absente ou supprimée), `rider_not_allowed`
    (pratiquant qui n'est pas membre actif de l'organisation de la machine),
-   `machine_offline` (statut écrit `offline`), `programs_disabled`
-   (programmes auto désactivés : séances manuelles seulement, à la machine).
-3. Une séance à la fois (ANH-144) : `machine_busy` si la machine se dit en
+   `machine_offline` (statut écrit `offline`).
+3. Paramètres médicaux : `medical_parameters_unavailable` si aucune version
+   courante n'est inscrite ; `medical_parameters_unsigned` si le heartbeat a
+   explicitement annoncé `null` (fichier absent ou signature non vérifiée sur
+   le Pi). Ce refus arrive avant celui des programmes désactivés.
+4. Programmes : `programs_disabled` (programmes auto désactivés : séances
+   manuelles seulement, à la machine).
+5. Une séance à la fois (ANH-144) : `machine_busy` si la machine se dit en
    séance (`in_session`) ou a une séance qui peut la tenir ; puis `rider_busy`
    si le pratiquant en a une, sur
    n'importe quelle machine, de n'importe quelle organisation. Ce qui tient,
@@ -925,18 +993,18 @@ le site) :
    Avant ces deux contrôles, les lancements de ce pratiquant et de cette
    machine qui ont attendu plus que le délai sont passés `failed` (expirés),
    comme la tâche planifiée l'aurait fait : ils ne tiennent plus personne.
-4. Programme : `programme_not_on_machine`.
-5. Pratiquant : `user_not_found` (compte disparu), puis `rider_hr_max_missing`
+6. Programme : `programme_not_on_machine`.
+7. Pratiquant : `user_not_found` (compte disparu), puis `rider_hr_max_missing`
    (ni FC max utilisable ni année de naissance), puis le refus de zone
    (`zone_above_ceiling`, puis `hard_max_above_hr_max`), puis
    `rider_birth_year_missing` (l'année est exigée **même** si la FC max est
-   mesurée), puis `rider_too_young` (moins de `MIN_RIDER_AGE` ans). Une valeur
-   enregistrée qui n'est pas un entier fini compte comme non renseignée (voir
+   mesurée), puis `rider_too_young` (moins de `minRiderAge` ans dans la version
+   courante). Une valeur enregistrée qui n'est pas un entier fini compte comme non renseignée (voir
    « Valeur utilisable » plus haut) : le lancement est refusé par
    `rider_hr_max_missing` pour la FC max, ou pour l'année de naissance sans FC
    max mesurée, et par `rider_birth_year_missing` pour l'année de naissance à
    côté d'une FC max mesurée. Rien n'est mis en file.
-6. Durée : `invalid_duration` (un nombre fini, strictement positif).
+8. Durée : `invalid_duration` (un nombre fini, strictement positif).
 
 La séance créée copie le programme (zone, durée, ou la durée demandée),
 `subjectHrMax`, `subjectAge`, `subjectLabel` (nom du pratiquant) et
@@ -983,9 +1051,14 @@ stable du refus (`ARMING_REFUSALS`, `convex/training.ts`, et
 | 3 | La machine est toujours dans l'organisation de la séance. | `organization_changed_before_start` |
 | 4 | Celui qui a lancé (`startedById`) pourrait lancer **maintenant** cette séance, dans l'organisation de la machine, sous la règle de `launchAutoSession` : un patient pour lui-même, avec son droit de lancement (`machine_user_permissions`) ; un gestionnaire sur une machine qu'il gère, pour un patient qu'il suit ; un admin de l'organisation ; l'admin Anheart. Son rôle est relu dans ses adhésions actives (`rolesHeldNow`, `convex/lib/auth.ts`), pas dans un jeton : personne n'appelle à ce moment-là. Le pratiquant a toujours son compte (ni effacé, ni marqué supprimé dans Clerk) et reste membre actif de l'organisation. Un lancement sans `startedById` est refusé. | `right_revoked_before_start` |
 | 5 | Aptitude et consentement du pratiquant (ANH-143) : **pas encore fait**. Le contrôle viendra à cette place, avec son propre code, et s'appliquera aux trois endroits. | - |
-| 6 | L'âge du pratiquant est connu et d'au moins `MIN_RIDER_AGE` (18 ans). | `age_refused_before_start` |
+| 6 | L'âge du pratiquant est connu et atteint l'âge minimum (`minRiderAge`) de la version médicale courante. | `age_refused_before_start` |
 | 7 | La FC max retenue du pratiquant est connue et **égale** à `subjectHrMax`, celle que le lancement a donnée à la machine, qui y ajuste le programme. Une valeur changée, même dans le bon sens, est refusée sans recalcul : la machine ne tourne jamais sur l'ancienne. L'estimation par l'âge peut changer au 1er janvier (UTC), selon l'âge (de 41 à 42 ans, elle reste à 179 bpm) : un lancement en attente à ce moment-là peut être refusé. | `hr_max_changed_before_start` |
 | 8 | Le pratiquant n'a aucune autre séance qui peut le tenir (règle ci-dessous), par exemple une séance démarrée à une autre machine pendant que celle-ci attendait. | `rider_busy` |
+
+La zone cible n'est pas revérifiée à l'armement : aucune version ne peut être
+inscrite pendant qu'un lancement auto attend.
+
+Les lancements auto déjà expirés sont échoués au moment de l'inscription.
 
 Un lancement refusé passe `failed`, avec `endedAt`, `endReason` (la phrase
 anglaise du refus) et `endCode` (le code). Chaque code de refus à l'armement
@@ -994,8 +1067,9 @@ tout code de cette table (`errors.<code>`) : « Séance échouée » puis « Dro
 retiré avant le départ », par exemple
 ([tableau-de-bord.md §5.3](tableau-de-bord.md#53-lancer-une-séance-auto)).
 Chaque échec de ce genre, qu'il vienne de la tâche planifiée, de la route de
-départ ou d'un nouveau lancement qui expire le précédent, est aussi une
-alerte `session_failed` à ses gestionnaires (ANH-90,
+départ, d'un nouveau lancement qui expire le précédent ou de l'inscription
+d'une version qui échoue les lancements expirés, est aussi une alerte
+`session_failed` à ses gestionnaires (ANH-90,
 [§5](#notificationsts-alertes-aux-gestionnaires-anh-90)) : `failBeforeStart`
 ne fait que la planifier, une mutation à part l'écrit, et rien de ce qui s'y
 passe ne peut faire échouer ni annuler la tâche, la route ou le lancement.
@@ -1083,6 +1157,13 @@ est lue par la route du heartbeat et répondue à la machine avec les codes du
 contrat (§6). Les codes de l'API machine sont une autre liste, partagée avec
 le Pi : `contracts/machine-api.json`.
 
+ANH-139 ajoute deux codes à `training.launchAutoSession` :
+
+| Code | Sens |
+|---|---|
+| `medical_parameters_unavailable` | Aucun paramètre médical courant n'est enregistré sur le serveur ; le lancement distant échoue fermé. |
+| `medical_parameters_unsigned` | La machine a annoncé `medicalParametersVersion: null` ; le Pi est en mode banc et ne peut pas démarrer une séance auto. Ce contrôle passe avant `programs_disabled`. |
+
 ### Fonctions par fichier
 
 Résumé des fonctions les plus utilisées par le site. Dans ces tableaux,
@@ -1090,6 +1171,24 @@ Résumé des fonctions les plus utilisées par le site. Dans ces tableaux,
 l'organisation concernée, et toute lecture ou liste est limitée à
 l'organisation de l'appelant, sauf pour l'admin Anheart
 ([§3](#3-règles-dautorisation)).
+
+### `medicalParameters.ts` et `medicalParametersStore.ts` (ANH-139)
+
+| Fonction | Type et autorisation | Rôle |
+|---|---|---|
+| `medicalParameters.current` | query publique ; utilisateur accepté par `getCurrentUserOrThrow` | Renvoie `null` si le registre est vide, sinon les métadonnées publiques de la version courante : `version`, `issuedAt`, `signedBy`, `zoneCeilingFraction`, `minRiderAge` et `hrMaxFormula`. |
+| `medicalParameters.registerVersion` | action interne ; opérateur du déploiement via la CLI | Reçoit le contenu exact du fichier (`content`) et sa signature détachée base64 (`signatureBase64`), vérifie Ed25519 avec la copie de `raspberry-pi/config/medical.pub`, analyse le document et ses bornes, stocke le fichier, puis appelle `medicalParametersStore.insertVersion`. Si l'insertion échoue, supprime le fichier stocké. Renvoie la version inscrite. |
+| `medicalParametersStore.insertVersion` | mutation interne | Refuse une version en double ou qui n'est pas supérieure à la version courante. Dans la même transaction, échoue les lancements auto expirés ; si un lancement attend encore, rend `{ refusal }` sans lever pour valider ces échecs. L'action `registerVersion` lève alors le refus et supprime le fichier stocké. Sinon, ajoute les champs validés et `registeredAt` à `medical_parameters_versions`, puis renvoie la version. |
+
+`convex/lib/medicalParameters.ts` contient les fonctions partagées :
+`parseMedicalDocument` valide le JSON strict et les bornes dérivées de
+`raspberry-pi/src/medical.py`, `raspberry-pi/src/local_config.py` et
+`raspberry-pi/src/training/motion.py` ;
+`verifyMedicalParametersSignature` vérifie la signature des octets UTF-8
+exacts ; `compareMedicalVersions` ordonne les trois composantes numériques ;
+`currentMedicalParameters` choisit la plus grande version ;
+`medicalParametersStatus` calcule le statut décrit en §2. Les calculs purs
+`estimateHrMax` et `zoneCeilingBpm` sont dans `lib/medicalParameters.ts`.
 
 ### `users.ts`
 
@@ -1158,7 +1257,7 @@ n'est pas utilisé, et le seuil de volume où il deviendrait nécessaire n'a pas
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `createMachine` | admin Anheart | Crée la machine, statut `offline`, dans l'organisation `organizationId` (par défaut celle de l'admin) ; refusée pour une organisation inconnue ou supprimée dans Clerk. Retourne `{machineId, apiKey}` : la clé `anh1.<sélecteur>.<secret>` **n'est visible qu'à ce moment**. Elle est la première ligne de la machine dans `machine_api_keys`, sans expiration. |
-| `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `organizationId` (l'organisation de la machine, dont seuls les gestionnaires peuvent lui être assignés), `softwareVersion`, `contractVersion` et `lastVersionSeenAt`. Les deux renvoient `serverNow`, l'heure du serveur dans la réponse, sur laquelle le site vieillit `lastHeartbeat` ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). |
+| `getMachine`, `listMachines` | admin ; gestionnaire (ses machines) | Lecture. `listMachines` renvoie `[]` à un `user`. Option `includeDeleted` pour l'admin. `getMachine` renvoie aussi `organizationId`, `softwareVersion`, `contractVersion`, `lastVersionSeenAt`, `medicalParametersVersion`, `medicalParametersStatus` et `medicalParametersReferenceVersion` (voir §2, `machines`). Les deux renvoient `serverNow`, l'heure du serveur dans la réponse, sur laquelle le site vieillit `lastHeartbeat` ([tableau-de-bord.md §6](tableau-de-bord.md#fraîcheur-recalculée-à-lhorloge)). |
 | `updateMachine` | admin, gestionnaire de la machine | Nom, lieu. |
 | `deleteMachine` | admin, gestionnaire de la machine | Suppression douce. Refusée s'il y a une séance `active` ou `pending`. |
 | `restoreMachine` | admin Anheart | Annule la suppression. |
@@ -1166,6 +1265,7 @@ n'est pas utilisé, et le seuil de volume où il deviendrait nécessaire n'a pas
 | `setGestionnaireMachines` | admin (`requireGestionnaireAdmin`) | Fixe la liste exacte des machines d'**un gestionnaire**, **dans une organisation** (celle de l'appelant ; pour l'admin Anheart, l'organisation principale du gestionnaire) : compare la liste demandée à ses lignes `machine_gestionnaires` de cette organisation, insère les liens manquants (`isOwner: false`, dans cette organisation) et supprime ceux qui ne sont plus demandés. Seules les lignes de ce gestionnaire dans cette organisation sont lues et écrites : les liens des autres gestionnaires ne bougent pas, ce que le gestionnaire gère dans une autre organisation non plus, et un lien déjà présent n'est pas modifié. Une machine inconnue, supprimée, ou d'une autre organisation (même réponse, `machine_not_found`), fait refuser l'appel sans rien écrire. Le lien vers une machine supprimée reste hors de la décision : il n'est jamais retiré, nommé ou non, et ne compte pas dans `{added, removed}` (ANH-194). Retourne `{added, removed}`. |
 | `assignGestionnaireToMachine` / `removeGestionnaireFromMachine` | admin ; gestionnaire de la machine | Lien machine ↔ gestionnaire. Le gestionnaire doit être membre actif de l'organisation de la machine. |
 | `getRecentHeartbeats`, `getGestionnairesForMachine`, `getMachinesForGestionnaire` | accès à la machine / admin | Lectures. `getMachinesForGestionnaire` renvoie aussi `serverNow` et laisse de côté les machines supprimées. `getMachine` liste le propriétaire en tête de ses gestionnaires. |
+| `recordHeartbeat` | mutation interne, appelée par la route HTTP | Enregistre la version médicale bien formée annoncée par le Pi dans `machines.medicalParametersVersion` ; garde `null` comme annonce explicite de paramètres non signés. Les réponses calculent ensuite son statut face à la version courante. |
 
 `regenerateApiKey` (« Régénérer la clé », ouverte aussi au gestionnaire de la
 machine) est retirée par ANH-165 : les clés se créent et se révoquent par
@@ -1683,7 +1783,14 @@ Détails du contrat :
   chiffres, `.`, `_`, `+`, `-` ; sinon le champ est effacé),
   `machines.contractVersion` (l'en-tête `X-Anheart-Contract`, qui vient d'être
   vérifié, et non la copie `contract_version` du corps) et
-  `machines.lastVersionSeenAt`.
+  `machines.lastVersionSeenAt`. Il retient aussi
+  `medical_parameters_version` dans `machines.medicalParametersVersion` : une
+  version bien formée est gardée comme chaîne, `null` est gardé comme annonce
+  explicite de paramètres non signés, et un champ absent ou mal formé ne donne
+  pas de version. Une console antérieure à la PR #103 envoie aussi `null` :
+  elle est classée non signée et le refus de lancement est correct, mais le
+  libellé « mode banc » ne la décrit pas. `medicalParametersStatus` et
+  `medicalParametersReferenceVersion` sont calculés ensuite à la lecture.
 - **Serveur d'un autre contrat** : `server_contract_version` vaut la version
   servie par Convex. Le Pi n'arme rien d'une réponse dont la majeure n'est
   pas la sienne ; il termine le lancement par `/training/end` avec la raison
@@ -1855,6 +1962,32 @@ Le déploiement de développement existe et reçoit le code par
 environnements, les clés et les commandes réellement utilisées sont dans
 [deploiement.md](deploiement.md#3-déployer-convex). Les étapes ci-dessous sont
 celles d'un projet **neuf**.
+
+**Enregistrer une version médicale (ANH-139).** La table
+`medical_parameters_versions` et son action d'enregistrement ne sont déployées
+sur aucun déploiement à ce jour. Après avoir déployé le code qui les contient,
+et avant tout lancement distant, inscrire le fichier signé choisi sur ce
+déploiement. Depuis la racine du dépôt, la commande ci-dessous construit les
+arguments en lisant le fichier et sa signature détachée, puis appelle l'action
+interne. Elle doit rendre la version inscrite. Ne pas relancer la même version
+ni en inscrire une version égale ou plus ancienne.
+
+```bash
+npx convex run medicalParameters:registerVersion "$(node -e 'const fs = require("node:fs"); const content = fs.readFileSync("raspberry-pi/config/medical_parameters.json", "utf8"); const signatureBase64 = fs.readFileSync("raspberry-pi/config/medical_parameters.sig").toString("base64"); process.stdout.write(JSON.stringify({ content, signatureBase64 }));')"
+```
+
+Inscrire le fichier signé livré dès le premier déploiement de développement qui
+contient cette action, avant de mettre le code en production. Si ce runtime ne
+prend pas en charge Ed25519, l'enregistrement échoue fermé ; le repli est une
+action avec la directive `"use node"` qui vérifie la signature avec
+`node:crypto`.
+
+Inscrire la version aussitôt après le déploiement. Si un lancement laissé en
+attente par le code précédent existe encore, l'inscription est refusée ; le
+balayage l'échoue dans la minute, puis réessayez. Les lancements déjà expirés
+sont échoués à l'inscription avec `expired_before_start`. Si un lancement
+atteint l'armement alors qu'aucune version n'est encore inscrite, il échoue
+avec `age_refused_before_start`.
 
 1. Installer les dépendances à la racine : `npm ci`.
 2. Créer un déploiement de développement et générer `convex/_generated/` :
@@ -2391,7 +2524,7 @@ et [ordre des événements Clerk](https://clerk.com/docs/guides/development/webh
 
 ## 9. Défauts connus et reste à faire
 
-### Migration des credentials avec ANH-82 — opération à réaliser
+### Migration des credentials avec ANH-82 : opération à réaliser
 
 Le correctif logiciel refuse les credentials historiques dès son déploiement.
 Il ne transforme pas les clés existantes et ne les accepte jamais en secours.
@@ -2699,13 +2832,11 @@ Limites à connaître :
   branche qui l'interroge n'arme donc **aucun lancement distant** (réponse sans
   version). C'est le cas tant que le nouveau code n'est pas déployé ; mettre
   les deux côtés à niveau relève du redéploiement (ticket ANH-82).
-- La « version attendue » d'une machine n'est définie nulle part aujourd'hui :
+- La version logicielle attendue d'une machine n'est définie nulle part aujourd'hui :
   la fiche machine du site **affiche** la version annoncée, sans la comparer.
   La comparaison et son badge viendront avec le registre machine (ticket
   ANH-147).
-- `medical_parameters_version` et `config_hash` sont acceptés dans le heartbeat
-  et **ne sont pas stockés**. Depuis ANH-139 (couche Pi), le Pi envoie dans
-  `medical_parameters_version` la version de son fichier médical quand sa
-  signature s'est vérifiée au démarrage, `null` sinon ; Convex la garde, la
-  compare à la version attendue et l'affiche dans la seconde PR du ticket
-  (couche Convex). `config_hash` vaut toujours `null`.
+- `medical_parameters_version` et `config_hash` sont acceptés dans le heartbeat.
+  Depuis ANH-139, Convex stocke et compare la version médicale annoncée à la
+  référence courante, puis l'affiche sur la fiche machine. `config_hash` garde
+  son statut : il vaut toujours `null` et n'est pas stocké.

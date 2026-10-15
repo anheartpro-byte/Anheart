@@ -67,6 +67,14 @@ function machine(
   name: string,
   overrides: Partial<Machine> = {},
 ): Machine {
+  answer(api.medicalParameters.current, {
+    version: "0.1.0",
+    issuedAt: "2026-01-01",
+    signedBy: "test",
+    zoneCeilingFraction: 0.9,
+    minRiderAge: 18,
+    hrMaxFormula: "tanaka",
+  });
   return {
     _id: id,
     name,
@@ -75,6 +83,9 @@ function machine(
     lastHeartbeat: NOW - 5_000,
     serverNow: NOW,
     programsEnabled: true,
+    medicalParametersVersion: undefined,
+    medicalParametersStatus: "unknown",
+    medicalParametersReferenceVersion: "0.1.0",
     live: null,
     profiles: [profile("Endurance"), profile("Tonus")],
     myHrMax: 180,

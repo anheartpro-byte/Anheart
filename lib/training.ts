@@ -9,16 +9,17 @@
  * browser-only code and of "@/" imports, which the Convex bundle cannot resolve.
  */
 
+import {
+  estimateHrMax,
+  zoneCeilingBpm,
+  type MedicalParameters,
+} from "./medicalParameters";
+
 /** Motor shaft turns per arm turn (the gearbox). Arm rpm = motor rpm / ratio. */
 export const GEAR_RATIO = 49.79;
 
-/** zone_high_bpm may not exceed this fraction of the rider's max heart rate. */
-export const ZONE_CEILING_FRACTION = 0.9;
-
 const HR_MAX_MIN = 100;
 const HR_MAX_MAX = 220;
-const MIN_AGE = 10;
-const MAX_AGE = 100;
 
 export type TrainingKind = "auto" | "manual" | "recording";
 export type TrainingOrigin = "remote" | "local";
@@ -61,9 +62,6 @@ export type TelemetryPoint = {
   gLoad: number;
   safetyAction: string;
 };
-
-/** Youngest rider an auto launch accepts (the server and the Pi check again). */
-export const MIN_RIDER_AGE = 18;
 
 /**
  * A machine state older than this means the machine cannot be relied on to
@@ -179,28 +177,32 @@ export function isWholeNumber(value: unknown): value is number {
 }
 
 /**
- * Measured maximum if valid, else the Tanaka estimate (208 - 0.7 x age). A
- * measured value that cannot be used (out of range, not a whole number) gives
- * nothing: it is not replaced by the estimate.
+ * Measured maximum if valid, else the estimate from the current signed
+ * medical parameters. A missing reference or unusable measure gives nothing.
  */
 export function effectiveHrMax(
   hrMax: number | undefined | null,
   birthYear: number | undefined | null,
   now: number,
+  medicalParameters: MedicalParameters | null,
 ): { value: number; source: "measured" | "estimated" } | null {
   if (hrMax !== undefined && hrMax !== null) {
     return isWholeNumber(hrMax) && hrMax >= HR_MAX_MIN && hrMax <= HR_MAX_MAX
       ? { value: hrMax, source: "measured" }
       : null;
   }
+  if (medicalParameters === null) return null;
   if (!isWholeNumber(birthYear)) return null;
   const age = new Date(now).getUTCFullYear() - birthYear;
-  if (age < MIN_AGE || age > MAX_AGE) return null;
-  return { value: Math.round(208 - 0.7 * age), source: "estimated" };
+  const value = estimateHrMax(age, medicalParameters.hrMaxFormula);
+  return value === null ? null : { value, source: "estimated" };
 }
 
-export function zoneCeiling(hrMax: number): number {
-  return Math.floor(ZONE_CEILING_FRACTION * hrMax);
+export function zoneCeiling(
+  hrMax: number,
+  medicalParameters: MedicalParameters,
+): number {
+  return zoneCeilingBpm(medicalParameters.zoneCeilingFraction, hrMax);
 }
 
 /**

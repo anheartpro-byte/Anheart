@@ -135,17 +135,21 @@ export const DASHBOARD_ERRORS = {
     "The rider is not an active member of the machine's organisation.",
   programs_disabled:
     "The machine takes manual sessions only, started at the machine.",
+  medical_parameters_unavailable:
+    "No signed medical parameters version is registered on the server, so remote launches are refused.",
+  medical_parameters_unsigned:
+    "The machine's medical parameters are unsigned: it is in bench mode only, with no programmed session or person on board.",
   programme_not_on_machine:
     "The programme is not, or no longer, among the machine's programmes.",
   rider_hr_max_missing:
     "The rider has neither a usable max heart rate nor a birth year.",
   zone_above_ceiling:
-    "The programme's zone goes above 90 % of the rider's max heart rate.",
+    "The programme's zone exceeds the current medical ceiling for the rider's max heart rate.",
   hard_max_above_hr_max:
     "The programme's hard maximum is above the rider's max heart rate.",
   rider_birth_year_missing: "The rider's birth year is not set.",
   rider_too_young:
-    "The rider is younger than MIN_RIDER_AGE (convex/training.ts).",
+    "The rider is younger than the minimum age in the current medical parameters version.",
   invalid_duration: "A duration is a positive number of seconds.",
 
   // Sessions.

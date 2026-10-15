@@ -1322,8 +1322,8 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 │ └──────────────────────┘                                              │
 │ ┌──────────────────────┐                                              │
 │ │ ♡ Physiologie        │                                              │
-│ │ Sert à valider la zone cible avant une séance auto (zone haute ≤ 90 %│
-│ │ de la FC max).       │                                              │
+│ │ Sert à valider la zone cible avant une séance auto par rapport au    │
+│ │ plafond médical courant.                                             │
 │ │ FC max mesurée (bpm)  Année de naissance                             │
 │ │ <      >              <1985 >                                        │
 │ │ FC max retenue                                                       │
@@ -2294,7 +2294,7 @@ aucun refus du serveur n'arrive en anglais.
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Année de naissance absente, ou enregistrée sans être un nombre entier. | P7. |
 | « Ce pratiquant n'a pas l'âge minimum requis pour une séance auto. » | Pratiquant de moins de 18 ans (le serveur compte l'âge en supposant l'anniversaire pas encore passé). | Aucune séance auto. |
-| « La zone du programme dépasse 90 % de la FC max du pratiquant. Choisissez un autre programme. » | Zone trop haute pour ce pratiquant. | Autre programme, ou FC max mesurée. |
+| « La zone du programme dépasse le plafond médical courant pour la FC max du pratiquant. Choisissez un autre programme. » | Zone trop haute pour ce pratiquant. | Autre programme, ou FC max mesurée. |
 | « La FC limite du programme dépasse la FC max du pratiquant. Choisissez un autre programme. » | FC limite du programme au dessus de la FC max. | Idem. |
 | « La durée doit être un nombre positif. » | Durée nulle ou négative. | Corriger. |
 | « Vous ne pouvez lancer une séance que pour vous-même. » | Un patient a tenté de lancer pour un autre. | Seul un gestionnaire peut lancer pour autrui. |

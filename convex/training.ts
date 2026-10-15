@@ -66,6 +66,15 @@ import { authorizedMachineLive } from "./lib/trainingPrivacy";
 import { machineError, type MachineErrorCode } from "./lib/contract";
 // The stable codes of the refusals the site words (ANH-90, ANH-144).
 import { refusal, type DashboardErrorCode } from "./lib/errors";
+import {
+  currentMedicalParameters,
+  medicalParametersStatus,
+} from "./lib/medicalParameters";
+import {
+  estimateHrMax,
+  zoneCeilingBpm,
+  type HrMaxFormula,
+} from "../lib/medicalParameters";
 // A heartbeat older than this means the machine cannot be relied on to answer.
 // The dashboard judges freshness on the same value (hooks/use-freshness.ts).
 import { LIVE_FRESH_MS, SESSION_SILENCE_MS } from "../lib/training";
@@ -84,8 +93,6 @@ import {
 // of it; these copies exist so a dashboard user gets the refusal at once.
 // ---------------------------------------------------------------------------
 
-/** zone_high_bpm may not exceed this fraction of the rider's max heart rate. */
-export const ZONE_CEILING_FRACTION = 0.9;
 const HR_MAX_MIN = 100;
 const HR_MAX_MAX = 220;
 const MIN_AGE = 10;
@@ -103,13 +110,13 @@ function isWholeNumber(value: unknown): value is number {
 }
 
 /**
- * Measured maximum if known, else the Tanaka estimate (208 - 0.7 x age). A
- * measured value that cannot be used (out of range, not a whole number) gives
- * nothing: it is not replaced by the estimate.
+ * Measured maximum if known, else the formula from the current signed medical
+ * parameters. An unusable measured value gives nothing, not an estimate.
  */
 export function effectiveHrMax(
   user: Pick<Doc<"users">, "hrMax" | "birthYear">,
   now: number,
+  formula: HrMaxFormula | null,
 ): number | null {
   if (user.hrMax !== undefined) {
     return isWholeNumber(user.hrMax) &&
@@ -118,10 +125,11 @@ export function effectiveHrMax(
       ? user.hrMax
       : null;
   }
+  if (formula === null) return null;
   if (!isWholeNumber(user.birthYear)) return null;
   const age = new Date(now).getUTCFullYear() - user.birthYear;
   if (age < MIN_AGE || age > MAX_AGE) return null;
-  return Math.round(208 - 0.7 * age);
+  return estimateHrMax(age, formula);
 }
 
 /**
@@ -136,19 +144,13 @@ export function effectiveHrMax(
 export function zoneRefusal(
   profile: { zoneHighBpm: number; hardMaxBpm: number },
   hrMax: number,
+  zoneCeilingFraction: number,
 ): "zone_above_ceiling" | "hard_max_above_hr_max" | null {
-  const ceiling = Math.floor(ZONE_CEILING_FRACTION * hrMax);
+  const ceiling = zoneCeilingBpm(zoneCeilingFraction, hrMax);
   if (!(profile.zoneHighBpm <= ceiling)) return "zone_above_ceiling";
   if (!(profile.hardMaxBpm <= hrMax)) return "hard_max_above_hr_max";
   return null;
 }
-
-/**
- * Youngest rider a remote AUTO launch accepts. Mirrors the Pi's MIN_RIDER_AGE
- * default; the Pi, whose value is configured per machine, checks again and is
- * the authority. [MED] lowering it is a medical decision.
- */
-export const MIN_RIDER_AGE = 18;
 
 /**
  * Age in whole years from a birth year (the later birthday assumed: never
@@ -310,6 +312,7 @@ export const listLaunchRights = query({
   handler: async (ctx, args) => {
     const me = await getCurrentUserOrThrow(ctx);
     if (!(await canAccessMachine(ctx, args.machineId, me))) return [];
+    const medical = await currentMedicalParameters(ctx);
     const machine = await ctx.db.get(args.machineId);
     if (!machine) return [];
     const rows = await ctx.db
@@ -331,7 +334,7 @@ export const listLaunchRights = query({
         userId: user._id,
         name: fullName(user),
         email: user.email,
-        hrMax: effectiveHrMax(user, now),
+        hrMax: effectiveHrMax(user, now, medical?.hrMaxFormula ?? null),
         grantedByName: granter ? fullName(granter) : "-",
         createdAt: row.createdAt,
       });
@@ -447,6 +450,16 @@ export const listLaunchableMachines = query({
       lastHeartbeat: v.number(),
       serverNow: v.number(),
       programsEnabled: v.boolean(),
+      medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
+      medicalParametersStatus: v.union(
+        v.literal("unknown"),
+        v.literal("unsigned"),
+        v.literal("no_reference"),
+        v.literal("current"),
+        v.literal("obsolete"),
+        v.literal("ahead"),
+      ),
+      medicalParametersReferenceVersion: v.union(v.string(), v.null()),
       live: v.union(liveStateValidator, v.null()),
       profiles: v.array(profileValidator),
       myHrMax: v.union(v.number(), v.null()),
@@ -454,6 +467,7 @@ export const listLaunchableMachines = query({
   ),
   handler: async (ctx) => {
     const me = await getCurrentUserOrThrow(ctx);
+    const medical = await currentMedicalParameters(ctx);
     let machineIds: Id<"machines">[];
     if (me.role === "admin") {
       machineIds = (await ctx.db.query("machines").collect()).map((m) => m._id);
@@ -495,12 +509,18 @@ export const listLaunchableMachines = query({
         lastHeartbeat: machine.lastHeartbeat,
         serverNow: now,
         programsEnabled: machine.programsEnabled ?? false,
+        medicalParametersVersion: machine.medicalParametersVersion,
+        medicalParametersStatus: medicalParametersStatus(
+          machine.medicalParametersVersion,
+          medical?.version ?? null,
+        ),
+        medicalParametersReferenceVersion: medical?.version ?? null,
         live:
           machine.live && now - machine.live.updatedAt < LIVE_FRESH_MS
             ? await authorizedMachineLive(ctx, me, machine)
             : null,
         profiles: await profilesFor(ctx, id),
-        myHrMax: effectiveHrMax(me, now),
+        myHrMax: effectiveHrMax(me, now, medical?.hrMaxFormula ?? null),
       });
     }
     return result;
@@ -603,7 +623,7 @@ function refusalFor(code: ArmingRefusalCode): ArmingRefusal {
 }
 
 /** A launch the machine has not armed `pendingSessionTtlMs` after it was made. */
-function expired(session: Doc<"sessions">, now: number): boolean {
+export function expired(session: Doc<"sessions">, now: number): boolean {
   // While pending, `startedAt` is the date of the launch, on the server's clock.
   return now - session.startedAt > pendingSessionTtlMs();
 }
@@ -730,7 +750,7 @@ async function riderStillAllowed(
  *    member of that organisation (`riderStillAllowed`);
  * 5. (ANH-143, to come) the rider's aptitude and consent are valid: checked
  *    here, with a code of its own, once that ticket stores them;
- * 6. the rider's age is known and at least `MIN_RIDER_AGE`;
+ * 6. the rider's age is known and at least the current medical minimum;
  * 7. the rider's max heart rate is known and is the one the launch carried,
  *    which the machine fits the programme to: a changed value is refused,
  *    not re-checked, so the machine never runs on the old one;
@@ -749,11 +769,16 @@ async function armingRefusal(
     return refusalFor("organization_changed_before_start");
   const rider = await riderStillAllowed(ctx, session, machine);
   if (rider === null) return refusalFor("right_revoked_before_start");
+  const medical = await currentMedicalParameters(ctx);
+  if (medical === null) {
+    // A launch left pending across deployment can reach this before registration.
+    return refusalFor("age_refused_before_start");
+  }
   // ANH-143: aptitude and consent are checked here.
   const age = ageFrom(rider.birthYear, now);
-  if (age === null || age < MIN_RIDER_AGE)
+  if (age === null || age < medical.minRiderAge)
     return refusalFor("age_refused_before_start");
-  const hrMax = effectiveHrMax(rider, now);
+  const hrMax = effectiveHrMax(rider, now, medical.hrMaxFormula);
   if (hrMax === null || hrMax !== session.subjectHrMax)
     return refusalFor("hr_max_changed_before_start");
   if (await riderHeld(ctx, rider._id, now, session._id))
@@ -784,6 +809,39 @@ async function failBeforeStart(
   await scheduleAlert(ctx, session.machineId, "session_failed", {
     sessionId: session._id,
   });
+}
+
+/**
+ * Settle expired auto launches before registering a medical parameter version.
+ * The registration invariant is that no pending launch can later be armed
+ * against a version other than the one used when it was created: expired
+ * launches become terminal in the same transaction, and the caller gets the
+ * count of still-waiting launches and must refuse registration if it is not 0.
+ * `kind` covers pending launches written before `origin` was added.
+ */
+export async function settlePendingLaunchesForRegistration(
+  ctx: MutationCtx,
+  now: number,
+): Promise<number> {
+  const pending = await ctx.db
+    .query("sessions")
+    .withIndex("by_status_and_started", (q) => q.eq("status", "pending"))
+    .collect();
+  let pendingCount = 0;
+  for (const session of pending) {
+    if (session.kind !== "auto") continue;
+    if (expired(session, now)) {
+      await failBeforeStart(
+        ctx,
+        session,
+        refusalFor("expired_before_start"),
+        now,
+      );
+    } else {
+      pendingCount += 1;
+    }
+  }
+  return pendingCount;
 }
 
 /**
@@ -898,6 +956,11 @@ export const launchAutoSession = mutation({
       throw refusal("rider_not_allowed");
     }
     if (machine.status === "offline") throw refusal("machine_offline");
+    const medical = await currentMedicalParameters(ctx);
+    if (medical === null) throw refusal("medical_parameters_unavailable");
+    if (machine.medicalParametersVersion === null) {
+      throw refusal("medical_parameters_unsigned");
+    }
     if (!machine.programsEnabled) {
       throw refusal("programs_disabled");
     }
@@ -925,17 +988,17 @@ export const launchAutoSession = mutation({
     if (!rider) throw refusal("user_not_found");
     // Both helpers give null for a value on record that is not a finite whole
     // number: what is compared below, and copied to the session, always is one.
-    const hrMax = effectiveHrMax(rider, now);
+    const hrMax = effectiveHrMax(rider, now, medical.hrMaxFormula);
     if (hrMax === null) {
       throw refusal("rider_hr_max_missing");
     }
-    const unsafe = zoneRefusal(profile, hrMax);
+    const unsafe = zoneRefusal(profile, hrMax, medical.zoneCeilingFraction);
     if (unsafe) throw refusal(unsafe);
     const age = ageFrom(rider.birthYear, now);
     if (age === null) {
       throw refusal("rider_birth_year_missing");
     }
-    if (age < MIN_RIDER_AGE) {
+    if (age < medical.minRiderAge) {
       throw refusal("rider_too_young");
     }
 
@@ -1022,6 +1085,16 @@ export const getMachineLive = query({
     v.object({
       status: v.string(),
       programsEnabled: v.boolean(),
+      medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
+      medicalParametersStatus: v.union(
+        v.literal("unknown"),
+        v.literal("unsigned"),
+        v.literal("no_reference"),
+        v.literal("current"),
+        v.literal("obsolete"),
+        v.literal("ahead"),
+      ),
+      medicalParametersReferenceVersion: v.union(v.string(), v.null()),
       live: v.union(liveStateValidator, v.null()),
       stale: v.boolean(),
       // The server's clock in this answer (see listLaunchableMachines).
@@ -1036,9 +1109,16 @@ export const getMachineLive = query({
     if (!machine) return null;
     const live = await authorizedMachineLive(ctx, me, machine);
     const now = Date.now();
+    const medical = await currentMedicalParameters(ctx);
     return {
       status: machine.status,
       programsEnabled: machine.programsEnabled ?? false,
+      medicalParametersVersion: machine.medicalParametersVersion,
+      medicalParametersStatus: medicalParametersStatus(
+        machine.medicalParametersVersion,
+        medical?.version ?? null,
+      ),
+      medicalParametersReferenceVersion: medical?.version ?? null,
       live,
       stale: live === null || now - live.updatedAt > LIVE_FRESH_MS,
       serverNow: now,
@@ -1440,6 +1520,7 @@ export const getRoster = internalQuery({
       .collect();
     const machine = await ctx.db.get(args.machineId);
     if (!machine) return [];
+    const medical = await currentMedicalParameters(ctx);
     const now = Date.now();
     const result = [];
     for (const row of rows) {
@@ -1453,7 +1534,7 @@ export const getRoster = internalQuery({
       result.push({
         userId: user._id,
         name: fullName(user),
-        hrMax: effectiveHrMax(user, now),
+        hrMax: effectiveHrMax(user, now, medical?.hrMaxFormula ?? null),
         birthYear: isWholeNumber(user.birthYear) ? user.birthYear : null,
       });
     }

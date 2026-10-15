@@ -28,7 +28,6 @@ import {
 } from "@/components/ui/select";
 import { AlertCircle, AlertTriangle, Hand, Info, Loader2 } from "lucide-react";
 import {
-  MIN_RIDER_AGE,
   armRpm,
   effectiveHrMax,
   formatMinutes,
@@ -103,6 +102,7 @@ function LaunchForm({
 
   const me = useQuery(api.users.getCurrentUser);
   const machines = useQuery(api.training.listLaunchableMachines, {});
+  const medicalParameters = useQuery(api.medicalParameters.current);
   const isManager = isStaff(me?.role);
   // An admin of the organisation picks among all its patients.
   const isAdmin = isOrganizationAdmin(me?.role);
@@ -136,7 +136,11 @@ function LaunchForm({
     riderIsPatient ? { userId: rider as Id<"users"> } : "skip",
   );
 
-  if (me === undefined || machines === undefined) {
+  if (
+    me === undefined ||
+    machines === undefined ||
+    medicalParameters === undefined
+  ) {
     return (
       <div className="flex items-center justify-center py-8">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -165,7 +169,12 @@ function LaunchForm({
       : undefined;
     const computed =
       hrMax !== undefined || birthYear !== undefined
-        ? effectiveHrMax(hrMax, birthYear, new Date().getTime())
+        ? effectiveHrMax(
+            hrMax,
+            birthYear,
+            new Date().getTime(),
+            medicalParameters,
+          )
         : null;
     if (computed) {
       riderHrMax = {
@@ -199,6 +208,10 @@ function LaunchForm({
   else if (machine.status === "offline") blocker = t("training.launch.offline");
   else if (machine.status === "in_session")
     blocker = t("training.launch.inSession");
+  else if (medicalParameters === null)
+    blocker = t("training.launch.medicalParametersUnavailable");
+  else if (machine.medicalParametersStatus === "unsigned")
+    blocker = t("training.launch.medicalParametersUnsigned");
   else if (!machine.programsEnabled)
     blocker = t("training.launch.programsDisabled");
   else if (machine.profiles.length === 0)
@@ -208,23 +221,28 @@ function LaunchForm({
   else if (notWholeOnRecord("birthYear"))
     blocker = t("training.launch.birthYearMissing");
   else if (riderIsPatient && riderDoc) {
-    // Mirrors the server's age gate (MIN_RIDER_AGE): birth year required, adults only.
     const birthYear = readOptionalNumber(riderDoc, "birthYear");
     if (birthYear === undefined)
       blocker = t("training.launch.birthYearMissing");
-    else if (new Date().getUTCFullYear() - birthYear - 1 < MIN_RIDER_AGE)
-      blocker = t("training.launch.tooYoung", { min: MIN_RIDER_AGE });
+    else if (
+      new Date().getUTCFullYear() - birthYear - 1 <
+      medicalParameters.minRiderAge
+    )
+      blocker = t("training.launch.tooYoung", {
+        min: medicalParameters.minRiderAge,
+      });
   }
 
   // Client-side preview of the server's zone check.
   let zoneWarning: string | null = null;
-  if (profile && riderHrMax.state === "known") {
-    const ceiling = zoneCeiling(riderHrMax.value);
+  if (profile && riderHrMax.state === "known" && medicalParameters !== null) {
+    const ceiling = zoneCeiling(riderHrMax.value, medicalParameters);
     if (profile.zoneHighBpm > ceiling) {
-      zoneWarning = t("training.launch.zoneTooHigh", {
+      zoneWarning = t("training.launch.zoneTooHighWithFraction", {
         zoneHigh: profile.zoneHighBpm,
         hrMax: riderHrMax.value,
         ceiling,
+        fraction: medicalParameters.zoneCeilingFraction * 100,
       });
     } else if (profile.hardMaxBpm > riderHrMax.value) {
       zoneWarning = t("training.launch.hardMaxTooHigh", {

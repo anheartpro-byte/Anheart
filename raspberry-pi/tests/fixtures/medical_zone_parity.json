@@ -1,0 +1,33 @@
+{
+  "description": "Expected refusals follow the signed rules: the zone ceiling is the floor of the shipped fraction times hr_max, and a value above that ceiling is refused; hard_max is refused only when it exceeds hr_max. The Pi reports zone before hard_max when both fail. Age estimates use the shipped formula rounded to the nearest whole bpm with ties to even. Ages strictly below the shipped minimum are refused; equality and older ages are accepted.",
+  "zone_cases": [
+    { "hr_max": 100, "zone_high_bpm": 90, "hard_max_bpm": 100, "expected": [] },
+    { "hr_max": 100, "zone_high_bpm": 91, "hard_max_bpm": 100, "expected": ["zone_above_ceiling"] },
+    { "hr_max": 100, "zone_high_bpm": 90, "hard_max_bpm": 101, "expected": ["hard_max_above_hr_max"] },
+    { "hr_max": 100, "zone_high_bpm": 91, "hard_max_bpm": 101, "expected": ["zone_above_ceiling", "hard_max_above_hr_max"] },
+    { "hr_max": 101, "zone_high_bpm": 90, "hard_max_bpm": 101, "expected": [] },
+    { "hr_max": 101, "zone_high_bpm": 91, "hard_max_bpm": 101, "expected": ["zone_above_ceiling"] },
+    { "hr_max": 110, "zone_high_bpm": 99, "hard_max_bpm": 110, "expected": [] },
+    { "hr_max": 110, "zone_high_bpm": 100, "hard_max_bpm": 110, "expected": ["zone_above_ceiling"] },
+    { "hr_max": 220, "zone_high_bpm": 198, "hard_max_bpm": 220, "expected": [] },
+    { "hr_max": 220, "zone_high_bpm": 199, "hard_max_bpm": 220, "expected": ["zone_above_ceiling"] },
+    { "hr_max": 220, "zone_high_bpm": 198, "hard_max_bpm": 221, "expected": ["hard_max_above_hr_max"] },
+    { "hr_max": 220, "zone_high_bpm": 199, "hard_max_bpm": 221, "expected": ["zone_above_ceiling", "hard_max_above_hr_max"] }
+  ],
+  "age_estimates": [
+    { "age": 10, "hr_max": 201 },
+    { "age": 15, "hr_max": 198 },
+    { "age": 25, "hr_max": 190 },
+    { "age": 30, "hr_max": 187 },
+    { "age": 45, "hr_max": 176 },
+    { "age": 65, "hr_max": 162 },
+    { "age": 85, "hr_max": 148 },
+    { "age": 100, "hr_max": 138 }
+  ],
+  "age_minimum": [
+    { "age": 10, "refused": true },
+    { "age": 17, "refused": true },
+    { "age": 18, "refused": false },
+    { "age": 19, "refused": false }
+  ]
+}

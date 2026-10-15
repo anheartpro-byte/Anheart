@@ -348,6 +348,51 @@ describe("ANH-203 programmes of a machine", () => {
     );
   });
 
+  it("replaces the disabled-programmes message with the unsigned-parameters reason in bench mode", () => {
+    const screen = render(
+      <ProfileList
+        profiles={[ENDURANCE]}
+        programsEnabled={false}
+        medicalParametersStatus="unsigned"
+      />,
+    );
+
+    expect(screen.text()).toContain(t.launch.medicalParametersUnsigned);
+    expect(screen.text()).not.toContain(t.programs.disabled);
+    expect(screen.reading("Endurance")[0].parentElement?.className).toContain(
+      "opacity-60",
+    );
+  });
+
+  it("shows the missing-reference reason when programmes cannot be launched", () => {
+    const screen = render(
+      <ProfileList
+        profiles={[ENDURANCE]}
+        programsEnabled
+        medicalParametersStatus="no_reference"
+      />,
+    );
+
+    expect(screen.text()).toContain(t.launch.medicalParametersUnavailable);
+    expect(screen.text()).not.toContain(t.programs.disabled);
+  });
+
+  it("shows the missing-reference reason when an unsigned machine has no reference", () => {
+    answer("training:listMachineProfiles", [ENDURANCE]);
+    answer("training:getMachineLive", {
+      programsEnabled: false,
+      live: null,
+      medicalParametersStatus: "unsigned",
+      medicalParametersReferenceVersion: null,
+    });
+
+    const screen = render(<MachineProgramsCard machineId={machineId} />);
+
+    expect(screen.text()).toContain(t.launch.medicalParametersUnavailable);
+    expect(screen.text()).not.toContain(t.launch.medicalParametersUnsigned);
+    expect(screen.text()).not.toContain(t.programs.disabled);
+  });
+
   it("does not grey the programmes of a machine that accepts them", () => {
     const screen = render(
       <ProfileList profiles={[ENDURANCE]} programsEnabled />,
@@ -515,6 +560,9 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
       lastHeartbeat: NOW - 3_000,
       serverNow: NOW,
       programsEnabled: true,
+      medicalParametersVersion: undefined,
+      medicalParametersStatus: "unknown",
+      medicalParametersReferenceVersion: "0.1.0",
       live: live(),
       profiles: [ENDURANCE],
       myHrMax: 185,
@@ -524,6 +572,20 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
 
   const launch = (screen: ReturnType<typeof render>) =>
     screen.button(t.launch.button);
+
+  it("capitalizes unsigned medical parameter launch reasons in both locales", () => {
+    expect(Object.keys(messages.fr.training.launch).sort()).toEqual(
+      Object.keys(messages.en.training.launch).sort(),
+    );
+    expect(messages.fr.training.launch).not.toHaveProperty("zoneTooHigh");
+    expect(messages.en.training.launch).not.toHaveProperty("zoneTooHigh");
+    expect(messages.fr.training.launch.medicalParametersUnsigned).toMatch(
+      /^Paramètres médicaux non signés :/,
+    );
+    expect(messages.en.training.launch.medicalParametersUnsigned).toMatch(
+      /^Unsigned medical parameters:/,
+    );
+  });
 
   it("an online machine with programmes can be launched: the click reaches the page", async () => {
     const onLaunch = vi.fn();
@@ -566,6 +628,59 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
       expect(screen.text()).toContain(reason);
     },
   );
+
+  it.each([
+    ["bench mode", "unsigned", false, t.launch.medicalParametersUnsigned],
+    [
+      "no server reference",
+      "no_reference",
+      true,
+      t.launch.medicalParametersUnavailable,
+    ],
+  ] as const)(
+    "cannot launch a machine in %s, and shows the exact reason",
+    async (_label, medicalParametersStatus, programsEnabled, reason) => {
+      const onLaunch = vi.fn();
+      const screen = render(
+        <LaunchableMachineCard
+          machine={
+            machine({ medicalParametersStatus, programsEnabled })
+          }
+          isUser
+          onLaunch={onLaunch}
+        />,
+      );
+
+      expect(launch(screen).hasAttribute("disabled")).toBe(true);
+      expect(screen.text()).toContain(reason);
+      if (medicalParametersStatus === "unsigned") {
+        expect(screen.text()).not.toContain(t.programs.disabled);
+      }
+      await click(launch(screen));
+      expect(onLaunch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("blocks a machine whose reference is missing even when its reported version is unknown", async () => {
+    const onLaunch = vi.fn();
+    const screen = render(
+      <LaunchableMachineCard
+        machine={
+          machine({
+            medicalParametersStatus: "unknown",
+            medicalParametersReferenceVersion: null,
+          })
+        }
+        isUser
+        onLaunch={onLaunch}
+      />,
+    );
+
+    expect(launch(screen).hasAttribute("disabled")).toBe(true);
+    expect(screen.text()).toContain(t.launch.medicalParametersUnavailable);
+    await click(launch(screen));
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
 
   it("a patient gets no link to the machine's page, a manager does", () => {
     const patient = render(
