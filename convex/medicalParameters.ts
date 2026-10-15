@@ -1,3 +1,10 @@
+/**
+ * Expose current signed medical parameter metadata and register verified files.
+ * Document rules mirror `raspberry-pi/src/medical.py` and
+ * `raspberry-pi/src/local_config.py`; motion bounds come from
+ * `raspberry-pi/src/training/motion.py`. Registration keeps every signed
+ * version for audit, while the current version is selected by semantic order.
+ */
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, query } from "./_generated/server";
@@ -19,6 +26,7 @@ const publicVersionValidator = v.object({
   hrMaxFormula: v.literal("tanaka"),
 });
 
+/** Return the current medical version's public metadata to an authenticated user. */
 export const current = query({
   args: {},
   returns: v.union(publicVersionValidator, v.null()),
@@ -37,6 +45,7 @@ export const current = query({
   },
 });
 
+/** Verify, store, and register one signed medical parameter file. */
 export const registerVersion = internalAction({
   args: { content: v.string(), signatureBase64: v.string() },
   returns: v.string(),

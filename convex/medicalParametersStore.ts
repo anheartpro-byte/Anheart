@@ -1,3 +1,10 @@
+/**
+ * Enforce the append-only registry for verified medical parameter versions.
+ * The accepted schema and bounds mirror `raspberry-pi/src/medical.py`,
+ * `raspberry-pi/src/local_config.py`, and `raspberry-pi/src/training/motion.py`.
+ * Keeping every signed version preserves the audit trail; current is the
+ * greatest semantic version and older rows are never replaced or deleted.
+ */
 import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 import { compareMedicalVersions, currentMedicalParameters } from "./lib/medicalParameters";
@@ -13,6 +20,7 @@ const registrationValues = {
   hrMaxFormula: v.literal("tanaka"),
 };
 
+/** Add a unique version that is newer than the current registered version. */
 export const insertVersion = internalMutation({
   args: registrationValues,
   returns: v.string(),

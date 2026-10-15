@@ -107,9 +107,8 @@ function isWholeNumber(value: unknown): value is number {
 }
 
 /**
- * Measured maximum if known, else the Tanaka estimate (208 - 0.7 x age). A
- * measured value that cannot be used (out of range, not a whole number) gives
- * nothing: it is not replaced by the estimate.
+ * Measured maximum if known, else the formula from the current signed medical
+ * parameters. An unusable measured value gives nothing, not an estimate.
  */
 export function effectiveHrMax(
   user: Pick<Doc<"users">, "hrMax" | "birthYear">,

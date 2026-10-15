@@ -1,7 +1,16 @@
+/**
+ * Parse, validate, and verify the signed medical document used by Convex.
+ * Its schema follows `raspberry-pi/src/medical.py`; age and cardiac limits
+ * also follow `raspberry-pi/src/local_config.py`, and motion limits follow
+ * `raspberry-pi/src/training/motion.py`. The version registry only grows so
+ * each signed decision remains available for audit; current means greatest
+ * semantic version.
+ */
 import type { Doc } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { HrMaxFormula, MedicalParameters } from "../../lib/medicalParameters";
 
+/** Public key used to verify shipped medical parameter signatures. */
 export const MEDICAL_PUBLIC_KEY_PEM =
   "-----BEGIN PUBLIC KEY-----\n" +
   "MCowBQYDK2VwAyEA9lp8wwVIXK2xXJ6ljOYle/mDb4D3Y8QkSXTXi6V1kX0=\n" +
@@ -30,6 +39,7 @@ const MEDICAL_VERSION_PATTERN =
 const SIGNER_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 
+/** Validated fields Convex reads from a signed medical parameter document. */
 export type ParsedMedicalDocument = MedicalParameters &
   Readonly<{ version: string; issuedAt: string; signedBy: string }>;
 
@@ -165,6 +175,7 @@ function validDate(text: string): boolean {
   return day >= 1 && day <= (days[month - 1] ?? 0);
 }
 
+/** Parse and enforce the document shape and the console's accepted bounds. */
 export function parseMedicalDocument(content: string): ParsedMedicalDocument {
   let decoded: unknown;
   try {
@@ -279,6 +290,7 @@ export function parseMedicalDocument(content: string): ParsedMedicalDocument {
   };
 }
 
+/** Compare three numeric version components in semantic version order. */
 export function compareMedicalVersions(left: string, right: string): number {
   const leftParts = left.split(".").map(Number);
   const rightParts = right.split(".").map(Number);
@@ -311,6 +323,7 @@ function decodePem(publicKeyPem: string): Uint8Array<ArrayBuffer> | null {
   return decodeBase64(match[1].replace(/\s/g, ""));
 }
 
+/** Verify an Ed25519 signature over the exact UTF-8 document bytes. */
 export async function verifyMedicalParametersSignature(
   content: string,
   signatureBase64: string,
@@ -338,6 +351,7 @@ export async function verifyMedicalParametersSignature(
   }
 }
 
+/** Read the registered version with the greatest semantic version. */
 export async function currentMedicalParameters(
   ctx: QueryCtx | MutationCtx,
 ): Promise<Doc<"medical_parameters_versions"> | null> {
