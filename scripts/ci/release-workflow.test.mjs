@@ -1428,7 +1428,14 @@ test("S-2 the three contract transitions and the console update time agree in th
     assert.match(order, /Dans les trois cas, \*\*jamais pendant une séance\*\*/);
     assert.match(order, /change la\s+majeure sans servir les deux coupe les consoles de l'autre majeure, quel que\s+soit l'ordre/);
     assert.match(order, /`server_contract_version: CONTRACT_VERSION`, la version propre du serveur,\s+pas celle de la console/);
-    assert.match(order, /console de l'ancienne majeure \*\*n'arme aucun\s+lancement distant\*\* tant qu'elle n'est pas à jour si le serveur annonce la\s+nouvelle majeure/);
+    const transition = order.slice(order.indexOf("**Pendant la transition"), order.indexOf("**Ce que fait la pipeline"));
+    assert.match(transition, /poll et le heartbeat annoncent/);
+    assert.match(transition, /`CONTRACT_VERSION` du commit de la release\s+de transition/);
+    assert.match(transition, /console d'une autre majeure \*\*n'arme aucun lancement distant\*\*/);
+    assert.match(transition, /lancement qu'elle peut lire[\s\S]*`\/api\/machine\/training\/end`[\s\S]*`failed: true`/);
+    assert.match(transition, /refusee par la machine : serveur incompatible/);
+    assert.match(transition, /À réception[\s\S]*en échec sur le tableau de bord[\s\S]*raison/);
+    assert.match(transition, /console affiche « serveur incompatible[\s\S]*liste d'événements[\s\S]*rappelle tant que l'incompatibilité persiste/);
     assert.match(order, /route de statut\s+répond quelle que soit la majeure.*\s+`stopRequested: true` ou `active: false`/);
     assert.match(order, /\| Console de la nouvelle majeure, Convex qui ne sert que l'ancienne majeure versionnée \| Convex répond 426/);
     assert.match(order, /\| Console de l'ancienne majeure versionnée, Convex qui ne sert que la nouvelle majeure \| Même refus 426/);

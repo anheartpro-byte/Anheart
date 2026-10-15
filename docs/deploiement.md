@@ -307,11 +307,17 @@ majeure sans servir les deux coupe les consoles de l'autre majeure, quel que
 soit l'ordre.
 
 **Pendant la transition entre deux majeures versionnées.** Servir les deux
-majeures évite le refus 426 de leurs requêtes, mais le poll annonce toujours
+majeures évite le refus 426 de leurs requêtes, mais le poll et le heartbeat annoncent
 `server_contract_version: CONTRACT_VERSION`, la version propre du serveur,
-pas celle de la console. Une console de l'ancienne majeure **n'arme aucun
-lancement distant** tant qu'elle n'est pas à jour si le serveur annonce la
-nouvelle majeure. L'arrêt traverse toutes les versions : la route de statut
+pas celle de la console : c'est le `CONTRACT_VERSION` du commit de la release
+de transition. Une console d'une autre majeure **n'arme aucun lancement distant**.
+Si le poll contient un lancement qu'elle peut lire, elle le refuse et envoie
+sa fin à `/api/machine/training/end`, avec `failed: true` et la raison
+« refusee par la machine : serveur incompatible (contrat … vs …) ».
+À réception, le lancement passe en échec sur le tableau de bord, avec cette
+raison. La console affiche « serveur incompatible (contrat … vs …) » dans sa
+liste d'événements et le rappelle tant que l'incompatibilité persiste.
+L'arrêt traverse toutes les versions : la route de statut
 répond quelle que soit la majeure, et la console arrête sa séance sur
 `stopRequested: true` ou `active: false`.
 
