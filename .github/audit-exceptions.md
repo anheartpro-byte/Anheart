@@ -47,10 +47,12 @@ exception n'est écrite ailleurs, ni dans le workflow ni dans une commande.
   jusque-là. Pas de barre verticale dans le texte.
 
 **Le tableau est le seul de la section**, ses lignes à la suite les unes des
-autres, sans retrait. Une ligne qui commence par une barre verticale ailleurs
-dans la section, un bloc de code ou un commentaire HTML dans la section sont
-refusés : rien de ce que la page affichée ne montre pas ne peut compter comme
-exception.
+autres, sans retrait. Sont refusés : une ligne qui commence par une barre
+verticale ailleurs dans la section, un bloc de code dans la section, un
+commentaire HTML n'importe où dans ce fichier, et un second titre « Exceptions
+en cours », ou un titre écrit dans un bloc de code. Ce que la page affichée ne
+montre pas ne peut donc pas compter comme exception. Un tableau placé dans un
+bloc `<details>` replié reste lu : la page le montre une fois déplié.
 
 Une exception npm ne cache pas l'avis : le job l'affiche encore, avec sa date
 d'expiration et son ticket. `pip-audit` compte les vulnérabilités sautées

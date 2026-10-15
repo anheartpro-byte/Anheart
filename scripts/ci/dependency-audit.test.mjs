@@ -119,8 +119,8 @@ test("only the rows of the one table count: a row hidden from the rendered page,
   for (const [name, before, after, refusal] of [
     ["in a fenced code block", "", "\n```\n" + row() + "\n```\n", /holds a code block or an HTML comment \("```"\)/],
     ["in a code block fenced by tildes", "", "\n~~~md\n" + row() + "\n~~~\n", /holds a code block or an HTML comment \("~~~md"\)/],
-    ["in an HTML comment", "", "\n<!--\n" + row() + "\n-->\n", /holds a code block or an HTML comment \("<!--"\)/],
-    ["in an HTML comment on one line", "", `\n<!-- ${row()} -->\n`, /holds a code block or an HTML comment/],
+    ["in an HTML comment", "", "\n<!--\n" + row() + "\n-->\n", /holds an HTML comment \("<!--"\)/],
+    ["in an HTML comment on one line", "", `\n<!-- ${row()} -->\n`, /holds an HTML comment/],
     ["after a blank line, under the table", "", `\n${row()}\n`, /begins like a row but is not a row of the table/],
     ["after a sentence, in a second table", "", `\nAutre :\n\n${HEAD}${row()}\n`, /begins like a row but is not a row of the table/],
     ["indented, as a code block", "", `\n    ${row()}\n`, /begins like a row but is not a row of the table/],
@@ -132,8 +132,33 @@ test("only the rows of the one table count: a row hidden from the rendered page,
   }
   // The table followed by text, then the next section, is read as usual.
   assert.deepEqual(around("Avant.\n\n", "\nAprès le tableau.\n").exceptions.map(({ id }) => id), ["GHSA-35jh-r3h4-6jhm"]);
-  // A comment or a code block elsewhere in the file changes nothing.
-  assert.deepEqual(parse(`# Exceptions\n\n<!-- note -->\n\n\`\`\`sh\nnode x\n\`\`\`\n\n${table([row()])}`, TODAY).problems, []);
+  // A code block elsewhere in the file changes nothing.
+  assert.deepEqual(parse(`# Exceptions\n\n\`\`\`sh\nnode x\n\`\`\`\n\n${table([row()])}`, TODAY).problems, []);
+});
+
+test("the page shows the one section that is read: no HTML comment anywhere, one heading, outside any code block", () => {
+  const real = table([]);
+  const hidden = `${SECTION}\n\n${HEAD}${row()}\n${row({ id: "GHSA-35jh-r3h4-6jhm" })}\n`;
+  for (const [name, text, refusal] of [
+    // Reported by the independent review: a comment before the heading hid a whole section, and that one was read.
+    ["a section hidden in a comment before the real one", `# Exceptions\n\n<!--\n${hidden}-->\n\n${real}`, /holds an HTML comment/],
+    ["a comment opened before the heading and never closed", `# Exceptions\n\n<!--\n\n${real}`, /holds an HTML comment/],
+    ["a comment in another section", `${real}\n## Notes\n\n<!-- rien -->\n`, /holds an HTML comment/],
+    ["a second section, shown", `# Exceptions\n\n${hidden}\n${real}`, /is written 2 times \(lines 3, \d+\)/],
+    ["a second heading at another level", `${real}\n### Exceptions en cours\n\nAucune.\n`, /is written 2 times/],
+    ["a heading in a code block before the real one", `# Exceptions\n\n\`\`\`md\n${hidden}\`\`\`\n\n${real}`, /is written 2 times/],
+    ["the only heading in a code block left open", `# Exceptions\n\n\`\`\`\n${hidden}`, /must be the line "## Exceptions en cours", outside any code block/],
+    ["the only heading written otherwise", hidden.replace(SECTION, "## exceptions en cours"), /must be the line "## Exceptions en cours"/],
+  ]) {
+    const { exceptions, problems } = parse(String(text), TODAY);
+    assert.deepEqual(exceptions, [], String(name));
+    assert.equal(problems.length, 1, `${name}: ${problems.join(" / ")}`);
+    assert.ok(refusal instanceof RegExp && refusal.test(problems[0] ?? ""), `${name}: ${problems.join(" / ")}`);
+  }
+  // The committed page holds no comment, and its heading once.
+  const committed = atRoot(FILE);
+  assert.ok(!committed.includes("<!--"));
+  assert.equal(committed.split(`\n${SECTION}\n`).length, 2);
 });
 
 // --- The verdict on npm -------------------------------------------------------

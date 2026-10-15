@@ -82,7 +82,27 @@ export function parse(text, today) {
   const now = dayOf(today);
   if (now === undefined) throw new Error(`not a day: ${today}`);
   const lines = text.replaceAll("\r\n", "\n").split("\n");
-  const start = lines.indexOf(SECTION);
+  // What the rendered page does not show must not be read. An HTML comment, anywhere, can hide
+  // a whole section from the page, the heading of the one that is read included: none is allowed.
+  if (text.includes("<!--")) {
+    return { exceptions, problems: [`${FILE}: holds an HTML comment ("<!--"): the page must show all that is read, and no comment is allowed in it`] };
+  }
+  // The heading of the section, written once, and not inside a code block, where it would be text.
+  /** @type {{ index: number, line: string, fenced: boolean }[]} */
+  const headings = [];
+  let fenced = false;
+  lines.forEach((line, index) => {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    else if (/^ {0,3}#{1,6}[ \t]+Exceptions en cours[ \t#]*$/i.test(line)) headings.push({ index, line, fenced });
+  });
+  if (headings.length > 1) {
+    return { exceptions, problems: [`${FILE}: the heading "${SECTION}" is written ${headings.length} times (lines ${headings.map(({ index }) => index + 1).join(", ")}): one section, read by the job and shown by the page`] };
+  }
+  const [heading] = headings;
+  if (heading !== undefined && (heading.fenced || heading.line !== SECTION)) {
+    return { exceptions, problems: [`${FILE}: the heading of the section must be the line "${SECTION}", outside any code block (line ${heading.index + 1})`] };
+  }
+  const start = heading?.index ?? -1;
   if (start < 0) return { exceptions, problems: [`${FILE}: no section "${SECTION}"`] };
   const after = lines.slice(start + 1);
   const end = after.findIndex((line) => line.startsWith("## "));
