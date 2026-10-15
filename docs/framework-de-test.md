@@ -2583,7 +2583,17 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
   comme dans `ci.yml` ;
 * que ce que la pipeline tient pour la production est ce que dit la
   [section 1 de deploiement.md](deploiement.md#1-les-environnements), et que
-  les sections 3.4 et 3.6 de cette page donnent une seule règle d'ordre.
+  les sections 3.4 et 3.6 de cette page donnent une seule règle d'ordre :
+  consoles d'abord pour le premier déploiement qui exige le contrat, face à
+  un Convex antérieur au contrat ; entre deux majeures versionnées, une release dont Convex sert
+  les deux majeures d'abord, puis les consoles, puis le retrait de l'ancienne
+  majeure quand plus aucune console ne la parle ; Convex d'abord pour une
+  mineure ou sans changement du contrat. Le test S-2 tient les refus 426 dans
+  les deux sens, `SUPPORTED_MAJORS` et la limite du lancement distant pendant
+  la transition. Il exige aussi le même moment de mise à jour des consoles,
+  mot pour mot, en 3.3, en 3.4 et dans les deux résumés de `release.yml`
+  exécutés comme par le runner, depuis le commit tagué, et aucune mise à jour
+  des consoles avant de lancer la pipeline.
 
 `scripts/release.test.mjs` tient les deux options que la pipeline passe à
 `scripts/release.sh tag` ([release.md](release.md#la-pipeline-de-release-et-le-script)).

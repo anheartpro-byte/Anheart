@@ -146,6 +146,9 @@ const RECORD = "Dire ce qui est déployé, et ce qui reste à enregistrer à la 
 const SITE = "Vérifier que le site sert le commit et la version de ce commit";
 const SIMULATION = "Vérifier que la simulation sert le commit et la page de ce commit";
 const MACHINES = "Dire la version du Pi et comment mettre une machine à jour à la main";
+const CONSOLE_UPDATE_TIME = "entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex)";
+const FIRST_CONTRACT_UPDATE = `- Premier déploiement d'un Convex qui exige le contrat : les consoles d'abord, ${CONSOLE_UPDATE_TIME}, depuis le commit qui vient d'être tagué ; Convex ensuite.`;
+const MAJOR_TRANSITION = "- Entre deux majeures versionnées : une release dont Convex sert les deux majeures d'abord (ordre de la pipeline), puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle.";
 
 // ---------------------------------------------------------------------------
 // Doubles, and how a script is run
@@ -532,7 +535,9 @@ test("EX-1 the top of the run says, before any approval, what this run will do",
   assert.match(real.summary, /^### Release RÉELLE : à lire avant d'approuver\n\n- Branche `main`, commit `0123456789abcdef0123456789abcdef01234567`\.\n/);
   assert.match(real.summary, /pose les tags, déploie Convex, puis le site, puis la simulation, en production\. Chacune de ces quatre écritures attend une approbation\./);
   assert.match(real.summary, /^- Jamais pendant une séance/m);
-  assert.match(real.summary, /^- Convex est déployé avant toute console\. .* si elle la change, mettre les consoles à jour d'abord, avant d'approuver le déploiement de Convex \(docs\/deploiement\.md, section 3\.4\)\.$/m);
+  assert.match(real.summary, /^- Ordre avec Convex \(docs\/deploiement\.md, section 3\.4\) : Convex d'abord pour une mineure ou sans changement du contrat\.$/m);
+  assert.ok(real.summary.split("\n").includes(FIRST_CONTRACT_UPDATE), real.summary);
+  assert.ok(real.summary.split("\n").includes(MAJOR_TRANSITION), real.summary);
   const dry = run(script(request, REMIND), { MODE: "dry" });
   assert.match(dry.summary, /^### Release à blanc\n/);
   assert.match(dry.summary, /rien n'est tagué, rien n'est déployé, aucune machine n'est touchée\./);
@@ -1355,10 +1360,12 @@ test("EX-7 the stage of the machines reaches no machine: it says the version of 
   const contract = JSON.parse(read("contracts/machine-api.json")).contract_version;
   assert.ok(
     tagged.summary.includes(
-      `- Ordre avec Convex (docs/deploiement.md, section 3.4) : cette release a déployé Convex avant toute console. C'est le bon ordre tant qu'elle garde la majeure du contrat machine (contrat de ce commit : \`${contract}\`). Une release qui change cette majeure demande l'inverse : les consoles d'abord, à la main, avant d'approuver le déploiement de Convex.`,
+      `- Ordre avec Convex (docs/deploiement.md, section 3.4) : cette release a déployé Convex avant toute console (contrat de ce commit : \`${contract}\`). C'est l'ordre pour une mineure ou sans changement du contrat.`,
     ),
     tagged.summary,
   );
+  assert.ok(tagged.summary.split("\n").includes(FIRST_CONTRACT_UPDATE), tagged.summary);
+  assert.ok(tagged.summary.split("\n").includes(MAJOR_TRANSITION), tagged.summary);
 });
 
 test("EX-10 docs/deploiement.md gives one rule for the order between Convex and the consoles, in 3.4 as in 3.6", () => {
@@ -1366,8 +1373,9 @@ test("EX-10 docs/deploiement.md gives one rule for the order between Convex and 
   const order = manual.slice(manual.indexOf("### 3.4 "), manual.indexOf("### 3.5 "));
   const sync = manual.slice(manual.indexOf("### 3.6 "), manual.indexOf("## 4. "));
   assert.match(manual, /^### 3\.4 Ordre de mise à jour entre Convex et les consoles$/m);
-  // The rule, once: the major of the contract decides.
-  assert.match(order, /\| La \*\*majeure\*\* du contrat machine[^|]*\| \*\*Les consoles d'abord, Convex ensuite\.\*\*/);
+  // The rule, once: first enforcement, a versioned major transition, or a minor.
+  assert.match(order, /\| Premier déploiement d'un Convex qui exige le contrat[^|]*\| \*\*Les consoles d'abord, Convex ensuite\.\*\*/);
+  assert.match(order, /\| La \*\*majeure\*\* change entre \*\*deux majeures versionnées\*\*[^|]*\| \*\*Une release dont Convex sert les deux majeures d'abord, puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle\.\*\*/);
   assert.match(order, /\| Une \*\*mineure\*\* du contrat, ou rien du contrat \| \*\*Convex d'abord, les consoles ensuite\.\*\*/);
   // Section 3.6 applies it to its minor and no longer states an order of its own.
   assert.match(sync, /\*\*Ordre : Convex d'abord, comme pour toute mineure\*\*/);
@@ -1375,6 +1383,62 @@ test("EX-10 docs/deploiement.md gives one rule for the order between Convex and 
   assert.doesNotMatch(manual, /34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite/, "a link still names the old title of section 3.4");
   // And it says what the pipeline does with it.
   assert.match(order, /pipeline de release[\s\S]*déploie Convex \(étape 4\) avant\s+toute console/);
+});
+
+test("S-2 the three contract transitions and the console update time agree in the docs and both executed summaries", async (context) => {
+  const manual = read("docs/deploiement.md");
+  const production = manual.slice(manual.indexOf("### 3.3 "), manual.indexOf("### 3.4 "));
+  const order = manual.slice(manual.indexOf("### 3.4 "), manual.indexOf("### 3.5 "));
+  await context.test("3.4 gives three orders, 426 in both directions and the limits of serving two majors", () => {
+    const table = order.slice(order.indexOf("| Ce que la release change")).split("\n\n")[0];
+    const rows = table.split("\n").slice(2);
+    assert.equal(rows.length, 3, "the order table must distinguish three cases");
+    const [first, major, minor] = rows;
+    assert.match(first, /Premier déploiement.*antérieur au contrat.*ne lit pas l'en-tête et n'annonce aucune version/);
+    assert.match(first, /\| \*\*Les consoles d'abord, Convex ensuite\.\*\* \|/);
+    assert.match(first, /Dans ce cas seulement.*console à jour fonctionne avec l'ancien Convex.*lancement distant près.*console en retard.*426/);
+    assert.match(major, /deux majeures versionnées.*Convex en service sert déjà le contrat/);
+    assert.match(major, /\| \*\*Une release dont Convex sert les deux majeures d'abord, puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle\.\*\* \|/);
+    assert.match(major, /Convex en service répond 426.*consoles d'abord seraient coupées/);
+    assert.match(major, /Convex qui ne sert que la nouvelle majeure répond 426.*Convex d'abord les couperait/);
+    assert.match(major, /lister les deux majeures dans `SUPPORTED_MAJORS`.*aucune release ne l'a encore fait.*ordre de la pipeline, Convex d'abord/);
+    assert.match(minor, /Une \*\*mineure\*\* du contrat, ou rien du contrat \| \*\*Convex d'abord, les consoles ensuite\.\*\*/);
+    assert.match(order, /Dans les trois cas, \*\*jamais pendant une séance\*\*/);
+    assert.match(order, /change la\s+majeure sans servir les deux coupe les consoles de l'autre majeure, quel que\s+soit l'ordre/);
+    assert.match(order, /`server_contract_version: CONTRACT_VERSION`, la version propre du serveur,\s+pas celle de la console/);
+    assert.match(order, /console de l'ancienne majeure \*\*n'arme aucun\s+lancement distant\*\* tant qu'elle n'est pas à jour si le serveur annonce la\s+nouvelle majeure/);
+    assert.match(order, /route de statut\s+répond quelle que soit la majeure.*\s+`stopRequested: true` ou `active: false`/);
+    assert.match(order, /\| Console de la nouvelle majeure, Convex qui ne sert que l'ancienne majeure versionnée \| Convex répond 426/);
+    assert.match(order, /\| Console de l'ancienne majeure versionnée, Convex qui ne sert que la nouvelle majeure \| Même refus 426/);
+  });
+  await context.test("3.3 puts the console update between tags and Convex approval, from the tagged commit", () => {
+    const preparation = production.split("\n").find((line) => line.startsWith("| Avant de lancer la pipeline pour de bon |"));
+    assert.ok(preparation, "the other preparations must remain");
+    assert.doesNotMatch(preparation, /consoles/i);
+    const timing = production.split("\n").find((line) => line.startsWith(`| ${CONSOLE_UPDATE_TIME} |`));
+    assert.ok(timing, "3.3 must use the exact update time");
+    assert.match(timing, /Pour le premier déploiement d'un Convex qui exige le contrat/);
+    assert.match(timing, /mettre les consoles en service à jour depuis le commit qui vient d'être tagué, puis approuver Convex/);
+  });
+  await context.test("3.4 uses that exact time for the first deployment, from the tagged commit", () => {
+    const pipeline = order.slice(order.indexOf("**Ce que fait la pipeline de release.**"), order.indexOf("**Quand les deux côtés"));
+    assert.ok(pipeline.includes(CONSOLE_UPDATE_TIME), "3.4 must use the exact update time");
+    assert.match(pipeline, /premier cas, mettre les consoles à jour à la main/);
+    assert.match(pipeline, /depuis le commit qui vient d'être tagué, puis approuver Convex/);
+  });
+  await context.test("the request summary uses that exact time and the two-major transition", () => {
+    const result = run(script(job("request"), REMIND), { MODE: "real" });
+    assert.equal(result.status, 0, result.said);
+    assert.ok(result.summary.split("\n").includes(FIRST_CONTRACT_UPDATE), result.summary);
+    assert.ok(result.summary.split("\n").includes(MAJOR_TRANSITION), result.summary);
+  });
+  await context.test("the machines summary uses that exact time and the two-major transition", () => {
+    const fx = repository(context);
+    const result = run(script(job("machines"), MACHINES), { GITHUB_SHA: fx.head }, { cwd: fx.work });
+    assert.equal(result.status, 0, result.said);
+    assert.ok(result.summary.split("\n").includes(FIRST_CONTRACT_UPDATE), result.summary);
+    assert.ok(result.summary.split("\n").includes(MAJOR_TRANSITION), result.summary);
+  });
 });
 
 // ---------------------------------------------------------------------------

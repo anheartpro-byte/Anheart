@@ -228,7 +228,8 @@ par la personne qui en répond (ANH-82) :
 
 | Quand | Quoi |
 |---|---|
-| Avant de lancer la pipeline pour de bon | Le modèle de jeton Clerk de production émet `email` et `email_verified` ([convex.md](convex.md#activer-le-multi-organisation), partie B) : sans eux, la liaison d'une fiche patient est refusée pour tout le monde. Les contrôles de données des points 1 et 7 ci-dessous. Les consoles en service, si la release change la majeure du contrat ([§3.4](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). |
+| Avant de lancer la pipeline pour de bon | Le modèle de jeton Clerk de production émet `email` et `email_verified` ([convex.md](convex.md#activer-le-multi-organisation), partie B) : sans eux, la liaison d'une fiche patient est refusée pour tout le monde. Les contrôles de données des points 1 et 7 ci-dessous. |
+| entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex) | Pour le premier déploiement d'un Convex qui exige le contrat, mettre les consoles en service à jour depuis le commit qui vient d'être tagué, puis approuver Convex ([§3.4](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). |
 | Juste après l'étape 4, pendant que la pipeline attend l'approbation du site | Les migrations des points 4 et 6, puis le premier admin (point 5). La migration multi-organisation d'abord : tant qu'elle n'a pas tourné, le tableau de bord refuse tout. |
 | Après la pipeline | L'enregistrement des versions dans Convex ([release.md, section 6](release.md#6-enregistrer-la-version-dans-convex)), et la régénération des clés des machines ([convex.md](convex.md#migration-des-credentials-avec-anh-82--opération-à-réaliser)). |
 
@@ -290,42 +291,56 @@ Avant de le lancer, par la pipeline ou à la main :
 ### 3.4 Ordre de mise à jour entre Convex et les consoles
 
 Le contrat entre une console et Convex est versionné, en `majeure.mineure`
-([convex.md](convex.md#11-versions-et-compatibilité)). **C'est la majeure qui
-décide de l'ordre.** Il n'y a qu'une règle, et la
+([convex.md](convex.md#11-versions-et-compatibilité)). **L'ordre dépend du
+contrat déjà servi par Convex et de celui de la release.** La
 [section 3.6](#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)
 l'applique à sa mineure :
 
 | Ce que la release change, par rapport à ce qui est en service | Ordre | Pourquoi |
 |---|---|---|
-| La **majeure** du contrat machine. Le premier déploiement d'un Convex qui exige le contrat en fait partie : ce qui est en service avant lui n'en annonce aucun | **Les consoles d'abord, Convex ensuite.** | Deux côtés qui n'ont pas la même majeure se refusent, et pas au même prix (tableau suivant) : une console à jour fonctionne avec l'ancien Convex, au lancement distant près ; une console en retard est refusée par le nouveau. |
+| Premier déploiement d'un Convex qui exige le contrat : le Convex en service est **antérieur au contrat**, ne lit pas l'en-tête et n'annonce aucune version | **Les consoles d'abord, Convex ensuite.** | Dans ce cas seulement, une console à jour fonctionne avec l'ancien Convex, au lancement distant près ; une console en retard est refusée (426) par le nouveau (tableau suivant). |
+| La **majeure** change entre **deux majeures versionnées** : le Convex en service sert déjà le contrat | **Une release dont Convex sert les deux majeures d'abord, puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle.** | Le Convex en service répond 426 à une console qui annonce une majeure qu'il ne sert pas : les consoles d'abord seraient coupées. Un Convex qui ne sert que la nouvelle majeure répond 426 aux consoles encore sur l'ancienne : Convex d'abord les couperait. La release de transition doit donc lister les deux majeures dans `SUPPORTED_MAJORS`, comme le code le prévoit (aucune release ne l'a encore fait), et se déploie dans l'ordre de la pipeline, Convex d'abord. |
 | Une **mineure** du contrat, ou rien du contrat | **Convex d'abord, les consoles ensuite.** | Dans une même majeure les deux ordres sont sans danger : chaque côté ne s'appuie que sur ce que toutes ses mineures fournissent. Convex d'abord est l'ordre qui ne laisse rien derrière lui : une console plus récente que son serveur garde sur son disque ce qu'il ne sait pas encore recevoir ([section 3.6](#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)). |
 
-Dans les deux cas, **jamais pendant une séance**.
+Dans les trois cas, **jamais pendant une séance**. Une release qui change la
+majeure sans servir les deux coupe les consoles de l'autre majeure, quel que
+soit l'ordre.
+
+**Pendant la transition entre deux majeures versionnées.** Servir les deux
+majeures évite le refus 426 de leurs requêtes, mais le poll annonce toujours
+`server_contract_version: CONTRACT_VERSION`, la version propre du serveur,
+pas celle de la console. Une console de l'ancienne majeure **n'arme aucun
+lancement distant** tant qu'elle n'est pas à jour si le serveur annonce la
+nouvelle majeure. L'arrêt traverse toutes les versions : la route de statut
+répond quelle que soit la majeure, et la console arrête sa séance sur
+`stopRequested: true` ou `active: false`.
 
 **Ce que fait la pipeline de release.** La pipeline de release
 ([release.md](release.md#la-pipeline-de-release)) déploie Convex (étape 4) avant
 toute console, et ne met aucune console à jour : son étape 6 dit seulement
 comment le faire à la main ([section 7.6](#76-arrêter-mettre-à-jour)). C'est
-l'ordre du second cas. Elle ne sait pas dans quel cas se trouve une release :
+l'ordre des deuxième et troisième cas, avec un Convex qui sert les deux
+majeures dans le deuxième. Elle ne sait pas dans quel cas se trouve une release :
 elle rappelle la règle en haut de son exécution, avant toute approbation, et
 la personne qui approuve le déploiement de Convex en répond. Pour une release
-du premier cas, la pipeline s'arrête d'elle-même au bon endroit : une fois les
-tags posés (étape 3), elle attend l'approbation de l'étape 4. Mettre alors les
-consoles à jour à la main, depuis le commit qui vient d'être tagué, et
-n'approuver le déploiement de Convex qu'ensuite.
+du premier cas, mettre les consoles à jour à la main
+entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex),
+depuis le commit qui vient d'être tagué, puis approuver Convex.
 
-**Quand les deux côtés n'ont pas la même majeure.** Les deux sens échouent du
-bon côté (aucun lancement distant n'est armé), mais pas au même prix.
+**Quand les deux côtés n'ont pas la même majeure.** Il faut distinguer un
+Convex antérieur au contrat d'un Convex qui sert déjà une majeure versionnée.
 
 | Situation | Effet |
 |---|---|
 | Console à jour, Convex antérieur au contrat | Heartbeat, programmes, séances lancées à la machine, télémétrie et fins de séance fonctionnent. Un arrêt venu du tableau de bord aussi : demande d'arrêt, ou séance que le serveur ne tient plus pour active. Le **lancement distant** est perdu : la console le refuse, parce que la réponse du poll n'annonce pas de version. La fiche machine n'affiche pas les versions, que cet ancien Convex ne stocke pas. |
 | Console antérieure au contrat (elle n'envoie pas l'en-tête), Convex à jour | Convex répond 426 à toutes ses requêtes, sauf celle qui porte la demande d'arrêt. La machine est **affichée hors ligne**, ses programmes ne sont plus synchronisés, sa télémétrie et ses fins de séance sont **refusées**, et aucun lancement distant ne lui parvient. Un arrêt venu du tableau de bord lui parvient encore. |
+| Console de la nouvelle majeure, Convex qui ne sert que l'ancienne majeure versionnée | Convex répond 426, sauf sur la route de statut qui porte l'arrêt. Mettre cette console à jour d'abord la coupe donc du Convex en service. |
+| Console de l'ancienne majeure versionnée, Convex qui ne sert que la nouvelle majeure | Même refus 426, sauf sur la route de statut qui porte l'arrêt. Déployer ce Convex d'abord coupe donc les consoles encore sur l'ancienne majeure. |
 
 D'où l'ordre du premier cas :
 
-1. **Les consoles d'abord.** Une console à jour fonctionne avec l'ancien Convex,
-   au lancement distant près.
+1. **Les consoles d'abord.** Une console à jour fonctionne avec le Convex
+   antérieur au contrat, au lancement distant près.
 2. **Convex ensuite**, quand toutes les consoles sont à jour.
 3. **Jamais pendant une séance.** Une séance en cours au moment où Convex cesse
    de servir la majeure de la console continue sous le seul superviseur local

@@ -192,7 +192,9 @@ jobs:
               echo "- Branche \`$DEPLOY_BRANCH\`, commit \`$GITHUB_SHA\`."
               echo "- Après les tests (étape 1) et CodeQL (étape 2), cette exécution pose les tags, déploie Convex, puis le site, puis la simulation, en production. Chacune de ces quatre écritures attend une approbation."
               echo "- Jamais pendant une séance : le vérifier avant d'approuver le déploiement de Convex, et approuver celui du site aussitôt après."
-              echo "- Convex est déployé avant toute console. C'est le bon ordre tant que la release garde la majeure du contrat machine ; si elle la change, mettre les consoles à jour d'abord, avant d'approuver le déploiement de Convex (docs/deploiement.md, section 3.4)."
+              echo "- Ordre avec Convex (docs/deploiement.md, section 3.4) : Convex d'abord pour une mineure ou sans changement du contrat."
+              echo "- Premier déploiement d'un Convex qui exige le contrat : les consoles d'abord, entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex), depuis le commit qui vient d'être tagué ; Convex ensuite."
+              echo "- Entre deux majeures versionnées : une release dont Convex sert les deux majeures d'abord (ordre de la pipeline), puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle."
             else
               echo "### Release à blanc"
               echo
@@ -837,6 +839,8 @@ jobs:
             echo "  1. depuis un poste, dans \`raspberry-pi/\` de ce commit : \`bash scripts/pi/deploy.sh pi@<adresse du Pi>\` ;"
             echo "  2. sur le Pi : \`sudo bash scripts/install.sh\`, qui refuse d'agir si la console n'est pas au repos ;"
             echo "  3. \`systemctl status anheart\` montre la version installée."
-            echo "- Ordre avec Convex (docs/deploiement.md, section 3.4) : cette release a déployé Convex avant toute console. C'est le bon ordre tant qu'elle garde la majeure du contrat machine (contrat de ce commit : \`$contract\`). Une release qui change cette majeure demande l'inverse : les consoles d'abord, à la main, avant d'approuver le déploiement de Convex."
+            echo "- Ordre avec Convex (docs/deploiement.md, section 3.4) : cette release a déployé Convex avant toute console (contrat de ce commit : \`$contract\`). C'est l'ordre pour une mineure ou sans changement du contrat."
+            echo "- Premier déploiement d'un Convex qui exige le contrat : les consoles d'abord, entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex), depuis le commit qui vient d'être tagué ; Convex ensuite."
+            echo "- Entre deux majeures versionnées : une release dont Convex sert les deux majeures d'abord (ordre de la pipeline), puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "Version du Pi de cette release : $version ($tagged). Aucune machine n'a été touchée."
