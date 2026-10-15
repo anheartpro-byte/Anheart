@@ -11,14 +11,14 @@ One session, in order
 ---------------------
 1. **declared** (a session started at the machine), under the reference its
    record carries, so that declaring it again, even after a restart, gives the
-   same session; or **confirmed** (a launch from the dashboard). Nothing is
-   sent before that. A confirmation the dashboard answers with anything but a
-   yes has the running session stopped at once: the machine does not run on
-   for a session the dashboard does not hold started. For the session that is
-   RUNNING this is :meth:`RecordUplink.greet`, called from the stop watch's
-   task and not from the sending: it is the first thing the dashboard hears
-   of a session and what lets its stop be asked for, so it waits behind no
-   reading of a record and no catching up, and reads nothing from the disk;
+   same session; or **already confirmed** (a launch the poll task confirmed
+   before arming). Older armed launches whose start is not yet confirmed use
+   :meth:`RecordUplink.greet` to confirm before telemetry; a refusal or missing
+   route stops that session at once. For a session that is RUNNING this is
+   called from the stop watch's task and not from the sending: it is the first
+   thing the dashboard hears of a session and what lets its stop be asked for,
+   so it waits behind no reading of a record and no catching up, and reads
+   nothing from the disk;
 2. **telemetry** then **events**, read from the cursor, one bounded batch at a
    time. The cursor moves when the dashboard acknowledges a batch, and is then
    written to disk;
@@ -84,6 +84,7 @@ from typing import Final, Protocol, assert_never
 from uuid import uuid4
 
 from src.clock import Clock
+from src.contract import ErrorCode
 from src.record.cursor import Cursor, UnreadableCursor, store
 from src.record.export import BUSY, TIMEOUT, RecordIo
 from src.record.rows import JsonValue
@@ -220,6 +221,9 @@ class Refusal:
     final: bool
     """Whether its stable code says the same request will always be refused."""
 
+    status: int | None = None
+    code: ErrorCode | None = None
+
 
 type Answer = Acked | Held | RouteMissing | Refusal
 
@@ -274,12 +278,14 @@ class Declaration:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ArmedSession:
-    """A session the runtime has just armed."""
+    """A session the runtime armed, including whether its remote start was already confirmed."""
 
     declaration: Declaration
     started_at: UnixMillis
     cloud_session_id: str | None
     """The launch from the dashboard this answers; ``None`` for a start at the machine."""
+
+    start_confirmed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -666,7 +672,7 @@ class RecordUplink:
             cursor=Cursor(
                 boot_id=None if source is None else source.boot_id,
                 session_id=remote,
-                start_confirmed=remote is None,
+                start_confirmed=session.start_confirmed or remote is None,
             ),
         )
 
@@ -1037,12 +1043,10 @@ class RecordUplink:
     async def _confirm(self, now: Monotonic, owed: _Owed, session_id: str) -> _Step | None:
         """Confirm the start of a launch from the dashboard. ``None`` once it is settled.
 
-        Anything but a yes or a silence has the running session stopped: the
-        machine is armed for a session the dashboard does not hold started
-        (cancelled there between the poll and the arm, or not taken for a
-        reason of the link's own), and whoever launched it could not stop it.
-        A refusal that is about the link leaves the confirmation owed: it is
-        made again, and the record sent, once the dashboard takes it.
+        For an older armed launch that has no pre-arm confirmation, a refusal
+        or missing route stops the running session because the dashboard
+        cannot stop a session it does not hold started. A link outage leaves
+        the confirmation owed and is retried later.
 
         "The running session" is read AFTER the answer: one that arrives when
         its session has ended is about that session alone, and stops no other.

@@ -21,14 +21,16 @@ body over the route's size. A console of an earlier minor reads the first as
 a refusal about the link, as it always read a 429: nothing is dropped, and the
 same request is made again later.
 
-Since 1.5 the dashboard checks a launch again when the console confirms its
-start, and may refuse it: 409 with one of :data:`ARMING_REFUSALS` (rights
-withdrawn, the launch expired, the rider's age or maximum heart rate changed,
-the rider in another session). The launch is then failed on the dashboard.
-This console confirms a launch after arming it, and reads that answer as it
-reads any refusal of its confirmation (:mod:`src.record_uplink`): it stops the
-session at once, on the ordinary ramp. Not arming at all is the console's
-part of ANH-144, still to come.
+Since 1.5 the dashboard checks a launch when the console confirms its start,
+and may refuse it: 409 with one of :data:`ARMING_REFUSALS` (rights withdrawn,
+the launch expired, the rider's age or maximum heart rate changed, or the rider
+is in another session). The console asks for this confirmation before arming.
+It sends the wall-clock time of the request as ``startedAt`` and
+``sessionAgeMs: 0``; the dashboard dates the start at confirmation while later
+measurements keep the machine's monotonic time axis. A 2xx is carried into the
+record cursor, so the armed session is not confirmed a second time
+(:mod:`src.record_uplink`). An older armed session without that pre-confirmation
+still uses the ordinary confirmation and refusal stop path.
 
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever

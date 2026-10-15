@@ -21,15 +21,13 @@ Up, from this machine to the dashboard:
 Down, from the dashboard to this machine, exactly three things:
 
 * an AUTO launch: a preset id, a rider and the rider's maximum heart rate. It
-  goes through :meth:`~src.control_surface.ControlSurface.submit_start` like a
-  start typed at the console, so the same gates apply (emergency-stop wiring
-  attested this boot, no standing verdict, the surface idle), and then through
-  the panel's own checks (medical parameters signed, programmes enabled,
-  occupied ceiling, the preset re-validated against this rider). Any refusal
-  goes back as a failed session with the reason. With unsigned medical
-  parameters the console still asks for launches, though programmes are off,
-  so that one waiting there is refused with that reason rather than left
-  waiting;
+  first passes the same surface and panel checks as a local start, without
+  submitting or arming. Only then does this task send ``training/start``;
+  ``submit_start`` and the panel re-run every gate after a 2xx before the
+  runtime is asked to arm. A local refusal goes back as a failed session with
+  its reason. A refusal by the dashboard is shown on the console and is not
+  ended again; a missing route or an unavailable link leaves the machine
+  unarmed so a later poll can offer the launch again;
 * the list of the riders this machine may offer (:mod:`src.roster`), asked
   for at the start and every :data:`~src.roster.ROSTER_PERIOD` while no
   session runs, kept in memory only. It starts nothing: a start at the
@@ -37,10 +35,9 @@ Down, from the dashboard to this machine, exactly three things:
   rider's maximum heart rate and age from that list;
 * a stop request, forwarded as an ordinary end on the commissioned ramp. It
   is looked for by :meth:`CloudSync.watch_stop`, from a task of its own: the
-  question keeps its cadence whatever the sending waits for. And a launch
-  whose start the dashboard does not take, for any reason it gives, is
-  stopped at once: a session that came from the dashboard never runs on
-  where the dashboard could not stop it.
+  question keeps its cadence whatever the sending waits for. A session armed
+  by an older console or before this handshake is still stopped at once when
+  its start is refused or no longer active on the dashboard.
 
 **Nothing else.** In particular a MANUAL session can never be started from
 the dashboard: nothing here can build one. Manual control needs somebody at
@@ -49,13 +46,13 @@ the machine.
 Why the link can never stop the machine by failing
 --------------------------------------------------
 Every call returns a :class:`~src.result.Result`; a dead network is
-``Err(Unreachable)``, logged and retried later, and the session carries on
-under the local supervisor exactly as it would with no dashboard at all. The
-worst a lost link does is leave the dashboard's picture stale, which the
-dashboard shows as stale. Nothing waits for the link in memory: what it owes
-the dashboard is in the session records, and is sent when the link answers
-again, after a restart of the console too (:func:`answer_of` says what each
-answer does to the sending).
+``Err(Unreachable)``, logged and retried later. A remote launch stays unarmed
+until ``training/start`` answers 2xx; a running session continues under the
+local supervisor when its link is lost. The worst a lost link does is leave
+the dashboard's picture stale, which the dashboard shows as stale. Nothing
+waits for the link in memory: what it owes the dashboard is in the session
+records, and is sent when the link answers again, after a restart of the
+console too (:func:`answer_of` says what each answer does to the sending).
 
 One contract, checked on both sides
 -----------------------------------
@@ -110,12 +107,15 @@ from abc import abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, unique
+from http import HTTPStatus
+from types import MappingProxyType
 from typing import Final, Protocol, assert_never, cast
 
 import httpx
 
 from src.clock import Clock
 from src.contract import (
+    ARMING_REFUSALS,
     CONTRACT_HEADER,
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
@@ -142,6 +142,7 @@ from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
 from src.medical import MedicalStatus
 from src.record_uplink import (
+    START_PATH,
     Acked,
     Answer,
     ArmedSession,
@@ -227,6 +228,22 @@ failure of the moment."""
 
 DASHBOARD_OPERATOR: Final[str] = "tableau de bord"
 """Who a stop from the dashboard is attributed to in the console's event list."""
+
+ARMING_REFUSAL_WORDS: Final[Mapping[ErrorCode, str]] = MappingProxyType(
+    {
+        ErrorCode("expired_before_start"): "lancement expire : depart non confirme a temps",
+        ErrorCode("machine_deleted_before_start"): "machine supprimee avant le depart",
+        ErrorCode("organization_changed_before_start"): (
+            "machine passee dans une autre organisation avant le depart"
+        ),
+        ErrorCode("right_revoked_before_start"): "droit retire avant le depart",
+        ErrorCode("age_refused_before_start"): "age du pratiquant refuse avant le depart",
+        ErrorCode("hr_max_changed_before_start"): "FC max du pratiquant modifiee avant le depart",
+        ErrorCode("rider_busy"): (
+            "pratiquant deja dans une autre seance en attente ou en cours : une seule a la fois"
+        ),
+    }
+)
 
 
 # =========================================================================
@@ -554,6 +571,13 @@ def describe_refusal(refused: Refused) -> str:
     return f"{code} (HTTP {refused.status}): {bounded(refused.detail)}"
 
 
+def _remote_start_refusal(refused: Refusal) -> str:
+    code = refused.code
+    if refused.status == HTTPStatus.CONFLICT and code is not None and code in ARMING_REFUSALS:
+        return f"{ARMING_REFUSAL_WORDS[code]} ({code})"
+    return f"depart distant refuse : {bounded(refused.detail)}"
+
+
 # =========================================================================
 # What the panel tells the link
 # =========================================================================
@@ -757,7 +781,12 @@ def answer_of(result: Result[Document, CloudError]) -> Answer:
                 return Held(describe_refusal(error), refused=True)
             if error.status == httpx.codes.NOT_FOUND and error.code is None:
                 return RouteMissing()
-            return Refusal(describe_refusal(error), final=error.code in FINAL_CODES)
+            return Refusal(
+                describe_refusal(error),
+                final=error.code in FINAL_CODES,
+                status=error.status,
+                code=error.code,
+            )
     raise assert_never(error)
 
 
@@ -773,6 +802,7 @@ class CloudSync:
     __slots__ = (
         "_awaiting",
         "_clock",
+        "_confirmed_launch_id",
         "_deposit",
         "_health",
         "_health_context",
@@ -787,6 +817,7 @@ class CloudSync:
         "_medical",
         "_next_profiles",
         "_online",
+        "_preflight_start",
         "_programs_enabled",
         "_pushed_rev",
         "_record_degraded",
@@ -813,6 +844,7 @@ class CloudSync:
         tiers: CardiacTiers,
         programs_enabled: bool,
         medical: MedicalStatus | None = None,
+        preflight_start: Callable[[Launch], Result[None, str]] | None = None,
         software_version: SoftwareVersion = UNKNOWN_SOFTWARE_VERSION,
         record_degraded: Callable[[], bool] | None = None,
         records: RecordSource | None = None,
@@ -844,6 +876,7 @@ class CloudSync:
         self._transport: CloudTransport = transport
         self._runtime: RuntimeView = runtime
         self._surface: ControlSurface = surface
+        self._preflight_start: Callable[[Launch], Result[None, str]] | None = preflight_start
         self._store: ProfileStore = store
         self._tiers: CardiacTiers = tiers
         self._programs_enabled: bool = programs_enabled
@@ -865,6 +898,7 @@ class CloudSync:
             said=surface.note_remote_refusal,
         )
         self._awaiting: _Awaiting | None = None
+        self._confirmed_launch_id: str | None = None
         self._pushed_rev: int | None = None
         self._next_profiles: Monotonic | None = None
         self._last_heartbeat: Monotonic | None = None
@@ -899,6 +933,9 @@ class CloudSync:
     def session_started(self, started: StartedSession) -> None:
         """Track a session the runtime has just armed. A launch's wait is over."""
         remote = started.cloud_session_id
+        confirmed = remote is not None and remote == self._confirmed_launch_id
+        if confirmed:
+            self._confirmed_launch_id = None
         # The first question about its stop is asked as soon as it may be,
         # whenever the last one about the session before was.
         self._last_status = None
@@ -909,6 +946,7 @@ class CloudSync:
                 declaration=declaration_of(started),
                 started_at=started.started_at,
                 cloud_session_id=remote,
+                start_confirmed=confirmed,
             )
         )
         if self._awaiting is not None and self._awaiting.cloud_session_id == remote:
@@ -916,6 +954,8 @@ class CloudSync:
 
     def start_refused(self, cloud_session_id: str, detail: str) -> None:
         """A launch the loop refused becomes a failed session on the dashboard."""
+        if self._confirmed_launch_id == cloud_session_id:
+            self._confirmed_launch_id = None
         if self._awaiting is not None and self._awaiting.cloud_session_id == cloud_session_id:
             self._awaiting = None
         self._owe_refusal(cloud_session_id, detail)
@@ -1115,8 +1155,54 @@ class CloudSync:
             if isinstance(incidents, int) and not isinstance(incidents, bool) and incidents >= 0
             else None
         )
-        if launch is None:
+        if launch is None or launch.session_id == self._refused_launch:
             return
+        admitted = self._preflight_remote_start(launch)
+        if isinstance(admitted, Err):
+            self._refuse_local_launch(launch.session_id, admitted.error)
+            return
+
+        await self._confirm_remote_start(launch, now)
+
+    def _preflight_remote_start(self, launch: Launch) -> Result[None, str]:
+        surface_check = self._surface.check_start()
+        if isinstance(surface_check, Err):
+            return Err(describe_surface_refusal(surface_check.error))
+        preflight = self._preflight_start
+        if preflight is None:
+            return Err("verification locale indisponible")
+        return preflight(launch)
+
+    async def _confirm_remote_start(self, launch: Launch, now: Monotonic) -> None:
+        started_at = self._clock.unix_millis()
+        answer = await self.send(
+            START_PATH,
+            {
+                "sessionId": launch.session_id,
+                "startedAt": int(started_at),
+                "sessionAgeMs": 0,
+            },
+        )
+        match answer:
+            case Acked():
+                self._submit_confirmed_launch(launch, now)
+            case Refusal():
+                sentence = _remote_start_refusal(answer)
+                self._refused_launch = launch.session_id
+                self._surface.note_remote_refusal(sentence)
+                _logger.warning("dashboard launch %s refused: %s", launch.session_id, sentence)
+            case Held():
+                sentence = f"depart distant non confirme : {answer.detail}"
+                self._surface.note_remote_refusal(sentence)
+                _logger.warning("dashboard launch %s held: %s", launch.session_id, answer.detail)
+            case RouteMissing():
+                sentence = "route training/start inconnue"
+                self._surface.note_remote_refusal(sentence)
+                _logger.warning("dashboard launch %s held: %s", launch.session_id, sentence)
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    def _submit_confirmed_launch(self, launch: Launch, now: Monotonic) -> None:
         submitted = self._surface.submit_start(
             profile_id=launch.profile_id,
             operator=f"{launch.operator} ({DASHBOARD_OPERATOR})",
@@ -1127,10 +1213,16 @@ class CloudSync:
             cloud_session_id=launch.session_id,
         )
         if isinstance(submitted, Err):
-            self._owe_refusal(launch.session_id, describe_surface_refusal(submitted.error))
+            self._refuse_local_launch(launch.session_id, describe_surface_refusal(submitted.error))
             return
+        self._confirmed_launch_id = launch.session_id
         _logger.info("dashboard launch %s submitted", launch.session_id)
         self._awaiting = _Awaiting(launch.session_id, now)
+
+    def _refuse_local_launch(self, session_id: str, detail: str) -> None:
+        self._refused_launch = session_id
+        self._surface.note_remote_refusal(detail)
+        self._owe_refusal(session_id, detail)
 
     def _refuse_server(self, sentence: str, launch: Launch | None) -> None:
         """The dashboard is of another contract: say so on the console, and fail its launch.
@@ -1160,6 +1252,7 @@ class CloudSync:
         if awaiting is None or elapsed(awaiting.since, now) < LAUNCH_TIMEOUT:
             return
         self._awaiting = None
+        self._confirmed_launch_id = None
         self._owe_refusal(awaiting.cloud_session_id, "la boucle n'a ni demarre ni refuse")
 
     # --- a stop from the dashboard ------------------------------------------

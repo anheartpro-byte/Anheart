@@ -62,6 +62,7 @@ from src.record_uplink import (
     UNOBSERVED_END,
     Acked,
     Answer,
+    ArmedSession,
     Held,
     RecordUplink,
     Refusal,
@@ -369,6 +370,29 @@ async def test_a_launch_is_confirmed_with_the_start_the_machine_dated_then_sent(
         {"sessionId": "k17remote", "startedAt": START, "sessionAgeMs": 1000}
     ]
     assert b.following() == "k17remote"
+    assert cursor_of_record(record.path).start_confirmed is True
+
+
+async def test_a_preconfirmed_launch_is_not_confirmed_again_after_arming(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path)
+    session = armed(b.clock, remote="k17remote")
+    b.uplink.begin(
+        ArmedSession(
+            declaration=session.declaration,
+            started_at=session.started_at,
+            cloud_session_id=session.cloud_session_id,
+            start_confirmed=True,
+        )
+    )
+    record = recording(tmp_path, b.clock, "ref-remote", remote="k17remote")
+    b.disk.current = record.path
+    record.tick(1.0)
+
+    await b.step()
+
+    assert b.link.to(START_PATH) == []
     assert cursor_of_record(record.path).start_confirmed is True
 
 

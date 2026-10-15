@@ -814,15 +814,9 @@ class ControlSurface:
         re-resolves it; a start for an unknown profile ends the session
         immediately with a refusal in the log rather than commanding motion.
         """
-        attested = self._supervisor.require_estop_confirmed()
-        if isinstance(attested, Err):
-            return self._refuse_start(attested.error)
-        standing = self._supervisor.standing
-        if standing is not None and standing.latched:
-            return self._refuse_start(SafetyHolding(standing))
-        busy = self._in_the_way_of_a_start()
-        if busy is not None:
-            return self._refuse_start(busy)
+        checked = self.check_start()
+        if isinstance(checked, Err):
+            return self._refuse_start(checked.error)
 
         command = StartSession(
             profile_id=profile_id,
@@ -837,6 +831,19 @@ class ControlSurface:
         )
         self._accept_start(command)
         return Ok(command)
+
+    def check_start(self) -> Result[None, StartRefusal]:
+        """Check the three start gates without recording or submitting a request."""
+        attested = self._supervisor.require_estop_confirmed()
+        if isinstance(attested, Err):
+            return Err(attested.error)
+        standing = self._supervisor.standing
+        if standing is not None and standing.latched:
+            return Err(SafetyHolding(standing))
+        busy = self._in_the_way_of_a_start()
+        if busy is not None:
+            return Err(busy)
+        return Ok(None)
 
     def submit_start_manual(
         self, *, occupancy: Occupancy, operator: str, subject_id: str = ""

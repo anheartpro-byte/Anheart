@@ -33,6 +33,7 @@ import pytest
 
 from src.clock import ManualClock
 from src.cloud_sync import (
+    ARMING_REFUSAL_WORDS,
     DASHBOARD_OPERATOR,
     FINAL_CODES,
     HEARTBEAT_PERIOD,
@@ -57,7 +58,7 @@ from src.cloud_sync import (
     live_row,
     runnable_profiles,
 )
-from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD, ErrorCode
+from src.contract import ARMING_REFUSALS, CONTRACT_VERSION, SERVER_VERSION_FIELD, ErrorCode
 from src.control_surface import (
     LOCAL_SUBJECT,
     ControlSurface,
@@ -67,8 +68,11 @@ from src.control_surface import (
     StartSession,
 )
 from src.local_config import CardiacTiers, CloudConfig, LocalConfig, load_local_config
-from src.local_panel import LocalPanel, build_panel, describe_resolve_error
+from src.local_panel import Armable, LocalPanel, RiderFacts, build_panel, describe_resolve_error
 from src.medical import SHIPPED_PARAMETERS, MedicalStatus
+from src.motor.drive import ControlWord, DriveError
+from src.motor.simulated import SimulatedDrive
+from src.record.journal import Journal
 from src.record_uplink import (
     MAX_REFUSALS,
     SUCCESSFUL_ENDS,
@@ -83,7 +87,7 @@ from src.roster import ROSTER_PATH, ROSTER_PERIOD, Roster, RosterState
 from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
-from src.units import Bpm, Monotonic, Seconds, UnixMillis
+from src.units import Bpm, Monotonic, MotorRpm, Seconds, UnixMillis
 from tests.medical_support import signed, unsigned
 from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, listed, roster_document
 from tests.test_contract import shared
@@ -217,6 +221,7 @@ class Rig:
     dashboard: Dashboard
     runtime: StubRuntime
     sync: CloudSync
+    journal: Journal | None = None
 
     async def step(self, seconds: float = 1.0) -> None:
         """One second of the link's two tasks: the stop watch looks before and after
@@ -234,13 +239,19 @@ def rig(
     tiers: CardiacTiers | None = None,
     records: RecordSource | None = None,
     medical: MedicalStatus | None = None,
+    record_root: Path | None = None,
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     config = config_of()
     dashboard = Dashboard()
+    journal = None if record_root is None else Journal(record_root, clock)
     panel = build_panel(
-        config, clock=clock, profiles_path=tmp_path / "p.json", transport=lambda _c: dashboard
+        config,
+        clock=clock,
+        profiles_path=tmp_path / "p.json",
+        transport=lambda _c: dashboard,
+        journal=journal,
     )
     runtime = StubRuntime(source=panel.runtime.snapshot)
     sync = CloudSync(
@@ -252,9 +263,17 @@ def rig(
         tiers=config.tiers if tiers is None else tiers,
         programs_enabled=programs,
         medical=medical,
+        preflight_start=panel._preflight_remote_start,
         records=records,
     )
-    return Rig(clock=clock, panel=panel, dashboard=dashboard, runtime=runtime, sync=sync)
+    return Rig(
+        clock=clock,
+        panel=panel,
+        dashboard=dashboard,
+        runtime=runtime,
+        sync=sync,
+        journal=journal,
+    )
 
 
 def manual(clock: ManualClock, *, remote: str | None = None) -> StartedSession:
@@ -392,17 +411,35 @@ def test_a_record_s_end_is_a_failure_exactly_when_the_runtime_s_is(reason: EndRe
         (Err(Refused(404, "HTTP 404")), RouteMissing()),
         (
             Err(Refused(404, "Session not found", ErrorCode("session_not_found"))),
-            Refusal("session_not_found (HTTP 404): Session not found", final=True),
+            Refusal(
+                "session_not_found (HTTP 404): Session not found",
+                final=True,
+                status=404,
+                code=ErrorCode("session_not_found"),
+            ),
         ),
         (
             Err(Refused(400, "Malformed event", ErrorCode("invalid_request"))),
-            Refusal("invalid_request (HTTP 400): Malformed event", final=True),
+            Refusal(
+                "invalid_request (HTTP 400): Malformed event",
+                final=True,
+                status=400,
+                code=ErrorCode("invalid_request"),
+            ),
         ),
         (
             Err(Refused(400, "Try again", ErrorCode("request_failed"))),
-            Refusal("request_failed (HTTP 400): Try again", final=False),
+            Refusal(
+                "request_failed (HTTP 400): Try again",
+                final=False,
+                status=400,
+                code=ErrorCode("request_failed"),
+            ),
         ),
-        (Err(Refused(400, "no")), Refusal("sans code (HTTP 400): no", final=False)),
+        (
+            Err(Refused(400, "no")),
+            Refusal("sans code (HTTP 400): no", final=False, status=400),
+        ),
     ],
 )
 def test_what_an_exchange_means_for_what_was_sent(reply: Reply, answer: object) -> None:
@@ -482,6 +519,7 @@ def roster_rig(tmp_path: Path, *, programs: bool = True) -> tuple[Rig, Roster]:
         store=r.panel.services.store,
         tiers=config_of().tiers,
         programs_enabled=programs,
+        preflight_start=r.panel._preflight_remote_start,
         roster=roster,
     )
     return replace(r, sync=sync), roster
@@ -742,6 +780,8 @@ async def test_a_launch_the_surface_refuses_comes_back_failed(tmp_path: Path) ->
     r = rig(tmp_path)  # e-stop wiring NOT attested
     r.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await r.step()
+    assert r.dashboard.to(START) == []
+    assert r.panel.surface.pending is None
     ends = r.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["sessionId"] == "remote-1"
@@ -749,6 +789,161 @@ async def test_a_launch_the_surface_refuses_comes_back_failed(tmp_path: Path) ->
     reason = ends[0]["reason"]
     assert isinstance(reason, str)
     assert "non atteste" in reason
+
+
+async def test_a_locked_surface_verdict_prevents_the_confirmation_request(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.panel.runtime.supervisor.latch_estop("test verdict")
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+
+    await r.step()
+
+    assert r.dashboard.to(START) == []
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    assert "verdict de securite" in str(ends[0]["reason"])
+
+
+async def test_a_waiting_surface_command_prevents_the_confirmation_request(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    reset = r.panel.surface.submit_fault_reset(operator=OPERATOR)
+    assert isinstance(reset, Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+
+    await r.step()
+
+    assert r.dashboard.to(START) == []
+    assert r.panel.surface.pending == reset.value
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    assert "console occupee" in str(ends[0]["reason"])
+
+
+async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path: Path) -> None:
+    r = rig(tmp_path)
+    sync = CloudSync(
+        clock=r.clock,
+        transport=r.dashboard,
+        runtime=r.runtime,
+        surface=r.panel.surface,
+        store=r.panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=True,
+    )
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+
+    r.clock.advance(Seconds(1.0))
+    await sync.step()
+
+    assert r.dashboard.to(START) == []
+    ends = r.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    assert r.panel.surface.pending is None
+
+
+@pytest.mark.parametrize("code", sorted(ARMING_REFUSALS))
+async def test_a_409_is_shown_logged_and_never_ended_or_retried(
+    tmp_path: Path, code: ErrorCode
+) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records")
+    assert r.journal is not None
+    words = ARMING_REFUSAL_WORDS[code]
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    client = r.panel.hub.subscribe()
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r.dashboard.answer(START, Err(Refused(409, "Declined", code)))
+
+    await r.step()
+
+    starts = r.dashboard.to(START)
+    assert starts == [
+        {"sessionId": "remote-1", "startedAt": int(r.clock.unix_millis()), "sessionAgeMs": 0}
+    ]
+    assert r.panel.surface.pending is None
+    assert r.runtime.state is RuntimeState.IDLE
+    assert r.dashboard.to("/api/machine/training/end") == []
+    payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
+    assert payload.event is not None
+    assert words in payload.event.detail
+    assert code in payload.event.detail
+
+    r.journal.drain()
+    logbook = (r.journal.root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
+    assert words in logbook
+    assert code in logbook
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step(POLL_PERIOD)
+    assert r.dashboard.to(START) == starts
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        pytest.param(Refused(400, "Not pending", ErrorCode("session_not_pending")), id="400-code"),
+        pytest.param(Refused(409, "Not pending", ErrorCode("session_not_pending")), id="409-code"),
+        pytest.param(Refused(409, "HTTP 409"), id="409-no-code"),
+    ],
+)
+async def test_another_start_refusal_is_shown_without_arming_or_ending(
+    tmp_path: Path, refusal: Refused
+) -> None:
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    client = r.panel.hub.subscribe()
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r.dashboard.answer(START, Err(refusal))
+
+    await r.step()
+
+    assert r.panel.surface.pending is None
+    assert r.runtime.state is RuntimeState.IDLE
+    assert r.dashboard.to("/api/machine/training/end") == []
+    payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
+    assert payload.event is not None
+    assert "depart distant refuse" in payload.event.detail
+    if refusal.code is not None:
+        assert refusal.code in payload.event.detail
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step(POLL_PERIOD)
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to("/api/machine/training/end") == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(DOWN, id="offline"),
+        pytest.param(Err(Refused(403, "Invalid key", ErrorCode("unauthorized"))), id="key"),
+        pytest.param(Err(Refused(429, "Wait")), id="rate-limit"),
+        pytest.param(Err(Refused(503, "Unavailable")), id="server-error"),
+        pytest.param(Err(Refused(404, "Not found")), id="unknown-route"),
+    ],
+)
+async def test_an_unconfirmed_start_stays_unarmed_and_has_no_end(
+    tmp_path: Path, answer: Reply
+) -> None:
+    r = rig(tmp_path)
+    client = r.panel.hub.subscribe()
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r.dashboard.answer(START, answer)
+
+    await r.step()
+
+    assert len(r.dashboard.to(START)) == 1
+    assert r.panel.surface.pending is None
+    assert r.runtime.state is RuntimeState.IDLE
+    assert r.dashboard.to("/api/machine/training/end") == []
+    payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
+    assert payload.event is not None
+    assert payload.event.detail
 
 
 async def test_a_launch_the_loop_refuses_comes_back_failed(tmp_path: Path) -> None:
@@ -1345,15 +1540,52 @@ def linked(tmp_path: Path, medical: MedicalStatus | None = None, **changes: str)
     return Linked(clock=clock, panel=panel, dashboard=dashboard)
 
 
-async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(tmp_path: Path) -> None:
+def observe_dashboard_and_drive(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> list[str]:
+    writes: list[str] = []
+    original_reply = Dashboard._reply
+    original_command = SimulatedDrive.write_command
+    original_speed = SimulatedDrive.write_speed
+
+    def reply(dashboard: Dashboard, method: str, path: str, body: Mapping[str, object]) -> Reply:
+        if path == START:
+            order.append("training/start")
+        return original_reply(dashboard, method, path, body)
+
+    async def command(drive: SimulatedDrive, word: ControlWord) -> Result[None, DriveError]:
+        writes.append(f"command:{word.name}")
+        order.append("drive")
+        return await original_command(drive, word)
+
+    async def speed(drive: SimulatedDrive, rpm: MotorRpm) -> Result[None, DriveError]:
+        writes.append(f"speed:{rpm}")
+        order.append("drive")
+        return await original_speed(drive, rpm)
+
+    monkeypatch.setattr(Dashboard, "_reply", reply)
+    monkeypatch.setattr(SimulatedDrive, "write_command", command)
+    monkeypatch.setattr(SimulatedDrive, "write_speed", speed)
+    return writes
+
+
+async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order: list[str] = []
+    observe_dashboard_and_drive(monkeypatch, order)
     rig_ = linked(tmp_path)
+    expected_start = int(rig_.clock.unix_millis()) + 200
     rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(LAUNCH)))
     await rig_.run(2.0)
     assert rig_.panel.runtime.state is RuntimeState.RUNNING
     starts = rig_.dashboard.to("/api/machine/training/start")
-    assert [start["sessionId"] for start in starts] == ["remote-1"]
-    assert isinstance(starts[0]["startedAt"], int)
-    assert starts[0]["sessionAgeMs"] in range(2000)
+    assert starts == [
+        {
+            "sessionId": "remote-1",
+            "startedAt": expected_start,
+            "sessionAgeMs": 0,
+        }
+    ]
+    assert order.index("training/start") < order.index("drive")
     assert rig_.panel.cloud is not None
     assert rig_.panel.cloud.current_session_id == "remote-1"
 
@@ -1364,16 +1596,74 @@ async def test_a_dashboard_launch_runs_and_a_dashboard_stop_ends_it(tmp_path: Pa
     await rig_.panel.close()
 
 
+async def test_a_409_never_commands_the_simulated_drive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order: list[str] = []
+    writes = observe_dashboard_and_drive(monkeypatch, order)
+    rig_ = linked(tmp_path)
+    rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    rig_.dashboard.answer(
+        START,
+        Err(Refused(409, "Right revoked", ErrorCode("right_revoked_before_start"))),
+    )
+
+    await rig_.run(2.0)
+
+    assert rig_.panel.runtime.state is RuntimeState.IDLE
+    assert writes == []
+    assert order == ["training/start"]
+    assert len(rig_.dashboard.to(START)) == 1
+    assert rig_.dashboard.to("/api/machine/training/end") == []
+
+
+async def test_a_rechecked_arm_refusal_after_2xx_ends_without_drive_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order: list[str] = []
+    writes = observe_dashboard_and_drive(monkeypatch, order)
+    attempts = 0
+    original_prepare = LocalPanel._prepare_programme
+
+    def refuse_at_arm(
+        panel: LocalPanel,
+        command: StartSession,
+        rider: Result[RiderFacts, str],
+    ) -> Result[Armable, str]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            return Err("programme refuse lors de la revalidation")
+        return original_prepare(panel, command, rider)
+
+    monkeypatch.setattr(LocalPanel, "_prepare_programme", refuse_at_arm)
+    rig_ = linked(tmp_path)
+    rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+
+    await rig_.run(3.0)
+
+    ends = rig_.dashboard.to("/api/machine/training/end")
+    assert len(rig_.dashboard.to(START)) == 1
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    assert writes == []
+    assert order == ["training/start"]
+    assert rig_.panel.runtime.state is RuntimeState.IDLE
+
+
 async def refused_launch(
     tmp_path: Path,
     launch: Mapping[str, JsonValue],
     medical: MedicalStatus | None = None,
+    after_confirmation: bool = False,
     **env: str,
 ) -> str:
     rig_ = linked(tmp_path, medical, **env)
     rig_.dashboard.answer("/api/machine/training/poll", launch_answer(dict(launch)))
     await rig_.run(3.0)
     assert rig_.panel.runtime.state is RuntimeState.IDLE
+    if not after_confirmation:
+        assert rig_.dashboard.to(START) == []
     ends = rig_.dashboard.to("/api/machine/training/end")
     assert len(ends) == 1
     assert ends[0]["failed"] is True
@@ -1409,7 +1699,7 @@ async def test_tiers_that_disagree_with_the_preset_are_refused_by_the_runtime(
     screened = signed(
         replace(SHIPPED_PARAMETERS, hr_hard_max_bpm=Bpm(150), hr_critical_bpm=Bpm(160))
     )
-    reason = await refused_launch(tmp_path, LAUNCH, screened)
+    reason = await refused_launch(tmp_path, LAUNCH, screened, after_confirmation=True)
     assert "demarrage refuse" in reason
 
 

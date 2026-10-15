@@ -154,6 +154,7 @@ from src.cloud_sync import (
     CloudTransport,
     DepositTask,
     HttpxTransport,
+    Launch,
     PacedTransport,
     SessionKind,
     SessionListener,
@@ -1284,6 +1285,23 @@ class LocalPanel:
         listed = passenger.value
         return Ok(RiderFacts(listed.hr_max, listed.age, listed.rider.name))
 
+    def _preflight_remote_start(self, launch: Launch) -> Result[None, str]:
+        command = StartSession(
+            profile_id=launch.profile_id,
+            operator=launch.operator,
+            total_duration_s=launch.total_duration_s,
+            at=self._clock.monotonic(),
+            request_id="preflight",
+            subject_id=launch.subject_id,
+            subject_hr_max=launch.subject_hr_max,
+            subject_age=launch.subject_age,
+            cloud_session_id=launch.session_id,
+        )
+        prepared = self._prepare_programme(command, self._rider_for(command))
+        if isinstance(prepared, Err):
+            return Err(prepared.error)
+        return Ok(None)
+
     def _admitted(self, rider: Result[RiderFacts, str]) -> Result[RiderFacts, str]:
         """Gate 1, before the machine is asked anything: the console is in service
         (whether the start is typed here or comes down from the dashboard), its
@@ -1858,6 +1876,30 @@ def build_panel(
         verdicts=runtime,
         roster=riders,
     )
+    panel = LocalPanel(
+        clock=clock,
+        config=config,
+        drive=drive,
+        runtime=runtime,
+        watchdog=watchdog,
+        surface=surface,
+        hub=hub,
+        ecg=ecg,
+        sim_ecg=ecg_side.simulator,
+        reporter=reporter,
+        services=services,
+        store=store,
+        sensors=sensor_hub,
+        presence=presence,
+        listener=None,
+        health=health,
+        cloud=None,
+        transport=None,
+        recorder=recorder,
+        wall_clock=watch,
+        service=service,
+        roster=riders,
+    )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
     if config.cloud is not None:
@@ -1889,6 +1931,7 @@ def build_panel(
             tiers=config.tiers,
             programs_enabled=config.programs_enabled,
             medical=config.medical,
+            preflight_start=panel._preflight_remote_start,
             software_version=version,
             record_degraded=None if recorder is None else recorder.is_degraded,
             records=None if journal is None else record_source(journal, clock),
@@ -1906,30 +1949,12 @@ def build_panel(
             ),
             roster=riders,
         )
-    return LocalPanel(
-        clock=clock,
-        config=config,
-        drive=drive,
-        runtime=runtime,
-        watchdog=watchdog,
-        surface=surface,
-        hub=hub,
-        ecg=ecg,
-        sim_ecg=ecg_side.simulator,
-        reporter=reporter,
-        services=services,
-        store=store,
-        sensors=sensor_hub,
-        presence=presence,
-        listener=cloud,
-        health=health,
-        cloud=cloud,
-        transport=owned,
-        recorder=recorder,
-        wall_clock=watch,
-        service=service,
-        roster=riders,
-    )
+    if cloud is not None:
+        panel._listener = cloud
+        panel._cloud = cloud
+        panel._transport = owned
+        panel._health = health
+    return panel
 
 
 def open_service(journal: Journal, clock: Clock) -> ServiceDesk:

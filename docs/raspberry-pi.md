@@ -1642,7 +1642,7 @@ exactement pareil, sans tableau de bord.
 | Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle, la version du contrat et, si la console enregistre, `recordDegraded` : l'enregistrement de séance est incomplet ou ne peut pas être écrit ([15.3](#153-quand-le-disque-refuse-se-remplit-ou-se-tait)) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
 | Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur | `POST /api/machine/profiles` | quand la révision du magasin change |
 | Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance, et son passager (`userId`, plus `subjectLabel` tant que la console a son nom en mémoire ; rien pour le banc) | `POST /api/machine/training/local` | dès que le dossier de son enregistrement existe, par la tâche de veille (8.6), avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
-| Pi → Convex | confirmation du départ d'une séance lancée à distance, avec les deux mêmes dates | `POST /api/machine/training/start` | dès que la séance est armée, par la tâche de veille (8.6) ; refaite tant qu'elle est retenue |
+| Pi → Convex | confirmation du départ d'une séance lancée à distance : `startedAt` est l'heure murale lue à la demande, `sessionAgeMs` vaut 0 | `POST /api/machine/training/start` | par la tâche du poll, après les contrôles locaux et avant `submit_start` ; après un 2xx, le curseur évite une seconde confirmation |
 | Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 3 s quand elle a du retard |
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, chacun avec son rang dans le fichier | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
@@ -1793,18 +1793,31 @@ refaite toutes les 15 s. Ni la séance en cours, ni celle qui vient de finir,
 ni le refus d'un lancement ne l'attendent ; les séances plus anciennes rangées
 derrière elle, si.
 
-Deux requêtes ont un effet propre. La **confirmation d'un départ** : toute
-réponse autre qu'un oui fait arrêter la séance en cours, tout de suite et une
-seule fois. Refusée (séance annulée sur le site entre le poll et l'armement,
-ou, depuis le contrat 1.5, lancement refusé à l'armement : 409 avec un code
-de `arming_refusals`), elle est tenue pour réglée ; retenue par le serveur (426, 401, 403, 5xx), elle
-reste due et est refaite toutes les 15 s, puis l'enregistrement est envoyé,
-quand le serveur l'accepte. Seule l'absence de réponse exploitable (réseau
-coupé, délai dépassé, réponse 2xx qui n'est pas un objet JSON) laisse tourner
-la séance. Une réponse qui arrive après la fin de la séance qu'elle concerne
-n'arrête pas celle qui a été armée entre-temps. Une **déclaration** refusée
-pour de bon clôt l'enregistrement sans
-rien en envoyer : sans séance côté tableau de bord, rien ne peut être reçu.
+Depuis ANH-241, un lancement reçu par le poll passe d'abord les contrôles de
+la surface et du panneau, sans soumettre ni armer. La tâche du poll envoie
+ensuite `training/start` avec `startedAt` mural et `sessionAgeMs: 0`. Un 2xx
+autorise `submit_start`, qui rejoue les contrôles, puis l'armement rejoue les
+portes du panneau. Le curseur de la séance est marqué confirmé : l'envoi de
+séance ne poste pas `training/start` une seconde fois. Un refus local avant la
+demande est écrit comme une fin échouée ; un refus local après le 2xx aussi.
+Un 409 avec un code `arming_refusals`, ou un autre refus de la confirmation,
+est affiché avec son code s'il est stable, sans nouvel envoi de fin ni nouvel
+essai du même lancement. Un lien retenu ou une route inconnue laisse la séance non
+armée et n'envoie pas de fin ; le poll suivant peut présenter le lancement.
+Limite suivie par ANH-240 : si Convex a pris le départ mais que son 2xx se perd,
+la console reste non armée. Si un `training/start` ultérieur reçoit
+`session_not_pending`, elle l'affiche sans armer ; Convex peut garder la séance
+active jusqu'à son interruption. L'idempotence de ce 2xx n'est pas dans ANH-241.
+
+Le chemin ci-dessus ne change pas celui d'une séance déjà armée dont le départ
+n'avait pas été confirmé (compatibilité avec les anciennes consoles). Dans
+`RecordUplink._confirm`, un refus ou une route inconnue arrête aussitôt cette
+séance ; une panne réseau sans réponse laisse la confirmation due. Une réponse
+qui arrive après la fin de la séance qu'elle concerne n'arrête pas celle qui a
+été armée entre-temps. `watch_stop` continue aussi d'arrêter sur
+`stopRequested` ou `active: false`. Une **déclaration** refusée pour de bon
+clôt l'enregistrement sans rien en envoyer : sans séance côté tableau de bord,
+rien ne peut être reçu.
 
 ### 8.4 Après un redémarrage de la console
 
@@ -1886,12 +1899,13 @@ suit ne change pas.
   des durées. La fin est datée de même. Une correction de l'heure murale en
   cours de séance ne déplace donc aucun point, et aucun n'est refusé pour
   elle.
-- **L'âge de la séance** (`sessionAgeMs`) accompagne la déclaration et la
-  confirmation du départ : le temps écoulé depuis le début, sur l'horloge
-  monotone. C'est lui qui fait dater la séance par le serveur, sur sa propre
-  horloge ([convex.md, Deux horloges](convex.md#deux-horloges)) : une console
-  datée de 1970 ne fait apparaître aucune séance en 1970, et ce qu'elle envoie
-  en retard est lu comme mesuré quand il l'a été.
+- **L'âge de la séance** (`sessionAgeMs`) accompagne les déclarations du
+  dossier et les mesures : le temps écoulé sur l'horloge monotone. Pour le
+  `training/start` pré-armement, il vaut intentionnellement 0 et `startedAt`
+  est l'heure murale lue à l'instant de la demande. Le tableau de bord date
+  ainsi le départ à la confirmation, puis lit les points et événements sur
+  l'axe monotone de la machine ([convex.md, Deux horloges](convex.md#deux-horloges)).
+  Une console datée de 1970 ne fait apparaître aucune séance en 1970.
 
 Après un redémarrage **de la console seule** (le système n'a pas redémarré),
 l'horloge monotone est la même : l'âge reste exact. Le curseur retient pour
@@ -2717,15 +2731,14 @@ Ce que fait la console :
   porte (`software_version`). Aucune variable d'environnement ne la règle :
   `ANHEART_SOFTWARE_VERSION`, qui réglait autrefois celle du manifeste seul,
   n'est plus lue ([12.1](#121-clés-lues-par-la-console-srclocal_configpy)).
-* **Un départ refusé à l'armement** (contrat 1.5, ANH-144) : Convex revérifie
-  un lancement quand la console en confirme le départ, et peut répondre 409
-  avec l'un des codes `arming_refusals` du contrat partagé (droit retiré,
-  lancement expiré, âge ou FC max changés, passager dans une autre séance).
-  La console confirme un départ **après** avoir armé la séance ; elle lit ce
-  409 comme tout refus de sa confirmation et arrête la séance aussitôt, sur
-  la rampe ordinaire ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)).
-  Ne pas armer du tout sur ce refus, et afficher le passager à confirmer,
-  est la couche Pi d'ANH-144, à venir.
+* **Un départ revérifié à la confirmation** (contrat 1.5, ANH-144) : Convex
+  revérifie le lancement quand la console demande `training/start`, avant que
+  le Pi soumette ou arme sa commande. Un 409 avec un code `arming_refusals`
+  clôt le lancement côté Convex ; la console affiche le code stable et ne
+  poste pas de `/training/end`. Une réponse retenue ou une route inconnue ne
+  permet pas non plus d'armer ; le poll peut présenter le lancement de nouveau.
+  Après un 2xx, le Pi soumet et réarme à travers ses contrôles locaux, puis
+  marque le curseur déjà confirmé ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)).
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les
