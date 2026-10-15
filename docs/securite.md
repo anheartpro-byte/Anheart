@@ -1793,9 +1793,11 @@ viennent et ce que la console fait quand rien ne prouve qu'elles sont signées.
   toute conversion des fins de ligne de ces fichiers à l'extraction du dépôt.
 * **La clé.** `config/medical.pub` est la clé publique avec laquelle la console
   vérifie, embarquée dans l'image avec le fichier. C'est la clé « médical » et
-  aucune autre : le catalogue de programmes (ANH-138) aura sa propre clé, et
-  une clé ne signe jamais pour l'autre. Sa moitié privée n'est jamais sur une
-  machine ni dans le dépôt.
+  aucune autre : le catalogue de programmes (ANH-137) aura sa propre clé, et
+  une clé ne signe jamais pour l'autre. Sa moitié privée reste chez le
+  signataire : jamais sur une console ni dans le dépôt. Où elle vit, qui la
+  tient et comment la changer :
+  [secrets.md, 3.4](secrets.md#34-clés-de-signature).
 * **Vérifiable sans ce code.** Avec OpenSSL 3 :
   `openssl pkeyutl -verify -pubin -inkey config/medical.pub -rawin -in config/medical_parameters.json -sigfile config/medical_parameters.sig`.
 
