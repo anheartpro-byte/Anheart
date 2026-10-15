@@ -52,7 +52,7 @@ projet de les tenir.
 | Mot de passe du Wi-Fi de la console | le réseau que le Pi crée pour les tablettes | `/etc/anheart/wifi-password` (root, mode 600) ; la fiche privée de mise en service | root du Pi ; le technicien ; chaque tablette jointe | [3.3](#33-mot-de-passe-du-wi-fi-de-la-console) |
 | Clé du volume chiffré des données du Pi | les enregistrements de séance au repos | `/etc/anheart/data.key` (root, mode 600), sur la même carte que le volume ([pi-stockage.md](pi-stockage.md)) | root du Pi ; quiconque a la carte SD | aucune procédure écrite ([section 5](#5-ce-qui-reste)) |
 | Clé de signature « médical » (Ed25519, ANH-139) | prouver que `config/medical_parameters.json` est le fichier qu'une personne habilitée a signé : sans signature vérifiée, la console ne démarre qu'en mode banc ([securite.md, section 13](securite.md#13-décisions-médicales--un-fichier-signé-anh-139)) | partie publique, qui n'est pas un secret : `raspberry-pi/config/medical.pub`, dans le dépôt et dans l'image de chaque console. Partie privée : chez le signataire seul, dans un fichier chiffré par une phrase secrète, hors du dépôt (`scripts/sign_medical_parameters.py` refuse de l'écrire dans le dépôt) et hors de tout Pi. **Aujourd'hui une clé de test**, dont la partie privée a été détruite après la signature du fichier livré : personne ne peut plus signer avec elle | aujourd'hui personne ; le signataire médical une fois la clé réelle créée (ANH-98) ; remplacer la partie publique demande une PR relue et une nouvelle version de la console | [3.4](#34-clés-de-signature) |
-| Clé de signature « catalogue » | prouver qu'un programme a été écrit par l'équipe habilitée | **n'existe pas encore** ([ANH-137](https://linear.app/anheart/issue/ANH-137/catalogue-de-programmes-dans-convex-ecrit-par-lequipe-anheart-seule)) ; ce sera une clé distincte de la clé « médical » | - | [3.4](#34-clés-de-signature) |
+| Clé de signature « catalogue » | prouver à la console que le catalogue de programmes vient d'Anheart (signé dans Convex) | **n'existe pas encore** ([ANH-138](https://linear.app/anheart/issue/ANH-138/publication-des-programmes-vers-les-machines-le-pi-recupere-revalide)) ; ce sera une clé distincte de la clé « médical » | - | [3.4](#34-clés-de-signature) |
 | Clé de déploiement Convex de **production** | déployer le backend de production, lire et écrire ses données et ses variables | prévue comme secret `CONVEX_DEPLOY_KEY` de l'environnement GitHub `production`, mais **pas encore créée** ([état au 14 octobre 2026](#ce-que-github-porte-aujourdhui)) ; `CONVEX_DEPLOY_KEY_PROD` dans `.env.local` du poste du responsable | une fois le secret créé : le job `convex` de la pipeline de release, et les administrateurs du dépôt (remplacer, pas relire) ; les membres de l'équipe Convex ; le poste qui a `.env.local` | [3.5](#35-clés-de-déploiement-convex) |
 | Clé de déploiement Convex de développement | la même chose sur le déploiement de développement | `CONVEX_DEPLOY_KEY` dans `.env.local` | les membres de l'équipe Convex ; le poste qui a `.env.local` | [3.5](#35-clés-de-déploiement-convex) |
 | Jeton Vercel, `VERCEL_TOKEN` | déployer le site **et** la simulation hébergée, en production comme en préversion ; lire les variables des deux projets ([MEN-21](menaces.md#men-21-service-de-simulation-hébergé-ouvert-à-internet)) | prévu comme secret des environnements GitHub `production` **et** `preview`, mais **pas encore créé** ([état au 14 octobre 2026](#ce-que-github-porte-aujourdhui)) | une fois le secret créé : les jobs des deux boutons de déploiement et de la pipeline, et les administrateurs du dépôt (remplacer) ; le compte Vercel qui crée le jeton | [3.6](#36-jeton-et-connexion-vercel) |
@@ -249,7 +249,7 @@ livrée aujourd'hui par la clé médicale réelle (ANH-98). La partie privée de
 clé de test a été détruite : il n'y a rien d'autre à retirer.
 
 **Clé « catalogue »**
-([ANH-137](https://linear.app/anheart/issue/ANH-137/catalogue-de-programmes-dans-convex-ecrit-par-lequipe-anheart-seule)).
+([ANH-138](https://linear.app/anheart/issue/ANH-138/publication-des-programmes-vers-les-machines-le-pi-recupere-revalide)).
 Elle n'existe pas encore ; sa procédure de rotation s'écrit avec ce ticket et
 se range ici. Ce sera une clé distincte : une clé ne signe jamais pour l'autre.
 
@@ -401,7 +401,7 @@ une clé compromise, c'est sa suppression chez Resend (étape 3) qui coupe tout.
 | Essayer chaque procédure de la section 3 une fois, et écrire ici la date et le résultat | le chef de projet, avec les vrais comptes |
 | Tenir la liste nominative de qui a accès à chaque compte (GitHub, Convex, Vercel, Clerk) | le chef de projet |
 | Fixer un rythme de rotation hors incident | le chef de projet |
-| Écrire la rotation de la clé de signature « catalogue » | ANH-137 |
+| Écrire la rotation de la clé de signature « catalogue » | ANH-138 |
 | Remplacer la clé de test « médical » par la clé médicale réelle, et essayer la procédure de [3.4](#34-clés-de-signature) à cette occasion | ANH-98 |
 | Écrire la rotation de la clé du volume chiffré du Pi | le lot stockage d'ANH-151 |
 | Un jeton Vercel par projet, ou un jeton commun assumé par écrit | décision ouverte de MEN-21 |
