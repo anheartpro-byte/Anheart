@@ -722,8 +722,8 @@ Après **Lancer** :
    Une seule séance à la fois (ANH-144) : si le pratiquant a déjà une séance
    en attente, en cours, ou interrompue sur une machine qui ne s'est pas
    manifestée depuis, sur n'importe quelle machine, le lancement est refusé
-   avec « Ce pratiquant a déjà une séance en attente ou en cours sur une
-   machine : une seule à la fois. » ; si c'est la machine, avec « Cette
+   avec « Pratiquant déjà dans une autre séance, en attente ou en cours : une
+   seule à la fois. » ; si c'est la machine, avec « Cette
    machine a déjà une séance en attente ou en cours : une seule à la fois. ».
    Le message ne dit pas où est l'autre séance.
 2. Le site ouvre la vue en direct : « En attente que la machine arme la
@@ -749,10 +749,10 @@ Après **Lancer** :
    | Raison affichée | Cause |
    |---|---|
    | Droit retiré avant le départ | Le droit de lancement du patient a été retiré, le gestionnaire ne gère plus la machine ou le patient, une adhésion a été désactivée, ou un compte supprimé. |
-   | Expirée : la machine ne l'a pas armée à temps | La machine ne l'a pas armée en 5 min (`PENDING_SESSION_TTL_S`, [convex.md](convex.md#revérification-à-larmement-anh-144)) : machine hors ligne, par exemple. Passée échouée dans la minute qui suit. |
+   | Expirée : départ non confirmé à temps | La machine n'en a pas confirmé le départ en 5 min (`PENDING_SESSION_TTL_S`, [convex.md](convex.md#revérification-à-larmement-anh-144)) : machine hors ligne, par exemple. Passée échouée dans la minute qui suit. La console actuelle arme avant de confirmer : elle a pu démarrer, et la confirmation refusée l'arrête alors sur la rampe ordinaire. Le lancement n'est plus offert à la machine 45 s avant l'échéance. |
    | FC max du pratiquant modifiée avant le départ | La FC max retenue n'est plus celle du lancement : relancer la séance. |
    | Âge du pratiquant refusé avant le départ | L'année de naissance a été effacée, ou donne moins de 18 ans. |
-   | Pratiquant déjà dans une autre séance au moment du départ | Une séance a démarré pour lui sur une autre machine pendant l'attente. |
+   | Pratiquant déjà dans une autre séance, en attente ou en cours : une seule à la fois. | Une séance a démarré pour lui sur une autre machine pendant l'attente. |
    | Machine passée dans une autre organisation avant le départ | La machine a changé d'organisation. |
    | Machine supprimée avant le départ | La machine a été supprimée. |
 

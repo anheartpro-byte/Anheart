@@ -785,8 +785,9 @@ Autres règles notables :
 
 Toutes les erreurs de ces fonctions sont des `ConvexError` : elles arrivent
 intactes dans le navigateur, même en production. La plupart portent une phrase ;
-`rider_busy` et `machine_busy` (ANH-144) portent `{code, message}`, et le site
-affiche la traduction du code (`errors.<code>` dans `messages/*.json`).
+`rider_busy` et `machine_busy` (ANH-144) sont des codes de la table
+`convex/lib/errors.ts`, levés par `refusal(code)`, et le site affiche leur
+traduction (`errors.<code>` dans `messages/*.json`).
 
 ### Constantes (miroir de `raspberry-pi/src/training/plan.py`)
 
@@ -852,10 +853,9 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
 2. Machine : « Machine not found » (absente ou supprimée), « Machine is
    offline », « This machine does not accept programmed sessions yet (manual
    only, at the machine) ».
-3. Une séance à la fois (ANH-144) : `machine_busy` (« This machine already has
-   a session waiting or running ») si la machine se dit en séance (`in_session`)
-   ou a une séance qui peut la tenir ; puis `rider_busy` (« This rider already
-   has a session waiting or running ») si le pratiquant en a une, sur
+3. Une séance à la fois (ANH-144) : `machine_busy` si la machine se dit en
+   séance (`in_session`) ou a une séance qui peut la tenir ; puis `rider_busy`
+   si le pratiquant en a une, sur
    n'importe quelle machine, de n'importe quelle organisation. Ce qui tient,
    et ce qui ne tient pas, est dit [plus bas](#revérification-à-larmement-anh-144).
    Avant ces deux contrôles, les lancements de ce pratiquant et de cette
@@ -885,7 +885,7 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `updateLive` | Écrit `machines.live` (et `programsEnabled` s'il est fourni). |
 | `syncProfiles` | Supprime tous les programmes de la machine, insère la nouvelle liste (dans l'organisation de la machine), met à jour `programsEnabled`. Retourne `{count}`. |
 | `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax}`. |
-| `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine que la revérification à l'armement accepterait, au format attendu par le Pi. Jamais un lancement expiré ni refusé, même avant le passage de la tâche planifiée. |
+| `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine que la revérification à l'armement accepterait, au format attendu par le Pi. Jamais un lancement expiré ni refusé, même avant le passage de la tâche planifiée, ni un lancement qui expire dans moins de `POLL_MARGIN_S` (45 s). |
 | `markTrainingStarted` | Revérifie d'abord le lancement ([ci-dessous](#revérification-à-larmement-anh-144)). Refusé : la séance passe `failed` avec `endCode`, la machine reste comme elle était, et la fonction rend `{armed: false, code, message}`, que la route répond **409**. Une confirmation répétée d'un lancement déjà refusé ainsi reçoit la même réponse. Accepté : `pending` → `active`, `startedAt` = maintenant, machine `in_session`, et `{armed: true}`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Refuse une séance d'une autre machine (`session_not_found`) ou qui n'attend plus son départ pour une autre raison (`session_not_pending` : annulée sur le site, déjà démarrée, terminée). |
 | `sweepPendingSessions` | Tâche planifiée toutes les minutes : passe `failed`, avec `endCode`, tout lancement `pending` (`kind: auto`) que la revérification refuse, expirés compris. Rend `{failed}`. Les séances de l'ancien mode ne sont pas touchées. |
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
@@ -920,22 +920,29 @@ stable du refus (`ARMING_REFUSALS`, `convex/training.ts`, et
 | 4 | Celui qui a lancé (`startedById`) pourrait lancer **maintenant** cette séance, dans l'organisation de la machine, sous la règle de `launchAutoSession` : un patient pour lui-même, avec son droit de lancement (`machine_user_permissions`) ; un gestionnaire sur une machine qu'il gère, pour un patient qu'il suit ; un admin de l'organisation ; l'admin Anheart. Son rôle est relu dans ses adhésions actives (`rolesHeldNow`, `convex/lib/auth.ts`), pas dans un jeton : personne n'appelle à ce moment-là. Le pratiquant a toujours son compte (ni effacé, ni marqué supprimé dans Clerk) et reste membre actif de l'organisation. Un lancement sans `startedById` est refusé. | `right_revoked_before_start` |
 | 5 | Aptitude et consentement du pratiquant (ANH-143) : **pas encore fait**. Le contrôle viendra à cette place, avec son propre code, et s'appliquera aux trois endroits. | - |
 | 6 | L'âge du pratiquant est connu et d'au moins `MIN_RIDER_AGE` (18 ans). | `age_refused_before_start` |
-| 7 | La FC max retenue du pratiquant est connue et **égale** à `subjectHrMax`, celle que le lancement a donnée à la machine, qui y ajuste le programme. Une valeur changée, même dans le bon sens, est refusée sans recalcul : la machine ne tourne jamais sur l'ancienne. L'estimation par l'âge change au 1er janvier (UTC) : un lancement en attente à ce moment-là est refusé. | `hr_max_changed_before_start` |
+| 7 | La FC max retenue du pratiquant est connue et **égale** à `subjectHrMax`, celle que le lancement a donnée à la machine, qui y ajuste le programme. Une valeur changée, même dans le bon sens, est refusée sans recalcul : la machine ne tourne jamais sur l'ancienne. L'estimation par l'âge peut changer au 1er janvier (UTC), selon l'âge (de 41 à 42 ans, elle reste à 179 bpm) : un lancement en attente à ce moment-là peut être refusé. | `hr_max_changed_before_start` |
 | 8 | Le pratiquant n'a aucune autre séance qui peut le tenir (règle ci-dessous), par exemple une séance démarrée à une autre machine pendant que celle-ci attendait. | `rider_busy` |
 
 Un lancement refusé passe `failed`, avec `endedAt`, `endReason` (la phrase
-anglaise du refus) et `endCode` (le code). Le site traduit le code : « Séance
-échouée » puis « Droit retiré avant le départ », par exemple
+anglaise du refus) et `endCode` (le code). Chaque code de refus à l'armement
+est aussi dans la table `convex/lib/errors.ts`, et le site le traduit comme
+tout code de cette table (`errors.<code>`) : « Séance échouée » puis « Droit
+retiré avant le départ », par exemple
 ([tableau-de-bord.md §5.3](tableau-de-bord.md#53-lancer-une-séance-auto)).
 Une séance échouée ainsi n'est ni active ni en attente pour les compteurs du
 tableau de bord.
 
 **Délai d'attente.** `PENDING_SESSION_TTL_S` est une variable d'environnement
 du déploiement Convex (`npx convex env set PENDING_SESSION_TTL_S 300`), en
-secondes entières, de 30 à 600. Absente, ou toute autre valeur : 300. Elle
-n'est posée sur aucun déploiement aujourd'hui. Le poll et la confirmation
-appliquent le délai à l'instant même ; la tâche planifiée passe le lancement
-`failed` dans la minute qui suit.
+secondes entières, de 90 à 600. Absente, ou toute autre valeur : 300. Elle
+n'est posée sur aucun déploiement aujourd'hui. La confirmation applique le
+délai à l'instant même ; la tâche planifiée passe le lancement `failed` dans
+la minute qui suit. Le poll cesse de l'offrir **45 s avant** l'échéance
+(`POLL_MARGIN_S`) : la console actuelle arme dès qu'elle lit un lancement, et
+un lancement lu juste avant l'échéance démarrerait, puis serait refusé à sa
+confirmation et arrêté aussitôt. Une confirmation reste acceptée jusqu'à
+l'échéance elle-même. La borne basse de 90 s laisse un lancement offert 45 s
+au moins.
 
 **Une séance à la fois.** Une séance **tient** son pratiquant et sa machine
 quand elle est :
@@ -965,7 +972,12 @@ aucune fonction ne la clôt. La console de ce dépôt confirme un lancement
 ordinaire ([section 6](#6-routes-http-machine-convexhttpts), « Départ non
 pris »), il ne l'empêche pas de démarrer. Le poll n'offrant déjà pas un
 lancement refusé, il reste les secondes entre le poll et la confirmation.
-Ne pas armer du tout est la couche Pi d'ANH-144.
+Et une confirmation restée sans réponse (réseau coupé) laisse la séance
+tourner pendant toute la coupure, sous le seul superviseur local : la
+tâche planifiée passe pendant ce temps le lancement `failed` (expiré, ou
+refusé pour une autre raison), ce qui libère son pratiquant, et le 409
+reçu au retour du réseau arrête alors la séance. Ne pas armer du tout,
+sans réponse comme sur un refus, est la couche Pi d'ANH-144.
 
 ---
 
@@ -1551,7 +1563,10 @@ pendant qu'il attendait ([Revérification à
 l'armement](#revérification-à-larmement-anh-144)). Une machine hors ligne
 10 min : son lancement est expiré dans la minute qui suit ses 5 min
 d'attente, et la machine revenue ne se le voit pas offrir ; si elle l'avait
-lu avant de se taire, sa confirmation reçoit 409 `expired_before_start`.
+lu avant de se taire, elle l'a armé (la console actuelle arme dès la
+lecture), sa confirmation reçoit 409 `expired_before_start` au retour du
+réseau, et elle l'arrête alors. « Expirée » dit donc que le départ n'a pas
+été confirmé à temps, pas que la machine n'a pas tourné.
 
 `convex/crons.ts` : `check-offline-machines`, **toutes les minutes**. Une machine
 `online` ou `in_session` sans heartbeat depuis **90 s** (`LIVE_FRESH_MS`, le
@@ -2301,7 +2316,7 @@ de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
-| `1.5` | `POST /api/machine/training/start` peut répondre **409** avec l'un des sept codes de refus à l'armement (`arming_refusals` du contrat partagé) : le lancement est revérifié au moment où la machine l'arme et la séance passe `failed` avec ce code (ANH-144). Le poll n'offre plus un lancement expiré ou que ces contrôles refuseraient. |
+| `1.5` | `POST /api/machine/training/start` peut répondre **409** avec l'un des sept codes de refus à l'armement (`arming_refusals` du contrat partagé) : le lancement est revérifié au moment où la machine l'arme et la séance passe `failed` avec ce code (ANH-144). Le poll n'offre plus un lancement expiré, qui expire dans moins de 45 s, ou que ces contrôles refuseraient. |
 | `1.4` | Deux codes d'erreur : `rate_limited` (429, avec `retryAfterMs` et `Retry-After`) sur cinq routes limitées par machine, et `payload_too_large` (413) pour un corps au-delà de la taille de sa route ou un lot de plus de 600 points ou 200 événements (400 avant). Bornes de `seq` (999 999) et de `t` (entier) d'un événement. La liste des limites et des tailles est dans le contrat partagé (`rate_limits`, `max_body_bytes`). |
 | `1.3` | Le heartbeat annonce `server_contract_version`. La console vérifie cette annonce pour son état de liaison, même sans programmes. Une réponse sans version lisible affiche un contrat inconnu. |
 | `1.2` | `POST /api/machine/records/upload-url`, `POST /api/machine/records/commit` et `GET /api/machine/records/status` : dépôt complet et vérification des enregistrements clos. Les consoles antérieures restent compatibles mais ne déposent pas les fichiers. |
