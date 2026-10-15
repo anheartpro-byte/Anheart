@@ -87,6 +87,19 @@ export function parse(text, today) {
   if (text.includes("<!--")) {
     return { exceptions, problems: [`${FILE}: holds an HTML comment ("<!--"): the page must show all that is read, and no comment is allowed in it`] };
   }
+  // The same for every other block of HTML: a line that begins with "<", after three spaces at most,
+  // opens one (CommonMark knows seven kinds), and each can take rows out of the page while they are
+  // still read: CDATA, processing instructions and declarations vanish, an attribute shows nothing,
+  // a <details> block is folded. Declarations, CDATA and processing instructions are refused
+  // wherever they stand, in the middle of a line too.
+  const markup = lines.findIndex((line) => /^ {0,3}</.test(line));
+  if (markup >= 0) {
+    return { exceptions, problems: [`${FILE}: line ${markup + 1} begins with HTML ("${lines[markup]?.trim()}"): the page must show all that is read, and no HTML block is allowed in it`] };
+  }
+  const inline = /<[!?]/.exec(text);
+  if (inline !== null) {
+    return { exceptions, problems: [`${FILE}: holds HTML that the page does not show ("${inline[0]}"): the page must show all that is read`] };
+  }
   // The heading of the section, written once, and not inside a code block, where it would be text.
   /** @type {{ index: number, line: string, fenced: boolean }[]} */
   const headings = [];

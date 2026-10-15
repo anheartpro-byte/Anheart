@@ -136,7 +136,7 @@ test("only the rows of the one table count: a row hidden from the rendered page,
   assert.deepEqual(parse(`# Exceptions\n\n\`\`\`sh\nnode x\n\`\`\`\n\n${table([row()])}`, TODAY).problems, []);
 });
 
-test("the page shows the one section that is read: no HTML comment anywhere, one heading, outside any code block", () => {
+test("the page shows the one section that is read: no HTML that hides a line, one heading, outside any code block", () => {
   const real = table([]);
   const hidden = `${SECTION}\n\n${HEAD}${row()}\n${row({ id: "GHSA-35jh-r3h4-6jhm" })}\n`;
   for (const [name, text, refusal] of [
@@ -149,15 +149,28 @@ test("the page shows the one section that is read: no HTML comment anywhere, one
     ["a heading in a code block before the real one", `# Exceptions\n\n\`\`\`md\n${hidden}\`\`\`\n\n${real}`, /is written 2 times/],
     ["the only heading in a code block left open", `# Exceptions\n\n\`\`\`\n${hidden}`, /must be the line "## Exceptions en cours", outside any code block/],
     ["the only heading written otherwise", hidden.replace(SECTION, "## exceptions en cours"), /must be the line "## Exceptions en cours"/],
+    // Reported by the second delta review: blocks of HTML that GitHub renders as nothing, or as an attribute.
+    ["the table in a CDATA block", `${SECTION}\n\n<![CDATA[\n${HEAD}${row()}\n]]>\n`, /line 3 begins with HTML \("<!\[CDATA\["\)/],
+    ["the table in a processing instruction", `${SECTION}\n\n<?x\n${HEAD}${row()}\n?>\n`, /line 3 begins with HTML \("<\?x"\)/],
+    ["the table in a declaration", `${SECTION}\n\n<!X\n${HEAD}${row()}\n>\n`, /line 3 begins with HTML \("<!X"\)/],
+    ["the rows in an attribute", `${SECTION}\n\n<div title="\n${HEAD}${row()}\n"></div>\n`, /line 3 begins with HTML \("<div title=""\)/],
+    ["the table in a folded details block", `${SECTION}\n\n<details><summary>Rien</summary>\n\n${HEAD}${row()}\n\n</details>\n`, /line 3 begins with HTML/],
+    ["a block of HTML indented by three spaces", `${SECTION}\n\n   <![CDATA[\n${HEAD}${row()}\n]]>\n`, /line 3 begins with HTML/],
+    ["a block of HTML before the section", `<div>\n\n</div>\n\n${real}`, /line 1 begins with HTML/],
+    ["a CDATA section opened in the middle of a line", `${SECTION}\n\nTexte <![CDATA[\n${HEAD}${row()}\n]]>\n`, /holds HTML that the page does not show \("<!"\)/],
+    ["a processing instruction in the middle of a line", `${real}\nTexte <?x ?>\n`, /holds HTML that the page does not show \("<\?"\)/],
   ]) {
     const { exceptions, problems } = parse(String(text), TODAY);
     assert.deepEqual(exceptions, [], String(name));
     assert.equal(problems.length, 1, `${name}: ${problems.join(" / ")}`);
     assert.ok(refusal instanceof RegExp && refusal.test(problems[0] ?? ""), `${name}: ${problems.join(" / ")}`);
   }
-  // The committed page holds no comment, and its heading once.
+  // A sign "<" in the middle of a line, or an HTML tag named in code, changes nothing.
+  assert.deepEqual(parse(`${real}\nUn bloc \`<details>\` replié, et 1 < 2.\n`, TODAY).problems, []);
+  // The committed page holds no comment, no line that begins with HTML, and its heading once.
   const committed = atRoot(FILE);
   assert.ok(!committed.includes("<!--"));
+  assert.doesNotMatch(committed, /^ {0,3}<|<[!?]/m);
   assert.equal(committed.split(`\n${SECTION}\n`).length, 2);
 });
 

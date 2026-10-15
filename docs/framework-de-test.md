@@ -1310,10 +1310,12 @@ paquet ni à l'environnement : `pip-audit` reçoit l'identifiant par
 `--ignore-vuln` et saute toute vulnérabilité qui le porte comme identifiant ou
 comme alias, dans les cinq environnements ; un `CVE-...`, alias possible
 d'avis de plusieurs paquets, est donc refusé pour pip. Seules comptent les
-lignes du tableau lui-même, celles que la page affichée montre : une ligne en
-dehors du tableau ou un bloc de code dans la section, un commentaire HTML
-n'importe où dans le fichier, un second titre de section ou un titre écrit dans
-un bloc de code sont refusés. Aucune exception au 14 octobre 2026.
+lignes du tableau lui-même, celles que la page affichée montre. Sont refusés :
+une ligne en dehors du tableau ou un bloc de code dans la section, un second
+titre de section ou un titre écrit dans un bloc de code, et, n'importe où dans
+le fichier, une ligne qui commence par `<` après trois espaces au plus (un bloc
+HTML, `details` compris), un commentaire HTML, une déclaration, une section
+CDATA ou une instruction de traitement. Aucune exception au 14 octobre 2026.
 
 **Essai du 14 octobre 2026, sur un poste, pas en CI.** Les commandes exactes
 des étapes du workflow, extraites du fichier, ont tourné sur une copie jetable
@@ -1330,6 +1332,7 @@ des fichiers de dépendances ; rien de vulnérable n'a été commité.
 | `lodash` retiré, aucune exception | étape verte (« found 0 vulnerabilities ») |
 | Après la revue indépendante, l'une des quatre lignes npm déplacée dans un commentaire HTML de la section | lecture du tableau et étape npm en échec (« holds an HTML comment ») |
 | Après la seconde revue, les quatre lignes dans une section entière cachée par un commentaire HTML ouvert avant le vrai titre | lecture du tableau et étape npm en échec (« holds an HTML comment ») ; avant la correction, les deux passaient |
+| Après la troisième revue, le tableau entouré d'un bloc HTML : section CDATA, instruction de traitement, déclaration, `div` dont l'attribut porte les lignes, `details` replié | refusé (« begins with HTML »), cas par cas dans les tests. Avant la correction, la revue avait vu, avec une section CDATA, la lecture et l'étape npm passer alors que la page rendue par GitHub ne montrait aucune ligne |
 | Après la même revue, `CVE-2019-11324` écrit en exception pip pour `urllib3` | refusé (« is not one pip-audit prints ») : l'étape Python échoue sans rien sauter |
 
 Que le job rougisse sur GitHub n'est pas constaté ici : il le sera à la
