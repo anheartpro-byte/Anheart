@@ -57,6 +57,7 @@ projet de les tenir.
 | Clé secrète Clerk de **production**, `CLERK_SECRET_KEY` | l'API d'administration de l'instance Clerk : comptes, sessions, organisations | variable du projet Vercel `anheart` (le site, côté serveur) ; variable du déploiement Convex de production (`convex/users.ts`, `convex/lib/clerkWebhook.ts`) | les membres du projet Vercel et de l'équipe Convex ; les administrateurs de Clerk ; aujourd'hui aussi chaque préversion du site, qui reçoit les valeurs de production ([deploiement.md, 5.2](deploiement.md#52-les-préversions-pointent-sur-la-production)) | [3.7](#37-clé-secrète-clerk) |
 | Clé secrète Clerk de développement | la même chose sur l'instance de développement | `.env.local` ; variable du déploiement Convex de développement | le poste ; l'équipe Convex | [3.7](#37-clé-secrète-clerk) |
 | Secret de signature du webhook Clerk, `CLERK_WEBHOOK_SIGNING_SECRET` | faire accepter par Convex un événement d'organisation ou de compte comme venant de Clerk ([convex.md](convex.md#webhook-clerk-vers-le-miroir)) | variable de chaque déploiement Convex qui reçoit le webhook ; l'endpoint du webhook dans Clerk | l'équipe Convex ; les administrateurs de Clerk | [3.8](#38-secret-du-webhook-clerk) |
+| Clé d'API Resend, `RESEND_API_KEY` (ANH-90) | envoyer des e-mails au nom du domaine vérifié du compte Resend ; lire les envois de ce compte | variable du déploiement Convex qui envoie les alertes ([convex.md](convex.md#composant-denvoi-de-mails-anh-90)) ; le composant d'envoi en garde une copie dans sa table (ANH-237) ; le compte Resend | l'équipe Convex ; les membres du compte Resend | [3.9](#39-clé-dapi-resend) |
 | `GITHUB_TOKEN` | le dépôt, avec les droits que chaque workflow déclare : lecture seule, sauf la publication des résultats de CodeQL et l'écriture des tags par le job des tags de la pipeline de release | créé par GitHub pour chaque job, expire avec lui | le job | aucune |
 | Configuration locale des agents, `.codex/config.toml` | ce qu'elle contient : selon `.gitignore`, elle peut porter des accès d'administration à un déploiement | le poste | le poste | celle du secret qu'elle contient |
 
@@ -69,6 +70,7 @@ qui peut écrire les variables de l'hébergement peut le faire.
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `NEXT_PUBLIC_CONVEX_URL` | projet Vercel `anheart`, `.env.local` ; figées dans le site à sa construction | publiques par nature : le navigateur les reçoit. Elles désignent l'instance Clerk et le déploiement Convex que le site utilise |
 | `CLERK_JWT_ISSUER_DOMAIN` | déploiement Convex (lue par `convex/auth.config.ts`) ; le projet Vercel l'a aussi, le site ne la lit pas | l'émetteur dont Convex accepte les jetons |
 | `ANHEART_ORG_ID` | déploiement Convex | l'organisation dont les admins sont admins Anheart, sur toutes les organisations ([MEN-16](menaces.md#men-16-secrets-ci-ou-artefacts-de-livraison-compromis), [convex.md](convex.md#activer-le-multi-organisation)) |
+| `NOTIFICATION_EMAIL_FROM`, `SITE_URL` (ANH-90) | déploiement Convex | l'expéditeur des e-mails d'alerte, et l'adresse du site vers laquelle ils renvoient ; sans l'une des deux, ou sans `RESEND_API_KEY`, aucun e-mail n'est mis en file |
 | `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID_SITE`, `VERCEL_PROJECT_ID_SIMULATION` | prévus comme secrets des environnements GitHub `production` et `preview`, pas encore créés | des identifiants, rangés en secrets avec le jeton ; ils ne changent que si l'équipe ou un projet Vercel est recréé |
 | La clé publiable de test de la CI (`ci-fixture.clerk.accounts.dev`) | `.github/workflows/ci.yml` | synthétique : elle ne désigne aucune instance réelle. Seule exception de gitleaks pour une valeur ([section 4](#4-détection-dans-le-dépôt)) |
 
@@ -259,6 +261,23 @@ livraison est acceptée si **l'une** des signatures `v1` de son en-tête
 correspond au secret configuré. Si Clerk signe un temps avec l'ancien et le
 nouveau secret après un renouvellement, l'une ou l'autre valeur suffit pendant
 ce temps (non vérifié du côté de Clerk).
+
+### 3.9 Clé d'API Resend
+
+Non essayée ; aucun compte Resend n'existe encore (décision du chef de
+projet, ANH-237).
+
+1. Resend, **API Keys** : créer une nouvelle clé, limitée à l'envoi.
+2. Convex, le déploiement qui envoie, « Environment Variables » : remplacer
+   `RESEND_API_KEY`.
+3. Resend : supprimer l'ancienne clé.
+
+Entre 2 et 3, les deux clés sont valides chez Resend. Une alerte écrite
+pendant le changement reste visible sur le site quoi qu'il arrive à son
+e-mail. Retirer la variable arrête les **nouvelles** mises en file
+([convex.md](convex.md#composant-denvoi-de-mails-anh-90)) ; les e-mails déjà
+en file partent encore, avec la copie de la clé que garde le composant. Sur
+une clé compromise, c'est sa suppression chez Resend (étape 3) qui coupe tout.
 
 ## 4. Détection dans le dépôt
 
