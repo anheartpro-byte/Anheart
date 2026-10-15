@@ -778,7 +778,6 @@
       "hrMaxUnknown": "Non disponible ici, vérifiée par le serveur au lancement",
       "hrMaxEstimated": "estimée",
       "hrMaxMissing": "La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
-      "zoneTooHigh": "La zone monte à {zoneHigh} bpm, au-delà de 90 % de la FC max du pratiquant ({hrMax} bpm → plafond {ceiling} bpm). Le serveur refusera ce lancement.",
       "hardMaxTooHigh": "La FC limite du programme ({hardMax} bpm) dépasse la FC max du pratiquant ({hrMax} bpm). Le serveur refusera ce lancement.",
       "notes": "Notes",
       "notesPlaceholder": "Notes optionnelles...",

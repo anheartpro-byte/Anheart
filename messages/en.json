@@ -778,7 +778,6 @@
       "hrMaxUnknown": "Not available here, checked by the server at launch",
       "hrMaxEstimated": "estimated",
       "hrMaxMissing": "The rider's max heart rate (or birth year) is not set: a manager must enter it before any auto session.",
-      "zoneTooHigh": "The zone goes up to {zoneHigh} bpm, above 90% of the rider's max HR ({hrMax} bpm → ceiling {ceiling} bpm). The server will refuse this launch.",
       "hardMaxTooHigh": "The programme's HR limit ({hardMax} bpm) is above the rider's max HR ({hrMax} bpm). The server will refuse this launch.",
       "notes": "Notes",
       "notesPlaceholder": "Optional notes...",
