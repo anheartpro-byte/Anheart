@@ -220,7 +220,7 @@ function LaunchForm({
     blocker = t("training.launch.hrMaxMissing");
   else if (notWholeOnRecord("birthYear"))
     blocker = t("training.launch.birthYearMissing");
-  else if (riderIsPatient && riderDoc && medicalParameters !== null) {
+  else if (riderIsPatient && riderDoc) {
     const birthYear = readOptionalNumber(riderDoc, "birthYear");
     if (birthYear === undefined)
       blocker = t("training.launch.birthYearMissing");

@@ -210,7 +210,7 @@ function validDate(text: string): boolean {
 /** Parse and enforce the document shape and the console's accepted bounds. */
 export function parseMedicalDocument(content: string): ParsedMedicalDocument {
   let decoded: unknown;
-  let numberTokens = new Map<string, string>();
+  let numberTokens: Map<string, string>;
   try {
     numberTokens = rejectDuplicateMembers(content);
     decoded = JSON.parse(content) as unknown;
