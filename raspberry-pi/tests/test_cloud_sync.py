@@ -77,6 +77,7 @@ from src.record_uplink import (
     MAX_REFUSALS,
     SUCCESSFUL_ENDS,
     Acked,
+    Answer,
     Held,
     RecordSource,
     Refusal,
@@ -917,6 +918,27 @@ async def test_another_start_refusal_is_shown_without_arming_or_ending(
     await r.step(POLL_PERIOD)
     assert len(r.dashboard.to(START)) == 1
     assert r.dashboard.to("/api/machine/training/end") == []
+
+
+async def test_an_unknown_confirmation_answer_fails_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    original_send = CloudSync.send
+
+    async def unknown_answer(sync: CloudSync, path: str, body: Mapping[str, JsonValue]) -> Answer:
+        if path == START:
+            return cast("Answer", object())
+        return await original_send(sync, path, body)
+
+    monkeypatch.setattr(CloudSync, "send", unknown_answer)
+    with pytest.raises(AssertionError):
+        await r.step()
+
+    assert r.panel.surface.pending is None
+    assert r.runtime.state is RuntimeState.IDLE
 
 
 @pytest.mark.parametrize(
