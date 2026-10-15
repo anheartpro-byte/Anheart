@@ -38,6 +38,7 @@ const MEDICAL_VERSION_PATTERN =
   /^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$/;
 const SIGNER_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const DATE_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const JSON_NUMBER_PATTERN = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
 
 export function isMedicalVersion(value: unknown): value is string {
   return typeof value === "string" && MEDICAL_VERSION_PATTERN.test(value);
@@ -77,9 +78,10 @@ function scanString(text: string, cursor: { value: number }): string {
   throw new Error("Unterminated JSON string");
 }
 
-function rejectDuplicateMembers(text: string): void {
+function rejectDuplicateMembers(text: string): Map<string, string> {
   const cursor = { value: 0 };
-  const scanValue = (): void => {
+  const numberTokens = new Map<string, string>();
+  const scanValue = (path: readonly string[]): void => {
     skipWhitespace(text, cursor);
     const character = text[cursor.value];
     if (character === '"') {
@@ -101,7 +103,7 @@ function rejectDuplicateMembers(text: string): void {
         keys.add(key);
         skipWhitespace(text, cursor);
         cursor.value += 1;
-        scanValue();
+        scanValue([...path, key]);
         skipWhitespace(text, cursor);
         if (text[cursor.value] === "}") {
           cursor.value += 1;
@@ -118,8 +120,10 @@ function rejectDuplicateMembers(text: string): void {
         cursor.value += 1;
         return;
       }
+      let index = 0;
       while (cursor.value < text.length) {
-        scanValue();
+        scanValue([...path, String(index)]);
+        index += 1;
         skipWhitespace(text, cursor);
         if (text[cursor.value] === "]") {
           cursor.value += 1;
@@ -129,14 +133,18 @@ function rejectDuplicateMembers(text: string): void {
       }
       throw new Error("Unterminated JSON array");
     }
+    const start = cursor.value;
     while (
       cursor.value < text.length &&
       !/[\s,\]}]/.test(text[cursor.value] ?? "")
     ) {
       cursor.value += 1;
     }
+    const token = text.slice(start, cursor.value);
+    if (JSON_NUMBER_PATTERN.test(token)) numberTokens.set(path.join("."), token);
   };
-  scanValue();
+  scanValue([]);
+  return numberTokens;
 }
 
 function objectMembers(
@@ -162,8 +170,17 @@ function objectMembers(
   return members;
 }
 
-function positiveWhole(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+function positiveWhole(
+  value: unknown,
+  path: string,
+  sourceToken: string | undefined,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value <= 0 ||
+    (sourceToken !== undefined && /[.eE]/.test(sourceToken))
+  ) {
     throw new Error(`${path} must be a positive whole number`);
   }
   return value;
@@ -191,9 +208,10 @@ function validDate(text: string): boolean {
 /** Parse and enforce the document shape and the console's accepted bounds. */
 export function parseMedicalDocument(content: string): ParsedMedicalDocument {
   let decoded: unknown;
+  let numberTokens = new Map<string, string>();
   try {
+    numberTokens = rejectDuplicateMembers(content);
     decoded = JSON.parse(content) as unknown;
-    rejectDuplicateMembers(content);
   } catch (error) {
     throw new Error(
       `Medical parameters document is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
@@ -225,14 +243,17 @@ export function parseMedicalDocument(content: string): ParsedMedicalDocument {
   const hardMax = positiveWhole(
     parameters.hr_hard_max_bpm,
     "document.parameters.hr_hard_max_bpm",
+    numberTokens.get("parameters.hr_hard_max_bpm"),
   );
   const critical = positiveWhole(
     parameters.hr_critical_bpm,
     "document.parameters.hr_critical_bpm",
+    numberTokens.get("parameters.hr_critical_bpm"),
   );
   const minRiderAge = positiveWhole(
     parameters.min_rider_age,
     "document.parameters.min_rider_age",
+    numberTokens.get("parameters.min_rider_age"),
   );
   const zoneCeilingFraction = positiveFinite(
     parameters.zone_ceiling_fraction,
@@ -281,6 +302,7 @@ export function parseMedicalDocument(content: string): ParsedMedicalDocument {
   const minRun = positiveWhole(
     motion.min_run_motor_rpm,
     "document.parameters.motion_limits.min_run_motor_rpm",
+    numberTokens.get("parameters.motion_limits.min_run_motor_rpm"),
   );
   const maxInterval = positiveFinite(
     motion.max_interval_s,

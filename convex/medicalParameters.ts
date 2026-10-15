@@ -76,7 +76,11 @@ export const registerVersion = internalAction({
         hrMaxFormula: parsed.hrMaxFormula,
       });
     } catch (error) {
-      await ctx.storage.delete(storageId);
+      try {
+        await ctx.storage.delete(storageId);
+      } catch {
+        throw error;
+      }
       throw error;
     }
   },

@@ -152,6 +152,18 @@ describe("ANH-139 a heartbeat that carries the medical parameters' version", () 
       medicalParametersStatus: "no_reference",
       medicalParametersReferenceVersion: null,
     });
+
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.machine, { medicalParametersVersion: null }),
+    );
+    const unsignedWithoutReference = await w.admin.query(api.machines.getMachine, {
+      machineId: w.machine,
+    });
+    expect(unsignedWithoutReference).toMatchObject({
+      medicalParametersVersion: null,
+      medicalParametersStatus: "unsigned",
+      medicalParametersReferenceVersion: null,
+    });
   });
 
   it("includes medical status and reference on both launch-screen queries", async () => {

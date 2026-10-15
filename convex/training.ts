@@ -623,7 +623,7 @@ function refusalFor(code: ArmingRefusalCode): ArmingRefusal {
 }
 
 /** A launch the machine has not armed `pendingSessionTtlMs` after it was made. */
-function expired(session: Doc<"sessions">, now: number): boolean {
+export function expired(session: Doc<"sessions">, now: number): boolean {
   // While pending, `startedAt` is the date of the launch, on the server's clock.
   return now - session.startedAt > pendingSessionTtlMs();
 }
@@ -771,7 +771,7 @@ async function armingRefusal(
   if (rider === null) return refusalFor("right_revoked_before_start");
   const medical = await currentMedicalParameters(ctx);
   if (medical === null) {
-    // This fallback is reachable only if the append-only registry invariant is broken.
+    // A launch left pending across deployment can reach this before registration.
     return refusalFor("age_refused_before_start");
   }
   // ANH-143: aptitude and consent are checked here.

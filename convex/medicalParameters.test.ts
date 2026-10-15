@@ -72,6 +72,26 @@ async function insertFixtureVersion(
   );
 }
 
+async function insertStoredVersion(
+  t: World["t"] | ReturnType<typeof backendOf>,
+  version: string,
+  zoneCeilingFraction = 0.9,
+) {
+  const storageId = await t.run((ctx) =>
+    ctx.storage.store(new Blob([`fixture ${version}`])),
+  );
+  return await t.mutation(internal.medicalParametersStore.insertVersion, {
+    version,
+    issuedAt: "2026-10-14",
+    storageId,
+    signedBy: "cle-de-test",
+    signature: "fixture-signature",
+    zoneCeilingFraction,
+    minRiderAge: 18,
+    hrMaxFormula: "tanaka",
+  });
+}
+
 async function rejectionLeavesNoWrites(
   content: string,
   signatureBase64: string,
@@ -103,6 +123,16 @@ describe("medical document parsing", () => {
 
   it("rejects malformed JSON and duplicate keys at every object depth", () => {
     expect(() => parseMedicalDocument("{")).toThrow(/valid JSON/);
+    expect(() => parseMedicalDocument("[]")).toThrow(/document must be a JSON object/);
+    expect(() => parseMedicalDocument('["text"]')).toThrow(/document must be a JSON object/);
+    expect(() => parseMedicalDocument("{}")).toThrow(/document.version is missing/);
+    expect(() =>
+      parseMedicalDocument('{"_comment":"unfinished}'),
+    ).toThrow(/Unterminated JSON string/);
+    const emptyParameters = { ...parsedShippedDocument(), parameters: {} };
+    expect(() => parseMedicalDocument(JSON.stringify(emptyParameters))).toThrow(
+      /document.parameters.hr_hard_max_bpm is missing/,
+    );
     expect(() =>
       parseMedicalDocument(shippedContent.replace('"version": "0.1.0",', '"version": "0.1.0", "version": "0.1.0",')),
     ).toThrow(/Duplicate JSON member/);
@@ -168,6 +198,26 @@ describe("medical document parsing", () => {
     const badMotionBound = parsedShippedDocument();
     (badMotionBound.parameters.motion_limits as Record<string, unknown>).g_per_s = 0.6;
     expect(() => parseMedicalDocument(JSON.stringify(badMotionBound))).toThrow(/console bounds/);
+  });
+
+  it.each([
+    ["hr_hard_max_bpm", "148"],
+    ["hr_critical_bpm", "158"],
+    ["min_rider_age", "18"],
+    ["min_run_motor_rpm", "55"],
+  ] as const)("requires integer JSON tokens for %s", (field, integerToken) => {
+    const replaceToken = (token: string) =>
+      shippedContent.replace(
+        new RegExp(`("${field}"\\s*:\\s*)[0-9]+`),
+        (_match, prefix: string) => `${prefix}${token}`,
+      );
+    expect(() => parseMedicalDocument(replaceToken(integerToken))).not.toThrow();
+    for (const token of ["18.0", "18e0", "148.0", "1.48e2"]) {
+      const content = replaceToken(token);
+      expect(() => parseMedicalDocument(content), `${field}=${token}`).toThrow(
+        /positive whole number/,
+      );
+    }
   });
 
   it("enforces the Pi console's inclusive heart-rate, age, and motion bounds", () => {
@@ -298,6 +348,46 @@ describe("medical signatures and version registration", () => {
     ).toBe(false);
   });
 
+  it("verifies UTF-8 comments with accents and rejects signatures of 63 or 65 bytes", async () => {
+    const pair = await crypto.subtle.generateKey(
+      { name: "Ed25519" },
+      true,
+      ["sign", "verify"],
+    );
+    const spki = new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey));
+    const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${btoa(String.fromCharCode(...spki))}\n-----END PUBLIC KEY-----`;
+    const content = shippedContent.replace(
+      /("_comment"\s*:\s*)"[^"]*"/,
+      '$1"Paramètres médicaux signés"',
+    );
+    const signed = await crypto.subtle.sign(
+      { name: "Ed25519" },
+      pair.privateKey,
+      new TextEncoder().encode(content),
+    );
+    const signature = new Uint8Array(signed);
+    expect(parseMedicalDocument(content)).toMatchObject({ version: "0.1.0" });
+    expect(
+      await verifyMedicalParametersSignature(
+        content,
+        btoa(String.fromCharCode(...signature)),
+        publicKeyPem,
+      ),
+    ).toBe(true);
+
+    for (const length of [63, 65]) {
+      const altered = new Uint8Array(length);
+      altered.set(signature.slice(0, length));
+      expect(
+        await verifyMedicalParametersSignature(
+          content,
+          btoa(String.fromCharCode(...altered)),
+          publicKeyPem,
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("registers the shipped file and stores exactly its signed UTF-8 bytes", async () => {
     if (!shippedSignatureBase64) throw new Error("The signature is not a base64 data URL");
     const t = backendOf(modules);
@@ -332,6 +422,82 @@ describe("medical signatures and version registration", () => {
       await t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
     ).toHaveLength(1);
     expect(await storedFiles(t)).toHaveLength(1);
+  });
+
+  it("refuses registration while an unexpired remote launch is pending without adding a row or file", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await as(w.t, "manager").mutation(
+      api.training.launchAutoSession,
+      { machineId: w.machine, profileId: w.profileId, userId: w.patient },
+    );
+    expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "pending",
+      origin: "remote",
+    });
+    const versionsBefore = await w.t.run((ctx) =>
+      ctx.db.query("medical_parameters_versions").collect(),
+    );
+    const filesBefore = await storedFiles(w.t);
+
+    await expect(registerShippedMedicalParameters(w.t)).rejects.toThrow(
+      /1 remote pending launch; retry after it arms or expires/,
+    );
+
+    expect(
+      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+    ).toEqual(versionsBefore);
+    expect(await storedFiles(w.t)).toEqual(filesBefore);
+  });
+
+  it("allows registration when a pending remote launch is expired but not swept", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "pending",
+      kind: "auto",
+    });
+    await w.t.run((ctx) => ctx.db.patch(sessionId, { origin: "remote" }));
+    vi.setSystemTime(NOW + 300_001);
+
+    await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toBe("0.2.0");
+
+    expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "pending",
+    });
+    expect(
+      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+    ).toHaveLength(2);
+  });
+
+  it("allows registration after a remote launch is already armed", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await as(w.t, "manager").mutation(
+      api.training.launchAutoSession,
+      { machineId: w.machine, profileId: w.profileId, userId: w.patient },
+    );
+    await w.t.mutation(internal.training.markTrainingStarted, {
+      machineId: w.machine,
+      sessionId,
+    });
+
+    await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toBe("0.2.0");
+    expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "active",
+    });
+  });
+
+  it("uses an accepted lower ceiling for new launches after registration", async () => {
+    const w = await seedWorld(modules);
+    await expect(insertStoredVersion(w.t, "0.2.0", 0.8)).resolves.toBe("0.2.0");
+
+    await expect(
+      as(w.t, "manager").mutation(api.training.launchAutoSession, {
+        machineId: w.machine,
+        profileId: w.profileId,
+        userId: w.patient,
+      }),
+    ).rejects.toThrow(/zone_above_ceiling/);
   });
 
   it("rechecks duplicate and semver order in the insertion mutation", async () => {
@@ -484,7 +650,11 @@ describe("current medical parameters in training", () => {
         await ctx.db.delete(row._id);
         await ctx.storage.delete(row.storageId);
       }
-      await ctx.db.patch(w.machine, { status: "offline", programsEnabled: false });
+      await ctx.db.patch(w.machine, {
+        status: "offline",
+        programsEnabled: false,
+        medicalParametersVersion: null,
+      });
     });
     const launchArgs = { machineId: w.machine, profileId: w.profileId, userId: w.patient };
     await expect(as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs)).rejects.toThrow(/machine_offline/);
