@@ -23,8 +23,8 @@ from typing import Final
 import httpx
 import pytest
 
-from src.control_surface import LOCAL_SUBJECT
-from src.result import Ok
+from src.control_surface import LOCAL_SUBJECT, StartManual, StartRefusal, StartSession
+from src.result import Ok, Result
 from src.roster import (
     ROSTER_MAX_AGE,
     FitnessExpired,
@@ -334,6 +334,7 @@ async def test_unready_passengers_never_arm_and_refusals_keep_personal_data_off_
     recorded.rig.panel.roster.heard({"riders": [row]}, recorded.clock.monotonic())
     surface = recorded.rig.panel.surface
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
+    asked: Result[StartManual | StartSession, StartRefusal]
     if manual:
         asked = surface.submit_start_manual(
             occupancy=Occupancy.OCCUPIED,
@@ -379,6 +380,7 @@ async def test_fitness_expiring_in_the_mailbox_is_refused_at_arming(
     recorded.rig.panel.roster.adopt((rider,), recorded.clock.monotonic())
     surface = recorded.rig.panel.surface
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
+    asked: Result[StartManual | StartSession, StartRefusal]
     if manual:
         asked = surface.submit_start_manual(
             occupancy=Occupancy.OCCUPIED,
