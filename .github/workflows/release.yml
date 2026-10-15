@@ -36,9 +36,10 @@ run-name: "Release ${{ inputs.dry_run && 'à blanc' || 'RÉELLE' }} : tests, Cod
 # are never put twice (docs/release.md, "Échec et reprise").
 #
 # What the repository settings must hold, set by hand (docs/deploiement.md,
-# section 5.5): the GitHub environment `production`, restricted to `main`,
-# with its approval rule, the four secrets of deploy-production.yml and the
-# deploy key of the production deployment of Convex.
+# section 5.5): the GitHub environment `production`, with required reviewers,
+# no administrator bypass, and selected branches and tags containing only the
+# branch `main`; the four secrets of deploy-production.yml and the deploy key
+# of the production deployment of Convex. The request reads these rules.
 
 on:
   workflow_dispatch:
@@ -139,30 +140,45 @@ jobs:
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "Mode : $mode"
       # The approval is a setting of the repository, not a line of this file:
-      # an environment without its rule would let every stage through. A real
-      # run is refused while the rule is not there; a dry run says so.
+      # an environment without its rules would let every stage through. Read
+      # the selected branch list only when custom policies are enabled (GitHub
+      # returns 404 otherwise). A real run refuses missing or unreadable rules;
+      # a dry run warns. Neither response is printed.
       - name: Exiger la règle d'approbation de l'environnement production
         env:
           GH_TOKEN: ${{ github.token }}
           MODE: ${{ steps.mode.outputs.mode }}
         run: |
-          missing=""
-          if ! rules="$(gh api "repos/$GITHUB_REPOSITORY/environments/production" --jq '[([.protection_rules[]? | select(.type == "required_reviewers") | (.reviewers // []) | length] | add // 0), (if .deployment_branch_policy == null then 0 else 1 end)] | @tsv')"; then
-            missing="il est introuvable ou illisible"
+          missing=()
+          if ! rules="$(gh api "repos/$GITHUB_REPOSITORY/environments/production" --jq 'if type != "object" then error("un objet était attendu") else [([.protection_rules[]? | select(.type == "required_reviewers") | (.reviewers // []) | length] | add // 0), (if .deployment_branch_policy == null then 0 else 1 end), (if .can_admins_bypass == false then 1 else 0 end), (if .deployment_branch_policy.custom_branch_policies == true then 1 else 0 end), (if .deployment_branch_policy.protected_branches == false then 1 else 0 end)] | @tsv end' 2>/dev/null)"; then
+            missing+=("il est introuvable ou illisible")
           else
-            read -r reviewers restricted <<< "$rules"
+            read -r reviewers restricted no_bypass custom selected <<< "$rules"
             if [[ ! "$reviewers" =~ ^[1-9][0-9]*$ ]]; then
-              missing="personne n'y est exigé pour approuver (« Required reviewers »)"
-            elif [[ "$restricted" != 1 ]]; then
-              missing="il n'est restreint à aucune branche (« Deployment branches and tags »)"
+              missing+=("personne n'y est exigé pour approuver (« Required reviewers »)")
+            fi
+            if [[ "$no_bypass" != 1 ]]; then
+              missing+=("le contournement administrateur doit être désactivé (« Allow administrators to bypass configured protection rules »)")
+            fi
+            if [[ "$restricted" != 1 ]]; then
+              missing+=("il n'est restreint à aucune branche (« Deployment branches and tags »)")
+            elif [[ "$custom" != 1 || "$selected" != 1 ]]; then
+              missing+=("il faut choisir « Selected branches and tags », pas « Protected branches only »")
+            fi
+            if [[ "$custom" == 1 ]]; then
+              if ! branch="$(gh api "repos/$GITHUB_REPOSITORY/environments/production/deployment-branch-policies?per_page=100" --jq 'if type == "object" then ( .total_count == 1 and (.branch_policies | type == "array" and length == 1 and .[0].name == "main" and .[0].type == "branch") ) else false end | if . then 1 else 0 end' 2>/dev/null)"; then
+                missing+=("la liste des branches autorisées est introuvable ou illisible")
+              elif [[ "$branch" != 1 ]]; then
+                missing+=("la liste doit contenir exactement une règle : la branche main (name main, type branch, total_count 1)")
+              fi
             fi
           fi
-          if [[ -z "$missing" ]]; then
-            echo "L'environnement production exige une approbation et est restreint à des branches choisies."
+          if (( ${#missing[@]} == 0 )); then
+            echo "L'environnement production exige une approbation sans contournement administrateur, avec la seule branche main autorisée."
           elif [[ "$MODE" == dry ]]; then
-            echo "::warning title=Environnement non protégé::Une release réelle serait refusée : l'environnement GitHub production n'est pas réglé, $missing. Voir docs/deploiement.md (section 5.5, étape 1)."
+            echo "::warning title=Environnement non protégé::Une release réelle serait refusée : l'environnement GitHub production n'est pas réglé, ${missing[*]}. Voir docs/deploiement.md (section 5.5, étape 1)."
           else
-            echo "::error title=Environnement non protégé::Rien n'a été tagué ni déployé. L'environnement GitHub production n'est pas réglé : $missing. Voir docs/deploiement.md (section 5.5, étape 1)."
+            echo "::error title=Environnement non protégé::Rien n'a été tagué ni déployé. L'environnement GitHub production n'est pas réglé : ${missing[*]}. Voir docs/deploiement.md (section 5.5, étape 1)."
             exit 1
           fi
       - name: Rappeler ce que fait cette exécution

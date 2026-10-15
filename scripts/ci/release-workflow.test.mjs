@@ -421,20 +421,24 @@ test("EX-1 a real run needs the box unticked and the word typed: anything else i
 
 /** What GitHub answers for an environment: one created without any rule, one set as section 5.5 of docs/deploiement.md asks, and three in between. */
 const ENVIRONMENT = {
-  unset: JSON.stringify({ name: "Production", protection_rules: [], deployment_branch_policy: null }),
+  unset: JSON.stringify({ name: "Production", can_admins_bypass: true, protection_rules: [], deployment_branch_policy: null }),
   set: JSON.stringify({
     name: "production",
+    can_admins_bypass: false,
     protection_rules: [
       { id: 1, type: "required_reviewers", prevent_self_review: false, reviewers: [{ type: "User", reviewer: { login: "responsable" } }] },
       { id: 2, type: "branch_policy" },
     ],
     deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
   }),
-  unreviewed: JSON.stringify({ protection_rules: [{ id: 2, type: "branch_policy" }], deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
-  emptyReview: JSON.stringify({ protection_rules: [{ id: 1, type: "required_reviewers", reviewers: [] }], deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } }),
-  anyBranch: JSON.stringify({ protection_rules: [{ id: 1, type: "required_reviewers", reviewers: [{ type: "User" }] }], deployment_branch_policy: null }),
+  unreviewed: JSON.stringify({ can_admins_bypass: false, protection_rules: [{ id: 2, type: "branch_policy" }], deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
+  emptyReview: JSON.stringify({ can_admins_bypass: false, protection_rules: [{ id: 1, type: "required_reviewers", reviewers: [] }], deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } }),
+  anyBranch: JSON.stringify({ can_admins_bypass: false, protection_rules: [{ id: 1, type: "required_reviewers", reviewers: [{ type: "User" }] }], deployment_branch_policy: null }),
 };
 const ENVIRONMENT_ENDPOINT = "repos/anheart/depot/environments/production#1";
+const BRANCHES_ENDPOINT = "repos/anheart/depot/environments/production/deployment-branch-policies?per_page=100#1";
+const MAIN_BRANCH = { id: 1, name: "main", type: "branch" };
+const MAIN_ONLY = JSON.stringify({ total_count: 1, branch_policies: [MAIN_BRANCH] });
 
 test("EX-1 a real run is refused while the environment production has no approval rule, and a dry run says so", () => {
   const request = job("request");
@@ -443,13 +447,13 @@ test("EX-1 a real run is refused while the environment production has no approva
   assert.deepEqual(block(request, "    permissions"), ["actions: read"]);
   const approval = script(request, APPROVAL);
   const judged = (/** @type {string} */ mode, /** @type {string | undefined} */ answer) =>
-    run(approval, { GH_TOKEN: TOKEN, MODE: mode }, { answers: answer === undefined ? {} : { [ENVIRONMENT_ENDPOINT]: answer } });
+    run(approval, { GH_TOKEN: TOKEN, MODE: mode }, { answers: answer === undefined ? {} : { [ENVIRONMENT_ENDPOINT]: answer, [BRANCHES_ENDPOINT]: MAIN_ONLY } });
 
   for (const mode of ["real", "dry"]) {
     const set = judged(mode, ENVIRONMENT.set);
     assert.equal(set.status, 0, set.said);
     assert.doesNotMatch(set.said, /::(error|warning)/);
-    assert.equal(set.calls.length, 1);
+    assert.equal(set.calls.length, 2);
     assert.ok(set.calls[0]?.startsWith("api repos/anheart/depot/environments/production --jq "), set.calls[0]);
     assert.ok(set.calls[0]?.endsWith(`|${TOKEN}`));
   }
@@ -471,6 +475,53 @@ test("EX-1 a real run is refused while the environment production has no approva
   }
   // A mode this step does not know is not a dry run.
   assert.equal(judged("", ENVIRONMENT.unset).status, 1);
+});
+
+test("S-5 (a) production requires approval without admin bypass and exactly the branch main, or refuses real runs and warns dry runs", () => {
+  const approval = script(job("request"), APPROVAL);
+  const environment = JSON.parse(ENVIRONMENT.set);
+  const changed = (fields) => JSON.stringify({ ...environment, ...fields });
+  const policies = (branch_policies, total_count = branch_policies.length) => JSON.stringify({ total_count, branch_policies });
+  const cases = [
+    ["configured", ENVIRONMENT.set, MAIN_ONLY, undefined, true],
+    ["admin bypass", changed({ can_admins_bypass: true }), MAIN_ONLY, /contournement administrateur doit être désactivé/, true],
+    ["protected branches", changed({ deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } }), MAIN_ONLY, /Selected branches and tags.*Protected branches only/, false],
+    ["main and develop", ENVIRONMENT.set, policies([MAIN_BRANCH, { name: "develop", type: "branch" }]), /exactement une règle.*branche main/, true],
+    ["tag main", ENVIRONMENT.set, policies([{ name: "main", type: "tag" }]), /exactement une règle.*type branch/, true],
+    ["pattern", ENVIRONMENT.set, policies([{ name: "release/*", type: "branch" }]), /exactement une règle.*branche main/, true],
+    ["empty", ENVIRONMENT.set, policies([]), /exactement une règle/, true],
+    ["404", ENVIRONMENT.set, undefined, /liste des branches autorisées est introuvable ou illisible/, true],
+    ["no branch policy", ENVIRONMENT.anyBranch, MAIN_ONLY, /restreint à aucune branche/, false],
+    ["inconsistent count", ENVIRONMENT.set, policies([MAIN_BRANCH], 2), /exactement une règle/, true],
+    ["invalid list JSON", ENVIRONMENT.set, "not JSON: private response", /liste des branches autorisées est introuvable ou illisible/, true],
+    ["invalid list shape", ENVIRONMENT.set, "[]", /exactement une règle/, true],
+    ["invalid environment JSON", "not JSON: private response", MAIN_ONLY, /il est introuvable ou illisible/, false],
+    ["invalid environment shape", "[]", MAIN_ONLY, /il est introuvable ou illisible/, false],
+    ["missing bypass field", changed({ can_admins_bypass: undefined }), MAIN_ONLY, /contournement administrateur doit être désactivé/, true],
+    ["both branch modes", changed({ deployment_branch_policy: { protected_branches: true, custom_branch_policies: true } }), MAIN_ONLY, /Selected branches and tags.*Protected branches only/, true],
+  ];
+  for (const [name, answer, branches, wanted, readsList] of cases) {
+    for (const mode of ["real", "dry"]) {
+      const result = run(approval, { GH_TOKEN: TOKEN, MODE: mode }, { answers: {
+        [ENVIRONMENT_ENDPOINT]: answer,
+        ...(branches === undefined ? {} : { [BRANCHES_ENDPOINT]: branches }),
+      } });
+      assert.equal(result.status, wanted && mode === "real" ? 1 : 0, `${name}, ${mode}: ${result.said}`);
+      if (wanted) {
+        assert.match(result.said, wanted, `${name}, ${mode}`);
+        assert.match(result.said, mode === "real"
+          ? /^::error title=Environnement non protégé::Rien n'a été tagué ni déployé\. /m
+          : /^::warning title=Environnement non protégé::Une release réelle serait refusée : /m);
+      } else {
+        assert.doesNotMatch(result.said, /::(?:warning|error)/);
+      }
+      assert.equal(result.calls.length, readsList ? 2 : 1, name);
+      assert.ok(result.calls[0]?.startsWith("api repos/anheart/depot/environments/production --jq "), name);
+      if (readsList) assert.ok(result.calls[1]?.startsWith(`api ${BRANCHES_ENDPOINT.split("#")[0]} --jq `), name);
+      assert.ok(result.calls.every((call) => call.endsWith(`|${TOKEN}`)), name);
+      assert.doesNotMatch(result.said + result.summary, /private response|responsable|release\/\*|gh: HTTP 404|"protection_rules"/);
+    }
+  }
 });
 
 test("EX-1 the top of the run says, before any approval, what this run will do", () => {

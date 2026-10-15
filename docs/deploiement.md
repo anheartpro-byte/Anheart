@@ -779,7 +779,7 @@ branche : celle de la release (voie A) et celles de la voie B (son point 5).
 
 | Environnement | Réglages |
 |---|---|
-| `production` | « Required reviewers » : la ou les personnes qui approuvent un déploiement en production (ne pas cocher « Prevent self-review » si la même personne lance et approuve). « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `main`. |
+| `production` | « Required reviewers » : la ou les personnes qui approuvent un déploiement en production (ne pas cocher « Prevent self-review » si la même personne lance et approuve). Décocher « Allow administrators to bypass configured protection rules ». « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `main` (type branche, aucun tag ni motif). Ne pas choisir « Protected branches only » : `develop` est aussi protégée. |
 | `preview` | « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `develop`. Sans approbation par défaut : lire ce que cela veut dire à l'étape 2. |
 
 Le faire **avant** le premier lancement : GitHub crée tout seul, sans aucune
@@ -788,11 +788,18 @@ majuscules dans le nom d'un environnement : si la liste en montre déjà un
 nommé `Production` ou `Preview`, créé sans règle par un outil relié au dépôt,
 c'est lui que les workflows utilisent, et c'est lui qu'il faut régler.
 
+Le relevé du 15 octobre 2026, en lecture seule, montre `Production` sans aucune
+règle et avec le contournement administrateur permis. Ces réglages restent à
+faire par le chef de projet.
+
 Les deux boutons de déploiement s'en remettent à ces règles. **La pipeline de
-release, elle, les lit** avant toute chose : elle refuse une release réelle tant que l'environnement
-`production` n'exige personne pour approuver, ou n'est restreint à aucune
-branche (message « Environnement non protégé »), et une exécution à blanc le
-signale par un avertissement.
+release, elle, les lit** avant toute chose : elle exige au moins un relecteur,
+`can_admins_bypass: false`, `custom_branch_policies: true` et
+`protected_branches: false`, puis exactement une règle autorisant `main` de
+type `branch` (et `total_count: 1`). Elle ne lit cette liste que si les règles
+personnalisées sont activées. Une règle absente, incorrecte ou illisible fait
+refuser une release réelle (message « Environnement non protégé ») ; une
+exécution à blanc le signale par un avertissement.
 
 **2. Créer le jeton Vercel et enregistrer les quatre secrets, dans les deux
 environnements et nulle part ailleurs.**

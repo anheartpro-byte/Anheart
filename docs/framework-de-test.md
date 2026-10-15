@@ -2516,10 +2516,14 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
 * qu'une release réelle demande la case décochée **et** le mot `production`
   exact, que tout le reste donne une exécution à blanc ou un refus, et qu'une
   valeur de la case qui n'est ni `true` ni `false` arrête tout ;
-* qu'une release réelle est refusée tant que l'environnement `production`
-  n'exige personne pour approuver ou n'est restreint à aucune branche, sur
-  plusieurs réponses de l'API, dont celle d'un environnement créé sans aucune
-  règle ;
+* qu'une release réelle exige un relecteur requis, aucun contournement
+  administrateur, « Selected branches and tags » et exactement la seule
+  branche `main` de type `branch` (`total_count: 1`) ; à blanc, les mêmes
+  défauts donnent un avertissement. Le test S-5 (a) passe par le vrai `jq` :
+  réglages conformes, contournement permis, branches protégées, `main` et
+  `develop`, tag `main`, motif `release/*`, liste vide, illisible ou incohérente,
+  environnement sans règle de branche. La liste n'est lue que si les règles
+  personnalisées sont activées ;
 * **l'ordre des étapes**, par leurs `needs` : chaque étape ne peut démarrer
   qu'après la précédente, aucune fonction d'état (`always()`, `!cancelled()`…)
   ni `continue-on-error` ne lève cette règle, et deux releases ne tournent
