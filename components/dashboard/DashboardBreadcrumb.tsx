@@ -33,6 +33,7 @@ export function DashboardBreadcrumb() {
       reports: t("reports"),
       "my-machines": t("myMachines"),
       members: t("members"),
+      notifications: t("notifications"),
       new: tBreadcrumb("new"),
       live: tBreadcrumb("live"),
       edit: tBreadcrumb("edit"),

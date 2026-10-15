@@ -129,6 +129,27 @@ describe("ANH-156 EX-1 useMutationWithFeedback", () => {
     expect(shown()).toEqual([{ kind: "error", message: "Traduction du code" }]);
   });
 
+  // ANH-90: a call without a valid session, or from an account the server
+  // has no profile for, is refused with a code, not a plain Error that
+  // production would mask behind a reference: the visitor is asked to sign in
+  // again, in their language.
+  it.each([
+    ["not_authenticated", "fr", fr.errors.not_authenticated],
+    ["account_not_registered", "fr", fr.errors.account_not_registered],
+    ["not_authenticated", "en", en.errors.not_authenticated],
+  ] as const)(
+    "sign-in refused (%s): a sign-in message in %s, never a request reference",
+    async (code, locale, words) => {
+      serverMutation.mockRejectedValue(new ConvexError(code));
+
+      const outcome = await renderHook(locale)({ machineId: "m1" });
+
+      expect(outcome).toMatchObject({ ok: false, code, message: words });
+      expect(words).toMatch(/connect|sign in/i);
+      expect(shown()).toEqual([{ kind: "error", message: words }]);
+    },
+  );
+
   it("coded error in an object: the code is translated, not the server text", async () => {
     serverMutation.mockRejectedValue(
       new ConvexError({

@@ -30,6 +30,7 @@ import {
   FileText,
   Gauge,
   UserCog,
+  Bell,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -58,6 +59,11 @@ const ENTRIES: Record<string, NavItem> = {
   },
   sessions: { labelKey: "sessions", href: "/dashboard/sessions", icon: Activity },
   reports: { labelKey: "reports", href: "/dashboard/reports", icon: FileText },
+  notifications: {
+    labelKey: "notifications",
+    href: "/dashboard/notifications",
+    icon: Bell,
+  },
 };
 
 export function AppSidebar() {

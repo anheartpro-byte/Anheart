@@ -1,5 +1,36 @@
 {
   "errors": {
+    "not_authenticated": "Your session has expired or you are signed out. Sign in again to continue.",
+    "account_not_registered": "Your account is not ready on the server yet. Wait a few moments, then sign in again if this message persists.",
+    "no_active_organization": "Choose an organization to continue.",
+    "organization_not_synchronized": "This organization is not known to the server yet. Try again in a few moments.",
+    "unknown_organization_role": "Your role in this organization is not recognized. Ask its admin to check your role.",
+    "malformed_organization_claim": "Your session does not identify your organization. Sign out, then sign in again.",
+    "no_organization": "Your account does not belong to any organization. Ask your admin for an invitation.",
+    "launch_right_patients_only": "A launch right is given to a patient of the machine's organization: managers and admins launch without one.",
+    "invalid_hr_max": "Max HR must be a whole number between 100 and 220 bpm.",
+    "invalid_birth_year": "Invalid birth year: it must give an age between 10 and 100.",
+    "launch_for_self_only": "You can only launch a session for yourself.",
+    "launch_right_missing": "You have not been given the right to launch sessions on this machine.",
+    "machine_offline": "The machine is offline: it cannot take a session right now.",
+    "rider_not_allowed": "This rider is not an active member of this machine's organization.",
+    "programs_disabled": "Auto programmes are disabled on this machine: only manual sessions, from the machine's console, are possible.",
+    "programme_not_on_machine": "This programme is no longer on the machine. Reload the page and choose another one.",
+    "rider_hr_max_missing": "The rider's max heart rate (or birth year) is not set: a manager must enter it before any auto session.",
+    "zone_above_ceiling": "The programme's zone goes above 90% of the rider's max HR. Choose another programme.",
+    "hard_max_above_hr_max": "The programme's HR limit is above the rider's max HR. Choose another programme.",
+    "rider_birth_year_missing": "The rider's birth year is not set: a manager must enter it before any auto session.",
+    "rider_too_young": "This rider is under the minimum age for an auto session.",
+    "invalid_duration": "Duration must be a positive number.",
+    "session_not_found": "Session not found. It may have been deleted.",
+    "session_not_managed": "You cannot stop this session.",
+    "invalid_release_version": "Invalid version: expected \"component-X.Y.Z\", for example pi-1.2.0.",
+    "validation_level_required": "A Pi version needs a validation level.",
+    "validation_level_pi_only": "Only a Pi version carries a validation level.",
+    "invalid_release_date": "Invalid release date.",
+    "release_notes_too_long": "Notes are limited to 2000 characters.",
+    "level_change_needs_notes": "Changing the validation level of a recorded version needs notes that say why.",
+    "notification_not_found": "Alert not found.",
     "invitation_failed": "The invitation delivery was not confirmed. Please retry.",
     "invalid_invitation": "Check the name and email address.",
     "invitation_unavailable": "This invitation cannot be created. Check your permissions and organization members.",
@@ -170,7 +201,8 @@
     "markets": "Markets",
     "faq": "FAQ",
     "myMachines": "My machines",
-    "members": "Members"
+    "members": "Members",
+    "notifications": "Alerts"
   },
   "sidebar": {
     "main": "Main",
@@ -879,5 +911,42 @@
     "notComputed": "Not computed yet",
     "report": "Report",
     "nausea": "Nausea and wellbeing: not collected yet (ANH-146)."
+  },
+  "notifications": {
+    "title": "Alerts",
+    "description": "What happens to the machines you manage: machine offline, failed session, drive fault, stop requested by the safety layer.",
+    "bell": "Alerts",
+    "bellUnread": "Alerts: {count} unread",
+    "empty": "No alerts.",
+    "accessDenied": "Alerts are for the managers and the admins of an organization.",
+    "unread": "Unread",
+    "markRead": "Mark as read",
+    "markAllRead": "Mark all as read",
+    "allRead": "Alerts marked as read.",
+    "repeated": "{count} times, last at {time}",
+    "openSession": "View session",
+    "openMachine": "View machine",
+    "reason": "Reason: {reason}",
+    "faultCode": "Drive code: {code}",
+    "listCut": "Only the {count} most recent alerts are shown.",
+    "types": {
+      "machine_offline": "Machine offline",
+      "session_failed": "Session failed",
+      "drive_fault": "Drive fault",
+      "safety_verdict": "Stop requested by the safety layer"
+    },
+    "verdict": {
+      "RAMP_DOWN": "Controlled stop requested",
+      "QUICK_STOP": "Quick stop requested",
+      "GO_SILENT": "Drive commands cut: the drive stops by itself",
+      "unknown": "Safety verdict"
+    },
+    "settings": {
+      "title": "Alerts by email",
+      "description": "Alerts always show here. Choose the ones also sent to you by email. An email never contains health data or a passenger's name: only the kind of alert, the machine's name and a link to this page.",
+      "unavailable": "Email is not configured on this deployment: alerts stay on the site.",
+      "email": "Email: {type}",
+      "saved": "Preference saved."
+    }
   }
 }

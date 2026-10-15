@@ -40,7 +40,14 @@ const granted = (role: string): AccountAccess => ({
   organizationClaim: "org_centre_a",
 });
 
-const MANAGEMENT = ["patients", "machines", "myMachines", "sessions", "reports"];
+const MANAGEMENT = [
+  "patients",
+  "machines",
+  "myMachines",
+  "sessions",
+  "reports",
+  "notifications",
+];
 
 describe("ANH-187 the sidebar of each role", () => {
   it("gives the Anheart admin administration, with the settings, and management", () => {

@@ -463,7 +463,7 @@ describe("ANH-216 EX-1 who may read and stop an interrupted session", () => {
       ).toBeNull();
       await expect(
         as(w.t, actor).mutation(api.training.requestStop, { sessionId }),
-      ).rejects.toThrow(/Session not found/);
+      ).rejects.toThrow(/session_not_found/);
       expect((await sessionOf(w, sessionId))?.stopRequestedAt).toBeUndefined();
     },
   );
@@ -474,7 +474,7 @@ describe("ANH-216 EX-1 who may read and stop an interrupted session", () => {
       const { w, sessionId } = await interruptedWorld();
       await expect(
         as(w.t, actor).mutation(api.training.requestStop, { sessionId }),
-      ).rejects.toThrow(/Not authorized to stop this session/);
+      ).rejects.toThrow(/session_not_managed/);
     },
   );
 

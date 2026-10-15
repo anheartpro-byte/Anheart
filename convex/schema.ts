@@ -69,6 +69,27 @@ export const validationLevelValidator = v.union(
   v.literal("auto_validated"), // programmed sessions (M5)
   v.literal("occupied_validated"), // a person on board (M6)
 );
+
+/**
+ * What an alert to the gestionnaires is about (ANH-90). Another kind (the
+ * incidents of ANH-145) is one more literal here and in
+ * `notificationEmailFields`, an entry of `NOTIFICATION_TYPES`
+ * (convex/lib/notifications.ts) and its translations.
+ */
+export const notificationTypeValidator = v.union(
+  v.literal("machine_offline"), // no heartbeat for LIVE_FRESH_MS
+  v.literal("session_failed"), // the machine ended a session as failed
+  v.literal("drive_fault"), // the drive reports a fault
+  v.literal("safety_verdict"), // a safety verdict stopped a session
+);
+
+/** Whether each kind of alert is sent by e-mail too; unset: its default. */
+export const notificationEmailFields = {
+  machine_offline: v.optional(v.boolean()),
+  session_failed: v.optional(v.boolean()),
+  drive_fault: v.optional(v.boolean()),
+  safety_verdict: v.optional(v.boolean()),
+};
 /**
  * Role of a member inside ONE organisation: the mirror of the Clerk roles
  * `org:admin`, `org:gestionnaire` and `org:patient`. Whether an `admin` is the
@@ -590,4 +611,54 @@ export default defineSchema({
   })
     .index("by_machine_and_timestamp", ["machineId", "timestamp"])
     .index("by_timestamp", ["timestamp"]),
+
+  // Alerts to the gestionnaires and organisation admins (ANH-90): one row per
+  // recipient, in the organisation of the machine it is about. Written by the
+  // server where it detects the event (convex/lib/notifications.ts), read by
+  // its recipient only (convex/notifications.ts). No health data and no
+  // passenger name: a type, a machine, a session, a machine-side code.
+  notifications: defineTable({
+    organizationId: v.id("organizations"), // The machine's organisation
+    userId: v.id("users"), // The recipient
+    type: notificationTypeValidator,
+    machineId: v.id("machines"),
+    sessionId: v.optional(v.id("sessions")),
+    // A code the machine sent, never a sentence: the drive's fault mnemonic
+    // ("OHF"), or the action a safety verdict demanded ("RAMP_DOWN").
+    detail: v.optional(v.string()),
+    // How many events this row stands for: a new event of the same kind
+    // folds into the recipient's unread row instead of adding one.
+    count: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    read: v.boolean(),
+    // The e-mail queued for this row, when one was (`@convex-dev/resend`).
+    emailId: v.optional(v.string()),
+  })
+    .index("by_user_and_organization_and_updated", [
+      "userId",
+      "organizationId",
+      "updatedAt",
+    ])
+    .index("by_user_and_organization_and_read", [
+      "userId",
+      "organizationId",
+      "read",
+    ])
+    .index("by_user_and_machine_and_type_and_read", [
+      "userId",
+      "machineId",
+      "type",
+      "read",
+    ])
+    .index("by_user", ["userId"])
+    .index("by_updated", ["updatedAt"]),
+
+  // Each account's choice of alerts sent by e-mail too (ANH-90). A type left
+  // unset takes its default (`NOTIFICATION_TYPES`, convex/lib/notifications.ts).
+  notification_settings: defineTable({
+    userId: v.id("users"),
+    email: v.object(notificationEmailFields),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
 });

@@ -985,8 +985,7 @@ site ne crée une séance que par **Lancer une séance auto**.
 > **Attention : séance « Enregistrement » restée en attente.** Si une telle
 > séance a été créée avant le retrait, elle reste **en attente**, le site
 > n'offre **aucun bouton pour l'annuler**, et tant qu'elle existe, **tout
-> lancement auto sur cette machine est refusé** (« A session is already waiting
-> for this machine ») et la machine ne peut pas être supprimée. Une migration,
+> lancement auto sur cette machine est refusé** (« Cette machine a déjà une séance en attente ou en cours : une seule à la fois. ») et la machine ne peut pas être supprimée. Une migration,
 > à exécuter une fois au redéploiement, passe ces séances au statut
 > **Échouée** avec le motif « legacy mode retired » (voir
 > [convex.md](../convex.md#migration-du-retrait-de-lancien-mode-ecg)). Elle n'a
@@ -1750,8 +1749,8 @@ retenue arrondie à 179 bpm (« estimée »).
 
 - « La FC max doit être comprise entre 100 et 220 bpm », « Année de naissance
   invalide » : corrigez la saisie ;
-- « Only a manager can set physiology » : vous êtes Patient ;
-- « You do not manage this user » : ce patient n'est pas rattaché à vous
+- « Votre rôle ne permet pas cette action. » : vous êtes Patient ;
+- « Vous ne gérez pas ce compte. » : ce patient n'est pas rattaché à vous
   ([P4](#p4-rattacher-des-patients-à-un-gestionnaire)).
 
 > **À vérifier au redéploiement.** Une version antérieure du code bloquait
@@ -1787,11 +1786,10 @@ Retirer le droit :
 
 **Si ça ne marche pas** (encadré rouge dans la carte) :
 
-- « Launch rights are granted to users; managers and admins already have
-  them » : la personne n'est pas Patient ;
-- « You do not manage this user » : patient non rattaché à vous ;
-- « Only an admin or a manager of this machine can grant launch rights » :
-  machine non attribuée à vous ;
+- « Le droit de lancement se donne à un patient de l'organisation de la machine : les gestionnaires et les administrateurs lancent sans lui. » :
+  la personne n'est pas Patient ;
+- « Vous ne gérez pas ce compte. » : patient non rattaché à vous ;
+- « Vous ne gérez pas cette machine. » : machine non attribuée à vous ;
 - le patient n'est pas dans la liste : il n'est pas rattaché à vous, ou il a
   déjà le droit.
 
@@ -1934,7 +1932,7 @@ commençant par `operator_stop`).
 
 **Si ça ne marche pas** :
 
-- « Not authorized to stop this session » : vous n'êtes ni le pratiquant ni
+- « Vous ne pouvez pas arrêter cette séance. » : vous n'êtes ni le pratiquant ni
   gestionnaire de cette machine ;
 - le bandeau « Arrêt demandé » reste longtemps : la machine ne reçoit pas la
   demande (liaison coupée). **Arrêtez à la machine** (console ou arrêt
@@ -2131,8 +2129,8 @@ séance avait commencé). Ce qu'il reste à savoir :
 
 | Situation | Ce qui se passe | Quoi faire |
 |---|---|---|
-| Machine hors ligne **avant** le lancement | Le bouton **Lancer une séance auto** est grisé (**Mes machines**), ou le serveur refuse (« Machine is offline »). | Vérifier l'alimentation, le réseau, et que la console de la machine tourne. |
-| Machine qui se coupe **pendant** l'attente | La séance reste **en attente** : personne ne la prend. | **L'annuler** ([P12](#p12-annuler-ou-arrêter-une-séance-à-distance)). **Ne la laissez pas traîner** : si la machine revient en ligne plus tard, elle la prendra et tentera de démarrer, même des heures après. |
+| Machine hors ligne **avant** le lancement | Le bouton **Lancer une séance auto** est grisé (**Mes machines**), ou le serveur refuse (« La machine est hors ligne : elle ne peut pas recevoir de séance pour l'instant. »). | Vérifier l'alimentation, le réseau, et que la console de la machine tourne. |
+| Machine qui se coupe **pendant** l'attente | La séance reste **en attente** environ 5 minutes après le lancement (300 s par défaut, vérifiées chaque minute), puis passe **Échouée** (« Expirée : départ non confirmé à temps ») : une machine revenue plus tard ne la prend pas. (Depuis ANH-144, à vérifier au redéploiement ; avant, elle restait en attente sans limite.) | **L'annuler** ([P12](#p12-annuler-ou-arrêter-une-séance-à-distance)) si elle n'a plus lieu d'être, et relancer quand la machine est revenue. |
 | Liaison perdue **pendant** une séance | La séance reste « Active » sur le site ; les chiffres se figent puis, au bout de 20 s, sont remplacés par « - » et grisés sous le bandeau « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » ; à 90 s, l'état de la machine passe « Données périmées » et son statut « Hors ligne », à la même seconde. La machine, elle, continue selon ses propres règles de sécurité. Elle enregistre toute la séance sur son disque et envoie ce qui manque au retour de la liaison, les points les plus anciens d'abord, 300 toutes les 3 s, quelle que soit la durée de la coupure, et même si sa console a redémarré entre-temps. **Pendant ce rattrapage, l'écran ne montre aucun chiffre comme actuel** : les courbes se complètent, les grands chiffres restent à « - » sous le bandeau « La machine envoie, mais ses mesures ne sont pas datées de maintenant… », qui part au premier point mesuré depuis moins de 20 s. | Le bouton **Arrêter** du site n'atteindra pas la machine : **agir à la machine**. |
 | Arrêt demandé pendant une coupure | La demande attend sur le serveur ; la machine l'exécutera à son retour si la séance tourne encore. | Agir à la machine. |
 
@@ -2244,39 +2242,40 @@ affichage pour les actions sans encadré : suppressions, rôle, assignations).
 Un message d'échec reste affiché jusqu'à ce que vous le fermiez par sa croix,
 même quand une fenêtre est ouverte. Depuis ANH-194, les refus des machines, des
 comptes, des gestionnaires et des rôles arrivent avec un code stable et
-s'affichent dans la langue du site : ce sont les lignes en français du tableau.
-Les autres messages, en anglais, s'affichent tels quels.
+s'affichent dans la langue du site ; depuis ANH-90, ceux de la connexion, de
+l'organisation, des droits de lancement, de la physiologie, de la vérification
+d'un lancement (droits du lanceur, machine hors ligne ou occupée, programme,
+zone, âge, durée) et de l'arrêt aussi. Ce sont les lignes du tableau : plus
+aucun refus du serveur n'arrive en anglais.
 
 | Message | Signification | Quoi faire |
 |---|---|---|
-| « Machine is offline » | La machine est hors ligne au moment du lancement. | [§6.3](#63-si-la-machine-est-hors-ligne). |
-| « Machine is already in a session » | Séance en cours sur la machine. | Attendre ou arrêter. |
-| « A session is already waiting for this machine » | Une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). | Dans **Sessions** onglet **En attente**, trouver la séance et l'annuler (P12). Si c'est un « Enregistrement » de l'ancien mode, voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
-| « This machine does not accept programmed sessions yet (manual only, at the machine) » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
-| « This programme is not on the machine » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
-| « The rider's max heart rate (or birth year) must be set by a manager before an auto session » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
-| « The rider's birth year must be set by a manager before an auto session » | Année de naissance absente, ou enregistrée sans être un nombre entier. | P7. |
-| « Rider is N: auto sessions require at least 18 years » | Pratiquant de moins de 18 ans (le serveur compte l'âge en supposant l'anniversaire pas encore passé). | Aucune séance auto. |
-| « Zone up to N bpm exceeds 90% of this rider's max heart rate (... → ceiling ... bpm) » | Zone trop haute pour ce pratiquant. | Autre programme, ou FC max mesurée. |
-| « Programme hard maximum N bpm is above this rider's max heart rate (N bpm) » | FC limite du programme au dessus de la FC max. | Idem. |
-| « Duration must be positive » | Durée nulle ou négative. | Corriger. |
-| « You can only launch a session for yourself » | Un patient a tenté de lancer pour un autre. | Seul un gestionnaire peut lancer pour autrui. |
-| « You have not been given the right to launch sessions on this machine » | Patient sans droit de lancement. | P8. |
-| « Not authorized to use this machine » | Gestionnaire sans cette machine. | P6. |
-| « Not authorized to launch a session for this rider » | Patient non rattaché au gestionnaire. | P4. |
-| « Machine not found » | Machine supprimée ou inexistante. | Vérifier dans **Machines**. |
-| « Rider not found » | Compte du pratiquant supprimé. | Choisir un autre pratiquant. |
-| « Not authorized to stop this session » | Ni pratiquant ni gestionnaire de la machine. | Demander au gestionnaire. |
-| « Session not found » (dans une fenêtre) | Séance supprimée. | Recharger. |
-| « Only an admin or a manager of this machine can grant launch rights » / « ... revoke launch rights » | Machine non attribuée à vous. | P6. |
-| « Launch rights are granted to users; managers and admins already have them » | La personne n'est pas Patient. | Inutile de lui donner le droit. |
-| « You do not manage this user » | Patient non rattaché à vous. | P4. |
+| « La machine est hors ligne : elle ne peut pas recevoir de séance pour l'instant. » | La machine est hors ligne au moment du lancement. | [§6.3](#63-si-la-machine-est-hors-ligne). |
+| « Cette machine a déjà une séance en attente ou en cours : une seule à la fois. » | Séance en cours sur la machine, ou une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). |
+| « Pratiquant déjà dans une autre séance, en attente ou en cours : une seule à la fois. » | Le pratiquant a déjà une séance en attente ou en cours, sur cette machine ou une autre. | Attendre sa fin, ou l'annuler (P12). | Dans **Sessions** onglet **En attente**, trouver la séance et l'annuler (P12). Si c'est un « Enregistrement » de l'ancien mode, voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
+| « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
+| « Ce programme n'est plus sur la machine. Rechargez la page et choisissez-en un autre. » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
+| « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
+| « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Année de naissance absente, ou enregistrée sans être un nombre entier. | P7. |
+| « Ce pratiquant n'a pas l'âge minimum requis pour une séance auto. » | Pratiquant de moins de 18 ans (le serveur compte l'âge en supposant l'anniversaire pas encore passé). | Aucune séance auto. |
+| « La zone du programme dépasse 90 % de la FC max du pratiquant. Choisissez un autre programme. » | Zone trop haute pour ce pratiquant. | Autre programme, ou FC max mesurée. |
+| « La FC limite du programme dépasse la FC max du pratiquant. Choisissez un autre programme. » | FC limite du programme au dessus de la FC max. | Idem. |
+| « La durée doit être un nombre positif. » | Durée nulle ou négative. | Corriger. |
+| « Vous ne pouvez lancer une séance que pour vous-même. » | Un patient a tenté de lancer pour un autre. | Seul un gestionnaire peut lancer pour autrui. |
+| « Vous n'avez pas reçu le droit de lancer des séances sur cette machine. » | Patient sans droit de lancement. | P8. |
+| « Vous ne gérez pas cette machine. » (au lancement) | Gestionnaire sans cette machine. | P6. |
+| « Vous ne gérez pas ce compte. » (au lancement) | Patient non rattaché au gestionnaire. | P4. |
+| « Machine introuvable. Elle a peut-être été supprimée. » (au lancement) | Machine supprimée ou inexistante. | Vérifier dans **Machines**. |
+| « Compte introuvable. Il a peut-être été supprimé. » (au lancement) | Compte du pratiquant supprimé. | Choisir un autre pratiquant. |
+| « Vous ne pouvez pas arrêter cette séance. » | Ni pratiquant ni gestionnaire de la machine. | Demander au gestionnaire. |
+| « Séance introuvable. Elle a peut-être été supprimée. » (dans une fenêtre) | Séance supprimée. | Recharger. |
+| « Vous ne gérez pas cette machine. » (droit de lancement) | Machine non attribuée à vous. | P6. |
+| « Le droit de lancement se donne à un patient de l'organisation de la machine : les gestionnaires et les administrateurs lancent sans lui. » | La personne n'est pas Patient. | Inutile de lui donner le droit. |
+| « Vous ne gérez pas ce compte. » (droit de lancement, physiologie) | Patient non rattaché à vous. | P4. |
 | « Compte introuvable. Il a peut-être été supprimé. » | Compte supprimé. | Recharger. |
-| « Only a manager can set physiology » | Un patient a tenté de saisir sa physiologie. | Demander au gestionnaire. |
-| « Max heart rate must be a whole number of bpm » | FC max qui n'est pas un nombre entier. | Corriger. |
-| « Max heart rate must be within 100-220 bpm » | FC max hors bornes. | Corriger. |
-| « Birth year must be a whole number » | Année de naissance qui n'est pas un nombre entier. | Corriger. |
-| « Birth year gives an implausible age » | Âge hors de 10 à 100 ans. | Corriger. |
+| « Votre rôle ne permet pas cette action. » (physiologie) | Un patient a tenté de saisir sa physiologie. | Demander au gestionnaire. |
+| « La FC max doit être un nombre entier compris entre 100 et 220 bpm. » | FC max qui n'est pas un nombre entier, ou hors bornes. | Corriger. |
+| « Année de naissance invalide : elle doit donner un âge entre 10 et 100 ans. » | Année de naissance qui n'est pas un nombre entier, ou âge hors de 10 à 100 ans. | Corriger. |
 | « Email already in use by an existing ... account (...) » | Adresse déjà utilisée. | Retrouver la fiche existante. |
 | « Invalid email format » | Adresse sans « @ ». | Corriger. |
 | « Votre rôle ne permet pas cette action. » | Action réservée à un autre rôle (l'administrateur, le plus souvent). Sur le site en ligne, tant que le redéploiement n'a pas eu lieu, c'est encore « Unauthorized. Required roles: admin. Your role: gestionnaire », qui s'affiche aussi à la fin de **Modifier** une machine par un gestionnaire, alors que la modification est enregistrée (voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
@@ -2284,17 +2283,16 @@ Les autres messages, en anglais, s'affichent tels quels.
 | « Machine introuvable. Elle a peut-être été supprimée. » | Machine supprimée ou inexistante (modification, clé, gestionnaires). | Vérifier dans **Machines**. |
 | « La machine est en séance : elle ne peut pas être supprimée maintenant. » / « Une séance attend son départ sur cette machine : annulez-la avant de supprimer la machine. » | Suppression impossible (message d'échec en bas à droite de l'écran, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
 | « Vous ne pouvez pas supprimer votre propre compte. » | Tentative de suppression de soi. | Demander à un autre administrateur. |
-| « User not found in database. Please complete registration. » | Votre fiche n'existe pas encore. | Revenir sur `/fr`, attendre quelques secondes ([§3.1](#31-se-connecter-clerk)). |
-| « Not authenticated » | Session Clerk expirée. | Se reconnecter. |
+| « Votre compte n'est pas encore prêt sur le serveur. Patientez quelques instants, puis reconnectez-vous si le message persiste. » | Votre fiche n'existe pas encore, ou a été supprimée. | Revenir sur `/fr`, attendre quelques secondes ([§3.1](#31-se-connecter-clerk)). |
+| « Votre session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour continuer. » | Session Clerk expirée. | Se reconnecter. |
 
 > **En production**, Convex peut masquer le texte des erreurs qui ne sont pas
-> déclarées comme messages destinés à l'utilisateur. Les messages du
-> lancement, de l'arrêt, des droits et de la physiologie, et depuis ANH-194
-> ceux des machines, des comptes et des rôles, restent lisibles. « Not
-> authenticated » et « User not found in database. Please complete
-> registration. » perdent leur texte : le site affiche à la place « L'action a
-> échoué. Réessayez. Référence à transmettre si le problème persiste : … », la
-> référence étant l'identifiant de requête Convex. Non vérifié, faute de
+> déclarées comme messages destinés à l'utilisateur. Tous les messages de ce
+> tableau sont déclarés comme tels : depuis ANH-90, les deux messages de
+> connexion (session expirée, fiche pas encore prête) aussi, qui affichaient
+> avant « L'action a échoué. Réessayez. Référence à transmettre si le problème
+> persiste : … ». Une erreur imprévue du serveur affiche toujours cette phrase,
+> la référence étant l'identifiant de requête Convex. Non vérifié, faute de
 > déploiement.
 
 ### 7.3 Motifs de refus envoyés par la machine
@@ -2436,7 +2434,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 4 | (Corrigé dans le code le 6 octobre 2026, à vérifier au redéploiement.) Un gestionnaire qui **Modifiait** une machine recevait une erreur alors que la modification était enregistrée. | Confusion. | Jusqu'au redéploiement : vérifier la carte Configuration. |
 | 5 | Pas d'invitation par courriel ; une fiche créée par **Nouveau patient** ne peut jamais servir à se connecter, et une inscription ultérieure crée un doublon. | Données éparpillées sur deux fiches. | Choisir la méthode (P3). |
 | 6 | (Corrigé dans le code le 15 octobre 2026 par ANH-84, à vérifier au redéploiement.) Séances démarrées à la machine sans pratiquant. | « Unknown », invisibles pour le patient. Après le correctif : une séance attribuée devient visible du patient ; une séance de banc reste « Unknown ». | Aucun jusqu'au redéploiement. |
-| 7 | Une séance **en attente** n'expire jamais côté serveur. | Si la machine revient en ligne des heures après, elle peut tenter de démarrer une séance oubliée. | Toujours annuler une séance en attente inutile. |
+| 7 | (Corrigé dans le code le 15 octobre 2026 par ANH-144, à vérifier au redéploiement.) Une séance **en attente** n'expirait jamais côté serveur. Elle passe maintenant **Échouée** environ 5 minutes après le lancement si la machine ne l'a pas armée (300 s par défaut, réglables, vérifiées chaque minute), et la machine ne la prend plus. | Si la machine revenait en ligne des heures après, elle pouvait tenter de démarrer une séance oubliée. | Jusqu'au redéploiement : toujours annuler une séance en attente inutile. |
 | 8 | Plusieurs actions échouaient **sans message** : suppression de machine, suppression de compte, changement de rôle, assignation de patients. (Corrigé le 6 octobre 2026 pour l'assignation de machines, qui affiche une confirmation ou le message du serveur. Corrigé par ANH-156 pour les autres : chaque action qui écrit dans la base affiche un message de succès ou d'échec en bas à droite de l'écran. Non vérifié dans un navigateur.) | L'utilisateur croyait que rien ne se passait. | Jusqu'au redéploiement : recharger et vérifier. |
 | 9 | Messages du serveur en anglais, et peut être masqués en production. (Depuis ANH-156, un message masqué est remplacé par « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : … ». La traduction des messages du serveur reste à faire.) | Messages peu compréhensibles. | Tableau du §7.2. |
 | 10 | Compteur Utilisateurs / Patients du tableau de bord non programmé ; « Sessions actives » compté sur les 10 dernières séances seulement. | Chiffres faux ou absents. | Regarder les listes. |

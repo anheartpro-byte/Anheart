@@ -87,14 +87,64 @@ describe("ANH-194 EX-5 the table of error codes", () => {
   it("is used for every refusal of the machines and accounts functions", () => {
     // Convex masks a plain Error in production: these two modules no longer
     // throw one, except the heartbeat, which answers the machine, not a page.
-    const plain = (path: string) =>
-      [...sources[path].matchAll(/throw new Error\(\s*"([^"]*)"/g)].map(
-        (match) => match[1],
-      );
-    expect(plain("./users.ts")).toEqual([]);
-    expect(plain("./machines.ts")).toEqual(["Machine not found"]);
+    expect(plainErrors("./users.ts")).toEqual([]);
+    expect(plainErrors("./machines.ts")).toEqual(["Machine not found"]);
     expect(sources["./machines.ts"]).toContain(
       "// Read by the heartbeat route, which answers the machine",
     );
+  });
+});
+
+/** The texts of the plain `Error`s a source throws (`throw new Error("...")`, `throw Error("...")`). */
+function plainErrors(path: string): string[] {
+  return [
+    ...sources[path].matchAll(/throw (?:new )?Error\(\s*"([^"]*)"/g),
+  ].map((match) => match[1]);
+}
+
+/** The texts of the `ConvexError`s a source throws with a sentence, not a code. */
+function sentences(path: string): string[] {
+  return [
+    ...sources[path].matchAll(/new ConvexError(?:<[^>]*>)?\(\s*(["`])([^"`]*)\1/g),
+  ]
+    .map((match) => match[2])
+    .filter((text) => !/^[a-z][a-z0-9_]*$/.test(text));
+}
+
+describe("ANH-90 no English sentence reaches the site", () => {
+  it("signs in with codes: a refusal of the sign-in is read in production too", () => {
+    // `requireAuth` and `getCurrentUserOrThrow` once threw plain Errors,
+    // which Convex masks in production.
+    expect(plainErrors("./lib/auth.ts")).toEqual([]);
+    expect(sentences("./lib/auth.ts")).toEqual([]);
+    for (const code of [
+      "not_authenticated",
+      "account_not_registered",
+      "no_active_organization",
+      "organization_not_synchronized",
+      "unknown_organization_role",
+      "malformed_organization_claim",
+      "no_organization",
+    ]) {
+      expect(code in DASHBOARD_ERRORS).toBe(true);
+    }
+  });
+
+  it("refuses with codes in the training, releases and records functions", () => {
+    expect(sentences("./softwareReleases.ts")).toEqual([]);
+    expect(plainErrors("./softwareReleases.ts")).toEqual([]);
+    // The only plain Errors of the records module are its machine's routes'.
+    expect(plainErrors("./recordStorage.ts")).toEqual([
+      "Manifest pages are incomplete",
+      "Invalid manifest page",
+    ]);
+    expect(sentences("./notifications.ts")).toEqual([]);
+    expect(plainErrors("./notifications.ts")).toEqual([]);
+    // training.ts refuses with codes only (ANH-90, after ANH-144): it builds
+    // no ConvexError of its own. The launcher's refusals are codes too: the
+    // type of `launcherRefusal` is `DashboardErrorCode | null`.
+    expect(sentences("./training.ts")).toEqual([]);
+    expect(sources["./training.ts"]).not.toMatch(/new ConvexError\(/);
+    expect(plainErrors("./training.ts")).toEqual([]);
   });
 });

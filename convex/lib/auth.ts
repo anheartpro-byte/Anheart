@@ -14,7 +14,6 @@
  * The `can...` helpers take the caller that `getCurrentUserOrThrow` or
  * `requireRole` returned: a rule is never evaluated without a resolved caller.
  */
-import { ConvexError } from "convex/values";
 import type { UserIdentity } from "convex/server";
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
@@ -45,15 +44,24 @@ export const STAFF_ROLES: Role[] = ["admin", "org_admin", "gestionnaire"];
 /** Slug of the organisation the migration attaches existing rows to. */
 export const DEFAULT_ORGANIZATION_SLUG = "anheart";
 
-export const NO_ACTIVE_ORGANIZATION =
-  "No active organization: select an organization to continue";
-export const ORGANIZATION_NOT_SYNCHRONIZED =
-  "This organization is not known to the server yet";
-export const UNKNOWN_ORGANIZATION_ROLE =
-  "Your role in this organization is not recognized";
-export const MALFORMED_ORGANIZATION_CLAIM = "Malformed organization claim";
-export const NO_ORGANIZATION =
-  "Your account does not belong to an organization";
+/**
+ * Why the server accepts no organisation for a call: each one a stable code
+ * of `convex/lib/errors.ts`, thrown as it is by `getCurrentUserOrThrow` and
+ * returned as it is by `users.getCurrentUser` (`organizationAccess`), which
+ * the site's organisation gate reads (ANH-90).
+ */
+export const NO_ACTIVE_ORGANIZATION = "no_active_organization";
+export const ORGANIZATION_NOT_SYNCHRONIZED = "organization_not_synchronized";
+export const UNKNOWN_ORGANIZATION_ROLE = "unknown_organization_role";
+export const MALFORMED_ORGANIZATION_CLAIM = "malformed_organization_claim";
+export const NO_ORGANIZATION = "no_organization";
+
+export type OrganizationRefusal =
+  | typeof NO_ACTIVE_ORGANIZATION
+  | typeof ORGANIZATION_NOT_SYNCHRONIZED
+  | typeof UNKNOWN_ORGANIZATION_ROLE
+  | typeof MALFORMED_ORGANIZATION_CLAIM
+  | typeof NO_ORGANIZATION;
 
 /**
  * The user row of the caller, with the role and the organisation of the
@@ -76,7 +84,7 @@ export type ClaimedOrganization =
     }
   /** No organisation claim, and the deployment still accepts that. */
   | { kind: "unclaimed" }
-  | { kind: "refused"; reason: string };
+  | { kind: "refused"; reason: OrganizationRefusal };
 
 /** Clerk roles, with or without the `org:` prefix of their key. */
 const ORGANIZATION_ROLE_OF_CLAIM = new Map<string, OrganizationRole>([
@@ -130,12 +138,14 @@ export function organizationRoleFromClaim(
 }
 
 /**
- * Require authentication - throws if not logged in
+ * Require authentication: refused with `not_authenticated` when the call
+ * carries no valid token. A `ConvexError`, not an `Error`, so that the site
+ * reads the code in production too and asks the visitor to sign in again.
  */
 export async function requireAuth(ctx: Ctx) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
-    throw new Error("Not authenticated");
+    throw refusal("not_authenticated");
   }
   return identity;
 }
@@ -233,7 +243,7 @@ async function sessionOf(
   ctx: Ctx,
   identity: UserIdentity,
   user: Doc<"users">,
-): Promise<Session | { refusal: string }> {
+): Promise<Session | { refusal: OrganizationRefusal }> {
   const claimed = await organizationFromClaims(ctx, identity);
   if (claimed.kind === "refused") return { refusal: claimed.reason };
   if (claimed.kind === "claimed") {
@@ -322,12 +332,14 @@ export async function getCurrentUserOrThrow(ctx: Ctx): Promise<CurrentUser> {
   const identity = await requireAuth(ctx);
   const user = await userOf(ctx, identity);
   if (!user) {
-    throw new Error(
-      "User not found in database. Please complete registration.",
-    );
+    // No profile for this Clerk account (not created yet by the webhook), or
+    // one deleted in Clerk: a code, so that the site asks to sign in again in
+    // production too (ANH-90). The call without an accepted organisation is
+    // refused below with the code of `OrganizationRefusal`.
+    throw refusal("account_not_registered");
   }
   const session = await sessionOf(ctx, identity, user);
-  if ("refusal" in session) throw new ConvexError(session.refusal);
+  if ("refusal" in session) throw refusal(session.refusal);
   return {
     ...user,
     role: session.role,
@@ -355,7 +367,7 @@ export function organizationClaimOf(identity: UserIdentity): string | null {
 export async function getCurrentUser(ctx: Ctx): Promise<{
   user: Doc<"users">;
   session: Session | null;
-  refusal: string | null;
+  refusal: OrganizationRefusal | null;
   organizationClaim: string | null;
 } | null> {
   const identity = await ctx.auth.getUserIdentity();

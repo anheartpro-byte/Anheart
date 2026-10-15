@@ -45,6 +45,11 @@ webhook `/clerk/webhook`. Le premier admin est un membre `org:admin` de
 l'organisation identifiée par `ANHEART_ORG_ID` ; aucun rôle à éditer en base.
 Voir la [procédure Clerk et Convex](docs/convex.md#activer-le-multi-organisation).
 
+Les alertes aux gestionnaires s'affichent dans le site sans réglage. Leur envoi
+par e-mail reste coupé tant que `RESEND_API_KEY`, `NOTIFICATION_EMAIL_FROM` et
+`SITE_URL` ne sont pas définies dans Convex : voir
+[le composant d'envoi d'e-mails](docs/convex.md#composant-denvoi-de-mails-anh-90).
+
 ## Vérifier une modification
 
 - Pi, depuis `raspberry-pi/` : `./scripts/check.sh`.

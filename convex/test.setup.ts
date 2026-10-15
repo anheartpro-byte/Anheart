@@ -15,6 +15,7 @@
  */
 import { convexTest } from "convex-test";
 import rateLimiterTest from "@convex-dev/rate-limiter/test";
+import resendTest from "@convex-dev/resend/test";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -32,13 +33,16 @@ export const modules = import.meta.glob([
 ]);
 
 /**
- * An in-memory backend with the components `convex/convex.config.ts` mounts
- * (ANH-166: the rate limiter, under the name the app gives it). Every world
- * of these tests is built on one.
+ * An in-memory backend with the components `convex/convex.config.ts` mounts,
+ * under the names the app gives them: the rate limiter (ANH-166) and the
+ * e-mail sender (ANH-90). Every world of these tests is built on one. The
+ * e-mail sender's own components are not: a test that queues an e-mail keeps
+ * the clock still, and the batch that would send it never runs.
  */
 export function backendOf(mods: Record<string, () => Promise<unknown>>) {
   const t = convexTest(schema, mods);
   rateLimiterTest.register(t, "rateLimiter");
+  resendTest.register(t, "resend");
   return t;
 }
 

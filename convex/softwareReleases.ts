@@ -17,7 +17,7 @@
  * organisation (`org_admin`) neither reads nor writes it.
  */
 import { limitUser } from "./lib/rateLimits";
-import { ConvexError, v } from "convex/values";
+import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import {
   internalQuery,
@@ -26,6 +26,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { requireRole } from "./lib/auth";
+import { refusal } from "./lib/errors";
 import { isReleaseVersion } from "./lib/releaseValidation";
 import { softwareComponentValidator, validationLevelValidator } from "./schema";
 import { CLOUD_VERSION } from "./cloudVersion";
@@ -84,24 +85,20 @@ export const recordRelease = mutation({
     const admin = await requireRole(ctx, ["admin"]);
 
     if (!isReleaseVersion(args.component, args.version)) {
-      throw new ConvexError(
-        `Invalid version: expected ${args.component}-X.Y.Z`,
-      );
+      throw refusal("invalid_release_version");
     }
     if (args.component === "pi" && args.validationLevel === undefined) {
-      throw new ConvexError("A Pi version needs a validation level");
+      throw refusal("validation_level_required");
     }
     if (args.component !== "pi" && args.validationLevel !== undefined) {
-      throw new ConvexError("Only a Pi version carries a validation level");
+      throw refusal("validation_level_pi_only");
     }
     if (!Number.isFinite(args.releasedAt) || args.releasedAt <= 0) {
-      throw new ConvexError("Invalid release date");
+      throw refusal("invalid_release_date");
     }
     const notes = args.notes?.trim() || undefined;
     if (notes !== undefined && notes.length > MAX_NOTES_LENGTH) {
-      throw new ConvexError(
-        `Notes are limited to ${MAX_NOTES_LENGTH} characters`,
-      );
+      throw refusal("release_notes_too_long");
     }
 
     const now = Date.now();
@@ -152,9 +149,7 @@ export const recordRelease = mutation({
     }
     if (existing.validationLevel !== level) {
       if (notes === undefined) {
-        throw new ConvexError(
-          "Changing the validation level of a recorded version needs notes",
-        );
+        throw refusal("level_change_needs_notes");
       }
       if (level !== undefined) {
         await ctx.db.insert("software_release_levels", {

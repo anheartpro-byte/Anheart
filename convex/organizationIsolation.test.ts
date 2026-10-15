@@ -636,7 +636,7 @@ describe("EX-5 a machine and an account of two different organisations never com
     for (const actor of ["manager", "orgAdmin", "admin"] as const) {
       await expect(
         as(w.t, actor).mutation(api.training.grantLaunchRight, args),
-      ).rejects.toThrow(/Launch rights are granted to users/);
+      ).rejects.toThrow(/launch_right_patients_only/);
     }
     const rights = await w.t.run((ctx) =>
       ctx.db
@@ -656,7 +656,7 @@ describe("EX-5 a machine and an account of two different organisations never com
         machineId: w.otherMachine,
         userId: w.otherPatient,
       }),
-    ).rejects.toThrow(/Machine not found/);
+    ).rejects.toThrow(/machine_not_found/);
     await expect(
       as(w.t, "admin").mutation(api.machines.assignGestionnaireToMachine, {
         machineId: w.otherMachine,
@@ -675,7 +675,7 @@ describe("EX-5 a machine and an account of two different organisations never com
         machineId: w.otherMachine,
         profileId: w.profileId,
       }),
-    ).rejects.toThrow(/have not been given the right/);
+    ).rejects.toThrow(/launch_right_missing/);
     expect(
       await as(w.t, "otherPatient").query(api.training.getMachineLive, {
         machineId: w.otherMachine,
@@ -735,7 +735,7 @@ describe("EX-5 a machine and an account of two different organisations never com
         profileId: w.profileId,
         userId: w.orgBPatient,
       }),
-    ).rejects.toThrow(/Not authorized to launch a session for this rider/);
+    ).rejects.toThrow(/rider_not_allowed/);
     const sessions = await w.t.run((ctx) => ctx.db.query("sessions").collect());
     expect(sessions).toEqual([]);
   });
@@ -1250,7 +1250,7 @@ describe("EX-5 an account of two organisations acts in one organisation at a tim
         machineId: w.machine,
         profileId: w.profileId,
       }),
-    ).rejects.toThrow(/have not been given the right/);
+    ).rejects.toThrow(/launch_right_missing/);
     expect(
       await asB.query(api.training.getMachineLive, { machineId: w.machine }),
     ).toBeNull();
@@ -1939,7 +1939,7 @@ describe("EX-5 a row that has no organisation is served to the Anheart admin onl
         machineId: rows.machine,
         profileId: w.profileId,
       }),
-    ).rejects.toThrow(/have not been given the right/);
+    ).rejects.toThrow(/launch_right_missing/);
     await expect(
       as(w.t, "manager").mutation(api.machines.updateMachine, {
         machineId: rows.machine,
@@ -1959,7 +1959,7 @@ describe("EX-5 a row that has no organisation is served to the Anheart admin onl
         machineId: rows.machine,
         userId: w.stranger,
       }),
-    ).rejects.toThrow(/Launch rights are granted to users/);
+    ).rejects.toThrow(/launch_right_patients_only/);
   });
 
   it("shows it to the Anheart admin", async () => {

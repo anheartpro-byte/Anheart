@@ -68,7 +68,7 @@ const NO_NAVIGATION: Navigation = {
  * - Anheart admin: administration (gestionnaires, members, users, settings)
  *   and management.
  * - Organisation admin: the same without the settings, which are Anheart's.
- * - Gestionnaire: management.
+ * - Gestionnaire: management, with the alerts of the machines they manage.
  * - Patient: their machines, sessions and reports.
  */
 export function navigationFor(
@@ -86,7 +86,14 @@ export function navigationFor(
   return {
     administration,
     management: isStaff(role)
-      ? ["patients", "machines", "myMachines", "sessions", "reports"]
+      ? [
+          "patients",
+          "machines",
+          "myMachines",
+          "sessions",
+          "reports",
+          "notifications",
+        ]
       : [],
     myHealth: isPatient(role) ? ["myMachines", "sessions", "reports"] : [],
   };

@@ -18,11 +18,9 @@
  * resource of centre A by direct identifier (scope "foreign") or lists from
  * centre B; `completeness.test.ts` fails if an entry has none.
  *
- * Error codes: users, machines and the role checks of `convex/lib/auth.ts`
- * refuse with a stable code (`ConvexError(code)`, table in
- * `convex/lib/errors.ts`); a refusal cell of theirs matches the code. Training
- * functions still throw `ConvexError(message)` with an English sentence, and
- * the sign-in checks a plain `Error`: their cells match a substring of it.
+ * Error codes: every refusal of a function the site calls is a stable code
+ * (`ConvexError(code)`, table in `convex/lib/errors.ts`), the sign-in checks
+ * included (ANH-90); a refusal cell matches the code.
  *
  * The file name has two dots so the Convex bundler never deploys it.
  */
@@ -30,6 +28,7 @@ import { isDeepStrictEqual } from "node:util";
 import { api } from "./_generated/api";
 import type { FunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
+import { notifyMachine } from "./lib/notifications";
 import {
   addSession,
   NOW,
@@ -109,7 +108,7 @@ const ok: Expectation = { outcome: "success" };
 const empty: Expectation = { outcome: "empty" };
 const filtered: Expectation = { outcome: "filtered" };
 
-const NOT_AUTH = /Not authenticated/;
+const NOT_AUTH = /not_authenticated/;
 const UNAUTHORIZED = /not_authorized/;
 
 function userId(w: World, actor: Actor): Id<"users"> {
@@ -1692,20 +1691,20 @@ export const MATRIX: Entry[] = [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
-        expect: refuse(/Only an admin or a manager of this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a user cannot grant",
       },
       { actor: "manager", scope: "own", expect: ok, note: "manages machine and user" },
       {
         actor: "manager",
         scope: "other",
-        expect: refuse(/do not manage this user/),
+        expect: refuse(/user_not_managed/),
         note: "manages the machine but not this rider",
       },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Only an admin or a manager of this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin grants" },
@@ -1713,13 +1712,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Only an admin or a manager of this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Only an admin or a manager of this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
     ],
@@ -1744,14 +1743,14 @@ export const MATRIX: Entry[] = [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
       {
         actor: "patient",
-        expect: refuse(/Only an admin or a manager of this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a user cannot revoke",
       },
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Only an admin or a manager of this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin revokes" },
@@ -1759,13 +1758,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Only an admin or a manager of this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Only an admin or a manager of this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
     ],
@@ -1819,14 +1818,14 @@ export const MATRIX: Entry[] = [
       {
         actor: "patient",
         scope: "self",
-        expect: refuse(/Only a manager can set physiology/),
+        expect: refuse(UNAUTHORIZED),
         note: "a user may never set physiology, not even their own",
       },
       { actor: "manager", scope: "own", expect: ok, note: "manages this patient" },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/do not manage this user/),
+        expect: refuse(/user_not_managed/),
         note: "does not manage this patient",
       },
       { actor: "admin", scope: "other", expect: ok, note: "admin sets" },
@@ -1834,13 +1833,13 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/do not manage this user/),
+        expect: refuse(/user_not_managed/),
         note: "a patient of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/do not manage this user/),
+        expect: refuse(/user_not_managed/),
         note: "a patient of another organisation, by identifier",
       },
     ],
@@ -1953,26 +1952,26 @@ export const MATRIX: Entry[] = [
       {
         actor: "patient",
         scope: "other",
-        expect: refuse(/only launch a session for yourself/),
+        expect: refuse(/launch_for_self_only/),
         note: "a user may not launch for someone else",
       },
       {
         actor: "stranger",
         scope: "self",
-        expect: refuse(/have not been given the right/),
+        expect: refuse(/launch_right_missing/),
         note: "no launch right on the machine",
       },
       { actor: "manager", scope: "own", expect: ok, note: "launches for a managed rider" },
       {
         actor: "manager",
         scope: "other",
-        expect: refuse(/Not authorized to launch a session for this rider/),
+        expect: refuse(/user_not_managed/),
         note: "manages the machine but not the rider",
       },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to use this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", scope: "own", expect: ok, note: "admin launches for a rider" },
@@ -1985,19 +1984,19 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Not authorized to use this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Not authorized to use this machine/),
+        expect: refuse(/machine_not_managed/),
         note: "a machine of another organisation, by identifier",
       },
       {
         actor: "orgBPatient",
         scope: "foreign",
-        expect: refuse(/have not been given the right/),
+        expect: refuse(/launch_right_missing/),
         note: "no launch right reaches a machine of another organisation",
       },
     ],
@@ -2028,14 +2027,14 @@ export const MATRIX: Entry[] = [
       {
         actor: "stranger",
         scope: "other",
-        expect: refuse(/Not authorized to stop this session/),
+        expect: refuse(/session_not_managed/),
         note: "not the rider and no machine access",
       },
       { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
       {
         actor: "otherManager",
         scope: "other",
-        expect: refuse(/Not authorized to stop this session/),
+        expect: refuse(/session_not_managed/),
         note: "does not manage this machine",
       },
       { actor: "admin", expect: ok, note: "admin stops" },
@@ -2043,19 +2042,19 @@ export const MATRIX: Entry[] = [
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/Session not found/),
+        expect: refuse(/session_not_found/),
         note: "a session of another organisation does not exist for them",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/Session not found/),
+        expect: refuse(/session_not_found/),
         note: "a session of another organisation does not exist for them",
       },
       {
         actor: "orgBPatient",
         scope: "foreign",
-        expect: refuse(/Session not found/),
+        expect: refuse(/session_not_found/),
         note: "a session of another organisation does not exist for them",
       },
     ],
@@ -2088,7 +2087,7 @@ export const MATRIX: Entry[] = [
       {actor:"orgAdmin",scope:"own",expect:ok,note:"organisation administrator"},
       {actor:"manager",scope:"own",expect:refuse(UNAUTHORIZED),note:"admin deletion only"},
       {actor:"patient",scope:"own",expect:refuse(UNAUTHORIZED),note:"admin deletion only"},
-      {actor:"orgBAdmin",scope:"foreign",expect:refuse(/Session not found/),note:"other organisation"},
+      {actor:"orgBAdmin",scope:"foreign",expect:refuse(/session_not_found/),note:"other organisation"},
       {actor:"orgBManager",scope:"foreign",expect:refuse(UNAUTHORIZED),note:"other organisation"},
     ],
     onSuccess: async (_res,w,_actor,_scope,args) => {
@@ -2569,6 +2568,151 @@ export const MATRIX: Entry[] = [
       { actor: "orgBPatient", scope: "self", expect: filtered, note: "their own history, in centre B" },
     ],
   },
+
+  // =========================================================================
+  // notifications.ts (ANH-90): the caller's own alerts, in their organisation
+  // =========================================================================
+  {
+    id: "notifications.list",
+    ref: api.notifications.list,
+    kind: "query",
+    build: async (w) => {
+      await seedAlerts(w);
+      return {};
+    },
+    onSuccess: (res, w, actor) => expectAlertsOf(res, w, actor),
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "own", expect: ok, note: "the alert of the machine they manage" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "the alert of a machine of their organisation" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "no alert of a machine they do not manage" },
+      { actor: "patient", scope: "self", expect: empty, note: "a patient receives no alert" },
+      { actor: "admin", expect: empty, note: "the Anheart team's alerts are ANH-150's" },
+      { actor: "orgBManager", scope: "own", expect: ok, note: "their centre B alert only" },
+      { actor: "orgBAdmin", scope: "own", expect: ok, note: "their centre B alert only" },
+      { actor: "orgBPatient", scope: "self", expect: empty, note: "a patient receives no alert" },
+    ],
+  },
+  {
+    id: "notifications.unreadCount",
+    ref: api.notifications.unreadCount,
+    kind: "query",
+    build: async (w) => {
+      await seedAlerts(w);
+      return {};
+    },
+    onSuccess: (res, _w, actor) => {
+      const expected = actor === "otherManager" ? 0 : 1;
+      if (res !== expected)
+        throw new Error(`Expected ${expected} unread alerts, got ${String(res)}`);
+    },
+    cases: [
+      { actor: "anonymous", expect: empty, note: "null: the header asks signed out too" },
+      { actor: "manager", scope: "own", expect: ok, note: "1: their alert" },
+      { actor: "otherManager", scope: "other", expect: ok, note: "0: none of another machine" },
+      { actor: "patient", scope: "self", expect: empty, note: "null: a patient receives no alert" },
+      { actor: "orgBManager", scope: "own", expect: ok, note: "1: their centre B alert only" },
+      { actor: "orgBPatient", scope: "self", expect: empty, note: "null: a patient receives no alert" },
+    ],
+  },
+  {
+    id: "notifications.markRead",
+    ref: api.notifications.markRead,
+    kind: "mutation",
+    build: async (w, actor, scope) => {
+      await seedAlerts(w);
+      // "own": the actor's alert; anything else: the manager's, in centre A.
+      const owner = scope === "own" ? userId(w, actor) : w.manager;
+      return { notificationId: await alertOf(w, owner) };
+    },
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const row = await w.t.run((ctx) =>
+        ctx.db.get(args.notificationId as Id<"notifications">),
+      );
+      if (row?.read !== true) throw new Error("Alert not marked as read");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "own", expect: ok, note: "their own alert" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "their own alert" },
+      { actor: "orgAdmin", scope: "other", expect: refuse(/notification_not_found/), note: "another account's alert, same organisation" },
+      { actor: "otherManager", scope: "other", expect: refuse(/notification_not_found/), note: "another account's alert" },
+      { actor: "admin", scope: "other", expect: refuse(/notification_not_found/), note: "even the Anheart admin reads only their own" },
+      { actor: "patient", scope: "other", expect: refuse(UNAUTHORIZED), note: "a patient has no alert" },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(/notification_not_found/), note: "centre A alert, by identifier" },
+      { actor: "orgBAdmin", scope: "foreign", expect: refuse(/notification_not_found/), note: "centre A alert, by identifier" },
+    ],
+  },
+  {
+    id: "notifications.markAllRead",
+    ref: api.notifications.markAllRead,
+    kind: "mutation",
+    build: async (w) => {
+      await seedAlerts(w);
+      return {};
+    },
+    onSuccess: async (res, w, actor) => {
+      if ((res as { marked?: unknown }).marked !== 1)
+        throw new Error("Expected one alert marked");
+      const unread = await w.t.run(async (ctx) =>
+        (await ctx.db.query("notifications").collect())
+          .filter((row) => !row.read)
+          .map((row) => row.userId),
+      );
+      if (unread.includes(userId(w, actor)))
+        throw new Error("An alert of the caller is still unread");
+      if (unread.length !== 3)
+        throw new Error("Another account's alert was marked");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "own", expect: ok, note: "their alert only" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient has no alert" },
+      { actor: "orgBManager", scope: "own", expect: ok, note: "their centre B alert only, none of centre A" },
+    ],
+  },
+  {
+    id: "notifications.getSettings",
+    ref: api.notifications.getSettings,
+    kind: "query",
+    build: async () => ({}),
+    onSuccess: (res) => {
+      const settings = res as { emailAvailable: boolean; email: Record<string, boolean> };
+      if (settings.emailAvailable !== false)
+        throw new Error("No e-mail can be sent without its three variables");
+      if (settings.email.drive_fault !== true || settings.email.machine_offline !== false)
+        throw new Error("Expected the default choices");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "self", expect: ok, note: "their own choices" },
+      { actor: "orgAdmin", scope: "self", expect: ok, note: "their own choices" },
+      { actor: "patient", scope: "self", expect: empty, note: "null: a patient receives no alert" },
+      { actor: "orgBManager", scope: "self", expect: ok, note: "their own choices" },
+    ],
+  },
+  {
+    id: "notifications.updateSettings",
+    ref: api.notifications.updateSettings,
+    kind: "mutation",
+    build: async () => ({ type: "machine_offline", email: true }),
+    onSuccess: async (_res, w, actor) => {
+      const rows = await w.t.run((ctx) =>
+        ctx.db.query("notification_settings").collect(),
+      );
+      if (rows.length !== 1 || rows[0].userId !== userId(w, actor))
+        throw new Error("Expected the caller's choice only");
+      if (rows[0].email.machine_offline !== true)
+        throw new Error("Choice not recorded");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "self", expect: ok, note: "their own choice" },
+      { actor: "orgAdmin", scope: "self", expect: ok, note: "their own choice" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient receives no alert" },
+      { actor: "orgBManager", scope: "self", expect: ok, note: "their own choice" },
+    ],
+  },
 ];
 
 /**
@@ -2611,6 +2755,53 @@ async function addSummarizedSession(
     });
   });
   return sessionId;
+}
+
+/**
+ * A drive fault on `machine` (centre A) and on `orgBMachine` (centre B), as
+ * the server writes it: an alert each for the machine's gestionnaire and the
+ * admin of its organisation.
+ */
+async function seedAlerts(w: World) {
+  await w.t.run(async (ctx) => {
+    for (const machineId of [w.machine, w.orgBMachine]) {
+      const machine = await ctx.db.get(machineId);
+      if (machine === null) throw new Error("Missing machine");
+      await notifyMachine(ctx, machine, "drive_fault");
+    }
+  });
+}
+
+/** The alert `seedAlerts` wrote for this account. */
+async function alertOf(w: World, owner: Id<"users">) {
+  const row = await w.t.run((ctx) =>
+    ctx.db
+      .query("notifications")
+      .withIndex("by_user", (q) => q.eq("userId", owner))
+      .first(),
+  );
+  // An account without one is handed another account's: refused all the same.
+  if (row !== null) return row._id;
+  const any = await w.t.run((ctx) => ctx.db.query("notifications").first());
+  if (any === null) throw new Error("No alert seeded");
+  return any._id;
+}
+
+/** The alerts of `seedAlerts` an actor is listed: the one of their machine. */
+function expectAlertsOf(res: unknown, w: World, actor: Actor) {
+  const machineOf: Partial<Record<Actor, Id<"machines">>> = {
+    manager: w.machine,
+    orgAdmin: w.machine,
+    orgBManager: w.orgBMachine,
+    orgBAdmin: w.orgBMachine,
+  };
+  const rows = asArray(res) as { machineId: string; type: string }[];
+  if (
+    rows.length !== 1 ||
+    rows[0].machineId !== machineOf[actor] ||
+    rows[0].type !== "drive_fault"
+  )
+    throw new Error("Expected exactly the alert of the caller's machine");
 }
 
 function summaryBuild(w: World) {

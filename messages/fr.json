@@ -1,5 +1,36 @@
 {
   "errors": {
+    "not_authenticated": "Votre session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour continuer.",
+    "account_not_registered": "Votre compte n'est pas encore prêt sur le serveur. Patientez quelques instants, puis reconnectez-vous si le message persiste.",
+    "no_active_organization": "Choisissez une organisation pour continuer.",
+    "organization_not_synchronized": "Cette organisation n'est pas encore connue du serveur. Réessayez dans quelques instants.",
+    "unknown_organization_role": "Votre rôle dans cette organisation n'est pas reconnu. Demandez à son administrateur de vérifier votre rôle.",
+    "malformed_organization_claim": "Votre session n'identifie pas votre organisation. Déconnectez-vous, puis reconnectez-vous.",
+    "no_organization": "Votre compte n'appartient à aucune organisation. Demandez une invitation à votre administrateur.",
+    "launch_right_patients_only": "Le droit de lancement se donne à un patient de l'organisation de la machine : les gestionnaires et les administrateurs lancent sans lui.",
+    "invalid_hr_max": "La FC max doit être un nombre entier compris entre 100 et 220 bpm.",
+    "invalid_birth_year": "Année de naissance invalide : elle doit donner un âge entre 10 et 100 ans.",
+    "launch_for_self_only": "Vous ne pouvez lancer une séance que pour vous-même.",
+    "launch_right_missing": "Vous n'avez pas reçu le droit de lancer des séances sur cette machine.",
+    "machine_offline": "La machine est hors ligne : elle ne peut pas recevoir de séance pour l'instant.",
+    "rider_not_allowed": "Ce pratiquant n'est pas membre actif de l'organisation de cette machine.",
+    "programs_disabled": "Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles.",
+    "programme_not_on_machine": "Ce programme n'est plus sur la machine. Rechargez la page et choisissez-en un autre.",
+    "rider_hr_max_missing": "La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
+    "zone_above_ceiling": "La zone du programme dépasse 90 % de la FC max du pratiquant. Choisissez un autre programme.",
+    "hard_max_above_hr_max": "La FC limite du programme dépasse la FC max du pratiquant. Choisissez un autre programme.",
+    "rider_birth_year_missing": "L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
+    "rider_too_young": "Ce pratiquant n'a pas l'âge minimum requis pour une séance auto.",
+    "invalid_duration": "La durée doit être un nombre positif.",
+    "session_not_found": "Séance introuvable. Elle a peut-être été supprimée.",
+    "session_not_managed": "Vous ne pouvez pas arrêter cette séance.",
+    "invalid_release_version": "Version invalide : attendu « composant-X.Y.Z », par exemple pi-1.2.0.",
+    "validation_level_required": "Une version du Pi doit porter un niveau de validation.",
+    "validation_level_pi_only": "Seule une version du Pi porte un niveau de validation.",
+    "invalid_release_date": "Date de publication invalide.",
+    "release_notes_too_long": "Les notes sont limitées à 2000 caractères.",
+    "level_change_needs_notes": "Changer le niveau de validation d'une version déjà enregistrée exige des notes qui disent pourquoi.",
+    "notification_not_found": "Alerte introuvable.",
     "invitation_failed": "L'envoi de l'invitation n'a pas été confirmé. Réessayez.",
     "invalid_invitation": "Vérifiez le nom et l'adresse e-mail.",
     "invitation_unavailable": "Cette invitation ne peut pas être créée. Vérifiez vos droits et les membres de votre organisation.",
@@ -170,7 +201,8 @@
     "markets": "Marchés",
     "faq": "FAQ",
     "myMachines": "Mes machines",
-    "members": "Membres"
+    "members": "Membres",
+    "notifications": "Alertes"
   },
   "sidebar": {
     "main": "Principal",
@@ -879,5 +911,42 @@
     "notComputed": "Pas encore calculé",
     "report": "Rapport",
     "nausea": "Nausée et ressenti : pas encore recueillis (ANH-146)."
+  },
+  "notifications": {
+    "title": "Alertes",
+    "description": "Ce qui arrive aux machines que vous gérez : machine hors ligne, séance échouée, défaut variateur, arrêt demandé par la sécurité.",
+    "bell": "Alertes",
+    "bellUnread": "Alertes : {count, plural, one {# non lue} other {# non lues}}",
+    "empty": "Aucune alerte.",
+    "accessDenied": "Les alertes sont réservées aux gestionnaires et aux administrateurs d'une organisation.",
+    "unread": "Non lue",
+    "markRead": "Marquer comme lue",
+    "markAllRead": "Tout marquer comme lu",
+    "allRead": "Alertes marquées comme lues.",
+    "repeated": "{count} fois, dernière à {time}",
+    "openSession": "Voir la séance",
+    "openMachine": "Voir la machine",
+    "reason": "Raison : {reason}",
+    "faultCode": "Code du variateur : {code}",
+    "listCut": "Seules les {count} alertes les plus récentes sont affichées.",
+    "types": {
+      "machine_offline": "Machine hors ligne",
+      "session_failed": "Séance échouée",
+      "drive_fault": "Défaut variateur",
+      "safety_verdict": "Arrêt demandé par la sécurité"
+    },
+    "verdict": {
+      "RAMP_DOWN": "Arrêt progressif demandé",
+      "QUICK_STOP": "Arrêt rapide demandé",
+      "GO_SILENT": "Commande du variateur coupée : arrêt par le variateur",
+      "unknown": "Verdict de sécurité"
+    },
+    "settings": {
+      "title": "Alertes par e-mail",
+      "description": "Les alertes s'affichent toujours ici. Choisissez celles qui vous sont aussi envoyées par e-mail. Un e-mail ne contient jamais de donnée de santé ni de nom de passager : seulement le type d'alerte, le nom de la machine et un lien vers cette page.",
+      "unavailable": "L'envoi d'e-mails n'est pas configuré sur ce déploiement : les alertes restent dans le site.",
+      "email": "E-mail : {type}",
+      "saved": "Préférence enregistrée."
+    }
   }
 }

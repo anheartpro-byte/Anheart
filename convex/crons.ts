@@ -48,4 +48,15 @@ crons.daily(
   {},
 );
 
+/**
+ * Every day: the alerts to the gestionnaires not changed for 90 days are
+ * deleted, read or not (`notifications.purge`, ANH-90).
+ */
+crons.daily(
+  "purge-notifications",
+  { hourUTC: 3, minuteUTC: 47 },
+  internal.notifications.purge,
+  {},
+);
+
 export default crons;
