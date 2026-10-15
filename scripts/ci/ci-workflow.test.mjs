@@ -33,6 +33,7 @@ test("S-4 CI concurrency separates the release call and only cancels pull reques
   assert.equal(ciName, "CI");
   assert.equal(releaseName, "Release en production (main)");
   const fields = concurrencyOf(workflow);
+  let runId = 0;
   const evaluate = (eventName, ref, { number, sha = "S", workflow: runWorkflow = ciName } = {}) => {
     const context = {
       github: {
@@ -40,6 +41,7 @@ test("S-4 CI concurrency separates the release call and only cancels pull reques
         event_name: eventName,
         ref,
         sha,
+        run_id: ++runId,
         event: { pull_request: number === undefined ? undefined : { number } },
       },
     };
@@ -64,6 +66,8 @@ test("S-4 CI concurrency separates the release call and only cancels pull reques
   assert.equal(pullRequest43.cancel, true);
   assert.notEqual(pullRequest42.group, pullRequest43.group);
   assert.notEqual(pushMain.group, pushDevelop.group);
+  assert.equal(evaluate("pull_request", "refs/pull/42/merge", { number: 42, sha: "T" }).group, pullRequest42.group);
+  assert.equal(evaluate("push", "refs/heads/main", { sha: "T" }).group, pushMain.group);
 });
 
 /** Each job's own lines, by job id. @type {Map<string, string>} */
