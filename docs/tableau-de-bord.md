@@ -391,8 +391,13 @@ d'organisation ne reçoit aucun formulaire ni bouton d'édition du registre.
 
 Les niveaux sont **Aucune validation**, **Au banc**, **Automatique**,
 **Personne à bord**. La clé médicale de test bloque le dernier niveau, avec
-une explication ANH-98. Les auteurs des décisions sont les identifiants
-utilisateur conservés par le serveur ; l'auteur d'une mesure est le nom saisi.
+une explication ANH-98. Le niveau affiché est le niveau effectif : si le niveau
+stocké ne correspond pas à l'historique, la fiche avertit et applique « Aucune
+validation ». Les auteurs des revues, descentes, rattachements de fiches et de
+la dernière modification apparaissent par prénom et nom, sans e-mail ; un
+compte supprimé ou absent garde son seul identifiant. L'auteur d'une mesure
+est le nom saisi. La mise en service est affichée en date UTC. Enregistrer
+une section conserve les saisies non enregistrées des autres sections.
 Les refus passent par `useMutationWithFeedback` et les codes traduits de
 `lib/feedback.ts`. Un dépôt manquant, invalide ou échoué affiche également
 une erreur traduite ; aucune mutation d'attachement ne suit un échec du dépôt.

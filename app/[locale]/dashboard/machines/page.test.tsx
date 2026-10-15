@@ -101,7 +101,6 @@ describe("machine list registry badges", () => {
           level: "auto",
           versionStatus: "not_validated",
           configurationStatus: "unavailable",
-          alerts: [],
         },
       ]);
       await renderPage(<MachinesPage />);
@@ -133,7 +132,6 @@ describe("machine list registry badges", () => {
           level: "bench",
           versionStatus,
           configurationStatus: "unavailable",
-          alerts: [],
         },
       ]);
       await renderPage(<MachinesPage />);
@@ -156,7 +154,6 @@ describe("machine list registry badges", () => {
           level: "occupied",
           versionStatus: "up_to_date",
           configurationStatus: "unavailable",
-          alerts: [],
         },
       ]);
       await renderPage(<MachinesPage />);

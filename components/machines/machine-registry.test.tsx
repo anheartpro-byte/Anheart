@@ -26,11 +26,15 @@ vi.mock(
   "convex/react",
   async () => (await import("@/test-support/pages")).convexReact,
 );
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 const machineId = "TEST-machine" as Id<"machines">;
 const contactId = "TEST-contact" as Id<"users">;
 const adminId = "TEST-admin" as Id<"users">;
+const author = { userId: adminId, firstName: "TEST", lastName: "Audit" };
 const storageId = "TEST-storage" as Id<"_storage">;
 const t = fr.machineRegistry;
 
@@ -54,8 +58,9 @@ function registry(overrides: Partial<MachineRegistry> = {}): MachineRegistry {
     driveParameterSheet: null,
     driveParameterSheetHistory: [],
     validation: { level: "bench", reviews: [], downgrades: [] },
+    effectiveLevel: overrides.validation?.level ?? "bench",
     updatedAt: NOW,
-    updatedBy: adminId,
+    updatedBy: author,
     reportedSoftwareVersion: "pi-0.1.0",
     versionStatus: "up_to_date",
     expectedVersionAllowed: true,
@@ -261,7 +266,7 @@ describe("machine registry visibility and reading", () => {
       contentType: "application/pdf" as const,
       signedBy: "TEST signataire",
       at: NOW,
-      attachedBy: adminId,
+      attachedBy: author,
       attachedAt: NOW,
       url: "https://storage.example.invalid/current",
     };
@@ -282,7 +287,7 @@ describe("machine registry visibility and reading", () => {
           reviews: [
             {
               level: "bench",
-              by: adminId,
+              by: author,
               at: NOW,
               reportStorageId: storageId,
               reportUrl: "https://storage.example.invalid/report",
@@ -291,7 +296,7 @@ describe("machine registry visibility and reading", () => {
             },
             {
               level: "auto",
-              by: adminId,
+              by: { userId: adminId },
               at: NOW + 1,
               reportStorageId: "TEST-report-missing" as Id<"_storage">,
               reportUrl: null,
@@ -303,7 +308,7 @@ describe("machine registry visibility and reading", () => {
             {
               from: "auto",
               to: "bench",
-              by: adminId,
+              by: author,
               at: NOW + 2,
               reason: "TEST nouvel essai requis",
             },
@@ -324,10 +329,82 @@ describe("machine registry visibility and reading", () => {
     expect(screen.getAllByText(t.fileUnavailable)).toHaveLength(2);
     expect(screen.getByText("TEST nouvel essai requis")).toBeTruthy();
     expect(screen.getAllByText(/TEST-admin/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Par TEST Audit/)).toHaveLength(2);
+    expect(screen.getAllByText(/Rattachée par TEST Audit/)).toHaveLength(3);
+    expect(
+      screen.getByText(/Dernière modification par TEST Audit/),
+    ).toBeTruthy();
+  });
+
+  it("warns when stored and effective levels differ and proposes the next effective review", async () => {
+    await card(
+      registry({
+        validation: { level: "auto", reviews: [], downgrades: [] },
+        effectiveLevel: "none",
+      }),
+    );
+    expect(
+      screen
+        .getByText(
+          t.levelMismatch
+            .replace("{stored}", t.levels.auto)
+            .replace("{effective}", t.levels.none),
+        )
+        .closest('[role="alert"]'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(t.nextLevel.replace("{level}", t.levels.bench)),
+    ).toBeTruthy();
+    expect(screen.queryByRole("form", { name: t.lowerLevel })).toBeNull();
+  });
+
+  it("shows the UTC commissioning day even in a negative timezone", async () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    await card(
+      registry({ commissionedAt: Date.UTC(2026, 9, 15) }),
+      "org_admin",
+    );
+    expect(screen.getByText("15 oct. 2026")).toBeTruthy();
+    expect(screen.queryByText("14 oct. 2026")).toBeNull();
   });
 });
 
 describe("machine registry editing", () => {
+  it.each(["identity", "radii"] as const)(
+    "preserves another section's draft when saving %s",
+    async (section) => {
+      const value = registry();
+      const view = await card(value);
+      fill(form(t.saveIdentity), t.serialPi, "TEST unsaved identity");
+      fill(form(t.saveRadii), t.measuredBy, "TEST unsaved measurer");
+      const title = section === "identity" ? t.saveIdentity : t.saveRadii;
+      await view.user.click(form(title).getByRole("button", { name: title }));
+      answer(api.machineRegistry.getRegistry, {
+        ...value,
+        updatedAt: NOW + 1,
+        ...(section === "identity"
+          ? { serialPi: "TEST unsaved identity" }
+          : { radiiMeasuredBy: "TEST unsaved measurer" }),
+      });
+      await view.refresh();
+      const draft =
+        section === "identity"
+          ? form(t.saveRadii).getByLabelText(t.measuredBy)
+          : form(t.saveIdentity).getByLabelText(t.serialPi);
+      expect(draft).toHaveProperty(
+        "value",
+        section === "identity"
+          ? "TEST unsaved measurer"
+          : "TEST unsaved identity",
+      );
+      expect(mutationsSent().map((entry) => entry.name)).toContain(
+        section === "identity"
+          ? "machineRegistry:updateIdentity"
+          : "machineRegistry:recordRadii",
+      );
+    },
+  );
+
   it("saves all identity fields, only organisation contact ids and a UTC commissioning date", async () => {
     const view = await card();
     const scope = form(t.saveIdentity);

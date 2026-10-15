@@ -359,7 +359,7 @@ export function DriveSheetForm({ registry }: { registry: MachineRegistry }) {
 export function ValidationForms({ registry }: { registry: MachineRegistry }) {
   const t = useTranslations("machineRegistry");
   const [file, setFile] = useState<File>();
-  const rank = VALIDATION_LEVELS.indexOf(registry.validation.level);
+  const rank = VALIDATION_LEVELS.indexOf(registry.effectiveLevel);
   const next = (["bench", "auto", "occupied"] as const)[rank];
   const lowerLevels = VALIDATION_LEVELS.slice(0, rank);
   const [target, setTarget] =

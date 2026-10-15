@@ -72,6 +72,9 @@ export function MachineRegistryCard({
   const missing = t("missing");
   const date = (at: number | undefined) =>
     at === undefined ? missing : when(at);
+  const authorName = (author: NonNullable<MachineRegistry["updatedBy"]>) =>
+    [author.firstName, author.lastName].filter(Boolean).join(" ") ||
+    author.userId;
   const attachment = (url: string | null, label: string) =>
     url === null ? (
       <span className="text-muted-foreground">{t("fileUnavailable")}</span>
@@ -89,6 +92,14 @@ export function MachineRegistryCard({
           {t(canEdit ? "editable" : "readOnly")}
         </p>
       </div>
+      {registry.updatedBy !== null && registry.updatedAt !== null && (
+        <p className="text-sm text-muted-foreground">
+          {t("lastUpdated", {
+            by: authorName(registry.updatedBy),
+            at: when(registry.updatedAt),
+          })}
+        </p>
+      )}
       {registry.alerts.map((alert) => (
         <Alert variant="destructive" key={alert.code}>
           <AlertDescription>
@@ -119,7 +130,12 @@ export function MachineRegistryCard({
               </Value>
             ))}
             <Value label={t("commissionedAt")}>
-              {date(registry.commissionedAt)}
+              {registry.commissionedAt === undefined
+                ? missing
+                : new Intl.DateTimeFormat(locale, {
+                    dateStyle: "medium",
+                    timeZone: "UTC",
+                  }).format(registry.commissionedAt)}
             </Value>
             <Value label={t("contacts")}>
               {registry.contacts.length === 0
@@ -132,7 +148,21 @@ export function MachineRegistryCard({
             </Value>
           </dl>
           {canEdit && (
-            <IdentityForm key={registry.updatedAt} registry={registry} />
+            <IdentityForm
+              key={JSON.stringify([
+                registry.machineId,
+                registry.serialPi,
+                registry.serialDrive,
+                registry.serialMotor,
+                registry.serialGearbox,
+                registry.bitalinoAddress,
+                registry.site,
+                registry.commissionedAt,
+                registry.expectedSoftwareVersion,
+                registry.contacts.map((contact) => contact.userId),
+              ])}
+              registry={registry}
+            />
           )}
         </Section>
         <Section title={t("measurements")}>
@@ -167,7 +197,16 @@ export function MachineRegistryCard({
             <p className="text-muted-foreground">{t("proposalPending")}</p>
           </div>
           {canEdit && (
-            <RadiiForm key={registry.updatedAt} registry={registry} />
+            <RadiiForm
+              key={JSON.stringify([
+                registry.machineId,
+                registry.armRadiusM,
+                registry.legTipRadiusM,
+                registry.radiiMeasuredAt,
+                registry.radiiMeasuredBy,
+              ])}
+              registry={registry}
+            />
           )}
         </Section>
         <Section title={t("drive")}>
@@ -187,6 +226,12 @@ export function MachineRegistryCard({
                   at: when(registry.driveParameterSheet.at),
                 })}
               </p>
+              <p className="text-sm">
+                {t("attachedAudit", {
+                  by: authorName(registry.driveParameterSheet.attachedBy),
+                  at: when(registry.driveParameterSheet.attachedAt),
+                })}
+              </p>
             </div>
           )}
           {registry.driveParameterSheetHistory.length > 0 && (
@@ -199,6 +244,12 @@ export function MachineRegistryCard({
                     <p className="text-sm">
                       {t("signed", { by: sheet.signedBy, at: when(sheet.at) })}
                     </p>
+                    <p className="text-sm">
+                      {t("attachedAudit", {
+                        by: authorName(sheet.attachedBy),
+                        at: when(sheet.attachedAt),
+                      })}
+                    </p>
                   </li>
                 ))}
               </ul>
@@ -207,7 +258,17 @@ export function MachineRegistryCard({
           {canEdit && <DriveSheetForm registry={registry} />}
         </Section>
         <Section title={t("validation")}>
-          <Badge>{t(`levels.${registry.validation.level}`)}</Badge>
+          <Badge>{t(`levels.${registry.effectiveLevel}`)}</Badge>
+          {registry.validation.level !== registry.effectiveLevel && (
+            <Alert variant="destructive">
+              <AlertDescription>
+                {t("levelMismatch", {
+                  stored: t(`levels.${registry.validation.level}`),
+                  effective: t(`levels.${registry.effectiveLevel}`),
+                })}
+              </AlertDescription>
+            </Alert>
+          )}
           <p className="text-sm text-muted-foreground">{t("reviewRule")}</p>
           {registry.medicalKeyIsTest && (
             <Alert>
@@ -225,7 +286,12 @@ export function MachineRegistryCard({
                   key={`${review.at}-${index}`}
                 >
                   <Badge variant="outline">{t(`levels.${review.level}`)}</Badge>
-                  <p>{t("audit", { by: review.by, at: when(review.at) })}</p>
+                  <p>
+                    {t("audit", {
+                      by: authorName(review.by),
+                      at: when(review.at),
+                    })}
+                  </p>
                   <p>
                     {t("softwareVersion")} : {review.softwareVersion}
                   </p>
@@ -254,7 +320,12 @@ export function MachineRegistryCard({
                       to: t(`levels.${entry.to}`),
                     })}
                   </p>
-                  <p>{t("audit", { by: entry.by, at: when(entry.at) })}</p>
+                  <p>
+                    {t("audit", {
+                      by: authorName(entry.by),
+                      at: when(entry.at),
+                    })}
+                  </p>
                   <p>{entry.reason}</p>
                 </li>
               ))}
@@ -262,7 +333,7 @@ export function MachineRegistryCard({
           )}
           {canEdit && (
             <ValidationForms
-              key={registry.validation.level}
+              key={`${registry.machineId}:${registry.effectiveLevel}`}
               registry={registry}
             />
           )}
