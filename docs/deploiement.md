@@ -166,6 +166,18 @@ réglages Clerk : [convex.md](convex.md#activer-le-multi-organisation).
 Le webhook du miroir se configure ensuite par environnement, avec son propre
 secret et une livraison signée vérifiée : [procédure Clerk](convex.md#webhook-clerk-vers-le-miroir).
 
+Depuis les clés multiples (ANH-165), une seconde migration déplace la clé
+unique de chaque machine dans la table `machine_api_keys`. Elle ne coupe
+aucune machine, avant comme après son passage, et se lance une fois après le
+code :
+
+```sh
+npx convex run migrations/machineApiKeys:moveMachineKeysToTable
+```
+
+Elle n'a tourné sur aucun déploiement ; résultat attendu et vérification :
+[convex.md](convex.md#migration-des-clés-machine-anh-165).
+
 ### 3.2 Vérifier un déploiement sans navigateur
 
 ```sh
