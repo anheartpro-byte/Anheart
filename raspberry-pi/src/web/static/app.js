@@ -1536,6 +1536,9 @@ function renderRemoteLaunch(offer) {
     status = "non confirme faute de reponse : " + offer.reason;
   } else if (!status && stage === "request_in_progress") {
     status = "demande en cours";
+  } else if (!status && stage === "waiting_confirmation") {
+    var reason = offer.reason || offer.passenger_reason;
+    status = reason ? labels[stage] + " : " + reason : labels[stage];
   } else if (!status) {
     status = labels[stage] || "etat inconnu";
   }
@@ -1547,7 +1550,8 @@ function loadRemoteLaunch() {
   return api("/api/remote-launch").then(function (offer) {
     var previous = state.remoteLaunch;
     if (!offer || !previous || offer.session_id !== previous.session_id ||
-        offer.state !== previous.state || offer.reason !== previous.reason) {
+        offer.state !== previous.state || offer.reason !== previous.reason ||
+        offer.passenger_reason !== previous.passenger_reason) {
       state.remoteLaunchMessage = null;
     }
     renderRemoteLaunch(offer);

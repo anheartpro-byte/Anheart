@@ -1682,7 +1682,7 @@ Règles :
   JSON de la route locale.
 * Après un refus du tableau de bord, la console n'arme pas et n'envoie pas
   `training/end`; ce lancement ne peut plus être confirmé. Une demande sans
-  réponse ou un empechement temporaire garde le lancement récupérable, sans
+  réponse ou un empêchement temporaire garde le lancement récupérable, sans
   armement ni fin : un nouveau clic explicite est possible après récupération,
   tant que le poll offre encore ce lancement. Un refus local avant la demande
   ou après le 2xx envoie une fin échouée et est définitif. Aucun essai n'est
@@ -1845,7 +1845,7 @@ séance ne poste pas `training/start` une seconde fois. Sans confirmation, il
 n'y a ni demande réseau ni armement. Un refus local avant la demande ou au
 moment de l'armement est écrit comme une fin échouée et rend ce lancement
 définitif. Un refus du tableau de bord n'envoie pas `training/end` et ne peut
-plus être confirmé. Une absence de réponse ou un empechement temporaire ne
+plus être confirmé. Une absence de réponse ou un empêchement temporaire ne
 demande pas de fin; après récupération, seul un nouveau clic explicite peut
 refaire une demande si le poll propose toujours la séance.
 

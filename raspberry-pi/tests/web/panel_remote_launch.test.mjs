@@ -117,6 +117,31 @@ test("requesting, refused, and unconfirmed states show their reason", () => {
   assert.equal(node("remote-launch-confirm").disabled, false);
 });
 
+test("waiting confirmation explains an offer or passenger reason and clears recovered absence", () => {
+  const { context, node } = page();
+  context.renderRemoteLaunch(offer({
+    reason: "l'offre a change, une nouvelle confirmation est requise",
+  }));
+  assert.equal(
+    node("remote-launch-status").textContent,
+    "en attente de confirmation : l'offre a change, une nouvelle confirmation est requise",
+  );
+
+  context.renderRemoteLaunch(offer({
+    passenger_name: null,
+    passenger_reason: "le passager n'est pas dans la liste",
+    can_confirm: false,
+  }));
+  assert.equal(
+    node("remote-launch-status").textContent,
+    "en attente de confirmation : le passager n'est pas dans la liste",
+  );
+
+  context.renderRemoteLaunch(offer());
+  assert.equal(node("remote-launch-status").textContent, "en attente de confirmation");
+  assert.equal(node("remote-launch-passenger-note").textContent, "");
+});
+
 test("the initial remote launch status uses a plain hyphen", () => {
   const { node } = page();
   assert.equal(node("remote-launch-state").textContent, "-");

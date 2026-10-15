@@ -1307,7 +1307,7 @@ Le nom passe uniquement dans la réponse JSON de `GET /api/remote-launch` vers l
 il n'est écrit ni dans l'enregistrement, ni dans `logbook/`, ni dans les journaux du
 processus. Si la liste tenue ne contient pas ce passager, la carte montre
 `indisponible` avec la raison et le bouton reste désactivé. La route de confirmation
-et l'etape CloudSync revérifient cette liste avant `training/start`; le panneau la
+et l'étape CloudSync revérifient cette liste avant `training/start`; le panneau la
 revérifie encore au moment d'armer. L'absence avant la demande garde l'offre
 récupérable, sans `training/start` ni `training/end`; après le retour du passager,
 un nouveau clic est nécessaire. L'absence après un 2xx refuse l'armement et envoie
@@ -1323,7 +1323,7 @@ ou `non confirme faute de reponse : <raison>`. Un refus du tableau de bord, un r
 local avant la demande ou un refus local après le 2xx est définitif pour ce lancement;
 il ne peut plus être confirmé. Les refus du tableau de bord et les demandes sans
 réponse n'envoient pas `training/end`; un refus local envoie une fin échouée. Après
-une absence de réponse ou un empechement temporaire (passager absent, séance déjà en
+une absence de réponse ou un empêchement temporaire (passager absent, séance déjà en
 cours au traitement), un nouveau clic est possible seulement après récupération et
 tant que le poll propose l'offre. Aucun essai n'est automatique.
 
@@ -2004,7 +2004,7 @@ est un événement opérateur attribué par alias; hors séance il va au
 l'alias du confirmateur. Un refus du tableau de bord ou une demande sans réponse ne
 soumet pas le démarrage à la machine et n'envoie pas `training/end`. Un refus local
 avant la demande ou après le 2xx envoie une fin échouée; ce lancement est alors
-définitif et le bouton reste désactivé. Après une absence de réponse ou un empechement
+définitif et le bouton reste désactivé. Après une absence de réponse ou un empêchement
 temporaire, un nouvel essai exige une nouvelle confirmation explicite après
 récupération, tant que le poll propose encore cette offre.
 

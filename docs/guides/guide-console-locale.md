@@ -866,7 +866,7 @@ carte d'offre disparaît. Sans 2xx de `training/start`, la machine ne reçoit au
 démarrage. Un refus du tableau de bord ou un refus local avant ou après le 2xx est
 définitif : ce lancement ne peut plus être confirmé. Les refus du tableau de bord et
 les demandes sans réponse n'envoient pas `training/end`; un refus local envoie une fin
-échouée. Après une absence de réponse ou un empechement temporaire (passager absent,
+échouée. Après une absence de réponse ou un empêchement temporaire (passager absent,
 séance déjà en cours au traitement), un nouvel essai exige un nouveau clic après
 récupération, si le poll propose encore l'offre. Elle ne réessaie jamais toute seule.
 
