@@ -182,6 +182,11 @@ jobs:
             args+=("--git-branch=$DEPLOY_BRANCH")
           fi
           vercel "${args[@]}"
+      # This generated file contains only the full checkout SHA and is never
+      # committed. It lets the release check identify this deployment even
+      # when the site version is unchanged.
+      - name: Marquer la construction du commit
+        run: printf '%s\n' "$(git rev-parse HEAD)" > public/commit.txt
       - name: Construire le site
         run: |
           args=(build)
@@ -278,6 +283,14 @@ jobs:
             exit 1
           fi
           bash deploy/simulation-vercel/build.sh
+      # These generated files contain only the full checkout SHA and are never
+      # committed. They let the release check identify this deployment even
+      # when the viewer page is unchanged.
+      - name: Marquer la construction du commit
+        run: |
+          commit="$(git rev-parse HEAD)"
+          printf '%s\n' "$commit" > deploy/simulation-vercel/dist/public/viewer/commit.txt
+          printf '%s\n' "$commit" > deploy/simulation-vercel/dist/simulation/viewer/commit.txt
       - name: Déployer la simulation assemblée
         id: deploy
         working-directory: deploy/simulation-vercel/dist

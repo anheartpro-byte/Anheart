@@ -1,6 +1,7 @@
 name: Déployer en production (main)
 
-# Shown in the list of runs and on the page where a run is approved.
+# Shown in the list of manual runs and on the page where one is approved.
+# GitHub ignores this run-name when the workflow is called by release.yml.
 run-name: 'Production (${{ inputs.project }}) : avec Convex, hors séance ; gates non vérifiées'
 
 # One of the two buttons that deploy to Vercel (docs/deploiement.md, sections
@@ -17,7 +18,8 @@ run-name: 'Production (${{ inputs.project }}) : avec Convex, hors séance ; gate
 #
 # What this button does NOT check, and says where it is pressed: that the
 # backend (Convex) is deployed in the same window, that no session is running,
-# and that the gates of the commit are green.
+# and that the gates of the commit are green. The release call instead says
+# that its stages 1 (tests) and 2 (CodeQL) succeeded on this commit.
 #
 # deploy-preview.yml is the same workflow for `develop` and the Preview
 # environment of Vercel. The steps of the two deployment jobs run the same
@@ -45,7 +47,7 @@ on:
         description: 'Le site de production ne se déploie que dans la fenêtre du déploiement de Convex, jamais pendant une séance. Ce bouton ne vérifie pas que les gates du commit sont vertes. Pour confirmer, écrire le mot : production'
         required: true
         type: string
-  # The same two inputs, for the release pipeline. A called workflow sees the
+  # The same two inputs plus the release marker. A called workflow sees the
   # ref and the commit of its caller, and every guard below applies as it does
   # behind the button: the branch, the confirmation word, the environment and
   # its approval, the commit that must still be the head of `main`. No secret
@@ -58,6 +60,10 @@ on:
       confirmation:
         required: true
         type: string
+      from_release:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -82,8 +88,8 @@ env:
 
 jobs:
   # Runs first and without the environment: a request that cannot be served
-  # is refused before anyone is asked to approve it, and what the button does
-  # not check is written at the top of the run before the approval.
+  # is refused before anyone is asked to approve it. The reminder distinguishes
+  # the manual button from the release call, whose gates have already passed.
   request:
     name: Vérifier la demande (production)
     runs-on: ubuntu-24.04
@@ -99,6 +105,19 @@ jobs:
             exit 1
           fi
           echo "Branche acceptée : $DEPLOY_BRANCH"
+      - name: Refuser un projet inconnu
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: |
+          case "$PROJECT" in
+            site | simulation | "site et simulation")
+              echo "Projet accepté."
+              ;;
+            *)
+              echo "::error title=Projet inconnu::Rien n'a été déployé. Choisir exactement site, simulation ou site et simulation dans le champ project."
+              exit 1
+              ;;
+          esac
       - name: Exiger la confirmation saisie
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
@@ -111,13 +130,18 @@ jobs:
       - name: Rappeler les règles de ce bouton
         env:
           PROJECT: ${{ inputs.project }}
+          FROM_RELEASE: ${{ inputs.from_release }}
         run: |
           {
             echo "### Production : à lire avant d'approuver"
             echo
             echo "- Demandé : $PROJECT, branche \`$DEPLOY_BRANCH\`, commit \`$GITHUB_SHA\`."
             echo "- Le site de production ne se déploie que dans la fenêtre du déploiement de Convex, jamais pendant une séance."
-            echo "- Ce bouton ne vérifie pas que les gates du commit sont vertes."
+            if [[ "$FROM_RELEASE" == true ]]; then
+              echo "- Ce bouton est appelé par la pipeline de release : ses étapes 1 (tests) et 2 (CodeQL) ont réussi sur ce commit avant ce déploiement."
+            else
+              echo "- Ce bouton ne vérifie pas que les gates du commit sont vertes."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The site is built here, the way Vercel documents for GitHub Actions:
@@ -187,6 +211,11 @@ jobs:
             args+=("--git-branch=$DEPLOY_BRANCH")
           fi
           vercel "${args[@]}"
+      # This generated file contains only the full checkout SHA and is never
+      # committed. It lets the release check identify this deployment even
+      # when the site version is unchanged.
+      - name: Marquer la construction du commit
+        run: printf '%s\n' "$(git rev-parse HEAD)" > public/commit.txt
       - name: Construire le site
         run: |
           args=(build)
@@ -283,6 +312,14 @@ jobs:
             exit 1
           fi
           bash deploy/simulation-vercel/build.sh
+      # These generated files contain only the full checkout SHA and are never
+      # committed. They let the release check identify this deployment even
+      # when the viewer page is unchanged.
+      - name: Marquer la construction du commit
+        run: |
+          commit="$(git rev-parse HEAD)"
+          printf '%s\n' "$commit" > deploy/simulation-vercel/dist/public/viewer/commit.txt
+          printf '%s\n' "$commit" > deploy/simulation-vercel/dist/simulation/viewer/commit.txt
       - name: Déployer la simulation assemblée
         id: deploy
         working-directory: deploy/simulation-vercel/dist

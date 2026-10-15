@@ -17,6 +17,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -40,6 +41,7 @@ const workflow = (file) =>
     .join("\n");
 
 const GUARD = "Refuser toute autre branche";
+const KNOWN_PROJECT = "Refuser un projet inconnu";
 const CONFIRM = "Exiger la confirmation saisie";
 const AGREE = "Exiger l'accord sur les données de production";
 const REMIND = "Rappeler les règles de ce bouton";
@@ -47,6 +49,7 @@ const SECRETS_HELD = "Exiger les secrets du déploiement";
 const STILL_HEAD = "Refuser un commit qui n'est plus la tête de la branche";
 const INSTALL = "Installer la CLI Vercel à sa version figée";
 const PULL = "Lire les réglages et les variables du projet Vercel";
+const MARK = "Marquer la construction du commit";
 const BUILD = "Construire le site";
 const DEPLOY_SITE = "Déployer la construction du site";
 const ASSEMBLE = "Assembler la simulation";
@@ -64,7 +67,7 @@ const BUTTONS = [
     // The button, and the release pipeline (release.yml), which calls these jobs after Convex.
     starts: ["workflow_dispatch", "workflow_call"],
     inputs: ["project", "confirmation"],
-    request: [GUARD, CONFIRM, REMIND],
+    request: [GUARD, KNOWN_PROJECT, CONFIRM, REMIND],
     pull: "pull --yes --environment=production",
     build: "build --prod",
     site: "deploy --prebuilt --archive=tgz --prod",
@@ -92,8 +95,8 @@ const CHOICES = ["site", "simulation", "site et simulation"];
 const SECRETS = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID_SIMULATION", "VERCEL_PROJECT_ID_SITE", "VERCEL_TOKEN"];
 /** The steps a deployment job is made of, in order: a name, or the action a step uses. The same behind both buttons. */
 const STEPS = {
-  site: [SECRETS_HELD, "uses actions/checkout", STILL_HEAD, "uses actions/setup-node", INSTALL, PULL, BUILD, DEPLOY_SITE, ANNOUNCE],
-  simulation: [SECRETS_HELD, "uses actions/checkout", STILL_HEAD, "uses actions/setup-node", INSTALL, ASSEMBLE, DEPLOY_SIMULATION, ANNOUNCE],
+  site: [SECRETS_HELD, "uses actions/checkout", STILL_HEAD, "uses actions/setup-node", INSTALL, PULL, MARK, BUILD, DEPLOY_SITE, ANNOUNCE],
+  simulation: [SECRETS_HELD, "uses actions/checkout", STILL_HEAD, "uses actions/setup-node", INSTALL, ASSEMBLE, MARK, DEPLOY_SIMULATION, ANNOUNCE],
 };
 /** The only steps that are handed the token: those that call Vercel, and the one that checks it is there. */
 const WITH_TOKEN = {
@@ -251,16 +254,16 @@ test("each button has its French name, and starts by hand and from nothing else"
   }
 });
 
-test("the production button can be called by the release pipeline alone, with the two inputs a person gives it", () => {
+test("the production button can be called by the release pipeline alone, with its inputs and release marker", () => {
   // The same jobs then run, behind the same guards: the pipeline deploys production to Vercel by them, not by a copy.
   const call = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_call:\n"), PRODUCTION.text.indexOf("\npermissions:"));
   assert.deepEqual(keysUnder(call, "  workflow_call"), ["inputs"], "the call declares a secret or an output");
-  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string"]);
+  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string", "from_release:", "type: boolean", "required: false", "default: false"]);
   // What the pipeline passes for `project` is one of the choices of the button: each of its jobs reads it by name.
   const release = workflow("release.yml");
   const passed = [
     ...release.matchAll(
-      /^ {4}uses: \.\/\.github\/workflows\/deploy-production\.yml\n {4}with:\n {6}project: (.*)\n {6}confirmation: \$\{\{ inputs\.confirmation \}\}\n {4}secrets: inherit$/gm,
+      /^ {4}uses: \.\/\.github\/workflows\/deploy-production\.yml\n {4}with:\n {6}project: (.*)\n {6}confirmation: \$\{\{ inputs\.confirmation \}\}\n {6}from_release: true\n {4}secrets: inherit$/gm,
     ),
   ].map((match) => match[1] ?? "");
   assert.deepEqual(passed, ["site", "simulation"]);
@@ -270,6 +273,76 @@ test("the production button can be called by the release pipeline alone, with th
     assert.doesNotMatch(workflow(file), /uses: \.\/\.github\/workflows\/deploy-/, file);
   }
   assert.doesNotMatch(release, /deploy-preview\.yml/);
+});
+
+test("S-5 (e) production accepts only its three exact project choices and refuses untrusted values without a workflow command injection", () => {
+  const request = jobsOf(PRODUCTION.text).get("request") ?? "";
+  assert.deepEqual(stepsOf(request).map(labelOf).slice(0, 2), [GUARD, KNOWN_PROJECT]);
+  const step = stepNamed(request, KNOWN_PROJECT);
+  assert.deepEqual(block(step, "        env"), ["PROJECT: ${{ inputs.project }}"]);
+  assert.doesNotMatch(step, /^ {8}if:/m);
+  const guard = script(request, KNOWN_PROJECT);
+  for (const project of CHOICES) {
+    const accepted = run(guard, { PROJECT: project });
+    assert.equal(accepted.status, 0, accepted.said);
+    assert.doesNotMatch(accepted.said, /^::/m);
+    assert.deepEqual(accepted.calls, []);
+  }
+  const message = "::error title=Projet inconnu::Rien n'a été déployé. Choisir exactement site, simulation ou site et simulation dans le champ project.";
+  for (const project of ["Site", "", "site,simulation", "site et simulation ", "tout", "untrusted\n::error::x"]) {
+    const refused = run(guard, { PROJECT: project });
+    assert.equal(refused.status, 1, `${JSON.stringify(project)} was accepted`);
+    assert.equal(refused.said, `${message}\n`);
+    assert.deepEqual(refused.said.split("\n").filter((line) => line.startsWith("::")), [message]);
+    assert.equal(refused.summary + refused.output, "");
+    assert.deepEqual(refused.calls, []);
+  }
+});
+
+test("S-5 (d) only a true from_release call replaces the manual gate reminder with the successful release stages", () => {
+  const call = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_call:\n"), PRODUCTION.text.indexOf("\npermissions:"));
+  assert.deepEqual(keysUnder(call, "    inputs"), ["project", "confirmation", "from_release"]);
+  assert.deepEqual(block(call, "      from_release"), ["type: boolean", "required: false", "default: false"]);
+  const dispatch = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_dispatch:\n"), PRODUCTION.text.indexOf("\n  workflow_call:\n"));
+  assert.deepEqual(keysUnder(dispatch, "    inputs"), ["project", "confirmation"]);
+  const request = jobsOf(PRODUCTION.text).get("request") ?? "";
+  assert.deepEqual(block(stepNamed(request, REMIND), "        env"), ["PROJECT: ${{ inputs.project }}", "FROM_RELEASE: ${{ inputs.from_release }}"]);
+  const pipeline = "Ce bouton est appelé par la pipeline de release : ses étapes 1 (tests) et 2 (CodeQL) ont réussi sur ce commit avant ce déploiement.";
+  for (const from of ["true", "", "false", "TRUE", "1"]) {
+    const result = run(script(request, REMIND), { ...shared(PRODUCTION.text), PROJECT: "site", GITHUB_SHA: OLDER, FROM_RELEASE: from });
+    assert.equal(result.status, 0, result.said);
+    assert.equal(result.summary, ["### Production : à lire avant d'approuver", "", `- Demandé : site, branche \`main\`, commit \`${OLDER}\`.`, `- ${WINDOW}`, `- ${from === "true" ? pipeline : GATES}`, ""].join("\n"), from);
+    assert.deepEqual(result.calls, []);
+  }
+  const release = jobsOf(workflow("release.yml"));
+  for (const [id, project] of [["vercel-site", "site"], ["vercel-simulation", "simulation"]]) {
+    assert.deepEqual(block(release.get(id) ?? "", "    with"), [`project: ${project}`, "confirmation: ${{ inputs.confirmation }}", "from_release: true"]);
+  }
+});
+
+test("S-5 (c) the documented secrets inheritance matches the release calls and environment secrets of the production jobs", () => {
+  const page = read("docs/framework-de-test.md");
+  const buttons = page.slice(page.indexOf("### Déploiement Vercel par bouton"), page.indexOf("### Pipeline de release"));
+  assert.doesNotMatch(buttons, /aucun secret lui soit passé|sans\s+(?:qu['’])?aucun secret|sans secret/i);
+  assert.match(buttons, /`secrets: inherit`/);
+  assert.match(buttons, /workflow appelé ne déclare aucun secret/);
+  assert.match(buttons, /quatre\s+secrets de déploiement[\s\S]*environnement `production`[\s\S]*chacun[\s\S]*après approbation/);
+  assert.match(buttons, /job de la pipeline qui appelle ne passe par aucun environnement/);
+  const release = jobsOf(workflow("release.yml"));
+  for (const id of ["vercel-site", "vercel-simulation"]) {
+    const caller = release.get(id) ?? "";
+    assert.equal(own(caller, "secrets"), "inherit", id);
+    assert.equal(own(caller, "environment"), undefined, id);
+  }
+  const call = PRODUCTION.text.slice(PRODUCTION.text.indexOf("\n  workflow_call:\n"), PRODUCTION.text.indexOf("\npermissions:"));
+  assert.deepEqual(keysUnder(call, "  workflow_call"), ["inputs"]);
+  const held = new Set();
+  for (const id of ["site", "simulation"]) {
+    const deploy = jobsOf(PRODUCTION.text).get(id) ?? "";
+    assert.equal(block(deploy, "    environment")[0], "name: production");
+    for (const match of deploy.matchAll(/secrets\.([A-Z_]+)/g)) held.add(match[1]);
+  }
+  assert.deepEqual([...held].sort(), SECRETS);
 });
 
 test("the jobs and their steps are the ones this file knows about, the same behind both buttons", () => {
@@ -296,6 +369,100 @@ test("the jobs and their steps are the ones this file knows about, the same behi
   }
   assert.deepEqual(Object.keys(shared(PRODUCTION.text)), ["DEPLOY_BRANCH", "VERCEL_TARGET", "VERCEL_CLI_VERSION"]);
   assert.deepEqual(Object.keys(shared(PREVIEW.text)), Object.keys(shared(PRODUCTION.text)));
+});
+
+test("S-1 each button writes only the full checkout SHA to its deployed commit files", () => {
+  const expected = {
+    site: ["public/commit.txt"],
+    simulation: [
+      "deploy/simulation-vercel/dist/public/viewer/commit.txt",
+      "deploy/simulation-vercel/dist/simulation/viewer/commit.txt",
+    ],
+  };
+  const fixtureFiles = [
+    ["public/commit.txt", "old site marker\n"],
+    ["public/index.html", "site fixture\n"],
+    ["deploy/simulation-vercel/dist/public/viewer/commit.txt", "old CDN marker\n"],
+    ["deploy/simulation-vercel/dist/public/viewer/index.html", "CDN fixture\n"],
+    ["deploy/simulation-vercel/dist/simulation/viewer/commit.txt", "old app marker\n"],
+    ["deploy/simulation-vercel/dist/simulation/viewer/index.html", "app fixture\n"],
+  ];
+  const inventory = (directory, prefix = "") =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      if (prefix === "" && entry.name === ".git") return [];
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const absolute = join(directory, entry.name);
+      return entry.isDirectory() ? inventory(absolute, relative) : [relative];
+    }).sort();
+
+  for (const { file, text } of BUTTONS) {
+    for (const id of ["site", "simulation"]) {
+      const job = jobsOf(text).get(id) ?? "";
+      const labels = stepsOf(job).map(labelOf);
+      const marker = stepNamed(job, MARK);
+      const markerIndex = labels.indexOf(MARK);
+      if (id === "site") {
+        assert.ok(markerIndex > labels.indexOf("uses actions/checkout"), `${file}: site marker must follow checkout`);
+        assert.ok(markerIndex > labels.indexOf(STILL_HEAD), `${file}: site marker must follow the head guard`);
+        assert.ok(markerIndex < labels.indexOf(BUILD), `${file}: site marker must precede the build`);
+      } else {
+        assert.equal(markerIndex, labels.indexOf(ASSEMBLE) + 1, `${file}: simulation marker must follow assembly`);
+        assert.ok(markerIndex < labels.indexOf(DEPLOY_SIMULATION), `${file}: simulation marker must precede deployment`);
+      }
+      assert.doesNotMatch(marker, /^ {8}(?:env|if):/m, `${file}: ${id} marker takes an env or if key`);
+      assert.doesNotMatch(marker, /\$\{\{/, `${file}: ${id} marker takes an expression`);
+      assert.doesNotMatch(marker, /secrets\./, `${file}: ${id} marker takes a secret`);
+
+      const tree = mkdtempSync(join(tmpdir(), "anheart-commit-marker-"));
+      try {
+        for (const [path, contents] of fixtureFiles) {
+          mkdirSync(join(tree, path, ".."), { recursive: true });
+          writeFileSync(join(tree, path), contents);
+        }
+        const git = (...args) => {
+          const result = spawnSync("git", args, {
+            cwd: tree,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              GIT_CONFIG_GLOBAL: "/dev/null",
+              GIT_CONFIG_NOSYSTEM: "1",
+              GIT_AUTHOR_NAME: "Workflow Test",
+              GIT_AUTHOR_EMAIL: "workflow@example.invalid",
+              GIT_COMMITTER_NAME: "Workflow Test",
+              GIT_COMMITTER_EMAIL: "workflow@example.invalid",
+            },
+          });
+          assert.equal(result.status, 0, result.stderr);
+          return result.stdout.trim();
+        };
+        git("init", "--quiet");
+        git("config", "gc.auto", "0");
+        git("config", "gc.autoDetach", "false");
+        git("config", "maintenance.auto", "false");
+        git("config", "maintenance.autoDetach", "false");
+        git("add", "-A");
+        git("commit", "--quiet", "-m", "fixture");
+        const head = git("rev-parse", "HEAD");
+        assert.match(head, /^[0-9a-f]{40}$/, `${file}: ${id} HEAD is not a full lowercase SHA`);
+        const before = new Map(inventory(tree).map((path) => [path, readFileSync(join(tree, path))]));
+
+        const ran = run(script(job, MARK), {}, tree);
+        assert.equal(ran.status, 0, `${file}: ${id}: ${ran.said}`);
+        assert.equal(ran.output, "", `${file}: ${id}: marker script wrote a workflow output`);
+        const paths = inventory(tree);
+        assert.deepEqual(paths, [...before.keys()].sort(), `${file}: ${id}: marker script created or removed another file`);
+        const after = new Map(paths.map((path) => [path, readFileSync(join(tree, path))]));
+        const changed = paths.filter((path) => !before.get(path)?.equals(after.get(path)));
+        assert.deepEqual(changed, [...expected[id]].sort(), `${file}: ${id}: marker script changed another file`);
+        for (const path of expected[id]) {
+          assert.equal(after.get(path)?.toString("utf8"), `${head}\n`, `${file}: ${path}`);
+        }
+      } finally {
+        rmSync(tree, { recursive: true, force: true });
+      }
+    }
+  }
 });
 
 test("a button refuses every ref but its own branch, before anything else runs", () => {
@@ -360,7 +527,7 @@ test("production asks for a typed confirmation, and says where it is pressed wha
   assert.doesNotMatch(PREVIEW.text, /confirmation|CONFIRMATION/);
 
   // At the top of the run, written before anyone is asked to approve.
-  assert.deepEqual(block(stepNamed(request, REMIND), "        env"), ["PROJECT: ${{ inputs.project }}"]);
+  assert.deepEqual(block(stepNamed(request, REMIND), "        env"), ["PROJECT: ${{ inputs.project }}", "FROM_RELEASE: ${{ inputs.from_release }}"]);
   const reminded = run(script(request, REMIND), { ...shared(PRODUCTION.text), PROJECT: "site et simulation", GITHUB_SHA: OLDER });
   assert.equal(reminded.status, 0, reminded.said);
   assert.equal(
@@ -517,7 +684,7 @@ test("the secrets are read by name through env, the token by the steps that call
     for (const line of text.split("\n").filter((written) => written.includes("${{"))) {
       assert.match(
         line,
-        /^run-name: '[^$']* \(\$\{\{ inputs\.project \}\}\) : [^$']*'$|^ {4}if: \$\{\{ inputs\.project == '[a-z ]+' \|\| inputs\.project == '[a-z ]+' \}\}$|^ {6}url: \$\{\{ steps\.deploy\.outputs\.url \}\}$|^ {6,10}[A-Z_]+: \$\{\{ (secrets\.[A-Z_]+|github\.ref|inputs\.(project|confirmation|production_data)|steps\.deploy\.outputs\.url) \}\}$/,
+        /^run-name: '[^$']* \(\$\{\{ inputs\.project \}\}\) : [^$']*'$|^ {4}if: \$\{\{ inputs\.project == '[a-z ]+' \|\| inputs\.project == '[a-z ]+' \}\}$|^ {6}url: \$\{\{ steps\.deploy\.outputs\.url \}\}$|^ {6,10}[A-Z_]+: \$\{\{ (secrets\.[A-Z_]+|github\.ref|inputs\.(project|confirmation|production_data|from_release)|steps\.deploy\.outputs\.url) \}\}$/,
         `${file}: ${line.trim()}`,
       );
     }

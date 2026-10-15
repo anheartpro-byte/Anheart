@@ -258,13 +258,13 @@ branche que `main`. Chaque étape attend la réussite de la précédente.
 
 | Étape | Jobs | Ce qu'ils font | Ce qu'ils peuvent écrire |
 |---|---|---|---|
-| 0. La demande | `request` | refuse une autre branche que `main` ; lit le mode (à blanc, ou réel si la case est décochée **et** le mot `production` saisi) ; refuse une release réelle si l'environnement GitHub `production` n'exige personne pour approuver ou n'est restreint à aucune branche | rien. Lit les réglages de l'environnement |
+| 0. La demande | `request` | refuse une autre branche que `main` ; lit le mode (à blanc, ou réel si la case est décochée **et** le mot `production` saisi) ; exige pour une release réelle que l'environnement GitHub `production` ait au moins un relecteur requis, aucun contournement administrateur, « Selected branches and tags » et exactement la seule branche `main`, sans tag ni motif ; à blanc, avertit si ces règles manquent ou sont illisibles | rien. Lit les réglages de l'environnement et sa liste de branches autorisées |
 | 1. Tout tester | `gates`, `install` | `gates` appelle `ci.yml` et `install` appelle `pi-install.yml`, tels quels, sur le commit de `main` | rien. Lisent le dépôt |
 | 2. CodeQL | `codeql`, `alerts` | `codeql` appelle `codeql.yml` (trois langages) ; `alerts` exige que chaque langage ait publié l'analyse de ce commit, puis refuse s'il reste une seule alerte ouverte pour `main` | `codeql` publie les résultats de l'analyse. `alerts` lit les alertes |
 | 3 à 6, à blanc | `dry-run` | à blanc seulement : dit quels tags seraient posés (par `scripts/release.sh tag --dry-run`, qui juge le commit comme le ferait l'étape 3), où Convex et les deux projets Vercel seraient déployés, et ce qui serait dit des machines | rien. Ni secret, ni environnement ; lit le dépôt et les vérifications du commit |
 | 3. Tags | `tags` | release réelle seulement, comme toutes les étapes qui suivent : pose les tags par `scripts/release.sh tag`, sur le commit testé | les tags : c'est le seul job du dépôt qui peut y écrire. Environnement `production` |
-| 4. Convex | `convex` | vérifie que la clé vise le déploiement de production, lance `npx convex deploy`, vérifie la version servie et le refus de l'API machine, puis écrit les lignes à enregistrer ([section 6](#6-enregistrer-la-version-dans-convex)) | le déploiement de production de Convex. Environnement `production` |
-| 5. Vercel | `vercel-site`, `site-answers`, `vercel-simulation`, `simulation-answers` | le site, puis la simulation, par les jobs de `deploy-production.yml` appelés une fois chacun ; après chacun, une vérification à l'adresse de production : le site sert la version du commit, la simulation sert la page du visualiseur du commit, octet pour octet, et sa liste de scénarios | les deux projets Vercel, par les jobs du bouton et leur environnement `production`. Les deux vérifications n'écrivent rien |
+| 4. Convex | `convex` | vérifie que la clé vise le déploiement de production, installe par `npm ci --ignore-scripts` (aucun script d'installation de paquet sur cette machine), lance `npx convex deploy`, vérifie la version servie et le refus de l'API machine, puis écrit les lignes à enregistrer ([section 6](#6-enregistrer-la-version-dans-convex)) | le déploiement de production de Convex. Environnement `production` |
+| 5. Vercel | `vercel-site`, `site-answers`, `vercel-simulation`, `simulation-answers` | le site, puis la simulation, par les jobs de `deploy-production.yml` appelés une fois chacun ; après chacun, vérifie que son fichier `commit.txt` sert exactement le SHA du commit de la release, même si le site ou la page n'a pas changé ; exige aussi la version entière du site dans une page HTTP 200, puis la page du visualiseur du commit octet pour octet et la liste des scénarios | les deux projets Vercel, par les jobs du bouton et leur environnement `production`. Les deux vérifications n'écrivent rien |
 | 6. Machines | `machines` | aucune action sur aucune machine : dit quelle version du Pi vient d'être taguée et comment mettre une console à jour à la main ([deploiement.md, section 7.6](deploiement.md#76-arrêter-mettre-à-jour)). La mise à jour à distance (ANH-116, ANH-168 à ANH-171) remplacera le contenu de ce job, pas sa place | rien. Lit le dépôt |
 
 **Ce que « tout tester » contient (étape 1).** Les jobs de `ci.yml` et de
@@ -358,13 +358,26 @@ l'étape 3 trouve les tags sur le commit et n'en pose aucun. Une reprise
 redemande les approbations des jobs qu'elle relance, et redéployer le même
 commit sur Convex ou sur Vercel ne change pas ce qui est servi.
 
+À l'étape 5, une adresse peut encore répondre avec le déploiement précédent,
+même si sa version ou sa page est identique : la pipeline compare aussi le SHA
+servi par `commit.txt`. Si, après six essais, le fichier manque ou nomme un
+autre commit, « Re-run failed jobs » relance la vérification, pas le déploiement
+déjà réussi. Si l'adresse a pu tarder à basculer, relancer ce contrôle suffit ;
+si elle sert toujours un autre SHA, vérifier d'abord dans Vercel quel déploiement
+porte le domaine de production du projet concerné. Si un redéploiement est
+nécessaire, utiliser le bouton « Déployer en production (main) » avec le projet
+correspondant (`site` ou `simulation`).
+
 | Où la chaîne s'arrête | Ce qui est en place | Quoi faire |
 |---|---|---|
 | Étape 0, 1 ou 2 (demande refusée, test en échec, alerte ouverte) | Rien n'a été écrit | Corriger. Une panne passagère (runner, réseau) : « Re-run failed jobs ». Un défaut du code ou une alerte : une PR, donc un nouveau commit de `main` et une nouvelle exécution |
+| Étape 0, « Environnement non protégé » | Rien n'a été tagué ni déployé | Le chef de projet règle `production` selon [deploiement.md, section 5.5](deploiement.md#55-réglages-à-faire-une-fois-à-la-main) : relecteur requis, contournement administrateur interdit, « Selected branches and tags » et seule branche `main`. Si la lecture de l'API était impossible, rétablir cet accès. Puis « Re-run failed jobs » |
+| Étape 2, l'appel CodeQL est annulé en attendant l'analyse du push du même commit | La pipeline n'a encore rien écrit : aucun tag n'a été posé | L'appel de release et l'analyse du push partagent `codeql-<sha>` ; le second attend. GitHub ne garde qu'une exécution en attente par groupe : une troisième analyse du commit (par exemple un lancement manuel de CodeQL) peut remplacer l'appel en attente. « Re-run failed jobs » relance l'étape 2 |
 | Étape 3, `scripts/release.sh tag` refuse | Aucun tag : il les pose tous ou aucun | Lire son message. Avis indépendant absent : le faire poser sur le candidat. Une vérification d'une **autre** exécution du même commit en échec ou en cours : voir [section 4](#la-pipeline-de-release-et-le-script). Puis « Re-run failed jobs » |
+| Étape 3, deux exécutions de la pipeline échouent sur le même commit | Les vérifications en échec de chaque exécution empêchent `tag` de reprendre l'autre ; une nouvelle exécution voit les deux | « Re-run failed jobs » sur l'une est refusé par `tag` à cause des vérifications en échec de l'autre, et inversement ; une nouvelle exécution est refusée par les deux. Dans l'onglet Actions, supprimer une exécution (« Delete workflow run »), puis lancer « Re-run failed jobs » sur l'autre |
 | Les tags sont posés, Convex n'est pas déployé | Les tags sont sur `origin`, la production est inchangée | Rien n'est cassé : l'ancien site tourne contre l'ancien Convex. Corriger la cause (secret absent, « Mauvaise clé », schéma refusé par les données : `convex deploy` ne modifie alors rien), puis « Re-run failed jobs » : l'étape 4 repart, les tags ne sont pas retouchés |
-| Convex est déployé, le site ne l'est pas | Le nouveau Convex sert l'ancien site : des pages de l'ancien site échouent ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production), point 2) | **Le plus urgent des cas.** Si l'étape 4 a échoué sur une de ses vérifications d'après déploiement, ou l'étape 5 sur une panne : « Re-run failed jobs » (redéployer le même code sur Convex ne change rien). Si la reprise ne passe pas : déployer le site par le bouton « Déployer en production (main) », qui ne dépend pas de la pipeline |
-| Le site est déployé, la simulation ne l'est pas | Convex et le site sont à jour ; la simulation hébergée sert l'ancienne version | Sans urgence : elle ne lit aucune donnée. « Re-run failed jobs », ou le bouton de production avec `simulation` |
+| Convex est déployé, le site ne l'est pas | Le nouveau Convex sert l'ancien site : des pages de l'ancien site échouent ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production), point 2) | **Le plus urgent des cas.** Si l'étape 4 a échoué sur une de ses vérifications d'après déploiement, ou l'étape 5 sur une panne ou un SHA servi absent ou différent : « Re-run failed jobs » (redéployer le même code sur Convex ne change rien). Si la reprise ne passe pas, ou si le site sert toujours un autre SHA après ce contrôle : vérifier dans Vercel quel déploiement porte son domaine de production, puis, si un redéploiement est nécessaire, utiliser le bouton « Déployer en production (main) » avec `site`, qui ne dépend pas de la pipeline |
+| Le site est déployé, la simulation ne l'est pas | Convex et le site sont à jour ; la simulation hébergée sert l'ancienne version ou son SHA servi ne correspond pas | Sans urgence : elle ne lit aucune donnée. « Re-run failed jobs ». Si la reprise ne passe pas, ou si la simulation sert toujours un autre SHA après ce contrôle : vérifier dans Vercel quel déploiement porte son domaine de production, puis, si un redéploiement est nécessaire, utiliser le bouton « Déployer en production (main) » avec `simulation`, qui ne dépend pas de la pipeline |
 | « Exécution périmée » | `main` a avancé depuis le lancement : la pipeline n'agit que sur la tête de `main` | Ne pas relancer cette exécution. Si les tags étaient déjà posés et qu'un déploiement manque : le faire à la main depuis le commit tagué ([deploiement.md, section 3.3](deploiement.md#33-vers-la-production)), ou publier une nouvelle version |
 
 Deux releases ne tournent jamais en même temps : une seconde exécution, à blanc
@@ -661,7 +674,7 @@ GitHub Actions, avec deux options qu'elle est seule à passer :
 | Option | Effet |
 |---|---|
 | `--expect-commit <SHA>` | `tag` refuse si `origin/main` n'est plus à ce commit, celui que la pipeline a testé : aucun tag ne va sur un commit qu'elle n'a pas testé. |
-| `--pipeline-run <numéro>` | Les vérifications de cette exécution de GitHub Actions ne sont pas jugées. Le job qui lance `tag` est lui-même une vérification du commit, en cours tant que le script tourne : sans cette option, `tag` se refuserait lui-même. Rien n'est perdu : les étapes précédentes de cette exécution ont dû réussir pour que ce job démarre. |
+| `--pipeline-run <numéro>` | Le numéro doit être celui de l'exécution GitHub Actions qui lance `tag` (`GITHUB_RUN_ID`) : le script refuse toute autre valeur. Un lancement à la main ne peut pas s'en servir pour éviter de juger les vérifications d'une autre exécution. Les vérifications de cette exécution ne sont pas jugées : le job qui lance `tag` est lui-même une vérification du commit, en cours tant que le script tourne, et les étapes précédentes ont dû réussir pour que ce job démarre. |
 
 Le reste ne change pas, et deux conséquences sont à connaître :
 
@@ -676,7 +689,8 @@ Le reste ne change pas, et deux conséquences sont à connaître :
   à 6 sont ignorés (`skipped`). Une exécution en échec, annulée ou encore en
   cours fait refuser `tag`. Avant une release réelle, faire réussir
   l'exécution à blanc précédente (« Re-run failed jobs ») ou la supprimer
-  (« Delete workflow run »).
+  (« Delete workflow run »). Si deux exécutions échouées se bloquent sur le
+  même commit, voir [Échec et reprise](#échec-et-reprise).
 
 Une exécution se reconnaît à l'adresse de ses vérifications
 (`.../actions/runs/<numéro>/job/...`).

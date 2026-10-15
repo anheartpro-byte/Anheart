@@ -143,9 +143,12 @@ const DEPLOY_CONVEX = "Déployer Convex en production";
 const SERVED = "Vérifier la version que sert le déploiement";
 const REFUSAL = "Vérifier que l'API machine répond, sans clé";
 const RECORD = "Dire ce qui est déployé, et ce qui reste à enregistrer à la main";
-const SITE = "Vérifier que le site sert la version de ce commit";
-const SIMULATION = "Vérifier que la simulation sert la page de ce commit";
+const SITE = "Vérifier que le site sert le commit et la version de ce commit";
+const SIMULATION = "Vérifier que la simulation sert le commit et la page de ce commit";
 const MACHINES = "Dire la version du Pi et comment mettre une machine à jour à la main";
+const CONSOLE_UPDATE_TIME = "entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex)";
+const FIRST_CONTRACT_UPDATE = `- Premier déploiement d'un Convex qui exige le contrat : les consoles d'abord, ${CONSOLE_UPDATE_TIME}, depuis le commit qui vient d'être tagué ; Convex ensuite.`;
+const MAJOR_TRANSITION = "- Entre deux majeures versionnées : une release dont Convex sert les deux majeures d'abord (ordre de la pipeline), puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle.";
 
 // ---------------------------------------------------------------------------
 // Doubles, and how a script is run
@@ -421,20 +424,24 @@ test("EX-1 a real run needs the box unticked and the word typed: anything else i
 
 /** What GitHub answers for an environment: one created without any rule, one set as section 5.5 of docs/deploiement.md asks, and three in between. */
 const ENVIRONMENT = {
-  unset: JSON.stringify({ name: "Production", protection_rules: [], deployment_branch_policy: null }),
+  unset: JSON.stringify({ name: "Production", can_admins_bypass: true, protection_rules: [], deployment_branch_policy: null }),
   set: JSON.stringify({
     name: "production",
+    can_admins_bypass: false,
     protection_rules: [
       { id: 1, type: "required_reviewers", prevent_self_review: false, reviewers: [{ type: "User", reviewer: { login: "responsable" } }] },
       { id: 2, type: "branch_policy" },
     ],
     deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
   }),
-  unreviewed: JSON.stringify({ protection_rules: [{ id: 2, type: "branch_policy" }], deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
-  emptyReview: JSON.stringify({ protection_rules: [{ id: 1, type: "required_reviewers", reviewers: [] }], deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } }),
-  anyBranch: JSON.stringify({ protection_rules: [{ id: 1, type: "required_reviewers", reviewers: [{ type: "User" }] }], deployment_branch_policy: null }),
+  unreviewed: JSON.stringify({ can_admins_bypass: false, protection_rules: [{ id: 2, type: "branch_policy" }], deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
+  emptyReview: JSON.stringify({ can_admins_bypass: false, protection_rules: [{ id: 1, type: "required_reviewers", reviewers: [] }], deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } }),
+  anyBranch: JSON.stringify({ can_admins_bypass: false, protection_rules: [{ id: 1, type: "required_reviewers", reviewers: [{ type: "User" }] }], deployment_branch_policy: null }),
 };
 const ENVIRONMENT_ENDPOINT = "repos/anheart/depot/environments/production#1";
+const BRANCHES_ENDPOINT = "repos/anheart/depot/environments/production/deployment-branch-policies?per_page=100#1";
+const MAIN_BRANCH = { id: 1, name: "main", type: "branch" };
+const MAIN_ONLY = JSON.stringify({ total_count: 1, branch_policies: [MAIN_BRANCH] });
 
 test("EX-1 a real run is refused while the environment production has no approval rule, and a dry run says so", () => {
   const request = job("request");
@@ -443,13 +450,13 @@ test("EX-1 a real run is refused while the environment production has no approva
   assert.deepEqual(block(request, "    permissions"), ["actions: read"]);
   const approval = script(request, APPROVAL);
   const judged = (/** @type {string} */ mode, /** @type {string | undefined} */ answer) =>
-    run(approval, { GH_TOKEN: TOKEN, MODE: mode }, { answers: answer === undefined ? {} : { [ENVIRONMENT_ENDPOINT]: answer } });
+    run(approval, { GH_TOKEN: TOKEN, MODE: mode }, { answers: answer === undefined ? {} : { [ENVIRONMENT_ENDPOINT]: answer, [BRANCHES_ENDPOINT]: MAIN_ONLY } });
 
   for (const mode of ["real", "dry"]) {
     const set = judged(mode, ENVIRONMENT.set);
     assert.equal(set.status, 0, set.said);
     assert.doesNotMatch(set.said, /::(error|warning)/);
-    assert.equal(set.calls.length, 1);
+    assert.equal(set.calls.length, 2);
     assert.ok(set.calls[0]?.startsWith("api repos/anheart/depot/environments/production --jq "), set.calls[0]);
     assert.ok(set.calls[0]?.endsWith(`|${TOKEN}`));
   }
@@ -473,6 +480,75 @@ test("EX-1 a real run is refused while the environment production has no approva
   assert.equal(judged("", ENVIRONMENT.unset).status, 1);
 });
 
+test("S-5 (a) production requires approval without admin bypass and exactly the branch main, or refuses real runs and warns dry runs", () => {
+  const approval = script(job("request"), APPROVAL);
+  const environment = JSON.parse(ENVIRONMENT.set);
+  const changed = (fields) => JSON.stringify({ ...environment, ...fields });
+  const policies = (branch_policies, total_count = branch_policies.length) => JSON.stringify({ total_count, branch_policies });
+  const cases = [
+    ["configured", ENVIRONMENT.set, MAIN_ONLY, undefined, true],
+    ["admin bypass", changed({ can_admins_bypass: true }), MAIN_ONLY, /contournement administrateur doit être désactivé/, true],
+    ["protected branches", changed({ deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } }), MAIN_ONLY, /Selected branches and tags.*Protected branches only/, false],
+    ["main and develop", ENVIRONMENT.set, policies([MAIN_BRANCH, { name: "develop", type: "branch" }]), /exactement une règle.*branche main/, true],
+    ["tag main", ENVIRONMENT.set, policies([{ name: "main", type: "tag" }]), /exactement une règle.*type branch/, true],
+    ["pattern", ENVIRONMENT.set, policies([{ name: "release/*", type: "branch" }]), /exactement une règle.*branche main/, true],
+    ["empty", ENVIRONMENT.set, policies([]), /exactement une règle/, true],
+    ["404", ENVIRONMENT.set, undefined, /liste des branches autorisées est introuvable ou illisible/, true],
+    ["no branch policy", ENVIRONMENT.anyBranch, MAIN_ONLY, /restreint à aucune branche/, false],
+    ["inconsistent count", ENVIRONMENT.set, policies([MAIN_BRANCH], 2), /exactement une règle/, true],
+    ["invalid list JSON", ENVIRONMENT.set, "not JSON: private response", /liste des branches autorisées est introuvable ou illisible/, true],
+    ["invalid list shape", ENVIRONMENT.set, "[]", /exactement une règle/, true],
+    ["invalid environment JSON", "not JSON: private response", MAIN_ONLY, /il est introuvable ou illisible/, false],
+    ["invalid environment shape", "[]", MAIN_ONLY, /il est introuvable ou illisible/, false],
+    ["missing bypass field", changed({ can_admins_bypass: undefined }), MAIN_ONLY, /contournement administrateur doit être désactivé/, true],
+    ["both branch modes", changed({ deployment_branch_policy: { protected_branches: true, custom_branch_policies: true } }), MAIN_ONLY, /Selected branches and tags.*Protected branches only/, true],
+  ];
+  for (const [name, answer, branches, wanted, readsList] of cases) {
+    for (const mode of ["real", "dry"]) {
+      const result = run(approval, { GH_TOKEN: TOKEN, MODE: mode }, { answers: {
+        [ENVIRONMENT_ENDPOINT]: answer,
+        ...(branches === undefined ? {} : { [BRANCHES_ENDPOINT]: branches }),
+      } });
+      assert.equal(result.status, wanted && mode === "real" ? 1 : 0, `${name}, ${mode}: ${result.said}`);
+      if (wanted) {
+        assert.match(result.said, wanted, `${name}, ${mode}`);
+        assert.match(result.said, mode === "real"
+          ? /^::error title=Environnement non protégé::Rien n'a été tagué ni déployé\. /m
+          : /^::warning title=Environnement non protégé::Une release réelle serait refusée : /m);
+      } else {
+        assert.doesNotMatch(result.said, /::(?:warning|error)/);
+      }
+      assert.equal(result.calls.length, readsList ? 2 : 1, name);
+      assert.ok(result.calls[0]?.startsWith("api repos/anheart/depot/environments/production --jq "), name);
+      if (readsList) assert.ok(result.calls[1]?.startsWith(`api ${BRANCHES_ENDPOINT.split("#")[0]} --jq `), name);
+      assert.ok(result.calls.every((call) => call.endsWith(`|${TOKEN}`)), name);
+      assert.doesNotMatch(result.said + result.summary, /private response|responsable|release\/\*|gh: HTTP 404|"protection_rules"/);
+    }
+  }
+});
+
+test("S-5 (a) multiple production findings are separated by semicolons in order in real errors and dry warnings", () => {
+  const approval = script(job("request"), APPROVAL);
+  const cases = [
+    ["no protections", ENVIRONMENT.unset, undefined, "personne n'y est exigé pour approuver (« Required reviewers ») ; le contournement administrateur doit être désactivé (« Allow administrators to bypass configured protection rules ») ; il n'est restreint à aucune branche (« Deployment branches and tags »)"],
+    ["admin bypass and main plus develop", JSON.stringify({ ...JSON.parse(ENVIRONMENT.set), can_admins_bypass: true }), JSON.stringify({ total_count: 2, branch_policies: [MAIN_BRANCH, { name: "develop", type: "branch" }] }), "le contournement administrateur doit être désactivé (« Allow administrators to bypass configured protection rules ») ; la liste doit contenir exactement une règle : la branche main (name main, type branch, total_count 1)"],
+  ];
+  for (const [name, answer, branches, findings] of cases) {
+    for (const mode of ["real", "dry"]) {
+      const result = run(approval, { GH_TOKEN: TOKEN, MODE: mode }, { answers: {
+        [ENVIRONMENT_ENDPOINT]: answer,
+        ...(branches === undefined ? {} : { [BRANCHES_ENDPOINT]: branches }),
+      } });
+      assert.equal(result.status, mode === "real" ? 1 : 0, `${name}, ${mode}: ${result.said}`);
+      assert.equal(result.said, mode === "real"
+        ? `::error title=Environnement non protégé::Rien n'a été tagué ni déployé. L'environnement GitHub production n'est pas réglé : ${findings}. Voir docs/deploiement.md (section 5.5, étape 1).\n`
+        : `::warning title=Environnement non protégé::Une release réelle serait refusée : l'environnement GitHub production n'est pas réglé, ${findings}. Voir docs/deploiement.md (section 5.5, étape 1).\n`, `${name}, ${mode}`);
+      assert.equal(result.calls.length, branches === undefined ? 1 : 2, name);
+      assert.equal(result.summary, "");
+    }
+  }
+});
+
 test("EX-1 the top of the run says, before any approval, what this run will do", () => {
   const request = job("request");
   assert.deepEqual(handed(stepNamed(request, REMIND)), ["MODE: ${{ steps.mode.outputs.mode }}"]);
@@ -481,7 +557,9 @@ test("EX-1 the top of the run says, before any approval, what this run will do",
   assert.match(real.summary, /^### Release RÉELLE : à lire avant d'approuver\n\n- Branche `main`, commit `0123456789abcdef0123456789abcdef01234567`\.\n/);
   assert.match(real.summary, /pose les tags, déploie Convex, puis le site, puis la simulation, en production\. Chacune de ces quatre écritures attend une approbation\./);
   assert.match(real.summary, /^- Jamais pendant une séance/m);
-  assert.match(real.summary, /^- Convex est déployé avant toute console\. .* si elle la change, mettre les consoles à jour d'abord, avant d'approuver le déploiement de Convex \(docs\/deploiement\.md, section 3\.4\)\.$/m);
+  assert.match(real.summary, /^- Ordre avec Convex \(docs\/deploiement\.md, section 3\.4\) : Convex d'abord pour une mineure ou sans changement du contrat\.$/m);
+  assert.ok(real.summary.split("\n").includes(FIRST_CONTRACT_UPDATE), real.summary);
+  assert.ok(real.summary.split("\n").includes(MAJOR_TRANSITION), real.summary);
   const dry = run(script(request, REMIND), { MODE: "dry" });
   assert.match(dry.summary, /^### Release à blanc\n/);
   assert.match(dry.summary, /rien n'est tagué, rien n'est déployé, aucune machine n'est touchée\./);
@@ -971,11 +1049,30 @@ test("EX-5 the deploy key is read by the three steps that need it, and by nothin
   assert.doesNotMatch(convex, /github\.token|secrets: inherit/);
   for (const name of [STILL_HEAD, DEPENDENCIES, REFUSAL, RECORD]) assert.doesNotMatch(stepNamed(convex, name), /env:/, name);
   // The command line of Convex is the one the lockfile holds, and it is asked to deploy, nothing more.
-  assert.equal(script(convex, DEPENDENCIES), "npm ci\n");
+  assert.equal(script(convex, DEPENDENCIES), "npm ci --ignore-scripts\n");
   assert.equal(script(convex, DEPLOY_CONVEX), "npx convex deploy\n");
   assert.deepEqual(stepNamed(convex, "uses actions/setup-node").trimEnd().split("\n").slice(1), ["        with:", "          node-version: '24'"]);
   assert.equal(everyCommand().split("convex deploy").length - 1, 1, "Convex is deployed by one step");
   assert.doesNotMatch(convex, /--preview|--admin-key|--url|convex (dev|import|env)|CONVEX_DEPLOYMENT\b/);
+});
+
+test("S-5 (b) jobs that read a secret install npm packages only with ignore-scripts, and the Convex install holds no env or secret", () => {
+  const convex = job("convex");
+  const install = stepNamed(convex, DEPENDENCIES);
+  assert.equal(script(convex, DEPENDENCIES), "npm ci --ignore-scripts\n");
+  assert.doesNotMatch(install, /env:|secrets\.|github\.token/);
+  assert.doesNotMatch(block(convex, "    env").join("\n"), /secrets\.|github\.token/);
+  let installs = 0;
+  for (const [id, text] of JOBS) {
+    if (!text.includes("secrets.")) continue;
+    for (const step of stepsOf(text).filter((written) => /^ {8}run:/m.test(written))) {
+      for (const match of script(text, labelOf(step)).matchAll(/\bnpm\s+(?:ci|install)\b[^\n]*/g)) {
+        installs += 1;
+        assert.match(match[0], /(?:^|\s)--ignore-scripts(?:\s|$)/, `${id}: ${labelOf(step)}`);
+      }
+    }
+  }
+  assert.equal(installs, 1);
 });
 
 test("EX-5 Convex is not deployed unless the key aims at the expected production deployment, and no part of the key is ever printed", () => {
@@ -1104,16 +1201,16 @@ test("EX-5 the versions are not recorded by the pipeline: it prints, once Convex
 // ---------------------------------------------------------------------------
 
 test("EX-6 the site and the simulation are deployed by the jobs of deploy-production.yml, and by no copy of them", () => {
-  // The button can be called, with the two inputs it asks of a person, and declares no secret: its jobs read their own.
+  // The button accepts the two manual inputs and the release marker, and declares no secret: its jobs read their own.
   assert.deepEqual(keysUnder(PRODUCTION, "on"), ["workflow_dispatch", "workflow_call"]);
   const call = PRODUCTION.slice(PRODUCTION.indexOf("\n  workflow_call:\n"), PRODUCTION.indexOf("\npermissions:"));
   assert.deepEqual(keysUnder(call, "  workflow_call"), ["inputs"]);
-  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string"]);
+  assert.deepEqual(block(call, "    inputs"), ["project:", "required: true", "type: string", "confirmation:", "required: true", "type: string", "from_release:", "type: boolean", "required: false", "default: false"]);
   // Called once for each project, by name, the site first; the word the person typed is checked again by the button.
   for (const [id, project] of [["vercel-site", "site"], ["vercel-simulation", "simulation"]]) {
     const text = job(id ?? "");
     assert.equal(own(text, "uses"), "./.github/workflows/deploy-production.yml", id);
-    assert.deepEqual(block(text, "    with"), [`project: ${project}`, "confirmation: ${{ inputs.confirmation }}"], id);
+    assert.deepEqual(block(text, "    with"), [`project: ${project}`, "confirmation: ${{ inputs.confirmation }}", "from_release: true"], id);
     assert.equal(own(text, "secrets"), "inherit", id);
     assert.deepEqual(block(text, "    permissions"), ["contents: read"], id);
     // The choice named is one the button knows: its job runs, the other is skipped.
@@ -1131,7 +1228,7 @@ test("EX-6 the site and the simulation are deployed by the jobs of deploy-produc
   assert.ok(before("vercel-site").has("convex") && before("vercel-simulation").has("site-answers"));
 });
 
-test("EX-6 the site must serve the version of this commit, and the simulation the viewer page of this commit", (context) => {
+test("S-1 the site and simulation must serve this commit, with the exact site version and viewer page", (context) => {
   const fx = repository(context);
   for (const id of ["site-answers", "simulation-answers"]) {
     const text = job(id);
@@ -1143,48 +1240,100 @@ test("EX-6 the site must serve the version of this commit, and the simulation th
   }
   const site = script(job("site-answers"), SITE);
   const home = "https://www.gauratechnologies.com/";
-  const visited = (/** @type {string | undefined} */ page, status = "200") =>
-    run(site, {}, { cwd: fx.work, answers: page === undefined ? {} : { [home]: page }, statuses: { [home]: status } });
+  const siteCommit = "https://www.gauratechnologies.com/commit.txt";
+  const previousCommit = "fedcba9876543210fedcba9876543210fedcba98";
+  const visited = (
+    /** @type {string} */ commitBody,
+    /** @type {string | undefined} */ page,
+    /** @type {Record<string, string>} */ statuses = {},
+  ) => run(
+    site,
+    {},
+    {
+      cwd: fx.work,
+      answers: { [siteCommit]: commitBody, ...(page === undefined ? {} : { [home]: page }) },
+      statuses,
+    },
+  );
   // The footer of the site shows the version built from package.json (lib/version.ts, next.config.ts).
   assert.match(read("next.config.ts"), /NEXT_PUBLIC_WEB_VERSION: `web-\$\{packageJson\.version\}`/);
   assert.match(read("components/landing/Footer.tsx"), /\{WEB_VERSION\}/);
-  const up = visited('<html><footer><span class="font-mono">web-0.1.0</span></footer></html>');
+  const correctPage = '<html><footer><span class="font-mono">web-0.1.0</span></footer></html>';
+  const up = visited(`${SHA}\n`, correctPage);
   assert.equal(up.status, 0, up.said);
-  assert.equal(up.summary, "### 5. Site : il répond\n\n- https://www.gauratechnologies.com sert `web-0.1.0`.\n");
-  assert.ok(up.calls[0]?.includes("--location") && up.calls[0]?.endsWith(`${home}|none|none`), up.calls[0]);
+  assert.equal(up.summary, "### 5. Site : il répond\n\n- https://www.gauratechnologies.com/commit.txt sert le commit `0123456789abcdef0123456789abcdef01234567`.\n- https://www.gauratechnologies.com sert la version `web-0.1.0`.\n");
+  assert.equal(up.calls.length, 2);
+  assert.ok(up.calls[0]?.includes("--write-out %{http_code}") && up.calls[0]?.endsWith(`${siteCommit}|none|none`), up.calls[0]);
+  assert.ok(up.calls[1]?.includes("--location") && up.calls[1]?.endsWith(`${home}|none|none`), up.calls[1]);
+  assert.ok(up.calls.every((call) => call.endsWith("|none|none")), "a curl call held a secret");
+  assert.equal(visited(SHA, correctPage).status, 0, "a commit response without a final newline was rejected");
+  for (const badVersion of ["web-0.1.0-dev", "web-0.1.01", "web-0.1.0.1", "web-0.1.0+x", "xweb-0.1.0"]) {
+    const page = `<html><span>${badVersion}</span></html>`;
+    const down = visited(`${SHA}\n`, page);
+    assert.equal(down.status, 1, `${badVersion} was taken for web-0.1.0`);
+    assert.match(down.said, /version web-0\.1\.0 absente/);
+    assert.ok(!down.said.includes(page), "the page body was printed");
+  }
   for (const [page, status] of /** @type {[string | undefined, string][]} */ ([
     ["<html><span>web-0.0.9</span></html>", "200"],
     ["<html><span>web-inconnue</span></html>", "200"],
     ["<html><span>web-0.1.0</span></html>", "500"],
     [undefined, "200"],
   ])) {
-    const down = visited(page, status);
+    const down = visited(`${SHA}\n`, page, { [home]: status });
     assert.equal(down.status, 1, `${status} ${page} was taken for the site of this commit`);
-    assert.match(down.said, /^::error title=Site inattendu::Le déploiement Vercel du site a réussi, mais https:\/\/www\.gauratechnologies\.com ne sert pas web-0\.1\.0 /m);
+    assert.match(down.said, /^::error title=Site inattendu::Le déploiement Vercel du site a réussi, mais la version web-0\.1\.0 est absente/m);
     assert.match(down.said, /La simulation n'est pas déployée : /);
     assert.equal(down.summary, "");
   }
+  for (const [commitBody, statuses, wanted] of [
+    [previousCommit, {}, "le commit servi est différent du SHA attendu"],
+    ["", { [siteCommit]: "404" }, "le commit servi est absent (HTTP 404)"],
+    [`${SHA}\nextra`, {}, "le commit servi est différent du SHA attendu"],
+  ]) {
+    const down = visited(commitBody, correctPage, statuses);
+    assert.equal(down.status, 1, `${wanted} was accepted`);
+    assert.ok(down.said.split("\n").some((line) => line.startsWith("::error ") && line.includes(wanted)), down.said);
+    assert.ok(down.said.includes("version web-0.1.0 servie"), down.said);
+    assert.ok(!down.said.includes(correctPage), "the page body was printed");
+    assert.ok(down.calls.filter((call) => !call.startsWith("sleep ")).every((call) => call.endsWith("|none|none")), "a curl call held a secret");
+  }
 
   const simulation = script(job("simulation-answers"), SIMULATION);
-  const [page, list] = ["https://anheart-simulation.vercel.app/viewer/index.html", "https://anheart-simulation.vercel.app/api/scenarios"];
+  const [commitUrl, page, list] = [
+    "https://anheart-simulation.vercel.app/viewer/commit.txt",
+    "https://anheart-simulation.vercel.app/viewer/index.html",
+    "https://anheart-simulation.vercel.app/api/scenarios",
+  ];
   const viewer = read("simulation/viewer/index.html");
   assert.match(read("deploy/simulation-vercel/app.py"), /app\.mount\("\/viewer", /);
   assert.match(read("deploy/simulation-vercel/app.py"), /@app\.get\("\/api\/scenarios"\)/);
   const served = (/** @type {Record<string, string>} */ answers, /** @type {Record<string, string>} */ statuses = {}) => run(simulation, {}, { cwd: fx.work, answers, statuses });
-  const current = served({ [page]: viewer, [list]: '["manual_27_rpm","auto_30_min"]' });
+  const current = served({ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: '["manual_27_rpm","auto_30_min"]' });
   assert.equal(current.status, 0, current.said);
+  assert.match(current.summary, /^- https:\/\/anheart-simulation\.vercel\.app\/viewer\/commit\.txt sert le commit `0123456789abcdef0123456789abcdef01234567`\.$/m);
   assert.match(current.summary, /^- https:\/\/anheart-simulation\.vercel\.app\/viewer\/index\.html est la page du visualiseur de ce commit, octet pour octet\.$/m);
+  assert.ok(current.calls.every((call) => call.endsWith("|none|none")), "a curl call held a secret");
+  for (const [commitBody, statuses, wanted] of [
+    [previousCommit, {}, "le commit servi est différent du SHA attendu"],
+    ["", { [commitUrl]: "404" }, "le commit servi est absent (HTTP 404)"],
+  ]) {
+    const other = served({ [commitUrl]: commitBody, [page]: viewer, [list]: '["manual_27_rpm"]' }, statuses);
+    assert.equal(other.status, 1, `${wanted} was accepted`);
+    assert.ok(other.said.split("\n").some((line) => line.startsWith("::error ") && line.includes(wanted)), other.said);
+    assert.ok(other.calls.filter((call) => !call.startsWith("sleep ")).every((call) => call.endsWith("|none|none")), "a curl call held a secret");
+  }
   for (const [answers, statuses] of /** @type {[Record<string, string>, Record<string, string>][]} */ ([
     // The page of the deployment before: one byte more, at its end or in its middle, is another page.
-    [{ [page]: `${viewer} `, [list]: '["manual_27_rpm"]' }, {}],
-    [{ [page]: `${viewer.slice(0, 200)} ${viewer.slice(200)}`, [list]: '["manual_27_rpm"]' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: `${viewer} `, [list]: '["manual_27_rpm"]' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: `${viewer.slice(0, 200)} ${viewer.slice(200)}`, [list]: '["manual_27_rpm"]' }, {}],
     // And so is one byte less.
-    [{ [page]: viewer.slice(0, -1), [list]: '["manual_27_rpm"]' }, {}],
-    [{ [page]: viewer, [list]: "[]" }, {}],
-    [{ [page]: viewer, [list]: '{"detail":"Not Found"}' }, {}],
-    [{ [page]: viewer, [list]: '["manual_27_rpm"]' }, { [list]: "500" }],
-    [{ [page]: viewer, [list]: '["manual_27_rpm"]' }, { [page]: "404" }],
-    [{ [list]: '["manual_27_rpm"]' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer.slice(0, -1), [list]: '["manual_27_rpm"]' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: "[]" }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: '{"detail":"Not Found"}' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: '["manual_27_rpm"]' }, { [list]: "500" }],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: '["manual_27_rpm"]' }, { [page]: "404" }],
+    [{ [commitUrl]: `${SHA}\n`, [list]: '["manual_27_rpm"]' }, {}],
   ])) {
     const other = served(answers, statuses);
     assert.equal(other.status, 1, `went on with ${JSON.stringify(statuses)} ${Object.keys(answers).length}`);
@@ -1233,10 +1382,12 @@ test("EX-7 the stage of the machines reaches no machine: it says the version of 
   const contract = JSON.parse(read("contracts/machine-api.json")).contract_version;
   assert.ok(
     tagged.summary.includes(
-      `- Ordre avec Convex (docs/deploiement.md, section 3.4) : cette release a déployé Convex avant toute console. C'est le bon ordre tant qu'elle garde la majeure du contrat machine (contrat de ce commit : \`${contract}\`). Une release qui change cette majeure demande l'inverse : les consoles d'abord, à la main, avant d'approuver le déploiement de Convex.`,
+      `- Ordre avec Convex (docs/deploiement.md, section 3.4) : cette release a déployé Convex avant toute console (contrat de ce commit : \`${contract}\`). C'est l'ordre pour une mineure ou sans changement du contrat.`,
     ),
     tagged.summary,
   );
+  assert.ok(tagged.summary.split("\n").includes(FIRST_CONTRACT_UPDATE), tagged.summary);
+  assert.ok(tagged.summary.split("\n").includes(MAJOR_TRANSITION), tagged.summary);
 });
 
 test("EX-10 docs/deploiement.md gives one rule for the order between Convex and the consoles, in 3.4 as in 3.6", () => {
@@ -1244,8 +1395,9 @@ test("EX-10 docs/deploiement.md gives one rule for the order between Convex and 
   const order = manual.slice(manual.indexOf("### 3.4 "), manual.indexOf("### 3.5 "));
   const sync = manual.slice(manual.indexOf("### 3.6 "), manual.indexOf("## 4. "));
   assert.match(manual, /^### 3\.4 Ordre de mise à jour entre Convex et les consoles$/m);
-  // The rule, once: the major of the contract decides.
-  assert.match(order, /\| La \*\*majeure\*\* du contrat machine[^|]*\| \*\*Les consoles d'abord, Convex ensuite\.\*\*/);
+  // The rule, once: first enforcement, a versioned major transition, or a minor.
+  assert.match(order, /\| Premier déploiement d'un Convex qui exige le contrat[^|]*\| \*\*Les consoles d'abord, Convex ensuite\.\*\*/);
+  assert.match(order, /\| La \*\*majeure\*\* change entre \*\*deux majeures versionnées\*\*[^|]*\| \*\*Une release dont Convex sert les deux majeures d'abord, puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle\.\*\*/);
   assert.match(order, /\| Une \*\*mineure\*\* du contrat, ou rien du contrat \| \*\*Convex d'abord, les consoles ensuite\.\*\*/);
   // Section 3.6 applies it to its minor and no longer states an order of its own.
   assert.match(sync, /\*\*Ordre : Convex d'abord, comme pour toute mineure\*\*/);
@@ -1253,6 +1405,69 @@ test("EX-10 docs/deploiement.md gives one rule for the order between Convex and 
   assert.doesNotMatch(manual, /34-ordre-de-mise-à-jour--les-consoles-dabord-convex-ensuite/, "a link still names the old title of section 3.4");
   // And it says what the pipeline does with it.
   assert.match(order, /pipeline de release[\s\S]*déploie Convex \(étape 4\) avant\s+toute console/);
+});
+
+test("S-2 the three contract transitions and the console update time agree in the docs and both executed summaries", async (context) => {
+  const manual = read("docs/deploiement.md");
+  const production = manual.slice(manual.indexOf("### 3.3 "), manual.indexOf("### 3.4 "));
+  const order = manual.slice(manual.indexOf("### 3.4 "), manual.indexOf("### 3.5 "));
+  await context.test("3.4 gives three orders, 426 in both directions and the limits of serving two majors", () => {
+    const table = order.slice(order.indexOf("| Ce que la release change")).split("\n\n")[0];
+    const rows = table.split("\n").slice(2);
+    assert.equal(rows.length, 3, "the order table must distinguish three cases");
+    const [first, major, minor] = rows;
+    assert.match(first, /Premier déploiement.*antérieur au contrat.*ne lit pas l'en-tête et n'annonce aucune version/);
+    assert.match(first, /\| \*\*Les consoles d'abord, Convex ensuite\.\*\* \|/);
+    assert.match(first, /Dans ce cas seulement.*console à jour fonctionne avec l'ancien Convex.*lancement distant près.*console en retard.*426/);
+    assert.match(major, /deux majeures versionnées.*Convex en service sert déjà le contrat/);
+    assert.match(major, /\| \*\*Une release dont Convex sert les deux majeures d'abord, puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle\.\*\* \|/);
+    assert.match(major, /Convex en service répond 426.*consoles d'abord seraient coupées/);
+    assert.match(major, /Convex qui ne sert que la nouvelle majeure répond 426.*Convex d'abord les couperait/);
+    assert.match(major, /lister les deux majeures dans `SUPPORTED_MAJORS`.*aucune release ne l'a encore fait.*ordre de la pipeline, Convex d'abord/);
+    assert.match(minor, /Une \*\*mineure\*\* du contrat, ou rien du contrat \| \*\*Convex d'abord, les consoles ensuite\.\*\*/);
+    assert.match(order, /Dans les trois cas, \*\*jamais pendant une séance\*\*/);
+    assert.match(order, /change la\s+majeure sans servir les deux coupe les consoles de l'autre majeure, quel que\s+soit l'ordre/);
+    assert.match(order, /`server_contract_version: CONTRACT_VERSION`, la version propre du serveur,\s+pas celle de la console/);
+    const transition = order.slice(order.indexOf("**Pendant la transition"), order.indexOf("**Ce que fait la pipeline"));
+    assert.match(transition, /poll et le heartbeat annoncent/);
+    assert.match(transition, /`CONTRACT_VERSION` du commit de la release\s+de transition/);
+    assert.match(transition, /console d'une autre majeure \*\*n'arme aucun lancement distant\*\*/);
+    assert.match(transition, /lancement qu'elle peut lire[\s\S]*`\/api\/machine\/training\/end`[\s\S]*`failed: true`/);
+    assert.match(transition, /refusee par la machine : serveur incompatible/);
+    assert.match(transition, /À réception[\s\S]*en échec sur le tableau de bord[\s\S]*raison/);
+    assert.match(transition, /console affiche « serveur incompatible[\s\S]*liste d'événements[\s\S]*rappelle tant que l'incompatibilité persiste/);
+    assert.match(order, /route de statut\s+répond quelle que soit la majeure.*\s+`stopRequested: true` ou `active: false`/);
+    assert.match(order, /\| Console de la nouvelle majeure, Convex qui ne sert que l'ancienne majeure versionnée \| Convex répond 426/);
+    assert.match(order, /\| Console de l'ancienne majeure versionnée, Convex qui ne sert que la nouvelle majeure \| Même refus 426/);
+  });
+  await context.test("3.3 puts the console update between tags and Convex approval, from the tagged commit", () => {
+    const preparation = production.split("\n").find((line) => line.startsWith("| Avant de lancer la pipeline pour de bon |"));
+    assert.ok(preparation, "the other preparations must remain");
+    assert.doesNotMatch(preparation, /consoles/i);
+    const timing = production.split("\n").find((line) => line.startsWith(`| ${CONSOLE_UPDATE_TIME} |`));
+    assert.ok(timing, "3.3 must use the exact update time");
+    assert.match(timing, /Pour le premier déploiement d'un Convex qui exige le contrat/);
+    assert.match(timing, /mettre les consoles en service à jour depuis le commit qui vient d'être tagué, puis approuver Convex/);
+  });
+  await context.test("3.4 uses that exact time for the first deployment, from the tagged commit", () => {
+    const pipeline = order.slice(order.indexOf("**Ce que fait la pipeline de release.**"), order.indexOf("**Quand les deux côtés"));
+    assert.ok(pipeline.includes(CONSOLE_UPDATE_TIME), "3.4 must use the exact update time");
+    assert.match(pipeline, /premier cas, mettre les consoles à jour à la main/);
+    assert.match(pipeline, /depuis le commit qui vient d'être tagué, puis approuver Convex/);
+  });
+  await context.test("the request summary uses that exact time and the two-major transition", () => {
+    const result = run(script(job("request"), REMIND), { MODE: "real" });
+    assert.equal(result.status, 0, result.said);
+    assert.ok(result.summary.split("\n").includes(FIRST_CONTRACT_UPDATE), result.summary);
+    assert.ok(result.summary.split("\n").includes(MAJOR_TRANSITION), result.summary);
+  });
+  await context.test("the machines summary uses that exact time and the two-major transition", () => {
+    const fx = repository(context);
+    const result = run(script(job("machines"), MACHINES), { GITHUB_SHA: fx.head }, { cwd: fx.work });
+    assert.equal(result.status, 0, result.said);
+    assert.ok(result.summary.split("\n").includes(FIRST_CONTRACT_UPDATE), result.summary);
+    assert.ok(result.summary.split("\n").includes(MAJOR_TRANSITION), result.summary);
+  });
 });
 
 // ---------------------------------------------------------------------------

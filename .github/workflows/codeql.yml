@@ -18,9 +18,12 @@ permissions:
   contents: read
 
 # One analysis at a time per pull request: a new push replaces the one in
-# progress. A push to develop or main, the weekly run and a manual run are
-# keyed by their commit: none is cancelled nor left waiting behind another,
-# so no commit of those branches is left with a cancelled analysis.
+# progress. Pushes, the weekly run and manual runs use their commit. The
+# release call sees its caller's workflow_dispatch event and shares
+# codeql-<sha> with a push analysis of that commit, so it waits. GitHub keeps
+# one pending run per group: a third run of that commit (for example, a manual
+# CodeQL run) replaces the pending run. If that is the release call, step 2
+# fails before tags are written; "Re-run failed jobs" starts it again.
 concurrency:
   group: codeql-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

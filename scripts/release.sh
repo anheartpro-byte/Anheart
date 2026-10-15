@@ -82,6 +82,8 @@ tag depuis GitHub Actions. Avec le premier, tag refuse si main n'est plus au
 commit donné. Avec le second, les vérifications de l'exécution donnée, celle
 qui lance tag, ne sont pas jugées : ses étapes précédentes ont réussi avant
 que tag démarre, et son propre job est en cours. Toutes les autres le restent.
+--pipeline-run doit être le GITHUB_RUN_ID de l'exécution GitHub Actions qui
+lance tag ; à la main, il ne peut pas écarter les vérifications d'une autre exécution.
 
 prepare qui échoue après avoir changé de branche rend le clone tel qu'il
 était ; relancé après un push réussi sans PR, il crée seulement la PR.
@@ -209,6 +211,8 @@ is_level() {
 # statut n'est pas refusé ici : l'avis indépendant, lui, est exigé par
 # require_review, sur le commit qui a été relu.
 #
+# --pipeline-run doit être le GITHUB_RUN_ID de l'exécution GitHub Actions qui
+# lance tag : il ne peut ainsi écarter que ses propres vérifications.
 # Lancé par la pipeline de release (--pipeline-run), tag tourne dans un job de
 # GitHub Actions, qui est lui-même un check run du commit, en cours tant que le
 # script tourne. Les check runs de cette exécution-là ne sont donc pas jugés :
@@ -1087,6 +1091,18 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ -n "$PIPELINE_RUN" ]; then
+  if [ "${GITHUB_RUN_ID+x}" != x ]; then
+    RUN_ID_RECEIVED="absent"
+  elif [ -z "$GITHUB_RUN_ID" ]; then
+    RUN_ID_RECEIVED="vide"
+  else
+    RUN_ID_RECEIVED="$GITHUB_RUN_ID"
+  fi
+  [ "$PIPELINE_RUN" = "${GITHUB_RUN_ID-}" ] ||
+    die "--pipeline-run $PIPELINE_RUN ne vaut que dans l'exécution GitHub Actions qu'il désigne (GITHUB_RUN_ID : $RUN_ID_RECEIVED)"
+fi
 
 case "$STEP" in
   prepare) cmd_prepare ;;

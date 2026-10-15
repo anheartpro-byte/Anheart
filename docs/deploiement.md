@@ -228,7 +228,8 @@ par la personne qui en répond (ANH-82) :
 
 | Quand | Quoi |
 |---|---|
-| Avant de lancer la pipeline pour de bon | Le modèle de jeton Clerk de production émet `email` et `email_verified` ([convex.md](convex.md#activer-le-multi-organisation), partie B) : sans eux, la liaison d'une fiche patient est refusée pour tout le monde. Les contrôles de données des points 1 et 7 ci-dessous. Les consoles en service, si la release change la majeure du contrat ([§3.4](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). |
+| Avant de lancer la pipeline pour de bon | Le modèle de jeton Clerk de production émet `email` et `email_verified` ([convex.md](convex.md#activer-le-multi-organisation), partie B) : sans eux, la liaison d'une fiche patient est refusée pour tout le monde. Les contrôles de données des points 1 et 7 ci-dessous. |
+| entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex) | Pour le premier déploiement d'un Convex qui exige le contrat, mettre les consoles en service à jour depuis le commit qui vient d'être tagué, puis approuver Convex ([§3.4](#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). |
 | Juste après l'étape 4, pendant que la pipeline attend l'approbation du site | Les migrations des points 4 et 6, puis le premier admin (point 5). La migration multi-organisation d'abord : tant qu'elle n'a pas tourné, le tableau de bord refuse tout. |
 | Après la pipeline | L'enregistrement des versions dans Convex ([release.md, section 6](release.md#6-enregistrer-la-version-dans-convex)), et la régénération des clés des machines ([convex.md](convex.md#migration-des-credentials-avec-anh-82--opération-à-réaliser)). |
 
@@ -290,42 +291,62 @@ Avant de le lancer, par la pipeline ou à la main :
 ### 3.4 Ordre de mise à jour entre Convex et les consoles
 
 Le contrat entre une console et Convex est versionné, en `majeure.mineure`
-([convex.md](convex.md#11-versions-et-compatibilité)). **C'est la majeure qui
-décide de l'ordre.** Il n'y a qu'une règle, et la
+([convex.md](convex.md#11-versions-et-compatibilité)). **L'ordre dépend du
+contrat déjà servi par Convex et de celui de la release.** La
 [section 3.6](#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)
 l'applique à sa mineure :
 
 | Ce que la release change, par rapport à ce qui est en service | Ordre | Pourquoi |
 |---|---|---|
-| La **majeure** du contrat machine. Le premier déploiement d'un Convex qui exige le contrat en fait partie : ce qui est en service avant lui n'en annonce aucun | **Les consoles d'abord, Convex ensuite.** | Deux côtés qui n'ont pas la même majeure se refusent, et pas au même prix (tableau suivant) : une console à jour fonctionne avec l'ancien Convex, au lancement distant près ; une console en retard est refusée par le nouveau. |
+| Premier déploiement d'un Convex qui exige le contrat : le Convex en service est **antérieur au contrat**, ne lit pas l'en-tête et n'annonce aucune version | **Les consoles d'abord, Convex ensuite.** | Dans ce cas seulement, une console à jour fonctionne avec l'ancien Convex, au lancement distant près ; une console en retard est refusée (426) par le nouveau (tableau suivant). |
+| La **majeure** change entre **deux majeures versionnées** : le Convex en service sert déjà le contrat | **Une release dont Convex sert les deux majeures d'abord, puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle.** | Le Convex en service répond 426 à une console qui annonce une majeure qu'il ne sert pas : les consoles d'abord seraient coupées. Un Convex qui ne sert que la nouvelle majeure répond 426 aux consoles encore sur l'ancienne : Convex d'abord les couperait. La release de transition doit donc lister les deux majeures dans `SUPPORTED_MAJORS`, comme le code le prévoit (aucune release ne l'a encore fait), et se déploie dans l'ordre de la pipeline, Convex d'abord. |
 | Une **mineure** du contrat, ou rien du contrat | **Convex d'abord, les consoles ensuite.** | Dans une même majeure les deux ordres sont sans danger : chaque côté ne s'appuie que sur ce que toutes ses mineures fournissent. Convex d'abord est l'ordre qui ne laisse rien derrière lui : une console plus récente que son serveur garde sur son disque ce qu'il ne sait pas encore recevoir ([section 3.6](#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)). |
 
-Dans les deux cas, **jamais pendant une séance**.
+Dans les trois cas, **jamais pendant une séance**. Une release qui change la
+majeure sans servir les deux coupe les consoles de l'autre majeure, quel que
+soit l'ordre.
+
+**Pendant la transition entre deux majeures versionnées.** Servir les deux
+majeures évite le refus 426 de leurs requêtes, mais le poll et le heartbeat annoncent
+`server_contract_version: CONTRACT_VERSION`, la version propre du serveur,
+pas celle de la console : c'est le `CONTRACT_VERSION` du commit de la release
+de transition. Une console d'une autre majeure **n'arme aucun lancement distant**.
+Si le poll contient un lancement qu'elle peut lire, elle le refuse et envoie
+sa fin à `/api/machine/training/end`, avec `failed: true` et la raison
+« refusee par la machine : serveur incompatible (contrat … vs …) ».
+À réception, le lancement passe en échec sur le tableau de bord, avec cette
+raison. La console affiche « serveur incompatible (contrat … vs …) » dans sa
+liste d'événements et le rappelle tant que l'incompatibilité persiste.
+L'arrêt traverse toutes les versions : la route de statut
+répond quelle que soit la majeure, et la console arrête sa séance sur
+`stopRequested: true` ou `active: false`.
 
 **Ce que fait la pipeline de release.** La pipeline de release
 ([release.md](release.md#la-pipeline-de-release)) déploie Convex (étape 4) avant
 toute console, et ne met aucune console à jour : son étape 6 dit seulement
 comment le faire à la main ([section 7.6](#76-arrêter-mettre-à-jour)). C'est
-l'ordre du second cas. Elle ne sait pas dans quel cas se trouve une release :
+l'ordre des deuxième et troisième cas, avec un Convex qui sert les deux
+majeures dans le deuxième. Elle ne sait pas dans quel cas se trouve une release :
 elle rappelle la règle en haut de son exécution, avant toute approbation, et
 la personne qui approuve le déploiement de Convex en répond. Pour une release
-du premier cas, la pipeline s'arrête d'elle-même au bon endroit : une fois les
-tags posés (étape 3), elle attend l'approbation de l'étape 4. Mettre alors les
-consoles à jour à la main, depuis le commit qui vient d'être tagué, et
-n'approuver le déploiement de Convex qu'ensuite.
+du premier cas, mettre les consoles à jour à la main
+entre l'étape 3 (les tags sont posés) et l'approbation de l'étape 4 (Convex),
+depuis le commit qui vient d'être tagué, puis approuver Convex.
 
-**Quand les deux côtés n'ont pas la même majeure.** Les deux sens échouent du
-bon côté (aucun lancement distant n'est armé), mais pas au même prix.
+**Quand les deux côtés n'ont pas la même majeure.** Il faut distinguer un
+Convex antérieur au contrat d'un Convex qui sert déjà une majeure versionnée.
 
 | Situation | Effet |
 |---|---|
 | Console à jour, Convex antérieur au contrat | Heartbeat, programmes, séances lancées à la machine, télémétrie et fins de séance fonctionnent. Un arrêt venu du tableau de bord aussi : demande d'arrêt, ou séance que le serveur ne tient plus pour active. Le **lancement distant** est perdu : la console le refuse, parce que la réponse du poll n'annonce pas de version. La fiche machine n'affiche pas les versions, que cet ancien Convex ne stocke pas. |
 | Console antérieure au contrat (elle n'envoie pas l'en-tête), Convex à jour | Convex répond 426 à toutes ses requêtes, sauf celle qui porte la demande d'arrêt. La machine est **affichée hors ligne**, ses programmes ne sont plus synchronisés, sa télémétrie et ses fins de séance sont **refusées**, et aucun lancement distant ne lui parvient. Un arrêt venu du tableau de bord lui parvient encore. |
+| Console de la nouvelle majeure, Convex qui ne sert que l'ancienne majeure versionnée | Convex répond 426, sauf sur la route de statut qui porte l'arrêt. Mettre cette console à jour d'abord la coupe donc du Convex en service. |
+| Console de l'ancienne majeure versionnée, Convex qui ne sert que la nouvelle majeure | Même refus 426, sauf sur la route de statut qui porte l'arrêt. Déployer ce Convex d'abord coupe donc les consoles encore sur l'ancienne majeure. |
 
 D'où l'ordre du premier cas :
 
-1. **Les consoles d'abord.** Une console à jour fonctionne avec l'ancien Convex,
-   au lancement distant près.
+1. **Les consoles d'abord.** Une console à jour fonctionne avec le Convex
+   antérieur au contrat, au lancement distant près.
 2. **Convex ensuite**, quand toutes les consoles sont à jour.
 3. **Jamais pendant une séance.** Une séance en cours au moment où Convex cesse
    de servir la majeure de la console continue sous le seul superviseur local
@@ -630,9 +651,19 @@ procédure que Vercel documente pour GitHub Actions
 
 1. `vercel pull` lit les réglages du projet `anheart` et les variables de
    l'environnement visé (Production ou Preview) ;
-2. `vercel build` construit le site : `npm install`, puis `npm run build`, sur
+2. l'étape `Marquer la construction du commit` écrit `public/commit.txt` avec
+   le SHA complet, en minuscules, du checkout, suivi d'un saut de ligne. Le
+   fichier est généré après le checkout et n'est jamais commité ; il est servi
+   à `/commit.txt` ;
+3. `vercel build` construit le site : `npm install`, puis `npm run build`, sur
    Node 24, comme le faisait Vercel à chaque push ;
-3. `vercel deploy --prebuilt` envoie ce qui a été construit et rend l'adresse.
+4. `vercel deploy --prebuilt` envoie ce qui a été construit et rend l'adresse.
+
+La pipeline de release lit `/commit.txt` après son déploiement et exige ce SHA
+exact, même si la version affichée par le site n'a pas changé. Ce fichier est
+écrit par ces workflows seulement : un déploiement lancé hors des boutons peut
+ne pas le contenir, et la pipeline ne vérifie que les déploiements de ses
+propres jobs.
 
 La CLI Vercel est installée à une version figée (`VERCEL_CLI_VERSION`, en tête
 des deux workflows : 62.1.0, celle que l'image de construction de Vercel
@@ -769,7 +800,7 @@ branche : celle de la release (voie A) et celles de la voie B (son point 5).
 
 | Environnement | Réglages |
 |---|---|
-| `production` | « Required reviewers » : la ou les personnes qui approuvent un déploiement en production (ne pas cocher « Prevent self-review » si la même personne lance et approuve). « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `main`. |
+| `production` | « Required reviewers » : la ou les personnes qui approuvent un déploiement en production (ne pas cocher « Prevent self-review » si la même personne lance et approuve). Décocher « Allow administrators to bypass configured protection rules ». « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `main` (type branche, aucun tag ni motif). Ne pas choisir « Protected branches only » : `develop` est aussi protégée. |
 | `preview` | « Deployment branches and tags » : « Selected branches and tags », avec la seule branche `develop`. Sans approbation par défaut : lire ce que cela veut dire à l'étape 2. |
 
 Le faire **avant** le premier lancement : GitHub crée tout seul, sans aucune
@@ -778,11 +809,18 @@ majuscules dans le nom d'un environnement : si la liste en montre déjà un
 nommé `Production` ou `Preview`, créé sans règle par un outil relié au dépôt,
 c'est lui que les workflows utilisent, et c'est lui qu'il faut régler.
 
+Le relevé du 15 octobre 2026, en lecture seule, montre `Production` sans aucune
+règle et avec le contournement administrateur permis. Ces réglages restent à
+faire par le chef de projet.
+
 Les deux boutons de déploiement s'en remettent à ces règles. **La pipeline de
-release, elle, les lit** avant toute chose : elle refuse une release réelle tant que l'environnement
-`production` n'exige personne pour approuver, ou n'est restreint à aucune
-branche (message « Environnement non protégé »), et une exécution à blanc le
-signale par un avertissement.
+release, elle, les lit** avant toute chose : elle exige au moins un relecteur,
+`can_admins_bypass: false`, `custom_branch_policies: true` et
+`protected_branches: false`, puis exactement une règle autorisant `main` de
+type `branch` (et `total_count: 1`). Elle ne lit cette liste que si les règles
+personnalisées sont activées. Une règle absente, incorrecte ou illisible fait
+refuser une release réelle (message « Environnement non protégé ») ; une
+exécution à blanc le signale par un avertissement.
 
 **2. Créer le jeton Vercel et enregistrer les quatre secrets, dans les deux
 environnements et nulle part ailleurs.**
@@ -1151,6 +1189,18 @@ construit la fonction. Rien de Python n'est installé sur le runner, et le
 moteur hébergé ne lit aucune variable de son projet Vercel. Une préversion est
 protégée par la connexion Vercel.
 
+Après l'assemblage, l'étape `Marquer la construction du commit` écrit le SHA
+complet, en minuscules, du checkout, suivi d'un saut de ligne, dans
+`deploy/simulation-vercel/dist/public/viewer/commit.txt` et
+`deploy/simulation-vercel/dist/simulation/viewer/commit.txt`. Les deux copies
+ne contiennent rien d'autre et ne sont jamais commitées. Elles rendent le même
+fichier accessible à `/viewer/commit.txt` : la première depuis les fichiers
+publics servis par le CDN, la seconde depuis le montage `/viewer` de `app.py`.
+Ce montage lit `ROOT / "viewer"` dans `deploy/simulation-vercel/app.py` ;
+`ROOT` désigne `simulation/` dans `simulation/live.py`. La pipeline exige
+ensuite le SHA exact, y compris si la page du visualiseur est identique à celle
+du déploiement précédent.
+
 Un déploiement par bouton part d'un checkout propre : il ne publie pas
 `/report.html`, que `build.sh` n'embarque que si le rapport a été produit sur
 le poste (`python -m simulation.quick --all`).
@@ -1166,7 +1216,8 @@ Il faut une connexion de la CLI Vercel dans `.vercel-cli/` :
 `npx vercel login --global-config .vercel-cli`. À la différence du bouton,
 `deploy.sh` embarque le code **du disque** au moment de `build.sh`, pas un
 commit ; il ne passe par aucune approbation ; et il prend la dernière version
-de la CLI, pas une version figée.
+de la CLI, pas une version figée. Il n'écrit pas les fichiers `commit.txt` ; la
+pipeline ne vérifie que ses propres déploiements, lancés par les boutons.
 
 Dans les deux cas, une modification de `raspberry-pi/src` ou de `simulation/`
 ne change pas une version déjà hébergée : il faut redéployer.

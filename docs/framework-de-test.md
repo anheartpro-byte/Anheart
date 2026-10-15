@@ -2356,7 +2356,7 @@ deux n'a encore tourné : ils ne peuvent être lancés qu'une fois sur `main`.
 | Déclencheur | `workflow_dispatch`, et l'appel de la pipeline de release (`workflow_call`), qui lance ces mêmes jobs après Convex | `workflow_dispatch`, et aucun autre |
 | Branche acceptée | `main` | `develop` |
 | Ce qui est demandé | quoi déployer (`site`, `simulation`, `site et simulation`) ; le mot `production`, à saisir | quoi déployer ; si le site est choisi, les mots `données de production`, à saisir |
-| Ce que le formulaire, le nom de l'exécution et le haut de sa page rappellent | le site de production ne se déploie que dans la fenêtre du déploiement de Convex, jamais pendant une séance ; les gates du commit ne sont pas vérifiées | une préversion du site lit et écrit les données de production tant que les variables Preview de Vercel ne sont pas séparées |
+| Ce que le formulaire, le nom de l'exécution et le haut de sa page rappellent | le site de production ne se déploie que dans la fenêtre du déploiement de Convex, jamais pendant une séance ; les gates du commit ne sont pas vérifiées par le bouton. Appelé par la pipeline, le haut de sa page rappelle la réussite des étapes 1 (tests) et 2 (CodeQL) sur ce commit ; le nom d'exécution ne s'applique qu'au bouton manuel | une préversion du site lit et écrit les données de production tant que les variables Preview de Vercel ne sont pas séparées |
 | Environnement GitHub | `production` | `preview` |
 | Environnement Vercel visé | Production | Preview |
 | Jobs | `Vérifier la demande (production)`, `Déployer le site (production)`, `Déployer la simulation (production)` | les trois mêmes, suffixés `(préversion)` |
@@ -2423,12 +2423,27 @@ n'appelle Vercel. Il vérifie :
   contient rien d'autre (les deux projets Vercel lisent ce même fichier) ;
 * que chaque workflow n'a qu'un déclencheur, le bouton, à une exception près :
   le bouton de production peut aussi être appelé, par la pipeline de release
-  et par elle seule, avec les deux saisies qu'une personne lui donne et sans
-  qu'aucun secret lui soit passé ;
+  et par elle seule, avec les deux saisies qu'une personne lui donne et
+  `secrets: inherit` ; le workflow appelé ne déclare aucun secret. Les quatre
+  secrets de déploiement sont dans l'environnement `production` : chacun de
+  ses jobs de déploiement y lit ceux dont il a besoin, après approbation. Le
+  job de la pipeline qui appelle ne passe par aucun environnement ; le test
+  d'héritage des secrets vérifie l'accord entre cette description et l'appel ;
 * que la garde de branche est la première étape, qu'elle accepte la branche du
   bouton et refuse les autres références (autre branche, tag du même nom, PR) ;
+* que la production refuse un projet inconnu juste après la garde de branche :
+  seules les valeurs exactes `site`, `simulation`, `site et simulation` passent.
+  Le test de la garde de projet refuse aussi la casse différente, la valeur
+  vide, la virgule, l'espace final et une valeur contenant un saut de ligne
+  suivi de `::error::x`, sans recopier la valeur reçue dans une commande de
+  workflow ;
 * que la production exige le mot `production` exact, et que son formulaire, le
   nom de son exécution et le haut de sa page disent ce qu'elle ne vérifie pas ;
+* que `from_release` est un booléen facultatif de l'appel seulement, faux par
+  défaut et passé à `true` par les deux appels de `release.yml` ; le rappel
+  exécuté avec `true` dit que les étapes 1 (tests) et 2 (CodeQL) ont réussi sur
+  ce commit avant le déploiement ; vide ou `false`, il garde le rappel du
+  bouton sur les gates non vérifiées ;
 * que la préversion exige l'accord saisi dès que le site est choisi, et jamais
   pour la simulation seule ;
 * les noms des environnements, les groupes de concurrence, l'absence de toute
@@ -2447,6 +2462,9 @@ n'appelle Vercel. Il vérifie :
 * que rien n'affiche ni n'envoie ce que `vercel pull` écrit sur le runner ;
 * les commandes passées à la CLI pour chaque cible, le refus d'un déploiement
   qui échoue ou ne rend pas d'adresse, et le contenu du résumé ;
+* que les deux boutons écrivent le SHA complet du checkout dans le bon fichier
+  avant la construction ou le déploiement, sans variable de secret ni autre
+  modification du dépôt temporaire ;
 * que les jobs de déploiement des deux workflows exécutent les mêmes scripts :
   ils ne diffèrent que par trois variables, par la branche du checkout et par
   ce que chaque bouton demande avant de déployer.
@@ -2476,13 +2494,30 @@ qu'une fois le fichier sur `main`.
 
 Elle ne recopie aucun job. `ci.yml`, `pi-install.yml`, `codeql.yml` et
 `deploy-production.yml` déclarent `workflow_call` et sont appelés tels quels.
-Un workflow appelé voit l'événement de son appelant, ici un lancement manuel :
-dans `ci.yml`, aucune gate n'est sautée par la règle de chemins, le rapport
-synthétique tourne avec ses scénarios `dsp`, et aucune des deux endurances
-nocturnes ne tourne. Celle de l'enregistrement de séance ne tourne, hors de la
-nuit, que sur un lancement manuel de `ci.yml` qui coche sa case, et un
-workflow appelé ne reçoit pas cette case ; celle de la console entière ne
+D'après la [documentation GitHub sur les workflows réutilisables](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations),
+le contexte `github` d'un workflow appelé est celui de son appelant. Pour les
+appels de release, cela donne à `ci.yml` le nom « Release en production
+(main) », l'événement `workflow_dispatch` et la référence `refs/heads/main` ;
+c'est lu dans la documentation, pas encore observé dans une exécution (au
+premier lancement à blanc de la pipeline). Aucune gate n'est sautée par la
+règle de chemins, le
+rapport synthétique tourne avec ses scénarios `dsp`, et aucune des deux
+endurances nocturnes ne tourne. Celle de l'enregistrement de séance ne tourne,
+hors de la nuit, que sur un lancement manuel de `ci.yml` qui coche sa case, et
+un workflow appelé ne reçoit pas cette case ; celle de la console entière ne
 tourne que la nuit.
+
+Deux tests tiennent les deux groupes de concurrence
+([ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a)) :
+`scripts/ci/ci-workflow.test.mjs` vérifie que la CI appelée par la release ne
+partage pas le groupe de la CI du push ou de la nuit sur `main`, et que seules
+les PR sont annulées. Il vérifie aussi que deux exécutions d'une même PR, ou
+deux push de `main`, partagent un groupe ;
+`scripts/ci/analysis-workflows.test.mjs` vérifie que CodeQL partage
+`codeql-<sha>` avec l'analyse du push du même commit. L'appel CodeQL attend ;
+une troisième analyse de ce commit peut remplacer l'unique exécution en
+attente et faire échouer l'étape 2 avant les tags. L'évaluateur refuse toute
+forme qu'il ne connaît pas, même derrière un `||` déjà vrai.
 
 **Tests.** `scripts/ci/release-workflow.test.mjs` est lancé par le job `docs` à
 chaque exécution. Il lit le workflow comme du texte et **exécute les scripts de
@@ -2499,10 +2534,14 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
 * qu'une release réelle demande la case décochée **et** le mot `production`
   exact, que tout le reste donne une exécution à blanc ou un refus, et qu'une
   valeur de la case qui n'est ni `true` ni `false` arrête tout ;
-* qu'une release réelle est refusée tant que l'environnement `production`
-  n'exige personne pour approuver ou n'est restreint à aucune branche, sur
-  plusieurs réponses de l'API, dont celle d'un environnement créé sans aucune
-  règle ;
+* qu'une release réelle exige un relecteur requis, aucun contournement
+  administrateur, « Selected branches and tags » et exactement la seule
+  branche `main` de type `branch` (`total_count: 1`) ; à blanc, les mêmes
+  défauts donnent un avertissement. Le test des protections de production
+  passe par le vrai `jq` : réglages conformes, contournement permis, branches
+  protégées, `main` et `develop`, tag `main`, motif `release/*`, liste vide,
+  illisible ou incohérente, environnement sans règle de branche. La liste
+  n'est lue que si les règles personnalisées sont activées ;
 * **l'ordre des étapes**, par leurs `needs` : chaque étape ne peut démarrer
   qu'après la précédente, aucune fonction d'état (`always()`, `!cancelled()`…)
   ni `continue-on-error` ne lève cette règle, et deux releases ne tournent
@@ -2525,14 +2564,20 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
   n'est pas une release est refusé ; que le jeton qui peut écrire n'est remis
   qu'à l'étape qui lance `scripts/release.sh`, sans être écrit dans le clone ;
 * que la clé de Convex n'est lue que par les trois étapes qui s'en servent,
-  jamais par l'installation des paquets npm ; qu'une clé de développement, de
+  jamais par l'installation des paquets npm ; que celle-ci est exactement
+  `npm ci --ignore-scripts`, sans `env` ni secret, et qu'aucun job de
+  `release.yml` qui lit un secret ne lance `npm ci` ou `npm install` sans
+  `--ignore-scripts` ; qu'une clé de développement, de
   préversion, de projet, d'un autre déploiement ou mal formée est refusée, et
   qu'aucune partie de la clé n'est jamais affichée ;
 * qu'après le déploiement de Convex la version servie et le refus de l'API
   machine sont exigés, la réponse de l'ancien backend étant refusée ;
 * que le site et la simulation sont déployés par les jobs de
   `deploy-production.yml` et par aucune copie, le site d'abord, et que chacun
-  est ensuite vérifié à son adresse de production ;
+  est ensuite vérifié à son adresse de production : la release exige le SHA
+  exact du commit, même si la page n'a pas changé ; elle refuse les versions du
+  site qui ne sont pas un mot entier et exige que le visualiseur serve la page
+  de ce commit, octet pour octet, et la liste des scénarios ;
 * que l'étape des machines n'appelle rien qui puisse en atteindre une, et
   redonne les commandes de [deploiement.md, section 7.6](deploiement.md#76-arrêter-mettre-à-jour) ;
 * **les permissions de chaque job**, une à une : un seul peut écrire dans le
@@ -2542,7 +2587,17 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
   comme dans `ci.yml` ;
 * que ce que la pipeline tient pour la production est ce que dit la
   [section 1 de deploiement.md](deploiement.md#1-les-environnements), et que
-  les sections 3.4 et 3.6 de cette page donnent une seule règle d'ordre.
+  les sections 3.4 et 3.6 de cette page donnent une seule règle d'ordre :
+  consoles d'abord pour le premier déploiement qui exige le contrat, face à
+  un Convex antérieur au contrat ; entre deux majeures versionnées, une release
+  dont Convex sert les deux majeures d'abord, puis les consoles, puis le retrait
+  de l'ancienne majeure quand plus aucune console ne la parle ; Convex d'abord
+  pour une mineure ou sans changement du contrat. Le test de l'ordre des mises
+  à jour tient les refus 426 dans les deux sens, `SUPPORTED_MAJORS` et la limite
+  du lancement distant pendant la transition. Il exige aussi le même moment
+  de mise à jour des consoles, mot pour mot, en 3.3, en 3.4 et dans les deux
+  résumés de `release.yml` exécutés comme par le runner, depuis le commit
+  tagué, et aucune mise à jour des consoles avant de lancer la pipeline.
 
 `scripts/release.test.mjs` tient les deux options que la pipeline passe à
 `scripts/release.sh tag` ([release.md](release.md#la-pipeline-de-release-et-le-script)).
@@ -2554,6 +2609,12 @@ deploy`, ni un déploiement Vercel ne sont exécutés par un test. La forme exac
 des réponses de GitHub (alertes, analyses, environnement) est reprise de sa
 documentation et de réponses réelles de son API, lues le 9 octobre 2026. Le
 premier lancement à blanc est la première vraie preuve.
+
+Le premier vrai `npx convex deploy`, avec les dépendances installées par
+`npm ci --ignore-scripts`, reste à faire, hors de ce lancement à blanc. La
+lecture de `generateBinPath()` dans `node_modules/esbuild/lib/main.js` montre
+qu'esbuild résout le binaire de son paquet de plateforme à l'exécution, sans
+son postinstall ; elle ne remplace pas ce déploiement réel.
 
 ### Rapport de qualité (ANH-199)
 
