@@ -1,7 +1,8 @@
 /**
  * Pure calculations shared by the dashboard backend and the signed medical
  * rules parsed by `raspberry-pi/src/medical.py`. Supported ages follow
- * `raspberry-pi/src/local_config.py`; the server stores every signed version
+ * `MIN_SUBJECT_AGE_YEARS` and `MAX_SUBJECT_AGE_YEARS` in
+ * `raspberry-pi/src/training/plan.py`; the server stores every signed version
  * so these calculations can use the current registered formula.
  */
 export type HrMaxFormula = "tanaka";
