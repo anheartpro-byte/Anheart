@@ -173,12 +173,14 @@ jobs:
               fi
             fi
           fi
+          findings="$(printf '%s ; ' "${missing[@]}")"
+          findings="${findings% ; }"
           if (( ${#missing[@]} == 0 )); then
             echo "L'environnement production exige une approbation sans contournement administrateur, avec la seule branche main autorisée."
           elif [[ "$MODE" == dry ]]; then
-            echo "::warning title=Environnement non protégé::Une release réelle serait refusée : l'environnement GitHub production n'est pas réglé, ${missing[*]}. Voir docs/deploiement.md (section 5.5, étape 1)."
+            echo "::warning title=Environnement non protégé::Une release réelle serait refusée : l'environnement GitHub production n'est pas réglé, ${findings}. Voir docs/deploiement.md (section 5.5, étape 1)."
           else
-            echo "::error title=Environnement non protégé::Rien n'a été tagué ni déployé. L'environnement GitHub production n'est pas réglé : ${missing[*]}. Voir docs/deploiement.md (section 5.5, étape 1)."
+            echo "::error title=Environnement non protégé::Rien n'a été tagué ni déployé. L'environnement GitHub production n'est pas réglé : ${findings}. Voir docs/deploiement.md (section 5.5, étape 1)."
             exit 1
           fi
       - name: Rappeler ce que fait cette exécution

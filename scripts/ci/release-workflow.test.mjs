@@ -527,6 +527,28 @@ test("S-5 (a) production requires approval without admin bypass and exactly the 
   }
 });
 
+test("S-5 (a) multiple production findings are separated by semicolons in order in real errors and dry warnings", () => {
+  const approval = script(job("request"), APPROVAL);
+  const cases = [
+    ["no protections", ENVIRONMENT.unset, undefined, "personne n'y est exigé pour approuver (« Required reviewers ») ; le contournement administrateur doit être désactivé (« Allow administrators to bypass configured protection rules ») ; il n'est restreint à aucune branche (« Deployment branches and tags »)"],
+    ["admin bypass and main plus develop", JSON.stringify({ ...JSON.parse(ENVIRONMENT.set), can_admins_bypass: true }), JSON.stringify({ total_count: 2, branch_policies: [MAIN_BRANCH, { name: "develop", type: "branch" }] }), "le contournement administrateur doit être désactivé (« Allow administrators to bypass configured protection rules ») ; la liste doit contenir exactement une règle : la branche main (name main, type branch, total_count 1)"],
+  ];
+  for (const [name, answer, branches, findings] of cases) {
+    for (const mode of ["real", "dry"]) {
+      const result = run(approval, { GH_TOKEN: TOKEN, MODE: mode }, { answers: {
+        [ENVIRONMENT_ENDPOINT]: answer,
+        ...(branches === undefined ? {} : { [BRANCHES_ENDPOINT]: branches }),
+      } });
+      assert.equal(result.status, mode === "real" ? 1 : 0, `${name}, ${mode}: ${result.said}`);
+      assert.equal(result.said, mode === "real"
+        ? `::error title=Environnement non protégé::Rien n'a été tagué ni déployé. L'environnement GitHub production n'est pas réglé : ${findings}. Voir docs/deploiement.md (section 5.5, étape 1).\n`
+        : `::warning title=Environnement non protégé::Une release réelle serait refusée : l'environnement GitHub production n'est pas réglé, ${findings}. Voir docs/deploiement.md (section 5.5, étape 1).\n`, `${name}, ${mode}`);
+      assert.equal(result.calls.length, branches === undefined ? 1 : 2, name);
+      assert.equal(result.summary, "");
+    }
+  }
+});
+
 test("EX-1 the top of the run says, before any approval, what this run will do", () => {
   const request = job("request");
   assert.deepEqual(handed(stepNamed(request, REMIND)), ["MODE: ${{ steps.mode.outputs.mode }}"]);
