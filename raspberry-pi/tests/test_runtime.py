@@ -3699,3 +3699,7 @@ async def test_an_ending_that_outlasts_its_recovery_is_not_done_while_it_turns()
     assert rig.runtime.applied_rpm == 0
     assert rig.phase() is Phase.DONE
     assert rig.runtime.end_reason is EndReason.OPERATOR_STOP
+
+
+build_rig = _rig
+climbing_profile = _climbing_profile

@@ -247,6 +247,7 @@ from src.training.safety import (
 from src.training.tracking import SpeedFollower, follow_rate
 from src.training.types import (
     DRIVE_STATUS_STALE_AFTER,
+    HEART_RATE_STALE_AFTER,
     ControlDecision,
     HeartRateSample,
     ManualView,
@@ -469,6 +470,19 @@ class RuntimeLimits:
 
     standstill_rpm: MotorRpm = DEFAULT_STANDSTILL_RPM
 
+    rise_reading_within: Seconds = Seconds(2.5)
+    """Maximum accepted-reading age for an increase, including the first step.
+
+    2.5 s tolerates one missed 1 Hz refresh (measured accepted-reading gaps
+    of 2.0-2.2 s), closing on the second miss. With the real ECG bridge at
+    5 Hz on the bench, a 1800 s DSP reference spends about 240/159/151 s
+    with increases withheld outside verdicts at 1.5/2.5/4 s respectively.
+    The 2.5 s budget avoids the short-gap cost of 1.5 s for about 7 extra
+    seconds versus 4 s. All seven references retain duration and end cause.
+    The law keeps its own 4 s freshness budget and every verdict still decides
+    first; this gate holds the applied setpoint without changing the input.
+    """
+
     ramp_settle: Seconds = COMMISSIONED_DECEL_S
     """How long after the setpoint last moved the shaft may still be lagging.
 
@@ -531,6 +545,9 @@ class RuntimeLimits:
         _require_positive("slew", self.slew)
         _require_positive("ramp_settle", self.ramp_settle)
         _require_positive("status_stale_after", self.status_stale_after)
+        _require_positive("rise_reading_within", self.rise_reading_within)
+        if self.rise_reading_within > HEART_RATE_STALE_AFTER:
+            raise ValueError("rise_reading_within must not exceed HEART_RATE_STALE_AFTER")
         _require_positive("max_motor_hz", self.max_motor_hz)
         _require_positive("-falling_trend", -self.falling_trend)
         if self.trend_samples < MIN_TREND_SAMPLES:
@@ -1950,9 +1967,9 @@ class TrainingRuntime:
         """
         if not self._occupied():
             return None
-        if self._tracker.usable(now) is None:
+        if not self._rise_reading_recent(now):
             return RiseHold.NO_HEART_RATE
-        if self._increase_permitted():
+        if self._increase_permitted(now):
             return None
         trend = self._tracker.recent_rate(self._limits.trend_samples)
         return RiseHold.TREND_UNKNOWN if trend is None else RiseHold.HEART_RATE_FALLING
@@ -3457,7 +3474,7 @@ class TrainingRuntime:
             self._decision = None
             await self._apply_setpoint(now, MotorRpm(0) if cap is None else cap)
             return
-        rise = self._increase_permitted()
+        rise = self._increase_permitted(now)
         step = controller.update(
             now, self._control_input(now), allow_increase=allow_increase and rise
         )
@@ -3486,7 +3503,7 @@ class TrainingRuntime:
         moved = self._motion_step(now, demand)
         applied = self._applied_rpm
         if moved > applied and not (rise and self._readable_status(now) is not None):
-            # The vasovagal gate holds the setpoint where it is, including a
+            # The freshness and vasovagal gates hold the setpoint, including a
             # climb towards a demand decided before the heart began to fall -
             # and so does a drive whose state is no longer known. The
             # controller adopts the speed actually held.
@@ -3551,10 +3568,16 @@ class TrainingRuntime:
             held = RiseHold.WRITE_UNACKNOWLEDGED
         self._rise_held = held
 
-    def _increase_permitted(self) -> bool:
-        """Whether the heart rate allows the setpoint to RISE this tick: the vasovagal gate.
+    def _rise_reading_recent(self, now: Monotonic) -> bool:
+        """The one freshness gate for programme and occupied manual increases."""
+        age = self._tracker.age(now)
+        return age is not None and math.isfinite(age) and age <= self._limits.rise_reading_within
 
-        No rise while the short trend (``RuntimeLimits.trend_samples``) falls
+    def _increase_permitted(self, now: Monotonic) -> bool:
+        """Whether reading freshness and the short trend permit an increase at ``now``.
+
+        No rise without a recent accepted reading, nor while the short trend
+        (``RuntimeLimits.trend_samples``) falls
         faster than ``RuntimeLimits.falling_trend``, nor while it is unknown. A
         falling heart rate reads to the control law as "below the zone", and
         its answer is to accelerate; before this gate it did so for ~16 s of a
@@ -3562,7 +3585,11 @@ class TrainingRuntime:
         every safety verdict still decides first.
         """
         trend = self._tracker.recent_rate(self._limits.trend_samples)
-        return trend is not None and trend >= self._limits.falling_trend
+        return (
+            self._rise_reading_recent(now)
+            and trend is not None
+            and trend >= self._limits.falling_trend
+        )
 
     def _motion_step(self, now: Monotonic, target: MotorRpm) -> MotorRpm:
         """One motion-limited step towards ``target``, with the accrual of motion.py.
