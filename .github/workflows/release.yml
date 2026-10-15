@@ -695,9 +695,9 @@ jobs:
           done
           problems=()
           if [[ "$commit_issue" == différent ]]; then
-            problems+=("le commit servi est différent")
+            problems+=("le commit servi est différent du SHA attendu")
           elif [[ "$commit_issue" != servi ]]; then
-            problems+=("le commit servi est absent ($commit_status)")
+            problems+=("le commit servi est absent (HTTP $commit_status)")
           fi
           [[ "$page_issue" == servie ]] || problems+=("la version $version est absente de la page (HTTP $page_status)")
           problem_text="${problems[0]}"

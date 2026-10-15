@@ -1287,13 +1287,13 @@ test("S-1 the site and simulation must serve this commit, with the exact site ve
     assert.equal(down.summary, "");
   }
   for (const [commitBody, statuses, wanted] of [
-    [previousCommit, {}, "le commit servi est différent"],
-    ["", { [siteCommit]: "404" }, "le commit servi est absent (404)"],
-    [`${SHA}\nextra`, {}, "le commit servi est différent"],
+    [previousCommit, {}, "le commit servi est différent du SHA attendu"],
+    ["", { [siteCommit]: "404" }, "le commit servi est absent (HTTP 404)"],
+    [`${SHA}\nextra`, {}, "le commit servi est différent du SHA attendu"],
   ]) {
     const down = visited(commitBody, correctPage, statuses);
     assert.equal(down.status, 1, `${wanted} was accepted`);
-    assert.ok(down.said.includes(wanted), down.said);
+    assert.ok(down.said.split("\n").some((line) => line.startsWith("::error ") && line.includes(wanted)), down.said);
     assert.ok(down.said.includes("version web-0.1.0 servie"), down.said);
     assert.ok(!down.said.includes(correctPage), "the page body was printed");
     assert.ok(down.calls.filter((call) => !call.startsWith("sleep ")).every((call) => call.endsWith("|none|none")), "a curl call held a secret");
@@ -1315,12 +1315,12 @@ test("S-1 the site and simulation must serve this commit, with the exact site ve
   assert.match(current.summary, /^- https:\/\/anheart-simulation\.vercel\.app\/viewer\/index\.html est la page du visualiseur de ce commit, octet pour octet\.$/m);
   assert.ok(current.calls.every((call) => call.endsWith("|none|none")), "a curl call held a secret");
   for (const [commitBody, statuses, wanted] of [
-    [previousCommit, {}, "commit différent"],
-    ["", { [commitUrl]: "404" }, "commit absent (HTTP 404)"],
+    [previousCommit, {}, "le commit servi est différent du SHA attendu"],
+    ["", { [commitUrl]: "404" }, "le commit servi est absent (HTTP 404)"],
   ]) {
     const other = served({ [commitUrl]: commitBody, [page]: viewer, [list]: '["manual_27_rpm"]' }, statuses);
     assert.equal(other.status, 1, `${wanted} was accepted`);
-    assert.ok(other.said.includes(wanted), other.said);
+    assert.ok(other.said.split("\n").some((line) => line.startsWith("::error ") && line.includes(wanted)), other.said);
     assert.ok(other.calls.filter((call) => !call.startsWith("sleep ")).every((call) => call.endsWith("|none|none")), "a curl call held a secret");
   }
   for (const [answers, statuses] of /** @type {[Record<string, string>, Record<string, string>][]} */ ([
