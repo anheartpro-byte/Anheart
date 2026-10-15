@@ -369,11 +369,21 @@ export default defineSchema({
     machineStartedAt: v.optional(v.number()),
     stopRequestedAt: v.optional(v.number()),
     endReason: v.optional(v.string()),
+    // The stable code of a launch from the dashboard that failed before its
+    // machine armed it (ANH-144): expired, launch right withdrawn, rider's
+    // physiology changed... One of the arming refusals of
+    // `convex/training.ts`, also a code of contracts/machine-api.json. The
+    // site words it from this code; `endReason` says it in English. Absent
+    // on every other session.
+    endCode: v.optional(v.string()),
     // When the server marked the session "interrupted" (server's clock).
     // Present exactly while the status is "interrupted".
     interruptedAt: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
+    // The open sessions of one rider (pending, active, interrupted): a rider
+    // has one session at a time, on any machine (`launchAutoSession`).
+    .index("by_user_and_status", ["userId", "status"])
     .index("by_machine_and_local_ref", ["machineId", "localRef"])
     .index("by_machine", ["machineId"])
     .index("by_machine_and_status", ["machineId", "status"])

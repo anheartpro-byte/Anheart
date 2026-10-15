@@ -59,6 +59,7 @@ type Session = {
   zoneHighBpm?: number;
   stopRequestedAt?: number;
   endReason?: string;
+  endCode?: string;
   profileName?: string;
   operatorName?: string;
   interruptedAt?: number;
@@ -541,6 +542,35 @@ describe("ANH-203 training panel: what it says of a session", () => {
     expect(screen.text().includes("drive_fault")).toBe(hasReason);
     expect(screen.text()).not.toContain(t.completed);
   });
+
+  it.each([
+    [
+      "the sentence of its code, not the server's words",
+      "right_revoked_before_start",
+      fr.errors.right_revoked_before_start,
+    ],
+    [
+      "the server's words for a code this site does not know",
+      "not_a_code_of_this_site",
+      "launch right withdrawn before the machine armed it",
+    ],
+  ])(
+    "ANH-144: a launch refused before its start says why, with %s",
+    (_case, endCode, shownReason) => {
+      session({
+        status: "failed",
+        canStop: false,
+        endedAt: NOW - 1_000,
+        endReason: "launch right withdrawn before the machine armed it",
+        endCode,
+      });
+      telemetry([]);
+
+      const screen = panel();
+
+      expect(screen.text()).toContain(`${t.failed} ${shownReason}`);
+    },
+  );
 
   it("hands the charts every point and the zone, and shows a placeholder while the points load", () => {
     session();

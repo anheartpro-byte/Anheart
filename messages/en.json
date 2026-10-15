@@ -26,7 +26,15 @@
     "machine_in_session": "The machine is in a session: it cannot be deleted now.",
     "machine_has_pending_session": "A session is waiting to start on this machine: cancel it before deleting the machine.",
     "machine_not_deleted": "This machine is not deleted: there is nothing to restore.",
-    "last_gestionnaire": "You are the only manager of this machine: delete it rather than leaving it."
+    "last_gestionnaire": "You are the only manager of this machine: delete it rather than leaving it.",
+    "rider_busy": "Rider already in another session, waiting or running: one at a time.",
+    "machine_busy": "This machine already has a session waiting or running: one at a time.",
+    "expired_before_start": "Expired: start not confirmed in time",
+    "machine_deleted_before_start": "Machine deleted before the start",
+    "organization_changed_before_start": "Machine moved to another organisation before the start",
+    "right_revoked_before_start": "Launch right withdrawn before the start",
+    "age_refused_before_start": "Rider's age refused before the start",
+    "hr_max_changed_before_start": "Rider's max heart rate changed before the start"
   },
   "sessionRecord": {
     "next": "Next page",
@@ -473,7 +481,8 @@
     "recordedRange": "Data recorded from {start} to {end}",
     "legacyTitle": "Former ECG recording",
     "legacyDescription": "This session comes from the former ECG recording mode, which has been removed. It is kept read-only.",
-    "dataBatches": "Data Batches"
+    "dataBatches": "Data Batches",
+    "failedBeforeStartDescription": "This launch was refused before the server confirmed its start to the machine."
   },
   "sessionLive": {
     "viewDetails": "View Session Details",

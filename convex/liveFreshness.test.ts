@@ -344,16 +344,33 @@ describe("the last sign of life of a session, dated by the server", () => {
 
   it("is the start the server dated, while a session launched from the dashboard has sent no point", async () => {
     const f = await seedTraining(modules);
-    const sessionId = await sessionOf(f, {
-      status: "pending",
-      origin: "remote",
-      startedAt: now,
+    // A launch the machine may arm (ANH-144): made by its rider, who holds the
+    // launch right and is in no other session, with the max heart rate on record.
+    await f.t.run((ctx) =>
+      ctx.db.patch(f.launcher, { hrMax: 180, birthYear: 1990 }),
+    );
+    const sessionId = await f.t.run(async (ctx) => {
+      const machine = await ctx.db.get(f.machineId);
+      return await ctx.db.insert("sessions", {
+        organizationId: machine?.organizationId,
+        machineId: f.machineId,
+        userId: f.launcher,
+        startedById: f.launcher,
+        channels: ["ECG"],
+        kind: "auto",
+        status: "pending",
+        origin: "remote",
+        startedAt: now,
+        subjectHrMax: 180,
+      });
     });
     vi.setSystemTime(now + 30_000);
-    await f.t.mutation(internal.training.markTrainingStarted, {
-      machineId: f.machineId,
-      sessionId,
-    });
+    expect(
+      await f.t.mutation(internal.training.markTrainingStarted, {
+        machineId: f.machineId,
+        sessionId,
+      }),
+    ).toEqual({ armed: true });
     vi.setSystemTime(now + 34_000);
     expect(await read(f, sessionId)).toMatchObject({
       startedAt: now + 30_000,

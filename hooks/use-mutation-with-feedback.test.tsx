@@ -171,6 +171,26 @@ describe("ANH-156 EX-1 useMutationWithFeedback", () => {
     },
   );
 
+  it.each(["rider_busy", "machine_busy"] as const)(
+    "ANH-144: a launch refused with %s reads the catalogue's words in both languages",
+    async (code) => {
+      // What convex/training.ts throws from launchAutoSession (`refusal`).
+      serverMutation.mockRejectedValue(new ConvexError(code));
+
+      for (const [locale, catalog] of [
+        ["fr", fr],
+        ["en", en],
+      ] as const) {
+        const outcome = await renderHook(locale)({ machineId: "m1" });
+        expect(outcome).toMatchObject({
+          ok: false,
+          code,
+          message: catalog.errors[code],
+        });
+      }
+    },
+  );
+
   it("coded error without a translation: the server text is shown", async () => {
     serverMutation.mockRejectedValue(
       new ConvexError({

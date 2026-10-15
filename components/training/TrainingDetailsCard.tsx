@@ -15,7 +15,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Gauge, Hand } from "lucide-react";
 import { formatMinutes } from "@/lib/training";
-import { SessionKindBadge, SessionOriginBadge } from "./TrainingBadges";
+import {
+  SessionKindBadge,
+  SessionOriginBadge,
+  useEndReason,
+} from "./TrainingBadges";
 import { TelemetryCharts } from "./TelemetryCharts";
 
 /** Session detail: training parameters, end reason and the recorded telemetry. */
@@ -25,6 +29,7 @@ export function TrainingDetailsCard({
   sessionId: Id<"sessions">;
 }) {
   const t = useTranslations("training");
+  const endReasonOf = useEndReason();
   const training = useQuery(api.training.getTrainingSession, { sessionId });
   const telemetry = useQuery(api.training.getSessionTelemetry, {
     sessionId,
@@ -36,6 +41,7 @@ export function TrainingDetailsCard({
 
   const hasZone =
     training.zoneLowBpm !== undefined && training.zoneHighBpm !== undefined;
+  const endReason = endReasonOf(training);
 
   return (
     <Card>
@@ -78,7 +84,7 @@ export function TrainingDetailsCard({
               : "-"}
           </Field>
         </div>
-        {training.endReason && (
+        {endReason && (
           <div
             className={`rounded-md border p-3 text-sm ${
               training.status === "failed"
@@ -89,7 +95,7 @@ export function TrainingDetailsCard({
             <p className="text-xs text-muted-foreground">
               {t("session.endReason")}
             </p>
-            <p className="font-mono text-sm">{training.endReason}</p>
+            <p className="font-mono text-sm">{endReason}</p>
           </div>
         )}
         {training.kind === "manual" && (

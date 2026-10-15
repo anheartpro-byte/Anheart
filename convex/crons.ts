@@ -28,6 +28,19 @@ crons.interval(
   {},
 );
 
+/**
+ * Every minute: a launch from the dashboard that its machine has not armed
+ * within `PENDING_SESSION_TTL_S` (300 s by default) fails, "expired before
+ * the machine armed it", and so does one whose rights, rider or machine
+ * changed while it waited (`training.sweepPendingSessions`, ANH-144).
+ */
+crons.interval(
+  "sweep-pending-sessions",
+  { minutes: 1 },
+  internal.training.sweepPendingSessions,
+  {},
+);
+
 crons.daily(
   "purge-machine-health",
   { hourUTC: 3, minuteUTC: 17 },

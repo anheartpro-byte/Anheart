@@ -53,13 +53,24 @@ function sendRaw(
   });
 }
 
-async function seedPendingAuto(w: MachineWorld, machineId: Id<"machines">) {
+/**
+ * A launch from the dashboard waiting for `machineId`, as `launchAutoSession`
+ * queues it: made by its rider, who holds the launch right on the first
+ * machine, dated now (a launch waits five minutes at most, ANH-144).
+ */
+async function seedPendingAuto(
+  w: MachineWorld,
+  machineId: Id<"machines">,
+  riderId: Id<"users"> = w.patient,
+) {
   return await w.t.run((ctx) =>
     ctx.db.insert("sessions", {
+      organizationId: w.organizationId,
       machineId,
-      userId: w.patient,
+      userId: riderId,
+      startedById: riderId,
       status: "pending" as const,
-      startedAt: NOW,
+      startedAt: Date.now(),
       channels: ["ECG"],
       kind: "auto" as const,
       origin: "remote" as const,
@@ -362,7 +373,8 @@ describe("ANH-132 /api/machine/training/poll", () => {
   it("returns only a pending auto session of this machine", async () => {
     const w = await world();
     const mine = await seedPendingAuto(w, w.machine);
-    await seedPendingAuto(w, w.otherMachine); // another machine's auto
+    // Another machine's auto, for another rider: a rider waits on one machine.
+    await seedPendingAuto(w, w.otherMachine, w.adminId);
     await seedSession(w, w.machine, "pending", "legacy"); // not an auto
 
     const response = await send(w, w.machineKey, "GET", "/api/machine/training/poll");

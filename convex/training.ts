@@ -27,6 +27,14 @@
  * unknown), never `completed` nor `failed`: the machine is not told to stop
  * it, a heartbeat that names it makes it active again, and the end the
  * machine sends, however late, closes it (`interruptSilentSessions`).
+ *
+ * A launch is checked again when the machine arms it (ANH-144), not only when
+ * it is made: whoever made it can still make it, the rider still may ride,
+ * the machine is the one it was, and the launch has not waited longer than
+ * `PENDING_SESSION_TTL_S` (`armingRefusal`). One that fails becomes a failed
+ * session with a stable code (`endCode`), the machine's start is answered 409
+ * with that code, and the poll never offers it. A rider has one session at a
+ * time, on any machine, and a machine one launch at a time (`launchAutoSession`).
  */
 import { limitUser } from "./lib/rateLimits";
 import { ConvexError, v } from "convex/values";
@@ -49,12 +57,17 @@ import {
   inScope,
   organizationRoleOf,
   requireSharedProfileAuthority,
+  rolesHeldNow,
   sameOrganization,
   type CurrentUser,
 } from "./lib/auth";
 import { liveStateValidator, machineProfileFields } from "./schema";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
-import { machineError } from "./lib/contract";
+import { machineError, type MachineErrorCode } from "./lib/contract";
+import {
+  refusal as dashboardRefusal,
+  type DashboardErrorCode,
+} from "./lib/errors";
 // A heartbeat older than this means the machine cannot be relied on to answer.
 // The dashboard judges freshness on the same value (hooks/use-freshness.ts).
 import { LIVE_FRESH_MS, SESSION_SILENCE_MS } from "../lib/training";
@@ -187,6 +200,34 @@ async function canSeeMachineTraining(
 ): Promise<boolean> {
   if (await canAccessMachine(ctx, machineId, user)) return true;
   return user.role === "user" && (await holdsLaunchRight(ctx, user, machineId));
+}
+
+/**
+ * Why `launcher` may not launch a session for `riderId` on this machine, or
+ * null when they may: a user for themselves, holding the launch right; an
+ * admin or a gestionnaire on a machine they reach, for a rider they manage
+ * (or themselves). The rule of `launchAutoSession`, and the one its launch is
+ * checked against again when the machine arms it (`armingRefusal`).
+ */
+async function launcherRefusal(
+  ctx: QueryCtx | MutationCtx,
+  launcher: CurrentUser,
+  riderId: Id<"users">,
+  machineId: Id<"machines">,
+): Promise<string | null> {
+  if (launcher.role === "user") {
+    if (riderId !== launcher._id)
+      return "You can only launch a session for yourself";
+    return (await holdsLaunchRight(ctx, launcher, machineId))
+      ? null
+      : "You have not been given the right to launch sessions on this machine";
+  }
+  if (!(await canAccessMachine(ctx, machineId, launcher))) {
+    return "Not authorized to use this machine";
+  }
+  return (await canAccessUser(ctx, riderId, launcher))
+    ? null
+    : "Not authorized to launch a session for this rider";
 }
 
 function fullName(user: Pick<Doc<"users">, "firstName" | "lastName">) {
@@ -482,11 +523,340 @@ function startedNotEnded(status: Doc<"sessions">["status"]): boolean {
   return status === "active" || status === "interrupted";
 }
 
+// ---------------------------------------------------------------------------
+// A launch waits, then is checked again when the machine arms it (ANH-144)
+// ---------------------------------------------------------------------------
+
+/** How long a launch waits for its machine, unless the deployment says otherwise. */
+export const DEFAULT_PENDING_SESSION_TTL_S = 300;
+/**
+ * The shortest and the longest wait `PENDING_SESSION_TTL_S` may set. The
+ * shortest leaves a launch offered for `POLL_MARGIN_S` at least.
+ */
+export const PENDING_SESSION_TTL_BOUNDS_S = { min: 90, max: 600 } as const;
+
+/**
+ * How long before its expiry a launch is no longer offered to its machine.
+ * A console of today arms a launch as soon as it reads it, and confirms the
+ * start afterwards: one read just before the expiry would start, then be
+ * refused at its confirmation and stopped at once. The confirmation itself
+ * is accepted until the expiry.
+ */
+export const POLL_MARGIN_S = 45;
+
+/**
+ * How long a launch from the dashboard may wait for its machine to arm it, in
+ * ms: the deployment's `PENDING_SESSION_TTL_S` (whole seconds, within
+ * `PENDING_SESSION_TTL_BOUNDS_S`), else 300 s. A value that is not one is not
+ * read, and the default applies.
+ */
+export function pendingSessionTtlMs(): number {
+  const raw = (process.env.PENDING_SESSION_TTL_S ?? "").trim();
+  const seconds = Number(raw);
+  const { min, max } = PENDING_SESSION_TTL_BOUNDS_S;
+  return /^\d+$/.test(raw) && seconds >= min && seconds <= max
+    ? seconds * 1000
+    : DEFAULT_PENDING_SESSION_TTL_S * 1000;
+}
+
+/** Written as `endReason` on a launch that waited too long. */
+export const EXPIRED_REASON = "expired before the machine armed it";
+
+/**
+ * Why a launch is refused when its machine arms it: each one a stable code
+ * of the machine API (contracts/machine-api.json, `arming_refusals`) and of
+ * the dashboard's table (convex/lib/errors.ts, which the site translates),
+ * stored on the failed session as `endCode`, with the sentence stored as its
+ * `endReason`. In the order they are checked.
+ */
+export const ARMING_REFUSALS = {
+  expired_before_start: EXPIRED_REASON,
+  machine_deleted_before_start: "machine deleted before it armed the launch",
+  organization_changed_before_start:
+    "the machine left the session's organisation before it armed the launch",
+  right_revoked_before_start:
+    "launch right withdrawn before the machine armed it",
+  age_refused_before_start: "the rider's age no longer allows an auto session",
+  hr_max_changed_before_start:
+    "the rider's max heart rate changed before the machine armed the launch",
+  rider_busy:
+    "the rider was already in another session when the machine armed the launch",
+} as const satisfies Partial<
+  Record<Extract<MachineErrorCode, DashboardErrorCode>, string>
+>;
+
+export type ArmingRefusalCode = keyof typeof ARMING_REFUSALS;
+
+export const ARMING_REFUSAL_CODES = Object.keys(
+  ARMING_REFUSALS,
+) as ArmingRefusalCode[];
+
+function isArmingRefusalCode(code: unknown): code is ArmingRefusalCode {
+  return ARMING_REFUSAL_CODES.some((known) => known === code);
+}
+
+const armingRefusalCode = v.union(
+  ...ARMING_REFUSAL_CODES.map((code) => v.literal(code)),
+);
+
+type ArmingRefusal = { code: ArmingRefusalCode; message: string };
+
+function refusalFor(code: ArmingRefusalCode): ArmingRefusal {
+  return { code, message: ARMING_REFUSALS[code] };
+}
+
+/** A launch the machine has not armed `pendingSessionTtlMs` after it was made. */
+function expired(session: Doc<"sessions">, now: number): boolean {
+  // While pending, `startedAt` is the date of the launch, on the server's clock.
+  return now - session.startedAt > pendingSessionTtlMs();
+}
+
+/** A launch that will expire within `POLL_MARGIN_S`: no longer offered. */
+function expiresSoon(session: Doc<"sessions">, now: number): boolean {
+  return now - session.startedAt > pendingSessionTtlMs() - POLL_MARGIN_S * 1000;
+}
+
+/**
+ * Whether a training session may still hold its rider and its machine: a
+ * launch waiting for its machine (and not expired), a session running, or one
+ * interrupted while its machine has said nothing since: it may still be
+ * running. An interrupted session whose machine has been heard since is not
+ * running there, since a heartbeat naming it would have made it active again.
+ * A session of the retired recording mode (no `kind`) is history, and holds
+ * no rider (see `machineHeld` for its machine).
+ */
+async function mayHold(
+  ctx: QueryCtx | MutationCtx,
+  session: Doc<"sessions">,
+  now: number,
+): Promise<boolean> {
+  if (session.kind === undefined) return false;
+  if (session.status === "pending") return !expired(session, now);
+  if (session.status === "active") return true;
+  if (session.status !== "interrupted") return false;
+  const machine = await ctx.db.get(session.machineId);
+  return (
+    machine === null ||
+    session.interruptedAt === undefined ||
+    machine.lastHeartbeat <= session.interruptedAt
+  );
+}
+
+const OPEN_STATUSES = ["pending", "active", "interrupted"] as const;
+
+/** Whether the rider has a session, other than `except`, that may hold them, on any machine. */
+async function riderHeld(
+  ctx: QueryCtx | MutationCtx,
+  riderId: Id<"users">,
+  now: number,
+  except?: Id<"sessions">,
+): Promise<boolean> {
+  for (const status of OPEN_STATUSES) {
+    const sessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_user_and_status", (q) =>
+        q.eq("userId", riderId).eq("status", status),
+      )
+      .collect();
+    for (const session of sessions) {
+      if (session._id !== except && (await mayHold(ctx, session, now)))
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the machine has a session that may hold it (`mayHold`). A pending
+ * session of the retired recording mode holds its machine too, as any pending
+ * session always did, until it is cancelled or the migration of ANH-135
+ * fails it.
+ */
+async function machineHeld(
+  ctx: QueryCtx | MutationCtx,
+  machineId: Id<"machines">,
+  now: number,
+): Promise<boolean> {
+  for (const status of OPEN_STATUSES) {
+    const sessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_machine_and_status", (q) =>
+        q.eq("machineId", machineId).eq("status", status),
+      )
+      .collect();
+    for (const session of sessions) {
+      const legacyWaiting =
+        session.kind === undefined && session.status === "pending";
+      if (legacyWaiting || (await mayHold(ctx, session, now))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The rider of a launch that could still be made now, or null. Whoever made
+ * it could make it now, in the machine's organisation: by the role they hold
+ * there, or as the Anheart admin (`rolesHeldNow`), under the rule of
+ * `launchAutoSession` (`launcherRefusal`). And the rider still has an
+ * account, and is still an active member of that organisation.
+ */
+async function riderStillAllowed(
+  ctx: QueryCtx | MutationCtx,
+  session: Doc<"sessions">,
+  machine: Doc<"machines">,
+): Promise<Doc<"users"> | null> {
+  const { startedById, userId } = session;
+  const organizationId = machine.organizationId;
+  if (startedById === undefined || userId === undefined) return null;
+  if (organizationId === undefined) return null;
+  const rider = await ctx.db.get(userId);
+  if (!rider || rider.clerkDeletedAt !== undefined) return null;
+  if ((await organizationRoleOf(ctx, userId, organizationId)) === null)
+    return null;
+  for (const launcher of await rolesHeldNow(ctx, startedById, organizationId)) {
+    if ((await launcherRefusal(ctx, launcher, userId, machine._id)) === null)
+      return rider;
+  }
+  return null;
+}
+
+/**
+ * Why a pending launch must not be armed now, or null when it may be. Checked
+ * when the machine polls (an offer it would refuse is not made), when it
+ * confirms the start (`markTrainingStarted`), and every minute for every
+ * pending launch (`sweepPendingSessions`). In order:
+ *
+ * 1. the launch has waited no longer than `PENDING_SESSION_TTL_S`;
+ * 2. the machine exists and is not deleted;
+ * 3. it is still in the session's organisation;
+ * 4. whoever made the launch could still make it, and the rider is still a
+ *    member of that organisation (`riderStillAllowed`);
+ * 5. (ANH-143, to come) the rider's aptitude and consent are valid: checked
+ *    here, with a code of its own, once that ticket stores them;
+ * 6. the rider's age is known and at least `MIN_RIDER_AGE`;
+ * 7. the rider's max heart rate is known and is the one the launch carried,
+ *    which the machine fits the programme to: a changed value is refused,
+ *    not re-checked, so the machine never runs on the old one;
+ * 8. the rider is in no other session that may still hold them (`mayHold`).
+ */
+async function armingRefusal(
+  ctx: QueryCtx | MutationCtx,
+  session: Doc<"sessions">,
+  now: number,
+): Promise<ArmingRefusal | null> {
+  if (expired(session, now)) return refusalFor("expired_before_start");
+  const machine = await ctx.db.get(session.machineId);
+  if (!machine || machine.isDeleted)
+    return refusalFor("machine_deleted_before_start");
+  if (machine.organizationId !== session.organizationId)
+    return refusalFor("organization_changed_before_start");
+  const rider = await riderStillAllowed(ctx, session, machine);
+  if (rider === null) return refusalFor("right_revoked_before_start");
+  // ANH-143: aptitude and consent are checked here.
+  const age = ageFrom(rider.birthYear, now);
+  if (age === null || age < MIN_RIDER_AGE)
+    return refusalFor("age_refused_before_start");
+  const hrMax = effectiveHrMax(rider, now);
+  if (hrMax === null || hrMax !== session.subjectHrMax)
+    return refusalFor("hr_max_changed_before_start");
+  if (await riderHeld(ctx, rider._id, now, session._id))
+    return refusalFor("rider_busy");
+  return null;
+}
+
+/** A launch the machine must not arm: failed, with its code, before it started. */
+async function failBeforeStart(
+  ctx: MutationCtx,
+  sessionId: Id<"sessions">,
+  refusal: ArmingRefusal,
+  now: number,
+): Promise<void> {
+  await ctx.db.patch(sessionId, {
+    status: "failed",
+    endedAt: now,
+    endReason: refusal.message,
+    endCode: refusal.code,
+  });
+}
+
+/**
+ * Fail every launch from the dashboard that is still pending and that its
+ * machine must no longer arm (`armingRefusal`): one that waited longer than
+ * `PENDING_SESSION_TTL_S` (`endReason` "expired before the machine armed
+ * it"), and one whose rights, rider or machine changed while it waited. Run
+ * every minute (`convex/crons.ts`). Returns how many it failed. Sessions of
+ * the retired recording mode (no `kind`) are left as they are.
+ */
+export const sweepPendingSessions = internalMutation({
+  args: {},
+  returns: v.object({ failed: v.number() }),
+  handler: async (ctx) => {
+    const now = Date.now();
+    const pending = await ctx.db
+      .query("sessions")
+      .withIndex("by_status_and_organization", (q) => q.eq("status", "pending"))
+      .collect();
+    let failed = 0;
+    for (const session of pending) {
+      if (session.kind !== "auto") continue;
+      const refusal = await armingRefusal(ctx, session, now);
+      if (refusal === null) continue;
+      await failBeforeStart(ctx, session._id, refusal, now);
+      failed++;
+    }
+    return { failed };
+  },
+});
+
+/**
+ * Fail, as the sweep would, the launches of this rider and of this machine
+ * that have waited too long: they hold neither, and would otherwise wait
+ * beside the new one until the sweep's next run.
+ */
+async function expireWaitingLaunches(
+  ctx: MutationCtx,
+  riderId: Id<"users">,
+  machineId: Id<"machines">,
+  now: number,
+): Promise<void> {
+  const waiting = [
+    ...(await ctx.db
+      .query("sessions")
+      .withIndex("by_user_and_status", (q) =>
+        q.eq("userId", riderId).eq("status", "pending"),
+      )
+      .collect()),
+    ...(await ctx.db
+      .query("sessions")
+      .withIndex("by_machine_and_status", (q) =>
+        q.eq("machineId", machineId).eq("status", "pending"),
+      )
+      .collect()),
+  ];
+  for (const session of waiting) {
+    if (session.kind === "auto" && expired(session, now)) {
+      await failBeforeStart(
+        ctx,
+        session._id,
+        refusalFor("expired_before_start"),
+        now,
+      );
+    }
+  }
+}
+
 /**
  * Queue an AUTO session for the machine to pick up. The only remote launch.
  *
  * A user launches for themselves only; an admin or a gestionnaire launches
  * for a rider they manage (or for themselves).
+ *
+ * One session at a time (ANH-144): refused with the stable code `rider_busy`
+ * when the rider has a session that may still hold them on any machine, of
+ * any organisation, and `machine_busy` when the machine has one (`mayHold`):
+ * waiting for its machine, running, or interrupted on a machine silent since.
+ * Neither refusal says where. A launch that has waited too long holds nobody:
+ * it is failed on the way, as the sweep would have failed it.
  */
 export const launchAutoSession = mutation({
   args: {
@@ -503,24 +873,13 @@ export const launchAutoSession = mutation({
     const me = await getCurrentUserOrThrow(ctx);
     const riderId = args.userId ?? me._id;
 
-    if (me.role === "user") {
-      if (riderId !== me._id)
-        throw new ConvexError("You can only launch a session for yourself");
-      if (!(await holdsLaunchRight(ctx, me, args.machineId))) {
-        throw new ConvexError(
-          "You have not been given the right to launch sessions on this machine",
-        );
-      }
-    } else {
-      if (!(await canAccessMachine(ctx, args.machineId, me))) {
-        throw new ConvexError("Not authorized to use this machine");
-      }
-      if (!(await canAccessUser(ctx, riderId, me))) {
-        throw new ConvexError(
-          "Not authorized to launch a session for this rider",
-        );
-      }
-    }
+    const unauthorized = await launcherRefusal(
+      ctx,
+      me,
+      riderId,
+      args.machineId,
+    );
+    if (unauthorized !== null) throw new ConvexError(unauthorized);
 
     const machine = await ctx.db.get(args.machineId);
     if (!machine || machine.isDeleted)
@@ -535,21 +894,22 @@ export const launchAutoSession = mutation({
     }
     if (machine.status === "offline")
       throw new ConvexError("Machine is offline");
-    if (machine.status === "in_session")
-      throw new ConvexError("Machine is already in a session");
     if (!machine.programsEnabled) {
       throw new ConvexError(
         "This machine does not accept programmed sessions yet (manual only, at the machine)",
       );
     }
-    const busy = await ctx.db
-      .query("sessions")
-      .withIndex("by_machine_and_status", (q) =>
-        q.eq("machineId", args.machineId).eq("status", "pending"),
-      )
-      .first();
-    if (busy)
-      throw new ConvexError("A session is already waiting for this machine");
+    const now = Date.now();
+    await expireWaitingLaunches(ctx, riderId, args.machineId, now);
+    if (
+      machine.status === "in_session" ||
+      (await machineHeld(ctx, args.machineId, now))
+    ) {
+      throw dashboardRefusal("machine_busy");
+    }
+    if (await riderHeld(ctx, riderId, now)) {
+      throw dashboardRefusal("rider_busy");
+    }
 
     const profile = await ctx.db
       .query("machine_profiles")
@@ -561,7 +921,6 @@ export const launchAutoSession = mutation({
 
     const rider = await ctx.db.get(riderId);
     if (!rider) throw new ConvexError("Rider not found");
-    const now = Date.now();
     // Both helpers give null for a value on record that is not a finite whole
     // number: what is compared below, and copied to the session, always is one.
     const hrMax = effectiveHrMax(rider, now);
@@ -918,6 +1277,9 @@ export const getTrainingSession = query({
       endedAt: v.optional(v.number()),
       stopRequestedAt: v.optional(v.number()),
       endReason: v.optional(v.string()),
+      // The stable code of a launch refused before its machine armed it
+      // (`ARMING_REFUSALS`): the site words it. Absent otherwise.
+      endCode: v.optional(v.string()),
       // When the server marked it interrupted (end unknown): only while it is.
       interruptedAt: v.optional(v.number()),
       canStop: v.boolean(),
@@ -953,6 +1315,7 @@ export const getTrainingSession = query({
       endedAt: s.endedAt,
       stopRequestedAt: s.stopRequestedAt,
       endReason: s.endReason,
+      endCode: s.endCode,
       interruptedAt: s.interruptedAt,
       canStop: s.status === "pending" || startedNotEnded(s.status),
     };
@@ -1075,25 +1438,33 @@ export const getPendingTrainingSession = internalQuery({
         q.eq("machineId", args.machineId).eq("status", "pending"),
       )
       .collect();
-    const s = pending.find((p) => p.kind === "auto");
-    if (
-      !s ||
-      s.profileId === undefined ||
-      s.subjectHrMax === undefined ||
-      s.userId === undefined
-    ) {
-      return null;
+    // Never a launch the machine would be refused when it arms it (expired,
+    // a right withdrawn, the rider's physiology changed...): the sweep fails
+    // it within the minute. Nor one that expires within `POLL_MARGIN_S`.
+    const now = Date.now();
+    for (const s of pending) {
+      if (
+        s.kind !== "auto" ||
+        expiresSoon(s, now) ||
+        s.profileId === undefined ||
+        s.subjectHrMax === undefined ||
+        s.userId === undefined ||
+        (await armingRefusal(ctx, s, now)) !== null
+      ) {
+        continue;
+      }
+      return {
+        sessionId: s._id,
+        profileId: s.profileId,
+        totalDurationS: s.totalDurationS ?? null,
+        subjectId: s.userId,
+        subjectLabel: s.subjectLabel ?? "",
+        subjectHrMax: s.subjectHrMax,
+        subjectAge: s.subjectAge ?? null,
+        operatorName: s.operatorName ?? "dashboard",
+      };
     }
-    return {
-      sessionId: s._id,
-      profileId: s.profileId,
-      totalDurationS: s.totalDurationS ?? null,
-      subjectId: s.userId,
-      subjectLabel: s.subjectLabel ?? "",
-      subjectHrMax: s.subjectHrMax,
-      subjectAge: s.subjectAge ?? null,
-      operatorName: s.operatorName ?? "dashboard",
-    };
+    return null;
   },
 });
 
@@ -1105,6 +1476,12 @@ export const getPendingTrainingSession = internalQuery({
  * and how long ago that was on its monotonic clock (`sessionAgeMs`): the
  * start is then that long before now, and the session has a machine axis. An
  * age that would place the start before the launch itself is not read.
+ *
+ * The launch is checked again first (`armingRefusal`). Refused, it becomes a
+ * failed session with the refusal's code, the machine stays as it was, and
+ * `{armed: false, code, message}` is returned, which the start route answers
+ * 409: the machine must not run. A launch already failed that way gets the
+ * same answer again, so that a confirmation sent twice reads the same.
  */
 export const markTrainingStarted = internalMutation({
   args: {
@@ -1113,17 +1490,32 @@ export const markTrainingStarted = internalMutation({
     machineStartedAt: v.optional(v.number()),
     sessionAgeMs: v.optional(v.number()),
   },
-  returns: v.null(),
+  returns: v.union(
+    v.object({ armed: v.literal(true) }),
+    v.object({
+      armed: v.literal(false),
+      code: armingRefusalCode,
+      message: v.string(),
+    }),
+  ),
   handler: async (ctx, args) => {
     const s = await ctx.db.get(args.sessionId);
     if (!s || s.machineId !== args.machineId)
       throw machineError("session_not_found", "Session not found");
+    if (s.status === "failed" && isArmingRefusalCode(s.endCode)) {
+      return { armed: false as const, ...refusalFor(s.endCode) };
+    }
     if (s.status !== "pending")
       throw machineError(
         "session_not_pending",
         `Session is not pending (status: ${s.status})`,
       );
     const now = Date.now();
+    const refusal = await armingRefusal(ctx, s, now);
+    if (refusal !== null) {
+      await failBeforeStart(ctx, s._id, refusal, now);
+      return { armed: false as const, ...refusal };
+    }
     // While pending, `startedAt` is the date of the launch.
     const start =
       args.machineStartedAt === undefined
@@ -1140,7 +1532,7 @@ export const markTrainingStarted = internalMutation({
           },
     );
     await ctx.db.patch(args.machineId, { status: "in_session" });
-    return null;
+    return { armed: true as const };
   },
 });
 

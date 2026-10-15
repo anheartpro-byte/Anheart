@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.4",
+  "contract_version": "1.5",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "heartbeat_response_fields": ["success", "serverTime", "server_contract_version"],
@@ -30,6 +30,20 @@
       "POST /api/machine/training/telemetry": 307200,
       "POST /api/machine/training/events": 2621440
     }
+  },
+  "arming_refusals": {
+    "description": "Depuis 1.5, `POST /api/machine/training/start` peut répondre 409 avec l'un de ces codes : Convex a revérifié le lancement au moment où la machine l'arme (droits, organisation, machine, âge, FC max, passager libre, délai d'attente) et le refuse. La séance est alors échouée avec ce code (champ `endCode`), `/api/machine/training/poll` ne l'offre plus, et la même réponse revient si la confirmation est répétée. La console ne fait pas tourner la machine pour une séance refusée ainsi. La console actuelle arme avant de confirmer : elle arrête aussitôt, sur la rampe ordinaire, la séance qu'elle vient d'armer, comme pour tout refus de sa confirmation ; ne pas armer du tout est la couche Pi d'ANH-144. Le poll n'offre déjà pas un lancement que ces contrôles refuseraient, ni un lancement qui expire dans moins de 45 s, et une tâche de Convex échoue chaque minute ceux qui attendent encore.",
+    "route": "POST /api/machine/training/start",
+    "status": 409,
+    "codes": [
+      "expired_before_start",
+      "machine_deleted_before_start",
+      "organization_changed_before_start",
+      "right_revoked_before_start",
+      "age_refused_before_start",
+      "hr_max_changed_before_start",
+      "rider_busy"
+    ]
   },
   "error_codes": {
     "contract_unsupported": {
@@ -67,6 +81,34 @@
     "payload_too_large": {
       "statuses": [413],
       "meaning": "Le corps dépasse la taille maximale de la route : refusé avant d'être parcouru, rien n'est écrit. La même requête sera refusée de nouveau."
+    },
+    "expired_before_start": {
+      "statuses": [409],
+      "meaning": "Refus à l'armement (voir `arming_refusals`) : le lancement attendait depuis plus de `PENDING_SESSION_TTL_S` secondes (300 par défaut) sans que la machine en confirme le départ. Une console qui arme avant de confirmer a pu démarrer."
+    },
+    "right_revoked_before_start": {
+      "statuses": [409],
+      "meaning": "Refus à l'armement : celui qui a lancé la séance n'a plus le droit de la lancer pour ce passager sur cette machine (droit de lancement retiré, lien de gestionnaire supprimé, adhésion désactivée), ou le passager n'est plus membre actif de l'organisation de la machine."
+    },
+    "organization_changed_before_start": {
+      "statuses": [409],
+      "meaning": "Refus à l'armement : la machine n'est plus dans l'organisation de la séance."
+    },
+    "machine_deleted_before_start": {
+      "statuses": [409],
+      "meaning": "Refus à l'armement : la machine a été supprimée depuis le lancement."
+    },
+    "age_refused_before_start": {
+      "statuses": [409],
+      "meaning": "Refus à l'armement : l'année de naissance du passager n'est plus connue, ou lui donne moins que l'âge minimal d'une séance automatique."
+    },
+    "hr_max_changed_before_start": {
+      "statuses": [409],
+      "meaning": "Refus à l'armement : la FC max du passager n'est plus connue, ou n'est plus celle que la machine a reçue avec le lancement."
+    },
+    "rider_busy": {
+      "statuses": [409],
+      "meaning": "Refus à l'armement : le passager a déjà une autre séance en attente, en cours ou interrompue sur une machine qui ne s'est pas manifestée depuis."
     }
   }
 }

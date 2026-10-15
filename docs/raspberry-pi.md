@@ -1702,8 +1702,9 @@ derrière elle, si.
 
 Deux requêtes ont un effet propre. La **confirmation d'un départ** : toute
 réponse autre qu'un oui fait arrêter la séance en cours, tout de suite et une
-seule fois. Refusée (séance annulée sur le site entre le poll et l'armement),
-elle est tenue pour réglée ; retenue par le serveur (426, 401, 403, 5xx), elle
+seule fois. Refusée (séance annulée sur le site entre le poll et l'armement,
+ou, depuis le contrat 1.5, lancement refusé à l'armement : 409 avec un code
+de `arming_refusals`), elle est tenue pour réglée ; retenue par le serveur (426, 401, 403, 5xx), elle
 reste due et est refaite toutes les 15 s, puis l'enregistrement est envoyé,
 quand le serveur l'accepte. Seule l'absence de réponse exploitable (réseau
 coupé, délai dépassé, réponse 2xx qui n'est pas un objet JSON) laisse tourner
@@ -2490,14 +2491,14 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.4`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.5`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.4`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.5`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. Les deux derniers valent `null` :
@@ -2524,6 +2525,15 @@ Ce que fait la console :
   porte (`software_version`). Aucune variable d'environnement ne la règle :
   `ANHEART_SOFTWARE_VERSION`, qui réglait autrefois celle du manifeste seul,
   n'est plus lue ([12.1](#121-clés-lues-par-la-console-srclocal_configpy)).
+* **Un départ refusé à l'armement** (contrat 1.5, ANH-144) : Convex revérifie
+  un lancement quand la console en confirme le départ, et peut répondre 409
+  avec l'un des codes `arming_refusals` du contrat partagé (droit retiré,
+  lancement expiré, âge ou FC max changés, passager dans une autre séance).
+  La console confirme un départ **après** avoir armé la séance ; elle lit ce
+  409 comme tout refus de sa confirmation et arrête la séance aussitôt, sur
+  la rampe ordinaire ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)).
+  Ne pas armer du tout sur ce refus, et afficher le passager à confirmer,
+  est la couche Pi d'ANH-144, à venir.
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les

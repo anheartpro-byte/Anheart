@@ -31,6 +31,7 @@ import {
   refusalOf,
   softwareVersionOf,
 } from "./lib/contract";
+import type { Id } from "./_generated/dataModel";
 import { machineRoutes } from "./machineAuth.fixtures";
 import { modules, NOW, seedMachineWorld } from "./test.setup";
 
@@ -77,17 +78,25 @@ const post = (w: MachineWorld, path: string, body?: unknown) =>
 const get = (w: MachineWorld, path: string) =>
   call(w, "GET", path, CONTRACT_VERSION);
 
+/**
+ * A session of `machineId` for the patient, as `launchAutoSession` queues it:
+ * launched by the patient, who holds the launch right on the first machine,
+ * dated now (a launch waits five minutes at most, ANH-144).
+ */
 async function seedSession(
   w: MachineWorld,
   machineId: MachineWorld["machine"],
   status: "pending" | "active",
+  startedAt: number = Date.now(),
 ) {
   return await w.t.run((ctx) =>
     ctx.db.insert("sessions", {
+      organizationId: w.organizationId,
       machineId,
       userId: w.patient,
+      startedById: w.patient,
       status,
-      startedAt: NOW,
+      startedAt,
       channels: ["ECG"],
       kind: "auto" as const,
       origin: "remote" as const,
@@ -96,6 +105,17 @@ async function seedSession(
       subjectAge: 36,
     }),
   );
+}
+
+/** Confirm, as the first machine, the start of a launch the world changed after it was made. */
+async function startAfter(
+  w: MachineWorld,
+  change: (sessionId: Id<"sessions">) => Promise<unknown>,
+  startedAt?: number,
+) {
+  const sessionId = await seedSession(w, w.machine, "pending", startedAt);
+  await change(sessionId);
+  return post(w, "/api/machine/training/start", { sessionId });
 }
 
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
@@ -437,6 +457,74 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
           sessionId: await seedSession(w, w.machine, "active"),
         }),
     },
+    // ANH-144: the launch is checked again when the machine arms it.
+    {
+      name: "training/start: a launch that waited longer than PENDING_SESSION_TTL_S",
+      status: 409,
+      code: "expired_before_start",
+      run: (w) => startAfter(w, async () => {}, Date.now() - 301_000),
+    },
+    {
+      name: "training/start: a machine that left the session's organisation",
+      status: 409,
+      code: "organization_changed_before_start",
+      run: (w) =>
+        startAfter(w, () =>
+          w.t.run(async (ctx) => {
+            const elsewhere = await ctx.db.insert("organizations", {
+              name: "Elsewhere",
+              slug: "elsewhere",
+              createdAt: NOW,
+              settings: { requirePrescription: false, language: "fr" },
+            });
+            await ctx.db.patch(w.machine, { organizationId: elsewhere });
+          }),
+        ),
+    },
+    {
+      name: "training/start: a launch right withdrawn while it waited",
+      status: 409,
+      code: "right_revoked_before_start",
+      run: (w) =>
+        startAfter(w, () =>
+          w.t.run(async (ctx) => {
+            for (const row of await ctx.db
+              .query("machine_user_permissions")
+              .collect()) {
+              await ctx.db.delete(row._id);
+            }
+          }),
+        ),
+    },
+    {
+      name: "training/start: a birth year that now gives a minor",
+      status: 409,
+      code: "age_refused_before_start",
+      run: (w) =>
+        startAfter(w, () =>
+          w.t.run((ctx) =>
+            ctx.db.patch(w.patient, {
+              birthYear: new Date().getUTCFullYear() - 15,
+            }),
+          ),
+        ),
+    },
+    {
+      name: "training/start: a max heart rate changed while it waited",
+      status: 409,
+      code: "hr_max_changed_before_start",
+      run: (w) =>
+        startAfter(w, () =>
+          w.t.run((ctx) => ctx.db.patch(w.patient, { hrMax: 175 })),
+        ),
+    },
+    {
+      name: "training/start: a rider already running on another machine",
+      status: 409,
+      code: "rider_busy",
+      run: (w) =>
+        startAfter(w, () => seedSession(w, w.otherMachine, "active")),
+    },
     {
       name: "training/start: an identifier that is not one",
       status: 400,
@@ -606,10 +694,14 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
     expect(shared.error_codes[code]?.statuses).toContain(status);
   });
 
-  it("exercises every code of the shared list but the one no route can reach", () => {
+  it("exercises every code of the shared list but those no route can reach", () => {
     const exercised = new Set(refusals.map((refusal) => refusal.code));
+    // A deleted machine is refused its key (401) before its start is read:
+    // `machine_deleted_before_start` is the end code the sweep writes, and a
+    // start answers it only to a machine deleted while the start is handled.
     expect(MACHINE_ERROR_CODES.filter((code) => !exercised.has(code))).toEqual([
       "machine_not_found",
+      "machine_deleted_before_start",
     ]);
   });
 

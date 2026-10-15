@@ -465,7 +465,7 @@ describe("ANH-135 migration: recording sessions left open are marked failed", ()
       });
     // Before: the pending recording session refuses every launch and blocks
     // the deletion of the machine.
-    await expect(launch()).rejects.toThrow(/already waiting/);
+    await expect(launch()).rejects.toThrow(/machine_busy/);
     await expect(
       as(w.t, "admin").mutation(api.machines.deleteMachine, {
         machineId: w.machine,

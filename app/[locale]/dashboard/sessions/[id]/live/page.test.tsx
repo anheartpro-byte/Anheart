@@ -109,6 +109,7 @@ function training(overrides: Partial<Training> = {}): Training {
     endedAt: undefined,
     stopRequestedAt: undefined,
     endReason: undefined,
+    endCode: undefined,
     interruptedAt: undefined,
     canStop: true,
     ...overrides,

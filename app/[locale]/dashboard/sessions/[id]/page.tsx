@@ -39,6 +39,7 @@ import { SessionSummaryCard } from "@/components/training/SessionSummaryCard";
 import {
   SessionKindBadge,
   SessionOriginBadge,
+  useEndReason,
 } from "@/components/training/TrainingBadges";
 
 export default function SessionDetailPage({
@@ -49,6 +50,7 @@ export default function SessionDetailPage({
   const { id } = use(params);
   const t = useTranslations();
   const locale = useLocale();
+  const endReasonOf = useEndReason();
 
   const sessionId = id as Id<"sessions">;
   const session = useQuery(api.sessions.getSession, { sessionId });
@@ -142,11 +144,13 @@ export default function SessionDetailPage({
                   {t("sessionDetail.failedTitle")}
                 </h3>
                 <p className="text-sm text-red-700 dark:text-red-300 mt-1">
-                  {t("sessionDetail.failedDescription")}
+                  {training?.endCode !== undefined
+                    ? t("sessionDetail.failedBeforeStartDescription")
+                    : t("sessionDetail.failedDescription")}
                 </p>
-                {training?.endReason && (
+                {training && endReasonOf(training) && (
                   <p className="text-sm text-red-600 dark:text-red-400 mt-2 font-mono">
-                    {training.endReason}
+                    {endReasonOf(training)}
                   </p>
                 )}
                 {session.notes && session.notes.includes("Failure reason:") && (

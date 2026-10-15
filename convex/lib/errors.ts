@@ -62,6 +62,30 @@ export const DASHBOARD_ERRORS = {
   last_gestionnaire:
     "The caller is the machine's only gestionnaire: they cannot leave it.",
 
+  // One session at a time (ANH-144). Thrown by `launchAutoSession`.
+  rider_busy:
+    "The rider already has a session waiting, running, or interrupted on a machine silent since, on any machine: one at a time. Also an arming refusal (below).",
+  machine_busy:
+    "The machine already has a session waiting, running, or interrupted while it is silent: one at a time.",
+
+  // Launches refused when their machine arms them (ANH-144): the codes of
+  // `ARMING_REFUSALS` (convex/training.ts), `rider_busy` above among them.
+  // Never thrown at the dashboard: each is the `endCode` of the failed
+  // session, which the site words with its translation, and a code of the
+  // machine API (contracts/machine-api.json, `arming_refusals`).
+  expired_before_start:
+    "End code: the machine did not confirm the start within PENDING_SESSION_TTL_S of the launch. A console that arms before confirming may have started.",
+  machine_deleted_before_start:
+    "End code: the machine was deleted while the launch waited.",
+  organization_changed_before_start:
+    "End code: the machine left the session's organisation while the launch waited.",
+  right_revoked_before_start:
+    "End code: whoever launched could no longer launch it, or the rider is no longer a member, when it was checked again.",
+  age_refused_before_start:
+    "End code: the rider's birth year is no longer known, or gives less than the minimum age.",
+  hr_max_changed_before_start:
+    "End code: the rider's max heart rate is no longer the one the launch gave the machine.",
+
   // Patient invitations.
   invalid_invitation: "The name or the e-mail address of the invitation is not valid.",
   invitation_unavailable:

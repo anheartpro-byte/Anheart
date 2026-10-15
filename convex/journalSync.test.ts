@@ -147,6 +147,7 @@ async function launched(
       organizationId: w.organizationId,
       machineId,
       userId: w.patient,
+      startedById: w.patient,
       status: "pending" as const,
       startedAt: launchedAt,
       channels: ["ECG"],

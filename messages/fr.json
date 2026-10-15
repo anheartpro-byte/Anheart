@@ -26,7 +26,15 @@
     "machine_in_session": "La machine est en séance : elle ne peut pas être supprimée maintenant.",
     "machine_has_pending_session": "Une séance attend son départ sur cette machine : annulez-la avant de supprimer la machine.",
     "machine_not_deleted": "Cette machine n'est pas supprimée : il n'y a rien à restaurer.",
-    "last_gestionnaire": "Vous êtes le seul gestionnaire de cette machine : supprimez-la plutôt que de vous en retirer."
+    "last_gestionnaire": "Vous êtes le seul gestionnaire de cette machine : supprimez-la plutôt que de vous en retirer.",
+    "rider_busy": "Pratiquant déjà dans une autre séance, en attente ou en cours : une seule à la fois.",
+    "machine_busy": "Cette machine a déjà une séance en attente ou en cours : une seule à la fois.",
+    "expired_before_start": "Expirée : départ non confirmé à temps",
+    "machine_deleted_before_start": "Machine supprimée avant le départ",
+    "organization_changed_before_start": "Machine passée dans une autre organisation avant le départ",
+    "right_revoked_before_start": "Droit retiré avant le départ",
+    "age_refused_before_start": "Âge du pratiquant refusé avant le départ",
+    "hr_max_changed_before_start": "FC max du pratiquant modifiée avant le départ"
   },
   "sessionRecord": {
     "next": "Page suivante",
@@ -473,7 +481,8 @@
     "recordedRange": "Données enregistrées de {start} à {end}",
     "legacyTitle": "Ancien enregistrement ECG",
     "legacyDescription": "Cette séance vient de l'ancien mode d'enregistrement ECG, retiré du logiciel. Elle est conservée en lecture seule.",
-    "dataBatches": "Lots de données"
+    "dataBatches": "Lots de données",
+    "failedBeforeStartDescription": "Ce lancement a été refusé avant que le serveur n'en confirme le départ à la machine."
   },
   "sessionLive": {
     "viewDetails": "Voir le détail de la session",

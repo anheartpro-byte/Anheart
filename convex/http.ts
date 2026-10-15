@@ -418,6 +418,10 @@ http.route({
  * monotonic clock. They are read together or not at all, and a value that is
  * not a number is not read: without both, the start is dated at its
  * reception, as for a machine that sends neither.
+ *
+ * 409 `{error: <arming refusal>, message}` when the launch is checked again
+ * and refused (ANH-144, contract 1.5, `arming_refusals`): the session is
+ * failed with that code and the machine must not run it. Never rate limited.
  */
 http.route({
   path: "/api/machine/training/start",
@@ -427,13 +431,18 @@ http.route({
     const sessionId = sessionIdOf(ctx, body?.sessionId);
     if (!body || !sessionId)
       return refuse(400, "invalid_request", "Missing sessionId");
-    await ctx.runMutation(internal.training.markTrainingStarted, {
-      machineId,
-      sessionId,
-      machineStartedAt: isNum(body.startedAt) ? body.startedAt : undefined,
-      sessionAgeMs: isNum(body.sessionAgeMs) ? body.sessionAgeMs : undefined,
-    });
-    return json(200, { success: true });
+    const started = await ctx.runMutation(
+      internal.training.markTrainingStarted,
+      {
+        machineId,
+        sessionId,
+        machineStartedAt: isNum(body.startedAt) ? body.startedAt : undefined,
+        sessionAgeMs: isNum(body.sessionAgeMs) ? body.sessionAgeMs : undefined,
+      },
+    );
+    return started.armed
+      ? json(200, { success: true })
+      : refuse(409, started.code, started.message);
   }),
 });
 

@@ -269,6 +269,52 @@ async function userOf(ctx: Ctx, identity: UserIdentity) {
 }
 
 /**
+ * The ways an account could act in an organisation now, read from the
+ * server's own rows when no call of theirs is being served: with the role of
+ * its active membership in that organisation, and as the Anheart admin when
+ * it is an active admin of the Anheart organisation. Empty for an account
+ * that no longer exists or was deleted in Clerk, or that holds neither.
+ *
+ * Only for re-checking, at the moment a machine arms a launch, that whoever
+ * made it could still make it (`convex/training.ts`). A call is never served
+ * with it: the organisation and the role of a call come from its token.
+ */
+export async function rolesHeldNow(
+  ctx: Ctx,
+  userId: Id<"users">,
+  organizationId: Id<"organizations">,
+): Promise<CurrentUser[]> {
+  const user = await ctx.db.get(userId);
+  if (!user || user.clerkDeletedAt !== undefined) return [];
+  const held: CurrentUser[] = [];
+  const organization = await ctx.db.get(organizationId);
+  const role = await organizationRoleOf(ctx, userId, organizationId);
+  if (organization && organization.deletedAt === undefined && role !== null) {
+    held.push({
+      ...user,
+      role: effectiveRole(organization, role),
+      organizationId,
+    });
+  }
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  for (const membership of memberships) {
+    if (!membership.active || membership.role !== "admin") continue;
+    const other = await ctx.db.get(membership.organizationId);
+    if (
+      other &&
+      other.deletedAt === undefined &&
+      isAnheartOrganization(other)
+    ) {
+      held.push({ ...user, role: "admin", organizationId: other._id });
+    }
+  }
+  return held;
+}
+
+/**
  * Get current user from database - throws if not found, or if the call
  * carries no organisation the server accepts.
  */

@@ -181,6 +181,7 @@ describe("ANH-216 EX-1 a session the server has no news of is marked interrupted
         organizationId: w.organizationId,
         machineId: w.machine,
         userId: w.patient,
+        startedById: w.patient,
         status: "pending" as const,
         startedAt: NOW,
         channels: ["ECG"],
@@ -191,7 +192,8 @@ describe("ANH-216 EX-1 a session the server has no news of is marked interrupted
         subjectAge: 36,
       }),
     );
-    const confirmed = NOW + 30 * MINUTE;
+    // Within the five minutes a launch may wait for its machine (ANH-144).
+    const confirmed = NOW + 4 * MINUTE;
     vi.setSystemTime(confirmed);
     await post(w, "/api/machine/training/start", { sessionId });
 

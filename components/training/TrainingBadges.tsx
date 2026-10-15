@@ -19,6 +19,23 @@ export function useTrainingLabel() {
       : value;
 }
 
+/**
+ * Why a session ended, for a person: the sentence of its stable end code (a
+ * launch refused before its machine armed it, ANH-144), translated like any
+ * code of the server's table (`errors.<code>`, convex/lib/errors.ts), else
+ * the reason as it was written (the machine's words or the server's), else
+ * nothing.
+ */
+export function useEndReason() {
+  const messages = useMessages();
+  const t = useTranslations("errors");
+  return (training: { endCode?: string; endReason?: string }) =>
+    training.endCode !== undefined &&
+    hasOwnMessage(messages, ["errors", training.endCode])
+      ? t(training.endCode)
+      : training.endReason;
+}
+
 export function SessionKindBadge({ kind }: { kind: string | undefined }) {
   const t = useTranslations("training.kind");
   const k = kind ?? "recording";
