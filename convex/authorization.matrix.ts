@@ -304,10 +304,10 @@ export const MATRIX: Entry[] = [
         .map((actor) => ({ actor, expect: empty, note: "registry not visible to this role" })),
     ],
     onSuccess: (res, w, actor) => {
-      const rows = res as Array<{ machineId: string; level: string; versionStatus: string; configurationStatus: string; alerts: string[] }>;
+      const rows = res as Array<{ machineId: string; level: string; versionStatus: string; configurationStatus: string }>;
       const expected = actor === "admin" ? [w.machine, w.otherMachine, w.orgBMachine] : actor === "orgAdmin" ? [w.machine, w.otherMachine] : [w.orgBMachine];
       expectExactly(rows.map((row) => row.machineId), expected, "registry badge machines");
-      if (rows.some((row) => row.level !== "none" || row.versionStatus !== "unknown" || row.configurationStatus !== "unavailable" || row.alerts.join() !== "programs_enabled_without_auto"))
+      if (rows.some((row) => row.level !== "none" || row.versionStatus !== "unknown" || row.configurationStatus !== "unavailable"))
         throw new Error("Empty registry badges differ");
     },
   },

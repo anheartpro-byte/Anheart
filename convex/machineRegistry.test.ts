@@ -108,7 +108,11 @@ describe("ANH-147 machine registry", () => {
       "auto",
     ]);
     for (const entry of registry?.validation.reviews ?? []) {
-      expect(entry.by).toBe(w.admin);
+      expect(entry.by).toEqual({
+        userId: w.admin,
+        firstName: "admin",
+        lastName: "Synthetic",
+      });
       expect(entry.reportUrl).toBeTypeOf("string");
       expect(
         await w.t.run(
@@ -209,14 +213,20 @@ describe("ANH-147 machine registry", () => {
         {
           from: "auto",
           to: "bench",
-          by: w.admin,
+          by: { userId: w.admin, firstName: "admin", lastName: "Synthetic" },
           at: NOW + 20,
           reason: args.reason,
         },
       ],
     });
-    expect(levelAt(registry!.validation, NOW + 15)).toBe("auto");
-    expect(levelAt(registry!.validation, NOW + 20)).toBe("bench");
+    const stored = await w.t.run((ctx) =>
+      ctx.db
+        .query("machine_registry")
+        .withIndex("by_machine", (q) => q.eq("machineId", w.machine))
+        .unique(),
+    );
+    expect(levelAt(stored!.validation, NOW + 15)).toBe("auto");
+    expect(levelAt(stored!.validation, NOW + 20)).toBe("bench");
   });
 
   it("normalizes identity, preserves absent fields and clears null fields", async () => {
@@ -240,7 +250,7 @@ describe("ANH-147 machine registry", () => {
       site: "Adresse de test",
       commissionedAt: NOW,
       expectedSoftwareVersion: "pi-0.1.0",
-      updatedBy: w.admin,
+      updatedBy: { userId: w.admin, firstName: "admin", lastName: "Synthetic" },
     });
     expect((await read(w))?.contacts.map((contact) => contact.userId)).toEqual([
       w.orgAdmin,
@@ -419,7 +429,11 @@ describe("ANH-147 machine registry", () => {
     expect(registry?.driveParameterSheet).toMatchObject({
       storageId: second,
       contentType: "application/json",
-      attachedBy: w.admin,
+      attachedBy: {
+        userId: w.admin,
+        firstName: "admin",
+        lastName: "Synthetic",
+      },
       signedBy: "TEST signataire",
       version: "TEST-v2",
     });
@@ -588,6 +602,7 @@ describe("ANH-147 machine registry", () => {
     "pending",
     "cancelled",
     "expired",
+    "pi_refused",
     "active",
     "completed",
     "failed",
@@ -620,6 +635,17 @@ describe("ANH-147 machine registry", () => {
           endReason: "Cancelled before start by manager Synthetic",
         });
         expect(cancelled?.endCode).toBeUndefined();
+      } else if (state === "pi_refused") {
+        await w.t.mutation(internal.training.endTrainingSession, {
+          machineId: w.machine,
+          sessionId,
+          failed: true,
+          reason: "refusee par la machine : TEST",
+        });
+        expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+          status: "failed",
+          endReason: "refusee par la machine : TEST",
+        });
       } else if (state === "expired") {
         vi.setSystemTime(NOW + pendingSessionTtlMs() + 1);
         expect(
@@ -673,8 +699,13 @@ describe("ANH-147 machine registry", () => {
             api.machineRegistry.listRegistryBadges,
             {},
           )
-        ).find((entry) => entry.machineId === w.machine)?.alerts,
-      ).toEqual(ran ? ["person_on_board_without_occupied"] : []);
+        ).find((entry) => entry.machineId === w.machine),
+      ).toEqual({
+        machineId: w.machine,
+        level: "auto",
+        versionStatus: "unknown",
+        configurationStatus: "unavailable",
+      });
     },
   );
 
@@ -742,11 +773,13 @@ describe("ANH-147 machine registry", () => {
           api.machineRegistry.listRegistryBadges,
           {},
         )
-      ).find((entry) => entry.machineId === w.machine)?.alerts,
-    ).toEqual([
-      "programs_enabled_without_auto",
-      "person_on_board_without_occupied",
-    ]);
+      ).find((entry) => entry.machineId === w.machine),
+    ).toEqual({
+      machineId: w.machine,
+      level: "bench",
+      versionStatus: "unknown",
+      configurationStatus: "unavailable",
+    });
   });
 
   it("limits rider alerts to the latest 50 sessions", async () => {
@@ -814,7 +847,7 @@ describe("ANH-147 machine registry", () => {
       ),
     ).toMatch(/^https?:\/\//);
     await w.t.run((ctx) => ctx.db.patch(w.machine, { isDeleted: true }));
-    expect(await read(w)).not.toBeNull();
+    expect(await read(w)).toMatchObject({ canEdit: false });
     expect(
       await as(w.t, "orgAdmin").query(api.machineRegistry.getRegistry, {
         machineId: w.machine,

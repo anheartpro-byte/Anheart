@@ -334,8 +334,9 @@ et `medicalParametersVersion` (version enregistrée ou `null`). Une descente
 contient `from`, `to`, `by`, `at`, `reason`. Ces historiques ne sont jamais
 effacés par les mutations. Le niveau monte uniquement par une revue jointe,
 exactement au niveau suivant. `occupied` exige une version médicale et reste
-refusé tant que `MEDICAL_PUBLIC_KEY_PEM` est la clé de test `cle-de-test` ;
-ANH-98 doit la remplacer. Seul l'admin Anheart descend le niveau, avec un
+refusé tant que `MEDICAL_PUBLIC_KEY_PEM` est la clé publique de test ;
+`cle-de-test` désigne le signataire du fichier de test, pas le nom de la clé.
+ANH-98 doit remplacer cette clé. Seul l'admin Anheart descend le niveau, avec un
 motif de 3 à 500 caractères après suppression des espaces extérieurs.
 
 Les chaînes sont nettoyées et limitées à 200 caractères (adresse : 500,
@@ -345,6 +346,10 @@ exister dans Convex Storage, être un PDF ou JSON de 10 Mio au plus, avoir
 été téléversée depuis moins d'une heure et ne figurer dans aucun registre,
 ni comme fiche courante, ni dans un historique, ni comme compte rendu.
 Aucune donnée de santé ne doit être déposée dans le registre ou la fiche.
+Résiduel Storage : un fichier téléversé puis refusé au rattachement reste
+dans le Storage sans référence de registre et sans URL exposée. Point de
+suivi : prévoir le nettoyage des dépôts non rattachés ; aucun mécanisme de
+purge supplémentaire n'est livré ici.
 
 ### `machines`
 
@@ -1557,8 +1562,8 @@ organisation cliente est refusé, en lecture comme en écriture.
 
 | Fonction | Droits et effet |
 |---|---|
-| `getRegistry` (query) | Admin Anheart : toute machine, même supprimée. `org_admin` : machine non supprimée de sa propre organisation. Autres cas : `null` ; anonyme : `not_authenticated`. Retourne les champs du registre, contacts résolus en `{userId, firstName, lastName}`, URL de la fiche, de son historique et des comptes rendus, et `canEdit`. |
-| `listRegistryBadges` (query) | Machines non supprimées de toutes les organisations pour l'admin Anheart, de sa propre organisation pour `org_admin`, `[]` pour les autres rôles ; anonyme refusé. Par machine : niveau, statut de version, statut de configuration et codes d'alerte. |
+| `getRegistry` (query) | Admin Anheart : toute machine, même supprimée. `org_admin` : machine non supprimée de sa propre organisation. Autres cas : `null` ; anonyme : `not_authenticated`. Retourne les champs du registre, contacts résolus en `{userId, firstName, lastName}`, auteurs résolus, URL de la fiche, de son historique et des comptes rendus, `effectiveLevel` et `canEdit` (admin et machine non supprimée). |
+| `listRegistryBadges` (query) | Machines non supprimées de toutes les organisations pour l'admin Anheart, de sa propre organisation pour `org_admin`, `[]` pour les autres rôles ; anonyme refusé. Par machine : niveau effectif, statut de version et statut de configuration. Aucun champ `alerts` ni lecture des séances : les alertes restent sur la fiche. |
 | `listContactCandidates({machineId})` (query) | Admin Anheart uniquement. Membres actifs de l'organisation de la machine, hors comptes supprimés dans Clerk, sous la forme `{userId, firstName, lastName, role}` (rôle dans cette organisation, sans e-mail). Tri par nom, prénom puis identifiant. La même règle contrôle les contacts proposés, lus et enregistrés. Machine absente ou supprimée : `machine_not_found` ; sans organisation : liste vide. |
 | `checkConfigurationLock` (query) | Même accès que la fiche ; verdict `{allowed, requiredLevel, reachedLevel, message}` pour une clé et sa valeur booléenne. Point d'entrée prévu pour ANH-141. |
 | `generateUploadUrl` (mutation) | Admin Anheart uniquement ; URL de dépôt Convex Storage. |
@@ -1579,6 +1584,18 @@ niveau corrompu refuse toute valeur. Le message de refus est exactement
 `machine validée jusqu'au niveau auto` pour une machine au niveau `auto`.
 `requireConfigurationAllowed` dans `convex/lib/machineRegistry.ts` fournit
 le garde serveur, avec le refus `machine_validation_insufficient`.
+L'écriture de configuration d'ANH-141 doit afficher le `message` renvoyé par
+`checkConfigurationLock` (« machine validée jusqu'au niveau X ») ; le garde
+conserve son code d'erreur structuré.
+
+Le niveau effectif vaut `validation.level` uniquement s'il égale
+`levelAt(validation, maintenant)`, sinon `none` (fermeture sur incohérence).
+Tous les verdicts, statuts de version, seuils d'alerte, badges et règles de
+montée ou descente utilisent ce niveau effectif. `getRegistry` le renvoie
+à côté du niveau stocké ; la fiche avertit si les deux diffèrent.
+Les auteurs `by`, `attachedBy` et `updatedBy` sont résolus à la lecture en
+`{userId, firstName, lastName}`, sans e-mail. Pour un compte supprimé ou
+absent, seul `{userId}` est renvoyé ; les identifiants stockés sont conservés.
 
 `configurationProposal` propose `ARM_RADIUS_M` et `LEG_TIP_RADIUS_M` depuis
 les mesures du registre, ou `null` si elles manquent. L'écriture de la
@@ -1600,17 +1617,28 @@ si aucune n'est définie. `medicalKeyIsTest` expose le blocage médical.
 Deux alertes sont calculées à la lecture. `programs_enabled_without_auto`
 signale `machines.programsEnabled === true` sous le niveau `auto`.
 `person_on_board_without_occupied` compte, parmi les 50 séances les plus
-récentes de la machine, celles avec une personne à bord alors que le niveau
+récentes que le lecteur peut lire sur cette machine, celles avec une personne
+à bord alors que le niveau
 historique au début était inférieur à `occupied`, et donne la date de la
-plus récente. Les séances `pending` sont exclues, ainsi que les séances
+plus récente. L'admin Anheart lit toutes les séances ; `org_admin` ne compte
+que celles dont `organizationId` égale son organisation, jamais celles sans
+organisation. Ce filtre Convex précède `.take(50)` pour que les séances
+illisibles ne masquent pas les séances lisibles.
+Les séances `pending` sont exclues, ainsi que les séances
 `failed` avec un `endCode` de `ARMING_REFUSAL_CODES` (refus à l'armement,
 expiration comprise), ou sans `endCode` et dont `endReason` commence par
-`Cancelled before start by` (annulation par `requestStop` avant départ).
-Une séance armée reste comptée même si elle échoue ensuite.
+`Cancelled before start by` (annulation par `requestStop` avant départ) ou
+`refusee par la machine : ` (refus du Pi avant départ, terminé par
+`/training/end`, préfixe écrit par `raspberry-pi/src/cloud_sync.py`).
+Seules les fins avant départ connues sont exclues ; toute autre fin compte,
+l'alerte penchant vers le signalement (fail closed). Une séance armée reste
+comptée même si elle échoue ensuite.
 Une séance `auto` a toujours une personne à bord ; pour les
 autres, un segment des notes séparé par `; ` doit valoir exactement
 `Occupancy: occupied`. Les revues et descentes permettent de retrouver le
-niveau à cet instant. À date égale, l'ordre est celui des transitions valides
+niveau à cet instant si le niveau courant est cohérent avec son historique ;
+sinon toutes les séances sont évaluées au niveau `none`. À date égale, l'ordre
+est celui des transitions valides
 en conservant l'ordre de chaque historique ; un historique incohérent est lu
 comme `none`. Une descente ultérieure ne dénonce pas une séance
 qui avait commencé au niveau `occupied`.

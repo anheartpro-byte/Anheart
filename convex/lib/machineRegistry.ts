@@ -1,3 +1,7 @@
+/**
+ * ANH-147: validation evidence, configuration locks and registry display rules.
+ * Decisions fail closed when the stored level disagrees with its history.
+ */
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { refusal, type DashboardErrorCode } from "./errors";
@@ -13,24 +17,30 @@ const TEST_MEDICAL_PUBLIC_KEY =
   "-----BEGIN PUBLIC KEY-----\n" +
   "MCowBQYDK2VwAyEA9lp8wwVIXK2xXJ6ljOYle/mDb4D3Y8QkSXTXi6V1kX0=\n" +
   "-----END PUBLIC KEY-----\n";
+/** Exact key comparison keeps occupied validation blocked until ANH-98 replaces it. */
 export const MEDICAL_KEY_IS_TEST =
   MEDICAL_PUBLIC_KEY_PEM === TEST_MEDICAL_PUBLIC_KEY;
 
+/** Returns the ordered rank, or -1 for an unknown stored value. */
 export function validationRank(level: MachineValidationLevel): number {
   return MACHINE_VALIDATION_LEVELS.indexOf(level);
 }
 
+/** Returns the only level a new review may grant. */
 export function nextValidationLevel(level: MachineValidationLevel) {
   const rank = validationRank(level);
   return rank < 0 ? null : (MACHINE_VALIDATION_LEVELS[rank + 1] ?? null);
 }
 
+/** Minimum validation required to enable each central configuration flag. */
 export const CONFIGURATION_LOCKS = {
   PROGRAMS_ENABLED: "auto",
   OCCUPANCY_OCCUPIED_ENABLED: "occupied",
 } as const;
+/** Configuration flags governed by the registry. */
 export type ConfigurationKey = keyof typeof CONFIGURATION_LOCKS;
 
+/** Allows disabling known flags and enabling only at the required effective level. */
 export function configurationLockVerdict(
   level: MachineValidationLevel,
   key: ConfigurationKey,
@@ -48,6 +58,7 @@ export function configurationLockVerdict(
   };
 }
 
+/** Refuses skipped reviews and occupied validation without production medical evidence. */
 export function reviewRefusal(
   current: MachineValidationLevel,
   target: Exclude<MachineValidationLevel, "none">,
@@ -64,6 +75,7 @@ export function reviewRefusal(
   return null;
 }
 
+/** Requires a strictly lower level and an auditable reason. */
 export function downgradeRefusal(
   current: MachineValidationLevel,
   target: MachineValidationLevel,
@@ -79,6 +91,7 @@ export function downgradeRefusal(
   return null;
 }
 
+/** Replays valid transitions chronologically, resolving ties by their valid sequence. */
 export function levelAt(
   validation: Pick<
     Doc<"machine_registry">["validation"],
@@ -121,6 +134,18 @@ export function levelAt(
   return level;
 }
 
+/** Uses the stored level only when its review history supports it at this instant. */
+export function effectiveValidationLevel(
+  validation: Doc<"machine_registry">["validation"] | undefined,
+  at: number,
+): MachineValidationLevel {
+  return validation !== undefined &&
+    validation.level === levelAt(validation, at)
+    ? validation.level
+    : "none";
+}
+
+/** Reports incompatible software before comparing expected and reported versions. */
 export function versionStatus({
   reported,
   expected,
@@ -139,6 +164,7 @@ export function versionStatus({
   return reported === expected ? "up_to_date" : "outdated";
 }
 
+/** Recognises auto sessions or the exact occupancy segment written by the Pi. */
 export function personOnBoard(
   session: Pick<Doc<"sessions">, "kind" | "notes">,
 ): boolean {
@@ -148,6 +174,7 @@ export function personOnBoard(
   );
 }
 
+/** Proposes measured radii without inventing configuration defaults. */
 export function radiiProposal(
   registry: Pick<
     Doc<"machine_registry">,
@@ -160,6 +187,7 @@ export function radiiProposal(
   };
 }
 
+/** Refuses a configuration write using the effective level and the stable error code. */
 export async function requireConfigurationAllowed(
   ctx: Pick<QueryCtx, "db">,
   machineId: Id<"machines">,
@@ -171,8 +199,11 @@ export async function requireConfigurationAllowed(
     .withIndex("by_machine", (q) => q.eq("machineId", machineId))
     .unique();
   if (
-    !configurationLockVerdict(registry?.validation.level ?? "none", key, value)
-      .allowed
+    !configurationLockVerdict(
+      effectiveValidationLevel(registry?.validation, Date.now()),
+      key,
+      value,
+    ).allowed
   )
     throw refusal("machine_validation_insufficient");
 }

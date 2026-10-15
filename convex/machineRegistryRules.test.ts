@@ -4,6 +4,7 @@ import {
   CONFIGURATION_LOCKS,
   configurationLockVerdict,
   downgradeRefusal,
+  effectiveValidationLevel,
   levelAt,
   MEDICAL_KEY_IS_TEST,
   nextValidationLevel,
@@ -121,6 +122,12 @@ describe("machine registry rules", () => {
       [0, 10, 19, 20, 29, 30, 40].map((at) => levelAt(validation, at)),
     ).toEqual(["none", "bench", "bench", "auto", "auto", "bench", "bench"]);
     expect(levelAt({ reviews: [], downgrades: [] }, 10)).toBe("none");
+    expect(effectiveValidationLevel(undefined, 10)).toBe("none");
+    expect(effectiveValidationLevel(validation, 30)).toBe("bench");
+    expect(effectiveValidationLevel(validation, 20)).toBe("none");
+    expect(
+      effectiveValidationLevel({ ...validation, level: corrupt }, 30),
+    ).toBe("none");
   });
 
   it("orders simultaneous reviews and downgrades by their valid transitions", () => {
@@ -292,13 +299,37 @@ describe("machine registry rules", () => {
         return true;
       }),
     ).resolves.toBe(true);
+    const reportStorageId = await w.t.run((ctx) =>
+      ctx.storage.store(new Blob(["TEST report"])),
+    );
     await w.t.run((ctx) =>
       ctx.db.insert("machine_registry", {
         machineId: w.machine,
         organizationId: w.orgA,
         contacts: [],
         driveParameterSheetHistory: [],
-        validation: { level: "auto", reviews: [], downgrades: [] },
+        validation: {
+          level: "auto",
+          reviews: [
+            {
+              level: "bench",
+              by: w.admin,
+              at: 0,
+              reportStorageId,
+              softwareVersion: "pi-0.1.0",
+              medicalParametersVersion: null,
+            },
+            {
+              level: "auto",
+              by: w.admin,
+              at: 1,
+              reportStorageId,
+              softwareVersion: "pi-0.1.0",
+              medicalParametersVersion: null,
+            },
+          ],
+          downgrades: [],
+        },
         updatedAt: Date.now(),
         updatedBy: w.admin,
       }),

@@ -134,8 +134,8 @@ describe("ANH-132 completeness of the authorization matrix", () => {
       .sort();
     expect(withoutForeignCell).toEqual([
       "dashboard.counters", // counts in the caller's organisation, takes no identifier
-      "machineRegistry.generateUploadUrl",
-      "machineRegistry.listRegistryBadges",
+      "machineRegistry.generateUploadUrl", // Anheart admin upload, takes no resource identifier
+      "machineRegistry.listRegistryBadges", // lists only the caller's readable machines, takes no identifier
       "machines.createMachine", // Anheart admin only; refused to centre B by role
       "machines.listMachines",
       "medicalParameters.current",
@@ -168,6 +168,8 @@ describe("ANH-132 completeness of the authorization matrix", () => {
     };
     const discovered = discoverPublicFunctions(withScratch);
     expect(discovered).toContain("scratch.hiddenQuery");
-    expect(missing(discovered, coveredFunctions)).toEqual(["scratch.hiddenQuery"]);
+    expect(missing(discovered, coveredFunctions)).toEqual([
+      "scratch.hiddenQuery",
+    ]);
   });
 });

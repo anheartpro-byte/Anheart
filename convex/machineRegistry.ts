@@ -1,3 +1,7 @@
+/**
+ * ANH-147: authorised machine registry reads and administrator evidence writes.
+ * Storage URLs and session-derived alerts stay within the reader's access.
+ */
 import { v, type Infer } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -17,6 +21,7 @@ import { limitUser } from "./lib/rateLimits";
 import {
   configurationLockVerdict,
   downgradeRefusal,
+  effectiveValidationLevel,
   levelAt,
   MEDICAL_KEY_IS_TEST,
   personOnBoard,
@@ -59,9 +64,17 @@ const alertCodeValidator = v.union(
   v.literal("programs_enabled_without_auto"),
   v.literal("person_on_board_without_occupied"),
 );
-const sheetWithUrlValidator = driveParameterSheetValidator.extend({
-  url: v.union(v.string(), v.null()),
+const authorValidator = v.object({
+  userId: v.id("users"),
+  firstName: v.optional(v.string()),
+  lastName: v.optional(v.string()),
 });
+const sheetWithUrlValidator = driveParameterSheetValidator
+  .omit("attachedBy")
+  .extend({
+    attachedBy: authorValidator,
+    url: v.union(v.string(), v.null()),
+  });
 const emptyValidation: Infer<typeof machineValidationValidator> = {
   level: "none",
   reviews: [],
@@ -108,6 +121,7 @@ async function contactOf(
       };
 }
 
+/** Lists active contacts in the machine's current organisation for Anheart administrators. */
 export const listContactCandidates = query({
   args: { machineId: v.id("machines") },
   returns: v.array(
@@ -222,6 +236,7 @@ async function requirePiVersion(ctx: QueryCtx, version: string) {
   return normalized;
 }
 
+/** Accepts fresh PDF/JSON uploads only once across current and historical registry evidence. */
 async function registryFile(
   ctx: MutationCtx,
   storageId: Id<"_storage">,
@@ -263,7 +278,10 @@ async function statusOf(
     reported === undefined ? null : piRelease(ctx, reported),
     expected === undefined ? null : piRelease(ctx, expected),
   ]);
-  const machineLevel = registry?.validation.level ?? "none";
+  const machineLevel = effectiveValidationLevel(
+    registry?.validation,
+    Date.now(),
+  );
   return {
     versionStatus: versionStatus({
       reported,
@@ -281,12 +299,15 @@ async function statusOf(
   };
 }
 
+/** Counts readable sessions conservatively, excluding only known pre-start failures. */
 async function alertsOf(
   ctx: QueryCtx,
-  machine: Doc<"machines">,
+  { machine, user }: { machine: Doc<"machines">; user: CurrentUser },
   registry: Doc<"machine_registry"> | null,
 ) {
-  const level = registry?.validation.level ?? "none";
+  const validation = registry?.validation ?? emptyValidation;
+  const level = effectiveValidationLevel(validation, Date.now());
+  const coherent = validation.level === levelAt(validation, Date.now());
   const alerts: Array<{
     code: Infer<typeof alertCodeValidator>;
     count: number;
@@ -301,24 +322,36 @@ async function alertsOf(
       count: 1,
       mostRecentAt: null,
     });
-  const sessions = await ctx.db
+  const query = ctx.db
     .query("sessions")
     .withIndex("by_machine_and_started", (q) => q.eq("machineId", machine._id))
-    .order("desc")
-    .take(50);
+    .order("desc");
+  // Apply read access before the limit so foreign sessions cannot hide readable ones.
+  const readable =
+    user.role === "admin"
+      ? query
+      : query.filter((q) =>
+          q.and(
+            q.neq(q.field("organizationId"), undefined),
+            q.eq(q.field("organizationId"), user.organizationId),
+          ),
+        );
+  const sessions = await readable.take(50);
   const unvalidated = sessions.filter((session) => {
     if (session.status === "pending") return false;
+    // Exclude only known pre-start endings; every other ending counts (fail closed).
     if (
       session.status === "failed" &&
       (ARMING_REFUSAL_CODES.some((code) => code === session.endCode) ||
         (session.endCode === undefined &&
-          session.endReason?.startsWith("Cancelled before start by")))
+          (session.endReason?.startsWith("Cancelled before start by") ||
+            session.endReason?.startsWith("refusee par la machine : "))))
     )
       return false;
     return (
       personOnBoard(session) &&
       validationRank(
-        levelAt(registry?.validation ?? emptyValidation, session.startedAt),
+        coherent ? levelAt(validation, session.startedAt) : "none",
       ) < validationRank("occupied")
     );
   });
@@ -331,6 +364,7 @@ async function alertsOf(
   return alerts;
 }
 
+/** Returns the authorised record, resolved authors, effective decisions and readable alerts. */
 export const getRegistry = query({
   args: { machineId: v.id("machines") },
   returns: v.union(
@@ -349,15 +383,26 @@ export const getRegistry = query({
       ),
       driveParameterSheet: v.union(sheetWithUrlValidator, v.null()),
       driveParameterSheetHistory: v.array(sheetWithUrlValidator),
-      validation: machineValidationValidator.extend({
-        reviews: v.array(
-          machineValidationValidator.fields.reviews.element.extend({
-            reportUrl: v.union(v.string(), v.null()),
-          }),
-        ),
-      }),
+      validation: machineValidationValidator
+        .omit("reviews", "downgrades")
+        .extend({
+          reviews: v.array(
+            machineValidationValidator.fields.reviews.element
+              .omit("by")
+              .extend({
+                by: authorValidator,
+                reportUrl: v.union(v.string(), v.null()),
+              }),
+          ),
+          downgrades: v.array(
+            machineValidationValidator.fields.downgrades.element
+              .omit("by")
+              .extend({ by: authorValidator }),
+          ),
+        }),
+      effectiveLevel: machineValidationLevelValidator,
       updatedAt: v.union(v.number(), v.null()),
-      updatedBy: v.union(v.id("users"), v.null()),
+      updatedBy: v.union(authorValidator, v.null()),
       reportedSoftwareVersion: v.union(v.string(), v.null()),
       versionStatus: versionStatusValidator,
       expectedVersionAllowed: v.union(v.boolean(), v.null()),
@@ -387,9 +432,20 @@ export const getRegistry = query({
     const { machine, user } = access;
     const registry = await registryOf(ctx, machine._id);
     const validation = registry?.validation ?? emptyValidation;
+    const effectiveLevel = effectiveValidationLevel(validation, Date.now());
+    const author = async (userId: Id<"users">) => {
+      const account = await ctx.db.get(userId);
+      return account === null || account.clerkDeletedAt !== undefined
+        ? { userId }
+        : { userId, firstName: account.firstName, lastName: account.lastName };
+    };
     const withUrl = async (
       sheet: Infer<typeof driveParameterSheetValidator>,
-    ) => ({ ...sheet, url: await ctx.storage.getUrl(sheet.storageId) });
+    ) => ({
+      ...sheet,
+      attachedBy: await author(sheet.attachedBy),
+      url: await ctx.storage.getUrl(sheet.storageId),
+    });
     const contacts = [];
     for (const userId of registry?.contacts ?? []) {
       const contact = await contactOf(ctx, userId, machine.organizationId);
@@ -428,35 +484,44 @@ export const getRegistry = query({
         reviews: await Promise.all(
           validation.reviews.map(async (review) => ({
             ...review,
+            by: await author(review.by),
             reportUrl: await ctx.storage.getUrl(review.reportStorageId),
           })),
         ),
+        downgrades: await Promise.all(
+          validation.downgrades.map(async (entry) => ({
+            ...entry,
+            by: await author(entry.by),
+          })),
+        ),
       },
+      effectiveLevel,
       updatedAt: registry?.updatedAt ?? null,
-      updatedBy: registry?.updatedBy ?? null,
+      updatedBy: registry === null ? null : await author(registry.updatedBy),
       reportedSoftwareVersion: machine.softwareVersion ?? null,
       ...(await statusOf(ctx, machine, registry)),
       configurationLocks: {
         PROGRAMS_ENABLED: configurationLockVerdict(
-          validation.level,
+          effectiveLevel,
           "PROGRAMS_ENABLED",
           true,
         ),
         OCCUPANCY_OCCUPIED_ENABLED: configurationLockVerdict(
-          validation.level,
+          effectiveLevel,
           "OCCUPANCY_OCCUPIED_ENABLED",
           true,
         ),
       },
       configurationStatus: "unavailable" as const,
       configurationProposal: radiiProposal(registry),
-      alerts: await alertsOf(ctx, machine, registry),
+      alerts: await alertsOf(ctx, access, registry),
       medicalKeyIsTest: MEDICAL_KEY_IS_TEST,
-      canEdit: user.role === "admin",
+      canEdit: user.role === "admin" && machine.isDeleted !== true,
     };
   },
 });
 
+/** Lists effective level and version badges without reading session alerts. */
 export const listRegistryBadges = query({
   args: {},
   returns: v.array(
@@ -465,7 +530,6 @@ export const listRegistryBadges = query({
       level: machineValidationLevelValidator,
       versionStatus: versionStatusValidator,
       configurationStatus: v.literal("unavailable"),
-      alerts: v.array(alertCodeValidator),
     }),
   ),
   handler: async (ctx) => {
@@ -487,19 +551,17 @@ export const listRegistryBadges = query({
           const registry = await registryOf(ctx, machine._id);
           return {
             machineId: machine._id,
-            level: registry?.validation.level ?? "none",
+            level: effectiveValidationLevel(registry?.validation, Date.now()),
             versionStatus: (await statusOf(ctx, machine, registry))
               .versionStatus,
             configurationStatus: "unavailable" as const,
-            alerts: (await alertsOf(ctx, machine, registry)).map(
-              (alert) => alert.code,
-            ),
           };
         }),
     );
   },
 });
 
+/** Returns the effective configuration verdict for a reader allowed to see the machine. */
 export const checkConfigurationLock = query({
   args: {
     machineId: v.id("machines"),
@@ -511,13 +573,14 @@ export const checkConfigurationLock = query({
     if ((await readableMachine(ctx, args.machineId)) === null) return null;
     const registry = await registryOf(ctx, args.machineId);
     return configurationLockVerdict(
-      registry?.validation.level ?? "none",
+      effectiveValidationLevel(registry?.validation, Date.now()),
       args.key,
       args.value,
     );
   },
 });
 
+/** Issues a registry upload URL to an Anheart administrator. */
 export const generateUploadUrl = mutation({
   args: {},
   returns: v.string(),
@@ -529,6 +592,7 @@ export const generateUploadUrl = mutation({
 });
 
 const nullableText = v.optional(v.union(v.string(), v.null()));
+/** Updates supplied identity fields, preserving absent fields and clearing explicit nulls. */
 export const updateIdentity = mutation({
   args: {
     machineId: v.id("machines"),
@@ -593,6 +657,7 @@ export const updateIdentity = mutation({
   },
 });
 
+/** Records the measured radii together with their date and measurer. */
 export const recordRadii = mutation({
   args: {
     machineId: v.id("machines"),
@@ -620,6 +685,7 @@ export const recordRadii = mutation({
   },
 });
 
+/** Attaches a checked upload while retaining every replaced drive sheet. */
 export const attachDriveParameterSheet = mutation({
   args: {
     machineId: v.id("machines"),
@@ -650,6 +716,7 @@ export const attachDriveParameterSheet = mutation({
   },
 });
 
+/** Raises the effective level by one review with an attached report and known versions. */
 export const addValidationReview = mutation({
   args: {
     machineId: v.id("machines"),
@@ -663,7 +730,7 @@ export const addValidationReview = mutation({
     const state = await editableMachine(ctx, args.machineId);
     const validation = state.registry?.validation ?? emptyValidation;
     const rejected = reviewRefusal(
-      validation.level,
+      effectiveValidationLevel(validation, Date.now()),
       args.level,
       MEDICAL_KEY_IS_TEST,
       args.medicalParametersVersion,
@@ -680,26 +747,28 @@ export const addValidationReview = mutation({
         .unique()) === null
     )
       throw refusal("unknown_medical_parameters_version");
-    return await saveRegistry(ctx, state, {
-      validation: {
-        ...validation,
-        level: args.level,
-        reviews: [
-          ...validation.reviews,
-          {
-            level: args.level,
-            by: state.admin._id,
-            at: Date.now(),
-            reportStorageId: args.reportStorageId,
-            softwareVersion,
-            medicalParametersVersion: args.medicalParametersVersion,
-          },
-        ],
-      },
-    });
+    const nextValidation = {
+      ...validation,
+      level: args.level,
+      reviews: [
+        ...validation.reviews,
+        {
+          level: args.level,
+          by: state.admin._id,
+          at: Date.now(),
+          reportStorageId: args.reportStorageId,
+          softwareVersion,
+          medicalParametersVersion: args.medicalParametersVersion,
+        },
+      ],
+    };
+    if (levelAt(nextValidation, Date.now()) !== args.level)
+      throw refusal("validation_level_not_next");
+    return await saveRegistry(ctx, state, { validation: nextValidation });
   },
 });
 
+/** Lowers the effective level with an administrator's recorded reason. */
 export const lowerValidationLevel = mutation({
   args: {
     machineId: v.id("machines"),
@@ -710,11 +779,8 @@ export const lowerValidationLevel = mutation({
   handler: async (ctx, args) => {
     const state = await editableMachine(ctx, args.machineId);
     const validation = state.registry?.validation ?? emptyValidation;
-    const rejected = downgradeRefusal(
-      validation.level,
-      args.level,
-      args.reason,
-    );
+    const effectiveLevel = effectiveValidationLevel(validation, Date.now());
+    const rejected = downgradeRefusal(effectiveLevel, args.level, args.reason);
     if (rejected !== null) throw refusal(rejected);
     return await saveRegistry(ctx, state, {
       validation: {
@@ -723,7 +789,7 @@ export const lowerValidationLevel = mutation({
         downgrades: [
           ...validation.downgrades,
           {
-            from: validation.level,
+            from: effectiveLevel,
             to: args.level,
             by: state.admin._id,
             at: Date.now(),
