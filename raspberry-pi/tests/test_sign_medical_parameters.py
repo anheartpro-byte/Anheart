@@ -1,5 +1,8 @@
+"""Check medical signing against the console's bounds and command-line refusals."""
+
 from __future__ import annotations
 
+import getpass
 import shutil
 import subprocess
 import sys
@@ -143,7 +146,7 @@ def _copy_installation(tmp_path: Path, changes: Mapping[str, int | float]) -> Pa
         pytest.param(
             {"hr_critical_bpm": 250},
             f"{MEDICAL_FILE}:hr_critical_bpm: 250 bpm",
-            ("verify",),
+            ("verify", "sign"),
             id="critical-250",
         ),
     ],
@@ -176,6 +179,45 @@ def test_cli_refuses_unusable_shipped_values_without_a_traceback_or_a_write(
         assert signature.read_bytes() == before
 
 
+def test_main_refuses_out_of_bounds_before_asking_for_a_passphrase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files = write_signed(tmp_path)
+    before = files.signature.read_bytes()
+    files.parameters.write_bytes(with_values({"hr_critical_bpm": 250}))
+    monkeypatch.setattr(signer, "PARAMETERS_PATH", files.parameters)
+    monkeypatch.setattr(signer, "SIGNATURE_PATH", files.signature)
+    monkeypatch.setattr(signer, "PUBLIC_KEY_PATH", files.public_key)
+
+    def unexpected_prompt(_prompt: str) -> str:
+        pytest.fail("an out-of-bounds file must be refused before asking for a passphrase")
+
+    monkeypatch.setattr(getpass, "getpass", unexpected_prompt)
+    assert signer.main(["sign", str(tmp_path / "absent.key")]) == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err.startswith("refuse : la console refuserait ce fichier au demarrage (code 2)")
+    assert f"{MEDICAL_FILE}:hr_critical_bpm: 250 bpm" in output.err
+    assert "phrase secrete" not in output.err
+    assert files.signature.read_bytes() == before
+
+
+def test_module_import_with_unusable_shipped_integer_reraises(tmp_path: Path) -> None:
+    copied = _copy_installation(tmp_path, {"occupied_ceiling_g": 10**399})
+    result = subprocess.run(
+        [sys.executable, "-c", "import scripts.sign_medical_parameters"],
+        cwd=copied,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "MedicalParametersUnusableError" in result.stderr
+    assert "un entier de 400 chiffres" in result.stderr
+
+
 def test_console_import_with_shipped_motion_out_of_bounds_exits_one(tmp_path: Path) -> None:
     copied = _copy_installation(tmp_path, {"motion_limits.g_per_s": 0.6})
     result = subprocess.run(
@@ -189,5 +231,5 @@ def test_console_import_with_shipped_motion_out_of_bounds_exits_one(tmp_path: Pa
     )
     assert result.returncode == 1
     assert "ValueError: g_rate must be finite and in (0, 0.5], got 0.6" in result.stderr
-    assert "src/training/motion.py" in result.stderr
+    assert str(Path("src") / "training" / "motion.py") in result.stderr
     assert f"{MEDICAL_FILE}:motion_limits" not in result.stderr

@@ -102,6 +102,14 @@ def public_pem(private: Ed25519PrivateKey) -> bytes:
     )
 
 
+def _checked_document(content: bytes, *, where: str) -> MedicalDocument:
+    parsed = parse_document(content, where=where)
+    if isinstance(parsed, Err):
+        raise SigningError("fichier refuse par la console : " + " ; ".join(parsed.error))
+    _console_bounds(parsed.value)
+    return parsed.value
+
+
 def generate_key(
     private_path: Path, passphrase: bytes, public_path: Path = PUBLIC_KEY_PATH
 ) -> None:
@@ -145,20 +153,17 @@ def sign(
 ) -> str:
     """Sign the file with ``private`` and check the result as the console will. Returns its version."""
     content = parameters_path.read_bytes()
-    parsed = parse_document(content, where=parameters_path.name)
-    if isinstance(parsed, Err):
-        raise SigningError("fichier refuse par la console : " + " ; ".join(parsed.error))
-    _console_bounds(parsed.value)
+    document = _checked_document(content, where=parameters_path.name)
     if public_pem(private) != public_key_path.read_bytes():
         raise SigningError(
             f"cette cle privee n'est pas celle de {public_key_path.name} : "
             "la console refuserait la signature"
         )
     signature_path.write_bytes(private.sign(content))
-    status = status_of(parsed.value, signature_path=signature_path, public_key_path=public_key_path)
+    status = status_of(document, signature_path=signature_path, public_key_path=public_key_path)
     if status.warning is not None:
         raise SigningError(status.warning)
-    return parsed.value.version
+    return document.version
 
 
 def describe(
@@ -167,11 +172,7 @@ def describe(
     public_key_path: Path = PUBLIC_KEY_PATH,
 ) -> str:
     """What the console would say of the three files at startup."""
-    parsed = parse_document(parameters_path.read_bytes(), where=parameters_path.name)
-    if isinstance(parsed, Err):
-        raise SigningError("fichier refuse par la console : " + " ; ".join(parsed.error))
-    document = parsed.value
-    _console_bounds(document)
+    document = _checked_document(parameters_path.read_bytes(), where=parameters_path.name)
     status = status_of(document, signature_path=signature_path, public_key_path=public_key_path)
     if status.warning is not None:
         raise SigningError(status.warning)
@@ -202,8 +203,11 @@ def main(argv: list[str] | None = None) -> int:
             generate_key(arguments.private_key, _passphrase(confirm=True))
             print(f"cle privee : {arguments.private_key} ; cle publique : {PUBLIC_KEY_PATH}")
         elif arguments.command == "sign":
+            _checked_document(PARAMETERS_PATH.read_bytes(), where=PARAMETERS_PATH.name)
             private = load_private_key(arguments.private_key, _passphrase(confirm=False))
-            print(f"signe : version {sign(private)}, {SIGNATURE_PATH}")
+            print(
+                f"signe : version {sign(private, parameters_path=PARAMETERS_PATH)}, {SIGNATURE_PATH}"
+            )
         else:
             print(describe())
     except SigningError as error:
