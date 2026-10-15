@@ -31,6 +31,7 @@ Il existe deux sortes de séance :
 | [console-locale.md](console-locale.md) | opérateur | chaque page de la console du Pi, chaque bouton, chaque message ; routes HTTP |
 | [tableau-de-bord.md](tableau-de-bord.md) | admin, gestionnaire, user | chaque page du site, rôles, droits de lancement, séance AUTO à distance |
 | [convex.md](convex.md) | développeur | schéma, fonctions publiques, routes HTTP machine, déploiement |
+| [programmes.md](programmes.md) | développeur, équipe produit | programmes synchronisés depuis le Pi et contrôles médicaux d'un lancement distant |
 | [raspberry-pi.md](raspberry-pi.md) | développeur | modules, boucle de contrôle, superviseur et ses règles, table des défauts variateur, capteurs, configuration, contrat de code |
 | [framework-de-test.md](framework-de-test.md) | développeur | tests, gates, simulation, scénarios, cohorte, matrice de pannes, visualiseur |
 | [deploiement.md](deploiement.md) | développeur, exploitant | environnements et clés, déployer Convex, le site, la simulation hébergée, le Raspberry Pi ; ce qui a été vérifié |

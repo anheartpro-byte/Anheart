@@ -360,6 +360,7 @@ Admin et gestionnaire de la machine.
 | Bandeau « Supprimée » | Date de suppression, bouton **Restaurer**. | admin |
 | Bouton **Lancer une séance auto** | Ouvre la fenêtre de lancement (§5). | admin, gestionnaire |
 | Configuration | Statut (« En ligne », « Hors ligne », « En session ») et dernier signal, recalculés chaque seconde (§6), « Créée le » ; bouton Modifier. | admin, gestionnaire |
+| **Version médicale** | Version annoncée par le Pi, ou `-` s'il n'en a pas annoncé. Le statut calculé par rapport à la référence serveur est `unknown` (pas d'annonce ; pas de libellé dans la fiche), `unsigned` (fichier absent ou signature non vérifiée, mode banc), `no_reference` (pas de version de référence serveur), `current` (à jour), `obsolete` (ancienne, référence affichée) ou `ahead` (version inconnue du serveur). | lecture |
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». « Programmes auto désactivés sur cette machine » si le Pi le dit. | lecture |
@@ -796,13 +797,19 @@ Depuis **Mes machines** ou le détail d'une machine : **Lancer une séance auto*
 | FC max du pratiquant | Affichée, avec « estimée » si c'est l'estimation. |
 | Notes | Facultatif. |
 
-La fenêtre **bloque** le bouton **Lancer** et explique pourquoi quand : la
-machine n'est pas lançable, est hors ligne, est déjà en séance, a les
-programmes désactivés, n'a aucun programme, la FC max ou l'année de naissance
-manque (ou la valeur enregistrée n'est pas un entier, pour un patient comme
-pour « Moi-même »), ou le pratiquant a moins de 18 ans. Elle **avertit** si la
-zone dépasse 90 % de la FC max ou si la FC limite du programme dépasse la FC
-max (« Le serveur refusera ce lancement. »).
+La fenêtre **bloque** le bouton **Lancer** et explique pourquoi quand : aucune
+version des paramètres médicaux n'est enregistrée sur le serveur, la machine
+annonce un fichier non signé (mode banc), elle n'est pas lançable, est hors
+ligne, est déjà en séance, a les programmes désactivés, n'a aucun programme,
+la FC max ou l'année de naissance manque (ou la valeur enregistrée n'est pas
+un entier, pour un patient comme pour « Moi-même »), ou le pratiquant est plus
+jeune que l'âge minimum de la version médicale courante. L'absence de version
+de référence affiche « Aucune version des paramètres médicaux n'est enregistrée
+sur le serveur : aucun lancement à distance n'est possible. » Le mode banc
+affiche « paramètres médicaux non signés : la machine est en mode banc
+uniquement. » Elle **avertit** si la zone dépasse la fraction de FC max fixée
+par la version courante ou si la FC limite du programme dépasse la FC max
+(« Le serveur refusera ce lancement. »).
 
 Après **Lancer** :
 

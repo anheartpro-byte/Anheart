@@ -1869,7 +1869,41 @@ Hors du Pi, sur le poste du signataire, depuis `raspberry-pi/` :
 | Limite | Conséquence, et à qui elle revient |
 |---|---|
 | **Les valeurs ne sont pas validées.** La signature de test prouve l'intégrité depuis ce ticket, pas une décision médicale | ANH-98 : décision et signature par le médecin |
-| **Le site ne sait rien de la signature.** Convex ne garde pas encore la version attendue (`medical_parameters_versions`), la fiche machine n'affiche ni la version médicale ni « version médicale obsolète », Convex ne lit pas ses valeurs dans le fichier (`MIN_RIDER_AGE` et 0,9 restent écrits dans `convex/training.ts`) et aucun test ne compare les refus de zone du Pi et de Convex | seconde PR du ticket (couche Convex : EX-4 côté Convex, EX-6, test de parité) |
+| **La couche Convex et site est implémentée mais pas déployée.** Convex vérifie le fichier signé et conserve sa version ; la fiche machine affiche la version annoncée et son statut (sauf `unknown`, qui n'a pas de libellé) ; le lancement distant échoue fermé sans version serveur et affiche un code précis si la machine annonce des paramètres non signés. La table n'est déployée sur aucun déploiement à ce jour ; aucun enregistrement de version sur le déploiement de développement n'a donc été vérifié. Le support Ed25519 du runtime Convex de production reste à vérifier au premier enregistrement. | premier déploiement et premier enregistrement à vérifier ; EX-5 (catalogue de programmes, ANH-137 / ANH-138) reste à faire |
 | **Le catalogue de programmes ne référence pas la version médicale** ; le Pi ne refuse pas un programme validé pour une autre version | EX-5, avec le ticket de publication des programmes (ANH-138) |
 | **Qui peut écrire dans l'image peut remplacer la clé.** Le fichier, sa signature et la clé publique sont dans l'image de la console, en lecture seule pour elle. Quelqu'un qui reconstruit l'image ou est root sur le Pi peut remplacer les trois ensemble : la signature protège d'une modification par erreur ou hors de la procédure, pas d'un Pi compromis | MEN-04 ([menaces.md](menaces.md)) ; distribution signée du logiciel : MEN-10 |
 | **Jamais essayé sur un Pi.** Mode banc, bandeau, refus d'un lancement distant : vérifiés par les tests automatisés seulement (console construite sur le variateur simulé) | essai au banc à faire |
+
+### 13.6 Côté Convex et site
+
+`convex/medicalParameters.ts` reçoit le fichier et sa signature dans une action
+interne. `convex/lib/medicalParameters.ts` vérifie la signature Ed25519 sur les
+octets exacts du fichier avec une copie de `raspberry-pi/config/medical.pub`,
+puis valide son schéma et ses bornes. L'action conserve le fichier dans le
+stockage Convex et `medicalParametersStore.insertVersion` ajoute les
+métadonnées au registre global `medical_parameters_versions`, sans
+organisation ; une version est ajoutée, jamais remplacée. La version courante
+est la plus élevée. La query authentifiée `medicalParameters.current` renvoie
+ses métadonnées au site.
+
+`training.launchAutoSession` prend la fraction de zone, l'âge minimum et la
+formule d'estimation dans cette version courante. Sans version, il refuse avec
+`medical_parameters_unavailable`. Si le heartbeat indique explicitement que
+la signature du Pi n'est pas vérifiée, il refuse avec
+`medical_parameters_unsigned` avant le contrôle `programs_disabled`. Le site
+affiche la version annoncée et le libellé du statut disponible ; `unknown`
+signifie qu'il n'y a pas d'annonce et n'a pas de libellé sur la fiche. Convex
+calcule l'un des statuts `unknown`, `unsigned`, `no_reference`, `current`,
+`obsolete` ou `ahead`, ainsi que la version de référence lorsqu'elle existe.
+Les écrans de lancement donnent la raison
+correspondante. Au démarrage, le Pi revérifie son propre fichier signé ; son
+contrôle fait foi pour la machine.
+
+La parité des refus de zone est comparée avec le même jeu de données dans
+`raspberry-pi/tests/test_medical_parity.py` et
+`convex/medicalParity.test.ts`, à partir de
+`raspberry-pi/tests/fixtures/medical_zone_parity.json`. Elle prouve la parité
+de ces cas de calcul, pas le déploiement du registre ni le support Ed25519 du
+runtime de production. Le catalogue de programmes ne référence pas encore la
+version médicale ; le Pi ne refuse donc pas encore un programme validé pour
+une autre version : cela reste EX-5, ANH-137 et ANH-138.
