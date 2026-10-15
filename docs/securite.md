@@ -178,6 +178,12 @@ préalables :
    fichier `config/medical_parameters.json` (ANH-98, [section 13](#13-décisions-médicales--un-fichier-signé-anh-139)).
 5. Brancher une vraie caméra (écrire `detector_link.py`) et la mettre en service.
 6. Refaire les essais sur le banc réel, puis capsule vide, avant tout passager.
+7. La barrière logicielle d'aptitude et de consentement existe : tout lancement
+   est refusé sans aptitude « apte » validée et consentement actif. Le
+   questionnaire 0.1.0 et le texte de consentement 0.1.0 sont provisoires ;
+   remplacer le premier par le contenu médical signé (ANH-98), et le second par
+   le texte valide après ANH-87b et ANH-172. Dès que leur version change, une
+   aptitude ou un consentement signé pour l'ancienne version ne compte plus.
 
 ## 7. Décisions des 5 et 6 octobre 2026 sur les reprises automatiques
 

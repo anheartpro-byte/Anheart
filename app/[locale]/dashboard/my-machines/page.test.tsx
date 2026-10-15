@@ -14,6 +14,7 @@ import {
   mutationsSent,
   NOW,
   person,
+  propsOf,
   renderPage,
   router,
   signedInAs,
@@ -30,6 +31,12 @@ vi.mock(
   "@/i18n/navigation",
   async () => (await import("@/test-support/pages")).navigation,
 );
+vi.mock("@/components/training/FitnessCard", async () => ({
+  FitnessCard: (await import("@/test-support/pages")).standIn("FitnessCard"),
+}));
+vi.mock("@/components/training/ConsentCard", async () => ({
+  ConsentCard: (await import("@/test-support/pages")).standIn("ConsentCard"),
+}));
 
 /**
  * "My machines": where a patient, a manager or an admin launches an auto
@@ -67,6 +74,15 @@ function machine(
   name: string,
   overrides: Partial<Machine> = {},
 ): Machine {
+  answer(api.fitness.getRiderReadiness, {
+    serverNow: NOW,
+    questionnaireVersion: "0.1.0",
+    consentTextVersion: "0.1.0",
+    fitness: null,
+    consent: { active: null, lastWithdrawnAt: undefined },
+    launchRefusal: null,
+    canValidate: false,
+  });
   answer(api.medicalParameters.current, {
     version: "0.1.0",
     issuedAt: "2026-01-01",
@@ -123,6 +139,23 @@ async function choose(
 }
 
 describe("my machines: what each visitor sees", () => {
+  it.each(["admin", "org_admin", "gestionnaire", "user"] as const)(
+    "mounts the fitness and consent cards for a %s, even with no machine",
+    async (role) => {
+      const user = signedInAs(role);
+      answer(api.training.listLaunchableMachines, []);
+      await renderPage(<MyMachinesPage />);
+
+      expect(
+        screen.getByRole("heading", {
+          name: fr.training.myMachines.readinessTitle,
+        }),
+      ).toBeTruthy();
+      expect(propsOf("FitnessCard")).toEqual({ userId: user._id });
+      expect(propsOf("ConsentCard")).toEqual({ userId: user._id });
+    },
+  );
+
   it("asks for the machines the visitor may launch on, and shows nothing until both answers are in", async () => {
     signedInAs("user");
     answer(api.training.listLaunchableMachines, undefined);
@@ -262,6 +295,49 @@ describe("my machines: what each visitor sees", () => {
 });
 
 describe("my machines: what cannot be launched", () => {
+  it("blocks a patient with a readiness refusal and explains how to resolve it", async () => {
+    signedInAs("user");
+    answer(api.training.listLaunchableMachines, [
+      machine(paris, "Paris", { myLaunchRefusal: "rider_not_fit" }),
+    ]);
+    await renderPage(<MyMachinesPage />);
+
+    const card = cardOf("Paris");
+    expect(
+      card.getByRole("button", launchButton).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      card.getByText(
+        fr.training.myMachines.myReadinessBlocked.replace(
+        "{reason}",
+        fr.errors.rider_not_fit,
+        ),
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows a manager their own refusal as information and leaves the launch button active", async () => {
+    signedInAs("gestionnaire");
+    answer(api.training.listLaunchableMachines, [
+      machine(paris, "Paris", { myLaunchRefusal: "consent_missing" }),
+    ]);
+    const { user } = await renderPage(<MyMachinesPage />);
+    const card = cardOf("Paris");
+    const launch = card.getByRole("button", launchButton);
+
+    expect(launch.hasAttribute("disabled")).toBe(false);
+    expect(
+      card.getByText(
+        fr.training.myMachines.myReadinessInfo.replace(
+        "{reason}",
+        fr.errors.consent_missing,
+        ),
+      ),
+    ).toBeTruthy();
+    await user.click(launch);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   it.each([
     [
       "offline",

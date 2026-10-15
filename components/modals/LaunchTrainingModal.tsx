@@ -131,6 +131,15 @@ function LaunchForm({
   const [error, setError] = useState<string | null>(null);
 
   const riderIsPatient = isManager && rider !== SELF && rider !== "";
+  const readinessUserId = me
+    ? riderIsPatient
+      ? (rider as Id<"users">)
+      : me._id
+    : null;
+  const readiness = useQuery(
+    api.fitness.getRiderReadiness,
+    readinessUserId ? { userId: readinessUserId, machineId } : "skip",
+  );
   const riderDoc = useQuery(
     api.users.getUserById,
     riderIsPatient ? { userId: rider as Id<"users"> } : "skip",
@@ -216,6 +225,12 @@ function LaunchForm({
     blocker = t("training.launch.programsDisabled");
   else if (machine.profiles.length === 0)
     blocker = t("training.launch.noPrograms");
+  else if (readiness === undefined)
+    blocker = t("training.launch.readinessLoading");
+  else if (readiness === null)
+    blocker = t("training.launch.readinessUnavailable");
+  else if (readiness.launchRefusal !== null)
+    blocker = t(`errors.${readiness.launchRefusal}`);
   else if (riderHrMax.state === "missing" || notWholeOnRecord("hrMax"))
     blocker = t("training.launch.hrMaxMissing");
   else if (notWholeOnRecord("birthYear"))

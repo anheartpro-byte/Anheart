@@ -49,6 +49,8 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { PatientFormModal } from "@/components/modals/PatientFormModal";
+import { ConsentCard } from "@/components/training/ConsentCard";
+import { FitnessCard } from "@/components/training/FitnessCard";
 import { PhysiologyCard } from "@/components/training/PhysiologyCard";
 import { RiderHistoryCard } from "@/components/training/RiderHistoryCard";
 
@@ -283,6 +285,16 @@ export default function PatientDetailPage({
         {canManage && (
           <div className="lg:col-span-1">
             <PhysiologyCard userId={patientId} user={patient} />
+          </div>
+        )}
+        {canManage && (
+          <div className="lg:col-span-1">
+            <FitnessCard userId={patientId} />
+          </div>
+        )}
+        {canManage && (
+          <div className="lg:col-span-1">
+            <ConsentCard userId={patientId} />
           </div>
         )}
       </div>

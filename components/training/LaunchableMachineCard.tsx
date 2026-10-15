@@ -51,6 +51,8 @@ export function LaunchableMachineCard({
     m.medicalParametersReferenceVersion === null
       ? "no_reference"
       : m.medicalParametersStatus;
+  const launchRefusal = m.myLaunchRefusal;
+  const launchRefusalText = launchRefusal ? t(`errors.${launchRefusal}`) : null;
 
   return (
     <Card>
@@ -114,7 +116,8 @@ export function LaunchableMachineCard({
               !m.programsEnabled ||
               medicalParametersStatus === "unsigned" ||
               medicalParametersStatus === "no_reference" ||
-              m.profiles.length === 0
+              m.profiles.length === 0 ||
+              (isUser && launchRefusal !== null)
             }
           >
             <Play className="h-4 w-4 mr-2" />
@@ -137,6 +140,17 @@ export function LaunchableMachineCard({
         {status === "offline" && (
           <p className="text-xs text-muted-foreground">
             {t("training.launch.offline")}
+          </p>
+        )}
+        {launchRefusalText && (
+          <p className="text-xs text-amber-800 dark:text-amber-200">
+            {isUser
+              ? t("training.myMachines.myReadinessBlocked", {
+                  reason: launchRefusalText,
+                })
+              : t("training.myMachines.myReadinessInfo", {
+                  reason: launchRefusalText,
+                })}
           </p>
         )}
       </CardContent>

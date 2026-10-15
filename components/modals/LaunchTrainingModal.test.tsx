@@ -53,6 +53,7 @@ vi.mock("@/i18n/navigation", () => ({ useRouter: () => router }));
 const fr = messages.fr;
 const t = fr.training.launch;
 const LAUNCH = "training:launchAutoSession";
+const READINESS = "fitness:getRiderReadiness";
 
 const machineId = "machine-1" as Id<"machines">;
 const patientId = "patient-1" as Id<"users">;
@@ -114,6 +115,15 @@ function machine(over: Partial<Machine> = {}) {
       ...over,
     },
   ]);
+  answer(READINESS, {
+    serverNow: Date.now(),
+    questionnaireVersion: "0.1.0",
+    consentTextVersion: "0.1.0",
+    fitness: null,
+    consent: { active: null, lastWithdrawnAt: undefined },
+    launchRefusal: null,
+    canValidate: false,
+  });
 }
 
 function signedInAs(role: "admin" | "org_admin" | "gestionnaire" | "user") {
@@ -352,6 +362,55 @@ describe("ANH-203 launch window: who can be chosen as rider", () => {
 });
 
 describe("ANH-203 launch window: what stops a launch before the server is asked", () => {
+  it.each([
+    ["rider_not_fit", fr.errors.rider_not_fit],
+    ["fitness_expired", fr.errors.fitness_expired],
+    ["consent_missing", fr.errors.consent_missing],
+  ] as const)(
+    "blocks the launch and shows the translated readiness reason %s",
+    async (code, reason) => {
+      signedInAs("user");
+      machine();
+      answer(READINESS, {
+        serverNow: Date.now(),
+        questionnaireVersion: "0.1.0",
+        consentTextVersion: "0.1.0",
+        fitness: null,
+        consent: { active: null, lastWithdrawnAt: undefined },
+        launchRefusal: code,
+        canValidate: false,
+      });
+      const { screen } = open();
+
+      expect(screen.text()).toContain(reason);
+      expect(launchDisabled(screen)).toBe(true);
+      await submit(screen.form());
+      expect(mutationCalls()).toEqual({});
+    },
+  );
+
+  it("keeps launch disabled while the server readiness check is loading", () => {
+    signedInAs("user");
+    machine();
+    answer(READINESS, undefined);
+    const { screen } = open();
+
+    expect(screen.text()).toContain(t.readinessLoading);
+    expect(launchDisabled(screen)).toBe(true);
+  });
+
+  it("checks readiness for the selected patient and selected machine", async () => {
+    gestionnaireWithPatient({ hrMax: 180, birthYear: 1986 });
+    const { screen } = open();
+
+    await choose(screen, PATIENT_OPTION);
+
+    expect(asks(READINESS)).toEqual([
+      { userId: "me", machineId },
+      { userId: patientId, machineId },
+    ]);
+  });
+
   it.each([
     [
       "the machine is not one this person may launch on",
