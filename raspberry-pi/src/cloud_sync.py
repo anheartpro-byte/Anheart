@@ -1007,7 +1007,7 @@ class CloudSync:
     async def send(self, path: str, body: Mapping[str, JsonValue]) -> Answer:
         """POST for the sending of the records, and say what the answer means for it."""
         sent = await self._transport.post(path, body)
-        self._note(sent)
+        self._note(sent, log_refusal_words=path != START_PATH)
         return answer_of(sent)
 
     # --- heartbeat and presets --------------------------------------------
@@ -1309,7 +1309,13 @@ class CloudSync:
         if isinstance(ended, Err):
             _logger.warning("dashboard stop not accepted by the console: %s", ended.error)
 
-    def _note(self, result: Result[Document, CloudError], *, contract: bool = True) -> None:
+    def _note(
+        self,
+        result: Result[Document, CloudError],
+        *,
+        contract: bool = True,
+        log_refusal_words: bool = True,
+    ) -> None:
         """Log what an exchange says of the link, and tell the console's indicator.
 
         ``contract``: the route answers only a console whose major the
@@ -1335,7 +1341,7 @@ class CloudSync:
                 case Refused() as refused:
                     # An answer, even a refusal, is a working link.
                     self._tell_refusal(now, refused, contract=contract)
-                    self._hear_refusal(refused)
+                    self._hear_refusal(refused, include_words=log_refusal_words)
                 case _ as unreachable:
                     assert_never(unreachable)
         else:
@@ -1369,15 +1375,20 @@ class CloudSync:
         else:
             self._link.unrecognised(f"{words} : {NOT_THE_DASHBOARD}", contract=contract)
 
-    def _hear_refusal(self, refused: Refused) -> None:
+    def _hear_refusal(self, refused: Refused, *, include_words: bool = True) -> None:
         """Log a refusal by its stable code, once; a refused contract goes to the console."""
         if refused != self._last_refused:
             self._last_refused = refused
-            _logger.warning(
-                "dashboard refused a request: %s (HTTP %d)",
-                "sans code" if refused.code is None else refused.code,
-                refused.status,
-            )
+            code = "sans code" if refused.code is None else refused.code
+            if include_words:
+                _logger.warning(
+                    "dashboard refused a request: %s (HTTP %d): %s",
+                    code,
+                    refused.status,
+                    logged_words(refused.detail),
+                )
+            else:
+                _logger.warning("dashboard refused a request: %s (HTTP %d)", code, refused.status)
         if refused.code == CONTRACT_UNSUPPORTED:
             self._refuse_server(unsupported_refusal(refused.supported), None)
 
