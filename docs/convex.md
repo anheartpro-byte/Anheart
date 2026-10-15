@@ -285,7 +285,7 @@ dans la réponse de l'appel qui l'a créée.
 | `keyHash` | `hmac-sha256:1:<sel>:<digest>` de la clé entière, vérifié par `crypto.subtle.verify` (§6). |
 | `prefix` | Ce que la fiche de la machine montre : `anh1.` suivi des 8 premiers caractères du sélecteur (par exemple `anh1.3f9c01ab`). |
 | `createdAt`, `createdBy` | Création et son auteur. Pas d'auteur pour une clé créée en ligne de commande (`createKeyByOperator`) ou déplacée par la migration ; pour cette dernière, `createdAt` est la date du déplacement, celle de l'émission n'étant pas connue. |
-| `expiresAt` | Optionnel. À partir de cet instant, la clé n'ouvre plus rien, que la tâche l'ait révoquée ou non. Posé à la création (d'une heure à dix ans plus tard, compté sur l'horloge du serveur), ou par la rotation qui remplace la clé (fin du chevauchement). |
+| `expiresAt` | Optionnel. À cet instant ou peu après (§6), la clé n'ouvre plus rien, que la tâche l'ait révoquée ou non. Posé à la création (d'une heure à dix ans plus tard, compté sur l'horloge du serveur), ou par la rotation qui remplace la clé (fin du chevauchement). |
 | `revokedAt`, `revokedBy` | La clé n'ouvre plus rien : révoquée par quelqu'un (`revokedBy`), par une rotation sans chevauchement (`revokedBy` est alors l'auteur de la rotation), ou par la tâche `revoke-expired-machine-keys` une fois son expiration passée (sans `revokedBy`). |
 | `replacedBy` | La clé créée par la rotation qui a retiré celle-ci. |
 | `lastUsedAt` | Dernière requête que la clé a ouverte, écrite **au plus une fois par minute** (§6). |
@@ -1197,8 +1197,7 @@ Fonctions internes :
   `revokeMachineKey` sans compte, pour qui opère le déploiement avec sa clé de
   déploiement (mise en service, essai de la rotation, tableau de bord hors
   d'atteinte). La clé créée n'a pas d'auteur ; elle est imprimée une fois, dans
-  le terminal de la commande
-  ([Rotation d'une clé machine](#rotation-dune-clé-machine-anh-165)).
+  le terminal de la commande ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)).
 
 ### `sessions.ts` (lectures seulement)
 
@@ -1428,7 +1427,8 @@ tout traitement, par le même point de passage que l'authentification
 (`validateMachineAuth`, `convex/lib/machineHttpAuth.ts`). En-tête absent,
 illisible, ou d'une majeure non servie : **426**
 `{"error": "contract_unsupported", "message": "…", "supported": ["1"]}`,
-et rien n'est lu ni écrit. Une mineure plus récente que celle du serveur
+et rien n'est lu ni écrit, hors la dernière utilisation de la clé (ci-dessous,
+au plus une fois par minute). Une mineure plus récente que celle du serveur
 est acceptée. Voir [Versions et compatibilité](#11-versions-et-compatibilité).
 
 **Une seule exception : la demande d'arrêt.**
@@ -1454,9 +1454,12 @@ expirées pendant sa suppression.
 **Plusieurs clés (ANH-165).** Une machine a ses clés dans `machine_api_keys`
 (§2). Toutes celles qui ne sont ni révoquées ni expirées ouvrent les routes :
 pendant le chevauchement d'une rotation, l'ancienne et la nouvelle. Une clé
-expirée est refusée dès son `expiresAt` (à la milliseconde, `now >=
-expiresAt`), sans attendre que la tâche la marque révoquée ; une clé révoquée
-l'est dès la requête suivante.
+expirée est refusée à son `expiresAt` ou peu après, sans attendre que la
+tâche la marque révoquée : la query d'authentification compare l'expiration à
+`Date.now()`, et Convex peut servir pendant un court moment une réponse
+qu'elle a calculée avant (ANH-238). Une clé révoquée est refusée dès la
+requête suivante : la révocation écrit la clé, ce qui invalide toute réponse
+gardée.
 
 La clé contient un sélecteur public aléatoire de 16 octets et un secret
 aléatoire de 32 octets, encodés en hexadécimal. `crypto.getRandomValues` génère
@@ -1497,7 +1500,10 @@ revérifie la minute dans sa transaction) : une machine qui envoie une requête
 toutes les quelques secondes écrit `lastUsedAt` une fois par minute, pas à
 chaque requête. Une clé pas encore déplacée dans la table n'a pas de dernière
 utilisation. L'ordre ne change pas : la clé, puis le contrat, puis la limite
-de débit de la machine (ANH-166), comptée après l'authentification.
+de débit de la machine (ANH-166), comptée après l'authentification. La
+dernière utilisation est donc écrite pour toute requête dont la clé est
+acceptée, même refusée ensuite (426, 429, 413, 400) : « rien n'est écrit »,
+ailleurs dans cette page, s'entend hors de cette date.
 
 **Erreurs** : tout refus des 10 routes machine (les 401 et les 426 compris)
 a la forme
@@ -2112,50 +2118,11 @@ preuve sur des données réelles.
 
 ### Rotation d'une clé machine (ANH-165)
 
-La procédure de rotation a sa place dans `docs/secrets.md`, l'inventaire des
-secrets qu'apporte ANH-153 ; ce fichier n'est pas encore sur `develop` à
-l'écriture de ces lignes, d'où cette section, à y reporter.
-
-**Pas encore essayée contre un déploiement.** Le critère d'acceptation
-d'ANH-165 (rotation sur le déploiement de développement, avec une console en
-simulation, sans interruption de heartbeat) reste à constater.
-
-Renouveler la clé d'une machine sans la couper :
-
-1. Fiche de la machine (admin Anheart, ou admin de l'organisation de la
-   machine), carte **Clés de la machine**, **Nouvelle clé**. Garder le
-   chevauchement de 24 heures (ou 1 heure) ; choisir une expiration si une
-   règle de rotation l'exige. **Créer la clé**.
-2. Copier la clé affichée **une seule fois**. Perdue avant l'étape 3 : en
-   créer une autre, ou révoquer celle-ci.
-3. Sur le Pi : `sudo nano /etc/anheart/anheart.env`, remplacer la valeur de
-   `MACHINE_API_KEY`, puis `sudo systemctl restart anheart` (au repos
-   seulement). Sur un poste de développement : `raspberry-pi/.env`, puis
-   relancer la console. La console lit sa clé au démarrage seulement ; elle
-   envoie un heartbeat toutes les 10 s et le site ne la dit hors ligne
-   qu'après 90 s sans heartbeat : un redémarrage de quelques secondes ne la
-   fait pas passer hors ligne.
-4. Sur la fiche : la nouvelle clé a une « Dernière utilisation » récente
-   (écrite au plus une fois par minute) et la machine est en ligne. L'ancienne
-   est « Remplacée, encore valide » jusqu'à la fin du chevauchement, puis
-   refusée (401) ; la tâche la marque « Révoquée » dans les 5 minutes.
-5. Pour couper l'ancienne avant la fin du chevauchement, une fois la nouvelle
-   vue en usage : **Révoquer** sur sa ligne.
-
-Clé compromise : la **Révoquer**. Si c'est la seule clé valide de la machine,
-la fenêtre le dit : la machine reste coupée du tableau de bord jusqu'à ce
-qu'une nouvelle clé y soit installée. Une nouvelle clé avec le chevauchement
-**Aucun** révoque d'un coup toutes les autres.
-
-Sans tableau de bord, avec la clé de déploiement du déploiement visé :
-
-```bash
-npx convex run machineKeys:createKeyByOperator '{"machineId": "<id>", "overlapMinutes": 1440}'
-npx convex run machineKeys:revokeKeyByOperator '{"keyId": "<id>"}'
-```
-
-La première imprime `{keyId, apiKey, prefix}` une fois, dans le terminal :
-ne pas la copier dans un ticket, un journal ou une capture.
+La procédure (nouvelle clé avec chevauchement, installation sur le Pi,
+révocation, clé compromise, commandes `createKeyByOperator` et
+`revokeKeyByOperator` sans tableau de bord) et le résultat de son essai sur le
+déploiement de développement sont dans
+[secrets.md, 3.1](secrets.md#31-clé-de-la-machine).
 
 ### Activer le multi-organisation
 
@@ -2523,14 +2490,14 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/sessionSummary.test.ts` | Les chiffres d'un résumé (ANH-89) sur des enregistrements de fixture écrits comme la console les écrit : durée, FC absente ou présente, temps en zone et ses bornes, vitesse, g aux deux rayons avec et sans géométrie, fenêtres de variation de g et chaque raison de ne pas juger un tic, verdicts et règle de fin, colonnes trouvées par leur nom, lignes illisibles, fichiers refusés. |
 | `convex/sessionReports.test.ts` | Le résumé de bout en bout (ANH-89) : provisoire à la fin, final après le dépôt des trois fichiers, jamais remplacé par le provisoire, idempotent, enregistrement illisible, séance non terminée ou de l'ancien mode ; et qui lit le résumé et l'historique d'un pratiquant. |
 | `convex/rateLimits.test.ts`, `convex/rateLimitsSource.test.ts` | La limitation de débit et la taille des corps (ANH-166) : chaque limite du contrat partagé sur sa route (sa réserve, puis 429 avec l'attente, puis de nouveau acceptée, une autre machine jamais retenue), rien d'écrit pour un heartbeat refusé, la limite avant le corps, la demande d'arrêt jamais limitée, **1000 heartbeats en 10 s** limités sans erreur (2 acceptés, 998 refusés 429), les tailles (16 Kio exactement accepté, un octet de plus refusé, octets et non caractères, `Content-Length` trop grand ou trop petit), 601 points refusés avant d'en lire un, le plus grand lot valide accepté ; par compte, 60 écritures puis `rate_limited`, un refus rend son jeton, 5 lancements par minute, l'arrêt jamais limité, et **chaque** mutation et action publique de la matrice refusée une fois les écritures de son acteur épuisées, l'arrêt excepté. Le second fichier remplace `contracts/machine-api.json` par un autre et vérifie que les limites et les tailles le suivent, et que le module refuse de se charger sans la limite ou la taille d'une route qu'il borne. |
-| `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire), clé vérifiée avant le contrat, rien d'écrit pour une requête refusée, `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
+| `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire d'autre que la dernière utilisation de la clé), clé vérifiée avant le contrat, rien d'écrit de la machine, de ses séances ni de ses heartbeats pour une requête refusée (la dernière utilisation de la clé, elle, est écrite pour toute requête dont la clé est acceptée, au plus une fois par minute : §6), `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines` (celui des clés expirées est dans `convex/machineKeys.test.ts`). |
 | `convex/interruptedSessions.test.ts` | La séance sans nouvelles (ANH-216) : marquée `interrupted` 10 min après la dernière nouvelle et pas avant, une seule fois ; marquée aussi quand la machine répond sans la nommer ; un lancement daté de sa confirmation ; ni l'ancien mode, ni `pending`, ni une séance finie touchés. Jamais marquée tant que sa machine la nomme (trois heures) ni pendant que ses points ou ses événements arrivent ; toujours `active: true` pour la machine ; rendue `active` par le heartbeat qui la nomme ; arrêt demandé transmis ; fin tardive acceptée avec sa date, mesures tardives stockées. Une machine ne ranime ni ne couvre la séance d'une autre ; lecture et arrêt réservés à ceux d'une séance active, jamais à un compte du centre B. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée, membre de deux organisations compté dans chacune), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
-| `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; la migration (clé historique acceptée avant, déplacée, idempotente, valeur réversible effacée, table seule juge d'un sélecteur, clé pas encore déplacée prise dans une rotation). |
+| `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; la migration (clé historique acceptée avant, déplacée, idempotente, valeur réversible effacée, table seule juge d'un sélecteur, clé pas encore déplacée prise dans une rotation). |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |
@@ -2626,7 +2593,7 @@ nom de l'en-tête, liste des codes d'erreur), et les constantes de
 |---|---|
 | Même **majeure** des deux côtés | Les deux se parlent. |
 | **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
-| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 9 des 10 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre. |
+| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 9 des 10 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre que la dernière utilisation de la clé ([§6](#6-routes-http-machine-convexhttpts)). |
 | Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
 | Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
 

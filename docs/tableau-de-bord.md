@@ -419,7 +419,7 @@ le », « Révoquée le » ou « Sans expiration ». La dernière utilisation es
 retard. L'état est celui du serveur à la lecture ; une clé dont le
 chevauchement finit pendant que la page est ouverte passe « Révoquée » quand
 la tâche du serveur l'a révoquée, dans les 5 minutes, alors qu'elle est
-refusée à la machine dès la fin du chevauchement.
+refusée à la machine à la fin du chevauchement ou peu après.
 
 - **Nouvelle clé** ouvre une fenêtre : le **chevauchement** avec les clés
   actuelles (« 24 heures (recommandé) », par défaut ; « 1 heure » ; « Aucun :
@@ -439,7 +439,7 @@ refusée à la machine dès la fin du chevauchement.
   de son chevauchement.
 
 La procédure complète de rotation est dans
-[convex.md](convex.md#rotation-dune-clé-machine-anh-165). Un gestionnaire ne
+[secrets.md, 3.1](secrets.md#31-clé-de-la-machine). Un gestionnaire ne
 voit pas la carte : le serveur lui refuse les clés, même de ses machines. La
 régénération immédiate d'avant ANH-165 (« Régénérer la clé », ouverte aussi au
 gestionnaire) n'existe plus ; une nouvelle clé avec le chevauchement « Aucun »
