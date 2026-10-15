@@ -23,10 +23,11 @@ import {
   as,
   configureAnheartOrganization,
   modules,
+  makeRiderReady,
   NOW,
   registerShippedMedicalParameters,
   seedLegacyWorld,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   type LegacyWorld,
   type World,
 } from "./test.setup";
@@ -563,6 +564,10 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
     const w = await seedLegacyWorld(modules);
     await registerShippedMedicalParameters(w.t);
     const { organizationId } = await migrate(w);
+    await makeRiderReady(w.t, w.patient, organizationId, {
+      now: NOW,
+      validUntil: Number.MAX_SAFE_INTEGER,
+    });
 
     // The admin of the default organisation is the Anheart admin.
     expect(await whoAmI(legacy(w, "legacy-admin"))).toMatchObject({

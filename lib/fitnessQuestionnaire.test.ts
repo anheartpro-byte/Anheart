@@ -55,7 +55,9 @@ function syntheticQuestionnaire(): Questionnaire {
 }
 
 function currentAnswers(answer: boolean): Record<string, boolean> {
-  return Object.fromEntries(CURRENT_QUESTIONNAIRE.questions.map((question) => [question.id, answer]));
+  return Object.fromEntries(
+    CURRENT_QUESTIONNAIRE.questions.map((question) => [question.id, answer]),
+  );
 }
 
 describe("versioned fitness questionnaire", () => {
@@ -73,28 +75,116 @@ describe("versioned fitness questionnaire", () => {
   it.each([
     ["not an object", null, "not_an_object"],
     ["missing version", questionnaireWithoutVersion, "invalid_version"],
-    ["missing question id", { ...CURRENT_QUESTIONNAIRE, questions: [{ ...CURRENT_QUESTIONNAIRE.questions[0], id: "" }] }, "invalid_question_id"],
-    ["duplicate question id", { ...CURRENT_QUESTIONNAIRE, questions: [CURRENT_QUESTIONNAIRE.questions[0], CURRENT_QUESTIONNAIRE.questions[0]] }, "duplicate_question_id"],
-    ["unknown question type", { ...CURRENT_QUESTIONNAIRE, questions: [{ ...CURRENT_QUESTIONNAIRE.questions[0], type: "multiple_choice" }] }, "unknown_question_type"],
-    ["unknown outcome", { ...CURRENT_QUESTIONNAIRE, outcomes: ["fit", "needs_medical_opinion", "unknown"] }, "unknown_outcome"],
-    ["missing French label", { ...CURRENT_QUESTIONNAIRE, questions: [{ ...CURRENT_QUESTIONNAIRE.questions[0], label: { en: "[MED] label" } }] }, "invalid_label"],
-    ["missing English label", { ...CURRENT_QUESTIONNAIRE, questions: [{ ...CURRENT_QUESTIONNAIRE.questions[0], label: { fr: "[MED] libellé" } }] }, "invalid_label"],
-    ["incoherent severity", { ...CURRENT_QUESTIONNAIRE, severity: ["fit", "unfit", "needs_medical_opinion"] }, "invalid_severity"],
-    ["zero maxDays", { ...CURRENT_QUESTIONNAIRE, validity: { ...CURRENT_QUESTIONNAIRE.validity, maxDays: 0 } }, "invalid_max_days"],
-    ["fractional maxDays", { ...CURRENT_QUESTIONNAIRE, validity: { ...CURRENT_QUESTIONNAIRE.validity, maxDays: 1.5 } }, "invalid_max_days"],
-    ["string maxDays", { ...CURRENT_QUESTIONNAIRE, validity: { ...CURRENT_QUESTIONNAIRE.validity, maxDays: "30" } }, "invalid_max_days"],
+    [
+      "missing question id",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        questions: [{ ...CURRENT_QUESTIONNAIRE.questions[0], id: "" }],
+      },
+      "invalid_question_id",
+    ],
+    [
+      "duplicate question id",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        questions: [
+          CURRENT_QUESTIONNAIRE.questions[0],
+          CURRENT_QUESTIONNAIRE.questions[0],
+        ],
+      },
+      "duplicate_question_id",
+    ],
+    [
+      "unknown question type",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        questions: [
+          { ...CURRENT_QUESTIONNAIRE.questions[0], type: "multiple_choice" },
+        ],
+      },
+      "unknown_question_type",
+    ],
+    [
+      "unknown outcome",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        outcomes: ["fit", "needs_medical_opinion", "unknown"],
+      },
+      "unknown_outcome",
+    ],
+    [
+      "missing French label",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        questions: [
+          {
+            ...CURRENT_QUESTIONNAIRE.questions[0],
+            label: { en: "[MED] label" },
+          },
+        ],
+      },
+      "invalid_label",
+    ],
+    [
+      "missing English label",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        questions: [
+          {
+            ...CURRENT_QUESTIONNAIRE.questions[0],
+            label: { fr: "[MED] libellé" },
+          },
+        ],
+      },
+      "invalid_label",
+    ],
+    [
+      "incoherent severity",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        severity: ["fit", "unfit", "needs_medical_opinion"],
+      },
+      "invalid_severity",
+    ],
+    [
+      "zero maxDays",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        validity: { ...CURRENT_QUESTIONNAIRE.validity, maxDays: 0 },
+      },
+      "invalid_max_days",
+    ],
+    [
+      "fractional maxDays",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        validity: { ...CURRENT_QUESTIONNAIRE.validity, maxDays: 1.5 },
+      },
+      "invalid_max_days",
+    ],
+    [
+      "string maxDays",
+      {
+        ...CURRENT_QUESTIONNAIRE,
+        validity: { ...CURRENT_QUESTIONNAIRE.validity, maxDays: "30" },
+      },
+      "invalid_max_days",
+    ],
   ])("refuses %s with its reason", (_name, raw, reason) => {
     expect(parseQuestionnaire(raw)).toEqual({ ok: false, reason });
   });
 
-  it.each(questionnaireCases)("applies reference case: $name", ({ version, answers, expected }) => {
-    const result = computeOutcome(CURRENT_QUESTIONNAIRE, version, answers);
-    if ("outcome" in expected) {
-      expect(result).toEqual({ ok: true, outcome: expected.outcome });
-    } else {
-      expect(result).toEqual({ ok: false, reason: expected.refused });
-    }
-  });
+  it.each(questionnaireCases)(
+    "applies reference case: $name",
+    ({ version, answers, expected }) => {
+      const result = computeOutcome(CURRENT_QUESTIONNAIRE, version, answers);
+      if ("outcome" in expected) {
+        expect(result).toEqual({ ok: true, outcome: expected.outcome });
+      } else {
+        expect(result).toEqual({ ok: false, reason: expected.refused });
+      }
+    },
+  );
 
   it("has a yes reference case for every current question", () => {
     for (const question of CURRENT_QUESTIONNAIRE.questions) {
@@ -104,7 +194,8 @@ describe("versioned fitness questionnaire", () => {
             typeof referenceCase.answers === "object" &&
             referenceCase.answers !== null &&
             !Array.isArray(referenceCase.answers) &&
-            (referenceCase.answers as Record<string, unknown>)[question.id] === true,
+            (referenceCase.answers as Record<string, unknown>)[question.id] ===
+              true,
         ),
         question.id,
       ).toBe(true);
@@ -136,7 +227,11 @@ describe("versioned fitness questionnaire", () => {
   it("does not read the system clock when computing an outcome", () => {
     const dateNowSpy = vi.spyOn(Date, "now");
     try {
-      const result = computeOutcome(CURRENT_QUESTIONNAIRE, "0.1.0", currentAnswers(false));
+      const result = computeOutcome(
+        CURRENT_QUESTIONNAIRE,
+        "0.1.0",
+        currentAnswers(false),
+      );
       expect(dateNowSpy).not.toHaveBeenCalled();
       expect(result).toEqual({ ok: true, outcome: "fit" });
     } finally {
@@ -152,7 +247,10 @@ describe("versioned fitness questionnaire", () => {
     );
     expect(
       maxValidUntil(
-        { ...questionnaire, validity: { ...questionnaire.validity, maxDays: null } },
+        {
+          ...questionnaire,
+          validity: { ...questionnaire.validity, maxDays: null },
+        },
         validatedAt,
       ),
     ).toBeNull();
@@ -164,7 +262,11 @@ describe("versioned fitness questionnaire", () => {
     ["not_an_object", "0.1.0", []],
     ["missing_answer", "0.1.0", { heart_condition: false }],
     ["unknown_question", "0.1.0", { ...currentAnswers(false), extra: false }],
-    ["invalid_answer", "0.1.0", { ...currentAnswers(false), heart_condition: "yes" }],
+    [
+      "invalid_answer",
+      "0.1.0",
+      { ...currentAnswers(false), heart_condition: "yes" },
+    ],
   ])("returns refusal %s", (reason, version, answers) => {
     expect(computeOutcome(CURRENT_QUESTIONNAIRE, version, answers)).toEqual({
       ok: false,

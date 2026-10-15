@@ -406,7 +406,8 @@ export async function makeRiderReady(
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .filter((q) => q.eq(q.field("organizationId"), organizationId))
       .first();
-    if (relation === null) throw new Error("Rider needs a manager in the test world");
+    if (relation === null)
+      throw new Error("Rider needs a manager in the test world");
 
     const answers: Record<string, boolean> = {};
     for (const question of CURRENT_QUESTIONNAIRE.questions) {
@@ -436,6 +437,23 @@ export async function makeRiderReady(
     });
     return { assessmentId, consentId };
   });
+}
+
+export async function seedLaunchWorld(
+  mods: Record<string, () => Promise<unknown>>,
+) {
+  const w = await seedWorld(mods);
+  for (const [userId, organizationId] of [
+    [w.patient, w.orgA],
+    [w.otherPatient, w.orgA],
+    [w.orgBPatient, w.orgB],
+  ] as const) {
+    await makeRiderReady(w.t, userId, organizationId, {
+      now: NOW,
+      validUntil: Number.MAX_SAFE_INTEGER,
+    });
+  }
+  return w;
 }
 
 /**
@@ -506,6 +524,13 @@ export async function seedMachineWorld(
       role: "user",
       active: true,
     });
+    await ctx.db.insert("user_gestionnaires", {
+      organizationId,
+      userId: id,
+      gestionnaireId: adminId,
+      createdAt: NOW,
+      createdBy: adminId,
+    });
     for (const machineId of [first.machineId, second.machineId]) {
       await ctx.db.patch(machineId, {
         status: "online",
@@ -536,6 +561,10 @@ export async function seedMachineWorld(
       createdAt: NOW,
     });
     return id;
+  });
+  await makeRiderReady(t, patient, organizationId, {
+    now: NOW,
+    validUntil: Number.MAX_SAFE_INTEGER,
   });
   return {
     t,

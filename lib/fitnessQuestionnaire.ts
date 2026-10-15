@@ -53,7 +53,9 @@ function isFitnessOutcome(value: unknown): value is FitnessOutcome {
   return FITNESS_OUTCOMES.some((outcome) => outcome === value);
 }
 
-function parseQuestion(raw: unknown):
+function parseQuestion(
+  raw: unknown,
+):
   | Readonly<{ ok: true; question: Question }>
   | Readonly<{ ok: false; reason: string }> {
   if (!isRecord(raw)) return { ok: false, reason: "invalid_question" };
@@ -65,7 +67,13 @@ function parseQuestion(raw: unknown):
   if (type !== "yes_no") {
     return { ok: false, reason: "unknown_question_type" };
   }
-  if (!isRecord(label) || typeof label.fr !== "string" || !label.fr.trim() || typeof label.en !== "string" || !label.en.trim()) {
+  if (
+    !isRecord(label) ||
+    typeof label.fr !== "string" ||
+    !label.fr.trim() ||
+    typeof label.en !== "string" ||
+    !label.en.trim()
+  ) {
     return { ok: false, reason: "invalid_label" };
   }
   if (
@@ -90,7 +98,17 @@ function parseQuestion(raw: unknown):
 export function parseQuestionnaire(raw: unknown): ParseQuestionnaireResult {
   if (!isRecord(raw)) return { ok: false, reason: "not_an_object" };
 
-  const { version, provisional, medicalStatus, description, validity, outcomes, severity, questions, rule } = raw;
+  const {
+    version,
+    provisional,
+    medicalStatus,
+    description,
+    validity,
+    outcomes,
+    severity,
+    questions,
+    rule,
+  } = raw;
   if (typeof version !== "string" || version.trim() === "") {
     return { ok: false, reason: "invalid_version" };
   }
@@ -107,11 +125,16 @@ export function parseQuestionnaire(raw: unknown): ParseQuestionnaireResult {
   }
   if (
     validity.maxDays !== null &&
-    (!Number.isSafeInteger(validity.maxDays) || (validity.maxDays as number) <= 0)
+    (!Number.isSafeInteger(validity.maxDays) ||
+      (validity.maxDays as number) <= 0)
   ) {
     return { ok: false, reason: "invalid_max_days" };
   }
-  if (!Array.isArray(outcomes) || outcomes.length === 0 || !outcomes.every(isFitnessOutcome)) {
+  if (
+    !Array.isArray(outcomes) ||
+    outcomes.length === 0 ||
+    !outcomes.every(isFitnessOutcome)
+  ) {
     return { ok: false, reason: "unknown_outcome" };
   }
   const uniqueOutcomes = [...new Set(outcomes)];
@@ -169,7 +192,9 @@ export function parseQuestionnaire(raw: unknown): ParseQuestionnaireResult {
 
 const parsedCurrentQuestionnaire = parseQuestionnaire(questionnaireContract);
 if (!parsedCurrentQuestionnaire.ok) {
-  throw new Error(`Invalid fitness questionnaire contract: ${parsedCurrentQuestionnaire.reason}`);
+  throw new Error(
+    `Invalid fitness questionnaire contract: ${parsedCurrentQuestionnaire.reason}`,
+  );
 }
 
 export const CURRENT_QUESTIONNAIRE = parsedCurrentQuestionnaire.questionnaire;
@@ -179,10 +204,13 @@ export function computeOutcome(
   version: string,
   answers: unknown,
 ): ComputeOutcomeResult {
-  if (version !== questionnaire.version) return { ok: false, reason: "version_mismatch" };
+  if (version !== questionnaire.version)
+    return { ok: false, reason: "version_mismatch" };
   if (!isRecord(answers)) return { ok: false, reason: "not_an_object" };
 
-  const questionIds = new Set(questionnaire.questions.map((question) => question.id));
+  const questionIds = new Set(
+    questionnaire.questions.map((question) => question.id),
+  );
   if (Object.keys(answers).some((id) => !questionIds.has(id))) {
     return { ok: false, reason: "unknown_question" };
   }
@@ -195,10 +223,14 @@ export function computeOutcome(
   let mostSevere: FitnessOutcome = questionnaire.severity[0];
   for (const question of questionnaire.questions) {
     const answer = answers[question.id];
-    if (typeof answer !== "boolean") return { ok: false, reason: "invalid_answer" };
+    if (typeof answer !== "boolean")
+      return { ok: false, reason: "invalid_answer" };
 
     const outcome = question.outcomes[answer ? "yes" : "no"];
-    if (questionnaire.severity.indexOf(outcome) > questionnaire.severity.indexOf(mostSevere)) {
+    if (
+      questionnaire.severity.indexOf(outcome) >
+      questionnaire.severity.indexOf(mostSevere)
+    ) {
       mostSevere = outcome;
     }
   }
@@ -206,7 +238,10 @@ export function computeOutcome(
   return { ok: true, outcome: mostSevere };
 }
 
-export function maxValidUntil(questionnaire: Questionnaire, validatedAt: number): number | null {
+export function maxValidUntil(
+  questionnaire: Questionnaire,
+  validatedAt: number,
+): number | null {
   if (questionnaire.validity.maxDays === null) return null;
   return validatedAt + questionnaire.validity.maxDays * 24 * 60 * 60 * 1000;
 }

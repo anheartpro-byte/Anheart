@@ -2743,6 +2743,12 @@ export const MATRIX: Entry[] = [
     ref: api.training.launchAutoSession,
     kind: "mutation",
     build: async (w, actor, scope) => {
+      if (!(actor === "admin" && scope === "other")) {
+        await makeRiderReady(w.t, w.patient, w.orgA, {
+          now: NOW,
+          validUntil: Number.MAX_SAFE_INTEGER,
+        });
+      }
       const base = { machineId: w.machine, profileId: w.profileId };
       if (actor === "patient")
         return scope === "other" ? { ...base, userId: w.otherPatient } : base;
@@ -2753,15 +2759,16 @@ export const MATRIX: Entry[] = [
           userId: scope === "other" ? w.otherPatient : w.patient,
         };
       if (actor === "otherManager") return { ...base, userId: w.otherPatient };
+      if (actor === "admin" && scope === "other") {
+        return { ...base, userId: w.otherPatient };
+      }
       return { ...base, userId: w.patient }; // admin
     },
-    onSuccess: async (res, w) => {
+    onSuccess: async (res, w, actor, _scope, args) => {
       const s = await w.t.run((ctx) => ctx.db.get(res as Id<"sessions">));
-      if (
-        s?.kind !== "auto" ||
-        s.status !== "pending" ||
-        s.userId !== w.patient
-      )
+      const riderId =
+        (args.userId as Id<"users"> | undefined) ?? userId(w, actor);
+      if (s?.kind !== "auto" || s.status !== "pending" || s.userId !== riderId)
         throw new Error("Auto session not queued for the intended rider");
     },
     cases: [
@@ -2811,6 +2818,12 @@ export const MATRIX: Entry[] = [
         scope: "own",
         expect: ok,
         note: "admin launches for a rider",
+      },
+      {
+        actor: "admin",
+        scope: "other",
+        expect: refuse(/rider_not_fit/),
+        note: "an admin receives the refusal for a passenger who is not ready",
       },
       {
         actor: "orgAdmin",

@@ -66,6 +66,31 @@ export async function activeConsent(
     .first();
 }
 
+/** Return only the launchable fitness and consent facts for a rider. */
+export async function riderFitness(
+  ctx: Ctx,
+  userId: Id<"users">,
+  organizationId: Id<"organizations">,
+  now: number,
+): Promise<{
+  fit: boolean;
+  fitnessValidUntil: number | null;
+  consent: boolean;
+}> {
+  const assessment = await latestAssessment(ctx, userId, organizationId);
+  const fitnessValidUntil =
+    assessment !== null &&
+    assessment.questionnaireVersion === CURRENT_QUESTIONNAIRE.version &&
+    assessment.outcome === "fit" &&
+    assessment.validatedAt !== undefined &&
+    assessment.validUntil !== undefined &&
+    assessment.validUntil > now
+      ? assessment.validUntil
+      : null;
+  const consent = (await activeConsent(ctx, userId, organizationId)) !== null;
+  return { fit: fitnessValidUntil !== null, fitnessValidUntil, consent };
+}
+
 /** Return the stable launch refusal for a rider's current fitness and consent. */
 export async function riderLaunchRefusal(
   ctx: Ctx,

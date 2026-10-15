@@ -30,11 +30,12 @@
  *
  * A launch is checked again when the machine arms it (ANH-144), not only when
  * it is made: whoever made it can still make it, the rider still may ride,
- * the machine is the one it was, and the launch has not waited longer than
- * `PENDING_SESSION_TTL_S` (`armingRefusal`). One that fails becomes a failed
- * session with a stable code (`endCode`), the machine's start is answered 409
- * with that code, and the poll never offers it. A rider has one session at a
- * time, on any machine, and a machine one launch at a time (`launchAutoSession`).
+ * has valid aptitude and active consent, the machine is the one it was, and
+ * the launch has not waited longer than `PENDING_SESSION_TTL_S`
+ * (`armingRefusal`). One that fails becomes a failed session with a stable
+ * code (`endCode`), the machine's start is answered 409 with that code, and
+ * the poll never offers it. A rider has one session at a time, on any machine,
+ * and a machine one launch at a time (`launchAutoSession`).
  */
 import { limitUser } from "./lib/rateLimits";
 import { v } from "convex/values";
@@ -61,6 +62,7 @@ import {
   sameOrganization,
   type CurrentUser,
 } from "./lib/auth";
+import { riderFitness, riderLaunchRefusal } from "./lib/fitness";
 import { liveStateValidator, machineProfileFields } from "./schema";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
 import { machineError, type MachineErrorCode } from "./lib/contract";
@@ -432,9 +434,10 @@ export const listMachineProfiles = query({
 
 /**
  * Machines the current user may launch an auto session on, with their live
- * state and presets. Anheart admin: every machine. Inside the caller's
- * organisation only: every machine for its admin, the ones they manage for a
- * gestionnaire, the ones they hold the launch right for for a user.
+ * state, presets, and `myLaunchRefusal` for that machine's organisation.
+ * Anheart admin: every machine. Inside the caller's organisation only: every
+ * machine for its admin, the ones they manage for a gestionnaire, the ones
+ * they hold the launch right for for a user.
  */
 export const listLaunchableMachines = query({
   args: {},
@@ -463,6 +466,12 @@ export const listLaunchableMachines = query({
       live: v.union(liveStateValidator, v.null()),
       profiles: v.array(profileValidator),
       myHrMax: v.union(v.number(), v.null()),
+      myLaunchRefusal: v.union(
+        v.literal("rider_not_fit"),
+        v.literal("fitness_expired"),
+        v.literal("consent_missing"),
+        v.null(),
+      ),
     }),
   ),
   handler: async (ctx) => {
@@ -500,7 +509,9 @@ export const listLaunchableMachines = query({
     for (const id of machineIds) {
       const machine = await ctx.db.get(id);
       if (!machine || machine.isDeleted) continue;
-      if (!inScope(me, machine.organizationId)) continue;
+      const organizationId = machine.organizationId;
+      if (organizationId === undefined || !inScope(me, organizationId))
+        continue;
       result.push({
         _id: machine._id,
         name: machine.name,
@@ -521,6 +532,12 @@ export const listLaunchableMachines = query({
             : null,
         profiles: await profilesFor(ctx, id),
         myHrMax: effectiveHrMax(me, now, medical?.hrMaxFormula ?? null),
+        myLaunchRefusal: await riderLaunchRefusal(
+          ctx,
+          me._id,
+          organizationId,
+          now,
+        ),
       });
     }
     return result;
@@ -915,6 +932,8 @@ async function expireWaitingLaunches(
  *
  * A user launches for themselves only; an admin or a gestionnaire launches
  * for a rider they manage (or for themselves).
+ * The rider must have a current, validated fit assessment and active consent;
+ * launch refusals are `rider_not_fit`, `fitness_expired`, and `consent_missing`.
  *
  * One session at a time (ANH-144): refused with the stable code `rider_busy`
  * when the rider has a session that may still hold them on any machine, of
@@ -947,14 +966,23 @@ export const launchAutoSession = mutation({
     if (unauthorized !== null) throw refusal(unauthorized);
 
     const machine = await ctx.db.get(args.machineId);
-    if (!machine || machine.isDeleted)
-      throw refusal("machine_not_found");
+    if (!machine || machine.isDeleted) throw refusal("machine_not_found");
+    const organizationId = machine.organizationId;
     // The rider is an active member of the machine's organisation.
     if (
-      (await organizationRoleOf(ctx, riderId, machine.organizationId)) === null
+      organizationId === undefined ||
+      (await organizationRoleOf(ctx, riderId, organizationId)) === null
     ) {
       throw refusal("rider_not_allowed");
     }
+    const now = Date.now();
+    const launchRefusal = await riderLaunchRefusal(
+      ctx,
+      riderId,
+      organizationId,
+      now,
+    );
+    if (launchRefusal !== null) throw refusal(launchRefusal);
     if (machine.status === "offline") throw refusal("machine_offline");
     const medical = await currentMedicalParameters(ctx);
     if (medical === null) throw refusal("medical_parameters_unavailable");
@@ -964,7 +992,6 @@ export const launchAutoSession = mutation({
     if (!machine.programsEnabled) {
       throw refusal("programs_disabled");
     }
-    const now = Date.now();
     await expireWaitingLaunches(ctx, riderId, args.machineId, now);
     if (
       machine.status === "in_session" ||
@@ -1498,10 +1525,11 @@ export const syncProfiles = internalMutation({
  *   from the birth year), null when neither is usable;
  * - `birthYear`: a whole number, or null. The console computes the age from
  *   it the way `ageFrom` does.
+ * - `fit`, `fitnessValidUntil`, `consent`: the launchable status for the
+ *   machine's organisation. The roster never carries answers or review notes.
  *
  * Both values are set on the site by a manager (`setUserPhysiology`); the
- * console shows them and cannot change them. Fitness and consent (ANH-143)
- * are not served yet.
+ * console shows them and cannot change them.
  */
 export const getRoster = internalQuery({
   args: { machineId: v.id("machines") },
@@ -1511,6 +1539,9 @@ export const getRoster = internalQuery({
       name: v.string(),
       hrMax: v.union(v.number(), v.null()),
       birthYear: v.union(v.number(), v.null()),
+      fit: v.boolean(),
+      fitnessValidUntil: v.union(v.number(), v.null()),
+      consent: v.boolean(),
     }),
   ),
   handler: async (ctx, args) => {
@@ -1519,23 +1550,24 @@ export const getRoster = internalQuery({
       .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
       .collect();
     const machine = await ctx.db.get(args.machineId);
-    if (!machine) return [];
+    if (!machine || machine.organizationId === undefined) return [];
+    const organizationId = machine.organizationId;
     const medical = await currentMedicalParameters(ctx);
     const now = Date.now();
     const result = [];
     for (const row of rows) {
-      const role = await organizationRoleOf(
-        ctx,
-        row.userId,
-        machine.organizationId,
-      );
+      const role = await organizationRoleOf(ctx, row.userId, organizationId);
       const user = role === null ? null : await ctx.db.get(row.userId);
       if (!user) continue;
+      const fitness = await riderFitness(ctx, user._id, organizationId, now);
       result.push({
         userId: user._id,
         name: fullName(user),
         hrMax: effectiveHrMax(user, now, medical?.hrMaxFormula ?? null),
         birthYear: isWholeNumber(user.birthYear) ? user.birthYear : null,
+        fit: fitness.fit,
+        fitnessValidUntil: fitness.fitnessValidUntil,
+        consent: fitness.consent,
       });
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));
@@ -1953,7 +1985,10 @@ export const storeEvents = internalMutation({
           verdicts.detail,
           verdictAction(event.detail),
         );
-      } else if (event.kind === "drive_fault" && driveFaultAlerts(event.detail)) {
+      } else if (
+        event.kind === "drive_fault" &&
+        driveFaultAlerts(event.detail)
+      ) {
         faults.count++;
         faults.detail = foldedDetail(
           "drive_fault",

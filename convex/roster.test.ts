@@ -9,7 +9,8 @@ import { describe, expect, it } from "vitest";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
-import { modules, NOW, seedMachineWorld } from "./test.setup";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
+import { makeRiderReady, modules, NOW, seedMachineWorld } from "./test.setup";
 
 type World = Awaited<ReturnType<typeof seedMachineWorld>>;
 type Rider = {
@@ -17,6 +18,9 @@ type Rider = {
   name: string;
   hrMax: number | null;
   birthYear: number | null;
+  fit: boolean;
+  fitnessValidUntil: number | null;
+  consent: boolean;
 };
 
 /** A rider of the machine's organisation holding the launch right, with `physiology`. */
@@ -43,6 +47,13 @@ async function rider(
       role: "user",
       active: true,
     });
+    await ctx.db.insert("user_gestionnaires", {
+      organizationId: w.organizationId,
+      userId: id,
+      gestionnaireId: w.adminId,
+      createdAt: NOW,
+      createdBy: w.adminId,
+    });
     await ctx.db.insert("machine_user_permissions", {
       organizationId: w.organizationId,
       machineId: w.machine,
@@ -66,7 +77,7 @@ async function served(w: World): Promise<Rider[]> {
   return ((await response.json()) as { riders: Rider[] }).riders;
 }
 
-describe("ANH-84 roster: the values a console vets a programme with", () => {
+describe("ANH-143 roster: the values a console vets a programme with", () => {
   it("serves the max heart rate and the birth year set on the site", async () => {
     const w = await seedMachineWorld(modules);
     const riders = await served(w);
@@ -76,6 +87,9 @@ describe("ANH-84 roster: the values a console vets a programme with", () => {
         name: "Synthetic Patient",
         hrMax: 180,
         birthYear: 1990,
+        fit: true,
+        fitnessValidUntil: Number.MAX_SAFE_INTEGER,
+        consent: true,
       },
     ]);
   });
@@ -89,6 +103,9 @@ describe("ANH-84 roster: the values a console vets a programme with", () => {
       name: "Synthetic roster-bare",
       hrMax: null,
       birthYear: null,
+      fit: false,
+      fitnessValidUntil: null,
+      consent: false,
     });
   });
 
@@ -120,6 +137,69 @@ describe("ANH-84 roster: the values a console vets a programme with", () => {
       hrMax: null,
       birthYear: null,
     });
+  });
+
+  it("serves only launch status for ready, unvalidated, expired, and unsigned riders", async () => {
+    const w = await seedMachineWorld(modules);
+    const unvalidated = await rider(w, "roster-unvalidated", {});
+    const expired = await rider(w, "roster-expired", {});
+    const noConsent = await rider(w, "roster-no-consent", {});
+    const assessment = (userId: Id<"users">, validated: boolean) =>
+      w.t.run((ctx) =>
+        ctx.db.insert("fitness_assessments", {
+          userId,
+          organizationId: w.organizationId,
+          questionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+          answers: {},
+          outcome: "fit",
+          submittedBy: userId,
+          submittedAt: NOW,
+          ...(validated ? { validatedBy: w.adminId, validatedAt: NOW } : {}),
+          validUntil: NOW + 60_000,
+        }),
+      );
+    await assessment(unvalidated, false);
+    await makeRiderReady(w.t, expired, w.organizationId, {
+      now: NOW,
+      validUntil: Date.now() - 1,
+    });
+    await assessment(noConsent, true);
+
+    const roster = await w.t.query(internal.training.getRoster, {
+      machineId: w.machine,
+    });
+    const ready = roster.find((r) => r.userId === w.patient);
+    expect(Object.keys(ready ?? {}).sort()).toEqual(
+      [
+        "userId",
+        "name",
+        "hrMax",
+        "birthYear",
+        "fit",
+        "fitnessValidUntil",
+        "consent",
+      ].sort(),
+    );
+    expect(ready).toMatchObject({ fit: true, consent: true });
+    expect(roster.find((r) => r.userId === unvalidated)).toMatchObject({
+      fit: false,
+      fitnessValidUntil: null,
+      consent: false,
+    });
+    expect(roster.find((r) => r.userId === expired)).toMatchObject({
+      fit: false,
+      fitnessValidUntil: null,
+      consent: true,
+    });
+    expect(roster.find((r) => r.userId === noConsent)).toMatchObject({
+      fit: true,
+      fitnessValidUntil: NOW + 60_000,
+      consent: false,
+    });
+    for (const row of roster) {
+      expect(row).not.toHaveProperty("answers");
+      expect(row).not.toHaveProperty("notes");
+    }
   });
 
   it("no longer lists a rider whose launch right was revoked", async () => {

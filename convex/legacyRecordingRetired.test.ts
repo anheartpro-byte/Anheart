@@ -28,7 +28,7 @@ import {
   modules,
   NOW,
   seedMachineWorld,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   WORLD_MACHINE_COUNT,
 } from "./test.setup";
 
@@ -165,7 +165,9 @@ describe("ANH-135 no function belongs to the recording mode any more", () => {
           path !== MIGRATION &&
           path !== "./schema.ts" &&
           // `convex.config` is the app's components file (ANH-166), not a machine's settings.
-          /(?<!convex)\.config\b|sampleRate:\s*machine|batchInterval/.test(text),
+          /(?<!convex)\.config\b|sampleRate:\s*machine|batchInterval/.test(
+            text,
+          ),
       )
       .map(([path]) => path);
     expect(reading).toEqual([]);

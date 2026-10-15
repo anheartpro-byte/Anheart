@@ -18,7 +18,7 @@ import {
   modules,
   NOW,
   registerShippedMedicalParameters,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   type World,
 } from "./test.setup";
 
@@ -83,16 +83,19 @@ async function insertStoredVersion(
   const storageId = await t.run((ctx) =>
     ctx.storage.store(new Blob([`fixture ${version}`])),
   );
-  const result = await t.mutation(internal.medicalParametersStore.insertVersion, {
-    version,
-    issuedAt: "2026-10-14",
-    storageId,
-    signedBy: "cle-de-test",
-    signature: "fixture-signature",
-    zoneCeilingFraction,
-    minRiderAge: 18,
-    hrMaxFormula: "tanaka",
-  });
+  const result = await t.mutation(
+    internal.medicalParametersStore.insertVersion,
+    {
+      version,
+      issuedAt: "2026-10-14",
+      storageId,
+      signedBy: "cle-de-test",
+      signature: "fixture-signature",
+      zoneCeilingFraction,
+      minRiderAge: 18,
+      hrMaxFormula: "tanaka",
+    },
+  );
   if (typeof result !== "string") {
     await t.run((ctx) => ctx.storage.delete(storageId));
   }
@@ -155,22 +158,36 @@ describe("medical document parsing", () => {
 
   it("rejects malformed JSON and duplicate keys at every object depth", () => {
     expect(() => parseMedicalDocument("{")).toThrow(/valid JSON/);
-    expect(() => parseMedicalDocument("[]")).toThrow(/document must be a JSON object/);
-    expect(() => parseMedicalDocument('["text"]')).toThrow(/document must be a JSON object/);
-    expect(() => parseMedicalDocument("{}")).toThrow(/document.version is missing/);
-    expect(() =>
-      parseMedicalDocument('{"_comment":"unfinished}'),
-    ).toThrow(/Unterminated JSON string/);
+    expect(() => parseMedicalDocument("[]")).toThrow(
+      /document must be a JSON object/,
+    );
+    expect(() => parseMedicalDocument('["text"]')).toThrow(
+      /document must be a JSON object/,
+    );
+    expect(() => parseMedicalDocument("{}")).toThrow(
+      /document.version is missing/,
+    );
+    expect(() => parseMedicalDocument('{"_comment":"unfinished}')).toThrow(
+      /Unterminated JSON string/,
+    );
     const emptyParameters = { ...parsedShippedDocument(), parameters: {} };
     expect(() => parseMedicalDocument(JSON.stringify(emptyParameters))).toThrow(
       /document.parameters.hr_hard_max_bpm is missing/,
     );
     expect(() =>
-      parseMedicalDocument(shippedContent.replace('"version": "0.1.0",', '"version": "0.1.0", "version": "0.1.0",')),
+      parseMedicalDocument(
+        shippedContent.replace(
+          '"version": "0.1.0",',
+          '"version": "0.1.0", "version": "0.1.0",',
+        ),
+      ),
     ).toThrow(/Duplicate JSON member/);
     expect(() =>
       parseMedicalDocument(
-        shippedContent.replace('"hr_critical_bpm": 158,', '"hr_critical_bpm": 158, "hr_critical_bpm": 158,'),
+        shippedContent.replace(
+          '"hr_critical_bpm": 158,',
+          '"hr_critical_bpm": 158, "hr_critical_bpm": 158,',
+        ),
       ),
     ).toThrow(/Duplicate JSON member/);
   });
@@ -178,58 +195,87 @@ describe("medical document parsing", () => {
   it("rejects missing and unknown members throughout the document", () => {
     const missing = parsedShippedDocument();
     delete missing.parameters.hr_hard_max_bpm;
-    expect(() => parseMedicalDocument(JSON.stringify(missing))).toThrow(/missing/);
+    expect(() => parseMedicalDocument(JSON.stringify(missing))).toThrow(
+      /missing/,
+    );
 
     const unknown = parsedShippedDocument();
     unknown.parameters.extra = 1;
-    expect(() => parseMedicalDocument(JSON.stringify(unknown))).toThrow(/unknown/);
+    expect(() => parseMedicalDocument(JSON.stringify(unknown))).toThrow(
+      /unknown/,
+    );
 
     const unknownMotion = parsedShippedDocument();
-    (unknownMotion.parameters.motion_limits as Record<string, unknown>).extra = 1;
-    expect(() => parseMedicalDocument(JSON.stringify(unknownMotion))).toThrow(/unknown/);
+    (unknownMotion.parameters.motion_limits as Record<string, unknown>).extra =
+      1;
+    expect(() => parseMedicalDocument(JSON.stringify(unknownMotion))).toThrow(
+      /unknown/,
+    );
   });
 
   it("checks signer, version, calendar date, and optional comment shape", () => {
     const badSigner = parsedShippedDocument();
     badSigner.signed_by = "Medical Team";
-    expect(() => parseMedicalDocument(JSON.stringify(badSigner))).toThrow(/signer/);
+    expect(() => parseMedicalDocument(JSON.stringify(badSigner))).toThrow(
+      /signer/,
+    );
 
     const badVersion = parsedShippedDocument();
     badVersion.version = "01.0.0";
-    expect(() => parseMedicalDocument(JSON.stringify(badVersion))).toThrow(/MAJOR/);
+    expect(() => parseMedicalDocument(JSON.stringify(badVersion))).toThrow(
+      /MAJOR/,
+    );
 
     const badDate = parsedShippedDocument();
     badDate.issued_at = "2026-02-29";
-    expect(() => parseMedicalDocument(JSON.stringify(badDate))).toThrow(/calendar date/);
+    expect(() => parseMedicalDocument(JSON.stringify(badDate))).toThrow(
+      /calendar date/,
+    );
 
     const badComment = { ...parsedShippedDocument(), _comment: false };
-    expect(() => parseMedicalDocument(JSON.stringify(badComment))).toThrow(/_comment/);
+    expect(() => parseMedicalDocument(JSON.stringify(badComment))).toThrow(
+      /_comment/,
+    );
   });
 
   it("checks positive numbers, physiological relationships, and console bounds", () => {
     const badWhole = parsedShippedDocument();
     badWhole.parameters.min_rider_age = true;
-    expect(() => parseMedicalDocument(JSON.stringify(badWhole))).toThrow(/whole number/);
+    expect(() => parseMedicalDocument(JSON.stringify(badWhole))).toThrow(
+      /whole number/,
+    );
 
     const badFraction = parsedShippedDocument();
     badFraction.parameters.zone_ceiling_fraction = 1.1;
-    expect(() => parseMedicalDocument(JSON.stringify(badFraction))).toThrow(/must not exceed/);
+    expect(() => parseMedicalDocument(JSON.stringify(badFraction))).toThrow(
+      /must not exceed/,
+    );
 
     const badFormula = parsedShippedDocument();
     badFormula.parameters.hr_max_formula = "unknown";
-    expect(() => parseMedicalDocument(JSON.stringify(badFormula))).toThrow(/must be tanaka/);
+    expect(() => parseMedicalDocument(JSON.stringify(badFormula))).toThrow(
+      /must be tanaka/,
+    );
 
     const badCritical = parsedShippedDocument();
     badCritical.parameters.hr_critical_bpm = 148;
-    expect(() => parseMedicalDocument(JSON.stringify(badCritical))).toThrow(/must exceed/);
+    expect(() => parseMedicalDocument(JSON.stringify(badCritical))).toThrow(
+      /must exceed/,
+    );
 
     const badAgeBound = parsedShippedDocument();
     badAgeBound.parameters.min_rider_age = 9;
-    expect(() => parseMedicalDocument(JSON.stringify(badAgeBound))).toThrow(/10..100/);
+    expect(() => parseMedicalDocument(JSON.stringify(badAgeBound))).toThrow(
+      /10..100/,
+    );
 
     const badMotionBound = parsedShippedDocument();
-    (badMotionBound.parameters.motion_limits as Record<string, unknown>).g_per_s = 0.6;
-    expect(() => parseMedicalDocument(JSON.stringify(badMotionBound))).toThrow(/console bounds/);
+    (
+      badMotionBound.parameters.motion_limits as Record<string, unknown>
+    ).g_per_s = 0.6;
+    expect(() => parseMedicalDocument(JSON.stringify(badMotionBound))).toThrow(
+      /console bounds/,
+    );
   });
 
   it.each([
@@ -243,7 +289,9 @@ describe("medical document parsing", () => {
         new RegExp(`("${field}"\\s*:\\s*)[0-9]+`),
         (_match, prefix: string) => `${prefix}${token}`,
       );
-    expect(() => parseMedicalDocument(replaceToken(integerToken))).not.toThrow();
+    expect(() =>
+      parseMedicalDocument(replaceToken(integerToken)),
+    ).not.toThrow();
     for (const token of ["18.0", "18e0", "148.0", "1.48e2"]) {
       const content = replaceToken(token);
       expect(() => parseMedicalDocument(content), `${field}=${token}`).toThrow(
@@ -255,15 +303,30 @@ describe("medical document parsing", () => {
   it("enforces the Pi console's inclusive heart-rate, age, and motion bounds", () => {
     const cases: Array<[string, Record<string, unknown>, RegExp]> = [
       ["hard maximum below", { hr_hard_max_bpm: 99 }, /heart-rate bounds/],
-      ["hard maximum above", { hr_hard_max_bpm: 221, hr_critical_bpm: 222 }, /heart-rate bounds/],
-      ["critical maximum below", { hr_hard_max_bpm: 98, hr_critical_bpm: 99 }, /heart-rate bounds/],
-      ["critical maximum above", { hr_hard_max_bpm: 220, hr_critical_bpm: 221 }, /heart-rate bounds/],
+      [
+        "hard maximum above",
+        { hr_hard_max_bpm: 221, hr_critical_bpm: 222 },
+        /heart-rate bounds/,
+      ],
+      [
+        "critical maximum below",
+        { hr_hard_max_bpm: 98, hr_critical_bpm: 99 },
+        /heart-rate bounds/,
+      ],
+      [
+        "critical maximum above",
+        { hr_hard_max_bpm: 220, hr_critical_bpm: 221 },
+        /heart-rate bounds/,
+      ],
       ["age above", { min_rider_age: 101 }, /10..100/],
     ];
     for (const [name, changes, expected] of cases) {
       const document = parsedShippedDocument();
       Object.assign(document.parameters, changes);
-      expect(() => parseMedicalDocument(JSON.stringify(document)), name).toThrow(expected);
+      expect(
+        () => parseMedicalDocument(JSON.stringify(document)),
+        name,
+      ).toThrow(expected);
     }
 
     const motionCases: Array<[string, string, number]> = [
@@ -274,8 +337,12 @@ describe("medical document parsing", () => {
     ];
     for (const [name, key, value] of motionCases) {
       const document = parsedShippedDocument();
-      (document.parameters.motion_limits as Record<string, unknown>)[key] = value;
-      expect(() => parseMedicalDocument(JSON.stringify(document)), name).toThrow(/console bounds/);
+      (document.parameters.motion_limits as Record<string, unknown>)[key] =
+        value;
+      expect(
+        () => parseMedicalDocument(JSON.stringify(document)),
+        name,
+      ).toThrow(/console bounds/);
     }
   });
 
@@ -287,19 +354,23 @@ describe("medical document parsing", () => {
       min_rider_age: 100,
       zone_ceiling_fraction: 1,
     });
-    Object.assign(document.parameters.motion_limits as Record<string, unknown>, {
-      output_rpm_per_s: 2,
-      g_per_s: 0.5,
-      min_run_motor_rpm: 200,
-      max_interval_s: 2,
-    });
+    Object.assign(
+      document.parameters.motion_limits as Record<string, unknown>,
+      {
+        output_rpm_per_s: 2,
+        g_per_s: 0.5,
+        min_run_motor_rpm: 200,
+        max_interval_s: 2,
+      },
+    );
     expect(() => parseMedicalDocument(JSON.stringify(document))).not.toThrow();
   });
 });
 
 describe("medical signatures and version registration", () => {
   it("pins the embedded Ed25519 key to the Pi key and verifies the exact shipped file bytes", async () => {
-    if (!shippedSignatureBase64) throw new Error("The signature is not a base64 data URL");
+    if (!shippedSignatureBase64)
+      throw new Error("The signature is not a base64 data URL");
     expect(MEDICAL_PUBLIC_KEY_PEM).toBe(shippedPublicKey);
     expect(
       await verifyMedicalParametersSignature(
@@ -308,7 +379,9 @@ describe("medical signatures and version registration", () => {
         MEDICAL_PUBLIC_KEY_PEM,
       ),
     ).toBe(true);
-    const changedByte = new Uint8Array(new TextEncoder().encode(shippedContent));
+    const changedByte = new Uint8Array(
+      new TextEncoder().encode(shippedContent),
+    );
     const changedAt = shippedContent.indexOf("0.1.0") + 4;
     changedByte[changedAt] = (changedByte[changedAt] ?? 0) ^ 1;
     const changedContent = new TextDecoder().decode(changedByte);
@@ -322,8 +395,11 @@ describe("medical signatures and version registration", () => {
   });
 
   it("rejects an altered byte, absent signature, and a signature from another key without writing", async () => {
-    if (!shippedSignatureBase64) throw new Error("The signature is not a base64 data URL");
-    const changedByte = new Uint8Array(new TextEncoder().encode(shippedContent));
+    if (!shippedSignatureBase64)
+      throw new Error("The signature is not a base64 data URL");
+    const changedByte = new Uint8Array(
+      new TextEncoder().encode(shippedContent),
+    );
     const changedAt = shippedContent.indexOf("0.1.0") + 4;
     changedByte[changedAt] = (changedByte[changedAt] ?? 0) ^ 1;
     await rejectionLeavesNoWrites(
@@ -349,21 +425,28 @@ describe("medical signatures and version registration", () => {
   });
 
   it("uses the supplied public key and refuses a different key", async () => {
-    const pair = await crypto.subtle.generateKey(
-      { name: "Ed25519" },
-      true,
-      ["sign", "verify"],
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+      "sign",
+      "verify",
+    ]);
+    const spki = new Uint8Array(
+      await crypto.subtle.exportKey("spki", pair.publicKey),
     );
-    const spki = new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey));
     const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${btoa(String.fromCharCode(...spki))}\n-----END PUBLIC KEY-----`;
     const signed = await crypto.subtle.sign(
       { name: "Ed25519" },
       pair.privateKey,
       new TextEncoder().encode(shippedContent),
     );
-    const signatureBase64 = btoa(String.fromCharCode(...new Uint8Array(signed)));
+    const signatureBase64 = btoa(
+      String.fromCharCode(...new Uint8Array(signed)),
+    );
     expect(
-      await verifyMedicalParametersSignature(shippedContent, signatureBase64, publicKeyPem),
+      await verifyMedicalParametersSignature(
+        shippedContent,
+        signatureBase64,
+        publicKeyPem,
+      ),
     ).toBe(true);
     expect(
       await verifyMedicalParametersSignature(
@@ -373,20 +456,29 @@ describe("medical signatures and version registration", () => {
       ),
     ).toBe(false);
     expect(
-      await verifyMedicalParametersSignature(shippedContent, signatureBase64, "invalid key"),
+      await verifyMedicalParametersSignature(
+        shippedContent,
+        signatureBase64,
+        "invalid key",
+      ),
     ).toBe(false);
     expect(
-      await verifyMedicalParametersSignature(shippedContent, "not base64", publicKeyPem),
+      await verifyMedicalParametersSignature(
+        shippedContent,
+        "not base64",
+        publicKeyPem,
+      ),
     ).toBe(false);
   });
 
   it("verifies UTF-8 comments with accents and rejects signatures of 63 or 65 bytes", async () => {
-    const pair = await crypto.subtle.generateKey(
-      { name: "Ed25519" },
-      true,
-      ["sign", "verify"],
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+      "sign",
+      "verify",
+    ]);
+    const spki = new Uint8Array(
+      await crypto.subtle.exportKey("spki", pair.publicKey),
     );
-    const spki = new Uint8Array(await crypto.subtle.exportKey("spki", pair.publicKey));
     const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${btoa(String.fromCharCode(...spki))}\n-----END PUBLIC KEY-----`;
     const content = shippedContent.replace(
       /("_comment"\s*:\s*)"[^"]*"/,
@@ -421,10 +513,13 @@ describe("medical signatures and version registration", () => {
   });
 
   it("registers the shipped file and stores exactly its signed UTF-8 bytes", async () => {
-    if (!shippedSignatureBase64) throw new Error("The signature is not a base64 data URL");
+    if (!shippedSignatureBase64)
+      throw new Error("The signature is not a base64 data URL");
     const t = backendOf(modules);
     await registerShippedMedicalParameters(t);
-    const rows = await t.run((ctx) => ctx.db.query("medical_parameters_versions").collect());
+    const rows = await t.run((ctx) =>
+      ctx.db.query("medical_parameters_versions").collect(),
+    );
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       version: "0.1.0",
@@ -442,16 +537,23 @@ describe("medical signatures and version registration", () => {
         ? null
         : Array.from(new Uint8Array(await stored.arrayBuffer()));
     });
-    expect(storedBytes).toEqual(Array.from(new TextEncoder().encode(shippedContent)));
+    expect(storedBytes).toEqual(
+      Array.from(new TextEncoder().encode(shippedContent)),
+    );
   });
 
   it("rejects an already registered shipped version without storing it twice", async () => {
-    if (!shippedSignatureBase64) throw new Error("The signature is not a base64 data URL");
+    if (!shippedSignatureBase64)
+      throw new Error("The signature is not a base64 data URL");
     const t = backendOf(modules);
     await registerShippedMedicalParameters(t);
-    await expect(registerShippedMedicalParameters(t)).rejects.toThrow(/already registered/);
+    await expect(registerShippedMedicalParameters(t)).rejects.toThrow(
+      /already registered/,
+    );
     expect(
-      await t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+      await t.run((ctx) =>
+        ctx.db.query("medical_parameters_versions").collect(),
+      ),
     ).toHaveLength(1);
     expect(await storedFiles(t)).toHaveLength(1);
   });
@@ -478,7 +580,9 @@ describe("medical signatures and version registration", () => {
     });
 
     expect(
-      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+      await w.t.run((ctx) =>
+        ctx.db.query("medical_parameters_versions").collect(),
+      ),
     ).toEqual(versionsBefore);
     expect(await storedFiles(w.t)).toEqual(filesBefore);
   });
@@ -524,7 +628,9 @@ describe("medical signatures and version registration", () => {
       ),
     ).toContain("notifications:deliver");
     expect(
-      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+      await w.t.run((ctx) =>
+        ctx.db.query("medical_parameters_versions").collect(),
+      ),
     ).toHaveLength(2);
   });
 
@@ -566,7 +672,9 @@ describe("medical signatures and version registration", () => {
     expect(session).toMatchObject({ status: "pending" });
     expect(session?.kind).toBeUndefined();
     expect(
-      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+      await w.t.run((ctx) =>
+        ctx.db.query("medical_parameters_versions").collect(),
+      ),
     ).toHaveLength(2);
   });
 
@@ -600,14 +708,18 @@ describe("medical signatures and version registration", () => {
       status: "pending",
     });
     expect(
-      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+      await w.t.run((ctx) =>
+        ctx.db.query("medical_parameters_versions").collect(),
+      ),
     ).toHaveLength(1);
   });
 
   it("refuses a shipped-file registration on an empty registry and cleans up its file", async () => {
     const w = await seedWorld(modules);
     await w.t.run(async (ctx) => {
-      const versions = await ctx.db.query("medical_parameters_versions").collect();
+      const versions = await ctx.db
+        .query("medical_parameters_versions")
+        .collect();
       for (const version of versions) {
         await ctx.db.delete(version._id);
         await ctx.storage.delete(version.storageId);
@@ -628,7 +740,9 @@ describe("medical signatures and version registration", () => {
       status: "pending",
     });
     expect(
-      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+      await w.t.run((ctx) =>
+        ctx.db.query("medical_parameters_versions").collect(),
+      ),
     ).toEqual([]);
     expect(await storedFiles(w.t)).toEqual([]);
   });
@@ -728,7 +842,9 @@ describe("medical signatures and version registration", () => {
     await expect(insert("0.2.0")).rejects.toThrow(/already registered/);
     await expect(insert("0.1.9")).rejects.toThrow(/not greater than current/);
     expect(
-      await t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+      await t.run((ctx) =>
+        ctx.db.query("medical_parameters_versions").collect(),
+      ),
     ).toHaveLength(2);
   });
 
@@ -738,7 +854,9 @@ describe("medical signatures and version registration", () => {
     const w = await seedWorld(modules);
     await insertFixtureVersion(w.t, "0.2.0");
     await insertFixtureVersion(w.t, "0.10.0");
-    await expect(as(w.t, "manager").query(api.medicalParameters.current, {})).resolves.toMatchObject({
+    await expect(
+      as(w.t, "manager").query(api.medicalParameters.current, {}),
+    ).resolves.toMatchObject({
       version: "0.10.0",
     });
   });
@@ -746,13 +864,19 @@ describe("medical signatures and version registration", () => {
   it("requires a signed-in user and returns null when no version is present", async () => {
     const w = await seedWorld(modules);
     await w.t.run(async (ctx) => {
-      for (const row of await ctx.db.query("medical_parameters_versions").collect()) {
+      for (const row of await ctx.db
+        .query("medical_parameters_versions")
+        .collect()) {
         await ctx.db.delete(row._id);
         await ctx.storage.delete(row.storageId);
       }
     });
-    await expect(w.t.query(api.medicalParameters.current, {})).rejects.toThrow(/not_authenticated/);
-    await expect(as(w.t, "patient").query(api.medicalParameters.current, {})).resolves.toBeNull();
+    await expect(w.t.query(api.medicalParameters.current, {})).rejects.toThrow(
+      /not_authenticated/,
+    );
+    await expect(
+      as(w.t, "patient").query(api.medicalParameters.current, {}),
+    ).resolves.toBeNull();
   });
 });
 
@@ -767,15 +891,19 @@ describe("current medical parameters in training", () => {
       ["0.1.1", "0.1.0", "ahead"],
     ] as const;
     for (const [machineVersion, referenceVersion, expected] of cases) {
-      expect(
-        medicalParametersStatus(machineVersion, referenceVersion),
-      ).toBe(expected);
+      expect(medicalParametersStatus(machineVersion, referenceVersion)).toBe(
+        expected,
+      );
     }
   });
 
   it("refuses an unsigned machine before checking whether its programmes are enabled", async () => {
     const w = await seedWorld(modules);
-    const launchArgs = { machineId: w.machine, profileId: w.profileId, userId: w.patient };
+    const launchArgs = {
+      machineId: w.machine,
+      profileId: w.profileId,
+      userId: w.patient,
+    };
     const sessionsBefore = await w.t.run((ctx) =>
       ctx.db.query("sessions").collect(),
     );
@@ -788,9 +916,9 @@ describe("current medical parameters in training", () => {
     await expect(
       as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs),
     ).rejects.toThrow(/medical_parameters_unsigned/);
-    expect(
-      await w.t.run((ctx) => ctx.db.query("sessions").collect()),
-    ).toEqual(sessionsBefore);
+    expect(await w.t.run((ctx) => ctx.db.query("sessions").collect())).toEqual(
+      sessionsBefore,
+    );
   });
 
   it("does not add a refusal when the machine has not announced a medical version", async () => {
@@ -811,23 +939,34 @@ describe("current medical parameters in training", () => {
   it("uses a stored fraction and minimum age for remote launch refusals", async () => {
     const w = await seedWorld(modules);
     await insertFixtureVersion(w.t, "0.2.0", { zoneCeilingFraction: 0.8 });
-    const zoneRefusal = await as(w.t, "manager").mutation(
-      api.training.launchAutoSession,
-      { machineId: w.machine, profileId: w.profileId, userId: w.patient },
-    ).then(
-      () => null,
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
+    const zoneRefusal = await as(w.t, "manager")
+      .mutation(api.training.launchAutoSession, {
+        machineId: w.machine,
+        profileId: w.profileId,
+        userId: w.patient,
+      })
+      .then(
+        () => null,
+        (error: unknown) =>
+          error instanceof Error ? error.message : String(error),
+      );
     expect(zoneRefusal).toBe("zone_above_ceiling");
 
-    await insertFixtureVersion(w.t, "0.3.0", { zoneCeilingFraction: 0.9, minRiderAge: 37 });
-    const ageRefusal = await as(w.t, "manager").mutation(
-      api.training.launchAutoSession,
-      { machineId: w.machine, profileId: w.profileId, userId: w.patient },
-    ).then(
-      () => null,
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
+    await insertFixtureVersion(w.t, "0.3.0", {
+      zoneCeilingFraction: 0.9,
+      minRiderAge: 37,
+    });
+    const ageRefusal = await as(w.t, "manager")
+      .mutation(api.training.launchAutoSession, {
+        machineId: w.machine,
+        profileId: w.profileId,
+        userId: w.patient,
+      })
+      .then(
+        () => null,
+        (error: unknown) =>
+          error instanceof Error ? error.message : String(error),
+      );
     expect(ageRefusal).toBe("rider_too_young");
   });
 
@@ -853,7 +992,9 @@ describe("current medical parameters in training", () => {
   it("fails closed in launch order and returns age refusal from arming if the registry is absent", async () => {
     const w = await seedWorld(modules);
     await w.t.run(async (ctx) => {
-      for (const row of await ctx.db.query("medical_parameters_versions").collect()) {
+      for (const row of await ctx.db
+        .query("medical_parameters_versions")
+        .collect()) {
         await ctx.db.delete(row._id);
         await ctx.storage.delete(row.storageId);
       }
@@ -863,10 +1004,18 @@ describe("current medical parameters in training", () => {
         medicalParametersVersion: null,
       });
     });
-    const launchArgs = { machineId: w.machine, profileId: w.profileId, userId: w.patient };
-    await expect(as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs)).rejects.toThrow(/machine_offline/);
+    const launchArgs = {
+      machineId: w.machine,
+      profileId: w.profileId,
+      userId: w.patient,
+    };
+    await expect(
+      as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs),
+    ).rejects.toThrow(/machine_offline/);
     await w.t.run((ctx) => ctx.db.patch(w.machine, { status: "online" }));
-    await expect(as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs)).rejects.toThrow(/medical_parameters_unavailable/);
+    await expect(
+      as(w.t, "manager").mutation(api.training.launchAutoSession, launchArgs),
+    ).rejects.toThrow(/medical_parameters_unavailable/);
     await w.t.run((ctx) => ctx.db.patch(w.machine, { programsEnabled: true }));
     const sessionId = await addSession(w, {
       machineId: w.machine,
@@ -890,7 +1039,9 @@ describe("current medical parameters in training", () => {
       }),
     );
     expect(
-      await w.t.query(internal.training.getPendingTrainingSession, { machineId: w.machine }),
+      await w.t.query(internal.training.getPendingTrainingSession, {
+        machineId: w.machine,
+      }),
     ).toBeNull();
     expect(
       await w.t.mutation(internal.training.markTrainingStarted, {
@@ -899,7 +1050,9 @@ describe("current medical parameters in training", () => {
       }),
     ).toMatchObject({ armed: false, code: "age_refused_before_start" });
     const polledWithoutVersion = await w.t.run((ctx) => ctx.db.get(sessionId));
-    expect(polledWithoutVersion).toMatchObject({ endCode: "age_refused_before_start" });
+    expect(polledWithoutVersion).toMatchObject({
+      endCode: "age_refused_before_start",
+    });
     const sweepSessionId = await addSession(w, {
       machineId: w.machine,
       userId: w.patient,
@@ -914,10 +1067,14 @@ describe("current medical parameters in training", () => {
         subjectHrMax: 180,
       }),
     );
-    await expect(w.t.mutation(internal.training.sweepPendingSessions, {})).resolves.toEqual({
+    await expect(
+      w.t.mutation(internal.training.sweepPendingSessions, {}),
+    ).resolves.toEqual({
       failed: 1,
     });
-    await expect(w.t.run((ctx) => ctx.db.get(sweepSessionId))).resolves.toMatchObject({
+    await expect(
+      w.t.run((ctx) => ctx.db.get(sweepSessionId)),
+    ).resolves.toMatchObject({
       endCode: "age_refused_before_start",
     });
   });
@@ -925,14 +1082,22 @@ describe("current medical parameters in training", () => {
   it("does not use estimated heart rate without a version and preserves measured values", async () => {
     const w = await seedWorld(modules);
     await w.t.run(async (ctx) => {
-      for (const row of await ctx.db.query("medical_parameters_versions").collect()) {
+      for (const row of await ctx.db
+        .query("medical_parameters_versions")
+        .collect()) {
         await ctx.db.delete(row._id);
         await ctx.storage.delete(row.storageId);
       }
     });
-    await w.t.run((ctx) => ctx.db.patch(w.patient, { hrMax: undefined, birthYear: 1990 }));
-    await expect(as(w.t, "manager").query(api.users.getUserById, { userId: w.patient })).resolves.toMatchObject({ effectiveHrMax: null });
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.patient, { hrMax: undefined, birthYear: 1990 }),
+    );
+    await expect(
+      as(w.t, "manager").query(api.users.getUserById, { userId: w.patient }),
+    ).resolves.toMatchObject({ effectiveHrMax: null });
     await w.t.run((ctx) => ctx.db.patch(w.patient, { hrMax: 180 }));
-    await expect(as(w.t, "manager").query(api.users.getUserById, { userId: w.patient })).resolves.toMatchObject({ effectiveHrMax: 180 });
+    await expect(
+      as(w.t, "manager").query(api.users.getUserById, { userId: w.patient }),
+    ).resolves.toMatchObject({ effectiveHrMax: 180 });
   });
 });

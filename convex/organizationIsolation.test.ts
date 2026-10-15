@@ -31,7 +31,7 @@ import {
   modules,
   NOW,
   seedMachineWorld,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   type Actor,
   type World,
 } from "./test.setup";

@@ -9,7 +9,7 @@ import {
   modules,
   NOW,
   registerShippedMedicalParameters,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   backendOf,
 } from "./test.setup";
 import { estimateHrMax } from "../lib/medicalParameters";
@@ -28,7 +28,8 @@ async function shippedParameters() {
   const t = backendOf(modules);
   await registerShippedMedicalParameters(t);
   const current = await t.run((ctx) => currentMedicalParameters(ctx));
-  if (current === null) throw new Error("The shipped medical version was not registered");
+  if (current === null)
+    throw new Error("The shipped medical version was not registered");
   return current;
 }
 
@@ -51,7 +52,9 @@ describe("Pi and Convex medical parity", () => {
   it("uses the current shipped formula for every age estimate", async () => {
     const medical = await shippedParameters();
     for (const testCase of parityFixture.age_estimates) {
-      expect(estimateHrMax(testCase.age, medical.hrMaxFormula)).toBe(testCase.hr_max);
+      expect(estimateHrMax(testCase.age, medical.hrMaxFormula)).toBe(
+        testCase.hr_max,
+      );
     }
   });
 
@@ -66,8 +69,11 @@ describe("Pi and Convex medical parity", () => {
   });
 
   it("refuses an underage rider through the real launch mutation", async () => {
-    const underage = parityFixture.age_minimum.find((testCase) => testCase.refused);
-    if (underage === undefined) throw new Error("The fixture needs a refused age");
+    const underage = parityFixture.age_minimum.find(
+      (testCase) => testCase.refused,
+    );
+    if (underage === undefined)
+      throw new Error("The fixture needs a refused age");
     const world = await seedWorld(modules);
     await world.t.run((ctx) =>
       ctx.db.patch(world.patient, {
@@ -84,7 +90,11 @@ describe("Pi and Convex medical parity", () => {
       .then(
         () => null,
         (error: unknown) =>
-          error instanceof ConvexError ? error.data : error instanceof Error ? error.message : String(error),
+          error instanceof ConvexError
+            ? error.data
+            : error instanceof Error
+              ? error.message
+              : String(error),
       );
     expect(verdict).toBe("rider_too_young");
   });

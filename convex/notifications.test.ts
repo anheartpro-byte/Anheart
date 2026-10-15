@@ -33,7 +33,7 @@ import {
   configureAnheartOrganization,
   modules,
   NOW,
-  seedWorld,
+  seedLaunchWorld as seedWorld,
   type World,
 } from "./test.setup";
 
@@ -185,7 +185,11 @@ describe("who receives an alert about a machine", () => {
       const other = await ctx.db.get(w.orgBMachine);
       if (machine === null || other === null) throw new Error("No machine");
       const counts = [
-        await notifyMachine(ctx, { ...machine, isDeleted: true }, "drive_fault"),
+        await notifyMachine(
+          ctx,
+          { ...machine, isDeleted: true },
+          "drive_fault",
+        ),
         await notifyMachine(
           ctx,
           { ...machine, organizationId: undefined },
@@ -402,7 +406,9 @@ describe("a session the machine ends as failed", () => {
       await delivered(w);
     }
 
-    const managers = (await alerts(w)).filter((row) => row.userId === w.manager);
+    const managers = (await alerts(w)).filter(
+      (row) => row.userId === w.manager,
+    );
     expect(managers).toHaveLength(2);
     expect(new Set(managers.map((row) => row.sessionId)).size).toBe(2);
   });
@@ -473,7 +479,13 @@ describe("a launch failed before its machine armed it (ANH-144)", () => {
     expect(listed.reasonCode).toBe("hr_max_changed_before_start");
     for (const row of rows) {
       const everything = JSON.stringify(await emailOf(w, row.emailId));
-      for (const forbidden of ["171", "heart", "hr_max", "patient", sessionId]) {
+      for (const forbidden of [
+        "171",
+        "heart",
+        "hr_max",
+        "patient",
+        sessionId,
+      ]) {
         expect(everything).not.toContain(forbidden);
       }
     }
@@ -541,7 +553,9 @@ describe("the events of a session's record", () => {
     ]);
 
     const rows = await alerts(w);
-    expect(rows.map((row) => [row.type, row.sessionId, row.detail, row.count])).toEqual([
+    expect(
+      rows.map((row) => [row.type, row.sessionId, row.detail, row.count]),
+    ).toEqual([
       ["safety_verdict", sessionId, "QUICK_STOP", 2],
       ["safety_verdict", sessionId, "QUICK_STOP", 2],
     ]);
@@ -578,7 +592,9 @@ describe("the events of a session's record", () => {
       kind: "auto",
     });
 
-    await storeEvents(w, sessionId, [event(1, "verdict", "a verdict of another form")]);
+    await storeEvents(w, sessionId, [
+      event(1, "verdict", "a verdict of another form"),
+    ]);
 
     expect((await alerts(w)).map((row) => [row.type, row.detail])).toEqual([
       ["safety_verdict", undefined],
@@ -636,7 +652,9 @@ describe("the events of a session's record", () => {
 
 describe("what the machine wrote, read as a code", () => {
   it("reads the action of a verdict and the mnemonic of a drive fault, and nothing else", () => {
-    expect(verdictAction("hr_critical (QUICK_STOP): 191 bpm")).toBe("QUICK_STOP");
+    expect(verdictAction("hr_critical (QUICK_STOP): 191 bpm")).toBe(
+      "QUICK_STOP",
+    );
     expect(verdictAction("cleared")).toBeNull();
     expect(verdictAction("HR (QUICK_STOP)")).toBeNull();
     expect(verdictAlerts("cleared")).toBe(false);
@@ -654,8 +672,12 @@ describe("what the machine wrote, read as a code", () => {
   });
 
   it("keeps the most severe action of a verdict, and the latest code of anything else", () => {
-    expect(foldedDetail("safety_verdict", "RAMP_DOWN", "QUICK_STOP")).toBe("QUICK_STOP");
-    expect(foldedDetail("safety_verdict", "GO_SILENT", "RAMP_DOWN")).toBe("GO_SILENT");
+    expect(foldedDetail("safety_verdict", "RAMP_DOWN", "QUICK_STOP")).toBe(
+      "QUICK_STOP",
+    );
+    expect(foldedDetail("safety_verdict", "GO_SILENT", "RAMP_DOWN")).toBe(
+      "GO_SILENT",
+    );
     expect(foldedDetail("safety_verdict", undefined, null)).toBeUndefined();
     expect(foldedDetail("safety_verdict", "GO_SILENT", "UNKNOWN_ACTION")).toBe(
       "UNKNOWN_ACTION",
@@ -785,7 +807,11 @@ describe("the alerts a caller reads", () => {
 
     expect(
       await w.t
-        .withIdentity({ subject: "manager", org_id: "org_synthetic_unknown", org_role: "org:gestionnaire" })
+        .withIdentity({
+          subject: "manager",
+          org_id: "org_synthetic_unknown",
+          org_role: "org:gestionnaire",
+        })
         .query(api.notifications.unreadCount, {}),
     ).toBeNull();
     expect(
@@ -801,8 +827,12 @@ describe("the alerts a caller reads", () => {
     const [own] = (await alerts(w)).filter((row) => row.userId === w.manager);
     const manager = as(w.t, "manager");
 
-    await manager.mutation(api.notifications.markRead, { notificationId: own._id });
-    await manager.mutation(api.notifications.markRead, { notificationId: own._id });
+    await manager.mutation(api.notifications.markRead, {
+      notificationId: own._id,
+    });
+    await manager.mutation(api.notifications.markRead, {
+      notificationId: own._id,
+    });
     expect((await w.t.run((ctx) => ctx.db.get(own._id)))?.read).toBe(true);
 
     await w.t.run((ctx) => ctx.db.delete(own._id));
@@ -892,7 +922,11 @@ describe("the e-mail of an alert", () => {
     });
 
     await storeEvents(w, sessionId, [
-      event(1, "verdict", "hr_critical (QUICK_STOP): 191 bpm for patient Synthetic"),
+      event(
+        1,
+        "verdict",
+        "hr_critical (QUICK_STOP): 191 bpm for patient Synthetic",
+      ),
     ]);
     await storeEvents(w, sessionId, [
       event(2, "verdict", "hr_critical (GO_SILENT): 195 bpm"),
