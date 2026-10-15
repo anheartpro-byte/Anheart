@@ -14,7 +14,7 @@ from typing import Final
 from src.clock import Clock
 from src.roster import Rider, Roster
 from src.training.plan import JsonValue
-from src.units import Bpm
+from src.units import Bpm, UnixMillis
 
 RIDER_ID: Final[str] = "k17rider0synthetic"
 """The dashboard's identifier of the synthetic rider: what the record writes as ``subject_id``."""
@@ -22,7 +22,16 @@ RIDER_ID: Final[str] = "k17rider0synthetic"
 RIDER_NAME: Final[str] = "Synthetic Rider"
 """Their name: shown on the page, never written."""
 
-RIDER: Final[Rider] = Rider(user_id=RIDER_ID, name=RIDER_NAME, hr_max=Bpm(190), birth_year=1940)
+RIDER: Final[Rider] = Rider(
+    user_id=RIDER_ID,
+    name=RIDER_NAME,
+    hr_max=Bpm(190),
+    birth_year=1940,
+    fit=True,
+    fitness_valid_until=UnixMillis(4_102_444_800_000),
+    consent=True,
+    questionnaire_version="0.1.0",
+)
 """An adult with both values set, whom every programme of the shipped store fits.
 
 Born in 1940 so as to be an adult on every clock the tests run (29 on a clock
@@ -30,7 +39,14 @@ left at 1970, the default of :class:`~src.clock.ManualClock`, and under the
 oldest age the console believes today)."""
 
 CHILD: Final[Rider] = Rider(
-    user_id="k17child0synthetic", name="Synthetic Child", hr_max=Bpm(200), birth_year=2013
+    user_id="k17child0synthetic",
+    name="Synthetic Child",
+    hr_max=Bpm(200),
+    birth_year=2013,
+    fit=True,
+    fitness_valid_until=RIDER.fitness_valid_until,
+    consent=True,
+    questionnaire_version="0.1.0",
 )
 """A rider of the list who is 9 on the clock the console rigs run (November 2023):
 a programme for them is refused for their age, by the loop."""
@@ -50,6 +66,10 @@ def rider_row(rider: Rider) -> Mapping[str, JsonValue]:
         "name": rider.name,
         "hrMax": None if rider.hr_max is None else int(rider.hr_max),
         "birthYear": rider.birth_year,
+        "fit": rider.fit,
+        "fitnessValidUntil": rider.fitness_valid_until,
+        "consent": rider.consent,
+        "fitnessQuestionnaireVersion": rider.questionnaire_version,
     }
 
 

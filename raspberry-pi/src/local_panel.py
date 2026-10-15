@@ -230,6 +230,7 @@ from src.roster import (
     Rider,
     Roster,
     age_of,
+    cleared_to_board,
     describe_passenger_refusal,
     passenger_of,
 )
@@ -377,6 +378,8 @@ class RiderFacts:
     age: int | None
     label: str | None
     """The list's name of the rider, for the dashboard; ``None`` for a launch."""
+
+    rider: Rider
 
 
 @dataclass(frozen=True, slots=True)
@@ -1194,6 +1197,9 @@ class LocalPanel:
             )
         if isinstance(age, Err):
             return describe_passenger_refusal(age.error)
+        cleared = cleared_to_board(rider, self._clock.unix_millis())
+        if isinstance(cleared, Err):
+            return describe_passenger_refusal(cleared.error)
         return rider_age_refusal(age.value, self._config.min_rider_age)
 
     def _manual_rider(self, command: StartManual) -> Result[Rider | None, PassengerRefusal]:
@@ -1283,19 +1289,19 @@ class LocalPanel:
         set on the site. A rider it no longer holds, a list too old, a value
         missing: refused, whatever the page showed when the start was asked.
         """
-        if command.cloud_session_id is not None:
-            found = self._roster.find(command.subject_id, self._clock.monotonic())
-            if isinstance(found, Err):
-                return Err(describe_passenger_refusal(found.error))
-            return Ok(RiderFacts(command.subject_hr_max, command.subject_age, None))
         found = self._roster.find(command.subject_id, self._clock.monotonic())
         if isinstance(found, Err):
             return Err(describe_passenger_refusal(found.error))
+        cleared = cleared_to_board(found.value, self._clock.unix_millis())
+        if isinstance(cleared, Err):
+            return Err(describe_passenger_refusal(cleared.error))
+        if command.cloud_session_id is not None:
+            return Ok(RiderFacts(command.subject_hr_max, command.subject_age, None, found.value))
         passenger = passenger_of(found.value, self._clock.unix_millis())
         if isinstance(passenger, Err):
             return Err(describe_passenger_refusal(passenger.error))
         listed = passenger.value
-        return Ok(RiderFacts(listed.hr_max, listed.age, listed.rider.name))
+        return Ok(RiderFacts(listed.hr_max, listed.age, listed.rider.name, listed.rider))
 
     def preflight_remote_start(self, launch: Launch) -> Result[None, str]:
         """Run the panel's start gates without submitting a command or arming."""

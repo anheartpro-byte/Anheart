@@ -2826,8 +2826,17 @@ async def test_the_confirming_operator_is_recorded_and_the_roster_name_stays_off
     assert RIDER_NAME not in caplog.text
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        ErrorCode("right_revoked_before_start"),
+        ErrorCode("rider_not_fit"),
+        ErrorCode("fitness_expired"),
+        ErrorCode("consent_missing"),
+    ],
+)
 async def test_a_409_never_commands_the_simulated_drive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: ErrorCode
 ) -> None:
     order: list[str] = []
     writes = observe_dashboard_and_drive(monkeypatch, order)
@@ -2835,8 +2844,9 @@ async def test_a_409_never_commands_the_simulated_drive(
     rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
     rig_.dashboard.answer(
         START,
-        Err(Refused(409, "Right revoked", ErrorCode("right_revoked_before_start"))),
+        Err(Refused(409, "private server detail", code)),
     )
+    client = rig_.panel.hub.subscribe()
 
     await rig_.run(0.2)
     confirm_linked(rig_.panel)
@@ -2847,6 +2857,74 @@ async def test_a_409_never_commands_the_simulated_drive(
     assert order == ["training/start"]
     assert len(rig_.dashboard.to(START)) == 1
     assert rig_.dashboard.to("/api/machine/training/end") == []
+    details: list[str] = []
+    for _ in range(2):
+        payload = await asyncio.wait_for(client.next_payload(), timeout=0.1)
+        assert payload.event is not None
+        details.append(payload.event.detail)
+    assert any(ARMING_REFUSAL_WORDS[code] in detail for detail in details)
+    await rig_.panel.close()
+
+
+@pytest.mark.parametrize("change", ["unfit", "expired", "no-consent"])
+async def test_held_roster_refuses_remote_start_before_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    order: list[str] = []
+    writes = observe_dashboard_and_drive(monkeypatch, order)
+    rig_ = linked(tmp_path)
+    rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await rig_.run(0.2)
+    confirm_linked(rig_.panel)
+    rider = replace(
+        RIDER,
+        fit=change != "unfit",
+        consent=change != "no-consent",
+        fitness_valid_until=rig_.clock.unix_millis()
+        if change == "expired"
+        else RIDER.fitness_valid_until,
+    )
+    rig_.panel.roster.adopt((rider,), rig_.clock.monotonic())
+    await rig_.run(1.8)
+    assert writes == []
+    assert rig_.dashboard.to(START) == []
+    assert state_of(rig_.panel) is RuntimeState.IDLE
+    ends = rig_.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    assert "aptitude" in str(ends[0]["reason"]) or "consentement" in str(ends[0]["reason"])
+    await rig_.panel.close()
+
+
+async def test_fitness_expires_between_remote_confirmation_and_arming(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    writes = observe_dashboard_and_drive(monkeypatch, order)
+    rig_ = linked(tmp_path)
+    rig_.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await rig_.run(0.2)
+    until = UnixMillis(rig_.clock.unix_millis() + 2000)
+    rig_.panel.roster.adopt((replace(RIDER, fitness_valid_until=until),), rig_.clock.monotonic())
+
+    def expire_before_ack(_body: Mapping[str, object]) -> Reply:
+        rig_.clock.advance(Seconds(2.0))
+        return ok()
+
+    rig_.dashboard.handle(START, expire_before_ack)
+    confirm_linked(rig_.panel)
+    await rig_.run(2.8)
+    assert writes == []
+    assert order == ["training/start"]
+    assert state_of(rig_.panel) is RuntimeState.IDLE
+    ends = rig_.dashboard.to("/api/machine/training/end")
+    assert len(ends) == 1
+    assert ends[0]["failed"] is True
+    assert "aptitude du passager expiree" in str(ends[0]["reason"])
+    await rig_.panel.close()
 
 
 async def test_a_rechecked_arm_refusal_after_2xx_ends_without_drive_write(

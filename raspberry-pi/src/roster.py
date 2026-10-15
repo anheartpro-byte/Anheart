@@ -40,8 +40,8 @@ the list held stops being offered after :data:`ROSTER_MAX_AGE`. The
 re-check of identity and rights at the arming of a launch is ANH-144, on the
 dashboard's side. The dashboard also re-checks the right when it registers
 a session started here: a rider no longer authorised is not attributed the
-session (ANH-180). Fitness and consent (ANH-143) are not served yet:
-:func:`passenger_of` is where their gate goes when they are.
+session (ANH-180). Fitness and consent are checked by :func:`cleared_to_board`
+against the held list and the injected wall clock before every occupied start.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -95,6 +95,8 @@ _USER_ID: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 _EARLIEST_BIRTH_YEAR: Final[int] = 1900
 _LATEST_BIRTH_YEAR: Final[int] = 2100
+_LATEST_FITNESS_MILLIS: Final[int] = 4_133_980_800_000  # 2101-01-01 UTC
+_QUESTIONNAIRE_VERSION: Final[re.Pattern[str]] = re.compile(r"[0-9A-Za-z.+-]{1,32}")
 
 
 # =========================================================================
@@ -117,6 +119,11 @@ class Rider:
 
     birth_year: int | None
     """Set on the site; ``None`` when it is not."""
+
+    fit: bool = False
+    fitness_valid_until: UnixMillis | None = None
+    consent: bool = False
+    questionnaire_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,8 +200,32 @@ class AgeUnknowable:
     """The birth year and this machine's clock give no plausible age."""
 
 
+@dataclass(frozen=True, slots=True)
+class NotFit:
+    """No complete, approved fitness assessment in the held list."""
+
+
+@dataclass(frozen=True, slots=True)
+class FitnessExpired:
+    """The held assessment is no longer valid at this start."""
+
+
+@dataclass(frozen=True, slots=True)
+class NoConsent:
+    """No active consent in the held list."""
+
+
 type PassengerRefusal = (
-    NoPassenger | OnBench | NoList | NotListed | HrMaxUnknown | BirthYearUnknown | AgeUnknowable
+    NoPassenger
+    | OnBench
+    | NoList
+    | NotListed
+    | HrMaxUnknown
+    | BirthYearUnknown
+    | AgeUnknowable
+    | NotFit
+    | FitnessExpired
+    | NoConsent
 )
 """Closed: :func:`describe_passenger_refusal` says each of them."""
 
@@ -254,6 +285,21 @@ def describe_passenger_refusal(refusal: PassengerRefusal) -> str:  # noqa: PLR09
             )
         case AgeUnknowable():
             return "demarrage refuse : age du passager incalculable avec l'horloge de cette machine"
+        case NotFit():
+            return (
+                "demarrage refuse : aptitude du passager non validee, "
+                "a valider par un gestionnaire sur le site"
+            )
+        case FitnessExpired():
+            return (
+                "demarrage refuse : aptitude du passager expiree, "
+                "a valider par un gestionnaire sur le site"
+            )
+        case NoConsent():
+            return (
+                "demarrage refuse : consentement du passager absent, "
+                "a signer par le passager sur le site"
+            )
     raise assert_never(refusal)
 
 
@@ -321,7 +367,24 @@ def _rider(raw: object) -> Rider | None:
         name=shown,
         hr_max=_hr_max(entry.get("hrMax")),
         birth_year=_birth_year(entry.get("birthYear")),
+        fit=entry.get("fit") is True,
+        fitness_valid_until=_fitness_until(entry.get("fitnessValidUntil")),
+        consent=entry.get("consent") is True,
+        questionnaire_version=_questionnaire_version(entry.get("fitnessQuestionnaireVersion")),
     )
+
+
+def _fitness_until(value: object) -> UnixMillis | None:
+    whole = _whole(value)
+    if whole is None or not 0 <= whole <= _LATEST_FITNESS_MILLIS:
+        return None
+    return UnixMillis(whole)
+
+
+def _questionnaire_version(value: object) -> str | None:
+    if not isinstance(value, str) or _QUESTIONNAIRE_VERSION.fullmatch(value) is None:
+        return None
+    return value
 
 
 def parse_roster(document: Mapping[str, object]) -> Result[Listing, str]:
@@ -351,6 +414,18 @@ def parse_roster(document: Mapping[str, object]) -> Result[Listing, str]:
 # =========================================================================
 # What a session with somebody on board needs of a rider
 # =========================================================================
+
+
+def cleared_to_board(rider: Rider, at: UnixMillis) -> Result[None, PassengerRefusal]:
+    """Fitness and consent at the start, from the held list; no personal detail in errors."""
+    until = rider.fitness_valid_until
+    if not rider.fit or rider.questionnaire_version is None or until is None:
+        return Err(NotFit())
+    if until <= at:
+        return Err(FitnessExpired())
+    if not rider.consent:
+        return Err(NoConsent())
+    return Ok(None)
 
 
 def age_at(birth_year: int, at: UnixMillis) -> int | None:
@@ -388,7 +463,7 @@ def passenger_of(rider: Rider, at: UnixMillis) -> Result[Passenger, PassengerRef
     Both come from the site; a missing one is a refusal, as on the site. The
     minimum age is the console's own gate (``min_rider_age`` of the signed
     medical parameters), applied after.
-    Fitness and consent (ANH-143) will be checked here.
+    Fitness and consent are checked separately by :func:`cleared_to_board`.
     """
     hr_max = rider.hr_max
     if hr_max is None:
