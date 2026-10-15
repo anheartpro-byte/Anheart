@@ -1,7 +1,11 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { CURRENT_QUESTIONNAIRE, computeOutcome, maxValidUntil } from "../lib/fitnessQuestionnaire";
+import {
+  CURRENT_QUESTIONNAIRE,
+  computeOutcome,
+  maxValidUntil,
+} from "../lib/fitnessQuestionnaire";
 import { CONSENT_TEXT_VERSION } from "../lib/consentText";
 import {
   canManageUser,
@@ -9,7 +13,12 @@ import {
   inScope,
   organizationRoleOf,
 } from "./lib/auth";
-import { activeConsent, latestAssessment, riderLaunchRefusal, riderOrganizationId } from "./lib/fitness";
+import {
+  activeConsent,
+  latestAssessment,
+  riderLaunchRefusal,
+  riderOrganizationId,
+} from "./lib/fitness";
 import { refusal } from "./lib/errors";
 import { limitUser } from "./lib/rateLimits";
 
@@ -37,6 +46,11 @@ const readinessFitnessValidator = v.union(
   v.null(),
 );
 
+/**
+ * Store the caller's questionnaire answers, or a managed rider's answers.
+ * Refuses an unregistered rider, an unmanaged target, an obsolete version,
+ * or answers that do not match the current questionnaire.
+ */
 export const submitFitnessAnswers = mutation({
   args: {
     userId: v.optional(v.id("users")),
@@ -51,10 +65,7 @@ export const submitFitnessAnswers = mutation({
     await limitUser(ctx);
     const caller = await getCurrentUserOrThrow(ctx);
     const userId = args.userId ?? caller._id;
-    if (
-      userId !== caller._id &&
-      !(await canManageUser(ctx, userId, caller))
-    ) {
+    if (userId !== caller._id && !(await canManageUser(ctx, userId, caller))) {
       throw refusal("user_not_managed");
     }
     const organizationId = await riderOrganizationId(ctx, userId, caller);
@@ -86,6 +97,11 @@ export const submitFitnessAnswers = mutation({
   },
 });
 
+/**
+ * Validate the latest assessment for a rider the caller manages.
+ * Refuses a missing, out-of-scope, superseded, already validated, obsolete,
+ * or self assessment, and invalid validity or notes.
+ */
 export const validateFitnessAssessment = mutation({
   args: {
     assessmentId: v.id("fitness_assessments"),
@@ -154,6 +170,11 @@ export const validateFitnessAssessment = mutation({
   },
 });
 
+/**
+ * Sign the current consent text for the caller in their active organisation.
+ * Any active member may sign for themselves; refuses an inactive membership
+ * or an obsolete text version. There is no argument for signing for another.
+ */
 export const signConsent = mutation({
   args: { textVersion: v.string() },
   returns: v.id("consents"),
@@ -164,12 +185,7 @@ export const signConsent = mutation({
       throw refusal("consent_text_outdated");
     }
     const organizationId = await riderOrganizationId(ctx, caller._id, caller);
-    if (
-      organizationId === null ||
-      (await organizationRoleOf(ctx, caller._id, organizationId)) !== "user"
-    ) {
-      throw refusal("not_authorized");
-    }
+    if (organizationId === null) throw refusal("not_authorized");
     const existing = await activeConsent(ctx, caller._id, organizationId);
     if (existing !== null) return existing._id;
     return await ctx.db.insert("consents", {
@@ -182,6 +198,11 @@ export const signConsent = mutation({
   },
 });
 
+/**
+ * Withdraw the caller's consent, or consent for a rider the caller manages.
+ * Any active member may withdraw their own consent; refuses an inactive
+ * membership, an unmanaged target, or when the target has no active consent.
+ */
 export const withdrawConsent = mutation({
   args: { userId: v.optional(v.id("users")) },
   returns: v.null(),
@@ -191,12 +212,7 @@ export const withdrawConsent = mutation({
     const userId = args.userId ?? caller._id;
     if (userId === caller._id) {
       const organizationId = await riderOrganizationId(ctx, userId, caller);
-      if (
-        organizationId === null ||
-        (await organizationRoleOf(ctx, userId, organizationId)) !== "user"
-      ) {
-        throw refusal("not_authorized");
-      }
+      if (organizationId === null) throw refusal("not_authorized");
     } else if (!(await canManageUser(ctx, userId, caller))) {
       throw refusal("user_not_managed");
     }
@@ -221,6 +237,11 @@ export const withdrawConsent = mutation({
   },
 });
 
+/**
+ * Return a rider's assessment and consent status to themselves or an
+ * authorized manager. Returns null outside that scope; answers and review
+ * notes are withheld from the rider and all console-facing calls.
+ */
 export const getRiderReadiness = query({
   args: {
     userId: v.id("users"),
@@ -267,7 +288,9 @@ export const getRiderReadiness = query({
         return null;
       }
       organizationId = machine.organizationId;
-      if ((await organizationRoleOf(ctx, args.userId, organizationId)) === null) {
+      if (
+        (await organizationRoleOf(ctx, args.userId, organizationId)) === null
+      ) {
         return null;
       }
     } else {
@@ -324,8 +347,12 @@ export const getRiderReadiness = query({
         validUntil: assessment.validUntil,
         current:
           assessment.questionnaireVersion === CURRENT_QUESTIONNAIRE.version,
-        answers: manages && caller._id !== args.userId ? assessment.answers : undefined,
-        notes: manages && caller._id !== args.userId ? assessment.notes : undefined,
+        answers:
+          manages && caller._id !== args.userId
+            ? assessment.answers
+            : undefined,
+        notes:
+          manages && caller._id !== args.userId ? assessment.notes : undefined,
       };
     }
     const active = consent

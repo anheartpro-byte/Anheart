@@ -3,7 +3,10 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { CurrentUser } from "./lib/auth";
 import { riderOrganizationId } from "./lib/fitness";
-import { CURRENT_QUESTIONNAIRE, type FitnessOutcome } from "../lib/fitnessQuestionnaire";
+import {
+  CURRENT_QUESTIONNAIRE,
+  type FitnessOutcome,
+} from "../lib/fitnessQuestionnaire";
 import { CONSENT_TEXT_VERSION } from "../lib/consentText";
 import { mockClerkInvitations } from "./patientInvitation.fixtures";
 import {
@@ -173,7 +176,9 @@ describe("ANH-143 fitness assessments", () => {
       signedAt: NOW,
       signedVia: "site",
     });
-    expect(await w.t.run((ctx) => ctx.db.get(withdrawnConsentId))).toMatchObject({
+    expect(
+      await w.t.run((ctx) => ctx.db.get(withdrawnConsentId)),
+    ).toMatchObject({
       withdrawnAt: NOW,
       withdrawnBy: w.manager,
     });
@@ -258,7 +263,10 @@ describe("ANH-143 fitness assessments", () => {
       notes: "synthetic review note",
     });
     const passengerView = await readiness(w, "patient", w.patient);
-    expect(passengerView?.fitness).toMatchObject({ outcome: "fit", validated: true });
+    expect(passengerView?.fitness).toMatchObject({
+      outcome: "fit",
+      validated: true,
+    });
     expect(passengerView?.fitness).not.toHaveProperty("answers");
     expect(passengerView?.fitness).not.toHaveProperty("notes");
   });
@@ -383,18 +391,25 @@ describe("ANH-143 fitness assessments", () => {
     ["fit assessment has no validity", undefined, "fit"],
     ["fit assessment is already expired", NOW, "fit"],
     ["fit assessment has a fractional validity", NOW + 1.5, "fit"],
-    ["non-fit assessment has a validity", NOW + 60_000, "needs_medical_opinion"],
-  ] as const)("refuses invalid validity when %s", async (_label, validUntil, outcome) => {
-    const w = await seedWorld(modules);
-    const assessmentId = await insertAssessment(w, { outcome });
-    await expectCode(
-      as(w.t, "manager").mutation(api.fitness.validateFitnessAssessment, {
-        assessmentId,
-        ...(validUntil === undefined ? {} : { validUntil }),
-      }),
-      "invalid_validity",
-    );
-  });
+    [
+      "non-fit assessment has a validity",
+      NOW + 60_000,
+      "needs_medical_opinion",
+    ],
+  ] as const)(
+    "refuses invalid validity when %s",
+    async (_label, validUntil, outcome) => {
+      const w = await seedWorld(modules);
+      const assessmentId = await insertAssessment(w, { outcome });
+      await expectCode(
+        as(w.t, "manager").mutation(api.fitness.validateFitnessAssessment, {
+          assessmentId,
+          ...(validUntil === undefined ? {} : { validUntil }),
+        }),
+        "invalid_validity",
+      );
+    },
+  );
 
   it("trims review notes and refuses notes longer than 1000 characters", async () => {
     const w = await seedWorld(modules);
@@ -425,13 +440,17 @@ describe("ANH-143 fitness assessments", () => {
 
   it("uses only the latest assessment and returns launch refusal codes in order", async () => {
     const w = await seedWorld(modules);
-    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe("rider_not_fit");
+    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(
+      "rider_not_fit",
+    );
 
     const ready = await makeRiderReady(w.t, w.patient, w.orgA, {
       now: NOW,
       validUntil: NOW + 60_000,
     });
-    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(null);
+    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(
+      null,
+    );
     vi.setSystemTime(NOW + 1);
     const submitted = await as(w.t, "patient").mutation(
       api.fitness.submitFitnessAnswers,
@@ -441,13 +460,17 @@ describe("ANH-143 fitness assessments", () => {
       },
     );
     expect(submitted.outcome).toBe("fit");
-    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe("rider_not_fit");
+    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(
+      "rider_not_fit",
+    );
     await w.t.run((ctx) =>
       ctx.db.patch(submitted.assessmentId, {
         questionnaireVersion: `${CURRENT_QUESTIONNAIRE.version}-old`,
       }),
     );
-    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe("rider_not_fit");
+    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(
+      "rider_not_fit",
+    );
     await expectCode(
       as(w.t, "manager").mutation(api.fitness.validateFitnessAssessment, {
         assessmentId: submitted.assessmentId,
@@ -461,7 +484,9 @@ describe("ANH-143 fitness assessments", () => {
       outcome: "needs_medical_opinion",
       validated: true,
     });
-    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe("rider_not_fit");
+    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(
+      "rider_not_fit",
+    );
     expect(ready.assessmentId).not.toBe(submitted.assessmentId);
   });
 
@@ -471,7 +496,9 @@ describe("ANH-143 fitness assessments", () => {
       now: NOW,
       validUntil: NOW,
     });
-    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe("fitness_expired");
+    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(
+      "fitness_expired",
+    );
 
     const row = await w.t.run((ctx) =>
       ctx.db
@@ -492,11 +519,49 @@ describe("ANH-143 fitness assessments", () => {
         .collect();
       for (const consent of consents) await ctx.db.delete(consent._id);
     });
-    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe("consent_missing");
+    expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(
+      "consent_missing",
+    );
   });
 });
 
 describe("ANH-143 passenger consent", () => {
+  it("lets a manager sign their own consent and launch after an admin validates them", async () => {
+    const w = await seedWorld(modules);
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.manager, { hrMax: 180, birthYear: 1990 }),
+    );
+    const assessmentId = await w.t.run((ctx) =>
+      ctx.db.insert("fitness_assessments", {
+        userId: w.manager,
+        organizationId: w.orgA,
+        questionnaireVersion: CURRENT_QUESTIONNAIRE.version,
+        answers: fitAnswers(),
+        outcome: "fit",
+        submittedBy: w.manager,
+        submittedAt: NOW,
+      }),
+    );
+    await as(w.t, "admin").mutation(api.fitness.validateFitnessAssessment, {
+      assessmentId,
+      validUntil: NOW + 60_000,
+    });
+    await as(w.t, "manager").mutation(api.fitness.signConsent, {
+      textVersion: CONSENT_TEXT_VERSION,
+    });
+
+    const sessionId = await as(w.t, "manager").mutation(
+      api.training.launchAutoSession,
+      { machineId: w.machine, profileId: "p1" },
+    );
+    const session = await w.t.run((ctx) => ctx.db.get(sessionId));
+    expect(session).toMatchObject({
+      userId: w.manager,
+      startedById: w.manager,
+      status: "pending",
+    });
+  });
+
   it("signs with the current text and returns the same id without another write", async () => {
     const w = await seedWorld(modules);
     const first = await as(w.t, "patient").mutation(api.fitness.signConsent, {
@@ -540,9 +605,12 @@ describe("ANH-143 passenger consent", () => {
         validated: true,
         validUntil: NOW + 60_000,
       });
-      const consentId = await as(w.t, "patient").mutation(api.fitness.signConsent, {
-        textVersion: CONSENT_TEXT_VERSION,
-      });
+      const consentId = await as(w.t, "patient").mutation(
+        api.fitness.signConsent,
+        {
+          textVersion: CONSENT_TEXT_VERSION,
+        },
+      );
       const olderConsentId = await w.t.run((ctx) =>
         ctx.db.insert("consents", {
           userId: w.patient,
@@ -556,13 +624,18 @@ describe("ANH-143 passenger consent", () => {
         ...(actor === "patient" ? {} : { userId: w.patient }),
       });
       const consent = await w.t.run((ctx) => ctx.db.get(consentId));
-      expect(consent).toMatchObject({ withdrawnAt: NOW, withdrawnBy: userIdFor(w, actor) });
+      expect(consent).toMatchObject({
+        withdrawnAt: NOW,
+        withdrawnBy: userIdFor(w, actor),
+      });
       const olderConsent = await w.t.run((ctx) => ctx.db.get(olderConsentId));
       expect(olderConsent).toMatchObject({
         withdrawnAt: NOW,
         withdrawnBy: userIdFor(w, actor),
       });
-      expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe("consent_missing");
+      expect((await readiness(w, "manager", w.patient))?.launchRefusal).toBe(
+        "consent_missing",
+      );
     },
   );
 
@@ -615,10 +688,14 @@ describe("ANH-143 readiness visibility and logging", () => {
       now: NOW,
       validUntil: NOW + 60_000,
     });
-    expect((await readiness(w, "manager", w.patient, w.machine))?.fitness).not.toBeNull();
+    expect(
+      (await readiness(w, "manager", w.patient, w.machine))?.fitness,
+    ).not.toBeNull();
     expect(await readiness(w, "orgBManager", w.patient, w.machine)).toBe(null);
     expect(await readiness(w, "manager", w.patient, w.orgBMachine)).toBe(null);
-    await w.t.run((ctx) => ctx.db.patch(w.machine, { isDeleted: true, deletedAt: NOW }));
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.machine, { isDeleted: true, deletedAt: NOW }),
+    );
     expect(await readiness(w, "manager", w.patient, w.machine)).toBe(null);
   });
 

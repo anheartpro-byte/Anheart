@@ -11,6 +11,7 @@ export type FitnessLaunchRefusal =
   | "fitness_expired"
   | "consent_missing";
 
+/** Resolve the user's active organisation for self or authorized management. */
 export async function riderOrganizationId(
   ctx: Ctx,
   userId: Id<"users">,
@@ -29,6 +30,7 @@ export async function riderOrganizationId(
   return organizationId;
 }
 
+/** Return the latest assessment for one rider in one organisation. */
 export async function latestAssessment(
   ctx: Ctx,
   userId: Id<"users">,
@@ -43,6 +45,7 @@ export async function latestAssessment(
     .first();
 }
 
+/** Return the current, non-withdrawn consent for one rider and organisation. */
 export async function activeConsent(
   ctx: Ctx,
   userId: Id<"users">,
@@ -63,6 +66,7 @@ export async function activeConsent(
     .first();
 }
 
+/** Return the stable launch refusal for a rider's current fitness and consent. */
 export async function riderLaunchRefusal(
   ctx: Ctx,
   userId: Id<"users">,
