@@ -136,6 +136,11 @@ describe("ANH-132 completeness of the authorization matrix", () => {
       "dashboard.counters", // counts in the caller's organisation, takes no identifier
       "machines.createMachine", // Anheart admin only; refused to centre B by role
       "machines.listMachines",
+      "notifications.getSettings", // the caller's own choices
+      "notifications.list", // the caller's own alerts, in their organisation
+      "notifications.markAllRead", // the caller's own alerts, in their organisation
+      "notifications.unreadCount", // the caller's own alerts, in their organisation
+      "notifications.updateSettings", // the caller's own choices
       "organizations.listOrganizations", // Anheart admin only; [] to centre B
       "sessions.getCompletedSessionsForUser",
       "softwareReleases.listReleases", // Anheart-wide register, Anheart admin only

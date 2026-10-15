@@ -156,13 +156,11 @@ const point = (t: number) => ({
 // A launch refused: the machine, the programme, the rider, the duration
 // ---------------------------------------------------------------------------
 
-const PROGRAMMES_OFF =
-  "This machine does not accept programmed sessions yet (manual only, at the machine)";
-const NOT_ON_MACHINE = "This programme is not on the machine";
-const PHYSIOLOGY_MISSING =
-  "The rider's max heart rate (or birth year) must be set by a manager before an auto session";
-const BIRTH_YEAR_MISSING =
-  "The rider's birth year must be set by a manager before an auto session";
+// ANH-90: stable codes, which the site words (`errors.<code>`).
+const PROGRAMMES_OFF = "programs_disabled";
+const NOT_ON_MACHINE = "programme_not_on_machine";
+const PHYSIOLOGY_MISSING = "rider_hr_max_missing";
+const BIRTH_YEAR_MISSING = "rider_birth_year_missing";
 
 describe("a launch is refused when the machine cannot take it", () => {
   const UNFIT: Array<[string, Partial<Doc<"machines">>, string]> = [
@@ -198,11 +196,11 @@ describe("a launch is refused when the machine cannot take it", () => {
     });
     const own = { machineId: w.machine, profileId: w.profileId };
 
-    await expectNothingQueued(w, () => launch(w), "Machine not found");
+    await expectNothingQueued(w, () => launch(w), "machine_not_found");
     await expectNothingQueued(
       w,
       () => as(w.t, "patient").mutation(api.training.launchAutoSession, own),
-      "Machine not found",
+      "machine_not_found",
     );
     await expectNothingQueued(
       w,
@@ -211,7 +209,7 @@ describe("a launch is refused when the machine cannot take it", () => {
           ...own,
           userId: w.patient,
         }),
-      "Machine not found",
+      "machine_not_found",
     );
   });
 
@@ -227,7 +225,7 @@ describe("a launch is refused when the machine cannot take it", () => {
           profileId: w.profileId,
           userId: w.patient,
         }),
-      "Machine not found",
+      "machine_not_found",
     );
   });
 });
@@ -311,27 +309,27 @@ describe("a launch is refused when the rider's physiology does not allow the pro
     [
       "has a max heart rate whose 90% is below the top of the zone",
       { hrMax: 160, birthYear: turning(37) },
-      "Zone up to 150 bpm exceeds 90% of this rider's max heart rate (160 bpm → ceiling 144 bpm)",
+      "zone_above_ceiling",
     ],
     [
       "has a max heart rate below the programme's hard maximum",
       { hrMax: 168, birthYear: turning(37) },
-      "Programme hard maximum 170 bpm is above this rider's max heart rate (168 bpm)",
+      "hard_max_above_hr_max",
     ],
     [
       "is 16",
       { hrMax: 180, birthYear: turning(17) },
-      "Rider is 16: auto sessions require at least 18 years",
+      "rider_too_young",
     ],
     [
       "only turns 18 this year (the later birthday is assumed)",
       { hrMax: 180, birthYear: turning(18) },
-      "Rider is 17: auto sessions require at least 18 years",
+      "rider_too_young",
     ],
     [
       "is a minor whose max heart rate is only estimated",
       { birthYear: turning(17) },
-      "Rider is 16: auto sessions require at least 18 years",
+      "rider_too_young",
     ],
   ];
 
@@ -491,7 +489,7 @@ describe("a launch is refused when the duration asked for is not a positive numb
     await expectNothingQueued(
       w,
       () => launch(w, { totalDurationS }),
-      "Duration must be positive",
+      "invalid_duration",
     );
   });
 
@@ -550,14 +548,14 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
     // 90% of 181 bpm is 162.9: the ceiling is 162, never 163.
     expect(zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 181 }, 181)).toBeNull();
     expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 181 }, 181)).toBe(
-      "Zone up to 163 bpm exceeds 90% of this rider's max heart rate (181 bpm → ceiling 162 bpm)",
+      "zone_above_ceiling",
     );
     expect(zoneRefusal({ zoneHighBpm: 162, hardMaxBpm: 182 }, 181)).toBe(
-      "Programme hard maximum 182 bpm is above this rider's max heart rate (181 bpm)",
+      "hard_max_above_hr_max",
     );
     // Both at once: the zone is told first.
-    expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 182 }, 181)).toMatch(
-      /^Zone up to 163 bpm/,
+    expect(zoneRefusal({ zoneHighBpm: 163, hardMaxBpm: 182 }, 181)).toBe(
+      "zone_above_ceiling",
     );
   });
 
@@ -565,12 +563,12 @@ describe("the physiology rules mirrored from the machine (raspberry-pi/src/train
     const fits = { zoneHighBpm: 162, hardMaxBpm: 181 };
     expect(zoneRefusal(fits, 181)).toBeNull();
 
-    expect(zoneRefusal(fits, Number.NaN)).toMatch(/^Zone up to 162 bpm/);
-    expect(zoneRefusal({ ...fits, zoneHighBpm: Number.NaN }, 181)).toMatch(
-      /^Zone up to NaN bpm/,
+    expect(zoneRefusal(fits, Number.NaN)).toBe("zone_above_ceiling");
+    expect(zoneRefusal({ ...fits, zoneHighBpm: Number.NaN }, 181)).toBe(
+      "zone_above_ceiling",
     );
-    expect(zoneRefusal({ ...fits, hardMaxBpm: Number.NaN }, 181)).toMatch(
-      /^Programme hard maximum NaN bpm/,
+    expect(zoneRefusal({ ...fits, hardMaxBpm: Number.NaN }, 181)).toBe(
+      "hard_max_above_hr_max",
     );
   });
 
@@ -618,7 +616,7 @@ describe("the physiology a manager sets for a rider", () => {
       const w = await seedWorld(modules);
 
       expect(await refusalOf(set(w, { hrMax }))).toBe(
-        "Max heart rate must be within 100-220 bpm",
+        "invalid_hr_max",
       );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
@@ -639,7 +637,7 @@ describe("the physiology a manager sets for a rider", () => {
       const w = await seedWorld(modules);
 
       expect(await refusalOf(set(w, { hrMax }))).toBe(
-        "Max heart rate must be a whole number of bpm",
+        "invalid_hr_max",
       );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
@@ -658,7 +656,7 @@ describe("the physiology a manager sets for a rider", () => {
       const w = await seedWorld(modules);
 
       expect(await refusalOf(set(w, { birthYear }))).toBe(
-        "Birth year must be a whole number",
+        "invalid_birth_year",
       );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
@@ -703,7 +701,7 @@ describe("the physiology a manager sets for a rider", () => {
       const w = await seedWorld(modules);
 
       expect(await refusalOf(set(w, { birthYear }))).toBe(
-        "Birth year gives an implausible age",
+        "invalid_birth_year",
       );
       expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     },
@@ -726,19 +724,19 @@ describe("the physiology a manager sets for a rider", () => {
     const w = await seedWorld(modules);
 
     expect(await refusalOf(set(w, { hrMax: 150, birthYear: turning(9) }))).toBe(
-      "Birth year gives an implausible age",
+      "invalid_birth_year",
     );
     expect(await refusalOf(set(w, { hrMax: 300, birthYear: 1985 }))).toBe(
-      "Max heart rate must be within 100-220 bpm",
+      "invalid_hr_max",
     );
     expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
     // ANH-205: the same when one of the two is not a whole number.
     expect(await refusalOf(set(w, { hrMax: 150, birthYear: Number.NaN }))).toBe(
-      "Birth year must be a whole number",
+      "invalid_birth_year",
     );
     expect(
       await refusalOf(set(w, { hrMax: Number.NaN, birthYear: 1985 })),
-    ).toBe("Max heart rate must be a whole number of bpm");
+    ).toBe("invalid_hr_max");
     expect(await physiologyOf(w, w.patient)).toEqual(SEEDED);
   });
 

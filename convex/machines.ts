@@ -25,6 +25,7 @@ import {
 import { generateApiKey } from "./lib/crypto";
 import { refusal } from "./lib/errors";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
+import { notifyMachine } from "./lib/notifications";
 import { interruptSilentSessions, resumeNamedSession } from "./training";
 // One threshold for the server's job and for the dashboard, which reads the
 // age of `lastHeartbeat` on `serverNow` (hooks/use-freshness.ts).
@@ -720,7 +721,8 @@ export const recordHeartbeat = internalMutation({
  * Check for machines that have gone offline, then for training sessions the
  * server has had no news of for `SESSION_SILENCE_MS` (marked interrupted, end
  * unknown: `training.interruptSilentSessions`).
- * Called by cron job every minute
+ * Called by cron job every minute. A machine marked offline is an alert to
+ * its gestionnaires and its organisation's admins (`machine_offline`, ANH-90).
  */
 export const checkOfflineMachines = internalMutation({
   args: {},
@@ -752,6 +754,7 @@ export const checkOfflineMachines = internalMutation({
       if (machine.lastHeartbeat < cutoff) {
         await ctx.db.patch(machine._id, { status: "offline" });
         markedOfflineCount++;
+        await notifyMachine(ctx, machine, "machine_offline");
 
         console.log(
           `Machine ${machine.name} marked offline (last heartbeat: ${new Date(machine.lastHeartbeat).toISOString()})`,

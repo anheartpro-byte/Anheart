@@ -22,6 +22,8 @@ import type * as lib_errors from "../lib/errors.js";
 import type * as lib_machineAuth from "../lib/machineAuth.js";
 import type * as lib_machineHealth from "../lib/machineHealth.js";
 import type * as lib_machineHttpAuth from "../lib/machineHttpAuth.js";
+import type * as lib_notificationEmail from "../lib/notificationEmail.js";
+import type * as lib_notifications from "../lib/notifications.js";
 import type * as lib_patientInvitation from "../lib/patientInvitation.js";
 import type * as lib_rateLimits from "../lib/rateLimits.js";
 import type * as lib_readableSessions from "../lib/readableSessions.js";
@@ -33,6 +35,7 @@ import type * as machineHealth from "../machineHealth.js";
 import type * as machines from "../machines.js";
 import type * as migrations_multiOrganization from "../migrations/multiOrganization.js";
 import type * as migrations_retireLegacyRecording from "../migrations/retireLegacyRecording.js";
+import type * as notifications from "../notifications.js";
 import type * as organizations from "../organizations.js";
 import type * as patientInvitations from "../patientInvitations.js";
 import type * as recordHttp from "../recordHttp.js";
@@ -66,6 +69,8 @@ declare const fullApi: ApiFromModules<{
   "lib/machineAuth": typeof lib_machineAuth;
   "lib/machineHealth": typeof lib_machineHealth;
   "lib/machineHttpAuth": typeof lib_machineHttpAuth;
+  "lib/notificationEmail": typeof lib_notificationEmail;
+  "lib/notifications": typeof lib_notifications;
   "lib/patientInvitation": typeof lib_patientInvitation;
   "lib/rateLimits": typeof lib_rateLimits;
   "lib/readableSessions": typeof lib_readableSessions;
@@ -77,6 +82,7 @@ declare const fullApi: ApiFromModules<{
   machines: typeof machines;
   "migrations/multiOrganization": typeof migrations_multiOrganization;
   "migrations/retireLegacyRecording": typeof migrations_retireLegacyRecording;
+  notifications: typeof notifications;
   organizations: typeof organizations;
   patientInvitations: typeof patientInvitations;
   recordHttp: typeof recordHttp;
@@ -118,4 +124,5 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+  resend: import("@convex-dev/resend/_generated/component.js").ComponentApi<"resend">;
 };

@@ -16,6 +16,7 @@ import {
   getCurrentUserOrThrow,
   requireRole,
 } from "./lib/auth";
+import { refusal } from "./lib/errors";
 import {
   MAX_RECORD_FILES,
   MANIFEST_PAGE_SIZE,
@@ -599,7 +600,7 @@ export const remove = mutation({
     const user = await requireRole(ctx, ["admin", "org_admin"]);
     const session = await ctx.db.get(args.sessionId);
     if (!session || !(await canAccessMachine(ctx, session.machineId, user)))
-      throw Error("Session not found");
+      throw refusal("session_not_found");
     await ctx.db.patch(session._id, {
       record: "none",
       recordDeleted: true,

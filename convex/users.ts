@@ -160,26 +160,19 @@ export const getOrCreateUser = mutation({
   },
 });
 
+/**
+ * "granted", or why the server accepts no organisation for the call: the code
+ * of the refusal itself (`convex/lib/auth.ts`, table in `convex/lib/errors.ts`),
+ * which `getCurrentUserOrThrow` throws to every other function.
+ */
 const organizationAccessValidator = v.union(
   v.literal("granted"),
-  v.literal("no_active_organization"),
-  v.literal("organization_not_synchronized"),
-  v.literal("unknown_organization_role"),
-  v.literal("malformed_organization_claim"),
-  v.literal("no_organization"),
+  v.literal(NO_ACTIVE_ORGANIZATION),
+  v.literal(ORGANIZATION_NOT_SYNCHRONIZED),
+  v.literal(UNKNOWN_ORGANIZATION_ROLE),
+  v.literal(MALFORMED_ORGANIZATION_CLAIM),
+  v.literal(NO_ORGANIZATION),
 );
-
-/** Why the server accepts no organisation for a call, as the site names it. */
-const ORGANIZATION_ACCESS_OF_REFUSAL = new Map<
-  string,
-  Exclude<Infer<typeof organizationAccessValidator>, "granted">
->([
-  [NO_ACTIVE_ORGANIZATION, "no_active_organization"],
-  [ORGANIZATION_NOT_SYNCHRONIZED, "organization_not_synchronized"],
-  [UNKNOWN_ORGANIZATION_ROLE, "unknown_organization_role"],
-  [MALFORMED_ORGANIZATION_CLAIM, "malformed_organization_claim"],
-  [NO_ORGANIZATION, "no_organization"],
-]);
 
 /**
  * Get current authenticated user
@@ -248,11 +241,7 @@ export const getCurrentUser = query({
             slug: session.organization.slug,
           }
         : null,
-      organizationAccess:
-        refusal === null
-          ? ("granted" as const)
-          : // An unnamed refusal is no organisation: it never opens more.
-            (ORGANIZATION_ACCESS_OF_REFUSAL.get(refusal) ?? "no_organization"),
+      organizationAccess: refusal ?? ("granted" as const),
       organizationClaim,
       rolesManagedInClerk: anheartClerkOrganizationId() !== null,
       gestionnaireId: user.gestionnaireId,
@@ -670,11 +659,17 @@ export const deleteUser = mutation({
       .query("machine_user_permissions")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .collect();
+    // ... and the alerts the account received (ANH-90)
+    const alerts = await ctx.db
+      .query("notifications")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
     for (const row of [
       ...patientRelations,
       ...managerRelations,
       ...machineRelations,
       ...launchRights,
+      ...alerts,
     ]) {
       if (removable(row.organizationId)) await ctx.db.delete(row._id);
     }
@@ -692,7 +687,12 @@ export const deleteUser = mutation({
     }
 
     if (kept.length === 0) {
-      // Delete user
+      // Delete user, and their choice of alerts by e-mail
+      const settings = await ctx.db
+        .query("notification_settings")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .unique();
+      if (settings) await ctx.db.delete(settings._id);
       await ctx.db.delete(args.userId);
     } else if (removable(targetUser.organizationId)) {
       // The account stays in another organisation, which becomes its main one

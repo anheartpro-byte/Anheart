@@ -49,9 +49,8 @@ type OwnPatient = FunctionReturnType<
   typeof api.users.getPatientsForGestionnaire
 >[number];
 
-/** The sentence of the server for a call that carries no organisation (convex/lib/auth.ts). */
-const NO_ACTIVE_ORGANIZATION =
-  "No active organization: select an organization to continue";
+/** What the server refuses a call that carries no organisation with (convex/lib/auth.ts). */
+const NO_ACTIVE_ORGANIZATION = "no_active_organization";
 
 const gestionnaireId = "user-gaston" as Id<"users">;
 const paris = "machine-paris" as Id<"machines">;
@@ -426,10 +425,10 @@ describe("gestionnaire page: assigning machines", () => {
 
   it.each([
     {
-      where: "with the sentence of a refusal the server words",
+      where: "with the code of a call that carries no organisation",
       // What every function of an organisation answers a call without one.
       error: new ConvexError(NO_ACTIVE_ORGANIZATION),
-      shown: NO_ACTIVE_ORGANIZATION,
+      shown: fr.errors.no_active_organization,
     },
     ...codedFailures(api.machines.setGestionnaireMachines, "machine_not_found"),
   ])(
@@ -680,10 +679,10 @@ describe("gestionnaire page: assigning patients", () => {
 
   it.each([
     {
-      where: "with the sentence of a refusal the server words",
+      where: "with the code of a call that carries no organisation",
       // What every function of an organisation answers a call without one.
       error: new ConvexError(NO_ACTIVE_ORGANIZATION),
-      shown: NO_ACTIVE_ORGANIZATION,
+      shown: fr.errors.no_active_organization,
     },
     ...codedFailures(
       api.users.assignPatientsToGestionnaire,

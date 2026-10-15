@@ -70,7 +70,7 @@ describe("ANH-134 EX-4 softwareReleases.recordRelease", () => {
         version: "pi-0.1.0",
         releasedAt: NOW,
       }),
-    ).rejects.toThrow(/needs a validation level/);
+    ).rejects.toThrow(/validation_level_required/);
     expect(await count(w)).toBe(0);
   });
 
@@ -85,7 +85,7 @@ describe("ANH-134 EX-4 softwareReleases.recordRelease", () => {
           validationLevel: "occupied_validated",
           releasedAt: NOW,
         }),
-      ).rejects.toThrow(/Only a Pi version/);
+      ).rejects.toThrow(/validation_level_pi_only/);
       expect(await count(w)).toBe(0);
     },
   );
@@ -104,7 +104,7 @@ describe("ANH-134 EX-4 softwareReleases.recordRelease", () => {
     const { w, admin } = await world();
     await expect(
       admin.mutation(api.softwareReleases.recordRelease, { ...PI, version }),
-    ).rejects.toThrow(/Invalid version/);
+    ).rejects.toThrow(/invalid_release_version/);
     expect(await count(w)).toBe(0);
   });
 
@@ -117,7 +117,7 @@ describe("ANH-134 EX-4 softwareReleases.recordRelease", () => {
           ...PI,
           releasedAt,
         }),
-      ).rejects.toThrow(/Invalid release date/);
+      ).rejects.toThrow(/invalid_release_date/);
       expect(await count(w)).toBe(0);
     },
   );
@@ -129,7 +129,7 @@ describe("ANH-134 EX-4 softwareReleases.recordRelease", () => {
         ...PI,
         notes: "x".repeat(2001),
       }),
-    ).rejects.toThrow(/limited to 2000/);
+    ).rejects.toThrow(/release_notes_too_long/);
     expect(await count(w)).toBe(0);
   });
 
@@ -155,7 +155,7 @@ describe("ANH-134 EX-4 softwareReleases.recordRelease", () => {
         ...PI,
         validationLevel: "auto_validated",
       }),
-    ).rejects.toThrow(/needs notes/);
+    ).rejects.toThrow(/level_change_needs_notes/);
     expect((await w.t.run((ctx) => ctx.db.get(id)))?.validationLevel).toBe(
       "bench",
     );
@@ -303,7 +303,7 @@ describe("ANH-195 EX-7 the history of the validation levels of a Pi version", ()
       validationLevel: "occupied_validated",
     });
 
-    await expect(refused).rejects.toThrow(/needs notes/);
+    await expect(refused).rejects.toThrow(/level_change_needs_notes/);
     const stored = await levels(w);
     expect(stored.map((row) => row.validationLevel)).toEqual(["bench"]);
   });
@@ -413,7 +413,7 @@ describe("ANH-195 EX-7 the history of the validation levels of a Pi version", ()
       validationLevel: "occupied_validated",
     });
 
-    await expect(refused).rejects.toThrow(/needs notes/);
+    await expect(refused).rejects.toThrow(/level_change_needs_notes/);
     expect(await levels(w)).toEqual([]);
   });
 
@@ -458,7 +458,7 @@ describe("ANH-195 EX-7 the history of the validation levels of a Pi version", ()
       api.softwareReleases.recordRelease,
       correction,
     );
-    await expect(silent).rejects.toThrow(/needs notes/);
+    await expect(silent).rejects.toThrow(/level_change_needs_notes/);
     await admin.mutation(api.softwareReleases.recordRelease, {
       ...correction,
       notes: "a cloud version carries no level",

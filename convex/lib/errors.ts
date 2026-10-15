@@ -20,6 +20,24 @@
 import { ConvexError } from "convex/values";
 
 export const DASHBOARD_ERRORS = {
+  // The caller's sign-in (`requireAuth`, `getCurrentUserOrThrow`, ANH-90).
+  not_authenticated:
+    "The call carries no valid Clerk token: the visitor is signed out, or the session expired.",
+  account_not_registered:
+    "The Clerk account has no profile on the server: not created yet by the webhook, or deleted.",
+
+  // The organisation of the call (`organizationFromClaims`, `sessionOf`),
+  // also the values `users.getCurrentUser` returns as `organizationAccess`.
+  no_active_organization:
+    "The token names no active organisation while ANHEART_ORG_ID is set.",
+  organization_not_synchronized:
+    "The token's organisation is not, or no longer, known to the server.",
+  unknown_organization_role:
+    "The token's organisation role is none of admin, gestionnaire and patient.",
+  malformed_organization_claim: "The token's org_id is not a string.",
+  no_organization:
+    "The account has no organisation, or no active membership in its main one.",
+
   // The caller's account and organisation.
   not_authorized: "The caller's role does not allow this call.",
   profile_pending:
@@ -91,6 +109,49 @@ export const DASHBOARD_ERRORS = {
   invitation_unavailable:
     "The invitation cannot be created for this caller and this address.",
   invitation_failed: "Clerk did not confirm that the invitation was sent.",
+
+  // Launch rights and physiology (convex/training.ts, ANH-90).
+  launch_right_patients_only:
+    "A launch right is granted to a patient of the machine's organisation: staff launch without one.",
+  invalid_hr_max: "A max heart rate is a whole number of bpm, from 100 to 220.",
+  invalid_birth_year:
+    "A birth year is a whole number that gives an age from 10 to 100.",
+
+  // A launch from the dashboard (`training.launchAutoSession`).
+  rider_not_allowed:
+    "The rider is not an active member of the machine's organisation.",
+  programs_disabled:
+    "The machine takes manual sessions only, started at the machine.",
+  programme_not_on_machine:
+    "The programme is not, or no longer, among the machine's programmes.",
+  rider_hr_max_missing:
+    "The rider has neither a usable max heart rate nor a birth year.",
+  zone_above_ceiling:
+    "The programme's zone goes above 90 % of the rider's max heart rate.",
+  hard_max_above_hr_max:
+    "The programme's hard maximum is above the rider's max heart rate.",
+  rider_birth_year_missing: "The rider's birth year is not set.",
+  rider_too_young:
+    "The rider is younger than MIN_RIDER_AGE (convex/training.ts).",
+  invalid_duration: "A duration is a positive number of seconds.",
+
+  // Sessions.
+  session_not_found:
+    "The session does not exist, or belongs to another organisation.",
+  session_not_managed: "The caller may not stop this session.",
+
+  // The register of released versions (convex/softwareReleases.ts).
+  invalid_release_version: "The version is not <component>-X.Y.Z.",
+  validation_level_required: "A Pi version needs a validation level.",
+  validation_level_pi_only: "Only a Pi version carries a validation level.",
+  invalid_release_date: "The release date is not a positive number of ms.",
+  release_notes_too_long: "The notes are longer than MAX_NOTES_LENGTH.",
+  level_change_needs_notes:
+    "Changing the validation level of a recorded version needs notes.",
+
+  // Alerts to the gestionnaires (convex/notifications.ts).
+  notification_not_found:
+    "The notification does not exist, or is not the caller's in this organisation.",
 } as const satisfies Record<string, string>;
 
 /** A stable error code of the dashboard's functions. */

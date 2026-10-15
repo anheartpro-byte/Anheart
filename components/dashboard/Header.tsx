@@ -6,6 +6,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { DashboardBreadcrumb } from "./DashboardBreadcrumb";
+import { NotificationBell } from "./NotificationBell";
 
 export function Header() {
   return (
@@ -14,6 +15,7 @@ export function Header() {
       <Separator orientation="vertical" className="mr-2 h-4" />
       <DashboardBreadcrumb />
       <div className="ml-auto flex items-center gap-2">
+        <NotificationBell />
         <ThemeToggle />
         <LanguageSwitcher />
         <UserButton afterSwitchSessionUrl="/" />

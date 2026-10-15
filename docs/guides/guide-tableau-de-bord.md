@@ -2244,39 +2244,41 @@ affichage pour les actions sans encadré : suppressions, rôle, assignations).
 Un message d'échec reste affiché jusqu'à ce que vous le fermiez par sa croix,
 même quand une fenêtre est ouverte. Depuis ANH-194, les refus des machines, des
 comptes, des gestionnaires et des rôles arrivent avec un code stable et
-s'affichent dans la langue du site : ce sont les lignes en français du tableau.
-Les autres messages, en anglais, s'affichent tels quels.
+s'affichent dans la langue du site ; depuis ANH-90, ceux de la connexion, de
+l'organisation, des droits de lancement, de la physiologie, de la vérification
+d'un lancement (programme, zone, âge, durée) et de l'arrêt aussi. Ce sont les
+lignes en français du tableau. Les quelques messages encore en anglais, ceux
+des droits du lanceur et d'une machine occupée ou hors ligne au lancement,
+s'affichent tels quels (leur traduction attend ANH-144).
 
 | Message | Signification | Quoi faire |
 |---|---|---|
 | « Machine is offline » | La machine est hors ligne au moment du lancement. | [§6.3](#63-si-la-machine-est-hors-ligne). |
 | « Machine is already in a session » | Séance en cours sur la machine. | Attendre ou arrêter. |
 | « A session is already waiting for this machine » | Une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). | Dans **Sessions** onglet **En attente**, trouver la séance et l'annuler (P12). Si c'est un « Enregistrement » de l'ancien mode, voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
-| « This machine does not accept programmed sessions yet (manual only, at the machine) » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
-| « This programme is not on the machine » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
-| « The rider's max heart rate (or birth year) must be set by a manager before an auto session » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
-| « The rider's birth year must be set by a manager before an auto session » | Année de naissance absente, ou enregistrée sans être un nombre entier. | P7. |
-| « Rider is N: auto sessions require at least 18 years » | Pratiquant de moins de 18 ans (le serveur compte l'âge en supposant l'anniversaire pas encore passé). | Aucune séance auto. |
-| « Zone up to N bpm exceeds 90% of this rider's max heart rate (... → ceiling ... bpm) » | Zone trop haute pour ce pratiquant. | Autre programme, ou FC max mesurée. |
-| « Programme hard maximum N bpm is above this rider's max heart rate (N bpm) » | FC limite du programme au dessus de la FC max. | Idem. |
-| « Duration must be positive » | Durée nulle ou négative. | Corriger. |
+| « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
+| « Ce programme n'est plus sur la machine. Rechargez la page et choisissez-en un autre. » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
+| « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
+| « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Année de naissance absente, ou enregistrée sans être un nombre entier. | P7. |
+| « Ce pratiquant n'a pas l'âge minimum requis pour une séance auto. » | Pratiquant de moins de 18 ans (le serveur compte l'âge en supposant l'anniversaire pas encore passé). | Aucune séance auto. |
+| « La zone du programme dépasse 90 % de la FC max du pratiquant. Choisissez un autre programme. » | Zone trop haute pour ce pratiquant. | Autre programme, ou FC max mesurée. |
+| « La FC limite du programme dépasse la FC max du pratiquant. Choisissez un autre programme. » | FC limite du programme au dessus de la FC max. | Idem. |
+| « La durée doit être un nombre positif. » | Durée nulle ou négative. | Corriger. |
 | « You can only launch a session for yourself » | Un patient a tenté de lancer pour un autre. | Seul un gestionnaire peut lancer pour autrui. |
 | « You have not been given the right to launch sessions on this machine » | Patient sans droit de lancement. | P8. |
 | « Not authorized to use this machine » | Gestionnaire sans cette machine. | P6. |
 | « Not authorized to launch a session for this rider » | Patient non rattaché au gestionnaire. | P4. |
-| « Machine not found » | Machine supprimée ou inexistante. | Vérifier dans **Machines**. |
+| « Machine introuvable. Elle a peut-être été supprimée. » (au lancement) | Machine supprimée ou inexistante. | Vérifier dans **Machines**. |
 | « Rider not found » | Compte du pratiquant supprimé. | Choisir un autre pratiquant. |
-| « Not authorized to stop this session » | Ni pratiquant ni gestionnaire de la machine. | Demander au gestionnaire. |
-| « Session not found » (dans une fenêtre) | Séance supprimée. | Recharger. |
-| « Only an admin or a manager of this machine can grant launch rights » / « ... revoke launch rights » | Machine non attribuée à vous. | P6. |
-| « Launch rights are granted to users; managers and admins already have them » | La personne n'est pas Patient. | Inutile de lui donner le droit. |
-| « You do not manage this user » | Patient non rattaché à vous. | P4. |
+| « Vous ne pouvez pas arrêter cette séance. » | Ni pratiquant ni gestionnaire de la machine. | Demander au gestionnaire. |
+| « Séance introuvable. Elle a peut-être été supprimée. » (dans une fenêtre) | Séance supprimée. | Recharger. |
+| « Vous ne gérez pas cette machine. » (droit de lancement) | Machine non attribuée à vous. | P6. |
+| « Le droit de lancement se donne à un patient de l'organisation de la machine : les gestionnaires et les administrateurs lancent sans lui. » | La personne n'est pas Patient. | Inutile de lui donner le droit. |
+| « Vous ne gérez pas ce compte. » (droit de lancement, physiologie) | Patient non rattaché à vous. | P4. |
 | « Compte introuvable. Il a peut-être été supprimé. » | Compte supprimé. | Recharger. |
-| « Only a manager can set physiology » | Un patient a tenté de saisir sa physiologie. | Demander au gestionnaire. |
-| « Max heart rate must be a whole number of bpm » | FC max qui n'est pas un nombre entier. | Corriger. |
-| « Max heart rate must be within 100-220 bpm » | FC max hors bornes. | Corriger. |
-| « Birth year must be a whole number » | Année de naissance qui n'est pas un nombre entier. | Corriger. |
-| « Birth year gives an implausible age » | Âge hors de 10 à 100 ans. | Corriger. |
+| « Votre rôle ne permet pas cette action. » (physiologie) | Un patient a tenté de saisir sa physiologie. | Demander au gestionnaire. |
+| « La FC max doit être un nombre entier compris entre 100 et 220 bpm. » | FC max qui n'est pas un nombre entier, ou hors bornes. | Corriger. |
+| « Année de naissance invalide : elle doit donner un âge entre 10 et 100 ans. » | Année de naissance qui n'est pas un nombre entier, ou âge hors de 10 à 100 ans. | Corriger. |
 | « Email already in use by an existing ... account (...) » | Adresse déjà utilisée. | Retrouver la fiche existante. |
 | « Invalid email format » | Adresse sans « @ ». | Corriger. |
 | « Votre rôle ne permet pas cette action. » | Action réservée à un autre rôle (l'administrateur, le plus souvent). Sur le site en ligne, tant que le redéploiement n'a pas eu lieu, c'est encore « Unauthorized. Required roles: admin. Your role: gestionnaire », qui s'affiche aussi à la fin de **Modifier** une machine par un gestionnaire, alors que la modification est enregistrée (voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
@@ -2284,17 +2286,16 @@ Les autres messages, en anglais, s'affichent tels quels.
 | « Machine introuvable. Elle a peut-être été supprimée. » | Machine supprimée ou inexistante (modification, clé, gestionnaires). | Vérifier dans **Machines**. |
 | « La machine est en séance : elle ne peut pas être supprimée maintenant. » / « Une séance attend son départ sur cette machine : annulez-la avant de supprimer la machine. » | Suppression impossible (message d'échec en bas à droite de l'écran, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
 | « Vous ne pouvez pas supprimer votre propre compte. » | Tentative de suppression de soi. | Demander à un autre administrateur. |
-| « User not found in database. Please complete registration. » | Votre fiche n'existe pas encore. | Revenir sur `/fr`, attendre quelques secondes ([§3.1](#31-se-connecter-clerk)). |
-| « Not authenticated » | Session Clerk expirée. | Se reconnecter. |
+| « Votre compte n'est pas encore prêt sur le serveur. Patientez quelques instants, puis reconnectez-vous si le message persiste. » | Votre fiche n'existe pas encore, ou a été supprimée. | Revenir sur `/fr`, attendre quelques secondes ([§3.1](#31-se-connecter-clerk)). |
+| « Votre session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour continuer. » | Session Clerk expirée. | Se reconnecter. |
 
 > **En production**, Convex peut masquer le texte des erreurs qui ne sont pas
-> déclarées comme messages destinés à l'utilisateur. Les messages du
-> lancement, de l'arrêt, des droits et de la physiologie, et depuis ANH-194
-> ceux des machines, des comptes et des rôles, restent lisibles. « Not
-> authenticated » et « User not found in database. Please complete
-> registration. » perdent leur texte : le site affiche à la place « L'action a
-> échoué. Réessayez. Référence à transmettre si le problème persiste : … », la
-> référence étant l'identifiant de requête Convex. Non vérifié, faute de
+> déclarées comme messages destinés à l'utilisateur. Tous les messages de ce
+> tableau sont déclarés comme tels : depuis ANH-90, les deux messages de
+> connexion (session expirée, fiche pas encore prête) aussi, qui affichaient
+> avant « L'action a échoué. Réessayez. Référence à transmettre si le problème
+> persiste : … ». Une erreur imprévue du serveur affiche toujours cette phrase,
+> la référence étant l'identifiant de requête Convex. Non vérifié, faute de
 > déploiement.
 
 ### 7.3 Motifs de refus envoyés par la machine

@@ -285,47 +285,47 @@ describe("EX-2 a call the server cannot place in an organisation is refused", ()
     {
       name: "an organisation the server does not know",
       claims: { org_id: "org_synthetic_unknown", org_role: "org:admin" },
-      message: /not known to the server/,
+      message: /organization_not_synchronized/,
     },
     {
       name: "a role the server does not recognise",
       claims: { org_id: ORG_A_CLERK_ORG, org_role: "org:member" },
-      message: /role in this organization is not recognized/,
+      message: /unknown_organization_role/,
     },
     {
       name: "a role inherited from Object.prototype",
       claims: { org_id: ORG_A_CLERK_ORG, org_role: "constructor" },
-      message: /role in this organization is not recognized/,
+      message: /unknown_organization_role/,
     },
     {
       name: "a role that is not a string",
       claims: { org_id: ORG_A_CLERK_ORG, org_role: 1 },
-      message: /role in this organization is not recognized/,
+      message: /unknown_organization_role/,
     },
     {
       name: "no role at all",
       claims: { org_id: ORG_A_CLERK_ORG },
-      message: /role in this organization is not recognized/,
+      message: /unknown_organization_role/,
     },
     {
       name: "an organisation claim that is not a string",
       claims: { org_id: 42, org_role: "org:admin" },
-      message: /Malformed organization claim/,
+      message: /malformed_organization_claim/,
     },
     {
       name: "no organisation claim",
       claims: {},
-      message: /No active organization/,
+      message: /no_active_organization/,
     },
     {
       name: "a null organisation claim (no active organisation in Clerk)",
       claims: { org_id: null, org_role: null },
-      message: /No active organization/,
+      message: /no_active_organization/,
     },
     {
       name: "an empty organisation claim",
       claims: { org_id: "", org_role: "org:admin" },
-      message: /No active organization/,
+      message: /no_active_organization/,
     },
   ];
 
@@ -373,7 +373,7 @@ describe("EX-2 a call the server cannot place in an organisation is refused", ()
           org_role: "org:admin",
         })
         .query(api.machines.listMachines, {}),
-    ).rejects.toThrow(/User not found in database/);
+    ).rejects.toThrow(/account_not_registered/);
   });
 });
 
@@ -550,7 +550,7 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
     ]) {
       await expect(
         legacy(w, subject).query(api.machines.listMachines, {}),
-      ).rejects.toThrow(/does not belong to an organization/);
+      ).rejects.toThrow(/no_organization/);
       expect(await whoAmI(legacy(w, subject))).toMatchObject({
         role: "user",
         organization: null,
@@ -675,7 +675,7 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
 
     await expect(
       legacy(w, "legacy-manager").query(api.machines.listMachines, {}),
-    ).rejects.toThrow(/does not belong to an organization/);
+    ).rejects.toThrow(/no_organization/);
     expect(await whoAmI(legacy(w, "legacy-manager"))).toMatchObject({
       organization: null,
     });
@@ -688,7 +688,7 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
 
     await expect(
       legacy(w, "legacy-manager").query(api.machines.listMachines, {}),
-    ).rejects.toThrow(/does not belong to an organization/);
+    ).rejects.toThrow(/no_organization/);
   });
 
   it("lets the admin change a role, in the membership and in its mirror", async () => {
@@ -797,7 +797,7 @@ describe("transition: once Clerk Organizations is configured (ANHEART_ORG_ID set
     ]) {
       await expect(
         legacy(w, subject).query(api.machines.listMachines, {}),
-      ).rejects.toThrow(/No active organization/);
+      ).rejects.toThrow(/no_active_organization/);
       expect(await whoAmI(legacy(w, subject))).toMatchObject({
         role: "user",
         organization: null,
@@ -836,7 +836,7 @@ describe("transition: once Clerk Organizations is configured (ANHEART_ORG_ID set
       w.t
         .withIdentity({ subject: "legacy-admin", ...claims })
         .query(api.machines.listMachines, {}),
-    ).rejects.toThrow(/not known to the server/);
+    ).rejects.toThrow(/organization_not_synchronized/);
 
     // The operator runs the migration again: it links the default organisation.
     await migrate(w);

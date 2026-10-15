@@ -431,7 +431,7 @@ describe("live view: stopping the session", () => {
   it("shows the server's refusal, on the page and as a message, and claims no stop", async () => {
     given();
     mutation(api.training.requestStop).mockRejectedValue(
-      new ConvexError("Not authorized to stop this session"),
+      new ConvexError("session_not_managed"),
     );
     const { user } = await open();
 
@@ -444,7 +444,7 @@ describe("live view: stopping the session", () => {
       }),
     );
 
-    const refusal = "Not authorized to stop this session";
+    const refusal = fr.errors.session_not_managed;
     expect(screen.getByText(refusal)).toBeTruthy();
     expect(feedbackShown()).toEqual([{ kind: "error", message: refusal }]);
     expect(takeLoggedFailures()).toEqual(["training:requestStop"]);

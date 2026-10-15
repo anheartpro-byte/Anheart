@@ -71,6 +71,17 @@ import {
 // A heartbeat older than this means the machine cannot be relied on to answer.
 // The dashboard judges freshness on the same value (hooks/use-freshness.ts).
 import { LIVE_FRESH_MS, SESSION_SILENCE_MS } from "../lib/training";
+// The stable codes of the refusals the site words (ANH-90), and the alerts
+// to the gestionnaires that a machine's report may call for.
+import { refusal } from "./lib/errors";
+import {
+  driveFaultAlerts,
+  driveFaultCode,
+  foldedDetail,
+  notifyMachine,
+  verdictAction,
+  verdictAlerts,
+} from "./lib/notifications";
 
 // ---------------------------------------------------------------------------
 // Physiology: mirrors raspberry-pi/src/training/plan.py. The Pi re-checks all
@@ -118,7 +129,9 @@ export function effectiveHrMax(
 }
 
 /**
- * Why a programme is unsafe for this rider, or null if it is acceptable.
+ * Why a programme is unsafe for this rider, or null if it is acceptable: the
+ * stable code the launch is refused with (`convex/lib/errors.ts`). The site
+ * shows the values themselves before the launch (`LaunchTrainingModal`).
  *
  * Each rule is written as what is accepted, negated: a programme passes only
  * if its value is known to be at or under the limit. A value that is not a
@@ -127,14 +140,10 @@ export function effectiveHrMax(
 export function zoneRefusal(
   profile: { zoneHighBpm: number; hardMaxBpm: number },
   hrMax: number,
-): string | null {
+): "zone_above_ceiling" | "hard_max_above_hr_max" | null {
   const ceiling = Math.floor(ZONE_CEILING_FRACTION * hrMax);
-  if (!(profile.zoneHighBpm <= ceiling)) {
-    return `Zone up to ${profile.zoneHighBpm} bpm exceeds 90% of this rider's max heart rate (${hrMax} bpm → ceiling ${ceiling} bpm)`;
-  }
-  if (!(profile.hardMaxBpm <= hrMax)) {
-    return `Programme hard maximum ${profile.hardMaxBpm} bpm is above this rider's max heart rate (${hrMax} bpm)`;
-  }
+  if (!(profile.zoneHighBpm <= ceiling)) return "zone_above_ceiling";
+  if (!(profile.hardMaxBpm <= hrMax)) return "hard_max_above_hr_max";
   return null;
 }
 
@@ -241,12 +250,10 @@ export const grantLaunchRight = mutation({
     await limitUser(ctx);
     const me = await getCurrentUserOrThrow(ctx);
     if (!(await canManageMachine(ctx, args.machineId, me))) {
-      throw new ConvexError(
-        "Only an admin or a manager of this machine can grant launch rights",
-      );
+      throw refusal("machine_not_managed");
     }
     const machine = await ctx.db.get(args.machineId);
-    if (!machine) throw new ConvexError("Machine not found");
+    if (!machine) throw refusal("machine_not_found");
     // The right goes to a user of the machine's organisation.
     const targetRole = await organizationRoleOf(
       ctx,
@@ -254,13 +261,11 @@ export const grantLaunchRight = mutation({
       machine.organizationId,
     );
     if (targetRole !== "user") {
-      throw new ConvexError(
-        "Launch rights are granted to users; managers and admins already have them",
-      );
+      throw refusal("launch_right_patients_only");
     }
     // A gestionnaire may only grant rights to a patient they manage.
     if (!(await canAccessUser(ctx, args.userId, me))) {
-      throw new ConvexError("You do not manage this user");
+      throw refusal("user_not_managed");
     }
     if (await hasLaunchRight(ctx, args.machineId, args.userId)) return null;
     await ctx.db.insert("machine_user_permissions", {
@@ -281,9 +286,7 @@ export const revokeLaunchRight = mutation({
     await limitUser(ctx);
     const me = await getCurrentUserOrThrow(ctx);
     if (!(await canManageMachine(ctx, args.machineId, me))) {
-      throw new ConvexError(
-        "Only an admin or a manager of this machine can revoke launch rights",
-      );
+      throw refusal("machine_not_managed");
     }
     const row = await ctx.db
       .query("machine_user_permissions")
@@ -352,10 +355,9 @@ export const setUserPhysiology = mutation({
   handler: async (ctx, args) => {
     await limitUser(ctx);
     const me = await getCurrentUserOrThrow(ctx);
-    if (me.role === "user")
-      throw new ConvexError("Only a manager can set physiology");
+    if (me.role === "user") throw refusal("not_authorized");
     if (!(await canAccessUser(ctx, args.userId, me))) {
-      throw new ConvexError("You do not manage this user");
+      throw refusal("user_not_managed");
     }
     await requireSharedProfileAuthority(ctx, args.userId, me);
     // Each value is a whole number first, then within its range; null clears
@@ -363,13 +365,12 @@ export const setUserPhysiology = mutation({
     const patch: Partial<Pick<Doc<"users">, "hrMax" | "birthYear">> = {};
     if (args.hrMax !== undefined) {
       if (args.hrMax !== null) {
-        if (!isWholeNumber(args.hrMax)) {
-          throw new ConvexError("Max heart rate must be a whole number of bpm");
-        }
-        if (args.hrMax < HR_MAX_MIN || args.hrMax > HR_MAX_MAX) {
-          throw new ConvexError(
-            `Max heart rate must be within ${HR_MAX_MIN}-${HR_MAX_MAX} bpm`,
-          );
+        if (
+          !isWholeNumber(args.hrMax) ||
+          args.hrMax < HR_MAX_MIN ||
+          args.hrMax > HR_MAX_MAX
+        ) {
+          throw refusal("invalid_hr_max");
         }
       }
       patch.hrMax = args.hrMax ?? undefined;
@@ -377,11 +378,11 @@ export const setUserPhysiology = mutation({
     if (args.birthYear !== undefined) {
       if (args.birthYear !== null) {
         if (!isWholeNumber(args.birthYear)) {
-          throw new ConvexError("Birth year must be a whole number");
+          throw refusal("invalid_birth_year");
         }
         const age = new Date().getUTCFullYear() - args.birthYear;
         if (age < MIN_AGE || age > MAX_AGE) {
-          throw new ConvexError("Birth year gives an implausible age");
+          throw refusal("invalid_birth_year");
         }
       }
       patch.birthYear = args.birthYear ?? undefined;
@@ -883,21 +884,17 @@ export const launchAutoSession = mutation({
 
     const machine = await ctx.db.get(args.machineId);
     if (!machine || machine.isDeleted)
-      throw new ConvexError("Machine not found");
+      throw refusal("machine_not_found");
     // The rider is an active member of the machine's organisation.
     if (
       (await organizationRoleOf(ctx, riderId, machine.organizationId)) === null
     ) {
-      throw new ConvexError(
-        "Not authorized to launch a session for this rider",
-      );
+      throw refusal("rider_not_allowed");
     }
     if (machine.status === "offline")
       throw new ConvexError("Machine is offline");
     if (!machine.programsEnabled) {
-      throw new ConvexError(
-        "This machine does not accept programmed sessions yet (manual only, at the machine)",
-      );
+      throw refusal("programs_disabled");
     }
     const now = Date.now();
     await expireWaitingLaunches(ctx, riderId, args.machineId, now);
@@ -917,7 +914,7 @@ export const launchAutoSession = mutation({
         q.eq("machineId", args.machineId).eq("profileId", args.profileId),
       )
       .unique();
-    if (!profile) throw new ConvexError("This programme is not on the machine");
+    if (!profile) throw refusal("programme_not_on_machine");
 
     const rider = await ctx.db.get(riderId);
     if (!rider) throw new ConvexError("Rider not found");
@@ -925,27 +922,21 @@ export const launchAutoSession = mutation({
     // number: what is compared below, and copied to the session, always is one.
     const hrMax = effectiveHrMax(rider, now);
     if (hrMax === null) {
-      throw new ConvexError(
-        "The rider's max heart rate (or birth year) must be set by a manager before an auto session",
-      );
+      throw refusal("rider_hr_max_missing");
     }
-    const refusal = zoneRefusal(profile, hrMax);
-    if (refusal) throw new ConvexError(refusal);
+    const unsafe = zoneRefusal(profile, hrMax);
+    if (unsafe) throw refusal(unsafe);
     const age = ageFrom(rider.birthYear, now);
     if (age === null) {
-      throw new ConvexError(
-        "The rider's birth year must be set by a manager before an auto session",
-      );
+      throw refusal("rider_birth_year_missing");
     }
     if (age < MIN_RIDER_AGE) {
-      throw new ConvexError(
-        `Rider is ${age}: auto sessions require at least ${MIN_RIDER_AGE} years`,
-      );
+      throw refusal("rider_too_young");
     }
 
     if (args.totalDurationS !== undefined) {
       if (!Number.isFinite(args.totalDurationS) || args.totalDurationS <= 0) {
-        throw new ConvexError("Duration must be positive");
+        throw refusal("invalid_duration");
       }
     }
 
@@ -992,12 +983,12 @@ export const requestStop = mutation({
       !session ||
       (session.userId !== me._id && !inScope(me, session.organizationId))
     )
-      throw new ConvexError("Session not found");
+      throw refusal("session_not_found");
     if (
       session.userId !== me._id &&
       !(await canAccessSession(ctx, session, me))
     ) {
-      throw new ConvexError("Not authorized to stop this session");
+      throw refusal("session_not_managed");
     }
     const now = Date.now();
     if (session.status === "pending") {
@@ -1326,6 +1317,27 @@ export const getTrainingSession = query({
 // Internal: what the Pi's HTTP routes call
 // ---------------------------------------------------------------------------
 
+/**
+ * The session a machine names in its live state, when it is one of its own
+ * sessions; undefined otherwise.
+ */
+async function ownSession(
+  ctx: MutationCtx,
+  machineId: Id<"machines">,
+  named: string | undefined,
+): Promise<Id<"sessions"> | undefined> {
+  const sessionId =
+    named === undefined ? null : ctx.db.normalizeId("sessions", named);
+  if (sessionId === null) return undefined;
+  const session = await ctx.db.get(sessionId);
+  return session?.machineId === machineId ? sessionId : undefined;
+}
+
+/**
+ * The live state a heartbeat carries. A drive that is in fault in this state
+ * and was not in the previous one is an alert (`drive_fault`, ANH-90): the
+ * console of this repository sends one every 10 s, in a session or not.
+ */
 export const updateLive = internalMutation({
   args: {
     machineId: v.id("machines"),
@@ -1334,10 +1346,20 @@ export const updateLive = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine) throw machineError("machine_not_found", "Machine not found");
     const patch: Partial<Doc<"machines">> = { live: args.live };
     if (args.programsEnabled !== undefined)
       patch.programsEnabled = args.programsEnabled;
     await ctx.db.patch(args.machineId, patch);
+    if (
+      args.live.driveState === "fault" &&
+      machine.live?.driveState !== "fault"
+    ) {
+      await notifyMachine(ctx, machine, "drive_fault", {
+        sessionId: await ownSession(ctx, machine._id, args.live.sessionId),
+      });
+    }
     return null;
   },
 });
@@ -1686,6 +1708,13 @@ export const endTrainingSession = internalMutation({
       internal.sessionReports.summarizeTelemetry,
       { sessionId: args.sessionId },
     );
+    // A failed session is an alert (ANH-90); its reason stays on the session.
+    const machine = await ctx.db.get(args.machineId);
+    if (args.failed && machine !== null) {
+      await notifyMachine(ctx, machine, "session_failed", {
+        sessionId: s._id,
+      });
+    }
     return null;
   },
 });
@@ -1806,6 +1835,10 @@ export const storeEvents = internalMutation({
       throw machineError("session_not_found", "Session not found");
     const window = sessionWindow(s);
     const outcome = { stored: 0, duplicates: 0, rejected: 0 };
+    // What the events stored by this call alert of (ANH-90): an event sent
+    // again alerts of nothing.
+    const verdicts = { count: 0, detail: undefined as string | undefined };
+    const faults = { count: 0, detail: undefined as string | undefined };
     for (const event of args.events) {
       if (!inWindow(window, event.t)) {
         outcome.rejected++;
@@ -1828,6 +1861,34 @@ export const storeEvents = internalMutation({
         ...event,
       });
       outcome.stored++;
+      if (event.kind === "verdict" && verdictAlerts(event.detail)) {
+        verdicts.count++;
+        verdicts.detail = foldedDetail(
+          "safety_verdict",
+          verdicts.detail,
+          verdictAction(event.detail),
+        );
+      } else if (event.kind === "drive_fault" && driveFaultAlerts(event.detail)) {
+        faults.count++;
+        faults.detail = foldedDetail(
+          "drive_fault",
+          faults.detail,
+          driveFaultCode(event.detail),
+        );
+      }
+    }
+    const machine = await ctx.db.get(args.machineId);
+    if (machine !== null && verdicts.count > 0) {
+      await notifyMachine(ctx, machine, "safety_verdict", {
+        sessionId: s._id,
+        ...verdicts,
+      });
+    }
+    if (machine !== null && faults.count > 0) {
+      await notifyMachine(ctx, machine, "drive_fault", {
+        sessionId: s._id,
+        ...faults,
+      });
     }
     return outcome;
   },
