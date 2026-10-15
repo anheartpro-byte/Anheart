@@ -1323,7 +1323,7 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 │ ┌──────────────────────┐                                              │
 │ │ ♡ Physiologie        │                                              │
 │ │ Sert à valider la zone cible avant une séance auto par rapport au    │
-│ │ plafond médical courant.                                            │
+│ │ plafond médical courant.                                             │
 │ │ FC max mesurée (bpm)  Année de naissance                             │
 │ │ <      >              <1985 >                                        │
 │ │ FC max retenue                                                       │

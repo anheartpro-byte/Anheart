@@ -241,14 +241,15 @@ la copie de `raspberry-pi/config/medical.pub` dans
 `medicalParametersStore.insertVersion` ; si cette insertion échoue, elle
 supprime le fichier du stockage.
 
-`insertVersion` refuse l'inscription tant qu'un lancement distant `pending`
-non expiré existe. Le contrôle et l'insertion sont dans la même transaction :
-le message donne leur nombre et invite à réessayer après leur armement ou leur
-expiration ; le délai effectif est celui de `PENDING_SESSION_TTL_S` (300 s par
-défaut, jusqu'à 600 s si configuré). Cette règle empêche la fraction de zone
-courante de changer entre la création et l'armement d'un lancement. La zone
-courante reste appliquée aux nouveaux lancements, et n'est donc pas recalculée
-à l'armement ; le pratiquant, son âge minimum et sa FC max restent revérifiés.
+`insertVersion` échoue dans la même transaction les lancements auto `pending`
+déjà expirés. Un lancement auto `pending` non expiré bloque l'inscription. Le
+contrôle et l'insertion sont dans la même transaction : le message donne leur
+nombre et invite à réessayer après leur armement, leur échec ou leur expiration ;
+le délai effectif est celui de `PENDING_SESSION_TTL_S` (300 s par défaut,
+jusqu'à 600 s si configuré). Cette règle empêche la fraction de zone courante
+de changer entre la création et l'armement d'un lancement. La zone courante
+reste appliquée aux nouveaux lancements, et n'est donc pas recalculée à
+l'armement ; le pratiquant, son âge minimum et sa FC max restent revérifiés.
 
 ### `machine_profiles` : programmes synchronisés depuis le Pi
 
@@ -1054,7 +1055,10 @@ stable du refus (`ARMING_REFUSALS`, `convex/training.ts`, et
 | 7 | La FC max retenue du pratiquant est connue et **égale** à `subjectHrMax`, celle que le lancement a donnée à la machine, qui y ajuste le programme. Une valeur changée, même dans le bon sens, est refusée sans recalcul : la machine ne tourne jamais sur l'ancienne. L'estimation par l'âge peut changer au 1er janvier (UTC), selon l'âge (de 41 à 42 ans, elle reste à 179 bpm) : un lancement en attente à ce moment-là peut être refusé. | `hr_max_changed_before_start` |
 | 8 | Le pratiquant n'a aucune autre séance qui peut le tenir (règle ci-dessous), par exemple une séance démarrée à une autre machine pendant que celle-ci attendait. | `rider_busy` |
 
-La zone cible n'est pas revérifiée à l'armement : aucune version ne peut être inscrite pendant qu'un lancement auto attend, et les lancements déjà expirés sont échoués au moment de l'inscription.
+La zone cible n'est pas revérifiée à l'armement : aucune version ne peut être
+inscrite pendant qu'un lancement auto attend.
+
+Les lancements auto déjà expirés sont échoués au moment de l'inscription.
 
 Un lancement refusé passe `failed`, avec `endedAt`, `endReason` (la phrase
 anglaise du refus) et `endCode` (le code). Chaque code de refus à l'armement
@@ -1063,8 +1067,9 @@ tout code de cette table (`errors.<code>`) : « Séance échouée » puis « Dro
 retiré avant le départ », par exemple
 ([tableau-de-bord.md §5.3](tableau-de-bord.md#53-lancer-une-séance-auto)).
 Chaque échec de ce genre, qu'il vienne de la tâche planifiée, de la route de
-départ ou d'un nouveau lancement qui expire le précédent, est aussi une
-alerte `session_failed` à ses gestionnaires (ANH-90,
+départ, d'un nouveau lancement qui expire le précédent ou de l'inscription
+d'une version qui échoue les lancements expirés, est aussi une alerte
+`session_failed` à ses gestionnaires (ANH-90,
 [§5](#notificationsts-alertes-aux-gestionnaires-anh-90)) : `failBeforeStart`
 ne fait que la planifier, une mutation à part l'écrit, et rien de ce qui s'y
 passe ne peut faire échouer ni annuler la tâche, la route ou le lancement.
@@ -1173,7 +1178,7 @@ l'organisation de l'appelant, sauf pour l'admin Anheart
 |---|---|---|
 | `medicalParameters.current` | query publique ; utilisateur accepté par `getCurrentUserOrThrow` | Renvoie `null` si le registre est vide, sinon les métadonnées publiques de la version courante : `version`, `issuedAt`, `signedBy`, `zoneCeilingFraction`, `minRiderAge` et `hrMaxFormula`. |
 | `medicalParameters.registerVersion` | action interne ; opérateur du déploiement via la CLI | Reçoit le contenu exact du fichier (`content`) et sa signature détachée base64 (`signatureBase64`), vérifie Ed25519 avec la copie de `raspberry-pi/config/medical.pub`, analyse le document et ses bornes, stocke le fichier, puis appelle `medicalParametersStore.insertVersion`. Si l'insertion échoue, supprime le fichier stocké. Renvoie la version inscrite. |
-| `medicalParametersStore.insertVersion` | mutation interne | Refuse une version en double ou qui n'est pas supérieure à la version courante, puis ajoute les champs validés et `registeredAt` à `medical_parameters_versions` et renvoie la version. |
+| `medicalParametersStore.insertVersion` | mutation interne | Refuse une version en double ou qui n'est pas supérieure à la version courante. Dans la même transaction, échoue les lancements auto expirés ; si un lancement attend encore, rend `{ refusal }` sans lever pour valider ces échecs. L'action `registerVersion` lève alors le refus et supprime le fichier stocké. Sinon, ajoute les champs validés et `registeredAt` à `medical_parameters_versions`, puis renvoie la version. |
 
 `convex/lib/medicalParameters.ts` contient les fonctions partagées :
 `parseMedicalDocument` valide le JSON strict et les bornes dérivées de

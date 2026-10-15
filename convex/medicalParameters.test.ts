@@ -99,6 +99,31 @@ async function insertStoredVersion(
   return result;
 }
 
+async function addArmablePendingAutoLaunch(w: World) {
+  const sessionId = await addSession(w, {
+    machineId: w.machine,
+    userId: w.patient,
+    startedById: w.manager,
+    status: "pending",
+    kind: "auto",
+  });
+  await w.t.run((ctx) =>
+    ctx.db.patch(sessionId, {
+      origin: "remote",
+      profileId: w.profileId,
+      profileName: "Programme p1",
+      zoneLowBpm: 130,
+      zoneHighBpm: 150,
+      totalDurationS: 600,
+      subjectHrMax: 180,
+      subjectAge: 36,
+      subjectLabel: "patient Synthetic",
+      operatorName: "manager Synthetic",
+    }),
+  );
+  return sessionId;
+}
+
 async function rejectionLeavesNoWrites(
   content: string,
   signatureBase64: string,
@@ -460,13 +485,7 @@ describe("medical signatures and version registration", () => {
 
   it("settles an expired launch during registration so a TTL increase cannot revive it", async () => {
     const w = await seedWorld(modules);
-    const sessionId = await addSession(w, {
-      machineId: w.machine,
-      userId: w.patient,
-      status: "pending",
-      kind: "auto",
-    });
-    await w.t.run((ctx) => ctx.db.patch(sessionId, { origin: "remote" }));
+    const sessionId = await addArmablePendingAutoLaunch(w);
     vi.setSystemTime(NOW + 300_001);
 
     await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toBe("0.2.0");
@@ -504,6 +523,48 @@ describe("medical signatures and version registration", () => {
         ),
       ),
     ).toContain("notifications:deliver");
+    expect(
+      await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
+    ).toHaveLength(2);
+  });
+
+  it("offers and arms the same unexpired launch fixture", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await addArmablePendingAutoLaunch(w);
+
+    await expect(
+      w.t.query(internal.training.getPendingTrainingSession, {
+        machineId: w.machine,
+      }),
+    ).resolves.toMatchObject({
+      sessionId,
+      profileId: w.profileId,
+      subjectHrMax: 180,
+      subjectId: w.patient,
+    });
+    await expect(
+      w.t.mutation(internal.training.markTrainingStarted, {
+        machineId: w.machine,
+        sessionId,
+      }),
+    ).resolves.toEqual({ armed: true });
+    expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
+      status: "active",
+    });
+  });
+
+  it("registers a version without settling a pending legacy session", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "pending",
+    });
+
+    await expect(insertStoredVersion(w.t, "0.2.0")).resolves.toBe("0.2.0");
+    const session = await w.t.run((ctx) => ctx.db.get(sessionId));
+    expect(session).toMatchObject({ status: "pending" });
+    expect(session?.kind).toBeUndefined();
     expect(
       await w.t.run((ctx) => ctx.db.query("medical_parameters_versions").collect()),
     ).toHaveLength(2);

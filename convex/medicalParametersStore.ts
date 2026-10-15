@@ -24,7 +24,10 @@ const registrationValues = {
   hrMaxFormula: v.literal("tanaka"),
 };
 
-/** Add a unique version that is newer than the current registered version. */
+/**
+ * Add a unique newer version. Fail expired auto launches in the same transaction;
+ * return `{ refusal }` for a waiting launch so those failures commit.
+ */
 export const insertVersion = internalMutation({
   args: registrationValues,
   returns: v.union(v.string(), v.object({ refusal: v.string() })),
