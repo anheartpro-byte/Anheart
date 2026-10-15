@@ -481,8 +481,8 @@ jobs:
           echo "Tags de release sur ce commit : $found"
 
   # Stage 4. The deploy key is read from the environment `production`, by the
-  # three steps that need it. `npm ci` runs the install scripts of npm
-  # packages: it is not one of them.
+  # three steps that need it. `npm ci --ignore-scripts` prevents package
+  # install scripts from running on the machine that later holds the key.
   convex:
     name: 4. Convex en production
     needs: [request, tags]
@@ -539,9 +539,10 @@ jobs:
         with:
           node-version: '24'
       # The Convex command line comes from here, at the version the lockfile
-      # holds.
+      # holds. esbuild's generateBinPath() resolves the platform package at
+      # runtime (node_modules/esbuild/lib/main.js), without its postinstall.
       - name: Installer les dépendances du dépôt
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Déployer Convex en production
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}

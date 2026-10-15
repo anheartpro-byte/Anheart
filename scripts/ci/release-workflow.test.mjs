@@ -1022,11 +1022,30 @@ test("EX-5 the deploy key is read by the three steps that need it, and by nothin
   assert.doesNotMatch(convex, /github\.token|secrets: inherit/);
   for (const name of [STILL_HEAD, DEPENDENCIES, REFUSAL, RECORD]) assert.doesNotMatch(stepNamed(convex, name), /env:/, name);
   // The command line of Convex is the one the lockfile holds, and it is asked to deploy, nothing more.
-  assert.equal(script(convex, DEPENDENCIES), "npm ci\n");
+  assert.equal(script(convex, DEPENDENCIES), "npm ci --ignore-scripts\n");
   assert.equal(script(convex, DEPLOY_CONVEX), "npx convex deploy\n");
   assert.deepEqual(stepNamed(convex, "uses actions/setup-node").trimEnd().split("\n").slice(1), ["        with:", "          node-version: '24'"]);
   assert.equal(everyCommand().split("convex deploy").length - 1, 1, "Convex is deployed by one step");
   assert.doesNotMatch(convex, /--preview|--admin-key|--url|convex (dev|import|env)|CONVEX_DEPLOYMENT\b/);
+});
+
+test("S-5 (b) jobs that read a secret install npm packages only with ignore-scripts, and the Convex install holds no env or secret", () => {
+  const convex = job("convex");
+  const install = stepNamed(convex, DEPENDENCIES);
+  assert.equal(script(convex, DEPENDENCIES), "npm ci --ignore-scripts\n");
+  assert.doesNotMatch(install, /env:|secrets\.|github\.token/);
+  assert.doesNotMatch(block(convex, "    env").join("\n"), /secrets\.|github\.token/);
+  let installs = 0;
+  for (const [id, text] of JOBS) {
+    if (!text.includes("secrets.")) continue;
+    for (const step of stepsOf(text).filter((written) => /^ {8}run:/m.test(written))) {
+      for (const match of script(text, labelOf(step)).matchAll(/\bnpm\s+(?:ci|install)\b[^\n]*/g)) {
+        installs += 1;
+        assert.match(match[0], /(?:^|\s)--ignore-scripts(?:\s|$)/, `${id}: ${labelOf(step)}`);
+      }
+    }
+  }
+  assert.equal(installs, 1);
 });
 
 test("EX-5 Convex is not deployed unless the key aims at the expected production deployment, and no part of the key is ever printed", () => {

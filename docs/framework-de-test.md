@@ -2546,7 +2546,10 @@ donne : les filtres du workflow sont exécutés, pas supposés. Il vérifie :
   n'est pas une release est refusé ; que le jeton qui peut écrire n'est remis
   qu'à l'étape qui lance `scripts/release.sh`, sans être écrit dans le clone ;
 * que la clé de Convex n'est lue que par les trois étapes qui s'en servent,
-  jamais par l'installation des paquets npm ; qu'une clé de développement, de
+  jamais par l'installation des paquets npm ; que celle-ci est exactement
+  `npm ci --ignore-scripts`, sans `env` ni secret, et qu'aucun job de
+  `release.yml` qui lit un secret ne lance `npm ci` ou `npm install` sans
+  `--ignore-scripts` (S-5 (b)) ; qu'une clé de développement, de
   préversion, de projet, d'un autre déploiement ou mal formée est refusée, et
   qu'aucune partie de la clé n'est jamais affichée ;
 * qu'après le déploiement de Convex la version servie et le refus de l'API
@@ -2578,6 +2581,12 @@ deploy`, ni un déploiement Vercel ne sont exécutés par un test. La forme exac
 des réponses de GitHub (alertes, analyses, environnement) est reprise de sa
 documentation et de réponses réelles de son API, lues le 9 octobre 2026. Le
 premier lancement à blanc est la première vraie preuve.
+
+Le premier vrai `npx convex deploy`, avec les dépendances installées par
+`npm ci --ignore-scripts`, reste à vérifier en S-7, hors de ce lancement à
+blanc. La lecture de `generateBinPath()` dans `node_modules/esbuild/lib/main.js`
+montre qu'esbuild résout le binaire de son paquet de plateforme à l'exécution,
+sans son postinstall ; elle ne remplace pas ce déploiement réel.
 
 ### Rapport de qualité (ANH-199)
 
