@@ -143,8 +143,8 @@ const DEPLOY_CONVEX = "Déployer Convex en production";
 const SERVED = "Vérifier la version que sert le déploiement";
 const REFUSAL = "Vérifier que l'API machine répond, sans clé";
 const RECORD = "Dire ce qui est déployé, et ce qui reste à enregistrer à la main";
-const SITE = "Vérifier que le site sert la version de ce commit";
-const SIMULATION = "Vérifier que la simulation sert la page de ce commit";
+const SITE = "Vérifier que le site sert le commit et la version de ce commit";
+const SIMULATION = "Vérifier que la simulation sert le commit et la page de ce commit";
 const MACHINES = "Dire la version du Pi et comment mettre une machine à jour à la main";
 
 // ---------------------------------------------------------------------------
@@ -1131,7 +1131,7 @@ test("EX-6 the site and the simulation are deployed by the jobs of deploy-produc
   assert.ok(before("vercel-site").has("convex") && before("vercel-simulation").has("site-answers"));
 });
 
-test("EX-6 the site must serve the version of this commit, and the simulation the viewer page of this commit", (context) => {
+test("S-1 the site and simulation must serve this commit, with the exact site version and viewer page", (context) => {
   const fx = repository(context);
   for (const id of ["site-answers", "simulation-answers"]) {
     const text = job(id);
@@ -1143,48 +1143,100 @@ test("EX-6 the site must serve the version of this commit, and the simulation th
   }
   const site = script(job("site-answers"), SITE);
   const home = "https://www.gauratechnologies.com/";
-  const visited = (/** @type {string | undefined} */ page, status = "200") =>
-    run(site, {}, { cwd: fx.work, answers: page === undefined ? {} : { [home]: page }, statuses: { [home]: status } });
+  const siteCommit = "https://www.gauratechnologies.com/commit.txt";
+  const previousCommit = "fedcba9876543210fedcba9876543210fedcba98";
+  const visited = (
+    /** @type {string} */ commitBody,
+    /** @type {string | undefined} */ page,
+    /** @type {Record<string, string>} */ statuses = {},
+  ) => run(
+    site,
+    {},
+    {
+      cwd: fx.work,
+      answers: { [siteCommit]: commitBody, ...(page === undefined ? {} : { [home]: page }) },
+      statuses,
+    },
+  );
   // The footer of the site shows the version built from package.json (lib/version.ts, next.config.ts).
   assert.match(read("next.config.ts"), /NEXT_PUBLIC_WEB_VERSION: `web-\$\{packageJson\.version\}`/);
   assert.match(read("components/landing/Footer.tsx"), /\{WEB_VERSION\}/);
-  const up = visited('<html><footer><span class="font-mono">web-0.1.0</span></footer></html>');
+  const correctPage = '<html><footer><span class="font-mono">web-0.1.0</span></footer></html>';
+  const up = visited(`${SHA}\n`, correctPage);
   assert.equal(up.status, 0, up.said);
-  assert.equal(up.summary, "### 5. Site : il répond\n\n- https://www.gauratechnologies.com sert `web-0.1.0`.\n");
-  assert.ok(up.calls[0]?.includes("--location") && up.calls[0]?.endsWith(`${home}|none|none`), up.calls[0]);
+  assert.equal(up.summary, "### 5. Site : il répond\n\n- https://www.gauratechnologies.com/commit.txt sert le commit `0123456789abcdef0123456789abcdef01234567`.\n- https://www.gauratechnologies.com sert la version `web-0.1.0`.\n");
+  assert.equal(up.calls.length, 2);
+  assert.ok(up.calls[0]?.includes("--write-out %{http_code}") && up.calls[0]?.endsWith(`${siteCommit}|none|none`), up.calls[0]);
+  assert.ok(up.calls[1]?.includes("--location") && up.calls[1]?.endsWith(`${home}|none|none`), up.calls[1]);
+  assert.ok(up.calls.every((call) => call.endsWith("|none|none")), "a curl call held a secret");
+  assert.equal(visited(SHA, correctPage).status, 0, "a commit response without a final newline was rejected");
+  for (const badVersion of ["web-0.1.0-dev", "web-0.1.01", "web-0.1.0.1", "web-0.1.0+x", "xweb-0.1.0"]) {
+    const page = `<html><span>${badVersion}</span></html>`;
+    const down = visited(`${SHA}\n`, page);
+    assert.equal(down.status, 1, `${badVersion} was taken for web-0.1.0`);
+    assert.match(down.said, /version web-0\.1\.0 absente/);
+    assert.ok(!down.said.includes(page), "the page body was printed");
+  }
   for (const [page, status] of /** @type {[string | undefined, string][]} */ ([
     ["<html><span>web-0.0.9</span></html>", "200"],
     ["<html><span>web-inconnue</span></html>", "200"],
     ["<html><span>web-0.1.0</span></html>", "500"],
     [undefined, "200"],
   ])) {
-    const down = visited(page, status);
+    const down = visited(`${SHA}\n`, page, { [home]: status });
     assert.equal(down.status, 1, `${status} ${page} was taken for the site of this commit`);
-    assert.match(down.said, /^::error title=Site inattendu::Le déploiement Vercel du site a réussi, mais https:\/\/www\.gauratechnologies\.com ne sert pas web-0\.1\.0 /m);
+    assert.match(down.said, /^::error title=Site inattendu::Le déploiement Vercel du site a réussi, mais la version web-0\.1\.0 est absente/m);
     assert.match(down.said, /La simulation n'est pas déployée : /);
     assert.equal(down.summary, "");
   }
+  for (const [commitBody, statuses, wanted] of [
+    [previousCommit, {}, "le commit servi est différent"],
+    ["", { [siteCommit]: "404" }, "le commit servi est absent (404)"],
+    [`${SHA}\nextra`, {}, "le commit servi est différent"],
+  ]) {
+    const down = visited(commitBody, correctPage, statuses);
+    assert.equal(down.status, 1, `${wanted} was accepted`);
+    assert.ok(down.said.includes(wanted), down.said);
+    assert.ok(down.said.includes("version web-0.1.0 servie"), down.said);
+    assert.ok(!down.said.includes(correctPage), "the page body was printed");
+    assert.ok(down.calls.filter((call) => !call.startsWith("sleep ")).every((call) => call.endsWith("|none|none")), "a curl call held a secret");
+  }
 
   const simulation = script(job("simulation-answers"), SIMULATION);
-  const [page, list] = ["https://anheart-simulation.vercel.app/viewer/index.html", "https://anheart-simulation.vercel.app/api/scenarios"];
+  const [commitUrl, page, list] = [
+    "https://anheart-simulation.vercel.app/viewer/commit.txt",
+    "https://anheart-simulation.vercel.app/viewer/index.html",
+    "https://anheart-simulation.vercel.app/api/scenarios",
+  ];
   const viewer = read("simulation/viewer/index.html");
   assert.match(read("deploy/simulation-vercel/app.py"), /app\.mount\("\/viewer", /);
   assert.match(read("deploy/simulation-vercel/app.py"), /@app\.get\("\/api\/scenarios"\)/);
   const served = (/** @type {Record<string, string>} */ answers, /** @type {Record<string, string>} */ statuses = {}) => run(simulation, {}, { cwd: fx.work, answers, statuses });
-  const current = served({ [page]: viewer, [list]: '["manual_27_rpm","auto_30_min"]' });
+  const current = served({ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: '["manual_27_rpm","auto_30_min"]' });
   assert.equal(current.status, 0, current.said);
+  assert.match(current.summary, /^- https:\/\/anheart-simulation\.vercel\.app\/viewer\/commit\.txt sert le commit `0123456789abcdef0123456789abcdef01234567`\.$/m);
   assert.match(current.summary, /^- https:\/\/anheart-simulation\.vercel\.app\/viewer\/index\.html est la page du visualiseur de ce commit, octet pour octet\.$/m);
+  assert.ok(current.calls.every((call) => call.endsWith("|none|none")), "a curl call held a secret");
+  for (const [commitBody, statuses, wanted] of [
+    [previousCommit, {}, "commit différent"],
+    ["", { [commitUrl]: "404" }, "commit absent (HTTP 404)"],
+  ]) {
+    const other = served({ [commitUrl]: commitBody, [page]: viewer, [list]: '["manual_27_rpm"]' }, statuses);
+    assert.equal(other.status, 1, `${wanted} was accepted`);
+    assert.ok(other.said.includes(wanted), other.said);
+    assert.ok(other.calls.filter((call) => !call.startsWith("sleep ")).every((call) => call.endsWith("|none|none")), "a curl call held a secret");
+  }
   for (const [answers, statuses] of /** @type {[Record<string, string>, Record<string, string>][]} */ ([
     // The page of the deployment before: one byte more, at its end or in its middle, is another page.
-    [{ [page]: `${viewer} `, [list]: '["manual_27_rpm"]' }, {}],
-    [{ [page]: `${viewer.slice(0, 200)} ${viewer.slice(200)}`, [list]: '["manual_27_rpm"]' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: `${viewer} `, [list]: '["manual_27_rpm"]' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: `${viewer.slice(0, 200)} ${viewer.slice(200)}`, [list]: '["manual_27_rpm"]' }, {}],
     // And so is one byte less.
-    [{ [page]: viewer.slice(0, -1), [list]: '["manual_27_rpm"]' }, {}],
-    [{ [page]: viewer, [list]: "[]" }, {}],
-    [{ [page]: viewer, [list]: '{"detail":"Not Found"}' }, {}],
-    [{ [page]: viewer, [list]: '["manual_27_rpm"]' }, { [list]: "500" }],
-    [{ [page]: viewer, [list]: '["manual_27_rpm"]' }, { [page]: "404" }],
-    [{ [list]: '["manual_27_rpm"]' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer.slice(0, -1), [list]: '["manual_27_rpm"]' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: "[]" }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: '{"detail":"Not Found"}' }, {}],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: '["manual_27_rpm"]' }, { [list]: "500" }],
+    [{ [commitUrl]: `${SHA}\n`, [page]: viewer, [list]: '["manual_27_rpm"]' }, { [page]: "404" }],
+    [{ [commitUrl]: `${SHA}\n`, [list]: '["manual_27_rpm"]' }, {}],
   ])) {
     const other = served(answers, statuses);
     assert.equal(other.status, 1, `went on with ${JSON.stringify(statuses)} ${Object.keys(answers).length}`);

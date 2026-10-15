@@ -14,7 +14,8 @@ run-name: "Release ${{ inputs.dry_run && 'à blanc' || 'RÉELLE' }} : tests, Cod
 #   3. the release tags are put by `scripts/release.sh tag`;
 #   4. Convex is deployed to production, then checked;
 #   5. the site, then the hosted simulation, are deployed to Vercel by the
-#      jobs of deploy-production.yml, each then checked;
+#      jobs of deploy-production.yml, each checked for the exact deployed
+#      commit even when its version or viewer page is unchanged;
 #   6. the machines: nothing is done to any of them yet (no over-the-air
 #      update exists), the stage says how one is updated by hand.
 #
@@ -607,9 +608,10 @@ jobs:
       confirmation: ${{ inputs.confirmation }}
     secrets: inherit
 
-  # The address of a deployment is behind the login of Vercel: what is
-  # checked is the address production is served at. The page must carry the
-  # version of this commit, which the footer of the site shows.
+  # The address of a deployment is behind the login of Vercel. Its generated
+  # commit.txt contains the full SHA of the checkout and is never committed;
+  # checking it distinguishes this release from an older deployment even
+  # when the site version is unchanged.
   site-answers:
     name: 5. Vercel (le site répond)
     needs: [request, vercel-site]
@@ -622,25 +624,63 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - name: Vérifier que le site sert la version de ce commit
+      - name: Vérifier que le site sert le commit et la version de ce commit
         run: |
           version="web-$(sed -n 's/^  "version": "\([^"]*\)",\{0,1\}$/\1/p' package.json | head -n 1)"
-          status=none
+          printf '%s' "$GITHUB_SHA" > "$RUNNER_TEMP/expected-commit.txt"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/expected-commit-newline.txt"
+          version_pattern="${version//./\\.}"
+          version_pattern="${version_pattern//+/\\+}"
+          commit_url="$SITE_URL/commit.txt"
+          commit_issue="absent"
+          page_issue="absente"
+          commit_status=none
+          page_status=none
           for attempt in 1 2 3 4 5 6; do
-            status="$(curl --silent --show-error --location --max-time 30 --output "$RUNNER_TEMP/site.html" --write-out '%{http_code}' "$SITE_URL/" || true)"
-            if [[ "$status" == 200 ]] && grep -Fq -- "$version" "$RUNNER_TEMP/site.html"; then
+            commit_status="$(curl --silent --show-error --location --max-time 30 --output "$RUNNER_TEMP/site-commit.txt" --write-out '%{http_code}' "$commit_url" || true)"
+            commit_ok=false
+            if [[ "$commit_status" == 200 ]]; then
+              if cmp -s "$RUNNER_TEMP/site-commit.txt" "$RUNNER_TEMP/expected-commit.txt" ||
+                cmp -s "$RUNNER_TEMP/site-commit.txt" "$RUNNER_TEMP/expected-commit-newline.txt"; then
+                commit_ok=true
+                commit_issue="servi"
+              else
+                commit_issue="différent"
+              fi
+            else
+              commit_issue="absent (HTTP $commit_status)"
+            fi
+            page_status="$(curl --silent --show-error --location --max-time 30 --output "$RUNNER_TEMP/site.html" --write-out '%{http_code}' "$SITE_URL/" || true)"
+            page_ok=false
+            if [[ "$page_status" == 200 ]] && grep -Eq "(^|[^0-9A-Za-z.+-])${version_pattern}($|[^0-9A-Za-z.+-])" "$RUNNER_TEMP/site.html"; then
+              page_ok=true
+              page_issue="servie"
+            else
+              page_issue="absente (HTTP $page_status)"
+            fi
+            if [[ "$commit_ok" == true && "$page_ok" == true ]]; then
               {
                 echo "### 5. Site : il répond"
                 echo
-                echo "- $SITE_URL sert \`$version\`."
+                echo "- $commit_url sert le commit \`$GITHUB_SHA\`."
+                echo "- $SITE_URL sert la version \`$version\`."
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "$SITE_URL sert $version."
+              echo "$SITE_URL sert le commit $GITHUB_SHA et la version $version."
               exit 0
             fi
-            echo "Essai $attempt : réponse $status, version $version absente de la page."
+            echo "Essai $attempt : commit $commit_issue ; version $version $page_issue."
             sleep 20
           done
-          echo "::error title=Site inattendu::Le déploiement Vercel du site a réussi, mais $SITE_URL ne sert pas $version (dernière réponse : $status). La simulation n'est pas déployée : voir docs/release.md (« Échec et reprise »)."
+          problems=()
+          if [[ "$commit_issue" == différent ]]; then
+            problems+=("le commit servi est différent")
+          elif [[ "$commit_issue" != servi ]]; then
+            problems+=("le commit servi est absent ($commit_status)")
+          fi
+          [[ "$page_issue" == servie ]] || problems+=("la version $version est absente de la page (HTTP $page_status)")
+          problem_text="${problems[0]}"
+          if (( ${#problems[@]} == 2 )); then problem_text="$problem_text et ${problems[1]}"; fi
+          echo "::error title=Site inattendu::Le déploiement Vercel du site a réussi, mais $problem_text. La simulation n'est pas déployée : voir docs/release.md (« Échec et reprise »)."
           exit 1
 
   vercel-simulation:
@@ -657,7 +697,9 @@ jobs:
 
   # The viewer page names its own script and its own style by their hash: a
   # page that differs by one byte from the one of this commit is not the page
-  # of this commit. The list of scenarios is what the hosted engine answers.
+  # of this commit. The generated viewer/commit.txt contains the full SHA of
+  # the checkout and is never committed, so it distinguishes deployments
+  # even when that page is unchanged. The list is what the hosted engine serves.
   simulation-answers:
     name: 5. Vercel (la simulation répond)
     needs: [request, vercel-simulation]
@@ -670,28 +712,71 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - name: Vérifier que la simulation sert la page de ce commit
+      - name: Vérifier que la simulation sert le commit et la page de ce commit
         run: |
+          commit_url="$SIMULATION_URL/viewer/commit.txt"
           page="$SIMULATION_URL/viewer/index.html"
           list="$SIMULATION_URL/api/scenarios"
+          printf '%s' "$GITHUB_SHA" > "$RUNNER_TEMP/expected-commit.txt"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/expected-commit-newline.txt"
+          commit_issue="absent"
+          commit_status=none
+          viewer_ok=false
+          scenarios_ok=false
           for attempt in 1 2 3 4 5 6; do
-            if curl --silent --show-error --fail --location --max-time 30 --output "$RUNNER_TEMP/viewer.html" "$page" &&
-              cmp -s "$RUNNER_TEMP/viewer.html" simulation/viewer/index.html &&
-              curl --silent --show-error --fail --location --max-time 60 --output "$RUNNER_TEMP/scenarios.json" "$list" &&
+            commit_status="$(curl --silent --show-error --location --max-time 30 --output "$RUNNER_TEMP/simulation-commit.txt" --write-out '%{http_code}' "$commit_url" || true)"
+            commit_ok=false
+            if [[ "$commit_status" == 200 ]]; then
+              if cmp -s "$RUNNER_TEMP/simulation-commit.txt" "$RUNNER_TEMP/expected-commit.txt" ||
+                cmp -s "$RUNNER_TEMP/simulation-commit.txt" "$RUNNER_TEMP/expected-commit-newline.txt"; then
+                commit_ok=true
+                commit_issue="servi"
+              else
+                commit_issue="différent"
+              fi
+            else
+              commit_issue="absent (HTTP $commit_status)"
+            fi
+            viewer_ok=false
+            scenarios_ok=false
+            if [[ "$commit_ok" == true ]] && curl --silent --show-error --fail --location --max-time 30 --output "$RUNNER_TEMP/viewer.html" "$page" &&
+              cmp -s "$RUNNER_TEMP/viewer.html" simulation/viewer/index.html; then
+              viewer_ok=true
+            fi
+            if [[ "$viewer_ok" == true ]] && curl --silent --show-error --fail --location --max-time 60 --output "$RUNNER_TEMP/scenarios.json" "$list" &&
               [[ "$(head -c 2 "$RUNNER_TEMP/scenarios.json")" == '["' ]]; then
+              scenarios_ok=true
+            fi
+            if [[ "$commit_ok" == true && "$viewer_ok" == true && "$scenarios_ok" == true ]]; then
               {
                 echo "### 5. Simulation : elle répond"
                 echo
+                echo "- $commit_url sert le commit \`$GITHUB_SHA\`."
                 echo "- $page est la page du visualiseur de ce commit, octet pour octet."
                 echo "- $list rend la liste des scénarios."
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "La simulation hébergée sert la page de ce commit et sa liste de scénarios."
+              echo "La simulation hébergée sert le commit $GITHUB_SHA, la page de ce commit et sa liste de scénarios."
               exit 0
             fi
-            echo "Essai $attempt : la page servie n'est pas celle de ce commit, ou la liste des scénarios ne répond pas."
+            if [[ "$commit_ok" != true ]]; then
+              echo "Essai $attempt : commit $commit_issue."
+            elif [[ "$viewer_ok" != true ]]; then
+              echo "Essai $attempt : la page du visualiseur n'est pas celle de ce commit, octet pour octet."
+            else
+              echo "Essai $attempt : la liste des scénarios ne répond pas comme attendu."
+            fi
             sleep 20
           done
-          echo "::error title=Simulation inattendue::Le déploiement Vercel de la simulation a réussi, mais $page n'est pas la page de ce commit, ou $list ne rend pas de liste. Voir docs/release.md (« Échec et reprise »)."
+          if [[ "$commit_issue" == différent ]]; then
+            problem_text="le commit servi est différent du SHA attendu"
+          elif [[ "$commit_issue" != servi ]]; then
+            problem_text="le commit servi est absent (HTTP $commit_status)"
+          elif [[ "$viewer_ok" != true ]]; then
+            problem_text="$page n'est pas la page de ce commit, octet pour octet"
+          else
+            problem_text="$list ne rend pas la liste des scénarios"
+          fi
+          echo "::error title=Simulation inattendue::Le déploiement Vercel de la simulation a réussi, mais $problem_text. Voir docs/release.md (« Échec et reprise »)."
           exit 1
 
   # Stage 6. No machine is reached: this job reads the repository and writes

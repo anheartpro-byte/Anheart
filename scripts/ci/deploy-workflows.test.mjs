@@ -17,6 +17,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -47,6 +48,7 @@ const SECRETS_HELD = "Exiger les secrets du déploiement";
 const STILL_HEAD = "Refuser un commit qui n'est plus la tête de la branche";
 const INSTALL = "Installer la CLI Vercel à sa version figée";
 const PULL = "Lire les réglages et les variables du projet Vercel";
+const MARK = "Marquer la construction du commit";
 const BUILD = "Construire le site";
 const DEPLOY_SITE = "Déployer la construction du site";
 const ASSEMBLE = "Assembler la simulation";
@@ -92,8 +94,8 @@ const CHOICES = ["site", "simulation", "site et simulation"];
 const SECRETS = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID_SIMULATION", "VERCEL_PROJECT_ID_SITE", "VERCEL_TOKEN"];
 /** The steps a deployment job is made of, in order: a name, or the action a step uses. The same behind both buttons. */
 const STEPS = {
-  site: [SECRETS_HELD, "uses actions/checkout", STILL_HEAD, "uses actions/setup-node", INSTALL, PULL, BUILD, DEPLOY_SITE, ANNOUNCE],
-  simulation: [SECRETS_HELD, "uses actions/checkout", STILL_HEAD, "uses actions/setup-node", INSTALL, ASSEMBLE, DEPLOY_SIMULATION, ANNOUNCE],
+  site: [SECRETS_HELD, "uses actions/checkout", STILL_HEAD, "uses actions/setup-node", INSTALL, PULL, MARK, BUILD, DEPLOY_SITE, ANNOUNCE],
+  simulation: [SECRETS_HELD, "uses actions/checkout", STILL_HEAD, "uses actions/setup-node", INSTALL, ASSEMBLE, MARK, DEPLOY_SIMULATION, ANNOUNCE],
 };
 /** The only steps that are handed the token: those that call Vercel, and the one that checks it is there. */
 const WITH_TOKEN = {
@@ -296,6 +298,94 @@ test("the jobs and their steps are the ones this file knows about, the same behi
   }
   assert.deepEqual(Object.keys(shared(PRODUCTION.text)), ["DEPLOY_BRANCH", "VERCEL_TARGET", "VERCEL_CLI_VERSION"]);
   assert.deepEqual(Object.keys(shared(PREVIEW.text)), Object.keys(shared(PRODUCTION.text)));
+});
+
+test("S-1 each button writes only the full checkout SHA to its deployed commit files", () => {
+  const expected = {
+    site: ["public/commit.txt"],
+    simulation: [
+      "deploy/simulation-vercel/dist/public/viewer/commit.txt",
+      "deploy/simulation-vercel/dist/simulation/viewer/commit.txt",
+    ],
+  };
+  const fixtureFiles = [
+    ["public/commit.txt", "old site marker\n"],
+    ["public/index.html", "site fixture\n"],
+    ["deploy/simulation-vercel/dist/public/viewer/commit.txt", "old CDN marker\n"],
+    ["deploy/simulation-vercel/dist/public/viewer/index.html", "CDN fixture\n"],
+    ["deploy/simulation-vercel/dist/simulation/viewer/commit.txt", "old app marker\n"],
+    ["deploy/simulation-vercel/dist/simulation/viewer/index.html", "app fixture\n"],
+  ];
+  const inventory = (directory, prefix = "") =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      if (prefix === "" && entry.name === ".git") return [];
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const absolute = join(directory, entry.name);
+      return entry.isDirectory() ? inventory(absolute, relative) : [relative];
+    }).sort();
+
+  for (const { file, text } of BUTTONS) {
+    for (const id of ["site", "simulation"]) {
+      const job = jobsOf(text).get(id) ?? "";
+      const labels = stepsOf(job).map(labelOf);
+      const marker = stepNamed(job, MARK);
+      const markerIndex = labels.indexOf(MARK);
+      if (id === "site") {
+        assert.ok(markerIndex > labels.indexOf("uses actions/checkout"), `${file}: site marker must follow checkout`);
+        assert.ok(markerIndex > labels.indexOf(STILL_HEAD), `${file}: site marker must follow the head guard`);
+        assert.ok(markerIndex < labels.indexOf(BUILD), `${file}: site marker must precede the build`);
+      } else {
+        assert.equal(markerIndex, labels.indexOf(ASSEMBLE) + 1, `${file}: simulation marker must follow assembly`);
+        assert.ok(markerIndex < labels.indexOf(DEPLOY_SIMULATION), `${file}: simulation marker must precede deployment`);
+      }
+      assert.doesNotMatch(marker, /^ {8}(?:env|if):|\$\{\{|secrets\./m, `${file}: ${id} marker takes an env, secret, expression or condition`);
+
+      const tree = mkdtempSync(join(tmpdir(), "anheart-commit-marker-"));
+      try {
+        for (const [path, contents] of fixtureFiles) {
+          mkdirSync(join(tree, path, ".."), { recursive: true });
+          writeFileSync(join(tree, path), contents);
+        }
+        const git = (...args) => {
+          const result = spawnSync("git", args, {
+            cwd: tree,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              GIT_CONFIG_GLOBAL: "/dev/null",
+              GIT_CONFIG_NOSYSTEM: "1",
+              GIT_AUTHOR_NAME: "Workflow Test",
+              GIT_AUTHOR_EMAIL: "workflow@example.invalid",
+              GIT_COMMITTER_NAME: "Workflow Test",
+              GIT_COMMITTER_EMAIL: "workflow@example.invalid",
+            },
+          });
+          assert.equal(result.status, 0, result.stderr);
+          return result.stdout.trim();
+        };
+        git("init", "--quiet");
+        git("add", "-A");
+        git("commit", "--quiet", "-m", "fixture");
+        const head = git("rev-parse", "HEAD");
+        assert.match(head, /^[0-9a-f]{40}$/, `${file}: ${id} HEAD is not a full lowercase SHA`);
+        const before = new Map(inventory(tree).map((path) => [path, readFileSync(join(tree, path))]));
+
+        const ran = run(script(job, MARK), {}, tree);
+        assert.equal(ran.status, 0, `${file}: ${id}: ${ran.said}`);
+        assert.equal(ran.output, "", `${file}: ${id}: marker script wrote a workflow output`);
+        const paths = inventory(tree);
+        assert.deepEqual(paths, [...before.keys()].sort(), `${file}: ${id}: marker script created or removed another file`);
+        const after = new Map(paths.map((path) => [path, readFileSync(join(tree, path))]));
+        const changed = paths.filter((path) => !before.get(path)?.equals(after.get(path)));
+        assert.deepEqual(changed, [...expected[id]].sort(), `${file}: ${id}: marker script changed another file`);
+        for (const path of expected[id]) {
+          assert.equal(after.get(path)?.toString("utf8"), `${head}\n`, `${file}: ${path}`);
+        }
+      } finally {
+        rmSync(tree, { recursive: true, force: true });
+      }
+    }
+  }
 });
 
 test("a button refuses every ref but its own branch, before anything else runs", () => {

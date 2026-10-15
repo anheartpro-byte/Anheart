@@ -630,9 +630,19 @@ procédure que Vercel documente pour GitHub Actions
 
 1. `vercel pull` lit les réglages du projet `anheart` et les variables de
    l'environnement visé (Production ou Preview) ;
-2. `vercel build` construit le site : `npm install`, puis `npm run build`, sur
+2. l'étape `Marquer la construction du commit` écrit `public/commit.txt` avec
+   le SHA complet, en minuscules, du checkout, suivi d'un saut de ligne. Le
+   fichier est généré après le checkout et n'est jamais commité ; il est servi
+   à `/commit.txt` ;
+3. `vercel build` construit le site : `npm install`, puis `npm run build`, sur
    Node 24, comme le faisait Vercel à chaque push ;
-3. `vercel deploy --prebuilt` envoie ce qui a été construit et rend l'adresse.
+4. `vercel deploy --prebuilt` envoie ce qui a été construit et rend l'adresse.
+
+La pipeline de release lit `/commit.txt` après son déploiement et exige ce SHA
+exact, même si la version affichée par le site n'a pas changé. Ce fichier est
+écrit par ces workflows seulement : un déploiement lancé hors des boutons peut
+ne pas le contenir, et la pipeline ne vérifie que les déploiements de ses
+propres jobs.
 
 La CLI Vercel est installée à une version figée (`VERCEL_CLI_VERSION`, en tête
 des deux workflows : 62.1.0, celle que l'image de construction de Vercel
@@ -1151,6 +1161,18 @@ construit la fonction. Rien de Python n'est installé sur le runner, et le
 moteur hébergé ne lit aucune variable de son projet Vercel. Une préversion est
 protégée par la connexion Vercel.
 
+Après l'assemblage, l'étape `Marquer la construction du commit` écrit le SHA
+complet, en minuscules, du checkout, suivi d'un saut de ligne, dans
+`deploy/simulation-vercel/dist/public/viewer/commit.txt` et
+`deploy/simulation-vercel/dist/simulation/viewer/commit.txt`. Les deux copies
+ne contiennent rien d'autre et ne sont jamais commitées. Elles rendent le même
+fichier accessible à `/viewer/commit.txt` : la première depuis les fichiers
+publics servis par le CDN, la seconde depuis le montage `/viewer` de `app.py`.
+Ce montage lit `ROOT / "viewer"` (`deploy/simulation-vercel/app.py:50`) ;
+`ROOT` désigne `simulation/` (`simulation/live.py:43-44`). La pipeline exige
+ensuite le SHA exact, y compris si la page du visualiseur est identique à celle
+du déploiement précédent.
+
 Un déploiement par bouton part d'un checkout propre : il ne publie pas
 `/report.html`, que `build.sh` n'embarque que si le rapport a été produit sur
 le poste (`python -m simulation.quick --all`).
@@ -1166,7 +1188,8 @@ Il faut une connexion de la CLI Vercel dans `.vercel-cli/` :
 `npx vercel login --global-config .vercel-cli`. À la différence du bouton,
 `deploy.sh` embarque le code **du disque** au moment de `build.sh`, pas un
 commit ; il ne passe par aucune approbation ; et il prend la dernière version
-de la CLI, pas une version figée.
+de la CLI, pas une version figée. Il n'écrit pas les fichiers `commit.txt` ; la
+pipeline ne vérifie que ses propres déploiements, lancés par les boutons.
 
 Dans les deux cas, une modification de `raspberry-pi/src` ou de `simulation/`
 ne change pas une version déjà hébergée : il faut redéployer.
