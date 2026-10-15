@@ -16,6 +16,7 @@ import { ConvexError } from "convex/values";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { CONTRACT_VERSION } from "./lib/contract";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 import { machineHeaders } from "./machineAuth.fixtures";
 import { ageFrom, effectiveHrMax, zoneRefusal } from "./training";
 import {
@@ -926,6 +927,7 @@ describe("launch rights are granted once and revoked quietly", () => {
         fit: true,
         fitnessValidUntil: Date.UTC(2100, 0, 1),
         consent: true,
+        fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
       },
       {
         userId: w.patient,
@@ -935,6 +937,7 @@ describe("launch rights are granted once and revoked quietly", () => {
         fit: true,
         fitnessValidUntil: Date.UTC(2100, 0, 1),
         consent: true,
+        fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
       },
       {
         userId: w.stranger,
@@ -944,6 +947,7 @@ describe("launch rights are granted once and revoked quietly", () => {
         fit: false,
         fitnessValidUntil: null,
         consent: false,
+        fitnessQuestionnaireVersion: null,
       },
     ]);
   });
@@ -1005,6 +1009,7 @@ describe("launch rights are granted once and revoked quietly", () => {
           fit: true,
           fitnessValidUntil: Date.UTC(2100, 0, 1),
           consent: true,
+          fitnessQuestionnaireVersion: CURRENT_QUESTIONNAIRE.version,
         },
       ]);
     },

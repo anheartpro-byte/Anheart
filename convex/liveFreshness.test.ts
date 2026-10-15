@@ -19,6 +19,7 @@ import {
   addSession,
   as,
   configureAnheartOrganization,
+  makeRiderReady,
   seedWorld,
   type World,
 } from "./test.setup";
@@ -349,6 +350,15 @@ describe("the last sign of life of a session, dated by the server", () => {
     await f.t.run((ctx) =>
       ctx.db.patch(f.launcher, { hrMax: 180, birthYear: 1990 }),
     );
+    const organizationId = await f.t.run(async (ctx) =>
+      (await ctx.db.get(f.machineId))?.organizationId,
+    );
+    if (organizationId === undefined) throw new Error("Missing test organisation");
+    await makeRiderReady(f.t, f.launcher, organizationId, {
+      now,
+      validUntil: now + 60_000,
+      validatedBy: f.manager,
+    });
     const sessionId = await f.t.run(async (ctx) => {
       const machine = await ctx.db.get(f.machineId);
       return await ctx.db.insert("sessions", {
