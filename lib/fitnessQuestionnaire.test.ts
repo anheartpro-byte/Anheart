@@ -1,7 +1,10 @@
 import casesContract from "../contracts/fitness-questionnaire-cases.json";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   CURRENT_QUESTIONNAIRE,
+  LATEST_FITNESS_DATE,
+  LATEST_FITNESS_MILLIS,
   computeOutcome,
   maxValidUntil,
   parseQuestionnaire,
@@ -61,6 +64,19 @@ function currentAnswers(answer: boolean): Record<string, boolean> {
 }
 
 describe("versioned fitness questionnaire", () => {
+  it("shares the console's technical fitness expiry limit", () => {
+    const roster = readFileSync(
+      new URL("../raspberry-pi/src/roster.py", import.meta.url),
+      "utf8",
+    );
+    const millis = roster.match(
+      /^_LATEST_FITNESS_MILLIS: Final\[int\] = ([\d_]+)/m,
+    )?.[1];
+    expect(Number(millis?.replaceAll("_", ""))).toBe(LATEST_FITNESS_MILLIS);
+    expect(LATEST_FITNESS_MILLIS).toBe(Date.parse("2101-01-01T00:00:00Z"));
+    expect(LATEST_FITNESS_DATE).toBe("2101-01-01");
+  });
+
   it("loads and validates the provisional 0.1.0 contract", () => {
     expect(CURRENT_QUESTIONNAIRE.version).toBe("0.1.0");
     expect(CURRENT_QUESTIONNAIRE.provisional).toBe(true);

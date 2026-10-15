@@ -35,7 +35,8 @@
  * the poll never offers it. A rider has one session at a time, on any machine,
  * and a machine one launch at a time (`launchAutoSession`).
  * Aptitude and consent are checked both at launch from the site and again at
- * arming (ANH-143, contract 1.6). The console's own start gate follows in T06.
+ * arming (ANH-143, contract 1.6). The console also checks its held roster and
+ * the fitness deadline before every occupied start.
  */
 import { limitUser } from "./lib/rateLimits";
 import { v } from "convex/values";

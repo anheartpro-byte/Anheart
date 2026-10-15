@@ -9,10 +9,11 @@ import {
   seedMachineWorld,
   type World,
 } from "./test.setup";
-import { sha256, uploadRequest } from "./lib/recordStorage";
+import { depositManifest, sha256, uploadRequest } from "./lib/recordStorage";
 import { makeFunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+import completePiManifest from "../raspberry-pi/tests/fixtures/complete_manifest_v2.json";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -97,6 +98,14 @@ async function upload(
   return args;
 }
 describe("ANH-130 verified session deposits", () => {
+  it("accepts the complete manifest written by the Pi and rejects an extra key", () => {
+    expect(depositManifest.safeParse(completePiManifest).success).toBe(true);
+    expect(depositManifest.safeParse({
+      ...completePiManifest,
+      future_optional_metric: 1,
+    }).success).toBe(false);
+  });
+
   it.each(["0.1.0", null])(
     "accepts the two fitness manifest fields (%s)",
     async (version) => {

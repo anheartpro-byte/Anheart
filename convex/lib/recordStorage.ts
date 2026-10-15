@@ -29,9 +29,7 @@ export const uploadRequest = z
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     size: z.number().int().min(0).max(MAX_RECORD_FILE_BYTES),
   })
-  .refine(
-    (file) => file.path !== "manifest.json" || file.size <= 2 * 1024 * 1024,
-  );
+  .refine((file) => file.path !== "manifest.json" || file.size <= 2 * 1024 * 1024);
 export const commitRequest = uploadRequest.safeExtend({
   storageId: z.string().min(1),
 });

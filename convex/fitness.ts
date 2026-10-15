@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import {
   CURRENT_QUESTIONNAIRE,
+  LATEST_FITNESS_MILLIS,
   computeOutcome,
   maxValidUntil,
 } from "../lib/fitnessQuestionnaire";
@@ -153,6 +154,7 @@ export const validateFitnessAssessment = mutation({
         !Number.isInteger(args.validUntil) ||
         Number.isNaN(new Date(args.validUntil).getTime()) ||
         args.validUntil <= now ||
+        args.validUntil > LATEST_FITNESS_MILLIS ||
         (maximum !== null && args.validUntil > maximum)
       ) {
         throw refusal("invalid_validity");

@@ -1,5 +1,11 @@
 import questionnaireContract from "../contracts/fitness-questionnaire.json";
 
+/** Representation limit shared with the console, not a medical validity duration. */
+export const LATEST_FITNESS_MILLIS = 4_133_980_800_000;
+export const LATEST_FITNESS_DATE = new Date(LATEST_FITNESS_MILLIS)
+  .toISOString()
+  .slice(0, 10);
+
 export type FitnessOutcome = "fit" | "needs_medical_opinion" | "unfit";
 
 export type Question = Readonly<{

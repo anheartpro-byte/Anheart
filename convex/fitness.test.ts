@@ -5,6 +5,7 @@ import type { CurrentUser } from "./lib/auth";
 import { riderOrganizationId } from "./lib/fitness";
 import {
   CURRENT_QUESTIONNAIRE,
+  LATEST_FITNESS_MILLIS,
   type FitnessOutcome,
 } from "../lib/fitnessQuestionnaire";
 import { CONSENT_TEXT_VERSION } from "../lib/consentText";
@@ -391,6 +392,7 @@ describe("ANH-143 fitness assessments", () => {
     ["fit assessment has no validity", undefined, "fit"],
     ["fit assessment is already expired", NOW, "fit"],
     ["fit assessment has a fractional validity", NOW + 1.5, "fit"],
+    ["fit assessment exceeds the console expiry limit", LATEST_FITNESS_MILLIS + 1, "fit"],
     ["fit assessment exceeds the Date range", 1e20, "fit"],
     ["fit assessment exceeds the last representable millisecond", 8.64e15 + 1, "fit"],
     [
@@ -426,15 +428,15 @@ describe("ANH-143 fitness assessments", () => {
     );
   });
 
-  it("accepts the last representable Date without a medical validity ceiling", async () => {
+  it("accepts the console expiry boundary without imposing a medical duration", async () => {
     const w = await seedWorld(modules);
     const assessmentId = await insertAssessment(w);
     await as(w.t, "manager").mutation(api.fitness.validateFitnessAssessment, {
       assessmentId,
-      validUntil: 8.64e15,
+      validUntil: LATEST_FITNESS_MILLIS,
     });
     expect((await readiness(w, "manager", w.patient))?.fitness?.validUntil).toBe(
-      8.64e15,
+      LATEST_FITNESS_MILLIS,
     );
   });
 
