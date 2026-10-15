@@ -1873,20 +1873,21 @@ Hors du Pi, sur le poste du signataire, depuis `raspberry-pi/` :
    nouvelle `version`, la date (`issued_at`) et l'identifiant du signataire.
 3. `python scripts/sign_medical_parameters.py sign <clé privée>` : refuse un
    fichier mal formé (le même analyseur que la console : JSON strict, membres
-   exacts, types, nombres positifs et finis, palier critique au-dessus du palier
-   dur, fraction de zone au plus 1) et une clé privée qui n'est pas celle de
-   `config/medical.pub`, écrit `config/medical_parameters.sig`, puis vérifie la
-   signature comme la console. Il **ne vérifie pas** les bornes que la console
-   applique au démarrage (FC 100..220 bpm, âge 10..100 ans, bornes du limiteur
-   de mouvement) : il signe un fichier qui en sort, et c'est la console qui le
-   refuse au démarrage (problème de configuration
-   `config/medical_parameters.json:<membre>`, code de sortie 2, sur lequel le
-   service ne la relance pas). Vérifier ces bornes avant de signer est prévu
-   par ANH-235.
+   exacts, types, nombres positifs et finis, y compris le refus d'un entier
+   qu'aucun flottant ne représente, palier critique au-dessus du palier dur,
+   fraction de zone au plus 1). Il applique ensuite les mêmes bornes que la
+   console au démarrage, en appelant `load_local_config` (FC 100..220 bpm, âge
+   10..100 ans, bornes du limiteur de mouvement), avant de comparer la clé ou
+   d'écrire la signature. Un refus cite chaque problème de la console, dans
+   son ordre ; une signature existante reste inchangée. Il refuse aussi une
+   clé privée qui n'est pas celle de `config/medical.pub`, écrit
+   `config/medical_parameters.sig`, puis vérifie la signature comme la console.
 4. `python scripts/sign_medical_parameters.py verify` : ce que la console dira
-   de la signature au démarrage (avec les mêmes limites que `sign` : les bornes
-   ne sont pas vérifiées). Puis une PR ordinaire, relue ; la check-list de
-   release relit toute valeur `[MED]` qui change ([release.md](release.md)).
+   au démarrage : format, mêmes bornes que `sign`, puis signature. Pour les
+   deux commandes, un fichier livré inutilisable, y compris une limite de
+   mouvement refusée à l'import, produit `refuse : ...` sur stderr et un code
+   de sortie 1, sans trace Python ni écriture. Puis une PR ordinaire, relue ;
+   la check-list de release relit toute valeur `[MED]` qui change ([release.md](release.md)).
 
 ### 13.5 Ce que cela ne couvre pas
 

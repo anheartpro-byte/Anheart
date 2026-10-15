@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Final, cast
@@ -50,7 +51,7 @@ from src.medical import (
 )
 from src.result import Err, Ok
 from src.units import Bpm, GLoadPerSecond, MotorRpm, OutputRpmPerSecond, ResultantG, Seconds
-from tests.medical_support import SHIPPED_CONTENT, public_pem, write_signed
+from tests.medical_support import SHIPPED_CONTENT, public_pem, with_values, write_signed
 
 #: A key of this test run, never written anywhere but a test's directory.
 KEY: Final[Ed25519PrivateKey] = Ed25519PrivateKey.generate()
@@ -418,6 +419,52 @@ def test_a_number_too_large_to_be_finite_is_refused() -> None:
         "medical_parameters.json.parameters.occupied_ceiling_g : nombre fini strictement "
         + "positif attendu, trouve inf",
     )
+
+
+FLOAT_MEMBERS: Final[tuple[str, ...]] = (
+    "occupied_ceiling_g",
+    "zone_ceiling_fraction",
+    "recovery_min_s",
+    "cooldown_min_s",
+    "motion_limits.output_rpm_per_s",
+    "motion_limits.g_per_s",
+    "motion_limits.max_interval_s",
+)
+MAX_JSON_INTEGER: Final[int] = int("9" * sys.int_info.default_max_str_digits)
+
+
+@pytest.mark.parametrize("member", FLOAT_MEMBERS)
+@pytest.mark.parametrize("sign", [1, -1])
+def test_an_integer_no_float_can_represent_is_a_documented_refusal(
+    tmp_path: Path, member: str, sign: int
+) -> None:
+    content = with_values({member: sign * 10**399})
+    expected = (
+        f"medical_parameters.json.parameters.{member} : nombre fini strictement "
+        "positif attendu, trouve un entier de 400 chiffres"
+    )
+    assert _problems(content) == (expected,)
+    path = tmp_path / "medical_parameters.json"
+    path.write_bytes(content)
+    with pytest.raises(MedicalParametersUnusableError) as raised:
+        shipped_document(path)
+    assert raised.value.problems == (expected,)
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        *FLOAT_MEMBERS,
+        "hr_hard_max_bpm",
+        "hr_critical_bpm",
+        "min_rider_age",
+        "motion_limits.min_run_motor_rpm",
+    ],
+)
+@settings(deadline=None)
+@given(value=st.integers(min_value=-MAX_JSON_INTEGER, max_value=MAX_JSON_INTEGER))
+def test_every_json_integer_in_a_numeric_member_returns_a_result(member: str, value: int) -> None:
+    assert isinstance(parse_document(with_values({member: value})), Ok | Err)
 
 
 def test_whole_seconds_are_read_as_seconds() -> None:

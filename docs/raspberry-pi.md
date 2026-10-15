@@ -2607,19 +2607,25 @@ Ce qui suit est ce qu'en fait la console.
 Le fichier est lu une fois, à l'import de `src/medical.py`, et ses octets sont
 gardés : les valeurs appliquées et les octets dont la signature est vérifiée
 sont les mêmes, quoi qu'il arrive ensuite au fichier sur le disque. Au
-démarrage, `load_local_config` vérifie en plus chaque valeur contre les bornes
-que la console tient pour plausibles (paliers 100..220 bpm, âge 10..100 ans,
-bornes du limiteur de mouvement) : une valeur hors bornes est un problème de
-configuration (clé `config/medical_parameters.json:<membre>`, code 2), signée
-ou non.
+démarrage, `load_local_config` vérifie les paliers (100..220 bpm), l'âge
+(10..100 ans) et les bornes du limiteur de mouvement, signés ou non. Un palier
+ou un âge hors bornes est un problème de configuration (clé
+`config/medical_parameters.json:<membre>`, code 2). Pour les limites de
+mouvement du fichier livré, le refus intervient plus tôt :
+`src/training/motion.py` construit `DEFAULT_MOTION_LIMITS` à l'import. Une
+limite hors bornes y lève `ValueError`, avec un code de sortie 1, avant
+`load_local_config` et sans clé `config/medical_parameters.json:motion_limits`.
+Ce comportement est vérifié par un sous-processus `python -c "import src.local_config"`
+sur une copie du dépôt où `g_per_s` vaut `0.6`.
 
-**Au démarrage.** Trois cas :
+**Au démarrage.**
 
 | Cas | Ce que fait la console |
 |---|---|
 | Signature vérifiée avec `config/medical.pub` | démarrage normal ; `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` valent ce que dit le `.env` |
 | Signature absente ou illisible (`medical_parameters.sig`), qui ne se vérifie pas (un octet du fichier changé, une fin de ligne comprise), clé publique absente ou qui n'est pas une clé Ed25519 | **mode banc seulement** : voir ci-dessous |
-| Fichier absent, illisible, qui n'est pas du JSON strict (UTF-8, sans membre en double, sans `NaN`), ou dont un membre manque, est inconnu ou n'a pas le bon type | la console **ne démarre pas** : aucune valeur ne permet même une séance de banc (chaque rampe manuelle suit les limites de mouvement). L'erreur sort à l'import (`MedicalParametersUnusableError`), avec un code de sortie 1, comme pour des profils livrés inutilisables |
+| Fichier absent, illisible, qui n'est pas du JSON strict (UTF-8, sans membre en double, sans `NaN`), dont un membre manque, est inconnu ou n'a pas le bon type, ou dont un membre flottant contient un entier qu'aucun flottant ne représente | la console **ne démarre pas** : aucune valeur ne permet même une séance de banc (chaque rampe manuelle suit les limites de mouvement). L'erreur sort à l'import (`MedicalParametersUnusableError`), avec un code de sortie 1, comme pour des profils livrés inutilisables |
+| Limite de mouvement hors bornes dans le fichier livré | la console **ne démarre pas** : `ValueError` à l'import de `src/training/motion.py`, code de sortie 1 |
 
 **Le mode banc.** Quand la signature ne se vérifie pas :
 
