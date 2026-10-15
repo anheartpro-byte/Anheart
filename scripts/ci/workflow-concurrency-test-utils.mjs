@@ -6,28 +6,40 @@
 import assert from "node:assert/strict";
 
 /**
- * Evaluate a dotted context property, `||`, or equality with a single-quoted
- * string.
+ * Validate every operand before returning an evaluator that can short-circuit.
+ * @param {string} source
+ * @returns {(context: Record<string, unknown>) => unknown}
+ */
+const compileExpression = (source) => {
+  const expression = source.trim();
+  const equality = /^([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\s*==\s*'([^']*)'$/.exec(expression);
+  if (equality) {
+    const left = compileExpression(equality[1] ?? "");
+    return (context) => left(context) === equality[2];
+  }
+  const alternatives = expression.split(/\s*\|\|\s*/);
+  if (alternatives.length > 1) {
+    assert.ok(alternatives.every(Boolean), `unsupported expression: ${source}`);
+    const operands = alternatives.map(compileExpression);
+    return (context) => {
+      for (const operand of operands) {
+        const value = operand(context);
+        if (value) return value;
+      }
+      return undefined;
+    };
+  }
+  assert.match(expression, /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/, `unsupported expression: ${source}`);
+  return (context) => expression.split(".").reduce((value, part) => value?.[part], context);
+};
+
+/**
+ * Evaluate a dotted context property, `||`, or equality with a single-quoted string.
  * @param {string} source
  * @param {Record<string, unknown>} context
  * @returns {unknown}
  */
-export const evaluateExpression = (source, context) => {
-  const expression = source.trim();
-  const equality = /^([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\s*==\s*'([^']*)'$/.exec(expression);
-  if (equality) return evaluateExpression(equality[1] ?? "", context) === equality[2];
-  const alternatives = expression.split(/\s*\|\|\s*/);
-  if (alternatives.length > 1) {
-    assert.ok(alternatives.every(Boolean), `unsupported expression: ${source}`);
-    for (const alternative of alternatives) {
-      const value = evaluateExpression(alternative, context);
-      if (value) return value;
-    }
-    return undefined;
-  }
-  assert.match(expression, /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/, `unsupported expression: ${source}`);
-  return expression.split(".").reduce((value, part) => value?.[part], context);
-};
+export const evaluateExpression = (source, context) => compileExpression(source)(context);
 
 /**
  * Evaluate a literal or a string containing `${{ ... }}` expressions.

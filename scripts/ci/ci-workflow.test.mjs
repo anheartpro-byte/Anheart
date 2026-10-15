@@ -22,7 +22,7 @@ import {
   vitestThresholds,
 } from "./coverage-thresholds.mjs";
 import { COVERAGES, GATES, SUITES } from "./quality-report.mjs";
-import { concurrencyOf, evaluateWorkflowValue, workflowName } from "./workflow-concurrency-test-utils.mjs";
+import { concurrencyOf, evaluateExpression, evaluateWorkflowValue, workflowName } from "./workflow-concurrency-test-utils.mjs";
 
 const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
 const releaseWorkflow = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
@@ -68,6 +68,23 @@ test("S-4 CI concurrency separates the release call and only cancels pull reques
   assert.notEqual(pushMain.group, pushDevelop.group);
   assert.equal(evaluate("pull_request", "refs/pull/42/merge", { number: 42, sha: "T" }).group, pullRequest42.group);
   assert.equal(evaluate("push", "refs/heads/main", { sha: "T" }).group, pushMain.group);
+});
+
+test("S-4 concurrency expressions reject unsupported operands before short-circuit evaluation", () => {
+  const context = { github: { workflow: "CI", event_name: "push" } };
+  for (const expression of [
+    "github.workflow || format(1)",
+    "github.workflow || github.ref || format(1)",
+    "github.event_name == 'push' || format(1)",
+    "github.workflow ||",
+  ]) {
+    assert.throws(() => evaluateExpression(expression, context), /unsupported expression/, expression);
+  }
+  assert.equal(evaluateExpression("github.event_name == 'schedule' || github.workflow", context), "CI");
+  assert.equal(evaluateExpression("github.event_name == 'push' || github.workflow", context), true);
+  assert.equal(evaluateExpression("github.workflow || github.ref", {
+    github: { workflow: "CI", get ref() { throw new Error("the second operand was evaluated"); } },
+  }), "CI");
 });
 
 /** Each job's own lines, by job id. @type {Map<string, string>} */
