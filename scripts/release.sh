@@ -1094,14 +1094,14 @@ done
 
 if [ -n "$PIPELINE_RUN" ]; then
   if [ "${GITHUB_RUN_ID+x}" != x ]; then
-    RUN_ID_RECEIVED="absente"
+    RUN_ID_RECEIVED="absent"
   elif [ -z "$GITHUB_RUN_ID" ]; then
     RUN_ID_RECEIVED="vide"
   else
     RUN_ID_RECEIVED="$GITHUB_RUN_ID"
   fi
   [ "$PIPELINE_RUN" = "${GITHUB_RUN_ID-}" ] ||
-    die "--pipeline-run $PIPELINE_RUN ne vaut que dans l'exécution GitHub Actions qu'il désigne (GITHUB_RUN_ID reçu : $RUN_ID_RECEIVED)"
+    die "--pipeline-run $PIPELINE_RUN ne vaut que dans l'exécution GitHub Actions qu'il désigne (GITHUB_RUN_ID : $RUN_ID_RECEIVED)"
 fi
 
 case "$STEP" in

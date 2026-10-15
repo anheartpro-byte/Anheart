@@ -904,7 +904,7 @@ test("S-3 --pipeline-run only skips checks from the GITHUB_RUN_ID that launched 
   const fx = merged(t);
   const before = fx.state();
   const missingIds = [
-    { received: "absente", unsetEnv: ["GITHUB_RUN_ID"] },
+    { received: "absent", unsetEnv: ["GITHUB_RUN_ID"] },
     { received: "vide", env: { GITHUB_RUN_ID: "" } },
     { received: "78", env: { GITHUB_RUN_ID: "78" } },
   ];
@@ -916,7 +916,7 @@ test("S-3 --pipeline-run only skips checks from the GITHUB_RUN_ID that launched 
       assert.match(
         result.stderr,
         new RegExp(
-          `release\\.sh : --pipeline-run 77 ne vaut que dans l'exécution GitHub Actions qu'il désigne \\(GITHUB_RUN_ID reçu : ${missing.received}\\)`,
+          `release\\.sh : --pipeline-run 77 ne vaut que dans l'exécution GitHub Actions qu'il désigne \\(GITHUB_RUN_ID : ${missing.received}\\)`,
         ),
       );
       assert.deepEqual(result.gh, []);
@@ -944,7 +944,7 @@ test("S-3 --pipeline-run only skips checks from the GITHUB_RUN_ID that launched 
   assert.match(pipelineRunRow, /autre exécution/);
 });
 
-test("ANH-219 failed pipeline executions on the same commit block one another", (t) => {
+test("two failed runs of the pipeline on one commit block each other", (t) => {
   const fx = merged(t);
   const before = fx.state();
   const failedCheck = (run) => `3. Tags de release\tcompleted\tfailure\t${jobOf(run, 3)}\n`;
@@ -971,11 +971,11 @@ test("ANH-219 tag run by the pipeline does not judge the checks of its own run, 
   const fx = merged(t);
   // Without the option, the job that runs the script is a check in progress like any other.
   refuses(fx.run(["tag"], { checks: PUSHED + PIPELINE }), /main n'est pas vert[\s\S]*3\. Tags de release : in_progress/);
-  // Another run number cannot be used to set aside any of the current run's checks.
+  // Run numbers other than 77 leave run 77's in-progress checks in the set.
   for (const other of ["78", "7", "771"]) {
     refuses(
-      fx.run(["tag", "--pipeline-run", other], { checks: PUSHED + PIPELINE, env: { GITHUB_RUN_ID: "77" } }),
-      /--pipeline-run \d+ ne vaut que dans l'exécution GitHub Actions qu'il désigne \(GITHUB_RUN_ID reçu : 77\)/,
+      fx.run(["tag", "--pipeline-run", other], { checks: PUSHED + PIPELINE, env: { GITHUB_RUN_ID: other } }),
+      /main n'est pas vert[\s\S]*3\. Tags de release : in_progress/,
     );
   }
   // A check of another run still decides: a deployment button that waits, a gate of the push that failed.
