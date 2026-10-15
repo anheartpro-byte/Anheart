@@ -784,7 +784,7 @@ pour une première release.
 ```sh
 git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u
 git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u | tr '\n' '\0' | xargs -0 -r git diff <base>..origin/develop --
-git diff --stat=200 <base>..origin/develop -- raspberry-pi/config/medical.pub raspberry-pi/config/medical_parameters.sig
+git diff --stat=200,200 <base>..origin/develop -- raspberry-pi/config/medical.pub raspberry-pi/config/medical_parameters.sig
 ```
 
 La première commande cherche dans tout le dépôt, sans se limiter à un dossier,
@@ -819,9 +819,10 @@ La troisième montre ce qui a changé dans `medical.pub` et
 `medical_parameters.sig`. Ces deux fichiers portent la décision : la clé qui
 fait foi et la signature du fichier médical. Ils ne peuvent pas porter le
 marqueur `[MED]` (clé en PEM, signature binaire), et les deux premières
-commandes ne les listent donc pas. `--stat=200` montre les fichiers modifiés et
+commandes ne les listent donc pas. `--stat=200,200` montre les fichiers modifiés et
 l'ampleur du changement, y compris pour la signature binaire ; sa largeur
-fixée garde ces deux chemins entiers même dans un terminal étroit.
+fixée garde ces deux chemins entiers même dans un terminal étroit ou avec
+`diff.statNameWidth` configuré.
 
 Cette check-list ne vaut pas autorisation de personne à bord : cette décision
 appartient à la revue M6.

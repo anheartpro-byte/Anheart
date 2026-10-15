@@ -1856,8 +1856,9 @@ en **mode banc seulement**.
   Si une version est inscrite, la carte dit « Paramètres médicaux non signés :
   la machine est en mode banc uniquement. » et bloque le départ ; la fenêtre
   aussi si la machine est accessible, en ligne et libre. Sans version serveur,
-  la carte et la fenêtre disent « Aucune version des paramètres médicaux n'est enregistrée sur le
-  serveur : aucun lancement à distance n'est possible. ». La carte peut aussi
+  la carte dit « Aucune version des paramètres médicaux n'est enregistrée
+  sur le serveur : aucun lancement à distance n'est possible. » et bloque
+  le départ ; la fenêtre aussi, aux mêmes conditions. La carte peut aussi
   montrer un refus d'aptitude ou de consentement ; la fenêtre les contrôle
   après le motif médical.
   Dans `launchAutoSession`, les refus médicaux suivent les droits d'accès,
@@ -1906,10 +1907,17 @@ Hors du Pi, sur le poste du signataire, depuis `raspberry-pi/` :
    inchangée. Il refuse aussi une clé privée qui n'est pas celle de
    `config/medical.pub`, écrit `config/medical_parameters.sig`, puis vérifie la
    signature comme la console.
-   Le script ne vérifie pas que les profils livrés (`config/profiles.default.json`)
-   restent recevables : un `recovery_min_s`, un `cooldown_min_s` ou une
-   `zone_ceiling_fraction` qui les refuse empêche la console de démarrer
-   (code 1, avec une trace Python) ; la gate Pi le signale sur la PR.
+   Le script ne vérifie pas que les profils livrés
+   (`config/profiles.default.json`) restent recevables. La console lit d'abord
+   `data/profiles.local.json` et ne lit les profils livrés que si ce magasin est
+   absent ou refusé. Un `recovery_min_s`, un `cooldown_min_s` ou une
+   `zone_ceiling_fraction` qui refuse les profils livrés empêche donc la console
+   de démarrer dès qu'elle les charge (premier démarrage, magasin local absent
+   ou refusé ; code 1, avec une trace Python). Un magasin local refusé par ces
+   valeurs est mis de côté au démarrage sous
+   `data/profiles.local.json.corrupt-<empreinte>` (12 premiers caractères du
+   SHA-256 de son contenu), puis la console tente les profils livrés.
+   La gate Pi signale sur la PR le refus des profils livrés.
 4. `python scripts/sign_medical_parameters.py verify` : vérifie le format,
    les mêmes bornes que `sign`, puis la signature. Pour les deux commandes,
    un fichier livré inutilisable, y compris une limite de
@@ -1961,4 +1969,4 @@ La parité des refus de zone est comparée avec le même jeu de données dans
 de ces cas de calcul, pas le déploiement du registre ni le support Ed25519 du
 runtime de production. Le catalogue de programmes ne référence pas encore la
 version médicale ; le Pi ne refuse donc pas encore un programme validé pour
-une autre version : cela reste EX-5, ANH-137 et ANH-138.
+une autre version : cela reste EX-5 d'ANH-139, ANH-137 et ANH-138.
