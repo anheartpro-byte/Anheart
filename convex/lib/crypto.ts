@@ -17,8 +17,16 @@ function unhex(value: string): Uint8Array<ArrayBuffer> {
   );
 }
 
+/** A stored verifier: `hmac-sha256:1:<salt hex>:<digest hex>`. */
+const VERIFIER = /^hmac-sha256:1:([a-f0-9]{32}):([a-f0-9]{64})$/;
+
 export function apiKeySelector(plain: string): string | null {
   return /^anh1\.([a-f0-9]{32})\.[a-f0-9]{64}$/.exec(plain)?.[1] ?? null;
+}
+
+/** Whether a stored value is a verifier this module can check (and not a legacy encoding). */
+export function isApiKeyVerifier(stored: string): boolean {
+  return VERIFIER.test(stored);
 }
 
 export async function hashApiKey(plain: string): Promise<string> {
@@ -48,9 +56,7 @@ export async function verifyApiKey(
   plain: string,
   storedHash: string,
 ): Promise<boolean> {
-  const match = /^hmac-sha256:1:([a-f0-9]{32}):([a-f0-9]{64})$/.exec(
-    storedHash,
-  );
+  const match = VERIFIER.exec(storedHash);
   const salt = match?.[1];
   const digest = match?.[2];
   if (!salt || !digest || !apiKeySelector(plain)) return false;

@@ -257,12 +257,22 @@ describe("EX-6 a member of centre A never reads centre B, even by direct identif
       const sessionId = await withCentreBSession(w);
       const me = as(w.t, actor);
       const machineId = w.orgBMachine;
+      const keyId = await w.t.run((ctx) =>
+        ctx.db.insert("machine_api_keys", {
+          machineId,
+          selector: "cd".repeat(16),
+          keyHash: "synthetic-verifier",
+          prefix: "anh1.cdcdcdcd",
+          createdAt: NOW,
+        }),
+      );
       const before = await snapshotCentreB(w);
 
       const attempts: Array<Promise<unknown>> = [
         me.mutation(api.machines.updateMachine, { machineId, name: "taken" }),
         me.mutation(api.machines.deleteMachine, { machineId }),
-        me.mutation(api.machines.regenerateApiKey, { machineId }),
+        me.mutation(api.machineKeys.createMachineKey, { machineId }),
+        me.mutation(api.machineKeys.revokeMachineKey, { keyId }),
         me.mutation(api.machines.assignGestionnaireToMachine, {
           machineId,
           gestionnaireId: w.manager,
@@ -341,6 +351,15 @@ async function snapshotCentreB(w: World) {
         firstName: patient.firstName,
         hrMax: patient.hrMax ?? null,
       },
+      machineKeys: (
+        await ctx.db
+          .query("machine_api_keys")
+          .withIndex("by_machine", (q) => q.eq("machineId", w.orgBMachine))
+          .collect()
+      ).map((key) => ({
+        expiresAt: key.expiresAt ?? null,
+        revokedAt: key.revokedAt ?? null,
+      })),
       memberships: inB(await ctx.db.query("memberships").collect()).length,
       machineLinks: inB(await ctx.db.query("machine_gestionnaires").collect())
         .length,
@@ -430,8 +449,8 @@ describe("EX-5 a resource of another organisation answers like one that does not
           }),
         "machines.deleteMachine": () =>
           me.mutation(api.machines.deleteMachine, { machineId: t.machineId }),
-        "machines.regenerateApiKey": () =>
-          me.mutation(api.machines.regenerateApiKey, {
+        "machineKeys.createMachineKey": () =>
+          me.mutation(api.machineKeys.createMachineKey, {
             machineId: t.machineId,
           }),
         "machines.restoreMachine": () =>
@@ -534,6 +553,8 @@ describe("EX-5 a resource of another organisation answers like one that does not
         // --- reads
         "machines.getMachine": () =>
           me.query(api.machines.getMachine, { machineId: t.machineId }),
+        "machineKeys.listMachineKeys": () =>
+          me.query(api.machineKeys.listMachineKeys, { machineId: t.machineId }),
         "machines.getRecentHeartbeats": () =>
           me.query(api.machines.getRecentHeartbeats, {
             machineId: t.machineId,

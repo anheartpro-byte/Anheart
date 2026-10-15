@@ -32,16 +32,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  Copy,
-  Check,
-  AlertTriangle,
-  RefreshCw,
-  Trash2,
-  Pencil,
-  RotateCcw,
-  Play,
-} from "lucide-react";
+import { AlertTriangle, Trash2, Pencil, RotateCcw, Play } from "lucide-react";
 import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import {
@@ -54,6 +45,7 @@ import { MachineFormModal } from "@/components/modals/MachineFormModal";
 import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
 import { MachineLiveCard } from "@/components/training/MachineLiveCard";
 import { MachineHealthCard } from "@/components/machines/MachineHealthCard";
+import { MachineKeysCard } from "@/components/machines/MachineKeysCard";
 import { MachineProgramsCard } from "@/components/training/ProfileList";
 import { LaunchRightsCard } from "@/components/training/LaunchRightsCard";
 
@@ -73,17 +65,11 @@ export default function MachineDetailPage({
 
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [showRegenerateDialog, setShowRegenerateDialog] = useState(false);
   const [showRestoreDialog, setShowRestoreDialog] = useState(false);
-  const [newApiKey, setNewApiKey] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [showLaunchModal, setShowLaunchModal] = useState(false);
 
   const deleteMachine = useMutationWithFeedback(api.machines.deleteMachine);
-  const regenerateApiKey = useMutationWithFeedback(
-    api.machines.regenerateApiKey,
-  );
   const restoreMachine = useMutationWithFeedback(api.machines.restoreMachine);
 
   const dateLocale = locale === "fr" ? fr : enUS;
@@ -109,25 +95,6 @@ export default function MachineDetailPage({
     );
     if (result.ok) setShowRestoreDialog(false);
     setRestoring(false);
-  };
-
-  const handleRegenerate = async () => {
-    const result = await regenerateApiKey(
-      { machineId },
-      { success: t("feedback.apiKeyRegenerated") },
-    );
-    if (result.ok) {
-      setNewApiKey(result.value.apiKey);
-      setShowRegenerateDialog(false);
-    }
-  };
-
-  const copyApiKey = async () => {
-    if (newApiKey) {
-      await navigator.clipboard.writeText(newApiKey);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
   };
 
   if (machine === undefined) {
@@ -316,6 +283,11 @@ export default function MachineDetailPage({
         />
       )}
 
+      {/* Keys of the machine (ANH-165): its admins only */}
+      {isOrganizationAdmin(user?.role) && !machine.isDeleted && (
+        <MachineKeysCard machineId={machineId} />
+      )}
+
       {/* Danger Zone - Only show if not deleted */}
       {canManage && !machine.isDeleted && (
         <Card className="border-destructive/50">
@@ -326,22 +298,6 @@ export default function MachineDetailPage({
             <CardDescription>{t("machines.dangerZoneDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">{t("machines.regenerateKey")}</p>
-                <p className="text-sm text-muted-foreground">
-                  {t("machines.regenerateKeyDesc")}
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                onClick={() => setShowRegenerateDialog(true)}
-              >
-                <RefreshCw className="h-4 w-4 mr-2" />
-                {t("machines.regenerate")}
-              </Button>
-            </div>
-            <Separator />
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium">{t("common.delete")}</p>
@@ -405,66 +361,6 @@ export default function MachineDetailPage({
               {restoring ? t("common.loading") : t("machines.restore")}
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Regenerate Key Confirmation Dialog */}
-      <Dialog
-        open={showRegenerateDialog}
-        onOpenChange={setShowRegenerateDialog}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("machines.regenerateKey")}</DialogTitle>
-            <DialogDescription>
-              {t("machines.regenerateKeyConfirmDesc")}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowRegenerateDialog(false)}
-            >
-              {t("common.cancel")}
-            </Button>
-            <Button onClick={handleRegenerate}>{t("common.confirm")}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* New API Key Dialog */}
-      <Dialog open={newApiKey !== null} onOpenChange={() => setNewApiKey(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("machines.apiKey")}</DialogTitle>
-            <DialogDescription className="flex items-center gap-2 text-amber-600">
-              <AlertTriangle className="h-4 w-4" />
-              {t("machines.apiKeyWarning")}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="bg-muted p-4 rounded-md font-mono text-sm break-all">
-              {newApiKey}
-            </div>
-            <div className="flex gap-2">
-              <Button onClick={copyApiKey} variant="outline" className="flex-1">
-                {copied ? (
-                  <>
-                    <Check className="h-4 w-4 mr-2" />
-                    {t("common.copied")}
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-4 w-4 mr-2" />
-                    {t("common.copy")}
-                  </>
-                )}
-              </Button>
-              <Button onClick={() => setNewApiKey(null)} className="flex-1">
-                {t("common.close")}
-              </Button>
-            </div>
-          </div>
         </DialogContent>
       </Dialog>
 

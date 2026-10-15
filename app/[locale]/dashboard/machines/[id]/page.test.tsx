@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import { format, formatDistance } from "date-fns";
 import { enUS, fr as frLocale } from "date-fns/locale";
 import type { FunctionReturnType } from "convex/server";
@@ -45,6 +45,11 @@ vi.mock("@/components/training/MachineLiveCard", async () => ({
 vi.mock("@/components/machines/MachineHealthCard", async () => ({
   MachineHealthCard:(await import("@/test-support/pages")).standIn("MachineHealthCard"),
 }));
+vi.mock("@/components/machines/MachineKeysCard", async () => ({
+  MachineKeysCard: (await import("@/test-support/pages")).standIn(
+    "MachineKeysCard",
+  ),
+}));
 vi.mock("@/components/training/ProfileList", async (original) => ({
   ...(await original<typeof import("@/components/training/ProfileList")>()),
   MachineProgramsCard: (await import("@/test-support/pages")).standIn(
@@ -64,8 +69,9 @@ vi.mock("@/components/modals/MachineFormModal", async () => ({
 
 /**
  * The page of one machine: its state, who manages it, and what a manager does
- * to it (launch a session, edit, renew its key, delete, restore). The launch
- * window is the real one.
+ * to it (launch a session, edit, delete, restore; its admins, its keys). The
+ * launch window is the real one; the card of the keys has its own tests
+ * (components/machines/machine-keys.test.tsx).
  */
 
 type Machine = NonNullable<FunctionReturnType<typeof api.machines.getMachine>>;
@@ -139,7 +145,6 @@ function valueUnder(label: string): string | null {
 
 const launchButton = { name: fr.training.launch.button };
 const editButton = { name: fr.common.edit };
-const regenerateButton = { name: fr.machines.regenerate };
 const deleteButton = { name: fr.common.delete };
 const restoreButton = { name: fr.machines.restore };
 
@@ -263,25 +268,27 @@ describe("machine page: what each role may do", () => {
     await open("user");
     expect(wasMounted("MachineHealthCard")).toBe(false);
   });
-  it("lets an admin launch, edit, renew the key, delete, and grant rights as an admin", async () => {
+  it("lets an admin launch, edit, delete, grant rights as an admin, and manage the keys", async () => {
     await open("admin");
 
     expect(screen.getByRole("button", launchButton)).toBeTruthy();
     expect(screen.getByRole("button", editButton)).toBeTruthy();
-    expect(screen.getByRole("button", regenerateButton)).toBeTruthy();
     expect(screen.getByRole("button", deleteButton)).toBeTruthy();
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
+    expect(propsOf("MachineKeysCard")).toEqual({ machineId });
     expect(screen.queryByRole("button", restoreButton)).toBeNull();
   });
 
-  it("lets a manager do the same, with the rights of a manager only", async () => {
+  it("lets a manager do the same, with the rights of a manager only and without the keys", async () => {
+    // ANH-165: the keys of a machine are its admins'; the server refuses
+    // them to a gestionnaire.
     await open("gestionnaire");
 
     expect(screen.getByRole("button", launchButton)).toBeTruthy();
     expect(screen.getByRole("button", editButton)).toBeTruthy();
-    expect(screen.getByRole("button", regenerateButton)).toBeTruthy();
     expect(screen.getByRole("button", deleteButton)).toBeTruthy();
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: false });
+    expect(wasMounted("MachineKeysCard")).toBe(false);
   });
 
   it("lets the admin of a client organisation do the same, choosing among all the patients of the organisation, without restoring", async () => {
@@ -291,9 +298,9 @@ describe("machine page: what each role may do", () => {
 
     expect(screen.getByRole("button", launchButton)).toBeTruthy();
     expect(screen.getByRole("button", editButton)).toBeTruthy();
-    expect(screen.getByRole("button", regenerateButton)).toBeTruthy();
     expect(screen.getByRole("button", deleteButton)).toBeTruthy();
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
+    expect(propsOf("MachineKeysCard")).toEqual({ machineId });
     expect(screen.queryByRole("button", restoreButton)).toBeNull();
   });
 
@@ -311,6 +318,7 @@ describe("machine page: what each role may do", () => {
       expect(screen.queryByRole("button")).toBeNull();
       expect(screen.queryByText(fr.machines.dangerZone)).toBeNull();
       expect(wasMounted("LaunchRightsCard")).toBe(false);
+      expect(wasMounted("MachineKeysCard")).toBe(false);
       expect(wasMounted("MachineLiveCard")).toBe(true);
     },
   );
@@ -334,6 +342,7 @@ describe("machine page: a deleted machine", () => {
     expect(wasMounted("MachineLiveCard")).toBe(false);
     expect(wasMounted("MachineProgramsCard")).toBe(false);
     expect(wasMounted("LaunchRightsCard")).toBe(false);
+    expect(wasMounted("MachineKeysCard")).toBe(false);
   });
 
   it("leaves the admin of a client organisation nothing to act on a deleted machine", async () => {
@@ -499,123 +508,6 @@ describe("machine page: deleting the machine", () => {
 
     expect(button.hasAttribute("disabled")).toBe(true);
     await user.click(button);
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-});
-
-describe("machine page: renewing the key of the machine", () => {
-  // Made up, and plain enough for the secret scan of the repository not to
-  // take it for a real key.
-  const KEY = "cle-aaaa-bbbb-cccc";
-
-  async function renew(user: Awaited<ReturnType<typeof open>>["user"]) {
-    await user.click(screen.getByRole("button", regenerateButton));
-    const dialog = within(screen.getByRole("dialog"));
-    expect(dialog.getByText(fr.machines.regenerateKeyConfirmDesc)).toBeTruthy();
-    expect(mutationsSent()).toEqual([]);
-    await user.click(dialog.getByRole("button", { name: fr.common.confirm }));
-  }
-
-  it("asks for a new key once confirmed and shows it, with the warning that it is shown once", async () => {
-    mutation(api.machines.regenerateApiKey).mockResolvedValue({ apiKey: KEY });
-    const { user } = await open("gestionnaire");
-
-    await renew(user);
-
-    expect(mutationsSent()).toEqual([
-      { name: "machines:regenerateApiKey", args: { machineId } },
-    ]);
-    expect(feedbackShown()).toEqual([
-      { kind: "success", message: fr.feedback.apiKeyRegenerated },
-    ]);
-    const shown = within(screen.getByRole("dialog"));
-    expect(shown.getByText(KEY)).toBeTruthy();
-    expect(shown.getByText(fr.machines.apiKeyWarning)).toBeTruthy();
-  });
-
-  it("copies the key and says so for two seconds", async () => {
-    mutation(api.machines.regenerateApiKey).mockResolvedValue({ apiKey: KEY });
-    const { user } = await open("admin");
-    await renew(user);
-    const copied = vi.spyOn(navigator.clipboard, "writeText");
-    const shown = within(screen.getByRole("dialog"));
-
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    fireEvent.click(shown.getByRole("button", { name: fr.common.copy }));
-    await act(async () => {});
-
-    expect(copied.mock.calls).toEqual([[KEY]]);
-    expect(shown.getByRole("button", { name: fr.common.copied })).toBeTruthy();
-    act(() => {
-      vi.advanceTimersByTime(1_999);
-    });
-    expect(shown.getByRole("button", { name: fr.common.copied })).toBeTruthy();
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(shown.getByRole("button", { name: fr.common.copy })).toBeTruthy();
-  });
-
-  it("no longer shows the key once its window is closed", async () => {
-    mutation(api.machines.regenerateApiKey).mockResolvedValue({ apiKey: KEY });
-    const { user } = await open("admin");
-    await renew(user);
-
-    await user.click(
-      within(screen.getByRole("dialog")).getByText(fr.common.close),
-    );
-
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByText(KEY)).toBeNull();
-  });
-
-  it("no longer shows the key once its window is dismissed from the keyboard", async () => {
-    mutation(api.machines.regenerateApiKey).mockResolvedValue({ apiKey: KEY });
-    const { user } = await open("admin");
-    await renew(user);
-    expect(screen.getByText(KEY)).toBeTruthy();
-
-    await user.keyboard("{Escape}");
-
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByText(KEY)).toBeNull();
-  });
-
-  it.each(
-    codedFailures(api.machines.regenerateApiKey, "machine_not_managed"),
-  )(
-    "shows no key, the failure, and its question still open when the renewal fails $where",
-    async ({ error, shown }) => {
-      mutation(api.machines.regenerateApiKey).mockRejectedValue(error);
-      const { user } = await open("gestionnaire");
-
-      await renew(user);
-
-      expect(feedbackShown()).toEqual([{ kind: "error", message: shown }]);
-      expect(takeLoggedFailures()).toEqual(["machines:regenerateApiKey"]);
-      expect(screen.queryByText(fr.machines.apiKeyWarning)).toBeNull();
-      // The confirmation did not close on the refusal: it can be tried again.
-      const stillOpen = within(screen.getByRole("dialog"));
-      expect(
-        stillOpen.getByText(fr.machines.regenerateKeyConfirmDesc),
-      ).toBeTruthy();
-      expect(
-        stillOpen.getByRole("button", { name: fr.common.confirm }),
-      ).toBeTruthy();
-    },
-  );
-
-  it("sends nothing when the renewal is declined", async () => {
-    const { user } = await open("admin");
-
-    await user.click(screen.getByRole("button", regenerateButton));
-    await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", {
-        name: fr.common.cancel,
-      }),
-    );
-
-    expect(mutationsSent()).toEqual([]);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

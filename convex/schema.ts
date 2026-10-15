@@ -293,7 +293,12 @@ export default defineSchema({
   machines: defineTable({
     organizationId,
     name: v.string(),
-    apiKey: v.string(), // Versioned salted digest; legacy values require replacement.
+    // The single key of a machine written before ANH-165: its verifier and its
+    // public selector. The keys now live in `machine_api_keys`; the migration
+    // `migrations/machineApiKeys:moveMachineKeysToTable` moves these two
+    // fields there and clears them. Until it has run, a key still found here
+    // opens the machine routes (`convex/lib/machineAuth.ts`).
+    apiKey: v.optional(v.string()),
     apiKeySelector: v.optional(v.string()),
     authenticationEnabled: v.optional(v.boolean()),
     status: v.union(
@@ -336,6 +341,41 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_is_deleted", ["isDeleted"])
     .index("by_organization", ["organizationId"]),
+
+  // The keys of the machines (ANH-165). A machine may hold several valid keys
+  // at once (the overlap of a rotation); each one is revoked on its own and
+  // may expire. Only a salted verifier of a key is kept, never the key, which
+  // is shown once, to whoever created it (`convex/machineKeys.ts`).
+  machine_api_keys: defineTable({
+    machineId: v.id("machines"),
+    // The public part of the key `anh1.<selector>.<secret>`: what a request is
+    // looked up by. It never opens anything on its own.
+    selector: v.string(),
+    // `hmac-sha256:1:<salt>:<digest>` of the whole key (convex/lib/crypto.ts).
+    keyHash: v.string(),
+    // What the dashboard shows of the key: "anh1." and the first 8
+    // characters of its selector.
+    prefix: v.string(),
+    createdAt: v.number(),
+    // Absent on a key moved from `machines.apiKey` or issued from the command
+    // line (`createKeyByOperator`).
+    createdBy: v.optional(v.id("users")),
+    // The key opens nothing from this instant on. Set at creation, or by the
+    // rotation that replaces the key (end of the overlap).
+    expiresAt: v.optional(v.number()),
+    // The key opens nothing any more: revoked by someone (`revokedBy`), by a
+    // rotation without overlap, or by the job once its expiry passed.
+    revokedAt: v.optional(v.number()),
+    revokedBy: v.optional(v.id("users")),
+    // The key created by the rotation that retired this one.
+    replacedBy: v.optional(v.id("machine_api_keys")),
+    // The last request it opened, written at most once a minute.
+    lastUsedAt: v.optional(v.number()),
+  })
+    .index("by_selector", ["selector"])
+    .index("by_machine", ["machineId"])
+    .index("by_machine_and_revoked", ["machineId", "revokedAt"])
+    .index("by_revoked_and_expiry", ["revokedAt", "expiresAt"]),
 
   // Sessions - training sessions (auto, manual), plus the read-only history
   // of the retired ECG recording mode (rows without `kind`).

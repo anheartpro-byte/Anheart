@@ -215,6 +215,22 @@ async function recentEcgBatch(w: World, sessionId: Id<"sessions">) {
   );
 }
 
+/** A key of the machine, valid, as a rotation writes it (ANH-165). */
+async function machineKeyOf(
+  w: World,
+  machineId: Id<"machines">,
+): Promise<Id<"machine_api_keys">> {
+  return await w.t.run((ctx) =>
+    ctx.db.insert("machine_api_keys", {
+      machineId,
+      selector: "ab".repeat(16),
+      keyHash: "synthetic-verifier",
+      prefix: "anh1.abababab",
+      createdAt: NOW,
+    }),
+  );
+}
+
 export const MATRIX: Entry[] = [
   // =========================================================================
   // users.ts
@@ -976,43 +992,128 @@ export const MATRIX: Entry[] = [
       },
     ],
   },
+  // =========================================================================
+  // machineKeys.ts (ANH-165): the keys are the admins' only
+  // =========================================================================
   {
-    id: "machines.regenerateApiKey",
-    ref: api.machines.regenerateApiKey,
-    kind: "mutation",
-    build: async (w) => ({ machineId: w.machine }),
+    id: "machineKeys.listMachineKeys",
+    ref: api.machineKeys.listMachineKeys,
+    kind: "query",
+    build: async (w) => {
+      await machineKeyOf(w, w.machine);
+      return { machineId: w.machine };
+    },
     onSuccess: (res) => {
-      const r = res as { apiKey: string };
-      if (!r.apiKey.startsWith("anh1."))
-        throw new Error("No replacement key issued");
+      const rows = res as { prefix: string; state: string }[];
+      if (rows.length !== 1 || rows[0].prefix !== "anh1.abababab")
+        throw new Error("The machine's key is not listed");
+      if (rows[0].state !== "active") throw new Error("Wrong state listed");
+      const listed = JSON.stringify(rows);
+      if (listed.includes("synthetic-verifier") || listed.includes("ab".repeat(16)))
+        throw new Error("The verifier or the selector of a key is listed");
     },
     cases: [
       { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: empty, note: "[] for a user" },
       {
-        actor: "patient",
-        expect: refuse(/machine_not_managed/),
-        note: "a user cannot manage a machine",
+        actor: "manager",
+        scope: "own",
+        expect: empty,
+        note: "[] even to a gestionnaire of the machine: the keys are the admins'",
       },
-      { actor: "manager", scope: "own", expect: ok, note: "manages this machine" },
-      {
-        actor: "otherManager",
-        scope: "other",
-        expect: refuse(/machine_not_managed/),
-        note: "does not manage this machine",
-      },
-      { actor: "admin", expect: ok, note: "admin regenerates" },
+      { actor: "admin", expect: ok, note: "admin lists" },
       { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
       {
         actor: "orgBAdmin",
         scope: "foreign",
-        expect: refuse(/machine_not_managed/),
-        note: "a machine of another organisation, by identifier",
+        expect: empty,
+        note: "[] for a machine of another organisation",
       },
       {
         actor: "orgBManager",
         scope: "foreign",
-        expect: refuse(/machine_not_managed/),
-        note: "a machine of another organisation, by identifier",
+        expect: empty,
+        note: "[] for a machine of another organisation",
+      },
+    ],
+  },
+  {
+    id: "machineKeys.createMachineKey",
+    ref: api.machineKeys.createMachineKey,
+    kind: "mutation",
+    build: async (w) => ({ machineId: w.machine }),
+    onSuccess: async (res, w) => {
+      const r = res as {
+        keyId: Id<"machine_api_keys">;
+        apiKey: string;
+        prefix: string;
+      };
+      if (!r.apiKey.startsWith(`${r.prefix}`) || r.prefix.length !== 13)
+        throw new Error("No one-time key issued");
+      const key = await w.t.run((ctx) => ctx.db.get(r.keyId));
+      if (key?.machineId !== w.machine)
+        throw new Error("The key is not the machine's");
+      if (JSON.stringify(key).includes(r.apiKey))
+        throw new Error("The plain key is stored");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: refuse(UNAUTHORIZED),
+        note: "a gestionnaire of the machine is not an admin",
+      },
+      { actor: "admin", expect: ok, note: "admin creates" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_not_found/),
+        note: "a machine of another organisation does not exist for them",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(UNAUTHORIZED),
+        note: "not an admin",
+      },
+    ],
+  },
+  {
+    id: "machineKeys.revokeMachineKey",
+    ref: api.machineKeys.revokeMachineKey,
+    kind: "mutation",
+    build: async (w) => ({ keyId: await machineKeyOf(w, w.machine) }),
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const key = await w.t.run((ctx) =>
+        ctx.db.get(args.keyId as Id<"machine_api_keys">),
+      );
+      if (key?.revokedAt === undefined) throw new Error("Key not revoked");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: refuse(UNAUTHORIZED),
+        note: "a gestionnaire of the machine is not an admin",
+      },
+      { actor: "admin", expect: ok, note: "admin revokes" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_key_not_found/),
+        note: "a key of another organisation's machine does not exist for them",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(UNAUTHORIZED),
+        note: "not an admin",
       },
     ],
   },

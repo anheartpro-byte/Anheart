@@ -41,6 +41,18 @@ crons.interval(
   {},
 );
 
+/**
+ * Revoke the machine keys whose expiry has passed (ANH-165): the keys a
+ * rotation replaced, once their overlap is over, and the keys created with an
+ * expiry. Such a key already opens nothing; the job writes it down.
+ */
+crons.interval(
+  "revoke-expired-machine-keys",
+  { minutes: 5 },
+  internal.machineKeys.revokeExpiredKeys,
+  {},
+);
+
 crons.daily(
   "purge-machine-health",
   { hourUTC: 3, minuteUTC: 17 },

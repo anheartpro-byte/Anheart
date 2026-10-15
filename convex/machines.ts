@@ -22,8 +22,8 @@ import {
   requireGestionnaireAdmin,
   sameOrganization,
 } from "./lib/auth";
-import { generateApiKey } from "./lib/crypto";
 import { refusal } from "./lib/errors";
+import { insertMachineKey } from "./lib/machineKeys";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
 import { scheduleAlert } from "./lib/notifications";
 import { interruptSilentSessions, resumeNamedSession } from "./training";
@@ -118,18 +118,21 @@ export const createMachine = mutation({
       throw refusal("organization_not_found");
     }
 
-    const { plain, hashed, selector } = await generateApiKey();
     const now = Date.now();
 
     const machineId = await ctx.db.insert("machines", {
       organizationId,
       name: args.name,
-      apiKey: hashed,
-      apiKeySelector: selector,
       status: "offline",
       lastHeartbeat: 0,
       location: args.location,
       createdAt: now,
+    });
+    // Its first key, in `machine_api_keys` like every key (ANH-165).
+    const { apiKey } = await insertMachineKey(ctx, machineId, {
+      createdBy: currentUser._id,
+      expiresAt: undefined,
+      now,
     });
 
     // Assign machine to gestionnaires: the first one kept owns it.
@@ -143,7 +146,7 @@ export const createMachine = mutation({
     // Return plain API key - this is the only time it's visible!
     return {
       machineId,
-      apiKey: plain,
+      apiKey,
     };
   },
 });
@@ -267,46 +270,6 @@ export const setGestionnaireMachines = mutation({
     return {
       added: toAdd.length,
       removed: new Set(toRemove.map((r) => r.machineId)).size,
-    };
-  },
-});
-
-/**
- * Regenerate API key for a machine
- * Old API key is immediately invalidated
- */
-export const regenerateApiKey = mutation({
-  args: {
-    machineId: v.id("machines"),
-  },
-  returns: v.object({
-    apiKey: v.string(),
-  }),
-  handler: async (ctx, args) => {
-    await limitUser(ctx);
-    const currentUser = await getCurrentUserOrThrow(ctx);
-    const canManage = await canManageMachine(ctx, args.machineId, currentUser);
-    if (!canManage) {
-      throw refusal("machine_not_managed");
-    }
-
-    const machine = await ctx.db.get(args.machineId);
-    if (!machine) {
-      throw refusal("machine_not_found");
-    }
-
-    // Generate new API key
-    const { plain, hashed, selector } = await generateApiKey();
-
-    // Update machine with new hashed key
-    await ctx.db.patch(args.machineId, {
-      apiKey: hashed,
-      apiKeySelector: selector,
-    });
-
-    // Return plain key (shown only this once!)
-    return {
-      apiKey: plain,
     };
   },
 });
@@ -619,7 +582,9 @@ export const restoreMachine = mutation({
 });
 
 /**
- * Get machine by API key (for HTTP endpoints)
+ * Get machine by API key (for HTTP endpoints): a key of `machine_api_keys`
+ * that is neither revoked nor expired, of a machine neither deleted nor
+ * disabled (convex/lib/machineAuth.ts). Reads only.
  */
 export const getMachineByApiKey = internalQuery({
   args: {
