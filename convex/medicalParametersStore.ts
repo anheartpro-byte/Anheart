@@ -7,6 +7,7 @@
  */
 import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
+import { audit, SYSTEM_ACTOR } from "./lib/audit";
 import { compareMedicalVersions, currentMedicalParameters } from "./lib/medicalParameters";
 import {
   pendingSessionTtlMs,
@@ -61,9 +62,17 @@ export const insertVersion = internalMutation({
       };
     }
 
-    await ctx.db.insert("medical_parameters_versions", {
+    const versionId = await ctx.db.insert("medical_parameters_versions", {
       ...args,
       registeredAt: Date.now(),
+    });
+    await audit(ctx, {
+      actor: SYSTEM_ACTOR,
+      source: "operator",
+      organizationId: undefined,
+      action: "medical_parameters.registered",
+      targetId: versionId,
+      details: { version: args.version },
     });
     return args.version;
   },

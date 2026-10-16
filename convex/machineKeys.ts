@@ -26,6 +26,7 @@ import {
 } from "./lib/auth";
 import { refusal } from "./lib/errors";
 import { limitUser } from "./lib/rateLimits";
+import { audit, SYSTEM_ACTOR, userActor } from "./lib/audit";
 import {
   EXPIRED_KEYS_PER_RUN,
   keyState,
@@ -158,11 +159,36 @@ export const createMachineKey = mutation({
     const machine = await managedMachine(ctx, caller, args.machineId);
     const now = Date.now();
     const options = rotationOptions(args, now);
-    return await rotateMachineKey(ctx, machine, {
+    const { issued, replaced } = await rotateMachineKey(ctx, machine, {
       ...options,
       createdBy: caller._id,
       now,
     });
+    await audit(ctx, {
+      actor: userActor(caller),
+      source: "site",
+      organizationId: machine.organizationId,
+      action: "machine_key.created",
+      targetId: issued.keyId,
+      details: {
+        machineId: machine._id,
+        count: replaced.length,
+        expiresAt: options.expiresAt,
+      },
+    });
+    if (options.overlapMs === 0) {
+      for (const keyId of replaced) {
+        await audit(ctx, {
+          actor: userActor(caller),
+          source: "site",
+          organizationId: machine.organizationId,
+          action: "machine_key.revoked",
+          targetId: keyId,
+          details: { machineId: machine._id },
+        });
+      }
+    }
+    return issued;
   },
 });
 
@@ -191,6 +217,14 @@ export const revokeMachineKey = mutation({
       await ctx.db.patch(key._id, {
         revokedAt: Date.now(),
         revokedBy: caller._id,
+      });
+      await audit(ctx, {
+        actor: userActor(caller),
+        source: "site",
+        organizationId: machine.organizationId,
+        action: "machine_key.revoked",
+        targetId: key._id,
+        details: { machineId: key.machineId },
       });
     }
     return null;
@@ -234,6 +268,15 @@ export const revokeExpiredKeys = internalMutation({
       .take(EXPIRED_KEYS_PER_RUN);
     for (const key of expired) {
       await ctx.db.patch(key._id, { revokedAt: now });
+      const machine = await ctx.db.get(key.machineId);
+      await audit(ctx, {
+        actor: SYSTEM_ACTOR,
+        source: "cron",
+        organizationId: machine?.organizationId,
+        action: "machine_key.expired_revoked",
+        targetId: key._id,
+        details: { machineId: key.machineId },
+      });
     }
     return { revoked: expired.length };
   },
@@ -256,11 +299,36 @@ export const createKeyByOperator = internalMutation({
     if (!machine || machine.isDeleted) throw refusal("machine_not_found");
     const now = Date.now();
     const options = rotationOptions(args, now);
-    return await rotateMachineKey(ctx, machine, {
+    const { issued, replaced } = await rotateMachineKey(ctx, machine, {
       ...options,
       createdBy: undefined,
       now,
     });
+    await audit(ctx, {
+      actor: SYSTEM_ACTOR,
+      source: "operator",
+      organizationId: machine.organizationId,
+      action: "machine_key.created",
+      targetId: issued.keyId,
+      details: {
+        machineId: machine._id,
+        count: replaced.length,
+        expiresAt: options.expiresAt,
+      },
+    });
+    if (options.overlapMs === 0) {
+      for (const keyId of replaced) {
+        await audit(ctx, {
+          actor: SYSTEM_ACTOR,
+          source: "operator",
+          organizationId: machine.organizationId,
+          action: "machine_key.revoked",
+          targetId: keyId,
+          details: { machineId: machine._id },
+        });
+      }
+    }
+    return issued;
   },
 });
 
@@ -273,6 +341,15 @@ export const revokeKeyByOperator = internalMutation({
     if (key === null) throw refusal("machine_key_not_found");
     if (key.revokedAt === undefined) {
       await ctx.db.patch(key._id, { revokedAt: Date.now() });
+      const machine = await ctx.db.get(key.machineId);
+      await audit(ctx, {
+        actor: SYSTEM_ACTOR,
+        source: "operator",
+        organizationId: machine?.organizationId,
+        action: "machine_key.revoked",
+        targetId: key._id,
+        details: { machineId: key.machineId },
+      });
     }
     return null;
   },

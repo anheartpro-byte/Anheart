@@ -1,7 +1,18 @@
 /// <reference types="vite/client" />
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import ts from "typescript";
+import http from "./http";
+import { api, internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
+import {
+  AUDIT_ACTIONS,
+  SENSITIVE_MUTATIONS,
+  type AuditAction,
+} from "./lib/audit";
+import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
+import { CONSENT_TEXT_VERSION } from "../lib/consentText";
+import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
+import { mockClerkInvitations } from "./patientInvitation.fixtures";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import {
   addSession,
@@ -9,6 +20,9 @@ import {
   configureAnheartOrganization,
   modules,
   NOW,
+  ORG_A_CLERK_ORG,
+  registerShippedMedicalParameters,
+  backendOf,
   seedLaunchWorld,
   seedMachineWorld,
   type World,
@@ -44,9 +58,10 @@ function expectEntry(
   > &
     Pick<Partial<Doc<"audit_log">>, "actorId" | "organizationId" | "details">,
 ) {
-  expect(actual).toMatchObject(expected);
-  expect(actual?.actorId).toBe(expected.actorId);
-  expect(actual?.organizationId).toBe(expected.organizationId);
+  const { actorId, organizationId, ...required } = expected;
+  expect(actual).toMatchObject(required);
+  expect(actual?.actorId).toBe(actorId);
+  expect(actual?.organizationId).toBe(organizationId);
   expect(actual?.requestId.length).toBeGreaterThan(0);
 }
 
@@ -57,7 +72,1003 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   configureAnheartOrganization(null);
+});
+
+type Expected = Parameters<typeof expectEntry>[1];
+function site(
+  w: World,
+  action: AuditAction,
+  targetId: string,
+  targetType: Expected["targetType"],
+  actor: "admin" | "orgAdmin" | "manager" | "patient" = "admin",
+  organizationId: Id<"organizations"> = w.orgA,
+  details?: Expected["details"],
+): Expected {
+  const roles = {
+    admin: "admin",
+    orgAdmin: "org_admin",
+    manager: "gestionnaire",
+    patient: "user",
+  } as const;
+  return {
+    action,
+    targetId,
+    targetType,
+    actorId: w[actor],
+    actorRole: roles[actor],
+    source: "site",
+    organizationId,
+    ...(details === undefined ? {} : { details }),
+  };
+}
+function system(
+  action: AuditAction,
+  targetId: string,
+  targetType: Expected["targetType"],
+  source: "operator" | "cron" | "webhook",
+  organizationId?: Id<"organizations">,
+  details?: Expected["details"],
+): Expected {
+  return {
+    action,
+    targetId,
+    targetType,
+    source,
+    organizationId,
+    actorRole: "system",
+    ...(details === undefined ? {} : { details }),
+  };
+}
+async function observe(w: Pick<World, "t">, call: () => Promise<Expected[]>) {
+  const before = new Set((await rows(w)).map((row) => row._id));
+  const expected = await call();
+  const written = (await rows(w)).filter((row) => !before.has(row._id));
+  expect(written).toHaveLength(expected.length);
+  for (const entry of expected) {
+    expectEntry(
+      written.find(
+        (row) =>
+          row.action === entry.action &&
+          row.targetId === entry.targetId &&
+          row.organizationId === entry.organizationId,
+      ),
+      entry,
+    );
+  }
+  return written;
+}
+async function key(w: World) {
+  return await as(w.t, "admin").mutation(api.machineKeys.createMachineKey, {
+    machineId: w.machine,
+  });
+}
+async function benchReview(w: World) {
+  await registryRelease(w);
+  await as(w.t, "admin").mutation(api.machineRegistry.addValidationReview, {
+    machineId: w.machine,
+    level: "bench",
+    softwareVersion: "pi-0.1.0",
+    medicalParametersVersion: null,
+    reportStorageId: await registryUpload(w),
+  });
+}
+
+const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
+  "clerkWebhook.applyEvent": async (w) => {
+    const written: Doc<"audit_log">[] = [];
+    const organization = {
+      id: ORG_A_CLERK_ORG,
+      name: "Synthetic centre",
+      slug: "centre-a",
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    const member = {
+      kind: "membership",
+      deleted: false,
+      organization,
+      occurredAt: NOW + 1,
+      updatedAt: NOW + 1,
+      membershipId: "synthetic-audit-member",
+      userId: "synthetic-audit-account",
+      firstName: "Synthetic",
+      lastName: "Member",
+      email: "audit-member@example.invalid",
+      role: "user",
+    } as const;
+    let memberId: Id<"users">;
+    written.push(
+      ...(await observe(w, async () => {
+        await w.t.mutation(internal.clerkWebhook.applyEvent, {
+          eventId: "audit-member-create",
+          event: member,
+        });
+        const user = await w.t.run((ctx) =>
+          ctx.db
+            .query("users")
+            .withIndex("by_clerk_id", (q) => q.eq("clerkId", member.userId))
+            .unique(),
+        );
+        if (!user) throw new Error("Missing synthetic member");
+        memberId = user._id;
+        return [
+          system("membership.created", memberId, "user", "webhook", w.orgA, {
+            role: "user",
+          }),
+        ];
+      })),
+    );
+    written.push(
+      ...(await observe(w, async () => {
+        await w.t.mutation(internal.clerkWebhook.applyEvent, {
+          eventId: "audit-member-role",
+          event: {
+            ...member,
+            occurredAt: NOW + 2,
+            updatedAt: NOW + 2,
+            role: "gestionnaire",
+          },
+        });
+        return [
+          system(
+            "membership.role_changed",
+            memberId,
+            "user",
+            "webhook",
+            w.orgA,
+            { role: "gestionnaire", previousRole: "user" },
+          ),
+        ];
+      })),
+    );
+    const deactivation = {
+      eventId: "audit-member-delete",
+      event: {
+        ...member,
+        role: "gestionnaire",
+        deleted: true,
+        occurredAt: NOW + 3,
+        updatedAt: NOW + 3,
+      },
+    } as const;
+    written.push(
+      ...(await observe(w, async () => {
+        await w.t.mutation(internal.clerkWebhook.applyEvent, deactivation);
+        return [
+          system("membership.deactivated", memberId, "user", "webhook", w.orgA),
+        ];
+      })),
+    );
+    await unchanged(w, () =>
+      w.t.mutation(internal.clerkWebhook.applyEvent, deactivation),
+    );
+    await w.t.run((ctx) =>
+      ctx.db.insert("memberships", {
+        userId: w.patient,
+        organizationId: w.orgB,
+        role: "user",
+        active: true,
+      }),
+    );
+    written.push(
+      ...(await observe(w, async () => {
+        await w.t.mutation(internal.clerkWebhook.applyEvent, {
+          eventId: "audit-account-delete",
+          event: {
+            kind: "userDeleted",
+            userId: "patient",
+            occurredAt: NOW + 4,
+            updatedAt: NOW + 4,
+          },
+        });
+        return [w.orgA, w.orgB].map((org) =>
+          system("account.deleted_in_clerk", w.patient, "user", "webhook", org),
+        );
+      })),
+    );
+    const count = await w.t.run(
+      async (ctx) =>
+        (await ctx.db.query("memberships").collect()).filter(
+          (row) => row.organizationId === w.orgA && row.active,
+        ).length,
+    );
+    written.push(
+      ...(await observe(w, async () => {
+        await w.t.mutation(internal.clerkWebhook.applyEvent, {
+          eventId: "audit-org-delete",
+          event: {
+            kind: "organization",
+            deleted: true,
+            organization,
+            occurredAt: NOW + 5,
+            updatedAt: NOW + 5,
+          },
+        });
+        return [
+          system(
+            "organization.deleted",
+            w.orgA,
+            "organization",
+            "webhook",
+            w.orgA,
+            { count },
+          ),
+        ];
+      })),
+    );
+    return written;
+  },
+  "fitness.validateFitnessAssessment": async (w) => {
+    const answers = Object.fromEntries(
+      CURRENT_QUESTIONNAIRE.questions.map((q) => [
+        q.id,
+        q.outcomes.no !== "fit",
+      ]),
+    );
+    const assessment = await as(w.t, "patient").mutation(
+      api.fitness.submitFitnessAnswers,
+      { questionnaireVersion: CURRENT_QUESTIONNAIRE.version, answers },
+    );
+    return observe(w, async () => {
+      await as(w.t, "manager").mutation(api.fitness.validateFitnessAssessment, {
+        assessmentId: assessment.assessmentId,
+        validUntil: NOW + 86400000,
+        notes: "synthetic-private-fitness-notes",
+      });
+      return [
+        site(
+          w,
+          "fitness.validated",
+          assessment.assessmentId,
+          "fitness_assessment",
+          "manager",
+          w.orgA,
+          { userId: w.patient },
+        ),
+      ];
+    });
+  },
+  "fitness.signConsent": async (w) =>
+    observe(w, async () => {
+      const consentId = await as(w.t, "orgAdmin").mutation(
+        api.fitness.signConsent,
+        { textVersion: CONSENT_TEXT_VERSION },
+      );
+      return [site(w, "consent.signed", consentId, "consent", "orgAdmin")];
+    }),
+  "fitness.withdrawConsent": async (w) => {
+    const consentIds = await w.t.run(async (ctx) => {
+      const prior = await ctx.db
+        .query("consents")
+        .withIndex("by_user_and_organization", (q) =>
+          q.eq("userId", w.patient).eq("organizationId", w.orgA),
+        )
+        .collect();
+      const duplicate = await ctx.db.insert("consents", {
+        userId: w.patient,
+        organizationId: w.orgA,
+        textVersion: CONSENT_TEXT_VERSION,
+        signedAt: NOW,
+        signedVia: "site",
+      });
+      return [...prior.map((row) => row._id), duplicate];
+    });
+    return observe(w, async () => {
+      await as(w.t, "patient").mutation(api.fitness.withdrawConsent, {});
+      return consentIds.map((id) =>
+        site(w, "consent.withdrawn", id, "consent", "patient"),
+      );
+    });
+  },
+  "machineKeys.createMachineKey": async (w) => {
+    const old = await key(w);
+    return observe(w, async () => {
+      const issued = await as(w.t, "orgAdmin").mutation(
+        api.machineKeys.createMachineKey,
+        { machineId: w.machine, overlapMinutes: 0, lifetimeMinutes: 60 },
+      );
+      return [
+        site(
+          w,
+          "machine_key.created",
+          issued.keyId,
+          "machine_key",
+          "orgAdmin",
+          w.orgA,
+          { machineId: w.machine, count: 1, expiresAt: NOW + 3600000 },
+        ),
+        site(w, "machine_key.revoked", old.keyId, "machine_key", "orgAdmin"),
+      ];
+    });
+  },
+  "machineKeys.revokeMachineKey": async (w) => {
+    const issued = await key(w);
+    return observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.machineKeys.revokeMachineKey, {
+        keyId: issued.keyId,
+      });
+      return [
+        site(w, "machine_key.revoked", issued.keyId, "machine_key", "orgAdmin"),
+      ];
+    });
+  },
+  "machineKeys.revokeExpiredKeys": async (w) => {
+    const issued = await key(w);
+    await w.t.run((ctx) => ctx.db.patch(issued.keyId, { expiresAt: NOW }));
+    return observe(w, async () => {
+      expect(
+        await w.t.mutation(internal.machineKeys.revokeExpiredKeys, {}),
+      ).toEqual({ revoked: 1 });
+      return [
+        system(
+          "machine_key.expired_revoked",
+          issued.keyId,
+          "machine_key",
+          "cron",
+          w.orgA,
+        ),
+      ];
+    });
+  },
+  "machineKeys.createKeyByOperator": async (w) => {
+    const old = await key(w);
+    return observe(w, async () => {
+      const issued = await w.t.mutation(
+        internal.machineKeys.createKeyByOperator,
+        { machineId: w.machine, overlapMinutes: 0 },
+      );
+      return [
+        system(
+          "machine_key.created",
+          issued.keyId,
+          "machine_key",
+          "operator",
+          w.orgA,
+          { machineId: w.machine, count: 1 },
+        ),
+        system(
+          "machine_key.revoked",
+          old.keyId,
+          "machine_key",
+          "operator",
+          w.orgA,
+        ),
+      ];
+    });
+  },
+  "machineKeys.revokeKeyByOperator": async (w) => {
+    const issued = await key(w);
+    return observe(w, async () => {
+      await w.t.mutation(internal.machineKeys.revokeKeyByOperator, {
+        keyId: issued.keyId,
+      });
+      return [
+        system(
+          "machine_key.revoked",
+          issued.keyId,
+          "machine_key",
+          "operator",
+          w.orgA,
+        ),
+      ];
+    });
+  },
+  "machineRegistry.updateIdentity": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "admin").mutation(api.machineRegistry.updateIdentity, {
+        machineId: w.machine,
+        site: "synthetic-private-postal-address",
+      });
+      return [
+        site(
+          w,
+          "registry.identity_updated",
+          w.machine,
+          "machine",
+          "admin",
+          w.orgA,
+          { fields: ["site"] },
+        ),
+      ];
+    }),
+  "machineRegistry.recordRadii": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "admin").mutation(api.machineRegistry.recordRadii, {
+        machineId: w.machine,
+        armRadiusM: 1.2,
+        legTipRadiusM: 1.5,
+        measuredAt: NOW,
+        measuredBy: "Synthetic measurer",
+      });
+      return [site(w, "registry.radii_recorded", w.machine, "machine")];
+    }),
+  "machineRegistry.attachDriveParameterSheet": async (w) => {
+    const storageId = await registryUpload(w);
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(
+        api.machineRegistry.attachDriveParameterSheet,
+        {
+          machineId: w.machine,
+          storageId,
+          version: "1.0.0",
+          signedBy: "Synthetic signer",
+          at: NOW,
+        },
+      );
+      return [
+        site(
+          w,
+          "registry.drive_sheet_attached",
+          w.machine,
+          "machine",
+          "admin",
+          w.orgA,
+          { version: "1.0.0" },
+        ),
+      ];
+    });
+  },
+  "machineRegistry.addValidationReview": async (w) => {
+    await registryRelease(w);
+    const reportStorageId = await registryUpload(w);
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.machineRegistry.addValidationReview, {
+        machineId: w.machine,
+        level: "bench",
+        softwareVersion: "pi-0.1.0",
+        medicalParametersVersion: null,
+        reportStorageId,
+      });
+      return [
+        site(
+          w,
+          "registry.review_added",
+          w.machine,
+          "machine",
+          "admin",
+          w.orgA,
+          {
+            level: "bench",
+            previousLevel: "none",
+            softwareVersion: "pi-0.1.0",
+          },
+        ),
+      ];
+    });
+  },
+  "machineRegistry.lowerValidationLevel": async (w) => {
+    await benchReview(w);
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(
+        api.machineRegistry.lowerValidationLevel,
+        {
+          machineId: w.machine,
+          level: "none",
+          reason: "synthetic-private-downgrade-reason",
+        },
+      );
+      return [
+        site(
+          w,
+          "registry.level_lowered",
+          w.machine,
+          "machine",
+          "admin",
+          w.orgA,
+          { level: "none", previousLevel: "bench" },
+        ),
+      ];
+    });
+  },
+  "machines.createMachine": async (w) =>
+    observe(w, async () => {
+      const created = await as(w.t, "admin").mutation(
+        api.machines.createMachine,
+        {
+          name: "Synthetic audit machine",
+          organizationId: w.orgA,
+          gestionnaireIds: [w.manager],
+        },
+      );
+      const createdKey = await w.t.run((ctx) =>
+        ctx.db
+          .query("machine_api_keys")
+          .withIndex("by_machine", (q) => q.eq("machineId", created.machineId))
+          .unique(),
+      );
+      if (!createdKey) throw new Error("Missing first machine key");
+      return [
+        site(w, "machine.created", created.machineId, "machine"),
+        site(w, "machine_key.created", createdKey._id, "machine_key"),
+        site(
+          w,
+          "machine_gestionnaires.set",
+          created.machineId,
+          "machine",
+          "admin",
+          w.orgA,
+          { added: [w.manager] },
+        ),
+      ];
+    }),
+  "machines.assignMachineToGestionnaires": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(
+        api.machines.assignMachineToGestionnaires,
+        { machineId: w.machine, gestionnaireIds: [w.otherManager] },
+      );
+      return [
+        site(
+          w,
+          "machine_gestionnaires.set",
+          w.machine,
+          "machine",
+          "orgAdmin",
+          w.orgA,
+          { added: [w.otherManager], removed: [w.manager] },
+        ),
+      ];
+    }),
+  "machines.setGestionnaireMachines": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.machines.setGestionnaireMachines, {
+        gestionnaireId: w.manager,
+        machineIds: [w.otherMachine],
+      });
+      return [
+        site(
+          w,
+          "gestionnaire_machines.set",
+          w.manager,
+          "user",
+          "orgAdmin",
+          w.orgA,
+          { added: [w.otherMachine], removed: [w.machine] },
+        ),
+      ];
+    }),
+  "machines.deleteMachine": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "manager").mutation(api.machines.deleteMachine, {
+        machineId: w.machine,
+      });
+      return [site(w, "machine.deleted", w.machine, "machine", "manager")];
+    }),
+  "machines.restoreMachine": async (w) => {
+    await as(w.t, "manager").mutation(api.machines.deleteMachine, {
+      machineId: w.machine,
+    });
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.machines.restoreMachine, {
+        machineId: w.machine,
+      });
+      return [site(w, "machine.restored", w.machine, "machine")];
+    });
+  },
+  "machines.assignGestionnaireToMachine": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(
+        api.machines.assignGestionnaireToMachine,
+        { machineId: w.machine, gestionnaireId: w.otherManager },
+      );
+      return [
+        site(
+          w,
+          "machine_gestionnaire.assigned",
+          w.machine,
+          "machine",
+          "orgAdmin",
+          w.orgA,
+          { gestionnaireId: w.otherManager },
+        ),
+      ];
+    }),
+  "machines.removeGestionnaireFromMachine": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(
+        api.machines.removeGestionnaireFromMachine,
+        { machineId: w.machine, gestionnaireId: w.manager },
+      );
+      return [
+        site(
+          w,
+          "machine_gestionnaire.removed",
+          w.machine,
+          "machine",
+          "orgAdmin",
+          w.orgA,
+          { gestionnaireId: w.manager },
+        ),
+      ];
+    }),
+  "medicalParametersStore.insertVersion": async () => {
+    const t = backendOf(modules);
+    return observe({ t }, async () => {
+      await registerShippedMedicalParameters(t);
+      const version = await t.run((ctx) =>
+        ctx.db.query("medical_parameters_versions").unique(),
+      );
+      if (!version) throw new Error("Missing medical version");
+      return [
+        system(
+          "medical_parameters.registered",
+          version._id,
+          "medical_parameters_version",
+          "operator",
+          undefined,
+          { version: version.version },
+        ),
+      ];
+    });
+  },
+  "patientInvitations.prepare": async (w) => {
+    mockClerkInvitations();
+    return observe(w, async () => {
+      const sent = await as(w.t, "manager").action(api.users.createPatient, {
+        firstName: "Synthetic",
+        lastName: "Invitee",
+        email: "synthetic-audit-invitee@example.invalid",
+      });
+      const invitation = await w.t.run((ctx) => ctx.db.get(sent.invitationId));
+      expect(invitation?.userId).toBeDefined();
+      return [
+        site(
+          w,
+          "user.invited",
+          sent.invitationId,
+          "patient_invitation",
+          "manager",
+          w.orgA,
+          { role: "user", userId: invitation?.userId },
+        ),
+      ];
+    });
+  },
+  "recordStorage.remove": async (w) => {
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "completed",
+    });
+    return observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.recordStorage.remove, {
+        sessionId,
+      });
+      return [site(w, "record.deleted", sessionId, "session", "orgAdmin")];
+    });
+  },
+  "softwareReleases.recordRelease": async (w) =>
+    observe(w, async () => {
+      const releaseId = await as(w.t, "admin").mutation(
+        api.softwareReleases.recordRelease,
+        {
+          component: "pi",
+          version: "pi-1.2.3",
+          releasedAt: NOW,
+          validationLevel: "bench",
+        },
+      );
+      return [
+        site(
+          w,
+          "software_release.recorded",
+          releaseId,
+          "software_release",
+          "admin",
+          w.anheartOrg,
+          { version: "pi-1.2.3", level: "bench" },
+        ),
+      ];
+    }),
+  "training.grantLaunchRight": async (w) => {
+    await as(w.t, "manager").mutation(api.training.revokeLaunchRight, {
+      machineId: w.machine,
+      userId: w.patient,
+    });
+    return observe(w, async () => {
+      await as(w.t, "manager").mutation(api.training.grantLaunchRight, {
+        machineId: w.machine,
+        userId: w.patient,
+      });
+      return [
+        site(w, "launch_right.granted", w.patient, "user", "manager", w.orgA, {
+          machineId: w.machine,
+        }),
+      ];
+    });
+  },
+  "training.revokeLaunchRight": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "manager").mutation(api.training.revokeLaunchRight, {
+        machineId: w.machine,
+        userId: w.patient,
+      });
+      return [
+        site(w, "launch_right.revoked", w.patient, "user", "manager", w.orgA, {
+          machineId: w.machine,
+        }),
+      ];
+    }),
+  "training.setUserPhysiology": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "manager").mutation(api.training.setUserPhysiology, {
+        userId: w.patient,
+        hrMax: 187,
+        birthYear: 1990,
+      });
+      return [
+        site(w, "physiology.updated", w.patient, "user", "manager", w.orgA, {
+          fields: ["hrMax", "birthYear"],
+        }),
+      ];
+    }),
+  "training.launchAutoSession": async (w) =>
+    observe(w, async () => {
+      const sessionId = await as(w.t, "manager").mutation(
+        api.training.launchAutoSession,
+        { machineId: w.machine, userId: w.patient, profileId: w.profileId },
+      );
+      return [
+        site(w, "session.launched", sessionId, "session", "manager", w.orgA, {
+          machineId: w.machine,
+          userId: w.patient,
+        }),
+      ];
+    }),
+  "training.requestStop": async (w) => {
+    const pending = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "pending",
+      kind: "auto",
+    });
+    const active = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "active",
+      kind: "auto",
+    });
+    return observe(w, async () => {
+      for (const sessionId of [pending, active])
+        await as(w.t, "patient").mutation(api.training.requestStop, {
+          sessionId,
+        });
+      return [
+        site(w, "session.cancelled", pending, "session", "patient"),
+        site(w, "session.stop_requested", active, "session", "patient"),
+      ];
+    });
+  },
+  "training.markTrainingStarted": async () => {
+    const w = await seedMachineWorld(modules);
+    const sessionId = await w.admin.mutation(api.training.launchAutoSession, {
+      machineId: w.machine,
+      userId: w.patient,
+      profileId: w.profileId,
+    });
+    return observe(w, async () => {
+      expect((await machinePost(w, "start", { sessionId })).status).toBe(200);
+      return [
+        {
+          action: "session.started",
+          targetId: sessionId,
+          targetType: "session",
+          source: "machine",
+          actorRole: "machine",
+          actorId: w.machine,
+          organizationId: w.organizationId,
+        },
+      ];
+    });
+  },
+  "training.registerLocalSession": async () => {
+    const w = await seedMachineWorld(modules);
+    return observe(w, async () => {
+      const response = await machinePost(w, "local", {
+        localRef: "synthetic-audit-completeness",
+        kind: "manual",
+        startedAt: NOW,
+        operatorName: "Synthetic operator",
+      });
+      expect(response.status).toBe(200);
+      const { sessionId } = (await response.json()) as { sessionId: string };
+      return [
+        {
+          action: "session.local_registered",
+          targetId: sessionId,
+          targetType: "session",
+          source: "machine",
+          actorRole: "machine",
+          actorId: w.machine,
+          organizationId: w.organizationId,
+        },
+      ];
+    });
+  },
+  "training.endTrainingSession": async () => {
+    const w = await seedMachineWorld(modules);
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "active",
+      kind: "auto",
+    });
+    return observe(w, async () => {
+      expect(
+        (
+          await machinePost(w, "end", {
+            sessionId,
+            failed: false,
+            reason: "synthetic-private-end-code-and-reason",
+          })
+        ).status,
+      ).toBe(200);
+      return [
+        {
+          action: "session.ended",
+          targetId: sessionId,
+          targetType: "session",
+          source: "machine",
+          actorRole: "machine",
+          actorId: w.machine,
+          organizationId: w.organizationId,
+          details: { outcome: "completed" },
+        },
+      ];
+    });
+  },
+  "users.updateUserRole": async (w) => {
+    configureAnheartOrganization(null);
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.anheartOrg, { clerkOrgId: undefined }),
+    );
+    return observe(w, async () => {
+      await w.t
+        .withIdentity({ subject: "admin" })
+        .mutation(api.users.updateUserRole, {
+          userId: w.admin,
+          role: "gestionnaire",
+        });
+      return [
+        site(w, "user.role_changed", w.admin, "user", "admin", w.anheartOrg, {
+          role: "gestionnaire",
+          previousRole: "admin",
+        }),
+      ];
+    });
+  },
+  "users.deleteUser": async (w) => {
+    await w.t.run((ctx) =>
+      ctx.db.insert("memberships", {
+        userId: w.patient,
+        organizationId: w.orgB,
+        role: "user",
+        active: true,
+      }),
+    );
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.users.deleteUser, {
+        userId: w.patient,
+      });
+      return [w.orgA, w.orgB].map((org) =>
+        site(w, "user.deleted", w.patient, "user", "admin", org),
+      );
+    });
+  },
+  "users.linkPatientToClerk": async (w) => {
+    await w.t.run((ctx) => ctx.db.patch(w.patient, { clerkId: "" }));
+    return observe(w, async () => {
+      expect(
+        await as(w.t, "patient", {
+          email: "patient@example.invalid",
+          emailVerified: true,
+        }).mutation(api.users.linkPatientToClerk, {
+          email: "patient@example.invalid",
+        }),
+      ).toBe(w.patient);
+      return [site(w, "user.linked_to_account", w.patient, "user", "patient")];
+    });
+  },
+  "users.assignGestionnaireToUser": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.users.assignGestionnaireToUser, {
+        userId: w.patient,
+        gestionnaireId: w.otherManager,
+      });
+      return [
+        site(
+          w,
+          "patient_gestionnaire.assigned",
+          w.patient,
+          "user",
+          "orgAdmin",
+          w.orgA,
+          { gestionnaireId: w.otherManager },
+        ),
+      ];
+    }),
+  "users.removeGestionnaireFromUser": async (w) => {
+    await w.t.run((ctx) =>
+      ctx.db.insert("user_gestionnaires", {
+        userId: w.patient,
+        gestionnaireId: w.manager,
+        organizationId: w.orgB,
+        createdAt: NOW,
+        createdBy: w.admin,
+      }),
+    );
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.users.removeGestionnaireFromUser, {
+        userId: w.patient,
+        gestionnaireId: w.manager,
+      });
+      return [w.orgA, w.orgB].map((org) =>
+        site(
+          w,
+          "patient_gestionnaire.removed",
+          w.patient,
+          "user",
+          "admin",
+          org,
+          { gestionnaireId: w.manager },
+        ),
+      );
+    });
+  },
+  "users.assignPatientsToGestionnaire": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(
+        api.users.assignPatientsToGestionnaire,
+        { gestionnaireId: w.manager, patientIds: [w.otherPatient] },
+      );
+      return [
+        site(
+          w,
+          "gestionnaire_patients.set",
+          w.manager,
+          "user",
+          "orgAdmin",
+          w.orgA,
+          { added: [w.otherPatient], removed: [w.patient] },
+        ),
+      ];
+    }),
+};
+
+describe("ANH-167 T02-a completeness through registered entry points", () => {
+  const observedActions = new Set<AuditAction>();
+  it("has exactly the sensitive mutation keys", () => {
+    expect(Object.keys(SCENARIOS).sort()).toEqual(
+      Object.keys(SENSITIVE_MUTATIONS).sort(),
+    );
+  });
+  it.each(Object.entries(SCENARIOS))(
+    "records %s with complete request metadata",
+    async (name, scenario) => {
+      const written = await scenario(await seedLaunchWorld(modules));
+      expect(written.length).toBeGreaterThan(0);
+      for (const action of SENSITIVE_MUTATIONS[name])
+        expect(written.map((row) => row.action)).toContain(action);
+      for (const row of written) {
+        observedActions.add(row.action);
+        expect(row.requestId.length).toBeGreaterThan(0);
+        for (const privateValue of [
+          "synthetic-private-fitness-notes",
+          "synthetic-private-postal-address",
+          "synthetic-private-downgrade-reason",
+          "synthetic-private-end-code-and-reason",
+        ])
+          expect(JSON.stringify(row)).not.toContain(privateValue);
+      }
+      if (name === "machines.createMachine")
+        expect(new Set(written.map((row) => row.requestId)).size).toBe(1);
+    },
+  );
+  it("observes every closed action in a sensitive mutation scenario", () => {
+    expect([...observedActions].sort()).toEqual([...AUDIT_ACTIONS].sort());
+  });
 });
 
 describe("ANH-167 T02 training safety and absent effects", () => {
@@ -203,4 +1214,262 @@ describe("ANH-167 T02 training safety and absent effects", () => {
       expect((await machinePost(w, "end", end)).status).toBe(200),
     );
   });
+});
+
+describe("ANH-167 T02-b absent effects and refusals", () => {
+  it("leaves consent, revoked keys and unchanged relationship sets unwritten", async () => {
+    const w = await seedLaunchWorld(modules);
+    await unchanged(w, () =>
+      as(w.t, "patient").mutation(api.fitness.signConsent, {
+        textVersion: CONSENT_TEXT_VERSION,
+      }),
+    );
+    const issued = await key(w);
+    await as(w.t, "orgAdmin").mutation(api.machineKeys.revokeMachineKey, {
+      keyId: issued.keyId,
+    });
+    await unchanged(w, () =>
+      as(w.t, "orgAdmin").mutation(api.machineKeys.revokeMachineKey, {
+        keyId: issued.keyId,
+      }),
+    );
+    await unchanged(w, () =>
+      w.t.mutation(internal.machineKeys.revokeKeyByOperator, {
+        keyId: issued.keyId,
+      }),
+    );
+    await unchanged(w, () =>
+      w.t.mutation(internal.machineKeys.revokeExpiredKeys, {}),
+    );
+    await unchanged(w, () =>
+      as(w.t, "orgAdmin").mutation(api.machines.assignMachineToGestionnaires, {
+        machineId: w.machine,
+        gestionnaireIds: [w.manager],
+      }),
+    );
+    await unchanged(w, () =>
+      as(w.t, "orgAdmin").mutation(api.machines.setGestionnaireMachines, {
+        gestionnaireId: w.manager,
+        machineIds: [w.machine],
+      }),
+    );
+    await unchanged(w, () =>
+      as(w.t, "orgAdmin").mutation(api.users.assignPatientsToGestionnaire, {
+        gestionnaireId: w.manager,
+        patientIds: [w.patient],
+      }),
+    );
+  });
+
+  it("leaves three not_authorized calls unwritten", async () => {
+    const w = await seedLaunchWorld(modules);
+    const issued = await key(w);
+    const patient = as(w.t, "patient");
+    for (const call of [
+      () =>
+        patient.mutation(api.machines.createMachine, {
+          name: "Synthetic refused machine",
+        }),
+      () =>
+        patient.mutation(api.machineKeys.revokeMachineKey, {
+          keyId: issued.keyId,
+        }),
+      () =>
+        patient.mutation(api.users.assignGestionnaireToUser, {
+          userId: w.patient,
+          gestionnaireId: w.otherManager,
+        }),
+    ])
+      await unchanged(w, () =>
+        expect(call()).rejects.toThrow("not_authorized"),
+      );
+  });
+
+  it("audits an ambiguous invitation without a profile and leaves its replay unwritten", async () => {
+    const w = await seedLaunchWorld(modules);
+    mockClerkInvitations();
+    const email = "synthetic-ambiguous@example.invalid";
+    await w.t.run(async (ctx) => {
+      for (const userId of [w.patient, w.orgBPatient])
+        await ctx.db.patch(userId, { email });
+    });
+    const input = { email, firstName: "Synthetic", lastName: "Ambiguous" };
+    const written = await observe(w, async () => {
+      const invitation = await as(w.t, "manager").action(
+        api.users.createPatient,
+        input,
+      );
+      expect(
+        (await w.t.run((ctx) => ctx.db.get(invitation.invitationId)))?.userId,
+      ).toBeUndefined();
+      return [
+        site(
+          w,
+          "user.invited",
+          invitation.invitationId,
+          "patient_invitation",
+          "manager",
+          w.orgA,
+          { role: "user" },
+        ),
+      ];
+    });
+    expect(written[0].details).toEqual({ role: "user" });
+    await unchanged(w, () =>
+      as(w.t, "manager").action(api.users.createPatient, input),
+    );
+  });
+});
+
+const sourceText = import.meta.glob(
+  [
+    "./**/*.ts",
+    "!./_generated/**",
+    "!./**/*.test.ts",
+    "!./**/*.fixtures.ts",
+    "!./**/*.setup.ts",
+    "!./**/*.matrix.ts",
+  ],
+  { eager: true, query: "?raw", import: "default" },
+) as Record<string, string>;
+const exportedModules = import.meta.glob(
+  [
+    "./*.ts",
+    "./migrations/*.ts",
+    "!./convex.config.ts",
+    "!./*.test.ts",
+    "!./*.fixtures.ts",
+    "!./*.setup.ts",
+    "!./*.matrix.ts",
+  ],
+  { eager: true },
+) as Record<string, Record<string, unknown>>;
+
+function walk(node: ts.Node, visit: (node: ts.Node) => void) {
+  visit(node);
+  ts.forEachChild(node, (child) => walk(child, visit));
+}
+function registrationOf(node: ts.Node): ts.VariableDeclaration | undefined {
+  let ancestor: ts.Node | undefined = node;
+  while (ancestor) {
+    if (
+      ts.isVariableDeclaration(ancestor) &&
+      ts.isIdentifier(ancestor.name) &&
+      ancestor.initializer &&
+      ts.isCallExpression(ancestor.initializer) &&
+      ts.isIdentifier(ancestor.initializer.expression) &&
+      [
+        "mutation",
+        "internalMutation",
+        "action",
+        "internalAction",
+        "query",
+        "internalQuery",
+      ].includes(ancestor.initializer.expression.text)
+    )
+      return ancestor;
+    ancestor = ancestor.parent;
+  }
+}
+
+describe("ANH-167 T02-f operator isolation", () => {
+  it("permits operator literals only inside the three registered internal functions and blocks public references", () => {
+    const operatorFunctions = new Set<string>();
+    const internalReferences: string[] = [];
+    const forbidden = new Set([
+      "createKeyByOperator",
+      "revokeKeyByOperator",
+      "insertVersion",
+      "registerVersion",
+    ]);
+    for (const [path, source] of Object.entries(sourceText)) {
+      const parsed = ts.createSourceFile(
+        path,
+        source,
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      walk(parsed, (node) => {
+        if (
+          ts.isPropertyAssignment(node) &&
+          node.name.getText(parsed) === "source" &&
+          ts.isStringLiteral(node.initializer) &&
+          node.initializer.text === "operator"
+        ) {
+          const registration = registrationOf(node);
+          expect(registration, path).toBeDefined();
+          if (!registration)
+            throw new Error("Operator source outside a registered function");
+          const name = registration.name.getText(parsed);
+          operatorFunctions.add(`${path}:${name}`);
+          const registered = exportedModules[path]?.[name] as
+            | { isInternal?: boolean }
+            | undefined;
+          expect(registered?.isInternal, `${path}:${name}`).toBe(true);
+        }
+        if (
+          ts.isPropertyAccessExpression(node) &&
+          forbidden.has(node.name.text)
+        ) {
+          const registration = registrationOf(node);
+          const owner = `${path}:${registration?.name.getText(parsed)}`;
+          internalReferences.push(`${owner}:${node.name.text}`);
+        }
+        if (
+          ts.isVariableDeclaration(node) &&
+          node.initializer &&
+          ts.isCallExpression(node.initializer) &&
+          ts.isIdentifier(node.initializer.expression) &&
+          ["mutation", "action", "query"].includes(
+            node.initializer.expression.text,
+          )
+        ) {
+          walk(node.initializer, (child) => {
+            if (ts.isIdentifier(child))
+              expect(
+                forbidden.has(child.text),
+                `${path}:${node.name.getText(parsed)} references ${child.text}`,
+              ).toBe(false);
+          });
+        }
+      });
+    }
+    expect([...operatorFunctions].sort()).toEqual([
+      "./machineKeys.ts:createKeyByOperator",
+      "./machineKeys.ts:revokeKeyByOperator",
+      "./medicalParametersStore.ts:insertVersion",
+    ]);
+    expect(internalReferences).toEqual([
+      "./medicalParameters.ts:registerVersion:insertVersion",
+    ]);
+    for (const name of forbidden)
+      expect(sourceText["./http.ts"]).not.toContain(name);
+    const registerVersion = exportedModules["./medicalParameters.ts"]
+      .registerVersion as { isInternal?: boolean };
+    expect(registerVersion.isInternal).toBe(true);
+  });
+
+  it.each(http.getRoutes().map(([path, method]) => ({ path, method })))(
+    "never writes operator from $method $path",
+    async ({ path, method }) => {
+      vi.stubEnv(
+        "CLERK_WEBHOOK_SIGNING_SECRET",
+        `whsec_${btoa("synthetic-audit-webhook-key")}`,
+      );
+      const w = await seedMachineWorld(modules);
+      const before = new Set((await rows(w)).map((row) => row._id));
+      const response = await w.t.fetch(path, {
+        method,
+        headers: {
+          Authorization: `Bearer ${w.machineKey}`,
+          "Content-Type": "application/json",
+          [CONTRACT_HEADER]: CONTRACT_VERSION,
+        },
+        ...(method === "POST" ? { body: "{}" } : {}),
+      });
+      expect(response.status).toBeLessThan(500);
+      const written = (await rows(w)).filter((row) => !before.has(row._id));
+      expect(written.every((row) => row.source !== "operator")).toBe(true);
+    },
+  );
 });

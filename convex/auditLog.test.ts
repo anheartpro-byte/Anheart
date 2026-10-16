@@ -42,6 +42,7 @@ const sources = import.meta.glob(
 const topLevel = import.meta.glob(
   [
     "./*.ts",
+    "./migrations/*.ts",
     "!./convex.config.ts",
     "!./*.test.ts",
     "!./*.fixtures.ts",

@@ -159,9 +159,12 @@ export async function rotateMachineKey(
     now: number;
   },
 ): Promise<{
-  keyId: Id<"machine_api_keys">;
-  apiKey: string;
-  prefix: string;
+  issued: {
+    keyId: Id<"machine_api_keys">;
+    apiKey: string;
+    prefix: string;
+  };
+  replaced: Id<"machine_api_keys">[];
 }> {
   const { now } = options;
   await moveLegacyKey(ctx, machine, now);
@@ -177,9 +180,11 @@ export async function rotateMachineKey(
     now,
   });
   const overlapEnd = now + options.overlapMs;
+  const replaced: Id<"machine_api_keys">[] = [];
   for (const key of current) {
     // An expired key is left to the job: there is nothing to shorten.
     if (!keyIsValid(key, now)) continue;
+    replaced.push(key._id);
     if (options.overlapMs === 0) {
       await ctx.db.patch(key._id, {
         revokedAt: now,
@@ -193,7 +198,7 @@ export async function rotateMachineKey(
       });
     }
   }
-  return issued;
+  return { issued, replaced };
 }
 
 /**

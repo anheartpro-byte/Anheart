@@ -43,6 +43,7 @@ export const AUDIT_TARGET_TYPES = [
   "organization",
   "software_release",
   "medical_parameters_version",
+  "patient_invitation",
 ] as const;
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[number];
 export const auditTargetTypeValidator = v.union(
@@ -51,9 +52,9 @@ export const auditTargetTypeValidator = v.union(
 
 export const AUDIT_ACTIONS = [
   "user.role_changed", // Admin changes a user's role; target: user.
-  "user.invited", // Staff prepares an invitation; target: invited user.
-  "user.linked_to_account", // Staff links a patient to an account; target: user.
-  "user.deleted", // Admin deletes a user; target: deleted user.
+  "user.invited", // Staff prepares an invitation; target: invitation, even without a unique profile.
+  "user.linked_to_account", // Patient links their own verified account; target: user.
+  "user.deleted", // Authorised staff removes a user from their scope; target: user.
   "patient_gestionnaire.assigned", // Staff assigns a manager; target: patient user.
   "patient_gestionnaire.removed", // Staff removes a manager; target: patient user.
   "gestionnaire_patients.set", // Staff sets a manager's patients; target: manager user.
@@ -82,7 +83,7 @@ export const AUDIT_ACTIONS = [
   "machine_key.revoked", // Admin or operator revokes a key; target: machine key.
   "machine_key.expired_revoked", // Cron revokes an expired key; target: machine key.
   "machine.created", // Admin creates a machine; target: machine.
-  "machine.deleted", // Admin deletes a machine; target: machine.
+  "machine.deleted", // Authorised machine manager soft-deletes a machine; target: machine.
   "machine.restored", // Admin restores a machine; target: machine.
   "registry.identity_updated", // Admin updates registry identity; target: machine.
   "registry.radii_recorded", // Admin records radii, without values; target: machine.
@@ -100,7 +101,7 @@ export const auditActionValidator = v.union(
 
 export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "user.role_changed": "user",
-  "user.invited": "user",
+  "user.invited": "patient_invitation",
   "user.linked_to_account": "user",
   "user.deleted": "user",
   "patient_gestionnaire.assigned": "user",
@@ -261,48 +262,63 @@ export const SENSITIVE_MUTATIONS: Readonly<
 
 export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
   "fitness.submitFitnessAnswers":
-    "Answers are health data; the audited decision is fitness.validated.",
-  "machineHealth.purge": "Automatic retention of machine health samples.",
+    "Rider or authorised manager stores questionnaire answers containing health data; fitness validation is audited separately.",
+  "machineHealth.purge": "Cron removes expired heartbeat and machine health history samples.",
   "machineKeys.recordKeyUse":
-    "Operational key-use timestamp, without a rights change.",
+    "Machine HTTP authentication refreshes the key-use timestamp, without a rights change.",
   "machineRegistry.generateUploadUrl":
-    "Upload preparation; attachment is audited separately.",
-  "machines.updateMachine": "Name and location only.",
+    "Anheart admin prepares an upload URL; registry attachment is audited separately.",
+  "machines.updateMachine":
+    "Authorised machine manager changes only name and location.",
   "machines.recordHeartbeat":
-    "Operational machine state, without a human decision.",
+    "Machine HTTP heartbeat records operational state and health, without a rights change.",
   "machines.checkOfflineMachines":
-    "Automatic offline detection and session interruption.",
+    "Cron detects offline machines and interrupts silent sessions, without confirming their end.",
   "notifications.markRead": "Recipient marks an alert read.",
   "notifications.markAllRead": "Recipient marks alerts read.",
   "notifications.updateSettings": "Recipient changes notification preferences.",
-  "notifications.deliver": "Delivery of an operational alert.",
-  "notifications.purge": "Automatic retention of notifications.",
+  "notifications.deliver": "Scheduled alert delivery writes recipients' operational notifications.",
+  "notifications.purge": "Cron removes expired notifications.",
   "patientInvitations.finish":
-    "Delivery status of an already audited invitation.",
+    "Patient creation action records delivery status of an already audited invitation.",
   "recordStorage.requestUpload": "Machine prepares a record upload.",
   "recordStorage.commit": "Machine completes a record upload.",
   "recordStorage.finishVerification":
-    "Automatic verification of uploaded data.",
-  "recordStorage.manifestPage": "Machine provides upload manifest identifiers.",
-  "recordStorage.sweepUploads": "Automatic cleanup of abandoned uploads.",
-  "recordStorage.removeBatch": "Executes an already audited deletion.",
+    "Internal upload verification action records verification results and recording status.",
+  "recordStorage.manifestPage":
+    "Internal upload verification action stores manifest path pages.",
+  "recordStorage.sweepUploads": "Cron recovers uploaded files whose commit was missed and schedules verification.",
+  "recordStorage.removeBatch":
+    "Scheduled batches remove files after an audited deletion or configured automatic retention.",
   "recordStorage.enforceRetention":
-    "Automatic retention policy, no human decision; kept on the session row.",
+    "Cron applies configured recording retention and marks the deletion on the session row.",
   "sessionReports.storeSummary":
-    "Machine stores a session summary containing health data.",
+    "Internal summary actions store the computed session summary containing health data.",
   "sessionReports.noteRecordProblem":
-    "Machine reports an operational recording problem.",
-  "training.sweepPendingSessions": "Automatic expiry of a launch never armed.",
-  "training.updateLive": "Transient live machine state containing health data.",
+    "Internal record summary action annotates the provisional summary with a recording problem.",
+  "training.sweepPendingSessions":
+    "Cron fails pending launches that expired or no longer pass arming checks.",
+  "training.updateLive": "Machine HTTP heartbeat updates transient live training state containing health data.",
   "training.syncProfiles":
-    "Machine synchronises training profiles containing health data.",
+    "Machine synchronises its saved training programme profiles, without a rights change.",
   "training.storeTelemetry": "Machine stores health telemetry.",
   "training.storeEvents":
     "Machine stores session events, without a human decision.",
   "users.getOrCreateUser":
-    "Mirror of Clerk session claims; the decision arrives through the Clerk webhook.",
+    "Signed-in user creates or refreshes their profile and membership mirror from Clerk claims, without choosing a role.",
   "users.updateUserProfile": "Own name and language only.",
-  "users.updatePatient": "Patient name and language only.",
+  "users.updatePatient":
+    "Authorised staff changes only a patient's name and language.",
+  "migrations/retireLegacyRecording.failOpenRecordingSessions":
+    "One-off operator data migration retires open legacy recording sessions, without a product decision.",
+  "migrations/retireLegacyRecording.removeMachineConfig":
+    "One-off operator data migration removes retired recording configuration, without a product decision.",
+  "migrations/machineApiKeys.moveMachineKeysToTable":
+    "One-off operator data migration moves legacy machine keys into their table, without a product decision.",
+  "migrations/multiOrganization.attachExistingRowsToAnheart":
+    "One-off operator data migration attaches existing rows to Anheart, without a product decision.",
+  "migrations/multiOrganization.repairDuplicatedAnheartOrganization":
+    "One-off operator data migration merges duplicated Anheart organizations, without a product decision.",
 };
 
 export type AuditActor =
