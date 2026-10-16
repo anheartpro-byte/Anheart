@@ -39,6 +39,7 @@
  * the fitness deadline before every occupied start.
  */
 import { limitUser } from "./lib/rateLimits";
+import { audit, machineActor, userActor } from "./lib/audit";
 import { v } from "convex/values";
 import {
   internalMutation,
@@ -276,6 +277,14 @@ export const grantLaunchRight = mutation({
       grantedBy: me._id,
       createdAt: Date.now(),
     });
+    await audit(ctx, {
+      actor: userActor(me),
+      source: "site",
+      organizationId: machine.organizationId,
+      action: "launch_right.granted",
+      targetId: args.userId,
+      details: { machineId: args.machineId },
+    });
     return null;
   },
 });
@@ -295,7 +304,17 @@ export const revokeLaunchRight = mutation({
         q.eq("machineId", args.machineId).eq("userId", args.userId),
       )
       .unique();
-    if (row) await ctx.db.delete(row._id);
+    if (row) {
+      await ctx.db.delete(row._id);
+      await audit(ctx, {
+        actor: userActor(me),
+        source: "site",
+        organizationId: row.organizationId,
+        action: "launch_right.revoked",
+        targetId: args.userId,
+        details: { machineId: args.machineId },
+      });
+    }
     return null;
   },
 });
@@ -390,6 +409,15 @@ export const setUserPhysiology = mutation({
       patch.birthYear = args.birthYear ?? undefined;
     }
     await ctx.db.patch(args.userId, patch);
+    const target = await ctx.db.get(args.userId);
+    await audit(ctx, {
+      actor: userActor(me),
+      source: "site",
+      organizationId: target?.organizationId,
+      action: "physiology.updated",
+      targetId: args.userId,
+      details: { fields: Object.keys(patch) },
+    });
     return null;
   },
 });
@@ -1051,7 +1079,7 @@ export const launchAutoSession = mutation({
       }
     }
 
-    return await ctx.db.insert("sessions", {
+    const sessionId = await ctx.db.insert("sessions", {
       organizationId: machine.organizationId,
       machineId: args.machineId,
       userId: riderId,
@@ -1072,6 +1100,15 @@ export const launchAutoSession = mutation({
       subjectLabel: fullName(rider),
       operatorName: fullName(me),
     });
+    await audit(ctx, {
+      actor: userActor(me),
+      source: "site",
+      organizationId: machine.organizationId,
+      action: "session.launched",
+      targetId: sessionId,
+      details: { machineId: args.machineId, userId: riderId },
+    });
+    return sessionId;
   },
 });
 
@@ -1108,11 +1145,25 @@ export const requestStop = mutation({
         endedAt: now,
         endReason: `Cancelled before start by ${fullName(me)}`,
       });
+      await audit(ctx, {
+        actor: userActor(me),
+        source: "site",
+        organizationId: session.organizationId,
+        action: "session.cancelled",
+        targetId: args.sessionId,
+      });
       return null;
     }
     if (!startedNotEnded(session.status)) return null;
     if (session.stopRequestedAt === undefined) {
       await ctx.db.patch(args.sessionId, { stopRequestedAt: now });
+      await audit(ctx, {
+        actor: userActor(me),
+        source: "site",
+        organizationId: session.organizationId,
+        action: "session.stop_requested",
+        targetId: args.sessionId,
+      });
     }
     return null;
   },
@@ -1709,6 +1760,13 @@ export const markTrainingStarted = internalMutation({
           },
     );
     await ctx.db.patch(args.machineId, { status: "in_session" });
+    await audit(ctx, {
+      actor: machineActor(args.machineId),
+      source: "machine",
+      organizationId: s.organizationId,
+      action: "session.started",
+      targetId: args.sessionId,
+    });
     return { armed: true as const };
   },
 });
@@ -1799,6 +1857,13 @@ export const registerLocalSession = internalMutation({
       subjectLabel: unassigned ? undefined : args.subjectLabel,
       operatorName: args.operatorName,
     });
+    await audit(ctx, {
+      actor: machineActor(args.machineId),
+      source: "machine",
+      organizationId: machine.organizationId,
+      action: "session.local_registered",
+      targetId: id,
+    });
     await ctx.db.patch(args.machineId, { status: "in_session" });
     return id;
   },
@@ -1835,6 +1900,14 @@ export const endTrainingSession = internalMutation({
       endedAt,
       endReason: args.reason,
       interruptedAt: undefined,
+    });
+    await audit(ctx, {
+      actor: machineActor(args.machineId),
+      source: "machine",
+      organizationId: s.organizationId,
+      action: "session.ended",
+      targetId: args.sessionId,
+      details: { outcome: args.failed ? "failed" : "completed" },
     });
     await ctx.db.patch(args.machineId, { status: "online" });
     // The provisional summary of the session, from its telemetry (ANH-89):
