@@ -11,24 +11,14 @@
  */
 import { limitUser } from "./lib/rateLimits";
 import { v } from "convex/values";
-import {
-  internalMutation,
-  mutation,
-  query,
-  type MutationCtx,
-  type QueryCtx,
-} from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Doc } from "./_generated/dataModel";
 import {
   STAFF_ROLES,
   canAccessSession,
-  effectiveRole,
-  getCurrentUser,
   getCurrentUserOrThrow,
-  organizationRoleOf,
   requireRole,
-  type CurrentUser,
 } from "./lib/auth";
 import { refusal } from "./lib/errors";
 import {
@@ -39,11 +29,12 @@ import {
 import { emailSettings } from "./lib/notificationEmail";
 import { notificationTypeValidator } from "./schema";
 import {
-  MARK_ALL_READ_LIMIT,
-  UNREAD_COUNT_LIMIT,
+  continueMarkAllReadHandler,
+  markAllReadHandler,
   notificationVisibility,
   recentVisible,
-  visibleUnread,
+  staffOrNull,
+  unreadCountHandler,
 } from "./lib/notificationVisibility";
 
 export {
@@ -51,11 +42,6 @@ export {
   UNREAD_COUNT_LIMIT,
   MARK_ALL_READ_LIMIT,
 } from "./lib/notificationVisibility";
-
-/** A staff member of the organisation of the call, or null for anyone else. */
-function staffOrNull(caller: CurrentUser): CurrentUser | null {
-  return STAFF_ROLES.includes(caller.role) ? caller : null;
-}
 
 const notificationRow = v.object({
   _id: v.id("notifications"),
@@ -129,20 +115,6 @@ export const list = query({
  * organisation, or a patient. Never throws: the header reads it on every
  * page, the organisation gate included.
  */
-export async function unreadCountHandler(
-  ctx: QueryCtx,
-): Promise<number | null> {
-  const current = await getCurrentUser(ctx);
-  if (current === null || current.session === null) return null;
-  const caller = staffOrNull({
-    ...current.user,
-    role: current.session.role,
-    organizationId: current.session.organization._id,
-  });
-  if (caller === null) return null;
-  return (await visibleUnread(ctx, caller, UNREAD_COUNT_LIMIT)).length;
-}
-
 export const unreadCount = query({
   args: {},
   returns: v.union(v.number(), v.null()),
@@ -168,71 +140,12 @@ export const markRead = mutation({
   },
 });
 
-async function markVisibleReadBatch(
-  ctx: MutationCtx,
-  caller: CurrentUser,
-): Promise<{ marked: number }> {
-  const unread = await visibleUnread(ctx, caller, MARK_ALL_READ_LIMIT);
-  for (const row of unread) await ctx.db.patch(row._id, { read: true });
-  if (unread.length === MARK_ALL_READ_LIMIT) {
-    await ctx.scheduler.runAfter(
-      0,
-      internal.notifications.continueMarkAllRead,
-      {
-        userId: caller._id,
-        organizationId: caller.organizationId,
-      },
-    );
-  }
-  return { marked: unread.length };
-}
-
 /** Mark visible alerts read in bounded transactions, continuing without a new click. */
-export async function markAllReadHandler(
-  ctx: MutationCtx,
-): Promise<{ marked: number }> {
-  await limitUser(ctx);
-  const caller = await requireRole(ctx, STAFF_ROLES);
-  return await markVisibleReadBatch(ctx, caller);
-}
-
 export const markAllRead = mutation({
   args: {},
   returns: v.object({ marked: v.number() }),
   handler: markAllReadHandler,
 });
-
-export async function continueMarkAllReadHandler(
-  ctx: MutationCtx,
-  {
-    userId,
-    organizationId,
-  }: {
-    readonly userId: Id<"users">;
-    readonly organizationId: Id<"organizations">;
-  },
-): Promise<{ marked: number }> {
-  const user = await ctx.db.get(userId);
-  const organization = await ctx.db.get(organizationId);
-  const role = await organizationRoleOf(ctx, userId, organizationId);
-  if (
-    !user ||
-    user.clerkDeletedAt !== undefined ||
-    !organization ||
-    organization.deletedAt !== undefined ||
-    role === null
-  ) {
-    return { marked: 0 };
-  }
-  const caller = staffOrNull({
-    ...user,
-    organizationId,
-    role: effectiveRole(organization, role),
-  });
-  return caller === null
-    ? { marked: 0 }
-    : await markVisibleReadBatch(ctx, caller);
-}
 
 export const continueMarkAllRead = internalMutation({
   args: { userId: v.id("users"), organizationId: v.id("organizations") },

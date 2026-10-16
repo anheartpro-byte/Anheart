@@ -11,8 +11,11 @@ import {
 import * as notifications from "./notifications";
 import { getCurrentUserOrThrow } from "./lib/auth";
 import {
+  continueMarkAllReadHandler,
+  markAllReadHandler,
   notificationVisibility,
   recentVisible,
+  unreadCountHandler,
   visibleUnread,
 } from "./lib/notificationVisibility";
 import {
@@ -178,14 +181,12 @@ function modulesRecordingBatches(batches: number[]) {
       ...notifications,
       markAllRead: mutation({
         args: {},
-        handler: (ctx) => recorded(ctx, notifications.markAllReadHandler),
+        handler: (ctx) => recorded(ctx, markAllReadHandler),
       }),
       continueMarkAllRead: internalMutation({
         args: { userId: v.id("users"), organizationId: v.id("organizations") },
         handler: (ctx, args) =>
-          recorded(ctx, (ctx) =>
-            notifications.continueMarkAllReadHandler(ctx, args),
-          ),
+          recorded(ctx, (ctx) => continueMarkAllReadHandler(ctx, args)),
       }),
     }),
   };
@@ -257,7 +258,7 @@ describe("ANH-237 visibility before notification limits", () => {
       const count = () =>
         caller.run(async (ctx) => {
           const reads = recordReads(ctx);
-          const value = await notifications.unreadCountHandler(reads.ctx);
+          const value = await unreadCountHandler(reads.ctx);
           return { value, tables: reads.tables };
         });
 

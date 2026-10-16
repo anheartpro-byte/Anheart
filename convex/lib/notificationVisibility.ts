@@ -5,13 +5,26 @@
  * live document. Logical deletion preserves access, as it does for sessions.
  */
 import type { Doc, Id } from "../_generated/dataModel";
-import type { QueryCtx } from "../_generated/server";
-import type { CurrentUser } from "./auth";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { internal } from "../_generated/api";
+import {
+  effectiveRole,
+  getCurrentUser,
+  organizationRoleOf,
+  requireRole,
+  STAFF_ROLES,
+  type CurrentUser,
+} from "./auth";
+import { limitUser } from "./rateLimits";
 
 export const LIST_LIMIT = 50;
 export const UNREAD_COUNT_LIMIT = 100;
 /** Maximum notification rows read and marked in one mark-all transaction. */
 export const MARK_ALL_READ_LIMIT = 500;
+
+export function staffOrNull(caller: CurrentUser): CurrentUser | null {
+  return STAFF_ROLES.includes(caller.role) ? caller : null;
+}
 
 export async function notificationVisibility(
   ctx: QueryCtx,
@@ -117,4 +130,77 @@ export async function recentVisible(
       (a, b) => b.updatedAt - a.updatedAt || b._creationTime - a._creationTime,
     )
     .slice(0, LIST_LIMIT);
+}
+
+export async function unreadCountHandler(
+  ctx: QueryCtx,
+): Promise<number | null> {
+  const current = await getCurrentUser(ctx);
+  if (current === null || current.session === null) return null;
+  const caller = staffOrNull({
+    ...current.user,
+    role: current.session.role,
+    organizationId: current.session.organization._id,
+  });
+  if (caller === null) return null;
+  return (await visibleUnread(ctx, caller, UNREAD_COUNT_LIMIT)).length;
+}
+
+async function markVisibleReadBatch(
+  ctx: MutationCtx,
+  caller: CurrentUser,
+): Promise<{ marked: number }> {
+  const unread = await visibleUnread(ctx, caller, MARK_ALL_READ_LIMIT);
+  for (const row of unread) await ctx.db.patch(row._id, { read: true });
+  if (unread.length === MARK_ALL_READ_LIMIT) {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.continueMarkAllRead,
+      {
+        userId: caller._id,
+        organizationId: caller.organizationId,
+      },
+    );
+  }
+  return { marked: unread.length };
+}
+
+export async function markAllReadHandler(
+  ctx: MutationCtx,
+): Promise<{ marked: number }> {
+  await limitUser(ctx);
+  const caller = await requireRole(ctx, STAFF_ROLES);
+  return await markVisibleReadBatch(ctx, caller);
+}
+
+export async function continueMarkAllReadHandler(
+  ctx: MutationCtx,
+  {
+    userId,
+    organizationId,
+  }: {
+    readonly userId: Id<"users">;
+    readonly organizationId: Id<"organizations">;
+  },
+): Promise<{ marked: number }> {
+  const user = await ctx.db.get(userId);
+  const organization = await ctx.db.get(organizationId);
+  const role = await organizationRoleOf(ctx, userId, organizationId);
+  if (
+    !user ||
+    user.clerkDeletedAt !== undefined ||
+    !organization ||
+    organization.deletedAt !== undefined ||
+    role === null
+  ) {
+    return { marked: 0 };
+  }
+  const caller = staffOrNull({
+    ...user,
+    organizationId,
+    role: effectiveRole(organization, role),
+  });
+  return caller === null
+    ? { marked: 0 }
+    : await markVisibleReadBatch(ctx, caller);
 }
