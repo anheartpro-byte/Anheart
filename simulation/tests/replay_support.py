@@ -16,14 +16,44 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 
+from simulation.harness import PANEL_SAFETY, RUNTIME_LIMITS, load_motion
 from simulation.real_records import ANONYMIZED, LOCAL_REF_LENGTH, library_identity
 from simulation.scenario import SCENARIO_DIR, Action, EcgMode, Scenario
 from simulation.tests.conftest import document, load, run
+from src.geometry import MachineGeometry
+from src.local_config import load_local_config
 from src.record.codec import Privacy
-from src.units import Seconds
+from src.record.schema import Manifest
+from src.record.session import applied_configuration
+from src.result import Ok
+from src.units import GearRatio, Hertz, Metres, MotorRpm, Seconds
 
 type Cells = list[str]
 type Line = dict[str, object]
+
+
+def configuration_for(manifest: Manifest) -> bytes:
+    geometry = manifest.geometry
+    assert geometry is not None
+    loaded = load_local_config(
+        {
+            "MOTOR_BACKEND": "sim",
+            "ECG_SOURCE": "sim",
+            "ARM_RADIUS_M": str(geometry.reference_radius_m),
+        }
+    )
+    assert isinstance(loaded, Ok)
+    config = replace(
+        loaded.value,
+        geometry=MachineGeometry(
+            radius=Metres(geometry.reference_radius_m),
+            ratio=GearRatio(geometry.gear_ratio),
+            nominal_rpm=MotorRpm(geometry.nominal_motor_rpm),
+            base_hz=Hertz(geometry.base_hz),
+        ),
+        leg_tip_radius=Metres(geometry.leg_tip_radius_m),
+    )
+    return applied_configuration(config, RUNTIME_LIMITS, PANEL_SAFETY, load_motion())
 
 
 def short(

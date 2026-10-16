@@ -198,24 +198,13 @@ class Stamp:
     as a ``warning`` event at the start of every record. ``None``: they are."""
 
 
-def _digest(document: JsonValue) -> str:
-    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def stamp_for(
+def applied_configuration(
     config: LocalConfig,
     limits: RuntimeLimits,
     safety: SafetyLimits,
     motion: MotionLimits,
-    software_version: SoftwareVersion,
-) -> Stamp:
-    """Hash the configuration actually applied. No secret enters either hash.
-
-    ``software_version`` is what this build calls itself
-    (:func:`~src.contract.read_software_version`, from ``raspberry-pi/VERSION``):
-    the one value the manifest, the console's page and the heartbeat all carry.
-    It is a fact about the build, not a setting, and is in neither hash.
+) -> bytes:
+    """The canonical document hashed by ``stamp_for``. No identity or secret.
 
     ``medical_parameters_version`` is the version of the signed medical file
     (``config/medical_parameters.json``) the console runs with; when its
@@ -255,12 +244,33 @@ def stamp_for(
         "camera": config.camera.value,
         "drive_link": None if link is None else link.describe(),
     }
+    return json.dumps(applied, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8"
+    )
+
+
+def stamp_for(
+    config: LocalConfig,
+    limits: RuntimeLimits,
+    safety: SafetyLimits,
+    motion: MotionLimits,
+    software_version: SoftwareVersion,
+) -> Stamp:
+    """Stamp the build and hash its applied configuration, excluding secrets.
+
+    The version comes from ``raspberry-pi/VERSION``, not from a setting, and
+    does not enter the configuration hash. The canonical bytes are shared
+    with the journal and the replay through :func:`applied_configuration`.
+    """
+    status = config.medical
     record = config.record
     return Stamp(
         machine_id=record.machine_id,
         organization_id=record.organization_id,
         software_version=software_version,
-        config_hash=_digest(applied),
+        config_hash=hashlib.sha256(
+            applied_configuration(config, limits, safety, motion)
+        ).hexdigest(),
         medical_parameters_version=status.recorded_version,
         medical_warning=status.warning,
     )

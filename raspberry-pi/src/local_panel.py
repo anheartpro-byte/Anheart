@@ -220,6 +220,7 @@ from src.record.session import (
     RecordJournalBusy,
     SessionRecorder,
     SessionRequest,
+    applied_configuration,
     operator_alias,
     stamp_for,
     storage_gate,
@@ -2166,6 +2167,7 @@ def build_recorder(
     simulator = drive.simulator
     radius = config.geometry.radius
     leg_tip = config.leg_tip_radius
+    journal.configure(applied_configuration(config, RUNTIME_LIMITS, safety, motion))
     return SessionRecorder(
         clock=clock,
         journal=journal,

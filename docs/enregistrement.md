@@ -87,6 +87,11 @@ enregistrements clos munis de l'inventaire `files` sont aussi déposés dans
 Convex Storage : manifeste, traces variateur, capteurs et blocs bruts compris.
 Le journal hors séance reste local. Voir [Dépôt vérifié](#dépôt-vérifié-dans-convex).
 
+**Configuration appliquée de la console.** Le fil du journal écrit aussi
+`data/records/config/<config_hash>.json`, hors de tout dossier de séance.
+Ce fichier local est décrit ci-dessous ; il ne fait partie ni du manifeste,
+ni de son inventaire, ni du contrat Pi-Convex.
+
 ## Manifeste
 
 Tous les champs suivants sont présents, y compris ceux dont la valeur est
@@ -652,18 +657,80 @@ ce que l'enregistrement contient :
 | l'ECG | `ecg_raw/` | les blocs bruts depuis au moins 8 s avant le départ (la fenêtre du DSP), chacun avec `t_received` |
 | les demandes | `events.jsonl` | les commandes du tableau ci-dessus, pour les trois kinds d'entrée |
 
-Il faut aussi la géométrie du manifeste (`geometry`) : le runtime rejoué est
-construit avec elle. Quand il manque plusieurs de ces choses, le refus les
-donne ensemble, séparées par « ; ».
+Pour un producteur `machine_id: simulation`, il faut aussi la géométrie du
+manifeste (`geometry`) : elle construit le runtime, avec les limites du
+dépôt courant. Son `config_hash` de scénario n'est pas vérifié, ce que le
+rapport dit explicitement. Les trois archives simulées gardent ce comportement.
 
-**L'enregistrement de la console en simulation reste refusé pour la
-géométrie absente du manifeste**, quand sa fenêtre est complète. Le test
-`test_record_console_parity.py` passe par le vrai DSP : les entrées se lisent
-par `commands.parse`, les blocs portent `t_received` et les remises
-`runtime_delivery`, les tics et échanges de repos précèdent le départ.
-Son seul refus restant est la géométrie. La console conserve `geometry: null`.
-Les échanges Modbus natifs restent aussi refusés tant que leur magnétophone
-n'est pas disponible.
+Pour tout autre producteur, dont la console en simulation, le document de
+configuration appliquée décrit ci-dessous est obligatoire. Il fournit la
+géométrie sans inventer les rayons que la console ne connaît pas ; son
+manifeste conserve `geometry: null`. Quand plusieurs entrées manquent, le
+refus les donne ensemble, séparées par « ; ». Les échanges Modbus natifs
+restent refusés tant que leur magnétophone n'est pas disponible.
+
+### Configuration vérifiée au rejeu (EX-5)
+
+`src.record.session.applied_configuration` rend les octets UTF-8 du JSON
+canonique que `stamp_for` hache : clés triées, séparateurs sans espaces,
+aucun saut de ligne. L'empreinte reste identique pour une même configuration.
+Le document contient les limites de sécurité, de mouvement et du runtime,
+la géométrie appliquée (rayon de référence, rapport, vitesse nominale,
+fréquence de base, rayon des pieds ou `null`), l'âge minimal, les plafonds et
+portes de la console, les sources et voies, la caméra, la description du
+lien variateur, l'empreinte et le verdict de signature du fichier médical.
+Les limites sont les mêmes objets de domaine sérialisés que dans la console.
+Il ne contient ni identité, ni donnée de santé individuelle, ni clé du
+tableau de bord, ni jeton de console. Aucun nom libre de programme n'y entre.
+
+Au démarrage, la console remet ces octets au journal, en mémoire. Le premier
+cycle du fil `record-journal` les écrit dans `config/<config_hash>.json` :
+jamais dans un tic ni dans la boucle de contrôle, et sans attente du départ
+de séance. Le dossier est en mode 700, le fichier est créé en mode 600.
+La borne `MAX_CONFIG_BYTES` est de 65 536 octets, à l'écriture et à la lecture.
+Un fichier identique existe déjà : il n'est ni remplacé ni réécrit. Un
+fichier différent au même nom est conservé et signalé. Disque plein,
+lecture seule, collision ou dépassement de taille donnent un événement
+`warning` préfixé `replay_config:` dans chaque enregistrement, avec une
+raison machine sans chemin ni texte d'exception. La séance continue ; le
+rejeu refuse cet avertissement. Un fichier partiellement écrit n'est pas
+réparé silencieusement.
+
+`config/` n'est jamais synchronisé, déposé, exporté par l'export de séance,
+ni purgé automatiquement. La sélection des séances filtre les noms par
+`RECORD_NAME` directement sous la racine ; curseurs et marqueurs ne sont
+pas cherchés récursivement. Le journal hors séance écrit seulement dans
+`logbook/`. `test_record_configuration.py` vérifie ces exclusions, avec un
+faux dossier de séance et des métadonnées placés sous `config/`.
+
+Pour rejouer une console, copier séparément son document et fournir
+`--config <fichier>`, ou le placer à côté de la source sous
+`<dossier>.config.json` ou `<archive sans .tar.gz>.config.json`. La bibliothèque
+lit aussi `<nom>.config.json` à côté de l'archive. Le rejeu exige
+`sha256(octets du document) == manifest.config_hash` avant de construire le
+runtime. Un document absent, illisible, trop grand ou refusé par les
+constructeurs du domaine donne `ReplayError`, code de sortie 2. Une
+empreinte différente nomme les 16 premiers caractères des deux empreintes,
+`manifest` et `document`. Même un espace ajouté change l'empreinte.
+
+Le runtime utilise la géométrie et toutes les limites du document vérifié,
+validées par les mêmes constructeurs que la console. Le rapport
+`configuration` porte `config_hash_verified`, `current_configuration_differs`
+et `differing_parts` (liste fermée : `medical_file`, `safety`, `motion`,
+`runtime`, `min_rider_age`). Il compare ces parties aux valeurs livrées
+par le dépôt ; `medical_file` couvre empreinte et signature. `not_compared`
+nomme `geometry`, `machine_ceilings`, `sources`, `camera`, `drive_link`,
+réglages propres à la machine sans valeur courante dans le dépôt. Une
+différence n'empêche pas le rejeu : il reste celui de la configuration
+enregistrée. Pour la simulation, `config_hash_verified` vaut `false` et
+`current_configuration_differs` vaut `null`.
+
+Le test croisé `test_record_console_parity.py` produit une séance manuelle
+avec changement de cible et arrêt, et une séance de programme, par le vrai
+`LocalPanel`, le variateur et BITalino simulés, le vrai DSP et une horloge
+simulée. Les deux rejeux donnent zéro tic différent, zéro tolérance consommée,
+avec pings de présence. Le cas où seul le fichier médical courant diffère
+reste identique et le rapport nomme `medical_file`.
 
 La fenêtre garde **12 s** (`PRESTART_SECONDS`) : les 8 s du DSP, plus 4 s de
 marge pour les frontières des lots de 0,2 s, le dernier tic de repos et une

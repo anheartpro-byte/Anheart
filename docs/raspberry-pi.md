@@ -3100,6 +3100,29 @@ enregistrement fermé par la boucle : il était clos sans rien en dire.
 
 ### 15.2 Aucune écriture dans la boucle
 
+Au démarrage, `build_recorder` remet aussi au journal le document canonique
+de la configuration appliquée, celui dont `stamp_for` calcule `config_hash`.
+Le premier cycle du fil écrit
+`RECORD_ROOT/config/<config_hash>.json`, une fois par empreinte : dossier
+700, création du fichier en mode 600, au plus 65 536 octets
+(`MAX_CONFIG_BYTES`). Une copie identique n'est pas réécrite ; une copie
+différente au même nom n'est jamais remplacée. Cette opération ne passe par
+aucun tic et aucun départ ne l'attend. Un refus disque, de taille ou de
+collision devient un `warning replay_config:` dans chaque enregistrement,
+sans bloquer la séance ; le rejeu refuse avec sa raison. Une faute interne
+dans cette écriture ne remonte pas vers le contrôle.
+
+Ce document contient les limites, la géométrie appliquée et les réglages de
+la machine, sans clé, jeton, identité ou donnée de santé individuelle.
+Il reste local : rétention, synchronisation, dépôt, export et journal hors
+séance ignorent `config/`. Pour rejouer une console, récupérer séparément
+le fichier et passer `--config`, ou préparer un fichier adjacent
+`<dossier>.config.json` / `<archive sans .tar.gz>.config.json`. Le rejeu
+vérifie ses octets contre `config_hash`, utilise ses limites et sa géométrie,
+et signale les parties qui diffèrent des valeurs livrées par le dépôt.
+Le contrat et le manifeste ne changent pas. Les garanties et les refus sont
+détaillés dans [enregistrement.md](enregistrement.md#configuration-vérifiée-au-rejeu-ex-5).
+
 Deux objets, deux fils :
 
 - `SessionRecorder` (`src/record/session.py`) vit sur la boucle de la console.

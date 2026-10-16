@@ -73,6 +73,7 @@ from typing import Final, assert_never
 
 from src.clock import Clock, ManualClock
 from src.record.codec import Privacy
+from src.record.configuration import persist
 from src.record.drive_tap import FRAME_BACKLOG, FrameSource, Observation
 from src.record.ecg import Header, RawBlock, RuntimeDelivery
 from src.record.logbook import Logbook, Note, note
@@ -504,6 +505,8 @@ class Scribe:
     __slots__ = (
         "_activity",
         "_clock",
+        "_config_warning",
+        "_configuration",
         "_consumed",
         "_discarded",
         "_dispatched",
@@ -554,6 +557,8 @@ class Scribe:
         """``dispatched``: the instant of the last control tick the loop reported
         (:meth:`Journal.dispatched`). ``room``: the drive frames that may wait here."""
         self._root: Path = root
+        self._configuration: bytes | None = None
+        self._config_warning: str | None = None
         self._clock: Clock = clock
         self._retention_days: int | None = retention_days
         self._publish: Callable[[Progress], None] = publish
@@ -631,6 +636,9 @@ class Scribe:
             activity=self._activity,
         )
 
+    def configure(self, document: bytes) -> None:
+        self._configuration = document
+
     def cycle(self, queue: deque[Item], dropped: int, unlogged: int) -> None:
         """Write everything queued when the cycle began, then the periodic work.
 
@@ -674,6 +682,13 @@ class Scribe:
         ended before it, and what the tap refused a console at rest since
         would be counted with it.
         """
+        document = self._configuration
+        if document is not None:
+            self._configuration = None
+            try:
+                self._config_warning = persist(self._root, document)
+            except Exception as error:
+                self._config_warning = f"replay_config: {type(error).__name__}"
         now = self._clock.monotonic()
         # Read before anything is taken, and before the queue is counted: see :meth:`_forget`.
         dispatched = self._dispatched()
@@ -941,6 +956,11 @@ class Scribe:
         self._writer = writer
         self._path = writer.path
         self._synced_at = now
+        warning = self._config_warning
+        if warning is not None:
+            self._note(
+                writer.event(Event(t=0.0, kind=EventKind.WARNING, detail=warning, actor="system"))
+            )
         return writer.sync()
 
     def _close(self, closing: Closing, dropped: int) -> Result[None, RecordError]:
@@ -1110,6 +1130,9 @@ class Journal:
     def root(self) -> Path:
         """The records directory."""
         return self._root
+
+    def configure(self, document: bytes) -> None:
+        self._scribe.configure(document)
 
     def listen(self, frames: FrameSource, refused: Callable[[], int] | None = None) -> None:
         """Take the drive's observations from ``frames`` at every cycle, off the loop.

@@ -13,7 +13,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Final, TypedDict
+from typing import Final, Literal, TypedDict
 
 from src.training.types import Phase, SafetyAction
 from src.units import MotorRpm, Seconds
@@ -242,6 +242,24 @@ class ReplayDocument(TypedDict):
     comparison: ComparisonDocument
     divergence: DivergenceDocument | None
     integrity: list[str]
+    configuration: ConfigurationDocument
+
+
+class ConfigurationDocument(TypedDict):
+    config_hash_verified: bool
+    current_configuration_differs: bool | None
+    differing_parts: list[str]
+    not_compared: list[str]
+
+
+type CurrentPart = Literal["medical_file", "safety", "motion", "runtime", "min_rider_age"]
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationCheck:
+    config_hash_verified: bool = False
+    current_configuration_differs: bool | None = None
+    differing_parts: tuple[CurrentPart, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +276,8 @@ class ReplayReport:
     divergence: Divergence | None
     integrity: tuple[str, ...] = ()
     """The reader's warnings (``file: code``): a record altered after it was closed says so."""
+
+    configuration: ConfigurationCheck = ConfigurationCheck()
 
     @property
     def outcome(self) -> Outcome:
@@ -281,6 +301,12 @@ class ReplayReport:
             "comparison": self.comparison.document(),
             "divergence": None if self.divergence is None else self.divergence.document(),
             "integrity": list(self.integrity),
+            "configuration": {
+                "config_hash_verified": self.configuration.config_hash_verified,
+                "current_configuration_differs": self.configuration.current_configuration_differs,
+                "differing_parts": list(self.configuration.differing_parts),
+                "not_compared": ["geometry", "machine_ceilings", "sources", "camera", "drive_link"],
+            },
         }
 
     def to_json(self) -> str:
@@ -297,6 +323,17 @@ class ReplayReport:
             f"+/-{VERDICT_TOLERANCE_TICKS} tick, phase and rule exact",
         ]
         first = comparison.first
+        configuration = self.configuration
+        if configuration.config_hash_verified:
+            parts = ", ".join(configuration.differing_parts) or "none"
+            lines.append(
+                f"  configuration: config_hash verified; current repository differences: {parts}"
+            )
+            lines.append(
+                "    not compared: geometry, machine ceilings, sources, camera, drive link"
+            )
+        else:
+            lines.append("  configuration: config_hash not verified for the simulation producer")
         if first is not None:
             lines.append(f"  first difference: {first.code.value} at t={first.t:.3f} s")
             lines.append(f"    tick index {first.index}")

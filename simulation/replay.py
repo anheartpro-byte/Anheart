@@ -61,7 +61,8 @@ from simulation.harness import (
     load_motion,
 )
 from simulation.replay_compare import Decision, RuleKey, SafetyDecision, compare_decisions
-from simulation.replay_report import Divergence, ReplayReport
+from simulation.replay_config import AppliedRuntime, load_configuration, sidecar
+from simulation.replay_report import ConfigurationCheck, Divergence, ReplayReport
 from simulation.replay_tape import (
     INSTANT_EPSILON,
     NO_FURTHER,
@@ -183,7 +184,7 @@ class _Plan:
     exchanges: tuple[Exchange, ...]
     blocks: tuple[Delivery, ...]
     origin: Monotonic
-    geometry: GeometrySnapshot
+    geometry: GeometrySnapshot | AppliedRuntime
 
 
 def _position(step: _Step) -> tuple[float, int]:
@@ -296,12 +297,11 @@ def _orders(recording: Recording) -> Result[tuple[_Order, ...], str]:
     return Ok(tuple(orders))
 
 
-def _plan(recording: Recording) -> Result[_Plan, str]:
+def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan, str]:
     """Everything a replay needs from the record, or EVERY reason it is not replayable.
 
-    All of them, not the first: a record the console writes today lacks several
-    things at once (commands in prose, no drive exchange, no geometry), and
-    whoever closes that gap needs the whole list.
+    An older producer can lack several inputs at once (commands, drive
+    exchanges, geometry). The refusal names each missing input.
     """
     problems: list[str] = []
     expected = _decisions(recording.rows)
@@ -310,6 +310,11 @@ def _plan(recording: Recording) -> Result[_Plan, str]:
     problems.extend(part.error for part in (expected, orders, exchanges) if isinstance(part, Err))
     if not recording.frames:
         problems.append("the record holds no drive exchange: nothing says what the drive answered")
+    if any(
+        event.kind is EventKind.WARNING and event.detail.startswith("replay_config:")
+        for event in recording.events
+    ):
+        problems.append("the console could not persist its configuration document (replay_config)")
     if any(
         event.kind is EventKind.WARNING and event.detail.startswith("replay_preamble:")
         for event in recording.events
@@ -321,7 +326,7 @@ def _plan(recording: Recording) -> Result[_Plan, str]:
         for event in recording.events
     ):
         problems.append("the console closed with an unresolved ECG delivery")
-    geometry = recording.manifest.geometry
+    geometry = recording.manifest.geometry if applied is None else applied
     if geometry is None:
         problems.append("the manifest holds no geometry: the runtime cannot be built as it was")
     if not recording.raw and any(
@@ -396,9 +401,12 @@ async def _confirm_inline(
 
 
 def _runtime(
-    geometry: GeometrySnapshot, profile: Profile | None, clock: ManualClock, drive: TapeDrive
+    geometry: GeometrySnapshot | AppliedRuntime,
+    profile: Profile | None,
+    clock: ManualClock,
+    drive: TapeDrive,
 ) -> Result[TrainingRuntime, str]:
-    """The runtime as the producer built it: the record's geometry, this checkout's limits."""
+    """Build from verified console settings, or simulation geometry and repository limits."""
     safety = (
         PANEL_SAFETY
         if profile is None
@@ -407,6 +415,18 @@ def _runtime(
         )
     )
     try:
+        if isinstance(geometry, AppliedRuntime):
+            return Ok(
+                TrainingRuntime(
+                    clock=clock,
+                    drive=drive,
+                    geometry=geometry.geometry,
+                    limits=geometry.runtime,
+                    safety=geometry.safety,
+                    motion=geometry.motion,
+                    limit_radius=geometry.limit_radius,
+                )
+            )
         machine = MachineGeometry(
             radius=Metres(geometry.reference_radius_m),
             ratio=GearRatio(geometry.gear_ratio),
@@ -598,9 +618,17 @@ def integrity_line(file: str, code: str) -> str:
     return f"{file if _MEMBER.fullmatch(file) is not None else '<member>'}: {code}"
 
 
-async def replay_recording(recording: Recording) -> Result[ReplayReport, ReplayError]:
+async def replay_recording(
+    recording: Recording, config: Path | None = None
+) -> Result[ReplayReport, ReplayError]:
     """Replay one record already read from disk. Must run on a loop of its own."""
-    plan = _plan(recording)
+    applied: AppliedRuntime | None = None
+    if recording.manifest.machine_id != "simulation":
+        configured = load_configuration(config, recording.manifest.config_hash)
+        if isinstance(configured, Err):
+            return Err(ReplayError(configured.error))
+        applied = configured.value
+    plan = _plan(recording, applied)
     if isinstance(plan, Err):
         return Err(ReplayError(plan.error))
     # The first step's instant AS WRITTEN: the one place an absolute instant is
@@ -625,13 +653,14 @@ async def replay_recording(recording: Recording) -> Result[ReplayReport, ReplayE
             ),
             divergence=replayed.divergence,
             integrity=tuple(integrity_line(w.file, w.code) for w in recording.warnings),
+            configuration=ConfigurationCheck() if applied is None else applied.check,
         )
     )
 
 
-def replay(path: Path) -> Result[ReplayReport, ReplayError]:
+def replay(path: Path, config: Path | None = None) -> Result[ReplayReport, ReplayError]:
     """Read the record folder at ``path`` and replay it."""
     loaded = read(path)
     if isinstance(loaded, Err):
         return Err(ReplayError(f"the record cannot be read ({loaded.error.detail})"))
-    return asyncio.run(replay_recording(loaded.value))
+    return asyncio.run(replay_recording(loaded.value, sidecar(path) if config is None else config))

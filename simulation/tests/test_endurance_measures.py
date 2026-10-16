@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -287,6 +287,56 @@ def test_ex2_what_is_left_next_to_the_records_is_named_and_a_confirmed_deposit_i
     assert isinstance(confirmed, Ok)
     assert after.deposited == 1
     assert after.stray == before.stray, "the deposit marker of a record is expected next to it"
+
+
+@pytest.mark.parametrize(
+    "kind", ["valid", "unexpected", "directory", "link", "root_file", "root_link", "unreadable"]
+)
+def test_configuration_documents_are_counted_separately_and_unknown_entries_stay_stray(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    root = tmp_path / "records"
+    directory = root / "config"
+    directory.mkdir(parents=True)
+    document = directory / ("a" * 64 + ".json")
+    document.write_bytes(b"{}")
+    expected: tuple[str, ...] = ()
+    if kind == "unexpected":
+        (directory / "unexpected.json").write_bytes(b"x")
+        expected = ("config/unexpected.json",)
+    elif kind == "directory":
+        document.unlink()
+        document.mkdir()
+        expected = ("config/" + document.name,)
+    elif kind == "link":
+        document.unlink()
+        document.symlink_to(tmp_path / "absent")
+        expected = ("config/" + document.name,)
+    elif kind in {"root_file", "root_link"}:
+        document.unlink()
+        directory.rmdir()
+        if kind == "root_file":
+            directory.write_bytes(b"x")
+        else:
+            directory.symlink_to(tmp_path / "absent")
+        expected = ("config",)
+    elif kind == "unreadable":
+        original = Path.iterdir
+
+        def denied(path: Path) -> Iterator[Path]:
+            if path == directory:
+                raise PermissionError(path)
+            return original(path)
+
+        monkeypatch.setattr(Path, "iterdir", denied)
+        expected = ("config",)
+    found = DataFolder(root).measure()
+    assert found.stray == expected
+    assert found.records == {}
+    assert found.total.entries == 1 + found.configuration.entries
+    assert found.total.size == found.configuration.size
 
 
 def test_ex2_a_record_the_retention_removed_is_counted_as_purged(tmp_path: Path) -> None:

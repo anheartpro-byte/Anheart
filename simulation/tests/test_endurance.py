@@ -152,6 +152,8 @@ def the_data_folder_is_bounded_by_confirmed_deposits_and_rotation(run: Run) -> N
     assert data.deposited == data.closed
     assert data.purged == 0
     assert data.stray == ()
+    assert data.configuration.entries == 2
+    assert data.configuration.size > 0
     for session in run.sessions:
         # Five raw blocks a second, and the handful of files every record has.
         assert (

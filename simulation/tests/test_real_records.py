@@ -8,6 +8,7 @@ anonymous, and replays as the library declares.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tarfile
@@ -49,6 +50,7 @@ from simulation.tests.replay_support import (
     as_library,
     as_real,
     at,
+    configuration_for,
     copy,
     edit_lines,
     edit_manifest,
@@ -541,9 +543,17 @@ def test_ex6_an_accepted_difference_is_a_file_next_to_the_archive(tmp_path: Path
 
 def _shelve(folder: Path, shelf: Path, name: str) -> Path:
     """Seal the (altered) record folder and put it in the library ``shelf`` as ``name``."""
+    manifest = loaded(folder).manifest
+    config: bytes | None = None
+    if manifest.machine_id != "simulation":
+        config = configuration_for(manifest)
+        digest = hashlib.sha256(config).hexdigest()
+        edit_manifest(folder, lambda line: line.update(config_hash=digest))
     reseal(folder)
     archive = shelf / f"{name}.tar.gz"
     pack(folder, archive)
+    if config is not None:
+        archive.with_name(name + ".config.json").write_bytes(config)
     return archive
 
 

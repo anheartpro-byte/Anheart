@@ -210,7 +210,7 @@ async def test_on_the_console_the_records_directory_holds_a_logbook_that_is_neve
     root = journal.root
     (record,) = records(root)
     assert sorted(entry.name for entry in root.iterdir()) == sorted(
-        [record.name, cursor_of(record).name, BASELINE_NAME, LOGBOOK]
+        [record.name, cursor_of(record).name, BASELINE_NAME, LOGBOOK, "config"]
     )
     assert wider_than_private(root) == {}
     closed = load(record)
@@ -240,6 +240,8 @@ async def test_on_the_console_the_records_directory_holds_a_logbook_that_is_neve
     # is no record.
     assert owed_records(root) == Ok(Listed(()))
     assert not (root / f"{LOGBOOK}.sync.json").exists()
+    assert not (root / "config.sync.json").exists()
+    assert list((root / "config").glob("*.json"))
 
 
 @pytest.fixture
