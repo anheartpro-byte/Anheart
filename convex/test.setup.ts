@@ -52,6 +52,11 @@ export async function registerShippedMedicalParameters(
   });
 }
 
+type BackendOptions = Pick<
+  Parameters<typeof convexTest>[0],
+  "transactionLimits"
+>;
+
 /**
  * An in-memory backend with the components `convex/convex.config.ts` mounts,
  * under the names the app gives them: the rate limiter (ANH-166) and the
@@ -59,11 +64,6 @@ export async function registerShippedMedicalParameters(
  * e-mail sender's own components are not: a test that queues an e-mail keeps
  * the clock still, and the batch that would send it never runs.
  */
-type BackendOptions = Pick<
-  Parameters<typeof convexTest>[0],
-  "transactionLimits"
->;
-
 export function backendOf(
   mods: Record<string, () => Promise<unknown>>,
   options: BackendOptions = {},

@@ -172,7 +172,7 @@ reprennent les niveaux fermés de `convex/lib/releaseValidation.ts` ;
 `outcome` est seulement `completed` ou `failed`, résultat technique d'une
 séance, jamais un verdict d'aptitude.
 `fields` ne contient que les noms des champs réellement modifiés. Les listes
-`added` et `removed` sont limitées chacune aux 1 000 premiers identifiants ;
+`added` et `removed` sont limitées chacune aux 1000 premiers identifiants ;
 si l'une dépasse ce plafond, `count` donne le total des deux listes avant
 troncature. Une invitation conserve ses gestionnaires dans `added` et
 chaque lien créé à son acceptation a sa propre ligne. Un changement de
@@ -1658,17 +1658,18 @@ routes d'entraînement.
 | `getCompletedSessionsForUser` | connecté | Les 100 séances `completed` les plus récentes que l'appelant peut lire. Plus appelée par le site de cette version (la page Rapports lit `listSessionsPaginated`) ; reste jusqu'au déploiement du site (ANH-82), car le site de la version précédente l'appelle encore entre le déploiement de Convex et celui du site. |
 
 **Les droits avant la limite (ANH-158, ANH-227).** Les trois listes appliquent
-les mêmes droits : qui peut lire quelles séances fait partie des plages
-et filtres lus avant de couper la limite ou la page. Une page de 50 contient donc en
-général 50 séances que l'appelant peut lire, jamais les 50 dernières de la
-base filtrées après coup. Elle peut en contenir moins, et même aucune sans que
-la liste soit finie : à la fin de la liste, quand le serveur demande de couper
-une page qui lit trop, quand des séances arrivent ou changent pendant la
-lecture, ou quand le second contrôle décrit plus bas en retire une. Le site
-propose la suite d'après le statut de la liste, pas d'après la taille d'une
-page, et n'écrit « aucune séance » qu'une fois la liste finie. Avant ce ticket, une séance d'un
-patient ou d'un gestionnaire pouvait manquer à sa liste parce que des séances
-plus récentes d'autres personnes remplissaient la page.
+les mêmes droits : qui peut lire quelles séances fait partie des plages et
+filtres lus avant de couper la limite ou la page. Une page de 50 contient donc
+en général 50 séances que l'appelant peut lire, jamais les 50 dernières de la
+base filtrées après coup. Elle peut en contenir moins, et même aucune sans
+que la liste soit finie : à la fin de la liste, quand le serveur demande de
+couper une page qui lit trop, quand des séances arrivent ou changent pendant
+la lecture, ou quand le second contrôle décrit plus bas en retire une. Le
+site propose la suite d'après le statut de la liste, pas d'après la taille
+d'une page, et n'écrit « aucune séance » qu'une fois la liste finie. Avant ce
+ticket, une séance d'un patient ou d'un gestionnaire pouvait manquer à sa
+liste parce que des séances plus récentes d'autres personnes remplissaient
+la page.
 
 | Appelant | Ce qu'il lit | Index lu |
 |---|---|---|
@@ -1719,7 +1720,7 @@ l'historique du centre, même s'il est lié à une machine d'une autre organisat
 **Les pages (ANH-227).** `listSessionsPaginated` conserve une seule plage et la
 pagination native Convex, avec ses pages contiguës et ses curseurs. Pour tous
 les appelants, le serveur impose `maximumRowsRead: 1000` au plus ; une valeur
-client inférieure est conservée, une valeur supérieure ramenée à 1 000.
+client inférieure est conservée, une valeur supérieure ramenée à 1000.
 Ce plafond compte les séances parcourues avant le filtre des droits, pas
 seulement celles affichées. À la limite, Convex retourne une page incomplète
 (`SplitRequired`), un `splitCursor` et un `continueCursor` au point d'arrêt.
@@ -1727,7 +1728,7 @@ seulement celles affichées. À la limite, Convex retourne une page incomplète
 « Afficher plus ». Une page vide peut donc précéder la fin de la liste :
 le site doit suivre le statut de pagination pour proposer la suite et afficher
 l'état vide. Le gestionnaire sans séance visible parcourt encore l'historique
-du centre au fil des pages, avec au plus 1 000 séances parcourues par page,
+du centre au fil des pages, avec au plus 1000 séances parcourues par page,
 plus les lectures d'autorisation et de noms.
 
 **Les filtres explicites.** Avec `machineId` ou `userId`, les listes courtes

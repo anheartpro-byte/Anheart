@@ -1,13 +1,20 @@
 /**
  * convex-test 0.0.60 counts returned documents, not rows rejected by a filter.
- * The merged sources have no database filter: every scanned session counts
- * towards documentsRead. The unfiltered centre scan proves the budget bites.
+ * The recorder proves the merged sources use narrow indexes without filters:
+ * every scanned session counts towards documentsRead. The unfiltered centre
+ * scan proves the budget bites.
  * For pagination, maximumRowsRead counts before filters; page cuts and cursor
  * traversal prove the scan cap, independently of the documentsRead counter.
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "./_generated/api";
+import type { QueryCtx } from "./_generated/server";
+import { getCurrentUserOrThrow } from "./lib/auth";
+import {
+  newestReadableSessions,
+  readableSessions,
+} from "./lib/readableSessions";
 import { as } from "./test.setup";
 import {
   boundsWorld,
@@ -16,6 +23,66 @@ import {
 } from "./sessionListBounds.fixtures";
 
 type BoundsWorld = Awaited<ReturnType<typeof boundsWorld>>;
+
+type RecordedRead = {
+  readonly table: string;
+  readonly index: unknown;
+  readonly calls: (
+    | { method: "filter" | "paginate" | "collect" }
+    | { method: "take"; limit: unknown }
+  )[];
+};
+
+function recordReads(ctx: QueryCtx) {
+  const reads: RecordedRead[] = [];
+  function record<T extends object>(
+    query: T,
+    table: string,
+    read?: RecordedRead,
+  ): T {
+    return new Proxy(query, {
+      get(target, key, receiver) {
+        const method: unknown = Reflect.get(target, key, receiver);
+        if (typeof method !== "function") return method;
+        return (...args: unknown[]) => {
+          let source = read;
+          if (key === "withIndex" || source === undefined) {
+            source = {
+              table,
+              index: key === "withIndex" ? args[0] : undefined,
+              calls: [],
+            };
+            reads.push(source);
+          }
+          if (key === "filter" || key === "paginate" || key === "collect") {
+            source.calls.push({ method: key });
+          } else if (key === "take") {
+            source.calls.push({ method: key, limit: args[0] });
+          }
+          const result: unknown = Reflect.apply(method, target, args);
+          if (
+            (key === "withIndex" || key === "order" || key === "filter") &&
+            typeof result === "object" &&
+            result !== null
+          ) {
+            return record(result, table, source);
+          }
+          return result;
+        };
+      },
+    });
+  }
+  const db = new Proxy(ctx.db, {
+    get(target, key, receiver) {
+      if (key === "query") {
+        return (table: Parameters<QueryCtx["db"]["query"]>[0]) =>
+          record(target.query(table), table);
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  return { ctx: { ...ctx, db }, reads };
+}
 
 async function expectBudgetBites(w: BoundsWorld) {
   await expect(
@@ -29,6 +96,78 @@ async function expectBudgetBites(w: BoundsWorld) {
     ),
   ).rejects.toThrow("Scanned too many documents");
 }
+
+describe("ANH-227 short lists: bounded source structure", () => {
+  describe.each([
+    { actor: "manager", sparse: false, machineCount: 0 },
+    { actor: "otherManager", sparse: false, machineCount: 0 },
+    { actor: "manager", sparse: true, machineCount: 2 },
+  ] as const)("$actor with $machineCount managed machines", (scenario) => {
+    let w: BoundsWorld;
+    beforeAll(async () => {
+      w = await boundsWorld(80, scenario.sparse);
+    });
+
+    it.each([undefined, "completed", "active"] as const)(
+      "takes only bounded machine and rider ranges when status is %s",
+      async (status) => {
+        const limit = 10;
+        const reads = await as(w.t, scenario.actor).run(async (ctx) => {
+          const caller = await getCurrentUserOrThrow(ctx);
+          const recorded = recordReads(ctx);
+          await newestReadableSessions(recorded.ctx, caller, { status }, limit);
+          return recorded.reads;
+        });
+        const sources = reads.filter((read) => read.table === "sessions");
+        const machineIndex =
+          status === undefined
+            ? "by_organization_and_machine_and_started"
+            : "by_organization_and_machine_and_status_and_started";
+        const riderIndex =
+          status === undefined
+            ? "by_organization_and_user_and_started"
+            : "by_organization_and_user_and_status_and_started";
+        expect(sources.map((source) => source.index).sort()).toEqual(
+          [
+            ...Array.from(
+              { length: scenario.machineCount },
+              () => machineIndex,
+            ),
+            riderIndex,
+          ].sort(),
+        );
+        for (const source of sources) {
+          expect(source.calls).toEqual([{ method: "take", limit }]);
+        }
+      },
+    );
+
+    it.each([undefined, "completed", "active"] as const)(
+      "records the centre scan and filter of the previous path when status is %s",
+      async (status) => {
+        const limit = 10;
+        const reads = await as(w.t, scenario.actor).run(async (ctx) => {
+          const caller = await getCurrentUserOrThrow(ctx);
+          const recorded = recordReads(ctx);
+          await (
+            await readableSessions(recorded.ctx, caller, { status })
+          ).take(limit);
+          return recorded.reads;
+        });
+        expect(reads.filter((read) => read.table === "sessions")).toEqual([
+          {
+            table: "sessions",
+            index:
+              status === undefined
+                ? "by_organization_and_started"
+                : "by_organization_and_status_and_started",
+            calls: [{ method: "filter" }, { method: "take", limit }],
+          },
+        ]);
+      },
+    );
+  });
+});
 
 describe("ANH-227 short lists: a manager with no readable history", () => {
   let w: BoundsWorld;
