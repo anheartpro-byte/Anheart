@@ -554,6 +554,12 @@ describe("ANH-167 T01-e closed schema and details", () => {
       by_actor_and_at: ["actorId", "at"],
       by_action_and_at: ["action", "at"],
       by_target_and_at: ["targetType", "targetId", "at"],
+      by_target_type_and_at: ["targetType", "at"],
+      by_organization_and_target_type_and_at: [
+        "organizationId",
+        "targetType",
+        "at",
+      ],
       by_organization_and_actor_and_at: ["organizationId", "actorId", "at"],
       by_organization_and_action_and_at: ["organizationId", "action", "at"],
       by_organization_and_target_and_at: [

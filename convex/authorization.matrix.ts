@@ -247,6 +247,43 @@ async function machineKeyOf(
 
 export const MATRIX: Entry[] = [
   {
+    id: "audit.list",
+    ref: api.audit.list,
+    kind: "query",
+    build: async (w, actor, scope) => {
+      await w.t.run(async (ctx) => {
+        for (const organizationId of [w.orgA, w.orgB]) {
+          await ctx.db.insert("audit_log", {
+            at: NOW, organizationId, actorRole: "system", source: "webhook",
+            action: "membership.created", targetType: "user", targetId: w.patient,
+            requestId: "synthetic-audit-matrix",
+          });
+        }
+      });
+      return { paginationOpts: { cursor: null, numItems: 50 }, ...(scope === "foreign" ? { organizationId: actor === "orgAdmin" ? w.orgB : w.orgA } : {}) };
+    },
+    onSuccess: (res, w) => {
+      const { page } = res as { page: Array<{ organizationId?: string }> };
+      if (![w.orgA, w.orgB].every(id => page.some(row => row.organizationId === id)))
+        throw new Error("Admin must read both organisations' audit rows");
+    },
+    onFiltered: (res, w, actor) => {
+      const { page } = res as { page: Array<{ organizationId?: string }> };
+      const organizationId = actor === "orgBAdmin" ? w.orgB : w.orgA;
+      if (page.length === 0 || page.some(row => row.organizationId !== organizationId))
+        throw new Error("Organisation admin must read their organisation only");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "all organisations and global events" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "centre A only" },
+      { actor: "orgAdmin", scope: "foreign", expect: empty, note: "no centre B rows" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "centre B only" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "no centre A rows" },
+      ...(["manager", "patient", "orgBManager", "orgBPatient"] as const).map(actor => ({ actor, scope: "foreign" as const, expect: refuse(UNAUTHORIZED), note: "organisation admin required" })),
+    ],
+  },
+  {
     id: "machineRegistry.listContactCandidates", ref: api.machineRegistry.listContactCandidates, kind: "query",
     build: async (w, actor, scope) => ({ machineId: actor === "admin" && scope === "other" ? w.orgBMachine : w.machine }),
     cases: [

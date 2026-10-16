@@ -198,6 +198,12 @@ export default defineSchema({
     .index("by_actor_and_at", ["actorId", "at"])
     .index("by_action_and_at", ["action", "at"])
     .index("by_target_and_at", ["targetType", "targetId", "at"])
+    .index("by_target_type_and_at", ["targetType", "at"])
+    .index("by_organization_and_target_type_and_at", [
+      "organizationId",
+      "targetType",
+      "at",
+    ])
     .index("by_organization_and_actor_and_at", [
       "organizationId",
       "actorId",

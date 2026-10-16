@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as audit from "../audit.js";
 import type * as clerkWebhook from "../clerkWebhook.js";
 import type * as cloudVersion from "../cloudVersion.js";
 import type * as crons from "../crons.js";
@@ -16,6 +17,7 @@ import type * as ecgData from "../ecgData.js";
 import type * as fitness from "../fitness.js";
 import type * as http from "../http.js";
 import type * as lib_audit from "../lib/audit.js";
+import type * as lib_auditIndex from "../lib/auditIndex.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
 import type * as lib_contract from "../lib/contract.js";
@@ -66,6 +68,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  audit: typeof audit;
   clerkWebhook: typeof clerkWebhook;
   cloudVersion: typeof cloudVersion;
   crons: typeof crons;
@@ -74,6 +77,7 @@ declare const fullApi: ApiFromModules<{
   fitness: typeof fitness;
   http: typeof http;
   "lib/audit": typeof lib_audit;
+  "lib/auditIndex": typeof lib_auditIndex;
   "lib/auth": typeof lib_auth;
   "lib/clerkWebhook": typeof lib_clerkWebhook;
   "lib/contract": typeof lib_contract;
