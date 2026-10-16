@@ -49,8 +49,9 @@ for (const [, issueId] of catalogue.matchAll(/\b(ANH-[1-9][0-9]*)\b/g)) {
 
 /** @param {string} text */
 function* ticketNames(text) {
-  for (const match of text.matchAll(/(?<![\p{L}\p{N}])a[*_~`\\]*n[*_~`\\]*h[\p{Zs}\s\p{Pd}−_\p{Cf}\\*~`]*\p{Nd}(?:[*_~`\\]*\p{Nd})*[\p{L}\p{N}_]*/giu)) {
-    if (match[0].startsWith("anh") && /[/#._-]/.test(text[match.index - 1] ?? "")) continue;
+  for (const match of text.matchAll(/(?<![\p{L}\p{N}])a[*_~`\\]*n[*_~`\\]*h[\p{Zs}\s\p{Pd}−_\p{Cf}\\*~`#./:·()[\]]*\p{Nd}(?:[*_~`\\]*\p{Nd})*[\p{L}\p{N}_]*/giu)) {
+    const before = text.slice(Math.max(0, match.index - 3), match.index);
+    if (match[0].startsWith("anh") && (/[/#.-]/.test(text[match.index - 1] ?? "") || /[\p{L}\p{N}]_$/u.test(before))) continue;
     yield match[0];
   }
 }
@@ -78,9 +79,16 @@ if (catalogue.includes("]:")) refuse("reference definition or footnote in the ca
 
 /** @type {{url: string, start: number, end: number}[]} */
 const destinations = [];
-for (const match of catalogue.matchAll(/\]\([ \t]*(?:\n[ \t]*)?(?:<([^<>\n]*)>|([^\s()<>]+))/g)) {
-  const url = match[1] ?? match[2];
-  const start = match.index + match[0].lastIndexOf(url);
+// Require a complete destination token so punctuation cannot hide its real host.
+const destinationToken = /[^\s()<>]+\)/y;
+for (const match of catalogue.matchAll(/\]\(/g)) {
+  const start = match.index + 2;
+  destinationToken.lastIndex = start;
+  const token = destinationToken.exec(catalogue);
+  if (!token) {
+    refuse(`link destination not written as one token closed by a parenthesis: ${JSON.stringify(catalogue.slice(match.index, match.index + 200))}`);
+  }
+  const url = token[0].slice(0, -1);
   destinations.push({ url, start, end: start + url.length });
 }
 
@@ -108,8 +116,8 @@ for (const { url: address } of addresses) {
   }
 }
 
-// Reject alternate ticket spellings, escapes and emphasis in visible text, retaining link titles.
-// Lowercase path, anchor and filename fragments are deliberately not ticket names.
+// Reject alternate ticket spellings, escapes and emphasis outside address tokens.
+// Lowercase path fragments are exempt; an underscore must follow a letter or number.
 let ticketText = catalogue;
 for (const { url, start, end } of destinations) {
   if (!/[./#:]/.test(url)) continue;
@@ -132,14 +140,15 @@ if (characterReference) refuse(`character reference in the catalogue: write the 
 // Code is not exempt: recognizing GitHub code spans would require reproducing rules this page does not need.
 if (/<(?!https?:\/\/[^<>\s]+>)[a-z/!?]/i.test(catalogue)) refuse("HTML in the catalogue: write Markdown");
 
-// Inline Linear links must use the literal registry key as their entire label.
-// Bound the prefix scan so an end-anchored whitespace search cannot grow with the page.
+// Inline Linear links require the literal registry key and an unescaped opening bracket.
+// Inspect only the adjacent label characters; destinations cannot start with whitespace.
 for (const { url, start } of addresses) {
   const parsed = linearUrl(url);
   if (!parsed) continue;
-  const prefix = catalogue.slice(Math.max(0, start - 300), start).replace(/[ \t]*(?:\n[ \t]*)?<?[ \t]*$/, "");
   const issueId = /(?:\/|%2f)issue(?:\/|%2f)([^/]*)/i.exec(parsed.pathname)?.[1];
-  if (prefix.endsWith("](") && !prefix.endsWith(`[${issueId}](`)) {
+  const label = `[${issueId}](`;
+  const labelStart = start - label.length;
+  if (catalogue.slice(start - 2, start) === "](" && (catalogue.slice(Math.max(0, labelStart), start) !== label || catalogue[labelStart - 1] === "\\")) {
     refuse(`Linear link not written [ANH-n](its registry address): ${url}`);
   }
 }

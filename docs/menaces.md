@@ -469,15 +469,26 @@ tildes, accents graves ou marques d'échappement, puis des séparateurs et des
 chiffres, avec ces mêmes marques possibles entre les chiffres et un éventuel
 suffixe collé. Un candidat doit être exactement écrit `ANH-n`, avec un entier
 positif sans zéro initial. Les séparateurs comprennent espaces, tirets Unicode,
-signe moins, tiret bas, caractères de format, échappement et marques d'emphase.
+signe moins, tiret bas, caractères de format, échappement, marques d'emphase,
+ainsi que `#`, `.`, `/`, `:`, `·`, les parenthèses et les crochets.
 Le candidat ne doit pas être immédiatement précédé d'une lettre ou d'un chiffre.
 Les fragments commençant par `anh` en minuscules et immédiatement précédés de
-`/`, `#`, `.`, `_` ou `-` sont ignorés partout, par exemple dans un chemin, une
-ancre ou un nom de fichier. Ainsi, `/anh-999` et `-anh-999` ne sont pas comptés.
+`/`, `#`, `.` ou `-` sont ignorés partout, par exemple dans un chemin, une
+ancre ou un nom de fichier. Le tiret bas ne donne cette exemption que s'il suit
+une lettre ou un chiffre, comme dans `x_anh-1` ; une emphase en minuscules
+reste contrôlée. Ainsi, `/anh-999` et `-anh-999` ne sont pas comptés.
+Un nom de fichier en minuscules au début d'un passage entre accents graves
+est refusé ; la page écrit donc `reviews/anh-136-2026-10-05.md` avec son chemin.
+Chaque suite crochet fermant puis parenthèse ouvrante doit être immédiatement
+suivie d'un jeton non vide, puis d'une parenthèse fermante. Ce jeton ne peut
+contenir ni caractère d'espacement reconnu par JavaScript, saut de ligne
+compris, ni parenthèse ni chevron. Les titres de lien, les destinations entre
+chevrons et les espaces
+avant la destination sont donc refusés.
 Le contrôle de forme efface seulement les jetons de destination des liens en
-ligne qui contiennent `.`, `/`, `#` ou `:`, sans leurs chevrons, les liens
+ligne qui contiennent `.`, `/`, `#` ou `:`, les liens
 automatiques HTTP(S), et les adresses nues HTTP(S) ou commençant par `www.`.
-Les titres restent contrôlés ; un jeton sans ces quatre caractères reste lu.
+Un jeton sans ces quatre caractères reste lu.
 
 Une adresse est Linear si son hôte, point final retiré, vaut `linear.app` ou
 finit par `.linear.app`. Toute adresse Linear doit être exactement celle d'un
@@ -487,10 +498,11 @@ toute casse et à toute position, est comparé comme un chemin de ticket.
 Toute autre adresse Linear, de revue, projet ou document, est refusée.
 La ponctuation finale `. , ; : ! ? _ ~` n'est retirée que pour une adresse nue ;
 une destination explicite est conservée telle quelle. Un lien en ligne vers
-Linear doit avoir exactement le libellé `ANH-n` du ticket lié, dans la forme
-`[ANH-n](adresse du registre)`, avec chevrons ou titre possibles et au plus un
-saut de ligne avant l'adresse. Les images suivent la même règle ; les libellés
-libres ou mis en forme sont refusés. La suite crochet fermant puis deux-points
+Linear doit avoir exactement le libellé `ANH-n` du ticket lié et pour
+destination l'adresse du registre de ce ticket, fragment éventuel retiré.
+Le crochet ouvrant de ce libellé ne doit pas être précédé d'une marque
+d'échappement. Les images suivent la même règle ; les libellés libres ou mis
+en forme sont refusés. La suite crochet fermant puis deux-points
 est refusée partout, code compris : pas de définition de référence ni de note.
 Les références de caractère et le HTML sont refusés dans toute la page, code
 compris, sauf les liens automatiques HTTP(S).
@@ -502,6 +514,11 @@ insécable U+00A0, à `« · »`, aux lettres U+00C0 à U+00FF sauf U+00D7 et U+
 insécable U+202F et à `→ ↔`. Les tabulations et tout autre caractère sont
 refusés, avec leur point de code et leur ligne, après les autres contrôles.
 Aucune normalisation Unicode n'est appliquée.
+Limites : un lien qui coupe les lettres, comme `[AN](x.md)H-999`, ou un saut
+de ligne entre les lettres `AN` et `H`, échappe au contrôle de forme des tickets.
+Un libellé `ANH-n` vers un hôte autre que Linear ou vers une page locale n'est
+pas comparé à la destination du registre ; les noms correctement écrits
+doivent toutefois être inscrits au registre.
 Limite : une adresse nue est coupée avant une espace, un chevron, une
 parenthèse, un crochet, un accent grave, un guillemet, une apostrophe ou un
 astérisque. Par exemple, dans `https://example.org/x(suite)`, seul le préfixe

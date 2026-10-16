@@ -18,6 +18,7 @@ const addressMessage = /unverified Linear issue link:/;
 const referenceMessage = /reference definition or footnote in the catalogue: write inline links/;
 const alphabetMessage = /character outside the catalogue alphabet: U\+[0-9A-F]+ at line [0-9]+/;
 const otherAddressMessage = /Linear address other than a registered ticket:/;
+const destinationMessage = /link destination not written as one token closed by a parenthesis:/;
 const scenarios = [
   { name: "refuses missing catalogue", files: {}, status: 1 },
   { name: "resolves open threat to verified existing issue", files: { "menaces.md": open, "rule.md": "MEN-01\n" }, status: 0 },
@@ -64,8 +65,8 @@ const scenarios = [
   { name: "EX-2 refuses a bold label for another ticket", files: { "menaces.md": open + `[**ANH-180**](${url186})\n` }, status: 1, message: labelMessage },
   { name: "EX-2 refuses a label with extra words for another ticket", files: { "menaces.md": open + `[ANH-180 lot 2](${url186})\n` }, status: 1, message: labelMessage },
   { name: "EX-2 refuses a code label for another ticket", files: { "menaces.md": open + `[\`ANH-180\`](${url186})\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses another ticket behind a titled link", files: { "menaces.md": open + `[ANH-180](${url186} "titre")\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses another ticket behind an angled destination", files: { "menaces.md": open + `[ANH-180](<${url186}>)\n` }, status: 1, message: labelMessage },
+  { name: "EX-2 refuses another ticket behind a titled link", files: { "menaces.md": open + `[ANH-180](${url186} "titre")\n` }, status: 1, message: destinationMessage },
+  { name: "EX-2 refuses another ticket behind an angled destination", files: { "menaces.md": open + `[ANH-180](<${url186}>)\n` }, status: 1, message: destinationMessage },
   { name: "EX-2 refuses a full reference to another ticket", files: { "menaces.md": open + `[ANH-180][x]\n\n[x]: ${url186}\n` }, status: 1, message: referenceMessage },
   { name: "EX-2 refuses a shortcut reference with a lowercase definition", files: { "menaces.md": open + `[ANH-180]\n\n[anh-180]: ${url186}\n` }, status: 1, message: referenceMessage },
   { name: "EX-2 refuses a lowercase Linear issue address", files: { "menaces.md": open + "[la décision](https://linear.app/anheart/issue/anh-999999/x)\n" }, status: 1, message: /unverified Linear issue link: anh-999999/ },
@@ -93,7 +94,7 @@ const scenarios = [
   { name: "EX-2 refuses a Unicode space", files: { "menaces.md": open + "Voir ANH\u2002165.\n" }, status: 1, message: spellingMessage },
   { name: "EX-2 refuses mixed case", files: { "menaces.md": open + "Voir AnH-165.\n" }, status: 1, message: spellingMessage },
   { name: "EX-2 refuses a ticket suffix with an underscore", files: { "menaces.md": open + "Voir ANH-165_extra.\n" }, status: 1, message: spellingMessage },
-  { name: "EX-2 retains the title when removing a link destination", files: { "menaces.md": open + '[x](reviews/anh-136.md "ANH 165")\n' }, status: 1, message: spellingMessage },
+  { name: "EX-2 refuses a local destination with a ticket in its title", files: { "menaces.md": open + '[x](reviews/anh-136.md "ANH 165")\n' }, status: 1, message: destinationMessage },
   { name: "EX-2 refuses an image labelled with another ticket", files: { "menaces.md": open + `![**ANH-180**](${url186})\n` }, status: 1, message: labelMessage },
   { name: "EX-2 refuses a collapsed reference to another ticket", files: { "menaces.md": open + `[ANH-180][]\n\n[ANH-180]: ${url186}\n` }, status: 1, message: referenceMessage },
   { name: "EX-2 refuses a shortcut reference to another ticket", files: { "menaces.md": open + `[ANH-180]\n\n[ANH-180]: ${url186}\n` }, status: 1, message: referenceMessage },
@@ -112,7 +113,7 @@ const scenarios = [
   // ANH-229 EX-4 : explicit destinations retain punctuation and are classified by host.
   { name: "EX-4 refuses a full stop in an explicitly labelled destination", files: { "menaces.md": open + `[ANH-180](${url180}.)\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses a full stop in an explicit free-label destination", files: { "menaces.md": open + `[la décision](${url180}.)\n` }, status: 1, message: addressMessage },
-  { name: "EX-4 refuses a full stop in an angled destination", files: { "menaces.md": open + `[la décision](<${url180}.>)\n` }, status: 1, message: addressMessage },
+  { name: "EX-4 refuses a full stop in an angled destination", files: { "menaces.md": open + `[la décision](<${url180}.>)\n` }, status: 1, message: destinationMessage },
   { name: "EX-4 refuses a full stop in an autolink", files: { "menaces.md": open + `<${url180}.>\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses a full stop in a reference destination", files: { "menaces.md": open + `[la décision][r]\n\n[r]: ${url180}.\n` }, status: 1, message: referenceMessage },
   { name: "EX-4 refuses an apostrophe in a Linear destination", files: { "menaces.md": open + `[ANH-180](${url186}')\n` }, status: 1, message: addressMessage },
@@ -169,9 +170,9 @@ const scenarios = [
   { name: "R1 refuses Greek letters inside a label", files: { "menaces.md": open + `[ΑΝΗ-180](${url186})\n` }, status: 1, message: labelMessage },
   { name: "R1 refuses a code closing bracket after a ticket label", files: { "menaces.md": open + `[ANH-180\`]\`](${url186})\n` }, status: 1, message: labelMessage },
   { name: "R1 refuses a code closing bracket before a ticket label", files: { "menaces.md": open + `[\`]\`ANH-180](${url186})\n` }, status: 1, message: labelMessage },
-  { name: "R1 refuses a mismatched label with an escaped double-quoted title", files: { "menaces.md": open + `[ANH-180](${url186} "a\\"b")\n` }, status: 1, message: labelMessage },
-  { name: "R1 refuses a mismatched label with an escaped parenthesized title", files: { "menaces.md": open + `[ANH-180](${url186} (a\\)b))\n` }, status: 1, message: labelMessage },
-  { name: "R1 refuses a mismatched label with an escaped single-quoted title", files: { "menaces.md": open + `[ANH-180](${url186} 'a\\'b')\n` }, status: 1, message: labelMessage },
+  { name: "R1 refuses a mismatched label with an escaped double-quoted title", files: { "menaces.md": open + `[ANH-180](${url186} "a\\"b")\n` }, status: 1, message: destinationMessage },
+  { name: "R1 refuses a mismatched label with an escaped parenthesized title", files: { "menaces.md": open + `[ANH-180](${url186} (a\\)b))\n` }, status: 1, message: destinationMessage },
+  { name: "R1 refuses a mismatched label with an escaped single-quoted title", files: { "menaces.md": open + `[ANH-180](${url186} 'a\\'b')\n` }, status: 1, message: destinationMessage },
   { name: "refuses a formatted label even for its own registered ticket", files: { "menaces.md": open + `[**ANH-180**](${url180})\n` }, status: 1, message: labelMessage },
   { name: "refuses an escaped closing bracket in a label", files: { "menaces.md": open + `[ANH-180\\]](${url186})\n` }, status: 1, message: labelMessage },
   // ANH-229 EX-2 : R1 uses the raw alphabet, without Unicode normalization.
@@ -206,16 +207,58 @@ const scenarios = [
   { name: "R1 refuses a Linear document address", files: { "menaces.md": open + "https://linear.app/anheart/document/x\n" }, status: 1, message: otherAddressMessage },
   // ANH-229 EX-2 : erasure applies only to destination tokens containing address punctuation.
   { name: "accepts a short lowercase destination filename", files: { "menaces.md": open + "[x](anh-136.md)\n" }, status: 0 },
-  { name: "refuses an address-free token after a link opener", files: { "menaces.md": open + "](ANH 999\n" }, status: 1, message: spellingMessage },
+  { name: "refuses an address-free token after a link opener", files: { "menaces.md": open + "](ANH 999\n" }, status: 1, message: destinationMessage },
   { name: "refuses an alternate ticket used as a destination token", files: { "menaces.md": open + "[x](anh-165)\n" }, status: 1, message: spellingMessage },
   // ANH-229 EX-2 : the strict subset retains the page's actual link and character forms.
-  { name: "accepts a canonical link with a fragment and title", files: { "menaces.md": open + `[ANH-180](${url180}#comment-1 "voir")\n` }, status: 0 },
-  { name: "accepts an angled canonical inline destination", files: { "menaces.md": open + `[ANH-180](<${url180}>)\n` }, status: 0 },
+  { name: "refuses a canonical link with a fragment and title", files: { "menaces.md": open + `[ANH-180](${url180}#comment-1 "voir")\n` }, status: 1, message: destinationMessage },
+  { name: "refuses an angled canonical inline destination", files: { "menaces.md": open + `[ANH-180](<${url180}>)\n` }, status: 1, message: destinationMessage },
   { name: "accepts a canonical image destination", files: { "menaces.md": open + `![ANH-180](${url180})\n` }, status: 0 },
-  { name: "accepts a canonical inline destination on the next line", files: { "menaces.md": open + `[ANH-180](\n ${url180})\n` }, status: 0 },
+  { name: "refuses a canonical inline destination on the next line", files: { "menaces.md": open + `[ANH-180](\n ${url180})\n` }, status: 1, message: destinationMessage },
   { name: "accepts the full catalogue alphabet after CRLF normalization", files: { "menaces.md": open + "« · » À É à â ç è é ê î ô ù û œ → ↔\u00a0\u202f\u2019Œ\u2014\r\n" }, status: 0 },
   { name: "accepts lowercase slash fragments anywhere", files: { "menaces.md": open + "Voir /anh-999.\n" }, status: 0 },
   { name: "accepts lowercase hyphen fragments anywhere", files: { "menaces.md": open + "Voir -anh-999.\n" }, status: 0 },
+  // ANH-229 EX-2 and EX-4 : R1b destinations must be a single closed token.
+  { name: "R1b refuses parentheses hiding a mismatched Linear host", files: { "menaces.md": open + `[ANH-180](${url186.replace("https://", "https://()@")})\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses parentheses hiding a truncated Linear address", files: { "menaces.md": open + "[la décision](https://()@linear.app/anheart/issue/ANH-165/convex-rotation)\n" }, status: 1, message: destinationMessage },
+  { name: "R1b refuses a chevron hiding a mismatched Linear host", files: { "menaces.md": open + `[ANH-180](${url186.replace("https://", "https://>@")})\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses an opening parenthesis in user information", files: { "menaces.md": open + `[ANH-180](${url186.replace("https://", "https://(@")}))\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses an escaped parenthesis in user information", files: { "menaces.md": open + `[ANH-180](${url186.replace("https://", "https://\\(@")})\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses parentheses before an encoded Linear host", files: { "menaces.md": open + `[ANH-180](${url186.replace("https://linear", "https://()@%6Cinear")})\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses 300 spaces before a Linear destination", files: { "menaces.md": open + `[ANH-180](${" ".repeat(300)}${url186})\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses a newline before a mismatched Linear destination", files: { "menaces.md": open + `[ANH-180](\n${url186})\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses a newline and 300 spaces before a destination", files: { "menaces.md": open + `[ANH-180](\n${" ".repeat(300)}${url186})\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses spaces before an angled destination", files: { "menaces.md": open + `[ANH-180](${" ".repeat(300)}<${url186}>)\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses a quoted link on two lines", files: { "menaces.md": open + `> [ANH-180](\n> ${url186})\n` }, status: 1, message: destinationMessage },
+  { name: "R1b refuses a quoted list link on two lines", files: { "menaces.md": open + `- > [ANH-180](\n  > ${url186})\n` }, status: 1, message: destinationMessage },
+  { name: "refuses an empty inline destination", files: { "menaces.md": open + "[x]()\n" }, status: 1, message: destinationMessage },
+  { name: "refuses an unterminated inline destination", files: { "menaces.md": open + "[x](x.md\n" }, status: 1, message: destinationMessage },
+  { name: "refuses parentheses after a canonical inline destination", files: { "menaces.md": open + `[ANH-180](${url180}(x))\n` }, status: 1, message: destinationMessage },
+  // ANH-229 EX-2 : R1b literal labels cannot begin with an escaped bracket.
+  { name: "R1b refuses an escaped opening bracket after another ticket", files: { "menaces.md": open + `[ANH-180 \\[ANH-186](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1b refuses an escaped opening bracket after a bold ticket", files: { "menaces.md": open + `[**ANH-180** \\[ANH-186](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1b refuses an escaped opening bracket on the next line", files: { "menaces.md": open + `[ANH-180\n\\[ANH-186](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1b refuses three escapes before an opening bracket", files: { "menaces.md": open + `[ANH-180 ${"\\".repeat(3)}[ANH-186](${url186})\n` }, status: 1, message: labelMessage },
+  // ANH-229 EX-4 : M20 must require the opening bracket of the entire label.
+  { name: "R1b refuses two tickets in a label ending with the right ticket", files: { "menaces.md": open + `[ANH-180 ANH-186](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1b refuses extra words before the right ticket", files: { "menaces.md": open + `[Voir ANH-180](${url180})\n` }, status: 1, message: labelMessage },
+  // ANH-229 EX-2 : R1b lowercase emphasis is not a filename fragment.
+  { name: "R1b refuses an italic lowercase unknown ticket", files: { "menaces.md": open + "Voir _anh-999_.\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses a bold lowercase unknown ticket", files: { "menaces.md": open + "__anh-999__\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses an italic lowercase ticket with a space", files: { "menaces.md": open + "_anh 999_\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses an italic lowercase registered ticket", files: { "menaces.md": open + "_anh-180_\n" }, status: 1, message: spellingMessage },
+  { name: "accepts a lowercase underscore fragment attached to a word", files: { "menaces.md": open + "x_anh-1\n" }, status: 0 },
+  { name: "accepts a ticket label pointing to a local page", files: { "menaces.md": open + "[ANH-223](pi-reseau.md)\n" }, status: 0 },
+  // ANH-229 EX-2 : R1b punctuation and partial links are ticket separators.
+  { name: "R1b refuses a spaced hash separator", files: { "menaces.md": open + "ANH #999\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses a hyphen and hash separator", files: { "menaces.md": open + "ANH-#999\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses a full stop separator", files: { "menaces.md": open + "ANH.999\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses a slash separator", files: { "menaces.md": open + "ANH/999\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses a colon separator", files: { "menaces.md": open + "ANH:999\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses a middle dot separator", files: { "menaces.md": open + "ANH·999\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses linked digits after a hyphen", files: { "menaces.md": open + "ANH-[999](x.md)\n" }, status: 1, message: spellingMessage },
+  { name: "R1b refuses a linked hyphen before the digits", files: { "menaces.md": open + "ANH[-](x.md)999\n" }, status: 1, message: spellingMessage },
+  { name: "refuses an opening parenthesis separator", files: { "menaces.md": open + "ANH(999\n" }, status: 1, message: spellingMessage },
+  { name: "refuses a closing parenthesis separator", files: { "menaces.md": open + "ANH)999\n" }, status: 1, message: spellingMessage },
 ];
 
 for (const scenario of scenarios) {
