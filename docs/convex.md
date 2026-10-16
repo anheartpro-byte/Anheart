@@ -2007,12 +2007,13 @@ expirées pendant sa suppression.
 **Plusieurs clés (ANH-165).** Une machine a ses clés dans `machine_api_keys`
 (§2). Toutes celles qui ne sont ni révoquées ni expirées ouvrent les routes :
 pendant le chevauchement d'une rotation, l'ancienne et la nouvelle. Une clé
-expirée est refusée à son `expiresAt` ou peu après, sans attendre que la
-tâche la marque révoquée : la query d'authentification compare l'expiration à
-`Date.now()`, et Convex peut servir pendant un court moment une réponse
-qu'elle a calculée avant (ANH-238). Une clé révoquée est refusée dès la
-requête suivante : la révocation écrit la clé, ce qui invalide toute réponse
-gardée.
+expirée est refusée dès son `expiresAt`, sans attendre que la tâche la marque
+révoquée : la query d'authentification refuse à sa propre horloge et rend
+`expiresAt` ; l'action de la route compare de nouveau à la sienne. Une réponse
+gardée par Convex ne rouvre donc pas une clé expirée (ANH-238). Une clé révoquée
+ou d'une machine supprimée ou désactivée est refusée dès la requête suivante :
+ces écritures modifient les documents lus par la query, ce qui invalide toute
+réponse gardée.
 
 La clé contient un sélecteur public aléatoire de 16 octets et un secret
 aléatoire de 32 octets, encodés en hexadécimal. `crypto.getRandomValues` génère
@@ -2046,17 +2047,25 @@ rotation sans chevauchement, les refuse dès la requête suivante. Les champs de
 suppression/désactivation de la machine restent inchangés.
 
 **Dernière utilisation, au plus une fois par minute.** L'authentification ne
-fait que lire (`machines.getMachineByApiKey` est une query). Quand la dernière
-utilisation écrite de la clé a une minute ou plus, la query le dit
-(`keyUseDue`), et la route l'écrit ensuite (`machineKeys.recordKeyUse`, qui
+fait que lire (`machines.getMachineByApiKey` est une query). Elle rend les dates
+brutes `expiresAt` et `lastUsedAt` avec l'identifiant de la clé. L'action juge
+à sa propre horloge : sans dernière utilisation écrite, ou quand elle a une
+minute ou plus, la route tente l'écriture (`machineKeys.recordKeyUse`, qui
 revérifie la minute dans sa transaction) : une machine qui envoie une requête
 toutes les quelques secondes écrit `lastUsedAt` une fois par minute, pas à
 chaque requête. Une clé pas encore déplacée dans la table n'a pas de dernière
-utilisation. L'ordre ne change pas : la clé, puis le contrat, puis la limite
+utilisation. Un échec d'écriture est journalisé sans la clé ni l'exception,
+ignoré, puis rattrapé à la requête suivante puisque la date reste due. La réponse
+n'en dépend jamais, demande d'arrêt et fin de séance comprises.
+L'ordre ne change pas : la clé, puis le contrat, puis la limite
 de débit de la machine (ANH-166), comptée après l'authentification. La
-dernière utilisation est donc écrite pour toute requête dont la clé est
-acceptée, même refusée ensuite (426, 429, 413, 400) : « rien n'est écrit »,
-ailleurs dans cette page, s'entend hors de cette date.
+dernière utilisation est donc tentée, si elle est due, pour toute requête dont
+la clé est acceptée, même refusée ensuite (426, 429, 413, 400). La clé a été
+présentée et vérifiée : cette date indique si une clé remplacée sert encore
+avant sa révocation, ou si une clé volée sert. Une console d'une autre majeure
+se sert toujours de sa clé, au moins pour demander l'arrêt. Cette écriture
+ne consomme aucun jeton du seau de débit : « rien n'est écrit », ailleurs dans
+cette page, s'entend hors de cette date.
 
 **Erreurs** : tout refus des 10 routes machine (les 401 et les 426 compris)
 a la forme

@@ -234,7 +234,8 @@ export const revokeMachineKey = mutation({
 /**
  * Write the use of a key, unless one was written less than a minute ago.
  * Called by the machine routes after authentication (convex/lib/machineHttpAuth.ts),
- * only when the authentication found the last use a minute old or more.
+ * only when the action's clock finds the last use a minute old or more.
+ * The caller logs and ignores a failure: accounting must never block a request.
  */
 export const recordKeyUse = internalMutation({
   args: { keyId: v.id("machine_api_keys") },
