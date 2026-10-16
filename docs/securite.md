@@ -2089,7 +2089,8 @@ avec l'acteur `system`, sans compte humain attribué ; le test de complétude
 vérifie leur isolement du site et des routes machine.
 
 Chaque écrivain d'une appartenance trace son propre effet : création active
-ou réactivation, changement de rôle d'une ligne active, désactivation.
+ou réactivation, changement de rôle d'une ligne qui reste active, désactivation.
+Une suppression qui porte un autre rôle trace seulement la désactivation.
 `users.getOrCreateUser` est sensible, avec le compte lui-même comme acteur
 et son rôle effectif dans l'organisation. Connexion puis webhook, comme
 l'ordre inverse, donnent une seule création ; une appartenance ouverte par
@@ -2097,6 +2098,8 @@ la seule connexion est tracée par la connexion. Une appartenance qui reste
 inactive n'est pas présentée comme créée. À l'acceptation d'une invitation,
 le webhook trace le lien au compte et chaque affectation de gestionnaire ;
 l'invitation conserve les identifiants prévus dans `details.added`.
+La connexion réutilise l'organisation déjà chargée pour attribuer son audit,
+sans la relire ni permettre un saut silencieux de cette écriture.
 
 `fitness.submitFitnessAnswers` est sensible (`fitness.submitted`, cible
 évaluation, seulement `userId`, sans réponses ni verdict), car une nouvelle
@@ -2107,15 +2110,22 @@ ne supprime jamais les lignes du journal.
 
 Les demandes sans changement réel de physiologie, de rôle ou d'identité
 machine ne donnent aucune ligne ; `fields` contient les seuls champs qui
-changent. Les organisations de physiologie et de suppression de compte
-viennent des appartenances ou relations touchées, ou de l'organisation de
-l'appelant non admin, sans se fier au miroir principal périmé du compte.
+changent. Pour la physiologie changée par l'admin Anheart, seules les
+appartenances actives du patient déterminent les organisations ; sans
+appartenance active, la ligne n'a pas d'organisation. Les relations
+gestionnaires dormantes ne comptent pas. Pour la suppression de compte,
+les organisations viennent des appartenances et relations supprimées.
+Un appelant non admin utilise son organisation, sans se fier au miroir
+principal périmé du compte.
 Le changement de propriétaire machine conserve le nouvel identifiant ;
 la correction d'un niveau de release conserve le précédent niveau.
 Les versions libres de fiche variateur et d'enregistrement médical ne sont
-pas copiées dans les détails ; les autres versions passent un format strict
-ou une vérification d'existence en base. `added` et `removed` sont bornés
-à 1 000 identifiants chacun ; `count` contient le total des deux listes
+pas copiées dans les détails, y compris la version médicale citée par une
+revue machine : son existence en base ne garantit pas son format. Les versions
+de release et la version logicielle d'une revue passent un format strict ;
+cette dernière doit aussi exister dans le registre des releases Pi.
+`added` et `removed` sont bornés à 1 000 identifiants chacun ;
+`count` contient le total des deux listes
 avant troncature quand l'une dépasse ce plafond.
 
 La lecture utilise des index globaux et par organisation pour `actorRole`,
@@ -2128,7 +2138,7 @@ désactivés pendant l'export CSV.
 | Limite | Conséquence, et à qui elle revient |
 |---|---|
 | **L'immutabilité vaut pour les fonctions du déploiement.** Ni chaînage cryptographique ni copie externe ne protège le journal | Un détenteur de la clé de déploiement ou d'un accès au tableau de bord Convex peut agir hors de ces fonctions ; ANH-167 ne garantit pas l'immutabilité face à lui. MEN-03 reste ouverte |
-| **L'énumération est une analyse de source, pas une preuve générale** | Le test couvre toutes les profondeurs de `convex/**/*.ts` et cherche le littéral `audit_log`. Il refuse aussi `as never`, `as any` et `as Id<...>` sur l'identifiant d'un `ctx.db.delete`, `patch` ou `replace` ; un identifiant non typé sans cette assertion ou un nom de table construit lui échapperait |
+| **L'énumération est une analyse de source, pas une preuve générale** | Le test couvre toutes les profondeurs de `convex/**/*.ts` et cherche le littéral `audit_log`. Il refuse toute assertion de type (`as ...` ou `<Type>...`, dont `GenericId<...>`) dans l'identifiant d'un `ctx.db.delete`, `patch` ou `replace`, et ces écritures sur un alias déclaré directement par `const db = ctx.db`, quel que soit son nom. Il ne suit pas le flux des valeurs : identifiant non typé, assertion avant l'appel, alias par affectation, déstructuration ou alias successifs, méthode extraite, accès calculé (`db[method]`) et nom de table construit peuvent lui échapper |
 | **La source est attribuée par le chemin de code et non constatée** | Une fonction interne lancée avec la clé de déploiement écrit la source de son chemin, par exemple `machine` pour `training.markTrainingStarted` ; `operator` n'identifie donc pas tous les usages possibles de cette clé |
 | **L'arrêt dépend de `getRequestMetadata` et de l'insertion dans la même transaction** | Aucun refus métier n'est ajouté, mais une panne de métadonnées, de base ou du runtime peut faire échouer la transaction d'arrêt ; l'audit n'est pas une écriture indépendante |
 | **La durée de rétention n'est pas décidée.** Les 5 ans restent à confirmer par ANH-87a | Aucune purge n'est implémentée : rien n'est supprimé avant ni après cinq ans tant que la décision n'est pas prise |
