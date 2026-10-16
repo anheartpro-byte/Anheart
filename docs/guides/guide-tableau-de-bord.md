@@ -2424,7 +2424,7 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « Séance terminée » + motif | Vue en direct | Fin normale. | Aucune. |
 | « La FC max doit être comprise entre 100 et 220 bpm » | Physiologie | Saisie hors bornes. | Corriger. |
 | « Année de naissance invalide » | Physiologie | Âge hors de 10 à 100 ans. | Corriger. |
-| « Cette clé ne sera affichée qu'une seule fois! » | Création ou régénération de clé | Avertissement. | Copier la clé maintenant. |
+| « Cette clé ne sera affichée qu'une seule fois! » | Création d'une machine ou d'une nouvelle clé (« Nouvelle clé ») | Avertissement. | Copier la clé maintenant. |
 
 ### 7.2 Messages du serveur
 

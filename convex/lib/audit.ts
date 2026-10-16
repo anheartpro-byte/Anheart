@@ -328,8 +328,8 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "One-off operator data migration retires open legacy recording sessions, without a product decision.",
   "migrations/retireLegacyRecording.removeMachineConfig":
     "One-off operator data migration removes retired recording configuration, without a product decision.",
-  "migrations/machineApiKeys.moveMachineKeysToTable":
-    "One-off operator data migration moves legacy machine keys into their table, without a product decision.",
+  "migrations/machineApiKeys.moveMachineKeysPage":
+    "One page of the one-off operator data migration moves legacy machine keys into their table, without a product decision.",
   "migrations/multiOrganization.attachExistingRowsToAnheart":
     "One-off operator data migration attaches existing rows to Anheart, without a product decision.",
   "migrations/multiOrganization.repairDuplicatedAnheartOrganization":

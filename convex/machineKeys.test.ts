@@ -30,7 +30,7 @@ import {
   machineHeaders,
   machineRoutes,
 } from "./machineAuth.fixtures";
-import { as, modules, NOW, seedWorld } from "./test.setup";
+import { as, backendOf, modules, NOW, seedWorld } from "./test.setup";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -836,7 +836,7 @@ describe("ANH-165 EX-2 the key of a machine written before is moved, never refus
       ?.apiKey;
 
     at(NOW + HOUR);
-    const result = await f.t.mutation(
+    const result = await f.t.action(
       internal.migrations.machineApiKeys.moveMachineKeysToTable,
       {},
     );
@@ -845,6 +845,7 @@ describe("ANH-165 EX-2 the key of a machine written before is moved, never refus
       machinesChecked: 2,
       keysMoved: 1,
       legacyDiscarded: 0,
+      selectorConflicts: 0,
     });
     const machine = await f.t.run((ctx) => ctx.db.get(legacy.machineId));
     expect(machine?.apiKey).toBeUndefined();
@@ -866,10 +867,7 @@ describe("ANH-165 EX-2 the key of a machine written before is moved, never refus
     const f = await machineFixture(modules);
     await legacyMachine(f);
     const move = () =>
-      f.t.mutation(
-        internal.migrations.machineApiKeys.moveMachineKeysToTable,
-        {},
-      );
+      f.t.action(internal.migrations.machineApiKeys.moveMachineKeysToTable, {});
     await move();
     const rows = await f.t.run((ctx) =>
       ctx.db.query("machine_api_keys").collect(),
@@ -879,6 +877,7 @@ describe("ANH-165 EX-2 the key of a machine written before is moved, never refus
       machinesChecked: 2,
       keysMoved: 0,
       legacyDiscarded: 0,
+      selectorConflicts: 0,
     });
     expect(
       await f.t.run((ctx) => ctx.db.query("machine_api_keys").collect()),
@@ -888,7 +887,7 @@ describe("ANH-165 EX-2 the key of a machine written before is moved, never refus
   it("refuses a moved key once it is revoked: the machine's old fields are no way back", async () => {
     const f = await machineFixture(modules);
     const legacy = await legacyMachine(f);
-    await f.t.mutation(
+    await f.t.action(
       internal.migrations.machineApiKeys.moveMachineKeysToTable,
       {},
     );
@@ -921,12 +920,94 @@ describe("ANH-165 EX-2 the key of a machine written before is moved, never refus
     expect(await status(f, legacy.apiKey)).toBe(401);
     // The migration then clears the fields without adding a second row.
     expect(
-      await f.t.mutation(
+      await f.t.action(
         internal.migrations.machineApiKeys.moveMachineKeysToTable,
         {},
       ),
-    ).toMatchObject({ keysMoved: 1 });
+    ).toEqual({
+      machinesChecked: 2,
+      keysMoved: 1,
+      legacyDiscarded: 0,
+      selectorConflicts: 0,
+    });
     expect(await keysOf(f, legacy.machineId)).toHaveLength(1);
+    const cleared = await f.t.run((ctx) => ctx.db.get(legacy.machineId));
+    expect(cleared?.apiKey).toBeUndefined();
+    expect(cleared?.apiKeySelector).toBeUndefined();
+  });
+
+  it("counts a selector owned by another machine as a conflict and leaves both machines' keys intact", async () => {
+    const f = await machineFixture(modules);
+    const legacy = await legacyMachine(f);
+    const before = await f.t.run((ctx) => ctx.db.get(legacy.machineId));
+    const owner = await firstKey(f);
+    await f.t.run((ctx) =>
+      ctx.db.patch(legacy.machineId, { apiKeySelector: owner.selector }),
+    );
+    const move = () =>
+      f.t.action(internal.migrations.machineApiKeys.moveMachineKeysToTable, {});
+    const rows = await f.t.run((ctx) =>
+      ctx.db.query("machine_api_keys").collect(),
+    );
+
+    for (let run = 0; run < 2; run++) {
+      expect(await move()).toEqual({
+        machinesChecked: 2,
+        keysMoved: 0,
+        legacyDiscarded: 0,
+        selectorConflicts: 1,
+      });
+      expect(
+        await f.t.run((ctx) => ctx.db.query("machine_api_keys").collect()),
+      ).toEqual(rows);
+      const machine = await f.t.run((ctx) => ctx.db.get(legacy.machineId));
+      expect(machine?.apiKey).toBe(before?.apiKey);
+      expect(machine?.apiKeySelector).toBe(owner.selector);
+    }
+    const conflictingKey = legacy.apiKey.replace(
+      legacy.selector,
+      owner.selector,
+    );
+    for (const apiKey of [legacy.apiKey, conflictingKey]) {
+      for (const [method, route] of machineRoutes) {
+        expect(
+          (await f.t.fetch(route, { method, headers: machineHeaders(apiKey) }))
+            .status,
+        ).toBe(401);
+      }
+    }
+    expect(await status(f, f.apiKey)).toBe(200);
+    expect(
+      (
+        await f.t.query(internal.machines.getMachineByApiKey, {
+          apiKey: f.apiKey,
+        })
+      )?._id,
+    ).toBe(f.machineId);
+    expect(await keysOf(f, legacy.machineId)).toEqual([]);
+  });
+
+  it("issues a new key on rotation despite a selector conflict, without clearing the legacy fields", async () => {
+    const f = await machineFixture(modules);
+    const legacy = await legacyMachine(f);
+    const owner = await firstKey(f);
+    await f.t.run((ctx) =>
+      ctx.db.patch(legacy.machineId, { apiKeySelector: owner.selector }),
+    );
+    const before = await f.t.run((ctx) => ctx.db.get(legacy.machineId));
+
+    const issued = await f.admin.mutation(api.machineKeys.createMachineKey, {
+      machineId: legacy.machineId,
+    });
+
+    expect(await status(f, issued.apiKey)).toBe(200);
+    expect(await status(f, f.apiKey)).toBe(200);
+    expect(await keysOf(f, legacy.machineId)).toHaveLength(1);
+    const machine = await f.t.run((ctx) => ctx.db.get(legacy.machineId));
+    expect(machine?.apiKey).toBe(before?.apiKey);
+    expect(machine?.apiKeySelector).toBe(owner.selector);
+    expect((await keyOf(f, owner._id)).replacedBy).toBeUndefined();
+    expect((await keyOf(f, owner._id)).revokedAt).toBeUndefined();
   });
 
   it("clears a reversible legacy value instead of moving it", async () => {
@@ -947,11 +1028,16 @@ describe("ANH-165 EX-2 the key of a machine written before is moved, never refus
     );
 
     expect(
-      await f.t.mutation(
+      await f.t.action(
         internal.migrations.machineApiKeys.moveMachineKeysToTable,
         {},
       ),
-    ).toEqual({ machinesChecked: 2, keysMoved: 0, legacyDiscarded: 2 });
+    ).toEqual({
+      machinesChecked: 2,
+      keysMoved: 0,
+      legacyDiscarded: 2,
+      selectorConflicts: 0,
+    });
     for (const id of [f.machineId, selectorOnly]) {
       const machine = await f.t.run((ctx) => ctx.db.get(id));
       expect(machine?.apiKey).toBeUndefined();
@@ -959,6 +1045,186 @@ describe("ANH-165 EX-2 the key of a machine written before is moved, never refus
     }
     expect(await keysOf(f)).toHaveLength(1);
     expect(await status(f, f.apiKey)).toBe(200);
+  });
+
+  it.each(["malformed selector", "invalid verifier"])(
+    "discards a legacy key with %s instead of inserting it",
+    async (kind) => {
+      const f = await machineFixture(modules);
+      const legacy = await legacyMachine(f);
+      await f.t.run((ctx) =>
+        ctx.db.patch(
+          legacy.machineId,
+          kind === "malformed selector"
+            ? { apiKeySelector: "not-a-selector" }
+            : { apiKey: btoa("synthetic-legacy") },
+        ),
+      );
+
+      expect(
+        await f.t.action(
+          internal.migrations.machineApiKeys.moveMachineKeysToTable,
+          {},
+        ),
+      ).toEqual({
+        machinesChecked: 2,
+        keysMoved: 0,
+        legacyDiscarded: 1,
+        selectorConflicts: 0,
+      });
+      const machine = await f.t.run((ctx) => ctx.db.get(legacy.machineId));
+      expect(machine?.apiKey).toBeUndefined();
+      expect(machine?.apiKeySelector).toBeUndefined();
+      expect(await keysOf(f, legacy.machineId)).toEqual([]);
+    },
+  );
+
+  it.each([{}, { pageSize: 1 }, { pageSize: 2 }, { pageSize: 1000 }])(
+    "sums every machine exactly once across mixed pages (%j)",
+    async (args) => {
+      const f = await machineFixture(modules);
+      const moved = await legacyMachine(f);
+      const conflict = await legacyMachine(f);
+      const owner = await firstKey(f);
+      await f.t.run(async (ctx) => {
+        await ctx.db.patch(conflict.machineId, {
+          apiKeySelector: owner.selector,
+        });
+        await ctx.db.insert("machines", {
+          name: "Reversible legacy value",
+          apiKey: btoa("synthetic-legacy"),
+          status: "offline",
+          lastHeartbeat: 0,
+          createdAt: NOW,
+        });
+        await ctx.db.insert("machines", {
+          name: "No key",
+          status: "offline",
+          lastHeartbeat: 0,
+          createdAt: NOW,
+        });
+      });
+      const before = await f.t.run((ctx) => ctx.db.query("machines").collect());
+
+      expect(
+        await f.t.action(
+          internal.migrations.machineApiKeys.moveMachineKeysToTable,
+          args,
+        ),
+      ).toEqual({
+        machinesChecked: before.length,
+        keysMoved: 1,
+        legacyDiscarded: 1,
+        selectorConflicts: 1,
+      });
+      expect(before).toHaveLength(5);
+      for (const machine of await f.t.run((ctx) =>
+        ctx.db.query("machines").collect(),
+      )) {
+        const original = before.find((row) => row._id === machine._id);
+        if (machine._id === conflict.machineId) {
+          expect(machine).toEqual(original);
+        } else {
+          expect(machine).toEqual({
+            ...original,
+            apiKey: undefined,
+            apiKeySelector: undefined,
+          });
+        }
+      }
+      expect(await keysOf(f, moved.machineId)).toHaveLength(1);
+      expect(await keysOf(f, conflict.machineId)).toHaveLength(0);
+      expect(
+        await f.t.run((ctx) => ctx.db.query("machine_api_keys").collect()),
+      ).toHaveLength(2);
+      expect(await status(f, moved.apiKey)).toBe(200);
+      expect(
+        await f.t.action(
+          internal.migrations.machineApiKeys.moveMachineKeysToTable,
+          args,
+        ),
+      ).toEqual({
+        machinesChecked: 5,
+        keysMoved: 0,
+        legacyDiscarded: 0,
+        selectorConflicts: 1,
+      });
+    },
+  );
+
+  it.each([0, 1001, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses pageSize %s before writing anything",
+    async (pageSize) => {
+      const f = await machineFixture(modules);
+      await legacyMachine(f);
+      const snapshot = () =>
+        f.t.run(async (ctx) => ({
+          machines: await ctx.db.query("machines").collect(),
+          keys: await ctx.db.query("machine_api_keys").collect(),
+        }));
+      const before = await snapshot();
+
+      await expect(
+        f.t.action(internal.migrations.machineApiKeys.moveMachineKeysToTable, {
+          pageSize,
+        }),
+      ).rejects.toThrow(
+        "Machine key migration pageSize must be an integer from 1 to 1000.",
+      );
+
+      expect(await snapshot()).toEqual(before);
+    },
+  );
+
+  it("returns zero counts for an empty fleet", async () => {
+    const t = backendOf(modules);
+    expect(
+      await t.action(
+        internal.migrations.machineApiKeys.moveMachineKeysToTable,
+        {},
+      ),
+    ).toEqual({
+      machinesChecked: 0,
+      keysMoved: 0,
+      legacyDiscarded: 0,
+      selectorConflicts: 0,
+    });
+  });
+
+  it("keeps a committed page after interruption and resumes by rerunning the command", async () => {
+    const f = await machineFixture(modules);
+    const first = await legacyMachine(f);
+    const second = await legacyMachine(f);
+
+    const page = await f.t.mutation(
+      internal.migrations.machineApiKeys.moveMachineKeysPage,
+      {
+        paginationOpts: { cursor: null, numItems: 2 },
+      },
+    );
+
+    expect(page).toMatchObject({
+      machinesChecked: 2,
+      keysMoved: 1,
+      legacyDiscarded: 0,
+      selectorConflicts: 0,
+      isDone: false,
+    });
+    expect(await keysOf(f, first.machineId)).toHaveLength(1);
+    expect(await keysOf(f, second.machineId)).toHaveLength(0);
+    expect(
+      await f.t.action(
+        internal.migrations.machineApiKeys.moveMachineKeysToTable,
+        { pageSize: 2 },
+      ),
+    ).toEqual({
+      machinesChecked: 3,
+      keysMoved: 1,
+      legacyDiscarded: 0,
+      selectorConflicts: 0,
+    });
+    expect(await keysOf(f, first.machineId)).toHaveLength(1);
+    expect(await keysOf(f, second.machineId)).toHaveLength(1);
   });
 
   it("brings a key not moved yet under the rotation: it keeps its overlap, then is refused", async () => {
