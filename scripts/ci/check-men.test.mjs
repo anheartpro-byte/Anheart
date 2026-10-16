@@ -207,8 +207,13 @@ const scenarios = [
   { name: "R1 refuses a Linear document address", files: { "menaces.md": open + "https://linear.app/anheart/document/x\n" }, status: 1, message: otherAddressMessage },
   // ANH-229 EX-2 : erasure applies only to destination tokens containing address punctuation.
   { name: "accepts a short lowercase destination filename", files: { "menaces.md": open + "[x](anh-136.md)\n" }, status: 0 },
+  { name: "accepts a short lowercase destination filename with an anchor", files: { "menaces.md": open + "[x](anh-136.md#y)\n" }, status: 0 },
   { name: "refuses an address-free token after a link opener", files: { "menaces.md": open + "](ANH 999\n" }, status: 1, message: destinationMessage },
   { name: "refuses an alternate ticket used as a destination token", files: { "menaces.md": open + "[x](anh-165)\n" }, status: 1, message: spellingMessage },
+  // ANH-229 EX-2 : R1c destination tokens cannot hide visible lowercase tickets.
+  { name: "R1c refuses a lowercase ticket after a false link opener", files: { "menaces.md": open + "Voir ](anh-180.) ici.\n" }, status: 1, message: spellingMessage },
+  { name: "R1c refuses a lowercase ticket after an escaped closing bracket", files: { "menaces.md": open + "Voir [x\\](anh-999.) ici.\n" }, status: 1, message: spellingMessage },
+  { name: "R1c refuses a lowercase destination token in code", files: { "menaces.md": open + "Voir `](anh-999.)` ici.\n" }, status: 1, message: spellingMessage },
   // ANH-229 EX-2 : the strict subset retains the page's actual link and character forms.
   { name: "refuses a canonical link with a fragment and title", files: { "menaces.md": open + `[ANH-180](${url180}#comment-1 "voir")\n` }, status: 1, message: destinationMessage },
   { name: "refuses an angled canonical inline destination", files: { "menaces.md": open + `[ANH-180](<${url180}>)\n` }, status: 1, message: destinationMessage },

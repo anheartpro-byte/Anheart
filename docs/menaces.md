@@ -483,12 +483,17 @@ Chaque suite crochet fermant puis parenthèse ouvrante doit être immédiatement
 suivie d'un jeton non vide, puis d'une parenthèse fermante. Ce jeton ne peut
 contenir ni caractère d'espacement reconnu par JavaScript, saut de ligne
 compris, ni parenthèse ni chevron. Les titres de lien, les destinations entre
-chevrons et les espaces
-avant la destination sont donc refusés.
-Le contrôle de forme efface seulement les jetons de destination des liens en
-ligne qui contiennent `.`, `/`, `#` ou `:`, les liens
-automatiques HTTP(S), et les adresses nues HTTP(S) ou commençant par `www.`.
-Un jeton sans ces quatre caractères reste lu.
+chevrons et les espaces avant la destination sont donc refusés.
+Une première passe du contrôle de forme efface les jetons après toute suite
+crochet fermant puis parenthèse ouvrante qui contiennent `.`, `/`, `#` ou `:`,
+les liens automatiques HTTP(S) et les adresses nues HTTP(S) ou commençant par
+`www.` ; un jeton sans ces quatre caractères reste lu.
+Une seconde passe relit les jetons de destination avec les mêmes exemptions
+de fragments en minuscules, en effaçant seulement les liens automatiques et
+les adresses nues. Elle ignore aussi un candidat commençant par `anh` en
+minuscules en tête de destination si le jeton entier est un nom de fichier
+fait de lettres minuscules, chiffres, `.`, `_`, `/` ou `-`, finissant par `.md`
+et éventuellement suivi d'une ancre.
 
 Une adresse est Linear si son hôte, point final retiré, vaut `linear.app` ou
 finit par `.linear.app`. Toute adresse Linear doit être exactement celle d'un
@@ -514,8 +519,14 @@ insécable U+00A0, à `« · »`, aux lettres U+00C0 à U+00FF sauf U+00D7 et U+
 insécable U+202F et à `→ ↔`. Les tabulations et tout autre caractère sont
 refusés, avec leur point de code et leur ligne, après les autres contrôles.
 Aucune normalisation Unicode n'est appliquée.
-Limites : un lien qui coupe les lettres, comme `[AN](x.md)H-999`, ou un saut
-de ligne entre les lettres `AN` et `H`, échappe au contrôle de forme des tickets.
+Limites : un lien ou une image qui coupe les lettres ou les chiffres d'un nom,
+par exemple un ticket inscrit suivi d'un chiffre en lien, ou un saut de ligne
+entre les lettres `AN` et `H`, échappe au contrôle de forme des tickets.
+Toute autre ponctuation entre `ANH` et les chiffres que celles reconnues par
+la règle n'est pas lue, par exemple une virgule, une apostrophe ou un signe plus.
+L'effacement des adresses nues reconnaît `http://`, `https://` ou `www.` en
+toute casse et n'importe où, même sans domaine, plus largement que la
+comparaison des adresses Linear ; il ne s'arrête pas à l'astérisque.
 Un libellé `ANH-n` vers un hôte autre que Linear ou vers une page locale n'est
 pas comparé à la destination du registre ; les noms correctement écrits
 doivent toutefois être inscrits au registre.

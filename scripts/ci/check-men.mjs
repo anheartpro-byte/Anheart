@@ -47,11 +47,17 @@ for (const [, issueId] of catalogue.matchAll(/\b(ANH-[1-9][0-9]*)\b/g)) {
   if (!issueId || !registry.has(issueId)) refuse(`Linear issue named but not verified: ${issueId}`);
 }
 
-/** @param {string} text */
-function* ticketNames(text) {
+/** @param {string} text @param {boolean} [markdownDestinations] */
+function* ticketNames(text, markdownDestinations = false) {
+  const filenameToken = /[a-z0-9._/-]+(?:#[^\s()<>]*)?\)/y;
   for (const match of text.matchAll(/(?<![\p{L}\p{N}])a[*_~`\\]*n[*_~`\\]*h[\p{Zs}\s\p{Pd}−_\p{Cf}\\*~`#./:·()[\]]*\p{Nd}(?:[*_~`\\]*\p{Nd})*[\p{L}\p{N}_]*/giu)) {
     const before = text.slice(Math.max(0, match.index - 3), match.index);
     if (match[0].startsWith("anh") && (/[/#.-]/.test(text[match.index - 1] ?? "") || /[\p{L}\p{N}]_$/u.test(before))) continue;
+    if (markdownDestinations && match[0].startsWith("anh") && text.slice(Math.max(0, match.index - 2), match.index) === "](") {
+      filenameToken.lastIndex = match.index;
+      const filename = filenameToken.exec(text)?.[0].slice(0, -1).split("#")[0];
+      if (filename?.endsWith(".md")) continue;
+    }
     yield match[0];
   }
 }
@@ -116,21 +122,31 @@ for (const { url: address } of addresses) {
   }
 }
 
-// Reject alternate ticket spellings, escapes and emphasis outside address tokens.
-// Lowercase path fragments are exempt; an underscore must follow a letter or number.
+/** @param {string} text @returns {string} */
+function withoutAddresses(text) {
+  return text.replace(/<https?:\/\/[^<>\s]*>/gi, " ").replace(/(?:https?:\/\/|www\.)[^\s<>()[\]`"']*/gi, " ");
+}
+
+/** @param {string} text @param {boolean} [markdownDestinations] */
+function checkTicketNames(text, markdownDestinations = false) {
+  for (const name of ticketNames(text, markdownDestinations)) {
+    if (!/^ANH-[1-9][0-9]*$/.test(name)) {
+      const readable = JSON.stringify(name).replace(/[\p{Cf}\p{Zs}]/gu, (char) => char === " " ? char : `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+      refuse(`ticket written other than ANH-n: ${readable}`);
+    }
+    if (!registry.has(name)) refuse(`Linear issue named but not verified: ${name}`);
+  }
+}
+
+// Keep destination erasure for ticket names split by markup, then reread tokens
+// behind every ]( with only lowercase Markdown filenames and path fragments exempt.
 let ticketText = catalogue;
 for (const { url, start, end } of destinations) {
   if (!/[./#:]/.test(url)) continue;
   ticketText = ticketText.slice(0, start) + " ".repeat(end - start) + ticketText.slice(end);
 }
-ticketText = ticketText.replace(/<https?:\/\/[^<>\s]*>/gi, " ").replace(/(?:https?:\/\/|www\.)[^\s<>()[\]`"']*/gi, " ");
-for (const name of ticketNames(ticketText)) {
-  if (!/^ANH-[1-9][0-9]*$/.test(name)) {
-    const readable = JSON.stringify(name).replace(/[\p{Cf}\p{Zs}]/gu, (char) => char === " " ? char : `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
-    refuse(`ticket written other than ANH-n: ${readable}`);
-  }
-  if (!registry.has(name)) refuse(`Linear issue named but not verified: ${name}`);
-}
+checkTicketNames(withoutAddresses(ticketText));
+checkTicketNames(withoutAddresses(catalogue), true);
 
 // Character references can hide ticket letters or separators, so require literal characters.
 const characterReference = /&(?:#(?:[0-9]+|x[0-9a-f]+)|[a-z][a-z0-9]*);/i.exec(catalogue);
