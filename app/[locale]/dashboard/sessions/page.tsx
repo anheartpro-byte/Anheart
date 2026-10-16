@@ -230,7 +230,7 @@ export default function SessionsPage() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Activity className="h-12 w-12 text-muted-foreground mb-4" />
-            <p className="text-muted-foreground text-center">
+            <p role="status" className="text-muted-foreground text-center">
               {canGrow
                 ? searching
                   ? t("sessions.searchNoMatchLoaded", {
@@ -246,7 +246,7 @@ export default function SessionsPage() {
       ) : (
         <>
           {canGrow && searching && (
-            <p className="text-sm text-muted-foreground">
+            <p role="status" className="text-sm text-muted-foreground">
               {t("sessions.searchLoadedOnly", { count: sessions.length })}
             </p>
           )}

@@ -450,7 +450,7 @@ describe.each([
       );
 
       const explanation = t("sessions.searchNoMatchLoaded", { count: 50 });
-      expect(screen.getByText(explanation)).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toBe(explanation);
       expect(screen.getByText("50+ sessions")).toBeTruthy();
       expect(screen.queryByRole("table")).toBeNull();
       expect(screen.queryByText(messages.sessions.noSessions)).toBeNull();
@@ -478,7 +478,7 @@ describe.each([
       expect(screen.queryByText(notice)).toBeNull();
 
       await view.user.type(search, " P ");
-      expect(screen.getByText(notice)).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toBe(notice);
       expect(document.querySelectorAll("tbody tr")).toHaveLength(50);
       await view.user.clear(search);
       expect(screen.queryByText(notice)).toBeNull();
@@ -503,7 +503,9 @@ describe.each([
         screen.getByPlaceholderText(messages.common.search),
         "   ",
       );
-      expect(screen.getByText(messages.sessions.nothingYet)).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toBe(
+        messages.sessions.nothingYet,
+      );
       expect(screen.queryByText(messages.sessions.noSessions)).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
 
@@ -526,7 +528,9 @@ describe.each([
       const view = await renderPage(<SessionsPage />, { locale });
       const search = screen.getByPlaceholderText(messages.common.search);
       await view.user.type(search, "Missing");
-      expect(screen.getByText(messages.sessions.searchNoMatch)).toBeTruthy();
+      expect(screen.getByRole("status").textContent).toBe(
+        messages.sessions.searchNoMatch,
+      );
       expect(screen.queryByText(messages.sessions.noSessions)).toBeNull();
       expect(screen.queryByRole("table")).toBeNull();
       expect(

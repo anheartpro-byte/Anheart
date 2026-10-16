@@ -58,7 +58,7 @@ export default function ReportsPage() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16">
             <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <p className="text-muted-foreground text-center">
+            <p role="status" className="text-muted-foreground text-center">
               {status === "Exhausted" ? t("noReports") : t("nothingYet")}
             </p>
           </CardContent>

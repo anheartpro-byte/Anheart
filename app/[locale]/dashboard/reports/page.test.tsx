@@ -289,7 +289,9 @@ describe.each([
         : undefined,
     );
     const view = await renderPage(<ReportsPage />, { locale });
-    expect(screen.getByText(messages.reports.nothingYet)).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe(
+      messages.reports.nothingYet,
+    );
     expect(screen.queryByText(messages.reports.noReports)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
 
