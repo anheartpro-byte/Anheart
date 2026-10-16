@@ -121,9 +121,9 @@ def summary_table(entries: Sequence[tuple[RunResult, Metrics, tuple[Violation, .
     return "\n".join(lines)
 
 
-def replay_command(record: Path, *, as_json: bool) -> int:
+def replay_command(record: Path, *, as_json: bool, config: Path | None = None) -> int:
     """``--replay``: print the report (text, or one line of JSON) and say how it went."""
-    result = replay_path(record)
+    result = replay_path(record, config)
     if isinstance(result, Err):
         print(f"replay impossible: {result.error.detail}", file=sys.stderr)
         return EXIT_UNUSABLE
@@ -155,6 +155,7 @@ class _Args(argparse.Namespace):
     csv: bool = False
     out: Path = OUT_DIR
     replay: Path | None = None
+    config: Path | None = None
     json: bool = False
     export_real: Sequence[str] | None = None
     library: Path = REAL_DIR
@@ -172,6 +173,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="with --replay: the report as JSON")
     parser.add_argument(
+        "--config", type=Path, help="with --replay: the console's applied configuration document"
+    )
+    parser.add_argument(
         "--export-real",
         nargs="*",
         metavar="NAME",
@@ -181,7 +185,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv, namespace=_Args())
     out_dir = args.out
     if args.replay is not None:
-        return replay_command(args.replay, as_json=args.json)
+        return replay_command(args.replay, as_json=args.json, config=args.config)
     if args.export_real is not None:
         return export_command(args.export_real, args.library)
     if args.list:

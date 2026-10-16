@@ -3927,11 +3927,13 @@ séance, avant elles jusqu'au départ inclus. Tout tourne en ligne, sur
 l'horloge injectée, sans fil. Le contrat, les validations et les refus des
 anciens lecteurs sont dans [enregistrement.md](enregistrement.md).
 
-> **Limite.** Aujourd'hui, seuls les enregistrements produits par la
-> simulation sont rejouables. La console écrit un enregistrement au même
-> format depuis ANH-128, mais il ne contient pas encore ce qu'un rejeu doit
-> redonner au runtime : le rejeu le refuse et dit ce qui manque. Et les
-> échanges Modbus du pilote réel ne sont pas rejoués (section 16.8).
+Les enregistrements de la vraie console en simulation sont aussi rejouables,
+avec leur document de configuration vérifié par `config_hash`. Le test croisé
+de la gate passe par `LocalPanel`, le variateur et le BITalino simulés, le
+vrai DSP et une horloge simulée : un programme et une séance manuelle avec
+changement de cible, arrêt et pings de présence. Les deux ont zéro écart,
+sans tolérance consommée. Les échanges Modbus du pilote réel restent hors
+du magnétophone actuel (section 16.8).
 
 ### 16.2 Commande
 
@@ -3940,7 +3942,36 @@ $PY -m simulation.run auto_jog_150_dsp                 # écrit simulation/out/<
 $PY -m simulation.run --replay simulation/out/<dossier>
 $PY -m simulation.run --replay simulation/scenarios/real/fault_bitalino_disconnect_dsp.tar.gz
 $PY -m simulation.run --replay <dossier> --json        # le même rapport, une ligne de JSON
+$PY -m simulation.run --replay <console.tar.gz> --config <empreinte.json> --json
 ```
+
+`--config` désigne les octets canoniques écrits par la console sous
+`data/records/config/<config_hash>.json`. Sans cette option, une console
+exige un fichier adjacent `<dossier>.config.json` ou
+`<archive sans .tar.gz>.config.json`. La bibliothèque lit ce même fichier
+adjacent. Il se récupère séparément : il n'est ni synchronisé ni inclus dans
+le dépôt ou l'export de séance. Le format du manifeste reste inchangé.
+
+Le rejeu vérifie le SHA-256 avant toute construction du runtime. Document
+absent ou illisible : code 2, `the console configuration document is absent
+or unreadable`. Empreinte différente : code 2, `configuration hash mismatch:
+manifest <16 caractères>, document <16 caractères>`. Taille au-delà de
+`MAX_CONFIG_BYTES` (65 536), géométrie ou limites refusées, ou avertissement
+de production `replay_config:` : code 2 avec raison. Même un espace ajouté
+au document est refusé. Les limites et la géométrie du runtime viennent du
+document vérifié, par les constructeurs de domaine de la console.
+
+Le rapport ajoute `configuration.config_hash_verified`,
+`current_configuration_differs` et `differing_parts`. Cette dernière liste
+nomme les parties qui diffèrent des valeurs livrées par le dépôt :
+`medical_file` (empreinte ou signature), `safety`, `motion`, `runtime`,
+`min_rider_age`. Une différence laisse le rejeu utiliser la configuration
+enregistrée. `not_compared` nomme les réglages de machine sans référence
+courante dans le dépôt : `geometry`, `machine_ceilings`, `sources`, `camera`,
+`drive_link`. Pour `machine_id: simulation`, le rapport dit explicitement
+que `config_hash` n'est pas vérifié pour ce producteur ; ce champ vaut
+`false`, la comparaison courante vaut `null`, la géométrie reste celle du
+manifeste et les limites celles du dépôt.
 
 Sortie réelle de la troisième commande (environ 17 s) :
 
@@ -4027,16 +4058,20 @@ replay of record 148716e4b06f4998bab0370bbcbac63a: DIVERGENCE
 à juger. Les causes sont listées dans
 [enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué) :
 pas de tics d'avant le départ, événement d'entrée qui n'est pas une commande,
-aucun échange du variateur, manifeste sans géométrie, fréquence cardiaque sans
+aucun échange du variateur, simulation sans géométrie, console sans document
+de configuration vérifié, fréquence cardiaque sans
 ECG brut, échanges Modbus natifs, phase ou action inconnue de cette version.
 Quand il en manque plusieurs, le message les donne ensemble, séparées par
-« ; » : c'est le cas d'un enregistrement écrit par la console (section 16.8).
+« ; ».
 
 ### 16.5 La bibliothèque `simulation/scenarios/real/`
 
 Un fichier par séance : `<nom>.tar.gz`, l'archive d'un dossier
 d'enregistrement fermé. Le dossier lui-même n'est pas versionné : une séance
 de treize minutes contient environ 4000 blocs d'ECG.
+Pour une archive de console, ajouter aussi `<nom>.config.json`, le document
+appliqué dont le manifeste porte l'empreinte. Aucune archive de console
+n'est encore ajoutée à cette bibliothèque.
 
 `simulation/tests/test_real_records.py` juge **chaque archive présente dans
 le dossier** (`judge`, dans `simulation/real_records.py`). Une archive ajoutée
@@ -4122,17 +4157,17 @@ réécrite : la commande affiche `unchanged`, et git n'a rien à ajouter. La
 comparaison porte sur le contenu lu, pas sur les octets, parce que deux
 versions de zlib ne compriment pas pareil.
 
-**Une séance réelle.** Pas encore possible de bout en bout :
-l'enregistrement que la console écrit n'est pas encore rejouable, et les
-échanges Modbus natifs ne sont pas rejoués (section 16.8). La marche à suivre,
+**Une séance réelle.** Les échanges Modbus natifs restent à traiter
+(section 16.8). La console en simulation est vérifiée par le test croisé.
+La marche à suivre,
 le jour où c'est possible :
 
-1. récupérer l'archive `.tar.gz` de la séance ;
+1. récupérer l'archive `.tar.gz` de la séance et son document de configuration ;
 2. l'anonymiser sous la forme « séance réelle » du tableau de 16.5 (manifeste,
    acteurs des événements, identifiants de la bibliothèque, nom du dossier),
    puis recalculer `checksums.sha256` ;
-3. vérifier `python -m simulation.run --replay <archive>` ;
-4. déposer l'archive dans `simulation/scenarios/real/` sous un nom qui ne
+3. vérifier `python -m simulation.run --replay <archive> --config <fichier>` ;
+4. déposer l'archive et `<nom>.config.json` dans `simulation/scenarios/real/` sous un nom qui ne
    désigne ni une personne ni un lieu, et ouvrir la PR. La gate fait le reste.
 
 ### 16.7 Un écart de rejeu : la règle
@@ -4174,6 +4209,8 @@ la raison, et **le rapport JSON du rejeu tout entier**, tel que
    "recorded": "speed 82 motor rpm at t=3.000 s",
    "requested": "speed 77 motor rpm", "t": 3.0, "tick": 64
   },
+  "configuration": {"config_hash_verified": true, "current_configuration_differs": false,
+   "differing_parts": [], "not_compared": ["geometry", "machine_ceilings", "sources", "camera", "drive_link"]},
   "integrity": [], "outcome": "divergence",
   "record": "148716e4b06f4998bab0370bbcbac63a", "recorded_ticks": 95,
   "tolerances": {"setpoint_motor_rpm": 1, "verdict_ticks": 1}
@@ -4228,19 +4265,11 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 
 ### 16.8 Limites connues
 
-* **Séances réelles.** La console écrit un enregistrement au format commun
-  (ANH-128), que le rejeu refuse aujourd'hui (code 2) en donnant ses deux
-  raisons : ses événements d'entrée sont du texte (`manual session started`,
-  `end_requested: done`) et non les commandes du vocabulaire ; son manifeste
-  n'a pas de géométrie. Son `drive_frames.jsonl` n'est plus vide (ANH-191) :
-  la console en simulation y écrit les observations d'appel que le rejeu
-  attend, depuis l'ouverture de l'enregistrement. Il lui manque encore les
-  tics du repos, avec les réponses du variateur à ces tics, et `t_received`
-  sur les blocs d'ECG.
-  `test_record_console_parity.py` construit cet enregistrement avec la vraie
-  console, vérifie ce refus, et vérifie que la console et la simulation
-  écrivent les mêmes observations d'appel : le jour où la console écrit ce
-  qu'il faut, le test du refus échoue, et se remplace par un rejeu.
+* **Séances réelles.** La preuve de console porte sur des séances simulées,
+  pas sur du matériel ni une acquisition humaine. La console fournit les
+  commandes, le repos, les trames, les remises ECG et le document de
+  configuration. Le magnétophone Modbus natif reste nécessaire pour le
+  pilote physique. Une ancienne console sans document est refusée, code 2.
 * **Échanges natifs.** Le magnétophone rejoue les observations d'appel du
   variateur (`open`, `speed`, `read_status`...), celles qu'écrit la simulation.
   Les échanges Modbus du pilote réel ne sont pas rejoués : un enregistrement
@@ -4277,7 +4306,9 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 | `raspberry-pi/tests/test_record_commands.py` | le vocabulaire des commandes (`src/record/commands.py`), écrit et relu à l'identique ; il est dans la gate du Pi |
 | `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées ; l'empreinte, qui distingue deux rejeux que les décomptes confondent |
 | `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences ; les archives et ce que l'extraction refuse (nom absolu, remontée de dossier, lien, périphérique, écriture hors du dossier) ; les deux formes d'anonymat et les identifiants de la bibliothèque ; l'écart accepté (sont refusés : un second écart derrière lui, un écart remplacé par un autre de même nature, un tic modifié après une divergence acceptée, un fichier accepté à côté d'un enregistrement de la simulation) ; l'export reproductible, et son refus d'un nom qui est un chemin |
-| `test_record_console_parity.py` | écrit pour ANH-128 (même structure sur la console et en simulation) ; il vérifie aussi que le rejeu refuse l'enregistrement de la console en donnant ses raisons, et que `t_received` est la seule clé d'en-tête de bloc que la simulation écrit en plus |
+| `test_record_console_parity.py` | même structure des deux producteurs ; rejeu exact de deux séances de console en simulation (programme, manuelle avec cible et arrêt, pings), configuration vérifiée, fichier adjacent et `--config`, refus code 2 si absent ou altéré, rejeu identique si seul le fichier médical courant diffère ; environ 28 s pour les deux cas croisés sur le poste de développement |
+| `test_replay_config.py` | limites et géométrie issues du document, validation par les constructeurs de domaine, empreintes et tailles refusées, parties de configuration courante nommées |
+| `raspberry-pi/tests/test_record_configuration.py` | empreinte de référence inchangée, sentinelle de confidentialité, taille bornée, modes 600/700, unicité et collisions, erreurs disque et écriture bloquée sans attente des tics, exclusions de rétention/synchronisation/dépôt/export/logbook |
 
 ## 17. Endurance de la console
 

@@ -44,6 +44,7 @@ from pydantic.dataclasses import dataclass
 
 from simulation.harness import OPERATOR, REMOTE, SYSTEM, run_scenario
 from simulation.replay import ReplayError, integrity_line, replay, replay_recording
+from simulation.replay_config import sidecar
 from simulation.replay_report import Outcome, ReplayReport
 from simulation.scenario import SCENARIO_DIR, load_scenario, scenario_paths
 from src.record.codec import JSON, Privacy, mapping
@@ -194,15 +195,15 @@ def unpack(archive: Path, into: Path) -> Result[Path, str]:
     return Ok(folders[0])
 
 
-def replay_path(path: Path) -> Result[ReplayReport, ReplayError]:
+def replay_path(path: Path, config: Path | None = None) -> Result[ReplayReport, ReplayError]:
     """Replay a record given as its folder or as its archive."""
     if path.is_dir():
-        return replay(path)
+        return replay(path, config)
     with TemporaryDirectory(prefix="anheart-replay-") as work:
         unpacked = unpack(path, Path(work))
         if isinstance(unpacked, Err):
             return Err(ReplayError(unpacked.error))
-        return replay(unpacked.value)
+        return replay(unpacked.value, sidecar(path) if config is None else config)
 
 
 # =========================================================================
@@ -349,7 +350,7 @@ def judge(archive: Path, work: Path) -> str | None:  # noqa: PLR0911  # one retu
     accepted = accepted_for(archive)
     if isinstance(accepted, Err):
         return accepted.error
-    replayed = asyncio.run(replay_recording(recording))
+    replayed = asyncio.run(replay_recording(recording, sidecar(archive)))
     if isinstance(replayed, Err):
         return f"the record is not replayable: {replayed.error.detail}"
     refused = refusal(replayed.value, accepted.value, simulated=is_simulated(recording.manifest))
