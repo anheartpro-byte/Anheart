@@ -271,7 +271,7 @@ export const applyEvent = internalMutation({
             targetId: user._id,
             details: { role: values.role },
           });
-        } else if (row.active && row.role !== values.role) {
+        } else if (row.active && values.active && row.role !== values.role) {
           await audit(ctx, {
             actor: SYSTEM_ACTOR,
             source: "webhook",

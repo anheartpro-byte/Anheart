@@ -184,8 +184,12 @@ Les versions de fiche variateur et la version fournie directement à
 ces mutations ne leur imposent pas de format strict. Les versions de release
 restantes passent `isReleaseVersion` ; `softwareVersion` d'une revue machine
 passe aussi ce format et doit exister dans le registre des releases Pi.
-`medicalParametersVersion` d'une revue doit exister en base. La machine de
-la fiche et l'identifiant de la version créée restent les cibles de leurs lignes.
+`medicalParametersVersion` d'une revue n'est pas copiée non plus : son
+existence en base ne garantit pas un format, puisque l'insertion interne
+accepte un texte libre. Cette vérification métier reste inchangée. La machine
+de la fiche et l'identifiant de la version créée restent les cibles de leurs lignes.
+La clé `medicalParametersVersion` reste admise par le schéma, mais aucun
+appel courant ne la remplit.
 
 Conformément au principe 6 du processus de développement, aucune donnée de
 santé ni texte libre ne doit y entrer : ni FC max, année de naissance,
@@ -210,10 +214,14 @@ même transaction que l'effet ; aucune fonction ne la modifie ni ne la
 supprime. [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) énumère les
 fonctions enregistrées dans tout `convex/**/*.ts`, hors fichiers générés,
 tests, fixtures, setup et matrices. Le test cherche le littéral `audit_log`
-et interdit aussi les assertions `as never`, `as any` et `as Id<...>` sur
-l'identifiant passé à `ctx.db.delete`, `patch` ou `replace`. Cette analyse
-de source ne constitue pas une preuve générale : un identifiant non typé
-sans cette assertion ou un nom de table construit lui échapperait.
+et interdit toute assertion de type (`as ...` ou `<Type>...`, y compris
+`GenericId<...>`) dans l'identifiant passé à `ctx.db.delete`, `patch` ou
+`replace`. Il refuse aussi ces écritures sur un alias déclaré directement
+par `const db = ctx.db`, quel que soit son nom. Cette analyse de source
+ne constitue pas une preuve générale : elle ne suit pas le flux des valeurs.
+Un identifiant non typé, une assertion faite avant l'appel, un alias obtenu
+par affectation, déstructuration ou alias successifs, une méthode extraite,
+un accès calculé (`db[method]`) ou un nom de table construit peut lui échapper.
 **Aucune purge n'existe.** La rétention envisagée est de **5 ans, à
 confirmer par ANH-87a** ; rien n'est supprimé, ni avant ni après cinq ans,
 tant que cette durée et sa mise en œuvre ne sont pas décidées. La portée de
@@ -1405,13 +1413,16 @@ la source est `site`, l'acteur est le compte avec son rôle effectif dans
 cette organisation. Le webhook écrit `membership.created` à l'insertion
 active ou au passage inactif vers actif, y compris une réintégration ou
 l'acceptation d'une invitation, sans ajouter en plus un changement de rôle.
-Une ligne déjà active ne donne une ligne de rôle que si celui-ci change ;
-une ligne qui reste inactive ne donne aucune création. La désactivation
-reste tracée. Connexion puis webhook, ou webhook puis connexion, produisent
+Une ligne déjà active ne donne une ligne de rôle que si celui-ci change et
+que l'appartenance reste active ; une suppression ne trace que la désactivation.
+Une ligne qui reste inactive ne donne aucune création.
+Connexion puis webhook, ou webhook puis connexion, produisent
 une seule création au total. Une appartenance ouverte par la seule
 connexion est tracée par la connexion. Le webhook trace aussi
 `user.linked_to_account` et chaque `patient_gestionnaire.assigned` qu'il
 crée, avec l'acteur système et la source `webhook`.
+La connexion réutilise l'organisation déjà chargée pour attribuer son audit,
+sans la relire ni permettre un saut silencieux de cette écriture.
 
 `fitness.submitFitnessAnswers` écrit `fitness.submitted`, cible
 `fitness_assessment`, avec seulement `userId` : une nouvelle saisie remplace
@@ -1421,10 +1432,13 @@ source `cron` et l'organisation de la séance. Cette rétention des fichiers
 de séance est distincte du journal d'audit, qui n'a aucune purge.
 
 Les appels de physiologie, de rôle et d'identité du registre sans changement
-réel ne donnent aucune ligne. Pour la physiologie et la suppression de
-compte, les organisations viennent des appartenances et relations touchées,
-ou de l'organisation de l'appelant non admin ; le miroir principal
-`users.organizationId` ne suffit pas à attribuer ces lignes.
+réel ne donnent aucune ligne. Pour la physiologie changée par l'admin Anheart,
+seules les appartenances actives du patient déterminent les organisations ;
+sans appartenance active, la ligne n'a pas d'organisation. Les relations
+gestionnaires dormantes ne comptent pas. Pour la suppression de compte,
+les organisations viennent des appartenances et relations supprimées.
+Un appelant non admin attribue ces lignes à son organisation ; le miroir
+principal `users.organizationId` ne suffit pas.
 
 Pour ajouter une mutation sensible :
 

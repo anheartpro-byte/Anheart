@@ -817,7 +817,6 @@ export const addValidationReview = mutation({
         level: args.level,
         previousLevel: effectiveValidationLevel(validation, Date.now()),
         softwareVersion,
-        medicalParametersVersion: medicalVersion ?? undefined,
       },
     });
     return null;

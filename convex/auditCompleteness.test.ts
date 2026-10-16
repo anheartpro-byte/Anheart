@@ -11,6 +11,7 @@ import {
 } from "./lib/audit";
 import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 import { CONSENT_TEXT_VERSION } from "../lib/consentText";
+import { auditCsv } from "../lib/auditCsv";
 import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
 import { mockClerkInvitations } from "./patientInvitation.fixtures";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
@@ -1507,6 +1508,81 @@ describe("ANH-167 T02-b absent effects and refusals", () => {
     await unchanged(w, () =>
       as(w.t, "manager").action(api.users.createPatient, input),
     );
+  });
+});
+
+describe("ANH-167 C2 regression effects", () => {
+  it("R2-5 does not reintroduce an unvalidated medical version through a registry review", async () => {
+    const w = await seedLaunchWorld(modules);
+    const version = "FC max 187; private medical version";
+    const storageId = await w.t.run((ctx) =>
+      ctx.storage.store(new Blob(["Synthetic document"])),
+    );
+    await w.t.mutation(internal.medicalParametersStore.insertVersion, {
+      version,
+      storageId,
+      issuedAt: "2026-01-01",
+      signedBy: "Synthetic signer",
+      signature: "synthetic",
+      zoneCeilingFraction: 0.8,
+      minRiderAge: 18,
+      hrMaxFormula: "tanaka",
+    });
+    expect(JSON.stringify(await rows(w))).not.toContain(version);
+    await registryRelease(w);
+    await as(w.t, "admin").mutation(api.machineRegistry.addValidationReview, {
+      machineId: w.machine,
+      level: "bench",
+      softwareVersion: "pi-0.1.0",
+      medicalParametersVersion: version,
+      reportStorageId: await registryUpload(w),
+    });
+    const written = await rows(w);
+    const page = await as(w.t, "orgAdmin").query(api.audit.list, {
+      paginationOpts: { cursor: null, numItems: 200 },
+    });
+    const review = page.page.find((row) => row.action === "registry.review_added");
+    for (const sentinel of [version, "187", "private medical version"])
+      for (const representation of [
+        JSON.stringify(written),
+        JSON.stringify(page.page),
+        auditCsv(page.page),
+      ])
+        expect.soft(representation).not.toContain(sentinel);
+    expect(review?.details).toEqual({
+      level: "bench",
+      previousLevel: "none",
+      softwareVersion: "pi-0.1.0",
+    });
+  });
+
+  it("R1-16 N1 records only deactivation when a deletion carries another role", async () => {
+    const w = await seedLaunchWorld(modules);
+    const event = membershipEvent();
+    await w.t.mutation(internal.clerkWebhook.applyEvent, {
+      eventId: "c2-membership-created",
+      event,
+    });
+    const before = (await rows(w)).length;
+    await w.t.mutation(internal.clerkWebhook.applyEvent, {
+      eventId: "c2-membership-deleted",
+      event: {
+        ...event,
+        deleted: true,
+        role: "admin",
+        updatedAt: NOW + 2,
+        occurredAt: NOW + 2,
+      },
+    });
+    const member = await w.t.run(async (ctx) =>
+      (await ctx.db.query("memberships").collect()).find(
+        (row) => row.clerkMembershipId === event.membershipId,
+      ),
+    );
+    expect(member).toMatchObject({ active: false, role: "admin" });
+    expect((await rows(w)).slice(before).map((row) => row.action)).toEqual([
+      "membership.deactivated",
+    ]);
   });
 });
 

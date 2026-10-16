@@ -794,8 +794,10 @@ automatique d'un enregistrement apparaît avec la source `cron`.
 Les changements sans effet de physiologie, de rôle et d'identité du registre
 n'ajoutent pas de ligne ; les champs affichés sont ceux réellement modifiés.
 Les versions libres de fiche et d'enregistrement médical sont omises des
-détails. Les invitations montrent les identifiants des gestionnaires prévus,
-et leurs affectations à l'acceptation ont chacune une ligne. Les changements
+détails, y compris la version médicale citée par une revue machine.
+Les invitations affichent le nombre de gestionnaires prévus ; leurs
+identifiants figurent seulement dans l'export CSV. Leurs affectations à
+l'acceptation ont chacune une ligne. Les changements
 de propriétaire machine et de niveau de release indiquent respectivement
 le nouveau propriétaire et le niveau précédent. Chaque liste d'identifiants
 est bornée à 1 000 éléments ; en cas de troncature, `count` donne le total

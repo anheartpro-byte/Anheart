@@ -54,9 +54,10 @@ import {
 async function mirrorMembership(
   ctx: MutationCtx,
   user: Doc<"users">,
-  organizationId: Id<"organizations">,
+  organization: Doc<"organizations">,
   role: OrganizationRole,
 ) {
+  const organizationId = organization._id;
   const membership = await findMembership(ctx, user._id, organizationId);
   if (
     membership &&
@@ -78,23 +79,21 @@ async function mirrorMembership(
     organizationId: user.organizationId ?? organizationId,
   });
   if (!membership || membership.role !== role) {
-    const organization = await ctx.db.get(organizationId);
-    if (organization)
-      await audit(ctx, {
-        actor: {
-          kind: "user",
-          id: user._id,
-          role: effectiveRole(organization, role),
-        },
-        source: "site",
-        organizationId,
-        action: membership ? "membership.role_changed" : "membership.created",
-        targetId: user._id,
-        details: {
-          role,
-          ...(membership ? { previousRole: membership.role } : {}),
-        },
-      });
+    await audit(ctx, {
+      actor: {
+        kind: "user",
+        id: user._id,
+        role: effectiveRole(organization, role),
+      },
+      source: "site",
+      organizationId,
+      action: membership ? "membership.role_changed" : "membership.created",
+      targetId: user._id,
+      details: {
+        role,
+        ...(membership ? { previousRole: membership.role } : {}),
+      },
+    });
   }
 }
 
@@ -127,7 +126,7 @@ export const getOrCreateUser = mutation({
         await mirrorMembership(
           ctx,
           existing,
-          claimed.organization._id,
+          claimed.organization,
           claimed.organizationRole,
         );
       }
@@ -144,25 +143,25 @@ export const getOrCreateUser = mutation({
       throw refusal("profile_pending");
 
     let home: {
-      organizationId: Id<"organizations">;
+      organization: Doc<"organizations">;
       role: OrganizationRole;
     } | null = null;
     if (claimed.kind === "claimed") {
       home = {
-        organizationId: claimed.organization._id,
+        organization: claimed.organization,
         role: claimed.organizationRole,
       };
     } else if (claimed.kind === "unclaimed") {
       const organization = await findUnlinkedDefaultOrganization(ctx);
       if (organization)
-        home = { organizationId: organization._id, role: "user" };
+        home = { organization, role: "user" };
     }
 
     // Create new user with default role
     const userId = await ctx.db.insert("users", {
       clerkId: identity.subject,
       role: home?.role ?? "user",
-      organizationId: home?.organizationId,
+      organizationId: home?.organization._id,
       firstName: identity.givenName ?? "",
       lastName: identity.familyName ?? "",
       email: identity.email ?? "",
@@ -172,24 +171,22 @@ export const getOrCreateUser = mutation({
     if (home) {
       await ctx.db.insert("memberships", {
         userId,
-        organizationId: home.organizationId,
+        organizationId: home.organization._id,
         role: home.role,
         active: true,
       });
-      const organization = await ctx.db.get(home.organizationId);
-      if (organization)
-        await audit(ctx, {
-          actor: {
-            kind: "user",
-            id: userId,
-            role: effectiveRole(organization, home.role),
-          },
-          source: "site",
-          organizationId: home.organizationId,
-          action: "membership.created",
-          targetId: userId,
-          details: { role: home.role },
-        });
+      await audit(ctx, {
+        actor: {
+          kind: "user",
+          id: userId,
+          role: effectiveRole(home.organization, home.role),
+        },
+        source: "site",
+        organizationId: home.organization._id,
+        action: "membership.created",
+        targetId: userId,
+        details: { role: home.role },
+      });
     }
 
     return userId;

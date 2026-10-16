@@ -84,30 +84,43 @@ function unsafeDatabaseIdCasts(text: string): string[] {
     true,
   );
   const unsafe: string[] = [];
+  const aliases = new Set<string>();
+  const findAliases = (node: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isPropertyAccessExpression(node.initializer) &&
+      node.initializer.name.text === "db"
+    )
+      aliases.add(node.name.text);
+    ts.forEachChild(node, findAliases);
+  };
+  findAliases(source);
   const visit = (node: ts.Node) => {
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      ["delete", "patch", "replace"].includes(node.expression.name.text) &&
-      ts.isPropertyAccessExpression(node.expression.expression) &&
-      node.expression.expression.name.text === "db"
+      ["delete", "patch", "replace"].includes(node.expression.name.text)
     ) {
-      const id =
-        ts.isStringLiteral(node.arguments[0]) && node.arguments.length > 1
-          ? node.arguments[1]
-          : node.arguments[0];
-      const inspect = (value: ts.Node) => {
-        if (
-          (ts.isAsExpression(value) || ts.isTypeAssertionExpression(value)) &&
-          (value.type.kind === ts.SyntaxKind.NeverKeyword ||
-            value.type.kind === ts.SyntaxKind.AnyKeyword ||
-            (ts.isTypeReferenceNode(value.type) &&
-              value.type.typeName.getText(source) === "Id"))
-        )
-          unsafe.push(value.getText(source));
-        ts.forEachChild(value, inspect);
-      };
-      if (id) inspect(id);
+      const receiver = node.expression.expression;
+      if (ts.isIdentifier(receiver) && aliases.has(receiver.text)) {
+        unsafe.push(node.getText(source));
+      } else if (
+        ts.isPropertyAccessExpression(receiver) &&
+        receiver.name.text === "db"
+      ) {
+        const id =
+          ts.isStringLiteral(node.arguments[0]) && node.arguments.length > 1
+            ? node.arguments[1]
+            : node.arguments[0];
+        const inspect = (value: ts.Node) => {
+          if (ts.isAsExpression(value) || ts.isTypeAssertionExpression(value))
+            unsafe.push(value.getText(source));
+          ts.forEachChild(value, inspect);
+        };
+        if (id) inspect(id);
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -442,6 +455,78 @@ describe("ANH-167 T01-b append-only and T01-c no purge", () => {
           `// ctx.db.${method}(id as never)\nctx.db.${method}(id, { text: "as any" });`,
         ),
       ).toEqual([]);
+    },
+  );
+
+  it.each(["delete", "patch", "replace"])(
+    "C2 R1-17 rejects every asserted id for %s",
+    (method) => {
+      for (const argument of [
+        'id as GenericId<"users">',
+        '(<GenericId<"users">>id)',
+        'id as CustomIdentifier',
+        '(id as unknown) as CustomIdentifier',
+      ])
+        for (const prefix of ["", '"users", '])
+          expect(
+            unsafeDatabaseIdCasts(`ctx.db.${method}(${prefix}${argument}, {});`),
+          ).not.toEqual([]);
+      expect(
+        unsafeDatabaseIdCasts(
+          `// const db = ctx.db; db.${method}(id as CustomIdentifier);\nctx.db.${method}(id, { text: "as CustomIdentifier", db: "ctx.db" });`,
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["delete", "patch", "replace"])(
+    "C2 R1-17 rejects database alias writes for %s",
+    (method) => {
+      for (const name of ["db", "database", "writer"])
+        expect(
+          unsafeDatabaseIdCasts(
+            `const ${name} = ctx.db; ${name}.${method}(id, {});`,
+          ),
+        ).not.toEqual([]);
+      expect(
+        unsafeDatabaseIdCasts(
+          `// const db = ctx.db; db.${method}(id as CustomIdentifier);\nctx.db.${method}(id, { text: "as CustomIdentifier", db: "ctx.db" });`,
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["mirrorMembership", "getOrCreateUser"])(
+    "C2 R1-20 reuses the loaded organisation without another get in %s",
+    (name) => {
+      const parsed = ts.createSourceFile(
+        "users.ts",
+        sources["./users.ts"],
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      const reads: string[] = [];
+      let found = false;
+      const inspect = (node: ts.Node) => {
+        if (
+          ts.isCallExpression(node) &&
+          node.expression.getText(parsed) === "ctx.db.get"
+        )
+          reads.push(node.getText(parsed));
+        ts.forEachChild(node, inspect);
+      };
+      const visit = (node: ts.Node) => {
+        if (
+          (ts.isFunctionDeclaration(node) || ts.isVariableDeclaration(node)) &&
+          node.name?.getText(parsed) === name
+        ) {
+          found = true;
+          inspect(node);
+        } else ts.forEachChild(node, visit);
+      };
+      visit(parsed);
+      expect(found).toBe(true);
+      expect(reads).toEqual([]);
     },
   );
 
