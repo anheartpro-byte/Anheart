@@ -3617,10 +3617,13 @@ restaurée).
   `pagesOf(liste)` de `test-support/pages.tsx` écrit pour une liste ; la
   première page est demandée avec `initialNumItems`, une de plus à chaque
   `loadMore`. Une page répondue par une `Error` est levée par la doublure de
-  `usePaginatedQuery` au rendu, comme par `useQuery` : le vrai hook de Convex
-  1.46 fait de même (`throwOnError` vaut `true` par défaut dans
-  `usePaginatedQueryInternal`, dans
-  `node_modules/convex/dist/esm/react/use_paginated_query.js`). Le test de la
+  `usePaginatedQuery` au rendu, comme par `useQuery`. Le vrai hook de Convex
+  1.46 traite à part une erreur `InvalidCursor` : il la journalise et repart
+  de la première page, dans une branche avant `throwOnError` dans
+  `node_modules/convex/dist/esm/react/use_paginated_query.js`. Pour les autres
+  erreurs, il lève comme la doublure (`throwOnError` vaut `true` par défaut
+  dans `usePaginatedQueryInternal`). La doublure lève toute `Error`, sans ce
+  traitement du curseur invalide. Le test de la
   page Rapports (`app/[locale]/dashboard/reports/page.test.tsx`, « throws a
   failed page during rendering instead of showing an empty report list »)
   le vérifie. Le remplaçant ne découpe aucune page et ne garde pas les bornes
