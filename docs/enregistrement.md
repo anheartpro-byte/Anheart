@@ -436,7 +436,7 @@ Cette observation groupée concerne uniquement les backends sans transactions
 natives (dont le modèle simulé). Elle ne sert jamais à fabriquer les trames
 individuelles du pilote natif.
 
-Depuis ANH-192 (T01), une observation échouée (`ok: false`) peut porter un
+Depuis ANH-192, une observation échouée (`ok: false`) peut porter un
 objet optionnel `error`, commun aux observations d'appel et aux transactions
 de registre natives. `type` nomme une variante fermée de `DriveError` :
 
@@ -461,8 +461,8 @@ Sans `error`, le rejeu garde son comportement antérieur : `CommTimeout` avec
 `after = latency_ms / 1000`. `RecordingDrive` et la prise `CallTap` écrivent
 le champ pour les retours `Err` ; une exception levée n'est pas assimilée à
 une variante de `DriveError`. L'absence du champ reste omise à l'écriture.
-Le format permet au magnétophone natif de renseigner ensuite ce même objet
-sur `modbus_read` et `modbus_write` ; cette production relève de T04.
+Le format permet au magnétophone natif de renseigner ce même objet sur
+`modbus_read` et `modbus_write` ; le pilote natif ne le remplit pas encore.
 
 ## Échantillons bruts
 
@@ -487,7 +487,7 @@ en entiers signés 16 bits little-endian, **canal par canal** : tous les
 est exactement `2 × n_samples × nombre_de_canaux` octets. Il n'y a aucun
 padding ni octet final de séparation. Le writer ne remplace jamais un bloc.
 
-Depuis ANH-192 (T01), l'en-tête peut aussi porter
+Depuis ANH-192, l'en-tête peut aussi porter
 `"runtime_delivery":{"t":0.45,"t_observed":0.25}`. Ces deux instants sont
 ensemble ou absents, finis, en secondes relatives au début monotone : `t` est
 l'instant effectif de l'appel `observe_ecg`, `t_observed` l'argument `now`
@@ -506,8 +506,8 @@ ne la voit pas. Sans cet objet, il conserve la remise en ligne à
 `t_received` (ou, si celui-ci manque aussi, à la fin des échantillons).
 Le rejeu reste déterministe, sans fil ni horloge murale. La simulation omet
 `runtime_delivery` : son traitement en ligne n'introduit aucune attente sur
-son horloge déterministe et `t_received` suffit. La console le produira par
-son propre point d'observation, sans changement du pont ECG dans T01.
+son horloge déterministe et `t_received` suffit. La console ne produit pas
+encore `runtime_delivery`.
 
 Les noms de voies autorisés sont ECG, EDA, SpO2, RESP, EMG et LUX. Les limites
 du contenant int16 sont vérifiées ; elles ne changent pas la résolution du
@@ -665,9 +665,9 @@ pas une nouvelle valeur de `schema_version` :
 | Ajout | Première version qui le relit | Lecteur antérieur |
 | --- | --- | --- |
 | `t_received` dans l'en-tête brut | ANH-131 | refuse le bloc (clé inconnue) |
-| `error` dans `drive_frames.jsonl` | ANH-192, T01 | refuse la ligne (clé inconnue) |
-| `runtime_delivery` dans l'en-tête brut | ANH-192, T01 | refuse le bloc (clé inconnue) |
-| commande `attendant_ping` | ANH-192, T01 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
+| `error` dans `drive_frames.jsonl` | ANH-192 | refuse la ligne (clé inconnue) |
+| `runtime_delivery` dans l'en-tête brut | ANH-192 | refuse le bloc (clé inconnue) |
+| commande `attendant_ping` | ANH-192 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
 
 Une commande mal écrite sous un kind d'entrée est aussi refusée par le rejeu
 avec sa raison. Le reader ne décode pas les commandes : il doit pouvoir

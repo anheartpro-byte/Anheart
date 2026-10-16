@@ -3923,7 +3923,7 @@ Une séance enregistrée devient ainsi un test de non-régression : le runtime
 d'aujourd'hui doit décider, sur les mêmes entrées, ce que celui du jour de la
 séance a décidé.
 
-Depuis ANH-192 (T01), le magnétophone rend la variante d'erreur nommée par
+Depuis ANH-192, le magnétophone rend la variante d'erreur nommée par
 `drive_frames.jsonl.error`, avec ses champs de décision et sans diagnostic
 libre. Sans ce champ, il rend le `CommTimeout` historique. `attendant_ping`
 note une présence ponctuelle à l'instant de la commande ; `attendant present=`
