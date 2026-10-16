@@ -2073,7 +2073,7 @@ Ce lot contribue à
 | Contrôle | Où |
 |---|---|
 | Chaque mutation de `SENSITIVE_MUTATIONS` écrit sa ligne dans la même transaction que l'effet sensible ; la liste est fermée et toutes les autres mutations ont une classification motivée | [`convex/lib/audit.ts`](../convex/lib/audit.ts) ; [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts), un scénario par fonction enregistrée et chaque action observée ; classification exhaustive dans [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) |
-| Seul `audit()` insère dans `audit_log` ; aucune fonction ne modifie ni ne supprime une ligne. Les modules qui lisent cette table n'exportent que des queries | [`convex/auditLog.test.ts`](../convex/auditLog.test.ts), énumération des fonctions touchant la table et interdiction de `patch`, `replace` et `delete` |
+| Seul `audit()` insère dans `audit_log` ; les fonctions actuelles ne modifient ni ne suppriment de ligne. Les modules qui lisent cette table n'exportent que des queries | [`convex/auditLog.test.ts`](../convex/auditLog.test.ts), découverte de `convex/**/*.ts` hors fichiers générés, tests, fixtures, setup et matrices ; recherche du littéral de table et refus des assertions de type sur les identifiants d'écriture. Limites au §14.2 |
 | Aucune purge du journal n'existe, avant ou après les cinq ans envisagés | [`convex/schema.ts`](../convex/schema.ts), [`convex/auditLog.test.ts`](../convex/auditLog.test.ts), vérification de l'absence de tâche de purge |
 | L'écriture d'audit n'ajoute aucun contrôle métier ni chemin de refus qui pourrait bloquer un arrêt autorisé : une lecture des métadonnées, puis un ajout. L'arrêt actif et l'annulation en attente gardent leur effet avec une ligne chacun | Contrat de `audit()` dans [`convex/lib/audit.ts`](../convex/lib/audit.ts) ; [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts), scénario « always stops active sessions and cancels pending sessions with one row per effect » ; absence de refus dans le helper vérifiée par [`convex/auditLog.test.ts`](../convex/auditLog.test.ts). Une panne de base ou du runtime reste un échec de transaction, comme pour toute insertion |
 | L'admin Anheart lit tout ; l'admin d'organisation ne lit que son organisation, jamais les lignes globales. Les libellés renvoyés n'incluent pas d'e-mail | [`convex/audit.ts`](../convex/audit.ts), [`convex/audit.test.ts`](../convex/audit.test.ts) |
@@ -2088,11 +2088,49 @@ déploiement : `machineKeys.createKeyByOperator`,
 avec l'acteur `system`, sans compte humain attribué ; le test de complétude
 vérifie leur isolement du site et des routes machine.
 
+Chaque écrivain d'une appartenance trace son propre effet : création active
+ou réactivation, changement de rôle d'une ligne active, désactivation.
+`users.getOrCreateUser` est sensible, avec le compte lui-même comme acteur
+et son rôle effectif dans l'organisation. Connexion puis webhook, comme
+l'ordre inverse, donnent une seule création ; une appartenance ouverte par
+la seule connexion est tracée par la connexion. Une appartenance qui reste
+inactive n'est pas présentée comme créée. À l'acceptation d'une invitation,
+le webhook trace le lien au compte et chaque affectation de gestionnaire ;
+l'invitation conserve les identifiants prévus dans `details.added`.
+
+`fitness.submitFitnessAnswers` est sensible (`fitness.submitted`, cible
+évaluation, seulement `userId`, sans réponses ni verdict), car une nouvelle
+saisie retire l'aptitude précédemment validée. `recordStorage.enforceRetention`
+est sensible aussi : une ligne `record.deleted`, source `cron`, acteur
+système, par séance dont l'enregistrement est supprimé. Cette rétention
+ne supprime jamais les lignes du journal.
+
+Les demandes sans changement réel de physiologie, de rôle ou d'identité
+machine ne donnent aucune ligne ; `fields` contient les seuls champs qui
+changent. Les organisations de physiologie et de suppression de compte
+viennent des appartenances ou relations touchées, ou de l'organisation de
+l'appelant non admin, sans se fier au miroir principal périmé du compte.
+Le changement de propriétaire machine conserve le nouvel identifiant ;
+la correction d'un niveau de release conserve le précédent niveau.
+Les versions libres de fiche variateur et d'enregistrement médical ne sont
+pas copiées dans les détails ; les autres versions passent un format strict
+ou une vérification d'existence en base. `added` et `removed` sont bornés
+à 1 000 identifiants chacun ; `count` contient le total des deux listes
+avant troncature quand l'une dépasse ce plafond.
+
+La lecture utilise des index globaux et par organisation pour `actorRole`,
+après la cible complète et l'acteur, avant l'action et le type de cible.
+Tous les filtres de page, y compris les boutons de cible des lignes, restent
+désactivés pendant l'export CSV.
+
 ### 14.2 Ce que ce lot ne couvre pas
 
 | Limite | Conséquence, et à qui elle revient |
 |---|---|
 | **L'immutabilité vaut pour les fonctions du déploiement.** Ni chaînage cryptographique ni copie externe ne protège le journal | Un détenteur de la clé de déploiement ou d'un accès au tableau de bord Convex peut agir hors de ces fonctions ; ANH-167 ne garantit pas l'immutabilité face à lui. MEN-03 reste ouverte |
+| **L'énumération est une analyse de source, pas une preuve générale** | Le test couvre toutes les profondeurs de `convex/**/*.ts` et cherche le littéral `audit_log`. Il refuse aussi `as never`, `as any` et `as Id<...>` sur l'identifiant d'un `ctx.db.delete`, `patch` ou `replace` ; un identifiant non typé sans cette assertion ou un nom de table construit lui échapperait |
+| **La source est attribuée par le chemin de code et non constatée** | Une fonction interne lancée avec la clé de déploiement écrit la source de son chemin, par exemple `machine` pour `training.markTrainingStarted` ; `operator` n'identifie donc pas tous les usages possibles de cette clé |
+| **L'arrêt dépend de `getRequestMetadata` et de l'insertion dans la même transaction** | Aucun refus métier n'est ajouté, mais une panne de métadonnées, de base ou du runtime peut faire échouer la transaction d'arrêt ; l'audit n'est pas une écriture indépendante |
 | **La durée de rétention n'est pas décidée.** Les 5 ans restent à confirmer par ANH-87a | Aucune purge n'est implémentée : rien n'est supprimé avant ni après cinq ans tant que la décision n'est pas prise |
 | **La page n'a pas de preuve de bout en bout dans un navigateur** | ANH-83 (infrastructure E2E, bloquée par ANH-82) ; les tests de `app/[locale]/dashboard/audit/page.test.tsx` prouvent l'accès, les filtres et l'export dans un DOM simulé avec Convex remplacé |
 | **Le classement des données de santé reste à décider dans ANH-172** | L'exclusion actuelle des valeurs de santé et du texte libre ne tranche pas ce classement ; toute évolution des détails exige une relecture |
