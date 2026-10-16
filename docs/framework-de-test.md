@@ -4345,6 +4345,82 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 | `test_replay_config.py` | limites et géométrie issues du document, validation par les constructeurs de domaine, empreintes et tailles refusées, parties de configuration courante nommées |
 | `raspberry-pi/tests/test_record_configuration.py` | empreinte de référence inchangée, sentinelle de confidentialité, taille bornée, modes 600/700, unicité et collisions, erreurs disque et écriture bloquée sans attente des tics, exclusions de rétention/synchronisation/dépôt/export/logbook |
 
+### 16.10 Vérification numérique unique sur un Pi
+
+**À faire sur banc, non faite.** Aucun essai ARM n'est déclaré réalisé.
+La référence du code et des cinq archives est le commit
+`1494c18bb87e42144771a611d82d3bf35d182f32`. Les empreintes ci-dessous ont été mesurées
+sur le poste de développement. Elles doivent être retrouvées dans
+l'environnement verrouillé de la CI au même SHA, puis sur un Pi aarch64.
+Une gate locale verte ne constitue pas cette comparaison avec le Pi.
+
+Sur le Pi de banc, utiliser ce checkout sans modification locale, avec
+Python 3.12, et installer l'environnement depuis le verrou aarch64
+d'ANH-230, sans le résoudre à nouveau :
+
+```sh
+git rev-parse HEAD
+git status --porcelain
+uname -m
+python3.12 -m venv "$HOME/.cache/anheart-replay-pi"
+"$HOME/.cache/anheart-replay-pi/bin/python" -m pip install --require-hashes -r raspberry-pi/requirements-lock.txt
+"$HOME/.cache/anheart-replay-pi/bin/python" -m pip check
+```
+
+Le SHA doit être celui de référence, le statut vide et l'architecture
+`aarch64`. Le verrou exige numpy 2.5.3, scipy 1.18.1 et BioSPPy 2.2.4,
+comme le verrou de développement utilisé en CI. Conserver le SHA,
+l'architecture, la sortie d'installation et les versions avec la preuve.
+
+Depuis la racine, exécuter exactement les cinq rejeux :
+
+```sh
+set -eu
+export PYTHONPATH=.:raspberry-pi
+mkdir -p replay-pi
+sha256sum raspberry-pi/requirements-lock.txt simulation/scenarios/real/*.tar.gz > replay-pi/inputs.sha256
+for archive in simulation/scenarios/real/*.tar.gz; do
+  name=$(basename "$archive" .tar.gz)
+  "$HOME/.cache/anheart-replay-pi/bin/python" -m simulation.run --replay "$archive" --json > "replay-pi/$name.json" 2> "replay-pi/$name.stderr.log"
+done
+(cd replay-pi && sha256sum *.json > SHA256SUMS)
+cat replay-pi/SHA256SUMS
+```
+
+Pour préparer la référence CI, exécuter cette même boucle au même SHA
+dans son environnement installé par les verrous de développement
+(section 15, ANH-230), avec `raspberry-pi/.venv/bin/python` comme
+interpréteur et `replay-ci` comme dossier de sortie. Conserver les cinq
+JSON et `SHA256SUMS` de ce run, puis les copier sous `replay-ci/` sur
+le poste qui compare les preuves. La gate `test_real_records.py` doit
+également passer dans ce run. L'observation CI de ce SHA reste à obtenir.
+
+Résultat attendu : cinq codes 0, `outcome: match`, aucune divergence ni
+alerte d'intégrité, zéro tic différent et zéro tolérance consommée.
+Les tics enregistrés et rejoués sont respectivement 4000, 1348, 4000,
+703 et 1082 dans l'ordre du tableau. Comparer les rapports complets,
+octet pour octet, et pas seulement leur verdict :
+
+```sh
+diff -u replay-ci/SHA256SUMS replay-pi/SHA256SUMS
+```
+
+| Rapport | SHA-256 du JSON complet, LF final inclus |
+| --- | --- |
+| `auto_jog_150_dsp.json` | `ee4049ae45c8eb42a79c758822611be6eed734b6eee7ec30e562bb43454eaa49` |
+| `fault_bitalino_disconnect_dsp.json` | `56470107fa21b0be4aa7afdd5e8ee15c1fcff89ac452691fd106e27764d8a877` |
+| `fault_ecg_electrode_off_dsp.json` | `75f709a5ebfeada5274c2c4d265f4737948ed3173f951dd4392e2f71146712c7` |
+| `manual_bench_dsp.json` | `7a667b83a2f701655712f2e24298a02bf7fbf58dc97fe93b602d6c95fe22034d` |
+| `manual_occupied_retarget_dsp.json` | `5b253ee86e91e26b21e8ed2fad7c68cb61c21c0422c8510d5381511d4577baf8` |
+
+Si une installation, un code de sortie, une empreinte ou un rapport
+diffère : conserver les deux jeux de JSON, stderr, empreintes des entrées,
+SHA, architecture et versions ; lire l'instant et la nature du premier
+écart ; vérifier d'abord les octets du code, des archives et des verrous,
+puis les calculs DSP. Ouvrir un ticket avec ces preuves selon la section
+16.7. Ne pas régénérer les archives, accepter un écart ou élargir une
+tolérance tant que sa cause n'est pas établie. L'essai reste non validé.
+
 ## 17. Endurance de la console
 
 ### 17.1 Ce que c'est
