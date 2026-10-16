@@ -690,7 +690,8 @@ export const restoreMachine = mutation({
 /**
  * Get machine by API key (for HTTP endpoints): a key of `machine_api_keys`
  * that is neither revoked nor expired, of a machine neither deleted nor
- * disabled (convex/lib/machineAuth.ts). Reads only.
+ * disabled (convex/lib/machineAuth.ts). Reads only; returns the key's raw
+ * expiry and last use for the HTTP action to judge on its own clock.
  */
 export const getMachineByApiKey = internalQuery({
   args: {

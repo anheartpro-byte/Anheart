@@ -690,9 +690,12 @@ gestionnaire de la machine. Sinon : « Machine introuvable » et lien
 Visible seulement pour une machine supprimée (donc seulement par un
 administrateur, les autres ne la voient plus). Date de suppression, bouton
 **Restaurer** : fenêtre « Restaurer cette machine? », « Cela réactivera la
-machine et la rendra à nouveau disponible. », boutons **Annuler** et
+machine et la rendra à nouveau disponible. », puis l'avertissement : les clés
+non révoquées ouvriront de nouveau les routes machine ; révoquer d'abord,
+dans **Clés de la machine**, celles qui ne doivent plus servir. Boutons **Annuler** et
 **Restaurer**. Une machine supprimée ne montre plus ni état en direct, ni
-programmes, ni droits, ni zone de danger.
+programmes, ni droits, ni zone de danger. L'admin Anheart garde la carte
+**Clés de la machine** pour révoquer avant de restaurer, sans créer de clé.
 
 #### Carte « Configuration »
 
@@ -782,11 +785,14 @@ Visible par l'administrateur et le gestionnaire de la machine. Sous titre :
 #### Carte « Clés de la machine »
 
 **Pour qui** : administrateur (Anheart, ou de l'organisation de la machine).
-Un gestionnaire ne la voit pas. Cachée pour une machine supprimée.
+Un gestionnaire ne la voit pas. Sur une machine supprimée, seul l'admin
+Anheart la voit et peut révoquer ; **Nouvelle clé** n'est pas proposé.
 
 La machine se présente au site avec une **clé** (`MACHINE_API_KEY` sur son
 Raspberry Pi). Elle peut en avoir plusieurs valides à la fois : c'est ce qui
-permet de la changer sans couper la machine. Chaque ligne montre :
+permet de la changer sans couper la machine. Toutes les clés non révoquées
+sont listées, même au-delà de 50 (les plus récentes d'abord), puis les clés
+révoquées les plus récentes complètent jusqu'à 50 lignes. Chaque ligne montre :
 
 - le début de la clé (`anh1.` et 8 caractères ; jamais la clé entière) et son
   état : **Active** ; **Remplacée, encore valide** (une nouvelle clé l'a
@@ -802,6 +808,19 @@ permet de la changer sans couper la machine. Chaque ligne montre :
 |---|---|
 | **Nouvelle clé** | Fenêtre « Nouvelle clé pour cette machine ». Choisir le **chevauchement avec les clés actuelles** : « 24 heures (recommandé) », « 1 heure », ou « Aucun : révoquer les clés actuelles tout de suite » ; et l'**expiration de la nouvelle clé** : « Jamais », « Dans 90 jours », « Dans un an ». **Créer la clé** : la clé s'affiche **une seule fois**, avec **Copier**. Pendant le chevauchement, l'ancienne et la nouvelle clé fonctionnent toutes les deux ; à la fin, l'ancienne est refusée. |
 | **Révoquer** (clé active ou remplacée) | Fenêtre « Révoquer la clé anh1.… ? » ; **Annuler** / **Révoquer**. La clé est refusée **dès la requête suivante**. Si c'est la seule clé valide, la fenêtre prévient que la machine restera coupée du site sans nouvelle clé. |
+
+Avant la migration, la clé historique apparaît en tête avec son préfixe,
+le badge **Active** et « Clé d'avant les clés multiples ». Elle ouvre les
+routes de la machine tant qu'elle n'est ni révoquée ni remplacée ; ni sa date
+de création ni sa dernière utilisation ne sont connues. **Révoquer** demande
+la même confirmation et coupe cette clé dès la requête suivante. Le message
+« Aucune clé n'est enregistrée pour cette machine. » n'apparaît que sans clé.
+
+Sur une machine supprimée, les clés n'ouvrent rien. L'admin Anheart peut
+les révoquer ici, y compris la clé historique, avant de restaurer ; celles
+qui ne sont pas révoquées ouvriront de nouveau les routes à la restauration.
+L'admin d'une organisation cliente n'a pas accès à cette carte sur une
+machine supprimée. Les droits restent les mêmes.
 
 #### Registre de la machine
 
@@ -2151,7 +2170,10 @@ passe (séance en attente, refus muet ; voir [§4.6](#carte-zone-de-danger)).
 Restaurer (administrateur) :
 
 1. **Machines** → **Afficher les machines supprimées** → la machine.
-2. Bandeau **Supprimée** → **Restaurer** → **Restaurer**.
+2. Dans **Clés de la machine**, révoquez d'abord les clés qui ne doivent plus
+   servir, y compris la clé historique si elle est présente.
+3. Bandeau **Supprimée** → **Restaurer** : la confirmation rappelle que les
+   clés non révoquées ouvriront de nouveau les routes machine → **Restaurer**.
 
 **Ce que vous devez voir** : le bandeau disparaît, les cartes reviennent.
 
@@ -2357,7 +2379,7 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « Séance terminée » + motif | Vue en direct | Fin normale. | Aucune. |
 | « La FC max doit être comprise entre 100 et 220 bpm » | Physiologie | Saisie hors bornes. | Corriger. |
 | « Année de naissance invalide » | Physiologie | Âge hors de 10 à 100 ans. | Corriger. |
-| « Cette clé ne sera affichée qu'une seule fois! » | Création ou régénération de clé | Avertissement. | Copier la clé maintenant. |
+| « Cette clé ne sera affichée qu'une seule fois! » | Création d'une machine ou d'une nouvelle clé (« Nouvelle clé ») | Avertissement. | Copier la clé maintenant. |
 
 ### 7.2 Messages du serveur
 

@@ -2,18 +2,22 @@ import { v } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { apiKeySelector, verifyApiKey } from "./crypto";
-import { keyIsValid, keyUseIsDue } from "./machineKeys";
+import { keyIsValid } from "./machineKeys";
 
 export const authenticatedMachine = v.union(
   v.object({
     _id: v.id("machines"),
     name: v.string(),
     status: v.string(),
-    // The key that opened the request, when its last recorded use is a
-    // minute old or more: the caller writes this use
-    // (`machineKeys.recordKeyUse`). Absent otherwise, and for a key not
-    // moved into the table yet. Authenticating never writes.
-    keyUseDue: v.optional(v.id("machine_api_keys")),
+    // Raw dates let the action judge time even when this query is cached.
+    // Absent for a key not moved into the table yet. Authenticating never writes.
+    key: v.optional(
+      v.object({
+        id: v.id("machine_api_keys"),
+        expiresAt: v.optional(v.number()),
+        lastUsedAt: v.optional(v.number()),
+      }),
+    ),
   }),
   v.null(),
 );
@@ -58,7 +62,11 @@ export async function authenticateMachine(ctx: QueryCtx, apiKey: string) {
       _id: machine._id,
       name: machine.name,
       status: machine.status,
-      keyUseDue: keyUseIsDue(key, now) ? key._id : undefined,
+      key: {
+        id: key._id,
+        expiresAt: key.expiresAt,
+        lastUsedAt: key.lastUsedAt,
+      },
     };
   }
   const machine = await ctx.db
