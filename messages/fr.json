@@ -434,6 +434,9 @@
     "title": "Clés de la machine",
     "description": "La machine se présente au tableau de bord avec l'une de ces clés. Une nouvelle clé ne s'affiche qu'une fois ; les clés qu'elle remplace restent valides pendant le chevauchement choisi, puis elles sont révoquées.",
     "none": "Aucune clé n'est enregistrée pour cette machine.",
+    "legacy": "Clé d'avant les clés multiples",
+    "legacyDescription": "Elle ouvre les routes de la machine tant qu'elle n'est ni révoquée ni remplacée ; ni sa date de création ni sa dernière utilisation ne sont connues.",
+    "deleted": "Cette machine est supprimée : ses clés n'ouvrent rien tant qu'elle l'est. Les clés non révoquées ouvriront de nouveau les routes à la restauration. Vous pouvez les révoquer ici ; la création de clés est indisponible.",
     "state": {
       "active": "Active",
       "replaced": "Remplacée, encore valide",
@@ -762,7 +765,7 @@
     "deletedAt": "Supprimée le",
     "restore": "Restaurer",
     "restoreConfirm": "Restaurer cette machine?",
-    "restoreConfirmDesc": "Cela réactivera la machine et la rendra à nouveau disponible.",
+    "restoreConfirmDesc": "Cela réactivera la machine et la rendra à nouveau disponible. Les clés de la machine qui ne sont pas révoquées ouvriront de nouveau les routes machine ; révoquez d'abord, dans « Clés de la machine », celles qui ne doivent plus servir.",
     "gestionnaires": "Gestionnaires",
     "owner": "Propriétaire",
     "dangerZoneDesc": "Ces actions peuvent impacter le fonctionnement de la machine",

@@ -257,6 +257,12 @@ describe("EX-6 a member of centre A never reads centre B, even by direct identif
       const sessionId = await withCentreBSession(w);
       const me = as(w.t, actor);
       const machineId = w.orgBMachine;
+      await w.t.run((ctx) =>
+        ctx.db.patch(machineId, {
+          apiKeySelector: "ef".repeat(16),
+          apiKey: `hmac-sha256:1:${"00".repeat(16)}:${"00".repeat(32)}`,
+        }),
+      );
       const keyId = await w.t.run((ctx) =>
         ctx.db.insert("machine_api_keys", {
           machineId,
@@ -273,6 +279,7 @@ describe("EX-6 a member of centre A never reads centre B, even by direct identif
         me.mutation(api.machines.deleteMachine, { machineId }),
         me.mutation(api.machineKeys.createMachineKey, { machineId }),
         me.mutation(api.machineKeys.revokeMachineKey, { keyId }),
+        me.mutation(api.machineKeys.revokeLegacyMachineKey, { machineId }),
         me.mutation(api.machines.assignGestionnaireToMachine, {
           machineId,
           gestionnaireId: w.manager,

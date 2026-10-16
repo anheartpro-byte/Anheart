@@ -67,7 +67,13 @@ const BADGE: Record<
  * one key, after a confirmation. The server decides who may do what
  * (`convex/machineKeys.ts`); the page mounts this card for admins only.
  */
-export function MachineKeysCard({ machineId }: { machineId: Id<"machines"> }) {
+export function MachineKeysCard({
+  machineId,
+  deleted = false,
+}: {
+  machineId: Id<"machines">;
+  deleted?: boolean;
+}) {
   const t = useTranslations();
   const locale = useLocale();
   const dateLocale = locale === "fr" ? fr : enUS;
@@ -76,6 +82,9 @@ export function MachineKeysCard({ machineId }: { machineId: Id<"machines"> }) {
   const keys = useQuery(api.machineKeys.listMachineKeys, { machineId });
   const createKey = useMutationWithFeedback(api.machineKeys.createMachineKey);
   const revokeKey = useMutationWithFeedback(api.machineKeys.revokeMachineKey);
+  const revokeLegacyKey = useMutationWithFeedback(
+    api.machineKeys.revokeLegacyMachineKey,
+  );
 
   const [creating, setCreating] = useState(false);
   const [overlap, setOverlap] = useState<string>(OVERLAPS[0]);
@@ -116,10 +125,10 @@ export function MachineKeysCard({ machineId }: { machineId: Id<"machines"> }) {
   const handleRevoke = async () => {
     if (!toRevoke) return;
     setBusy(true);
-    const result = await revokeKey(
-      { keyId: toRevoke._id },
-      { success: t("feedback.machineKeyRevoked") },
-    );
+    const feedback = { success: t("feedback.machineKeyRevoked") };
+    const result = await (toRevoke.kind === "legacy"
+      ? revokeLegacyKey({ machineId }, feedback)
+      : revokeKey({ keyId: toRevoke._id }, feedback));
     setBusy(false);
     if (result.ok) setToRevoke(null);
   };
@@ -144,12 +153,16 @@ export function MachineKeysCard({ machineId }: { machineId: Id<"machines"> }) {
             <KeyRound className="h-4 w-4" aria-hidden="true" />
             {t("machineKeys.title")}
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={openCreation}>
-            <Plus className="h-4 w-4 mr-1" aria-hidden="true" />
-            {t("machineKeys.create")}
-          </Button>
+          {!deleted && (
+            <Button variant="outline" size="sm" onClick={openCreation}>
+              <Plus className="h-4 w-4 mr-1" aria-hidden="true" />
+              {t("machineKeys.create")}
+            </Button>
+          )}
         </div>
-        <CardDescription>{t("machineKeys.description")}</CardDescription>
+        <CardDescription>
+          {t(deleted ? "machineKeys.deleted" : "machineKeys.description")}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {keys === undefined ? (
@@ -162,7 +175,7 @@ export function MachineKeysCard({ machineId }: { machineId: Id<"machines"> }) {
           <ul className="divide-y rounded-md border">
             {keys.map((key) => (
               <li
-                key={key._id}
+                key={identityOf(key)}
                 className="flex flex-wrap items-center justify-between gap-3 p-3"
               >
                 <div className="min-w-0 space-y-1">
@@ -172,25 +185,38 @@ export function MachineKeysCard({ machineId }: { machineId: Id<"machines"> }) {
                       {t(`machineKeys.state.${key.state}`)}
                     </Badge>
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    {key.createdByName === null
-                      ? t("machineKeys.createdNoAuthor", {
-                          date: when(key.createdAt),
-                        })
-                      : t("machineKeys.created", {
-                          date: when(key.createdAt),
-                          name: key.createdByName,
-                        })}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {key.lastUsedAt === null
-                      ? t("machineKeys.neverUsed")
-                      : t("machineKeys.lastUsed", {
-                          date: when(key.lastUsedAt),
-                        })}
-                    {" · "}
-                    {expiryOf(key, t, when)}
-                  </p>
+                  {key.kind === "legacy" ? (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        {t("machineKeys.legacy")}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {t("machineKeys.legacyDescription")}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        {key.createdByName === null
+                          ? t("machineKeys.createdNoAuthor", {
+                              date: when(key.createdAt),
+                            })
+                          : t("machineKeys.created", {
+                              date: when(key.createdAt),
+                              name: key.createdByName,
+                            })}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {key.lastUsedAt === null
+                          ? t("machineKeys.neverUsed")
+                          : t("machineKeys.lastUsed", {
+                              date: when(key.lastUsedAt),
+                            })}
+                        {" · "}
+                        {expiryOf(key, t, when)}
+                      </p>
+                    </>
+                  )}
                 </div>
                 {(key.state === "active" || key.state === "replaced") && (
                   <Button
@@ -320,12 +346,17 @@ export function MachineKeysCard({ machineId }: { machineId: Id<"machines"> }) {
               {t("machineKeys.revokeDescription")}
             </DialogDescription>
           </DialogHeader>
-          {validKeys.length === 1 && validKeys[0]._id === toRevoke?._id && (
-            <p className="flex items-start gap-2 text-sm text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-              {t("machineKeys.revokeLast")}
-            </p>
-          )}
+          {validKeys.length === 1 &&
+            toRevoke !== null &&
+            identityOf(validKeys[0]) === identityOf(toRevoke) && (
+              <p className="flex items-start gap-2 text-sm text-amber-600 dark:text-amber-400">
+                <AlertTriangle
+                  className="h-4 w-4 shrink-0"
+                  aria-hidden="true"
+                />
+                {t("machineKeys.revokeLast")}
+              </p>
+            )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setToRevoke(null)}>
               {t("common.cancel")}
@@ -346,7 +377,7 @@ export function MachineKeysCard({ machineId }: { machineId: Id<"machines"> }) {
 
 /** The end of a key, as its line says it: revoked, expired, expiring, or never. */
 function expiryOf(
-  key: MachineKey,
+  key: Extract<MachineKey, { kind: "table" }>,
   t: ReturnType<typeof useTranslations>,
   when: (time: number) => string,
 ): string {
@@ -357,4 +388,9 @@ function expiryOf(
   return key.state === "expired"
     ? t("machineKeys.expiredOn", { date: when(key.expiresAt) })
     : t("machineKeys.expiresOn", { date: when(key.expiresAt) });
+}
+
+/** The historical row has no invented database id. */
+function identityOf(key: MachineKey): string {
+  return key.kind === "legacy" ? "legacy" : key._id;
 }

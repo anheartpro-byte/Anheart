@@ -31,7 +31,10 @@ import {
   EXPIRED_KEYS_PER_RUN,
   keyState,
   keyUseIsDue,
+  keyPrefix,
+  legacyKeyOf,
   LISTED_KEYS,
+  moveLegacyKey,
   rotateMachineKey,
   rotationOptions,
 } from "./lib/machineKeys";
@@ -82,9 +85,11 @@ async function managedMachine(
 }
 
 /**
- * The keys of a machine, most recent first (50 at most): prefix, state at the
- * server's clock, creation and its author, last use, expiry, revocation. Never
- * the key, its selector or its verifier. `[]` for anyone but an admin of the
+ * All unrevoked keys of a machine: the historical key first, then table keys
+ * most recent first. Fill up to 50 with the most recently revoked keys.
+ * Prefix, state at the server's clock, creation and its author, last use,
+ * expiry, revocation. Never the key, its selector or its verifier.
+ * `[]` for anyone but an admin of the
  * machine's organisation (or the Anheart admin), and for a machine that does
  * not exist; a deleted machine's keys are listed to the Anheart admin only.
  *
@@ -95,16 +100,24 @@ async function managedMachine(
 export const listMachineKeys = query({
   args: { machineId: v.id("machines") },
   returns: v.array(
-    v.object({
-      _id: v.id("machine_api_keys"),
-      prefix: v.string(),
-      state: keyStateValidator,
-      createdAt: v.number(),
-      createdByName: v.union(v.string(), v.null()),
-      lastUsedAt: v.union(v.number(), v.null()),
-      expiresAt: v.union(v.number(), v.null()),
-      revokedAt: v.union(v.number(), v.null()),
-    }),
+    v.union(
+      v.object({
+        kind: v.literal("legacy"),
+        prefix: v.string(),
+        state: v.literal("active"),
+      }),
+      v.object({
+        kind: v.literal("table"),
+        _id: v.id("machine_api_keys"),
+        prefix: v.string(),
+        state: keyStateValidator,
+        createdAt: v.number(),
+        createdByName: v.union(v.string(), v.null()),
+        lastUsedAt: v.union(v.number(), v.null()),
+        expiresAt: v.union(v.number(), v.null()),
+        revokedAt: v.union(v.number(), v.null()),
+      }),
+    ),
   ),
   handler: async (ctx, args) => {
     const caller = await getCurrentUserOrThrow(ctx);
@@ -118,16 +131,41 @@ export const listMachineKeys = query({
       return [];
     }
     const now = Date.now();
-    const keys = await ctx.db
+    const legacy = await legacyKeyOf(ctx, machine);
+    const historical =
+      legacy !== null && legacy.tableKey === null
+        ? [
+            {
+              kind: "legacy" as const,
+              prefix: keyPrefix(legacy.selector),
+              state: "active" as const,
+            },
+          ]
+        : [];
+    const unrevoked = await ctx.db
       .query("machine_api_keys")
-      .withIndex("by_machine", (q) => q.eq("machineId", args.machineId))
+      .withIndex("by_machine_and_revoked", (q) =>
+        q.eq("machineId", args.machineId).eq("revokedAt", undefined),
+      )
       .order("desc")
-      .take(LISTED_KEYS);
-    return await Promise.all(
-      keys.map(async (key) => {
+      .collect();
+    const remaining = LISTED_KEYS - historical.length - unrevoked.length;
+    const revoked =
+      remaining > 0
+        ? await ctx.db
+            .query("machine_api_keys")
+            .withIndex("by_machine_and_revoked", (q) =>
+              q.eq("machineId", args.machineId).gt("revokedAt", undefined),
+            )
+            .order("desc")
+            .take(remaining)
+        : [];
+    const listed = await Promise.all(
+      [...unrevoked, ...revoked].map(async (key) => {
         const author =
           key.createdBy === undefined ? null : await ctx.db.get(key.createdBy);
         return {
+          kind: "table" as const,
           _id: key._id,
           prefix: key.prefix,
           state: keyState(key, now),
@@ -140,6 +178,7 @@ export const listMachineKeys = query({
         };
       }),
     );
+    return [...historical, ...listed];
   },
 });
 
@@ -227,6 +266,41 @@ export const revokeMachineKey = mutation({
         details: { machineId: key.machineId },
       });
     }
+    return null;
+  },
+});
+
+/** Revoke a historical key under exactly the rights of `revokeMachineKey`. */
+export const revokeLegacyMachineKey = mutation({
+  args: { machineId: v.id("machines") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await limitUser(ctx);
+    const caller = await requireRole(ctx, ORGANIZATION_ADMIN_ROLES);
+    const machine = await ctx.db.get(args.machineId);
+    if (machine === null || !inScope(caller, machine.organizationId)) {
+      throw refusal("machine_key_not_found");
+    }
+    const legacy = await legacyKeyOf(ctx, machine);
+    if (legacy === null || legacy.tableKey !== null) {
+      throw refusal("machine_key_not_found");
+    }
+    const now = Date.now();
+    await moveLegacyKey(ctx, machine, now);
+    // The move just inserted this row in the same transaction.
+    const [key] = await ctx.db
+      .query("machine_api_keys")
+      .withIndex("by_selector", (q) => q.eq("selector", legacy.selector))
+      .take(1);
+    await ctx.db.patch(key._id, { revokedAt: now, revokedBy: caller._id });
+    await audit(ctx, {
+      actor: userActor(caller),
+      source: "site",
+      organizationId: machine.organizationId,
+      action: "machine_key.revoked",
+      targetId: key._id,
+      details: { machineId: machine._id },
+    });
     return null;
   },
 });
