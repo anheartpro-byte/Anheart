@@ -473,14 +473,19 @@ class RuntimeLimits:
     rise_reading_within: Seconds = Seconds(2.5)
     """Maximum accepted-reading age for an increase, including the first step.
 
+    The runtime bounds this budget once at construction by the actual tracker's
+    ``TrackerLimits.stale_after``: a rise never outlasts that freshness.
     2.5 s tolerates one missed 1 Hz refresh (measured accepted-reading gaps
     of 2.0-2.2 s), closing on the second miss. With the real ECG bridge at
     5 Hz on the bench, a 1800 s DSP reference spends about 240/159/151 s
     with increases withheld outside verdicts at 1.5/2.5/4 s respectively.
+    These count WARMUP and HOLD ticks where the last accepted reading is older
+    than each budget and no verdict is in force.
     The 2.5 s budget avoids the short-gap cost of 1.5 s for about 7 extra
     seconds versus 4 s. All seven references retain duration and end cause.
-    The law keeps its own 4 s freshness budget and every verdict still decides
-    first; this gate holds the applied setpoint without changing the input.
+    The law keeps the tracker's freshness budget (4 s by default) and every
+    verdict still decides first; this gate holds the applied setpoint without
+    changing the input.
     """
 
     ramp_settle: Seconds = COMMISSIONED_DECEL_S
@@ -1256,6 +1261,7 @@ class TrainingRuntime:
         "_recovery_from",
         "_resting_bpm",
         "_rise_held",
+        "_rise_reading_within",
         "_safety_limits",
         "_session_over",
         "_setpoint_changed_at",
@@ -1331,6 +1337,11 @@ class TrainingRuntime:
         self._safety_limits: SafetyLimits = safety
         self._supervisor: SafetySupervisor = _supervisor_for(clock, safety, supervisor)
         self._tracker: HeartRateTracker = HeartRateTracker(tracker_limits)
+        # Fixed at construction: neither rise path may outlast this tracker's
+        # freshness, even when it is stricter than the runtime's own budget.
+        self._rise_reading_within: Seconds = min(
+            limits.rise_reading_within, self._tracker.limits.stale_after
+        )
         self._motion: MotionLimits = motion
         # The geometry every motion limit is evaluated through: the machine's,
         # with the radius moved out to `limit_radius` when one was given. Only
@@ -3572,9 +3583,9 @@ class TrainingRuntime:
         self._rise_held = held
 
     def _rise_reading_recent(self, now: Monotonic) -> bool:
-        """The one freshness gate for programme and occupied manual increases."""
+        """Gate both rise paths by the runtime/tracker minimum fixed at construction."""
         age = self._tracker.age(now)
-        return age is not None and math.isfinite(age) and age <= self._limits.rise_reading_within
+        return age is not None and math.isfinite(age) and age <= self._rise_reading_within
 
     def _increase_permitted(self, now: Monotonic) -> bool:
         """Whether reading freshness and the short trend permit an increase at ``now``.

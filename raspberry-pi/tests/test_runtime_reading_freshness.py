@@ -9,7 +9,12 @@ from hypothesis import strategies as st
 
 from src.result import Err, is_ok
 from src.training import runtime as runtime_module
-from src.training.hr_control import ControlPlan, HeartRateController, HeartRateTracker
+from src.training.hr_control import (
+    ControlPlan,
+    HeartRateController,
+    HeartRateTracker,
+    TrackerLimits,
+)
 from src.training.motion import DEFAULT_MOTION_LIMITS
 from src.training.runtime import HeldAtStandstill, RiseHold
 from src.training.types import HEART_RATE_STALE_AFTER, Occupancy, SafetyAction, SignalQuality
@@ -110,6 +115,55 @@ async def test_a_manual_climb_with_a_person_on_board_holds_once_no_reading_is_re
     assert rig.runtime.applied_rpm > 0
     await assert_lost_climb_is_held(rig)
     assert rig.runtime.manual_rise_hold() is RiseHold.NO_HEART_RATE
+
+
+@pytest.mark.parametrize("manual", [False, True], ids=["programme", "occupied-manual"])
+@pytest.mark.parametrize(
+    ("tracker_limits", "rise_within"),
+    [
+        pytest.param(TrackerLimits(stale_after=Seconds(1.5)), Seconds(1.5), id="strict-tracker"),
+        pytest.param(None, Seconds(2.5), id="default-tracker"),
+    ],
+)
+async def test_the_rise_gate_never_outlasts_the_tracker_freshness(
+    manual: bool, tracker_limits: TrackerLimits | None, rise_within: Seconds
+) -> None:
+    rig = build_rig(
+        profile=climbing_profile(),
+        limits=LIMITS,
+        motion=DEFAULT_MOTION_LIMITS,
+        tracker_limits=tracker_limits,
+    )
+    rig.fed_bpm = Bpm(70)
+    if manual:
+        rig.feed(Bpm(70))
+        assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
+        assert is_ok(await rig.runtime.start_manual(Occupancy.OCCUPIED, OPERATOR, MotorRpm(1000)))
+        await rig.run(6)
+        target(rig, 1000)
+        await rig.run(6)
+    else:
+        assert is_ok(await rig.start())
+        await first_step(rig)
+        await rig.run(3)
+    assert rig.runtime.applied_rpm > 0
+    rig.feed(Bpm(70))
+    accepted_at = rig.now
+    last_rise_age = Seconds(0)
+    for _ in range(20):
+        before = rig.runtime.applied_rpm
+        rig.feed(None, quality=SignalQuality.NO_SIGNAL)
+        snapshot = await rig.step(feed=False)
+        age = Seconds(rig.now - accepted_at)
+        after = rig.runtime.applied_rpm
+        assert snapshot.safety_action is SafetyAction.NONE
+        if age > rise_within:
+            assert after <= before, (age, before, after)
+        if after > before:
+            last_rise_age = age
+    assert rise_within - 2 * TICK < last_rise_age <= rise_within
+    if manual:
+        assert rig.runtime.manual_rise_hold() is RiseHold.NO_HEART_RATE
 
 
 async def test_a_manual_target_over_a_stopped_arm_is_refused_once_no_reading_is_recent() -> None:
