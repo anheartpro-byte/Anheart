@@ -171,12 +171,13 @@ test("the page shows the one section that is read: no HTML that hides a line, on
   assert.doesNotMatch(committed, /^ {0,3}<|<[\p{L}/!?]/mu);
   assert.equal(committed.split(`\n${SECTION}\n`).length, 2);
   const refusalRules = committed.split("**Le tableau est le seul de la section**")[1]?.split("\n\n")[0] ?? "";
-  assert.match(refusalRules, /suivi d'une lettre Unicode, de `\/`, de `!` ou de `\?`/);
-  assert.match(refusalRules, /code compris/);
+  assert.match(refusalRules, /suivi\s+d'une\s+lettre\s+Unicode,\s+de\s+`\/`,\s+de\s+`!`\s+ou\s+de\s+`\?`/);
+  assert.match(refusalRules, /code\s+compris/);
 });
 
 for (const [name, text, refusal] of /** @type {const} */ ([
   ["a folded details block opened and closed in the middle of a line", `${SECTION}\n\nTexte <details><summary>Rien</summary>\n\n${HEAD}${row()}\n\nFin </details>\n`, /line 3 holds "<d"/],
+  ["a folded details block opened and closed in the middle of a line with CRLF endings", `${SECTION}\n\nTexte <details><summary>Rien</summary>\n\n${HEAD}${row()}\n\nFin </details>\n`.replaceAll("\n", "\r\n"), /line 3 holds "<d"/],
   ["a folded details block opened in the middle of a line and never closed", `${SECTION}\n\nTexte <details><summary>Rien</summary>\n\n${HEAD}${row()}\n`, /line 3 holds "<d"/],
   ["a closing tag alone in the middle of a line", `${SECTION}\n\n${HEAD}${row()}\n\nFin </details>\n`, /line 7 holds "<\/"/],
   ["a tag in the middle of a line whose attribute holds the table", `${SECTION}\n\nTexte <span title="\n${HEAD}${row()}\n">\n`, /line 3 holds "<s"/],
@@ -201,7 +202,7 @@ for (const [name, text, refusal] of /** @type {const} */ ([
 }
 
 test("a sign that does not open HTML in the middle of a line leaves the real table readable", () => {
-  for (const text of ["1 < 2", "a <= b", "<3", "<-", "`<`"]) {
+  for (const text of ["1 < 2", "a <= b", "<3", "<-", "`<`", "<1a@b.co>"]) {
     const { exceptions, problems } = parse(`${SECTION}\n\nTexte ${text}\n\n${HEAD}${row()}\n`, TODAY);
     assert.deepEqual(problems, [], text);
     assert.deepEqual(exceptions.map(({ id }) => id), ["GHSA-jf85-cpcp-j695"], text);
