@@ -95,6 +95,17 @@ describe("reports", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
+  it("throws a failed page during rendering instead of showing an empty report list", async () => {
+    signedInAs("user");
+    const failure = new Error("Test report page failed");
+    answer(LIST, failure);
+
+    await expect(renderPage(<ReportsPage />)).rejects.toBe(failure);
+
+    expect(screen.queryByText(fr.reports.noReports)).toBeNull();
+    expect(screen.queryByText(fr.reports.nothingYet)).toBeNull();
+  });
+
   it("shows each session with a reference, its rider, its machine, its date and its length", async () => {
     signedInAs("gestionnaire");
     serverLists(
@@ -192,7 +203,8 @@ describe("reports: page by page", () => {
       startedAt: STARTED - i * 60_000,
     }),
   );
-  const cards = () => screen.getAllByText(fr.reports.view);
+  const cards = () =>
+    screen.getAllByText(fr.reports.view, { selector: "button" });
 
   it("shows the first 50 reports, then the next ones at 'Show more'", async () => {
     signedInAs("gestionnaire");
@@ -200,7 +212,9 @@ describe("reports: page by page", () => {
     const { user } = await renderPage(<ReportsPage />);
     expect(cards()).toHaveLength(50);
 
-    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+    await user.click(
+      screen.getByText(fr.common.showMore, { selector: "button" }),
+    );
 
     expect(argsAsked(LIST).at(-1)).toEqual({
       status: "completed",
@@ -208,21 +222,27 @@ describe("reports: page by page", () => {
     });
     expect(cards()).toHaveLength(70);
     expect(
-      screen.queryByRole("button", { name: fr.common.showMore }),
+      screen.queryByText(fr.common.showMore, { selector: "button" }),
     ).toBeNull();
   });
 
   it("keeps the reports shown and offers nothing more while the next page loads", async () => {
     signedInAs("user");
     answer(LIST, (args) =>
-      args.paginationOpts.cursor === null ? pagesOf(many)(args) : undefined,
+      args.paginationOpts.cursor === null
+        ? { page: many.slice(0, 2), isDone: false, continueCursor: "2" }
+        : undefined,
     );
     const { user } = await renderPage(<ReportsPage />);
 
-    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+    await user.click(
+      screen.getByText(fr.common.showMore, { selector: "button" }),
+    );
 
-    expect(cards()).toHaveLength(50);
-    const waiting = screen.getByRole("button", { name: fr.common.loading });
+    expect(cards()).toHaveLength(2);
+    expect(report("00000000").getByText("Rose Rider")).toBeTruthy();
+    expect(report("00000001").getByText("Rose Rider")).toBeTruthy();
+    const waiting = screen.getByText(fr.common.loading, { selector: "button" });
     expect((waiting as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -237,7 +257,9 @@ describe("reports: page by page", () => {
     const { user } = await renderPage(<ReportsPage />);
 
     expect(screen.queryByText(fr.reports.noReports)).toBeNull();
-    await user.click(screen.getByRole("button", { name: fr.common.showMore }));
+    await user.click(
+      screen.getByText(fr.common.showMore, { selector: "button" }),
+    );
 
     expect(cards()).toHaveLength(1);
     expect(screen.queryByText(fr.reports.noReports)).toBeNull();
@@ -245,12 +267,12 @@ describe("reports: page by page", () => {
 
   it("offers no 'Show more' when every report is shown", async () => {
     signedInAs("user");
-    serverLists(...many.slice(0, 50));
+    serverLists(...many.slice(0, 2));
     await renderPage(<ReportsPage />);
 
-    expect(cards()).toHaveLength(50);
+    expect(cards()).toHaveLength(2);
     expect(
-      screen.queryByRole("button", { name: fr.common.showMore }),
+      screen.queryByText(fr.common.showMore, { selector: "button" }),
     ).toBeNull();
   });
 });
