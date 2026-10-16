@@ -79,6 +79,14 @@ balayage mesure, hors verdict, **240,4 s** de porte fermée à 1,5 s, **158,8 s*
 de fin. Ce coût est mesuré en boucle fermée, dont la vitesse et les lectures
 ECG changent avec la retenue ; ce n'est pas une estimation médicale.
 
+Une perte de FC de plus de 30 s termine plus souvent la séance : la consigne
+tenue plus bas atteint 0 plus tôt sous le REDUCE de `hr_stale`, puis
+`session_standstill` termine la séance sur un verrou. Dans le rejeu de revue
+S10 bis, sur le banc des tests Pi, une perte de 35 s donne une fin verrouillée
+à **34,8 s en programme** et **34,0 s en manuel occupé**. Avant, la consigne
+encore en descente permettait la reprise au retour de la FC. Ce changement
+est du côté sûr ; aucune trace livrée ne le montre.
+
 **724 instants de perte rejoués**, lectures directes à 1 Hz : 240 bras au repos
 avant le premier pas, 408 bras en rotation sur deux programmes
 (`standard_30_min`, `jog_150_30_min`) et quatre sujets (fit, unfit,
@@ -101,8 +109,9 @@ lecture sans FC n'implique pas encore l'expiration de la dernière acceptation.
 **Sept séances de référence `dsp`.** Durée de START au premier FINISHED, cause
 de fin et part des appels de lecture sans FC ; la déconnexion ne livre plus
 d'appels après la coupure, donc son 0 % ne signifie pas un signal disponible.
-La porte fermée est mesurée en WARMUP et HOLD, verdict compris ; la dernière
-colonne isole le temps hors verdict. Il s'agit d'une permission de montée
+Le temps de porte fermée compte les tics en WARMUP et HOLD où la dernière
+acceptation du suiveur a plus de 2,5 s, verdict compris ; la dernière colonne
+isole le temps hors verdict. Il s'agit d'une permission de montée
 retirée, pas d'un comptage d'ordres moteur refusés. La porte n'existait pas
 avant : ces temps ne sont mesurés qu'après.
 
@@ -115,6 +124,12 @@ avant : ces temps ne sont mesurés qu'après.
 | `auto_standard_30_min` (DSP) | 1 800,0 / 1 800,0 | programme_complete / programme_complete | 0,0222 % / 0,0222 % | 0 | 0 |
 | `auto_standard_45_min` (DSP) | 2 700,2 / 2 700,2 | programme_complete / programme_complete | 0,0222 % / 0,0222 % | 0 | 0 |
 | `auto_jog_150_nominal` (DSP) | 1 800,0 / 1 800,0 | programme_complete / programme_complete | 31,363 % / 30,630 % | 414,4 | 158,8 |
+
+L'outil commité `python -m simulation.signal_loss --dsp` mesure l'intersection
+continue des écarts entre acceptations avec les intervalles de tics. Sur le
+candidat relu, il donne **162,2 / 36,5 / 176,1 / 172,8 / 417,0 s** pour les
+cinq lignes non nulles du tableau, dans leur ordre. L'écart avec le comptage
+par tic est inférieur à 1 % (source : rejeu de revue).
 
 **Péremption et tendances.** Dans le cas rejoué où chaque lecture utilisable
 à 1 Hz est suivie d'une lecture sans FC avant le tic, le superviseur donnait
