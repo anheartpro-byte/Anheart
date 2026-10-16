@@ -754,9 +754,9 @@ jobs:
       # hosted simulation are read as they are, every version and hash fixed.
       # Only the CAD extractor is resolved first for Python 3.12 with the
       # packages it pulls in, since its input fixes only some versions.
-      # pip-audit fails on any
-      # known vulnerability, whatever its severity, except the Python
-      # exceptions. Every environment is audited, even after one has failed.
+      # pip-audit fails on any known vulnerability, whatever its severity,
+      # except the Python exceptions. Every environment is audited, even
+      # after one has failed.
       - name: Audit Python dependencies
         if: ${{ !cancelled() }}
         run: |
