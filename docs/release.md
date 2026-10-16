@@ -774,7 +774,7 @@ pour une première release.
 | Matrice de compatibilité | la section « Versions et compatibilité » (créée par ANH-133) cite les versions que cette release prépare. |
 | Rapport de simulation | la commande et ses options sont décrites dans [framework-de-test.md](framework-de-test.md#6-verdicts-instantanés--simulationquick). La CI nocturne produit le même rapport. L'empreinte de `report.json` ne se compare pas d'un lancement à l'autre : le fichier porte la durée mesurée de la batterie et celle de chaque exécution (`wall_s`). Ce qui se compare est `counts` et, pour chaque exécution, `name`, `group`, `status`, `end`, `violations` et `known_defect` : la preuve donne ces compteurs et le résultat de chaque exécution, pas une empreinte du fichier. |
 | Rejeu des séances réelles | `python -m simulation.run <fichier> --out <dossier>` pour chaque fichier de `simulation/scenarios/real/`. |
-| Valeurs `[MED]` | les deux commandes de [Lister les fichiers qui portent le marqueur](#lister-les-fichiers-qui-portent-le-marqueur) : la première liste chaque fichier du dépôt qui porte `[MED]` à l'un des deux bouts de la release, la seconde montre ce qui y a changé. |
+| Valeurs `[MED]` | les trois commandes de [Lister les fichiers qui portent le marqueur](#lister-les-fichiers-qui-portent-le-marqueur) : la première liste chaque fichier du dépôt qui porte `[MED]` à l'un des deux bouts de la release, la seconde montre ce qui y a changé, la troisième montre les changements de clé publique et de signature. |
 | Verrous | `git diff <base>..origin/develop -- raspberry-pi/src/local_config.py raspberry-pi/.env.example raspberry-pi/.env.pi.example` ne change aucun des deux défauts, et les deux fichiers d'exemple portent `=false`. |
 | Niveau de validation | `bench` : cette check-list. Au-dessus : le compte rendu de revue. |
 | Fenêtre de déploiement | la date, l'heure, et le nom de la personne qui lance la pipeline et de celle qui approuve ses quatre écritures. Qu'aucune séance ne soit en cours se vérifie au moment d'approuver le déploiement de Convex, pas ici ([étape 8 du déroulé](#3-le-déroulé)). |
@@ -784,6 +784,7 @@ pour une première release.
 ```sh
 git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u
 git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u | tr '\n' '\0' | xargs -0 -r git diff <base>..origin/develop --
+git diff --stat=200,200 <base>..origin/develop -- raspberry-pi/config/medical.pub raspberry-pi/config/medical_parameters.sig
 ```
 
 La première commande cherche dans tout le dépôt, sans se limiter à un dossier,
@@ -813,6 +814,15 @@ argument : un chemin qui contient une espace n'est pas coupé en deux, ce qui
 arrivait à la forme précédente (`git diff ... -- $(...)`), qui le sautait sans
 rien dire. Le dépôt n'a aujourd'hui aucun chemin de ce genre ; un chemin qui
 contient un retour à la ligne n'est pas pris en charge.
+
+La troisième montre ce qui a changé dans `medical.pub` et
+`medical_parameters.sig`. Ces deux fichiers portent la décision : la clé qui
+fait foi et la signature du fichier médical. Ils ne peuvent pas porter le
+marqueur `[MED]` (clé en PEM, signature binaire), et les deux premières
+commandes ne les listent donc pas. `--stat=200,200` montre les fichiers modifiés et
+l'ampleur du changement, y compris pour la signature binaire ; sa largeur
+fixée garde ces deux chemins entiers même dans un terminal étroit ou avec
+`diff.statNameWidth` configuré.
 
 Cette check-list ne vaut pas autorisation de personne à bord : cette décision
 appartient à la revue M6.
@@ -888,10 +898,12 @@ npm run test:convex     # le registre, sa matrice d'autorisation, la règle, la 
 son `origin`, et remplace `gh` par un double : aucun test ne touche GitHub ni le
 dépôt réel. Il vérifie aussi les fichiers de version du dépôt, le pied de page
 du site, et que la check-list du modèle de PR est celle de ce document. Il
-lance enfin, dans un dépôt jetable, les deux commandes `[MED]` de la
+lance enfin, dans un dépôt jetable, les trois commandes `[MED]` de la
 [section 5](#lister-les-fichiers-qui-portent-le-marqueur) telles qu'elles y
-sont écrites : elles doivent lister chaque fichier qui porte le marqueur à
-l'un des deux bouts, où qu'il soit dans le dépôt.
+sont écrites : les deux premières doivent lister chaque fichier qui porte le
+marqueur à l'un des deux bouts, où qu'il soit dans le dépôt, et montrer son
+diff ; la troisième doit montrer seulement la clé publique et la signature
+modifiées, même si un autre fichier sans marqueur a changé.
 
 La pipeline de release a son propre fichier,
 `scripts/ci/release-workflow.test.mjs`, lancé par le job `docs` avec les autres

@@ -225,8 +225,9 @@ depuis `raspberry-pi/`, sur le poste du signataire, jamais sur un Pi :
 2. `python scripts/sign_medical_parameters.py sign <nouvelle clé privée>` :
    signe à nouveau `config/medical_parameters.json` (les valeurs ne changent
    pas si seule la clé change), écrit `config/medical_parameters.sig`, puis
-   vérifie la signature comme la console. Le script ne vérifie pas les bornes
-   que la console applique au démarrage
+   vérifie la signature comme la console. Avant de signer, le script vérifie
+   les mêmes bornes que la console au démarrage et refuse un entier qu'aucun
+   flottant ne représente ; un refus laisse la signature existante inchangée
    ([securite.md, 13.4](securite.md#134-changer-une-valeur--la-procédure-du-signataire)).
 3. Une seule PR, relue, qui change ensemble `medical.pub` et
    `medical_parameters.sig` : l'un sans l'autre met la console en mode banc.

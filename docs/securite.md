@@ -1849,10 +1849,34 @@ en **mode banc seulement**.
   les pages de la console ; le pied de page dit la version et « NON SIGNES ».
 * Chaque enregistrement de séance contient un événement `warning` avec la
   raison.
-* Un lancement venu du tableau de bord est refusé : « refusee par la machine :
-  parametres medicaux non signes (raison) : console en mode banc seulement,
-  aucune seance programmee ni personne a bord ». Les textes de la console sont
-  écrits sans accents, comme tous ses messages.
+* Un lancement venu du tableau de bord est refusé. En mode banc, le heartbeat
+  annonce `programsEnabled: false` et `medical_parameters_version: null`.
+  La fiche machine affiche « paramètres médicaux non signés (mode banc
+  uniquement) », qu'une version soit inscrite sur le serveur ou non.
+  Si une version est inscrite, la carte dit « Paramètres médicaux non signés :
+  la machine est en mode banc uniquement. » et bloque le départ ; la fenêtre
+  aussi si la machine est accessible, en ligne et libre. Sans version serveur,
+  la carte dit « Aucune version des paramètres médicaux n'est enregistrée
+  sur le serveur : aucun lancement à distance n'est possible. » et bloque
+  le départ ; la fenêtre aussi, aux mêmes conditions. La carte peut aussi
+  montrer un refus d'aptitude ou de consentement ; la fenêtre les contrôle
+  après le motif médical.
+  Dans `launchAutoSession`, les refus médicaux suivent les droits d'accès,
+  l'appartenance du passager (`rider_not_allowed`), son aptitude
+  (`rider_not_fit`, `fitness_expired`), son consentement (`consent_missing`),
+  puis `machine_offline`. Sans version serveur : `medical_parameters_unavailable`,
+  avec le même message. Sinon, `medical_parameters_unsigned` :
+  « Paramètres médicaux non signés : la machine est en mode banc seulement,
+  aucune séance programmée ni personne à bord. », avant `programs_disabled`.
+  Une console antérieure à la PR #103 annonce aussi `null` : elle est
+  présentée comme en mode banc. Une annonce absente ou mal formée donne
+  `unknown`, sans libellé sur la fiche ; programmes désactivés et version
+  serveur inscrite, le refus est `programs_disabled` : « Programmes auto
+  désactivés sur cette machine : seules les séances manuelles, depuis la
+  console de la machine, sont possibles. ». Au contrôle médical local en mode
+  banc, la console refuse : « refusee par la machine : parametres medicaux non
+  signes (raison) : console en mode banc seulement, aucune seance programmee
+  ni personne a bord ». Ses messages sont sans accents.
 * Une séance manuelle sans personne à bord reste possible : la machine
   n'emporte alors personne.
 
@@ -1873,28 +1897,43 @@ Hors du Pi, sur le poste du signataire, depuis `raspberry-pi/` :
    nouvelle `version`, la date (`issued_at`) et l'identifiant du signataire.
 3. `python scripts/sign_medical_parameters.py sign <clé privée>` : refuse un
    fichier mal formé (le même analyseur que la console : JSON strict, membres
-   exacts, types, nombres positifs et finis, palier critique au-dessus du palier
-   dur, fraction de zone au plus 1) et une clé privée qui n'est pas celle de
+   exacts, types, nombres positifs et finis, y compris le refus d'un entier
+   qu'aucun flottant ne représente, palier critique au-dessus du palier dur,
+   fraction de zone au plus 1). Il applique ensuite les mêmes bornes que la
+   console au démarrage, en appelant `load_local_config` (FC 100..220 bpm, âge
+   10..100 ans, bornes du limiteur de mouvement), avant de demander la phrase
+   secrète, de charger la clé ou d'écrire la signature. Un refus cite chaque
+   problème de la console, dans son ordre ; une signature existante reste
+   inchangée. Il refuse aussi une clé privée qui n'est pas celle de
    `config/medical.pub`, écrit `config/medical_parameters.sig`, puis vérifie la
-   signature comme la console. Il **ne vérifie pas** les bornes que la console
-   applique au démarrage (FC 100..220 bpm, âge 10..100 ans, bornes du limiteur
-   de mouvement) : il signe un fichier qui en sort, et c'est la console qui le
-   refuse au démarrage (problème de configuration
-   `config/medical_parameters.json:<membre>`, code de sortie 2, sur lequel le
-   service ne la relance pas). Vérifier ces bornes avant de signer est prévu
-   par ANH-235.
-4. `python scripts/sign_medical_parameters.py verify` : ce que la console dira
-   de la signature au démarrage (avec les mêmes limites que `sign` : les bornes
-   ne sont pas vérifiées). Puis une PR ordinaire, relue ; la check-list de
-   release relit toute valeur `[MED]` qui change ([release.md](release.md)).
+   signature comme la console.
+   Le script ne vérifie pas que les profils livrés
+   (`config/profiles.default.json`) restent recevables. La console lit d'abord
+   `data/profiles.local.json` et ne lit les profils livrés que si ce magasin est
+   absent ou refusé. Un `recovery_min_s`, un `cooldown_min_s` ou une
+   `zone_ceiling_fraction` qui refuse les profils livrés empêche donc la console
+   de démarrer dès qu'elle les charge (premier démarrage, magasin local absent
+   ou refusé ; code 1, avec une trace Python). Un magasin local refusé par ces
+   valeurs est mis de côté au démarrage sous
+   `data/profiles.local.json.corrupt-<empreinte>` (12 premiers caractères du
+   SHA-256 de son contenu), puis la console tente les profils livrés.
+   La gate Pi signale sur la PR le refus des profils livrés.
+4. `python scripts/sign_medical_parameters.py verify` : vérifie le format,
+   les mêmes bornes que `sign`, puis la signature. Pour les deux commandes,
+   un fichier livré inutilisable, y compris une limite de
+   mouvement refusée à l'import, produit `refuse : ...` sur stderr et un code
+   de sortie 1, sans trace Python ni écriture. Puis une PR ordinaire, relue ;
+   la check-list de release relit toute valeur `[MED]` qui change ([release.md](release.md)).
 
 ### 13.5 Ce que cela ne couvre pas
 
 | Limite | Conséquence, et à qui elle revient |
 |---|---|
 | **Les valeurs ne sont pas validées.** La signature de test prouve l'intégrité depuis ce ticket, pas une décision médicale | ANH-98 : décision et signature par le médecin |
-| **La couche Convex et site est implémentée mais pas déployée.** Convex vérifie le fichier signé et conserve sa version ; la fiche machine affiche la version annoncée et son statut (sauf `unknown`, qui n'a pas de libellé) ; le lancement distant échoue fermé sans version serveur et affiche un code précis si la machine annonce des paramètres non signés. La table n'est déployée sur aucun déploiement à ce jour ; aucun enregistrement de version sur le déploiement de développement n'a donc été vérifié. Le support Ed25519 du runtime Convex de production reste à vérifier au premier enregistrement. | premier déploiement et premier enregistrement à vérifier ; EX-5 (catalogue de programmes, ANH-137 / ANH-138) reste à faire |
-| **Le catalogue de programmes ne référence pas la version médicale** ; le Pi ne refuse pas un programme validé pour une autre version | EX-5, avec le ticket de publication des programmes (ANH-138) |
+| **Rejeu.** La console vérifie la signature par la clé embarquée, sans contrôle d'ancienneté de la date ni version minimale acceptée. Tout couple fichier et signature signé un jour par cette clé reste accepté par une console qui porte cette clé. Un couple plus ancien remis par erreur de fusion ou retour à une ancienne image est accepté par la console sans avertissement, et ses valeurs s'appliquent. | Aujourd'hui, un seul couple existe : version `0.1.0`, clé de test dont la moitié privée est détruite. Rien à rejouer tant qu'une deuxième version n'est pas signée (ANH-98). Changer de clé invalide les couples signés par l'ancienne ([secrets.md, 3.4](secrets.md#34-clés-de-signature)). La fiche machine ne le signale (`obsolete`, calculé par Convex) que si la référence du serveur est plus récente, mais `launchAutoSession` ne refuse pas ce statut : Convex juge la zone et l'âge avec sa version courante, la console applique ses propres paliers et limites, ceux de l'ancien fichier. La troisième commande de la [check-list de release](release.md#lister-les-fichiers-qui-portent-le-marqueur) montre un `.sig` qui change. Aucune version minimale acceptée n'est implémentée, choix d'ANH-235. |
+| **Pas de borne de vraisemblance sur `occupied_ceiling_g`.** Le Pi et Convex exigent seulement un nombre fini strictement positif ; `load_local_config` n'ajoute pas de borne. Un fichier signé avec 50 g est accepté des deux côtés. | Avec personne à bord autorisée, `LocalConfig.ceiling_for` retient le plus bas de `MOTOR_MAX_RPM` et de la vitesse qui donne ce plafond ; sans personne à bord, le plafond est `MOTOR_MAX_RPM`. La borne de vraisemblance reste à décider avec le médecin (ANH-98) : elle n'est pas implémentée, EX-5 d'ANH-235 reste bloquée. |
+| **La couche Convex et site est implémentée mais pas déployée.** Convex vérifie le fichier signé et conserve sa version ; la fiche machine affiche la version annoncée et son statut (sauf `unknown`, qui n'a pas de libellé) ; le lancement distant échoue fermé sans version serveur et affiche un code précis si la machine annonce des paramètres non signés. La table n'est déployée sur aucun déploiement à ce jour ; aucun enregistrement de version sur le déploiement de développement n'a donc été vérifié. Le support Ed25519 du runtime Convex de production reste à vérifier au premier enregistrement. | premier déploiement et premier enregistrement à vérifier ; EX-5 d'ANH-139 (catalogue de programmes, ANH-137 / ANH-138) reste à faire |
+| **Le catalogue de programmes ne référence pas la version médicale** ; le Pi ne refuse pas un programme validé pour une autre version | EX-5 d'ANH-139, avec le ticket de publication des programmes (ANH-138) |
 | **Qui peut écrire dans l'image peut remplacer la clé.** Le fichier, sa signature et la clé publique sont dans l'image de la console, en lecture seule pour elle. Quelqu'un qui reconstruit l'image ou est root sur le Pi peut remplacer les trois ensemble : la signature protège d'une modification par erreur ou hors de la procédure, pas d'un Pi compromis | MEN-04 ([menaces.md](menaces.md)) ; distribution signée du logiciel : MEN-10 |
 | **Jamais essayé sur un Pi.** Mode banc, bandeau, refus d'un lancement distant : vérifiés par les tests automatisés seulement (console construite sur le variateur simulé) | essai au banc à faire |
 
@@ -1930,4 +1969,4 @@ La parité des refus de zone est comparée avec le même jeu de données dans
 de ces cas de calcul, pas le déploiement du registre ni le support Ed25519 du
 runtime de production. Le catalogue de programmes ne référence pas encore la
 version médicale ; le Pi ne refuse donc pas encore un programme validé pour
-une autre version : cela reste EX-5, ANH-137 et ANH-138.
+une autre version : cela reste EX-5 d'ANH-139, ANH-137 et ANH-138.

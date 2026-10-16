@@ -8,9 +8,11 @@ key it generates (:func:`write_signed`); no private key exists anywhere else.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -31,6 +33,21 @@ SHIPPED_CONTENT: Final[bytes] = PARAMETERS_PATH.read_bytes()
 INVALID: Final[Unsigned] = Unsigned(
     SignatureProblem.SIGNATURE_INVALID, "la signature ne correspond pas au fichier"
 )
+
+
+def with_values(changes: Mapping[str, int | float]) -> bytes:
+    """The shipped bytes with numeric parameters changed, using dotted motion member names."""
+    decoded: object = json.loads(SHIPPED_CONTENT)  # pyright: ignore[reportAny]  # narrowed next
+    assert isinstance(decoded, dict)
+    document = cast("dict[str, object]", decoded)
+    for path, value in changes.items():
+        target = document
+        for member in ("parameters", *path.split(".")[:-1]):
+            nested = target[member]
+            assert isinstance(nested, dict)
+            target = cast("dict[str, object]", nested)
+        target[path.split(".")[-1]] = value
+    return json.dumps(document).encode("utf-8")
 
 
 def signed(parameters: MedicalParameters = SHIPPED_PARAMETERS) -> MedicalStatus:

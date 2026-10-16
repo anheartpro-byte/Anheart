@@ -2000,3 +2000,33 @@ test("ANH-221 the [MED] commands of docs/release.md find every file that carries
     "simulation/limits.py",
   ]);
 });
+
+test("ANH-235 la troisième commande [MED] montre seulement la clé et la signature modifiées", (t) => {
+  const fx = fixture(t, [
+    [
+      "ANH-20 : première signature (#20)",
+      {
+        "raspberry-pi/config/medical.pub": "-----BEGIN PUBLIC KEY-----\nYW5jaWVubmU=\n-----END PUBLIC KEY-----\n",
+        "raspberry-pi/config/medical_parameters.sig": Buffer.from([0, 1, 2, 3]),
+        "raspberry-pi/config/other.txt": "avant\n",
+      },
+    ],
+  ]);
+  git(fx.work, "tag", "pi-0.1.0");
+  fx.mergeTicket("ANH-21 : nouvelle signature (#21)", {
+    "raspberry-pi/config/medical.pub": "-----BEGIN PUBLIC KEY-----\nbm91dmVsbGU=\n-----END PUBLIC KEY-----\n",
+    "raspberry-pi/config/medical_parameters.sig": Buffer.from([0, 4, 5, 6]),
+    "raspberry-pi/config/other.txt": "après\n",
+  });
+  const [, , diff] = commandsUnder("#### Lister les fichiers qui portent le marqueur");
+  const output = execFileSync("sh", ["-c", diff.replaceAll("<base>", "pi-0.1.0")], {
+    cwd: fx.work,
+    env: GIT_ENV,
+    encoding: "utf8",
+  });
+  const shown = [...output.matchAll(/^ (.+?)\s+\|/gm)].map((match) => match[1]).sort();
+  assert.deepEqual(shown, [
+    "raspberry-pi/config/medical.pub",
+    "raspberry-pi/config/medical_parameters.sig",
+  ]);
+});

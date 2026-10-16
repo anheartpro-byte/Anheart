@@ -39,7 +39,8 @@ happens to the file on disk afterwards.
 
 Parse, don't validate (contract rule 6): this module is the one layer that
 turns the file into domain types. It checks what it can check alone: the
-shape, the types, positive and finite numbers, a fraction at most 1, a
+shape, the types, positive and finite numbers (including refusing integers
+no float can represent), a fraction at most 1, a
 critical tier above the hard one. The limits the rest of the console imposes
 on every value it is given (the plausible heart rates, the ages the formula
 holds for, the motion limiter's own bounds) are checked by
@@ -355,21 +356,24 @@ def _whole(members: Mapping[str, object], key: str, where: str, problems: list[s
 
 
 def _positive(members: Mapping[str, object], key: str, where: str, problems: list[str]) -> float:
-    """A finite, strictly positive JSON number; ``0.0`` with a problem said otherwise."""
+    """A finite, positive JSON number representable as a float; ``0.0`` and a problem otherwise."""
     value = members.get(key, _MISSING)
     if value is _MISSING:
         return 0.0
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not math.isfinite(value)
-        or value <= 0
-    ):
-        problems.append(
-            f"{where}.{key} : nombre fini strictement positif attendu, trouve {value!r}"
-        )
-        return 0.0
-    return float(value)
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        try:
+            number = float(value)
+        except OverflowError:
+            digits = len(str(value).lstrip("-"))
+            problems.append(
+                f"{where}.{key} : nombre fini strictement positif attendu, "
+                f"trouve un entier de {digits} chiffres"
+            )
+            return 0.0
+        if math.isfinite(number) and number > 0:
+            return number
+    problems.append(f"{where}.{key} : nombre fini strictement positif attendu, trouve {value!r}")
+    return 0.0
 
 
 def _text(

@@ -15,18 +15,19 @@ one and no other: never use it to sign anything else (the programme catalogue
 has a key of its own).
 
 ``sign`` reads ``config/medical_parameters.json``, refuses it if it is
-malformed (the console's own parser, :func:`src.medical.parse_document`),
+malformed (the console's own parser, :func:`src.medical.parse_document`) or
+outside the console's startup bounds (:func:`src.local_config.load_local_config`),
 refuses a private key whose public half is not ``config/medical.pub``, then
 writes the detached Ed25519 signature of the file's exact bytes to
-``config/medical_parameters.sig`` and checks it the way the console will. It
-does NOT check the ranges the console holds the values to at startup (heart
-rates 100..220, ages 10..100, the motion limiter's bounds): a file outside them
-is signed, and the console refuses it when it starts (exit code 2). Checking
-them before signing is ANH-235.
+``config/medical_parameters.sig`` and checks it the way the console will.
+The bounds are checked before comparing the key or writing any signature.
 
-``verify`` checks the file's shape and its signature as the console does at
-startup (not those ranges either), and says which version is signed, by whom,
-and with which key.
+``verify`` checks the file's shape, the same startup bounds, then its signature,
+and says which version is signed, by whom, and with which key.
+
+An unusable shipped file, including an integer no float can represent or a
+motion limit refused at import, is reported as ``refuse : ...`` on stderr:
+exit code 1, no traceback, no passphrase prompt and no file written.
 
 The same check, without this repository's code (OpenSSL 3)::
 
@@ -53,14 +54,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from src.medical import (
-    PARAMETERS_PATH,
-    PUBLIC_KEY_PATH,
-    SIGNATURE_PATH,
-    parse_document,
-    status_of,
-)
 from src.result import Err
+
+try:
+    from src.local_config import MEDICAL_FILE, load_local_config
+    from src.medical import (
+        PARAMETERS_PATH,
+        PUBLIC_KEY_PATH,
+        SIGNATURE_PATH,
+        MedicalDocument,
+        MedicalStatus,
+        parse_document,
+        status_of,
+    )
+except ValueError as error:
+    if __name__ != "__main__":
+        raise
+    # The interpreter writes the SystemExit message without a module-level print.
+    raise SystemExit(f"refuse : {error}") from None
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 """The root of the repository: no private key is ever written under it."""
@@ -70,11 +81,33 @@ class SigningError(Exception):
     """A refusal, said in words; the command exits with code 1."""
 
 
+def _console_bounds(document: MedicalDocument) -> None:
+    loaded = load_local_config({}, medical=MedicalStatus(document=document, unsigned=None))
+    if isinstance(loaded, Err):
+        problems = tuple(
+            f"{problem.key}: {problem.detail}"
+            for problem in loaded.error
+            if problem.key.startswith(f"{MEDICAL_FILE}:")
+        )
+        if problems:
+            raise SigningError(
+                "la console refuserait ce fichier au demarrage (code 2) : " + " ; ".join(problems)
+            )
+
+
 def public_pem(private: Ed25519PrivateKey) -> bytes:
     """The public half of ``private``, as ``config/medical.pub`` holds it."""
     return private.public_key().public_bytes(
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
     )
+
+
+def _checked_document(content: bytes, *, where: str) -> MedicalDocument:
+    parsed = parse_document(content, where=where)
+    if isinstance(parsed, Err):
+        raise SigningError("fichier refuse par la console : " + " ; ".join(parsed.error))
+    _console_bounds(parsed.value)
+    return parsed.value
 
 
 def generate_key(
@@ -120,19 +153,17 @@ def sign(
 ) -> str:
     """Sign the file with ``private`` and check the result as the console will. Returns its version."""
     content = parameters_path.read_bytes()
-    parsed = parse_document(content, where=parameters_path.name)
-    if isinstance(parsed, Err):
-        raise SigningError("fichier refuse par la console : " + " ; ".join(parsed.error))
+    document = _checked_document(content, where=parameters_path.name)
     if public_pem(private) != public_key_path.read_bytes():
         raise SigningError(
             f"cette cle privee n'est pas celle de {public_key_path.name} : "
             "la console refuserait la signature"
         )
     signature_path.write_bytes(private.sign(content))
-    status = status_of(parsed.value, signature_path=signature_path, public_key_path=public_key_path)
+    status = status_of(document, signature_path=signature_path, public_key_path=public_key_path)
     if status.warning is not None:
         raise SigningError(status.warning)
-    return parsed.value.version
+    return document.version
 
 
 def describe(
@@ -141,10 +172,7 @@ def describe(
     public_key_path: Path = PUBLIC_KEY_PATH,
 ) -> str:
     """What the console would say of the three files at startup."""
-    parsed = parse_document(parameters_path.read_bytes(), where=parameters_path.name)
-    if isinstance(parsed, Err):
-        raise SigningError("fichier refuse par la console : " + " ; ".join(parsed.error))
-    document = parsed.value
+    document = _checked_document(parameters_path.read_bytes(), where=parameters_path.name)
     status = status_of(document, signature_path=signature_path, public_key_path=public_key_path)
     if status.warning is not None:
         raise SigningError(status.warning)
@@ -175,8 +203,11 @@ def main(argv: list[str] | None = None) -> int:
             generate_key(arguments.private_key, _passphrase(confirm=True))
             print(f"cle privee : {arguments.private_key} ; cle publique : {PUBLIC_KEY_PATH}")
         elif arguments.command == "sign":
+            _checked_document(PARAMETERS_PATH.read_bytes(), where=PARAMETERS_PATH.name)
             private = load_private_key(arguments.private_key, _passphrase(confirm=False))
-            print(f"signe : version {sign(private)}, {SIGNATURE_PATH}")
+            print(
+                f"signe : version {sign(private, parameters_path=PARAMETERS_PATH)}, {SIGNATURE_PATH}"
+            )
         else:
             print(describe())
     except SigningError as error:
