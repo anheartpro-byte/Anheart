@@ -309,25 +309,33 @@ describe("ANH-228 EX-2 key, then contract, then bucket", () => {
         reason: "synthetic_stop",
       });
       const routes = [
-        ["heartbeat", {}, 1],
-        ["training/poll", undefined, 1],
-        ["training/local", declaration("synthetic-auth-order"), 20],
-        ["profiles", { storeRev: 2, programsEnabled: true, profiles: [] }, 5],
+        ["heartbeat", {}, 1, 200],
+        ["training/poll", undefined, 1, 200],
+        ["training/local", declaration("synthetic-auth-order"), 20, 200],
+        ["profiles", { storeRev: 2, programsEnabled: true, profiles: [] }, 5, 200],
         [
           "records/upload-url",
           { sessionId, path: "manifest.json", size: 0, sha256: "a".repeat(64) },
           64,
+          200,
         ],
+        ["records/commit", {}, 64, 400],
       ] as const;
       const limit = vi.spyOn(rateLimiter, "limit");
-      for (const [path, body, capacity] of routes) {
+      for (const [path, body, capacity, status] of routes) {
         limit.mockClear();
         for (let n = 0; n <= capacity; n++) {
           expect((await send(w, path, body, rejected)).status).toBe(expected);
         }
         expect(limit).not.toHaveBeenCalled();
         for (let n = 0; n < capacity; n++) {
-          expect((await send(w, path, body, valid)).status).toBe(200);
+          const response = await send(w, path, body, valid);
+          expect(response.status).toBe(status);
+          if (status === 400) {
+            expect(await response.json()).toMatchObject({
+              error: "invalid_request",
+            });
+          }
         }
         expect((await send(w, path, body, valid)).status).toBe(429);
       }

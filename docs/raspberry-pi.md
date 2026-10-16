@@ -2140,7 +2140,7 @@ lequel la même requête serait encore refusée.
   les 3 s pour une toutes les 2 s, télémétrie toutes les 3 s au plus vite pour
   deux lots toutes les 5 s, événements une fois par étape (1 s) pour dix par
   seconde, 64 réservations et commits par étape du dépôt pour une réserve de
-  64 chacun et dix par seconde, un commit par réservation ; programmes à
+  64 chacun et dix par seconde, au plus un commit par réservation ; programmes à
   chaque révision, reprise après échec pas avant 15 s pour une limite d'un
   envoi toutes les 10 s et une réserve de 5 ; une déclaration par séance
   locale, dont le rattrapage se fait une séance à la fois, pour une limite

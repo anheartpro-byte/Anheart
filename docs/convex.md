@@ -2134,21 +2134,29 @@ qui fonctionne comme prévu ne les atteint jamais.
 | `POST /api/machine/records/upload-url` | 10 par seconde | 64 | 64 fichiers par étape du dépôt, 4 transferts à la fois |
 | `POST /api/machine/training/local` | 1 par minute | 20 | une déclaration par séance démarrée à la machine ; rattrapage une séance à la fois, après l'envoi de la précédente |
 | `POST /api/machine/profiles` | 1 toutes les 10 s | 5 | une fois par révision des programmes modifiés par l'opérateur ; pas de nouvel essai avant 15 s après un échec |
-| `POST /api/machine/records/commit` | 10 par seconde | 64 | un commit après chaque réservation `upload-url`, 64 fichiers par étape du dépôt |
+| `POST /api/machine/records/commit` | 10 par seconde | 64 | au plus un commit par réservation `upload-url`, 64 fichiers par étape du dépôt |
 
 Ces trois plafonds (ANH-228) suivent le trafic attendu d'une console : une
 séance avec quelqu'un à bord dure des minutes (embarquement, rampe et plancher
 médical du refroidissement). La réserve de 20 déclarations couvre une journée
 de séances faites hors ligne ; le rattrapage n'en déclare qu'une à la fois,
 après avoir envoyé la précédente. Au-delà, le 429 retient la route et la
-console refait la même déclaration : rien n'est perdu, la séance tourne de
-toute façon (le Pi décide) et l'arrêt local reste toujours disponible. Une
-clé volée peut créer au plus 20 + 1 440 séances par jour, au lieu d'un nombre
-illimité. Chaque envoi de `profiles` efface et réécrit les programmes de la
-machine. Un dépôt qui fonctionne n'envoie jamais plus de commits que de
-réservations, déjà limitées à 10 par seconde avec une réserve de 64 (une
-étape du dépôt, `FILES_PER_STEP`) ; chaque commit peut planifier une
-vérification des octets dans Storage.
+console refait la même déclaration : rien n'est perdu et la séance continue
+sous l'autorité du Pi. Un seau `training/local` vide retarde toutefois la
+déclaration des séances démarrées à la machine. Le tableau de bord ne connaît
+pas une séance non déclarée : son affichage, son arrêt depuis le tableau de
+bord et l'envoi de sa fin attendent aussi. Sans attaquant, une console qui
+rattrape plus de 20 séances d'un coup peut ainsi retarder la séance suivante
+d'une minute au plus (le délai `retryAfterMs` ne dépasse pas 60 s) ; la séance
+en cours est déclarée avant le rattrapage. Avec une clé volée qui garde ce
+seau vide, ce retard peut durer jusqu'à sa révocation. L'arrêt local n'en
+dépend jamais, et les routes d'arrêt et de fin elles-mêmes ne sont jamais
+limitées. Une clé volée peut créer au plus 20 + 1 440 séances par jour, au lieu
+d'un nombre illimité. Chaque envoi de `profiles` efface et réécrit les
+programmes de la machine. Un dépôt qui fonctionne n'envoie jamais plus de
+commits que de réservations, déjà limitées à 10 par seconde avec une réserve
+de 64 (une étape du dépôt, `FILES_PER_STEP`) ; chaque commit peut planifier
+une vérification des octets dans Storage.
 
 Au-delà : **429** `{"error": "rate_limited", "message": "…", "retryAfterMs": <ms>}`
 et l'en-tête `Retry-After` (en secondes, arrondi au-dessus). La limite est
