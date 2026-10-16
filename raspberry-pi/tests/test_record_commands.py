@@ -9,6 +9,7 @@ import pytest
 from src.record import commands
 from src.record.schema import EventKind
 from src.result import Err, Ok
+from src.training.types import SafetyAction
 from src.units import MotorRpm, OutputRpm
 
 EVERY_COMMAND: tuple[tuple[commands.Command, str], ...] = (
@@ -22,6 +23,7 @@ EVERY_COMMAND: tuple[tuple[commands.Command, str], ...] = (
     ),
     (commands.Stop(), "stop"),
     (commands.EmergencyStop(), "estop"),
+    (commands.LatchEmergencyStop(), "latch_estop"),
     (commands.Acknowledge(estop_released=True), "acknowledge estop_released=true"),
     (commands.Acknowledge(estop_released=False), "acknowledge estop_released=false"),
     (commands.FaultReset(), "fault_reset"),
@@ -29,6 +31,10 @@ EVERY_COMMAND: tuple[tuple[commands.Command, str], ...] = (
     (commands.Attendant(present=True), "attendant present=true"),
     (commands.Attendant(present=False), "attendant present=false"),
     (commands.AttendantPing(), "attendant_ping"),
+    (
+        commands.PresenceTrip("presence_intrusion", SafetyAction.QUICK_STOP),
+        "presence_trip rule=presence_intrusion action=QUICK_STOP",
+    ),
 )
 
 
@@ -73,8 +79,15 @@ def test_ex1_every_command_is_written_as_pinned_and_read_back_identical(
         "attendant_ping=true",
         "start_programme profile=1",
         "estop hard",
+        "latch_estop now",
         "fault_reset now",
         "shutdown -h",
+        "presence_trip",
+        "presence_trip rule=presence_intrusion",
+        "presence_trip name=presence_intrusion action=QUICK_STOP",
+        "presence_trip rule=presence_intrusion kind=QUICK_STOP",
+        "presence_trip rule=unknown action=QUICK_STOP",
+        "presence_trip rule=presence_intrusion action=UNKNOWN",
     ],
 )
 def test_ex1_anything_else_is_refused_with_a_reason(detail: str) -> None:

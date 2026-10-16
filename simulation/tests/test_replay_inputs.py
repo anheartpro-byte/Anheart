@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from simulation.harness import ORIGIN, HarnessClock
 from simulation.replay import replay, replay_recording
 from simulation.replay_tape import TapeDrive, parse_frames
 from simulation.tests.replay_support import record, short
@@ -19,8 +20,111 @@ from src.record.schema import Event, EventKind, TimeoutFailure
 from src.result import Err, Ok, Result
 from src.training.hr_control import HeartRateRejection, TrackerReading
 from src.training.runtime import TrainingRuntime
-from src.training.types import SignalQuality, TelemetrySnapshot
+from src.training.types import SafetyAction, SignalQuality, TelemetrySnapshot
 from src.units import Bpm, Monotonic, Seconds
+
+
+def test_a_click_between_ticks_latches_before_the_forwarded_runtime_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    advance = HarnessClock.advance
+    tick = TrainingRuntime.tick
+    runtimes: list[TrainingRuntime] = []
+    clicked = False
+
+    def clock_step(clock: HarnessClock, dt: Seconds) -> Monotonic:
+        nonlocal clicked
+        now = clock.monotonic()
+        click = ORIGIN + 0.9
+        if not clicked and runtimes and now < click <= now + dt:
+            advance(clock, Seconds(click - now))
+            runtimes[0].supervisor.latch_estop("operator clicked between ticks")
+            clicked = True
+            return advance(clock, Seconds(now + dt - click))
+        return advance(clock, dt)
+
+    async def forwarded(runtime: TrainingRuntime, now: Monotonic) -> TelemetrySnapshot:
+        if not runtimes:
+            runtimes.append(runtime)
+        if abs(now - ORIGIN - 1.0) < 1e-6:
+            runtime.request_estop("the next control step")
+        return await tick(runtime, now)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(HarnessClock, "advance", clock_step)
+        patch.setattr(TrainingRuntime, "tick", forwarded)
+        folder = record(short("manual_27_rpm", duration=3.0, preroll=0.0), tmp_path)
+    assert clicked
+    loaded = read(folder)
+    assert isinstance(loaded, Ok)
+    inputs = (
+        Event(t=0.9, kind=EventKind.OPERATOR_ACTION, detail="latch_estop", actor="system"),
+        Event(t=1.0, kind=EventKind.OPERATOR_ACTION, detail="estop", actor="system"),
+    )
+    recording = loaded.value
+    assert any(row.safety_rule == "operator_estop" and row.t == 1.0 for row in recording.rows)
+    result = asyncio.run(replay_recording(replace(recording, events=(*recording.events, *inputs))))
+    assert isinstance(result, Ok)
+    assert result.value.matches, result.value.to_text()
+    assert result.value.comparison.deviating_ticks == 0
+
+
+def test_a_recorded_camera_trip_replays_the_same_verdict_at_the_same_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tick = TrainingRuntime.tick
+
+    async def camera(runtime: TrainingRuntime, now: Monotonic) -> TelemetrySnapshot:
+        if abs(now - ORIGIN - 1.0) < 1e-6:
+            runtime.trip_from_thread(
+                "presence_camera_lost", SafetyAction.RAMP_DOWN, "private camera diagnostic"
+            )
+        return await tick(runtime, now)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(TrainingRuntime, "tick", camera)
+        folder = record(short("manual_27_rpm", duration=3.0, preroll=0.0), tmp_path)
+    loaded = read(folder)
+    assert isinstance(loaded, Ok)
+    recording = loaded.value
+    assert any(row.safety_rule == "presence_camera_lost" and row.t == 1.0 for row in recording.rows)
+    command = Event(
+        t=1.0,
+        kind=EventKind.OPERATOR_ACTION,
+        detail=commands.encode(
+            commands.PresenceTrip("presence_camera_lost", SafetyAction.RAMP_DOWN)
+        ),
+        actor="system",
+    )
+    replayed = asyncio.run(
+        replay_recording(replace(recording, events=(*recording.events, command)))
+    )
+    assert isinstance(replayed, Ok)
+    assert replayed.value.matches, replayed.value.to_text()
+    assert replayed.value.comparison.deviating_ticks == 0
+
+
+@pytest.mark.parametrize(
+    ("warning", "reason"),
+    [
+        ("replay_preamble: less than 8 s of raw ECG before the origin", "less than 8 s"),
+        ("replay_incomplete: pending_ecg_delivery", "unresolved ECG delivery"),
+    ],
+)
+def test_a_console_record_with_missing_preroll_or_delivery_has_a_named_refusal(
+    tmp_path: Path,
+    warning: str,
+    reason: str,
+) -> None:
+    folder = record(short("manual_27_rpm", duration=0.4, preroll=0.0), tmp_path)
+    loaded = read(folder)
+    assert isinstance(loaded, Ok)
+    event = Event(t=0.0, kind=EventKind.WARNING, detail=warning)
+    result = asyncio.run(
+        replay_recording(replace(loaded.value, events=(*loaded.value.events, event)))
+    )
+    assert isinstance(result, Err)
+    assert reason in result.error.detail
 
 
 def test_failed_enable_is_recorded_and_replayed_with_the_same_safety_decision(

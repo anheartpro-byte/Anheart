@@ -274,12 +274,18 @@ def every_1_hz_point_of_the_record_is_on_the_dashboard_once(
 def every_event_of_the_record_is_on_the_dashboard_once(outcome: Outcome) -> None:
     events = [stored.item for _key, stored in sorted(outcome.dashboard.events.items())]
 
-    assert [event["seq"] for event in events] == list(range(len(outcome.recording.events)))
+    expected = [
+        (seq, event)
+        for seq, event in enumerate(outcome.recording.events)
+        if event.t >= 0 and event.detail != "attendant_ping"
+    ]
+    assert [event["seq"] for event in events] == list(range(len(expected)))
     assert [(event["kind"], event["detail"], event["actor"]) for event in events] == [
-        (event.kind.value, event.detail, event.actor) for event in outcome.recording.events
+        (event.kind.value, event.detail, event.actor) for _seq, event in expected
     ]
     kinds = [event["kind"] for event in events]
-    assert kinds[:2] == ["operator_action", "phase"]
+    assert any(event.detail.startswith("start_manual ") for _seq, event in expected)
+    assert "phase" in kinds
     assert kinds.count("refusal") == 2, "one refusal before the cut, one after it"
 
 

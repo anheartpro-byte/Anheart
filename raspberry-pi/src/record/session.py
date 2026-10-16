@@ -6,15 +6,16 @@ frozen values and hands them to :class:`~src.record.journal.Journal`, whose
 ``submit`` never waits: no file is opened, written or flushed from this module.
 The disk belongs to the journal thread.
 
-A record is opened when a session has just been armed (:meth:`SessionRecorder.begin`),
-fed once per control tick (:meth:`SessionRecorder.observe`), and closed on the
-tick that sees the session's phase reach ``DONE``, or at the console's exit
+A record is opened when a session has just been armed (:meth:`SessionRecorder.begin`).
+It includes a bounded idle window, with its origin at the last idle tick before
+the start command, then each session tick (:meth:`SessionRecorder.observe`).
+``DONE`` seals the drive stream immediately; a pending ECG delivery may defer
+the file closure until the next tick. Console exit also closes it
 (:meth:`SessionRecorder.finish`).
 
-A closed record never changes again. What is asked and answered at the console
-while no record is open (an acknowledgement, a fault reset, a start that is
-refused) goes to the logbook instead (:mod:`src.record.logbook`), by the same
-queue and with the same rules about names.
+A closed record never changes again. Between records, commands and rows wait
+in the bounded idle window for the next opening. Console notifications also go
+to the logbook (:mod:`src.record.logbook`), by the same queue and privacy rules.
 
 ``DONE`` and not the runtime's FINISHED state, on purpose. After an ordinary
 stop they are the same tick. Behind a latched drive fault the runtime stays
@@ -40,9 +41,9 @@ What is NOT written, on purpose:
 The drive's frames are not written from here either, and do not go through
 this object at all: they wait in :mod:`src.record.drive_tap` and the journal
 thread takes them. All this object says of them is when a session begins and
-ends, and how many their list had refused at each of those two instants
-(:meth:`SessionRecorder.frames_refused`): the record then counts what its own
-session lost, and nothing else.
+ends. With an idle window, the journal counts overlapping loss intervals as
+an upper bound. Without one, the two boundary counts can give an exact loss
+(:meth:`SessionRecorder.frames_refused`).
 """
 
 from __future__ import annotations
@@ -52,8 +53,9 @@ import hashlib
 import json
 import logging
 import re
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Concatenate, Final, assert_never
@@ -68,8 +70,10 @@ from src.contract import SoftwareVersion
 from src.control_surface import LOCAL_SUBJECT, SessionEvent
 from src.control_surface import EventKind as SurfaceEvent
 from src.local_config import LocalConfig
-from src.motor.drive import DriveStatus
+from src.motor.drive import DriveState, DriveStatus
+from src.record import commands
 from src.record.codec import IDENTIFIER, Privacy
+from src.record.ecg import RuntimeDelivery
 from src.record.journal import (
     MIN_FREE_BYTES,
     MIN_FREE_INODES,
@@ -86,6 +90,7 @@ from src.record.journal import (
 from src.record.logbook import note
 from src.record.rows import JsonValue, Row
 from src.record.schema import Clocks, EndObservation, Event, EventKind, Manifest, Profile
+from src.result import Err
 from src.sensors.base import SensorReading
 from src.training.motion import MotionLimits
 from src.training.plan import Program
@@ -106,6 +111,10 @@ MAX_TEXT: Final[int] = 500
 """Characters of free text kept per event: a message, not a document."""
 
 WITHHELD: Final[str] = "[redacted]"
+
+PRESTART_SECONDS: Final[float] = 12.0
+PRESTART_ENTRIES: Final[int] = 512
+PRESTART_SAMPLES: Final[int] = 100_000
 
 SYSTEM: Final[str] = "system"
 REMOTE: Final[str] = "remote"
@@ -173,13 +182,6 @@ def redact(text: str, names: tuple[str, ...]) -> str:
     for name in names:
         cleaned = re.sub(rf"(?<!\w){re.escape(name)}(?!\w)", WITHHELD, cleaned, flags=re.IGNORECASE)
     return cleaned
-
-
-def utc_stamp(clock: Clock) -> str:
-    """The clock's wall time, ISO 8601 UTC with a ``Z``."""
-    return (
-        datetime.fromtimestamp(clock.unix_millis() / 1000, UTC).isoformat().replace("+00:00", "Z")
-    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -318,7 +320,12 @@ class SessionRequest:
 
 
 def manifest_for(
-    stamp: Stamp, request: SessionRequest, clock: Clock, wall_trusted: bool | None = None
+    stamp: Stamp,
+    request: SessionRequest,
+    clock: Clock,
+    wall_trusted: bool | None = None,
+    *,
+    origin: Monotonic | None = None,
 ) -> Manifest:
     """The opening manifest of one session. Identifiers only, never a name.
 
@@ -328,7 +335,12 @@ def manifest_for(
     offset its time service measured, and writes no number it did not read.
     """
     identity = uuid4().hex
-    started = utc_stamp(clock)
+    instant = clock.monotonic() if origin is None else origin
+    started = (
+        datetime.fromtimestamp(clock.unix_millis() / 1000 - (clock.monotonic() - instant), UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
     subject = request.subject_id.strip()
     remote = request.cloud_session_id
     version = (
@@ -353,7 +365,7 @@ def manifest_for(
         contract_version=CONTRACT_VERSION,
         medical_parameters_version=stamp.medical_parameters_version,
         clocks=Clocks(
-            monotonic_start=clock.monotonic(),
+            monotonic_start=instant,
             utc_start=started,
             ntp_offset_s=None,
             wall_trusted=wall_trusted,
@@ -479,9 +491,9 @@ def record_kind(kind: SurfaceEvent) -> EventKind | None:
             | SurfaceEvent.ATTESTED
             | SurfaceEvent.LAUNCH_CONFIRMED
         ):
-            return EventKind.OPERATOR_ACTION
+            return EventKind.WARNING
         case SurfaceEvent.ACKNOWLEDGED:
-            return EventKind.VERDICT_ACK
+            return EventKind.WARNING
         case SurfaceEvent.REFUSED | SurfaceEvent.CANCELLED:
             # A request the loop refused, or one a stop displaced before the loop
             # took it: either way it was asked, written above as asked, and not done.
@@ -524,6 +536,13 @@ class _Live:
     link: LinkStats | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _Held:
+    at: Monotonic
+    entry: Row | Event | RawBatch
+    attested: str | None = None
+
+
 def _total[**P](
     method: Callable[Concatenate[SessionRecorder, P], None],
 ) -> Callable[Concatenate[SessionRecorder, P], None]:
@@ -544,19 +563,25 @@ class SessionRecorder:
 
     __slots__ = (
         "_clock",
+        "_closing",
         "_faults",
+        "_floor",
+        "_idle",
         "_idle_names",
+        "_idle_samples",
         "_journal",
         "_leg_tip",
         "_link_stats",
         "_live",
         "_notice",
+        "_pending",
         "_radius",
         "_said",
         "_sim_state",
         "_stamp",
         "_status",
         "_wall_clock",
+        "_window_dropped",
     )
 
     def __init__(
@@ -591,6 +616,12 @@ class SessionRecorder:
         self._faults: int = 0
         # The names last typed at the console outside a session, kept out of the logbook's text.
         self._idle_names: tuple[str, ...] = ()
+        self._idle: deque[_Held] = deque()
+        self._idle_samples: int = 0
+        self._window_dropped: int = 0
+        self._floor: Monotonic = clock.monotonic()
+        self._pending: RawBatch | None = None
+        self._closing: tuple[_Live, Closing] | None = None
 
     @property
     def journal(self) -> Journal:
@@ -601,6 +632,12 @@ class SessionRecorder:
     def recording(self) -> bool:
         """Whether a session's record is open."""
         return self._live is not None
+
+    @property
+    def prestart_size(self) -> tuple[int, int]:
+        pending = self._pending
+        samples = 0 if pending is None else sum(len(channel) for channel in pending.samples)
+        return len(self._idle) + int(pending is not None), self._idle_samples + samples
 
     @property
     def degraded(self) -> bool:
@@ -628,22 +665,37 @@ class SessionRecorder:
             _logger.exception("session recorder: %s failed; the session is unaffected", where)
             self._notice = BROKEN
         self._faults += 1
+        if self._live is None:
+            self._window_dropped += 1
 
     # --- the session's life --------------------------------------------------
 
     @_total
     def begin(self, request: SessionRequest) -> None:
         """The runtime has just armed a session: open its record."""
+        self._expire_closing()
         clock = self._clock
         # A new record: what the recorder itself got wrong was about the previous one.
         self._faults = 0
-        origin = clock.monotonic()
+        asked = clock.monotonic() if request.arming_began is None else request.arming_began
+        self._trim(asked)
+        ticks = tuple(
+            held for held in self._idle if isinstance(held.entry, Row) and held.at < asked
+        )
+        origin = asked if not ticks else ticks[-1].at
+        window = (
+            tuple(self._idle)
+            if not ticks
+            else tuple(held for held in self._idle if held.at >= ticks[0].at)
+        )
         if request.arming_began is None:
             # Nobody timed the arming: the frames of the record, and the count of
             # those it loses, begin with the record.
             since, refused = origin, self._journal.frames_refused()
         else:
             since, refused = request.arming_began, request.arming_refused
+        if ticks:
+            since, refused = ticks[0].at, None
         if self._live is not None:
             # The previous session's end was never observed; close what is open. The
             # drive's frames are its own up to the arming of this one, and no further.
@@ -657,25 +709,55 @@ class SessionRecorder:
         )
         self._live = live
         self._journal.open(
-            manifest_for(self._stamp, request, clock, self._wall_trusted()),
+            manifest_for(self._stamp, request, clock, self._wall_trusted(), origin=origin),
             _EMAILS,
             since=since,
             refused=refused,
         )
-        kind = "manual" if request.program is None else "auto"
-        self._event(
-            live,
-            live.origin,
-            EventKind.OPERATOR_ACTION,
-            f"{kind} session started",
-            operator_alias(request.operator),
+        if (
+            ticks
+            and ticks[0].attested is not None
+            and not any(
+                isinstance(held.entry, Event)
+                and held.entry.detail == commands.encode(commands.ConfirmEstopWiring())
+                for held in window
+            )
+        ):
+            self._journal.submit(
+                Event(
+                    t=float(since - origin),
+                    kind=EventKind.OPERATOR_ACTION,
+                    detail=commands.encode(commands.ConfirmEstopWiring()),
+                    actor=ticks[0].attested,
+                )
+            )
+        for held in window:
+            self._write(live, held.entry)
+        self._journal.note_dropped(self._window_dropped)
+        self._idle.clear()
+        self._idle_samples = 0
+        self._window_dropped = 0
+        pending = self._pending
+        acquired = (
+            window if pending is None else (*window, _Held(Monotonic(pending.t_first), pending))
         )
-        if request.confirmed_by is not None:
+        if self._preroll(acquired, origin) < 8.0 - 1e-6:
+            self._event(
+                live,
+                asked,
+                EventKind.WARNING,
+                "replay_preamble: less than 8 s of raw ECG before the origin",
+                SYSTEM,
+            )
+        if request.confirmed_by is not None and not any(
+            isinstance(held.entry, Event) and held.entry.detail == "console: launch_confirmed"
+            for held in window
+        ):
             self._event(
                 live,
                 live.origin,
-                EventKind.OPERATOR_ACTION,
-                "launch_confirmed",
+                EventKind.WARNING,
+                "console: launch_confirmed",
                 operator_alias(request.confirmed_by),
             )
         warning = self._stamp.medical_warning
@@ -706,8 +788,22 @@ class SessionRecorder:
         self, now: Monotonic, snapshot: TelemetrySnapshot, runtime: TrainingRuntime
     ) -> None:
         """One control tick: its row, what changed, and the end when the runtime is done."""
+        self._expire_closing()
         live = self._live
         if live is None:
+            if (
+                runtime.floor is not None
+                or runtime.supervisor.estop is not None
+                or snapshot.drive_state is DriveState.FAULT
+            ):
+                self.discard_preroll()
+                return
+            row = self._row(_Live(Monotonic(0.0), ()), now, snapshot, runtime)
+            attestation = runtime.supervisor.require_estop_confirmed()
+            actor = (
+                None if isinstance(attestation, Err) else operator_alias(attestation.value.operator)
+            )
+            self._remember(_Held(now, replace(row, t=float(now)), actor))
             return
         self._journal.submit(self._row(live, now, snapshot, runtime))
         self._note_changes(live, now, snapshot)
@@ -721,6 +817,7 @@ class SessionRecorder:
         live = self._live
         if live is not None:
             self._end(live, now, runtime.snapshot(), runtime, detail)
+        self._expire_closing()
 
     def _end(
         self,
@@ -735,32 +832,36 @@ class SessionRecorder:
         status = _fresh_status(snapshot, runtime)
         stop = runtime.stop_reason
         self._event(live, now, EventKind.END, words, SYSTEM)
-        self._journal.close(
-            Closing(
-                ended_at=self._clock.unix_millis(),
-                end_reason=words,
-                observation=EndObservation(
-                    t=_seconds(live, now),
-                    runtime_state=runtime.state.value,
-                    drive_state=snapshot.drive_state.name,
-                    runtime_output_enabled=runtime.output_enabled,
-                    runtime_applied_rpm=int(runtime.applied_rpm),
-                    lfrd_motor_rpm=None if status is None else int(status.setpoint_echo_rpm),
-                    shaft_motor_rpm=None if status is None else int(status.output_rpm),
-                    # Torque presence is not something this console observes.
-                    energised=None,
-                    silent=runtime.silent,
-                    stop_reason=None if stop is None else self._text(live, stop),
-                    shutdown_detail=None if detail is None else self._text(live, detail),
-                ),
-                # Read now, not ``now``: the exchanges of this last tick began after the
-                # tick's own instant, and they are the session's. The next ones are not.
-                until=self._clock.monotonic(),
-                # And at that same instant, what the drive's list has refused so far.
-                refused=self._journal.frames_refused(),
-            )
+        closing = Closing(
+            ended_at=self._clock.unix_millis(),
+            end_reason=words,
+            observation=EndObservation(
+                t=_seconds(live, now),
+                runtime_state=runtime.state.value,
+                drive_state=snapshot.drive_state.name,
+                runtime_output_enabled=runtime.output_enabled,
+                runtime_applied_rpm=int(runtime.applied_rpm),
+                lfrd_motor_rpm=None if status is None else int(status.setpoint_echo_rpm),
+                shaft_motor_rpm=None if status is None else int(status.output_rpm),
+                # Torque presence is not something this console observes.
+                energised=None,
+                silent=runtime.silent,
+                stop_reason=None if stop is None else self._text(live, stop),
+                shutdown_detail=None if detail is None else self._text(live, detail),
+            ),
+            # Read now, not ``now``: the exchanges of this last tick began after the
+            # tick's own instant, and they are the session's. The next ones are not.
+            until=self._clock.monotonic(),
+            # And at that same instant, what the drive's list has refused so far.
+            refused=self._journal.frames_refused(),
         )
         self._live = None
+        self._floor = Monotonic(self._clock.monotonic() + 1e-9)
+        if self._pending is None:
+            self._journal.close(closing)
+        else:
+            self._closing = (live, closing)
+            self._journal.seal(closing)
 
     # --- what the other tasks see --------------------------------------------
 
@@ -780,20 +881,35 @@ class SessionRecorder:
         actor = operator_alias(event.operator) if event.operator.strip() else SYSTEM
         if DASHBOARD_OPERATOR in event.operator:
             actor = REMOTE
-            if kind is EventKind.OPERATOR_ACTION:
-                kind = EventKind.REMOTE_COMMAND
         detail = (
             event.kind.value
             if event.kind is SurfaceEvent.LAUNCH_CONFIRMED
             else f"{event.kind.value}: {event.detail}"
         )
+        if kind is EventKind.WARNING and event.kind is not SurfaceEvent.DASHBOARD:
+            detail = "console: " + detail
+        if event.kind is SurfaceEvent.ATTESTED:
+            self.note_command(commands.ConfirmEstopWiring(), event.operator, at=event.at)
+        elif event.kind is SurfaceEvent.EMERGENCY_STOP:
+            self.note_command(commands.LatchEmergencyStop(), event.operator, at=event.at)
         if live is not None:
             self._event(live, event.at, kind, detail, actor)
             return
         if event.kind is SurfaceEvent.START_REQUESTED:
             # The words of a start request name a programme by its identifier, which
             # the format keeps out of a record: that a start was asked is all that is kept.
-            detail = event.kind.value
+            detail = "console: " + event.kind.value
+        self._remember(
+            _Held(
+                event.at,
+                Event(
+                    t=float(event.at),
+                    kind=kind,
+                    detail=_cleaned(known, detail),
+                    actor=actor,
+                ),
+            )
+        )
         self._journal.log(
             note(
                 wall_clock=event.wall_clock,
@@ -839,21 +955,163 @@ class SessionRecorder:
         The number is taken even when the queue refuses the batch, so a hole in
         the numbering on disk is a block this recorder lost.
         """
-        live = self._live
-        if live is None or not batch.channels or not batch.channels[0].values:
+        self._flush_batch()
+        if not batch.channels or not batch.channels[0].values:
             return
         clock = self._clock
-        first = clock.monotonic() - (clock.unix_millis() - batch.timestamp) / 1000
-        seq = live.raw_seq
-        live.raw_seq = seq + 1
-        self._journal.submit(
-            RawBatch(
-                seq=seq,
-                t_first=round(first - live.origin, 3),
-                channels=tuple(channel.channel for channel in batch.channels),
-                samples=tuple(channel.values for channel in batch.channels),
-            )
+        received = clock.monotonic()
+        first = received - (clock.unix_millis() - batch.timestamp) / 1000
+        count = sum(len(channel.values) for channel in batch.channels)
+        self._trim(received)
+        if self._idle_samples + count > PRESTART_SAMPLES or len(self._idle) >= PRESTART_ENTRIES:
+            self._lost()
+            return
+        if first < self._floor:
+            return
+        self._pending = RawBatch(
+            seq=0,
+            t_first=first,
+            channels=tuple(channel.channel for channel in batch.channels),
+            samples=tuple(channel.values for channel in batch.channels),
+            t_received=received,
         )
+
+    @_total
+    def note_delivery(self, observed: Monotonic, delivered: Monotonic) -> None:
+        pending = self._pending
+        if pending is not None:
+            self._pending = replace(
+                pending, runtime_delivery=RuntimeDelivery(t=delivered, t_observed=observed)
+            )
+            self._flush_batch()
+
+    def _flush_batch(self) -> None:
+        pending = self._pending
+        self._pending = None
+        if pending is not None:
+            closing = self._closing
+            if closing is not None:
+                self._write(closing[0], pending)
+                self._journal.close(closing[1])
+                self._closing = None
+                return
+            live = self._live
+            if live is None:
+                self._remember(_Held(Monotonic(pending.t_first), pending))
+            else:
+                self._write(live, pending)
+
+    def _expire_closing(self) -> None:
+        closing = self._closing
+        if closing is not None:
+            self._event(
+                closing[0],
+                closing[1].until,
+                EventKind.WARNING,
+                "replay_incomplete: pending_ecg_delivery",
+                SYSTEM,
+            )
+            self._flush_batch()
+
+    @_total
+    def discard_preroll(self) -> None:
+        self._expire_closing()
+        if self._live is None:
+            self._idle.clear()
+            self._idle_samples = 0
+            self._pending = None
+            self._floor = self._clock.monotonic()
+            self._journal.dispatched(self._floor)
+
+    @_total
+    def note_command(
+        self, command: commands.Command, operator: str = SYSTEM, *, at: Monotonic | None = None
+    ) -> None:
+        instant = self._clock.monotonic() if at is None else at
+        self._withheld(names_of(operator))
+        remote = DASHBOARD_OPERATOR in operator
+        actor = (
+            SYSTEM
+            if not operator.strip() or operator == SYSTEM
+            else (REMOTE if remote else operator_alias(operator))
+        )
+        event = Event(
+            t=float(instant),
+            kind=commands.kind_of(command, remote=remote),
+            detail=commands.encode(command),
+            actor=actor,
+        )
+        live = self._live
+        if live is None:
+            self._remember(_Held(instant, event))
+        else:
+            self._write(live, event)
+
+    def _lost(self) -> None:
+        if self._live is None:
+            self._window_dropped += 1
+        else:
+            self._journal.note_dropped(1)
+
+    def _trim(self, now: Monotonic) -> None:
+        cutoff = max(self._floor, now - PRESTART_SECONDS)
+        while self._idle and self._idle[0].at < cutoff:
+            removed = self._idle.popleft().entry
+            if isinstance(removed, RawBatch):
+                self._idle_samples -= sum(len(channel) for channel in removed.samples)
+
+    def _remember(self, held: _Held) -> None:
+        self._trim(self._clock.monotonic())
+        entry = held.entry
+        samples = (
+            sum(len(channel) for channel in entry.samples) if isinstance(entry, RawBatch) else 0
+        )
+        if held.at < self._floor:
+            return
+        if len(self._idle) + int(self._pending is not None) >= PRESTART_ENTRIES:
+            self._window_dropped += 1
+            return
+        self._idle.append(held)
+        self._idle_samples += samples
+
+    def _write(self, live: _Live, entry: Row | Event | RawBatch) -> None:
+        if isinstance(entry, Row):
+            self._journal.submit(replace(entry, t=round(entry.t - live.origin, 3)))
+        elif isinstance(entry, Event):
+            self._journal.submit(replace(entry, t=entry.t - live.origin))
+        else:
+            delivery = entry.runtime_delivery
+            self._journal.submit(
+                replace(
+                    entry,
+                    seq=live.raw_seq,
+                    t_first=entry.t_first - live.origin,
+                    t_received=None if entry.t_received is None else entry.t_received - live.origin,
+                    runtime_delivery=None
+                    if delivery is None
+                    else RuntimeDelivery(
+                        t=delivery.t - live.origin, t_observed=delivery.t_observed - live.origin
+                    ),
+                )
+            )
+            live.raw_seq += 1
+
+    @staticmethod
+    def _preroll(window: tuple[_Held, ...], origin: Monotonic) -> float:
+        end_at = float(origin)
+        edge: float | None = None
+        for held in reversed(window):
+            entry = held.entry
+            if isinstance(entry, RawBatch) and "ECG" in entry.channels:
+                end = entry.t_first + len(entry.samples[entry.channels.index("ECG")]) / 1000
+                if entry.t_first >= origin:
+                    continue
+                if edge is None:
+                    end_at = min(end, origin)
+                elif end < edge - 0.001:
+                    break
+                edge = entry.t_first if edge is None else min(edge, entry.t_first)
+        return 0.0 if edge is None else end_at - edge
 
     @_total
     def note_link(self) -> None:
@@ -900,7 +1158,7 @@ class SessionRecorder:
         dispatched: any arming asked for before it is over. The journal is
         told so (:meth:`Journal.dispatched`), which is how it knows which of
         the drive's frames wait for a record and which belong to no session."""
-        self._journal.dispatched(now)
+        self._journal.dispatched(Monotonic(max(self._floor, now - PRESTART_SECONDS)))
         status = self._journal.status(now)
         self._status = status
         said = (status.cause, None if status.error is None else status.error.detail)
