@@ -41,18 +41,162 @@ for (const row of readFileSync(registryFile, "utf8").split(/\r?\n/)) {
 if (registry.size === 0) refuse("empty Linear registry");
 
 const catalogue = readFileSync(join(docs, "menaces.md"), "utf8").replaceAll("\r\n", "\n");
-// A ticket the page names outside an Issues field must have been read too, and
-// any Linear link must be the one Linear gave: five names once entered the text
-// without a read, and nothing refused them.
+// Correctly written tickets must have been read wherever they occur, including
+// code and addresses, so prose cannot bypass the verified registry.
 for (const [, issueId] of catalogue.matchAll(/\b(ANH-[1-9][0-9]*)\b/g)) {
   if (!issueId || !registry.has(issueId)) refuse(`Linear issue named but not verified: ${issueId}`);
 }
-for (const [url, issueId] of catalogue.matchAll(/https:\/\/linear\.app\/anheart\/issue\/(ANH-[1-9][0-9]*)(?:\/[^\s)#>]*)?/g)) {
-  if (!issueId || registry.get(issueId) !== url) refuse(`unverified Linear issue link: ${issueId}`);
+
+/** @param {string} text */
+function* ticketNames(text) {
+  const normalized = text.normalize("NFKC");
+  for (const match of normalized.matchAll(/(?<![\p{L}\p{N}])anh[\p{Zs}\s\p{Pd}−_\p{Cf}]*\p{Nd}+[\p{L}\p{N}_]*/giu)) {
+    if (match[0].startsWith("anh") && /[/#._-]/.test(normalized[match.index - 1] ?? "")) continue;
+    yield match[0];
+  }
 }
-for (const [, issueId, url] of catalogue.matchAll(/\[(ANH-[1-9][0-9]*)\]\((https:\/\/linear\.app\/[^\s)]+)\)/g)) {
-  if (!issueId || registry.get(issueId) !== url) refuse(`Linear issue link labelled with another issue: ${issueId}`);
+
+/** @param {string} url @returns {string} */
+function issueAddress(url) {
+  return url.split("#")[0];
 }
+
+/** @param {string} address @returns {URL | undefined} */
+function linearUrl(address) {
+  let parsed;
+  try {
+    parsed = new URL(/^www\./i.test(address) ? `http://${address}` : address);
+  } catch {
+    if (/linear\.app/i.test(address)) refuse(`unverified Linear issue link: ${JSON.stringify(address)}`);
+    return;
+  }
+  if (parsed.hostname === "linear.app" || parsed.hostname.endsWith(".linear.app")) return parsed;
+}
+
+/** @param {string} label @returns {string} */
+function referenceLabel(label) {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+/** @type {Map<string, string[]>} */
+const references = new Map();
+/** @type {{url: string, start: number, end: number}[]} */
+const destinations = [];
+for (const match of catalogue.matchAll(/\[([^\]]+)\]:[ \t]*(?:\n[ \t]*(?:>[ \t]*)?)?(?:<([^<>\n]*)>|(\S+))/g)) {
+  const url = match[2] ?? match[3];
+  const start = match.index + match[0].lastIndexOf(url);
+  destinations.push({ url, start, end: start + url.length });
+  const key = referenceLabel(match[1]);
+  const addresses = references.get(key) ?? [];
+  addresses.push(url);
+  references.set(key, addresses);
+}
+
+/** @param {number} start @returns {{url: string, start: number, end: number} | undefined} */
+function inlineDestination(start) {
+  let cursor = start + 1;
+  while (/\s/.test(catalogue[cursor] ?? "")) cursor++;
+  const angled = catalogue[cursor] === "<";
+  if (angled) cursor++;
+  const addressStart = cursor;
+  let depth = 0;
+  for (; cursor < catalogue.length; cursor++) {
+    const char = catalogue[cursor];
+    if (char === "\\") { cursor++; continue; }
+    if (angled) {
+      if (char === ">") break;
+    } else {
+      if (char === "(") depth++;
+      if (char === ")") {
+        if (depth === 0) break;
+        depth--;
+      }
+      if (/\s/.test(char)) break;
+    }
+  }
+  const end = cursor;
+  if (angled && catalogue[cursor++] !== ">") return;
+  if (!/^\s*(?:(?:"[^"]*"|'[^']*'|\([^)]*\))\s*)?\)/.test(catalogue.slice(cursor))) return;
+  return { url: catalogue.slice(addressStart, end), start: addressStart, end };
+}
+
+/** @type {{label: string, url: string}[]} */
+const markdownLinks = [];
+const brackets = [];
+for (let index = 0; index < catalogue.length; index++) {
+  const char = catalogue[index];
+  if (char === "\\") { index++; continue; }
+  if (char === "[") brackets.push(index);
+  if (char !== "]" || !brackets.length) continue;
+  const start = brackets.pop();
+  const label = catalogue.slice(start + 1, index);
+  const after = catalogue.slice(index + 1);
+  if (after.startsWith(":")) continue;
+  if (after.startsWith("(")) {
+    const destination = inlineDestination(index + 1);
+    if (destination) {
+      destinations.push(destination);
+      markdownLinks.push({ label, url: destination.url });
+    }
+  } else {
+    const reference = /^\[([^\]]*)\]/.exec(after);
+    const addresses = references.get(referenceLabel(reference?.[1] || label)) ?? [];
+    for (const url of addresses) markdownLinks.push({ label, url });
+    if (reference) index += reference[0].length;
+  }
+}
+
+for (const match of catalogue.matchAll(/<(https?:\/\/[^<>\s]+|www\.[^<>\s]+)>/gi)) {
+  const url = match[1];
+  const start = match.index + 1;
+  destinations.push({ url, start, end: start + url.length });
+}
+
+// Compare Linear issue addresses by host and exact registry spelling, ignoring
+// fragments; only bare addresses may shed trailing prose punctuation.
+const addresses = destinations.map(({ url }) => url);
+for (const match of catalogue.matchAll(/(?:https?:\/\/|www\.)[^\s<>()[\]`"'*]+/gi)) {
+  if (destinations.some(({ start, end }) => match.index >= start && match.index < end)) continue;
+  addresses.push(match[0].replace(/[.,;:!?_~]+$/g, ""));
+}
+for (const address of addresses) {
+  const parsed = linearUrl(address);
+  if (!parsed) continue;
+  const issueId = /^\/[^/]+\/issue\/([^/]+)/i.exec(parsed.pathname)?.[1];
+  if (issueId && (!/^ANH-[1-9][0-9]*$/.test(issueId) || registry.get(issueId) !== issueAddress(address))) {
+    refuse(`unverified Linear issue link: ${issueId}`);
+  }
+}
+
+// Reject alternate ticket spellings in visible text, retaining link titles.
+// Lowercase path, anchor and filename fragments are deliberately not ticket names.
+let ticketText = catalogue;
+for (const { start, end } of destinations.sort((a, b) => b.start - a.start)) {
+  ticketText = ticketText.slice(0, start) + " ".repeat(end - start) + ticketText.slice(end);
+}
+ticketText = ticketText.replace(/<https?:\/\/[^<>\s]*>/gi, " ").replace(/(?:https?:\/\/|www\.)[^\s<>()[\]`"']*/gi, " ");
+for (const name of ticketNames(ticketText)) {
+  if (!/^ANH-[1-9][0-9]*$/.test(name)) {
+    const readable = JSON.stringify(name).replace(/[\p{Cf}\p{Zs}]/gu, (char) => char === " " ? char : `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    refuse(`ticket written other than ANH-n: ${readable}`);
+  }
+  if (!registry.has(name)) refuse(`Linear issue named but not verified: ${name}`);
+}
+
+// Every ticket named by a Markdown label must identify its Linear destination,
+// including formatted labels, images and all three reference link forms.
+for (const { label, url } of markdownLinks) {
+  if (!linearUrl(url)) continue;
+  for (const name of ticketNames(label)) {
+    const number = /\p{Nd}+/u.exec(name)?.[0];
+    const issueId = `ANH-${number}`;
+    if (registry.get(issueId) !== issueAddress(url)) {
+      refuse(`Linear link labelled ${issueId} points to another address`);
+    }
+  }
+}
+
+// HTML anchors bypass Markdown label checks, so require Markdown links instead.
+if (/<a(?=[\s>/])/i.test(catalogue)) refuse("HTML link in the catalogue: write Markdown links");
 /** @type {Set<string>} */
 const definitions = new Set();
 for (const block of catalogue.split(/(?=^## )/m)) {
