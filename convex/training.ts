@@ -422,13 +422,8 @@ export const setUserPhysiology = mutation({
           .query("memberships")
           .withIndex("by_user", (q) => q.eq("userId", args.userId))
           .collect();
-        const relations = await ctx.db
-          .query("user_gestionnaires")
-          .withIndex("by_user", (q) => q.eq("userId", args.userId))
-          .collect();
         for (const row of memberships.filter((row) => row.active))
           organizations.add(row.organizationId);
-        for (const row of relations) organizations.add(row.organizationId);
         if (organizations.size === 0) organizations.add(undefined);
       }
       for (const organizationId of organizations)
