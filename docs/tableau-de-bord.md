@@ -544,9 +544,15 @@ sous le titre se termine par « + » (« 50+ sessions »). Changer d'onglet repa
 de la première page. Le serveur n'applique la page qu'après les droits : un
 patient ou un gestionnaire voit toutes ses séances, page après page, quel que
 soit le nombre de séances des autres. La recherche ne porte que sur les
-séances déjà chargées. « Aucune session trouvée » ne s'affiche qu'une fois la
-liste finie : une page vide alors qu'il reste des séances (le serveur peut
-couper une page) ne laisse que le bouton.
+séances déjà chargées. Tant qu'il reste des pages, une recherche avec des
+résultats rappelle cette limite et le nombre de séances chargées. Sans
+résultat, une carte indique qu'aucune des séances chargées ne correspond et
+invite à utiliser **Afficher plus** pour lire les plus anciennes. Une fois la
+liste finie, elle indique « Aucune séance ne correspond à la recherche ».
+Sans recherche, « Aucune session trouvée » ne s'affiche qu'une fois la liste
+finie. Le plafond de lecture du serveur (ANH-227) peut rendre une page vide
+alors que des séances restent à lire : une carte l'explique et **Afficher
+plus** poursuit la lecture, même si plusieurs pages vides se suivent.
 
 Cette page ne crée aucune séance : une séance auto se lance depuis une machine
 (« Lancer une séance auto », §5), une séance manuelle depuis la console. Le
@@ -746,6 +752,12 @@ ouvre le rapport de la séance (ANH-89). Elles sont servies par pages
 de 50, de la plus récente à la plus ancienne (`sessions.listSessionsPaginated`
 avec le statut `completed`), avec le bouton **Afficher plus** tant qu'il en
 reste ; comme pour la page Sessions, la page ne se coupe qu'après les droits.
+Le plafond de lecture du serveur (ANH-227) peut rendre une page vide avant la
+fin de la liste. Si aucun rapport n'est encore chargé, une carte indique
+« Aucun rapport à afficher pour l'instant : d'autres séances restent à lire »
+et explique qu'**Afficher plus** poursuit la lecture. Le message reste visible
+pendant le chargement suivant ; « Aucun rapport disponible pour le moment »
+ne s'affiche qu'une fois la liste finie et vide.
 L'ancien rapport PDF, construit sur les données ECG, a été retiré avec le mode
 d'enregistrement ; le rapport d'une séance d'entraînement est la page
 [Rapport d'une séance](#rapport-dune-séance--frdashboardsessionsidreport). La

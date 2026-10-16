@@ -254,3 +254,42 @@ describe("reports: page by page", () => {
     ).toBeNull();
   });
 });
+
+describe.each([
+  ["fr", fr],
+  ["en", en],
+] as const)("reports: empty pages (%s, T02-f)", (locale, messages) => {
+  it("T02-e explains an empty unfinished page and keeps the message while reading more, until the list is done", async () => {
+    signedInAs("gestionnaire");
+    answer(LIST, (args) =>
+      args.paginationOpts.cursor === null
+        ? { page: [], isDone: false, continueCursor: "0" }
+        : undefined,
+    );
+    const view = await renderPage(<ReportsPage />, { locale });
+    expect(screen.getByText(messages.reports.nothingYet)).toBeTruthy();
+    expect(screen.queryByText(messages.reports.noReports)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await view.user.click(
+      screen.getByRole("button", { name: messages.common.showMore }),
+    );
+    expect(screen.getByText(messages.reports.nothingYet)).toBeTruthy();
+    expect(screen.queryByText(messages.reports.noReports)).toBeNull();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: messages.common.loading,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    serverLists();
+    await view.refresh();
+    expect(screen.getByText(messages.reports.noReports)).toBeTruthy();
+    expect(screen.queryByText(messages.reports.nothingYet)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: messages.common.showMore }),
+    ).toBeNull();
+  });
+});

@@ -1055,7 +1055,7 @@ capture d'origine, est « Sessions » depuis ANH-194.
 | Élément | Effet |
 |---|---|
 | Onglets **Tous**, **En attente**, **Actives**, **Interrompues**, **Terminées**, **Échouées** | Filtrent par statut : chaque onglet demande au serveur les séances de ce statut. **En attente** : les séances lancées depuis le site que la machine n'a pas encore armées. **Interrompues** : les séances dont le serveur n'a plus de nouvelles, fin inconnue ; elles sont aussi sous **Tous**. |
-| **Rechercher** | Filtre sur le texte des lignes **déjà affichées** (voir **Afficher plus** ci-dessous). |
+| **Rechercher** | Filtre sur le texte des séances **déjà chargées** (voir **Afficher plus** ci-dessous). |
 | Colonne **Patient** | Nom du pratiquant. « Unknown » pour une séance démarrée à la machine sans pratiquant connu. |
 | Colonne **Type** | Badge **Auto** (jauge), **Manuel** (main, ambre) ou **Enregistrement** (courbe) ; badge d'origine **Tableau de bord** (écran) ou **Machine** (puce). |
 | **Démarrée à** | Date et heure. |
@@ -1069,8 +1069,21 @@ ancienne (date de début). Le bouton **Afficher plus**, sous la liste, ajoute
 les 50 suivantes ; tant qu'il en reste à charger, le compteur sous le titre se
 termine par « + » (« 50+ sessions »). Changer d'onglet repart des 50 premières.
 Un patient ou un gestionnaire voit toutes ses séances, page après page, quel
-que soit le nombre de séances des autres. « Aucune session trouvée » s'affiche
-quand la liste est vide, une fois toutes les séances chargées. Cette page ne crée aucune séance : une séance auto se lance
+que soit le nombre de séances des autres.
+
+La recherche ne porte que sur les séances déjà chargées. Tant qu'il reste des
+pages, un texte près du tableau rappelle cette limite et le nombre chargé.
+Si aucune ligne ne correspond, une carte l'explique et invite à utiliser
+**Afficher plus** pour chercher parmi les séances plus anciennes. Une fois la
+liste finie, le message devient « Aucune séance ne correspond à la recherche ».
+Sans recherche, « Aucune session trouvée » s'affiche quand la liste est vide
+et finie. Le serveur limite le nombre de lectures par page (ANH-227) : une
+page peut donc être vide alors que des séances restent à lire. Une carte
+indique alors « Aucune séance à afficher pour l'instant : d'autres restent à
+lire » ; **Afficher plus** poursuit la lecture, même si la page suivante est
+encore vide.
+
+Cette page ne crée aucune séance : une séance auto se lance
 depuis une machine ([§4.8](#48-fenêtre-lancer-une-séance-auto)), une séance
 manuelle depuis la console.
 
@@ -1606,6 +1619,12 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   **Afficher plus** ajoute les 50 suivantes tant qu'il en reste. Titre :
   « Rapport de session » et les 8 derniers caractères de l'identifiant.
 - **Voir** : ouvre le détail de la séance ([§4.12](#412-détail-dune-séance)).
+- Le plafond de lecture du serveur (ANH-227) peut rendre une page vide alors
+  que des séances restent à lire. Si aucun rapport n'est encore chargé, une
+  carte indique « Aucun rapport à afficher pour l'instant : d'autres séances
+  restent à lire » et explique qu'**Afficher plus** poursuit la lecture. Elle
+  reste visible pendant le chargement suivant. « Aucun rapport disponible
+  pour le moment » s'affiche seulement quand la liste est finie et vide.
 - Il n'y a plus de bouton **Télécharger PDF** : l'ancien rapport, construit
   sur les données ECG, a été retiré avec le mode d'enregistrement. Le rapport
   d'une séance d'entraînement n'existe pas encore sur le site.

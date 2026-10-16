@@ -807,6 +807,10 @@
     "viewLive": "Voir en direct",
     "viewReport": "Voir le rapport",
     "noSessions": "Aucune session trouvée",
+    "searchNoMatchLoaded": "{count, plural, =0 {Aucune séance n'est encore chargée.} one {La séance chargée ne correspond pas à la recherche.} other {Aucune des # séances chargées ne correspond à la recherche.}} La recherche ne porte que sur les séances déjà chargées : « Afficher plus » charge les plus anciennes.",
+    "searchLoadedOnly": "La recherche ne porte que sur {count, plural, one {la séance chargée} other {les # séances chargées}}.",
+    "searchNoMatch": "Aucune séance ne correspond à la recherche.",
+    "nothingYet": "Aucune séance à afficher pour l'instant : d'autres restent à lire. « Afficher plus » poursuit la lecture.",
     "patient": "Patient",
     "machine": "Machine",
     "startedBy": "Démarrée par",
@@ -898,6 +902,7 @@
     "metrics": "Métriques",
     "sessionReport": "Rapport de session",
     "noReports": "Aucun rapport disponible pour le moment",
+    "nothingYet": "Aucun rapport à afficher pour l'instant : d'autres séances restent à lire. « Afficher plus » poursuit la lecture.",
     "view": "Voir",
     "durationMinutes": "{minutes, number} min"
   },
