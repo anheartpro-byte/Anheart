@@ -249,61 +249,55 @@ Only decision-bearing fields are kept. Human diagnostics never enter this value.
 """
 
 
-def record_failure(error: DriveError) -> RecordedFailure:
+def record_failure(error: DriveError) -> RecordedFailure:  # noqa: PLR0911  # one return per error
     """Strip prose from an error without changing the evidence the runtime acts on."""
-    recorded: RecordedFailure
     match error:
         case CommTimeout():
-            recorded = TimeoutFailure(after=error.after)
+            return TimeoutFailure(after=error.after)
         case BadResponse():
-            recorded = ResponseFailure()
+            return ResponseFailure()
         case UnexpectedState():
-            recorded = StateFailure(expected=error.expected, actual=error.actual)
+            return StateFailure(expected=error.expected, actual=error.actual)
         case DriveFaulted():
-            recorded = FaultFailure(fault=error.fault, raw_code=error.raw_code)
+            return FaultFailure(fault=error.fault, raw_code=error.raw_code)
         case OutOfRange():
-            recorded = RangeFailure()
+            return RangeFailure()
         case EnableUnconfirmed():
-            recorded = EnableFailure(
+            return EnableFailure(
                 reference_zeroed=error.reference_zeroed,
                 run_command_removed=error.run_command_removed,
             )
         case StopUnconfirmed():
-            recorded = StopFailure(waited=error.waited, last_output_rpm=error.last_output_rpm)
-        case _ as unreachable:
-            raise assert_never(unreachable)
-    return recorded
+            return StopFailure(waited=error.waited, last_output_rpm=error.last_output_rpm)
+    raise assert_never(error)
 
 
-def replay_failure(error: RecordedFailure) -> DriveError:
+def replay_failure(error: RecordedFailure) -> DriveError:  # noqa: PLR0911  # one return per error
     """Restore the variant and its evidence; omitted prose gets a fixed diagnostic."""
-    restored: DriveError
     match error:
         case TimeoutFailure():
-            restored = CommTimeout(after=error.after)
+            return CommTimeout(after=error.after)
         case ResponseFailure():
-            restored = BadResponse(detail="recorded failure")
+            return BadResponse(detail="recorded failure")
         case StateFailure():
-            restored = UnexpectedState(expected=error.expected, actual=error.actual)
+            return UnexpectedState(expected=error.expected, actual=error.actual)
         case FaultFailure():
-            restored = DriveFaulted(fault=error.fault, raw_code=error.raw_code)
+            return DriveFaulted(fault=error.fault, raw_code=error.raw_code)
         case RangeFailure():
-            restored = OutOfRange(quantity="recorded", value=0.0, low=0.0, high=0.0)
+            return OutOfRange(quantity="recorded", value=0.0, low=0.0, high=0.0)
         case EnableFailure():
-            restored = EnableUnconfirmed(
+            return EnableUnconfirmed(
                 detail="recorded failure",
                 reference_zeroed=error.reference_zeroed,
                 run_command_removed=error.run_command_removed,
             )
         case StopFailure():
-            restored = StopUnconfirmed(
+            return StopUnconfirmed(
                 waited=error.waited,
                 last_output_rpm=error.last_output_rpm,
                 detail="recorded failure",
             )
-        case _ as unreachable:
-            raise assert_never(unreachable)
-    return restored
+    raise assert_never(error)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)
