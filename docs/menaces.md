@@ -476,7 +476,10 @@ retirée que pour une adresse nue ; une destination explicite est conservée
 telle quelle.
 Chaque nom de ticket du libellé d'un lien Markdown vers Linear doit désigner
 le ticket lié, même en gras, en code, dans une image ou dans un lien par
-référence. Les liens HTML sont refusés. Ce contrôle de forme ne remplace pas
+référence. L'échappement et les marques d'emphase comptent comme séparateurs
+dans un nom de ticket ; les références de caractère et le HTML sont refusés
+dans toute la page, code compris, sauf les liens automatiques HTTP(S).
+Ce contrôle de forme ne remplace pas
 la lecture des liens par le relecteur, demandée à la ligne 4 de la check-list
 de release.
 Il compare les liens au [registre Linear vérifié](../scripts/ci/men-linear-issues.tsv)

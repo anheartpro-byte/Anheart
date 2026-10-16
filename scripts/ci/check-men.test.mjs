@@ -66,7 +66,7 @@ const scenarios = [
   { name: "EX-2 refuses a full reference to another ticket", files: { "menaces.md": open + `[ANH-180][x]\n\n[x]: ${url186}\n` }, status: 1, message: labelMessage },
   { name: "EX-2 refuses a shortcut reference with a lowercase definition", files: { "menaces.md": open + `[ANH-180]\n\n[anh-180]: ${url186}\n` }, status: 1, message: spellingMessage },
   { name: "EX-2 refuses a lowercase Linear issue address", files: { "menaces.md": open + "[la décision](https://linear.app/anheart/issue/anh-999999/x)\n" }, status: 1, message: /unverified Linear issue link: anh-999999/ },
-  { name: "EX-2 refuses an HTML link", files: { "menaces.md": open + `<a href="${url186}">ANH-180</a>\n` }, status: 1, message: /HTML link in the catalogue: write Markdown links/ },
+  { name: "EX-2 refuses an HTML link", files: { "menaces.md": open + `<a href="${url186}">ANH-180</a>\n` }, status: 1, message: /HTML in the catalogue: write Markdown/ },
   // ANH-229 EX-3 : exact addresses survive prose punctuation, code and comment fragments.
   { name: "EX-3 accepts an exact bare address followed by a full stop", files: { "menaces.md": open + `${url180}.\n` }, status: 0 },
   { name: "EX-3 accepts an exact address in code", files: { "menaces.md": open + `\`${url180}\`\n` }, status: 0 },
@@ -125,6 +125,26 @@ const scenarios = [
   { name: "EX-2 refuses a real definition hidden behind a false one", files: { "menaces.md": open + `[ANH-180][x]\n\nTexte [x]: ${url180}\n\n[x]: ${url186}\n` }, status: 1, message: labelMessage },
   // ANH-229 EX-2 : a canonical destination on the next line remains usable.
   { name: "accepts a canonical reference destination on the following line", files: { "menaces.md": open + `[ANH-180][r]\n\n[r]:\n${url180}\n` }, status: 0 },
+  // ANH-229 EX-2 : escapes and emphasis cannot hide the separator of a ticket name.
+  { name: "EX-2 refuses an escaped ticket separator", files: { "menaces.md": open + "Voir ANH\\-999.\n" }, status: 1, message: spellingMessage },
+  { name: "EX-2 refuses bold markup inside a ticket name", files: { "menaces.md": open + "Voir **ANH**-999.\n" }, status: 1, message: spellingMessage },
+  { name: "EX-2 refuses code markup inside a ticket name", files: { "menaces.md": open + "Voir `ANH`-999.\n" }, status: 1, message: spellingMessage },
+  { name: "EX-2 refuses strikethrough markup inside a ticket name", files: { "menaces.md": open + "Voir ~~ANH~~-999.\n" }, status: 1, message: spellingMessage },
+  { name: "EX-2 refuses an escaped label for another ticket", files: { "menaces.md": open + `[ANH\\-180](${url186})\n` }, status: 1, message: spellingMessage },
+  // ANH-229 EX-2 : character references cannot hide ticket letters or separators.
+  { name: "EX-2 refuses a decimal character reference in a ticket separator", files: { "menaces.md": open + "Voir ANH&#45;999.\n" }, status: 1, message: /character reference in the catalogue: write the character itself: "&#45;"/ },
+  { name: "EX-2 refuses a character reference in a label for another ticket", files: { "menaces.md": open + `[ANH&#45;180](${url186})\n` }, status: 1, message: /character reference in the catalogue: write the character itself: "&#45;"/ },
+  { name: "EX-2 refuses a decimal character reference in a ticket letter", files: { "menaces.md": open + "Voir &#65;NH-999.\n" }, status: 1, message: /character reference in the catalogue: write the character itself: "&#65;"/ },
+  { name: "EX-2 refuses a named character reference", files: { "menaces.md": open + "Voir ANH&hyphen;999.\n" }, status: 1, message: /character reference in the catalogue: write the character itself: "&hyphen;"/ },
+  { name: "EX-2 refuses a lowercase hexadecimal character reference", files: { "menaces.md": open + "Voir ANH&#x2d;999.\n" }, status: 1, message: /character reference in the catalogue: write the character itself: "&#x2d;"/ },
+  { name: "EX-2 refuses an uppercase hexadecimal character reference", files: { "menaces.md": open + "Voir ANH&#X2D;999.\n" }, status: 1, message: /character reference in the catalogue: write the character itself: "&#X2D;"/ },
+  // ANH-229 EX-2 : HTML is refused throughout the page, including code spans.
+  { name: "EX-2 refuses an HTML span inside a ticket name", files: { "menaces.md": open + "Voir ANH<span>-999</span>.\n" }, status: 1, message: /HTML in the catalogue: write Markdown/ },
+  { name: "EX-2 refuses an HTML comment", files: { "menaces.md": open + "Voir <!-- x -->.\n" }, status: 1, message: /HTML in the catalogue: write Markdown/ },
+  { name: "EX-2 refuses an HTML line break", files: { "menaces.md": open + "Voir <br>.\n" }, status: 1, message: /HTML in the catalogue: write Markdown/ },
+  { name: "EX-2 refuses HTML in a code span", files: { "menaces.md": open + "Voir `<span>`.\n" }, status: 1, message: /HTML in the catalogue: write Markdown/ },
+  { name: "accepts an HTTPS autolink to a non-Linear address", files: { "menaces.md": open + "<https://example.org/x>\n" }, status: 0 },
+  { name: "accepts an HTTPS autolink to an exact registered address", files: { "menaces.md": open + `<${url180}>\n` }, status: 0 },
 ];
 
 for (const scenario of scenarios) {

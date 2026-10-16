@@ -50,7 +50,7 @@ for (const [, issueId] of catalogue.matchAll(/\b(ANH-[1-9][0-9]*)\b/g)) {
 /** @param {string} text */
 function* ticketNames(text) {
   const normalized = text.normalize("NFKC");
-  for (const match of normalized.matchAll(/(?<![\p{L}\p{N}])anh[\p{Zs}\s\p{Pd}−_\p{Cf}]*\p{Nd}+[\p{L}\p{N}_]*/giu)) {
+  for (const match of normalized.matchAll(/(?<![\p{L}\p{N}])anh[\p{Zs}\s\p{Pd}−_\p{Cf}\\*~`]*\p{Nd}+[\p{L}\p{N}_]*/giu)) {
     if (match[0].startsWith("anh") && /[/#._-]/.test(normalized[match.index - 1] ?? "")) continue;
     yield match[0];
   }
@@ -167,7 +167,7 @@ for (const address of addresses) {
   }
 }
 
-// Reject alternate ticket spellings in visible text, retaining link titles.
+// Reject alternate ticket spellings, escapes and emphasis in visible text, retaining link titles.
 // Lowercase path, anchor and filename fragments are deliberately not ticket names.
 let ticketText = catalogue;
 for (const { start, end } of destinations.sort((a, b) => b.start - a.start)) {
@@ -195,8 +195,13 @@ for (const { label, url } of markdownLinks) {
   }
 }
 
-// HTML anchors bypass Markdown label checks, so require Markdown links instead.
-if (/<a(?=[\s>/])/i.test(catalogue)) refuse("HTML link in the catalogue: write Markdown links");
+// Character references can hide ticket letters or separators, so require literal characters.
+const characterReference = /&(?:#(?:[0-9]+|x[0-9a-f]+)|[a-z][a-z0-9]*);/i.exec(catalogue);
+if (characterReference) refuse(`character reference in the catalogue: write the character itself: ${JSON.stringify(characterReference[0])}`);
+
+// HTML can hide ticket text; only HTTP(S) autolinks remain subject to the address checks.
+// Code is not exempt: recognizing GitHub code spans would require reproducing rules this page does not need.
+if (/<(?!https?:\/\/[^<>\s]+>)[a-z/!?]/i.test(catalogue)) refuse("HTML in the catalogue: write Markdown");
 /** @type {Set<string>} */
 const definitions = new Set();
 for (const block of catalogue.split(/(?=^## )/m)) {
