@@ -800,7 +800,7 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
       });
       return [
         site(w, "physiology.updated", w.patient, "user", "manager", w.orgA, {
-          fields: ["hrMax", "birthYear"],
+          fields: ["hrMax"],
         }),
       ];
     }),
@@ -1142,7 +1142,7 @@ describe("ANH-167 T02 training safety and absent effects", () => {
     );
     await as(w.t, "manager").mutation(api.training.setUserPhysiology, args);
     const row = (await rows(w)).slice(-1)[0];
-    expect(row?.details?.fields).toEqual(["hrMax", "birthYear"]);
+    expect(row?.details?.fields).toEqual(["hrMax"]);
     expect(JSON.stringify(row)).not.toContain("187");
     expect(JSON.stringify(row)).not.toContain("1990");
   });

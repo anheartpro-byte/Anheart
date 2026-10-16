@@ -408,16 +408,39 @@ export const setUserPhysiology = mutation({
       }
       patch.birthYear = args.birthYear ?? undefined;
     }
-    await ctx.db.patch(args.userId, patch);
     const target = await ctx.db.get(args.userId);
-    await audit(ctx, {
-      actor: userActor(me),
-      source: "site",
-      organizationId: target?.organizationId,
-      action: "physiology.updated",
-      targetId: args.userId,
-      details: { fields: Object.keys(patch) },
-    });
+    const fields = (Object.keys(patch) as (keyof typeof patch)[]).filter(
+      (key) => patch[key] !== target?.[key],
+    );
+    await ctx.db.patch(args.userId, patch);
+    if (fields.length > 0) {
+      const organizations = new Set<Id<"organizations"> | undefined>();
+      if (me.role !== "admin") {
+        organizations.add(me.organizationId);
+      } else {
+        const memberships = await ctx.db
+          .query("memberships")
+          .withIndex("by_user", (q) => q.eq("userId", args.userId))
+          .collect();
+        const relations = await ctx.db
+          .query("user_gestionnaires")
+          .withIndex("by_user", (q) => q.eq("userId", args.userId))
+          .collect();
+        for (const row of memberships.filter((row) => row.active))
+          organizations.add(row.organizationId);
+        for (const row of relations) organizations.add(row.organizationId);
+        if (organizations.size === 0) organizations.add(undefined);
+      }
+      for (const organizationId of organizations)
+        await audit(ctx, {
+          actor: userActor(me),
+          source: "site",
+          organizationId,
+          action: "physiology.updated",
+          targetId: args.userId,
+          details: { fields },
+        });
+    }
     return null;
   },
 });
