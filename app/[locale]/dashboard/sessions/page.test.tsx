@@ -3,6 +3,7 @@ import { Component, type ReactNode } from "react";
 import { screen, within } from "@testing-library/react";
 import { format, formatDistanceToNow } from "date-fns";
 import { enUS, fr as frLocale } from "date-fns/locale";
+import { createTranslator } from "next-intl";
 import type { FunctionReturnType } from "convex/server";
 import { describe, expect, it, vi } from "vitest";
 import { api } from "@/convex/_generated/api";
@@ -422,9 +423,181 @@ describe("sessions list: tabs and search", () => {
 
     await user.clear(search);
     await user.type(search, "nobody");
-    expect(screen.getByText(fr.sessions.noSessions)).toBeTruthy();
+    expect(screen.getByText(fr.sessions.searchNoMatch)).toBeTruthy();
   });
 });
+
+describe.each([
+  ["fr", fr],
+  ["en", en],
+] as const)(
+  "sessions list: search and empty pages (%s, T02-f)",
+  (locale, messages) => {
+    const t = createTranslator({ locale, messages });
+    const many = Array.from({ length: 70 }, (_, i) =>
+      listed(String(i), {
+        patientName: i === 60 ? "Patient Target" : `Patient Test ${i}`,
+        startedAt: NOW - (i + 1) * 60_000,
+      }),
+    );
+
+    it("T02-a explains a search with no match among 50 loaded sessions, then finds an older match at Show more", async () => {
+      serverLists(...many);
+      const view = await renderPage(<SessionsPage />, { locale });
+      await view.user.type(
+        screen.getByPlaceholderText(messages.common.search),
+        "Target",
+      );
+
+      const explanation = t("sessions.searchNoMatchLoaded", { count: 50 });
+      expect(screen.getByRole("status").textContent).toBe(explanation);
+      expect(screen.getByText("50+ sessions")).toBeTruthy();
+      expect(screen.queryByRole("table")).toBeNull();
+      expect(screen.queryByText(messages.sessions.noSessions)).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      await view.user.click(
+        screen.getByRole("button", { name: messages.common.showMore }),
+      );
+      expect(argsAsked(LIST).at(-1)).toEqual({
+        paginationOpts: { numItems: 50, cursor: "50" },
+      });
+
+      expect(patientsListed()).toEqual(["Patient Target"]);
+      expect(screen.queryByText(explanation)).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: messages.common.showMore }),
+      ).toBeNull();
+    });
+
+    it("T02-b shows the loaded-only search notice with matches until search is cleared or the list is done", async () => {
+      serverLists(...many);
+      const view = await renderPage(<SessionsPage />, { locale });
+      const search = screen.getByPlaceholderText(messages.common.search);
+      const notice = t("sessions.searchLoadedOnly", { count: 50 });
+      expect(screen.queryByText(notice)).toBeNull();
+
+      await view.user.type(search, " P ");
+      expect(screen.getByRole("status").textContent).toBe(notice);
+      expect(document.querySelectorAll("tbody tr")).toHaveLength(50);
+      await view.user.clear(search);
+      expect(screen.queryByText(notice)).toBeNull();
+
+      await view.user.type(search, "P");
+      await view.user.click(screen.getByText(messages.common.showMore));
+      expect(document.querySelectorAll("tbody tr")).toHaveLength(70);
+      expect(screen.queryByText(notice)).toBeNull();
+      expect(
+        screen.queryByText(t("sessions.searchLoadedOnly", { count: 70 })),
+      ).toBeNull();
+    });
+
+    it("T02-c explains an empty server page without a search, including while reading more", async () => {
+      answer(LIST, (args) =>
+        args.paginationOpts.cursor === null
+          ? { page: [], isDone: false, continueCursor: "0" }
+          : undefined,
+      );
+      const view = await renderPage(<SessionsPage />, { locale });
+      await view.user.type(
+        screen.getByPlaceholderText(messages.common.search),
+        "   ",
+      );
+      expect(screen.getByRole("status").textContent).toBe(
+        messages.sessions.nothingYet,
+      );
+      expect(screen.queryByText(messages.sessions.noSessions)).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      await view.user.click(
+        screen.getByRole("button", { name: messages.common.showMore }),
+      );
+      expect(screen.getByText(messages.sessions.nothingYet)).toBeTruthy();
+      expect(screen.queryByText(messages.sessions.noSessions)).toBeNull();
+      expect(
+        (
+          screen.getByRole("button", {
+            name: messages.common.loading,
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+    });
+
+    it("T02-d distinguishes an exhausted search with no match from an exhausted empty list", async () => {
+      serverLists(finished);
+      const view = await renderPage(<SessionsPage />, { locale });
+      const search = screen.getByPlaceholderText(messages.common.search);
+      await view.user.type(search, "Missing");
+      expect(screen.getByRole("status").textContent).toBe(
+        messages.sessions.searchNoMatch,
+      );
+      expect(screen.queryByText(messages.sessions.noSessions)).toBeNull();
+      expect(screen.queryByRole("table")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: messages.common.showMore }),
+      ).toBeNull();
+
+      await view.user.clear(search);
+      expect(patientsListed()).toEqual(["Patient B"]);
+      view.unmount();
+      serverLists();
+      await renderPage(<SessionsPage />, { locale });
+      expect(screen.getByText(messages.sessions.noSessions)).toBeTruthy();
+      expect(screen.queryByText(messages.sessions.searchNoMatch)).toBeNull();
+    });
+
+    it.each([0, 1])(
+      "explains a search on a short unfinished page with %i loaded sessions",
+      async (count) => {
+        answer(LIST, (args) =>
+          args.paginationOpts.cursor === null
+            ? {
+                page: many.slice(0, count),
+                isDone: false,
+                continueCursor: "next",
+              }
+            : undefined,
+        );
+        const { user } = await renderPage(<SessionsPage />, { locale });
+        const search = screen.getByPlaceholderText(messages.common.search);
+        await user.type(search, "Missing");
+        expect(
+          screen.getByText(t("sessions.searchNoMatchLoaded", { count })),
+        ).toBeTruthy();
+        expect(
+          screen.getByRole("button", { name: messages.common.showMore }),
+        ).toBeTruthy();
+        if (count === 1) {
+          await user.clear(search);
+          await user.type(search, "P");
+          expect(
+            screen.getByText(t("sessions.searchLoadedOnly", { count })),
+          ).toBeTruthy();
+        }
+        await user.click(
+          screen.getByRole("button", { name: messages.common.showMore }),
+        );
+        expect(
+          screen.getByText(
+            t(
+              count === 1
+                ? "sessions.searchLoadedOnly"
+                : "sessions.searchNoMatchLoaded",
+              { count },
+            ),
+          ),
+        ).toBeTruthy();
+        expect(
+          (
+            screen.getByRole("button", {
+              name: messages.common.loading,
+            }) as HTMLButtonElement
+          ).disabled,
+        ).toBe(true);
+      },
+    );
+  },
+);
 
 describe("sessions list: page by page", () => {
   /** 60 finished sessions, newest first, as the server lists them. */

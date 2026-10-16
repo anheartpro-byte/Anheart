@@ -549,10 +549,17 @@ pratiquant : une à la fois, ANH-144), `by_machine`, `by_machine_and_status`,
 `by_status_and_organization` (les séances actives ou en attente d'une
 organisation, ou de toutes : ce que compte `dashboard.counters`, et les
 séances actives que parcourt la tâche planifiée). Pour les
-listes de séances (ANH-158, [§5](#sessionsts-lectures-seulement)), six index
+listes de séances (ANH-158, ANH-227, [§5](#sessionsts-lectures-seulement)), dix index
 qui finissent tous par `startedAt` : `by_started`, `by_status_and_started`,
 `by_organization_and_started`, `by_organization_and_status_and_started`,
-`by_user_and_started`, `by_machine_and_started`. Convex les construit au
+`by_user_and_started`, `by_machine_and_started`,
+`by_organization_and_machine_and_started`,
+`by_organization_and_machine_and_status_and_started`,
+`by_organization_and_user_and_started`,
+`by_organization_and_user_and_status_and_started`. Les quatre derniers servent
+à la fusion bornée des listes courtes du gestionnaire : organisation, machine
+ou pratiquant et, si demandé, statut sont dans la plage d'index, sans filtre
+après lecture. Convex les construit au
 déploiement, sur les séances déjà présentes ; aucune migration n'est à lancer.
 Ils n'ont encore été poussés sur aucun déploiement : seuls les tests en mémoire
 les ont lus. Il en va de même de `by_user_and_status` et du champ `endCode`
@@ -1648,26 +1655,27 @@ routes d'entraînement.
 | `listSessions` | connecté | Les `limit` (50 par défaut) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status` (`pending`, `active`, `interrupted`, `completed` ou `failed`), `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
 | `listSessionsPaginated` | connecté | Les mêmes séances, avec les mêmes filtres, **page par page** (`paginationOpts`, pour `usePaginatedQuery`). Page Sessions (un statut par onglet) et page Rapports (`status: "completed"`). |
 | `getActiveSessionForMachine` | accès machine | Séance `active` (une séance `interrupted` n'en est pas une). |
-| `getCompletedSessionsForUser` | connecté | Les 100 séances `completed` les plus récentes que l'appelant peut lire. Plus appelée par le site de cette version (la page Rapports lit `listSessionsPaginated`) ; gardée pour le site de la version précédente, qui l'appelle encore entre le déploiement de Convex et celui du site. |
+| `getCompletedSessionsForUser` | connecté | Les 100 séances `completed` les plus récentes que l'appelant peut lire. Plus appelée par le site de cette version (la page Rapports lit `listSessionsPaginated`) ; reste jusqu'au déploiement du site (ANH-82), car le site de la version précédente l'appelle encore entre le déploiement de Convex et celui du site. |
 
-**Les droits avant la limite (ANH-158).** Les trois listes lisent la même
-requête : qui peut lire quelles séances fait partie de la requête, et la
-limite ou la page ne se coupe qu'ensuite. Une page de 50 contient donc en
-général 50 séances que l'appelant peut lire, jamais les 50 dernières de la
-base filtrées après coup. Elle peut en contenir moins, et même aucune sans que
-la liste soit finie : à la fin de la liste, quand le serveur demande de couper
-une page qui lit trop, quand des séances arrivent ou changent pendant la
-lecture, ou quand le second contrôle décrit plus bas en retire une. Le site
-propose la suite d'après le statut de la liste, pas d'après la taille d'une
-page, et n'écrit « aucune séance » qu'une fois la liste finie. Avant ce ticket, une séance d'un
-patient ou d'un gestionnaire pouvait manquer à sa liste parce que des séances
-plus récentes d'autres personnes remplissaient la page.
+**Les droits avant la limite (ANH-158, ANH-227).** Les trois listes appliquent
+les mêmes droits : qui peut lire quelles séances fait partie des plages et
+filtres lus avant de couper la limite ou la page. Une page de 50 contient donc
+en général 50 séances que l'appelant peut lire, jamais les 50 dernières de la
+base filtrées après coup. Elle peut en contenir moins, et même aucune sans
+que la liste soit finie : à la fin de la liste, quand le serveur demande de
+couper une page qui lit trop, quand des séances arrivent ou changent pendant
+la lecture, ou quand le second contrôle décrit plus bas en retire une. Le
+site propose la suite d'après le statut de la liste, pas d'après la taille
+d'une page, et n'écrit « aucune séance » qu'une fois la liste finie. Avant ce
+ticket, une séance d'un patient ou d'un gestionnaire pouvait manquer à sa
+liste parce que des séances plus récentes d'autres personnes remplissaient
+la page.
 
 | Appelant | Ce qu'il lit | Index lu |
 |---|---|---|
 | admin Anheart | toutes les séances, de toutes les organisations | `by_started` (ou `by_status_and_started` avec un statut) |
 | admin d'organisation | les séances de son organisation | `by_organization_and_started` (ou `by_organization_and_status_and_started`) |
-| gestionnaire | dans son organisation, celles des machines qu'il gère (`machine_gestionnaires`, machines de cette organisation) et celles dont il est le pratiquant | le même index que l'admin d'organisation, avec ce filtre dans la requête |
+| gestionnaire | dans son organisation, celles des machines qu'il gère (`machine_gestionnaires`, machines de cette organisation) et celles dont il est le pratiquant | listes courtes sans filtre machine/pratiquant : fusion des plages par machine et pratiquant ci-dessous ; page : même index que l'admin d'organisation, avec ce filtre dans la requête |
 | user | dans son organisation, celles dont il est le pratiquant | `by_user_and_started` |
 
 Avec `machineId`, la requête lit `by_machine_and_started` ; avec `userId`,
@@ -1685,37 +1693,52 @@ son pratiquant avant de regarder la machine. Aucune mutation ne produit cet
 état (une machine n'est supprimée qu'en douceur), et `getSession` échoue sur
 une telle séance pour tout le monde, comme avant ce ticket.
 
-*Le cas du gestionnaire.* Le ticket proposait de lire `by_machine` pour chaque
-machine du gestionnaire et de fusionner les flux par date. Ce n'est pas ce que
-fait le code : une fusion de plusieurs index se pagine avec un curseur écrit à
-la main, que Convex ne sait pas garder stable quand une séance arrive pendant
-la lecture (la page déjà affichée change de bornes, et une séance peut
-disparaître entre deux pages jusqu'au rechargement). La requête lit donc
-l'index de l'organisation, du plus récent au plus ancien, et garde au passage
-les séances de ses machines et les siennes ; la pagination reste celle de
-Convex, qui garde les pages contiguës. Le coût : pour remplir une page, Convex
-lit aussi les séances de l'organisation que le gestionnaire ne voit pas. Dans
-un centre où il gère la plupart des machines, c'est presque rien ; dans un
-centre où il en gère une sur vingt, une page lit environ vingt fois plus de
-séances qu'elle n'en montre. Quand une page lit trop, le serveur Convex demande
-de la couper en deux, ce que fait `usePaginatedQuery`. Ce coût n'a été mesuré
-sur aucun déploiement.
+**Les listes courtes du gestionnaire (ANH-227).** Sans `machineId` ni `userId`,
+`listSessions` et `getCompletedSessionsForUser` fusionnent une source par
+machine gérée dans son organisation, plus une source pour les séances dont
+il est le pratiquant. Chaque source lit au plus `limit` séances (50 par défaut
+pour `listSessions`, 100 pour l'ancienne liste Rapports), du plus récent au
+plus ancien. L'organisation et, si demandé, le statut sont dans l'index :
 
-Le pire cas est un gestionnaire qui ne voit aucune machine de son centre (il
-n'en gère aucune, ou celles qu'il gère n'y sont plus) et n'y a roulé aucune
-séance. Sa liste est vide, mais pour la servir la requête lit **tout
-l'historique des séances du centre** : à chaque page, à chaque ouverture de
-l'accueil (`listSessions` avec `limit: 10`), et de nouveau à chaque séance
-écrite dans le centre, puisque la requête est réactive. Une page peut au moins
-être coupée à la demande du serveur ; `listSessions` et
-`getCompletedSessionsForUser` (`take`) n'ont pas ce recours, et échoueraient
-au-delà de la limite de lecture d'une exécution Convex. Le même parcours sans
-résultat a lieu quand un appelant filtre sur une machine ou un pratiquant
-qu'il ne voit pas ; il est alors borné par l'historique de cette machine ou de
-ce pratiquant, et rien n'est montré. Reste à faire, dans un ticket de suite :
-pour `take`, la fusion bornée des index de chaque machine (le problème de
-curseur ne s'y pose pas), et une borne de lecture imposée par le serveur à la
-page du gestionnaire.
+| Source | Sans statut | Avec statut |
+|---|---|---|
+| une machine gérée | `by_organization_and_machine_and_started` | `by_organization_and_machine_and_status_and_started` |
+| le gestionnaire pratiquant | `by_organization_and_user_and_started` | `by_organization_and_user_and_status_and_started` |
+
+L'union retire les doublons par identifiant (une séance sur sa machine dont
+il est aussi le pratiquant), trie par `startedAt` décroissant puis date
+d'écriture décroissante, et conserve les `limit` premières. La borne de
+lecture des séances est **(nombre de machines gérées + 1) × limit**, à laquelle
+s'ajoutent les liens `machine_gestionnaires`, les machines, puis le second
+contrôle d'accès et les noms des lignes retournées. Les séances sans
+organisation ou d'une autre organisation sur une machine gérée sont exclues
+par la plage d'index et ne sont pas parcourues. Le résultat et les droits
+restent les mêmes. Dans le pire cas, un gestionnaire sans machine de son
+centre et sans séance pratiquée reçoit donc une liste vide sans parcourir
+l'historique du centre, même s'il est lié à une machine d'une autre organisation.
+
+**Les pages (ANH-227).** `listSessionsPaginated` conserve une seule plage et la
+pagination native Convex, avec ses pages contiguës et ses curseurs. Pour tous
+les appelants, le serveur impose `maximumRowsRead: 1000` au plus ; une valeur
+client entière d'au moins 1 et inférieure au plafond est conservée (une décimale
+est tronquée) ; une valeur absente, inférieure à 1, non finie ou supérieure donne 1000.
+Ce plafond compte les séances parcourues avant le filtre des droits, pas
+seulement celles affichées. À la limite, Convex retourne une page incomplète
+(`SplitRequired`), un `splitCursor` et un `continueCursor` au point d'arrêt.
+`usePaginatedQuery` coupe cette page et la suite reste accessible par
+« Afficher plus ». Une page vide peut donc précéder la fin de la liste :
+le site doit suivre le statut de pagination pour proposer la suite et afficher
+l'état vide. Le gestionnaire sans séance visible parcourt encore l'historique
+du centre au fil des pages, avec au plus 1000 séances parcourues par page,
+plus les lectures d'autorisation et de noms.
+
+**Les filtres explicites.** Avec `machineId` ou `userId`, les listes courtes
+conservent leur requête actuelle sur une machine ou un pratiquant, y compris
+pour le gestionnaire. Un filtre sur une machine ou un pratiquant que
+l'appelant ne voit pas peut parcourir tout son historique sans résultat :
+ce coût reste borné par l'historique de cette machine ou de ce pratiquant,
+et non celui du centre. Le plafond des pages s'applique aussi à ces filtres ;
+les listes courtes ainsi filtrées n'ont pas ce plafond. Aucun droit n'est modifié.
 
 ### `sessionReports.ts` (résumés de séance et historique, ANH-89)
 

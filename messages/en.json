@@ -807,6 +807,10 @@
     "viewLive": "View Live",
     "viewReport": "View Report",
     "noSessions": "No sessions found",
+    "searchNoMatchLoaded": "{count, plural, =0 {No sessions have been loaded yet.} one {The loaded session does not match your search.} other {None of the # loaded sessions match your search.}} Search only covers sessions already loaded: \"Show more\" loads older ones.",
+    "searchLoadedOnly": "Search only covers the {count, plural, one {loaded session} other {# loaded sessions}}.",
+    "searchNoMatch": "No sessions match your search.",
+    "nothingYet": "No sessions to show yet: more remain to be read. \"Show more\" continues reading.",
     "patient": "Patient",
     "machine": "Machine",
     "startedBy": "Started by",
@@ -898,6 +902,7 @@
     "metrics": "Metrics",
     "sessionReport": "Session Report",
     "noReports": "No reports available yet",
+    "nothingYet": "No reports to show yet: more sessions remain to be read. \"Show more\" continues reading.",
     "view": "View",
     "durationMinutes": "{minutes, number} min"
   },

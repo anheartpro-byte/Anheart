@@ -35,14 +35,16 @@
  * answer is a function of the arguments of one page (those of the page, plus
  * `paginationOpts: {numItems, cursor}`) that returns `{page, isDone,
  * continueCursor}`, `undefined` for a page still loading, or an `Error`, which
- * `usePaginatedQuery` throws as `useQuery` does (`pagesOf` in
+ * this stand-in of `usePaginatedQuery` always throws (`pagesOf` in
  * `test-support/pages.tsx` cuts a list into such pages). The hook asks for
  * the first page with `initialNumItems`, then for one more page at each
  * `loadMore`, from the `continueCursor` of the page before; each page it asks
  * for is recorded by `asks`. New arguments start again from the first page.
  * What it does not do: split a page, keep the end of a page when the data
  * changes (a reactive server does both), or send the `id` the real hook adds
- * to `paginationOpts`.
+ * to `paginationOpts`. The real hook handles an `InvalidCursor` error before
+ * `throwOnError`: it logs the error and restarts from the first page. This
+ * stand-in throws that error like any other `Error`.
  */
 
 import { getFunctionName, type FunctionReference } from "convex/server";
@@ -114,7 +116,10 @@ export function resetConvex() {
 }
 
 /** What a query answers to these arguments, the question noted. */
-function answerTo(reference: FunctionReference<"query">, args: unknown): unknown {
+function answerTo(
+  reference: FunctionReference<"query">,
+  args: unknown,
+): unknown {
   const name = getFunctionName(reference);
   asked.push({ name, args });
   if (args === "skip") return undefined;

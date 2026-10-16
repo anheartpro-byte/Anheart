@@ -78,6 +78,7 @@ export default function SessionsPage() {
   );
   const loading = status === "LoadingFirstPage";
   const canGrow = status === "CanLoadMore" || status === "LoadingMore";
+  const searching = globalFilter.trim().length > 0;
 
   const dateLocale = locale === "fr" ? fr : enUS;
 
@@ -167,7 +168,7 @@ export default function SessionsPage() {
     data: sessions,
     columns,
     state: {
-      globalFilter,
+      globalFilter: globalFilter.trim(),
       sorting,
     },
     onGlobalFilterChange: setGlobalFilter,
@@ -226,70 +227,82 @@ export default function SessionsPage() {
       {loading ? (
         <TableSkeleton />
       ) : table.getRowModel().rows.length === 0 ? (
-        // A page can come back empty while older sessions remain (the
-        // server split it, or left out a row): "none" only once the list is
-        // done; until then "Show more" alone.
-        status === "Exhausted" && (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12">
-              <Activity className="h-12 w-12 text-muted-foreground mb-4" />
-              <p className="text-muted-foreground">
-                {t("sessions.noSessions")}
-              </p>
-            </CardContent>
-          </Card>
-        )
-      ) : (
         <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <TableRow key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => (
-                      <TableHead key={header.id}>
-                        {header.isPlaceholder
-                          ? null
-                          : flexRender(
-                              header.column.columnDef.header,
-                              header.getContext(),
-                            )}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {table.getRowModel().rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    className="cursor-pointer hover:bg-accent/50"
-                    onClick={() => {
-                      if (row.original.status === "active") {
-                        router.push(
-                          `/dashboard/sessions/${row.original._id}/live`,
-                        );
-                      } else {
-                        // All other statuses (completed, pending, interrupted,
-                        // failed) go to details
-                        router.push(`/dashboard/sessions/${row.original._id}`);
-                      }
-                    }}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext(),
-                        )}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          <CardContent className="flex flex-col items-center justify-center py-12">
+            <Activity className="h-12 w-12 text-muted-foreground mb-4" />
+            <p role="status" className="text-muted-foreground text-center">
+              {canGrow
+                ? searching
+                  ? t("sessions.searchNoMatchLoaded", {
+                      count: sessions.length,
+                    })
+                  : t("sessions.nothingYet")
+                : searching
+                  ? t("sessions.searchNoMatch")
+                  : t("sessions.noSessions")}
+            </p>
           </CardContent>
         </Card>
+      ) : (
+        <>
+          {canGrow && searching && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t("sessions.searchLoadedOnly", { count: sessions.length })}
+            </p>
+          )}
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  {table.getHeaderGroups().map((headerGroup) => (
+                    <TableRow key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => (
+                        <TableHead key={header.id}>
+                          {header.isPlaceholder
+                            ? null
+                            : flexRender(
+                                header.column.columnDef.header,
+                                header.getContext(),
+                              )}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableHeader>
+                <TableBody>
+                  {table.getRowModel().rows.map((row) => (
+                    <TableRow
+                      key={row.id}
+                      className="cursor-pointer hover:bg-accent/50"
+                      onClick={() => {
+                        if (row.original.status === "active") {
+                          router.push(
+                            `/dashboard/sessions/${row.original._id}/live`,
+                          );
+                        } else {
+                          // All other statuses (completed, pending, interrupted,
+                          // failed) go to details
+                          router.push(
+                            `/dashboard/sessions/${row.original._id}`,
+                          );
+                        }
+                      }}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext(),
+                          )}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </>
       )}
 
       {canGrow && (

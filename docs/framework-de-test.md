@@ -3532,7 +3532,7 @@ lequel le vrai React tourne (état, effets, nouveau rendu après un événement)
 |---|---|
 | `test-support/dom.ts` | le document : ce que React demande à un document (éléments, texte, attributs, événements qui descendent et remontent), et rien de ce qu'un navigateur ajoute (ni mise en page, ni focus, ni CSS) |
 | `test-support/render.tsx` | `render(<Composant />)` sous le vrai fournisseur `next-intl` avec les vrais `messages/`, puis `click`, `type`, `submit`, `fire`, et de quoi lire l'écran (`screen.text()`, `screen.button(libellé)`, `screen.field(id)`). Doit être le premier import du fichier de test : React décide au chargement s'il a un document |
-| `test-support/convex.ts` | ce qui remplace `convex/react` : `answer(nom, valeur)` fixe la réponse d'une requête (une `Error` pour une requête que le serveur a fait échouer : `useQuery` la lève comme Convex, `useQueries` la rend), `mutation(nom)` est la fonction appelée, `asks(nom)` les arguments demandés (ou `"skip"`), `sessionIs(état)` dit si le visiteur est connecté (`Authenticated`, `Unauthenticated`, `AuthLoading`, `useConvexAuth`). `useMutation` rend la même fonction à chaque rendu, comme le vrai. `useMutationWithFeedback` reste le vrai, par-dessus |
+| `test-support/convex.ts` | ce qui remplace `convex/react` : `answer(nom, valeur)` fixe la réponse d'une requête (une `Error` pour une requête que le serveur a fait échouer : `useQuery` et `usePaginatedQuery` la lèvent au rendu comme Convex, `useQueries` la rend), `mutation(nom)` est la fonction appelée, `asks(nom)` les arguments demandés (ou `"skip"`), `sessionIs(état)` dit si le visiteur est connecté (`Authenticated`, `Unauthenticated`, `AuthLoading`, `useConvexAuth`). `useMutation` rend la même fonction à chaque rendu, comme le vrai. `useMutationWithFeedback` reste le vrai, par-dessus |
 | `test-support/ui.tsx` | des remplaçants nommés pour nos fenêtres, listes de choix et cases à cocher (`components/ui/dialog`, `select`, `checkbox`), pour tester le composant qui s'en sert |
 | `test-support/radix.tsx` | des remplaçants pour les primitives Radix, pour tester nos propres enveloppes de `components/ui/` |
 | `test-support/browser.ts` | ce qu'un navigateur ajoute et que certains composants demandent : horloge d'images d'animation, canevas, largeur de fenêtre, observateurs. Chaque pièce est installée et pilotée par le test |
@@ -3616,7 +3616,17 @@ restaurée).
   est une fonction des arguments d'une page (`paginationOpts` compris), que
   `pagesOf(liste)` de `test-support/pages.tsx` écrit pour une liste ; la
   première page est demandée avec `initialNumItems`, une de plus à chaque
-  `loadMore`. Le remplaçant ne découpe aucune page et ne garde pas les bornes
+  `loadMore`. Une page répondue par une `Error` est levée par la doublure de
+  `usePaginatedQuery` au rendu, comme par `useQuery`. Le vrai hook de Convex
+  1.46 traite à part une erreur `InvalidCursor` : il la journalise et repart
+  de la première page, dans une branche avant `throwOnError` dans
+  `node_modules/convex/dist/esm/react/use_paginated_query.js`. Pour les autres
+  erreurs, il lève comme la doublure (`throwOnError` vaut `true` par défaut
+  dans `usePaginatedQueryInternal`). La doublure lève toute `Error`, sans ce
+  traitement du curseur invalide. Le test de la
+  page Rapports (`app/[locale]/dashboard/reports/page.test.tsx`, « throws a
+  failed page during rendering instead of showing an empty report list »)
+  le vérifie. Le remplaçant ne découpe aucune page et ne garde pas les bornes
   d'une page déjà servie quand les données changent, ce que fait le vrai
   serveur (ANH-158).
 

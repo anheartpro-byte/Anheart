@@ -299,6 +299,54 @@ describe("ANH-158 lists of sessions: 300 sessions, 3 machines, 2 centres", () =>
     },
   );
 
+  it.each(
+    USER_ACTORS.flatMap((actor) =>
+      STATUSES.map((status) => [actor, status] as const),
+    ),
+  )(
+    "gives %s a short list of their %s sessions only",
+    async (actor, status) => {
+      const listed = await as(w.t, actor).query(api.sessions.listSessions, {
+        status,
+        limit: 10,
+      });
+      expect(listed.map((row) => row._id)).toEqual(
+        readableBy(actor)
+          .filter((row) => row.status === status)
+          .slice(0, 10)
+          .map((row) => row.id),
+      );
+    },
+  );
+
+  it.each(USER_ACTORS)(
+    "keeps machine and rider filters in the short list for %s",
+    async (actor) => {
+      for (const machine of MACHINES) {
+        const listed = await as(w.t, actor).query(api.sessions.listSessions, {
+          machineId: w[machine],
+          limit: 10,
+        });
+        expect(listed.map((row) => row._id)).toEqual(
+          readableBy(actor)
+            .filter((row) => row.machine === machine)
+            .slice(0, 10)
+            .map((row) => row.id),
+        );
+      }
+      const listed = await as(w.t, actor).query(api.sessions.listSessions, {
+        userId: w.patient,
+        limit: 10,
+      });
+      expect(listed.map((row) => row._id)).toEqual(
+        readableBy(actor)
+          .filter((row) => row.rider === "patient")
+          .slice(0, 10)
+          .map((row) => row.id),
+      );
+    },
+  );
+
   it("names each rider, or says there is none, with the machine, the status and the origin", async () => {
     const result = await as(w.t, "admin").query(
       api.sessions.listSessionsPaginated,

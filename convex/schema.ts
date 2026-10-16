@@ -640,8 +640,7 @@ export default defineSchema({
     // what the dashboard counts (`dashboard.counters`), and the active ones
     // the job of `interruptSilentSessions` looks at.
     .index("by_status_and_organization", ["status", "organizationId"])
-    // The lists of sessions (`convex/sessions.ts`): each one reads a single
-    // range of one of these, most recent start first.
+    // The lists of sessions (`convex/sessions.ts`), most recent start first.
     .index("by_started", ["startedAt"])
     .index("by_status_and_started", ["status", "startedAt"])
     .index("by_organization_and_started", ["organizationId", "startedAt"])
@@ -651,7 +650,31 @@ export default defineSchema({
       "startedAt",
     ])
     .index("by_user_and_started", ["userId", "startedAt"])
-    .index("by_machine_and_started", ["machineId", "startedAt"]),
+    .index("by_machine_and_started", ["machineId", "startedAt"])
+    // The bounded lists of a gestionnaire (ANH-227): one organisation and
+    // one machine or rider, with the requested status in the index range.
+    .index("by_organization_and_machine_and_started", [
+      "organizationId",
+      "machineId",
+      "startedAt",
+    ])
+    .index("by_organization_and_machine_and_status_and_started", [
+      "organizationId",
+      "machineId",
+      "status",
+      "startedAt",
+    ])
+    .index("by_organization_and_user_and_started", [
+      "organizationId",
+      "userId",
+      "startedAt",
+    ])
+    .index("by_organization_and_user_and_status_and_started", [
+      "organizationId",
+      "userId",
+      "status",
+      "startedAt",
+    ]),
 
   // ECG Data - HISTORY of the retired ECG recording mode. Read-only: no
   // function writes to this table any more.
