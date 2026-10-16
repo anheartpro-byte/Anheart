@@ -55,7 +55,7 @@ export const AUDIT_ACTIONS = [
   "user.invited", // Staff prepares an invitation; target: invitation, even without a unique profile.
   "user.linked_to_account", // Patient or Clerk webhook links a verified account; target: user.
   "user.deleted", // Authorised staff removes a user from their scope; target: user.
-  "patient_gestionnaire.assigned", // Staff assigns a manager; target: patient user.
+  "patient_gestionnaire.assigned", // Staff or Clerk webhook assigns a manager; target: patient user.
   "patient_gestionnaire.removed", // Staff removes a manager; target: patient user.
   "gestionnaire_patients.set", // Staff sets a manager's patients; target: manager user.
   "machine_gestionnaire.assigned", // Staff assigns a manager; target: machine.
