@@ -2001,6 +2001,26 @@ test("ANH-221 the [MED] commands of docs/release.md find every file that carries
   ]);
 });
 
+test("ANH-229 la seconde commande [MED] montre le diff d'un fichier au chemin accentué", (t) => {
+  const fx = fixture(t, [
+    [
+      "ANH-20 : première limite (#20)",
+      { "docs/sécurité.md": "Ceiling [MED].\nceiling = 1.2\n" },
+    ],
+  ]);
+  git(fx.work, "tag", "pi-0.1.0");
+  fx.mergeTicket("ANH-21 : nouvelle limite (#21)", {
+    "docs/sécurité.md": "Ceiling [MED].\nceiling = 1.5\n",
+  });
+  const [, diff] = commandsUnder("#### Lister les fichiers qui portent le marqueur");
+  const output = execFileSync("sh", ["-c", diff.replaceAll("<base>", "pi-0.1.0")], {
+    cwd: fx.work,
+    env: GIT_ENV,
+    encoding: "utf8",
+  });
+  assert.match(output, /^\+ceiling = 1\.5$/m);
+});
+
 test("ANH-235 la troisième commande [MED] montre seulement la clé et la signature modifiées", (t) => {
   const fx = fixture(t, [
     [

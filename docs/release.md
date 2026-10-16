@@ -788,7 +788,7 @@ pour une première release.
 
 ```sh
 git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u
-git grep -l -F '[MED]' <base> origin/develop | cut -d: -f2- | sort -u | tr '\n' '\0' | xargs -0 -r git diff <base>..origin/develop --
+git grep -z -l -F '[MED]' <base> origin/develop | tr '\0' '\n' | cut -d: -f2- | sort -u | tr '\n' '\0' | xargs -0 -r git diff <base>..origin/develop --
 git diff --stat=200,200 <base>..origin/develop -- raspberry-pi/config/medical.pub raspberry-pi/config/medical_parameters.sig
 ```
 
@@ -817,8 +817,11 @@ seconde n'a pas lieu d'être, et elle ne montre rien.
 La seconde passe la liste à `git diff` par `xargs -0`, un chemin par
 argument : un chemin qui contient une espace n'est pas coupé en deux, ce qui
 arrivait à la forme précédente (`git diff ... -- $(...)`), qui le sautait sans
-rien dire. Le dépôt n'a aujourd'hui aucun chemin de ce genre ; un chemin qui
-contient un retour à la ligne n'est pas pris en charge.
+rien dire. `git grep -z` écrit les chemins tels quels, séparés par des NUL :
+sans `-z`, un chemin non ASCII, ou qui contient un guillemet ou une barre oblique
+inverse, serait écrit cité et sauté sans rien dire par `git diff`. Les NUL sont
+convertis en retours à la ligne pour `cut` et `sort`, puis rétablis pour
+`xargs -0` ; un chemin qui contient un retour à la ligne reste non pris en charge.
 
 La troisième montre ce qui a changé dans `medical.pub` et
 `medical_parameters.sig`. Ces deux fichiers portent la décision : la clé qui
@@ -907,8 +910,9 @@ lance enfin, dans un dépôt jetable, les trois commandes `[MED]` de la
 [section 5](#lister-les-fichiers-qui-portent-le-marqueur) telles qu'elles y
 sont écrites : les deux premières doivent lister chaque fichier qui porte le
 marqueur à l'un des deux bouts, où qu'il soit dans le dépôt, et montrer son
-diff ; la troisième doit montrer seulement la clé publique et la signature
-modifiées, même si un autre fichier sans marqueur a changé.
+diff, y compris pour un chemin accentué ; la troisième doit montrer seulement
+la clé publique et la signature modifiées, même si un autre fichier sans marqueur
+a changé.
 
 La pipeline de release a son propre fichier,
 `scripts/ci/release-workflow.test.mjs`, lancé par le job `docs` avec les autres
@@ -956,7 +960,7 @@ n'a changé.
 
 | Quoi | Qui ou quel ticket |
 |---|---|
-| Publier la première release (`pi-1.0.0`, `cloud-1.0.0`, `web-1.0.0`), fusionnée dans `main` le 10 octobre 2026 : fixer la fenêtre de déploiement, puis poser les tags et déployer par la pipeline | le responsable du produit, [section 3](#3-le-déroulé), étapes 7 à 9 |
+| Publier la première release (`pi-1.0.0`, `cloud-1.0.0`, `web-1.0.0`), fusionnée dans `main` le 10 octobre 2026 : fixer la fenêtre de déploiement, puis poser les tags et déployer par la pipeline, ce qu'elle refuse aujourd'hui sur la tête de `main` : voir la note [`main` après la release (relevé du 14 octobre 2026)](#release--versions-changelog-check-list) en tête de ce document | le responsable du produit, [section 3](#3-le-déroulé), étapes 7 à 9 |
 | Appliquer la règle de la [section 2](#2-le-niveau-de-validation-dune-version-du-pi) | ANH-147 (registre machine), ANH-116 et ANH-168 (mise à jour à distance) |
 | Dire qui pose `agent-review/R1` sur le candidat d'une release ([section 3](#lavis-indépendant-sur-une-release)) | le chef de projet, avant de publier la première release (de poser ses tags) |
 | Une release d'un seul composant fait entrer dans `main` les changements des autres composants, sous leur ancienne version : l'accepter, ou exiger une version pour chaque composant modifié | le chef de projet, avant de préparer la première release partielle |
