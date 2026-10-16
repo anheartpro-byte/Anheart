@@ -69,6 +69,7 @@ from src.record.journal import (
 from src.record.logbook import DIRECTORY as LOGBOOK
 from src.record.logbook import MAX_BYTES as LOGBOOK_FILE_BYTES
 from src.record.retention import CHECKSUMS, MARKER_SUFFIX, RECORD_NAME, confirmed_deposit
+from src.record.session import PRESTART_SECONDS
 
 RSS_BAND: Final[float] = 0.10
 """After the warm-up the resident memory stays within this share of its first reading."""
@@ -642,7 +643,7 @@ def check_descriptors(run: Run) -> Check:
 
 def record_problems(session: Session) -> tuple[str, ...]:
     """Where the record of ``session`` takes more than the arming gate plans for."""
-    lasted = session.recorded + RECORD_SLACK_S
+    lasted = session.recorded + PRESTART_SECONDS + RECORD_SLACK_S
     planned = round(RAW_BLOCKS_PER_SECOND * lasted) + FIXED_ENTRIES
     problems: list[str] = []
     if session.record.entries > planned:
@@ -681,7 +682,8 @@ def check_data(run: Run) -> Check | None:
         return None
     threshold = (
         f"par enregistrement : au plus {RAW_BLOCKS_PER_SECOND} fichiers par seconde plus "
-        f"{FIXED_ENTRIES}, et {BYTES_PER_SECOND_RESERVED / KIB:.0f} Kio par seconde ; "
+        f"{FIXED_ENTRIES}, et {BYTES_PER_SECOND_RESERVED / KIB:.0f} Kio par seconde "
+        f"(avec {PRESTART_SECONDS:.0f} s de repos avant le départ) ; "
         f"journal hors séance sous {megabytes(LOGBOOK_LIMIT)} ; rien d'autre à côté"
     )
     problems = [problem for session in run.sessions for problem in record_problems(session)]

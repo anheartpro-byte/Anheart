@@ -15,6 +15,7 @@ import asyncio
 import gzip
 from collections.abc import Mapping
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ from src.contract import UNKNOWN_SOFTWARE_VERSION, read_software_version
 from src.ecg_pipeline import EcgFrame, Treatment, treat_ecg
 from src.local_config import load_local_config
 from src.local_panel import LocalPanel, build_panel
+from src.record import commands
 from src.record.codec import Privacy
 from src.record.journal import Journal
 from src.record.reader import read
@@ -99,6 +101,7 @@ async def _console_record(tmp_path: Path, *, programme: bool) -> Path:
     )
     surface = panel.surface
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
+    await _ticks(panel, journal, clock, 12.0)
     if programme:
         started = surface.submit_start(
             profile_id="standard_30_min",
@@ -193,28 +196,39 @@ def _assert_same_structure(console: Path, simulation: Path) -> None:
         assert loaded.value.events[-1].kind is EventKind.END
 
 
-def test_anh131_a_record_the_console_writes_today_is_refused_by_the_replay_with_its_reasons(
+def test_console_inputs_and_preroll_leave_only_the_geometry_replay_refusal(
     tmp_path: Path,
 ) -> None:
-    """Same structure is not yet "replayable": the replay says what is missing, all of it.
-
-    The console writes what it was ASKED in prose and has no full geometry to
-    give. The replay refuses such a record (exit code 2 on the command line)
-    instead of replaying half of it into a difference nobody could explain.
-
-    What the drive answered IS in the record since ANH-191 (EX-2): the replay
-    no longer says that the record holds no drive exchange.
-    """
     for programme in (False, True):
         home = tmp_path / ("programme" if programme else "manual")
         home.mkdir()
-        refused = replay(asyncio.run(_console_record(home, programme=programme)))
+        folder = asyncio.run(_console_record(home, programme=programme))
+        loaded = read(folder)
+        assert isinstance(loaded, Ok)
+        record = loaded.value
+        inputs = [event for event in record.events if event.kind in commands.INPUT_KINDS]
+        assert inputs
+        assert all(isinstance(commands.parse(event.detail), Ok) for event in inputs)
+        start = next(event for event in inputs if event.detail.startswith("start_"))
+        assert start.t == pytest.approx(0.2)
+        idle = [row for row in record.rows if row.t <= 0]
+        assert len(idle) >= 40
+        assert idle[-1].t == 0
+        assert all(row.state == "idle" for row in idle)
+        idle_frames = [frame for frame in record.frames if frame.t <= 0]
+        assert idle_frames[0].t == idle[0].t
+        assert {frame.kind for frame in idle_frames} == {"open", "read_status"}
+        reads = [frame for frame in idle_frames if frame.kind == "read_status"]
+        assert len(reads) >= 16
+        assert all(any(abs(frame.t - row.t) < 0.001 for row in idle) for frame in reads)
+        assert all(later.t - earlier.t <= 0.601 for earlier, later in pairwise(reads))
+        raw = [block for block in record.raw if block.header.t_first < 0]
+        assert sum(block.header.n_samples for block in raw) >= 8000
+        assert all(block.header.t_received is not None for block in record.raw)
+        assert all(block.header.runtime_delivery is not None for block in record.raw)
+        refused = replay(folder)
         assert isinstance(refused, Err), refused
         assert refused.error.detail.split("; ") == [
-            (
-                "the operator_action event at t=0.000 s is not replayable: "
-                "not a command of the replay vocabulary"
-            ),
             "the manifest holds no geometry: the runtime cannot be built as it was",
         ]
 
@@ -330,10 +344,9 @@ def test_ex9_a_programme_has_the_same_profile_keys_and_raw_block_headers(tmp_pat
     assert theirs["fitness_questionnaire_version"] is None
     assert _keys(ours["profile"]) == _keys(theirs["profile"])
     block_keys = ("channels", "n_samples", "sample_rate", "seq", "t_first")
-    assert _block_header_keys(console) == {block_keys}
-    # The harness also says when each block reached the DSP (ANH-131): an
-    # optional key of the shared header, which a replay needs and which the
-    # console does not write yet. It is the only key the two do not share.
+    assert _block_header_keys(console) == {
+        tuple(sorted((*block_keys, "runtime_delivery", "t_received")))
+    }
     assert _block_header_keys(simulation) == {(*block_keys, "t_received")}
     console_rows = read(console)
     assert isinstance(console_rows, Ok)

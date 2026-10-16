@@ -202,9 +202,11 @@ from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
+from src.presence.adapter import RuntimePort as PresenceRuntimePort
 from src.presence.monitor import PresenceMonitor
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
+from src.record import commands as record_commands
 from src.record.cursor import boot_identity
 from src.record.deposit import RecordDeposit
 from src.record.drive_tap import tap_drive
@@ -271,6 +273,7 @@ from src.training.runtime import (
     Holding,
     LimitsMismatch,
     ManualEnding,
+    ManualSession,
     ManualTargetRefusal,
     NoFaultToReset,
     NoManualSession,
@@ -292,8 +295,19 @@ from src.training.runtime import (
     TrainingRuntime,
     WithdrawnTarget,
 )
-from src.training.safety import SELF_CLEARING, SafetyLimits
-from src.training.types import Occupancy, SafetyVerdict, TelemetrySnapshot
+from src.training.safety import (
+    SELF_CLEARING,
+    AcknowledgeRefusal,
+    SafetyAcknowledgement,
+    SafetyLimits,
+)
+from src.training.types import (
+    Occupancy,
+    SafetyAction,
+    SafetyVerdict,
+    SignalQuality,
+    TelemetrySnapshot,
+)
 from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
 from src.wall_clock import (
     WallClockProbe,
@@ -567,6 +581,52 @@ def recorded_tap(first: BatchTap, recorder: SessionRecorder) -> BatchTap:
     return tap
 
 
+@final
+class RecordedRuntime:
+    __slots__ = ("_clock", "_recorder", "_runtime")
+
+    def __init__(self, runtime: TrainingRuntime, recorder: SessionRecorder, clock: Clock) -> None:
+        self._runtime: TrainingRuntime = runtime
+        self._recorder: SessionRecorder = recorder
+        self._clock: Clock = clock
+
+    @property
+    def state(self) -> RuntimeState:
+        return self._runtime.state
+
+    @property
+    def output_enabled(self) -> bool:
+        return self._runtime.output_enabled
+
+    @property
+    def manual(self) -> ManualSession | None:
+        return self._runtime.manual
+
+    def snapshot(self) -> TelemetrySnapshot:
+        return self._runtime.snapshot()
+
+    def acknowledge(
+        self, operator: str, *, estop_released: bool = False
+    ) -> Result[SafetyAcknowledgement, AcknowledgeRefusal]:
+        self._recorder.note_command(record_commands.Acknowledge(estop_released), operator)
+        return self._runtime.acknowledge(operator, estop_released=estop_released)
+
+    def request_estop(self, source: str) -> SafetyVerdict:
+        self._recorder.note_command(record_commands.EmergencyStop())
+        return self._runtime.request_estop(source)
+
+    def trip_from_thread(self, rule: str, action: SafetyAction, detail: str = "") -> None:
+        self._recorder.note_command(record_commands.PresenceTrip(rule, action))
+        self._runtime.trip_from_thread(rule, action, detail)
+
+    def observe_ecg(
+        self, now: Monotonic, seq: int, quality: SignalQuality, heart_rate: Bpm | None
+    ) -> object:
+        delivered = self._clock.monotonic()
+        self._recorder.note_delivery(now, delivered)
+        return self._runtime.observe_ecg(now, seq, quality, heart_rate)
+
+
 # =========================================================================
 # What the panel reports
 # =========================================================================
@@ -804,6 +864,7 @@ class LocalPanel:
         "_last_measured",
         "_listener",
         "_presence",
+        "_recorded_presence",
         "_recorder",
         "_reporter",
         "_roster",
@@ -857,6 +918,7 @@ class LocalPanel:
         # Set once the control loop has completed a tick, so read the drive.
         self._ticked: asyncio.Event = asyncio.Event()
         self._recorder: SessionRecorder | None = recorder
+        self._recorded_presence: Monotonic | None = None
         self._wall_clock: WallClockWatch | None = wall_clock
         self._config: LocalConfig = config
         self._drive: DriveSide = drive
@@ -1008,10 +1070,16 @@ class LocalPanel:
         tick is under way. It is taken by the NEXT tick, and the surface keeps
         its place until then (:meth:`~src.control_surface.ControlSurface.note_idle`).
         """
-        if self._surface.take_estop() is not None:
+        estop = self._surface.take_estop()
+        if estop is not None:
+            self._record_command(record_commands.EmergencyStop(), estop.operator)
             self._runtime.request_estop(ESTOP_SOURCE)
         seen = self._surface.attendant_last_seen
         if seen is not None:
+            if seen != self._recorded_presence:
+                self._recorded_presence = seen
+                if self._recorder is not None:
+                    self._recorder.note_command(record_commands.AttendantPing(), at=seen)
             # The page pings the surface; attendant_absent judges the runtime's record.
             self._runtime.note_presence(seen)
         await self._dispatch()
@@ -1074,6 +1142,10 @@ class LocalPanel:
         """
         return None if self._recorder is None else self._recorder.frames_refused()
 
+    def _record_command(self, command: record_commands.Command, operator: str = SYSTEM) -> None:
+        if self._recorder is not None:
+            self._recorder.note_command(command, operator)
+
     async def _dispatch(self) -> None:
         """Hand the mailbox's command to the runtime, and say what became of it.
 
@@ -1092,12 +1164,15 @@ class LocalPanel:
             case StartManual():
                 await self._start_manual(command)
             case SetManualTarget(output_rpm=output_rpm):
+                self._record_command(record_commands.SetManualTarget(output_rpm), command.operator)
                 target = runtime.set_manual_target(output_rpm)
                 self._answer(command, target, describe_target_refusal)
             case FaultReset():
+                self._record_command(record_commands.FaultReset(), command.operator)
                 reset = await runtime.fault_reset()
                 self._answer(command, reset, describe_reset_refusal)
             case EndSession(reason=reason):
+                self._record_command(record_commands.Stop(), command.operator)
                 runtime.request_stop(reason)
                 self._surface.note_taken(command)
             case _ as unreachable:
@@ -1151,8 +1226,11 @@ class LocalPanel:
         # and so does the count of those it loses.
         asked = self._clock.monotonic()
         refused = self._frames_refused()
+        self._record_command(record_commands.StartManual(ceiling.value), operator)
         started = await self._runtime.start_manual(occupancy, operator, ceiling.value)
         if isinstance(started, Err):
+            if self._recorder is not None:
+                self._recorder.discard_preroll()
             self._surface.note_refused(command, describe_start_refusal(started.error))
             return
         self._surface.note_taken(command)
@@ -1254,8 +1332,11 @@ class LocalPanel:
         # and so does the count of those it loses.
         asked = self._clock.monotonic()
         refused = self._frames_refused()
+        self._record_command(record_commands.StartProgramme(), operator)
         started = await self._runtime.start(program, subject)
         if isinstance(started, Err):
+            if self._recorder is not None:
+                self._recorder.discard_preroll()
             self._refuse_programme(command, describe_start_refusal(started.error))
             return
         self._surface.note_taken(command)
@@ -1599,6 +1680,7 @@ class LocalPanel:
             self._drive.release()
             detail = "runtime never started: drive link released without a write"
         else:
+            self._record_command(record_commands.Shutdown())
             report = await self._runtime.shutdown("console exit")
             detail = report.detail
         recorder = self._recorder
@@ -1623,7 +1705,7 @@ class LocalPanel:
 
 
 def build_presence(
-    config: LocalConfig, clock: Clock, runtime: TrainingRuntime
+    config: LocalConfig, clock: Clock, runtime: PresenceRuntimePort
 ) -> PresenceGuard | None:
     """The camera fail-safe ``PRESENCE_SOURCE`` asks for, or ``None`` (the default).
 
@@ -1855,13 +1937,14 @@ def build_panel(
     )
     # ONE supervisor: the surface latches the runtime's own. And the runtime
     # acknowledges, so its own latches clear with the supervisor's.
-    presence = build_presence(config, clock, runtime)
+    inputs = runtime if recorder is None else RecordedRuntime(runtime, recorder, clock)
+    presence = build_presence(config, clock, inputs)
     surface = ControlSurface(
         clock=clock,
         supervisor=runtime.supervisor,
         sink=hub if recorder is None else RecordedSink(hub, recorder),
         # With a camera, an acknowledgement clears the presence latch too.
-        acknowledger=runtime if presence is None else PresenceAcknowledger(runtime, presence),
+        acknowledger=inputs if presence is None else PresenceAcknowledger(inputs, presence),
     )
     store = ProfileStore(profiles_path, defaults_path)
     match store.load():
@@ -1875,7 +1958,7 @@ def build_panel(
         clock=clock,
         source=ecg_side.client,
         treatment=load_treatment(ECG_SAMPLE_RATE, DSP_OUTPUT_RATE),
-        heart_rate=runtime,
+        heart_rate=inputs,
         waveform=hub,
         sample_rate=ECG_SAMPLE_RATE,
         treat=treat,

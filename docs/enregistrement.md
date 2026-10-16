@@ -64,7 +64,16 @@ d'un dossier (un marqueur de dépôt, un curseur de synchronisation, la liste
 premier démarrage de la console avec un tableau de bord configuré sur ce
 répertoire : sa télémétrie à 1 Hz, ses événements et sa fin, et rien d'autre
 (ni les trames du variateur, ni les blocs ECG, ni `sensors.csv`, ni rien du
-journal hors séance `logbook/`). Cela vaut
+journal hors séance `logbook/`). Le flux transmet les événements de séance
+seulement : les pings `attendant_ping` et
+les événements `t < 0` restent dans `events.jsonl` et dans son dépôt complet,
+sans partir dans le flux d'événements du tableau de bord. Ces lignes ne
+prennent aucun rang transmis : `seq` est le rang après ce filtrage, stable
+entre l'envoi direct et une reprise. Le curseur les passe sans les compter
+comme illisibles. Une ligne illisible prend toujours un rang et reste signalée.
+Le point de la seconde 0
+reste envoyé ; sur la console, c'est le dernier tic de repos avant la
+commande de départ. Les points de temps négatif ne partent pas. Cela vaut
 aussi pour un enregistrement fait **pendant qu'aucun tableau de bord n'était
 configuré**, s'il est postérieur à ce premier démarrage : il part au premier
 démarrage où une clé est de nouveau en place, et aucun réglage ne l'en
@@ -211,10 +220,15 @@ de configuration ou le dernier tic ; les indicateurs inconnus restent inconnus.
 ## Tics, 5 Hz
 
 `ticks.csv` a une ligne d'en-tête, puis une ligne par tic réellement observé.
-Le writer n'invente pas les tics manquants. Les tics de la console au repos
-qui précèdent le départ ont un `t` négatif ou nul : `t = 0` est l'instant de
-la commande de départ, et un tic horodaté 0 est le dernier tic d'avant le
-départ. Les tics de la séance ont un `t` strictement positif. La simulation
+Le writer n'invente pas les tics manquants. Sur la console, `t = 0` est le
+dernier tic de repos précédant la commande de départ. La commande conserve
+son instant propre, normalement au plus un tic après l'origine ; le tic de
+son `control_step` la suit, à `t > 0`. La boucle garde son ordre. Si le départ
+arrive dans le tout premier pas, l'origine est l'instant de la commande :
+la fenêtre manque et le rejeu refuse l'enregistrement.
+La simulation garde `t = 0` à sa commande de départ, faite après son dernier
+tic de repos du même instant. Les tics de repos ont `t <= 0`, ceux de séance
+`t > 0`, chez les deux producteurs. La simulation
 écrit les tics de sa période de repos (15 s par défaut) ; le viewer n'affiche
 que la séance. L'ordre des colonnes est celui du type partagé
 `src.record.rows.Row`, réexporté par `simulation.tracefile` :
@@ -288,17 +302,41 @@ et la simulation écrivent la même chose :
 | `manual_target output_rpm=27.0` | `set_manual_target(27.0)` |
 | `stop` | `request_stop(...)` (bouton, ou fin demandée à distance : kind `remote_command`) |
 | `estop` | `request_estop(...)` |
+| `latch_estop` | `supervisor.latch_estop(...)` : verrou immédiat de la surface, avant le traitement de `estop` par le runtime |
 | `acknowledge estop_released=true` | `acknowledge(actor, estop_released=True)` (kind `verdict_ack`) |
 | `fault_reset` | `fault_reset()` |
 | `shutdown` | `shutdown(...)` : la console quitte (signal, tâche en échec, fin d'une simulation) |
 | `attendant present=true` | tant que `true`, chaque tic note la présence de l'accompagnant |
 | `attendant_ping` | `note_presence(...)` à cet instant seulement, sans argument ni présence présumée aux tics suivants |
+| `presence_trip rule=presence_intrusion action=QUICK_STOP` | `trip_from_thread(rule, action, détail fixe)` ; `rule` appartient à `MOTION_RULES` du garde caméra, `action` est un nom de `SafetyAction` |
 
 Qui a demandé est dans `actor`. Ce que le runtime a répondu n'est pas dans la
 commande : un refus est son propre événement `refusal`, et les décisions sont
 dans `ticks.csv`. Le plafond d'une séance manuelle est écrit dans la commande
 parce que le manifeste ne le porte pas. `t` est l'horloge monotone que le
 runtime lit en traitant la commande, **non arrondie**.
+Pour `attendant_ping`, `t` est l'instant du ping que la surface passe en
+argument à `note_presence`, également non arrondi : cette méthode ne lit pas
+l'horloge. La console garde ses appels existants à chaque tic, mais écrit
+une seule commande par nouvelle valeur du ping, acteur `system`.
+Les verdicts caméra et leur éventuel `estop` sont deux commandes dans
+l'ordre des appels, acteur `system`, sans diagnostic libre dans `presence_trip`.
+Un clic E-STOP écrit `latch_estop` à l'instant non arrondi du verrou de la
+surface, puis `estop` à l'instant de l'appel du runtime au pas suivant.
+Les deux portent l'alias opaque de l'opérateur ; le garde caméra utilise
+directement l'appel du runtime et n'invente pas de clic de surface.
+Une tentative d'attestation sans opérateur est refusée avant tout effet sur
+l'état du runtime : la surface ne publie pas d'entrée et cet appel n'est pas
+écrit. L'attestation en vigueur et les décisions des tics suivants restent
+inchangées. Les autres commandes refusées par le runtime restent écrites,
+avec leur événement `refusal` séparé.
+
+Une attestation en vigueur au premier tic de la fenêtre est redite par
+`confirm_estop_wiring` à cet instant, avec l'alias opaque de son auteur lu
+dans le superviseur. Une attestation faite dans la fenêtre garde son instant
+réel et n'est pas doublée. C'est une précondition en vigueur, pas une nouvelle
+attestation de l'opérateur. Un départ réinitialise la présence : un ping
+périmé d'avant la fenêtre n'est pas rajeuni.
 
 Tout autre texte sous l'un de ces trois kinds rend l'enregistrement non
 rejouable, et le rejeu le dit : une commande ignorée en silence donnerait le
@@ -319,6 +357,9 @@ son `detail` :
 | `dashboard:` | la console : une nouvelle du lien avec le tableau de bord montrée à l'opérateur, par exemple `serveur incompatible (contrat 1.0 vs 2.0)` |
 | `record_degraded:` | le fil du journal de séance : ce qui manque à cet enregistrement, `dropped=<n> failures=<n>`, `drive_frames_lost=<n>` s'il manque des trames du variateur (ce que ce nombre compte : [Observations du variateur](#observations-du-variateur)), puis `last=<opération>:<erreur>`. Une ligne par changement de ces comptes : la dernière de l'enregistrement fait foi, et elle est écrite avant sa clôture, y compris quand il est clos `superseded` |
 | `simulation:` | la simulation : ce qu'elle a fait au modèle |
+| `console:` | la console : notification de mise en file, de confirmation ou d'attestation, distincte de la commande effectivement remise au runtime |
+| `replay_preamble:` | la console : moins de 8 s continues d'ECG brut avant l'origine ; le rejeu refuse avec cette raison |
+| `replay_incomplete: pending_ecg_delivery` | la console : un lot ECG n'a pas été résolu dans le délai de fermeture ; le rejeu refuse cette remise inconnue |
 
 ## Observations du variateur
 
@@ -382,7 +423,7 @@ ou trop de trames en attente d'un enregistrement) sont comptées dans
 l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`) : combien
 de trames du variateur manquent à cet enregistrement.
 
-- Pour les trames que la prise a refusées, ce nombre est **exact si les deux
+- Sans fenêtre de repos, pour les trames que la prise a refusées, ce nombre est **exact si les deux
   lectures de frontière réussissent** : la
   console lit le compte des refus au début de l'armement et à la fin de la
   séance, et l'enregistrement compte la différence. Ce qu'une console au repos
@@ -390,7 +431,9 @@ de trames du variateur manquent à cet enregistrement.
 - Il reste un **majorant**, jamais inférieur à la perte réelle, dans trois
   cas : les trames que le fil du journal a lâchées lui-même faute de place ;
   et tout refus de la prise quand son compte n'a pas pu être lu au début de
-  l'armement. Ces trames sont comptées pour chaque séance dont l'intervalle
+  l'armement. La console utilise aussi ce majorant quand elle joint la
+  fenêtre de repos : elle n'a pas lu le compteur au début exact de cette
+  fenêtre retenue après coup. Ces trames sont comptées pour chaque séance dont l'intervalle
   recouvre celui où elles ont pu commencer, donc par deux enregistrements
   quand deux séances le recouvrent.
 - Si seul le compte de fin manque, le fil soustrait le compte d'armement du
@@ -399,20 +442,21 @@ de trames du variateur manquent à cet enregistrement.
   la séance. C'est donc aussi un majorant, mais calculé par différence de
   compteurs, sans attribution par recouvrement d'intervalles.
 
-La ligne ne dit pas elle-même lequel des deux comptes a servi. Sur la console,
-le premier est le seul attendu : le second n'a été obtenu qu'en test (une
-borne réduite, une lecture du compte rendue fautive), et une lecture du compte
-qui échoue est écrite dans le journal de la console. Le format ne change pas :
-c'est le même texte dans le `detail` d'un événement `warning`, qu'un lecteur
-plus ancien lit comme avant, et le nombre n'est jamais plus grand que celui
-que la console écrivait jusque-là pour la même séance. Les lignes sont celles de la séance, du début de
-son armement à sa fin : ce que la console demande au variateur hors séance
-(scrutation au repos, consigne nulle après une séance, départ refusé,
-réarmement de défaut) n'y est pas, ni avant ni après, même quand cela
-attendait avec les trames de la séance que le fil du journal vienne les
-prendre. Les échanges de l'armement précèdent l'ouverture de l'enregistrement
-(leur `t` est négatif) : ils y sont tous, parce que le fil du journal garde ce
-qu'il prend pendant un armement jusqu'à l'ouverture de l'enregistrement
+La ligne ne dit pas elle-même lequel des deux comptes a servi. Avec sa
+fenêtre de repos, la console utilise normalement le majorant par intervalles.
+Une lecture de compteur qui échoue est écrite dans le journal de la console.
+Le format ne change pas : c'est le même texte dans le `detail` d'un événement
+`warning`, qu'un lecteur plus ancien lit comme avant. Le compte additionne
+chaque intervalle de perte qui recouvre la fenêtre de cet enregistrement ;
+les intervalles entièrement extérieurs n'y entrent pas. Le début de la
+fenêtre de repos est une borne comme la fin de séance pour ce majorant :
+un intervalle qui le recouvre peut inclure une trame antérieure à la fenêtre.
+Les lignes
+vont désormais du premier tic de la fenêtre retenue à la fin de la séance.
+Les échanges de repos de cette fenêtre et ceux de l'armement y sont tous ;
+ceux de l'armement ont normalement `t > 0`, après le dernier tic de repos qui
+fixe l'origine. Le fil garde ce qu'il prend avant l'ouverture jusqu'à ce que
+l'enregistrement le réclame
 ([raspberry-pi.md](raspberry-pi.md#158-ce-qui-nest-pas-enregistré-aujourdhui)).
 
 Le point existant de simulation, `RecordingDrive`, est un wrapper de
@@ -506,8 +550,10 @@ ne la voit pas. Sans cet objet, il conserve la remise en ligne à
 `t_received` (ou, si celui-ci manque aussi, à la fin des échantillons).
 Le rejeu reste déterministe, sans fil ni horloge murale. La simulation omet
 `runtime_delivery` : son traitement en ligne n'introduit aucune attente sur
-son horloge déterministe et `t_received` suffit. La console ne produit pas
-encore `runtime_delivery`.
+son horloge déterministe et `t_received` suffit. La console produit
+`runtime_delivery` par une enveloppe du récepteur de lectures de
+l'`EcgBridge`, sans modifier le DSP : le lot attend en mémoire sa remise,
+puis le fil écrit l'en-tête complet.
 
 Les noms de voies autorisés sont ECG, EDA, SpO2, RESP, EMG et LUX. Les limites
 du contenant int16 sont vérifiées ; elles ne changent pas la résolution du
@@ -521,7 +567,9 @@ Sur la console du Pi, un bloc est un lot d'acquisition tel que reçu (200
 la numérotation est un lot que l'enregistreur a dû refuser (file pleine). Ce
 que le BITalino lui-même a perdu est dit par un événement `warning`
 (`bitalino_loss:`, avec les compteurs de la liaison), et se voit dans les
-`t_first`. Le premier bloc d'une séance peut commencer un peu avant `t = 0`.
+`t_first`. Chaque bloc porte `t_received`, lu dans `SessionRecorder.note_batch`
+quand le tap lui remet le lot. Le premier bloc est normalement dans la
+fenêtre de repos, plusieurs secondes avant `t = 0`.
 
 Dans les scénarios DSP, le tap placé avant le traitement capture tous les
 canaux acquis, avec `t_received`. Les blocs acquis pendant le repos qui précède
@@ -608,21 +656,56 @@ Il faut aussi la géométrie du manifeste (`geometry`) : le runtime rejoué est
 construit avec elle. Quand il manque plusieurs de ces choses, le refus les
 donne ensemble, séparées par « ; ».
 
-**L'enregistrement que la console du Pi écrit aujourd'hui est refusé**, pour
-deux raisons que le rejeu énonce : ses événements d'entrée sont du texte
-(`manual session started`, `end_requested: done`) et non des commandes du
-tableau ci-dessus ; son manifeste n'a pas de géométrie. Son
-`drive_frames.jsonl` n'est plus vide (ANH-191) : en simulation il porte les
-observations d'appel, depuis l'ouverture de l'enregistrement. Il n'a pas les
-tics du repos (son premier tic est à `t = 0`), donc pas non plus les réponses
-du variateur à ces tics, ni `t_received` sur ses blocs ; et sur le pilote
-natif ses trames sont des échanges Modbus, que le rejeu ne sait pas encore
-redonner. Même structure ne veut donc pas encore dire rejouable :
-`test_record_console_parity.py` vérifie les deux, et que la console et la
-simulation écrivent les mêmes observations d'appel.
+**L'enregistrement de la console en simulation reste refusé pour la
+géométrie absente du manifeste**, quand sa fenêtre est complète. Le test
+`test_record_console_parity.py` passe par le vrai DSP : les entrées se lisent
+par `commands.parse`, les blocs portent `t_received` et les remises
+`runtime_delivery`, les tics et échanges de repos précèdent le départ.
+Son seul refus restant est la géométrie. La console conserve `geometry: null`.
+Les échanges Modbus natifs restent aussi refusés tant que leur magnétophone
+n'est pas disponible.
 
-À instant égal (à la milliseconde), l'ordre rejoué est : avant et jusqu'au
-départ (`t ≤ 0`), le tic puis les commandes ; pendant la séance (`t > 0`), les
+La fenêtre garde **12 s** (`PRESTART_SECONDS`) : les 8 s du DSP, plus 4 s de
+marge pour les frontières des lots de 0,2 s, le dernier tic de repos et une
+première remise décalée. Elle commence au plus tard des quatre frontières :
+
+- fin de l'enregistrement précédent : aucune ligne, aucun lot ni aucune
+  trame n'appartient aux deux enregistrements ;
+- premier tic de repos sans état verrouillé, après l'acquittement ou le
+  réarmement qui l'a levé ; aucun verrou antérieur n'est réinventé ;
+- dernière tentative de départ parvenue au runtime puis refusée, dont les
+  arguments peuvent différer de ceux du futur manifeste ;
+- les 12 dernières secondes conservées en mémoire.
+
+Les lignes, commandes et lots restent dans `SessionRecorder`, au plus 512
+valeurs et 100 000 échantillons, lot en traitement compris ; les trames
+restent dans le fil du journal, au plus 8192, plus la prise de 4096.
+Les nouveaux éléments au-delà d'une borne sont refusés et comptés sans
+attente ; le journal garde sa règle pour les trames les plus anciennes.
+L'expiration normale de la fenêtre n'est pas une perte. Un débordement de la
+fenêtre est annoncé par `record_degraded: dropped=...` à l'ouverture : ce
+compte conservateur comprend les refus depuis la dernière ouverture, même
+si leur instant est sorti depuis de la fenêtre. Si les blocs retenus ne
+couvrent pas 8 s continues avant l'origine, `replay_preamble:` le dit et le
+rejeu refuse. La durée est celle de la dernière plage continue acquise,
+lot en traitement compris, jusqu'au plus tôt de sa fin et de l'origine :
+aucun échantillon n'est exigé pile à l'origine. Un décalage d'acquisition de
+50 ms ne transforme donc pas 8 s présentes en une fenêtre courte. Une vraie
+plage courte après une rupture, ou coupée par la frontière de début de
+fenêtre, reste refusée explicitement. L'ouverture ne touche pas le disque
+et n'attend pas le fil.
+
+Un lot encore dans le DSP au tic `DONE` peut retarder la clôture seule, au
+plus jusqu'au tic suivant. La borne `Closing.until` reste celle de `DONE` :
+aucun tic, événement ni échange postérieur n'est ajouté. Une remise observée
+complète l'en-tête ; le lot suivant résout un lot sans lecture. À la borne,
+avant un autre départ ou à la sortie avec l'ECG annulé, un lot non résolu
+est écrit sans remise datée avec `replay_incomplete: pending_ecg_delivery` :
+le rejeu refuse au lieu de présumer une lecture. Le moteur et la boucle
+n'attendent jamais cette clôture.
+
+À instant égal (à la milliseconde), l'ordre rejoué est : avant et jusqu'à
+l'origine (`t ≤ 0`), le tic puis les commandes ; après l'origine (`t > 0`), les
 commandes puis le tic, comme la console vide sa boîte de commandes avant de
 tiquer ; `shutdown` vient toujours après le tic de son instant.
 Une remise ECG explicitement datée se place juste avant le tic : avant le
@@ -653,7 +736,13 @@ producteur ne le porte pas :
   sont refusés au rejeu ;
 - une exception levée dans le tic d'origine, un saut de l'horloge murale
   pendant l'acquisition, une perte signalée par le lien d'acquisition sans
-  trou dans les horodatages.
+  trou dans les horodatages ;
+- l'entrelacement exact d'un clic E-STOP pendant une attente du tic. La
+  console peut lire le verrou immédiat dans ce tic déjà en cours ; le rejeu
+  remet la commande avant le tic suivant. La transition peut alors décaler
+  d'au plus un tic, dans la tolérance de transition existante, même si
+  `latch_estop` garde l'instant réel du clic. Un clic entre deux tics se
+  rejoue au même tic, avec la même consigne.
 
 ## Utilisation et compatibilité
 
@@ -668,6 +757,8 @@ pas une nouvelle valeur de `schema_version` :
 | `error` dans `drive_frames.jsonl` | ANH-192 | refuse la ligne (clé inconnue) |
 | `runtime_delivery` dans l'en-tête brut | ANH-192 | refuse le bloc (clé inconnue) |
 | commande `attendant_ping` | ANH-192 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
+| commande `presence_trip` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; ni kind ni champ de manifeste nouveau |
+| commande `latch_estop` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; le verrou immédiat de la surface est distinct de l'appel `estop` du runtime |
 
 Une commande mal écrite sous un kind d'entrée est aussi refusée par le rejeu
 avec sa raison. Le reader ne décode pas les commandes : il doit pouvoir

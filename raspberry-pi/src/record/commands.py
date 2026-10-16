@@ -13,6 +13,7 @@ this closed vocabulary, written by :func:`encode` and read by :func:`parse`:
     manual_target output_rpm=27.0
     stop
     estop
+    latch_estop
     acknowledge estop_released=true
     fault_reset
     shutdown
@@ -35,8 +36,10 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Final, assert_never
 
+from src.presence.monitor import MOTION_RULES
 from src.record.schema import EventKind
 from src.result import Err, Ok, Result
+from src.training.types import SafetyAction
 from src.units import MotorRpm, OutputRpm
 
 
@@ -73,6 +76,11 @@ class EmergencyStop:
 
 
 @dataclass(frozen=True, slots=True)
+class LatchEmergencyStop:
+    """The surface's immediate supervisor latch, before the runtime handles the stop."""
+
+
+@dataclass(frozen=True, slots=True)
 class Acknowledge:
     estop_released: bool
 
@@ -99,6 +107,14 @@ class AttendantPing:
     """The attendant was seen at this instant, without promising another presence."""
 
 
+@dataclass(frozen=True, slots=True)
+class PresenceTrip:
+    """A movement verdict from the camera guard, without its free diagnostic text."""
+
+    rule: str
+    action: SafetyAction
+
+
 type Command = (
     ConfirmEstopWiring
     | StartProgramme
@@ -106,11 +122,13 @@ type Command = (
     | SetManualTarget
     | Stop
     | EmergencyStop
+    | LatchEmergencyStop
     | Acknowledge
     | FaultReset
     | Shutdown
     | Attendant
     | AttendantPing
+    | PresenceTrip
 )
 
 INPUT_KINDS: Final[frozenset[EventKind]] = frozenset(
@@ -119,6 +137,17 @@ INPUT_KINDS: Final[frozenset[EventKind]] = frozenset(
 """The event kinds whose ``detail`` is a command."""
 
 _BOOLEANS: Final = {"true": True, "false": False}
+_PRESENCE_ARGUMENTS: Final[int] = 2
+_BARE_COMMANDS: Final[dict[str, Command]] = {
+    "confirm_estop_wiring": ConfirmEstopWiring(),
+    "start_programme": StartProgramme(),
+    "stop": Stop(),
+    "estop": EmergencyStop(),
+    "latch_estop": LatchEmergencyStop(),
+    "fault_reset": FaultReset(),
+    "shutdown": Shutdown(),
+    "attendant_ping": AttendantPing(),
+}
 
 
 def encode(command: Command) -> str:  # noqa: PLR0911  # one return per command
@@ -134,8 +163,8 @@ def encode(command: Command) -> str:  # noqa: PLR0911  # one return per command
             return f"manual_target output_rpm={float(output_rpm)!r}"
         case Stop():
             return "stop"
-        case EmergencyStop():
-            return "estop"
+        case EmergencyStop() | LatchEmergencyStop():
+            return "latch_estop" if isinstance(command, LatchEmergencyStop) else "estop"
         case Acknowledge(estop_released):
             return f"acknowledge estop_released={str(estop_released).lower()}"
         case FaultReset():
@@ -146,6 +175,8 @@ def encode(command: Command) -> str:  # noqa: PLR0911  # one return per command
             return f"attendant present={str(present).lower()}"
         case AttendantPing():
             return "attendant_ping"
+        case PresenceTrip(rule, action):
+            return f"presence_trip rule={rule} action={action.name}"
     raise assert_never(command)
 
 
@@ -225,33 +256,40 @@ def _attendant(words: list[str]) -> Result[Command, str]:
     return Ok(Attendant(present.value))
 
 
+def _presence_trip(words: list[str]) -> Result[Command, str]:
+    if len(words) != _PRESENCE_ARGUMENTS:
+        return Err("expected rule=... action=...")
+    rule = _argument(words[:1], "rule")
+    action = _argument(words[1:], "action")
+    if isinstance(rule, Err) or isinstance(action, Err):
+        return Err("expected rule=... action=...")
+    if rule.value not in MOTION_RULES:
+        return Err("unknown camera movement rule")
+    try:
+        demand = SafetyAction[action.value]
+    except KeyError:
+        return Err("unknown safety action")
+    return Ok(PresenceTrip(rule.value, demand))
+
+
 def parse(detail: str) -> Result[Command, str]:  # noqa: PLR0911  # one return per command
     """The command ``detail`` records, or why it is none. Total: never raises."""
     words = detail.split(" ")
     verb, arguments = words[0], words[1:]
+    bare = _BARE_COMMANDS.get(verb)
+    if bare is not None:
+        return _bare(arguments, bare)
     match verb:
-        case "confirm_estop_wiring":
-            return _bare(arguments, ConfirmEstopWiring())
-        case "start_programme":
-            return _bare(arguments, StartProgramme())
         case "start_manual":
             return _start_manual(arguments)
         case "manual_target":
             return _manual_target(arguments)
-        case "stop":
-            return _bare(arguments, Stop())
-        case "estop":
-            return _bare(arguments, EmergencyStop())
         case "acknowledge":
             return _acknowledge(arguments)
-        case "fault_reset":
-            return _bare(arguments, FaultReset())
-        case "shutdown":
-            return _bare(arguments, Shutdown())
         case "attendant":
             return _attendant(arguments)
-        case "attendant_ping":
-            return _bare(arguments, AttendantPing())
+        case "presence_trip":
+            return _presence_trip(arguments)
         case _:
             pass
     return Err("not a command of the replay vocabulary")

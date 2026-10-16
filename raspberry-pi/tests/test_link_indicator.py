@@ -53,6 +53,7 @@ from src.control_surface import EventKind as SurfaceEvent
 from src.link_state import MAX_DETAIL, UNREACHABLE_AFTER, LinkHealth, LinkState, LinkStatus
 from src.local_config import RETIRED_KEYS, CloudConfig, load_local_config, retired_keys
 from src.local_panel import EXIT_CONFIG, main
+from src.record.commands import INPUT_KINDS
 from src.record.cursor import Cursor, load
 from src.record.journal import Journal
 from src.record.reader import Recording, read
@@ -739,7 +740,15 @@ def the_session_is_whole_and_closed_on_the_dashboard(s: Scene) -> None:
     assert len(expected) >= 50
     assert (inner.duplicates, inner.rejected) == (0, 0)
     events = [item.item for _key, item in sorted(inner.events.items())]
-    assert [event["seq"] for event in events] == list(range(len(recording.events)))
+    transmitted = [
+        event
+        for event in recording.events
+        if event.t >= 0 and not (event.kind in INPUT_KINDS and event.detail == "attendant_ping")
+    ]
+    assert [event["seq"] for event in events] == list(range(len(transmitted)))
+    assert [(event["kind"], event["detail"], event["actor"]) for event in events] == [
+        (event.kind, event.detail, event.actor) for event in transmitted
+    ]
     paths = [exchange.path for exchange in inner.trace]
     assert (paths.count(LOCAL), paths.count(END)) == (1, 1)
     cloud = s.console.panel.cloud

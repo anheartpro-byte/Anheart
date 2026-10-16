@@ -485,12 +485,14 @@ def test_ex2_a_descriptor_that_leaks_fails_and_descriptors_that_come_and_go_do_n
 
 def test_ex2_the_data_folder_is_held_to_what_the_arming_gate_plans_for() -> None:
     run = steady()
-    crowded = replace(session(1), record=Footprint(size=1, allocated=1, entries=3050))
+    full = replace(session(1), record=Footprint(size=1, allocated=1, entries=3093))
+    crowded = replace(full, record=Footprint(size=1, allocated=1, entries=3094))
     heavy = replace(session(2), record=Footprint(allocated=round(BYTES_PER_SECOND_RESERVED * 700)))
     logbook = replace(STEADY_DATA, logbook=Footprint(size=LOGBOOK_LIMIT + 1))
     littered = replace(STEADY_DATA, stray=("core.dump", ".sync-0.tmp"))
 
     fine = check_data(run)
+    at_limit = check_data(replace(run, sessions=(full, session(2))))
     too_many = check_data(replace(run, sessions=(crowded, session(2))))
     too_heavy = check_data(replace(run, sessions=(session(1), heavy)))
     long_logbook = check_data(replace(run, data=logbook))
@@ -500,10 +502,12 @@ def test_ex2_the_data_folder_is_held_to_what_the_arming_gate_plans_for() -> None
 
     assert fine is not None
     assert fine.status is Status.PASS
+    assert at_limit is not None
+    assert at_limit.status is Status.PASS
     # 600 s of session: 3008 files, as many as the gate plans; an hour is 18 048.
     assert "18048 fichiers par heure de séance" in fine.measured
     assert too_many is not None
-    assert (too_many.status, "séance 1 : 3050 fichiers" in too_many.measured) == (Status.FAIL, True)
+    assert (too_many.status, "séance 1 : 3094 fichiers" in too_many.measured) == (Status.FAIL, True)
     assert too_heavy is not None
     assert (too_heavy.status, "séance 2" in too_heavy.measured) == (Status.FAIL, True)
     assert long_logbook is not None

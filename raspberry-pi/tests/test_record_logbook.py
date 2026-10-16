@@ -390,11 +390,11 @@ def test_ex3_outside_a_session_a_console_event_is_a_line_of_the_logbook(tmp_path
     written = lines_of(journal.root / DIRECTORY / ACTIVE)
     assert [(e["kind"], e["detail"], e["actor"]) for e in written] == [
         # A start request names a programme: that it was asked is all that is kept.
-        ("operator_action", "start_requested", ALIAS),
+        ("warning", "console: start_requested", ALIAS),
         ("refusal", "refused: demarrage refuse par [redacted]", ALIAS),
-        ("verdict_ack", "acknowledged: operator_estop", ALIAS),
-        ("operator_action", "fault_reset_requested: reset defaut", ALIAS),
-        ("remote_command", "end_requested: arret", "remote"),
+        ("warning", "console: acknowledged: operator_estop", ALIAS),
+        ("warning", "console: fault_reset_requested: reset defaut", ALIAS),
+        ("warning", "console: end_requested: arret", "remote"),
         ("warning", "dashboard: serveur incompatible (contrat 1.0 vs 2.0)", "system"),
     ]
     assert {e["at"] for e in written} == {"2023-11-14T22:13:20.000Z"}
@@ -506,9 +506,14 @@ async def test_ex3_acceptance_what_is_asked_after_the_record_closed_is_in_the_lo
         await recorded.tick(1.0)
 
     after = logbook_of(recorded)[before:]
-    kinds = [(entry["kind"], str(entry["detail"]).split(":")[0]) for entry in after]
-    assert ("verdict_ack", "acknowledged") in kinds
-    assert ("operator_action", "fault_reset_requested") in kinds
+    kinds = [(entry["kind"], str(entry["detail"])) for entry in after]
+    assert any(
+        kind == "warning" and detail.startswith("console: acknowledged:") for kind, detail in kinds
+    )
+    assert any(
+        kind == "warning" and detail.startswith("console: fault_reset_requested:")
+        for kind, detail in kinds
+    )
     assert all(entry["actor"] in (ALIAS, "system") for entry in after)
     assert again.status_code in (202, 409)
     # The closed record did not change by one byte, and still reads without a warning.
@@ -553,12 +558,12 @@ async def test_ex3_a_start_the_machine_refuses_is_in_the_logbook_with_its_reason
     kept = refusals[0].replace("passager de 9 ans", "[redacted]")
     assert kept.startswith("demarrage refuse : [redacted], minimum ")
     assert written[1:] == [
-        ("operator_action", "start_requested", ALIAS),
+        ("warning", "console: start_requested", ALIAS),
         ("refusal", f"refused: {kept}", ALIAS),
     ]
     assert b"9 ans" not in recorded.everything_on_disk()
-    assert written[0][0] == "operator_action"
-    assert str(written[0][1]).startswith("attested: ")
+    assert written[0][0] == "warning"
+    assert str(written[0][1]).startswith("console: attested: ")
     on_disk = recorded.everything_on_disk()
     assert SHORT_PROFILE.encode() not in on_disk, "the programme's identifier is not written"
     assert OPERATOR.encode() not in on_disk
@@ -589,7 +594,7 @@ async def test_ex3_a_refused_start_never_writes_the_identifier_of_the_programme_
     ]
     written = [(e["kind"], e["detail"]) for e in logbook_of(recorded)]
     assert written[1:] == [
-        ("operator_action", "start_requested"),
+        ("warning", "console: start_requested"),
         ("refusal", "refused: demarrage refuse : programme '[redacted]' inconnu sur cette machine"),
     ]
     assert programme.encode() not in recorded.everything_on_disk()

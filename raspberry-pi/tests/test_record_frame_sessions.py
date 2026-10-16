@@ -24,6 +24,7 @@ records hold: none lost, none twice, each in the record of its session.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Final, override
 
@@ -41,7 +42,7 @@ from src.motor.drive import (
 from src.motor.simulated import SimulatedDrive
 from src.record.codec import Privacy
 from src.record.journal import DEFAULT_LIMITS, Cause, Journal, Limits, just_before
-from src.record.reader import read
+from src.record.reader import Recording, read
 from src.record.retention import records
 from src.record.schema import EventKind, RecordError
 from src.record.session import INTERRUPTED, SessionRecorder, SessionRequest, Stamp
@@ -226,7 +227,7 @@ def test_ex1_a_session_begun_over_one_never_seen_ending_takes_its_own_arming_and
     assert frames_read(first) == [(0.5, "speed"), (1.9, "read_status")]
     second = record_of(journal)
     assert second != first
-    assert frames_read(second) == [(-0.1, "open"), (0.2, "speed")]
+    assert frames_read(second) == [(0.0, "open"), (0.3, "speed")]
 
 
 # =========================================================================
@@ -237,7 +238,11 @@ def test_ex1_a_session_begun_over_one_never_seen_ending_takes_its_own_arming_and
 def degradations(path: Path) -> list[str]:
     loaded = read(path)
     assert isinstance(loaded, Ok), loaded
-    return [e.detail for e in loaded.value.events if e.kind is EventKind.WARNING]
+    return [
+        e.detail
+        for e in loaded.value.events
+        if e.kind is EventKind.WARNING and e.detail.startswith("record_degraded:")
+    ]
 
 
 def test_ex3_a_frame_source_that_raises_in_the_cycle_that_opens_a_record_is_counted_for_it(
@@ -331,6 +336,8 @@ class Told(Wrapped):
         """Moved by ``ANSWER`` at each call; ``None``: the clock stands still within a tick."""
         self.part: str = "first"
         self.calls: list[tuple[str, str]] = []
+        self.stamps: list[Monotonic] = []
+        self.witness_clock: ManualClock | None = None
         self.inside: Callable[[], None] | None = None
         """Done once, inside the call numbered ``at`` (the first call made is 1), before
         the drive answers: the journal thread passing while that exchange is under way.
@@ -340,6 +347,8 @@ class Told(Wrapped):
         """The next read of the drive's limits times out, once: that arming is refused."""
 
     def _told(self, kind: str) -> None:
+        witness = self.witness_clock
+        self.stamps.append(Monotonic(0) if witness is None else witness.monotonic())
         self.calls.append((self.part, kind))
         if self.clock is not None:
             self.clock.advance(ANSWER)
@@ -350,6 +359,25 @@ class Told(Wrapped):
 
     def made_in(self, part: str) -> list[str]:
         return [kind for told, kind in self.calls if told == part]
+
+    def calls_for(self, recording: Recording) -> list[str]:
+        manifest = recording.manifest
+        origin = manifest.clocks.monotonic_start
+        since = origin + min(0.0, *(row.t for row in recording.rows))
+        end = manifest.ended_at
+        until = (
+            float("inf")
+            if end is None
+            else origin
+            + (
+                datetime.fromisoformat(end) - datetime.fromisoformat(manifest.started_at)
+            ).total_seconds()
+        )
+        return [
+            kind
+            for stamp, (_, kind) in zip(self.stamps, self.calls, strict=True)
+            if since - 1e-6 <= stamp <= until + 1e-6
+        ]
 
     def pass_inside(self, call: int, passing: Callable[[], None]) -> None:
         """Have ``passing`` done inside the ``call``-th call made from now on (the next is 1)."""
@@ -417,6 +445,7 @@ def told_rig(
     journal = Journal(tmp_path / "records", clock, limits=limits)
     rig, wrapper = make_rig(tmp_path, env=env, wrap=wrap, clock=clock, journal=journal)
     assert isinstance(wrapper, Told)
+    wrapper.witness_clock = clock
     if answers_take_time:
         wrapper.clock = clock
     return RecordedRig(rig=rig, journal=journal, clock=clock), wrapper
@@ -447,6 +476,9 @@ async def tick_to_the_end(recorded: RecordedRig, *, away: bool) -> None:
             recorded.drain()
         await recorded.tick(0.2, drain=False)
         if not recorded.recorder.recording:
+            recorded.recorder.finish(
+                recorded.clock.monotonic(), recorded.rig.panel.runtime, "test end"
+            )
             return
     raise AssertionError("the session did not end")
 
@@ -500,20 +532,18 @@ async def test_ex1_acceptance_two_chained_sessions_each_hold_their_own_exchanges
     assert "read_status" in drive.made_in("at rest")
     assert "read_status" in drive.made_in("at rest again")
 
-    # None lost, none twice, each in the record of its session, in the order it was made:
-    # the frames of a record ARE the calls made in its session, and what the console did
-    # at rest is in neither.
     held = [[frame.kind for frame in loaded.value.frames] for loaded in (first, second)]
-    assert held == [drive.made_in("first"), drive.made_in("second")]
+    assert held == [drive.calls_for(first.value), drive.calls_for(second.value)]
     for frames in held:
-        assert frames.count("open") == 1, "its own arming, and nobody else's"
-        assert frames[0] == "open"
+        assert "read_limits" in frames
 
-    # The clock moved during the arming: its exchanges are timed before the start of
-    # the record they open, and nothing in a record is timed after its session ended.
     for loaded in (first, second):
         recording = loaded.value
-        assert recording.frames[0].t < 0
+        start = next(
+            event for event in recording.events if event.detail.startswith("start_manual ")
+        )
+        arming = next(frame for frame in recording.frames if frame.kind == "read_limits")
+        assert arming.t >= start.t
         observation = recording.manifest.end_observation
         assert observation is not None
         assert recording.frames[-1].t <= observation.t + 0.2
@@ -543,7 +573,7 @@ async def test_ex2_on_time_too_the_polling_of_a_console_at_rest_is_in_no_record(
     assert recording.warnings == ()
     assert drive.made_in("before")
     assert drive.made_in("after")
-    assert [frame.kind for frame in recording.frames] == drive.made_in("first")
+    assert [frame.kind for frame in recording.frames] == drive.calls_for(recording)
 
 
 async def test_ex1_a_programme_keeps_the_exchanges_of_its_own_arming_like_a_manual_session(
@@ -561,6 +591,9 @@ async def test_ex1_a_programme_keeps_the_exchanges_of_its_own_arming_like_a_manu
         recorded.drain()
     assert drive.made_in("at rest")
     frames = frames_read(recorded.only_record())
-    assert [kind for _, kind in frames] == drive.made_in("programme")
+    recording = recorded.recording()
+    assert [kind for _, kind in frames] == drive.calls_for(recording)
     assert frames[0][1] == "open"
-    assert frames[0][0] < 0, "the arming took time, and came before the start of the record"
+    start = next(event for event in recording.events if event.detail == "start_programme")
+    arming = next(frame for frame in recording.frames if frame.kind == "read_limits")
+    assert arming.t >= start.t

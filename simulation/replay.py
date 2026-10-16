@@ -82,7 +82,7 @@ from src.geometry import MachineGeometry
 from src.record import commands
 from src.record.reader import Recording, read
 from src.record.rows import Row
-from src.record.schema import GeometrySnapshot, Manifest, Profile
+from src.record.schema import EventKind, GeometrySnapshot, Manifest, Profile
 from src.result import Err, Ok, Result
 from src.sensors import ecg as typed_ecg
 from src.sensors.base import SensorReading
@@ -149,11 +149,13 @@ type _Operation = (
     | commands.SetManualTarget
     | commands.Stop
     | commands.EmergencyStop
+    | commands.LatchEmergencyStop
     | commands.Acknowledge
     | commands.FaultReset
     | commands.Shutdown
     | commands.Attendant
     | commands.AttendantPing
+    | commands.PresenceTrip
 )
 
 
@@ -308,6 +310,17 @@ def _plan(recording: Recording) -> Result[_Plan, str]:
     problems.extend(part.error for part in (expected, orders, exchanges) if isinstance(part, Err))
     if not recording.frames:
         problems.append("the record holds no drive exchange: nothing says what the drive answered")
+    if any(
+        event.kind is EventKind.WARNING and event.detail.startswith("replay_preamble:")
+        for event in recording.events
+    ):
+        problems.append("the console recorded less than 8 s of raw ECG before the origin")
+    if any(
+        event.kind is EventKind.WARNING
+        and event.detail == "replay_incomplete: pending_ecg_delivery"
+        for event in recording.events
+    ):
+        problems.append("the console closed with an unresolved ECG delivery")
     geometry = recording.manifest.geometry
     if geometry is None:
         problems.append("the manifest holds no geometry: the runtime cannot be built as it was")
@@ -501,16 +514,29 @@ class _Session:
                 runtime.request_stop(f"{actor}: stop")
             case commands.EmergencyStop():
                 runtime.request_estop(f"{actor}: e-stop")
+            case commands.LatchEmergencyStop():
+                runtime.supervisor.latch_estop(f"{actor}: e-stop")
             case commands.Acknowledge(estop_released):
                 runtime.acknowledge(actor, estop_released=estop_released)
             case commands.FaultReset():
                 await runtime.fault_reset()
             case commands.Shutdown():
                 await runtime.shutdown("replay: the recorded console exit")
+            case commands.Attendant() | commands.AttendantPing() | commands.PresenceTrip():
+                self._presence(order.operation)
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    def _presence(
+        self, command: commands.Attendant | commands.AttendantPing | commands.PresenceTrip
+    ) -> None:
+        match command:
             case commands.Attendant(present):
                 self._attendant = present
             case commands.AttendantPing():
-                runtime.note_presence(self._clock.monotonic())
+                self._runtime.note_presence(self._clock.monotonic())
+            case commands.PresenceTrip(rule, action):
+                self._runtime.trip_from_thread(rule, action, "recorded camera movement verdict")
             case _ as unreachable:
                 assert_never(unreachable)
 

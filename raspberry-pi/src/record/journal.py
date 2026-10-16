@@ -36,15 +36,13 @@ The drive's frames do not go through the queue. They wait in a bounded list of
 their own (:mod:`src.record.drive_tap`), filled by whoever talks to the drive,
 and the journal thread takes them at every cycle: nothing is put on the control
 tick for them. Each goes to the record of the session it began in, from the
-instant the arming of that session began (:attr:`Opening.since`) to the instant
+instant its retained window began (:attr:`Opening.since`) to the instant
 it ended (:attr:`Closing.until`), whenever the thread comes for it: what it
 takes before the record of a session is open waits here, bounded, for that
-opening. What began in no session (a console at rest polling its drive, a
-start that was refused) is written nowhere. And the frames nobody could keep
-are counted for the record of the session they began in: those their list
-refused, exactly, from what the loop read of that list's count at the two ends
-of the session (:attr:`Opening.refused`, :attr:`Closing.refused`); the others
-for every record whose session they can have begun in (:class:`Gap`).
+opening. Frames outside retained windows are omitted. Frames nobody could
+keep are counted for every overlapping window (:class:`Gap`), an upper bound.
+When both boundary counts are known (:attr:`Opening.refused`,
+:attr:`Closing.refused`), tap refusals are counted exactly by subtraction.
 
 A long operation (closing a record of thousands of files, the retention) is
 still one cycle, but not a silent one: between two files the thread measures
@@ -76,7 +74,7 @@ from typing import Final, assert_never
 from src.clock import Clock, ManualClock
 from src.record.codec import Privacy
 from src.record.drive_tap import FRAME_BACKLOG, FrameSource, Observation
-from src.record.ecg import Header, RawBlock
+from src.record.ecg import Header, RawBlock, RuntimeDelivery
 from src.record.logbook import Logbook, Note, note
 from src.record.retention import purge
 from src.record.rows import Row
@@ -196,6 +194,8 @@ class RawBatch:
     t_first: float
     channels: tuple[str, ...]
     samples: tuple[Sequence[float], ...]
+    t_received: float | None = None
+    runtime_delivery: RuntimeDelivery | None = None
 
 
 type Entry = Row | Event | DriveFrame | RawBatch | Sensors
@@ -210,9 +210,8 @@ class Opening:
     manifest: Manifest
     privacy: Privacy
     since: Monotonic
-    """When the arming of that session began, on the console's clock. The drive's
-    frames that began at that instant or later are the session's; what began
-    before it is an idle console's polling, or an earlier session's."""
+    """The first retained idle tick, or the arming when no idle window exists.
+    Frames starting before this boundary are outside this record."""
 
     refused: int | None = None
     """How many frames the drive's bounded list had refused since startup when that
@@ -244,7 +243,14 @@ class Closing:
     ``None``: nobody read it."""
 
 
-type Item = Opening | Closing | Entry | Note
+@dataclass(frozen=True, slots=True)
+class Sealing:
+    """Fix the drive boundary at DONE while a pending ECG block awaits its delivery."""
+
+    closing: Closing
+
+
+type Item = Opening | Closing | Sealing | Entry | Note
 
 
 # =========================================================================
@@ -391,7 +397,14 @@ def raw_block(batch: RawBatch) -> RawBlock:
         raise ValueError("raw acquisition requires integer ADC counts")
     count = len(batch.samples[0]) if batch.samples else 0
     return RawBlock(
-        Header(seq=batch.seq, t_first=batch.t_first, n_samples=count, channels=batch.channels),
+        Header(
+            seq=batch.seq,
+            t_first=batch.t_first,
+            n_samples=count,
+            channels=batch.channels,
+            t_received=batch.t_received,
+            runtime_delivery=batch.runtime_delivery,
+        ),
         tuple(tuple(int(value) for value in channel) for channel in batch.samples),
     )
 
@@ -494,6 +507,7 @@ class Scribe:
         "_consumed",
         "_discarded",
         "_dispatched",
+        "_ending",
         "_error",
         "_failures",
         "_frames",
@@ -548,6 +562,7 @@ class Scribe:
         # Due at once: the first idle cycle after startup applies the retention.
         self._purged_at: Monotonic = Monotonic(clock.monotonic() - PURGE_PERIOD)
         self._writer: Writer | None = None
+        self._ending: Closing | None = None
         self._logbook: Logbook = Logbook(root)
         self._frames: FrameSource | None = None
         self._activity: Activity = Activity.IDLE
@@ -678,7 +693,10 @@ class Scribe:
                 self._hand_frames(item.until, item.refused)
             self._note(self._take(item, now, dropped, unlogged))
             self._pulse()
-        self._hand_frames(None, heard)
+        ending = self._ending
+        self._hand_frames(
+            None if ending is None else ending.until, heard if ending is None else ending.refused
+        )
         self._forget(dispatched)
         self._checkpoint(now, dropped)
         self._published_at = self._clock.monotonic()
@@ -843,7 +861,10 @@ class Scribe:
             if isinstance(item, Opening):
                 return self._open(item, now)
             if isinstance(item, Closing):
-                return self._close(item, now, dropped)
+                return self._close(item, dropped)
+            if isinstance(item, Sealing):
+                self._ending = item.closing
+                return Ok(None)
             if isinstance(item, Note):
                 return self._log(item, now, unlogged)
             return self._append(item)
@@ -884,6 +905,7 @@ class Scribe:
         return self._logbook.append(entry)
 
     def _open(self, opening: Opening, now: Monotonic) -> Result[None, RecordError]:
+        self._ending = None
         previous = self._writer
         if previous is not None:
             # The producer closes a session before opening the next. One that
@@ -921,12 +943,13 @@ class Scribe:
         self._synced_at = now
         return writer.sync()
 
-    def _close(self, closing: Closing, now: Monotonic, dropped: int) -> Result[None, RecordError]:
+    def _close(self, closing: Closing, dropped: int) -> Result[None, RecordError]:
+        self._ending = None
         writer = self._writer
         if writer is None:
             return Ok(None)
         self._writer = None
-        self._warn(writer, now, dropped)
+        self._warn(writer, closing.until, dropped)
         return self._finalise(
             writer,
             ManualClock(epoch_millis=closing.ended_at),
@@ -955,7 +978,8 @@ class Scribe:
         writer = self._writer
         if writer is not None and now - self._synced_at >= FSYNC_PERIOD:
             self._synced_at = now
-            self._warn(writer, now, dropped)
+            ending = self._ending
+            self._warn(writer, now if ending is None else ending.until, dropped)
             self._note(writer.sync())
         if now - self._logbook_synced_at >= FSYNC_PERIOD:
             self._logbook_synced_at = now
@@ -1152,6 +1176,9 @@ class Journal:
         self._open = False
         self._enqueue(closing)
 
+    def seal(self, closing: Closing) -> None:
+        self._enqueue(Sealing(closing))
+
     def submit(self, entry: Entry) -> bool:
         """Queue one value of the open session. ``False``: no session, or no room.
 
@@ -1171,6 +1198,9 @@ class Journal:
         self._put_samples += samples
         self._enqueue(entry)
         return True
+
+    def note_dropped(self, entries: int) -> None:
+        self._dropped += entries
 
     def log(self, entry: Note) -> bool:
         """Queue one line of the logbook, session or not. ``False``: no room.
