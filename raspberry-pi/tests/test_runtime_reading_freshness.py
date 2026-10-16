@@ -46,8 +46,10 @@ async def first_step(rig: Rig) -> float:
     for _ in range(750):
         await rig.step()
         if rig.runtime.applied_rpm > 0:
-            return float(rig.now)
-    pytest.fail("the reference programme never moved")
+            break
+    else:
+        pytest.fail("the reference programme never moved")
+    return float(rig.now)
 
 
 async def turning() -> Rig:
