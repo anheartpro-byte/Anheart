@@ -462,14 +462,96 @@ bash scripts/ci/check-men.sh
 ```
 
 Le validateur échoue sur catalogue absent, doublon, référence inconnue, statut
-invalide, ticket absent du registre ou lien ne correspondant pas au ticket. Un
-ticket compte dès que cette page le nomme, dans un champ Issues ou ailleurs, et
-chaque lien Linear de la page est comparé au registre, où qu'il soit.
+invalide ou ticket écrit `ANH-n` absent du registre, où qu'il soit dans la page,
+adresses et code compris. Le contrôle de forme cherche les lettres de `anh`
+en toute casse, éventuellement séparées par des astérisques, tirets bas,
+tildes, accents graves ou marques d'échappement, puis des séparateurs et des
+chiffres, avec ces mêmes marques possibles entre les chiffres et un éventuel
+suffixe collé. Un candidat doit être exactement écrit `ANH-n`, avec un entier
+positif sans zéro initial. Les séparateurs comprennent espaces, tirets Unicode,
+signe moins, tiret bas, caractères de format, échappement, marques d'emphase,
+ainsi que `#`, `.`, `/`, `:`, `·`, les parenthèses et les crochets.
+Le candidat ne doit pas être immédiatement précédé d'une lettre ou d'un chiffre.
+Les fragments commençant par `anh` en minuscules et immédiatement précédés de
+`/`, `#`, `.` ou `-` sont ignorés partout, par exemple dans un chemin, une
+ancre ou un nom de fichier. Le tiret bas ne donne cette exemption que s'il suit
+une lettre ou un chiffre, comme dans `x_anh-1` ; une emphase en minuscules
+reste contrôlée. Ainsi, `/anh-999` et `-anh-999` ne sont pas comptés.
+Un nom de fichier en minuscules au début d'un passage entre accents graves
+est refusé ; la page écrit donc `reviews/anh-136-2026-10-05.md` avec son chemin.
+Chaque suite crochet fermant puis parenthèse ouvrante doit être immédiatement
+suivie d'un jeton non vide, puis d'une parenthèse fermante. Ce jeton ne peut
+contenir ni caractère d'espacement reconnu par JavaScript, saut de ligne
+compris, ni parenthèse ni chevron. Les titres de lien, les destinations entre
+chevrons et les espaces avant la destination sont donc refusés.
+Une première passe du contrôle de forme efface les jetons après toute suite
+crochet fermant puis parenthèse ouvrante qui contiennent `.`, `/`, `#` ou `:`,
+les liens automatiques HTTP(S) et les adresses nues HTTP(S) ou commençant par
+`www.` ; un jeton sans ces quatre caractères reste lu.
+Une seconde passe relit les jetons de destination avec les mêmes exemptions
+de fragments en minuscules, en effaçant seulement les liens automatiques et
+les adresses nues. Elle ignore aussi un candidat commençant par `anh` en
+minuscules en tête du jeton qui suit toute suite crochet fermant puis
+parenthèse ouvrante, lien ou non, code compris. Le jeton entier doit être un
+nom de fichier fait de lettres minuscules non accentuées (`a` à `z`), chiffres,
+`.`, `_`, `/` ou `-`, finissant par `.md` et éventuellement suivi d'une ancre.
+
+Une adresse est Linear si son hôte, point final retiré, vaut `linear.app` ou
+finit par `.linear.app`. Toute adresse Linear doit être exactement celle d'un
+ticket du registre, fragment retiré. Un chemin contenant une barre oblique ou
+sa forme encodée `%2f`, puis `issue` et une autre barre oblique ou `%2f`, en
+toute casse et à toute position, est comparé comme un chemin de ticket.
+Toute autre adresse Linear, de revue, projet ou document, est refusée.
+La ponctuation finale `. , ; : ! ? _ ~` n'est retirée que pour une adresse nue ;
+une destination explicite est conservée telle quelle. Un lien en ligne vers
+Linear doit avoir exactement le libellé `ANH-n` du ticket lié et pour
+destination l'adresse du registre de ce ticket, fragment éventuel retiré.
+Le crochet ouvrant de ce libellé ne doit pas être précédé d'une marque
+d'échappement. Les images suivent la même règle ; les libellés libres ou mis
+en forme sont refusés. La suite crochet fermant puis deux-points
+est refusée partout, code compris : pas de définition de référence ni de note.
+Les références de caractère et le HTML sont refusés dans toute la page, code
+compris, sauf les liens automatiques HTTP(S).
+
+L'alphabet brut de la page, après remplacement des fins de ligne CRLF par LF,
+se limite au saut de ligne, à l'ASCII imprimable U+0020 à U+007E, à l'espace
+insécable U+00A0, à `« · »`, aux lettres U+00C0 à U+00FF sauf U+00D7 et U+00F7,
+à `Œ œ`, au tiret U+2014 déjà présent, à l'apostrophe U+2019, à l'espace fine
+insécable U+202F et à `→ ↔`. Les tabulations et tout autre caractère sont
+refusés, avec leur point de code et leur ligne, après les autres contrôles.
+Aucune normalisation Unicode n'est appliquée.
+Limites : un lien ou une image qui coupe les lettres ou les chiffres d'un nom,
+par exemple un ticket inscrit suivi d'un chiffre en lien, ou un saut de ligne
+entre les lettres `AN` et `H`, échappe au contrôle des noms de ticket, forme
+et registre.
+Un nom dont `ANH` et les chiffres sont séparés par un autre signe que ceux
+reconnus n'est pas lu, par exemple une virgule, un signe égal ou une flèche.
+Contournement connu non détecté : un lien dont la destination ne contient ni
+`.`, ni `/`, ni `#`, ni `:`, posé sur le séparateur ou sur les lettres d'un
+nom de ticket, n'est pas lu par le contrôle de forme. C'est le cas de
+`anh[-](x)180` et `[ANH](x) 180`, dont l'affichage réunit les morceaux du nom.
+La lecture des liens par le relecteur, à la ligne 4 de la check-list de
+release, reste donc nécessaire.
+La correction n'est pas faite. Elle est consignée comme point de suivi dans
+la PR qui introduit ces contrôles : [PR #117](https://github.com/anheartpro-byte/Anheart/pull/117).
+L'effacement des adresses nues reconnaît `http://`, `https://` ou `www.` en
+toute casse et n'importe où, même sans domaine, plus largement que la
+comparaison des adresses Linear ; il ne s'arrête pas à l'astérisque.
+Un libellé `ANH-n` vers un hôte autre que Linear ou vers une page locale n'est
+pas comparé à la destination du registre ; les noms correctement écrits
+doivent toutefois être inscrits au registre.
+Limite : une adresse nue est coupée avant une espace, un chevron, une
+parenthèse, un crochet, un accent grave, un guillemet, une apostrophe ou un
+astérisque. Par exemple, dans `https://example.org/x(suite)`, seul le préfixe
+avant la parenthèse est lu ; GitHub peut inclure la suite dans le lien.
+Ce contrôle de forme ne remplace pas
+la lecture des liens par le relecteur, demandée à la ligne 4 de la check-list
+de release.
 Il compare les liens au [registre Linear vérifié](../scripts/ci/men-linear-issues.tsv)
 (clé, UUID, date de lecture, URL canonique), constitué par lectures réelles
 `get_issue`. Chaque ligne porte sa date de lecture, la plus récente quand le
-ticket a été relu : 2026-10-10 pour 31 lignes, 2026-10-14 pour 15 lignes,
-2026-10-15 pour 1 ligne.
+ticket a été relu : 2026-10-10 pour 29 lignes, 2026-10-14 pour 9 lignes,
+2026-10-15 pour 1 ligne, 2026-10-16 pour 8 lignes.
 La revue de release du 10 octobre 2026 n'avait relu
 aucun ticket ; la relecture a suivi le même jour, et son résultat, ticket par
 ticket, est dans les preuves de la PR qui a redaté le registre. Les 32 tickets
@@ -493,11 +575,42 @@ des menaces » (paragraphe suivant) : identifiant, UUID et adresse n'ont pas
 changé, et leur ligne porte cette date. ANH-230, que MEN-06 nomme depuis le
 même jour, a été lu dans Linear ce jour-là (identifiant, UUID, adresse et
 description) et inscrit au registre. Le validateur refuse désormais tout ticket
-nommé par cette page et absent du registre. Le fichier de tests vérifie que la
+écrit `ANH-n` dans cette page et absent du registre, y compris dans les adresses
+et le code. Les autres écritures sont soumises au contrôle de forme et aux
+exceptions décrits ci-dessus. Le fichier de tests vérifie que la
 phrase qui donne ces dates nomme celles que porte le registre, avec le nombre
 de lignes de chacune, et aucune autre. Aucun jeton Linear n'est requis en CI.
 Ce snapshot atteste **l'existence au jour de lecture**, pas le statut actuel,
 l'achèvement d'une mesure ou la présence d'un backlink dans le ticket.
+
+Le 16 octobre 2026, ANH-180, ANH-186, ANH-187, ANH-223 et ANH-224 ont été relus
+dans Linear, identifiant, UUID, adresse, description et commentaires compris.
+Aucun ne portait de section « Traçabilité des menaces ». ANH-223 citait déjà
+MEN-04, MEN-05, MEN-14 et MEN-15 dans « Dépendances et risque » ; ANH-224 y
+citait MEN-04, MEN-18 et MEN-20, mais pas MEN-14. ANH-180, ANH-186 et ANH-187
+ne citaient aucune MEN. Une section « Traçabilité des menaces » a été ajoutée
+en fin de description de chacun, puis relue. Elle nomme MEN-08 pour ANH-180 ;
+MEN-03 et MEN-07 pour ANH-186 ; MEN-03 pour ANH-187 ; MEN-05 pour ANH-223 ;
+MEN-14 et MEN-18 pour ANH-224. Elle reprend aussi les menaces déjà citées dans
+« Dépendances et risque » : MEN-04, MEN-14 et MEN-15 pour ANH-223 ; MEN-04 et
+MEN-20 pour ANH-224. Chaque section dit que le ticket contribue au traitement
+de ces menaces, que leur fermeture exige la preuve de la fiche et qu'aucun
+statut de risque fermé ou accepté ne se déduit du statut du ticket. Aucun autre
+texte, état ni étiquette n'a changé. À l'enregistrement, Linear a remis entre
+chevrons les adresses de 13 liens de revue de PR déjà présents dans ces
+descriptions, sans changer leur libellé ni leur adresse. Linear a aussi ajouté
+de lui-même une relation vers ANH-136 à chacun des cinq tickets, à
+l'enregistrement de sa section (activité du 16 octobre 2026 vers 05 h 15 UTC).
+
+Le même jour, ANH-135 (MEN-08), ANH-148 (MEN-20) et ANH-230 (MEN-06) ont été
+relus de la même façon (identifiant, UUID, adresse, description et commentaires).
+Aucun ne porte de section
+« Traçabilité des menaces » ; ils n'ont pas été modifiés. Pour les huit tickets,
+identifiant, UUID et adresse sont ceux du registre, dont la date de lecture
+est maintenant le 16 octobre 2026. Ces huit tickets sont nommés hors des champs
+Issues. Les autres tickets nommés hors de ces champs sont des décisions et
+analyses séparées (ANH-98, ANH-103, ANH-104 et ANH-105), le pilote (ANH-120) et
+le ticket de ce modèle (ANH-136), pas des tickets de traitement.
 
 À chaque modification des tickets cités, chaque jalon et avant le pilote :
 relire chaque issue par son identifiant dans Linear, vérifier UUID/URL et contenu,
@@ -511,6 +624,10 @@ datée impose la fraîcheur avant livraison.
 Chaque ticket de sécurité doit citer les MEN qu'il **contribue à fermer**,
 avec mesures et preuves ; un statut Done du ticket ne ferme pas automatiquement
 la menace. Les mappings exacts sont les champs Issues de chaque fiche.
+Le constat que chaque ticket d'un champ Issues cite dans sa section chaque
+menace que cette page lui attribue porte sur ces champs. Pour les huit tickets
+de traitement nommés hors de ces champs, les lectures
+du 16 octobre ci-dessus disent lesquels portent une section et lesquels non.
 Le 5 octobre 2026, le responsable de l'intégration a ajouté les backlinks
 aux 27 tickets de traitement référencés ; leur texte et leur identité ont été
 revérifiés par lecture de chaque ticket dans Linear. À la relecture du

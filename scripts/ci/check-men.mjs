@@ -41,17 +41,132 @@ for (const row of readFileSync(registryFile, "utf8").split(/\r?\n/)) {
 if (registry.size === 0) refuse("empty Linear registry");
 
 const catalogue = readFileSync(join(docs, "menaces.md"), "utf8").replaceAll("\r\n", "\n");
-// A ticket the page names outside an Issues field must have been read too, and
-// any Linear link must be the one Linear gave: five names once entered the text
-// without a read, and nothing refused them.
+// Correctly written tickets must have been read wherever they occur, including
+// code and addresses, so prose cannot bypass the verified registry.
 for (const [, issueId] of catalogue.matchAll(/\b(ANH-[1-9][0-9]*)\b/g)) {
   if (!issueId || !registry.has(issueId)) refuse(`Linear issue named but not verified: ${issueId}`);
 }
-for (const [url, issueId] of catalogue.matchAll(/https:\/\/linear\.app\/anheart\/issue\/(ANH-[1-9][0-9]*)(?:\/[^\s)#>]*)?/g)) {
-  if (!issueId || registry.get(issueId) !== url) refuse(`unverified Linear issue link: ${issueId}`);
+
+/** @param {string} text @param {boolean} [markdownDestinations] */
+function* ticketNames(text, markdownDestinations = false) {
+  const filenameToken = /[a-z0-9._/-]+(?:#[^\s()<>]*)?\)/y;
+  for (const match of text.matchAll(/(?<![\p{L}\p{N}])a[*_~`\\]*n[*_~`\\]*h[\p{Zs}\s\p{Pd}−_\p{Cf}\\*~`#./:·()[\]]*\p{Nd}(?:[*_~`\\]*\p{Nd})*[\p{L}\p{N}_]*/giu)) {
+    const before = text.slice(Math.max(0, match.index - 3), match.index);
+    if (match[0].startsWith("anh") && (/[/#.-]/.test(text[match.index - 1] ?? "") || /[\p{L}\p{N}]_$/u.test(before))) continue;
+    if (markdownDestinations && match[0].startsWith("anh") && text.slice(Math.max(0, match.index - 2), match.index) === "](") {
+      filenameToken.lastIndex = match.index;
+      const filename = filenameToken.exec(text)?.[0].slice(0, -1).split("#")[0];
+      if (filename?.endsWith(".md")) continue;
+    }
+    yield match[0];
+  }
 }
-for (const [, issueId, url] of catalogue.matchAll(/\[(ANH-[1-9][0-9]*)\]\((https:\/\/linear\.app\/[^\s)]+)\)/g)) {
-  if (!issueId || registry.get(issueId) !== url) refuse(`Linear issue link labelled with another issue: ${issueId}`);
+
+/** @param {string} url @returns {string} */
+function issueAddress(url) {
+  return url.split("#")[0];
+}
+
+/** @param {string} address @returns {URL | undefined} */
+function linearUrl(address) {
+  let parsed;
+  try {
+    parsed = new URL(/^www\./i.test(address) ? `http://${address}` : address);
+  } catch {
+    if (/linear\.app/i.test(address)) refuse(`unverified Linear issue link: ${JSON.stringify(address)}`);
+    return;
+  }
+  const host = parsed.hostname.replace(/\.$/, "");
+  if (host === "linear.app" || host.endsWith(".linear.app")) return parsed;
+}
+
+// Reference definitions and footnotes are outside the catalogue's inline link subset.
+if (catalogue.includes("]:")) refuse("reference definition or footnote in the catalogue: write inline links");
+
+/** @type {{url: string, start: number, end: number}[]} */
+const destinations = [];
+// Require a complete destination token so punctuation cannot hide its real host.
+const destinationToken = /[^\s()<>]+\)/y;
+for (const match of catalogue.matchAll(/\]\(/g)) {
+  const start = match.index + 2;
+  destinationToken.lastIndex = start;
+  const token = destinationToken.exec(catalogue);
+  if (!token) {
+    refuse(`link destination not written as one token closed by a parenthesis: ${JSON.stringify(catalogue.slice(match.index, match.index + 200))}`);
+  }
+  const url = token[0].slice(0, -1);
+  destinations.push({ url, start, end: start + url.length });
+}
+
+for (const match of catalogue.matchAll(/<(https?:\/\/[^<>\s]+|www\.[^<>\s]+)>/gi)) {
+  const url = match[1];
+  const start = match.index + 1;
+  destinations.push({ url, start, end: start + url.length });
+}
+
+// Compare Linear issue addresses by host and exact registry spelling, ignoring
+// fragments; only bare addresses may shed trailing prose punctuation.
+const addresses = [...destinations];
+for (const match of catalogue.matchAll(/(?:https?:\/\/|www\.)[^\s<>()[\]`"'*]+/gi)) {
+  if (destinations.some(({ start, end }) => match.index >= start && match.index < end)) continue;
+  addresses.push({ url: match[0].replace(/[.,;:!?_~]+$/g, ""), start: match.index, end: match.index + match[0].length });
+}
+for (const { url: address } of addresses) {
+  const parsed = linearUrl(address);
+  if (!parsed) continue;
+  const issuePath = /(?:\/|%2f)issue(?:\/|%2f)([^/]*)/i.exec(parsed.pathname);
+  if (!issuePath) refuse(`Linear address other than a registered ticket: ${address}`);
+  const issueId = issuePath[1];
+  if (!/^ANH-[1-9][0-9]*$/.test(issueId) || registry.get(issueId) !== issueAddress(address)) {
+    refuse(`unverified Linear issue link: ${issueId}`);
+  }
+}
+
+/** @param {string} text @returns {string} */
+function withoutAddresses(text) {
+  return text.replace(/<https?:\/\/[^<>\s]*>/gi, " ").replace(/(?:https?:\/\/|www\.)[^\s<>()[\]`"']*/gi, " ");
+}
+
+/** @param {string} text @param {boolean} [markdownDestinations] */
+function checkTicketNames(text, markdownDestinations = false) {
+  for (const name of ticketNames(text, markdownDestinations)) {
+    if (!/^ANH-[1-9][0-9]*$/.test(name)) {
+      const readable = JSON.stringify(name).replace(/[\p{Cf}\p{Zs}]/gu, (char) => char === " " ? char : `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+      refuse(`ticket written other than ANH-n: ${readable}`);
+    }
+    if (!registry.has(name)) refuse(`Linear issue named but not verified: ${name}`);
+  }
+}
+
+// Keep destination erasure for ticket names split by markup, then reread tokens
+// behind every ]( with only lowercase Markdown filenames and path fragments exempt.
+let ticketText = catalogue;
+for (const { url, start, end } of destinations) {
+  if (!/[./#:]/.test(url)) continue;
+  ticketText = ticketText.slice(0, start) + " ".repeat(end - start) + ticketText.slice(end);
+}
+checkTicketNames(withoutAddresses(ticketText));
+checkTicketNames(withoutAddresses(catalogue), true);
+
+// Character references can hide ticket letters or separators, so require literal characters.
+const characterReference = /&(?:#(?:[0-9]+|x[0-9a-f]+)|[a-z][a-z0-9]*);/i.exec(catalogue);
+if (characterReference) refuse(`character reference in the catalogue: write the character itself: ${JSON.stringify(characterReference[0])}`);
+
+// HTML can hide ticket text; only HTTP(S) autolinks remain subject to the address checks.
+// Code is not exempt: recognizing GitHub code spans would require reproducing rules this page does not need.
+if (/<(?!https?:\/\/[^<>\s]+>)[a-z/!?]/i.test(catalogue)) refuse("HTML in the catalogue: write Markdown");
+
+// Inline Linear links require the literal registry key and an unescaped opening bracket.
+// Inspect only the adjacent label characters; destinations cannot start with whitespace.
+for (const { url, start } of addresses) {
+  const parsed = linearUrl(url);
+  if (!parsed) continue;
+  const issueId = /(?:\/|%2f)issue(?:\/|%2f)([^/]*)/i.exec(parsed.pathname)?.[1];
+  const label = `[${issueId}](`;
+  const labelStart = start - label.length;
+  if (catalogue.slice(start - 2, start) === "](" && (catalogue.slice(Math.max(0, labelStart), start) !== label || catalogue[labelStart - 1] === "\\")) {
+    refuse(`Linear link not written [ANH-n](its registry address): ${url}`);
+  }
 }
 /** @type {Set<string>} */
 const definitions = new Set();
@@ -105,5 +220,13 @@ for (const directory of directories) {
       if (!definitions.has(reference[0])) refuse(`undefined ${reference[0]} in ${path}`);
     }
   }
+}
+
+// Keep the catalogue in its explicit character subset, after the more specific diagnostics.
+const outsideAlphabet = /[^\n\x20-\x7e\u00a0\u00ab\u00b7\u00bb\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff\u0152\u0153\u2014\u2019\u202f\u2192\u2194]/u.exec(catalogue);
+if (outsideAlphabet) {
+  const point = outsideAlphabet[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+  const line = catalogue.slice(0, outsideAlphabet.index).split("\n").length;
+  refuse(`character outside the catalogue alphabet: U+${point} at line ${line}`);
 }
 console.log(`MEN validation passed: ${definitions.size} threats; ${registry.size} verified Linear issues.`);
