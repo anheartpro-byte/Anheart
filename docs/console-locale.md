@@ -900,8 +900,9 @@ Règles de la cible :
   montée et que la consigne appliquée vaut 0, une cible non nulle est **refusée** par la
   boucle ; une cible déjà acceptée, que quelque chose vient retenir avant le premier pas,
   est **remise à 0**. Ce qui retient : un verdict en cours, verrouillé ou non ; avec une
-  personne à bord, une fréquence cardiaque inutilisable (aucune lecture fiable depuis
-  plus de 4 s), de tendance inconnue (moins de 5 lectures) ou en baisse de plus de
+  personne à bord, une fréquence cardiaque inutilisable (aucune lecture acceptée par
+  le suiveur, ou dernière acceptation âgée de plus de 2,5 s), de tendance inconnue
+  (moins de 5 lectures) ou en baisse de plus de
   20 bpm/min ; un premier pas que le variateur n'a pas confirmé. Le bras ne part donc ni
   quand un avertissement se lève, ni après un acquittement, ni quand la fréquence
   cardiaque revient : il faut retaper la cible. Une cible de 0 est toujours acceptée, et
@@ -972,7 +973,7 @@ tienne. L'encadré le dit **avant** qu'une cible soit tapée, avec la raison :
 
 | Texte | Raison |
 |---|---|
-| `pas de frequence cardiaque utilisable` | aucune lecture fiable depuis plus de 4 s |
+| `pas de frequence cardiaque utilisable` | aucune lecture acceptée par le suiveur, ou dernière acceptation âgée de plus de 2,5 s ; les 4 s restent la borne de l'affichage |
 | `tendance de la frequence cardiaque pas encore connue` | moins de 5 lectures depuis le début de l'ECG, ou depuis un saut confirmé |
 | `la frequence cardiaque baisse trop vite` | baisse de plus de 20 bpm/min sur 5 lectures (garde vasovagale) |
 
@@ -985,7 +986,8 @@ envoyée dans cet intervalle est refusée, et la note en donne la raison. Il n'e
 affiché qu'en mode `MANUEL`. Si `/api/panel` ne répond plus depuis 3,5 s alors qu'une
 personne est à bord, il dit `RETENUE PAR LA FREQUENCE CARDIAQUE : INCONNUE` au lieu de
 s'éteindre : éteint, il veut dire que rien ne retient. Avec une capsule vide il
-n'apparaît jamais. Rejoué dans un navigateur, personne à bord déclarée par l'API :
+n'apparaît jamais. Rejoué dans un navigateur (rejeu antérieur à la porte de montée
+de 2,5 s), personne à bord déclarée par l'API :
 4,4 s après la perte de l'ECG, l'encadré dit `pas de frequence cardiaque utilisable`,
 avant tout verdict ; une cible envoyée alors est refusée pour cette raison. Sur la
 fréquence cardiaque simulée, la raison `baisse trop vite` s'allume et s'éteint d'une
@@ -2005,7 +2007,7 @@ Cible manuelle (`describe_target_refusal`) :
 | `consigne refusee : <x> tr/min de sortie hors de 0 ou [<min>, <plafond>] tr/min moteur` | hors domaine : ni arrondie ni bornée |
 | `consigne refusee : le verdict <règle> tient le bras a l'arret. Attendre qu'il soit leve, puis redonner la cible` | un avertissement non verrouillé tient le bras à l'arrêt : attendre qu'il se lève, retaper la cible |
 | `consigne refusee : le verdict <règle> tient le bras a l'arret. L'acquitter une fois sa cause levee, puis redonner la cible` | un verdict verrouillé tient le bras à l'arrêt : traiter la cause, acquitter (page Securite), retaper la cible |
-| `consigne refusee : pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable, puis redonner la cible` | personne à bord, aucune lecture fiable depuis plus de 4 s, aucun verdict : vérifier les électrodes, attendre la lecture, retaper la cible |
+| `consigne refusee : pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable, puis redonner la cible` | personne à bord, aucune lecture acceptée par le suiveur, ou dernière acceptation âgée de plus de 2,5 s, aucun verdict : vérifier les électrodes, attendre la lecture, retaper la cible ; une fréquence encore affichée entre 2,5 et 4 s ne suffit pas |
 | `consigne refusee : tendance de la frequence cardiaque pas encore connue, rien ne monte depuis l'arret. Attendre quelques secondes de lecture, puis redonner la cible` | personne à bord, moins de 5 lectures depuis le début de l'ECG (ou depuis un saut confirmé) : attendre quelques secondes, retaper la cible |
 | `consigne refusee : la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. Attendre qu'elle se stabilise, puis redonner la cible` | personne à bord, baisse de plus de 20 bpm/min sur 5 lectures (garde vasovagale) : attendre, retaper la cible |
 
