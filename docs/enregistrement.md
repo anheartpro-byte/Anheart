@@ -733,7 +733,7 @@ ce que l'enregistrement contient :
 Pour un producteur `machine_id: simulation`, il faut aussi la géométrie du
 manifeste (`geometry`) : elle construit le runtime, avec les limites du
 dépôt courant. Son `config_hash` de scénario n'est pas vérifié, ce que le
-rapport dit explicitement. Les trois archives simulées gardent ce comportement.
+rapport dit explicitement. Les archives produites par la simulation gardent ce comportement.
 
 Pour tout autre producteur, dont la console en simulation, le document de
 configuration appliquée décrit ci-dessous est obligatoire. Il fournit la
