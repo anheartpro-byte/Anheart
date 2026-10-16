@@ -894,6 +894,18 @@ export default defineSchema({
       "organizationId",
       "read",
     ])
+    .index("by_user_and_organization_and_machine_and_updated", [
+      "userId",
+      "organizationId",
+      "machineId",
+      "updatedAt",
+    ])
+    .index("by_user_and_organization_and_machine_and_read", [
+      "userId",
+      "organizationId",
+      "machineId",
+      "read",
+    ])
     .index("by_user_and_machine_and_type_and_read", [
       "userId",
       "machineId",

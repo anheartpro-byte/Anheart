@@ -31,6 +31,7 @@ import type * as lib_machineKeys from "../lib/machineKeys.js";
 import type * as lib_machineRegistry from "../lib/machineRegistry.js";
 import type * as lib_medicalParameters from "../lib/medicalParameters.js";
 import type * as lib_notificationEmail from "../lib/notificationEmail.js";
+import type * as lib_notificationVisibility from "../lib/notificationVisibility.js";
 import type * as lib_notifications from "../lib/notifications.js";
 import type * as lib_patientInvitation from "../lib/patientInvitation.js";
 import type * as lib_rateLimits from "../lib/rateLimits.js";
@@ -91,6 +92,7 @@ declare const fullApi: ApiFromModules<{
   "lib/machineRegistry": typeof lib_machineRegistry;
   "lib/medicalParameters": typeof lib_medicalParameters;
   "lib/notificationEmail": typeof lib_notificationEmail;
+  "lib/notificationVisibility": typeof lib_notificationVisibility;
   "lib/notifications": typeof lib_notifications;
   "lib/patientInvitation": typeof lib_patientInvitation;
   "lib/rateLimits": typeof lib_rateLimits;

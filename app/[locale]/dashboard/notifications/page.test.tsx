@@ -44,6 +44,7 @@ function alert(id: string, overrides: Partial<Alert> = {}): Alert {
     type: "drive_fault",
     machineId: "machine-1" as Id<"machines">,
     machineName: "Centri Paris",
+    machineDeleted: false,
     sessionId: undefined,
     detail: undefined,
     reason: undefined,
@@ -82,6 +83,50 @@ function item(title: string) {
 }
 
 describe("the alerts page", () => {
+  it.each(["fr", "en"] as const)(
+    "shows a deleted-machine notice in %s while keeping the readable session link",
+    async (locale) => {
+      signedInAs("gestionnaire");
+      serverHas([
+        alert("a1", { machineDeleted: true }),
+        alert("a2", {
+          machineDeleted: true,
+          sessionId: "session-1" as Id<"sessions">,
+        }),
+      ]);
+
+      await renderPage(<NotificationsPage />, { locale });
+
+      const messages = locale === "fr" ? fr.notifications : en.notifications;
+      expect(screen.getAllByText(messages.machineDeleted)).toHaveLength(2);
+      expect(
+        screen.queryByRole("link", { name: messages.openMachine }),
+      ).toBeNull();
+      expect(
+        screen
+          .getByRole("link", { name: messages.openSession })
+          .getAttribute("href"),
+      ).toBe("/dashboard/sessions/session-1");
+      expect(screen.queryByText(messages.empty)).toBeNull();
+      expect(
+        screen.queryByText(messages.listCut.replace("{count}", "50")),
+      ).toBeNull();
+    },
+  );
+
+  it("shows a single visible alert without an empty or truncated-list message", async () => {
+    signedInAs("gestionnaire");
+    serverHas([alert("visible")]);
+
+    await renderPage(<NotificationsPage />);
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByText(fr.notifications.empty)).toBeNull();
+    expect(
+      screen.queryByText(fr.notifications.listCut.replace("{count}", "50")),
+    ).toBeNull();
+  });
+
   it("is refused to a patient, who is never asked for alerts", async () => {
     signedInAs("user");
 

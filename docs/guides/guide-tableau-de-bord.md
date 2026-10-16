@@ -324,6 +324,17 @@ nécessaire.
 Pendant un chargement, des **rectangles gris animés** occupent la place des
 blocs : c'est normal.
 
+### 3.7 La cloche des alertes
+
+La cloche de l'en-tête ouvre la page **Alertes** pour les gestionnaires et
+administrateurs. Son badge compte uniquement leurs alertes non lues encore
+visibles dans l'organisation où ils travaillent, jusqu'à 100 ; il affiche
+« 99+ » à partir de 100. Sans non lue, la cloche reste présente sans badge.
+Un patient n'a pas de cloche. Une machine retirée à un gestionnaire ne
+masque pas ses alertes des autres machines derrière celles qu'il ne voit
+plus. Une machine supprimée reste comptée pour son admin d'organisation et
+son gestionnaire encore lié, comme ses séances restent lisibles.
+
 ---
 
 ## 4. Visite guidée, page par page
@@ -1664,9 +1675,29 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 | **Gestion des Rôles** | **Sélectionner un Utilisateur** (tous les comptes sauf vous, « Nom - Rôle »), **Nouveau Rôle** (Administrateur, Gestionnaire, Patient), bouton **Mettre à jour le Rôle** (« Chargement... » pendant l'envoi). En cas de succès, les deux listes se vident et le message « Rôle mis à jour. » s'affiche en bas à droite de l'écran ; en cas d'échec, un message d'échec s'affiche au même endroit. |
 | **Informations Système** | Valeurs affichées pour information, **pas des réglages** : nom de l'application, version du site (`web-X.Y.Z`, celle du pied de page des pages publiques, depuis ANH-194), langues, « Délai d'expiration du heartbeat: 90s ». |
 
-Il n'y a **aucun autre réglage** sur le site : ni notifications, ni mot de passe
-(géré par Clerk, menu de l'avatar), ni réglage de machine (fait sur la
-machine).
+Les choix d'alertes par e-mail se trouvent sur la page **Alertes** (§4.21).
+Le mot de passe est géré par Clerk, dans le menu de l'avatar ; les réglages
+de machine se font sur la machine.
+
+### 4.21 Alertes
+
+La cloche ouvre `/fr/dashboard/notifications` : les 50 alertes visibles les
+plus récemment changées, dans l'organisation où vous travaillez. Une mention
+indique quand la liste atteint sa limite. Les alertes d'une machine dont
+vous avez été retiré ne prennent aucune place dans cette liste.
+
+Chaque alerte indique son type, la machine, l'heure et son état de lecture.
+**Voir la séance** ouvre la séance si vous pouvez la lire ; sinon **Voir la
+machine** ouvre la fiche. Pour une machine supprimée, les alertes restent
+accessibles à l'admin d'organisation et au gestionnaire encore lié, comme
+ses séances : **Machine supprimée** remplace le lien vers sa fiche. Le lien
+vers la séance reste disponible quand elle est lisible.
+
+**Marquer comme lue** marque une alerte ; **Tout marquer comme lu** marque
+toutes vos alertes visibles non lues, par lots automatiques de 500 sans
+nouveau clic. Les alertes que vous ne pouvez plus voir restent non lues.
+Les interrupteurs **Alertes par e-mail** choisissent les types que vous
+recevez aussi par e-mail.
 
 ---
 

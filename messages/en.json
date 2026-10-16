@@ -1320,6 +1320,7 @@
     "repeated": "{count} times, last at {time}",
     "openSession": "View session",
     "openMachine": "View machine",
+    "machineDeleted": "Machine deleted",
     "reason": "Reason: {reason}",
     "faultCode": "Drive code: {code}",
     "listCut": "Only the {count} most recent alerts are shown.",

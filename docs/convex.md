@@ -849,6 +849,9 @@ nom de passager ni de raison de fin de séance : la raison reste sur la
 séance, et la liste ne la lit qu'au moment de l'afficher, à qui peut lire la
 séance. Index `by_user_and_organization_and_updated` (la liste),
 `by_user_and_organization_and_read` (le nombre de non lues),
+`by_user_and_organization_and_machine_and_updated` et
+`by_user_and_organization_and_machine_and_read` (liste et non lues des seules
+machines liées au gestionnaire, avant la coupe),
 `by_user_and_machine_and_type_and_read` (le regroupement), `by_user`
 (suppression d'un compte) et `by_updated` (purge à 90 jours).
 
@@ -1933,14 +1936,51 @@ sans délai garanti. Rien de cela n'a été mesuré contre un déploiement.
 
 | Fonction | Type | Autorisation | Effet / retour |
 |---|---|---|---|
-| `list` | query | connecté ; vide pour un `user` | Les 50 alertes de l'appelant les plus récemment changées, **dans l'organisation de l'appel**, et seulement celles d'une machine qu'il atteint encore (`canAccessMachine`) : un gestionnaire retiré d'une machine ne voit plus ses alertes. Pour chacune : type, machine et son nom, `detail`, `count`, dates, `read` ; la séance (`sessionId`) seulement si l'appelant peut la lire (`canAccessSession`), et pour `session_failed` sa raison de fin et son `endCode` (`reason`, `reasonCode`), lus sur la séance à ce moment. |
+| `list` | query | connecté ; vide pour un `user` | Les 50 alertes visibles de l'appelant les plus récemment changées, **dans l'organisation de l'appel**, sélectionnées avant la coupe. Pour chacune : type, machine et son nom actuel, `machineDeleted`, `detail`, `count`, dates, `read` ; la séance (`sessionId`) seulement si l'appelant peut la lire (`canAccessSession`), et pour `session_failed` sa raison de fin et son `endCode` (`reason`, `reasonCode`), lus sur la séance à ce moment. |
 | `unreadCount` | query | jamais de refus | Le nombre d'alertes non lues visibles, 100 au plus ; `null` pour un visiteur déconnecté, un compte inconnu, un appel sans organisation acceptée et un `user`. C'est ce que lit la cloche de l'en-tête, sur toutes les pages. |
-| `markRead` | mutation | admin ou gestionnaire ; sa propre alerte, dans l'organisation de l'appel | Marque l'alerte lue. Celle d'un autre compte ou d'une autre organisation : `notification_not_found`, comme une alerte inexistante. |
-| `markAllRead` | mutation | admin ou gestionnaire | Marque lues toutes ses alertes de l'organisation de l'appel ; renvoie `{marked}`. |
+| `markRead` | mutation | admin ou gestionnaire ; sa propre alerte visible, dans l'organisation de l'appel | Marque l'alerte lue. Une alerte invisible, d'un autre compte ou d'une autre organisation : `notification_not_found`, comme une alerte inexistante. |
+| `markAllRead` | mutation | admin ou gestionnaire | Lit et marque au plus 500 alertes visibles non lues par transaction (`MARK_ALL_READ_LIMIT`) ; renvoie `{marked}`, le nombre marqué dans cette transaction. La suite est planifiée sans nouveau clic. Les alertes invisibles restent non lues. |
 | `getSettings` | query | connecté ; `null` pour un `user` | `{emailAvailable, email}` : si le déploiement envoie des e-mails (les trois variables du §8), et le choix par type, valeurs par défaut comprises. |
 | `updateSettings` | mutation | admin ou gestionnaire | `{type, email}` : choisit si ce type part aussi par e-mail pour l'appelant. |
 
-Les trois mutations prennent un jeton de la limite par compte (ANH-166).
+**Visibilité (ANH-237).** Une même règle, dans
+[`convex/lib/notificationVisibility.ts`](../convex/lib/notificationVisibility.ts), sert à `list`, `unreadCount`,
+`markRead` et `markAllRead` : l'alerte appartient à l'appelant et à
+l'organisation de l'appel ; l'appelant est admin Anheart, admin de cette
+organisation, ou gestionnaire lié à la machine par un lien
+`machine_gestionnaires` de cette organisation. Cette décision ne lit aucun
+document `machines` ni `sessions`. Elle repose sur l'hypothèse du produit :
+**une machine ne change pas d'organisation** ; l'organisation de l'alerte et
+celle du lien sont donc celles de la machine. Un gestionnaire retiré d'une
+machine ne voit plus ses alertes, même si elles sont plus récentes que les
+alertes encore visibles.
+
+Pour les admins, les index par destinataire et organisation sélectionnent
+directement les alertes visibles. Pour un gestionnaire, les index par
+destinataire, organisation et machine ne lisent que les machines liées : la
+liste prend au plus 50 lignes par machine, fusionne par `updatedAt`
+décroissant puis garde 50 lignes au total ; le compteur s'arrête à 100 non
+lues visibles au total. `unreadCount` ne lit ni machines ni séances : un
+heartbeat qui réécrit le statut ou le direct d'une machine ne change pas
+ses dépendances. `list` lit la machine pour son nom et son état de
+suppression ; les droits de la séance restent vérifiés séparément.
+
+Une machine supprimée logiquement conserve ses liens : ses alertes restent
+visibles et comptées pour l'admin d'organisation et le gestionnaire encore
+lié, **comme ses séances restent lisibles**. `machineDeleted: true` permet
+au site de remplacer le lien vers sa fiche par « Machine supprimée » ; le
+lien vers une séance lisible reste proposé. Un gestionnaire délié ne voit
+ni ses alertes ni les séances dont l'accès dépendait de ce lien.
+
+Quand un lot de `markAllRead` atteint 500 lignes, il planifie
+`notifications.continueMarkAllRead` (mutation interne, `runAfter(0)`). Chaque
+lot relit l'utilisateur, l'organisation, son appartenance et son rôle
+effectif, puis réapplique la règle de visibilité et la même borne de 500
+lignes d'alertes. Si le compte, l'organisation ou le rôle ne permet plus
+l'accès, la suite s'arrête ; les liens retirés entre deux lots ne donnent
+plus accès aux alertes restantes.
+
+Les trois mutations publiques prennent un jeton de la limite par compte (ANH-166).
 `notifications.purge` (interne, tâche de §7) supprime les alertes inchangées
 depuis 90 jours, lues ou non, par lots de 500. Supprimer un compte
 (`users.deleteUser`) supprime ses alertes des organisations retirées, et son

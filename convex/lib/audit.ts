@@ -280,6 +280,8 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Machine HTTP heartbeat records operational state and health, without a rights change.",
   "machines.checkOfflineMachines":
     "Cron detects offline machines and interrupts silent sessions, without confirming their end.",
+  "notifications.continueMarkAllRead":
+    "Scheduled continuation marks the recipient visible alerts read in bounded batches.",
   "notifications.markRead": "Recipient marks an alert read.",
   "notifications.markAllRead": "Recipient marks alerts read.",
   "notifications.updateSettings": "Recipient changes notification preferences.",

@@ -204,17 +204,24 @@ function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
           {reason && <p className="text-sm">{t("reason", { reason })}</p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="ghost" size="sm" asChild>
-            <Link
-              href={
-                alert.sessionId
-                  ? `/dashboard/sessions/${alert.sessionId}`
-                  : `/dashboard/machines/${alert.machineId}`
-              }
-            >
-              {alert.sessionId ? t("openSession") : t("openMachine")}
-            </Link>
-          </Button>
+          {alert.machineDeleted && (
+            <span className="text-sm text-muted-foreground">
+              {t("machineDeleted")}
+            </span>
+          )}
+          {(alert.sessionId || !alert.machineDeleted) && (
+            <Button variant="ghost" size="sm" asChild>
+              <Link
+                href={
+                  alert.sessionId
+                    ? `/dashboard/sessions/${alert.sessionId}`
+                    : `/dashboard/machines/${alert.machineId}`
+                }
+              >
+                {alert.sessionId ? t("openSession") : t("openMachine")}
+              </Link>
+            </Button>
+          )}
           {!alert.read && (
             <Button variant="outline" size="sm" onClick={onRead}>
               {t("markRead")}

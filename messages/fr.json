@@ -1320,6 +1320,7 @@
     "repeated": "{count} fois, dernière à {time}",
     "openSession": "Voir la séance",
     "openMachine": "Voir la machine",
+    "machineDeleted": "Machine supprimée",
     "reason": "Raison : {reason}",
     "faultCode": "Code du variateur : {code}",
     "listCut": "Seules les {count} alertes les plus récentes sont affichées.",

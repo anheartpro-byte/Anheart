@@ -877,8 +877,15 @@ plus, la page le dit quand la liste est coupée) :
 Chaque alerte donne la machine, l'heure, « N fois, dernière à … » quand
 plusieurs événements s'y sont fondus pendant qu'elle était non lue, le
 badge « Non lue », et un lien **Voir la séance** (quand le visiteur peut la
-lire) ou **Voir la machine**. **Marquer comme lue** et **Tout marquer comme
-lu** l'écrivent sur le serveur. Ce que le serveur écrit, quand, et pour qui :
+lire) ou **Voir la machine**. Si la machine a été supprimée, l'alerte reste
+visible et comptée, comme sa séance reste lisible : **Machine supprimée**
+remplace le lien vers la machine, et **Voir la séance** reste proposé quand
+la séance est lisible. Retirer le gestionnaire de la machine lui retire
+aussi ces alertes. Les alertes devenues invisibles ne consomment ni les 50
+places de la liste ni les 100 non lues comptées par la cloche.
+**Marquer comme lue** et **Tout marquer comme lu** l'écrivent sur le serveur.
+Le second traite toutes les alertes visibles non lues par lots de 500,
+avec une suite automatique sans nouveau clic. Ce que le serveur écrit, quand, et pour qui :
 [convex.md](convex.md#notificationsts-alertes-aux-gestionnaires-anh-90).
 
 En bas, **Alertes par e-mail** : un interrupteur par type d'alerte. Par
