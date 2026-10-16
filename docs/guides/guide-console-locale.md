@@ -1709,8 +1709,9 @@ Repères :
 
 Que faire :
 
-1. En séance programmée (le cœur commande la vitesse), la règle `hr_stale` réagit
-   seule à une fréquence périmée : après 10 s la vitesse est gelée (`freeze`), après
+1. En séance programmée (le cœur commande la vitesse), toute montée est déjà retenue
+   au-delà de 2,5 s depuis la dernière lecture acceptée par le suiveur. Les paliers
+   de la règle `hr_stale` restent inchangés : après 10 s la vitesse est gelée (`freeze`), après
    30 s elle baisse (`reduce`), après 60 s la séance est terminée (`ramp_down`
    verrouillé). Si la fréquence revient pendant que le bras tourne encore,
    l'avertissement se lève seul et la vitesse **remonte sans clic**. Si la baisse a
@@ -1957,7 +1958,7 @@ Quoi faire, selon ce que dit le message. Dans tous les cas il se termine par
 |---|---|---|
 | `le verdict <règle> tient le bras a l'arret. Attendre qu'il soit leve` | un avertissement non verrouillé (par exemple `attendant_absent` : onglet resté sans signal ; `hr_stale` : plus de fréquence cardiaque fiable) | traiter la cause, attendre que la pastille Securite revienne à `none` |
 | `le verdict <règle> tient le bras a l'arret. L'acquitter une fois sa cause levee` | un verdict verrouillé (par exemple `loop_stall`) | traiter la cause, acquitter (§13.6) |
-| `pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable` | personne à bord : aucune lecture fiable depuis plus de 4 s | vérifier les électrodes et le BITalino, attendre que la fréquence soit affichée, non barrée |
+| `pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable` | personne à bord : aucune lecture acceptée par le suiveur, ou dernière acceptation âgée de plus de 2,5 s | vérifier les électrodes et le BITalino, attendre que l'encadré de retenue disparaisse ; l'affichage non barré garde une borne de 4 s |
 | `tendance de la frequence cardiaque pas encore connue, rien ne monte depuis l'arret. Attendre quelques secondes de lecture` | personne à bord : l'ECG vient de commencer (moins de 5 lectures) | attendre quelques secondes |
 | `la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. Attendre qu'elle se stabilise` | personne à bord : la fréquence baisse de plus de 20 bpm/min. Elle redescend après un effort, ou elle a simplement perdu deux battements en cinq secondes | attendre quelques secondes ; si le refus se répète, attendre que la fréquence se stabilise |
 | `le variateur n'a pas confirme la consigne, elle n'est pas redemandee. Verifier la liaison` | le variateur n'a pas confirmé le premier pas (capsule vide comprise) | regarder **Vitesse mesuree** et la carte **Variateur** (état, `lectures / echecs`, `derniere erreur`), vérifier le câble |
@@ -1984,8 +1985,9 @@ Quoi faire, selon ce que dit le message. Dans tous les cas il se termine par
 
 > **Ce qui a été rejoué.** Ces messages viennent du code et des tests automatiques,
 > qui pilotent la vraie console en simulation par son API
-> (`raspberry-pi/tests/test_manual_target_held_console.py`). Le 7 octobre 2026, trois
-> cas ont été rejoués dans un navigateur sans interface, avec une personne à bord
+> (`raspberry-pi/tests/test_manual_target_held_console.py`). Le 7 octobre 2026, lors
+> d'un rejeu antérieur à la porte de montée de 2,5 s, trois cas ont été rejoués dans
+> un navigateur sans interface, avec une personne à bord
 > déclarée par l'API : une cible refusée pendant que la fréquence cardiaque baissait
 > vite, une cible refusée environ 7 s après la perte de l'ECG (encadré
 > `pas de frequence cardiaque utilisable` affiché 4,4 s après la perte, avant toute

@@ -247,6 +247,7 @@ from src.training.safety import (
 from src.training.tracking import SpeedFollower, follow_rate
 from src.training.types import (
     DRIVE_STATUS_STALE_AFTER,
+    HEART_RATE_STALE_AFTER,
     ControlDecision,
     HeartRateSample,
     ManualView,
@@ -469,6 +470,24 @@ class RuntimeLimits:
 
     standstill_rpm: MotorRpm = DEFAULT_STANDSTILL_RPM
 
+    rise_reading_within: Seconds = Seconds(2.5)
+    """Maximum accepted-reading age for an increase, including the first step.
+
+    The runtime bounds this budget once at construction by the actual tracker's
+    ``TrackerLimits.stale_after``: a rise never outlasts that freshness.
+    2.5 s tolerates one missed 1 Hz refresh (measured accepted-reading gaps
+    of 2.0-2.2 s), closing on the second miss. With the real ECG bridge at
+    5 Hz on the bench, a 1800 s DSP reference spends about 240/159/151 s
+    with increases withheld outside verdicts at 1.5/2.5/4 s respectively.
+    These count WARMUP and HOLD ticks where the last accepted reading is older
+    than each budget and no verdict is in force.
+    The 2.5 s budget avoids the short-gap cost of 1.5 s for about 7 extra
+    seconds versus 4 s. All seven references retain duration and end cause.
+    The law keeps the tracker's freshness budget (4 s by default) and every
+    verdict still decides first; this gate holds the applied setpoint without
+    changing the input.
+    """
+
     ramp_settle: Seconds = COMMISSIONED_DECEL_S
     """How long after the setpoint last moved the shaft may still be lagging.
 
@@ -531,6 +550,9 @@ class RuntimeLimits:
         _require_positive("slew", self.slew)
         _require_positive("ramp_settle", self.ramp_settle)
         _require_positive("status_stale_after", self.status_stale_after)
+        _require_positive("rise_reading_within", self.rise_reading_within)
+        if self.rise_reading_within > HEART_RATE_STALE_AFTER:
+            raise ValueError("rise_reading_within must not exceed HEART_RATE_STALE_AFTER")
         _require_positive("max_motor_hz", self.max_motor_hz)
         _require_positive("-falling_trend", -self.falling_trend)
         if self.trend_samples < MIN_TREND_SAMPLES:
@@ -1239,6 +1261,7 @@ class TrainingRuntime:
         "_recovery_from",
         "_resting_bpm",
         "_rise_held",
+        "_rise_reading_within",
         "_safety_limits",
         "_session_over",
         "_setpoint_changed_at",
@@ -1314,6 +1337,11 @@ class TrainingRuntime:
         self._safety_limits: SafetyLimits = safety
         self._supervisor: SafetySupervisor = _supervisor_for(clock, safety, supervisor)
         self._tracker: HeartRateTracker = HeartRateTracker(tracker_limits)
+        # Fixed at construction: neither rise path may outlast this tracker's
+        # freshness, even when it is stricter than the runtime's own budget.
+        self._rise_reading_within: Seconds = min(
+            limits.rise_reading_within, self._tracker.limits.stale_after
+        )
         self._motion: MotionLimits = motion
         # The geometry every motion limit is evaluated through: the machine's,
         # with the radius moved out to `limit_radius` when one was given. Only
@@ -1428,8 +1456,8 @@ class TrainingRuntime:
     def _initialise_evidence(self) -> None:
         """Evidence and output, as a runtime nobody has started holds them."""
         self._last_sample: HeartRateSample | None = None
-        # The latest fresh sample that carried a usable rate: what the level
-        # rules go on judging when the fresh samples after it carry none.
+        # The latest fresh sample that carried a usable rate: evidence for
+        # hr_stale and the level and trend rules when later samples carry none.
         self._last_usable_sample: HeartRateSample | None = None
         self._decision: ControlDecision | None = None
         self._counters: ZoneCounters = ZoneCounters(
@@ -1705,11 +1733,13 @@ class TrainingRuntime:
         is shown one sample a tick, and this method can be called several times
         between two ticks (the bridge drains a backlog in one pump, and it runs
         on its own task). A fresh sample with no rate in it replaces the last
-        sample, as it must: the screen and ``hr_stale`` need to know nothing is
-        being measured. It does not replace the last USABLE one, which is what
-        the level rules go on judging until it is stale
-        (:meth:`~src.training.safety.SafetySupervisor._level_rate`). The gate
-        is the same sequence gate, and the test is the sample's own
+        sample, as it must: the screen needs to know nothing is being measured.
+        It does not replace the last USABLE one, whose measurement instant
+        dates ``hr_stale`` and which the supervisor uses for its level and
+        trend rules, subject to their age and sequence gates
+        (:meth:`~src.training.safety.SafetySupervisor._ingest` and
+        :meth:`~src.training.safety.SafetySupervisor._level_rate`). The gate
+        for retaining it is the same sequence gate, and the test is the sample's own
         ``usable_bpm``, the one the supervisor applies: the tracker's
         plausibility and jump gates decide what the control law regulates on,
         not what the safety rules are shown.
@@ -1941,18 +1971,19 @@ class TrainingRuntime:
         The one statement of the gate, read by :meth:`_follow_manual` in the
         tick and by :meth:`set_manual_target` at the console, so that what is
         refused and what is held cannot drift apart. Nobody on board: no gate.
-        A person on board: no rise without a fresh, trustworthy heart rate,
-        nor while the vasovagal gate is closed (:meth:`_increase_permitted`,
-        the very test a programme's rise passes). The DECISION is those two
-        tests and nothing else, exactly as before this method had a name; the
-        trend is read a second time only to say which of its two ways the
+        A person on board: no rise unless the shared age gate
+        (:meth:`_rise_reading_recent`, ``RuntimeLimits.rise_reading_within``)
+        accepts the last tracker-accepted reading, nor while the short trend
+        is unknown or falling too fast (:meth:`_increase_permitted`, the
+        very test a programme's rise passes). The trend is read a second time
+        only to distinguish an unknown trend from a falling one when that
         gate is closed. None of this is a verdict.
         """
         if not self._occupied():
             return None
-        if self._tracker.usable(now) is None:
+        if not self._rise_reading_recent(now):
             return RiseHold.NO_HEART_RATE
-        if self._increase_permitted():
+        if self._increase_permitted(now):
             return None
         trend = self._tracker.recent_rate(self._limits.trend_samples)
         return RiseHold.TREND_UNKNOWN if trend is None else RiseHold.HEART_RATE_FALLING
@@ -3457,7 +3488,7 @@ class TrainingRuntime:
             self._decision = None
             await self._apply_setpoint(now, MotorRpm(0) if cap is None else cap)
             return
-        rise = self._increase_permitted()
+        rise = self._increase_permitted(now)
         step = controller.update(
             now, self._control_input(now), allow_increase=allow_increase and rise
         )
@@ -3486,7 +3517,7 @@ class TrainingRuntime:
         moved = self._motion_step(now, demand)
         applied = self._applied_rpm
         if moved > applied and not (rise and self._readable_status(now) is not None):
-            # The vasovagal gate holds the setpoint where it is, including a
+            # The freshness and vasovagal gates hold the setpoint, including a
             # climb towards a demand decided before the heart began to fall -
             # and so does a drive whose state is no longer known. The
             # controller adopts the speed actually held.
@@ -3551,10 +3582,16 @@ class TrainingRuntime:
             held = RiseHold.WRITE_UNACKNOWLEDGED
         self._rise_held = held
 
-    def _increase_permitted(self) -> bool:
-        """Whether the heart rate allows the setpoint to RISE this tick: the vasovagal gate.
+    def _rise_reading_recent(self, now: Monotonic) -> bool:
+        """Gate both rise paths by the runtime/tracker minimum fixed at construction."""
+        age = self._tracker.age(now)
+        return age is not None and math.isfinite(age) and age <= self._rise_reading_within
 
-        No rise while the short trend (``RuntimeLimits.trend_samples``) falls
+    def _increase_permitted(self, now: Monotonic) -> bool:
+        """Whether reading freshness and the short trend permit an increase at ``now``.
+
+        No rise without a recent accepted reading, nor while the short trend
+        (``RuntimeLimits.trend_samples``) falls
         faster than ``RuntimeLimits.falling_trend``, nor while it is unknown. A
         falling heart rate reads to the control law as "below the zone", and
         its answer is to accelerate; before this gate it did so for ~16 s of a
@@ -3562,7 +3599,11 @@ class TrainingRuntime:
         every safety verdict still decides first.
         """
         trend = self._tracker.recent_rate(self._limits.trend_samples)
-        return trend is not None and trend >= self._limits.falling_trend
+        return (
+            self._rise_reading_recent(now)
+            and trend is not None
+            and trend >= self._limits.falling_trend
+        )
 
     def _motion_step(self, now: Monotonic, target: MotorRpm) -> MotorRpm:
         """One motion-limited step towards ``target``, with the accrual of motion.py.

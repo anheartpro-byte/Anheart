@@ -4060,6 +4060,10 @@ Contenu au 7 octobre 2026, trois scénarios de la batterie exportés par
 | `fault_bitalino_disconnect_dsp.tar.gz` | le BITalino se déconnecte en WARMUP, fin sur verdict | 1348 | 0,3 Mo | ≈ 17 s, 23 s |
 | `fault_ecg_electrode_off_dsp.tar.gz` | une électrode décollée 30 s, `hr_stale` puis reprise | 4000 | 1,8 Mo | ≈ 75 s, 155 s |
 
+> Les deux archives simulées `auto_jog_150_dsp` et
+> `fault_ecg_electrode_off_dsp` ont été refaites après l'ajout de la porte de
+> montée ; le détail figure dans la PR.
+
 Les durées en CI sont celles du run 37548774542 (7 octobre 2026, runner à
 4 CPU, quatre processus pytest en même temps). Les archives ont été produites
 sur un Mac et se rejouent sans écart sur le runner Linux.

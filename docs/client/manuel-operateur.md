@@ -1034,7 +1034,9 @@ Capture prise en simulation.*
 
 Ce que fait la console :
 
-- **Séance avec passager.** Sans fréquence cardiaque fiable, la console garde
+- **Séance avec passager.** La console retient toute montée quand la dernière
+  lecture acceptée date de plus de 2,5 secondes, avant même « freeze ».
+  Sans fréquence cardiaque fiable, la console garde
   la vitesse (« freeze », après 10 secondes), puis la baisse (« reduce »,
   après 30 secondes). Elle termine la séance dès que la vitesse commandée est
   revenue à zéro, et au plus tard après 60 secondes : **Securite** affiche
