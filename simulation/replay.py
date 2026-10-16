@@ -89,7 +89,7 @@ from src.sensors.base import SensorReading
 from src.training.plan import Channel, Program, StoreRev, TrainingProfile
 from src.training.runtime import Subject, TrainingRuntime
 from src.training.safety import SafetyLimits
-from src.training.types import Occupancy, Phase, SafetyAction
+from src.training.types import Occupancy, Phase, SafetyAction, SignalQuality
 from src.units import (
     Bpm,
     GearRatio,
@@ -153,6 +153,7 @@ type _Operation = (
     | commands.FaultReset
     | commands.Shutdown
     | commands.Attendant
+    | commands.AttendantPing
 )
 
 
@@ -164,7 +165,13 @@ class _Order:
     operation: _Operation
 
 
-type _Step = _Tick | _Order
+@dataclass(frozen=True, slots=True)
+class _Reading:
+    t: Seconds
+    at: float
+
+
+type _Step = _Tick | _Order | _Reading
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,8 +187,13 @@ class _Plan:
 def _position(step: _Step) -> tuple[float, int]:
     """Where a step stands in the replay (module docstring, "The order of things")."""
     if isinstance(step, _Tick):
+        return (step.t, 3 if step.t > 0.0 else 1)
+    if isinstance(step, _Reading):
         return (step.t, 2 if step.t > 0.0 else 0)
-    return (step.t, 3 if isinstance(step.operation, commands.Shutdown) else 1)
+    return (
+        step.t,
+        4 if isinstance(step.operation, commands.Shutdown) else (1 if step.t > 0.0 else 2),
+    )
 
 
 def _decision(row: Row) -> Decision | None:
@@ -317,7 +329,14 @@ def _plan(recording: Recording) -> Result[_Plan, str]:
     ticks = tuple(
         _Tick(Seconds(round(row.t, 3)), row.t, index) for index, row in enumerate(recording.rows)
     )
-    steps: tuple[_Step, ...] = tuple(sorted((*ticks, *orders.value), key=_position))
+    readings = tuple(
+        _Reading(
+            Seconds(round(block.header.runtime_delivery.t, 3)), block.header.runtime_delivery.t
+        )
+        for block in recording.raw
+        if block.header.runtime_delivery is not None
+    )
+    steps: tuple[_Step, ...] = tuple(sorted((*ticks, *orders.value, *readings), key=_position))
     first = steps[0].t
     if any(exchange.t < first - TICK - INSTANT_EPSILON for exchange in exchanges.value):
         return Err(
@@ -407,6 +426,7 @@ class _Session:
         "_occupancy",
         "_origin",
         "_runtime",
+        "_source",
         "_subject",
     )
 
@@ -419,11 +439,12 @@ class _Session:
         self._occupancy: Occupancy = Occupancy(manifest.occupancy)
         self._subject: str = manifest.subject_id or REPLAYED
         self._attendant: bool = False
+        self._source: TapeSource = TapeSource(plan.blocks, clock, plan.origin)
         self._bridge: EcgBridge = EcgBridge(
             clock=clock,
-            source=TapeSource(plan.blocks, clock, plan.origin),
+            source=self._source,
             treatment=load_treatment(ECG_SAMPLE_RATE, DSP_OUTPUT_RATE),
-            heart_rate=runtime,
+            heart_rate=self,
             waveform=_NoWaveform(),
             sample_rate=ECG_SAMPLE_RATE,
             treat=_treat_inline,
@@ -433,6 +454,17 @@ class _Session:
     def now(self) -> Seconds:
         """The replay instant on the record's axis."""
         return elapsed(self._origin, self._clock.monotonic())
+
+    def observe_ecg(
+        self, now: Monotonic, seq: int, quality: SignalQuality, heart_rate: Bpm | None
+    ) -> None:
+        observed = self._source.observed
+        at = now if observed is None else Monotonic(self._origin + observed)
+        self._runtime.observe_ecg(at, seq, quality, heart_rate)
+
+    async def reading(self) -> None:
+        while await self._bridge.pump():
+            pass
 
     async def tick(self, t: Seconds) -> Decision:
         """One tick, in the console's order: presence, ECG, then the runtime."""
@@ -477,6 +509,8 @@ class _Session:
                 await runtime.shutdown("replay: the recorded console exit")
             case commands.Attendant(present):
                 self._attendant = present
+            case commands.AttendantPing():
+                runtime.note_presence(self._clock.monotonic())
             case _ as unreachable:
                 assert_never(unreachable)
 
@@ -499,6 +533,8 @@ async def _run(plan: _Plan, session: _Session, tape: TapeDrive, pace: Pace) -> R
         try:
             if isinstance(step, _Tick):
                 decision = await session.tick(plan.expected[step.index].t)
+            elif isinstance(step, _Reading):
+                await session.reading()
             else:
                 await session.issue(step)
         except Exception as error:  # the code under test failing on recorded inputs: a finding

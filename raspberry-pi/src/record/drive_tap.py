@@ -77,7 +77,7 @@ from src.motor.drive import (
     EmergencyStopOutcome,
 )
 from src.motor.observation import ExchangeLog, ObservableDrive
-from src.record.schema import DriveFrame
+from src.record.schema import DriveFrame, RecordedFailure, record_failure
 from src.result import Err, Ok, Result
 from src.units import Monotonic, MotorRpm, Seconds
 
@@ -122,6 +122,7 @@ class Observation:
     ok: bool
     latency_ms: float
     raw_hex: str | None = None
+    error: RecordedFailure | None = None
 
     def frame(self, origin: Monotonic) -> DriveFrame:
         """The line of ``drive_frames.jsonl``, timed from ``origin`` to the millisecond."""
@@ -133,6 +134,7 @@ class Observation:
             ok=self.ok,
             latency_ms=self.latency_ms,
             raw_hex=self.raw_hex,
+            error=self.error,
         )
 
 
@@ -223,6 +225,7 @@ class CallTap:
         *,
         ok: bool,
         said: Callable[[], tuple[Registers, Values]] = _nothing,
+        error: DriveError | None = None,
     ) -> None:
         """Remember one call. Total: the drive's answer is already on its way back."""
         try:
@@ -234,6 +237,7 @@ class CallTap:
                 value=value,
                 ok=ok,
                 latency_ms=(self._clock.monotonic() - started) * 1000,
+                error=None if error is None else record_failure(error),
             )
         except Exception:  # an observer: what it cannot say is lost, never raised
             with self._noting:
@@ -262,7 +266,7 @@ class CallTap:
         except BaseException:
             self._note(CallKind.OPEN, started, ok=False)
             raise
-        self._note(CallKind.OPEN, started, ok=isinstance(result, Ok))
+        self._note(CallKind.OPEN, started, ok=isinstance(result, Ok), error=_error(result))
         return result
 
     async def close(self) -> Result[None, DriveError]:
@@ -272,7 +276,7 @@ class CallTap:
         except BaseException:
             self._note(CallKind.CLOSE, started, ok=False)
             raise
-        self._note(CallKind.CLOSE, started, ok=isinstance(result, Ok))
+        self._note(CallKind.CLOSE, started, ok=isinstance(result, Ok), error=_error(result))
         return result
 
     async def write_command(self, word: ControlWord) -> Result[None, DriveError]:
@@ -287,6 +291,7 @@ class CallTap:
             started,
             ok=isinstance(result, Ok),
             said=lambda: (CMD_LOGICAL, int(word)),
+            error=_error(result),
         )
         return result
 
@@ -302,6 +307,7 @@ class CallTap:
             started,
             ok=isinstance(result, Ok),
             said=lambda: (LFRD_LOGICAL, int(rpm)),
+            error=_error(result),
         )
         return result
 
@@ -313,7 +319,7 @@ class CallTap:
             self._note(CallKind.READ_FAILED, started, ok=False)
             raise
         if isinstance(result, Err):
-            self._note(CallKind.READ_FAILED, started, ok=False)
+            self._note(CallKind.READ_FAILED, started, ok=False, error=result.error)
         else:
             status = result.value
             self._note(CallKind.READ, started, ok=True, said=lambda: status_observation(status))
@@ -327,7 +333,7 @@ class CallTap:
             self._note(CallKind.READ_LIMITS, started, ok=False)
             raise
         if isinstance(result, Err):
-            self._note(CallKind.READ_LIMITS, started, ok=False)
+            self._note(CallKind.READ_LIMITS, started, ok=False, error=result.error)
         else:
             limits = result.value
             self._note(
@@ -353,6 +359,10 @@ class CallTap:
             said=lambda: (LFRD_LOGICAL, 0),
         )
         return outcome
+
+
+def _error[T](result: Result[T, DriveError]) -> DriveError | None:
+    return result.error if isinstance(result, Err) else None
 
 
 def exchange_refusals(log: ExchangeLog) -> Callable[[], int]:

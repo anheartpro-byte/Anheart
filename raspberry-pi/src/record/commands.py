@@ -17,6 +17,7 @@ this closed vocabulary, written by :func:`encode` and read by :func:`parse`:
     fault_reset
     shutdown
     attendant present=false
+    attendant_ping
 
 Who asked is the event's ``actor``; what the runtime answered is not here (a
 refusal is its own ``refusal`` event, and the decisions are in ``ticks.csv``).
@@ -93,6 +94,11 @@ class Attendant:
     present: bool
 
 
+@dataclass(frozen=True, slots=True)
+class AttendantPing:
+    """The attendant was seen at this instant, without promising another presence."""
+
+
 type Command = (
     ConfirmEstopWiring
     | StartProgramme
@@ -104,6 +110,7 @@ type Command = (
     | FaultReset
     | Shutdown
     | Attendant
+    | AttendantPing
 )
 
 INPUT_KINDS: Final[frozenset[EventKind]] = frozenset(
@@ -137,6 +144,8 @@ def encode(command: Command) -> str:  # noqa: PLR0911  # one return per command
             return "shutdown"
         case Attendant(present):
             return f"attendant present={str(present).lower()}"
+        case AttendantPing():
+            return "attendant_ping"
     raise assert_never(command)
 
 
@@ -241,6 +250,8 @@ def parse(detail: str) -> Result[Command, str]:  # noqa: PLR0911  # one return p
             return _bare(arguments, Shutdown())
         case "attendant":
             return _attendant(arguments)
+        case "attendant_ping":
+            return _bare(arguments, AttendantPing())
         case _:
             pass
     return Err("not a command of the replay vocabulary")

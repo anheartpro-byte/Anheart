@@ -3911,7 +3911,9 @@ redonne tout cela, dans l'ordre et aux instants enregistrés, à un **vrai**
 * le variateur est un « magnétophone » (`simulation/replay_tape.py`) qui répond
   à chaque appel ce que `drive_frames.jsonl` a enregistré, et qui vérifie
   d'abord que l'appel est bien celui qui a été enregistré ;
-* l'ECG repasse bloc par bloc dans le vrai DSP et le vrai `EcgBridge` ;
+* l'ECG repasse bloc par bloc dans le vrai DSP et le vrai `EcgBridge` : avec
+  `runtime_delivery`, la lecture atteint le runtime à `t` avec l'argument
+  `t_observed` enregistré ; sans ce champ, à `t_received` comme auparavant ;
 * les commandes de `events.jsonl` sont redonnées à leurs instants ;
 * l'horloge est une `ManualClock` qui avance par les intervalles enregistrés.
 
@@ -3920,6 +3922,16 @@ règle, phase) est comparé à ce que l'enregistrement dit qu'il avait décidé.
 Une séance enregistrée devient ainsi un test de non-régression : le runtime
 d'aujourd'hui doit décider, sur les mêmes entrées, ce que celui du jour de la
 séance a décidé.
+
+Depuis ANH-192 (T01), le magnétophone rend la variante d'erreur nommée par
+`drive_frames.jsonl.error`, avec ses champs de décision et sans diagnostic
+libre. Sans ce champ, il rend le `CommTimeout` historique. `attendant_ping`
+note une présence ponctuelle à l'instant de la commande ; `attendant present=`
+reste un état continu de simulation. Une remise ECG explicitement datée
+vient juste avant le tic du même instant : après les commandes pendant la
+séance, avant elles jusqu'au départ inclus. Tout tourne en ligne, sur
+l'horloge injectée, sans fil. Le contrat, les validations et les refus des
+anciens lecteurs sont dans [enregistrement.md](enregistrement.md).
 
 > **Limite.** Aujourd'hui, seuls les enregistrements produits par la
 > simulation sont rejouables. La console écrit un enregistrement au même
@@ -4246,8 +4258,9 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
   connue à la milliseconde : une décision prise à moins d'une milliseconde
   d'un seuil peut tomber un tic plus tôt ou plus tard, ce que les tolérances
   absorbent pour un verdict, pas pour une phase.
-* **Ce que l'enregistrement ne porte pas** : la nature d'un échange en échec,
-  le courant à mieux que 0,1 A, une exception levée dans le tic d'origine, un
+* **Ce que l'enregistrement ne porte pas** : la nature d'un échange en échec
+  sans `error`, le délai de remise ECG sans `runtime_delivery`, le courant
+  à mieux que 0,1 A, une exception levée dans le tic d'origine, un
   saut de l'horloge murale pendant l'acquisition. Détail dans
   [enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué).
 * **Coût.** Rejouer la bibliothèque prend environ trois minutes sur un Mac et
@@ -4266,6 +4279,7 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 |---|---|
 | `test_replay.py` | de bout en bout sur de courtes séances réellement enregistrées : rejeu sans écart (y compris boucle bloquée, liaison perdue, défaut variateur, ECG lacunaire ou perdu), écart détecté à son instant quand on altère un tic ou une trame, divergence, déterminisme, refus motivés (toutes les raisons à la fois), événements qui ne sont pas des entrées jamais lus comme des commandes, ligne de commande |
 | `test_replay_tape.py` | le magnétophone : lecture des trames, appel conforme ou non, horloge, blocs ECG |
+| `test_replay_inputs.py` | erreur d'armement nommée rejouée sans écart et divergence sans son champ ; pings discrets et absence à 60,2 s sans eux ; lecture reçue entre deux tics, timestamp de fraîcheur conservé ; refus d'une commande mal écrite |
 | `raspberry-pi/tests/test_record_commands.py` | le vocabulaire des commandes (`src/record/commands.py`), écrit et relu à l'identique ; il est dans la gate du Pi |
 | `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées ; l'empreinte, qui distingue deux rejeux que les décomptes confondent |
 | `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences ; les archives et ce que l'extraction refuse (nom absolu, remontée de dossier, lien, périphérique, écriture hors du dossier) ; les deux formes d'anonymat et les identifiants de la bibliothèque ; l'écart accepté (sont refusés : un second écart derrière lui, un écart remplacé par un autre de même nature, un tic modifié après une divergence acceptée, un fichier accepté à côté d'un enregistrement de la simulation) ; l'export reproductible, et son refus d'un nom qui est un chemin |

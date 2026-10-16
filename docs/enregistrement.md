@@ -292,6 +292,7 @@ et la simulation écrivent la même chose :
 | `fault_reset` | `fault_reset()` |
 | `shutdown` | `shutdown(...)` : la console quitte (signal, tâche en échec, fin d'une simulation) |
 | `attendant present=true` | tant que `true`, chaque tic note la présence de l'accompagnant |
+| `attendant_ping` | `note_presence(...)` à cet instant seulement, sans argument ni présence présumée aux tics suivants |
 
 Qui a demandé est dans `actor`. Ce que le runtime a répondu n'est pas dans la
 commande : un refus est son propre événement `refusal`, et les décisions sont
@@ -435,6 +436,34 @@ Cette observation groupée concerne uniquement les backends sans transactions
 natives (dont le modèle simulé). Elle ne sert jamais à fabriquer les trames
 individuelles du pilote natif.
 
+Depuis ANH-192 (T01), une observation échouée (`ok: false`) peut porter un
+objet optionnel `error`, commun aux observations d'appel et aux transactions
+de registre natives. `type` nomme une variante fermée de `DriveError` :
+
+| `error.type` | Autres champs, tous obligatoires pour cette variante |
+| --- | --- |
+| `CommTimeout` | `after`, durée finie positive ou nulle en secondes, indépendante de `latency_ms` |
+| `BadResponse` | aucun |
+| `UnexpectedState` | `expected`, `actual` : noms exacts des membres de `DriveState` |
+| `DriveFaulted` | `fault` : nom exact d'un membre de `DriveFault` ; `raw_code` : entier de 0 à 65535 |
+| `OutOfRange` | aucun |
+| `EnableUnconfirmed` | `reference_zeroed`, `run_command_removed` : booléens |
+| `StopUnconfirmed` | `waited`, durée finie positive ou nulle en secondes ; `last_output_rpm`, entier en tr/min moteur |
+
+Exemple : `"error":{"type":"EnableUnconfirmed","reference_zeroed":true,"run_command_removed":false}`.
+Ni `BadResponse.detail`, ni les diagnostics libres des autres variantes, ni
+`OutOfRange.quantity` ne sont écrits. Le runtime ne décide pas sur ces textes
+ou les nombres diagnostiques d'`OutOfRange`. Le rejeu restitue la variante et
+les champs du tableau ; les diagnostics omis deviennent un texte fixe. Une
+variante inconnue, un champ supplémentaire ou mal typé, un nombre non fini,
+ou une erreur sur un succès sont des erreurs de lecture, jamais des warnings.
+Sans `error`, le rejeu garde son comportement antérieur : `CommTimeout` avec
+`after = latency_ms / 1000`. `RecordingDrive` et la prise `CallTap` écrivent
+le champ pour les retours `Err` ; une exception levée n'est pas assimilée à
+une variante de `DriveError`. L'absence du champ reste omise à l'écriture.
+Le format permet au magnétophone natif de renseigner ensuite ce même objet
+sur `modbus_read` et `modbus_write` ; cette production relève de T04.
+
 ## Échantillons bruts
 
 Chaque bloc `ecg_raw/NNNNNN.bin.gz` se décompresse en un objet JSON UTF-8,
@@ -457,6 +486,28 @@ en entiers signés 16 bits little-endian, **canal par canal** : tous les
 échantillons du premier canal, puis tous ceux du deuxième, etc. Sa taille
 est exactement `2 × n_samples × nombre_de_canaux` octets. Il n'y a aucun
 padding ni octet final de séparation. Le writer ne remplace jamais un bloc.
+
+Depuis ANH-192 (T01), l'en-tête peut aussi porter
+`"runtime_delivery":{"t":0.45,"t_observed":0.25}`. Ces deux instants sont
+ensemble ou absents, finis, en secondes relatives au début monotone : `t` est
+l'instant effectif de l'appel `observe_ecg`, `t_observed` l'argument `now`
+transmis à cet appel. Le pont lit cet argument après le DSP, avant d'attendre
+la confirmation indépendante, puis remet une seule lecture au runtime après
+cette confirmation. Celle-ci ne fait aucun second appel au runtime. Il faut
+donc deux instants pour cet unique appel ; un lot sans lecture (`frame=None`)
+omet l'objet. Le reader exige `t_observed <= t` et, si `t_received` est
+présent, `t_received <= t_observed` ; toute inversion ou forme mal typée
+refuse le bloc. Le writer conserve la précision fournie, comme pour
+`t_received` ; l'ordonnancement du rejeu se fait à la milliseconde.
+
+Quand cet objet est présent, le rejeu repasse le lot dans le DSP et le pont
+à `t`, puis transmet la lecture avec `t_observed` : un tic antérieur à `t`
+ne la voit pas. Sans cet objet, il conserve la remise en ligne à
+`t_received` (ou, si celui-ci manque aussi, à la fin des échantillons).
+Le rejeu reste déterministe, sans fil ni horloge murale. La simulation omet
+`runtime_delivery` : son traitement en ligne n'introduit aucune attente sur
+son horloge déterministe et `t_received` suffit. La console le produira par
+son propre point d'observation, sans changement du pont ECG dans T01.
 
 Les noms de voies autorisés sont ECG, EDA, SpO2, RESP, EMG et LUX. Les limites
 du contenant int16 sont vérifiées ; elles ne changent pas la résolution du
@@ -574,6 +625,9 @@ simulation écrivent les mêmes observations d'appel.
 départ (`t ≤ 0`), le tic puis les commandes ; pendant la séance (`t > 0`), les
 commandes puis le tic, comme la console vide sa boîte de commandes avant de
 tiquer ; `shutdown` vient toujours après le tic de son instant.
+Une remise ECG explicitement datée se place juste avant le tic : avant le
+tic puis les commandes si `t ≤ 0`, après les commandes puis avant le tic si
+`t > 0`. Plusieurs lots au même instant gardent l'ordre des blocs.
 
 L'horloge rejouée part de l'instant de la première entrée, tel qu'il est
 écrit, et avance par les intervalles enregistrés, arrondis à la milliseconde.
@@ -590,9 +644,8 @@ producteur ne le porte pas :
   `modbus_receive_chunk`) : il faudrait rejouer un maître Modbus sous le vrai
   pilote ATV320. Un enregistrement qui en contient est refusé, pas rejoué à
   moitié ;
-- la nature d'un échange en échec : chaque échec est rejoué comme une absence
-  de réponse. Le runtime ne distingue que deux variantes (étage de sortie
-  peut-être sous tension), que seul le pilote natif produit ;
+- la nature d'un échange en échec qui ne porte pas `error`, et le délai de
+  remise au runtime d'un lot sans `runtime_delivery` ;
 - le courant moteur à mieux que 0,1 A, résolution du registre dans lequel
   l'observation est écrite ;
 - une fréquence cardiaque qui n'est pas passée par l'acquisition : le mode
@@ -603,6 +656,24 @@ producteur ne le porte pas :
   trou dans les horodatages.
 
 ## Utilisation et compatibilité
+
+Le reader reste strict : une clé inconnue refuse la ligne ou le bloc. Les
+ajouts restent au schéma 2 et ne modifient ni le manifeste, ni les kinds
+d'événement. Les versions ci-dessous désignent les révisions du lecteur,
+pas une nouvelle valeur de `schema_version` :
+
+| Ajout | Première version qui le relit | Lecteur antérieur |
+| --- | --- | --- |
+| `t_received` dans l'en-tête brut | ANH-131 | refuse le bloc (clé inconnue) |
+| `error` dans `drive_frames.jsonl` | ANH-192, T01 | refuse la ligne (clé inconnue) |
+| `runtime_delivery` dans l'en-tête brut | ANH-192, T01 | refuse le bloc (clé inconnue) |
+| commande `attendant_ping` | ANH-192, T01 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
+
+Une commande mal écrite sous un kind d'entrée est aussi refusée par le rejeu
+avec sa raison. Le reader ne décode pas les commandes : il doit pouvoir
+relire les anciens événements en prose de la console. Les nouveaux champs
+optionnels absents se relisent et se rejouent comme avant. `attendant present=`
+garde son sens continu pour la simulation ; il ne remplace pas les pings.
 
 Depuis la racine, avec l'environnement Python existant :
 
