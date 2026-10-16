@@ -18,6 +18,7 @@ import json
 import logging
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, cast, override
 
@@ -31,6 +32,7 @@ from src.cloud_sync import (
     MAX_RATE_WAIT,
     POLL_PERIOD,
     RATE_WAIT_UNSAID,
+    RETRY_PERIOD,
     STATUS_PATH,
     CloudError,
     CloudSync,
@@ -52,11 +54,12 @@ from src.health import HealthContext, HealthWatch
 from src.local_panel import CLOUD_PERIOD, build_panel
 from src.record.deposit import FILES_PER_STEP
 from src.record.upload import MAX_EVENTS, MAX_POINTS, read_events
-from src.record_uplink import CATCH_UP_PERIOD, TELEMETRY_PERIOD, Held, Refusal
+from src.record_uplink import CATCH_UP_PERIOD, LOCAL_PATH, TELEMETRY_PERIOD, Answer, Held, Refusal
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
 from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, Seconds, UnixMillis
+from tests.record_uplink_support import armed, bench, recording
 from tests.test_cloud_sync import Dashboard, StubRuntime, config_of, ok, transport_answering
 from tests.test_contract import shared
 
@@ -65,6 +68,8 @@ POLL: Final[str] = "/api/machine/training/poll"
 TELEMETRY: Final[str] = "/api/machine/training/telemetry"
 EVENTS: Final[str] = "/api/machine/training/events"
 UPLOAD_URL: Final[str] = "/api/machine/records/upload-url"
+COMMIT: Final[str] = "/api/machine/records/commit"
+PROFILES: Final[str] = "/api/machine/profiles"
 
 
 def limited(wait: Seconds | None) -> Result[Document, CloudError]:
@@ -325,6 +330,49 @@ def test_every_cadence_of_the_console_is_under_its_route_s_limit() -> None:
     assert float(CLOUD_PERIOD) >= least_gap(f"POST {EVENTS}")
     # One step of the deposit asks for its files' reservations together.
     assert limits()[f"POST {UPLOAD_URL}"]["capacity"] >= FILES_PER_STEP
+    assert limits()[f"POST {COMMIT}"]["capacity"] >= FILES_PER_STEP
+    assert least_gap(f"POST {COMMIT}") <= least_gap(f"POST {UPLOAD_URL}")
+    assert float(RETRY_PERIOD) >= least_gap(f"POST {PROFILES}")
+
+
+@dataclass(frozen=True, slots=True)
+class _PacedSender:
+    transport: PacedTransport
+
+    async def send(self, path: str, body: Mapping[str, JsonValue]) -> Answer:
+        return answer_of(await self.transport.post(path, body))
+
+
+async def test_a_429_keeps_a_local_session_due_and_redeclares_the_same_reference_after_waiting(
+    tmp_path: Path,
+) -> None:
+    time = clock()
+    dashboard = Dashboard()
+    dashboard.answer(LOCAL_PATH, limited(Seconds(60.0)))
+    b = bench(tmp_path, clock=time, sender=_PacedSender(PacedTransport(dashboard, time)))
+    b.uplink.begin(armed(time))
+    record = recording(tmp_path, time, "synthetic-local-429")
+    b.disk.current = record.path
+
+    await b.uplink.greet()
+    assert b.uplink.running
+    assert b.following() is None
+    assert record.path.exists()
+    time.advance(Seconds(59.0))
+    await b.uplink.greet()
+    assert len(dashboard.to(LOCAL_PATH)) == 1
+
+    dashboard.answer(LOCAL_PATH, ok({"sessionId": "synthetic-cloud-session"}))
+    time.advance(Seconds(15.0))
+    await b.uplink.greet()
+
+    assert [body["localRef"] for body in dashboard.to(LOCAL_PATH)] == [
+        "synthetic-local-429",
+        "synthetic-local-429",
+    ]
+    assert b.following() == "synthetic-cloud-session"
+    assert b.uplink.running
+    assert record.path.exists()
 
 
 def test_every_batch_of_the_console_is_under_its_route_s_count() -> None:

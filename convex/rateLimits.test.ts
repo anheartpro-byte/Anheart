@@ -22,7 +22,7 @@ import { ConvexError, type Value } from "convex/values";
 import { getFunctionName, makeFunctionReference } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharedText from "../contracts/machine-api.json?raw";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { MATRIX } from "./authorization.matrix";
 import {
@@ -85,20 +85,13 @@ function request(
 
 /** A local session of the first machine, the target of the batch routes. */
 async function localSession(w: MachineWorld): Promise<Id<"sessions">> {
-  const response = await request(
-    w,
-    w.machineKey,
-    "POST",
-    "/api/machine/training/local",
-    JSON.stringify({
-      localRef: `ref-${Date.now()}`,
-      kind: "manual",
-      startedAt: NOW,
-      operatorName: "Synthetic Operator",
-    }),
-  );
-  expect(response.status).toBe(200);
-  return ((await response.json()) as { sessionId: Id<"sessions"> }).sessionId;
+  return w.t.mutation(internal.training.registerLocalSession, {
+    machineId: w.machine,
+    localRef: `ref-${Date.now()}`,
+    kind: "manual",
+    startedAt: NOW,
+    operatorName: "Synthetic Operator",
+  });
 }
 
 const POINT = {
@@ -145,6 +138,26 @@ const ROUTES: Record<
   "POST /api/machine/records/upload-url": async () => ({
     method: "POST",
     path: "/api/machine/records/upload-url",
+    body: "{}",
+  }),
+  "POST /api/machine/training/local": async () => ({
+    method: "POST",
+    path: "/api/machine/training/local",
+    body: JSON.stringify({
+      localRef: "synthetic-capacity",
+      kind: "manual",
+      startedAt: NOW,
+      operatorName: "Synthetic Operator",
+    }),
+  }),
+  "POST /api/machine/profiles": async () => ({
+    method: "POST",
+    path: "/api/machine/profiles",
+    body: JSON.stringify({ storeRev: 1, programsEnabled: true, profiles: [] }),
+  }),
+  "POST /api/machine/records/commit": async () => ({
+    method: "POST",
+    path: "/api/machine/records/commit",
     body: "{}",
   }),
 };

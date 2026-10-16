@@ -2126,8 +2126,9 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
   le processus. L'ordre de sortie reste : variateur arrêté d'abord.
 
 **Quand le tableau de bord demande d'attendre (contrat 1.4, ANH-166).**
-Convex limite le débit de cinq routes par machine : heartbeat, interrogation
-des lancements, télémétrie, événements et réservation d'un fichier de dépôt
+Convex limite le débit de huit routes par machine : heartbeat, interrogation
+des lancements, télémétrie, événements, réservation d'un fichier de dépôt,
+déclaration d'une séance locale, programmes et commit d'un fichier de dépôt
 (les limites sont dans `contracts/machine-api.json`, `rate_limits`, et
 expliquées dans [convex.md](convex.md#limitation-de-débit-et-taille-des-corps-anh-166)).
 Au-delà, il répond 429 `rate_limited` avec `retryAfterMs`, le délai avant
@@ -2138,7 +2139,12 @@ lequel la même requête serait encore refusée.
   toutes les 10 s pour une limite d'un toutes les 5 s, interrogation toutes
   les 3 s pour une toutes les 2 s, télémétrie toutes les 3 s au plus vite pour
   deux lots toutes les 5 s, événements une fois par étape (1 s) pour dix par
-  seconde, 64 réservations par étape du dépôt pour une réserve de 64. Les
+  seconde, 64 réservations et commits par étape du dépôt pour une réserve de
+  64 chacun et dix par seconde, un commit par réservation ; programmes à
+  chaque révision, reprise après échec pas avant 15 s pour une limite d'un
+  envoi toutes les 10 s et une réserve de 5 ; une déclaration par séance
+  locale, dont le rattrapage se fait une séance à la fois, pour une limite
+  d'une par minute et une réserve de 20. Les
   tailles aussi : 300 points et 200 événements par lot, un heartbeat de moins
   de 16 Kio, chacun sous la taille de sa route.
 - **Si elle y arrive quand même** (un rattrapage de dépôt sur un lien rapide,

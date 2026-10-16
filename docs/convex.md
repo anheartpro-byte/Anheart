@@ -2132,6 +2132,23 @@ qui fonctionne comme prévu ne les atteint jamais.
 | `POST /api/machine/training/telemetry` | 2 lots toutes les 5 s | 2 | un lot toutes les 3 s au plus vite |
 | `POST /api/machine/training/events` | 10 par seconde | 10 | une fois par étape du lien (1 s) |
 | `POST /api/machine/records/upload-url` | 10 par seconde | 64 | 64 fichiers par étape du dépôt, 4 transferts à la fois |
+| `POST /api/machine/training/local` | 1 par minute | 20 | une déclaration par séance démarrée à la machine ; rattrapage une séance à la fois, après l'envoi de la précédente |
+| `POST /api/machine/profiles` | 1 toutes les 10 s | 5 | une fois par révision des programmes modifiés par l'opérateur ; pas de nouvel essai avant 15 s après un échec |
+| `POST /api/machine/records/commit` | 10 par seconde | 64 | un commit après chaque réservation `upload-url`, 64 fichiers par étape du dépôt |
+
+Ces trois plafonds (ANH-228) suivent le trafic attendu d'une console : une
+séance avec quelqu'un à bord dure des minutes (embarquement, rampe et plancher
+médical du refroidissement). La réserve de 20 déclarations couvre une journée
+de séances faites hors ligne ; le rattrapage n'en déclare qu'une à la fois,
+après avoir envoyé la précédente. Au-delà, le 429 retient la route et la
+console refait la même déclaration : rien n'est perdu, la séance tourne de
+toute façon (le Pi décide) et l'arrêt local reste toujours disponible. Une
+clé volée peut créer au plus 20 + 1 440 séances par jour, au lieu d'un nombre
+illimité. Chaque envoi de `profiles` efface et réécrit les programmes de la
+machine. Un dépôt qui fonctionne n'envoie jamais plus de commits que de
+réservations, déjà limitées à 10 par seconde avec une réserve de 64 (une
+étape du dépôt, `FILES_PER_STEP`) ; chaque commit peut planifier une
+vérification des octets dans Storage.
 
 Au-delà : **429** `{"error": "rate_limited", "message": "…", "retryAfterMs": <ms>}`
 et l'en-tête `Retry-After` (en secondes, arrondi au-dessus). La limite est
@@ -2150,11 +2167,13 @@ avec une réserve de 64 (une étape du dépôt), soit une heure pour une telle
 séance. La valeur est une ligne du contrat partagé.
 
 **Jamais limitées** : la demande d'arrêt (`GET /api/machine/training/status`),
-pour qu'un arrêt passe toujours, les routes appelées une fois par séance ou
-par fichier (`profiles`, `training/start`, `training/local`,
-`training/end`, `records/commit`, `records/status`), et `roster`, que la
-console demande à son démarrage puis au plus une fois par minute au repos
-(ANH-84). Une requête sans clé
+pour qu'un arrêt passe toujours, et la fin d'une séance
+(`POST /api/machine/training/end`). `POST /api/machine/training/start`
+n'écrit que sur un lancement en attente de la machine, déjà borné par
+`launchAutoSession` ; un 429 y arrêterait une console d'avant 1.5 déjà armée.
+`GET /api/machine/records/status` et `GET /api/machine/roster` ne font que
+lire : rien n'est écrit et une requête sans clé valide, qu'on ne peut pas
+limiter, coûte déjà autant. Une requête sans clé
 valide est refusée (401) avant toute limite : Convex ne voit pas l'adresse de
 l'appelant, il n'y a donc rien sur quoi limiter un appel anonyme. Chacun coûte
 une lecture d'index.
@@ -2211,11 +2230,11 @@ déploiement.
 | Méthode et chemin | Corps / paramètres | Réponse 200 | Cadence côté Pi |
 |---|---|---|---|
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) ; 16 Kio max | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
-| `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s |
+| `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s ; limite 1 toutes les 10 s, réserve 5 |
 | `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent, fitnessQuestionnaireVersion\|null}]}` (`getRoster`, [`roster` du contrat 1.6](../contracts/machine-api.json)) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
 | `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}` ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
-| `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local |
+| `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local ; limite 1 par minute, réserve 20 |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
 | `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points et 300 Kio max) | `{stored, duplicates, rejected}` | lots de 300 points max : toutes les 5 s pour une séance à jour, toutes les 3 s pour ce qui est en retard |
 | `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements et 2,5 Mio max, 2000 caractères de texte par événement) | `{stored, duplicates, rejected}` | avec la télémétrie, 200 événements max par envoi |
@@ -3219,6 +3238,11 @@ les routes de dépôt répondent 404. La télémétrie continue selon les capaci
 de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
 
 ### Ce que chaque mineure ajoute
+
+Les trois plafonds par machine ajoutés par ANH-228 gardent le contrat `1.6`
+inchangé : aucun champ ni code nouveau, `429 rate_limited` existe depuis
+`1.4`. Une console `1.4` ou plus retient la route avec `PacedTransport` ; une
+plus ancienne lit le 429 comme une réponse retenue.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|

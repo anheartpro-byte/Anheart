@@ -15,6 +15,9 @@ const ROUTES = [
   "POST /api/machine/training/telemetry",
   "POST /api/machine/training/events",
   "POST /api/machine/records/upload-url",
+  "POST /api/machine/training/local",
+  "POST /api/machine/profiles",
+  "POST /api/machine/records/commit",
 ] as const;
 
 function substitute(
@@ -66,6 +69,16 @@ describe("ANH-166 the limits are read from contracts/machine-api.json", () => {
       period: 7_000,
       capacity: 7,
     });
+    for (const [index, name] of (
+      ["machineLocalSession", "machineProfiles", "machineRecordCommit"] as const
+    ).entries()) {
+      expect(limits.rateLimiter.limits?.[name]).toEqual({
+        kind: "token bucket",
+        rate: index + 7,
+        period: 7_000,
+        capacity: index + 8,
+      });
+    }
     expect([
       limits.MAX_HEARTBEAT_BYTES,
       limits.MAX_TELEMETRY_BYTES,
@@ -86,6 +99,13 @@ describe("ANH-166 the limits are read from contracts/machine-api.json", () => {
 
     await expect(import("./lib/rateLimits")).rejects.toThrow(
       "No body size for POST /api/machine/training/telemetry",
+    );
+  });
+
+  it.each(ROUTES.slice(-3))("refuses to load without %s", async (missing) => {
+    substitute(ROUTES.filter((route) => route !== missing));
+    await expect(import("./lib/rateLimits")).rejects.toThrow(
+      `No rate limit for ${missing}`,
     );
   });
 });
