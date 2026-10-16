@@ -3242,13 +3242,15 @@ de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
 Les trois plafonds par machine ajoutés par ANH-228 gardent le contrat `1.6`
 inchangé : aucun champ ni code nouveau, `429 rate_limited` existe depuis
 `1.4`. Une console `1.4` ou plus retient la route avec `PacedTransport` ; une
-plus ancienne lit le 429 comme une réponse retenue.
+plus ancienne qui relit le journal, dont `pi-1.0.0`, lit le 429 comme une
+réponse retenue. Les versions de développement qui envoyaient de mémoire
+sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
 | `1.6` | Trois refus à l'armement en **409** : `rider_not_fit`, `fitness_expired`, `consent_missing`. Le poll et la tâche de chaque minute appliquent le même contrôle. Le roster ajoute `fit` (booléen), `fitnessValidUntil` (ms Unix ou `null`), `consent` (booléen) et `fitnessQuestionnaireVersion` (chaîne de la saisie validée qui rend `fit` vrai, sinon `null`), sans réponses ni notes. Leur définition est dans [`contracts/machine-api.json`, entrée `roster`](../contracts/machine-api.json) ; une console qui ne reçoit pas ces champs considère le passager non apte et sans consentement. La porte locale `cleared_to_board` applique ce contrôle avant tout départ avec personne à bord. |
 | `1.5` | `POST /api/machine/training/start` peut répondre **409** avec l'un des sept codes de refus à l'armement (`arming_refusals` du contrat partagé) : le lancement est revérifié au moment où la machine l'arme et la séance passe `failed` avec ce code (ANH-144). Le poll n'offre plus un lancement expiré, qui expire dans moins de 45 s, ou que ces contrôles refuseraient. |
-| `1.4` | Deux codes d'erreur : `rate_limited` (429, avec `retryAfterMs` et `Retry-After`) sur cinq routes limitées par machine, et `payload_too_large` (413) pour un corps au-delà de la taille de sa route ou un lot de plus de 600 points ou 200 événements (400 avant). Bornes de `seq` (999 999) et de `t` (entier) d'un événement. La liste des limites et des tailles est dans le contrat partagé (`rate_limits`, `max_body_bytes`). |
+| `1.4` | Deux codes d'erreur : `rate_limited` (429, avec `retryAfterMs` et `Retry-After`) sur les routes limitées par machine, et `payload_too_large` (413) pour un corps au-delà de la taille de sa route ou un lot de plus de 600 points ou 200 événements (400 avant). Bornes de `seq` (999 999) et de `t` (entier) d'un événement. La liste des limites et des tailles est dans le contrat partagé (`rate_limits`, `max_body_bytes`). |
 | `1.3` | Le heartbeat annonce `server_contract_version`. La console vérifie cette annonce pour son état de liaison, même sans programmes. Une réponse sans version lisible affiche un contrat inconnu. |
 | `1.2` | `POST /api/machine/records/upload-url`, `POST /api/machine/records/commit` et `GET /api/machine/records/status` : dépôt complet et vérification des enregistrements clos. Les consoles antérieures restent compatibles mais ne déposent pas les fichiers. |
 | `1.1` | La route `POST /api/machine/training/events`. La réponse `{stored, duplicates, rejected}` de `training/telemetry` (au lieu de `{stored}`), qui n'écrit plus deux fois le même point. Les champs facultatifs `startedAt` et `sessionAgeMs` de `training/start`, et `sessionAgeMs` de `training/local` : c'est `sessionAgeMs` qui fait dater la séance par le serveur et borner ses points ([Deux horloges](#deux-horloges)). |
@@ -3283,8 +3285,41 @@ refaite 15 s plus tard, rien d'abandonné), sans tenir compte de
 `retryAfterMs` ; ses cadences et ses lots sont les mêmes, sauf le rattrapage
 de télémétrie (un lot toutes les 2 s), que la réserve de deux lots et l'attente
 de 15 s après un 429 ramènent sous la limite. Un 413 ne la touche pas : ses
-lots sont sous les tailles. Face à un serveur antérieur sans version dans
-le heartbeat, elle conserve les échanges mais affiche un contrat serveur inconnu.
+lots sont sous les tailles.
+
+`pi-1.0.0` (commit `80208a0`, contrat `1.1`) se comporte de même sur un 429.
+Pour `training/local`, `training/telemetry` et `training/events`, elle garde
+le curseur et refait la même requête après 15 s : rien n'est abandonné.
+Pour `profiles`, la révision reste à envoyer et un nouvel essai attend 15 s.
+Le heartbeat garde sa cadence de 10 s et `training/poll` celle de 3 s ; la
+console ignore `retryAfterMs` et ne retient pas toute une route sur place.
+Son rattrapage de télémétrie espace les lots de 2 s au moins, toutes séances
+confondues, avec la même attente de 15 s après un 429. Ses lots habituels
+(300 points ou 200 événements) restent sous les tailles. Si un lot reçoit
+quand même un 413, le code `payload_too_large` lui est inconnu : elle refait
+deux essais, espacés de 15 s, puis passe ce lot après le troisième refus.
+Un 413 sur le heartbeat laisse partir le suivant à sa cadence habituelle.
+Cette console ne dépose pas les fichiers : elle n'appelle ni
+`records/upload-url` ni `records/commit`, ajoutées au contrat `1.2`.
+
+Les versions de développement **d'avant ANH-129 lot 2** (`e2457b8`, dont le
+parent sur `develop` est `3f50b00`) annonçaient déjà le contrat `1.1`, avec
+`VERSION` à `pi-0.0.0-dev`, mais envoyaient la télémétrie de mémoire.
+Leur `_flush` abandonne **tout lot refusé, 429 ou 413 compris** ; seule une
+absence de réponse conserve le lot. Pendant une séance, elles envoient au
+plus un lot toutes les 5 s. Après sa fin, elles envoient jusqu'à un lot de
+300 points par séance finie à chaque étape du lien, prévue chaque seconde,
+sans espacement commun aux séances. Si ce rattrapage dépasse la réserve et
+le débit de deux lots toutes les 5 s, les lots refusés en 429 sont abandonnés :
+le tableau de bord perd ces points. En revanche, un 429 sur `training/local`
+laisse la déclaration à refaire après 15 s, sans identifiant de séance
+acquitté ; sur `profiles`, la révision reste à envoyer, avec un nouvel essai
+après 15 s. Cette perte de lots ne concerne aucune console publiée : aucun
+tag `pi-*` n'est posé, et `pi-1.0.0`, préparée mais non publiée, inclut déjà
+ANH-129 lot 2.
+
+Une console `1.3` face à un serveur antérieur sans version dans
+le heartbeat conserve les échanges mais affiche un contrat serveur inconnu.
 Déployer Convex avant la console permet de maintenir une indication compatible.
 Elle conserve les ajouts de `1.1` : elle envoie les événements,
 dit l'âge de ses séances, et compte sur l'idempotence pour renvoyer sans

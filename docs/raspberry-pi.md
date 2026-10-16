@@ -2161,7 +2161,15 @@ lequel la même requête serait encore refusée.
 - **Rien n'est perdu.** Un 429 est une réponse retenue (8.3) : le curseur ne
   bouge pas, la même requête est refaite après l'attente ; pour le dépôt, le
   fichier reste sur le disque et la purge locale attend toujours sa
-  vérification. La pastille **Serveur** lit `en erreur` pendant ce temps.
+  vérification. La pastille **Serveur** ne passe pas `en erreur` pendant
+  chaque attente : une retenue, sur place ou par le serveur, ne change pas
+  l'état tant que les routes qui portent le heartbeat et la séance ont dit
+  quelque chose de reconnaissable dans les 25 dernières secondes. Elle reste
+  `joignable` si une autre route prend ce qui est envoyé dans ce délai. Elle
+  ne passe `en erreur` qu'après **25 s sans rien d'accepté sur ces routes**,
+  avec le motif de la dernière retenue si celle-ci reste le dernier échec.
+  Les réponses à la question d'arrêt ne remettent pas ce délai à zéro
+  ([section 14](#14-versions-et-compatibilité)).
 - **La question de l'arrêt n'est jamais retenue**, et Convex ne la limite pas.
 - Un corps trop grand reçoit 413 `payload_too_large` : la même requête serait
   toujours refusée, elle est passée (8.3). La console n'en envoie pas : ses
@@ -2927,8 +2935,9 @@ dit, et `/api/panel` le sert :
   réponse qui le dit ; la dernière chose dite l'emporte, donc un 426 après un
   401 se lit `incompatible` ;
 * **ce qui n'est pas la réponse du tableau de bord ne prouve rien** : un
-  silence, une erreur du serveur (5xx, 408, 425, 429), un 404 ou un 400 sans
-  code stable, une page HTML. Rien de cela ne donne `joignable` ni n'efface un
+  silence, une erreur du serveur (5xx, 408, 425, 429), une requête retenue sur
+  place par `PacedTransport` sans être envoyée, un 404 ou un 400 sans code
+  stable, une page HTML. Rien de cela ne donne `joignable` ni n'efface un
   refus, et cela ne change l'affichage qu'après **25 s** sans rien de
   reconnaissable sur ces routes (`UNREACHABLE_AFTER`, deux heartbeats et
   demi) : une requête lente ou perdue ne fait pas clignoter la pastille. Le
@@ -2943,7 +2952,9 @@ dit, et `/api/panel` le sert :
   revenu en dernier ;
 * le motif affiché sous la pastille ne reprend, de ce que le serveur envoie,
   que le code HTTP, le code stable et les majeures servies, sur une ligne de
-  160 caractères au plus. La phrase du serveur reste dans le journal.
+  160 caractères au plus. Quand une retenue sur place explique `en erreur`,
+  le motif dit `requete retenue ici, non envoyee (rate_limited)` : ce n'est
+  pas une réponse du serveur. La phrase du serveur reste dans le journal.
 
 Pourquoi la version du contrat est une constante du code, et non lue dans le
 fichier partagé à l'exécution : la console est déployée avec le seul dossier
