@@ -50,12 +50,15 @@ exception n'est écrite ailleurs, ni dans le workflow ni dans une commande.
 autres, sans retrait. Sont refusés : une ligne qui commence par une barre
 verticale ailleurs dans la section, un bloc de code dans la section, un second
 titre « Exceptions en cours » ou un titre écrit dans un bloc de code, et, n'importe
-où dans ce fichier, tout HTML qui peut retirer une ligne de la page : une ligne
-qui commence, après trois espaces au plus, par le signe `<` (c'est ainsi que
-s'ouvre un bloc HTML, y compris un bloc `details` replié), et un commentaire,
-une déclaration, une section CDATA ou une instruction de traitement, même au
-milieu d'une ligne. Ce que la page affichée ne montre pas
-ne peut donc pas compter comme exception.
+où dans ce fichier, code compris, le signe `<` immédiatement
+suivi d'une lettre Unicode, de `/`, de `!` ou de `?` : c'est ainsi que s'ouvre
+toute balise ou tout bloc HTML, y compris un bloc `details` replié au milieu
+d'une ligne, un commentaire, une déclaration, une section CDATA ou une
+instruction de traitement ; un lien entre chevrons est aussi refusé. Est
+également refusée toute ligne qui commence par `<` après trois espaces au
+plus. Au milieu d'une ligne, un `<` suivi d'une espace ou d'un chiffre reste
+permis. Ce que la page affichée ne montre pas ne peut donc pas compter comme
+exception.
 
 Une exception npm ne cache pas l'avis : le job l'affiche encore, avec sa date
 d'expiration et son ticket. `pip-audit` compte les vulnérabilités sautées

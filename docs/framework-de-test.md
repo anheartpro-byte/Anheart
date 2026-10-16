@@ -1373,9 +1373,12 @@ d'avis de plusieurs paquets, est donc refusé pour pip. Seules comptent les
 lignes du tableau lui-même, celles que la page affichée montre. Sont refusés :
 une ligne en dehors du tableau ou un bloc de code dans la section, un second
 titre de section ou un titre écrit dans un bloc de code, et, n'importe où dans
-le fichier, une ligne qui commence par `<` après trois espaces au plus (un bloc
-HTML, `details` compris), un commentaire HTML, une déclaration, une section
-CDATA ou une instruction de traitement. Aucune exception au 14 octobre 2026.
+le fichier, code compris, le signe `<` immédiatement suivi d'une lettre Unicode,
+de `/`, de `!` ou de `?` (balise ou bloc HTML, y compris un bloc `details` replié
+au milieu d'une ligne, commentaire, déclaration, section CDATA, instruction de
+traitement ou lien entre chevrons), ainsi qu'une ligne qui commence par `<`
+après trois espaces au plus ; au milieu d'une ligne, un `<` suivi d'une espace
+ou d'un chiffre reste permis. Aucune exception au 14 octobre 2026.
 
 **Essai du 14 octobre 2026, sur un poste, pas en CI.** Les commandes exactes
 des étapes du workflow, extraites du fichier, ont tourné sur une copie jetable
