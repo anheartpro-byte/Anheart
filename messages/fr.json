@@ -78,6 +78,7 @@
         "updated": "Profil physiologique modifié"
       },
       "fitness": {
+        "submitted": "Questionnaire d'aptitude soumis",
         "validated": "Aptitude validée"
       },
       "consent": {

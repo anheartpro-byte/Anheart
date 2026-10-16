@@ -51,7 +51,12 @@ async function writeMachineGestionnaires(
   machine: Pick<Doc<"machines">, "_id" | "organizationId">,
   gestionnaireIds: readonly Id<"users">[],
   createdBy: Id<"users">,
-): Promise<{ added: Id<"users">[]; removed: Id<"users">[]; changed: boolean }> {
+): Promise<{
+  added: Id<"users">[];
+  removed: Id<"users">[];
+  changed: boolean;
+  owner: Id<"users"> | undefined;
+}> {
   const kept: Id<"users">[] = [];
   for (const gestionnaireId of new Set(gestionnaireIds)) {
     const role = await organizationRoleOf(
@@ -101,7 +106,7 @@ async function writeMachineGestionnaires(
     added.push(gestionnaireId);
     changed = true;
   }
-  return { added, removed, changed };
+  return { added, removed, changed, owner };
 }
 
 /**
@@ -228,7 +233,11 @@ export const assignMachineToGestionnaires = mutation({
         organizationId: machine.organizationId,
         action: "machine_gestionnaires.set",
         targetId: machine._id,
-        details: { added: links.added, removed: links.removed },
+        details: {
+          added: links.added,
+          removed: links.removed,
+          gestionnaireId: links.owner,
+        },
       });
     }
     return null;

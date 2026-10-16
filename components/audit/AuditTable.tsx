@@ -16,10 +16,12 @@ import {
 export function AuditTable({
   rows,
   admin,
+  disabled,
   onTarget,
 }: {
   rows: AuditRow[];
   admin: boolean;
+  disabled: boolean;
   onTarget: (row: AuditRow) => void;
 }) {
   const t = useTranslations("audit");
@@ -59,7 +61,12 @@ export function AuditTable({
                 {t(`targets.${row.targetType}`)} :{" "}
                 {row.targetLabel ?? row.targetId.slice(0, 12)}
               </div>
-              <Button variant="ghost" size="sm" onClick={() => onTarget(row)}>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={disabled}
+                onClick={() => onTarget(row)}
+              >
                 {t("filterTarget")}
               </Button>
             </TableCell>

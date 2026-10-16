@@ -786,12 +786,27 @@ comptes et machines actuels. Une référence disparue est remplacée par son
 identifiant abrégé. Les détails montrent leurs clés traduites, les tableaux
 sous forme de nombre d'éléments et les autres valeurs sur 60 caractères au
 plus. L'identifiant de requête est abrégé à 12 caractères, complet au survol.
+Les soumissions d'aptitude sont visibles comme `fitness.submitted`, sans
+réponses ni verdict. Les créations et réactivations d'appartenance sont
+tracées par leur écrivain, connexion ou webhook, une seule fois ; une
+appartenance ouverte par la seule connexion reste donc visible. La suppression
+automatique d'un enregistrement apparaît avec la source `cron`.
+Les changements sans effet de physiologie, de rôle et d'identité du registre
+n'ajoutent pas de ligne ; les champs affichés sont ceux réellement modifiés.
+Les versions libres de fiche et d'enregistrement médical sont omises des
+détails. Les invitations montrent les identifiants des gestionnaires prévus,
+et leurs affectations à l'acceptation ont chacune une ligne. Les changements
+de propriétaire machine et de niveau de release indiquent respectivement
+le nouveau propriétaire et le niveau précédent. Chaque liste d'identifiants
+est bornée à 1 000 éléments ; en cas de troncature, `count` donne le total
+des listes `added` et `removed` avant troncature.
 
 **Exporter en CSV** relit les pages avec les filtres courants, par lots de
 200, jusqu'à **10 000 lignes au plus** (hors en-tête). S'il reste des lignes,
 la page affiche « L'export contient les 10 000 premières lignes. Restreignez
-la période pour exporter la suite. » Le bouton et les filtres restent
-désactivés pendant l'export ; un échec affiche un message et permet un nouvel
+la période pour exporter la suite. » Le bouton, les sélecteurs, la
+réinitialisation et tous les boutons « Filtrer sur cette cible » des lignes
+restent désactivés pendant l'export ; un échec affiche un message et permet un nouvel
 essai.
 
 [`lib/auditCsv.ts`](../lib/auditCsv.ts) produit 13 colonnes stables : `at`,

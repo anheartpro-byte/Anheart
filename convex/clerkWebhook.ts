@@ -179,6 +179,13 @@ export const applyEvent = internalMutation({
         if (!user && candidates[0]) {
           user = candidates[0];
           await ctx.db.patch(user._id, { clerkId: event.userId });
+          await audit(ctx, {
+            actor: SYSTEM_ACTOR,
+            source: "webhook",
+            organizationId: organization._id,
+            action: "user.linked_to_account",
+            targetId: user._id,
+          });
         }
         if (
           invitationsForUser.some(
@@ -239,14 +246,15 @@ export const applyEvent = internalMutation({
           organizationId: organization._id,
           ...values,
         });
-        await audit(ctx, {
-          actor: SYSTEM_ACTOR,
-          source: "webhook",
-          organizationId: organization._id,
-          action: "membership.created",
-          targetId: user._id,
-          details: { role: event.role },
-        });
+        if (values.active)
+          await audit(ctx, {
+            actor: SYSTEM_ACTOR,
+            source: "webhook",
+            organizationId: organization._id,
+            action: "membership.created",
+            targetId: user._id,
+            details: { role: event.role },
+          });
       } else if (
         !stale(row, event) &&
         (row.active ||
@@ -254,7 +262,16 @@ export const applyEvent = internalMutation({
           event.deleted)
       ) {
         await ctx.db.patch(row._id, values);
-        if (row.role !== values.role) {
+        if (!row.active && values.active) {
+          await audit(ctx, {
+            actor: SYSTEM_ACTOR,
+            source: "webhook",
+            organizationId: row.organizationId,
+            action: "membership.created",
+            targetId: user._id,
+            details: { role: values.role },
+          });
+        } else if (row.active && row.role !== values.role) {
           await audit(ctx, {
             actor: SYSTEM_ACTOR,
             source: "webhook",
@@ -298,7 +315,6 @@ export const applyEvent = internalMutation({
             updatedAt: Date.now(),
           });
           for (const gestionnaireId of invitation.gestionnaireIds) {
-            // Invitation acceptance links are covered by user.invited.
             if (event.role !== "user") continue;
             if (
               (await organizationRoleOf(
@@ -314,7 +330,9 @@ export const applyEvent = internalMutation({
                 q.eq("userId", user._id).eq("gestionnaireId", gestionnaireId),
               )
               .collect();
-            if (!links.some((link) => link.organizationId === organization._id))
+            if (
+              !links.some((link) => link.organizationId === organization._id)
+            ) {
               await ctx.db.insert("user_gestionnaires", {
                 userId: user._id,
                 gestionnaireId,
@@ -322,6 +340,15 @@ export const applyEvent = internalMutation({
                 createdAt: Date.now(),
                 createdBy: invitation.requestedBy,
               });
+              await audit(ctx, {
+                actor: SYSTEM_ACTOR,
+                source: "webhook",
+                organizationId: organization._id,
+                action: "patient_gestionnaire.assigned",
+                targetId: user._id,
+                details: { gestionnaireId },
+              });
+            }
           }
         }
       }

@@ -654,15 +654,23 @@ export const updateIdentity = mutation({
       }
       fields.contacts = contacts;
     }
-    await saveRegistry(ctx, state, fields);
-    await audit(ctx, {
-      actor: userActor(state.admin),
-      source: "site",
-      organizationId: state.machine.organizationId,
-      action: "registry.identity_updated",
-      targetId: args.machineId,
-      details: { fields: Object.keys(fields) },
+    const changedFields = (
+      Object.keys(fields) as (keyof typeof fields)[]
+    ).filter((key) => {
+      const previous =
+        state.registry?.[key] ?? (key === "contacts" ? [] : undefined);
+      return JSON.stringify(previous) !== JSON.stringify(fields[key]);
     });
+    await saveRegistry(ctx, state, fields);
+    if (changedFields.length > 0)
+      await audit(ctx, {
+        actor: userActor(state.admin),
+        source: "site",
+        organizationId: state.machine.organizationId,
+        action: "registry.identity_updated",
+        targetId: args.machineId,
+        details: { fields: changedFields },
+      });
     return null;
   },
 });
@@ -745,7 +753,6 @@ export const attachDriveParameterSheet = mutation({
       organizationId: state.machine.organizationId,
       action: "registry.drive_sheet_attached",
       targetId: args.machineId,
-      details: { version: sheet.version },
     });
     return null;
   },

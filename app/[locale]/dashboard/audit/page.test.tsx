@@ -327,6 +327,30 @@ describe("ANH-167 T03-d exact filter arguments", () => {
 });
 
 describe("ANH-167 T03-e filtered CSV export", () => {
+  it("R2-4 keeps every precise-target filter disabled during export", async () => {
+    const pending =
+      Promise.withResolvers<FunctionReturnType<typeof api.audit.list>>();
+    client.query.mockReturnValueOnce(pending.promise);
+    const view = await renderPage(<AuditPage />);
+    await view.user.click(
+      screen.getByRole("button", { name: fr.audit.export }),
+    );
+    const before = last();
+    const target = screen.getByRole("button", { name: fr.audit.filterTarget });
+    await view.user.click(target);
+    const after = last();
+    const disabled = (target as HTMLButtonElement).disabled;
+    await act(async () =>
+      pending.resolve({ page: [row], isDone: true, continueCursor: "" }),
+    );
+    expect(after).toEqual(before);
+    expect(disabled).toBe(true);
+    expect((target as HTMLButtonElement).disabled).toBe(false);
+    await view.user.click(target);
+    expect(last()).toEqual(
+      firstPage({ targetType: row.targetType, targetId: row.targetId }),
+    );
+  });
   it("keeps export and filter controls disabled until the last page arrives", async () => {
     const pending =
       Promise.withResolvers<FunctionReturnType<typeof api.audit.list>>();

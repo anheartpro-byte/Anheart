@@ -177,7 +177,13 @@ export const recordRelease = mutation({
       organizationId: admin.organizationId,
       action: "software_release.recorded",
       targetId: existing._id,
-      details: { version: args.version, level },
+      details: {
+        version: args.version,
+        level,
+        ...(existing.validationLevel !== level
+          ? { previousLevel: existing.validationLevel }
+          : {}),
+      },
     });
     return existing._id;
   },

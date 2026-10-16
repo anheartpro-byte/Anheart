@@ -119,7 +119,11 @@ export const prepare = internalMutation({
       organizationId: me.organizationId,
       action: "user.invited",
       targetId: invitationId,
-      details: { role: "user", ...(userId === undefined ? {} : { userId }) },
+      details: {
+        role: "user",
+        added: gestionnaireIds,
+        ...(userId === undefined ? {} : { userId }),
+      },
     });
     return {
       invitationId,

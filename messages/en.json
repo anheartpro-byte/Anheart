@@ -78,6 +78,7 @@
         "updated": "Physiology updated"
       },
       "fitness": {
+        "submitted": "Fitness questionnaire submitted",
         "validated": "Fitness validated"
       },
       "consent": {

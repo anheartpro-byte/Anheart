@@ -122,6 +122,7 @@ export default function AuditPage() {
             <AuditTable
               rows={results}
               admin={admin}
+              disabled={exporting}
               onTarget={(row) =>
                 setState({
                   ...state,

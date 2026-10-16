@@ -1,6 +1,6 @@
 import { limitUser } from "./lib/rateLimits";
 import { v } from "convex/values";
-import { audit, userActor } from "./lib/audit";
+import { audit, SYSTEM_ACTOR, userActor } from "./lib/audit";
 import {
   internalMutation,
   internalQuery,
@@ -675,6 +675,13 @@ export const enforceRetention = internalMutation({
         recordExpectedCount: undefined,
         recordVerifiedCount: undefined,
         recordRejectedCount: undefined,
+      });
+      await audit(ctx, {
+        actor: SYSTEM_ACTOR,
+        source: "cron",
+        organizationId: session.organizationId,
+        action: "record.deleted",
+        targetId: session._id,
       });
       await ctx.scheduler.runAfter(0, internal.recordStorage.removeBatch, {
         sessionId: session._id,

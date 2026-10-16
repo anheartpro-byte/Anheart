@@ -53,7 +53,7 @@ export const auditTargetTypeValidator = v.union(
 export const AUDIT_ACTIONS = [
   "user.role_changed", // Admin changes a user's role; target: user.
   "user.invited", // Staff prepares an invitation; target: invitation, even without a unique profile.
-  "user.linked_to_account", // Patient links their own verified account; target: user.
+  "user.linked_to_account", // Patient or Clerk webhook links a verified account; target: user.
   "user.deleted", // Authorised staff removes a user from their scope; target: user.
   "patient_gestionnaire.assigned", // Staff assigns a manager; target: patient user.
   "patient_gestionnaire.removed", // Staff removes a manager; target: patient user.
@@ -64,12 +64,13 @@ export const AUDIT_ACTIONS = [
   "gestionnaire_machines.set", // Staff sets a manager's machines; target: manager user.
   "launch_right.granted", // Staff grants launch access; target: passenger user.
   "launch_right.revoked", // Staff revokes launch access; target: passenger user.
-  "membership.created", // Clerk webhook creates membership; target: user.
-  "membership.role_changed", // Clerk webhook changes membership role; target: user.
+  "membership.created", // Login mirror or Clerk webhook activates membership; target: user.
+  "membership.role_changed", // Login mirror or Clerk webhook changes an active membership role; target: user.
   "membership.deactivated", // Clerk webhook deactivates membership; target: user.
   "account.deleted_in_clerk", // Clerk webhook deletes an account; target: user.
   "organization.deleted", // Clerk webhook deletes an organisation; target: organisation.
   "physiology.updated", // Staff updates physiology, without values; target: user.
+  "fitness.submitted", // Rider or authorised staff submits answers, without answers or verdict; target: assessment.
   "fitness.validated", // Staff validates fitness, without verdict; target: assessment.
   "consent.signed", // User signs consent; target: consent.
   "consent.withdrawn", // User withdraws consent; target: consent.
@@ -92,7 +93,7 @@ export const AUDIT_ACTIONS = [
   "registry.level_lowered", // Admin lowers validation level; target: machine.
   "software_release.recorded", // Admin records a release; target: software release.
   "medical_parameters.registered", // Operator registers a version; target: medical version.
-  "record.deleted", // Authorised user deletes a recording; target: session.
+  "record.deleted", // Authorised user or retention cron deletes a recording; target: session.
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 export const auditActionValidator = v.union(
@@ -119,6 +120,7 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "account.deleted_in_clerk": "user",
   "organization.deleted": "organization",
   "physiology.updated": "user",
+  "fitness.submitted": "fitness_assessment",
   "fitness.validated": "fitness_assessment",
   "consent.signed": "consent",
   "consent.withdrawn": "consent",
@@ -205,9 +207,13 @@ export const SENSITIVE_MUTATIONS: Readonly<
     "membership.created",
     "membership.role_changed",
     "membership.deactivated",
+    "user.linked_to_account",
+    "patient_gestionnaire.assigned",
     "account.deleted_in_clerk",
     "organization.deleted",
   ],
+  "users.getOrCreateUser": ["membership.created", "membership.role_changed"],
+  "fitness.submitFitnessAnswers": ["fitness.submitted"],
   "fitness.validateFitnessAssessment": ["fitness.validated"],
   "fitness.signConsent": ["consent.signed"],
   "fitness.withdrawConsent": ["consent.withdrawn"],
@@ -243,6 +249,7 @@ export const SENSITIVE_MUTATIONS: Readonly<
   "medicalParametersStore.insertVersion": ["medical_parameters.registered"],
   "patientInvitations.prepare": ["user.invited"],
   "recordStorage.remove": ["record.deleted"],
+  "recordStorage.enforceRetention": ["record.deleted"],
   "softwareReleases.recordRelease": ["software_release.recorded"],
   "training.grantLaunchRight": ["launch_right.granted"],
   "training.revokeLaunchRight": ["launch_right.revoked"],
@@ -261,9 +268,8 @@ export const SENSITIVE_MUTATIONS: Readonly<
 };
 
 export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
-  "fitness.submitFitnessAnswers":
-    "Rider or authorised manager stores questionnaire answers containing health data; fitness validation is audited separately.",
-  "machineHealth.purge": "Cron removes expired heartbeat and machine health history samples.",
+  "machineHealth.purge":
+    "Cron removes expired heartbeat and machine health history samples.",
   "machineKeys.recordKeyUse":
     "Machine HTTP authentication refreshes the key-use timestamp, without a rights change.",
   "machineRegistry.generateUploadUrl":
@@ -277,7 +283,8 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
   "notifications.markRead": "Recipient marks an alert read.",
   "notifications.markAllRead": "Recipient marks alerts read.",
   "notifications.updateSettings": "Recipient changes notification preferences.",
-  "notifications.deliver": "Scheduled alert delivery writes recipients' operational notifications.",
+  "notifications.deliver":
+    "Scheduled alert delivery writes recipients' operational notifications.",
   "notifications.purge": "Cron removes expired notifications.",
   "patientInvitations.finish":
     "Patient creation action records delivery status of an already audited invitation.",
@@ -287,25 +294,23 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Internal upload verification action records verification results and recording status.",
   "recordStorage.manifestPage":
     "Internal upload verification action stores manifest path pages.",
-  "recordStorage.sweepUploads": "Cron recovers uploaded files whose commit was missed and schedules verification.",
+  "recordStorage.sweepUploads":
+    "Cron recovers uploaded files whose commit was missed and schedules verification.",
   "recordStorage.removeBatch":
     "Scheduled batches remove files after an audited deletion or configured automatic retention.",
-  "recordStorage.enforceRetention":
-    "Cron applies configured recording retention and marks the deletion on the session row.",
   "sessionReports.storeSummary":
     "Internal summary actions store the computed session summary containing health data.",
   "sessionReports.noteRecordProblem":
     "Internal record summary action annotates the provisional summary with a recording problem.",
   "training.sweepPendingSessions":
     "Cron fails pending launches that expired or no longer pass arming checks.",
-  "training.updateLive": "Machine HTTP heartbeat updates transient live training state containing health data.",
+  "training.updateLive":
+    "Machine HTTP heartbeat updates transient live training state containing health data.",
   "training.syncProfiles":
     "Machine synchronises its saved training programme profiles, without a rights change.",
   "training.storeTelemetry": "Machine stores health telemetry.",
   "training.storeEvents":
     "Machine stores session events, without a human decision.",
-  "users.getOrCreateUser":
-    "Signed-in user creates or refreshes their profile and membership mirror from Clerk claims, without choosing a role.",
   "users.updateUserProfile": "Own name and language only.",
   "users.updatePatient":
     "Authorised staff changes only a patient's name and language.",
@@ -350,6 +355,23 @@ type AuditEntry = {
   | { source: "operator"; actor: Extract<AuditActor, { kind: "system" }> }
 );
 
+function boundedDetails(details: AuditEntry["details"]): AuditEntry["details"] {
+  if (
+    !details ||
+    ((details.added?.length ?? 0) <= 1000 &&
+      (details.removed?.length ?? 0) <= 1000)
+  )
+    return details;
+  // Convex arrays are limited to 8192 entries. Keep at most 1000 identifiers
+  // per list; count is the total before truncation across both lists.
+  return {
+    ...details,
+    added: details.added?.slice(0, 1000),
+    removed: details.removed?.slice(0, 1000),
+    count: (details.added?.length ?? 0) + (details.removed?.length ?? 0),
+  };
+}
+
 /**
  * One request-metadata read and one insertion, no other read or write. A typed
  * entry adds no refusal or throw path, so auditing cannot refuse a safety stop.
@@ -374,7 +396,7 @@ export async function audit(
     action: entry.action,
     targetType: AUDIT_ACTION_TARGET[entry.action],
     targetId: entry.targetId,
-    details: entry.details,
+    details: boundedDetails(entry.details),
     requestId,
     source: entry.source,
   });

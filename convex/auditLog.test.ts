@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Doc } from "./_generated/dataModel";
 import type { CurrentUser } from "./lib/auth";
@@ -39,15 +40,15 @@ const sources = import.meta.glob(
   ],
   { eager: true, query: "?raw", import: "default" },
 ) as Record<string, string>;
-const topLevel = import.meta.glob(
+const deployedModules = import.meta.glob(
   [
-    "./*.ts",
-    "./migrations/*.ts",
+    "./**/*.ts",
+    "!./_generated/**",
     "!./convex.config.ts",
-    "!./*.test.ts",
-    "!./*.fixtures.ts",
-    "!./*.setup.ts",
-    "!./*.matrix.ts",
+    "!./**/*.test.ts",
+    "!./**/*.fixtures.ts",
+    "!./**/*.setup.ts",
+    "!./**/*.matrix.ts",
   ],
   { eager: true },
 ) as Record<string, Record<string, unknown>>;
@@ -73,6 +74,45 @@ function registrations(mod: Record<string, unknown>): [string, Registration][] {
       );
     },
   );
+}
+
+function unsafeDatabaseIdCasts(text: string): string[] {
+  const source = ts.createSourceFile(
+    "source.ts",
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const unsafe: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ["delete", "patch", "replace"].includes(node.expression.name.text) &&
+      ts.isPropertyAccessExpression(node.expression.expression) &&
+      node.expression.expression.name.text === "db"
+    ) {
+      const id =
+        ts.isStringLiteral(node.arguments[0]) && node.arguments.length > 1
+          ? node.arguments[1]
+          : node.arguments[0];
+      const inspect = (value: ts.Node) => {
+        if (
+          (ts.isAsExpression(value) || ts.isTypeAssertionExpression(value)) &&
+          (value.type.kind === ts.SyntaxKind.NeverKeyword ||
+            value.type.kind === ts.SyntaxKind.AnyKeyword ||
+            (ts.isTypeReferenceNode(value.type) &&
+              value.type.typeName.getText(source) === "Id"))
+        )
+          unsafe.push(value.getText(source));
+        ts.forEachChild(value, inspect);
+      };
+      if (id) inspect(id);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return unsafe;
 }
 
 const NOW = 1_800_000_000_000;
@@ -125,6 +165,64 @@ describe("ANH-167 T01-a audit insertion", () => {
     vi.setSystemTime(NOW);
   });
   afterEach(() => vi.useRealTimers());
+
+  it.each([
+    { added: 1000, removed: 0 },
+    { added: 1001, removed: 0 },
+    { added: 0, removed: 1001 },
+    { added: 9000, removed: 9001 },
+  ])(
+    "C1 bounds identifier lists and preserves the total for $added added and $removed removed",
+    async (lengths) => {
+      const w = await world();
+      const added = Array.from(
+        { length: lengths.added },
+        (_, i) => `synthetic-added-${i}`,
+      );
+      const removed = Array.from(
+        { length: lengths.removed },
+        (_, i) => `synthetic-removed-${i}`,
+      );
+      await w.t.run((ctx) =>
+        audit(ctx, {
+          source: "site",
+          actor: { kind: "user", id: w.userId, role: "admin" },
+          organizationId: w.organizationId,
+          action: "gestionnaire_patients.set",
+          targetId: w.userId,
+          details: { added, removed },
+        }),
+      );
+      const [row] = await w.t.run((ctx) => ctx.db.query("audit_log").collect());
+      expect(row.details?.added).toEqual(added.slice(0, 1000));
+      expect(row.details?.removed).toEqual(removed.slice(0, 1000));
+      expect(row.details?.count).toBe(
+        lengths.added > 1000 || lengths.removed > 1000
+          ? lengths.added + lengths.removed
+          : undefined,
+      );
+    },
+  );
+
+  it.each(["added", "removed"] as const)(
+    "C1 bounds an isolated %s list and replaces its count",
+    async (key) => {
+      const w = await world();
+      const ids = Array.from({ length: 1001 }, (_, i) => `synthetic-${i}`);
+      await w.t.run((ctx) =>
+        audit(ctx, {
+          source: "cron",
+          actor: SYSTEM_ACTOR,
+          organizationId: w.organizationId,
+          action: "gestionnaire_patients.set",
+          targetId: w.userId,
+          details: { [key]: ids, count: 7 },
+        }),
+      );
+      const [row] = await w.t.run((ctx) => ctx.db.query("audit_log").collect());
+      expect(row.details).toEqual({ [key]: ids.slice(0, 1000), count: 1001 });
+    },
+  );
 
   it.each(["admin", "org_admin", "gestionnaire", "user"] as const)(
     "writes exactly one complete row for a user acting as %s",
@@ -290,9 +388,8 @@ describe("ANH-167 T01-b append-only and T01-c no purge", () => {
       ["./lib/audit.ts", "./schema.ts", ...queryModules].sort(),
     );
     for (const path of queryModules) {
-      expect(path, path).toMatch(/^\.\/[^/]+\.ts$/);
-      expect(Object.keys(topLevel), path).toContain(path);
-      const functions = registrations(topLevel[path]);
+      expect(Object.keys(deployedModules), path).toContain(path);
+      const functions = registrations(deployedModules[path]);
       expect(functions.length, path).toBeGreaterThan(0);
       for (const [name, registration] of functions) {
         expect(registration.isQuery, `${path}:${name}`).toBe(true);
@@ -307,6 +404,7 @@ describe("ANH-167 T01-b append-only and T01-c no purge", () => {
       );
     }
     for (const [path, text] of Object.entries(sources)) {
+      expect(unsafeDatabaseIdCasts(text), path).toEqual([]);
       expect(text, path).not.toMatch(
         /\b(?:patch|replace|delete|normalizeId|id)\s*\(\s*["'`]audit_log["'`]/,
       );
@@ -319,6 +417,33 @@ describe("ANH-167 T01-b append-only and T01-c no purge", () => {
     ).toEqual(["insert"]);
     expect(helper).not.toMatch(/\bthrow\s+(?:new|refusal)\b/);
   });
+
+  it.each(["delete", "patch", "replace"])(
+    "C1 rejects unsafe id assertions for db.%s without matching comments or field values",
+    (method) => {
+      for (const cast of [
+        "as never",
+        "as any",
+        'as Id<"users">',
+        '<Id<"users">>',
+      ]) {
+        const argument = cast.startsWith("<") ? `${cast}id` : `id ${cast}`;
+        expect(
+          unsafeDatabaseIdCasts(`ctx.db.${method}(${argument}, {});`),
+        ).toHaveLength(1);
+        expect(
+          unsafeDatabaseIdCasts(
+            `ctx.db.${method}("users", (${argument}), {});`,
+          ),
+        ).toHaveLength(1);
+      }
+      expect(
+        unsafeDatabaseIdCasts(
+          `// ctx.db.${method}(id as never)\nctx.db.${method}(id, { text: "as any" });`,
+        ),
+      ).toEqual([]);
+    },
+  );
 
   it("exports only the fixed audit API, with no reader or updater", () => {
     const names = [
@@ -369,8 +494,15 @@ describe("ANH-167 T01-b append-only and T01-c no purge", () => {
 });
 
 describe("ANH-167 T01-d mutation classification", () => {
+  it("C1 loads every deployment source at every directory depth", () => {
+    expect(Object.keys(deployedModules).sort()).toEqual(
+      Object.keys(sources)
+        .filter((path) => path !== "./convex.config.ts")
+        .sort(),
+    );
+  });
   it("classifies every public and internal mutation exactly once, without stale entries", () => {
-    const discovered = Object.entries(topLevel)
+    const discovered = Object.entries(deployedModules)
       .flatMap(([path, mod]) =>
         registrations(mod)
           .filter(([, value]) => value.isMutation === true)
@@ -552,6 +684,12 @@ describe("ANH-167 T01-e closed schema and details", () => {
       by_at: ["at"],
       by_organization_and_at: ["organizationId", "at"],
       by_actor_and_at: ["actorId", "at"],
+      by_actor_role_and_at: ["actorRole", "at"],
+      by_organization_and_actor_role_and_at: [
+        "organizationId",
+        "actorRole",
+        "at",
+      ],
       by_action_and_at: ["action", "at"],
       by_target_and_at: ["targetType", "targetId", "at"],
       by_target_type_and_at: ["targetType", "at"],

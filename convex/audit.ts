@@ -29,8 +29,16 @@ const rowValidator = schema
 type Period = { from?: number; to?: number };
 
 function rangeOf(ctx: QueryCtx, filters: AuditIndexFilters & Period) {
-  const { organizationId, actorId, action, targetType, targetId, from, to } =
-    filters;
+  const {
+    organizationId,
+    actorId,
+    actorRole,
+    action,
+    targetType,
+    targetId,
+    from,
+    to,
+  } = filters;
   const rows = ctx.db.query("audit_log");
   const period = (
     q: IndexRange &
@@ -63,6 +71,16 @@ function rangeOf(ctx: QueryCtx, filters: AuditIndexFilters & Period) {
     case "by_actor_and_at":
       return rows.withIndex("by_actor_and_at", (q) =>
         period(q.eq("actorId", actorId)),
+      );
+    case "by_organization_and_actor_role_and_at":
+      return rows.withIndex("by_organization_and_actor_role_and_at", (q) =>
+        period(
+          q.eq("organizationId", organizationId).eq("actorRole", actorRole!),
+        ),
+      );
+    case "by_actor_role_and_at":
+      return rows.withIndex("by_actor_role_and_at", (q) =>
+        period(q.eq("actorRole", actorRole!)),
       );
     case "by_organization_and_action_and_at":
       return rows.withIndex("by_organization_and_action_and_at", (q) =>

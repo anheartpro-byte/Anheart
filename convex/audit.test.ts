@@ -171,6 +171,14 @@ describe("ANH-167 T03-a audit reads", () => {
       { actorId: w.machine },
       { actorRole: "machine" },
       { actorRole: "system" },
+      {
+        actorRole: "machine",
+        organizationId: w.orgA,
+        from: NOW + 1,
+        to: NOW + 4,
+      },
+      { actorRole: "system", organizationId: w.orgA },
+      { actorRole: "system", action: "machine_key.expired_revoked" },
       { action: "user.role_changed" },
       { targetType: "user" },
       { targetType: "user", targetId: w.patient },
@@ -334,30 +342,39 @@ describe("ANH-167 T03-a audit reads", () => {
 });
 
 describe("ANH-167 T03-a pure index priority", () => {
-  it("selects complete target, actor, action, target type then time for every combination", async () => {
+  it("selects complete target, actor, actor role, action, target type then time for every combination", async () => {
     const w = await world();
     for (const organizationId of [undefined, w.orgA])
       for (const actorId of [undefined, w.manager])
-        for (const action of [undefined, "user.role_changed"] as const)
-          for (const target of [
-            {},
-            { targetType: "user" as const },
-            { targetType: "user" as const, targetId: w.patient },
-          ]) {
-            const filters = { organizationId, actorId, action, ...target };
-            const suffix =
-              "targetId" in target
-                ? "target_and_at"
-                : actorId
-                  ? "actor_and_at"
-                  : action
-                    ? "action_and_at"
-                    : "targetType" in target
-                      ? "target_type_and_at"
-                      : "at";
-            expect(chooseAuditIndex(filters)).toBe(
-              `by_${organizationId ? "organization_and_" : ""}${suffix}`,
-            );
-          }
+        for (const actorRole of [undefined, "system"] as const)
+          for (const action of [undefined, "user.role_changed"] as const)
+            for (const target of [
+              {},
+              { targetType: "user" as const },
+              { targetType: "user" as const, targetId: w.patient },
+            ]) {
+              const filters = {
+                organizationId,
+                actorId,
+                actorRole,
+                action,
+                ...target,
+              };
+              const suffix =
+                "targetId" in target
+                  ? "target_and_at"
+                  : actorId
+                    ? "actor_and_at"
+                    : actorRole
+                      ? "actor_role_and_at"
+                      : action
+                        ? "action_and_at"
+                        : "targetType" in target
+                          ? "target_type_and_at"
+                          : "at";
+              expect(chooseAuditIndex(filters)).toBe(
+                `by_${organizationId ? "organization_and_" : ""}${suffix}`,
+              );
+            }
   });
 });

@@ -31,6 +31,7 @@ import {
   canManageUser,
   requireSharedProfileAuthority,
   findMembership,
+  effectiveRole,
   findUnlinkedDefaultOrganization,
   inScope,
   MALFORMED_ORGANIZATION_CLAIM,
@@ -76,6 +77,25 @@ async function mirrorMembership(
     role,
     organizationId: user.organizationId ?? organizationId,
   });
+  if (!membership || membership.role !== role) {
+    const organization = await ctx.db.get(organizationId);
+    if (organization)
+      await audit(ctx, {
+        actor: {
+          kind: "user",
+          id: user._id,
+          role: effectiveRole(organization, role),
+        },
+        source: "site",
+        organizationId,
+        action: membership ? "membership.role_changed" : "membership.created",
+        targetId: user._id,
+        details: {
+          role,
+          ...(membership ? { previousRole: membership.role } : {}),
+        },
+      });
+  }
 }
 
 /**
@@ -156,6 +176,20 @@ export const getOrCreateUser = mutation({
         role: home.role,
         active: true,
       });
+      const organization = await ctx.db.get(home.organizationId);
+      if (organization)
+        await audit(ctx, {
+          actor: {
+            kind: "user",
+            id: userId,
+            role: effectiveRole(organization, home.role),
+          },
+          source: "site",
+          organizationId: home.organizationId,
+          action: "membership.created",
+          targetId: userId,
+          details: { role: home.role },
+        });
     }
 
     return userId;
@@ -291,14 +325,15 @@ export const updateUserRole = mutation({
 
     await ctx.db.patch(membership._id, { role: args.role });
     await ctx.db.patch(args.userId, { role: args.role });
-    await audit(ctx, {
-      actor: userActor(currentUser),
-      source: "site",
-      organizationId: membership.organizationId,
-      action: "user.role_changed",
-      targetId: args.userId,
-      details: { role: args.role, previousRole: membership.role },
-    });
+    if (membership.role !== args.role)
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId: membership.organizationId,
+        action: "user.role_changed",
+        targetId: args.userId,
+        details: { role: args.role, previousRole: membership.role },
+      });
     return null;
   },
 });
@@ -714,15 +749,17 @@ export const deleteUser = mutation({
         .unique();
       if (settings) await ctx.db.delete(settings._id);
       await ctx.db.delete(args.userId);
-      affectedOrganizations.add(targetUser.organizationId);
     } else if (removable(targetUser.organizationId)) {
       // The account stays in another organisation, which becomes its main one
       await ctx.db.patch(args.userId, {
         organizationId: kept[0].organizationId,
         role: kept[0].role,
       });
-      affectedOrganizations.add(targetUser.organizationId);
     }
+    if (affectedOrganizations.size === 0)
+      affectedOrganizations.add(
+        currentUser.role === "admin" ? undefined : currentUser.organizationId,
+      );
     for (const organizationId of affectedOrganizations) {
       await audit(ctx, {
         actor: userActor(currentUser),

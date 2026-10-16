@@ -72,7 +72,6 @@ export const insertVersion = internalMutation({
       organizationId: undefined,
       action: "medical_parameters.registered",
       targetId: versionId,
-      details: { version: args.version },
     });
     return args.version;
   },

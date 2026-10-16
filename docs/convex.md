@@ -142,7 +142,7 @@ requête. Les valeurs fermées sont définies dans
 | `organizationId` | Identifiant d'organisation, facultatif pour une action globale. Une ligne sans organisation n'est lisible que par l'admin Anheart. |
 | `actorId` | Identifiant de `users` ou de `machines`, absent pour le système. |
 | `actorRole` | `admin`, `org_admin`, `gestionnaire`, `user`, `machine` ou `system`. Le rôle de l'acteur au moment de l'effet. |
-| `action` | Une des 42 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
+| `action` | Une des 43 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
 | `targetType` | `user`, `machine`, `machine_key`, `session`, `fitness_assessment`, `consent`, `organization`, `software_release`, `medical_parameters_version` ou `patient_invitation`. Déduit de l'action par `AUDIT_ACTION_TARGET`. `user.invited` cible une `patient_invitation`, y compris quand aucun profil unique ne peut être lié à l'invitation. |
 | `targetId` | Chaîne, identifiant de la cible ; il reste dans le journal après la suppression de celle-ci. |
 | `details` | Objet facultatif, dont seules les clés ci-dessous sont admises. |
@@ -157,6 +157,9 @@ déploiement : `machineKeys.createKeyByOperator`,
 (écriture par `medicalParametersStore.insertVersion`). Ces fonctions sont
 internes ; l'acteur est `system`, sans `actorId`. Le site et les routes
 machine ne peuvent pas emprunter ce chemin.
+La source est attribuée par le chemin de code, pas constatée à l'exécution :
+une fonction interne lancée avec la clé de déploiement garde la source de
+son chemin, par exemple `machine` pour `training.markTrainingStarted`.
 
 Les clés autorisées de `details` sont `fields`, `role`, `previousRole`,
 `level`, `previousLevel`, `version`, `softwareVersion`,
@@ -168,6 +171,21 @@ reprennent les quatre rôles humains ci-dessus ; `level` et `previousLevel`
 reprennent les niveaux fermés de `convex/lib/releaseValidation.ts` ;
 `outcome` est seulement `completed` ou `failed`, résultat technique d'une
 séance, jamais un verdict d'aptitude.
+`fields` ne contient que les noms des champs réellement modifiés. Les listes
+`added` et `removed` sont limitées chacune aux 1 000 premiers identifiants ;
+si l'une dépasse ce plafond, `count` donne le total des deux listes avant
+troncature. Une invitation conserve ses gestionnaires dans `added` et
+chaque lien créé à son acceptation a sa propre ligne. Un changement de
+propriétaire machine donne le nouveau propriétaire dans `gestionnaireId` ;
+une correction du niveau d'une release conserve `previousLevel`.
+
+Les versions de fiche variateur et la version fournie directement à
+`medicalParametersStore.insertVersion` ne sont pas copiées dans les détails :
+ces mutations ne leur imposent pas de format strict. Les versions de release
+restantes passent `isReleaseVersion` ; `softwareVersion` d'une revue machine
+passe aussi ce format et doit exister dans le registre des releases Pi.
+`medicalParametersVersion` d'une revue doit exister en base. La machine de
+la fiche et l'identifiant de la version créée restent les cibles de leurs lignes.
 
 Conformément au principe 6 du processus de développement, aucune donnée de
 santé ni texte libre ne doit y entrer : ni FC max, année de naissance,
@@ -177,8 +195,10 @@ clés ; les appels et leurs tests vérifient les valeurs réellement écrites.
 Le classement des données de santé reste à décider dans ANH-172 ; tout ajout
 de clé exige une relecture.
 
-Les dix index ordonnent les lectures par `at` : `by_at`,
+Les douze index ordonnent les lectures par `at` : `by_at`,
 `by_organization_and_at`, `by_actor_and_at`, `by_action_and_at`,
+`by_actor_role_and_at` (`actorRole`, `at`),
+`by_organization_and_actor_role_and_at` (`organizationId`, `actorRole`, `at`),
 `by_target_and_at` (`targetType`, `targetId`, `at`),
 `by_target_type_and_at`, `by_organization_and_target_type_and_at`,
 `by_organization_and_actor_and_at`, `by_organization_and_action_and_at` et
@@ -188,8 +208,13 @@ Les dix index ordonnent les lectures par `at` : `by_at`,
 La table est **append-only** : seule `audit()` y insère une ligne, dans la
 même transaction que l'effet ; aucune fonction ne la modifie ni ne la
 supprime. [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) énumère les
-fonctions qui touchent la table et interdit les écritures autres que cet
-ajout. **Aucune purge n'existe.** La rétention envisagée est de **5 ans, à
+fonctions enregistrées dans tout `convex/**/*.ts`, hors fichiers générés,
+tests, fixtures, setup et matrices. Le test cherche le littéral `audit_log`
+et interdit aussi les assertions `as never`, `as any` et `as Id<...>` sur
+l'identifiant passé à `ctx.db.delete`, `patch` ou `replace`. Cette analyse
+de source ne constitue pas une preuve générale : un identifiant non typé
+sans cette assertion ou un nom de table construit lui échapperait.
+**Aucune purge n'existe.** La rétention envisagée est de **5 ans, à
 confirmer par ANH-87a** ; rien n'est supprimé, ni avant ni après cinq ans,
 tant que cette durée et sa mise en œuvre ne sont pas décidées. La portée de
 l'immutabilité est précisée dans
@@ -1339,7 +1364,8 @@ autre organisation, donner un `targetId` sans `targetType`, ou une période
 avec `from >= to` renvoie une page vide.
 
 [`convex/lib/auditIndex.ts`](../convex/lib/auditIndex.ts) choisit l'index
-selon cette priorité : cible complète, acteur, action, type de cible, date ;
+selon cette priorité : cible complète, acteur, rôle d'acteur, action, type
+de cible, date ;
 avec la variante d'organisation quand elle est fixée. La période porte sur
 l'index et les autres filtres sont appliqués avant la pagination.
 
@@ -1354,22 +1380,51 @@ L'interface est décrite dans
 ### `convex/lib/audit.ts` (ANH-167)
 
 La bibliothèque définit les actions, leurs cibles et `audit(ctx, entry)`.
-Les 42 actions couvrent comptes et invitations, appartenances Clerk, liens
+Les 43 actions couvrent comptes et invitations, appartenances Clerk, liens
 gestionnaires et droits de lancement, changement de physiologie sans les
-valeurs, validation d'aptitude sans verdict, consentements, lancement et
+valeurs, soumission et validation d'aptitude sans réponses ni verdict, consentements, lancement et
 arrêt de séances, clés machine, création/suppression/restauration de
 machines, registre et niveaux de validation, versions logicielles et
 médicales, suppression d'enregistrements.
 
 La liste de référence est `SENSITIVE_MUTATIONS` dans
-[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 39 mutations publiques ou
+[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 42 mutations publiques ou
 internes, avec leurs actions attendues. Les actions Convex et routes HTTP
 font écrire leurs effets par ces mutations. `NON_SENSITIVE_MUTATIONS`
 classe toutes les autres avec un motif : télémétrie et états transitoires,
 synchronisation opérationnelle, calculs de résumés, dépôts de fichiers,
-notifications, changements de nom/langue, rafraîchissement du miroir
-d'identité et les cinq migrations de `convex/migrations/`. Les purges de
+notifications, changements de nom/langue et les cinq migrations de
+`convex/migrations/`. Les purges de
 ces autres données ne purgent jamais `audit_log`.
+
+`users.getOrCreateUser` est sensible : chaque écrivain d'une appartenance
+trace son propre effet une seule fois. La connexion écrit
+`membership.created` lorsqu'elle insère une appartenance active, et
+`membership.role_changed` lorsqu'elle change le rôle d'un miroir actif ;
+la source est `site`, l'acteur est le compte avec son rôle effectif dans
+cette organisation. Le webhook écrit `membership.created` à l'insertion
+active ou au passage inactif vers actif, y compris une réintégration ou
+l'acceptation d'une invitation, sans ajouter en plus un changement de rôle.
+Une ligne déjà active ne donne une ligne de rôle que si celui-ci change ;
+une ligne qui reste inactive ne donne aucune création. La désactivation
+reste tracée. Connexion puis webhook, ou webhook puis connexion, produisent
+une seule création au total. Une appartenance ouverte par la seule
+connexion est tracée par la connexion. Le webhook trace aussi
+`user.linked_to_account` et chaque `patient_gestionnaire.assigned` qu'il
+crée, avec l'acteur système et la source `webhook`.
+
+`fitness.submitFitnessAnswers` écrit `fitness.submitted`, cible
+`fitness_assessment`, avec seulement `userId` : une nouvelle saisie remplace
+l'aptitude précédemment validée. `recordStorage.enforceRetention` écrit
+`record.deleted` par séance dont l'enregistrement est supprimé, avec la
+source `cron` et l'organisation de la séance. Cette rétention des fichiers
+de séance est distincte du journal d'audit, qui n'a aucune purge.
+
+Les appels de physiologie, de rôle et d'identité du registre sans changement
+réel ne donnent aucune ligne. Pour la physiologie et la suppression de
+compte, les organisations viennent des appartenances et relations touchées,
+ou de l'organisation de l'appelant non admin ; le miroir principal
+`users.organizationId` ne suffit pas à attribuer ces lignes.
 
 Pour ajouter une mutation sensible :
 
@@ -2971,7 +3026,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 
 | Fichier | Rôle |
 |---|---|
-| [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) | Métadonnées et identifiant de requête, valeurs fermées et clés de détails ; énumération des accès à `audit_log` (seul ajout par `audit()`, modules de lecture limités aux queries, aucun `patch`, `replace` ou `delete`), absence de purge et classification exhaustive des mutations, migrations comprises. |
+| [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) | Métadonnées et identifiant de requête, valeurs fermées et clés de détails, listes d'identifiants bornées ; énumération des accès au littéral `audit_log` (seul ajout par `audit()`, modules de lecture limités aux queries, aucun `patch`, `replace` ou `delete`), refus des assertions de type sur les identifiants d'écriture, absence de purge et classification des mutations à toute profondeur, migrations comprises ; limites décrites au §2. |
 | [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts) | Un scénario par mutation sensible, passant par les fonctions enregistrées, avec effets et lignes attendues dans la même transaction ; toutes les actions observées, refus et rejeux sans ligne, arrêt actif et annulation en attente, absence des valeurs privées testées, source `operator` limitée aux chemins internes prévus et absente des routes HTTP. |
 | [`convex/audit.test.ts`](../convex/audit.test.ts) | Lecture réservée aux administrateurs, séparation des organisations et des lignes globales, filtres combinés, bornes de période, pagination après filtrage, priorité de chaque index et libellés sans e-mail, y compris les références disparues. |
 | `convex/test.setup.ts` | Fabriques partagées : un monde de **trois organisations** (Anheart et son admin ; le centre A avec son admin, deux gestionnaires, trois patients, deux machines ; le centre B avec son admin, un gestionnaire, un patient, une machine), un monde de machines avec de vraies clés pour les routes HTTP, et un monde « d'avant les organisations » pour la migration. Nom à deux points : non déployé. |

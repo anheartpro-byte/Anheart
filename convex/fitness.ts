@@ -95,6 +95,14 @@ export const submitFitnessAnswers = mutation({
       submittedBy: caller._id,
       submittedAt: Date.now(),
     });
+    await audit(ctx, {
+      actor: userActor(caller),
+      source: "site",
+      organizationId,
+      action: "fitness.submitted",
+      targetId: assessmentId,
+      details: { userId },
+    });
     return { assessmentId, outcome: computed.outcome };
   },
 });
