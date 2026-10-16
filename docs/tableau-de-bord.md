@@ -380,7 +380,7 @@ Admin et gestionnaire de la machine.
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
-| **Clés de la machine** | Les clés de la machine, la plus récente en tête : préfixe, état, création et son auteur, dernière utilisation, expiration ; boutons **Nouvelle clé** et **Révoquer** (ci-dessous). Pas affichée pour une machine supprimée. | admin Anheart, admin de l'organisation (ANH-165) |
+| **Clés de la machine** | Toutes les clés non révoquées d'abord (historique en tête, puis les plus récentes), puis les révoquées récentes jusqu'à 50 lignes au total : préfixe, état, création et son auteur, dernière utilisation, expiration ; boutons **Nouvelle clé** et **Révoquer** (ci-dessous). Sur une machine supprimée, visible seulement à l'admin Anheart, avec **Révoquer** seul. | admin Anheart, admin de l'organisation si la machine n'est pas supprimée (ANH-165, ANH-238) |
 | Zone de danger | **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
 
 **Registre (ANH-147).** `MachineRegistryCard` lit
@@ -477,6 +477,18 @@ chevauchement finit pendant que la page est ouverte passe « Révoquée » quand
 la tâche du serveur l'a révoquée, dans les 5 minutes, alors qu'elle est
 refusée à la machine à la fin du chevauchement ou peu après.
 
+Toutes les clés non révoquées sont listées, même au-delà de 50, la plus
+récente en tête ; les clés révoquées les plus récentes complètent jusqu'à
+50 lignes au total. Avant la migration, la clé historique figure en tête,
+avec son préfixe, son badge « Active » et « Clé d'avant les clés multiples ».
+Elle ouvre les routes de la machine tant qu'elle n'est ni révoquée ni
+remplacée ; ni sa date de création ni sa dernière utilisation ne sont connues.
+**Révoquer** utilise la même confirmation que pour les autres clés et la
+déplace dans la table pour la révoquer aussitôt. Une valeur réversible ou un
+sélecteur déjà dans la table ne donne pas de ligne historique : la table
+décide seule. « Aucune clé n'est enregistrée pour cette machine. » indique
+donc une machine vraiment sans clé.
+
 - **Nouvelle clé** ouvre une fenêtre : le **chevauchement** avec les clés
   actuelles (« 24 heures (recommandé) », par défaut ; « 1 heure » ; « Aucun :
   révoquer les clés actuelles tout de suite ») et l'**expiration** de la
@@ -500,6 +512,16 @@ voit pas la carte : le serveur lui refuse les clés, même de ses machines. La
 régénération immédiate d'avant ANH-165 (« Régénérer la clé », ouverte aussi au
 gestionnaire) n'existe plus ; une nouvelle clé avec le chevauchement « Aucun »
 fait la même chose.
+
+Sur une machine supprimée, seul l'admin Anheart voit cette carte, comme le
+permet déjà la lecture serveur : **Révoquer** reste offert, y compris pour
+la clé historique, mais **Nouvelle clé** disparaît. Ses clés n'ouvrent rien
+tant que la machine est supprimée ; celles qui ne sont pas révoquées
+ouvriront de nouveau les routes à la restauration. La confirmation de
+restauration demande de révoquer d'abord ici celles qui ne doivent plus
+servir. Une rotation proposée à la restauration rouvrirait les clés au
+moment même de la restauration, avant tout geste sur elles : la révocation
+sur la machine supprimée permet de les couper avant. Aucun droit ne change.
 
 ### Mes machines : `/fr/dashboard/my-machines`
 

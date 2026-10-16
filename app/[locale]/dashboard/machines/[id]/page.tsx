@@ -325,9 +325,16 @@ export default function MachineDetailPage({
         />
       )}
 
-      {/* Keys of the machine (ANH-165): its admins only */}
-      {isOrganizationAdmin(user?.role) && !machine.isDeleted && (
-        <MachineKeysCard machineId={machineId} />
+      {/* Only the Anheart admin can list a deleted machine's keys. Revoke
+          before restoration: offering rotation afterwards would reopen the
+          unrevoked keys before any explicit action on them. */}
+      {(machine.isDeleted
+        ? isAnheartAdmin(user?.role)
+        : isOrganizationAdmin(user?.role)) && (
+        <MachineKeysCard
+          machineId={machineId}
+          deleted={machine.isDeleted === true}
+        />
       )}
 
       {/* Danger Zone - Only show if not deleted */}

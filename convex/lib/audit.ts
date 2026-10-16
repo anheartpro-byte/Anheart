@@ -222,6 +222,7 @@ export const SENSITIVE_MUTATIONS: Readonly<
     "machine_key.revoked",
   ],
   "machineKeys.revokeMachineKey": ["machine_key.revoked"],
+  "machineKeys.revokeLegacyMachineKey": ["machine_key.revoked"],
   "machineKeys.revokeExpiredKeys": ["machine_key.expired_revoked"],
   "machineKeys.createKeyByOperator": [
     "machine_key.created",

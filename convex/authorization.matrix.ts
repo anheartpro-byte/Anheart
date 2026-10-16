@@ -1235,6 +1235,34 @@ export const MATRIX: Entry[] = [
     ],
   },
   {
+    id: "machineKeys.revokeLegacyMachineKey",
+    ref: api.machineKeys.revokeLegacyMachineKey,
+    kind: "mutation",
+    build: async (w) => {
+      await w.t.run((ctx) => ctx.db.patch(w.machine, {
+        apiKeySelector: "ef".repeat(16),
+        // An obviously synthetic, correctly shaped historical verifier.
+        apiKey: `hmac-sha256:1:${"00".repeat(16)}:${"00".repeat(32)}`,
+      }));
+      return { machineId: w.machine };
+    },
+    onSuccess: async (_res, w) => {
+      const keys = await w.t.run((ctx) => ctx.db.query("machine_api_keys")
+        .withIndex("by_machine", (q) => q.eq("machineId", w.machine)).collect());
+      if (keys.length !== 1 || keys[0].revokedAt === undefined || keys[0].revokedBy === undefined)
+        throw new Error("Historical key not revoked");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      { actor: "manager", scope: "own", expect: refuse(UNAUTHORIZED), note: "a gestionnaire is not an admin" },
+      { actor: "admin", expect: ok, note: "admin revokes" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      { actor: "orgBAdmin", scope: "foreign", expect: refuse(/machine_key_not_found/), note: "another organisation's key does not exist for them" },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+    ],
+  },
+  {
     id: "machines.getMachine",
     ref: api.machines.getMachine,
     kind: "query",

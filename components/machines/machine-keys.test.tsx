@@ -41,8 +41,10 @@ const DAY = 86_400_000;
 // it for a real key.
 const PLAIN = "cle-aaaa-bbbb-cccc";
 
-function key(overrides: Partial<Key> = {}): Key {
+type TableKey = Extract<Key, { kind: "table" }>;
+function key(overrides: Partial<TableKey> = {}): TableKey {
   return {
+    kind: "table",
     _id: "key-1" as Id<"machine_api_keys">,
     prefix: "anh1.ab12cd34",
     state: "active",
@@ -415,4 +417,127 @@ describe("machine keys: revoking a key", () => {
     expect(mutationsSent()).toEqual([]);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+});
+
+describe("machine keys: the historical key and a deleted machine", () => {
+  const legacy: Key = {
+    kind: "legacy",
+    prefix: "anh1.12121212",
+    state: "active",
+  };
+
+  it.each(["fr", "en"] as const)(
+    "shows the historical key with its state and unknown dates in %s",
+    async (locale) => {
+      await card([legacy], locale);
+      const copy = locale === "fr" ? fr : en;
+      const row = rowOf(legacy.prefix);
+
+      expect(row.getByText(copy.machineKeys.state.active)).toBeTruthy();
+      expect(row.getByText(copy.machineKeys.legacy)).toBeTruthy();
+      expect(row.getByText(copy.machineKeys.legacyDescription)).toBeTruthy();
+      expect(screen.queryByText(copy.machineKeys.none)).toBeNull();
+      expect(row.queryByText(copy.machineKeys.neverUsed)).toBeNull();
+    },
+  );
+
+  it("names the historical key, warns when it is alone, and sends its machine id only once", async () => {
+    const server = Promise.withResolvers<null>();
+    mutation(api.machineKeys.revokeLegacyMachineKey).mockReturnValue(
+      server.promise,
+    );
+    const { user } = await card([legacy]);
+    await user.click(
+      rowOf(legacy.prefix).getByRole("button", { name: t.revoke }),
+    );
+    const dialog = within(screen.getByRole("dialog"));
+    expect(
+      dialog.getByText(t.revokeTitle.replace("{prefix}", legacy.prefix)),
+    ).toBeTruthy();
+    expect(dialog.getByText(t.revokeDescription)).toBeTruthy();
+    expect(dialog.getByText(t.revokeLast)).toBeTruthy();
+    expect(mutationsSent()).toEqual([]);
+
+    const confirm = dialog.getByRole("button", { name: t.revoke });
+    await user.click(confirm);
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    await user.click(confirm);
+    expect(mutationsSent()).toEqual([
+      { name: "machineKeys:revokeLegacyMachineKey", args: { machineId } },
+    ]);
+    await act(async () => server.resolve(null));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("does not warn of the last valid key when a table key is also valid, and cancels without sending", async () => {
+    const { user } = await card([legacy, key()]);
+    await user.click(
+      rowOf(legacy.prefix).getByRole("button", { name: t.revoke }),
+    );
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByText(t.revokeLast)).toBeNull();
+
+    await user.click(dialog.getByRole("button", { name: fr.common.cancel }));
+
+    expect(mutationsSent()).toEqual([]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it.each(
+    codedFailures(
+      api.machineKeys.revokeLegacyMachineKey,
+      "machine_key_not_found",
+    ),
+  )(
+    "keeps the historical confirmation open after a refusal $where",
+    async ({ error, shown }) => {
+      mutation(api.machineKeys.revokeLegacyMachineKey).mockRejectedValue(error);
+      const { user } = await card([legacy]);
+      await user.click(
+        rowOf(legacy.prefix).getByRole("button", { name: t.revoke }),
+      );
+
+      await user.click(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: t.revoke,
+        }),
+      );
+
+      expect(feedbackShown()).toEqual([{ kind: "error", message: shown }]);
+      expect(takeLoggedFailures()).toEqual([
+        "machineKeys:revokeLegacyMachineKey",
+      ]);
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    },
+  );
+
+  it.each([legacy, key()])(
+    "allows revocation alone on a deleted machine for $kind keys",
+    async (listed) => {
+      answer(api.machineKeys.listMachineKeys, [listed]);
+      const { user } = await renderPage(
+        <MachineKeysCard machineId={machineId} deleted />,
+      );
+      expect(screen.queryByRole("button", { name: t.create })).toBeNull();
+      expect(screen.getByText(t.deleted)).toBeTruthy();
+      await user.click(
+        rowOf(listed.prefix).getByRole("button", { name: t.revoke }),
+      );
+
+      await user.click(
+        within(screen.getByRole("dialog")).getByRole("button", {
+          name: t.revoke,
+        }),
+      );
+
+      expect(mutationsSent()).toEqual([
+        listed.kind === "legacy"
+          ? { name: "machineKeys:revokeLegacyMachineKey", args: { machineId } }
+          : {
+              name: "machineKeys:revokeMachineKey",
+              args: { keyId: listed._id },
+            },
+      ]);
+    },
+  );
 });
