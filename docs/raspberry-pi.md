@@ -106,7 +106,7 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `training/motion.py` | Le profileur de mouvement anti-nausée : accélération angulaire et dérivée de g. | Toute consigne non urgente respecte les deux limites (tests de propriétés). Porte 100 %. |
 | `training/tracking.py` | L'enveloppe de vitesse où l'arbre peut légitimement être (pour `tracking_error`). | Suiveur au tiers de la rampe du variateur relue à l'armement (`TRACKING_RAMP_MARGIN` = 3). Porte 100 %. |
 | `training/safety.py` | Le superviseur de sécurité (`SafetySupervisor`) : 18 règles indépendantes. | Il ne voit jamais la demande de la loi de commande ; son verdict l'emporte toujours (voir [section 5](#5-le-superviseur-de-sécurité)). Porte 100 %. |
-| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut ; aucune reprise après un verdict verrouillé ; une consigne revenue à 0 en cours de séance sans que personne l'ait demandé termine la séance (voir [5.1](#51-principes)). En séance manuelle, une cible non nulle est refusée, et celle déjà saisie remise à 0, tant que quelque chose retient une montée sur un bras à l'arrêt : un verdict, la fréquence cardiaque d'une personne à bord, un premier pas que le variateur n'a pas confirmé ([4.3](#43-séance-manuelle)). Un arrêt demandé (STOP, arrêt venu du site, cible manuelle à 0) fait descendre la consigne même sous FREEZE, et la descente prévue d'un programme (à partir de sa phase COOLDOWN) y est suivie aussi ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Porte 100 %. |
+| `training/runtime.py` | `TrainingRuntime` : le tic, l'armement, les arrêts, l'acquittement, le réarmement de défaut. | Les verdicts décident de la consigne ; aucun réarmement automatique de défaut ; aucune reprise après un verdict verrouillé ; une consigne revenue à 0 en cours de séance sans que personne l'ait demandé termine la séance (voir [5.1](#51-principes)). Toute hausse d'un programme, premier pas compris, et toute montée manuelle avec personne à bord exigent une dernière lecture acceptée par le suiveur âgée de 2,5 s au plus (`RuntimeLimits.rise_reading_within`). En séance manuelle, une cible non nulle est refusée, et celle déjà saisie remise à 0, tant que quelque chose retient une montée sur un bras à l'arrêt : un verdict, la fréquence cardiaque d'une personne à bord, un premier pas que le variateur n'a pas confirmé ([4.3](#43-séance-manuelle)). Un arrêt demandé (STOP, arrêt venu du site, cible manuelle à 0) fait descendre la consigne même sous FREEZE, et la descente prévue d'un programme (à partir de sa phase COOLDOWN) y est suivie aussi ([section 7](#7-ce-qui-se-passe-physiquement-à-larrêt)). Porte 100 %. |
 
 ### 2.5 La console et ses liens
 
@@ -236,6 +236,16 @@ gestionnaire de service (`LocalPanel.control_cycle`,
    observation qui ne contient **aucune** demande de la loi de commande.
 5. **Commande** : un `match` sur l'action du verdict (table ci-dessous). La loi
    de commande n'est consultée que dans deux branches, et plafonnée.
+   Toute hausse d'un programme, y compris vers une demande déjà décidée et
+   pour son premier pas, passe par `_increase_permitted(now)`. La porte
+   `_rise_reading_recent(now)` exige un âge connu, fini et au plus égal à
+   `RuntimeLimits.rise_reading_within` (**2,5 s**) pour la dernière lecture
+   acceptée par le suiveur. Sinon le runtime tient la **consigne appliquée**,
+   recale la loi sur cette vitesse (`rebase`) et remet la base de temps du
+   mouvement au tic courant. En manuel occupé, `_heart_rate_hold(now)` lit
+   la même porte avant de laisser monter la consigne. Les descentes et la
+   priorité des verdicts sont inchangées ; la loi, l'affichage et les
+   compteurs gardent leur fraîcheur de **4 s**.
 6. `_settle` : si la phase ne demande plus de mouvement, la consigne est 0 et
    RFRD montre l'arrêt, alors `SWITCH_ON` (transition 5) puis `SHUTDOWN`
    (transition 2). Sinon rien n'est envoyé.
@@ -541,8 +551,9 @@ aucun.
   * un verdict, verrouillé ou non : `le verdict <règle> tient le bras a
     l'arret. Attendre qu'il soit leve` (verrouillé : `L'acquitter une fois sa
     cause levee`) ;
-  * personne à bord, pas de FC utilisable (aucune lecture fiable depuis plus
-    de 4 s) : `pas de frequence cardiaque utilisable, rien ne monte depuis
+  * personne à bord, dernière lecture acceptée par le suiveur absente,
+    d'âge inconnu ou supérieur à **2,5 s** (`rise_reading_within`) :
+    `pas de frequence cardiaque utilisable, rien ne monte depuis
     l'arret. Attendre une frequence cardiaque fiable` ;
   * personne à bord, tendance de la FC inconnue (moins de 5 lectures depuis le
     début de l'historique : premières secondes de l'ECG, ou après un saut
@@ -572,8 +583,10 @@ aucun.
   (`_heart_rate_hold`) à l'instant de l'appel, comme le fait le refus : `None`
   hors séance manuelle en cours, et toujours avec une capsule vide. La console
   la publie dans `/api/panel` (`manual_rise_hold`). La garde n'est énoncée
-  qu'à cet endroit : la page ne la recalcule pas.
-* **Rien ne change pour un bras qui tourne.** Une cible tapée pendant qu'un
+  qu'à cet endroit : la page ne la recalcule pas. Le refus à la saisie et
+  la retenue au tic partagent donc le même délai de 2,5 s, même si la valeur
+  de FC reste affichée jusqu'à 4 s.
+* **Sur un bras qui tourne, la cible reste gardée.** Une cible tapée pendant qu'un
   FREEZE, un REDUCE, la garde de la FC (pas de FC utilisable, tendance inconnue
   ou en baisse rapide) ou un variateur qui ne confirme pas retiennent la
   montée d'un bras en mouvement est acceptée et gardée ; la consigne reste où
@@ -667,6 +680,20 @@ est renvoyé comme séance échouée avec la raison.
 * **Garde vasovagale** : la consigne ne peut pas **monter** tant que la pente de
   la FC sur les 5 dernières lectures acceptées est inférieure à −20 bpm/min, ou
   inconnue (`RuntimeLimits.falling_trend`, `trend_samples`).
+* **Porte de montée**, pour chaque tic et le premier pas aussi : la dernière
+  lecture acceptée par `HeartRateTracker` doit avoir **2,5 s au plus**
+  (`RuntimeLimits.rise_reading_within`, `_rise_reading_recent`). Une lecture
+  sans FC ne rafraîchit pas cette acceptation. Au-delà de la borne, la
+  consigne appliquée est tenue et la loi adopte la vitesse tenue ; les
+  descentes restent permises. À 1 Hz, une lecture isolée sans FC laisse
+  2,0 à 2,2 s entre acceptations : 2,5 s tolère ce trou et sa gigue. Avec le
+  vrai pont ECG du banc à 5 Hz, le jog DSP de référence de 1 800 s cumule
+  hors verdict 240,4 / 158,8 / 151,4 s de porte fermée pour les délais
+  1,5 / 2,5 / 4 s : 7,4 s de coût à 2,5 s par rapport à 4 s. Les sept
+  références gardent leur durée et leur cause de fin ; leurs chiffres et le
+  rejeu des 724 pertes sont dans
+  [securite.md](securite.md#la-porte-de-montée--délai-et-mesures-anh-214).
+  Mesures sur le banc logiciel seulement, jamais sur la machine réelle.
 * Filtre d'entrée (`HeartRateTracker`) : FC hors de 25..240 bpm rejetée, saut de
   plus de 25 bpm entre deux lectures rejeté (réinitialisé après 3 rejets
   consécutifs), médiane de 3 lectures, une lecture n'est « fraîche » que 4 s
@@ -783,6 +810,18 @@ distant ([console-locale.md](console-locale.md)).
 * **Il ne touche jamais le fil** : pas de Modbus, pas d'`await`. C'est une
   fonction pure des mesures et de son historique.
 * **Chaque règle est indépendante**, puis on garde la plus sévère.
+* **La péremption et les tendances prennent la dernière lecture utilisable.**
+  `_ingest` avance l'horloge de `hr_stale` à son **instant de mesure** et
+  l'ajoute une fois à l'historique de `hr_drop`, `hr_rate` et
+  `hr_unresponsive`, même si une lecture sans FC l'a dépassée avant le tic.
+  Le numéro de séquence utilisable doit avancer : répétitions, reculs et
+  présentation de la même lecture dans les deux champs ne comptent pas deux
+  fois. Si plusieurs utilisables arrivent entre deux tics, **seule la
+  dernière** entre dans l'historique, comme avant ; ce n'est pas une file de
+  toutes les lectures intermédiaires. Une utilisable conservée d'avant le
+  départ ancre aussi `hr_stale` à sa mesure, donc peut faire intervenir la
+  péremption plus tôt dans la séance, du côté sûr. L'horloge ne part du
+  départ que si aucune utilisable n'a été fournie.
 * **Deux niveaux de persistance** :
   * **verrouillé (latch)** : le verdict monte dans un « plancher » qui ne
     redescend **que** par un acquittement humain nominatif. Tout ce qui est au
@@ -842,7 +881,7 @@ signé, `hr_hard_max_bpm` / `hr_critical_bpm` (148 / 158 dans le fichier livré,
 | `hr_hard_max` | FC > palier dur pendant 5 s continues (bande de relâche 5 bpm). La FC jugée est la dernière FC utilisable : une lecture sans FC ne relance pas le délai (détail ci-dessous) | 148 bpm, 5 s ; dernière FC utilisable jugée jusqu'à 10 s d'âge | RAMP_DOWN | oui |
 | `hr_critical` | FC ≥ palier critique, sur la même FC jugée que `hr_hard_max` | 158 bpm, aucun délai ; dernière FC utilisable jugée jusqu'à 10 s d'âge | QUICK_STOP | oui |
 | `hr_rate` | pente (moindres carrés) des médianes glissantes de 5 lectures sur 60 s, étendue ≥ 20 s, > limite | 25 bpm/min ; relâche sous 15 bpm/min | REDUCE | non |
-| `hr_stale` | aucune FC fraîche et fiable depuis… | > 10 s FREEZE ; > 30 s REDUCE ; > 60 s RAMP_DOWN | FREEZE → REDUCE → RAMP_DOWN | seulement le niveau RAMP_DOWN |
+| `hr_stale` | âge depuis la dernière lecture utilisable à séquence nouvelle, même dépassée par une lecture sans FC avant le tic ; depuis le départ seulement si aucune n'a été fournie | > 10 s FREEZE ; > 30 s REDUCE ; > 60 s RAMP_DOWN | FREEZE → REDUCE → RAMP_DOWN | seulement le niveau RAMP_DOWN |
 | `hr_unresponsive` | sur 300 s (étendue ≥ 240 s, ≥ 10 points par moitié) la charge moyenne monte d'au moins 0,08 g, la seconde moitié est à ≥ 0,15 g, et la FC moyenne monte de moins de 3 bpm | 300 s, 0,08 g, 0,15 g, 3 bpm | REDUCE | non |
 | `current_high` | courant moteur (LCR) > seuil d'alerte pendant 10 s (relâche 0,2 A sous le seuil) ; ou > seuil de coupure | alerte 2,4 A / 10 s ; coupure 3,2 A immédiat (plaque 2,15 A) | REDUCE (alerte) ; RAMP_DOWN (coupure) | alerte non ; coupure oui |
 | `no_load` | consigne ≥ 100 tr/min, sortie active, courant < 0,2 A pendant 3 s (phase ouverte, pas de moteur, mauvais registre) | 0,2 A, 100 tr/min, 3 s | RAMP_DOWN | oui |
@@ -974,12 +1013,12 @@ jugent donc
   périmée : une seule définition de « périmé ». Au-delà, la FC est abandonnée
   (une FC d'il y a une minute, ou du passager précédent, n'est celle de
   personne) et la perte du signal revient à `hr_stale`. Cette règle compte
-  depuis la dernière FC utilisable que le superviseur a vue à un tic, jamais
-  plus récente que celle jugée ici : elle a donc déjà commencé. Un seul cas y
-  échappe : un superviseur qui n'a jamais vu de FC utilisable à un tic compte
-  depuis le départ de la séance, et une FC gardée d'avant ce départ est alors
-  abandonnée avant que `hr_stale` ne commence. Pendant ces secondes aucune
-  des deux règles ne parle, exactement comme quand aucune FC n'était gardée.
+  depuis l'instant de mesure de la dernière FC utilisable fournie au
+  superviseur, même dépassée par une lecture sans FC avant le tic ou gardée
+  d'avant le départ : l'horloge a donc déjà commencé. Le départ ne sert de
+  référence que si aucune utilisable n'a été fournie. Une FC gardée d'avant
+  le départ ne laisse plus de silence entre son abandon par les règles de
+  niveau et le début de `hr_stale`.
 
 Conséquences :
 
@@ -1020,18 +1059,29 @@ lectures (`TrainingRuntime.observe_ecg`) et la donne au superviseur dans le
 champ `last_usable_heart_rate` de l'observation. L'observation ne montre
 qu'une lecture par tic alors que plusieurs peuvent arriver entre deux tics (le
 pont ECG tourne dans sa propre tâche et vide un retard en une fois) : ainsi
-toute lecture utilisable compte pour les règles de niveau, y compris celle
-qu'une lecture sans FC a suivie avant le tic. Ce champ est une mesure, il ne
-peut qu'ajouter un verdict, et seules les deux règles de niveau le lisent :
-l'horloge de `hr_stale` et l'historique des règles de tendance restent
-alimentés par la dernière lecture de chaque tic, comme avant.
+la dernière lecture utilisable compte pour les règles de niveau, y compris
+si une lecture sans FC l'a suivie avant le tic. Ce champ est une mesure : il
+sert aux règles de niveau, mais aussi à `_ingest` pour l'horloge de
+`hr_stale` et l'historique des règles de tendance ([5.1](#51-principes)).
+La lecture utilisable dépassée compte une fois, à son instant de mesure ;
+les utilisables intermédiaires entre deux tics ne sont pas conservées.
+
+Sur le rejeu logiciel de 71 s où chaque utilisable à 1 Hz est suivie d'une
+lecture sans FC avant le tic, le changement de `_ingest` supprime les
+verdicts parasites : avant, FREEZE à 9,2 s, REDUCE à 29,2 s et fin déclenchée
+à 31,8 s (`session_standstill`) ; après, aucun verdict et aucune fin
+déclenchée. Ces 31,8 s datent la décision de fin, pas un arrêt physique
+observé. Les seuils et délais des règles sont inchangés ; une perte réelle
+continue d'escalader au premier tic strictement après 10, 30 et 60 s depuis
+la dernière utilisable. Les 67 traces de scénarios restent identiques pour
+ce changement de péremption et de tendance.
 
 `SafetyLimits` refuse un délai du palier dur qui ne serait pas plus court que
 `hr_stale_freeze_after` : un tel délai ne pourrait pas s'écouler sur un signal
 perdu. Ce que la règle ne couvre pas est dans
 [securite.md](securite.md#5-le-résiduel-connu) : une FC qui franchit un palier
-pendant que le signal est perdu, et la consigne qui peut encore monter quelques
-secondes après la dernière FC utilisable.
+pendant que le signal est perdu, et la hausse encore permise jusqu'à 2,5 s
+après la dernière lecture acceptée par le suiveur de régulation.
 
 **`hr_drop` en détail** (la règle vasovagale). Seules les lectures dont le
 numéro de séquence a avancé et dont la qualité est `good` comptent.

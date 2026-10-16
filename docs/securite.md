@@ -36,6 +36,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 |---|---|
 | **La sécurité passe avant la régulation.** Le superviseur rend son verdict sans voir la demande du régulateur, et le verdict le plus grave l'emporte toujours. | `src/training/safety.py`, `runtime.py` |
 | **Pas d'accélération sur un malaise.** La consigne ne peut pas monter tant que la pente de la fréquence cardiaque est sous −20 bpm/min, ou inconnue. | garde vasovagale, `runtime.py` |
+| **Une montée en programme ou en manuel occupé exige une lecture acceptée depuis 2,5 s au plus.** La porte `RuntimeLimits.rise_reading_within` juge la dernière lecture acceptée par le suiveur, premier pas compris. Sinon la consigne appliquée est tenue et la loi adopte cette vitesse. Le refus d'une cible manuelle sur un bras à l'arrêt, sa remise à 0 et la retenue pendant la montée lisent le même test. Les descentes restent permises et les verdicts décident toujours avant la régulation. | `runtime.py` (`_rise_reading_recent`, `_increase_permitted`, `_heart_rate_hold`) |
 | **Une consigne revenue à 0 en cours de séance ne remonte jamais seule.** Un verdict verrouillé ne se lève que par un acquittement nominatif ; aucun réarmement automatique de défaut. GO_SILENT ne s'acquitte jamais dans le même processus. Un avertissement non verrouillé (FREEZE, REDUCE) se lève seul, et la consigne suit alors de nouveau la régulation ou la cible sans clic, tant que le bras tourne. Mais dès que le bras a tourné dans une séance, tout retour de la consigne à 0 que personne n'a demandé, par un avertissement ou par la régulation cardiaque, termine la séance sur un verrou (`session_standstill`). En séance manuelle, aucune cible n'attend sur un bras à l'arrêt : tant que quelque chose y retient une montée (un verdict, verrouillé ou non ; avec une personne à bord, une fréquence cardiaque inutilisable, de tendance inconnue ou en baisse rapide ; un premier pas que le variateur n'a pas confirmé), une cible non nulle est refusée et celle déjà saisie est remise à 0, de sorte que ni un avertissement qui se lève, ni un acquittement, ni une fréquence cardiaque qui revient ou se stabilise ne mettent le bras en mouvement. Reste possible sans clic à cet instant : le premier mouvement d'un programme après sa BASELINE ([décisions des 5 et 6 octobre 2026](#7-décisions-des-5-et-6-octobre-2026-sur-les-reprises-automatiques), avec en 7.4 la liste exacte de ce que les règles ne couvrent pas et en 7.6 la règle des cibles manuelles). | `safety.py`, `runtime.py` |
 | **Une séance qui dépasse sa durée est arrêtée ; une séance finie n'est plus jugée.** `session_overrun` termine, sur un verrou, une séance encore en cours 30 s après sa durée prévue. Une fois la séance finie, la règle ne juge plus, aussi longtemps que la console reste au repos : rien ne se verrouille seul après une séance, et un nouveau départ ne demande pas de redémarrer la console ([section 8](#8-une-séance-finie-nest-plus-jugée-sur-sa-durée-anh-181)). Une fin de séance déjà ouverte (STOP, E-STOP, verdict d'arrêt, limite d'une séance manuelle) est jugée sur sa propre échéance, jamais plus tôt que celle du programme : son ouverture, plus la descente attendue depuis la vitesse commandée à cet instant, plus la récupération une fois la consigne à 0, plus 30 s. Un verdict qui arrive au repos après une séance finie reste verrouillé et à acquitter, sans rouvrir de fin de séance ([8.6](#86-une-alerte-de-fin-de-séance-dit-quelque-chose-de-vrai-anh-185)). | `safety.py`, `runtime.py` |
 | **Un arrêt demandé descend toujours, et la descente prévue d'un programme aussi.** STOP à la console, arrêt demandé depuis le site, cible manuelle remise à 0 : la consigne descend aux limites de mouvement dès le cycle suivant, qu'un avertissement FREEZE tienne ou non, verrouillé ou non, et un FREEZE qui apparaît pendant la descente ne la fige pas ([7.7](#77-un-arrêt-demandé-descend-toujours-même-sous-freeze-anh-175)). De même, dès qu'un programme entre dans son retour au calme (`cooldown`), la consigne descend aux limites de mouvement sous FREEZE comme sans verdict, sans jamais remonter, et la séance se termine à la durée prévue, sauf si la cause d'un FREEZE non verrouillé dure jusqu'au RAMP_DOWN verrouillé de sa règle ([7.8](#78-la-descente-prévue-dun-programme-est-suivie-sous-freeze-anh-189)). Hors de ces cas, FREEZE tient la consigne comme avant ; les verdicts plus sévères décident toujours en premier. | `runtime.py` |
@@ -47,6 +48,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Sur un Pi installé, la console ne tourne pas sous root.** Dans son conteneur elle est le compte `anheart`, sans aucune capacité, sur une image en lecture seule, et n'ouvre que les classes de périphériques du câble et du capteur ; elle ne peut ni lire ni réécrire sa propre configuration, où sont ses limites ; ce qu'elle écrit lui appartient et n'est lisible par personne d'autre. Le client Docker qui la lance reste root : c'est dit, pas masqué ([section 10](#10-le-pi-comme-appareil-fermé--premier-lot-anh-151)). | `scripts/anheart.service`, `scripts/install.sh`, `scripts/harden.sh`, `Dockerfile` |
 | **Les écritures sont vérifiées.** LFRD est relu ; une écriture qui n'atterrit pas donne `setpoint_unconfirmed`, puis GO_SILENT si l'arbre ne suit pas non plus. | `safety.py`, `tracking.py` |
 | **Une FC n'est utilisée que si elle est fiable.** Deux traitements ECG indépendants doivent être d'accord à 5 bpm près sur la même fenêtre continue. Le premier n'extrait une FC que d'une fenêtre qu'il a notée `good` ; une fenêtre qu'il ne peut pas noter (valeur non finie, test du secteur impossible ou refusé par le filtre) vaut `no_signal`, jamais `good`. Sinon la FC est « périmée » : FREEZE à 10 s, REDUCE à 30 s, RAMP_DOWN à 60 s. | `signal_processing.py`, `ecg_pipeline.py`, règle `hr_stale` |
+| **La péremption et les tendances jugent la dernière lecture utilisable, à son instant de mesure.** `hr_stale`, `hr_drop`, `hr_rate` et `hr_unresponsive` la prennent en compte même si une lecture sans FC l'a dépassée avant le tic. Répéter une séquence ou présenter la même lecture dans les deux champs de l'observation ne la compte pas deux fois. Plusieurs lectures utilisables entre deux tics : seule la dernière entre dans l'historique des tendances, comme avant. | `safety.py` (`_ingest`) |
 | **Une FC mesurée au-dessus d'un palier reste jugée tant qu'aucune FC utilisable n'est venue dire le contraire.** Une lecture sans FC (fenêtre bruitée, dérivation plate, électrode décollée, fenêtre que le traitement ne peut pas noter, FC retenue par la confirmation) ne relance pas le délai de 5 s du palier dur et n'efface pas un dépassement mesuré : `hr_hard_max` et `hr_critical` jugent la dernière FC utilisable tant qu'elle a 10 s au plus, l'âge où `hr_stale` commence. Seule une FC utilisable sous le niveau de relâche relance le délai. Quand le signal se perd au-dessus du palier dur, la séance se termine à l'échéance des 5 s, avant le premier niveau de `hr_stale`, qui garde sa propre horloge. Toute lecture compte, y compris celle qu'une lecture sans FC a suivie avant le tic. Détail dans [raspberry-pi.md](raspberry-pi.md#52-les-18-règles-du-superviseur) ; ce que la règle ne couvre pas en [section 5](#5-le-résiduel-connu). | `safety.py` (`_level_rate`), `runtime.py` (`observe_ecg`) |
 | **Les 60 défauts du variateur** (plus un code inconnu) mènent tous à un arrêt contrôlé, avec le code affiché. Le réarmement est refusé pour les 38 défauts non réarmables et pour un code inconnu ; il n'est jamais plus permissif que le manuel du constructeur. La table suit les documents de l'ATV320 lui-même ([raspberry-pi.md, section 6](raspberry-pi.md#6-les-défauts-du-variateur-table-lft)). | `motor/drive.py`, table LFT |
 | **Jamais d'arrêt plus rapide que la rampe.** QUICK_STOP met la consigne à 0 mais garde l'ordre de marche : le variateur freine sur sa rampe réglée, ce qui évite ObF et la roue libre. | `motor/atv320.py` |
@@ -57,6 +59,79 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Hors de la boucle locale, la page de la console n'est servie qu'en TLS, ou la console ne démarre pas.** Un seul port, aucun port en clair à côté, aucune redirection ; la WebSocket n'y accepte que l'origine `https` ; un certificat que la console ne peut pas servir est une erreur de configuration, dite avant qu'elle ne construise quoi que ce soit. La séance, elle, ne dépend pas de TLS : des clients TLS qui ne finissent jamais ne déplacent pas le tic, et un certificat expiré n'empêche ni de servir ni d'arrêter ([section 10](#11-la-console-en-tls-hors-de-la-boucle-locale-anh-151)). Vérifié sur la boucle locale d'une machine de test ; pas sur un Pi installé, ni avec une tablette. | `web/deps.py`, `web/tls.py`, `web/app.py`, `scripts/pi/make_console_tls.sh` |
 | **Âge minimum** : une séance programmée, et depuis le 15 octobre 2026 une séance manuelle avec personne à bord, exige un âge connu et d'au moins `min_rider_age` du fichier médical signé (18 ans, `config/medical_parameters.json`, [section 13](#13-décisions-médicales--un-fichier-signé-anh-139)), compté depuis l'année de naissance réglée sur le site. Le site et la console refusent tous les deux. | `local_panel.py`, `roster.py`, `convex/training.ts` |
 | **Réglages prudents par défaut** : personne à bord refusée (`OCCUPANCY_OCCUPIED_ENABLED=false`), séances programmées désactivées (`PROGRAMS_ENABLED=false`), plafond 300 tr/min moteur (≈ 6 tr/min au bras). | `.env.example`, `local_config.py` |
+
+### La porte de montée : délai et mesures (ANH-214)
+
+Les mesures ci-dessous viennent du **banc logiciel seulement**, avec le runtime,
+le superviseur et, en mode `dsp`, le vrai traitement ECG. Elles n'ont jamais
+été faites sur la machine réelle. Le délai de montée de **2,5 s** est distinct
+de la fraîcheur de **4 s** de la loi : son entrée, l'affichage et les compteurs
+de zone gardent cette borne de 4 s. Une lecture isolée sans FC ne ferme pas
+immédiatement la porte et ne rafraîchit pas la dernière acceptation.
+
+À 1 Hz, une lecture isolée sans FC laisse **2,0 à 2,2 s** entre deux lectures
+acceptées. Le délai de 2,5 s tolère cet intervalle et sa gigue. Avec le vrai
+pont ECG du banc, qui livre à **5 Hz**, un délai de 1,5 s retiendrait aussi des
+montées pendant des trous courts. Sur le jog de référence de 1 800 s, le
+balayage mesure, hors verdict, **240,4 s** de porte fermée à 1,5 s, **158,8 s**
+à 2,5 s et **151,4 s** à 4 s : le choix de 2,5 s coûte **7,4 s** par rapport
+à 4 s sur cette séance. Les sept références gardent leur durée et leur cause
+de fin. Ce coût est mesuré en boucle fermée, dont la vitesse et les lectures
+ECG changent avec la retenue ; ce n'est pas une estimation médicale.
+
+**724 instants de perte rejoués**, lectures directes à 1 Hz : 240 bras au repos
+avant le premier pas, 408 bras en rotation sur deux programmes
+(`standard_30_min`, `jog_150_30_min`) et quatre sujets (fit, unfit,
+fast_responder, slow_responder), 76 montées manuelles avec personne à bord.
+Cette grille documentée est celle du rejeu, pas la grille historique exacte
+du 9 octobre. « Avant » désigne le runtime avant la porte, « après » le délai
+de 2,5 s ; les hausses sont celles de la **consigne appliquée**, en tr/min moteur.
+
+| Cas | Hausse maximale après la première lecture sans FC, avant / après | Dernière hausse après cette lecture, avant / après | Dernière hausse après la dernière lecture acceptée, avant / après | Départs depuis le repos après la première lecture sans FC, avant / après |
+|---|---:|---:|---:|---:|
+| Programme au repos (240) | +72 / +72 | 4,4 / 1,4 s | 5,4 / 2,4 s | 128 / 63 |
+| Programme en rotation (408) | +21 / +19 | 3,0 / 1,4 s | 4,0 / 2,4 s | 0 / 0 |
+| Manuel occupé en rotation (76) | +40 / +20 | 3,0 / 1,4 s | 4,0 / 2,4 s | 0 / 0 |
+
+Après changement, **aucune hausse ni aucun départ au-delà de la dernière
+lecture acceptée + 2,5 s**. **Aucune hausse sous un verdict**, avant comme
+après. Les 63 départs restants sont dans le budget de 2,5 s : une première
+lecture sans FC n'implique pas encore l'expiration de la dernière acceptation.
+
+**Sept séances de référence `dsp`.** Durée de START au premier FINISHED, cause
+de fin et part des appels de lecture sans FC ; la déconnexion ne livre plus
+d'appels après la coupure, donc son 0 % ne signifie pas un signal disponible.
+La porte fermée est mesurée en WARMUP et HOLD, verdict compris ; la dernière
+colonne isole le temps hors verdict. Il s'agit d'une permission de montée
+retirée, pas d'un comptage d'ordres moteur refusés. La porte n'existait pas
+avant : ces temps ne sont mesurés qu'après.
+
+| Séance | Durée avant / après (s) | Fin avant / après | Lectures sans FC avant / après | Porte fermée après (s) | Dont hors verdict (s) |
+|---|---:|---|---:|---:|---:|
+| `auto_jog_150_dsp` | 780,0 / 780,0 | programme_complete / programme_complete | 27,326 % / 27,583 % | 161,0 | 61,4 |
+| `fault_bitalino_disconnect_dsp` | 249,4 / 249,4 | safety_verdict / safety_verdict | 0 % / 0 % | 36,6 | 7,6 |
+| `fault_ecg_electrode_off_dsp` | 780,0 / 780,0 | programme_complete / programme_complete | 28,608 % / 28,198 % | 175,0 | 60,2 |
+| `fault_ecg_mains_burst_dsp` | 780,0 / 780,0 | programme_complete / programme_complete | 30,377 % / 29,121 % | 171,6 | 65,4 |
+| `auto_standard_30_min` (DSP) | 1 800,0 / 1 800,0 | programme_complete / programme_complete | 0,0222 % / 0,0222 % | 0 | 0 |
+| `auto_standard_45_min` (DSP) | 2 700,2 / 2 700,2 | programme_complete / programme_complete | 0,0222 % / 0,0222 % | 0 | 0 |
+| `auto_jog_150_nominal` (DSP) | 1 800,0 / 1 800,0 | programme_complete / programme_complete | 31,363 % / 30,630 % | 414,4 | 158,8 |
+
+**Péremption et tendances.** Dans le cas rejoué où chaque lecture utilisable
+à 1 Hz est suivie d'une lecture sans FC avant le tic, le superviseur donnait
+FREEZE à **9,2 s**, REDUCE à **29,2 s**, puis déclenchait la fin de séance à
+**31,8 s** (`session_standstill`). Après prise en compte de la dernière
+utilisable : aucun verdict et aucune fin déclenchée sur le même rejeu de
+**71 s**. Les 31,8 s datent le déclenchement de fin, pas un arrêt physique
+constaté. Une lecture utilisable gardée d'avant le départ démarre aussi
+l'horloge de `hr_stale` à son instant de mesure : la péremption peut donc
+intervenir plus tôt dans la séance, du côté sûr. Sans aucune utilisable
+fournie, l'horloge part du départ. Les paliers restent strictement au-delà
+de 10, 30 et 60 s, au premier tic après chaque borne.
+
+Le détail des trois traces DSP modifiées et des deux enregistrements simulés
+refaits figure dans la PR ANH-214. L'instrument de mesure est neutre sur les
+67 scénarios ; la correction de péremption et de tendance conserve elle aussi
+les 67 traces et leurs annexes.
 
 ## 3. Ce que le logiciel ne garantit PAS
 
@@ -105,10 +180,11 @@ que mesure la batterie aujourd'hui.
 ## 5. Le résiduel connu
 
 - **S07, séance jog (xfail strict).** Cohorte, femme de 48 ans sujette au malaise
-  vagal. Une hausse de +12 tr/min décidée au tic exact où l'effondrement scripté
-  commence, avant que le capteur ne montre la moindre baisse (123 bpm réels, 122
-  lus), est encore exécutée jusqu'au bout. Rien ne monte après la première baisse
-  mesurable. C'est le seul xfail strict restant dans les deux suites de tests.
+  vagal. Une hausse de +8 tr/min moteur (887 vers 895) décidée au tic exact où
+  l'effondrement scripté commence, avant que le capteur ne montre la moindre
+  baisse (133 bpm réels, 132 lus), est encore exécutée jusqu'au bout. Rien ne
+  monte après la première baisse mesurable. C'est le seul xfail strict restant
+  dans les deux suites de tests.
   Voir [framework-de-test.md](framework-de-test.md#12-les--xfail-strict--et-le-cas-résiduel-s07).
 - **Un statut variateur figé à vitesse constante** est indiscernable d'un statut
   vrai. Il n'est détecté que quand la consigne bouge (escalade vers GO_SILENT).
@@ -140,23 +216,16 @@ que mesure la batterie aujourd'hui.
   premier tic ; une FC au-dessus du palier dur vieille de 2 s la termine 5 s
   après ce premier tic ; vieille de 6 s, elle est périmée avant l'échéance et
   ne déclenche rien. Le coût est le même : une fin de séance à acquitter.
-- **La consigne peut encore monter quelques secondes après la dernière FC
-  utilisable**, avant le premier verdict. La régulation tient une FC pour
-  fraîche pendant 4 s, puis la consigne finit le pas déjà décidé. Mesuré sur le
-  banc logiciel, sur 1 640 instants de perte dans cinq scénarios programmés
-  (lectures fraîches sans FC, une par seconde), en comptant depuis la première
-  lecture sans FC : dernière hausse au plus 5,2 s après elle, soit 6,2 s après
-  la dernière FC utilisable ; au plus +44 tr/min moteur (0,9 tr/min au bras)
-  sur un bras qui tourne ; et un bras à l'arrêt dont le programme allait faire
-  son premier pas part encore, de 0 à 72 ou 77 tr/min moteur (1,4 à 1,5 tr/min
-  au bras), quand le signal est perdu dans les 4 s qui précèdent ce pas. En
-  séance manuelle avec une personne à bord : au plus +40 tr/min moteur, la
-  dernière hausse 3 s après la première lecture sans FC. Le FREEZE de
-  `hr_stale` tient ensuite la vitesse atteinte, 10 s après la dernière FC
-  utilisable. Aucune hausse n'a lieu dès qu'un verdict tient. Ce changement ne
-  touche pas à la loi de régulation ; il raccourcit seulement cette fenêtre
-  quand la dernière FC connue est au-dessus d'un palier, puisque le verdict de
-  niveau tombe alors à l'échéance de son délai.
+- **Une hausse reste permise jusqu'à 2,5 s après la dernière lecture acceptée
+  par le suiveur**, si la tendance et les autres contrôles la permettent.
+  Après cette borne, la consigne appliquée est tenue, premier pas compris,
+  et la loi adopte la vitesse tenue. Sur les 724 pertes du banc logiciel
+  ([section 2](#la-porte-de-montée--délai-et-mesures-anh-214)), après la première
+  lecture sans FC : au plus +19 tr/min moteur en programme déjà en rotation,
+  +20 en manuel occupé, et des départs de 0 jusqu'à 72 dans le budget restant.
+  Dernière hausse mesurée au plus 1,4 s après cette lecture, soit 2,4 s après
+  la dernière acceptation. Le FREEZE de `hr_stale` reste au premier tic
+  strictement après 10 s sans lecture utilisable ; aucune hausse sous verdict.
 - **Le simulateur modélise une fermeture minimale du variateur** : après chaque
   sortie de console, le variateur simulé verrouille SLF via ttO, alors que le
   vrai `ATV320Drive.close` envoie la séquence d'arrêt. C'est une différence de
@@ -489,7 +558,7 @@ Liste établie en lisant toutes les conditions sous lesquelles
 | Ce qui retient | Refus à la saisie | Retrait au cycle | Ce que dit la console, puis « puis redonner la cible » |
 |---|---|---|---|
 | Un verdict, verrouillé ou non (FREEZE, REDUCE, et tout verdict de fin) | oui | oui | « le verdict hr_stale tient le bras a l'arret. Attendre qu'il soit leve » (verrouillé : « L'acquitter une fois sa cause levee ») |
-| Personne à bord, pas de FC utilisable (aucune lecture fiable depuis plus de 4 s) | oui | oui | « pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable » |
+| Personne à bord, dernière lecture acceptée par le suiveur absente, d'âge inconnu ou supérieur à 2,5 s | oui | oui | « pas de frequence cardiaque utilisable, rien ne monte depuis l'arret. Attendre une frequence cardiaque fiable » |
 | Personne à bord, tendance de la FC inconnue (moins de 5 lectures depuis le début de l'historique : premières secondes de l'ECG, ou après un saut confirmé) | oui | oui | « tendance de la frequence cardiaque pas encore connue, rien ne monte depuis l'arret. Attendre quelques secondes de lecture » |
 | Personne à bord, FC en baisse de plus de 20 bpm/min sur les 5 dernières lectures (garde vasovagale) | oui | oui | « la frequence cardiaque baisse trop vite, rien ne monte depuis l'arret. Attendre qu'elle se stabilise » |
 | Le variateur n'a pas confirmé l'écriture du premier pas (troisième retenue, trouvée à la lecture du code) | non : rien ne permet de le prévoir | oui, au cycle où le pas est demandé | « le variateur n'a pas confirme la consigne, elle n'est pas redemandee. Verifier la liaison » |
@@ -527,10 +596,11 @@ livrées, voir 7.4). Le plafond d'un REDUCE est un verdict : première ligne.
   suive une cible depuis l'arrêt, il faut qu'elle ait été saisie alors que rien
   ne retenait, et que rien ne retienne à ce cycle.
 - La garde de la FC est énoncée une seule fois (`_heart_rate_hold`), lue par le
-  refus et par le cycle. Sa décision est celle d'avant, inchangée : FC
-  utilisable, et garde vasovagale ouverte (le test que passe aussi la montée
-  d'un programme). Les trames envoyées au variateur sont les mêmes qu'avant ;
-  seule la cible change.
+  refus et par le cycle : dernière lecture acceptée par le suiveur âgée de
+  2,5 s au plus (`_rise_reading_recent`), et garde vasovagale ouverte, comme
+  pour toute hausse d'un programme. Cette porte de montée remplace depuis
+  ANH-214 l'ancien test de fraîcheur à 4 s, qui reste celui de la loi,
+  de l'affichage et des compteurs ([section 2](#la-porte-de-montée--délai-et-mesures-anh-214)).
 - **Rien ne change pour un bras qui tourne** : une cible tapée pendant qu'un
   FREEZE, un REDUCE, la garde de la FC ou un variateur qui ne confirme pas
   retiennent la montée d'un bras en mouvement est acceptée, gardée, et suivie
