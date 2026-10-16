@@ -221,11 +221,7 @@ export const updateSettings = mutation({
   },
 });
 
-/**
- * Write the alert `scheduleAlert` asked for (convex/lib/notifications.ts), in
- * a transaction of its own. Nothing for a machine whose row is gone. Returns
- * how many alerts were written.
- */
+/** Validate a scheduled delivery and the bounded retry's attempt and failed recipients. */
 export const deliveryArgs = v.object({
   machineId: v.id("machines"),
   type: notificationTypeValidator,
@@ -236,6 +232,7 @@ export const deliveryArgs = v.object({
   attempt: v.optional(v.number()),
 });
 
+/** Load the machine and deliver its alert, retrying a failed lookup within the bound. */
 export async function deliverHandler(
   ctx: MutationCtx,
   args: Infer<typeof deliveryArgs>,
@@ -251,16 +248,23 @@ export async function deliverHandler(
   return await notifyMachine(ctx, machine, args.type, args, args);
 }
 
+/**
+ * Write the alert `scheduleAlert` asked for (convex/lib/notifications.ts), in
+ * a transaction of its own, or retry only its failed recipients. Do nothing for
+ * a machine whose row is gone. Return how many new alerts were written.
+ */
 export const deliver = internalMutation({
   args: deliveryArgs.fields,
   returns: v.number(),
   handler: deliverHandler,
 });
 
+/** Validate one recipient's subtransaction without carrying delivery retry state. */
 export const recipientDeliveryArgs = deliveryArgs
   .omit("recipientIds", "attempt")
   .extend({ userId: v.id("users") });
 
+/** Recheck that the machine and recipient exist before writing this recipient's alert. */
 export async function deliverRecipientHandler(
   ctx: MutationCtx,
   args: Infer<typeof recipientDeliveryArgs>,
@@ -271,6 +275,7 @@ export async function deliverRecipientHandler(
   return await notifyRecipient(ctx, machine, user, args.type, args);
 }
 
+/** Isolate one recipient's writes so their failure cannot undo another recipient's alert. */
 export const deliverRecipient = internalMutation({
   args: recipientDeliveryArgs.fields,
   returns: v.number(),

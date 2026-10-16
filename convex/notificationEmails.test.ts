@@ -18,6 +18,7 @@ import {
 } from "./lib/notifications";
 import {
   EMAIL_MAX_ATTEMPTS,
+  EMAIL_REQUEST_TIMEOUT_MS,
   EMAIL_RETRY_DELAYS_MS,
   EMAIL_RETRY_WINDOW_MS,
 } from "./notificationEmails";
@@ -43,9 +44,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -302,6 +303,7 @@ describe("REST sending without persisted credentials (T02-c)", () => {
     const [url, init] = network.mock.calls[0];
     expect(url).toBe("https://api.resend.com/emails");
     expect(init?.method).toBe("POST");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(new Headers(init?.headers).get("Authorization")).toBe(
       `Bearer ${SECRET}`,
     );
@@ -336,6 +338,78 @@ describe("REST sending without persisted credentials (T02-c)", () => {
       resendId: "email_synthetic",
     });
     expect((await rows(w)).every((r) => r.emailId === undefined)).toBe(true);
+  });
+
+  it.each(["timeout", "AbortSignal", "AbortController", "setTimeout"])(
+    "sends once with an optional request deadline when %s is unavailable",
+    async (missing) => {
+      const w = await seedLaunchWorld(modules);
+      const row = await queue(w);
+      const scheduleTimeout = setTimeout;
+      vi.stubGlobal(
+        "AbortSignal",
+        missing === "AbortSignal" ? undefined : { timeout: undefined },
+      );
+      if (missing === "AbortController")
+        vi.stubGlobal("AbortController", undefined);
+      if (missing === "setTimeout") vi.stubGlobal("setTimeout", undefined);
+      await w.t.action(internal.notificationEmails.send, {
+        notificationId: row._id,
+        attempt: 0,
+      });
+      vi.stubGlobal("setTimeout", scheduleTimeout);
+      expect(network).toHaveBeenCalledTimes(1);
+      expect(await email(w, row)).toMatchObject({
+        status: "sent",
+        attempts: 1,
+        resendId: "email_synthetic",
+      });
+      const signal = network.mock.calls[0][1]?.signal;
+      if (missing === "timeout" || missing === "AbortSignal") {
+        expect(signal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(EMAIL_REQUEST_TIMEOUT_MS);
+        expect(signal?.aborted).toBe(false);
+      } else {
+        expect(signal).toBeUndefined();
+      }
+      await drain(w);
+      expect(network).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("aborts a stalled request with the fallback controller and retries it", async () => {
+    const w = await seedLaunchWorld(modules);
+    const row = await queue(w);
+    vi.stubGlobal("AbortSignal", { timeout: undefined });
+    let started: () => void = () => {};
+    const requested = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    network.mockImplementationOnce(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new Error("Timeout")),
+          );
+          started();
+        }),
+    );
+    const sending = w.t.action(internal.notificationEmails.send, {
+      notificationId: row._id,
+      attempt: 0,
+    });
+    await requested;
+    await vi.advanceTimersByTimeAsync(EMAIL_REQUEST_TIMEOUT_MS);
+    await sending;
+    expect(network.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(await email(w, row)).toMatchObject({
+      status: "pending",
+      attempts: 1,
+      failureCode: "email_network_error",
+    });
+    await drain(w);
+    expect(network).toHaveBeenCalledTimes(2);
+    expect(await email(w, row)).toMatchObject({ status: "sent", attempts: 2 });
   });
 });
 

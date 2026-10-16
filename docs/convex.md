@@ -2653,15 +2653,23 @@ L'en-tête `Idempotency-Key` vaut `notification:<identifiant de l'alerte>`.
 [Resend conserve ces clés 24 heures](https://resend.com/changelog/idempotency-keys).
 Les constantes exportées de `notificationEmails.ts` bornent les reprises :
 `EMAIL_MAX_ATTEMPTS` = 5, `EMAIL_RETRY_DELAYS_MS` = 1 min, 5 min, 30 min,
-2 h, et `EMAIL_RETRY_WINDOW_MS` = 23 h depuis la mise en attente. Aucun appel
-ne commence après cette fenêtre, et chaque requête a un délai maximal de
-30 s (`EMAIL_REQUEST_TIMEOUT_MS`), donc même une reprise retardée reste
-bornée avant les 24 h. Seuls 429, 5xx et les erreurs réseau sont repris ;
+2 h, et `EMAIL_RETRY_WINDOW_MS` = 23 h depuis la mise en attente. Aucune des
+cinq tentatives au plus ne commence après cette fenêtre ; chaque requête a
+un délai maximal de 30 s (`EMAIL_REQUEST_TIMEOUT_MS`) si le runtime fournit
+`AbortSignal.timeout` ou `AbortController` avec `setTimeout`, sinon elle part
+sans signal ni délai propre, ces fonctionnalités n'ayant pas été vérifiées
+sur le déploiement. Seuls 429, 5xx et les erreurs réseau sont repris ;
 les autres réponses, dont les autres 4xx, échouent immédiatement. L'état
 `email` de l'alerte garde le nombre de tentatives, les dates, un code d'échec
 final ou l'identifiant Resend après succès. `notifications.purge` le supprime
 avec l'alerte après 90 jours sans changement de l'alerte, et `users.deleteUser`
 le retire avec les alertes des organisations supprimées pour ce compte.
+
+Une action planifiée s'exécute au plus une fois (documentation du paquet
+Convex 1.46.0 installé, `src/server/scheduler.ts`, lignes 39-40) : si elle ne
+tourne jamais ou s'arrête hors des blocs qui enregistrent son résultat lors
+d'une panne d'infrastructure, l'e-mail reste `pending` jusqu'à la purge de
+l'alerte, sans code d'échec.
 
 Pour ANH-82 : le composant `resend` n'est plus monté et ses tables n'ont
 jamais reçu d'e-mail, aucune clé n'ayant été posée. Le sort de ses anciennes

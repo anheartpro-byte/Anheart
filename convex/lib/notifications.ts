@@ -21,6 +21,9 @@
  * is written, or the e-mail queued, never fails nor undoes the heartbeat, the
  * batch of events, the end, the start, the sweep or the offline check that
  * asked for it.
+ * Each recipient is written in a separate subtransaction, so only failed
+ * recipients are retried. A new alert may queue a REST e-mail action in
+ * `notificationEmails`, whose delivery state and retries stay on that alert.
  *
  * Recipients: the gestionnaires linked to the machine who are still active
  * gestionnaires of its organisation, and the active admins of that
@@ -203,11 +206,18 @@ export type MachineEvent = {
   count?: number;
 };
 
+/** Bound failed alert writes to three delivery attempts before logging a final code. */
 export const DELIVERY_MAX_ATTEMPTS = 3;
+/** Space the two possible delivery retries to let a transient failure recover. */
 export const DELIVERY_RETRY_DELAYS_MS = [1_000, 10_000] as const;
 
+/** Carry the attempt and only failed recipients, or omit recipients to retry discovery. */
 export type DeliveryRetry = { recipientIds?: Id<"users">[]; attempt?: number };
 
+/**
+ * Reschedule failed delivery within the attempt bound, preserving its recipients.
+ * After the last attempt, log one final line of codes and IDs without error text.
+ */
 export async function retryDelivery(
   ctx: MutationCtx,
   machineId: Id<"machines">,
@@ -242,6 +252,12 @@ export async function retryDelivery(
   );
 }
 
+/**
+ * Write or fold one recipient's alert inside the subtransaction of
+ * `deliverRecipient`, returning one only for a new alert. Queue its optional
+ * REST e-mail separately from the write so an e-mail setup failure keeps the
+ * site alert and records a safe failure code on it.
+ */
 export async function notifyRecipient(
   ctx: MutationCtx,
   machine: Doc<"machines">,
@@ -325,6 +341,15 @@ export async function notifyRecipient(
   return 1;
 }
 
+/**
+ * Alert the machine's active organisation admins and linked gestionnaires,
+ * folding into their unread alert by machine or session and queuing an e-mail
+ * only for a new alert when their settings allow it. Each recipient has its
+ * own subtransaction, so a failed write retries only the failed recipients
+ * without recounting events for those already served. Return the new alert count.
+ * Do nothing for a deleted machine, one without an organisation, or a deleted
+ * organisation.
+ */
 export async function notifyMachine(
   ctx: MutationCtx,
   machine: Doc<"machines">,
