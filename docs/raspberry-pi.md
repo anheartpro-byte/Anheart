@@ -2126,8 +2126,9 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
   le processus. L'ordre de sortie reste : variateur arrêté d'abord.
 
 **Quand le tableau de bord demande d'attendre (contrat 1.4, ANH-166).**
-Convex limite le débit de cinq routes par machine : heartbeat, interrogation
-des lancements, télémétrie, événements et réservation d'un fichier de dépôt
+Convex limite le débit de huit routes par machine : heartbeat, interrogation
+des lancements, télémétrie, événements, réservation d'un fichier de dépôt,
+déclaration d'une séance locale, programmes et commit d'un fichier de dépôt
 (les limites sont dans `contracts/machine-api.json`, `rate_limits`, et
 expliquées dans [convex.md](convex.md#limitation-de-débit-et-taille-des-corps-anh-166)).
 Au-delà, il répond 429 `rate_limited` avec `retryAfterMs`, le délai avant
@@ -2138,7 +2139,12 @@ lequel la même requête serait encore refusée.
   toutes les 10 s pour une limite d'un toutes les 5 s, interrogation toutes
   les 3 s pour une toutes les 2 s, télémétrie toutes les 3 s au plus vite pour
   deux lots toutes les 5 s, événements une fois par étape (1 s) pour dix par
-  seconde, 64 réservations par étape du dépôt pour une réserve de 64. Les
+  seconde, 64 réservations et commits par étape du dépôt pour une réserve de
+  64 chacun et dix par seconde, au plus un commit par réservation ; programmes à
+  chaque révision, reprise après échec pas avant 15 s pour une limite d'un
+  envoi toutes les 10 s et une réserve de 5 ; une déclaration par séance
+  locale, dont le rattrapage se fait une séance à la fois, pour une limite
+  d'une par minute et une réserve de 20. Les
   tailles aussi : 300 points et 200 événements par lot, un heartbeat de moins
   de 16 Kio, chacun sous la taille de sa route.
 - **Si elle y arrive quand même** (un rattrapage de dépôt sur un lien rapide,
@@ -2155,7 +2161,15 @@ lequel la même requête serait encore refusée.
 - **Rien n'est perdu.** Un 429 est une réponse retenue (8.3) : le curseur ne
   bouge pas, la même requête est refaite après l'attente ; pour le dépôt, le
   fichier reste sur le disque et la purge locale attend toujours sa
-  vérification. La pastille **Serveur** lit `en erreur` pendant ce temps.
+  vérification. La pastille **Serveur** ne passe pas `en erreur` pendant
+  chaque attente : une retenue, sur place ou par le serveur, ne change pas
+  l'état tant que les routes qui portent le heartbeat et la séance ont dit
+  quelque chose de reconnaissable dans les 25 dernières secondes. Elle reste
+  `joignable` si une autre route prend ce qui est envoyé dans ce délai. Elle
+  ne passe `en erreur` qu'après **25 s sans rien d'accepté sur ces routes**,
+  avec le motif de la dernière retenue si celle-ci reste le dernier échec.
+  Les réponses à la question d'arrêt ne remettent pas ce délai à zéro
+  ([section 14](#14-versions-et-compatibilité)).
 - **La question de l'arrêt n'est jamais retenue**, et Convex ne la limite pas.
 - Un corps trop grand reçoit 413 `payload_too_large` : la même requête serait
   toujours refusée, elle est passée (8.3). La console n'en envoie pas : ses
@@ -2921,8 +2935,9 @@ dit, et `/api/panel` le sert :
   réponse qui le dit ; la dernière chose dite l'emporte, donc un 426 après un
   401 se lit `incompatible` ;
 * **ce qui n'est pas la réponse du tableau de bord ne prouve rien** : un
-  silence, une erreur du serveur (5xx, 408, 425, 429), un 404 ou un 400 sans
-  code stable, une page HTML. Rien de cela ne donne `joignable` ni n'efface un
+  silence, une erreur du serveur (5xx, 408, 425, 429), une requête retenue sur
+  place par `PacedTransport` sans être envoyée, un 404 ou un 400 sans code
+  stable, une page HTML. Rien de cela ne donne `joignable` ni n'efface un
   refus, et cela ne change l'affichage qu'après **25 s** sans rien de
   reconnaissable sur ces routes (`UNREACHABLE_AFTER`, deux heartbeats et
   demi) : une requête lente ou perdue ne fait pas clignoter la pastille. Le
@@ -2937,7 +2952,9 @@ dit, et `/api/panel` le sert :
   revenu en dernier ;
 * le motif affiché sous la pastille ne reprend, de ce que le serveur envoie,
   que le code HTTP, le code stable et les majeures servies, sur une ligne de
-  160 caractères au plus. La phrase du serveur reste dans le journal.
+  160 caractères au plus. Quand une retenue sur place explique `en erreur`,
+  le motif dit `requete retenue ici, non envoyee (rate_limited)` : ce n'est
+  pas une réponse du serveur. La phrase du serveur reste dans le journal.
 
 Pourquoi la version du contrat est une constante du code, et non lue dans le
 fichier partagé à l'exécution : la console est déployée avec le seul dossier

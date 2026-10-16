@@ -42,9 +42,16 @@ export const uploadUrl = httpAction(async (ctx, req) => {
     ? machineErrorResponse(400, "invalid_request", result.error)
     : json(result);
 });
+/** One commit per reservation; ten a second per machine, 64 in reserve (ANH-228). */
 export const commit = httpAction(async (ctx, req) => {
   const auth = await validateMachineAuth(ctx, req);
   if ("error" in auth) return auth.error;
+  const limited = await limitMachine(
+    ctx,
+    "machineRecordCommit",
+    auth.machine._id,
+  );
+  if (limited) return limited;
   const parsed = commitRequest.safeParse(await requestBody(req));
   if (!parsed.success)
     return machineErrorResponse(
@@ -60,6 +67,7 @@ export const commit = httpAction(async (ctx, req) => {
     ? machineErrorResponse(400, "invalid_request", result.error)
     : json(result);
 });
+/** Never rate limited: read only; an invalid key already costs as much. */
 export const status = httpAction(async (ctx, req) => {
   const auth = await validateMachineAuth(ctx, req);
   if ("error" in auth) return auth.error;

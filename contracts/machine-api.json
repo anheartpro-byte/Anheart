@@ -14,13 +14,16 @@
     "config_hash"
   ],
   "rate_limits": {
-    "description": "Limites de débit par machine (clé : la machine authentifiée), en seau à jetons : `rate` requêtes acceptées par `period_ms`, au plus `capacity` d'avance. Au-delà : 429 `rate_limited`. Les routes absentes de cette liste ne sont pas limitées ; la demande d'arrêt (`GET /api/machine/training/status`) ne l'est jamais. Lu par convex/lib/rateLimits.ts ; les tests du Pi y épinglent ses cadences.",
+    "description": "Limites de débit par machine (clé : la machine authentifiée), en seau à jetons : `rate` requêtes acceptées par `period_ms`, au plus `capacity` d'avance. Au-delà : 429 `rate_limited`. Les routes absentes de cette liste ne sont pas limitées ; la demande d'arrêt (`GET /api/machine/training/status`) ne l'est jamais, ni la fin d'une séance (`POST /api/machine/training/end`). Lu par convex/lib/rateLimits.ts ; les tests du Pi y épinglent ses cadences.",
     "routes": {
       "POST /api/machine/heartbeat": { "rate": 1, "period_ms": 5000, "capacity": 1 },
       "GET /api/machine/training/poll": { "rate": 1, "period_ms": 2000, "capacity": 1 },
       "POST /api/machine/training/telemetry": { "rate": 2, "period_ms": 5000, "capacity": 2 },
       "POST /api/machine/training/events": { "rate": 10, "period_ms": 1000, "capacity": 10 },
-      "POST /api/machine/records/upload-url": { "rate": 10, "period_ms": 1000, "capacity": 64 }
+      "POST /api/machine/records/upload-url": { "rate": 10, "period_ms": 1000, "capacity": 64 },
+      "POST /api/machine/training/local": { "rate": 1, "period_ms": 60000, "capacity": 20 },
+      "POST /api/machine/profiles": { "rate": 1, "period_ms": 10000, "capacity": 5 },
+      "POST /api/machine/records/commit": { "rate": 10, "period_ms": 1000, "capacity": 64 }
     }
   },
   "max_body_bytes": {

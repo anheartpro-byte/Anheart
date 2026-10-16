@@ -7,13 +7,18 @@
  * token bucket per limit and per key. A refused call writes nothing there:
  * only an accepted one takes a token.
  *
- * Per machine, the routes it calls on a cadence. Their limits and their body
+ * Per machine: heartbeat, training/poll, telemetry, events, local, profiles,
+ * records/upload-url and commit (ANH-228). Their limits and their body
  * sizes are read from the shared contract (`contracts/machine-api.json`,
  * `rate_limits` and `max_body_bytes`), which the Pi's tests pin its own
  * cadences and batch sizes to: a console that works as designed never meets
  * them. Over the limit, a route answers 429
  * `{error: "rate_limited", message, retryAfterMs}` with `Retry-After`.
- * The stop request (`GET /api/machine/training/status`) is never limited.
+ * Never rate limited: training/status (the stop), training/end (the end),
+ * training/start (only writes for a pending launch, already bounded by
+ * launchAutoSession; a 429 would stop an armed console from before 1.5),
+ * GET records/status and GET roster (read only; an invalid key, which cannot
+ * be rate limited, already costs as much).
  *
  * Per account (the subject of its token): `launchAutoSession`, and every
  * public mutation that writes, together. Over the limit, the call throws a
@@ -58,6 +63,9 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   machineTelemetry: bucket("POST /api/machine/training/telemetry"),
   machineEvents: bucket("POST /api/machine/training/events"),
   machineUploadUrl: bucket("POST /api/machine/records/upload-url"),
+  machineLocalSession: bucket("POST /api/machine/training/local"),
+  machineProfiles: bucket("POST /api/machine/profiles"),
+  machineRecordCommit: bucket("POST /api/machine/records/commit"),
   /** Remote launches by one account: five a minute. */
   launchAutoSession: {
     kind: "token bucket",
@@ -75,7 +83,10 @@ export type MachineLimit =
   | "machinePoll"
   | "machineTelemetry"
   | "machineEvents"
-  | "machineUploadUrl";
+  | "machineUploadUrl"
+  | "machineLocalSession"
+  | "machineProfiles"
+  | "machineRecordCommit";
 
 /** The limits of an account. */
 export type UserLimit = "launchAutoSession" | "userWrite";

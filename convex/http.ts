@@ -352,10 +352,12 @@ http.route({
 /**
  * GET /api/machine/roster -> {riders: [{userId, name, hrMax, birthYear,
  * fit, fitnessValidUntil, consent, fitnessQuestionnaireVersion}]}
+ * The riders the local console offers (`training.getRoster`), asked at its
+ * start and once a minute at rest.
  * Contract 1.6: fitness status and its validated questionnaire version only,
  * never answers or review notes (`contracts/machine-api.json`, `roster`).
- * The riders the local console offers (`training.getRoster`). Not rate
- * limited: the console asks at its start and once a minute at rest.
+ * Never rate limited: read only; an invalid key, which cannot be limited,
+ * already costs as much.
  */
 http.route({
   path: "/api/machine/roster",
@@ -368,11 +370,14 @@ http.route({
   }),
 });
 
-/** POST /api/machine/profiles {storeRev, programsEnabled, profiles[]} */
+/**
+ * POST /api/machine/profiles {storeRev, programsEnabled, profiles[]}
+ * One every 10 s per machine, five in reserve (ANH-228).
+ */
 http.route({
   path: "/api/machine/profiles",
   method: "POST",
-  handler: machineRoute(async (ctx, req, machineId) => {
+  handler: limitedRoute("machineProfiles", async (ctx, req, machineId) => {
     const body = await readJson(req);
     if (!body || !isNum(body.storeRev) || !Array.isArray(body.profiles)) {
       return refuse(
@@ -441,7 +446,9 @@ http.route({
  *
  * 409 `{error: <arming refusal>, message}` when the launch is checked again
  * and refused (ANH-144, contract 1.5, `arming_refusals`): the session is
- * failed with that code and the machine must not run it. Never rate limited.
+ * failed with that code and the machine must not run it. Never rate limited:
+ * only writes for a pending launch, already bounded by launchAutoSession;
+ * a 429 would stop an armed console from before 1.5.
  */
 http.route({
   path: "/api/machine/training/start",
@@ -471,11 +478,12 @@ http.route({
  * machine. `startedAt` is the start as the machine dated it; `sessionAgeMs`,
  * optional, how long ago that was on its monotonic clock. Without it the
  * session is dated as the machine wrote it.
+ * One per minute per machine, twenty in reserve (ANH-228).
  */
 http.route({
   path: "/api/machine/training/local",
   method: "POST",
-  handler: machineRoute(async (ctx, req, machineId) => {
+  handler: limitedRoute("machineLocalSession", async (ctx, req, machineId) => {
     const b = await readJson(req);
     if (
       !b ||
@@ -516,7 +524,10 @@ http.route({
   }),
 });
 
-/** POST /api/machine/training/end {sessionId, failed, reason, endedAt?} */
+/**
+ * POST /api/machine/training/end {sessionId, failed, reason, endedAt?}
+ * Never rate limited: the end of a session must always reach the server.
+ */
 http.route({
   path: "/api/machine/training/end",
   method: "POST",
@@ -550,7 +561,7 @@ http.route({
  * the same thing under every contract. A console of another major ends its
  * session on `stopRequested: true` or `active: false` (either can only cause
  * an ordinary stop) and trusts nothing else in this answer. The route only
- * reads.
+ * reads. Never rate limited: a stop must always reach the machine.
  */
 http.route({
   path: "/api/machine/training/status",
