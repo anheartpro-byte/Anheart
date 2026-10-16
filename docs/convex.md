@@ -1974,7 +1974,7 @@ Clé inconnue, révoquée ou expirée : **401**
 `{"error": "unauthorized", "message": "Invalid API key"}`, la même réponse
 dans les trois cas.
 
-**Contrat** : chaque route (9 des 10, l'exception suit) exige ensuite l'en-tête
+**Contrat** : chaque route (12 des 13, l'exception suit) exige ensuite l'en-tête
 `X-Anheart-Contract: <majeure.mineure>`, vérifié **après** la clé et avant
 tout traitement, par le même point de passage que l'authentification
 (`validateMachineAuth`, `convex/lib/machineHttpAuth.ts`). En-tête absent,
@@ -1998,7 +1998,7 @@ listées dans `contracts/machine-api.json` (`contract_exempt_routes`), et
 passent par `authenticateMachineRequest` au lieu de `validateMachineAuth`.
 
 La suppression (`isDeleted`) ou la désactivation explicite
-(`authenticationEnabled: false`) produit aussi **401**, sur les 10 routes et
+(`authenticationEnabled: false`) produit aussi **401**, sur les 13 routes et
 les deux queries internes d'authentification, quelle que soit la clé. Une
 machine simplement `offline` peut envoyer son heartbeat avec une clé valide.
 Une machine restaurée retrouve ses clés qui n'ont été ni révoquées ni
@@ -2067,7 +2067,7 @@ se sert toujours de sa clé, au moins pour demander l'arrêt. Cette écriture
 ne consomme aucun jeton du seau de débit : « rien n'est écrit », ailleurs dans
 cette page, s'entend hors de cette date.
 
-**Erreurs** : tout refus des 10 routes machine (les 401 et les 426 compris)
+**Erreurs** : tout refus des 13 routes machine (les 401 et les 426 compris)
 a la forme
 `{"error": "<code stable>", "message": "<texte>"}`. Le code ne change pas
 d'une version à l'autre ; le texte, en anglais, est fait pour être lu et peut
@@ -2708,7 +2708,7 @@ pu partir tout de suite : aucun code ne l'a jamais écrite.
 
 ### Migration des clés machine (ANH-165)
 
-**Pas encore exécutée, sur aucun déploiement.** Une mutation interne de
+**Pas encore exécutée, sur aucun déploiement.** Une action interne de
 `convex/migrations/machineApiKeys.ts`, à lancer à la main, une fois par
 déploiement, **après** avoir déployé ce code :
 
@@ -2719,6 +2719,18 @@ npx convex run migrations/machineApiKeys:moveMachineKeysToTable
 Comme les lignes de la section précédente, celle-ci vise le déploiement que
 désigne la clé `CONVEX_DEPLOY_KEY` chargée ; pour la production, la précéder
 de la clé de production, après l'avoir lue comme à l'étape 1 ci-dessus.
+
+L'action parcourt toutes les machines par pages, chacune traitée par une
+mutation interne dans sa propre transaction, sans planification ni cron.
+`pageSize` est facultatif : 100 par défaut, entier de 1 à 1000, refusé sinon
+avant toute écriture. Pour choisir des pages de 50 machines :
+
+```bash
+npx convex run migrations/machineApiKeys:moveMachineKeysToTable '{"pageSize":50}'
+```
+
+En cas d'interruption, relancer la même commande : les pages déjà validées
+restent acquises et ne créent aucune clé en double.
 
 Elle déplace la clé unique de chaque machine (`machines.apiKey`,
 `machines.apiKeySelector`) dans `machine_api_keys`, sans expiration ni auteur,
@@ -2731,12 +2743,26 @@ réversibles refusés depuis ANH-121) n'ouvre rien : elle est effacée sans êtr
 déplacée, et sa machine a besoin d'une nouvelle clé (fiche de la machine,
 **Nouvelle clé**).
 
-Résultat : `{machinesChecked, keysMoved, legacyDiscarded}`. `machinesChecked`
+Un sélecteur déjà présent dans la table ne compte comme déplacé que si sa
+ligne appartient à la même machine : les deux champs historiques sont alors
+vidés sans insérer de doublon. S'il appartient à une autre machine, le cas est
+compté dans `selectorConflicts` : rien n'est inséré ni effacé, les champs
+historiques restent en place. La table juge seule ce sélecteur ; la clé de sa
+ligne n'ouvre que la machine de cette ligne, et la clé historique de la machine
+en conflit n'ouvre pas celle-ci. Si `selectorConflicts` n'est pas nul, chercher
+les deux machines à partir du sélecteur dans `machines.apiKeySelector` et
+`machine_api_keys.selector`, puis examiner cette incohérence avant de la
+corriger ; une nouvelle clé peut être créée sur la machine en conflit.
+
+Résultat : `{machinesChecked, keysMoved, legacyDiscarded, selectorConflicts}`,
+somme de toutes les pages. `machinesChecked`
 doit valoir le nombre de documents de `machines` (commande de la section
 précédente). La migration est idempotente : une seconde exécution renvoie
-`keysMoved: 0` et `legacyDiscarded: 0`, preuve que la première a tout traité.
+`keysMoved: 0`, `legacyDiscarded: 0` et le même `selectorConflicts` tant que
+les incohérences persistent.
 Créer une clé sur une machine pas encore migrée y déplace d'abord sa clé, qui
-reçoit le chevauchement comme les autres.
+reçoit le chevauchement comme les autres. Un conflit ne bloque pas cette
+rotation : la nouvelle clé est émise, les champs historiques restent en place.
 
 Une fois la migration passée sur **tous** les déploiements, les champs
 `machines.apiKey` et `machines.apiKeySelector`, l'index `by_apiKeySelector` et
@@ -3067,7 +3093,7 @@ régressions locales exécutables.
 
 | # | Constat | Conséquence |
 |---|---|---|
-| 1 | **Correctif logiciel ANH-121 : digest HMAC-SHA-256 salé.** | Les anciennes valeurs doivent encore être régénérées lors de l'opération ANH-82 ; aucune migration réelle n'est attestée ici. |
+| 1 | **Correctif logiciel ANH-121 : digest HMAC-SHA-256 salé.** | Les anciennes valeurs doivent encore être remplacées par de nouvelles clés lors de l'opération ANH-82 ; aucune migration réelle n'est attestée ici. |
 | 2 | **Correctif logiciel ANH-121 : suppression/désactivation refusée.** | Les routes renvoient 401 ; le déploiement reste à effectuer avec ANH-82. |
 | 3 | ~~`users.getCurrentUser` : validateur de retour incomplet.~~ **Corrigé.** Le validateur déclare `hrMax` et `birthYear`. | Vérifié sur le déploiement de développement le 1er octobre 2026 : la query répond après réglage de la FC max du compte. |
 | 4 | ~~Séances locales sans pratiquant.~~ **Corrigé dans le logiciel par ANH-84.** La console envoie `userId` (et `subjectLabel` tant qu'elle a le nom en mémoire) pour une séance lancée à la machine avec un passager ; une séance de banc n'en porte pas, avec `occupancy = bench`. | Une séance lancée à la machine apparaît au nom du passager choisi, s'il a toujours le droit à sa déclaration (ANH-180). Non vérifié sur un déploiement : effet en production avec le redéploiement ANH-82. |
@@ -3114,7 +3140,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/organizationChoice.test.ts` | Ce que le site lit pour travailler dans une organisation (ANH-187) : raison du refus de l'organisation de l'appel, `org_id` du jeton, rôles portés par Clerk ; organisations proposées à la création d'une machine ; gestionnaires d'une organisation et leurs liens comptés dans celle-ci. |
 | `convex/organizationIsolation.test.ts` | Ce que la matrice n'exprime pas : l'autre sens (le centre A sur le centre B), la même réponse pour un identifiant d'une autre organisation et pour un identifiant inconnu, les appels qui mêlent deux organisations dans leurs arguments, un compte membre de deux organisations (liens patient et machine fixés dans une seule), ce qu'une machine écrit, les lignes sans organisation. |
 | `convex/multiOrganizationMigration.test.ts` | La migration : rattachement, appartenances, idempotence, lots, liaison avec `ANHEART_ORG_ID`. |
-| `convex/httpRoutes.test.ts` | Les 10 routes machine de `http.ts` : corps mal formés, idempotence, liaison ressource-machine, filtrage des séances. |
+| `convex/httpRoutes.test.ts` | 12 des 13 routes machine enregistrées dans `http.ts` : corps mal formés sur toutes les routes POST, dont les deux de `recordHttp.ts` ; idempotence, liaison ressource-machine et filtrage des séances pour les 10 routes hors enregistrements. `GET /api/machine/records/status` et les cas métier des trois routes d'enregistrement sont exercés dans les suites dédiées. |
 | `convex/journalTrace.test.ts` | Le test d'acceptation de la synchronisation, côté Convex : il rejoue, dans l'ordre et aux mêmes instants, **les requêtes que la console du Pi a réellement envoyées** pendant son propre test d'acceptation (`contracts/fixtures/journal-sync-trace.json` : séance, coupure réseau à 3 min, console tuée à 5 min, retour du réseau à 8 min, machine datée de 1970). Convex doit répondre à chacune comme la trace l'a noté, et détenir à la fin chaque point 1 Hz et chaque événement une seule fois, et la fin avec sa raison. Le test du Pi échoue si le fichier n'est plus ce que la console envoie. |
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance que le résumé provisoire d'ANH-89, et les deux mutations de migration. |
@@ -3128,7 +3154,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée, membre de deux organisations compté dans chacune), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
-| `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; la migration (clé historique acceptée avant, déplacée, idempotente, valeur réversible effacée, table seule juge d'un sélecteur, clé pas encore déplacée prise dans une rotation). |
+| `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; la migration (clé historique acceptée avant, déplacée, idempotente, valeur réversible effacée, table seule juge d'un sélecteur, sélecteur déjà présent à la même machine sans doublon, conflit avec une autre machine sans effacement et rotation toujours possible, pages mixtes et sommes exactes, bornes de pageSize sans écriture, parc vide, relance après une page validée, clé pas encore déplacée prise dans une rotation). |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |
@@ -3224,7 +3250,7 @@ nom de l'en-tête, liste des codes d'erreur), et les constantes de
 |---|---|
 | Même **majeure** des deux côtés | Les deux se parlent. |
 | **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
-| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 9 des 10 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre que la dernière utilisation de la clé ([§6](#6-routes-http-machine-convexhttpts)). |
+| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 12 des 13 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre que la dernière utilisation de la clé ([§6](#6-routes-http-machine-convexhttpts)). |
 | Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
 | Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
 

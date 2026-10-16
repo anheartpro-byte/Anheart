@@ -89,8 +89,8 @@ async function managedMachine(
  * not exist; a deleted machine's keys are listed to the Anheart admin only.
  *
  * The state is computed when the query runs: an overlap that ends while the
- * page is open shows "expired" once the job has revoked the key (within
- * 5 minutes), or at the next reading.
+ * page is open shows "revoked" once the job has revoked the key (within
+ * 5 minutes), or "expired" on a reading before that revocation.
  */
 export const listMachineKeys = query({
   args: { machineId: v.id("machines") },

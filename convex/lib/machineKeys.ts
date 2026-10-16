@@ -211,13 +211,15 @@ export async function rotateMachineKey(
  *
  * A legacy value that is not a verifier with its selector (the reversible
  * encodings refused since ANH-121) opens nothing: it is cleared, not moved.
+ * A selector already in the table belongs to that row's machine alone. If
+ * it belongs to another machine, report a conflict and keep the legacy fields.
  * Idempotent: a machine without these fields is left as it is.
  */
 export async function moveLegacyKey(
   ctx: MutationCtx,
   machine: Doc<"machines">,
   now: number,
-): Promise<"moved" | "discarded" | "none"> {
+): Promise<"moved" | "discarded" | "conflict" | "none"> {
   const { apiKey, apiKeySelector: selector } = machine;
   if (apiKey === undefined && selector === undefined) return "none";
   let outcome: "moved" | "discarded" = "discarded";
@@ -231,6 +233,7 @@ export async function moveLegacyKey(
       .query("machine_api_keys")
       .withIndex("by_selector", (q) => q.eq("selector", selector))
       .first();
+    if (already !== null && already.machineId !== machine._id) return "conflict";
     if (already === null) {
       await ctx.db.insert("machine_api_keys", {
         machineId: machine._id,

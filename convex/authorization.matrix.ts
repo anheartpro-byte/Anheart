@@ -3882,7 +3882,8 @@ function expectCounters(res: unknown, actor: Actor): void {
  * Coverage of the machine HTTP routes in `convex/http.ts`, used both to drive
  * `httpRoutes.test.ts` and to satisfy the completeness check. Authentication
  * refusals (missing header, malformed key, deleted/disabled machine,
- * regenerated key) across every route are proven by `machineAuth.test.ts`.
+ * revoked, expired or replaced key after its overlap) across every route are
+ * proven by `machineAuth.test.ts` and `machineKeys.test.ts`.
  */
 export const ROUTE_COVERAGE: ReadonlyArray<{
   method: "GET" | "POST" | "OPTIONS";
