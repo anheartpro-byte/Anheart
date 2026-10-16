@@ -9,11 +9,12 @@
  * A session with no `kind` belongs to the retired ECG recording mode. It is
  * read-only history and is reported here with the kind "recording".
  *
- * Every list of sessions (`listSessions`, `listSessionsPaginated`,
- * `getCompletedSessionsForUser`) reads `readableSessions`
- * (`convex/lib/readableSessions.ts`): the caller's rights are part of the
- * query, so a limit or a page counts only sessions the caller may read
- * (ANH-158).
+ * Every list applies the caller's rights before its limit (ANH-158).
+ * `listSessions` and `getCompletedSessionsForUser` use `newestReadableSessions`:
+ * an unfiltered gestionnaire reads at most limit per managed machine and per
+ * rider source, organisation and status already in each index range.
+ * `listSessionsPaginated` keeps one `readableSessions` range and caps its scan
+ * at 1000 rows (ANH-227).
  */
 import { query, type QueryCtx } from "./_generated/server";
 import {
@@ -28,7 +29,12 @@ import {
   canAccessSession,
   type CurrentUser,
 } from "./lib/auth";
-import { readableSessions, stillReadable } from "./lib/readableSessions";
+import {
+  newestReadableSessions,
+  readableSessions,
+  SESSION_PAGE_MAX_ROWS_READ,
+  stillReadable,
+} from "./lib/readableSessions";
 
 const sessionStatusValidator = v.union(
   v.literal("pending"),
@@ -210,9 +216,12 @@ export const listSessions = query({
   returns: v.array(listedSessionValidator),
   handler: async (ctx, { limit, ...filters }) => {
     const caller = await getCurrentUserOrThrow(ctx);
-    const sessions = await (
-      await readableSessions(ctx, caller, filters)
-    ).take(limit ?? 50);
+    const sessions = await newestReadableSessions(
+      ctx,
+      caller,
+      filters,
+      limit ?? 50,
+    );
     return await listedRows(ctx, caller, sessions);
   },
 });
@@ -232,7 +241,13 @@ export const listSessionsPaginated = query({
     const caller = await getCurrentUserOrThrow(ctx);
     const result = await (
       await readableSessions(ctx, caller, filters)
-    ).paginate(paginationOpts);
+    ).paginate({
+      ...paginationOpts,
+      maximumRowsRead: Math.min(
+        paginationOpts.maximumRowsRead ?? SESSION_PAGE_MAX_ROWS_READ,
+        SESSION_PAGE_MAX_ROWS_READ,
+      ),
+    });
     return { ...result, page: await listedRows(ctx, caller, result.page) };
   },
 });
@@ -305,9 +320,12 @@ export const getCompletedSessionsForUser = query({
   ),
   handler: async (ctx) => {
     const caller = await getCurrentUserOrThrow(ctx);
-    const sessions = await (
-      await readableSessions(ctx, caller, { status: "completed" })
-    ).take(100);
+    const sessions = await newestReadableSessions(
+      ctx,
+      caller,
+      { status: "completed" },
+      100,
+    );
 
     const result = [];
     for (const session of await stillReadable(ctx, caller, sessions)) {

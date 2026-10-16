@@ -59,8 +59,16 @@ export async function registerShippedMedicalParameters(
  * e-mail sender's own components are not: a test that queues an e-mail keeps
  * the clock still, and the batch that would send it never runs.
  */
-export function backendOf(mods: Record<string, () => Promise<unknown>>) {
-  const t = convexTest(schema, mods);
+type BackendOptions = Pick<
+  Parameters<typeof convexTest>[0],
+  "transactionLimits"
+>;
+
+export function backendOf(
+  mods: Record<string, () => Promise<unknown>>,
+  options: BackendOptions = {},
+) {
+  const t = convexTest({ schema, modules: mods, ...options });
   rateLimiterTest.register(t, "rateLimiter");
   resendTest.register(t, "resend");
   return t;
@@ -240,9 +248,12 @@ const ORGANIZATION_SETTINGS = {
  * target for `launchAutoSession`. Functions that need a pending/active session
  * create their own in their `setup` hook.
  */
-export async function seedWorld(mods: Record<string, () => Promise<unknown>>) {
+export async function seedWorld(
+  mods: Record<string, () => Promise<unknown>>,
+  options: BackendOptions = {},
+) {
   configureAnheartOrganization(ANHEART_CLERK_ORG);
-  const t = backendOf(mods);
+  const t = backendOf(mods, options);
   await registerShippedMedicalParameters(t);
   const ids = await t.run(async (ctx) => {
     const mkOrganization = (clerkOrgId: string, name: string, slug: string) =>

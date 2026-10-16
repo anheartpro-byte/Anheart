@@ -1,14 +1,22 @@
 /**
- * The sessions a caller may read, as a query (ANH-158): the rule of
- * `canAccessSession` written as a filter of one index range, so that a limit
- * or a page counts only sessions the caller may read. Read by every list of
- * `convex/sessions.ts` and by the history of a rider
- * (`convex/sessionReports.ts`, ANH-89).
+ * The sessions a caller may read (ANH-158, ANH-227). Paginated lists and rider
+ * history read one index range with `canAccessSession` as a filter. Short
+ * lists merge bounded machine and rider ranges for an unfiltered gestionnaire
+ * instead of scanning the centre's history. Other callers and explicit
+ * machine/rider filters keep the single range. `sessions.ts` caps page scans;
+ * `sessionReports.ts` reads the history of one rider (ANH-89).
  */
 import type { Expression } from "convex/server";
 import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { canAccessSession, sameOrganization, type CurrentUser } from "./auth";
+
+/**
+ * At this cap Convex returns a partial page (SplitRequired) with a cursor at
+ * the stopping point. usePaginatedQuery splits it; later sessions remain
+ * accessible through "Show more", using Convex's contiguous pagination.
+ */
+export const SESSION_PAGE_MAX_ROWS_READ = 1000;
 
 /** What a list can be narrowed to, inside what the caller may read. */
 export type ListFilters = {
@@ -134,6 +142,75 @@ export async function readableSessions(
     }
     return conditions.length === 0 ? true : q.and(...conditions);
   });
+}
+
+/**
+ * The newest readable sessions, with at most (managed machines + 1) * limit
+ * session reads for a gestionnaire without machine/rider filters, plus
+ * machine_gestionnaires links and machines. Organisation and status are in
+ * the index range, so no rejected rows are scanned. Each source takes at most
+ * limit; their union contains the global newest limit, including creation ties.
+ */
+export async function newestReadableSessions(
+  ctx: QueryCtx,
+  caller: CurrentUser,
+  filters: ListFilters,
+  limit: number,
+): Promise<Doc<"sessions">[]> {
+  if (
+    caller.role !== "gestionnaire" ||
+    filters.machineId !== undefined ||
+    filters.userId !== undefined
+  ) {
+    return await (await readableSessions(ctx, caller, filters)).take(limit);
+  }
+
+  const machines = await machinesManagedBy(ctx, caller);
+  const { status } = filters;
+  const sessions = ctx.db.query("sessions");
+  const ranges = machines.map((machineId) =>
+    status === undefined
+      ? sessions.withIndex("by_organization_and_machine_and_started", (q) =>
+          q
+            .eq("organizationId", caller.organizationId)
+            .eq("machineId", machineId),
+        )
+      : sessions.withIndex(
+          "by_organization_and_machine_and_status_and_started",
+          (q) =>
+            q
+              .eq("organizationId", caller.organizationId)
+              .eq("machineId", machineId)
+              .eq("status", status),
+        ),
+  );
+  ranges.push(
+    status === undefined
+      ? sessions.withIndex("by_organization_and_user_and_started", (q) =>
+          q
+            .eq("organizationId", caller.organizationId)
+            .eq("userId", caller._id),
+        )
+      : sessions.withIndex(
+          "by_organization_and_user_and_status_and_started",
+          (q) =>
+            q
+              .eq("organizationId", caller.organizationId)
+              .eq("userId", caller._id)
+              .eq("status", status),
+        ),
+  );
+  const sources = await Promise.all(
+    ranges.map((range) => range.order("desc").take(limit)),
+  );
+  const unique = new Map(
+    sources.flat().map((session) => [session._id, session]),
+  );
+  return [...unique.values()]
+    .sort(
+      (a, b) => b.startedAt - a.startedAt || b._creationTime - a._creationTime,
+    )
+    .slice(0, limit);
 }
 
 /**
