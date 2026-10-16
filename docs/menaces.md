@@ -491,9 +491,10 @@ les liens automatiques HTTP(S) et les adresses nues HTTP(S) ou commençant par
 Une seconde passe relit les jetons de destination avec les mêmes exemptions
 de fragments en minuscules, en effaçant seulement les liens automatiques et
 les adresses nues. Elle ignore aussi un candidat commençant par `anh` en
-minuscules en tête de destination si le jeton entier est un nom de fichier
-fait de lettres minuscules, chiffres, `.`, `_`, `/` ou `-`, finissant par `.md`
-et éventuellement suivi d'une ancre.
+minuscules en tête du jeton qui suit toute suite crochet fermant puis
+parenthèse ouvrante, lien ou non, code compris. Le jeton entier doit être un
+nom de fichier fait de lettres minuscules non accentuées (`a` à `z`), chiffres,
+`.`, `_`, `/` ou `-`, finissant par `.md` et éventuellement suivi d'une ancre.
 
 Une adresse est Linear si son hôte, point final retiré, vaut `linear.app` ou
 finit par `.linear.app`. Toute adresse Linear doit être exactement celle d'un
@@ -521,9 +522,18 @@ refusés, avec leur point de code et leur ligne, après les autres contrôles.
 Aucune normalisation Unicode n'est appliquée.
 Limites : un lien ou une image qui coupe les lettres ou les chiffres d'un nom,
 par exemple un ticket inscrit suivi d'un chiffre en lien, ou un saut de ligne
-entre les lettres `AN` et `H`, échappe au contrôle de forme des tickets.
-Toute autre ponctuation entre `ANH` et les chiffres que celles reconnues par
-la règle n'est pas lue, par exemple une virgule, une apostrophe ou un signe plus.
+entre les lettres `AN` et `H`, échappe au contrôle des noms de ticket, forme
+et registre.
+Un nom dont `ANH` et les chiffres sont séparés par un autre signe que ceux
+reconnus n'est pas lu, par exemple une virgule, un signe égal ou une flèche.
+Contournement connu non détecté : un lien dont la destination ne contient ni
+`.`, ni `/`, ni `#`, ni `:`, posé sur le séparateur ou sur les lettres d'un
+nom de ticket, n'est pas lu par le contrôle de forme. C'est le cas de
+`anh[-](x)180` et `[ANH](x) 180`, dont l'affichage réunit les morceaux du nom.
+La lecture des liens par le relecteur, à la ligne 4 de la check-list de
+release, reste donc nécessaire.
+La correction n'est pas faite. Elle est consignée comme point de suivi dans
+la PR qui introduit ces contrôles : [PR #117](https://github.com/anheartpro-byte/Anheart/pull/117).
 L'effacement des adresses nues reconnaît `http://`, `https://` ou `www.` en
 toute casse et n'importe où, même sans domaine, plus largement que la
 comparaison des adresses Linear ; il ne s'arrête pas à l'astérisque.
