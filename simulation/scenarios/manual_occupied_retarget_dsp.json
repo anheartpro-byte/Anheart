@@ -1,0 +1,22 @@
+{
+  "name": "manual_occupied_retarget_dsp",
+  "description": "Occupied manual session through the real ECG path, with the existing ladder targets 5, 10 and 5 output rpm, followed by an operator stop.",
+  "tags": ["manual", "nominal", "occupied", "dsp"],
+  "kind": "manual",
+  "duration_s": 220,
+  "manual": {"occupancy": "occupied"},
+  "ecg": {"mode": "dsp"},
+  "actions": [
+    {"at_s": 2, "do": "manual_target", "output_rpm": 5.0, "expect": "accepted"},
+    {"at_s": 40, "do": "manual_target", "output_rpm": 10.0, "expect": "accepted"},
+    {"at_s": 80, "do": "manual_target", "output_rpm": 5.0, "expect": "accepted"},
+    {"at_s": 120, "do": "operator_stop"}
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "final_state": "finished",
+    "reaches_output_rpm": 10.0,
+    "max_output_rpm": 10.05,
+    "forbid_rules": ["hr_critical", "hr_hard_max"]
+  }
+}

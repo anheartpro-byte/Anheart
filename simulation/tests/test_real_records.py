@@ -80,6 +80,35 @@ def test_ex5_the_library_holds_at_least_three_scenarios_of_the_battery() -> None
     assert [name_of(archive) for archive in LIBRARY] == sorted(name_of(a) for a in LIBRARY)
 
 
+@pytest.mark.parametrize(
+    ("name", "occupancy"),
+    [("manual_bench_dsp", "bench"), ("manual_occupied_retarget_dsp", "occupied")],
+)
+def test_the_library_has_manual_sessions_with_raw_ecg(
+    name: str, occupancy: str, tmp_path: Path
+) -> None:
+    archive = next(archive for archive in LIBRARY if name_of(archive) == name)
+    unpacked = unpack(archive, tmp_path)
+    assert isinstance(unpacked, Ok)
+    recording = loaded(unpacked.value)
+    assert recording.manifest.kind == "manual"
+    assert recording.manifest.occupancy == occupancy
+    assert recording.manifest.profile is None
+    assert recording.manifest.machine_id == "simulation"
+    assert recording.raw
+    assert any(
+        samples
+        for block in recording.raw
+        for channel, samples in zip(block.header.channels, block.samples, strict=True)
+        if channel == "ECG"
+    )
+    targets = {
+        event.detail for event in recording.events if event.detail.startswith("manual_target ")
+    }
+    assert len(targets) >= (2 if occupancy == "occupied" else 1)
+    assert "stop" in {event.detail for event in recording.events}
+
+
 @pytest.mark.parametrize("archive", LIBRARY, ids=name_of)
 def test_ex5_a_library_record_is_closed_anonymous_and_replays_as_the_library_says(
     archive: Path, tmp_path: Path

@@ -50,6 +50,7 @@ import asyncio
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
 from typing import Final, assert_never, final
 
@@ -132,8 +133,6 @@ class _Tick:
 
     at: float
     """The instant as written."""
-
-    index: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,9 +343,7 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
         or problems
     ):
         return Err("; ".join(problems))
-    ticks = tuple(
-        _Tick(Seconds(round(row.t, 3)), row.t, index) for index, row in enumerate(recording.rows)
-    )
+    ticks = tuple(_Tick(Seconds(round(row.t, 3)), row.t) for row in recording.rows)
     readings = tuple(
         _Reading(
             Seconds(round(block.header.runtime_delivery.t, 3)), block.header.runtime_delivery.t
@@ -499,6 +496,15 @@ class _Session:
         while await self._bridge.pump():
             pass
 
+    async def apply(self, step: _Step) -> Decision | None:
+        if isinstance(step, _Tick):
+            return await self.tick(Seconds(step.at))
+        if isinstance(step, _Reading):
+            await self.reading()
+        else:
+            await self.issue(step)
+        return None
+
     async def tick(self, t: Seconds) -> Decision:
         """One tick, in the console's order: presence, ECG, then the runtime."""
         now = self._clock.monotonic()
@@ -573,26 +579,25 @@ async def _run(plan: _Plan, session: _Session, tape: TapeDrive, pace: Pace) -> R
     """Walk the plan until its end or until the tape no longer holds."""
     actual: list[Decision] = []
     raised: str | None = None
-    for step in plan.steps:
-        pace.to(step.t)
-        decision: Decision | None = None
-        try:
-            if isinstance(step, _Tick):
-                decision = await session.tick(plan.expected[step.index].t)
-            elif isinstance(step, _Reading):
-                await session.reading()
-            else:
-                await session.issue(step)
-        except Exception as error:  # the code under test failing on recorded inputs: a finding
-            raised = type(error).__name__
+    groups = tuple(tuple(group) for _, group in groupby(plan.steps, key=lambda step: step.t))
+    for index, group in enumerate(groups):
+        tape.begin_step(groups[index + 1][0].t if index + 1 < len(groups) else None)
+        for step in group:
+            pace.to(step.t)
+            decision: Decision | None = None
+            try:
+                decision = await session.apply(step)
+            except Exception as error:  # the code under test failing on recorded inputs: a finding
+                raised = type(error).__name__
+                break
+            if tape.mismatch is not None:
+                break
+            if decision is not None:
+                actual.append(decision)
+        if raised is not None or tape.mismatch is not None:
             break
-        if tape.mismatch is not None:
-            # The step ran to its end on a tape that had stopped answering: what
-            # it decided is not a decision about the recorded session, and
-            # nothing after it is replayed.
+        if tape.finish_step() is not None:
             break
-        if decision is not None:
-            actual.append(decision)
     pending = tape.pending
     recorded = NO_FURTHER if pending is None else located(pending)
     mismatch = tape.mismatch

@@ -1,0 +1,22 @@
+{
+  "name": "manual_bench_dsp",
+  "description": "Bench manual session through the real ECG path, at the existing 300 motor rpm ceiling, followed by an operator stop.",
+  "tags": ["manual", "nominal", "dsp"],
+  "kind": "manual",
+  "duration_s": 200,
+  "manual": {
+    "occupancy": "bench",
+    "ceiling_motor_rpm": 300
+  },
+  "ecg": {"mode": "dsp"},
+  "actions": [
+    {"at_s": 4, "do": "manual_target", "output_rpm": 6.0, "expect": "accepted"},
+    {"at_s": 100, "do": "operator_stop"}
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "final_state": "finished",
+    "reaches_output_rpm": 6.0,
+    "max_output_rpm": 6.05
+  }
+}
