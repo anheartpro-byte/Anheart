@@ -3,6 +3,7 @@
  * Storage URLs and session-derived alerts stay within the reader's access.
  */
 import { v, type Infer } from "convex/values";
+import { audit, userActor } from "./lib/audit";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   mutation,
@@ -180,7 +181,7 @@ async function saveRegistry(
   state: Awaited<ReturnType<typeof editableMachine>>,
   fields: Partial<Omit<Doc<"machine_registry">, "_id" | "_creationTime">>,
 ) {
-  const audit = {
+  const updated = {
     organizationId: state.machine.organizationId,
     updatedAt: Date.now(),
     updatedBy: state.admin._id,
@@ -192,10 +193,10 @@ async function saveRegistry(
       driveParameterSheetHistory: [],
       validation: emptyValidation,
       ...fields,
-      ...audit,
+      ...updated,
     });
   } else {
-    await ctx.db.patch(state.registry._id, { ...fields, ...audit });
+    await ctx.db.patch(state.registry._id, { ...fields, ...updated });
   }
   return null;
 }
@@ -653,7 +654,24 @@ export const updateIdentity = mutation({
       }
       fields.contacts = contacts;
     }
-    return await saveRegistry(ctx, state, fields);
+    const changedFields = (
+      Object.keys(fields) as (keyof typeof fields)[]
+    ).filter((key) => {
+      const previous =
+        state.registry?.[key] ?? (key === "contacts" ? [] : undefined);
+      return JSON.stringify(previous) !== JSON.stringify(fields[key]);
+    });
+    await saveRegistry(ctx, state, fields);
+    if (changedFields.length > 0)
+      await audit(ctx, {
+        actor: userActor(state.admin),
+        source: "site",
+        organizationId: state.machine.organizationId,
+        action: "registry.identity_updated",
+        targetId: args.machineId,
+        details: { fields: changedFields },
+      });
+    return null;
   },
 });
 
@@ -676,12 +694,28 @@ export const recordRadii = mutation({
       )
     )
       throw refusal("invalid_registry_field");
-    return await saveRegistry(ctx, state, {
+    await saveRegistry(ctx, state, {
       armRadiusM: args.armRadiusM,
       legTipRadiusM: args.legTipRadiusM,
       radiiMeasuredAt: timestamp(args.measuredAt),
       radiiMeasuredBy: text(args.measuredBy),
     });
+    await audit(ctx, {
+      actor: userActor(state.admin),
+      source: "site",
+      organizationId: state.machine.organizationId,
+      action: "registry.radii_recorded",
+      targetId: args.machineId,
+      details: {
+        fields: [
+          "armRadiusM",
+          "legTipRadiusM",
+          "radiiMeasuredAt",
+          "radiiMeasuredBy",
+        ],
+      },
+    });
+    return null;
   },
 });
 
@@ -709,10 +743,18 @@ export const attachDriveParameterSheet = mutation({
     const history = state.registry?.driveParameterSheetHistory ?? [];
     if (state.registry?.driveParameterSheet !== undefined)
       history.push(state.registry.driveParameterSheet);
-    return await saveRegistry(ctx, state, {
+    await saveRegistry(ctx, state, {
       driveParameterSheet: sheet,
       driveParameterSheetHistory: history,
     });
+    await audit(ctx, {
+      actor: userActor(state.admin),
+      source: "site",
+      organizationId: state.machine.organizationId,
+      action: "registry.drive_sheet_attached",
+      targetId: args.machineId,
+    });
+    return null;
   },
 });
 
@@ -764,7 +806,20 @@ export const addValidationReview = mutation({
     };
     if (levelAt(nextValidation, Date.now()) !== args.level)
       throw refusal("validation_level_not_next");
-    return await saveRegistry(ctx, state, { validation: nextValidation });
+    await saveRegistry(ctx, state, { validation: nextValidation });
+    await audit(ctx, {
+      actor: userActor(state.admin),
+      source: "site",
+      organizationId: state.machine.organizationId,
+      action: "registry.review_added",
+      targetId: args.machineId,
+      details: {
+        level: args.level,
+        previousLevel: effectiveValidationLevel(validation, Date.now()),
+        softwareVersion,
+      },
+    });
+    return null;
   },
 });
 
@@ -782,7 +837,7 @@ export const lowerValidationLevel = mutation({
     const effectiveLevel = effectiveValidationLevel(validation, Date.now());
     const rejected = downgradeRefusal(effectiveLevel, args.level, args.reason);
     if (rejected !== null) throw refusal(rejected);
-    return await saveRegistry(ctx, state, {
+    await saveRegistry(ctx, state, {
       validation: {
         ...validation,
         level: args.level,
@@ -798,5 +853,14 @@ export const lowerValidationLevel = mutation({
         ],
       },
     });
+    await audit(ctx, {
+      actor: userActor(state.admin),
+      source: "site",
+      organizationId: state.machine.organizationId,
+      action: "registry.level_lowered",
+      targetId: args.machineId,
+      details: { level: args.level, previousLevel: effectiveLevel },
+    });
+    return null;
   },
 });

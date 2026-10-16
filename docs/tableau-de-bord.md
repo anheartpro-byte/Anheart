@@ -84,6 +84,11 @@ patient : ni entrée de menu, ni bouton (`lib/organizationAccess.ts`).
 | **gestionnaire** | Voir et gérer **ses** machines (liées par l'admin) et **ses** patients. Créer des patients. Régler leur physiologie. Accorder / retirer le droit de lancement sur ses machines, **à ses patients**. Lancer une séance auto sur ses machines, pour lui-même ou un de ses patients. |
 | **user** (patient) | Voir ses propres séances et rapports. Lancer une séance auto **pour lui-même seulement**, sur les machines où un gestionnaire ou un admin lui a donné le droit. Arrêter sa propre séance. |
 
+Le journal **Audit** est réservé aux administrateurs : l'admin Anheart voit
+toutes les organisations et les actions globales ; l'admin d'organisation
+(`org_admin`) ne voit que son organisation. Gestionnaire et patient n'y ont
+pas accès.
+
 **Qui donne le droit de lancement à qui :**
 
 ```
@@ -247,6 +252,7 @@ Barre latérale (`components/dashboard/AppSidebar.tsx`) :
 |---|---|---|
 | Principal | Tableau de bord | tous |
 | Administration | Gestionnaires, Membres, Utilisateurs | admin, admin d'organisation |
+| Administration | Audit | admin, admin d'organisation |
 | Administration | Paramètres | admin |
 | Gestion | Patients, Machines, Mes machines, Sessions, Rapports, Alertes | admin, admin d'organisation, gestionnaire |
 | Ma Santé | Mes machines, Sessions, Rapports | patient |
@@ -754,6 +760,77 @@ administrateurs de l'organisation. »). Le panneau de Clerk
 rôles. Clerk applique ses propres droits dans ce panneau. Sans organisation
 active dans Clerk (déploiement avant `ANHEART_ORG_ID`), la page propose d'abord
 d'en choisir une.
+
+### Audit : `/fr/dashboard/audit`
+
+Admin Anheart et admin d'organisation, avec une organisation acceptée par le
+serveur. Les autres comptes lisent « L'accès au journal est réservé aux
+administrateurs. » La page appelle `audit.list` ; Convex impose les droits
+et le périmètre de l'organisation, y compris pendant un export. L'admin
+Anheart voit aussi les actions globales, sans organisation.
+
+Les filtres se combinent : acteur (personne, machine précise, toutes les
+machines ou système), action, type de cible, période et, pour l'admin
+Anheart seulement, organisation. Les dates sont des journées dans le fuseau
+du navigateur : le début est inclus et la fin va jusqu'au début du jour
+suivant, exclu. **Filtrer sur cette cible** sur une ligne ajoute sa cible
+précise ; changer de type retire cette sélection. Le bouton de
+réinitialisation efface tous les filtres.
+
+Les lignes vont de la plus récente à la plus ancienne, par pages de 50,
+avec **Afficher plus**. Colonnes : date, organisation (admin Anheart
+seulement), acteur et rôle, action, cible, source, détails et identifiant de
+requête. Actions, rôles, types et sources sont traduits. Les libellés
+d'acteur et de cible n'incluent pas d'e-mail ; les noms sont lus dans les
+comptes et machines actuels. Une référence disparue est remplacée par son
+identifiant abrégé. Les détails montrent leurs clés traduites, les tableaux
+sous forme de nombre d'éléments et les autres valeurs sur 60 caractères au
+plus. L'identifiant de requête est abrégé à 12 caractères, complet au survol.
+Les soumissions d'aptitude sont visibles comme `fitness.submitted`, sans
+réponses ni verdict. Les créations et réactivations d'appartenance sont
+tracées par leur écrivain, connexion ou webhook, une seule fois ; une
+appartenance ouverte par la seule connexion reste donc visible. La suppression
+automatique d'un enregistrement apparaît avec la source `cron`.
+Les changements sans effet de physiologie, de rôle et d'identité du registre
+n'ajoutent pas de ligne ; les champs affichés sont ceux réellement modifiés.
+Les versions libres de fiche et d'enregistrement médical sont omises des
+détails, y compris la version médicale citée par une revue machine.
+Les invitations affichent le nombre de gestionnaires prévus ; leurs
+identifiants figurent seulement dans l'export CSV. Leurs affectations à
+l'acceptation ont chacune une ligne. Les changements
+de propriétaire machine et de niveau de release indiquent respectivement
+le nouveau propriétaire et le niveau précédent. Chaque liste d'identifiants
+est bornée à 1 000 éléments ; en cas de troncature, `count` donne le total
+des listes `added` et `removed` avant troncature.
+
+**Exporter en CSV** relit les pages avec les filtres courants, par lots de
+200, jusqu'à **10 000 lignes au plus** (hors en-tête). S'il reste des lignes,
+la page affiche « L'export contient les 10 000 premières lignes. Restreignez
+la période pour exporter la suite. » Le bouton, les sélecteurs, la
+réinitialisation et tous les boutons « Filtrer sur cette cible » des lignes
+restent désactivés pendant l'export ; un échec affiche un message et permet un nouvel
+essai.
+
+[`lib/auditCsv.ts`](../lib/auditCsv.ts) produit 13 colonnes stables : `at`,
+`organizationId`, `organizationName`, `actorId`, `actorRole`, `actorLabel`,
+`action`, `targetType`, `targetId`, `targetLabel`, `details`, `requestId`,
+`source`. Les dates sont en ISO UTC et `details` en JSON. Le fichier UTF-8
+porte un BOM et des fins de ligne CRLF ; l'échappement suit RFC 4180
+(cellules contenant virgules, guillemets ou retours à la ligne entourées de
+guillemets, guillemets internes doublés). Un préfixe `=`, `+`, `-`, `@`,
+tabulation ou retour chariot est neutralisé par une apostrophe avant
+l'échappement pour éviter son interprétation comme formule par un tableur.
+[`lib/download.ts`](../lib/download.ts) déclenche le téléchargement puis
+libère l'URL temporaire du fichier.
+
+[`lib/auditCsv.test.ts`](../lib/auditCsv.test.ts) vérifie les 13 colonnes,
+BOM, CRLF, ISO UTC, RFC 4180 et chaque préfixe de formule. Les tests de
+[`app/[locale]/dashboard/audit/page.test.tsx`](../app/[locale]/dashboard/audit/page.test.tsx)
+montent la page et ses composants `components/audit/` : accès selon le rôle,
+filtres envoyés, pagination, libellés, export filtré par lots de 200 et
+plafond de 10 000 lignes avec son message. Cette preuve utilise un DOM
+simulé et Convex remplacé ; la vérification de bout en bout dans un
+navigateur reste bloquée par ANH-83.
 
 ### Paramètres : `/fr/dashboard/settings`
 
@@ -1379,6 +1456,7 @@ Pièges :
 | Sujet | État |
 |---|---|
 | Rendu dans un navigateur | **Jamais testé.** |
+| Journal Audit (ANH-167) | Accès, filtres, pagination et export vérifiés par les tests de page et de composants de `app/[locale]/dashboard/audit/page.test.tsx` ; format CSV et neutralisation des formules par `lib/auditCsv.test.ts`. La vérification de bout en bout de la page accessible et filtrable dans un navigateur est **bloquée par ANH-83**, infrastructure E2E elle-même bloquée par ANH-82. |
 | Déploiement Convex / Clerk | **Pas fait.** |
 | Tests du site | Unitaires seulement, sans navigateur : `npm run test:lib` (règles de `lib/` extraites des fenêtres, horloge du serveur, retrait de l'ancien mode ECG) et `npm run test:site` (fraîcheur, statut et dernier signal : hook et composants, avec l'horloge du poste et celle du Pi décalées ; retour des mutations : hook, message d'arrêt et garde-fou des erreurs silencieuses ; chaque composant : panneau de séance et arrêt, fenêtre de lancement, droits de lancement, formulaires machine et patient, menu par rôle ; chaque page de `app/` montée dans un DOM simulé, Convex remplacé : ce qu'elle montre à chaque rôle, ce que ses actions envoient, ce qu'elle affiche quand le serveur refuse, voir [framework-de-test.md](framework-de-test.md#tests-des-pages-du-site-anh-204)). La CI exige 80 % de lignes et de branches couvertes sur `lib/`, `hooks/`, `components/` et `app/` réunis. **Aucun test dans un navigateur** : ni la coupure d'une console simulée suivie de 90 s d'attente, ni une suppression refusée par un vrai serveur ne sont rejouées de bout en bout (ANH-83). |
 | Fraîcheur et horloges | Jugée sur l'horloge du serveur (§6) : l'horloge du poste ne date rien. Pire cas chiffré sur une page qui vient de s'ouvrir : 107 s pour une machine, 37 s pour le panneau (cache de Convex, 17 s d'après son code source), plus le transit de la réponse et un onglet suspendu, **non mesurés**. Panneau, quand l'horloge du Pi date la mesure (console d'une version antérieure, serveur au contrat 1.0, ou enregistrement envoyé après un redémarrage du système) : en retard de plus de 15 s environ, ou en avance de plus de 5 s environ, elle affiche le bandeau alors que la machine envoie (sens sûr) ; en avance de X, un point renvoyé en retard peut passer pour actuel jusqu'à 20 s + X après sa mesure (ANH-163). Pour une séance en cours de la console de ce dépôt face à un serveur 1.1, l'horloge du Pi ne date pas la mesure. |

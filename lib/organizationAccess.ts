@@ -80,7 +80,7 @@ export function navigationFor(
   const { role } = account;
   const administration: string[] = [];
   if (isOrganizationAdmin(role)) {
-    administration.push("gestionnaires", "members", "users");
+    administration.push("gestionnaires", "members", "users", "audit");
   }
   if (isAnheartAdmin(role)) administration.push("settings");
   return {

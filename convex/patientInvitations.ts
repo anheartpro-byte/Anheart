@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { internalMutation } from "./_generated/server";
+import { audit, userActor } from "./lib/audit";
 import type { Id } from "./_generated/dataModel";
 import {
   canAccessUser,
@@ -111,6 +112,18 @@ export const prepare = internalMutation({
       status: "pending",
       createdAt: now,
       updatedAt: now,
+    });
+    await audit(ctx, {
+      actor: userActor(me),
+      source: "site",
+      organizationId: me.organizationId,
+      action: "user.invited",
+      targetId: invitationId,
+      details: {
+        role: "user",
+        added: gestionnaireIds,
+        ...(userId === undefined ? {} : { userId }),
+      },
     });
     return {
       invitationId,

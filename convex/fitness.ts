@@ -22,6 +22,7 @@ import {
 } from "./lib/fitness";
 import { refusal } from "./lib/errors";
 import { limitUser } from "./lib/rateLimits";
+import { audit, userActor } from "./lib/audit";
 
 const fitnessOutcomeValidator = v.union(
   v.literal("fit"),
@@ -93,6 +94,14 @@ export const submitFitnessAnswers = mutation({
       outcome: computed.outcome,
       submittedBy: caller._id,
       submittedAt: Date.now(),
+    });
+    await audit(ctx, {
+      actor: userActor(caller),
+      source: "site",
+      organizationId,
+      action: "fitness.submitted",
+      targetId: assessmentId,
+      details: { userId },
     });
     return { assessmentId, outcome: computed.outcome };
   },
@@ -169,6 +178,14 @@ export const validateFitnessAssessment = mutation({
       validUntil: args.validUntil,
       notes: notes === "" ? undefined : notes,
     });
+    await audit(ctx, {
+      actor: userActor(caller),
+      source: "site",
+      organizationId: assessment.organizationId,
+      action: "fitness.validated",
+      targetId: args.assessmentId,
+      details: { userId: assessment.userId },
+    });
     return null;
   },
 });
@@ -191,13 +208,21 @@ export const signConsent = mutation({
     if (organizationId === null) throw refusal("not_authorized");
     const existing = await activeConsent(ctx, caller._id, organizationId);
     if (existing !== null) return existing._id;
-    return await ctx.db.insert("consents", {
+    const consentId = await ctx.db.insert("consents", {
       userId: caller._id,
       organizationId,
       textVersion: args.textVersion,
       signedAt: Date.now(),
       signedVia: "site",
     });
+    await audit(ctx, {
+      actor: userActor(caller),
+      source: "site",
+      organizationId,
+      action: "consent.signed",
+      targetId: consentId,
+    });
+    return consentId;
   },
 });
 
@@ -233,6 +258,13 @@ export const withdrawConsent = mutation({
       await ctx.db.patch(consent._id, {
         withdrawnAt: now,
         withdrawnBy: caller._id,
+      });
+      await audit(ctx, {
+        actor: userActor(caller),
+        source: "site",
+        organizationId: consent.organizationId,
+        action: "consent.withdrawn",
+        targetId: consent._id,
       });
     }
     return null;

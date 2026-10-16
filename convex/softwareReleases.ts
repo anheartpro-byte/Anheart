@@ -26,6 +26,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { requireRole } from "./lib/auth";
+import { audit, userActor } from "./lib/audit";
 import { refusal } from "./lib/errors";
 import { isReleaseVersion } from "./lib/releaseValidation";
 import { softwareComponentValidator, validationLevelValidator } from "./schema";
@@ -122,6 +123,14 @@ export const recordRelease = mutation({
       .unique();
     if (existing === null) {
       const releaseId = await ctx.db.insert("software_releases", fields);
+      await audit(ctx, {
+        actor: userActor(admin),
+        source: "site",
+        organizationId: admin.organizationId,
+        action: "software_release.recorded",
+        targetId: releaseId,
+        details: { version: args.version, level },
+      });
       if (level !== undefined) {
         await ctx.db.insert("software_release_levels", {
           releaseId,
@@ -162,6 +171,20 @@ export const recordRelease = mutation({
     // The row is the record in force: the last write wins there. What it
     // said of an earlier level stays in `software_release_levels`.
     await ctx.db.replace(existing._id, fields);
+    await audit(ctx, {
+      actor: userActor(admin),
+      source: "site",
+      organizationId: admin.organizationId,
+      action: "software_release.recorded",
+      targetId: existing._id,
+      details: {
+        version: args.version,
+        level,
+        ...(existing.validationLevel !== level
+          ? { previousLevel: existing.validationLevel }
+          : {}),
+      },
+    });
     return existing._id;
   },
 });

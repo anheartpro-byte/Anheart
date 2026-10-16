@@ -1,4 +1,5 @@
 import { limitUser } from "./lib/rateLimits";
+import { audit, userActor } from "./lib/audit";
 import {
   query,
   mutation,
@@ -30,6 +31,7 @@ import {
   canManageUser,
   requireSharedProfileAuthority,
   findMembership,
+  effectiveRole,
   findUnlinkedDefaultOrganization,
   inScope,
   MALFORMED_ORGANIZATION_CLAIM,
@@ -52,9 +54,10 @@ import {
 async function mirrorMembership(
   ctx: MutationCtx,
   user: Doc<"users">,
-  organizationId: Id<"organizations">,
+  organization: Doc<"organizations">,
   role: OrganizationRole,
 ) {
+  const organizationId = organization._id;
   const membership = await findMembership(ctx, user._id, organizationId);
   if (
     membership &&
@@ -75,6 +78,23 @@ async function mirrorMembership(
     role,
     organizationId: user.organizationId ?? organizationId,
   });
+  if (!membership || membership.role !== role) {
+    await audit(ctx, {
+      actor: {
+        kind: "user",
+        id: user._id,
+        role: effectiveRole(organization, role),
+      },
+      source: "site",
+      organizationId,
+      action: membership ? "membership.role_changed" : "membership.created",
+      targetId: user._id,
+      details: {
+        role,
+        ...(membership ? { previousRole: membership.role } : {}),
+      },
+    });
+  }
 }
 
 /**
@@ -106,7 +126,7 @@ export const getOrCreateUser = mutation({
         await mirrorMembership(
           ctx,
           existing,
-          claimed.organization._id,
+          claimed.organization,
           claimed.organizationRole,
         );
       }
@@ -123,25 +143,25 @@ export const getOrCreateUser = mutation({
       throw refusal("profile_pending");
 
     let home: {
-      organizationId: Id<"organizations">;
+      organization: Doc<"organizations">;
       role: OrganizationRole;
     } | null = null;
     if (claimed.kind === "claimed") {
       home = {
-        organizationId: claimed.organization._id,
+        organization: claimed.organization,
         role: claimed.organizationRole,
       };
     } else if (claimed.kind === "unclaimed") {
       const organization = await findUnlinkedDefaultOrganization(ctx);
       if (organization)
-        home = { organizationId: organization._id, role: "user" };
+        home = { organization, role: "user" };
     }
 
     // Create new user with default role
     const userId = await ctx.db.insert("users", {
       clerkId: identity.subject,
       role: home?.role ?? "user",
-      organizationId: home?.organizationId,
+      organizationId: home?.organization._id,
       firstName: identity.givenName ?? "",
       lastName: identity.familyName ?? "",
       email: identity.email ?? "",
@@ -151,9 +171,21 @@ export const getOrCreateUser = mutation({
     if (home) {
       await ctx.db.insert("memberships", {
         userId,
-        organizationId: home.organizationId,
+        organizationId: home.organization._id,
         role: home.role,
         active: true,
+      });
+      await audit(ctx, {
+        actor: {
+          kind: "user",
+          id: userId,
+          role: effectiveRole(home.organization, home.role),
+        },
+        source: "site",
+        organizationId: home.organization._id,
+        action: "membership.created",
+        targetId: userId,
+        details: { role: home.role },
       });
     }
 
@@ -290,6 +322,15 @@ export const updateUserRole = mutation({
 
     await ctx.db.patch(membership._id, { role: args.role });
     await ctx.db.patch(args.userId, { role: args.role });
+    if (membership.role !== args.role)
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId: membership.organizationId,
+        action: "user.role_changed",
+        targetId: args.userId,
+        details: { role: args.role, previousRole: membership.role },
+      });
     return null;
   },
 });
@@ -644,6 +685,7 @@ export const deleteUser = mutation({
     // their own organisation for anyone else.
     const removable = (organizationId: Id<"organizations"> | undefined) =>
       inScope(currentUser, organizationId);
+    const affectedOrganizations = new Set<Id<"organizations"> | undefined>();
 
     // Delete user-gestionnaire relations where this user is the patient
     const patientRelations = await ctx.db
@@ -677,7 +719,10 @@ export const deleteUser = mutation({
       ...launchRights,
       ...alerts,
     ]) {
-      if (removable(row.organizationId)) await ctx.db.delete(row._id);
+      if (removable(row.organizationId)) {
+        await ctx.db.delete(row._id);
+        affectedOrganizations.add(row.organizationId);
+      }
     }
 
     // Memberships: the ones removed, and the ones another organisation keeps
@@ -689,6 +734,7 @@ export const deleteUser = mutation({
     for (const membership of memberships) {
       if (removable(membership.organizationId)) {
         await ctx.db.delete(membership._id);
+        affectedOrganizations.add(membership.organizationId);
       }
     }
 
@@ -707,7 +753,19 @@ export const deleteUser = mutation({
         role: kept[0].role,
       });
     }
-
+    if (affectedOrganizations.size === 0)
+      affectedOrganizations.add(
+        currentUser.role === "admin" ? undefined : currentUser.organizationId,
+      );
+    for (const organizationId of affectedOrganizations) {
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId,
+        action: "user.deleted",
+        targetId: args.userId,
+      });
+    }
     return null;
   },
 });
@@ -780,6 +838,13 @@ export const linkPatientToClerk = mutation({
     // Link the Clerk account
     await ctx.db.patch(user._id, {
       clerkId: identity.subject,
+    });
+    await audit(ctx, {
+      actor: { kind: "user", id: user._id, role: "user" },
+      source: "site",
+      organizationId: user.organizationId,
+      action: "user.linked_to_account",
+      targetId: user._id,
     });
 
     return user._id;
@@ -868,6 +933,14 @@ export const assignGestionnaireToUser = mutation({
       createdAt: Date.now(),
       createdBy: currentUser._id,
     });
+    await audit(ctx, {
+      actor: userActor(currentUser),
+      source: "site",
+      organizationId,
+      action: "patient_gestionnaire.assigned",
+      targetId: args.userId,
+      details: { gestionnaireId: args.gestionnaireId },
+    });
 
     return null;
   },
@@ -905,6 +978,14 @@ export const removeGestionnaireFromUser = mutation({
 
     for (const relation of relations) {
       await ctx.db.delete(relation._id);
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId: relation.organizationId,
+        action: "patient_gestionnaire.removed",
+        targetId: args.userId,
+        details: { gestionnaireId: args.gestionnaireId },
+      });
     }
 
     return null;
@@ -1124,6 +1205,19 @@ export const assignPatientsToGestionnaire = mutation({
       });
     }
 
+    if (toAdd.length > 0 || toRemove.length > 0) {
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId,
+        action: "gestionnaire_patients.set",
+        targetId: args.gestionnaireId,
+        details: {
+          added: toAdd,
+          removed: [...new Set(toRemove.map((r) => r.userId))],
+        },
+      });
+    }
     return {
       added: toAdd.length,
       removed: new Set(toRemove.map((r) => r.userId)).size,

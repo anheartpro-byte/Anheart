@@ -49,6 +49,7 @@ const ENTRIES: Record<string, NavItem> = {
   },
   members: { labelKey: "members", href: "/dashboard/members", icon: UserCog },
   users: { labelKey: "users", href: "/dashboard/users", icon: Users },
+  audit: { labelKey: "audit", href: "/dashboard/audit", icon: FileText },
   settings: { labelKey: "settings", href: "/dashboard/settings", icon: Settings },
   patients: { labelKey: "patients", href: "/dashboard/patients", icon: Users },
   machines: { labelKey: "machines", href: "/dashboard/machines", icon: Cpu },

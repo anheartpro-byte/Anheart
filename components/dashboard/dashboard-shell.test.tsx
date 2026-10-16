@@ -160,6 +160,7 @@ const ORGANIZATION_ADMIN_ENTRIES = [
   [nav.gestionnaires, "/dashboard/gestionnaires"],
   [nav.members, "/dashboard/members"],
   [nav.users, "/dashboard/users"],
+  [nav.audit, "/dashboard/audit"],
 ];
 const ADMIN_ENTRIES = [
   ...ORGANIZATION_ADMIN_ENTRIES,
@@ -398,6 +399,7 @@ describe("ANH-203 breadcrumb of a dashboard page", () => {
     ["settings", nav.settings],
     ["reports", nav.reports],
     ["notifications", nav.notifications],
+    ["audit", nav.audit],
   ])("the level « %s » reads « %s »", (segment, label) => {
     expect(crumbs(`/dashboard/${segment}`).at(-1)).toEqual([label, null]);
   });

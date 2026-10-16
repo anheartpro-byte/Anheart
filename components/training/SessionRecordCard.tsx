@@ -9,6 +9,7 @@ import { useTranslations } from "next-intl";
 import { Archive, Download, ExternalLink } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { isOrganizationAdmin } from "@/lib/organizationAccess";
+import { save } from "@/lib/download";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   Card,
@@ -28,15 +29,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-
-function save(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
 
 export function SessionRecordCard({
   sessionId,

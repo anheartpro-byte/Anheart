@@ -7,6 +7,7 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
+import { audit, userActor } from "./lib/audit";
 import type { Doc, Id } from "./_generated/dataModel";
 import { machineHealthValidator, HEARTBEAT_RETENTION_MS } from "./lib/machineHealth";
 import { recordMachineHealth } from "./machineHealth";
@@ -50,7 +51,12 @@ async function writeMachineGestionnaires(
   machine: Pick<Doc<"machines">, "_id" | "organizationId">,
   gestionnaireIds: readonly Id<"users">[],
   createdBy: Id<"users">,
-): Promise<void> {
+): Promise<{
+  added: Id<"users">[];
+  removed: Id<"users">[];
+  changed: boolean;
+  owner: Id<"users"> | undefined;
+}> {
   const kept: Id<"users">[] = [];
   for (const gestionnaireId of new Set(gestionnaireIds)) {
     const role = await organizationRoleOf(
@@ -67,14 +73,23 @@ async function writeMachineGestionnaires(
     .withIndex("by_machine", (q) => q.eq("machineId", machine._id))
     .collect();
   const linked = new Set<Id<"users">>();
+  const added: Id<"users">[] = [];
+  const removed = [
+    ...new Set(existing.map((row) => row.gestionnaireId)),
+  ].filter((id) => !kept.includes(id));
+  let changed = false;
   for (const row of existing) {
     if (!kept.includes(row.gestionnaireId) || linked.has(row.gestionnaireId)) {
       await ctx.db.delete(row._id);
+      changed = true;
       continue;
     }
     linked.add(row.gestionnaireId);
     const isOwner = row.gestionnaireId === owner;
-    if (row.isOwner !== isOwner) await ctx.db.patch(row._id, { isOwner });
+    if (row.isOwner !== isOwner) {
+      await ctx.db.patch(row._id, { isOwner });
+      changed = true;
+    }
   }
 
   const now = Date.now();
@@ -88,7 +103,10 @@ async function writeMachineGestionnaires(
       createdAt: now,
       createdBy,
     });
+    added.push(gestionnaireId);
+    changed = true;
   }
+  return { added, removed, changed, owner };
 }
 
 /**
@@ -132,20 +150,45 @@ export const createMachine = mutation({
       location: args.location,
       createdAt: now,
     });
+    await audit(ctx, {
+      actor: userActor(currentUser),
+      source: "site",
+      organizationId,
+      action: "machine.created",
+      targetId: machineId,
+    });
     // Its first key, in `machine_api_keys` like every key (ANH-165).
-    const { apiKey } = await insertMachineKey(ctx, machineId, {
+    const { apiKey, keyId } = await insertMachineKey(ctx, machineId, {
       createdBy: currentUser._id,
       expiresAt: undefined,
       now,
     });
+    await audit(ctx, {
+      actor: userActor(currentUser),
+      source: "site",
+      organizationId,
+      action: "machine_key.created",
+      targetId: keyId,
+      details: { machineId, count: 0 },
+    });
 
     // Assign machine to gestionnaires: the first one kept owns it.
-    await writeMachineGestionnaires(
+    const links = await writeMachineGestionnaires(
       ctx,
       { _id: machineId, organizationId },
       args.gestionnaireIds ?? [],
       currentUser._id,
     );
+    if (links.changed) {
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId,
+        action: "machine_gestionnaires.set",
+        targetId: machineId,
+        details: { added: links.added },
+      });
+    }
 
     // Return plain API key - this is the only time it's visible!
     return {
@@ -177,12 +220,26 @@ export const assignMachineToGestionnaires = mutation({
       throw refusal("machine_not_found");
     }
 
-    await writeMachineGestionnaires(
+    const links = await writeMachineGestionnaires(
       ctx,
       machine,
       args.gestionnaireIds,
       currentUser._id,
     );
+    if (links.changed) {
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId: machine.organizationId,
+        action: "machine_gestionnaires.set",
+        targetId: machine._id,
+        details: {
+          added: links.added,
+          removed: links.removed,
+          gestionnaireId: links.owner,
+        },
+      });
+    }
     return null;
   },
 });
@@ -271,6 +328,19 @@ export const setGestionnaireMachines = mutation({
       });
     }
 
+    if (toAdd.length > 0 || toRemove.length > 0) {
+      await audit(ctx, {
+        actor: userActor(currentUser),
+        source: "site",
+        organizationId,
+        action: "gestionnaire_machines.set",
+        targetId: args.gestionnaireId,
+        details: {
+          added: toAdd,
+          removed: [...new Set(toRemove.map((r) => r.machineId))],
+        },
+      });
+    }
     return {
       added: toAdd.length,
       removed: new Set(toRemove.map((r) => r.machineId)).size,
@@ -566,6 +636,13 @@ export const deleteMachine = mutation({
       deletedBy: currentUser._id,
       status: "offline", // Set to offline when deleted
     });
+    await audit(ctx, {
+      actor: userActor(currentUser),
+      source: "site",
+      organizationId: machine.organizationId,
+      action: "machine.deleted",
+      targetId: args.machineId,
+    });
 
     return null;
   },
@@ -581,7 +658,7 @@ export const restoreMachine = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     await limitUser(ctx);
-    await requireRole(ctx, ["admin"]);
+    const currentUser = await requireRole(ctx, ["admin"]);
 
     const machine = await ctx.db.get(args.machineId);
     if (!machine) {
@@ -597,6 +674,13 @@ export const restoreMachine = mutation({
       isDeleted: false,
       deletedAt: undefined,
       deletedBy: undefined,
+    });
+    await audit(ctx, {
+      actor: userActor(currentUser),
+      source: "site",
+      organizationId: machine.organizationId,
+      action: "machine.restored",
+      targetId: args.machineId,
     });
 
     return null;
@@ -860,6 +944,14 @@ export const assignGestionnaireToMachine = mutation({
       createdAt: Date.now(),
       createdBy: currentUser._id,
     });
+    await audit(ctx, {
+      actor: userActor(currentUser),
+      source: "site",
+      organizationId: machine.organizationId,
+      action: "machine_gestionnaire.assigned",
+      targetId: args.machineId,
+      details: { gestionnaireId: args.gestionnaireId },
+    });
 
     return null;
   },
@@ -910,6 +1002,14 @@ export const removeGestionnaireFromMachine = mutation({
     }
 
     await ctx.db.delete(relation._id);
+    await audit(ctx, {
+      actor: userActor(currentUser),
+      source: "site",
+      organizationId: relation.organizationId,
+      action: "machine_gestionnaire.removed",
+      targetId: args.machineId,
+      details: { gestionnaireId: args.gestionnaireId },
+    });
 
     return null;
   },

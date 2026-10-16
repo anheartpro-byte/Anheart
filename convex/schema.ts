@@ -1,4 +1,11 @@
 import { defineSchema, defineTable } from "convex/server";
+import {
+  auditActionValidator,
+  auditActorRoleValidator,
+  auditDetailsValidator,
+  auditSourceValidator,
+  auditTargetTypeValidator,
+} from "./lib/audit";
 import { recordState } from "./lib/recordStorage";
 import {
   summaryFiguresValidator,
@@ -170,6 +177,56 @@ export const organizationRoleValidator = v.union(
 const organizationId = v.optional(v.id("organizations"));
 
 export default defineSchema({
+  // Append-only, written only by audit() in convex/lib/audit.ts. No function
+  // modifies or deletes a row, and there is no purge. Retention of five years
+  // remains to be confirmed by ANH-87a. A row without an organisation describes
+  // a global action and is readable only by an Anheart admin (auth.inScope).
+  audit_log: defineTable({
+    at: v.number(), // Unix milliseconds at insertion
+    organizationId: v.optional(v.id("organizations")),
+    actorId: v.optional(v.union(v.id("users"), v.id("machines"))),
+    actorRole: auditActorRoleValidator,
+    action: auditActionValidator,
+    targetType: auditTargetTypeValidator,
+    targetId: v.string(),
+    details: v.optional(auditDetailsValidator),
+    requestId: v.string(),
+    source: auditSourceValidator, // Includes operator CLI calls as an EX-1 extension.
+  })
+    .index("by_at", ["at"])
+    .index("by_organization_and_at", ["organizationId", "at"])
+    .index("by_actor_and_at", ["actorId", "at"])
+    .index("by_actor_role_and_at", ["actorRole", "at"])
+    .index("by_organization_and_actor_role_and_at", [
+      "organizationId",
+      "actorRole",
+      "at",
+    ])
+    .index("by_action_and_at", ["action", "at"])
+    .index("by_target_and_at", ["targetType", "targetId", "at"])
+    .index("by_target_type_and_at", ["targetType", "at"])
+    .index("by_organization_and_target_type_and_at", [
+      "organizationId",
+      "targetType",
+      "at",
+    ])
+    .index("by_organization_and_actor_and_at", [
+      "organizationId",
+      "actorId",
+      "at",
+    ])
+    .index("by_organization_and_action_and_at", [
+      "organizationId",
+      "action",
+      "at",
+    ])
+    .index("by_organization_and_target_and_at", [
+      "organizationId",
+      "targetType",
+      "targetId",
+      "at",
+    ]),
+
   // Organisations (clients) - mirror of Clerk Organizations. Clerk carries
   // membership, roles and invitations; Convex stays the authority on the data.
   organizations: defineTable({

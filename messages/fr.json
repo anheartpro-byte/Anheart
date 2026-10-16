@@ -1,4 +1,171 @@
 {
+  "audit": {
+    "title": "Audit",
+    "description": "Journal des actions sensibles de la plateforme.",
+    "accessDenied": "L'accès au journal est réservé aux administrateurs.",
+    "all": "Tous",
+    "global": "Plateforme",
+    "empty": "Aucune action ne correspond aux filtres.",
+    "showMore": "Afficher plus",
+    "loading": "Chargement...",
+    "export": "Exporter en CSV",
+    "exporting": "Export en cours...",
+    "exportTruncated": "L'export contient les 10 000 premières lignes. Restreignez la période pour exporter la suite.",
+    "exportError": "L'export a échoué. Réessayez.",
+    "filterTarget": "Filtrer sur cette cible",
+    "filters": {
+      "actor": "Acteur",
+      "action": "Action",
+      "targetType": "Type de cible",
+      "target": "Cible : {target}",
+      "removeTarget": "Retirer la cible",
+      "from": "Du",
+      "to": "Au",
+      "organization": "Organisation",
+      "reset": "Réinitialiser",
+      "allMachines": "Toutes les machines"
+    },
+    "columns": {
+      "at": "Date et heure",
+      "organization": "Organisation",
+      "actor": "Acteur",
+      "action": "Action",
+      "target": "Cible",
+      "source": "Source",
+      "details": "Détails",
+      "requestId": "Référence de requête"
+    },
+    "actions": {
+      "user": {
+        "role_changed": "Rôle modifié",
+        "invited": "Invitation créée",
+        "linked_to_account": "Compte associé",
+        "deleted": "Utilisateur supprimé"
+      },
+      "patient_gestionnaire": {
+        "assigned": "Gestionnaire affecté au patient",
+        "removed": "Gestionnaire retiré du patient"
+      },
+      "gestionnaire_patients": {
+        "set": "Patients du gestionnaire modifiés"
+      },
+      "machine_gestionnaire": {
+        "assigned": "Gestionnaire affecté à la machine",
+        "removed": "Gestionnaire retiré de la machine"
+      },
+      "machine_gestionnaires": {
+        "set": "Gestionnaires de la machine modifiés"
+      },
+      "gestionnaire_machines": {
+        "set": "Machines du gestionnaire modifiées"
+      },
+      "launch_right": {
+        "granted": "Droit de lancement accordé",
+        "revoked": "Droit de lancement révoqué"
+      },
+      "membership": {
+        "created": "Adhésion créée",
+        "role_changed": "Rôle dans l'organisation modifié",
+        "deactivated": "Adhésion désactivée"
+      },
+      "account": {
+        "deleted_in_clerk": "Compte supprimé dans Clerk"
+      },
+      "organization": {
+        "deleted": "Organisation supprimée"
+      },
+      "physiology": {
+        "updated": "Profil physiologique modifié"
+      },
+      "fitness": {
+        "submitted": "Questionnaire d'aptitude soumis",
+        "validated": "Aptitude validée"
+      },
+      "consent": {
+        "signed": "Consentement signé",
+        "withdrawn": "Consentement retiré"
+      },
+      "session": {
+        "launched": "Séance demandée",
+        "cancelled": "Séance annulée",
+        "stop_requested": "Arrêt demandé",
+        "started": "Séance démarrée",
+        "local_registered": "Séance locale enregistrée",
+        "ended": "Séance terminée"
+      },
+      "machine_key": {
+        "created": "Clé de machine créée",
+        "revoked": "Clé de machine révoquée",
+        "expired_revoked": "Clé expirée révoquée"
+      },
+      "machine": {
+        "created": "Machine créée",
+        "deleted": "Machine supprimée",
+        "restored": "Machine restaurée"
+      },
+      "registry": {
+        "identity_updated": "Identité du registre modifiée",
+        "radii_recorded": "Mesures du registre enregistrées",
+        "drive_sheet_attached": "Fiche variateur jointe",
+        "review_added": "Revue ajoutée au registre",
+        "level_lowered": "Niveau de validation abaissé"
+      },
+      "software_release": {
+        "recorded": "Version logicielle enregistrée"
+      },
+      "medical_parameters": {
+        "registered": "Version des paramètres médicaux enregistrée"
+      },
+      "record": {
+        "deleted": "Enregistrement supprimé"
+      }
+    },
+    "targets": {
+      "user": "Utilisateur",
+      "machine": "Machine",
+      "machine_key": "Clé de machine",
+      "session": "Séance",
+      "fitness_assessment": "Évaluation d'aptitude",
+      "consent": "Consentement",
+      "organization": "Organisation",
+      "software_release": "Version logicielle",
+      "medical_parameters_version": "Version des paramètres médicaux",
+      "patient_invitation": "Invitation du patient"
+    },
+    "roles": {
+      "admin": "Admin Anheart",
+      "org_admin": "Admin de l'organisation",
+      "gestionnaire": "Gestionnaire",
+      "user": "Patient",
+      "machine": "Machine",
+      "system": "Système"
+    },
+    "sources": {
+      "site": "Site",
+      "machine": "Machine",
+      "cron": "Tâche planifiée",
+      "webhook": "Webhook",
+      "operator": "Opérateur"
+    },
+    "detailLabels": {
+      "fields": "Champs modifiés",
+      "role": "Rôle",
+      "previousRole": "Ancien rôle",
+      "level": "Niveau",
+      "previousLevel": "Ancien niveau",
+      "version": "Version",
+      "softwareVersion": "Version logicielle",
+      "medicalParametersVersion": "Version des paramètres médicaux",
+      "machineId": "Machine",
+      "userId": "Utilisateur",
+      "gestionnaireId": "Gestionnaire",
+      "added": "Ajouts",
+      "removed": "Retraits",
+      "count": "Nombre",
+      "outcome": "État final",
+      "expiresAt": "Expiration"
+    }
+  },
   "machineRegistry": {
     "title": "Registre de la machine",
     "loading": "Chargement du registre...",
@@ -343,6 +510,7 @@
     "done": "Action effectuée."
   },
   "nav": {
+    "audit": "Audit",
     "dashboard": "Tableau de bord",
     "machines": "Machines",
     "sessions": "Sessions",
