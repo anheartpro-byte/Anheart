@@ -2147,7 +2147,12 @@ déclaration des séances démarrées à la machine. Le tableau de bord ne conna
 pas une séance non déclarée : son affichage, son arrêt depuis le tableau de
 bord et l'envoi de sa fin attendent aussi. Sans attaquant, une console qui
 rattrape plus de 20 séances d'un coup peut ainsi retarder la séance suivante
-d'une minute au plus (le délai `retryAfterMs` ne dépasse pas 60 s) ; la séance
+d'environ une minute, pouvant atteindre environ 75 s dans un cas limite :
+l'attente de `retryAfterMs` dure 60 s au plus à compter de la réception du
+429, mais les essais ont lieu toutes les 15 s ; une déclaration du rattrapage
+déjà en vol au démarrage de la séance peut ainsi repousser la déclaration
+de celle-ci à l'essai suivant. Les délais du réseau et de la boucle du lien
+s'y ajoutent ; la séance
 en cours est déclarée avant le rattrapage. Avec une clé volée qui garde ce
 seau vide, ce retard peut durer jusqu'à sa révocation. L'arrêt local n'en
 dépend jamais, et les routes d'arrêt et de fin elles-mêmes ne sont jamais
