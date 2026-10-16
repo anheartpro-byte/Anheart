@@ -13,22 +13,16 @@ Every call after the mismatch simply fails, and the replay loop, which reads
 :attr:`TapeDrive.mismatch` after each step, stops.
 
 :class:`TapeSource` is the acquisition client the real
-:class:`~src.ecg_pipeline.EcgBridge` reads: it hands each ``ecg_raw`` block
-back at the instant the record says it was received.
+:class:`~src.ecg_pipeline.EcgBridge` reads: at ``runtime_delivery.t`` with its
+recorded observation timestamp, or at acquisition receipt when absent.
 
-Only the drive-call observations of :class:`~simulation.recording.RecordingDrive`
-are a tape (``open``, ``command``, ``speed``, ``read_status``...). The native
-driver's ``modbus_*`` exchanges are not: replaying those means replaying a
-Modbus master under the real ATV320 driver, which this module does not do, and
-a record holding them is refused rather than half-replayed.
+This tape serves the drive-call observations of
+:class:`~simulation.recording.RecordingDrive` (``open``, ``command``,
+``speed``, ``read_status``...). Native ``modbus_*`` exchanges use the master
+in :mod:`simulation.replay_modbus`, under the real ATV320 driver.
 
 What a tape cannot give back, because the record does not hold it:
 
-* WHICH error a failed exchange was. Every one is replayed as a
-  :class:`~src.motor.drive.CommTimeout`. The runtime branches on the variant
-  in one way only (``EnableUnconfirmed`` and ``StopUnconfirmed`` mean the
-  output stage may be energised), and neither is produced by the simulated
-  drive whose calls are recorded here.
 * the motor current below 0.1 A, the resolution of the LCR register the
   observation is written in.
 """
@@ -38,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Final, final
+from typing import Final, cast, final
 
 from simulation.recording import FrameKind
 from simulation.replay_report import SETPOINT_TOLERANCE_RPM
@@ -69,7 +63,7 @@ from src.motor.drive import (
     describe_fault,
 )
 from src.record.ecg import RawBlock
-from src.record.schema import DriveFrame
+from src.record.schema import DriveFrame, RecordedFailure, replay_failure
 from src.result import Err, Ok, Result
 from src.units import Monotonic, MotorRpm, RawRegister, Seconds, StatusWord, UnixMillis, elapsed
 
@@ -131,6 +125,7 @@ class Exchange:
 
     status: DriveStatus | None = None
     limits: DriveLimits | None = None
+    error: DriveError | None = None
 
 
 def describe(call: Call, written: int | None) -> str:
@@ -223,6 +218,9 @@ def _exchange(frame: DriveFrame) -> Result[Exchange, str]:
             written=written.value,
             status=status,
             limits=limits,
+            error=None
+            if frame.error is None
+            else replay_failure(cast("RecordedFailure", frame.error)),
         )
     )
 
@@ -295,7 +293,16 @@ class Mismatch:
 class TapeDrive:
     """``drive_frames.jsonl`` as a drive. Mutable, single-use, owned by the replay loop."""
 
-    __slots__ = ("_clock", "_cursor", "_exchanges", "_mismatch", "_origin", "_proven", "_served")
+    __slots__ = (
+        "_clock",
+        "_cursor",
+        "_exchanges",
+        "_mismatch",
+        "_origin",
+        "_proven",
+        "_served",
+        "_until",
+    )
 
     def __init__(
         self, exchanges: Sequence[Exchange], clock: ManualClock, origin: Monotonic
@@ -307,6 +314,28 @@ class TapeDrive:
         self._mismatch: Mismatch | None = None
         self._served: int = 0
         self._proven: bool = False
+        self._until: Seconds | None = None
+
+    def begin_step(self, until: Seconds | None) -> None:
+        self._until = until
+
+    def finish_step(self) -> Mismatch | None:
+        recorded = self.pending
+        if (
+            self._until is not None
+            and self._mismatch is None
+            and recorded is not None
+            and self._belongs(recorded)
+        ):
+            self._mismatch = Mismatch(
+                t=recorded.t,
+                requested="missing replay call (tick or command)",
+                recorded=located(recorded),
+            )
+        return self._mismatch
+
+    def _belongs(self, recorded: Exchange) -> bool:
+        return self._until is None or round(recorded.t, 3) < self._until
 
     @property
     def mismatch(self) -> Mismatch | None:
@@ -326,6 +355,13 @@ class TapeDrive:
             return None
         now = elapsed(self._origin, self._clock.monotonic())
         recorded = self.pending
+        if recorded is not None and not self._belongs(recorded):
+            self._mismatch = Mismatch(
+                t=now,
+                requested=f"extra replay call (tick or command): {describe(call, written)}",
+                recorded=f"no exchange in this step; next {located(recorded)}",
+            )
+            return None
         if recorded is not None and _answers(recorded, call, written, now):
             self._cursor += 1
             if recorded.latency > 0.0:
@@ -408,10 +444,12 @@ def located(exchange: Exchange) -> str:
 
 
 def _failure(exchange: Exchange | None) -> DriveError:
-    """The one error a failed exchange is replayed as (see the module docstring).
+    """The recorded failure, or the historical timeout when no variant was recorded.
 
     ``None`` is the tape that no longer holds: nothing answers, at once.
     """
+    if exchange is not None and exchange.error is not None:
+        return exchange.error
     return CommTimeout(after=Seconds(0.0) if exchange is None else exchange.latency)
 
 
@@ -428,18 +466,19 @@ def _acknowledged(exchange: Exchange | None) -> Result[None, DriveError]:
 
 @dataclass(frozen=True, slots=True)
 class Delivery:
-    """One recorded acquisition batch and the instant the acquisition handed it over."""
+    """One batch, its replay instant, and an optional recorded observe_ecg timestamp."""
 
     due: Seconds
     batch: SampleBatch
+    observed: Seconds | None = None
 
 
 def deliveries(blocks: Sequence[RawBlock], origin: Monotonic) -> tuple[Delivery, ...]:
     """The blocks as batches, in the order they were recorded.
 
-    A block is due when the record says it was received. A record that does not
-    say (``t_received`` absent) is given the earliest instant the batch can have
-    existed: when its last sample was taken.
+    With ``runtime_delivery``, the DSP runs at runtime arrival, stamped with
+    ``t_observed``. Otherwise receipt, or the last sample if unknown, is used.
+    Sample times stay unchanged: moving computation cannot change the window.
     """
     out: list[Delivery] = []
     for block in blocks:
@@ -448,13 +487,22 @@ def deliveries(blocks: Sequence[RawBlock], origin: Monotonic) -> tuple[Delivery,
         due = (
             header.t_first + header.n_samples / header.sample_rate if received is None else received
         )
+        arrival = header.runtime_delivery
+        if arrival is not None:
+            due = round(arrival.t, 3)
         first_ms = round((float(origin) + header.t_first) * MILLIS_PER_SECOND)
         channels = tuple(
             ChannelData(channel=name, values=tuple(float(value) for value in samples))
             for name, samples in zip(header.channels, block.samples, strict=True)
         )
         batch = SampleBatch(timestamp=UnixMillis(first_ms), channels=channels)
-        out.append(Delivery(due=Seconds(due), batch=batch))
+        out.append(
+            Delivery(
+                due=Seconds(due),
+                batch=batch,
+                observed=None if arrival is None else Seconds(arrival.t_observed),
+            )
+        )
     return tuple(out)
 
 
@@ -462,13 +510,14 @@ def deliveries(blocks: Sequence[RawBlock], origin: Monotonic) -> tuple[Delivery,
 class TapeSource:
     """``ecg_raw/`` as an acquisition client. Mutable, single-use, owned by the replay loop."""
 
-    __slots__ = ("_clock", "_cursor", "_deliveries", "_origin")
+    __slots__ = ("_clock", "_cursor", "_deliveries", "_origin", "observed")
 
     def __init__(self, recorded: Sequence[Delivery], clock: ManualClock, origin: Monotonic) -> None:
         self._deliveries: tuple[Delivery, ...] = tuple(recorded)
         self._clock: ManualClock = clock
         self._origin: Monotonic = origin
         self._cursor: int = 0
+        self.observed: Seconds | None = None
 
     async def read_samples(self, count: int = 1000) -> SampleBatch | None:  # noqa: ARG002  # the client's signature; a recorded batch has the size it had
         """The next recorded batch once its instant has come, else ``None``."""
@@ -479,4 +528,5 @@ class TapeSource:
         if delivery.due > now + INSTANT_EPSILON:
             return None
         self._cursor += 1
+        self.observed = delivery.observed
         return delivery.batch

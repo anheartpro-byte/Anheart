@@ -15,6 +15,8 @@ import pytest
 
 import simulation.run as cli
 from simulation import live
+from simulation import real_records as library
+from simulation.real_records import pack
 from simulation.scenario import SCENARIO_DIR
 from simulation.tests.conftest import document, run_file
 from src.record.codec import Privacy
@@ -260,13 +262,18 @@ def test_the_server_lists_the_scenarios(server: str) -> None:
     assert "manual_27_rpm" in names
 
 
+@pytest.mark.parametrize("archived", [False, True], ids=["folder", "archive"])
 def test_ex11_server_reads_schema2_through_shared_reader(
-    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, archived: bool
 ) -> None:
     trace = run_file(FAST).trace
     directory = trace.write_record(tmp_path, Privacy())
+    requested = directory
+    if archived:
+        requested = tmp_path / "opaque.tar.gz"
+        pack(directory, requested)
     monkeypatch.setattr(live, "ROOT", tmp_path)
-    with _get(server + "/api/record?path=" + directory.name) as response:
+    with _get(server + "/api/record?path=" + requested.name) as response:
         assert response.headers["Content-Type"] == "application/x-ndjson"
         lines = [document(line) for line in response.read().decode().splitlines()]
     assert lines[0]["schema"] == 2
@@ -277,6 +284,25 @@ def test_ex11_server_rejects_invalid_record(server: str) -> None:
     with pytest.raises(HTTPError) as caught:
         _get(server + "/api/record")
     assert caught.value.code == 400
+
+
+@pytest.mark.parametrize("limited", [False, True], ids=["reader", "extraction_limit"])
+def test_viewer_archive_uses_the_shared_reader_and_extraction_limit(
+    server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limited: bool
+) -> None:
+    folder = tmp_path / "record"
+    folder.mkdir()
+    (folder / "manifest.json").write_bytes(b"{}")
+    pack(folder, tmp_path / "opaque.tar.gz")
+    monkeypatch.setattr(live, "ROOT", tmp_path)
+    if limited:
+        monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 1)
+    with pytest.raises(HTTPError) as caught:
+        _get(server + "/api/record?path=opaque.tar.gz")
+    assert caught.value.code == 400
+    assert caught.value.reason == (
+        "the archive exceeds MAX_ARCHIVE_BYTES" if limited else "ValidationError"
+    )
 
 
 def test_the_server_says_why_a_folder_of_its_directory_is_not_a_record(

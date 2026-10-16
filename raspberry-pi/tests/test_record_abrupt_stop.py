@@ -101,7 +101,7 @@ def test_acceptance_a_sigkill_mid_session_leaves_a_record_readable_to_within_two
 
     events = recording.events
     refusals = [event for event in events if event.kind is EventKind.REFUSAL]
-    assert events[0].detail == "manual session started"
+    assert any(event.detail.startswith("start_manual ") for event in events)
     assert len(refusals) >= 3, "the worker's refused targets are events, twice a second"
     assert age(events[-1].t) < FRESH, f"the last event is {age(events[-1].t):.2f} s old"
 

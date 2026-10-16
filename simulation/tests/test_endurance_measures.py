@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -289,6 +289,56 @@ def test_ex2_what_is_left_next_to_the_records_is_named_and_a_confirmed_deposit_i
     assert after.stray == before.stray, "the deposit marker of a record is expected next to it"
 
 
+@pytest.mark.parametrize(
+    "kind", ["valid", "unexpected", "directory", "link", "root_file", "root_link", "unreadable"]
+)
+def test_configuration_documents_are_counted_separately_and_unknown_entries_stay_stray(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    root = tmp_path / "records"
+    directory = root / "config"
+    directory.mkdir(parents=True)
+    document = directory / ("a" * 64 + ".json")
+    document.write_bytes(b"{}")
+    expected: tuple[str, ...] = ()
+    if kind == "unexpected":
+        (directory / "unexpected.json").write_bytes(b"x")
+        expected = ("config/unexpected.json",)
+    elif kind == "directory":
+        document.unlink()
+        document.mkdir()
+        expected = ("config/" + document.name,)
+    elif kind == "link":
+        document.unlink()
+        document.symlink_to(tmp_path / "absent")
+        expected = ("config/" + document.name,)
+    elif kind in {"root_file", "root_link"}:
+        document.unlink()
+        directory.rmdir()
+        if kind == "root_file":
+            directory.write_bytes(b"x")
+        else:
+            directory.symlink_to(tmp_path / "absent")
+        expected = ("config",)
+    elif kind == "unreadable":
+        original = Path.iterdir
+
+        def denied(path: Path) -> Iterator[Path]:
+            if path == directory:
+                raise PermissionError(path)
+            return original(path)
+
+        monkeypatch.setattr(Path, "iterdir", denied)
+        expected = ("config",)
+    found = DataFolder(root).measure()
+    assert found.stray == expected
+    assert found.records == {}
+    assert found.total.entries == 1 + found.configuration.entries
+    assert found.total.size == found.configuration.size
+
+
 def test_ex2_a_record_the_retention_removed_is_counted_as_purged(tmp_path: Path) -> None:
     root = tmp_path / "records"
     closed = record(root, CLOSED, blocks=1, closed=True)
@@ -485,12 +535,14 @@ def test_ex2_a_descriptor_that_leaks_fails_and_descriptors_that_come_and_go_do_n
 
 def test_ex2_the_data_folder_is_held_to_what_the_arming_gate_plans_for() -> None:
     run = steady()
-    crowded = replace(session(1), record=Footprint(size=1, allocated=1, entries=3050))
+    full = replace(session(1), record=Footprint(size=1, allocated=1, entries=3093))
+    crowded = replace(full, record=Footprint(size=1, allocated=1, entries=3094))
     heavy = replace(session(2), record=Footprint(allocated=round(BYTES_PER_SECOND_RESERVED * 700)))
     logbook = replace(STEADY_DATA, logbook=Footprint(size=LOGBOOK_LIMIT + 1))
     littered = replace(STEADY_DATA, stray=("core.dump", ".sync-0.tmp"))
 
     fine = check_data(run)
+    at_limit = check_data(replace(run, sessions=(full, session(2))))
     too_many = check_data(replace(run, sessions=(crowded, session(2))))
     too_heavy = check_data(replace(run, sessions=(session(1), heavy)))
     long_logbook = check_data(replace(run, data=logbook))
@@ -500,10 +552,12 @@ def test_ex2_the_data_folder_is_held_to_what_the_arming_gate_plans_for() -> None
 
     assert fine is not None
     assert fine.status is Status.PASS
+    assert at_limit is not None
+    assert at_limit.status is Status.PASS
     # 600 s of session: 3008 files, as many as the gate plans; an hour is 18 048.
     assert "18048 fichiers par heure de séance" in fine.measured
     assert too_many is not None
-    assert (too_many.status, "séance 1 : 3050 fichiers" in too_many.measured) == (Status.FAIL, True)
+    assert (too_many.status, "séance 1 : 3094 fichiers" in too_many.measured) == (Status.FAIL, True)
     assert too_heavy is not None
     assert (too_heavy.status, "séance 2" in too_heavy.measured) == (Status.FAIL, True)
     assert long_logbook is not None

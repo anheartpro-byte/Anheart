@@ -2826,7 +2826,9 @@ async def test_the_confirming_operator_is_recorded_and_the_roster_name_stays_off
     assert len(session_events) == 1
     loaded = read(session_events[0].parent)
     assert isinstance(loaded, Ok)
-    confirmations = [event for event in loaded.value.events if event.detail == "launch_confirmed"]
+    confirmations = [
+        event for event in loaded.value.events if event.detail == "console: launch_confirmed"
+    ]
     assert len(confirmations) == 1
     assert confirmations[0].actor == operator_alias(confirmer)
     logbook = (root / "logbook" / "events.jsonl").read_text(encoding="utf-8")

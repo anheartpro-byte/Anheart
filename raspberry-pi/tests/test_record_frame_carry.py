@@ -85,7 +85,11 @@ def listening(tmp_path: Path, limits: Limits | None = None) -> tuple[Journal, Wa
 def warnings_of(path: Path) -> list[str]:
     loaded = read(path)
     assert isinstance(loaded, Ok), loaded
-    return [e.detail for e in loaded.value.events if e.kind is EventKind.WARNING]
+    return [
+        e.detail
+        for e in loaded.value.events
+        if e.kind is EventKind.WARNING and e.detail.startswith("record_degraded:")
+    ]
 
 
 def test_the_start_of_an_arming_taken_before_its_record_opens_waits_for_it(tmp_path: Path) -> None:
@@ -383,6 +387,9 @@ async def to_the_end(recorded: RecordedRig, *, away: bool) -> None:
             recorded.drain()
         await recorded.rig.tick(float(TICK))
         if not recorded.recorder.recording:
+            recorded.recorder.finish(
+                recorded.clock.monotonic(), recorded.rig.panel.runtime, "test end"
+            )
             return
     raise AssertionError("the session did not end")
 
@@ -435,7 +442,7 @@ def exact(recorded: RecordedRig, drive: Told, name: str, known: frozenset[Path])
         loaded = read(path)
         assert isinstance(loaded, Ok), loaded
         held = [frame.kind for frame in loaded.value.frames]
-        made = drive.made_in(label)
+        made = drive.calls_for(loaded.value)
         if held != made or loaded.value.warnings:
             lost = Counter(made) - Counter(held)
             extra = Counter(held) - Counter(made)
@@ -443,7 +450,11 @@ def exact(recorded: RecordedRig, drive: Told, name: str, known: frozenset[Path])
                 f"{label}: {len(made)} calls, {len(held)} frames, missing {dict(lost)}, "
                 f"not its own {dict(extra)}, {loaded.value.warnings}"
             )
-        degraded = [e.detail for e in loaded.value.events if e.kind is EventKind.WARNING]
+        degraded = [
+            e.detail
+            for e in loaded.value.events
+            if e.kind is EventKind.WARNING and e.detail.startswith("record_degraded:")
+        ]
         if degraded:
             wrong.append(f"{label}: {degraded}")
     return "; ".join(wrong)
@@ -463,7 +474,7 @@ async def test_l1_the_start_of_an_arming_is_in_its_record_when_the_journal_passe
     assert drive.passed(), "the journal did pass inside that call"
     made = drive.made_in("session")
     assert made[:4] == ["open", "read_status", "read_limits", "speed"]
-    assert kinds_in(recorded.only_record()) == made
+    assert kinds_in(recorded.only_record()) == drive.calls_for(recorded.recording())
     assert recorded.recording().warnings == ()
     assert nothing_counted(recorded)
 
@@ -489,7 +500,8 @@ async def test_l1b_away_since_the_previous_session_the_journal_passes_during_the
     assert drive.passed()
     assert exact(recorded, drive, "pair", NONE) == ""
     second = kinds_in(in_order(recorded)[-1])
-    assert second[:3] == ["open", "read_status", "read_limits"]
+    arming = second.index("read_limits") - 2
+    assert second[arming : arming + 3] == ["open", "read_status", "read_limits"]
     assert nothing_counted(recorded)
 
 
@@ -568,7 +580,7 @@ async def test_l2_the_last_tick_run_while_the_journal_takes_the_frames_is_in_its
         await a_cycle_overtaken_by(recorded, taps[0], to_the_end)
         drive.part = "after"
         await recorded.tick(REST)
-    assert kinds_in(recorded.only_record()) == drive.made_in("session")
+    assert kinds_in(recorded.only_record()) == drive.calls_for(recorded.recording())
     assert recorded.recording().warnings == ()
     assert nothing_counted(recorded)
 
@@ -720,7 +732,7 @@ async def test_the_exchanges_of_a_start_that_is_refused_are_in_no_record_and_are
     assert drive.made_in("refused")[:3] == ["open", "read_status", "read_limits"], (
         "the refused start did reach the drive"
     )
-    assert kinds_in(recorded.only_record()) == drive.made_in("session")
+    assert kinds_in(recorded.only_record()) == drive.calls_for(recorded.recording())
     assert recorded.recording().warnings == ()
     assert nothing_counted(recorded)
 
@@ -757,22 +769,14 @@ async def test_what_a_small_tap_refused_while_two_sessions_waited_is_said_in_eac
     assert kinds_in(second) == []
     said = "record_degraded: dropped=0 failures=0 drive_frames_lost="
     assert warnings_of(first) == [f"{said}{len(made) - 40}"]
-    assert warnings_of(second) == [f"{said}{len(drive.made_in('second'))}"]
+    assert warnings_of(second) == [f"{said}{len(drive.calls) - 40}"]
     at_rest = len(drive.calls) - len(made) - len(drive.made_in("second"))
-    assert at_rest > 0, "the console was refused frames at rest too: they are in neither count"
+    assert at_rest > 0, "the shared gap also bounds refusals during the retained idle window"
 
 
-async def test_what_was_let_go_while_the_console_was_at_rest_is_not_counted_with_a_later_loss(
+async def test_idle_frames_shed_from_a_small_window_are_counted_with_the_session_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A console long at rest, then a session of which the tap refuses frames.
-
-    The console polls its drive at rest for longer than the journal thread has
-    room to keep. The loop reports its ticks, so that polling is known to be no
-    session's as it goes, and is forgotten: it never fills the room, and none
-    of it is let go for lack of it. What the session then loses is counted
-    alone: its record says how many frames the tap refused, and not one more.
-    """
     monkeypatch.setattr(session_module, "STORAGE_STALE_AFTER", Seconds(1e9))
 
     def small(backend: DriveBackend, clock: Clock, *, sdk_frames: bool) -> Tapped:
@@ -789,8 +793,12 @@ async def test_what_was_let_go_while_the_console_was_at_rest_is_not_counted_with
 
     made = drive.made_in("session")
     assert len(made) > 40
-    assert kinds_in(recorded.only_record()) == made[:40]
-    refused = len(made) - 40
+    held = kinds_in(recorded.only_record())
+    assert held[-40:] == made[:40]
+    assert held[:-40] == drive.made_in("at rest")[-6:]
+    refused = len(drive.calls_for(recorded.recording())) - len(held)
+    assert refused == 46
+    # The shed interval overlaps the window but includes one earlier frame: the bound is +1.
     assert warnings_of(recorded.only_record()) == [
-        f"record_degraded: dropped=0 failures=0 drive_frames_lost={refused}"
+        "record_degraded: dropped=0 failures=0 drive_frames_lost=47"
     ]

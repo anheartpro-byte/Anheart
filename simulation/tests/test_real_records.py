@@ -8,6 +8,7 @@ anonymous, and replays as the library declares.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tarfile
@@ -49,6 +50,7 @@ from simulation.tests.replay_support import (
     as_library,
     as_real,
     at,
+    configuration_for,
     copy,
     edit_lines,
     edit_manifest,
@@ -76,6 +78,35 @@ LIBRARY = archives()
 def test_ex5_the_library_holds_at_least_three_scenarios_of_the_battery() -> None:
     assert len(simulated()) >= 3
     assert [name_of(archive) for archive in LIBRARY] == sorted(name_of(a) for a in LIBRARY)
+
+
+@pytest.mark.parametrize(
+    ("name", "occupancy"),
+    [("manual_bench_dsp", "bench"), ("manual_occupied_retarget_dsp", "occupied")],
+)
+def test_the_library_has_manual_sessions_with_raw_ecg(
+    name: str, occupancy: str, tmp_path: Path
+) -> None:
+    archive = next(archive for archive in LIBRARY if name_of(archive) == name)
+    unpacked = unpack(archive, tmp_path)
+    assert isinstance(unpacked, Ok)
+    recording = loaded(unpacked.value)
+    assert recording.manifest.kind == "manual"
+    assert recording.manifest.occupancy == occupancy
+    assert recording.manifest.profile is None
+    assert recording.manifest.machine_id == "simulation"
+    assert recording.raw
+    assert any(
+        samples
+        for block in recording.raw
+        for channel, samples in zip(block.header.channels, block.samples, strict=True)
+        if channel == "ECG"
+    )
+    targets = {
+        event.detail for event in recording.events if event.detail.startswith("manual_target ")
+    }
+    assert len(targets) >= (2 if occupancy == "occupied" else 1)
+    assert "stop" in {event.detail for event in recording.events}
 
 
 @pytest.mark.parametrize("archive", LIBRARY, ids=name_of)
@@ -126,6 +157,52 @@ def test_ex5_a_record_survives_its_archive_byte_for_byte(session: Path, tmp_path
     }
     assert restored == original
     assert loaded(unpacked.value).warnings == ()
+
+
+@pytest.mark.parametrize("limit", ["bytes", "members"])
+def test_archive_limits_are_checked_before_writing_the_next_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 3)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 2)
+    archive = tmp_path / "bounded.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for index in range(3):
+            member = tarfile.TarInfo(f"record/{index}")
+            member.size = 2 if limit == "bytes" else 0
+            tar.addfile(member, io.BytesIO(b"xx") if member.size > 0 else None)
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    expected = "MAX_ARCHIVE_MEMBERS" if limit == "members" else "MAX_ARCHIVE_BYTES"
+    assert result == Err("the archive exceeds " + expected)
+    assert not (into / "record" / ("2" if limit == "members" else "1")).exists()
+
+
+def test_announced_size_above_the_real_limit_is_refused_without_reading_its_payload(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "oversized.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        member = tarfile.TarInfo("record/manifest.json")
+        member.size = library.MAX_ARCHIVE_BYTES + 1
+        tar.addfile(member)
+    into = tmp_path / "out"
+    assert unpack(archive, into) == Err("the archive exceeds MAX_ARCHIVE_BYTES")
+    assert list(into.iterdir()) == []
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_member_limit_also_counts_repeated_files_and_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: bool
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 2)
+    archive = tmp_path / "repeated.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for _ in range(3):
+            member = tarfile.TarInfo("record" if directory else "record/empty")
+            member.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
+            tar.addfile(member)
+    assert unpack(archive, tmp_path / "out") == Err("the archive exceeds MAX_ARCHIVE_MEMBERS")
 
 
 def test_ex5_what_is_not_the_archive_of_one_record_is_refused(
@@ -541,9 +618,17 @@ def test_ex6_an_accepted_difference_is_a_file_next_to_the_archive(tmp_path: Path
 
 def _shelve(folder: Path, shelf: Path, name: str) -> Path:
     """Seal the (altered) record folder and put it in the library ``shelf`` as ``name``."""
+    manifest = loaded(folder).manifest
+    config: bytes | None = None
+    if manifest.machine_id != "simulation":
+        config = configuration_for(manifest)
+        digest = hashlib.sha256(config).hexdigest()
+        edit_manifest(folder, lambda line: line.update(config_hash=digest))
     reseal(folder)
     archive = shelf / f"{name}.tar.gz"
     pack(folder, archive)
+    if config is not None:
+        archive.with_name(name + ".config.json").write_bytes(config)
     return archive
 
 

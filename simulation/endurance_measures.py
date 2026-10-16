@@ -46,6 +46,7 @@ import json
 import math
 import os
 import platform
+import re
 import subprocess
 import sys
 from bisect import bisect_left
@@ -58,6 +59,7 @@ from stat import S_ISDIR
 from typing import Final
 
 from src.cloud_sync import HEARTBEAT_PERIOD
+from src.record.configuration import DIRECTORY as CONFIG_DIRECTORY
 from src.record.cursor import BASELINE_NAME, CURSOR_SUFFIX
 from src.record.journal import (
     FIXED_ENTRIES,
@@ -69,6 +71,7 @@ from src.record.journal import (
 from src.record.logbook import DIRECTORY as LOGBOOK
 from src.record.logbook import MAX_BYTES as LOGBOOK_FILE_BYTES
 from src.record.retention import CHECKSUMS, MARKER_SUFFIX, RECORD_NAME, confirmed_deposit
+from src.record.session import PRESTART_SECONDS
 
 RSS_BAND: Final[float] = 0.10
 """After the warm-up the resident memory stays within this share of its first reading."""
@@ -327,6 +330,8 @@ class DataState:
     purged: int
     """Closed records seen once and gone since: removed by the retention."""
 
+    configuration: Footprint = Footprint()
+
 
 class DataFolder:
     """The records directory of the console, measured without walking it whole each time.
@@ -357,6 +362,7 @@ class DataFolder:
         names = {child.name for child in children}
         records: dict[str, Footprint] = {}
         logbook = Footprint()
+        configuration = Footprint()
         stray: list[str] = []
         total = Footprint(entries=1)
         deposited = 0
@@ -375,6 +381,9 @@ class DataFolder:
                 deposited += int(confirmed_deposit(child) is not None)
             elif child.name == LOGBOOK:
                 logbook = taken
+            elif child.name == CONFIG_DIRECTORY:
+                configuration = taken
+                stray.extend(_configuration_strays(child))
             elif not _beside_a_record(child.name, names):
                 stray.append(child.name)
         for name in tuple(self._closed):
@@ -389,7 +398,23 @@ class DataFolder:
             stray=tuple(stray),
             deposited=deposited,
             purged=self._purged,
+            configuration=configuration,
         )
+
+
+def _configuration_strays(directory: Path) -> tuple[str, ...]:
+    try:
+        if directory.is_symlink() or not directory.is_dir():
+            return (directory.name,)
+        return tuple(
+            f"{directory.name}/{entry.name}"
+            for entry in sorted(directory.iterdir())
+            if entry.is_symlink()
+            or not entry.is_file()
+            or re.fullmatch(r"[0-9a-f]{64}\.json", entry.name) is None
+        )
+    except OSError:
+        return (directory.name,)
 
 
 def _beside_a_record(name: str, names: set[str]) -> bool:
@@ -642,7 +667,7 @@ def check_descriptors(run: Run) -> Check:
 
 def record_problems(session: Session) -> tuple[str, ...]:
     """Where the record of ``session`` takes more than the arming gate plans for."""
-    lasted = session.recorded + RECORD_SLACK_S
+    lasted = session.recorded + PRESTART_SECONDS + RECORD_SLACK_S
     planned = round(RAW_BLOCKS_PER_SECOND * lasted) + FIXED_ENTRIES
     problems: list[str] = []
     if session.record.entries > planned:
@@ -681,7 +706,8 @@ def check_data(run: Run) -> Check | None:
         return None
     threshold = (
         f"par enregistrement : au plus {RAW_BLOCKS_PER_SECOND} fichiers par seconde plus "
-        f"{FIXED_ENTRIES}, et {BYTES_PER_SECOND_RESERVED / KIB:.0f} Kio par seconde ; "
+        f"{FIXED_ENTRIES}, et {BYTES_PER_SECOND_RESERVED / KIB:.0f} Kio par seconde "
+        f"(avec {PRESTART_SECONDS:.0f} s de repos avant le départ) ; "
         f"journal hors séance sous {megabytes(LOGBOOK_LIMIT)} ; rien d'autre à côté"
     )
     problems = [problem for session in run.sessions for problem in record_problems(session)]
@@ -837,6 +863,7 @@ def _data(run: Run) -> Mapping[str, object] | None:
         "closed": data.closed,
         "per_recorded_hour": None if hourly is None else _footprint(hourly),
         "logbook_bytes": data.logbook.size,
+        "configuration": _footprint(data.configuration),
         "stray": list(data.stray),
         "deposited": data.deposited,
         "purged": data.purged,

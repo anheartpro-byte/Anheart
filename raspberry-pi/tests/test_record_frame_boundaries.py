@@ -137,6 +137,32 @@ from tests.test_record_frame_sessions import (
 # =========================================================================
 
 
+@pytest.mark.parametrize("first", [0, 1, 7, 14, 15, 19])
+def test_a_window_never_reports_fewer_shed_frames_than_it_actually_lost(
+    tmp_path: Path, first: int
+) -> None:
+    clock = early_clock()
+    journal = Journal(tmp_path / "records", clock, limits=Limits(frames=5))
+    waiting = Waiting()
+    journal.listen(waiting)
+    instants = [10 + index / 5 for index in range(20)]
+    for at in instants:
+        waiting.add(at)
+    journal.drain()
+    boundary = Monotonic(instants[first])
+    journal.open(started_at(1, 14), Privacy(), since=boundary)
+    journal.drain()
+    recording = read(record_of(journal))
+    assert isinstance(recording, Ok)
+    assert [frame.t for frame in recording.value.frames] == [
+        round(at - 14, 3) for at in instants[-5:] if at >= boundary
+    ]
+    actual = sum(at >= boundary for at in instants[:-5])
+    announced = journal.status(clock.monotonic()).dropped
+    assert actual <= announced <= 15
+    assert announced == (15 if first < 15 else 0)
+
+
 def test_ex1_an_arming_reported_while_the_thread_closes_a_record_keeps_its_first_frames(
     tmp_path: Path,
 ) -> None:
@@ -933,7 +959,8 @@ async def test_ex1_held_while_it_closes_one_record_as_the_next_session_is_armed_
     assert drive.made_in("pair: second")[:4] == ["open", "read_status", "read_limits", "speed"]
     assert exact(recorded, drive, "pair", NONE) == ""
     second = kinds_in(in_order(recorded)[-1])
-    assert second[:3] == ["open", "read_status", "read_limits"], "the three it held"
+    arming = second.index("read_limits") - 2
+    assert second[arming : arming + 3] == ["open", "read_status", "read_limits"]
     assert nothing_counted(recorded)
 
 
@@ -1021,7 +1048,7 @@ async def test_ex3_a_session_says_what_it_lost_and_not_what_the_console_was_refu
     made = drive.made_in("session")
     assert made[0] == "open"
     assert kinds_in(recorded.only_record()) == [], "the tap had no room left for any of them"
-    assert warnings_of(recorded.only_record()) == [f"{LOST}{len(made)}"]
+    assert warnings_of(recorded.only_record()) == [f"{LOST}{len(drive.calls) - 40}"]
     refused = len(drive.calls) - 40
     assert refused > len(made) + (before - 40), "at rest before, in the session, at rest after"
 
@@ -1050,7 +1077,7 @@ async def test_ex3_a_programme_counts_from_its_own_arming_like_a_manual_session(
     made = drive.made_in("programme")
     assert made[0] == "open"
     assert kinds_in(recorded.only_record()) == []
-    assert (status.dropped, status.cause) == (len(made), Cause.QUEUE_FULL)
+    assert (status.dropped, status.cause) == (len(drive.calls) - 40, Cause.QUEUE_FULL)
 
 
 class ToldThenRaises(Told):
@@ -1170,6 +1197,6 @@ async def test_ex6_a_count_of_the_refused_that_cannot_be_read_changes_no_call_to
     assert witness.calls == told.calls, "the same calls, in the same order"
     assert witness.asked == told.asked, "and the same values written"
     assert await broken.rig.left_stopped() == ""
-    assert kinds_in(broken.only_record()) == witness.made_in("session")
+    assert kinds_in(broken.only_record()) == witness.calls_for(broken.recording())
     assert broken.recording().warnings == ()
     assert not broken.degraded()

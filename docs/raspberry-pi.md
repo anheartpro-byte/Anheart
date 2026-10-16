@@ -1696,13 +1696,21 @@ exactement pareil, sans tableau de bord.
 | Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance, et son passager (`userId`, plus `subjectLabel` tant que la console a son nom en mémoire ; rien pour le banc) | `POST /api/machine/training/local` | dès que le dossier de son enregistrement existe, par la tâche de veille (8.6), avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
 | Pi → Convex | confirmation du départ d'une séance lancée à distance : `startedAt` est l'heure murale lue à la demande, `sessionAgeMs` vaut 0 | `POST /api/machine/training/start` | par la tâche CloudSync après le clic opérateur et les contrôles locaux, avant `submit_start` ; après un 2xx, le curseur évite une seconde confirmation |
 | Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 3 s quand elle a du retard |
-| Pi → Convex | événements de la séance **relus dans `events.jsonl`**, chacun avec son rang dans le fichier | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
+| Pi → Convex | événements de la séance **relus dans `events.jsonl`**, rangés après filtrage des pings `attendant_ping` et événements `t < 0` | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
 | Convex → Pi | le lancement AUTO proposé au dernier poll : profil, identifiant de passager, FC max, âge (déduit de l'année de naissance), libellé reçu pour la retenue locale, avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos, y compris tant qu'une offre attend une décision et qu'aucune séance ne tourne |
 | Convex → Pi | la liste des passagers de la machine : identifiant, nom, FC max, année de naissance ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)), gardée en mémoire seulement | `GET /api/machine/roster` | au démarrage, puis toutes les 60 s au repos |
 | Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | dès que le tableau de bord tient la séance pour démarrée, puis toutes les 3 s tant qu'elle n'est pas finie, par une **tâche à part** (`cloud_stop_step`) : la question ne passe derrière aucun envoi ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)) |
 
 Règles :
+
+* Les pings discrets et les événements de repos à `t < 0` restent dans le
+  fichier local et son dépôt complet. Ils ne créent aucune ligne dans le
+  flux d'événements du tableau de bord. Le `seq` est le rang après filtrage,
+  identique en direct et à la reprise ; ces lignes ne prennent aucun rang et
+  ne sont pas comptées comme illisibles. Une ligne illisible garde son rang
+  et est signalée. La télémétrie garde le point à `t = 0`, dernier tic de repos
+  avant la commande de départ pour la console ; les points négatifs sont omis.
 
 * **Rien d'autre ne descend.** Une séance **manuelle ne peut jamais être lancée
   à distance** : le lien ne sait pas en construire une. La liste des passagers
@@ -1726,9 +1734,10 @@ Règles :
   le passager au moment de l'armement, en gardant l'âge et la FC max du
   lancement. Une absence du roster après le 2xx envoie une fin échouée.
   Sans confirmation, aucun `training/start` ni armement. La
-  confirmation est un événement `operator_action` attribué à l'alias de
-  l'opérateur : au repos il va au journal de bord, et l'enregistrement armé
-  porte aussi `launch_confirmed` avec cet alias. Le nom du passager n'est pas
+  confirmation est une notification `warning` attribuée à l'alias de
+  l'opérateur : au repos elle va au journal de bord, et l'enregistrement armé
+  porte aussi `console: launch_confirmed` avec cet alias, une seule fois.
+  Le nom du passager n'est pas
   écrit dans l'enregistrement ou un journal et n'est pas envoyé dans la
   déclaration de séance distante; il ne sort vers la page que dans la réponse
   JSON de la route locale.
@@ -1818,7 +1827,8 @@ ce qui la suit est lu. Le curseur retient qu'il est au milieu d'elle
 **Ce qui n'est pas envoyé.** Les trames du variateur (`drive_frames.jsonl`),
 les blocs ECG bruts (`ecg_raw/`) et `sensors.csv` ne sont ni lus ni envoyés :
 ils voyageront avec le dépôt des enregistrements complets (ANH-130). Seuls les
-événements d'une séance, ceux de son `events.jsonl`, sont envoyés. Le journal
+événements de séance de son `events.jsonl`, après omission des pings discrets
+et des événements à temps négatif, sont envoyés. Le journal
 hors séance (`logbook/`, à côté des enregistrements,
 [15.9](#159-le-journal-hors-séance)) n'est pas un enregistrement : il n'est ni
 listé, ni lu, ni envoyé, et n'a pas de curseur.
@@ -3045,15 +3055,25 @@ locale aléatoire.
 | Moment | Ce qui se passe |
 |---|---|
 | Démarrage de la console | le dossier racine est créé s'il manque, mis en mode 700, et son espace libre est mesuré, en octets et en inodes |
-| Le runtime vient d'armer une séance | le dossier de la séance est créé avec son manifeste d'ouverture (`ended_at` et `end_reason` à `null`), qui dit ce que valait l'horloge murale à cet instant (`clocks.wall_trusted`, [12.4](#124-lhorloge-murale-et-le-journal-de-la-console)). Un état d'horloge illisible ne coûte pas l'enregistrement : il est ouvert et dit `false` |
+| Le runtime vient d'armer une séance | l'ouverture est mise en file avec la fenêtre de repos retenue ; l'origine est le dernier tic de repos avant la commande ; le fil crée le manifeste (`ended_at` et `end_reason` à `null`), avec l'état de confiance de l'horloge murale (`clocks.wall_trusted`, [12.4](#124-lhorloge-murale-et-le-journal-de-la-console)). Un état illisible donne `false` |
 | Chaque tic (5 Hz) | une ligne de `ticks.csv` ; un événement à chaque changement de phase, de verdict ou de défaut variateur |
 | Chaque appel au variateur | une ligne de `drive_frames.jsonl` : ce qui a été demandé, ce qui a été répondu, en combien de temps (15.2) |
-| Chaque lot du BITalino | un bloc brut `ecg_raw/NNNNNN.bin.gz`, toutes voies, **avant** tout traitement |
+| Chaque lot du BITalino | capture du lot brut, toutes voies, et de `t_received` dans le tap ; après sa résolution, le fil écrit `ecg_raw/NNNNNN.bin.gz`, avec `runtime_delivery` si une lecture a atteint le runtime |
 | Chaque seconde | les indicateurs des capteurs dans `sensors.csv` |
-| Événement de la console pendant la séance | demande de fin, E-STOP, réarmement, attestation (`operator_action`, ou `remote_command` si elle vient du tableau de bord) ; acquittement (`verdict_ack`) ; refus (`refusal`) ; nouvelle du lien avec le tableau de bord, par exemple `serveur incompatible (contrat 1.1 vs 2.0)` (`warning`, détail préfixé `dashboard:` : ce n'est pas le refus d'une demande faite sur la console, et le format n'a pas de type propre pour elle) |
-| La phase de la séance atteint `DONE` | événement `end`, manifeste final (`ended_at`, `end_reason`, observation finale), `checksums.sha256` |
+| Entrée remise au runtime | commande de `src.record.commands.encode` sous `operator_action`, `remote_command` pour le tableau de bord, `verdict_ack` pour l'acquittement ; pings discrets et verdicts caméra compris ; les notifications de la surface passent sous `warning` avec le préfixe `console:`, les refus restent `refusal` et les nouvelles du lien restent `warning` avec `dashboard:` |
+| La phase de la séance atteint `DONE` | événement `end`, puis manifeste final (`ended_at`, `end_reason`, observation finale) et `checksums.sha256` ; un lot encore en traitement peut différer cette clôture seule jusqu'au tic suivant (15.2) |
 | Sortie de la console en cours de séance | même fermeture, **après** l'arrêt du variateur, avec le motif du runtime (`shutdown` si rien d'autre n'avait déjà mis fin à la séance) et le compte rendu de l'arrêt ; la sortie attend le fil du journal au plus 5 s, sans emprunter de fil à personne |
 | Événement de la console sans séance enregistrée | une ligne du journal hors séance, `logbook/events.jsonl` (15.9) : départ demandé, départ refusé, acquittement, réarmement, nouvelle du lien avec le tableau de bord |
+
+Le tableau de bord reçoit la même forme d'événement : `seq`, `t`, `kind`,
+`detail`, `actor`. Il voit désormais les commandes canoniques de séance et
+les notifications `console:` ; les refus gardent leur propre ligne. Les
+pings discrets et événements `t < 0` restent dans le fichier déposé, hors
+du flux d'événements. Aucun champ du contrat ne change. La télémétrie à 1 Hz
+garde le tic à `t = 0`, dernier tic de repos. Le résumé Convex lit déjà
+seulement `t > 0`, les changements
+`verdict` et les avertissements `record_degraded:` : la fenêtre ne crée pas
+de points ni de verdicts de séance dans ce résumé.
 
 La fermeture suit la phase `DONE` et non l'état `FINISHED` du runtime, exprès.
 Après un STOP ordinaire, c'est le même tic. Derrière un défaut variateur
@@ -3079,6 +3099,29 @@ clos, ce qui lui manque (la ligne `record_degraded:`, 15.3), comme un
 enregistrement fermé par la boucle : il était clos sans rien en dire.
 
 ### 15.2 Aucune écriture dans la boucle
+
+Au démarrage, `build_recorder` remet aussi au journal le document canonique
+de la configuration appliquée, celui dont `stamp_for` calcule `config_hash`.
+Le premier cycle du fil écrit
+`RECORD_ROOT/config/<config_hash>.json`, une fois par empreinte : dossier
+700, création du fichier en mode 600, au plus 65 536 octets
+(`MAX_CONFIG_BYTES`). Une copie identique n'est pas réécrite ; une copie
+différente au même nom n'est jamais remplacée. Cette opération ne passe par
+aucun tic et aucun départ ne l'attend. Un refus disque, de taille ou de
+collision devient un `warning replay_config:` dans chaque enregistrement,
+sans bloquer la séance ; le rejeu refuse avec sa raison. Une faute interne
+dans cette écriture ne remonte pas vers le contrôle.
+
+Ce document contient les limites, la géométrie appliquée et les réglages de
+la machine, sans clé, jeton, identité ou donnée de santé individuelle.
+Il reste local : rétention, synchronisation, dépôt, export et journal hors
+séance ignorent `config/`. Pour rejouer une console, récupérer séparément
+le fichier et passer `--config`, ou préparer un fichier adjacent
+`<dossier>.config.json` / `<archive sans .tar.gz>.config.json`. Le rejeu
+vérifie ses octets contre `config_hash`, utilise ses limites et sa géométrie,
+et signale les parties qui diffèrent des valeurs livrées par le dépôt.
+Le contrat et le manifeste ne changent pas. Les garanties et les refus sont
+détaillés dans [enregistrement.md](enregistrement.md#configuration-vérifiée-au-rejeu-ex-5).
 
 Deux objets, deux fils :
 
@@ -3160,6 +3203,23 @@ Selon le variateur branché :
   cherche, est dans l'enregistrement. Une séance où aucun appel ne lève
   enregistre exactement ce qu'elle enregistrait.
 
+Le pilote conserve aussi `modbus_connect` et `modbus_close`, sans registre
+ni valeur, même avec `RECORD_DRIVE_SDK_FRAMES=false`. Un échec natif porte
+`error` avec une cause fermée : absence de réponse, réponse d'exception et
+son code, mauvaise fonction et son code, port non ouvert, réponse inutilisable
+ou catégorie d'exception SDK. Aucun texte d'exception n'y entre. Ces lignes
+restent sous la même borne et sont écrites par le même fil. Le reader refuse
+une cause inconnue ou la famille d'erreur d'un autre type d'observation.
+
+Le document de configuration d'un lien natif porte `native_drive`, avec
+ses réglages série et son offset structurés, sans port ni numéro de série.
+Le rejeu le vérifie par `config_hash`, reconstruit le vrai pilote ATV320
+sur un maître de bande et ignore les fragments SDK diagnostiques. Les
+réglages structurés sont obligatoires pour ce rejeu. Le manifeste ne change
+pas ; l'empreinte d'une configuration simulée sans lien reste inchangée.
+La preuve est une console en simulation avec le vrai pilote, pas un essai
+sur le matériel ([enregistrement.md](enregistrement.md#observations-du-variateur)).
+
 Au-delà de la borne, l'observation la plus récente est refusée et comptée ;
 une observation impossible à construire est comptée de même, et ne remonte
 jamais vers l'appelant : la réponse du variateur est rendue quoi qu'il arrive
@@ -3172,99 +3232,84 @@ Elle est comptée pour l'enregistrement ouvert à ce moment-là et, quand ce mê
 cycle en ouvre un, pour celui-là aussi : les trames de son armement étaient
 parmi celles qui manquent.
 
-**Chaque trame va à l'enregistrement de la séance pendant laquelle elle a
-commencé, et à aucun autre**, quel que soit le moment où le fil du journal
-passe. Pour ses trames, une séance va de l'instant où la console demande
-l'armement au runtime (lu avant tout échange avec le variateur) à l'instant où
-elle ferme son enregistrement (lu après les échanges de son dernier tic),
-bornes comprises. Les trames prises sont remises à trois moments du cycle :
+**Chaque trame va à un seul enregistrement**, selon l'instant où elle a
+commencé. Sa borne basse est désormais le premier tic de la fenêtre de repos
+retenue, sa borne haute reste `Closing.until`, l'instant de fin lu après les
+échanges du dernier tic. Les échanges de l'armement suivent normalement
+l'origine : ils ont `t > 0`. La simulation garde son départ à `t = 0`.
 
-- avant qu'un enregistrement soit fermé, à celui-là, celles qui ont commencé
-  au plus tard à la fin de sa séance. Le fil **reprend d'abord la liste** : la
-  boucle a noté les dernières trames de la séance avant de mettre sa fermeture
-  en file, mais peut-être après que ce cycle a pris ce qui attendait ;
-- avant qu'un enregistrement soit ouvert par-dessus un autre resté ouvert, à
-  celui resté ouvert, celles qui ont commencé avant l'armement du nouveau ;
-- une fois la file écrite, à l'enregistrement alors ouvert (les trames d'un
-  armement vont à la séance qu'il arme, avec un `t` légèrement négatif).
+La console conserve en mémoire les **12 dernières secondes de repos**
+(`PRESTART_SECONDS`) : 8 s pour remplir le DSP, plus 4 s de marge pour les
+lots de 0,2 s, le dernier tic de repos et une première remise décalée. Les
+lignes `Row`, les commandes et les lots bruts attendent dans `SessionRecorder`
+(`src/record/session.py`), au plus **512 valeurs et 100 000 échantillons**,
+lot en traitement compris. Ce n'est pas une file disque : les valeurs
+expirent normalement sans être écrites. Une console laissée au repos pendant
+des heures ne garde donc pas des heures de données.
 
-**Ce qui n'a pas encore d'enregistrement attend, d'un cycle au suivant.**
-L'armement d'une séance dure ce que le variateur met à répondre, et son
-enregistrement n'est ouvert qu'une fois la séance armée : le fil du journal
-peut passer une ou plusieurs fois entre-temps. Les trames qu'il prend alors
-restent chez lui jusqu'à l'ouverture qui les réclame. Quand deux séances
-s'enchaînent pendant un seul cycle, ou que le fil passe au milieu d'un
-armement, chacune garde donc les échanges de son armement, son `open`
-compris.
+La fenêtre commence au plus tard des frontières suivantes :
 
-Une trame en attente n'est lâchée que dans deux cas, où elle n'est celle
-d'aucune séance :
+- fin de l'enregistrement précédent, sans réutiliser ses lignes, lots ou trames ;
+- premier tic de repos sans état verrouillé, après l'acquittement ou le
+  réarmement qui a levé le verrou ;
+- dernière tentative de départ remise au runtime puis refusée ;
+- les 12 dernières secondes.
 
-- un enregistrement s'ouvre, et elle a commencé avant le début de son
-  armement ;
-- aucun enregistrement n'est ouvert, et elle a commencé avant un tic dont la
-  boucle a depuis rendu compte. À chaque tic, une fois sa boîte de commandes
-  vidée, la boucle dit au journal l'instant de ce tic
-  (`Journal.dispatched`, une affectation, sans verrou ni attente) : tout
-  armement demandé avant cet instant est alors terminé, son enregistrement
-  mis en file ou son départ refusé. Le fil lit cet instant au début de son
-  cycle, avant la liste et avant la file : ce que la boucle avait mis en file
-  jusque-là, ce cycle l'écrit, et ce qui reste d'avant cet instant sans
-  enregistrement ouvert n'appartient à aucune séance. Lu après, ce pourrait
-  être l'instant du tic même qui vient d'armer une séance dont ce cycle n'a
-  pas compté l'ouverture : les premiers échanges de cet armement, déjà pris,
-  seraient lâchés sans être comptés pour personne. Cet ordre est tenu par un
-  test qui retient le fil pendant qu'il ferme un enregistrement, la séance
-  suivante s'armant entre-temps (`test_record_frame_boundaries.py`).
+La console n'invente aucun verrou antérieur. Elle redit seulement une
+attestation en vigueur au premier tic, sous l'alias opaque de son auteur lu
+dans le superviseur, si cette attestation n'a pas été faite dans la fenêtre.
+Les pings conservent l'instant passé à `note_presence`, une commande par
+nouveau ping. Le départ réinitialise la présence : aucun ping ancien n'est
+rajeuni. Le départ reprend les règles de la machine, sans tic différé.
+Un clic E-STOP est deux entrées : `latch_estop` au verrou immédiat du
+superviseur, puis `estop` à l'appel du runtime au pas suivant. Chacune garde
+son instant non arrondi et l'alias de son auteur. Un verrou posé au repos
+coupe la fenêtre jusqu'au premier tic sans verrou après son acquittement.
 
-Ce qui est ainsi lâché, c'est tout ce que la console demande au variateur
-hors séance : la scrutation au repos (une lecture d'état), la consigne nulle
-qu'elle écrit à chaque tic après une séance, les échanges d'un départ refusé
-après avoir touché le variateur (son ouverture, ses lectures), un réarmement
-de défaut entre deux séances. Rien de cela n'est écrit dans un
-enregistrement, que le fil l'ait pris à l'heure ou trouvé en attente, et ce
-n'est pas une perte : rien n'est compté.
+À l'ouverture, `t = 0` est le **dernier tic de repos avant la commande de
+départ** ; la commande garde son propre instant, normalement au plus un tic
+après. Le tic de son `control_step` vient après elle. Sans tic de repos
+antérieur, l'origine est l'instant de la commande. Si les blocs retenus ne
+couvrent pas au moins 8 s continues avant l'origine, l'événement `warning`
+`replay_preamble:` le dit et le rejeu refuse pour cette raison. Cela n'ajoute
+aucune porte de départ : la sécurité continue avec ses propres contrôles.
 
-**Borné, et compté.** Le fil garde au plus 8192 trames en attente
-(`Limits.frames`, deux fois la borne de la prise : ce qu'il gardait, et ce
-qu'une prise peut ajouter). En temps normal il en garde quelques-unes : celles
-du tic en cours. Au-delà de la borne, les plus anciennes sont lâchées, et
-comptées. Elles rejoignent ce que la prise a refusé : des trames que personne
-n'a gardées. Un enregistrement dit combien il lui en manque
-(`record_degraded: … drive_frames_lost=<n>`, cause `queue_full`), et ce nombre
-est fait de deux comptes :
+**Les trames restent au fil du journal**, dans son tampon existant, au plus
+8192 observations, en plus des 4096 de la prise. La boucle lui publie la borne
+de repos qu'il peut oublier, sans verrou ni attente. Il lit cette borne
+avant la prise et la file, comme auparavant : une ouverture en cours ne perd
+pas les premières trames de son armement. Il remet les trames à la fermeture,
+avant une ouverture qui remplace une séance restée ouverte, puis en fin de
+cycle. Ce qui attend encore un enregistrement reste borné.
 
-- **ce que la prise a refusé à cette séance : exactement si les deux lectures
-  de frontière réussissent.** La prise ne date
-  pas ce qu'elle refuse, elle le compte. La boucle lit ce compte à l'instant
-  où elle demande l'armement, puis à l'instant où elle ferme l'enregistrement
-  (`Journal.frames_refused` : un entier lu en mémoire, sans verrou ni attente,
-  et qui ne lève jamais) : ce sont les deux instants qui bornent déjà les
-  trames de la séance. L'enregistrement compte la différence. Ce que la prise
-  a refusé à une console au repos, avant ou après la séance, n'y est plus : la
-  revue d'ANH-215 avait relevé 64 trames dites pour 47 perdues (le repos avait
-  rempli la prise avant l'armement) et 835 pour 829 (le repos après la
-  séance, avant que le fil revienne). Et deux séances qui ont attendu à
-  travers le même débordement comptent chacune les leurs. Tant que la séance
-  dure, le compte va jusqu'à la première prise du cycle en cours. Rien n'est
-  ajouté aux autres tics ;
-- **ce que le fil a lâché lui-même au-delà de 8192, et ce que la prise a
-  refusé quand son compte n'a pas pu être lu au début de l'armement : un
-  majorant.** De ces trames on ne sait que le nombre et entre quels instants
-  elles ont commencé (ce que la prise refuse est ce qu'elle a reçu de plus
-  récent, donc après la dernière trame qu'elle a gardée). Un enregistrement
-  les compte quand sa séance recouvre cet intervalle ; quand deux séances le
-  recouvrent, les deux les comptent, parce que rien ne dit laquelle a perdu
-  quoi : jamais moins que ce que l'enregistrement a perdu. Un intervalle qui
-  ne recouvre aucune séance n'est pas une perte. Le premier cas demande plus
-  de 8192 échanges en attente sans enregistrement ouvert : il n'a été produit
-  que dans des tests, sur le journal seul ou en réduisant la borne, jamais
-  sur la console avec ses bornes.
-- **Lecture de fin manquante, lecture d'armement présente : un majorant par
-  différence de compteurs.** Le fil utilise son dernier compte cumulatif,
-  lu en vidant la prise pour cette fermeture, moins le compte d'armement.
-  La lecture du fil vient après la fin et peut inclure des refus au repos
-  survenus depuis. Ce cas n'utilise pas le recouvrement d'intervalles.
+L'expiration normale des données de repos n'est pas une perte. Quand le tampon
+des lignes et lots refuse une nouvelle valeur, il la compte ; à l'ouverture,
+ces refus deviennent `record_degraded: dropped=...`. Ce compte conservateur
+porte sur les refus depuis la dernière ouverture, même si leur instant est
+sorti depuis de la fenêtre. La remise de la fenêtre à la file disque peut
+elle-même déborder : la file refuse et compte, sans bloquer le départ.
+
+**`drive_frames_lost` : règle de comptage.** Les refus de la prise sont datés
+par un intervalle entre deux prises, les trames lâchées par le journal par
+l'intervalle de leurs instants observés. Chaque enregistrement dont la
+fenêtre recouvre cet intervalle les compte : c'est un majorant, jamais un
+nombre inférieur à ce qui lui manque. Un même intervalle de perte peut donc
+être compté pour deux enregistrements, même si aucune trame conservée n'est
+écrite deux fois. La console joint la fenêtre avec `Opening.refused=None` :
+le compteur n'a pas été lu au début exact de cette fenêtre choisie après coup.
+Sans fenêtre, la différence entre les deux compteurs de frontière réussis
+reste exacte ; si celui du début est inconnu, la règle d'intervalle s'applique ;
+si seule la fin manque, le dernier compteur lu par le fil donne un majorant
+par différence. Les fautes de prise restent comptées comme écritures manquées.
+
+**Lot ECG encore en traitement à la fin.** La phase `DONE` termine la séance
+au même tic. Seule la clôture du dossier peut être différée en mémoire, au
+plus jusqu'au tic suivant : le fil connaît déjà `Closing.until` et n'ajoute
+aucun échange postérieur. Le lot résolu reçoit sa remise datée ; le lot
+suivant résout un lot sans lecture. À la borne, avant tout autre départ ou à
+la sortie avec l'ECG annulé, un lot encore non résolu est écrit sans remise,
+avec `replay_incomplete: pending_ecg_delivery` : le rejeu refuse cette remise
+inconnue. Ni la boucle ni le moteur n'attendent la clôture.
 
 Ce que cela ajoute à un enregistrement, mesuré, dans **un** fichier ajouté en
 fin, donc sans aucun inode de plus :
@@ -3581,21 +3626,17 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 
 ### 15.8 Ce qui n'est pas enregistré aujourd'hui
 
-- Les échanges avec le variateur hors de toute séance : avant la première,
-  entre deux séances et après la dernière. `drive_frames.jsonl` va du début de
-  l'armement d'une séance à sa fin, et ne contient rien d'autre. Ce sont, sans
-  qu'aucun soit écrit dans un enregistrement : la scrutation d'une console au
-  repos ; la consigne nulle écrite à chaque tic après une séance ; les
-  échanges d'un départ **refusé** après avoir touché le variateur ; un
-  réarmement de défaut entre deux séances. Les demandes de la console
-  correspondantes (départ demandé, départ refusé, réarmement) sont, elles,
-  dans le journal hors séance (15.9), sans les échanges.
+- Les échanges, lignes et lots de repos qui sont sortis de la fenêtre
+  bornée, ceux d'un enregistrement précédent, ceux d'avant le dernier verrou
+  levé ou le dernier départ parvenu au runtime puis refusé (15.2). Les
+  demandes et refus hors séance restent aussi dans le journal local (15.9).
 - Les trames du variateur lâchées faute de place : celles que la prise refuse
   quand le fil du journal ne vient plus (4096 en attente), et celles que ce
   fil lâche lui-même au-delà de 8192 en attente d'un enregistrement. Elles
   sont comptées, et l'enregistrement le dit (15.2).
-- **Ce que `drive_frames_lost` ne dit pas exactement.** Ce que la prise a
-  refusé à une séance est compté pour elle seule, exactement quand les deux
+- **Ce que `drive_frames_lost` ne dit pas exactement.** Avec la fenêtre de
+  repos, les pertes sont des majorants par recouvrement d'intervalles (15.2).
+  Sans fenêtre, ce que la prise a refusé est compté exactement quand les deux
   lectures de frontière réussissent (15.2). Deux
   comptes restent des majorants, comptés pour chaque séance dont l'intervalle
   les recouvre et non partagés entre elles : les trames que le fil du journal
@@ -3609,10 +3650,9 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   était un jour fait par un autre fil que la boucle à l'instant même où une
   séance commence ou finit, il pourrait être compté du mauvais côté, à une
   trame près.
-- Avec le pilote ATV320, l'échange pendant lequel un tic lèverait une
-  exception : ce pilote note lui-même ses échanges, pas la prise (15.2), et ce
-  cas n'a été rejoué que sur le simulateur, où l'appel qui lève est maintenant
-  dans l'enregistrement.
+- Une exception du runtime hors des échanges du pilote : la capture native
+  garde les échecs du maître, mais ne transforme pas une exception du tic
+  d'origine en une entrée rejouable.
 - La géométrie détaillée (`geometry: null`), la vérité physiologique
   (`hr_true` vide), la présence de couple (`energised: null`).
 - Les contrôles pré-vol (`preflight: null`), et l'écart mesuré de l'horloge
@@ -3625,8 +3665,9 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
 
 Un enregistrement fermé ne change plus : ses sommes de contrôle indexent
 chaque fichier, un dépôt y est lié, et le reader signale toute modification.
-Ce qui se passe à la console **sans séance enregistrée** n'a donc pas sa place
-dans un enregistrement, et n'était écrit nulle part. C'est maintenant une
+Ce qui se passe à la console **sans séance enregistrée** ne modifie pas le
+dossier déjà fermé. La fenêtre de repos peut le joindre au prochain dossier
+(15.2). Il reste aussi une
 ligne de `<dossier racine>/logbook/events.jsonl` (`src/record/logbook.py`) :
 
 ```json
@@ -3635,13 +3676,13 @@ ligne de `<dossier racine>/logbook/events.jsonl` (`src/record/logbook.py`) :
 
 | Événement de la console | `kind` | `detail` |
 |---|---|---|
-| départ demandé | `operator_action` (`remote_command` depuis le tableau de bord) | `start_requested`, sans ses mots : ils nomment un programme par son identifiant |
+| départ demandé à la surface | `warning` | `console: start_requested`, sans ses mots : ils nomment un programme par son identifiant ; la commande rejouable est capturée quand la boucle la remet au runtime |
 | départ, consigne ou réarmement refusé | `refusal` | `refused: ` puis la phrase montrée à l'opérateur, sans l'identifiant du programme ni l'âge du passager qu'elle cite (`[redacted]`) |
 | départ, consigne ou réarmement qu'un STOP a déplacé avant que la boucle le prenne | `refusal` | `cancelled: un STOP est arrive avant que la machine prenne cette demande, rien n'a ete fait` |
 | demande prise par la boucle (événement `taken` de la console) | aucune ligne | ce qu'elle a produit se lit dans les tics ; l'identifiant d'une demande n'est écrit nulle part |
-| acquittement | `verdict_ack` | `acknowledged: …` |
-| réarmement du défaut variateur demandé | `operator_action` | `fault_reset_requested: reset defaut` |
-| attestation, E-STOP, fin demandée | `operator_action` | comme dans un enregistrement |
+| résultat d'acquittement | `warning` | `console: acknowledged: …` |
+| réarmement du défaut variateur demandé à la surface | `warning` | `console: fault_reset_requested: reset defaut` |
+| notification d'attestation, E-STOP, fin demandée | `warning` | `console: …`, comme dans un enregistrement |
 | nouvelle du lien avec le tableau de bord | `warning` | `dashboard: …` |
 | démarrage de la console après un arrêt non propre | `warning` | `unclean_stop: demarrage apres arret non propre`, suivi de ` : enregistrement de seance <nom> non clos` quand le dernier enregistrement est resté ouvert ([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)) |
 | démarrage de la console hors service | `warning` | `out_of_service: console hors service : …`, la phrase montrée à l'opérateur |

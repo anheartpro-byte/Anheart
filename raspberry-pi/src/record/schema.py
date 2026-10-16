@@ -2,13 +2,25 @@
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal, Self, assert_never
 
-from pydantic import ConfigDict
+from pydantic import BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
 from pydantic.dataclasses import dataclass
 
+from src.motor.drive import (
+    BadResponse,
+    CommTimeout,
+    DriveError,
+    DriveFault,
+    DriveFaulted,
+    DriveState,
+    EnableUnconfirmed,
+    StopUnconfirmed,
+    UnexpectedState,
+)
+from src.motor.observation import MODBUS_FAILURES, ModbusFailure
 from src.record.rows import JsonValue
-from src.units import Monotonic, Seconds
+from src.units import Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
 
 CONFIG = ConfigDict(allow_inf_nan=False, extra="forbid", ser_json_inf_nan="constants")
 
@@ -147,6 +159,148 @@ class Event:
         }
 
 
+def _state(value: object) -> DriveState:
+    if isinstance(value, DriveState):
+        return value
+    if isinstance(value, str) and value in DriveState.__members__:
+        return DriveState[value]
+    raise ValueError("unknown drive state")
+
+
+def _fault(value: object) -> DriveFault:
+    if isinstance(value, DriveFault):
+        return value
+    if isinstance(value, str) and value in DriveFault.__members__:
+        return DriveFault[value]
+    raise ValueError("unknown drive fault")
+
+
+def _state_name(value: DriveState) -> str:
+    return value.name
+
+
+def _fault_name(value: DriveFault) -> str:
+    return value.name
+
+
+def _absent(value: object) -> bool:
+    return value is None
+
+
+FAILURE_CONFIG = ConfigDict(allow_inf_nan=False, extra="forbid", strict=True)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class TimeoutFailure:
+    type: Literal["CommTimeout"] = "CommTimeout"
+    after: Annotated[Seconds, Field(ge=0)]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class ResponseFailure:
+    type: Literal["BadResponse"] = "BadResponse"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class StateFailure:
+    type: Literal["UnexpectedState"] = "UnexpectedState"
+    expected: Annotated[DriveState, BeforeValidator(_state), PlainSerializer(_state_name)]
+    actual: Annotated[DriveState, BeforeValidator(_state), PlainSerializer(_state_name)]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class FaultFailure:
+    type: Literal["DriveFaulted"] = "DriveFaulted"
+    fault: Annotated[DriveFault, BeforeValidator(_fault), PlainSerializer(_fault_name)]
+    raw_code: Annotated[RawRegister, Field(ge=0, le=65535)]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class RangeFailure:
+    type: Literal["OutOfRange"] = "OutOfRange"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class EnableFailure:
+    type: Literal["EnableUnconfirmed"] = "EnableUnconfirmed"
+    reference_zeroed: bool
+    run_command_removed: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class StopFailure:
+    type: Literal["StopUnconfirmed"] = "StopUnconfirmed"
+    waited: Annotated[Seconds, Field(ge=0)]
+    last_output_rpm: MotorRpm
+
+
+type RecordedFailure = Annotated[
+    TimeoutFailure
+    | ResponseFailure
+    | StateFailure
+    | FaultFailure
+    | RangeFailure
+    | EnableFailure
+    | StopFailure,
+    Field(discriminator="type"),
+]
+"""Closed failure vocabulary for drive-call observations.
+
+Only decision-bearing fields are kept. Human diagnostics never enter this value.
+"""
+
+
+def record_failure(error: DriveError) -> RecordedFailure:  # noqa: PLR0911  # one return per error
+    """Strip prose from an error without changing the evidence the runtime acts on."""
+    match error:
+        case CommTimeout():
+            return TimeoutFailure(after=error.after)
+        case BadResponse():
+            return ResponseFailure()
+        case UnexpectedState():
+            return StateFailure(expected=error.expected, actual=error.actual)
+        case DriveFaulted():
+            return FaultFailure(fault=error.fault, raw_code=error.raw_code)
+        case OutOfRange():
+            return RangeFailure()
+        case EnableUnconfirmed():
+            return EnableFailure(
+                reference_zeroed=error.reference_zeroed,
+                run_command_removed=error.run_command_removed,
+            )
+        case StopUnconfirmed():
+            return StopFailure(waited=error.waited, last_output_rpm=error.last_output_rpm)
+    raise assert_never(error)
+
+
+def replay_failure(error: RecordedFailure) -> DriveError:  # noqa: PLR0911  # one return per error
+    """Restore the variant and its evidence; omitted prose gets a fixed diagnostic."""
+    match error:
+        case TimeoutFailure():
+            return CommTimeout(after=error.after)
+        case ResponseFailure():
+            return BadResponse(detail="recorded failure")
+        case StateFailure():
+            return UnexpectedState(expected=error.expected, actual=error.actual)
+        case FaultFailure():
+            return DriveFaulted(fault=error.fault, raw_code=error.raw_code)
+        case RangeFailure():
+            return OutOfRange(quantity="recorded", value=0.0, low=0.0, high=0.0)
+        case EnableFailure():
+            return EnableUnconfirmed(
+                detail="recorded failure",
+                reference_zeroed=error.reference_zeroed,
+                run_command_removed=error.run_command_removed,
+            )
+        case StopFailure():
+            return StopUnconfirmed(
+                waited=error.waited,
+                last_output_rpm=error.last_output_rpm,
+                detail="recorded failure",
+            )
+    raise assert_never(error)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)
 class DriveFrame:
     t: float
@@ -156,6 +310,19 @@ class DriveFrame:
     ok: bool
     latency_ms: float
     raw_hex: str | None = None
+    error: RecordedFailure | ModbusFailure | None = Field(default=None, exclude_if=_absent)
+
+    @model_validator(mode="after")
+    def failed_only(self) -> Self:
+        if self.ok and self.error is not None:
+            raise ValueError("a successful exchange cannot carry an error")
+        if self.error is not None and isinstance(
+            self.error, MODBUS_FAILURES
+        ) != self.kind.startswith("modbus_"):
+            raise ValueError(
+                "the failure vocabulary must match native exchanges or call observations"
+            )
+        return self
 
 
 @dataclass(frozen=True, slots=True)

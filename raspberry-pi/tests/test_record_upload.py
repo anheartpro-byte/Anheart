@@ -675,6 +675,41 @@ def test_events_go_on_from_the_cursor_with_the_ranks_that_follow(tmp_path: Path)
     assert rest.value.events[0]["detail"] == "phase 3"
 
 
+def test_local_events_take_no_transmitted_rank_and_are_never_counted_unreadable(
+    tmp_path: Path,
+) -> None:
+    made = writer(tmp_path)
+    for t, kind, detail in (
+        (-1.0, EventKind.OPERATOR_ACTION, "confirm_estop_wiring"),
+        (0.0, EventKind.OPERATOR_ACTION, "attendant_ping"),
+        (0.123456, EventKind.OPERATOR_ACTION, "stop"),
+        (0.2, EventKind.WARNING, "attendant_ping"),
+        (1.0, EventKind.REMOTE_COMMAND, "attendant_ping"),
+        (-0.000001, EventKind.PHASE, "done"),
+        (1.245, EventKind.VERDICT_ACK, "acknowledge estop_released=false"),
+        (2.0, EventKind.VERDICT_ACK, "attendant_ping"),
+    ):
+        assert isinstance(made.event(Event(t=t, kind=kind, detail=detail)), Ok)
+    with (made.path / "events.jsonl").open("ab") as handle:
+        handle.write(b"unreadable\n")
+    first = read_events(made.path, start_ms=START_MS, offset=0, last_seq=-1, limit=1)
+    assert isinstance(first, Ok)
+    assert first.value.skipped == 0
+    assert [event["seq"] for event in first.value.events] == [0]
+    rest = read_events(
+        made.path, start_ms=START_MS, offset=first.value.offset, last_seq=first.value.last_seq
+    )
+    assert isinstance(rest, Ok)
+    assert [event["seq"] for event in rest.value.events] == [1, 2]
+    assert rest.value.last_seq == 3
+    assert rest.value.skipped == 1
+    assert rest.value.offset == (made.path / "events.jsonl").stat().st_size
+    again = read_events(made.path, start_ms=START_MS, offset=0, last_seq=-1)
+    assert isinstance(again, Ok)
+    assert again.value.events == (*first.value.events, *rest.value.events)
+    assert again.value.last_seq == rest.value.last_seq
+
+
 def test_at_most_two_hundred_events_are_read_at_a_time(tmp_path: Path) -> None:
     made = writer(tmp_path)
     events_of(made, MAX_EVENTS + 5)

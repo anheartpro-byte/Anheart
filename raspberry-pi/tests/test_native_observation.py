@@ -81,12 +81,13 @@ async def test_native_observer_reaches_the_real_sdk_transport() -> None:
         opened = await drive.open()
         assert isinstance(opened, Ok)
         assert [entry.kind for entry in log.entries] == [
+            ExchangeKind.CONNECT,
             ExchangeKind.SEND,
             ExchangeKind.RECEIVE_CHUNK,
             ExchangeKind.RECEIVE_CHUNK,
             ExchangeKind.READ,
         ]
-        assert log.entries[0].raw_hex == chip.requests[0].hex()
+        assert log.entries[1].raw_hex == chip.requests[0].hex()
         assert log.entries[-1].value == 64
         assert all(entry.latency_ms > 0 for entry in log.entries)
     finally:

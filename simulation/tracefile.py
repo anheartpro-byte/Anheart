@@ -13,14 +13,24 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import Final, override
+
+from pydantic import TypeAdapter
 
 from simulation.recording import Frame
 from src.clock import ManualClock
-from src.record.codec import Privacy, encode
+from src.motor.observation import ModbusFailure
+from src.record.codec import Privacy, document, encode
 from src.record.ecg import decode_block
 from src.record.rows import JsonScalar, JsonValue, Row, finite
-from src.record.schema import EndObservation, Event, EventKind, Manifest, RecordError
+from src.record.schema import (
+    EndObservation,
+    Event,
+    EventKind,
+    Manifest,
+    RecordedFailure,
+    RecordError,
+)
 from src.record.writer import DEFAULT_PRIVACY, FRAME, TICK_COLUMNS, Writer, csv_line, tick_line
 from src.result import Err, Result
 from src.sensors.base import SensorReading
@@ -88,9 +98,14 @@ class FinalState:
         }
 
 
+FAILURE: Final[TypeAdapter[RecordedFailure | ModbusFailure]] = TypeAdapter(
+    RecordedFailure | ModbusFailure
+)
+
+
 def frame_to_json(frame: Frame, origin: float) -> Mapping[str, JsonValue]:
     """One drive frame, timed from the session start."""
-    return {
+    payload: dict[str, JsonValue] = {
         "type": "frame",
         "t": round(finite(frame.at - origin), 3),
         "kind": frame.kind.value,
@@ -105,6 +120,9 @@ def frame_to_json(frame: Frame, origin: float) -> Mapping[str, JsonValue]:
         "latency_ms": finite(frame.latency_ms),
         "raw_hex": frame.raw_hex,
     }
+    if frame.error is not None:
+        payload["error"] = document(FAILURE, frame.error)
+    return payload
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -138,6 +156,8 @@ class Trace:
                 key: frame[key] for key in ("t", "kind", "register", "value", "ok", "latency_ms")
             }
             payload["raw_hex"] = frame.get("raw_hex")
+            if "error" in frame:
+                payload["error"] = frame["error"]
             _required(writer.frame(FRAME.validate_json(encode(payload, privacy))))
         for block in self.raw:
             _required(writer.raw(decode_block(block)))
