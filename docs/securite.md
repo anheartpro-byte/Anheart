@@ -56,6 +56,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Le tableau de bord ne peut ni arrêter la machine en tombant en panne, ni lancer une séance manuelle.** Il ne peut envoyer que deux choses : un lancement AUTO (qui repasse par toutes les portes de la console) et une demande d'arrêt (exécutée sur la rampe normale). | `cloud_sync.py` |
 | **Un tableau de bord d'un autre contrat n'arme rien.** Un lancement venu d'une réponse dont la majeure de contrat n'est pas celle de la console, ou qui n'annonce aucune version, n'atteint jamais la boîte aux lettres : la console l'affiche et le renvoie comme séance échouée. Dans l'autre sens, Convex refuse (426) toute requête d'une machine dont il ne sert pas la majeure, sauf celle qui porte la demande d'arrêt : un arrêt demandé au tableau de bord, ou une séance que le serveur ne tient plus pour active, arrête la séance en cours quelle que soit la version des deux côtés. C'est tout ce que la console retient d'une réponse d'une autre majeure : le pire qu'une telle réponse puisse faire est un arrêt ordinaire. | `contract.py`, `cloud_sync.py`, `convex/lib/contract.ts` |
 | **Les clients sont séparés dans Convex.** Chaque fonction publique répond dans l'organisation de l'appelant, lue dans le jeton vérifié et jamais dans un argument ; une machine, un patient, une séance ou une mesure d'une autre organisation est refusé comme s'il n'existait pas, y compris par identifiant direct. Ce qu'une machine écrit hérite de son organisation. Seul l'admin de l'organisation Anheart lit toutes les organisations. Vérifié en mémoire seulement (voir la limite en §3). | `convex/lib/auth.ts`, `convex/authorization.matrix.ts`, `convex/organizationIsolation.test.ts` |
+| **Chaque mutation sensible listée ajoute sa ligne d'audit dans la transaction de son effet.** Les fonctions du déploiement ne modifient ni ne suppriment ces lignes ; aucune purge n'existe. Portée et limites au [§14](#14-journal-daudit-anh-167). | [`convex/lib/audit.ts`](../convex/lib/audit.ts), [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts), [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) |
 | **Hors de la boucle locale, la page de la console n'est servie qu'en TLS, ou la console ne démarre pas.** Un seul port, aucun port en clair à côté, aucune redirection ; la WebSocket n'y accepte que l'origine `https` ; un certificat que la console ne peut pas servir est une erreur de configuration, dite avant qu'elle ne construise quoi que ce soit. La séance, elle, ne dépend pas de TLS : des clients TLS qui ne finissent jamais ne déplacent pas le tic, et un certificat expiré n'empêche ni de servir ni d'arrêter ([section 10](#11-la-console-en-tls-hors-de-la-boucle-locale-anh-151)). Vérifié sur la boucle locale d'une machine de test ; pas sur un Pi installé, ni avec une tablette. | `web/deps.py`, `web/tls.py`, `web/app.py`, `scripts/pi/make_console_tls.sh` |
 | **Âge minimum** : une séance programmée, et depuis le 15 octobre 2026 une séance manuelle avec personne à bord, exige un âge connu et d'au moins `min_rider_age` du fichier médical signé (18 ans, `config/medical_parameters.json`, [section 13](#13-décisions-médicales--un-fichier-signé-anh-139)), compté depuis l'année de naissance réglée sur le site. Le site et la console refusent tous les deux. | `local_panel.py`, `roster.py`, `convex/training.ts` |
 | **Réglages prudents par défaut** : personne à bord refusée (`OCCUPANCY_OCCUPIED_ENABLED=false`), séances programmées désactivées (`PROGRAMS_ENABLED=false`), plafond 300 tr/min moteur (≈ 6 tr/min au bras). | `.env.example`, `local_config.py` |
@@ -2055,3 +2056,43 @@ de ces cas de calcul, pas le déploiement du registre ni le support Ed25519 du
 runtime de production. Le catalogue de programmes ne référence pas encore la
 version médicale ; le Pi ne refuse donc pas encore un programme validé pour
 une autre version : cela reste EX-5 d'ANH-139, ANH-137 et ANH-138.
+
+## 14. Journal d'audit (ANH-167)
+
+Le journal `audit_log` attribue les actions sensibles à un acteur, une cible,
+une organisation et une requête Convex. Son schéma et les règles d'ajout
+sont décrits dans [convex.md](convex.md#audit_log--journal-daudit-anh-167), sa
+consultation dans
+[tableau-de-bord.md](tableau-de-bord.md#audit--frdashboardaudit).
+Ce lot contribue à
+[MEN-03 Gestionnaire malveillant ou compte gestionnaire compromis](menaces.md#men-03-gestionnaire-malveillant-ou-compte-gestionnaire-compromis)
+**sans fermer cette menace ni accepter son risque résiduel**.
+
+### 14.1 Ce que ce lot apporte
+
+| Contrôle | Où |
+|---|---|
+| Chaque mutation de `SENSITIVE_MUTATIONS` écrit sa ligne dans la même transaction que l'effet sensible ; la liste est fermée et toutes les autres mutations ont une classification motivée | [`convex/lib/audit.ts`](../convex/lib/audit.ts) ; [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts), un scénario par fonction enregistrée et chaque action observée ; classification exhaustive dans [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) |
+| Seul `audit()` insère dans `audit_log` ; aucune fonction ne modifie ni ne supprime une ligne. Les modules qui lisent cette table n'exportent que des queries | [`convex/auditLog.test.ts`](../convex/auditLog.test.ts), énumération des fonctions touchant la table et interdiction de `patch`, `replace` et `delete` |
+| Aucune purge du journal n'existe, avant ou après les cinq ans envisagés | [`convex/schema.ts`](../convex/schema.ts), [`convex/auditLog.test.ts`](../convex/auditLog.test.ts), vérification de l'absence de tâche de purge |
+| L'écriture d'audit n'ajoute aucun contrôle métier ni chemin de refus qui pourrait bloquer un arrêt autorisé : une lecture des métadonnées, puis un ajout. L'arrêt actif et l'annulation en attente gardent leur effet avec une ligne chacun | Contrat de `audit()` dans [`convex/lib/audit.ts`](../convex/lib/audit.ts) ; [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts), scénario « always stops active sessions and cancels pending sessions with one row per effect » ; absence de refus dans le helper vérifiée par [`convex/auditLog.test.ts`](../convex/auditLog.test.ts). Une panne de base ou du runtime reste un échec de transaction, comme pour toute insertion |
+| L'admin Anheart lit tout ; l'admin d'organisation ne lit que son organisation, jamais les lignes globales. Les libellés renvoyés n'incluent pas d'e-mail | [`convex/audit.ts`](../convex/audit.ts), [`convex/audit.test.ts`](../convex/audit.test.ts) |
+| Les détails utilisent seulement les clés relues ; les appels n'y copient ni données de santé ni texte libre saisi par l'utilisateur, selon le principe 6 du processus de développement | [`convex/lib/audit.ts`](../convex/lib/audit.ts), liste des clés dans [convex.md](convex.md#audit_log--journal-daudit-anh-167) ; tests des clés et des valeurs privées dans `convex/auditLog.test.ts` et `convex/auditCompleteness.test.ts` |
+
+La source **`operator` est une extension d'EX-1 décidée pendant le
+développement faute de valeur adaptée, à relire par le chef de projet**.
+Elle identifie les fonctions lancées en ligne de commande avec la clé de
+déploiement : `machineKeys.createKeyByOperator`,
+`machineKeys.revokeKeyByOperator` et `medicalParameters.registerVersion`
+(via `medicalParametersStore.insertVersion`). Ces chemins internes écrivent
+avec l'acteur `system`, sans compte humain attribué ; le test de complétude
+vérifie leur isolement du site et des routes machine.
+
+### 14.2 Ce que ce lot ne couvre pas
+
+| Limite | Conséquence, et à qui elle revient |
+|---|---|
+| **L'immutabilité vaut pour les fonctions du déploiement.** Ni chaînage cryptographique ni copie externe ne protège le journal | Un détenteur de la clé de déploiement ou d'un accès au tableau de bord Convex peut agir hors de ces fonctions ; ANH-167 ne garantit pas l'immutabilité face à lui. MEN-03 reste ouverte |
+| **La durée de rétention n'est pas décidée.** Les 5 ans restent à confirmer par ANH-87a | Aucune purge n'est implémentée : rien n'est supprimé avant ni après cinq ans tant que la décision n'est pas prise |
+| **La page n'a pas de preuve de bout en bout dans un navigateur** | ANH-83 (infrastructure E2E, bloquée par ANH-82) ; les tests de `app/[locale]/dashboard/audit/page.test.tsx` prouvent l'accès, les filtres et l'export dans un DOM simulé avec Convex remplacé |
+| **Le classement des données de santé reste à décider dans ANH-172** | L'exclusion actuelle des valeurs de santé et du texte libre ne tranche pas ce classement ; toute évolution des détails exige une relecture |
