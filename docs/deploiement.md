@@ -1226,19 +1226,19 @@ ne change pas une version déjà hébergée : il faut redéployer.
 > Le **tout premier** déploiement d'un projet Vercel est toujours affecté à la
 > production, même sans `--prod`. C'est ce qui s'est passé le 1er octobre 2026.
 
-Essayer en local avant de déployer :
-
 pip et uv 0.13.0 lisent la ligne `--require-hashes` de
 `dist/requirements.txt` et refusent toute ligne sans empreinte. uv 0.8.22
 (celui de la CI) l'ignore avec un avertissement, mais vérifie quand même
 chaque empreinte présente : une empreinte altérée est refusée, essai du
-coordinateur sans l'option en ligne de commande. Il accepterait une ligne
+16 octobre 2026 sur un poste, sans l'option en ligne de commande. Il accepterait une ligne
 sans empreinte, que le fichier ne contient pas puisque `build.sh` l'écrit
 depuis le verrou et qu'un test le vérifie. C'est pourquoi chaque commande de
 la CI passe aussi `--require-hashes` en ligne de commande. L'installateur et
 la version qu'utilise Vercel ne sont pas connus ici : la construction sur
 Vercel n'est pas constatée. `simulation-gate` installe cet assemblage avec
 `--require-hashes` et sert une requête HTTP en CI.
+
+Essayer en local avant de déployer :
 
 ```sh
 deploy/simulation-vercel/build.sh

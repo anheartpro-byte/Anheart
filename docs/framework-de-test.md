@@ -1316,7 +1316,7 @@ mise à jour de ces guides reste à suivre.
 ligne `--require-hashes` de `dist/requirements.txt` et refusent toute ligne
 sans empreinte. uv 0.8.22 (celui de la CI) l'ignore avec un avertissement,
 mais vérifie quand même chaque empreinte présente : une empreinte altérée
-est refusée, essai du coordinateur sans l'option en ligne de commande. Il
+est refusée, essai du 16 octobre 2026 sur un poste, sans l'option en ligne de commande. Il
 accepterait une ligne sans empreinte, que le fichier ne contient pas puisque
 `build.sh` l'écrit depuis le verrou et qu'un test le vérifie. C'est pourquoi
 chaque commande de la CI passe aussi `--require-hashes` en ligne de commande.
@@ -1340,8 +1340,9 @@ exceptée.
 Chaque environnement est audité même quand un autre a échoué, et le message
 d'erreur les nomme. Pour l'extracteur CAO, l'audit porte sur ce que la
 résolution choisit ce jour-là sur un runner Linux. Les paquets réservés à macOS
-(`pyobjc-*`) sont désormais dans le verrou dev ; `pip-audit` 2.9.0 applique
-leurs marqueurs de plateforme et les saute sur Linux. L'essai du 16 octobre
+(`pyobjc-*`) sont désormais dans le verrou dev ; d'après le source de
+`pip-audit` 2.9.0 (lu le 16 octobre 2026), il applique leurs marqueurs de
+plateforme et les saute sur Linux. L'essai du 16 octobre
 2026 sur macOS n'a signalé aucune vulnérabilité connue ; ce n'est pas une
 preuve de leur audit en CI. Un audit ne voit que les vulnérabilités publiées :
 il ne détecte pas un paquet malveillant
