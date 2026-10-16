@@ -280,7 +280,7 @@ describe("ANH-227 pagination: server scan cap", () => {
     w = await boundsWorld(1100);
   });
 
-  it.each([undefined, 5000])(
+  it.each([undefined, 5000, 0, -1, 0.9, NaN, Infinity])(
     "caps empty pages when the client maximum is %s",
     async (maximumRowsRead) => {
       await expectBudgetBites(w);
@@ -298,37 +298,48 @@ describe("ANH-227 pagination: server scan cap", () => {
     },
   );
 
-  it("honours a lower client cap, including the native split boundaries", async () => {
-    await expectBudgetBites(w);
-    const pages = await allPages(w, { maximumRowsRead: 73 });
-    expect(pages).toHaveLength(Math.ceil(HISTORY_SIZE / 73));
-    expect(pages.flatMap((page) => page.page)).toEqual([]);
-    for (const page of pages.slice(0, -1))
-      expect(page.pageStatus).toBe("SplitRequired");
+  it.each([73, 73.9])(
+    "honours a lower client cap of %s, including the native split boundaries",
+    async (maximumRowsRead) => {
+      await expectBudgetBites(w);
+      const pages = await allPages(w, { maximumRowsRead });
+      expect(pages).toHaveLength(Math.ceil(HISTORY_SIZE / 73));
+      expect(pages.flatMap((page) => page.page)).toEqual([]);
+      for (const page of pages.slice(0, -1))
+        expect(page.pageStatus).toBe("SplitRequired");
 
-    const first = pages[0];
-    const reader = as(w.t, "manager");
-    const left = await reader.query(api.sessions.listSessionsPaginated, {
-      paginationOpts: {
-        numItems: 50,
-        cursor: null,
-        endCursor: first.splitCursor,
-        maximumRowsRead: 73,
-      },
-    });
-    const right = await reader.query(api.sessions.listSessionsPaginated, {
-      paginationOpts: {
-        numItems: 50,
-        cursor: first.splitCursor ?? null,
-        endCursor: first.continueCursor,
-        maximumRowsRead: 73,
-      },
-    });
-    expect([...left.page, ...right.page]).toEqual(first.page);
-    expect(left.pageStatus).not.toBe("SplitRequired");
-    expect(right.pageStatus).not.toBe("SplitRequired");
-    expect(right.continueCursor).toBe(first.continueCursor);
-  });
+      const adminPage = await as(w.t, "admin").query(
+        api.sessions.listSessionsPaginated,
+        {
+          paginationOpts: { numItems: 3000, cursor: null, maximumRowsRead },
+        },
+      );
+      expect(adminPage.page).toHaveLength(73);
+
+      const first = pages[0];
+      const reader = as(w.t, "manager");
+      const left = await reader.query(api.sessions.listSessionsPaginated, {
+        paginationOpts: {
+          numItems: 50,
+          cursor: null,
+          endCursor: first.splitCursor,
+          maximumRowsRead,
+        },
+      });
+      const right = await reader.query(api.sessions.listSessionsPaginated, {
+        paginationOpts: {
+          numItems: 50,
+          cursor: first.splitCursor ?? null,
+          endCursor: first.continueCursor,
+          maximumRowsRead,
+        },
+      });
+      expect([...left.page, ...right.page]).toEqual(first.page);
+      expect(left.pageStatus).not.toBe("SplitRequired");
+      expect(right.pageStatus).not.toBe("SplitRequired");
+      expect(right.continueCursor).toBe(first.continueCursor);
+    },
+  );
 });
 
 describe("ANH-227 pagination: sparse readable sessions", () => {

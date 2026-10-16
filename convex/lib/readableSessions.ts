@@ -18,6 +18,12 @@ import { canAccessSession, sameOrganization, type CurrentUser } from "./auth";
  */
 export const SESSION_PAGE_MAX_ROWS_READ = 1000;
 
+export function pageMaxRowsRead(asked?: number): number {
+  return asked !== undefined && Number.isFinite(asked) && asked >= 1
+    ? Math.min(Math.floor(asked), SESSION_PAGE_MAX_ROWS_READ)
+    : SESSION_PAGE_MAX_ROWS_READ;
+}
+
 /** What a list can be narrowed to, inside what the caller may read. */
 export type ListFilters = {
   status?: Doc<"sessions">["status"];

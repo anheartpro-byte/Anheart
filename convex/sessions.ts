@@ -31,8 +31,8 @@ import {
 } from "./lib/auth";
 import {
   newestReadableSessions,
+  pageMaxRowsRead,
   readableSessions,
-  SESSION_PAGE_MAX_ROWS_READ,
   stillReadable,
 } from "./lib/readableSessions";
 
@@ -243,10 +243,7 @@ export const listSessionsPaginated = query({
       await readableSessions(ctx, caller, filters)
     ).paginate({
       ...paginationOpts,
-      maximumRowsRead: Math.min(
-        paginationOpts.maximumRowsRead ?? SESSION_PAGE_MAX_ROWS_READ,
-        SESSION_PAGE_MAX_ROWS_READ,
-      ),
+      maximumRowsRead: pageMaxRowsRead(paginationOpts.maximumRowsRead),
     });
     return { ...result, page: await listedRows(ctx, caller, result.page) };
   },

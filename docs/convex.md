@@ -172,7 +172,7 @@ reprennent les niveaux fermés de `convex/lib/releaseValidation.ts` ;
 `outcome` est seulement `completed` ou `failed`, résultat technique d'une
 séance, jamais un verdict d'aptitude.
 `fields` ne contient que les noms des champs réellement modifiés. Les listes
-`added` et `removed` sont limitées chacune aux 1000 premiers identifiants ;
+`added` et `removed` sont limitées chacune aux 1 000 premiers identifiants ;
 si l'une dépasse ce plafond, `count` donne le total des deux listes avant
 troncature. Une invitation conserve ses gestionnaires dans `added` et
 chaque lien créé à son acceptation a sa propre ligne. Un changement de
