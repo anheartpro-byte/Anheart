@@ -543,20 +543,28 @@ describe("ANH-165 EX-4 the use of a key is written once a minute at most", () =>
     expect((await keyOf(f, key._id)).lastUsedAt).toBe(NOW + KEY_USE_REFRESH_MS);
   });
 
-  it("authenticates without writing: the query only says when a use is due", async () => {
+  it("authenticates without writing: the query returns the raw dates for the action", async () => {
     const f = await machineFixture(modules);
     const key = await firstKey(f);
+    await f.t.run((ctx) => ctx.db.patch(key._id, { expiresAt: NOW + HOUR }));
     const authenticate = () =>
       f.t.query(internal.machines.getMachineByApiKey, { apiKey: f.apiKey });
 
-    expect((await authenticate())?.keyUseDue).toBe(key._id);
+    expect((await authenticate())?.key).toEqual({
+      id: key._id,
+      expiresAt: NOW + HOUR,
+    });
     expect((await keyOf(f, key._id)).lastUsedAt).toBeUndefined();
 
     expect(
       await f.t.mutation(internal.machineKeys.recordKeyUse, { keyId: key._id }),
     ).toBe(true);
     at(NOW + 30_000);
-    expect((await authenticate())?.keyUseDue).toBeUndefined();
+    expect((await authenticate())?.key).toEqual({
+      id: key._id,
+      expiresAt: NOW + HOUR,
+      lastUsedAt: NOW,
+    });
     expect(
       await f.t.mutation(internal.machineKeys.recordKeyUse, { keyId: key._id }),
     ).toBe(false);

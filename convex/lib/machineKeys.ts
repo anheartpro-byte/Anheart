@@ -39,7 +39,10 @@ export function keyPrefix(selector: string): string {
 }
 
 /** Whether the key opens the machine routes at `now`. */
-export function keyIsValid(key: Key, now: number): boolean {
+export function keyIsValid(
+  key: Pick<Key, "revokedAt" | "expiresAt">,
+  now: number,
+): boolean {
   return (
     key.revokedAt === undefined &&
     (key.expiresAt === undefined || now < key.expiresAt)
@@ -47,7 +50,7 @@ export function keyIsValid(key: Key, now: number): boolean {
 }
 
 /** Whether the use of the key at `now` is to be written (once a minute at most). */
-export function keyUseIsDue(key: Key, now: number): boolean {
+export function keyUseIsDue(key: Pick<Key, "lastUsedAt">, now: number): boolean {
   return (
     key.lastUsedAt === undefined || now - key.lastUsedAt >= KEY_USE_REFRESH_MS
   );
