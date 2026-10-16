@@ -49,9 +49,8 @@ for (const [, issueId] of catalogue.matchAll(/\b(ANH-[1-9][0-9]*)\b/g)) {
 
 /** @param {string} text */
 function* ticketNames(text) {
-  const normalized = text.normalize("NFKC");
-  for (const match of normalized.matchAll(/(?<![\p{L}\p{N}])anh[\p{Zs}\s\p{Pd}−_\p{Cf}\\*~`]*\p{Nd}+[\p{L}\p{N}_]*/giu)) {
-    if (match[0].startsWith("anh") && /[/#._-]/.test(normalized[match.index - 1] ?? "")) continue;
+  for (const match of text.matchAll(/(?<![\p{L}\p{N}])a[*_~`\\]*n[*_~`\\]*h[\p{Zs}\s\p{Pd}−_\p{Cf}\\*~`]*\p{Nd}(?:[*_~`\\]*\p{Nd})*[\p{L}\p{N}_]*/giu)) {
+    if (match[0].startsWith("anh") && /[/#._-]/.test(text[match.index - 1] ?? "")) continue;
     yield match[0];
   }
 }
@@ -70,79 +69,19 @@ function linearUrl(address) {
     if (/linear\.app/i.test(address)) refuse(`unverified Linear issue link: ${JSON.stringify(address)}`);
     return;
   }
-  if (parsed.hostname === "linear.app" || parsed.hostname.endsWith(".linear.app")) return parsed;
+  const host = parsed.hostname.replace(/\.$/, "");
+  if (host === "linear.app" || host.endsWith(".linear.app")) return parsed;
 }
 
-/** @param {string} label @returns {string} */
-function referenceLabel(label) {
-  return label.trim().replace(/\s+/g, " ").toLowerCase();
-}
-/** @type {Map<string, string[]>} */
-const references = new Map();
+// Reference definitions and footnotes are outside the catalogue's inline link subset.
+if (catalogue.includes("]:")) refuse("reference definition or footnote in the catalogue: write inline links");
+
 /** @type {{url: string, start: number, end: number}[]} */
 const destinations = [];
-for (const match of catalogue.matchAll(/\[([^\]]+)\]:[ \t]*(?:\n[ \t]*(?:>[ \t]*)?)?(?:<([^<>\n]*)>|(\S+))/g)) {
-  const url = match[2] ?? match[3];
+for (const match of catalogue.matchAll(/\]\([ \t]*(?:\n[ \t]*)?(?:<([^<>\n]*)>|([^\s()<>]+))/g)) {
+  const url = match[1] ?? match[2];
   const start = match.index + match[0].lastIndexOf(url);
   destinations.push({ url, start, end: start + url.length });
-  const key = referenceLabel(match[1]);
-  const addresses = references.get(key) ?? [];
-  addresses.push(url);
-  references.set(key, addresses);
-}
-
-/** @param {number} start @returns {{url: string, start: number, end: number} | undefined} */
-function inlineDestination(start) {
-  let cursor = start + 1;
-  while (/\s/.test(catalogue[cursor] ?? "")) cursor++;
-  const angled = catalogue[cursor] === "<";
-  if (angled) cursor++;
-  const addressStart = cursor;
-  let depth = 0;
-  for (; cursor < catalogue.length; cursor++) {
-    const char = catalogue[cursor];
-    if (char === "\\") { cursor++; continue; }
-    if (angled) {
-      if (char === ">") break;
-    } else {
-      if (char === "(") depth++;
-      if (char === ")") {
-        if (depth === 0) break;
-        depth--;
-      }
-      if (/\s/.test(char)) break;
-    }
-  }
-  const end = cursor;
-  if (angled && catalogue[cursor++] !== ">") return;
-  if (!/^\s*(?:(?:"[^"]*"|'[^']*'|\([^)]*\))\s*)?\)/.test(catalogue.slice(cursor))) return;
-  return { url: catalogue.slice(addressStart, end), start: addressStart, end };
-}
-
-/** @type {{label: string, url: string}[]} */
-const markdownLinks = [];
-const brackets = [];
-for (let index = 0; index < catalogue.length; index++) {
-  const char = catalogue[index];
-  if (char === "\\") { index++; continue; }
-  if (char === "[") brackets.push(index);
-  if (char !== "]" || !brackets.length) continue;
-  const start = brackets.pop();
-  const label = catalogue.slice(start + 1, index);
-  const after = catalogue.slice(index + 1);
-  if (after.startsWith(":")) continue;
-  if (after.startsWith("(")) {
-    const destination = inlineDestination(index + 1);
-    if (destination) {
-      destinations.push(destination);
-      markdownLinks.push({ label, url: destination.url });
-    }
-  } else {
-    const reference = /^\[([^\]]*)\]/.exec(after);
-    const addresses = references.get(referenceLabel(reference?.[1] || label)) ?? [];
-    for (const url of addresses) markdownLinks.push({ label, url });
-    if (reference) index += reference[0].length;
-  }
 }
 
 for (const match of catalogue.matchAll(/<(https?:\/\/[^<>\s]+|www\.[^<>\s]+)>/gi)) {
@@ -153,16 +92,18 @@ for (const match of catalogue.matchAll(/<(https?:\/\/[^<>\s]+|www\.[^<>\s]+)>/gi
 
 // Compare Linear issue addresses by host and exact registry spelling, ignoring
 // fragments; only bare addresses may shed trailing prose punctuation.
-const addresses = destinations.map(({ url }) => url);
+const addresses = [...destinations];
 for (const match of catalogue.matchAll(/(?:https?:\/\/|www\.)[^\s<>()[\]`"'*]+/gi)) {
   if (destinations.some(({ start, end }) => match.index >= start && match.index < end)) continue;
-  addresses.push(match[0].replace(/[.,;:!?_~]+$/g, ""));
+  addresses.push({ url: match[0].replace(/[.,;:!?_~]+$/g, ""), start: match.index, end: match.index + match[0].length });
 }
-for (const address of addresses) {
+for (const { url: address } of addresses) {
   const parsed = linearUrl(address);
   if (!parsed) continue;
-  const issueId = /^\/[^/]+\/issue\/([^/]+)/i.exec(parsed.pathname)?.[1];
-  if (issueId && (!/^ANH-[1-9][0-9]*$/.test(issueId) || registry.get(issueId) !== issueAddress(address))) {
+  const issuePath = /(?:\/|%2f)issue(?:\/|%2f)([^/]*)/i.exec(parsed.pathname);
+  if (!issuePath) refuse(`Linear address other than a registered ticket: ${address}`);
+  const issueId = issuePath[1];
+  if (!/^ANH-[1-9][0-9]*$/.test(issueId) || registry.get(issueId) !== issueAddress(address)) {
     refuse(`unverified Linear issue link: ${issueId}`);
   }
 }
@@ -170,7 +111,8 @@ for (const address of addresses) {
 // Reject alternate ticket spellings, escapes and emphasis in visible text, retaining link titles.
 // Lowercase path, anchor and filename fragments are deliberately not ticket names.
 let ticketText = catalogue;
-for (const { start, end } of destinations.sort((a, b) => b.start - a.start)) {
+for (const { url, start, end } of destinations) {
+  if (!/[./#:]/.test(url)) continue;
   ticketText = ticketText.slice(0, start) + " ".repeat(end - start) + ticketText.slice(end);
 }
 ticketText = ticketText.replace(/<https?:\/\/[^<>\s]*>/gi, " ").replace(/(?:https?:\/\/|www\.)[^\s<>()[\]`"']*/gi, " ");
@@ -182,19 +124,6 @@ for (const name of ticketNames(ticketText)) {
   if (!registry.has(name)) refuse(`Linear issue named but not verified: ${name}`);
 }
 
-// Every ticket named by a Markdown label must identify its Linear destination,
-// including formatted labels, images and all three reference link forms.
-for (const { label, url } of markdownLinks) {
-  if (!linearUrl(url)) continue;
-  for (const name of ticketNames(label)) {
-    const number = /\p{Nd}+/u.exec(name)?.[0];
-    const issueId = `ANH-${number}`;
-    if (registry.get(issueId) !== issueAddress(url)) {
-      refuse(`Linear link labelled ${issueId} points to another address`);
-    }
-  }
-}
-
 // Character references can hide ticket letters or separators, so require literal characters.
 const characterReference = /&(?:#(?:[0-9]+|x[0-9a-f]+)|[a-z][a-z0-9]*);/i.exec(catalogue);
 if (characterReference) refuse(`character reference in the catalogue: write the character itself: ${JSON.stringify(characterReference[0])}`);
@@ -202,6 +131,18 @@ if (characterReference) refuse(`character reference in the catalogue: write the 
 // HTML can hide ticket text; only HTTP(S) autolinks remain subject to the address checks.
 // Code is not exempt: recognizing GitHub code spans would require reproducing rules this page does not need.
 if (/<(?!https?:\/\/[^<>\s]+>)[a-z/!?]/i.test(catalogue)) refuse("HTML in the catalogue: write Markdown");
+
+// Inline Linear links must use the literal registry key as their entire label.
+// Bound the prefix scan so an end-anchored whitespace search cannot grow with the page.
+for (const { url, start } of addresses) {
+  const parsed = linearUrl(url);
+  if (!parsed) continue;
+  const prefix = catalogue.slice(Math.max(0, start - 300), start).replace(/[ \t]*(?:\n[ \t]*)?<?[ \t]*$/, "");
+  const issueId = /(?:\/|%2f)issue(?:\/|%2f)([^/]*)/i.exec(parsed.pathname)?.[1];
+  if (prefix.endsWith("](") && !prefix.endsWith(`[${issueId}](`)) {
+    refuse(`Linear link not written [ANH-n](its registry address): ${url}`);
+  }
+}
 /** @type {Set<string>} */
 const definitions = new Set();
 for (const block of catalogue.split(/(?=^## )/m)) {
@@ -254,5 +195,13 @@ for (const directory of directories) {
       if (!definitions.has(reference[0])) refuse(`undefined ${reference[0]} in ${path}`);
     }
   }
+}
+
+// Keep the catalogue in its explicit character subset, after the more specific diagnostics.
+const outsideAlphabet = /[^\n\x20-\x7e\u00a0\u00ab\u00b7\u00bb\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff\u0152\u0153\u2014\u2019\u202f\u2192\u2194]/u.exec(catalogue);
+if (outsideAlphabet) {
+  const point = outsideAlphabet[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+  const line = catalogue.slice(0, outsideAlphabet.index).split("\n").length;
+  refuse(`character outside the catalogue alphabet: U+${point} at line ${line}`);
 }
 console.log(`MEN validation passed: ${definitions.size} threats; ${registry.size} verified Linear issues.`);

@@ -463,22 +463,49 @@ bash scripts/ci/check-men.sh
 
 Le validateur échoue sur catalogue absent, doublon, référence inconnue, statut
 invalide ou ticket écrit `ANH-n` absent du registre, où qu'il soit dans la page,
-adresses et code compris. Après normalisation Unicode NFKC, toute autre écriture
-est refusée : casse, espace, autre tiret, caractère invisible ou suffixe collé.
-Ce contrôle de forme exclut les destinations des liens et les adresses, mais
-conserve les titres des liens. Il ignore aussi les fragments en minuscules
-immédiatement précédés de `/`, `#`, `.`, `_` ou `-` dans un chemin, une ancre ou
-un nom de fichier. Par exemple, un nom en minuscules collé à `/` n'est pas compté.
-Une adresse Linear est reconnue par son hôte, `linear.app` ou un sous-domaine.
-Chaque adresse de ticket Linear est comparée à celle du registre, quelle que
-soit la forme du lien, après retrait du fragment. La ponctuation finale n'est
-retirée que pour une adresse nue ; une destination explicite est conservée
-telle quelle.
-Chaque nom de ticket du libellé d'un lien Markdown vers Linear doit désigner
-le ticket lié, même en gras, en code, dans une image ou dans un lien par
-référence. L'échappement et les marques d'emphase comptent comme séparateurs
-dans un nom de ticket ; les références de caractère et le HTML sont refusés
-dans toute la page, code compris, sauf les liens automatiques HTTP(S).
+adresses et code compris. Le contrôle de forme cherche les lettres de `anh`
+en toute casse, éventuellement séparées par des astérisques, tirets bas,
+tildes, accents graves ou marques d'échappement, puis des séparateurs et des
+chiffres, avec ces mêmes marques possibles entre les chiffres et un éventuel
+suffixe collé. Un candidat doit être exactement écrit `ANH-n`, avec un entier
+positif sans zéro initial. Les séparateurs comprennent espaces, tirets Unicode,
+signe moins, tiret bas, caractères de format, échappement et marques d'emphase.
+Le candidat ne doit pas être immédiatement précédé d'une lettre ou d'un chiffre.
+Les fragments commençant par `anh` en minuscules et immédiatement précédés de
+`/`, `#`, `.`, `_` ou `-` sont ignorés partout, par exemple dans un chemin, une
+ancre ou un nom de fichier. Ainsi, `/anh-999` et `-anh-999` ne sont pas comptés.
+Le contrôle de forme efface seulement les jetons de destination des liens en
+ligne qui contiennent `.`, `/`, `#` ou `:`, sans leurs chevrons, les liens
+automatiques HTTP(S), et les adresses nues HTTP(S) ou commençant par `www.`.
+Les titres restent contrôlés ; un jeton sans ces quatre caractères reste lu.
+
+Une adresse est Linear si son hôte, point final retiré, vaut `linear.app` ou
+finit par `.linear.app`. Toute adresse Linear doit être exactement celle d'un
+ticket du registre, fragment retiré. Un chemin contenant une barre oblique ou
+sa forme encodée `%2f`, puis `issue` et une autre barre oblique ou `%2f`, en
+toute casse et à toute position, est comparé comme un chemin de ticket.
+Toute autre adresse Linear, de revue, projet ou document, est refusée.
+La ponctuation finale `. , ; : ! ? _ ~` n'est retirée que pour une adresse nue ;
+une destination explicite est conservée telle quelle. Un lien en ligne vers
+Linear doit avoir exactement le libellé `ANH-n` du ticket lié, dans la forme
+`[ANH-n](adresse du registre)`, avec chevrons ou titre possibles et au plus un
+saut de ligne avant l'adresse. Les images suivent la même règle ; les libellés
+libres ou mis en forme sont refusés. La suite crochet fermant puis deux-points
+est refusée partout, code compris : pas de définition de référence ni de note.
+Les références de caractère et le HTML sont refusés dans toute la page, code
+compris, sauf les liens automatiques HTTP(S).
+
+L'alphabet brut de la page, après remplacement des fins de ligne CRLF par LF,
+se limite au saut de ligne, à l'ASCII imprimable U+0020 à U+007E, à l'espace
+insécable U+00A0, à `« · »`, aux lettres U+00C0 à U+00FF sauf U+00D7 et U+00F7,
+à `Œ œ`, au tiret U+2014 déjà présent, à l'apostrophe U+2019, à l'espace fine
+insécable U+202F et à `→ ↔`. Les tabulations et tout autre caractère sont
+refusés, avec leur point de code et leur ligne, après les autres contrôles.
+Aucune normalisation Unicode n'est appliquée.
+Limite : une adresse nue est coupée avant une espace, un chevron, une
+parenthèse, un crochet, un accent grave, un guillemet, une apostrophe ou un
+astérisque. Par exemple, dans `https://example.org/x(suite)`, seul le préfixe
+avant la parenthèse est lu ; GitHub peut inclure la suite dans le lien.
 Ce contrôle de forme ne remplace pas
 la lecture des liens par le relecteur, demandée à la ligne 4 de la check-list
 de release.
@@ -533,7 +560,9 @@ de ces menaces, que leur fermeture exige la preuve de la fiche et qu'aucun
 statut de risque fermé ou accepté ne se déduit du statut du ticket. Aucun autre
 texte, état ni étiquette n'a changé. À l'enregistrement, Linear a remis entre
 chevrons les adresses de 13 liens de revue de PR déjà présents dans ces
-descriptions, sans changer leur libellé ni leur adresse.
+descriptions, sans changer leur libellé ni leur adresse. Linear a aussi ajouté
+de lui-même une relation vers ANH-136 à chacun des cinq tickets, à
+l'enregistrement de sa section (activité du 16 octobre 2026 vers 05 h 15 UTC).
 
 Le même jour, ANH-135 (MEN-08), ANH-148 (MEN-20) et ANH-230 (MEN-06) ont été
 relus de la même façon (identifiant, UUID, adresse, description et commentaires).
@@ -558,8 +587,8 @@ Chaque ticket de sécurité doit citer les MEN qu'il **contribue à fermer**,
 avec mesures et preuves ; un statut Done du ticket ne ferme pas automatiquement
 la menace. Les mappings exacts sont les champs Issues de chaque fiche.
 Le constat que chaque ticket d'un champ Issues cite dans sa section chaque
-menace que cette page lui attribue porte sur ces champs. Pour les tickets
-nommés hors de ces champs, les lectures
+menace que cette page lui attribue porte sur ces champs. Pour les huit tickets
+de traitement nommés hors de ces champs, les lectures
 du 16 octobre ci-dessus disent lesquels portent une section et lesquels non.
 Le 5 octobre 2026, le responsable de l'intégration a ajouté les backlinks
 aux 27 tickets de traitement référencés ; leur texte et leur identité ont été

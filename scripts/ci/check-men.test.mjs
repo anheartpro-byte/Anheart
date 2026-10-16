@@ -13,8 +13,11 @@ const accepted = mitigated.replace("MITIGATED", "ACCEPTED");
 const url180 = "https://linear.app/anheart/issue/ANH-180/convex-valider-le-passager-dune-seance-locale-et-neutraliser-un";
 const url186 = "https://linear.app/anheart/issue/ANH-186/multi-organisation-lot-2-webhook-clerk-vers-le-miroir-convex-signature";
 const spellingMessage = /ticket written other than ANH-n:/;
-const labelMessage = /Linear link labelled ANH-180 points to another address/;
+const labelMessage = /Linear link not written \[ANH-n\]\(its registry address\):/;
 const addressMessage = /unverified Linear issue link:/;
+const referenceMessage = /reference definition or footnote in the catalogue: write inline links/;
+const alphabetMessage = /character outside the catalogue alphabet: U\+[0-9A-F]+ at line [0-9]+/;
+const otherAddressMessage = /Linear address other than a registered ticket:/;
 const scenarios = [
   { name: "refuses missing catalogue", files: {}, status: 1 },
   { name: "resolves open threat to verified existing issue", files: { "menaces.md": open, "rule.md": "MEN-01\n" }, status: 0 },
@@ -63,8 +66,8 @@ const scenarios = [
   { name: "EX-2 refuses a code label for another ticket", files: { "menaces.md": open + `[\`ANH-180\`](${url186})\n` }, status: 1, message: labelMessage },
   { name: "EX-2 refuses another ticket behind a titled link", files: { "menaces.md": open + `[ANH-180](${url186} "titre")\n` }, status: 1, message: labelMessage },
   { name: "EX-2 refuses another ticket behind an angled destination", files: { "menaces.md": open + `[ANH-180](<${url186}>)\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses a full reference to another ticket", files: { "menaces.md": open + `[ANH-180][x]\n\n[x]: ${url186}\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses a shortcut reference with a lowercase definition", files: { "menaces.md": open + `[ANH-180]\n\n[anh-180]: ${url186}\n` }, status: 1, message: spellingMessage },
+  { name: "EX-2 refuses a full reference to another ticket", files: { "menaces.md": open + `[ANH-180][x]\n\n[x]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "EX-2 refuses a shortcut reference with a lowercase definition", files: { "menaces.md": open + `[ANH-180]\n\n[anh-180]: ${url186}\n` }, status: 1, message: referenceMessage },
   { name: "EX-2 refuses a lowercase Linear issue address", files: { "menaces.md": open + "[la décision](https://linear.app/anheart/issue/anh-999999/x)\n" }, status: 1, message: /unverified Linear issue link: anh-999999/ },
   { name: "EX-2 refuses an HTML link", files: { "menaces.md": open + `<a href="${url186}">ANH-180</a>\n` }, status: 1, message: /HTML in the catalogue: write Markdown/ },
   // ANH-229 EX-3 : exact addresses survive prose punctuation, code and comment fragments.
@@ -77,13 +80,13 @@ const scenarios = [
   { name: "EX-4 refuses an HTTP address with a free label", files: { "menaces.md": open + `[la décision](${url180.replace("https:", "http:")})\n` }, status: 1, message: addressMessage },
   // ANH-229 EX-2 : valid Markdown and lowercase path fragments remain usable.
   { name: "accepts a correctly labelled registered link", files: { "menaces.md": open + `[ANH-180](${url180})\n` }, status: 0 },
-  { name: "accepts a correctly labelled registered reference", files: { "menaces.md": open + `[ANH-180][r]\n\n[r]: ${url180}\n` }, status: 0 },
-  { name: "accepts a free label to a registered address", files: { "menaces.md": open + `[la décision](${url180})\n` }, status: 0 },
+  { name: "refuses a correctly labelled registered reference", files: { "menaces.md": open + `[ANH-180][r]\n\n[r]: ${url180}\n` }, status: 1, message: referenceMessage },
+  { name: "refuses a free label to a registered address", files: { "menaces.md": open + `[la décision](${url180})\n` }, status: 1, message: labelMessage },
   { name: "accepts a lowercase review filename", files: { "menaces.md": open + "[x](reviews/anh-136-2026-10-05.md)\n" }, status: 0 },
   { name: "accepts a lowercase release anchor", files: { "menaces.md": open + "[y](framework-de-test.md#pipeline-de-release-anh-219)\n" }, status: 0 },
   { name: "accepts a lowercase path in code", files: { "menaces.md": open + "`/root/anh136_threat_model`\n" }, status: 0 },
-  { name: "accepts a Linear review with a free label", files: { "menaces.md": open + "[la PR](https://linear.app/anheart/review/x)\n" }, status: 0 },
-  // ANH-229 EX-2 : Unicode separators, titles, images and normalized references follow the same rules.
+  { name: "refuses a Linear review with a free label", files: { "menaces.md": open + "[la PR](https://linear.app/anheart/review/x)\n" }, status: 1, message: otherAddressMessage },
+  // ANH-229 EX-2 : Unicode separators, titles and images follow the same rules.
   { name: "EX-2 refuses an invisible separator with a readable diagnostic", files: { "menaces.md": open + "Voir ANH\u200b165.\n" }, status: 1, message: /ticket written other than ANH-n: "ANH\\u200b165"/ },
   { name: "EX-2 refuses a soft hyphen with a readable diagnostic", files: { "menaces.md": open + "Voir ANH\u00ad165.\n" }, status: 1, message: /ticket written other than ANH-n: "ANH\\u00ad165"/ },
   { name: "EX-2 refuses a Unicode minus", files: { "menaces.md": open + "Voir ANH\u2212165.\n" }, status: 1, message: spellingMessage },
@@ -92,9 +95,9 @@ const scenarios = [
   { name: "EX-2 refuses a ticket suffix with an underscore", files: { "menaces.md": open + "Voir ANH-165_extra.\n" }, status: 1, message: spellingMessage },
   { name: "EX-2 retains the title when removing a link destination", files: { "menaces.md": open + '[x](reviews/anh-136.md "ANH 165")\n' }, status: 1, message: spellingMessage },
   { name: "EX-2 refuses an image labelled with another ticket", files: { "menaces.md": open + `![**ANH-180**](${url186})\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses a collapsed reference to another ticket", files: { "menaces.md": open + `[ANH-180][]\n\n[ANH-180]: ${url186}\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses a shortcut reference to another ticket", files: { "menaces.md": open + `[ANH-180]\n\n[ANH-180]: ${url186}\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 normalizes reference case and whitespace", files: { "menaces.md": open + `[ANH-180][X   Y]\n\n[x y]: <${url186}> "titre"\n` }, status: 1, message: labelMessage },
+  { name: "EX-2 refuses a collapsed reference to another ticket", files: { "menaces.md": open + `[ANH-180][]\n\n[ANH-180]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "EX-2 refuses a shortcut reference to another ticket", files: { "menaces.md": open + `[ANH-180]\n\n[ANH-180]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "EX-2 refuses a reference with mixed case and whitespace", files: { "menaces.md": open + `[ANH-180][X   Y]\n\n[x y]: <${url186}> "titre"\n` }, status: 1, message: referenceMessage },
   // ANH-229 EX-4 : all address forms retain exact registry comparison.
   { name: "EX-4 refuses a WWW issue address", files: { "menaces.md": open + `[la décision](${url180.replace("https://", "www.")})\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses a Linear subdomain", files: { "menaces.md": open + `<${url180.replace("linear.app", "x.linear.app")}>\n` }, status: 1, message: addressMessage },
@@ -102,29 +105,28 @@ const scenarios = [
   { name: "EX-4 refuses another workspace", files: { "menaces.md": open + `[la décision](${url180.replace("/anheart/", "/other/")})\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses an address query", files: { "menaces.md": open + `[la décision](${url180}?x=1)\n` }, status: 1, message: addressMessage },
   { name: "EX-4 checks registered names even inside a foreign address", files: { "menaces.md": open + "[x](https://example.org/ANH-999999/x)\n" }, status: 1, message: /Linear issue named but not verified: ANH-999999/ },
-  // ANH-229 EX-2 : destinations are excluded from spelling checks; text is normalized in NFKC.
+  // ANH-229 EX-2 : destinations are excluded from spelling checks; the alphabet is literal.
   { name: "accepts lowercase ticket names inside non-Linear destinations", files: { "menaces.md": open + "[x](https://example.org/anh-999999/x)\n" }, status: 0 },
-  { name: "accepts an NFKC spelling of a registered name", files: { "menaces.md": open + "Voir ＡＮＨ-１６５.\n" }, status: 0 },
-  { name: "accepts exact reference destinations with fragments and titles", files: { "menaces.md": open + `[ANH-180][r]\n\n[r]: <${url180}#comment-1> "titre"\n` }, status: 0 },
+  { name: "refuses an NFKC spelling of a registered name", files: { "menaces.md": open + "Voir ＡＮＨ-１６５.\n" }, status: 1, message: alphabetMessage },
+  { name: "refuses exact reference destinations with fragments and titles", files: { "menaces.md": open + `[ANH-180][r]\n\n[r]: <${url180}#comment-1> "titre"\n` }, status: 1, message: referenceMessage },
   // ANH-229 EX-4 : explicit destinations retain punctuation and are classified by host.
   { name: "EX-4 refuses a full stop in an explicitly labelled destination", files: { "menaces.md": open + `[ANH-180](${url180}.)\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses a full stop in an explicit free-label destination", files: { "menaces.md": open + `[la décision](${url180}.)\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses a full stop in an angled destination", files: { "menaces.md": open + `[la décision](<${url180}.>)\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses a full stop in an autolink", files: { "menaces.md": open + `<${url180}.>\n` }, status: 1, message: addressMessage },
-  { name: "EX-4 refuses a full stop in a reference destination", files: { "menaces.md": open + `[la décision][r]\n\n[r]: ${url180}.\n` }, status: 1, message: addressMessage },
+  { name: "EX-4 refuses a full stop in a reference destination", files: { "menaces.md": open + `[la décision][r]\n\n[r]: ${url180}.\n` }, status: 1, message: referenceMessage },
   { name: "EX-4 refuses an apostrophe in a Linear destination", files: { "menaces.md": open + `[ANH-180](${url186}')\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses an asterisk in a Linear destination", files: { "menaces.md": open + `[ANH-180](${url186}*)\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses user information in a Linear destination", files: { "menaces.md": open + `[ANH-180](${url186.replace("https://", "https://x@")})\n` }, status: 1, message: addressMessage },
   { name: "EX-4 refuses a truncated Linear destination with user information", files: { "menaces.md": open + "[la décision](https://x@linear.app/anheart/issue/ANH-165/convex-rotation)\n" }, status: 1, message: addressMessage },
   { name: "EX-4 refuses an unreadable destination containing the Linear host", files: { "menaces.md": open + `[la décision](${url180.replace("linear.app", "[linear.app")})\n` }, status: 1, message: addressMessage },
-  // ANH-229 EX-2 : broad reference reads cannot let a false definition mask a real one.
-  { name: "EX-2 refuses a reference destination on the following line", files: { "menaces.md": open + `[ANH-180][x]\n\n[x]:\n${url186}\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses a reference definition in a quotation", files: { "menaces.md": open + `[ANH-180][x]\n\n> [x]: ${url186}\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses a reference definition in a list", files: { "menaces.md": open + `[ANH-180][x]\n\n- [x]: ${url186}\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses a multiline reference label", files: { "menaces.md": open + `[ANH-180][x y]\n\n[x\ny]: ${url186}\n` }, status: 1, message: labelMessage },
-  { name: "EX-2 refuses a real definition hidden behind a false one", files: { "menaces.md": open + `[ANH-180][x]\n\nTexte [x]: ${url180}\n\n[x]: ${url186}\n` }, status: 1, message: labelMessage },
-  // ANH-229 EX-2 : a canonical destination on the next line remains usable.
-  { name: "accepts a canonical reference destination on the following line", files: { "menaces.md": open + `[ANH-180][r]\n\n[r]:\n${url180}\n` }, status: 0 },
+  // ANH-229 EX-2 : reference definitions are refused wherever they appear.
+  { name: "EX-2 refuses a reference destination on the following line", files: { "menaces.md": open + `[ANH-180][x]\n\n[x]:\n${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "EX-2 refuses a reference definition in a quotation", files: { "menaces.md": open + `[ANH-180][x]\n\n> [x]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "EX-2 refuses a reference definition in a list", files: { "menaces.md": open + `[ANH-180][x]\n\n- [x]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "EX-2 refuses a multiline reference label", files: { "menaces.md": open + `[ANH-180][x y]\n\n[x\ny]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "EX-2 refuses a real definition hidden behind a false one", files: { "menaces.md": open + `[ANH-180][x]\n\nTexte [x]: ${url180}\n\n[x]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "refuses a canonical reference destination on the following line", files: { "menaces.md": open + `[ANH-180][r]\n\n[r]:\n${url180}\n` }, status: 1, message: referenceMessage },
   // ANH-229 EX-2 : escapes and emphasis cannot hide the separator of a ticket name.
   { name: "EX-2 refuses an escaped ticket separator", files: { "menaces.md": open + "Voir ANH\\-999.\n" }, status: 1, message: spellingMessage },
   { name: "EX-2 refuses bold markup inside a ticket name", files: { "menaces.md": open + "Voir **ANH**-999.\n" }, status: 1, message: spellingMessage },
@@ -145,6 +147,75 @@ const scenarios = [
   { name: "EX-2 refuses HTML in a code span", files: { "menaces.md": open + "Voir `<span>`.\n" }, status: 1, message: /HTML in the catalogue: write Markdown/ },
   { name: "accepts an HTTPS autolink to a non-Linear address", files: { "menaces.md": open + "<https://example.org/x>\n" }, status: 0 },
   { name: "accepts an HTTPS autolink to an exact registered address", files: { "menaces.md": open + `<${url180}>\n` }, status: 0 },
+  // ANH-229 EX-2 : R1 definitions and footnotes cannot erase visible ticket text.
+  { name: "R1 refuses a false definition inside prose", files: { "menaces.md": open + "Voir [x]: ANH 999.\n" }, status: 1, message: referenceMessage },
+  { name: "R1 refuses a lowercase ticket after a false definition", files: { "menaces.md": open + "Voir [note]: anh-999.\n" }, status: 1, message: referenceMessage },
+  { name: "R1 refuses a false definition before a line break", files: { "menaces.md": open + "[x]:\nANH 999\n" }, status: 1, message: referenceMessage },
+  { name: "R1 refuses a footnote containing an alternate ticket spelling", files: { "menaces.md": open + "[^n]: ANH 999\n" }, status: 1, message: referenceMessage },
+  { name: "R1 refuses a shortcut followed by a colon in prose", files: { "menaces.md": open + `Voir [ANH-180]: détails.\n\n[ANH-180]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "R1 refuses an escaped reference label", files: { "menaces.md": open + `[ANH-180][x\\]]\n\n[x\\]]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "R1 refuses a Unicode case-folded reference", files: { "menaces.md": open + `[ANH-180][Straße]\n\n[STRASSE]: ${url186}\n` }, status: 1, message: referenceMessage },
+  { name: "R1 refuses a mismatched first reference definition", files: { "menaces.md": open + `[ANH-180][x]\n\n[x]: ${url186}\n[x]: ${url180}\n` }, status: 1, message: referenceMessage },
+  { name: "refuses a reference marker even in code", files: { "menaces.md": open + "`]:`\n" }, status: 1, message: referenceMessage },
+  // ANH-229 EX-2 : R1 split letters and digits are candidates, rather than hidden names.
+  { name: "R1 refuses a partially bold label", files: { "menaces.md": open + `[A**NH**-180](${url186})\n` }, status: 1, message: spellingMessage },
+  { name: "R1 refuses a partially italic label", files: { "menaces.md": open + `[*A*NH-180](${url186})\n` }, status: 1, message: spellingMessage },
+  { name: "R1 refuses partially bold ticket letters in prose", files: { "menaces.md": open + "Voir A**NH**-999.\n" }, status: 1, message: spellingMessage },
+  { name: "R1 refuses partially italic ticket letters in prose", files: { "menaces.md": open + "*A*NH-999\n" }, status: 1, message: spellingMessage },
+  { name: "R1 refuses code markup between ticket letters", files: { "menaces.md": open + "AN`H`-999\n" }, status: 1, message: spellingMessage },
+  { name: "R1 refuses markup between ticket digits", files: { "menaces.md": open + "Voir ANH-165**0**.\n" }, status: 1, message: spellingMessage },
+  // ANH-229 EX-2 : R1 labels must be literal even when Markdown hides their spelling.
+  { name: "R1 refuses an invisible character inside a label", files: { "menaces.md": open + `[A\u200bNH-180](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1 refuses Greek letters inside a label", files: { "menaces.md": open + `[ΑΝΗ-180](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1 refuses a code closing bracket after a ticket label", files: { "menaces.md": open + `[ANH-180\`]\`](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1 refuses a code closing bracket before a ticket label", files: { "menaces.md": open + `[\`]\`ANH-180](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1 refuses a mismatched label with an escaped double-quoted title", files: { "menaces.md": open + `[ANH-180](${url186} "a\\"b")\n` }, status: 1, message: labelMessage },
+  { name: "R1 refuses a mismatched label with an escaped parenthesized title", files: { "menaces.md": open + `[ANH-180](${url186} (a\\)b))\n` }, status: 1, message: labelMessage },
+  { name: "R1 refuses a mismatched label with an escaped single-quoted title", files: { "menaces.md": open + `[ANH-180](${url186} 'a\\'b')\n` }, status: 1, message: labelMessage },
+  { name: "refuses a formatted label even for its own registered ticket", files: { "menaces.md": open + `[**ANH-180**](${url180})\n` }, status: 1, message: labelMessage },
+  { name: "refuses an escaped closing bracket in a label", files: { "menaces.md": open + `[ANH-180\\]](${url186})\n` }, status: 1, message: labelMessage },
+  // ANH-229 EX-2 : R1 uses the raw alphabet, without Unicode normalization.
+  { name: "R1 refuses a zero-width space between ticket letters", files: { "menaces.md": open + "Voir A\u200bNH-999.\n" }, status: 1, message: /character outside the catalogue alphabet: U\+200B at line 4/ },
+  { name: "R1 refuses a soft hyphen between ticket letters", files: { "menaces.md": open + "AN\u00adH-999\n" }, status: 1, message: /character outside the catalogue alphabet: U\+00AD at line 4/ },
+  { name: "R1 refuses a word joiner between ticket letters", files: { "menaces.md": open + "A\u2060NH-999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a combining grapheme joiner", files: { "menaces.md": open + "A\u034fNH-999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a variation selector between ticket letters", files: { "menaces.md": open + "A\ufe0fNH-999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses an invisible separator between ticket digits", files: { "menaces.md": open + "Voir ANH-165\u200b0.\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses Cyrillic ticket homoglyphs", files: { "menaces.md": open + "Voir АNН-999.\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses Greek ticket homoglyphs in prose", files: { "menaces.md": open + "ΑΝΗ-999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a box-drawing separator", files: { "menaces.md": open + "ANH─999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a prolonged sound mark separator", files: { "menaces.md": open + "ANHー999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a hyphen bullet separator", files: { "menaces.md": open + "ANH⁃999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a modifier minus separator", files: { "menaces.md": open + "ANH˗999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a heavy minus separator", files: { "menaces.md": open + "ANH➖999\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a fullwidth unknown ticket", files: { "menaces.md": open + "Voir ＡＮＨ-９９９.\n" }, status: 1, message: alphabetMessage },
+  { name: "R1 refuses a fullwidth label for another ticket", files: { "menaces.md": open + `[ＡＮＨ-180](${url186})\n` }, status: 1, message: labelMessage },
+  { name: "R1 refuses a tab in prose", files: { "menaces.md": open + "Voir\tici.\n" }, status: 1, message: /character outside the catalogue alphabet: U\+0009 at line 4/ },
+  { name: "refuses multiplication outside the alphabet", files: { "menaces.md": open + "x × y\n" }, status: 1, message: alphabetMessage },
+  { name: "refuses division outside the alphabet", files: { "menaces.md": open + "x ÷ y\n" }, status: 1, message: alphabetMessage },
+  { name: "refuses a supplementary code point with its full diagnostic", files: { "menaces.md": open + "\u{1f600}\n" }, status: 1, message: /character outside the catalogue alphabet: U\+1F600 at line 4/ },
+  // ANH-229 EX-4 : R1 host spelling and every Linear path keep exact registry comparison.
+  { name: "R1 refuses a dotted Linear host in a labelled link", files: { "menaces.md": open + `[ANH-180](${url186.replace("linear.app", "linear.app.")})\n` }, status: 1, message: addressMessage },
+  { name: "R1 refuses a truncated dotted Linear host in a free-label link", files: { "menaces.md": open + "[la décision](https://linear.app./anheart/issue/ANH-165/convex-rotation)\n" }, status: 1, message: addressMessage },
+  { name: "R1 refuses a truncated dotted Linear host in a bare address", files: { "menaces.md": open + "https://linear.app./anheart/issue/ANH-165/convex-rotation\n" }, status: 1, message: addressMessage },
+  { name: "R1 refuses doubled path slashes in a Linear issue address", files: { "menaces.md": open + "https://linear.app//anheart/issue/ANH-165/convex-rotation\n" }, status: 1, message: addressMessage },
+  { name: "R1 refuses an encoded slash before the issue path", files: { "menaces.md": open + "https://linear.app/anheart%2Fissue/ANH-165/convex-rotation\n" }, status: 1, message: addressMessage },
+  { name: "R1 refuses an encoded slash after a mixed-case issue path", files: { "menaces.md": open + "https://linear.app/anheart/IsSuE%2FANH-165/convex-rotation\n" }, status: 1, message: addressMessage },
+  { name: "R1 refuses a bare Linear review address", files: { "menaces.md": open + "https://linear.app/anheart/review/x\n" }, status: 1, message: otherAddressMessage },
+  { name: "R1 refuses a Linear project address", files: { "menaces.md": open + "https://linear.app/anheart/project/x\n" }, status: 1, message: otherAddressMessage },
+  { name: "R1 refuses a Linear document address", files: { "menaces.md": open + "https://linear.app/anheart/document/x\n" }, status: 1, message: otherAddressMessage },
+  // ANH-229 EX-2 : erasure applies only to destination tokens containing address punctuation.
+  { name: "accepts a short lowercase destination filename", files: { "menaces.md": open + "[x](anh-136.md)\n" }, status: 0 },
+  { name: "refuses an address-free token after a link opener", files: { "menaces.md": open + "](ANH 999\n" }, status: 1, message: spellingMessage },
+  { name: "refuses an alternate ticket used as a destination token", files: { "menaces.md": open + "[x](anh-165)\n" }, status: 1, message: spellingMessage },
+  // ANH-229 EX-2 : the strict subset retains the page's actual link and character forms.
+  { name: "accepts a canonical link with a fragment and title", files: { "menaces.md": open + `[ANH-180](${url180}#comment-1 "voir")\n` }, status: 0 },
+  { name: "accepts an angled canonical inline destination", files: { "menaces.md": open + `[ANH-180](<${url180}>)\n` }, status: 0 },
+  { name: "accepts a canonical image destination", files: { "menaces.md": open + `![ANH-180](${url180})\n` }, status: 0 },
+  { name: "accepts a canonical inline destination on the next line", files: { "menaces.md": open + `[ANH-180](\n ${url180})\n` }, status: 0 },
+  { name: "accepts the full catalogue alphabet after CRLF normalization", files: { "menaces.md": open + "« · » À É à â ç è é ê î ô ù û œ → ↔\u00a0\u202f\u2019Œ\u2014\r\n" }, status: 0 },
+  { name: "accepts lowercase slash fragments anywhere", files: { "menaces.md": open + "Voir /anh-999.\n" }, status: 0 },
+  { name: "accepts lowercase hyphen fragments anywhere", files: { "menaces.md": open + "Voir -anh-999.\n" }, status: 0 },
 ];
 
 for (const scenario of scenarios) {
