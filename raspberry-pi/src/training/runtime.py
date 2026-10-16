@@ -1445,8 +1445,8 @@ class TrainingRuntime:
     def _initialise_evidence(self) -> None:
         """Evidence and output, as a runtime nobody has started holds them."""
         self._last_sample: HeartRateSample | None = None
-        # The latest fresh sample that carried a usable rate: what the level
-        # rules go on judging when the fresh samples after it carry none.
+        # The latest fresh sample that carried a usable rate: evidence for
+        # hr_stale and the level and trend rules when later samples carry none.
         self._last_usable_sample: HeartRateSample | None = None
         self._decision: ControlDecision | None = None
         self._counters: ZoneCounters = ZoneCounters(
@@ -1722,11 +1722,13 @@ class TrainingRuntime:
         is shown one sample a tick, and this method can be called several times
         between two ticks (the bridge drains a backlog in one pump, and it runs
         on its own task). A fresh sample with no rate in it replaces the last
-        sample, as it must: the screen and ``hr_stale`` need to know nothing is
-        being measured. It does not replace the last USABLE one, which is what
-        the level rules go on judging until it is stale
-        (:meth:`~src.training.safety.SafetySupervisor._level_rate`). The gate
-        is the same sequence gate, and the test is the sample's own
+        sample, as it must: the screen needs to know nothing is being measured.
+        It does not replace the last USABLE one, whose measurement instant
+        dates ``hr_stale`` and which the supervisor uses for its level and
+        trend rules, subject to their age and sequence gates
+        (:meth:`~src.training.safety.SafetySupervisor._ingest` and
+        :meth:`~src.training.safety.SafetySupervisor._level_rate`). The gate
+        for retaining it is the same sequence gate, and the test is the sample's own
         ``usable_bpm``, the one the supervisor applies: the tracker's
         plausibility and jump gates decide what the control law regulates on,
         not what the safety rules are shown.
@@ -1958,11 +1960,12 @@ class TrainingRuntime:
         The one statement of the gate, read by :meth:`_follow_manual` in the
         tick and by :meth:`set_manual_target` at the console, so that what is
         refused and what is held cannot drift apart. Nobody on board: no gate.
-        A person on board: no rise without a fresh, trustworthy heart rate,
-        nor while the vasovagal gate is closed (:meth:`_increase_permitted`,
-        the very test a programme's rise passes). The DECISION is those two
-        tests and nothing else, exactly as before this method had a name; the
-        trend is read a second time only to say which of its two ways the
+        A person on board: no rise unless the shared age gate
+        (:meth:`_rise_reading_recent`, ``RuntimeLimits.rise_reading_within``)
+        accepts the last tracker-accepted reading, nor while the short trend
+        is unknown or falling too fast (:meth:`_increase_permitted`, the
+        very test a programme's rise passes). The trend is read a second time
+        only to distinguish an unknown trend from a falling one when that
         gate is closed. None of this is a verdict.
         """
         if not self._occupied():
