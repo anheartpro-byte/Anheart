@@ -28,6 +28,7 @@ EVERY_COMMAND: tuple[tuple[commands.Command, str], ...] = (
     (commands.Shutdown(), "shutdown"),
     (commands.Attendant(present=True), "attendant present=true"),
     (commands.Attendant(present=False), "attendant present=false"),
+    (commands.AttendantPing(), "attendant_ping"),
 )
 
 
@@ -65,6 +66,11 @@ def test_ex1_every_command_is_written_as_pinned_and_read_back_identical(
         "acknowledge released=true",
         "attendant present=1",
         "attendant here=true",
+        "attendant_ping present=true",
+        "attendant_ping ",
+        " attendant_ping",
+        "attendant_ping\n",
+        "attendant_ping=true",
         "start_programme profile=1",
         "estop hard",
         "fault_reset now",
