@@ -61,8 +61,17 @@ from simulation.harness import (
     RUNTIME_LIMITS,
     load_motion,
 )
+from simulation.modbus import InlineExecutor
 from simulation.replay_compare import Decision, RuleKey, SafetyDecision, compare_decisions
 from simulation.replay_config import AppliedRuntime, load_configuration, sidecar
+from simulation.replay_modbus import (
+    NATIVE_KINDS,
+    SDK_KINDS,
+    NativeExchange,
+    NativeFrames,
+    TapeMaster,
+    parse_native,
+)
 from simulation.replay_report import ConfigurationCheck, Divergence, ReplayReport
 from simulation.replay_tape import (
     INSTANT_EPSILON,
@@ -81,6 +90,8 @@ from src.bitalino_client import SampleBatch
 from src.clock import ManualClock
 from src.ecg_pipeline import EcgBridge, EcgFrame, Treatment, load_treatment, treat_ecg
 from src.geometry import MachineGeometry
+from src.motor.atv320 import ATV320Drive
+from src.motor.drive import DriveBackend
 from src.record import commands
 from src.record.reader import Recording, read
 from src.record.rows import Row
@@ -180,7 +191,7 @@ type _Step = _Tick | _Order | _Reading
 class _Plan:
     expected: tuple[Decision, ...]
     steps: tuple[_Step, ...]
-    exchanges: tuple[Exchange, ...]
+    exchanges: tuple[Exchange, ...] | NativeFrames
     blocks: tuple[Delivery, ...]
     origin: Monotonic
     geometry: GeometrySnapshot | AppliedRuntime
@@ -305,7 +316,8 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
     problems: list[str] = []
     expected = _decisions(recording.rows)
     orders = _orders(recording)
-    exchanges = parse_frames(recording.frames)
+    native = any(frame.kind in NATIVE_KINDS | SDK_KINDS for frame in recording.frames)
+    exchanges = parse_native(recording.frames) if native else parse_frames(recording.frames)
     problems.extend(part.error for part in (expected, orders, exchanges) if isinstance(part, Err))
     if not recording.frames:
         problems.append("the record holds no drive exchange: nothing says what the drive answered")
@@ -353,7 +365,10 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
     )
     steps: tuple[_Step, ...] = tuple(sorted((*ticks, *orders.value, *readings), key=_position))
     first = steps[0].t
-    if any(exchange.t < first - TICK - INSTANT_EPSILON for exchange in exchanges.value):
+    entries = (
+        exchanges.value.exchanges if isinstance(exchanges.value, NativeFrames) else exchanges.value
+    )
+    if any(exchange.t < first - TICK - INSTANT_EPSILON for exchange in entries):
         return Err(
             "drive exchanges were recorded before the first tick or command: the record "
             "does not hold the idle ticks that made them (t <= 0)"
@@ -401,7 +416,7 @@ def _runtime(
     geometry: GeometrySnapshot | AppliedRuntime,
     profile: Profile | None,
     clock: ManualClock,
-    drive: TapeDrive,
+    drive: DriveBackend,
 ) -> Result[TrainingRuntime, str]:
     """Build from verified console settings, or simulation geometry and repository limits."""
     safety = (
@@ -575,7 +590,9 @@ class ReplayedSession:
     divergence: Divergence | None
 
 
-async def _run(plan: _Plan, session: _Session, tape: TapeDrive, pace: Pace) -> ReplayedSession:
+async def _run(
+    plan: _Plan, session: _Session, tape: TapeDrive | TapeMaster, pace: Pace
+) -> ReplayedSession:
     """Walk the plan until its end or until the tape no longer holds."""
     actual: list[Decision] = []
     raised: str | None = None
@@ -599,7 +616,11 @@ async def _run(plan: _Plan, session: _Session, tape: TapeDrive, pace: Pace) -> R
         if tape.finish_step() is not None:
             break
     pending = tape.pending
-    recorded = NO_FURTHER if pending is None else located(pending)
+    recorded = (
+        NO_FURTHER
+        if pending is None
+        else (pending.located() if isinstance(pending, NativeExchange) else located(pending))
+    )
     mismatch = tape.mismatch
     divergence: Divergence | None = None
     # To the millisecond, like every instant of a record: the report is what an
@@ -639,8 +660,26 @@ async def replay_recording(
     # The first step's instant AS WRITTEN: the one place an absolute instant is
     # rebuilt, and why the producer does not round the stamp of its first command.
     clock = ManualClock(start=Monotonic(plan.value.origin + plan.value.steps[0].at))
-    tape = TapeDrive(plan.value.exchanges, clock, plan.value.origin)
-    runtime = _runtime(plan.value.geometry, recording.manifest.profile, clock, tape)
+    data = plan.value.exchanges
+    tape: TapeDrive | TapeMaster
+    drive: DriveBackend
+    if isinstance(data, NativeFrames):
+        if applied is None or applied.native_drive is None:
+            return Err(
+                ReplayError(
+                    "native Modbus replay requires native_drive "
+                    "in the verified configuration document"
+                )
+            )
+        settings, registers = applied.native_drive
+        tape = TapeMaster(data, clock, plan.value.origin)
+        drive = ATV320Drive(
+            clock, tape, settings, registers, executor_factory=InlineExecutor, wait=tape.wait
+        )
+    else:
+        tape = TapeDrive(data, clock, plan.value.origin)
+        drive = tape
+    runtime = _runtime(plan.value.geometry, recording.manifest.profile, clock, drive)
     if isinstance(runtime, Err):
         return Err(ReplayError(runtime.error))
     session = _Session(plan.value, recording.manifest, runtime.value, clock)

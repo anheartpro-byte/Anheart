@@ -225,7 +225,7 @@ def applied_configuration(
         "signed": status.signed,
     }
     link = config.drive_link
-    applied: JsonValue = {
+    applied: dict[str, JsonValue] = {
         "medical": medical,
         "runtime": _RUNTIME.dump_json(limits).decode("utf-8"),
         "geometry": (
@@ -244,6 +244,18 @@ def applied_configuration(
         "camera": config.camera.value,
         "drive_link": None if link is None else link.describe(),
     }
+    if link is not None:
+        settings = link.settings
+        applied["native_drive"] = {
+            "baudrate": settings.baudrate,
+            "bytesize": settings.bytesize,
+            "parity": settings.parity.value,
+            "stopbits": settings.stopbits,
+            "timeout": settings.timeout,
+            "slave_address": settings.slave_address,
+            "retries": settings.retries,
+            "offset": link.registers.offset,
+        }
     return json.dumps(applied, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
         "utf-8"
     )

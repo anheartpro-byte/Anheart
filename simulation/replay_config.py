@@ -13,6 +13,9 @@ from simulation.replay_report import ConfigurationCheck, CurrentPart
 from src.geometry import MachineGeometry
 from src.local_config import CameraSource
 from src.medical import SHIPPED_PARAMETERS, shipped_status
+from src.motor.atv320 import SerialSettings
+from src.motor.drive import RegisterMap
+from src.motor.ftdi_link import Parity
 from src.panel_status import EcgSource, MotorBackend
 from src.record.configuration import MAX_CONFIG_BYTES
 from src.result import Err, Ok, Result
@@ -20,7 +23,7 @@ from src.sensors.base import SensorKind
 from src.training.motion import MotionLimits
 from src.training.runtime import RuntimeLimits
 from src.training.safety import SafetyLimits
-from src.units import GearRatio, Hertz, Metres, MotorRpm
+from src.units import GearRatio, Hertz, Metres, MotorRpm, Seconds
 
 
 @validated(frozen=True, slots=True, config=ConfigDict(extra="forbid", allow_inf_nan=False))
@@ -30,6 +33,33 @@ class _Medical:
     min_rider_age: int
     file_sha256: str
     signed: bool
+
+
+@validated(frozen=True, slots=True, config=ConfigDict(extra="forbid", allow_inf_nan=False))
+class _NativeDrive:
+    baudrate: int
+    bytesize: int
+    parity: Parity
+    stopbits: int
+    timeout: float
+    slave_address: int
+    retries: int
+    offset: int
+
+    def build(self) -> tuple[SerialSettings, RegisterMap]:
+        return (
+            SerialSettings(
+                port="replay",
+                baudrate=self.baudrate,
+                bytesize=self.bytesize,
+                parity=self.parity,
+                stopbits=self.stopbits,
+                timeout=Seconds(self.timeout),
+                slave_address=self.slave_address,
+                retries=self.retries,
+            ),
+            RegisterMap(offset=self.offset),
+        )
 
 
 @validated(frozen=True, slots=True, config=ConfigDict(extra="forbid", allow_inf_nan=False))
@@ -45,6 +75,7 @@ class _Document:
     ecg_source: EcgSource
     camera: CameraSource
     drive_link: str | None
+    native_drive: _NativeDrive | None = None
 
 
 _DOCUMENT: Final[TypeAdapter[_Document]] = TypeAdapter(_Document)
@@ -61,6 +92,7 @@ class AppliedRuntime:
     safety: SafetyLimits
     motion: MotionLimits
     check: ConfigurationCheck
+    native_drive: tuple[SerialSettings, RegisterMap] | None = None
 
 
 def sidecar(path: Path) -> Path:
@@ -110,6 +142,7 @@ def load_configuration(path: Path | None, expected_hash: str) -> Result[AppliedR
         )
     try:
         document = _DOCUMENT.validate_json(content, strict=True)
+        native = None if document.native_drive is None else document.native_drive.build()
         safety = _SAFETY.validate_json(document.medical.safety, strict=True, extra="forbid")
         motion = _MOTION.validate_json(document.medical.motion, strict=True, extra="forbid")
         runtime = _RUNTIME.validate_json(document.runtime, strict=True, extra="forbid")
@@ -133,5 +166,6 @@ def load_configuration(path: Path | None, expected_hash: str) -> Result[AppliedR
             safety,
             motion,
             ConfigurationCheck(True, bool(differing), differing),
+            native,
         )
     )

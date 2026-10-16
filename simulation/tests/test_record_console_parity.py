@@ -72,11 +72,13 @@ ENTRIES = [
 ]
 
 
-async def _inline(treatment: Treatment, batch: SampleBatch) -> EcgFrame | None:
+async def console_inline(treatment: Treatment, batch: SampleBatch) -> EcgFrame | None:
     return treat_ecg(treatment, batch)
 
 
-async def _ticks(panel: LocalPanel, journal: Journal, clock: ManualClock, seconds: float) -> None:
+async def console_ticks(
+    panel: LocalPanel, journal: Journal, clock: ManualClock, seconds: float
+) -> None:
     for index in range(round(seconds / TICK)):
         clock.advance(TICK)
         panel.surface.note_presence(OPERATOR)
@@ -102,13 +104,13 @@ async def _console_record(tmp_path: Path, *, programme: bool) -> Path:
         loaded.value,
         clock=clock,
         profiles_path=tmp_path / "profiles.json",
-        treat=_inline,
+        treat=console_inline,
         journal=journal,
         roster=listed(clock),
     )
     surface = panel.surface
     assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
-    await _ticks(panel, journal, clock, 12.0)
+    await console_ticks(panel, journal, clock, 12.0)
     if programme:
         started = surface.submit_start(
             profile_id="standard_30_min",
@@ -117,22 +119,22 @@ async def _console_record(tmp_path: Path, *, programme: bool) -> Path:
             subject_id=RIDER_ID,
         )
         assert isinstance(started, Ok), started
-        await _ticks(panel, journal, clock, 8.0)
+        await console_ticks(panel, journal, clock, 8.0)
     else:
         assert isinstance(
             surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
         )
-        await _ticks(panel, journal, clock, 1.0)
+        await console_ticks(panel, journal, clock, 1.0)
         assert isinstance(
             surface.submit_manual_target(output_rpm=OutputRpm(3.0), operator=OPERATOR), Ok
         )
-        await _ticks(panel, journal, clock, 12.0)
+        await console_ticks(panel, journal, clock, 12.0)
     assert _state(panel) is RuntimeState.RUNNING, surface.run_state
     if not programme:
         # The operator's stop, to the end. (A programme's cooldown and monitored
         # recovery take minutes: that one is closed by the console's exit instead.)
         assert isinstance(surface.submit_end(operator=OPERATOR, reason="done"), Ok)
-        await _ticks(panel, journal, clock, 60.0)
+        await console_ticks(panel, journal, clock, 60.0)
         assert _state(panel) is RuntimeState.FINISHED
     await panel.close()
     found = records(journal.root)

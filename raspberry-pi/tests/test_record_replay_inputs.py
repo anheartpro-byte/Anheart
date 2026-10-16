@@ -20,6 +20,7 @@ from src.motor.drive import (
     StopUnconfirmed,
     UnexpectedState,
 )
+from src.motor.observation import MODBUS_FAILURES
 from src.record.drive_tap import CallTap
 from src.record.ecg import Header, RawBlock, RuntimeDelivery, decode_block, encode_block
 from src.record.reader import read
@@ -61,6 +62,7 @@ def test_named_failure_roundtrip_keeps_decision_fields_and_never_prose(error: Dr
     parsed = FRAME.validate_json(raw)
     assert parsed == frame
     assert parsed.error is not None
+    assert not isinstance(parsed.error, MODBUS_FAILURES)
     restored = replay_failure(parsed.error)
     assert type(restored) is type(error)
     assert record_failure(restored) == record_failure(error)

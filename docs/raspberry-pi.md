@@ -3203,6 +3203,23 @@ Selon le variateur branché :
   cherche, est dans l'enregistrement. Une séance où aucun appel ne lève
   enregistre exactement ce qu'elle enregistrait.
 
+Le pilote conserve aussi `modbus_connect` et `modbus_close`, sans registre
+ni valeur, même avec `RECORD_DRIVE_SDK_FRAMES=false`. Un échec natif porte
+`error` avec une cause fermée : absence de réponse, réponse d'exception et
+son code, mauvaise fonction et son code, port non ouvert, réponse inutilisable
+ou catégorie d'exception SDK. Aucun texte d'exception n'y entre. Ces lignes
+restent sous la même borne et sont écrites par le même fil. Le reader refuse
+une cause inconnue ou la famille d'erreur d'un autre type d'observation.
+
+Le document de configuration d'un lien natif porte `native_drive`, avec
+ses réglages série et son offset structurés, sans port ni numéro de série.
+Le rejeu le vérifie par `config_hash`, reconstruit le vrai pilote ATV320
+sur un maître de bande et ignore les fragments SDK diagnostiques. Les
+réglages structurés sont obligatoires pour ce rejeu. Le manifeste ne change
+pas ; l'empreinte d'une configuration simulée sans lien reste inchangée.
+La preuve est une console en simulation avec le vrai pilote, pas un essai
+sur le matériel ([enregistrement.md](enregistrement.md#observations-du-variateur)).
+
 Au-delà de la borne, l'observation la plus récente est refusée et comptée ;
 une observation impossible à construire est comptée de même, et ne remonte
 jamais vers l'appelant : la réponse du variateur est rendue quoi qu'il arrive
@@ -3633,10 +3650,9 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   était un jour fait par un autre fil que la boucle à l'instant même où une
   séance commence ou finit, il pourrait être compté du mauvais côté, à une
   trame près.
-- Avec le pilote ATV320, l'échange pendant lequel un tic lèverait une
-  exception : ce pilote note lui-même ses échanges, pas la prise (15.2), et ce
-  cas n'a été rejoué que sur le simulateur, où l'appel qui lève est maintenant
-  dans l'enregistrement.
+- Une exception du runtime hors des échanges du pilote : la capture native
+  garde les échecs du maître, mais ne transforme pas une exception du tic
+  d'origine en une entrée rejouable.
 - La géométrie détaillée (`geometry: null`), la vérité physiologique
   (`hr_true` vide), la présence de couple (`energised: null`).
 - Les contrôles pré-vol (`preflight: null`), et l'écart mesuré de l'horloge

@@ -19,6 +19,7 @@ from pydantic import TypeAdapter
 
 from simulation.recording import Frame
 from src.clock import ManualClock
+from src.motor.observation import ModbusFailure
 from src.record.codec import Privacy, document, encode
 from src.record.ecg import decode_block
 from src.record.rows import JsonScalar, JsonValue, Row, finite
@@ -97,7 +98,9 @@ class FinalState:
         }
 
 
-FAILURE: Final[TypeAdapter[RecordedFailure]] = TypeAdapter(RecordedFailure)
+FAILURE: Final[TypeAdapter[RecordedFailure | ModbusFailure]] = TypeAdapter(
+    RecordedFailure | ModbusFailure
+)
 
 
 def frame_to_json(frame: Frame, origin: float) -> Mapping[str, JsonValue]:
