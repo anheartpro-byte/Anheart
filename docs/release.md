@@ -305,14 +305,19 @@ Laissé de côté, exprès :
 
 **La nomenclature des composants (SBOM) de la release.** Le job `audit` de
 l'étape 1 l'écrit au format CycloneDX, comme à chaque exécution de `ci.yml` :
-les paquets npm du site et de Convex, depuis `package-lock.json`, et les paquets
-Python de l'image du Pi, depuis ses deux verrous
+les paquets npm du site et de Convex, depuis `package-lock.json`, les paquets
+Python de l'image du Pi, depuis ses deux verrous, et ceux de la simulation
+hébergée, depuis `deploy/simulation-vercel/requirements-lock.txt`
+(`simulation-requirements-lock.cdx.json`). Ce verrou porte la commande de
+régénération et la date commune `--exclude-newer 2026-10-07T00:00:00Z` ;
+`simulation-gate` installe le fichier livré avec `--require-hashes` et sert
+une requête HTTP, sans preuve de la construction sur Vercel
 ([framework-de-test.md](framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153)).
 Elle est dans l'artefact `sbom` de l'exécution de la pipeline, gardé 90 jours,
 et décrit le commit tagué. Passé ce délai, elle se refait depuis le tag, avec
-les mêmes composants : ses verrous n'ont pas changé. La simulation hébergée n'en a pas :
-elle n'a pas de verrou. Elle n'est jointe à aucun objet durable et n'est pas
-signée (section 8).
+les mêmes composants : ses verrous n'ont pas changé. Le stockage durable et
+la signature ou l'attestation restent bloqués avec ANH-220 : ils demandent un
+lancement de release et de nouveaux droits du workflow (section 8).
 
 `scripts/release.sh tag` exige en plus, à l'étape 3, que les six gates aient
 réussi **dans une autre exécution** que celle de la pipeline : celle du push sur
@@ -963,7 +968,7 @@ n'a changé.
 | Une release réelle demande quatre approbations, une par écriture, et attend une personne entre Convex et le site | à décider après la première release publiée : le garder, ou regrouper Convex et le site sous une seule approbation |
 | Mettre les machines à jour à distance : l'étape 6 de la pipeline ne fait que dire comment le faire à la main | ANH-116, ANH-168 à ANH-171 |
 | Déployer une préversion de Convex par PR, publier les rapports de test | ANH-126 |
-| Joindre la nomenclature des composants à un objet qui dure plus que les 90 jours de l'artefact `sbom` (une « release » GitHub sur le tag, par exemple, ce qui donne au job des tags un droit d'écriture de plus), la signer ou l'attester, et produire celle de la simulation hébergée quand elle aura un verrou | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |
+| La SBOM de la simulation hébergée est livrée depuis son verrou ; restent bloqués le stockage au-delà des 90 jours de l'artefact `sbom` et la signature ou l'attestation : ils demandent un lancement de release et de nouveaux droits du workflow (joindre les fichiers à une « release » GitHub sur le tag, par exemple, demande un droit d'écriture de plus au job des tags) | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) |
 | Appeler `softwareReleases.recordRelease` depuis le site | avec la fiche machine d'ANH-147 |
 
 [Sommaire](README.md) · [Déploiement](deploiement.md) · [Menaces](menaces.md) · [Roadmap](roadmap.md)

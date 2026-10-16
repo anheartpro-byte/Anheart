@@ -1144,7 +1144,7 @@ L'application et l'assemblage autonome sont dans `deploy/simulation-vercel/` :
 |---|---|
 | `app.py` | L'application FastAPI : `/`, `/viewer`, `/api/scenarios`, `/api/catalogue`, `/stream`. |
 | `bitalino.py` | Un substitut du paquet `bitalino` : `src/bitalino_client.py` l'importe au chargement, et le vrai paquet demande une pile Bluetooth. Il refuse toute connexion. |
-| `requirements.txt` | Sous-ensemble de `raspberry-pi/requirements-base.txt` (sans BioSPPy). |
+| `requirements.txt` | Fichier d'entrée à bornes, sous-ensemble de `raspberry-pi/requirements-base.txt` (sans BioSPPy). `requirements-lock.txt` le fige avec ses dépendances transitives, sous la contrainte de ce fichier de base ; sa commande en tête porte `--exclude-newer 2026-10-07T00:00:00Z`. `build.sh` envoie `dist/requirements.txt` : une ligne `--require-hashes`, puis le contenu exact du verrou. |
 | `vercel.json` | Durée maximale de la fonction : 300 s. |
 | `build.sh` | Assemble `dist/` : ce dossier, `simulation/` (modules, scénarios, cohorte, géométrie CAO), `raspberry-pi/src` et `raspberry-pi/config`. |
 | `deploy.sh` | `build.sh`, puis `vercel deploy`. |
@@ -1165,7 +1165,8 @@ Le dépôt garde deux dispositions de la même application :
   Elles correspondent au sous-ensemble hébergé ci-dessus ; garder les deux
   listes alignées lors d'une mise à jour (un test les compare).
   `simulation_app.py` charge la même application, les sources Pi et le
-  substitut BITalino. Le `requirements.txt` racine renvoie au fichier ci-dessus
+  substitut BITalino. Le `requirements.txt` racine inclut
+  `deploy/simulation-vercel/requirements-lock.txt`
   pour les installations pip manuelles ; `.python-version` et le manifeste
   fixent Python 3.12. Plus aucun déploiement ne construit cette disposition :
   elle reste lançable en local ([section 6.4](#64-redéployer)) et couverte par
@@ -1225,12 +1226,24 @@ ne change pas une version déjà hébergée : il faut redéployer.
 > Le **tout premier** déploiement d'un projet Vercel est toujours affecté à la
 > production, même sans `--prod`. C'est ce qui s'est passé le 1er octobre 2026.
 
+pip et uv 0.13.0 lisent la ligne `--require-hashes` de
+`dist/requirements.txt` et refusent toute ligne sans empreinte. uv 0.8.22
+(celui de la CI) l'ignore avec un avertissement, mais vérifie quand même
+chaque empreinte présente : une empreinte altérée est refusée, essai du
+16 octobre 2026 sur un poste, sans l'option en ligne de commande. Il accepterait une ligne
+sans empreinte, que le fichier ne contient pas puisque `build.sh` l'écrit
+depuis le verrou et qu'un test le vérifie. C'est pourquoi chaque commande de
+la CI passe aussi `--require-hashes` en ligne de commande. L'installateur et
+la version qu'utilise Vercel ne sont pas connus ici : la construction sur
+Vercel n'est pas constatée. `simulation-gate` installe cet assemblage avec
+`--require-hashes` et sert une requête HTTP en CI.
+
 Essayer en local avant de déployer :
 
 ```sh
 deploy/simulation-vercel/build.sh
 cd deploy/simulation-vercel/dist
-python3.12 -m venv /tmp/simvenv && /tmp/simvenv/bin/pip install -r requirements.txt
+python3.12 -m venv /tmp/simvenv && /tmp/simvenv/bin/pip install --require-hashes -r requirements.txt
 /tmp/simvenv/bin/uvicorn app:app --port 8765
 curl -N "http://127.0.0.1:8765/stream?scenario=manual_27_rpm&speed=200"
 ```

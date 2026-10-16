@@ -846,7 +846,7 @@ test("the viewer page build.sh puts in dist/ is the source file, byte for byte",
   const tree = mkdtempSync(join(tmpdir(), "anheart-build-"));
   context.after(() => rmSync(tree, { recursive: true, force: true }));
   mkdirSync(join(tree, HERE), { recursive: true });
-  for (const own of ["build.sh", "app.py", "bitalino.py", "requirements.txt", "vercel.json", ".python-version"]) {
+  for (const own of ["build.sh", "app.py", "bitalino.py", "requirements.txt", "requirements-lock.txt", "vercel.json", ".python-version"]) {
     copyFileSync(join(root, HERE, own), join(tree, HERE, own));
   }
   for (const read of ["simulation", "raspberry-pi"]) symlinkSync(join(root, read), join(tree, read), "dir");
@@ -858,6 +858,12 @@ test("the viewer page build.sh puts in dist/ is the source file, byte for byte",
   });
   assert.equal(built.status, 0, built.stderr);
   assert.match(built.stdout, /^assembled: .*\/deploy\/simulation-vercel\/dist \(/m);
+
+  const lock = readFileSync(join(root, HERE, "requirements-lock.txt"), "utf8");
+  const installed = readFileSync(join(tree, HERE, "dist/requirements.txt"), "utf8");
+  assert.equal(installed, `--require-hashes\n${lock}`);
+  assert.notEqual(installed, readFileSync(join(root, HERE, "requirements.txt"), "utf8"));
+  assert.equal(existsSync(join(tree, HERE, "dist/requirements-lock.txt")), false);
 
   const source = readFileSync(join(root, SOURCE));
   assert.ok(source.length > 10_000, "the source page was not read");

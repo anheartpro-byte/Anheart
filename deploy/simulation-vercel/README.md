@@ -24,8 +24,9 @@ changement de ces dossiers.
 Le dépôt garde une seconde disposition, que Vercel construisait à chaque push
 avant que les déploiements Git soient coupés : la racine du dépôt, avec
 `simulation_app:app` déclaré dans le `pyproject.toml` racine. Ce point d'entrée
-charge la même application ; le `requirements.txt` racine inclut les
-dépendances de ce dossier, et la table `[project]` du manifeste racine porte
-les mêmes : conserver les deux listes alignées. Plus aucun déploiement ne
+charge la même application ; le `requirements.txt` racine inclut le verrou
+`requirements-lock.txt` de ce dossier. La table `[project]` du manifeste
+racine porte les mêmes exigences que le fichier d'entrée `requirements.txt`
+de ce dossier : conserver ces deux listes alignées. Plus aucun déploiement ne
 construit cette disposition ; elle sert en local, où le visualiseur est servi
 dans les deux dispositions.

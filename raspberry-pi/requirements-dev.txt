@@ -1,4 +1,6 @@
 # AnHeart Raspberry Pi - development and CI dependencies.
+# Install requirements-dev-lock.txt with --require-hashes; regenerate it with
+# the command at its top after changing these inputs.
 -r requirements-base.txt
 
 # --- Tests ---------------------------------------------------------------
@@ -16,6 +18,6 @@ ruff>=0.6
 # PyBluez-bitalino==0.30, whose wheels stop at cp310 and whose sdist needs
 # MSVC + the Windows Bluetooth SDK. The vendor module itself imports
 # `bluetooth` lazily (inside BITalino.__init__, on the MAC-address branch
-# only), so installing without deps is safe on a COM-port bench:
-#     pip install pyserial
-#     pip install --no-deps bitalino
+# only), so installing without deps is safe on a COM-port bench, which is why
+# requirements-dev-nodeps-lock.txt is installed separately with --require-hashes
+# --no-deps; its input keeps the vendor version aligned with requirements-prod.txt.

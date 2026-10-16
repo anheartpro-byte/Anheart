@@ -207,10 +207,20 @@ Les paquets que le code demande directement (`requirements-base.txt`,
 | `setuptools` | `84.0.0` | build |
 | `wheel` | `0.48.0` | build |
 
-`requirements-base.txt` est aussi ce qu'installent le poste de développement et
-la CI (`requirements-dev.txt` l'inclut) : les trois font tourner les mêmes
-versions. Les outils de développement de `requirements-dev.txt` (pytest, ruff,
-mypy, basedpyright) ne sont pas figés par ce ticket.
+`requirements-base.txt` contraint aussi les verrous des tests et de la
+simulation hébergée. Depuis ANH-230, les cinq étapes d'installation Python de
+la CI lisent `requirements-dev-lock.txt` puis
+`requirements-dev-nodeps-lock.txt` avec `--require-hashes`, la seconde avec
+`--no-deps` pour bitalino. Outils de développement et dépendances transitives
+sont figés. `deploy/simulation-vercel/requirements-lock.txt` fige la simulation
+hébergée ; `build.sh` l'envoie dans `dist/requirements.txt`, précédé de
+`--require-hashes`, et `simulation-gate` l'installe avec cette option puis sert
+une requête HTTP. La construction sur Vercel n'est pas constatée. Les cinq
+verrous partagent la date `--exclude-newer 2026-10-07T00:00:00Z` ; des tests
+comparent leurs versions communes. Les commandes de régénération sont en tête
+de chaque verrou. L'installation depuis les verrous sur un poste et la limite
+des anciens guides sont décrites dans
+[framework-de-test.md](framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153).
 
 Les paquets Debian installés **dans** l'image (`bluez`, `libusb-1.0-0`,
 compilateurs) sont ceux de Debian 12 le jour de la construction : figés par la
@@ -1190,7 +1200,7 @@ démarrage : `sudo systemctl restart anheart`, console au repos.
 
 | Quoi | Où | Puis |
 |---|---|---|
-| Un paquet Python | `requirements-base.txt` ou `requirements-prod.txt` | régénérer `requirements-lock.txt` avec la commande écrite en tête du fichier (en avançant sa date `--exclude-newer`), mettre à jour l'environnement de développement, corriger le tableau de la [section 2](#limage-de-la-console) |
+| Un paquet Python | `requirements-base.txt` ou `requirements-prod.txt` | régénérer `requirements-lock.txt`, `requirements-dev-lock.txt` et `deploy/simulation-vercel/requirements-lock.txt` avec les commandes écrites en tête des fichiers ; pour bitalino, corriger aussi `requirements-dev-nodeps.txt` et régénérer `requirements-dev-nodeps-lock.txt` ; si la date `--exclude-newer` avance, la garder commune aux cinq verrous ; mettre à jour l'environnement de développement et le tableau de la [section 2](#limage-de-la-console) |
 | Les outils de construction | `requirements-build.txt` | régénérer `requirements-build-lock.txt` de la même façon |
 | L'image de base (Python) | ligne `FROM` du `Dockerfile` : version **et** empreinte | corriger la [section 2](#limage-de-la-console) |
 | Le système du Pi | `OS_REFERENCE` (et `OS_CODENAME` pour une autre série) dans `scripts/install.sh` | corriger la [section 2](#le-système-du-pi) ; pour une autre série Debian, changer aussi `MACHINE_BASE` dans `scripts/pi/test_install.sh` |
@@ -1228,7 +1238,6 @@ nouvelles versions.
 | Un `systemctl start anheart` à la main, ou la relance après la mort du client Docker, arrête une console trouvée en marche sans lui demander si elle est au repos ([section 4](#une-seule-console-à-la-fois)) | limite assumée ; `scripts/install.sh`, lui, pose la question |
 | Une coupure franche de l'alimentation n'est pas simulée par la CI (l'étape 8 est un arrêt ordonné) | une personne avec le matériel, [section 6](#6-installer-un-vrai-raspberry-pi), étape 6 |
 | Raspberry Pi OS 12 est la série « Legacy » ; la série courante est Debian 13. En changer se fait en [section 7](#7-mettre-à-jour-changer-une-version-figée) | décision du chef de projet |
-| Figer les outils de développement (`requirements-dev.txt`) | ticket d'hygiène de la CI (ANH-183) |
 
 ---
 

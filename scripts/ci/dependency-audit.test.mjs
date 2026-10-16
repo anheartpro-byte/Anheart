@@ -367,7 +367,7 @@ test("Dependabot watches every place the audit audits, and nothing else, against
     if (ecosystem === "pip" && directory === "/") continue;
     assert.ok(entries.some((entry) => entry.ecosystem === ecosystem && entry.directory === directory), `${path}: no ${ecosystem} entry for ${directory}`);
   }
-  assert.equal(atRoot("requirements.txt").trim(), "-r deploy/simulation-vercel/requirements.txt");
+  assert.equal(atRoot("requirements.txt").trim(), "-r deploy/simulation-vercel/requirements-lock.txt");
   assert.ok(DEPENDABOT.replaceAll("\n# ", " ").includes("pyproject.toml of the root repeat the hosted simulation"));
   assert.match(atRoot("vercel.json"), /"deploymentEnabled": false/);
 });

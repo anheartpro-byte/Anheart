@@ -23,8 +23,11 @@ fi
 rm -rf "$dist"
 mkdir -p "$dist/simulation/cad" "$dist/simulation/viewer" "$dist/public/viewer"
 
-cp "$here/app.py" "$here/bitalino.py" "$here/requirements.txt" "$here/vercel.json" \
+cp "$here/app.py" "$here/bitalino.py" "$here/vercel.json" \
    "$here/.python-version" "$dist/"
+
+# Vercel reads this file: require every locked package to match its hashes.
+{ printf '%s\n' '--require-hashes'; cat "$here/requirements-lock.txt"; } > "$dist/requirements.txt"
 
 # The simulation package: modules, scenarios, and the one CAD file it reads.
 cp "$root"/simulation/*.py "$dist/simulation/"

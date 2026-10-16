@@ -1264,9 +1264,66 @@ dans un workflow ou une page de la documentation.
 | Environnement | Fichier installé | Versions | Empreintes vérifiées à l'installation |
 |---|---|---|---|
 | Image du Pi | `raspberry-pi/requirements-lock.txt`, compilé depuis `requirements-prod.txt` (donc `requirements-base.txt`), et `requirements-build-lock.txt` pour les outils qui construisent l'image | toutes, dépendances transitives comprises | oui : le `Dockerfile` installe avec `--require-hashes` ([pi-image.md](pi-image.md#2-versions-figées)) |
-| Tests, simulation locale, CI | `raspberry-pi/requirements-dev.txt` | celles de `requirements-base.txt` ; les outils de test et d'analyse (`pytest`, `hypothesis`, `ruff`, `mypy`, `basedpyright`...) par une borne basse ; les dépendances transitives libres | non : la CI installe par `uv pip install -r`, sans empreintes |
-| Simulation hébergée | `deploy/simulation-vercel/requirements.txt` (le `requirements.txt` et le `pyproject.toml` de la racine le répètent) | bornes basses, deux bornes hautes | non : Vercel résout les versions quand il déploie |
+| Tests, simulation locale, CI | `raspberry-pi/requirements-dev-lock.txt` et `requirements-dev-nodeps-lock.txt` | toutes, dépendances transitives comprises | oui : les cinq étapes « Install Python dependencies » (`pi-tests`, `pi-gate`, `simulation-battery`, `simulation-report`, `simulation-gate`) passent `--require-hashes` ; la seconde installation passe aussi `--no-deps` |
+| Simulation hébergée | `deploy/simulation-vercel/requirements-lock.txt`, compilé depuis `requirements.txt` sous la contrainte de `raspberry-pi/requirements-base.txt` ; le `requirements.txt` racine inclut le verrou, le `pyproject.toml` garde la liste d'entrée | toutes, dépendances transitives comprises | `build.sh` écrit `dist/requirements.txt` : `--require-hashes`, puis le verrou exact ; `simulation-gate` l'installe avec `--require-hashes` et sert une requête HTTP en CI ; la construction sur Vercel n'est pas constatée |
 | Extracteur CAO, en CI seulement | `simulation/cad/requirements.txt` | `cadquery-ocp` seul | non |
+
+**Produire ou régénérer les verrous.** Chaque fichier porte sa commande en
+tête. Depuis `raspberry-pi/`, pour les quatre verrous du Pi et des tests :
+
+```sh
+uv pip compile requirements-prod.txt --python-version 3.12 --python-platform aarch64-unknown-linux-gnu --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
+uv pip compile requirements-build.txt --python-version 3.12 --python-platform aarch64-unknown-linux-gnu --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-build-lock.txt
+uv pip compile requirements-dev.txt --universal --python-version 3.12 --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-dev-lock.txt
+uv pip compile requirements-dev-nodeps.txt --no-deps --universal --python-version 3.12 --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-dev-nodeps-lock.txt
+```
+
+Depuis `deploy/simulation-vercel/`, pour la simulation hébergée :
+
+```sh
+uv pip compile requirements.txt -c ../../raspberry-pi/requirements-base.txt --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
+```
+
+La date commune `--exclude-newer 2026-10-07T00:00:00Z` et, pour la simulation
+hébergée, la contrainte de `requirements-base.txt` gardent les paquets partagés
+à la même version que dans l'image du Pi : c'est ce que les tests exercent.
+`raspberry-pi/tests/test_pi_install.py` compare les versions communes aux
+verrous dev et image ; `deploy/simulation-vercel/tests/test_dependencies.py`
+compare chaque paquet du verrou hébergé au verrou de l'image. Le verrou dev
+est `--universal` pour Linux en CI et les postes macOS et Windows : les
+`pyobjc-*` portent le marqueur `darwin`, `colorama` le marqueur `win32`.
+`bitalino` a son entrée `requirements-dev-nodeps.txt` et son verrou
+`--no-deps` : sa dépendance `PyBluez-bitalino` ne se construit pas sur toutes
+les plateformes de développement. Sa version et ses empreintes sont celles
+du verrou de l'image, vérifiées par un test. Changer une version demande de
+régénérer tous les verrous qui la portent, avec leurs commandes en tête ; si
+la date avance, elle reste commune aux cinq verrous.
+
+**Installer les tests sur un poste.** Depuis la racine du dépôt, dans un venv
+neuf, les deux commandes sont celles de la CI :
+
+```sh
+uv venv --python 3.12 raspberry-pi/.venv
+uv pip install --python raspberry-pi/.venv/bin/python --require-hashes -r raspberry-pi/requirements-dev-lock.txt
+uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps -r raspberry-pi/requirements-dev-nodeps-lock.txt
+```
+
+Sous Windows, le chemin de l'interpréteur est
+`raspberry-pi/.venv/Scripts/python.exe`. L'installation n'a été essayée que sur
+macOS et, en CI, sous Linux, pas sous Windows. L'ancienne commande des guides,
+`pip install -r requirements-dev.txt`, installe encore sans empreintes : la
+mise à jour de ces guides reste à suivre.
+
+**Ce que lit l'installateur de la simulation.** pip et uv 0.13.0 lisent la
+ligne `--require-hashes` de `dist/requirements.txt` et refusent toute ligne
+sans empreinte. uv 0.8.22 (celui de la CI) l'ignore avec un avertissement,
+mais vérifie quand même chaque empreinte présente : une empreinte altérée
+est refusée, essai du 16 octobre 2026 sur un poste, sans l'option en ligne de commande. Il
+accepterait une ligne sans empreinte, que le fichier ne contient pas puisque
+`build.sh` l'écrit depuis le verrou et qu'un test le vérifie. C'est pourquoi
+chaque commande de la CI passe aussi `--require-hashes` en ligne de commande.
+L'installateur et la version qu'utilise Vercel ne sont pas connus ici : la
+construction sur Vercel n'est pas constatée.
 
 **Ce que le job `audit` audite.** C'est une vérification obligatoire, lancée à
 chaque exécution : PR, push sur `develop` ou `main`, exécution de nuit (qui
@@ -1278,16 +1335,19 @@ exceptée.
 | Quoi | Outil | Ce qui fait échouer |
 |---|---|---|
 | `package-lock.json` (site et Convex), paquets de développement compris | `npm audit --audit-level=high` | un avis de gravité haute ou critique ; un avis modéré ou faible est affiché, sans faire échouer |
-| Image du Pi : ses deux verrous, tels quels | `pip-audit --disable-pip --require-hashes` | toute vulnérabilité connue, quelle que soit sa gravité (`pip-audit` ne lit pas la gravité) |
-| Tests et CI, simulation hébergée, extracteur CAO : chacun résolu à part pour Python 3.12 avec ses dépendances transitives (`uv pip compile --generate-hashes`), comme il s'installe | le même | le même |
+| Image du Pi, tests et CI, simulation hébergée : les cinq verrous tels quels (`raspberry-pi/requirements-lock.txt`, `requirements-build-lock.txt`, `requirements-dev-lock.txt`, `requirements-dev-nodeps-lock.txt`, et `deploy/simulation-vercel/requirements-lock.txt`) | `pip-audit --disable-pip --require-hashes` | toute vulnérabilité connue, quelle que soit sa gravité (`pip-audit` ne lit pas la gravité) |
+| Extracteur CAO seul : `simulation/cad/requirements.txt`, résolu pour Python 3.12 avec ses dépendances transitives (`uv pip compile --generate-hashes`) le jour de l'audit | le même | le même |
 | Tout l'historique Git | gitleaks | un secret (voir plus haut) |
 
 Chaque environnement est audité même quand un autre a échoué, et le message
-d'erreur les nomme. Pour un environnement qui n'est pas figé, l'audit porte sur
-ce que la résolution choisit ce jour-là sur un runner Linux : pas forcément ce
-qu'un poste a installé, ni ce que Vercel a installé à son dernier déploiement.
-Les paquets réservés à macOS (`pyobjc`) ne sont pas audités. Un audit ne voit
-que les vulnérabilités publiées : il ne détecte pas un paquet malveillant
+d'erreur les nomme. Pour l'extracteur CAO, l'audit porte sur ce que la
+résolution choisit ce jour-là sur un runner Linux. Les paquets réservés à macOS
+et à Windows (`pyobjc-*`, `colorama`) sont désormais dans le verrou dev ; d'après le source de
+`pip-audit` 2.9.0 (lu le 16 octobre 2026), il applique leurs marqueurs de
+plateforme et les saute sur Linux. L'essai du 16 octobre
+2026 sur macOS n'a signalé aucune vulnérabilité connue ; ce n'est pas une
+preuve de leur audit en CI. Un audit ne voit que les vulnérabilités publiées :
+il ne détecte pas un paquet malveillant
 ([menaces.md, MEN-06](menaces.md#men-06-compromission-dun-paquet-pip-ou-npm)).
 `scripts/ci/ci-workflow.test.mjs` vérifie que chaque fichier `requirements*.txt`
 du dépôt est audité, directement, par inclusion (`-r`) ou comme source d'un
@@ -1308,7 +1368,7 @@ n'explique) ne fait rien sauter. Une exception npm ne vaut que pour l'avis
 qu'elle nomme, dans le paquet qu'elle nomme. Une exception pip n'est liée ni au
 paquet ni à l'environnement : `pip-audit` reçoit l'identifiant par
 `--ignore-vuln` et saute toute vulnérabilité qui le porte comme identifiant ou
-comme alias, dans les cinq environnements ; un `CVE-...`, alias possible
+comme alias, dans tous les environnements ; un `CVE-...`, alias possible
 d'avis de plusieurs paquets, est donc refusé pour pip. Seules comptent les
 lignes du tableau lui-même, celles que la page affichée montre. Sont refusés :
 une ligne en dehors du tableau ou un bloc de code dans la section, un second
@@ -1365,22 +1425,27 @@ limites :
 **Nomenclature des composants (SBOM).** L'étape « Write the bill of materials »
 écrit, au format CycloneDX : `site-convex.cdx.json`
 (`npm sbom --package-lock-only`, paquets de développement marqués comme tels),
-`pi-requirements-lock.cdx.json` et `pi-requirements-build-lock.cdx.json`
-(`cyclonedx-py`, version figée), gardés 90 jours dans l'artefact `sbom` de
+`pi-requirements-lock.cdx.json`, `pi-requirements-build-lock.cdx.json` et
+`simulation-requirements-lock.cdx.json` (depuis
+`deploy/simulation-vercel/requirements-lock.txt`, par `cyclonedx-py`, version
+figée), gardés 90 jours dans l'artefact `sbom` de
 l'exécution. La pipeline de release appelle ce workflow sur le commit qu'elle
 tague : l'artefact `sbom` de son exécution est la nomenclature de la release
-([release.md](release.md#la-pipeline-de-release)). La simulation hébergée n'en
-a pas : sans verrou, une liste faite en CI ne serait pas ce que Vercel a
-installé. Ce qui reste, pour [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) et [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la) : joindre ces fichiers à un
+([release.md](release.md#la-pipeline-de-release)). La nomenclature de la
+simulation décrit son verrou, sans preuve de la construction sur Vercel.
+Ce qui reste bloqué, pour [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) et [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la) : joindre ces fichiers à un
 objet qui dure plus que 90 jours (une « release » GitHub sur le tag, par
 exemple, ce qui demande au job des tags un droit d'écriture de plus), les
-signer ou les attester, et produire celle de la simulation hébergée quand elle
-aura un verrou.
+signer ou les attester. Cela demande un lancement de release et de nouveaux
+droits du workflow.
 
-**Ce qui reste, hors de ce lot.** L'environnement des tests et de la CI n'est
-ni entièrement figé ni installé avec ses empreintes ; la simulation hébergée n'a
-pas de verrou. Les figer changerait l'installation de toutes les gates Python
-et le déploiement de la simulation : c'est [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la).
+**Ce qui reste, hors de ce lot.** L'extracteur CAO n'a pas de verrou avec
+empreintes. Les outils lancés par `uv tool run`, `pip-audit` 2.9.0 et
+`cyclonedx-bom` 7.4.0, sont figés par version, sans empreintes. La construction
+sur Vercel et le comportement de Dependabot face aux verrous générés par uv
+ne sont pas constatés. Les guides des postes gardent l'ancienne installation
+sans empreintes ; le stockage durable et la signature ou l'attestation des
+SBOM restent bloqués avec ANH-220, comme décrit ci-dessus.
 
 ### Gate Pi en parallèle (ANH-72)
 

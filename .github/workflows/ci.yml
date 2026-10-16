@@ -215,8 +215,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           uv venv raspberry-pi/.venv
-          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
-          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes -r raspberry-pi/requirements-dev-lock.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps -r raspberry-pi/requirements-dev-nodeps-lock.txt
       - name: Pi gate, shares ${{ matrix.shares }} of the tests
         env:
           PYTEST_ADDOPTS: --durations=25
@@ -298,8 +298,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           uv venv raspberry-pi/.venv
-          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
-          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes -r raspberry-pi/requirements-dev-lock.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps -r raspberry-pi/requirements-dev-nodeps-lock.txt
       - name: Gather what every share recorded and measured
         if: ${{ !cancelled() }}
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -381,8 +381,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           uv venv raspberry-pi/.venv
-          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
-          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes -r raspberry-pi/requirements-dev-lock.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps -r raspberry-pi/requirements-dev-nodeps-lock.txt
       # In every part: the test of the CAD extraction is skipped without it,
       # and no part knows in advance which one will be given that test.
       - name: Install and verify CAD extractor
@@ -436,8 +436,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           uv venv raspberry-pi/.venv
-          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
-          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes -r raspberry-pi/requirements-dev-lock.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps -r raspberry-pi/requirements-dev-nodeps-lock.txt
       - name: Synthetic simulation report
         timeout-minutes: 90
         env:
@@ -516,8 +516,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           uv venv raspberry-pi/.venv
-          uv pip install --python raspberry-pi/.venv/bin/python -r raspberry-pi/requirements-dev.txt
-          uv pip install --python raspberry-pi/.venv/bin/python --no-deps bitalino==1.2.6
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes -r raspberry-pi/requirements-dev-lock.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps -r raspberry-pi/requirements-dev-nodeps-lock.txt
       - name: Gather what every share recorded and measured
         if: ${{ !cancelled() }}
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -549,6 +549,27 @@ jobs:
       - name: Test the hosted simulation engine
         if: ${{ !cancelled() }}
         run: raspberry-pi/.venv/bin/python -m pytest deploy/simulation-vercel/tests
+      # Install the assembled payload in isolation and serve an HTTP request
+      # with hashes required, as Vercel receives it. This proves the payload
+      # works on the runner, not that Vercel itself has built it.
+      - name: Install the hosted simulation as Vercel receives it, hashes required
+        if: ${{ !cancelled() }}
+        run: |
+          bash deploy/simulation-vercel/build.sh
+          hosted_venv="$RUNNER_TEMP/hosted-simulation-venv"
+          uv venv "$hosted_venv"
+          uv pip install --python "$hosted_venv/bin/python" --require-hashes -r deploy/simulation-vercel/dist/requirements.txt
+          cd deploy/simulation-vercel/dist
+          env -u PYTHONPATH "$hosted_venv/bin/python" - <<'PY'
+          from app import app
+          from fastapi.testclient import TestClient
+
+          with TestClient(app) as client:
+              response = client.get("/api/scenarios")
+              print(response.status_code)
+              if response.status_code != 200:
+                  raise SystemExit(1)
+          PY
       - name: Publish coverage and synthetic reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -729,15 +750,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/quality"
           node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-dependency-guard.xml" scripts/ci/braces-depth-guard.test.mjs
       # Each Python environment the project installs, audited on its own, as
-      # it is installed. The image of the Pi: its two lock files, as they are,
-      # every version and hash fixed. Then, each resolved first for Python 3.12
-      # with the packages it pulls in, since their files fix only some
-      # versions: the tests, the local simulation and the CI
-      # (raspberry-pi/requirements-dev.txt), the hosted simulation
-      # (deploy/simulation-vercel/requirements.txt, which the requirements.txt
-      # of the root includes) and the CAD extractor. pip-audit fails on any
-      # known vulnerability, whatever its severity, except the Python
-      # exceptions. Every environment is audited, even after one has failed.
+      # it is installed. The five locks of the Pi image, development/CI and
+      # hosted simulation are read as they are, every version and hash fixed.
+      # Only the CAD extractor is resolved first for Python 3.12 with the
+      # packages it pulls in, since its input fixes only some versions.
+      # pip-audit fails on any known vulnerability, whatever its severity,
+      # except the Python exceptions. Every environment is audited, even
+      # after one has failed.
       - name: Audit Python dependencies
         if: ${{ !cancelled() }}
         run: |
@@ -748,10 +767,10 @@ jobs:
             echo "pip-audit: $1"
             uv tool run pip-audit==2.9.0 --disable-pip --require-hashes "${ignore[@]}" -r "$2" || failed+=("$1")
           }
-          for lock in raspberry-pi/requirements-lock.txt raspberry-pi/requirements-build-lock.txt; do
+          for lock in raspberry-pi/requirements-lock.txt raspberry-pi/requirements-build-lock.txt raspberry-pi/requirements-dev-lock.txt raspberry-pi/requirements-dev-nodeps-lock.txt deploy/simulation-vercel/requirements-lock.txt; do
             audit "$lock" "$lock"
           done
-          for set in raspberry-pi/requirements-dev.txt deploy/simulation-vercel/requirements.txt simulation/cad/requirements.txt; do
+          for set in simulation/cad/requirements.txt; do
             resolved="$RUNNER_TEMP/audit-${set//\//-}"
             uv pip compile "$set" --python-version 3.12 --generate-hashes --quiet --output-file "$resolved"
             audit "$set" "$resolved"
@@ -771,9 +790,8 @@ jobs:
       # The bill of materials, in the CycloneDX format, of what is installed
       # from a lock file: the npm packages of the site and of Convex
       # (package-lock.json, development packages marked as such), the Python
-      # packages of the image of the Pi and the tools that build it. The hosted
-      # simulation has none: Vercel resolves its packages when it deploys, and
-      # a list made here would not be what runs. Written on every run,
+      # packages of the image of the Pi, the tools that build it and the
+      # hosted simulation. Written on every run,
       # including the run of the release pipeline, which calls this workflow on
       # the commit it tags: the artifact `sbom` of that run is the bill of
       # materials of the release (docs/release.md).
@@ -785,6 +803,7 @@ jobs:
           for lock in requirements-lock requirements-build-lock; do
             uv tool run --from cyclonedx-bom==7.4.0 cyclonedx-py requirements "raspberry-pi/$lock.txt" --output-format JSON --output-file "$RUNNER_TEMP/sbom/pi-$lock.cdx.json"
           done
+          uv tool run --from cyclonedx-bom==7.4.0 cyclonedx-py requirements deploy/simulation-vercel/requirements-lock.txt --output-format JSON --output-file "$RUNNER_TEMP/sbom/simulation-requirements-lock.cdx.json"
       - name: Keep the bill of materials
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
