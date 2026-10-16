@@ -56,9 +56,9 @@ toute balise ou tout bloc HTML, y compris un bloc `details` replié au milieu
 d'une ligne, un commentaire, une déclaration, une section CDATA ou une
 instruction de traitement ; un lien entre chevrons est aussi refusé. Est
 également refusée toute ligne qui commence par `<` après trois espaces au
-plus. Au milieu d'une ligne, un `<` suivi d'une espace ou d'un chiffre reste
-permis. Ce que la page affichée ne montre pas ne peut donc pas compter comme
-exception.
+plus. Ailleurs qu'en début de ligne, tout autre `<` reste permis, par exemple
+suivi d'une espace, d'un chiffre ou de `=`. Ce que la page affichée ne montre
+pas ne peut donc pas compter comme exception.
 
 Une exception npm ne cache pas l'avis : le job l'affiche encore, avec sa date
 d'expiration et son ticket. `pip-audit` compte les vulnérabilités sautées

@@ -1377,8 +1377,8 @@ le fichier, code compris, le signe `<` immédiatement suivi d'une lettre Unicode
 de `/`, de `!` ou de `?` (balise ou bloc HTML, y compris un bloc `details` replié
 au milieu d'une ligne, commentaire, déclaration, section CDATA, instruction de
 traitement ou lien entre chevrons), ainsi qu'une ligne qui commence par `<`
-après trois espaces au plus ; au milieu d'une ligne, un `<` suivi d'une espace
-ou d'un chiffre reste permis. Aucune exception au 14 octobre 2026.
+après trois espaces au plus ; ailleurs qu'en début de ligne, tout autre `<`
+reste permis, par exemple suivi d'une espace, d'un chiffre ou de `=`. Aucune exception au 14 octobre 2026.
 
 **Essai du 14 octobre 2026, sur un poste, pas en CI.** Les commandes exactes
 des étapes du workflow, extraites du fichier, ont tourné sur une copie jetable
