@@ -29,7 +29,7 @@ indépendante** du logiciel et du variateur.
 
 « Garanti » veut dire ici : écrit dans le code, couvert par des tests (100 % des
 branches sur la chaîne de sécurité, tests de propriétés `hypothesis`) et vérifié
-dans la simulation (67 scénarios, 187 pannes injectées, cohorte de 30
+dans la simulation (69 scénarios, 187 pannes injectées, cohorte de 30
 personnes). Pas sur la vraie machine avec une personne à bord.
 
 | Garantie | Où |
