@@ -4150,9 +4150,9 @@ Les identifiants de la bibliothèque sont exigés sous les deux formes : un
 enregistrement de la bibliothèque ne porte jamais ceux sous lesquels sa
 source le connaît, quelle que soit la forme qu'il déclare.
 
-La date de la séance reste dans le manifeste et dans le nom du dossier : pour
-une séance réelle, c'est à l'outil d'anonymisation de la traiter (il n'existe
-pas encore, section 16.6).
+L'import de console neutralise aussi les dates de séance et le nom du dossier
+(section 16.6). Les dates des archives de scénarios viennent de l'horloge
+déterministe du harness.
 
 Une archive est le fichier de quelqu'un d'autre. Elle est extraite membre par
 membre (`unpack`), et seuls des fichiers ordinaires et des dossiers sont
@@ -4160,6 +4160,10 @@ membre (`unpack`), et seuls des fichiers ordinaires et des dossiers sont
 qui remonte d'un dossier, un lien (symbolique ou physique), un périphérique,
 ou un membre qu'un lien déjà présent ferait écrire ailleurs, arrête
 l'extraction : la gate échoue sur cette archive et dit pourquoi.
+`MAX_ARCHIVE_BYTES` borne à 512 Mio la somme des tailles annoncées des membres
+et `MAX_ARCHIVE_MEMBERS` à 40 000 leur nombre, dossiers et doublons compris.
+Chaque borne est vérifiée avant d'écrire le membre suivant. L'import, le rejeu,
+le jugement de bibliothèque et le visualiseur utilisent cette même extraction.
 
 Contenu au 7 octobre 2026, trois scénarios de la batterie exportés par
 `--export-real`, comme preuve de fonctionnement avant toute séance réelle :
@@ -4181,8 +4185,11 @@ sur un Mac et se rejouent sans écart sur le runner Linux.
 Ce sont les scénarios en `ecg.mode: dsp` : le mode `direct` injecte des bpm
 sans acquisition, et ne laisse pas d'ECG brut à rejouer.
 
-Pour regarder une archive dans le visualiseur, l'extraire sous `simulation/out/`
-puis ouvrir `?trace=out/<dossier>` (section 7).
+Le visualiseur ouvre directement une archive :
+`?trace=scenarios/real/manual_bench_dsp.tar.gz`, ou
+`?trace=out/<nom>.tar.gz` pour une copie locale. Le serveur utilise le reader
+partagé après extraction temporaire confinée et bornée ; il retire cette copie
+temporaire après la lecture. Un dossier reste accepté (section 7).
 
 ### 16.6 Ajouter un enregistrement
 
@@ -4206,18 +4213,86 @@ réécrite : la commande affiche `unchanged`, et git n'a rien à ajouter. La
 comparaison porte sur le contenu lu, pas sur les octets, parce que deux
 versions de zlib ne compriment pas pareil.
 
-**Une séance réelle.** Le rejeu Modbus natif est vérifié par une console en
-simulation ; aucune séance réelle n'est encore disponible (section 16.8).
-La marche à suivre,
-le jour où c'est possible :
+**Un enregistrement de console à importer.** L'outil est prouvé sur la console
+en simulation, avec observations d'appel ou échanges Modbus natifs. Aucune
+séance réelle n'existe dans le dépôt : son import reste à faire quand elle
+sera disponible, après décision humaine sur son versement.
 
-1. récupérer l'archive `.tar.gz` de la séance et son document de configuration ;
-2. l'anonymiser sous la forme « séance réelle » du tableau de 16.5 (manifeste,
-   acteurs des événements, identifiants de la bibliothèque, nom du dossier),
-   puis recalculer `checksums.sha256` ;
-3. vérifier `python -m simulation.run --replay <archive> --config <fichier>` ;
-4. déposer l'archive et `<nom>.config.json` dans `simulation/scenarios/real/` sous un nom qui ne
-   désigne ni une personne ni un lieu, et ouvrir la PR. La gate fait le reste.
+```sh
+$PY -m simulation.import_record <dossier-ou-archive.tar.gz> --name <nom_opaque> --directory <bibliotheque_de_relecture> --config <document.json>
+```
+
+Le nom accepte lettres ASCII, chiffres et `_`, sans personne, lieu ni date.
+`--directory` vaut `simulation/scenarios/real/` par défaut ; utiliser un dossier
+de relecture pour préparer un import. L'outil refuse une archive ou un fichier
+adjacent déjà présent et n'écrit aucune archive si une étape est refusée.
+Les preuves automatisées importent seulement dans des répertoires temporaires.
+
+Pour une console, `--config` désigne son document canonique. Sans cette option,
+l'outil cherche `<source>.config.json` à côté du dossier ou
+`<source sans .tar.gz>.config.json` à côté de l'archive ; pour un dossier local,
+il cherche ensuite `config/<config_hash>.json` dans son parent. Le document
+est vérifié par le rejeu et copié sans changer un octet en `<nom>.config.json`
+à côté de l'archive produite. `config_hash` reste identique.
+
+L'import lit par le reader partagé et exige un enregistrement clos, sans
+avertissement d'intégrité. Il travaille sur une copie, avec ces règles :
+
+| Élément | Règle d'import |
+| --- | --- |
+| `record_id`, `local_ref` | `library_identity(nom)` et ses 16 premiers caractères |
+| `machine_id`, `organization_id`, `operator` | constante `anonymized` |
+| `session_id`, `subject_id` | `null` |
+| `software_version` | `unversioned`, comme à l'export des scénarios |
+| `started_at`, `ended_at`, `clocks.utc_start` | même date neutre pour tous les imports : `2000-01-01T00:00:00Z`, sans durée déduite de ces champs |
+| `profile.resolved_at` | même date neutre, `946684800000` millisecondes Unix ; les autres valeurs du programme sont conservées |
+| `clocks.wall_trusted`, `clocks.ntp_offset_s` | `null` : l'import ne juge pas l'horloge de la console et ne conserve pas son écart NTP |
+| dossier dans l'archive | `2000-01-01T000000Z_<local_ref>` |
+| acteurs des événements | `system` et `remote` conservés ; tout alias d'opérateur devient `anonymized` |
+
+Les commandes restent leurs octets d'origine après validation par le vocabulaire
+fermé. Hors commandes, seule une liste fermée de faits machine reste : verdict
+`règle (ACTION)` ou `cleared`, défaut `MNEMONIQUE (LFT code)` ou `cleared`, phase
+connue, motif de fin connu. Les refus et contrôles pré-vol deviennent
+`anonymized`. Les warnings ne gardent que les préfixes connus `record_degraded`,
+`replay_config`, `replay_preamble`, `replay_incomplete`, `console`, `dashboard`,
+`bitalino_loss` ; les deux préfixes de compteurs ne gardent que leurs compteurs
+numériques fermés. Le marqueur `replay_incomplete: pending_ecg_delivery` reste
+intégral. Aucun diagnostic libre ni nombre physiologique ne reste dans les
+détails d'événement. Un fait inconnu devient `anonymized`.
+
+L'outil refuse toute identité source connue ou date absolue reconnue encore
+présente dans les fichiers, leurs noms et la configuration : identifiants du
+manifeste, alias des événements, dates calendaires et représentations Unix en
+secondes ou millisecondes. Il vérifie aussi les en-têtes bruts décompressés et
+les octets décodés de `raw_hex`. Les tableaux d'échantillons sont contrôlés
+pour les sentinelles d'identité et de date, sans les interpréter comme de la
+prose. L'enveloppe gzip des blocs doit avoir une date nulle et aucun nom,
+commentaire ou champ supplémentaire, comme à l'écriture ; un second membre
+gzip ou des octets finaux sont refusés. Les octets des blocs acceptés restent
+identiques. Cette vérification complète la frontière explicite de
+[confidentialité](enregistrement.md#frontière-de-confidentialité) ; elle ne
+reconnaît pas un nom humain arbitraire inconnu dans un champ de provenance.
+
+Les instants relatifs `t`, y compris les instants négatifs du repos, les
+mesures, trames, blocs bruts, capteurs, géométrie et observations finales ne
+changent pas. `clocks.monotonic_start` reste identique. Seuls le manifeste,
+les événements et les sommes de contrôle sont réécrits. `Writer.close` partagé
+recalcule l'inventaire `files` et `checksums.sha256`, puis le rejeu de la source
+et celui de la copie doivent tous deux être possibles. La copie est rejouée
+avec son document de configuration avant d'être archivée au même format que
+l'export de scénarios.
+
+Un écart exige la procédure de 16.7. Après son examen, ajouter explicitement
+`--accept-ticket ANH-<numero> --accept-reason '<explication>'` à la commande :
+l'outil écrit `<nom>.accepted.json` avec le rapport entier de la copie. Sans
+ces deux options, il refuse l'archivage d'un écart. Il refuse aussi une
+acceptation sans écart. Un rejeu impossible est toujours refusé.
+
+Les tics et l'ECG brut d'une séance importée restent des **données de santé
+pseudonymisées**. L'import ne décide pas de publier une vraie séance dans la
+bibliothèque du dépôt : ce versement reste une décision humaine, suivie dans
+ANH-172. Aucune vraie séance ni archive de console n'est ajoutée par ces preuves.
 
 ### 16.7 Un écart de rejeu : la règle
 
@@ -4363,6 +4438,7 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 | `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences ; les archives et ce que l'extraction refuse (nom absolu, remontée de dossier, lien, périphérique, écriture hors du dossier) ; les deux formes d'anonymat et les identifiants de la bibliothèque ; l'écart accepté (sont refusés : un second écart derrière lui, un écart remplacé par un autre de même nature, un tic modifié après une divergence acceptée, un fichier accepté à côté d'un enregistrement de la simulation) ; l'export reproductible, et son refus d'un nom qui est un chemin |
 | `test_record_console_parity.py` | même structure des deux producteurs ; rejeu exact de deux séances de console en simulation (programme, manuelle avec cible et arrêt, pings), configuration vérifiée, fichier adjacent et `--config`, refus code 2 si absent ou altéré, rejeu identique si seul le fichier médical courant diffère ; environ 28 s pour les deux cas croisés sur le poste de développement |
 | `test_replay_config.py` | limites et géométrie issues du document, validation par les constructeurs de domaine, empreintes et tailles refusées, parties de configuration courante nommées |
+| `test_import_record.py`, `test_import_privacy.py` | imports de console simulée manuelle, programmée et native, neutralisation des dates et identités, événements fermés, sentinelles sur tous les fichiers et en-têtes bruts, octets des mesures conservés, intégrité et rejeu exacts, refus et acceptation explicite d'un écart |
 | `test_replay_modbus.py`, `test_modbus.py` | séance native de console simulée avec arrêt, rejeu exact sous le vrai pilote, rapports identiques ; ETA altérée et échange retiré nommés avec les registres ; causes d'échec, étapes, offsets et fragments SDK ; aucun scénario JSON ni archive supplémentaire |
 | `raspberry-pi/tests/test_modbus_recording.py` | causes natives fermées, variantes recalculées par le pilote via les objets SDK, refus du reader, erreurs d'ouverture et d'urgence, confidentialité et observation défaillante isolée |
 | `raspberry-pi/tests/test_record_configuration.py` | empreinte de référence inchangée, sentinelle de confidentialité, taille bornée, modes 600/700, unicité et collisions, erreurs disque et écriture bloquée sans attente des tics, exclusions de rétention/synchronisation/dépôt/export/logbook |

@@ -159,6 +159,52 @@ def test_ex5_a_record_survives_its_archive_byte_for_byte(session: Path, tmp_path
     assert loaded(unpacked.value).warnings == ()
 
 
+@pytest.mark.parametrize("limit", ["bytes", "members"])
+def test_archive_limits_are_checked_before_writing_the_next_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 3)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 2)
+    archive = tmp_path / "bounded.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for index in range(3):
+            member = tarfile.TarInfo(f"record/{index}")
+            member.size = 2 if limit == "bytes" else 0
+            tar.addfile(member, io.BytesIO(b"xx") if member.size > 0 else None)
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    expected = "MAX_ARCHIVE_MEMBERS" if limit == "members" else "MAX_ARCHIVE_BYTES"
+    assert result == Err("the archive exceeds " + expected)
+    assert not (into / "record" / ("2" if limit == "members" else "1")).exists()
+
+
+def test_announced_size_above_the_real_limit_is_refused_without_reading_its_payload(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "oversized.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        member = tarfile.TarInfo("record/manifest.json")
+        member.size = library.MAX_ARCHIVE_BYTES + 1
+        tar.addfile(member)
+    into = tmp_path / "out"
+    assert unpack(archive, into) == Err("the archive exceeds MAX_ARCHIVE_BYTES")
+    assert list(into.iterdir()) == []
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_member_limit_also_counts_repeated_files_and_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: bool
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 2)
+    archive = tmp_path / "repeated.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for _ in range(3):
+            member = tarfile.TarInfo("record" if directory else "record/empty")
+            member.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
+            tar.addfile(member)
+    assert unpack(archive, tmp_path / "out") == Err("the archive exceeds MAX_ARCHIVE_MEMBERS")
+
+
 def test_ex5_what_is_not_the_archive_of_one_record_is_refused(
     session: Path, tmp_path: Path
 ) -> None:
