@@ -82,23 +82,21 @@ export function parse(text, today) {
   const now = dayOf(today);
   if (now === undefined) throw new Error(`not a day: ${today}`);
   const lines = text.replaceAll("\r\n", "\n").split("\n");
-  // What the rendered page does not show must not be read. An HTML comment, anywhere, can hide
-  // a whole section from the page, the heading of the one that is read included: none is allowed.
+  // Refuse HTML comments, lines beginning with "<" after at most three spaces, and any "<" followed
+  // by a Unicode letter, "/", "!" or "?" anywhere in the file so the page shows all that is read.
+  // Code is included because exempting it would require exactly matching GitHub's backtick and
+  // escape rules, and any mismatch could hide rows.
   if (text.includes("<!--")) {
     return { exceptions, problems: [`${FILE}: holds an HTML comment ("<!--"): the page must show all that is read, and no comment is allowed in it`] };
   }
-  // The same for every other block of HTML: a line that begins with "<", after three spaces at most,
-  // opens one (CommonMark knows seven kinds), and each can take rows out of the page while they are
-  // still read: CDATA, processing instructions and declarations vanish, an attribute shows nothing,
-  // a <details> block is folded. Declarations, CDATA and processing instructions are refused
-  // wherever they stand, in the middle of a line too.
   const markup = lines.findIndex((line) => /^ {0,3}</.test(line));
   if (markup >= 0) {
     return { exceptions, problems: [`${FILE}: line ${markup + 1} begins with HTML ("${lines[markup]?.trim()}"): the page must show all that is read, and no HTML block is allowed in it`] };
   }
-  const inline = /<[!?]/.exec(text);
+  const inline = /<[\p{L}/!?]/u.exec(text);
   if (inline !== null) {
-    return { exceptions, problems: [`${FILE}: holds HTML that the page does not show ("${inline[0]}"): the page must show all that is read`] };
+    const line = text.slice(0, inline.index).split("\n").length;
+    return { exceptions, problems: [`${FILE}: line ${line} holds "${inline[0]}": a "<" followed by a letter, "/", "!" or "?" opens HTML wherever it stands, a folded details block in the middle of a line included, and none is allowed in this file, code included: the page must show all that is read`] };
   }
   // The heading of the section, written once, and not inside a code block, where it would be text.
   /** @type {{ index: number, line: string, fenced: boolean }[]} */

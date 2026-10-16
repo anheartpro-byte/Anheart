@@ -157,21 +157,56 @@ test("the page shows the one section that is read: no HTML that hides a line, on
     ["the table in a folded details block", `${SECTION}\n\n<details><summary>Rien</summary>\n\n${HEAD}${row()}\n\n</details>\n`, /line 3 begins with HTML/],
     ["a block of HTML indented by three spaces", `${SECTION}\n\n   <![CDATA[\n${HEAD}${row()}\n]]>\n`, /line 3 begins with HTML/],
     ["a block of HTML before the section", `<div>\n\n</div>\n\n${real}`, /line 1 begins with HTML/],
-    ["a CDATA section opened in the middle of a line", `${SECTION}\n\nTexte <![CDATA[\n${HEAD}${row()}\n]]>\n`, /holds HTML that the page does not show \("<!"\)/],
-    ["a processing instruction in the middle of a line", `${real}\nTexte <?x ?>\n`, /holds HTML that the page does not show \("<\?"\)/],
+    ["a CDATA section opened in the middle of a line", `${SECTION}\n\nTexte <![CDATA[\n${HEAD}${row()}\n]]>\n`, /line 3 holds "<!"/],
+    ["a processing instruction in the middle of a line", `${real}\nTexte <?x ?>\n`, /holds "<\?"/],
   ]) {
     const { exceptions, problems } = parse(String(text), TODAY);
     assert.deepEqual(exceptions, [], String(name));
     assert.equal(problems.length, 1, `${name}: ${problems.join(" / ")}`);
     assert.ok(refusal instanceof RegExp && refusal.test(problems[0] ?? ""), `${name}: ${problems.join(" / ")}`);
   }
-  // A sign "<" in the middle of a line, or an HTML tag named in code, changes nothing.
-  assert.deepEqual(parse(`${real}\nUn bloc \`<details>\` replié, et 1 < 2.\n`, TODAY).problems, []);
-  // The committed page holds no comment, no line that begins with HTML, and its heading once.
+  // The committed page holds no HTML opening, code included, and its heading once.
   const committed = atRoot(FILE);
   assert.ok(!committed.includes("<!--"));
-  assert.doesNotMatch(committed, /^ {0,3}<|<[!?]/m);
+  assert.doesNotMatch(committed, /^ {0,3}<|<[\p{L}/!?]/mu);
   assert.equal(committed.split(`\n${SECTION}\n`).length, 2);
+  const refusalRules = committed.split("**Le tableau est le seul de la section**")[1]?.split("\n\n")[0] ?? "";
+  assert.match(refusalRules, /suivi\s+d'une\s+lettre\s+Unicode,\s+de\s+`\/`,\s+de\s+`!`\s+ou\s+de\s+`\?`/);
+  assert.match(refusalRules, /code\s+compris/);
+});
+
+for (const [name, text, refusal] of /** @type {const} */ ([
+  ["a folded details block opened and closed in the middle of a line", `${SECTION}\n\nTexte <details><summary>Rien</summary>\n\n${HEAD}${row()}\n\nFin </details>\n`, /line 3 holds "<d"/],
+  ["a folded details block opened and closed in the middle of a line with CRLF endings", `${SECTION}\n\nTexte <details><summary>Rien</summary>\n\n${HEAD}${row()}\n\nFin </details>\n`.replaceAll("\n", "\r\n"), /line 3 holds "<d"/],
+  ["a folded details block opened in the middle of a line and never closed", `${SECTION}\n\nTexte <details><summary>Rien</summary>\n\n${HEAD}${row()}\n`, /line 3 holds "<d"/],
+  ["a closing tag alone in the middle of a line", `${SECTION}\n\n${HEAD}${row()}\n\nFin </details>\n`, /line 7 holds "<\/"/],
+  ["a tag in the middle of a line whose attribute holds the table", `${SECTION}\n\nTexte <span title="\n${HEAD}${row()}\n">\n`, /line 3 holds "<s"/],
+  ["an uppercase tag in the middle of a line", `${SECTION}\n\nTexte <DETAILS><SUMMARY>Rien</SUMMARY>\n\n${HEAD}${row()}\n\nFin </DETAILS>\n`, /line 3 holds "<D"/],
+  ["a details tag between backticks", `${SECTION}\n\nUn bloc \`<details>\` replié.\n\n${HEAD}${row()}\n`, /line 3 holds "<d"/],
+  // Escaped backticks outside code are literal backticks around real HTML on GitHub.
+  // Exempting them as if they were code would let a folded block hide rows again.
+  ["a details tag between escaped backticks", `${SECTION}\n\nUn bloc \\\`<details>\\\` replié.\n\n${HEAD}${row()}\n`, /line 3 holds "<d"/],
+  ["a tag in a fenced code block in another section", `${table([row()])}\n## Notes\n\n\`\`\`md\nx <details>\n\`\`\`\n`, /holds "<d"/],
+  ["a tag in an indented code block in another section", `${table([row()])}\n## Notes\n\n    x <details>\n`, /holds "<d"/],
+  ["an automatic link between angle brackets", `${SECTION}\n\nTexte <https://example.com>\n\n${HEAD}${row()}\n`, /line 3 holds "<h"/],
+  ["a non-ASCII letter after the opening sign", `${SECTION}\n\nTexte <é\n\n${HEAD}${row()}\n`, /line 3 holds "<é"/],
+])) {
+  test(`the page refuses HTML anywhere, code included: ${name}`, () => {
+    const { exceptions, problems } = parse(text, TODAY);
+    assert.deepEqual(exceptions, []);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0] ?? "", refusal);
+    assert.match(problems[0] ?? "", /^\.github\/audit-exceptions\.md: line \d+ holds /);
+    assert.match(problems[0] ?? "", /a "<" followed by a letter, "\/", "!" or "\?" opens HTML wherever it stands, a folded details block in the middle of a line included, and none is allowed in this file, code included: the page must show all that is read$/);
+  });
+}
+
+test("a sign that does not open HTML in the middle of a line leaves the real table readable", () => {
+  for (const text of ["1 < 2", "a <= b", "<3", "<-", "`<`", "<1a@b.co>"]) {
+    const { exceptions, problems } = parse(`${SECTION}\n\nTexte ${text}\n\n${HEAD}${row()}\n`, TODAY);
+    assert.deepEqual(problems, [], text);
+    assert.deepEqual(exceptions.map(({ id }) => id), ["GHSA-jf85-cpcp-j695"], text);
+  }
 });
 
 // --- The verdict on npm -------------------------------------------------------
