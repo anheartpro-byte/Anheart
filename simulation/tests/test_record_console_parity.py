@@ -94,7 +94,7 @@ def _state(panel: LocalPanel) -> RuntimeState:
     return panel.runtime.state
 
 
-async def _console_record(tmp_path: Path, *, programme: bool) -> Path:
+async def console_record(tmp_path: Path, *, programme: bool) -> Path:
     """One session of the real console in simulation, recorded and closed."""
     loaded = load_local_config(ENV)
     assert isinstance(loaded, Ok), loaded
@@ -214,7 +214,7 @@ def test_console_sessions_replay_exactly_with_the_applied_configuration(
 ) -> None:
     home = tmp_path / ("programme" if programme else "manual")
     home.mkdir()
-    folder = asyncio.run(_console_record(home, programme=programme))
+    folder = asyncio.run(console_record(home, programme=programme))
     loaded = read(folder)
     assert isinstance(loaded, Ok)
     record = loaded.value
@@ -325,7 +325,7 @@ def test_anh191_ex2_the_console_writes_the_drive_calls_the_harness_writes(tmp_pa
     The console's tap (``src.record.drive_tap``) and the harness's
     ``RecordingDrive`` are two pieces of code; this is what keeps them one format.
     """
-    console = asyncio.run(_console_record(tmp_path, programme=False))
+    console = asyncio.run(console_record(tmp_path, programme=False))
     simulation = _simulation_record(tmp_path, "manual_27_rpm.json", 30.0)
     keys = {("kind", "latency_ms", "ok", "raw_hex", "register", "t", "value")}
     assert _line_keys(console / "drive_frames.jsonl") == keys
@@ -342,7 +342,7 @@ def test_anh191_ex2_the_console_writes_the_drive_calls_the_harness_writes(tmp_pa
 def test_ex9_a_manual_session_has_the_same_structure_on_the_console_and_in_simulation(
     tmp_path: Path,
 ) -> None:
-    console = asyncio.run(_console_record(tmp_path, programme=False))
+    console = asyncio.run(console_record(tmp_path, programme=False))
     simulation = _simulation_record(tmp_path, "manual_27_rpm.json", 30.0)
     _assert_same_structure(console, simulation)
     assert _manifest(console)["profile"] is None
@@ -404,7 +404,7 @@ def test_anh163_a_scenario_record_does_not_judge_a_wall_clock_and_older_records_
 
 
 def test_ex9_a_programme_has_the_same_profile_keys_and_raw_block_headers(tmp_path: Path) -> None:
-    console = asyncio.run(_console_record(tmp_path, programme=True))
+    console = asyncio.run(console_record(tmp_path, programme=True))
     simulation = _simulation_record(tmp_path, "auto_jog_150_dsp.json", 12.0)
     _assert_same_structure(console, simulation)
     ours, theirs = _manifest(console), _manifest(simulation)

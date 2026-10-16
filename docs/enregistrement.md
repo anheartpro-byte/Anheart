@@ -672,6 +672,49 @@ des données machine sans identité inconnue. Le recorder ne reconnaît pas
 magiquement un nom humain arbitraire : le test sentinelle prouve le respect
 de cette frontière explicite, pas une détection générale de personnes.
 
+### Import dans la bibliothèque de rejeu
+
+`python -m simulation.import_record` prépare une copie destinée à la
+bibliothèque, sans modifier la source. La procédure complète et ses options
+sont dans [framework-de-test.md §16.6](framework-de-test.md#166-ajouter-un-enregistrement).
+Le reader partagé refuse les formes inconnues ; l'import exige en plus une
+séance close et intacte, puis un rejeu possible avant l'archivage.
+
+La copie remplace les identifiants du manifeste par ceux dérivés du nom opaque
+de bibliothèque, ou par `anonymized` ; `session_id` et `subject_id` deviennent
+`null`. Les alias des acteurs deviennent `anonymized`, `system` et `remote`
+restent. Les détails d'événement ne gardent que les commandes validées et une
+liste fermée de faits machine, sans prose ni nombre physiologique. Les
+préfixes qui font refuser le rejeu ne sont pas cachés par le nettoyage.
+
+Toutes les dates de séance deviennent la constante `2000-01-01T00:00:00Z` :
+`started_at`, `ended_at`, `clocks.utc_start`, le préfixe du dossier et
+`profile.resolved_at` (soit `946684800000` millisecondes Unix). Le profil
+conserve ses autres valeurs. `clocks.wall_trusted` et `clocks.ntp_offset_s`
+deviennent `null` : l'import ne porte aucun jugement sur l'horloge source.
+`software_version` devient `unversioned`, selon la règle d'export existante.
+Ni les instants relatifs, ni `clocks.monotonic_start`, ni le `config_hash`,
+la géométrie ou les observations finales ne changent. Le document de
+configuration est vérifié et copié tel quel à côté de l'archive.
+
+Une sentinelle d'identité source, une date absolue reconnue ou une adresse
+dans les textes conservés refuse l'import, au lieu de réécrire une mesure ou
+une provenance supplémentaire. Le contrôle porte sur tous les fichiers,
+les en-têtes bruts décompressés et les octets de transport décodés. Il ne
+remplace pas la règle de production ci-dessus sur les noms inconnus. Le
+contenant gzip doit aussi être neutre, comme celui du writer : date nulle,
+aucun nom, commentaire ou champ supplémentaire, un seul membre gzip. Une
+autre enveloppe est refusée pour conserver tous les octets des blocs acceptés.
+Le writer partagé recalcule l'inventaire et les sommes de contrôle ; les autres
+octets des flux et blocs bruts sont conservés.
+
+Ce nettoyage ne rend pas les mesures anonymes : tics et ECG brut restent des
+données de santé pseudonymisées. Le versement d'une vraie séance dans la
+bibliothèque du dépôt reste une décision humaine (ANH-172), distincte de la
+commande d'import. Aucune séance réelle n'existe dans le dépôt ; les preuves
+utilisent la console en simulation, y compris le pilote natif sous un maître
+Modbus simulé. L'import d'une vraie séance reste à faire quand elle existera.
+
 ## Ce qu'un enregistrement doit contenir pour être rejoué
 
 `python -m simulation.run --replay <dossier>` redonne un enregistrement à un
@@ -905,7 +948,12 @@ PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m simulation.run manual
 PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m simulation.live --port 8765
 ```
 
-Ouvrir `/?trace=out/<dossier>` pour le schéma 2. Le serveur utilise le reader
+Ouvrir `/?trace=out/<dossier>` ou `/?trace=out/<nom>.tar.gz` pour le schéma 2.
+Pour une archive, le serveur extrait temporairement par la même fonction que
+la bibliothèque : chemins confinés par `resolve_under`, fichiers ordinaires
+seulement, au plus 512 Mio et 40 000 membres (dossiers et doublons compris),
+borne vérifiée avant l'écriture du membre suivant. Il retire ensuite sa copie
+temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du
 schéma 1. `Trace.write_jsonl()` reste un export de compatibilité explicite ;
