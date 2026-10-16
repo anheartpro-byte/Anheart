@@ -52,7 +52,9 @@ def _locked(path: Path) -> dict[str, Version]:
         assert len(specifiers) == 1, requirement
         assert specifiers[0].operator == "==", requirement
         assert re.search(r"--hash=sha256:[0-9a-f]{64}(?:\s|$)", entry), requirement
-        versions[canonicalize_name(requirement.name)] = Version(specifiers[0].version)
+        name = canonicalize_name(requirement.name)
+        assert name not in versions, f"{path.name}: duplicate package: {name}"
+        versions[name] = Version(specifiers[0].version)
     assert versions, path
     return versions
 

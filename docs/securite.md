@@ -1782,7 +1782,7 @@ ticket : **ils ne sont pas faits.**
 | **Aucune procédure de rotation n'a été essayée** | le chef de projet, avec les vrais comptes ([secrets.md](secrets.md#5-ce-qui-reste)) |
 | **L'analyse des secrets de GitHub et sa protection au push sont désactivées** ; gitleaks juge après le push | le chef de projet (réglage du dépôt) |
 | **Aucun compte à privilèges n'exige un second facteur** ; la durée des sessions est celle de Clerk ; un rôle retiré dans Clerk vaut jusqu'à l'expiration du jeton en cours | [MEN-07](menaces.md#men-07-prise-de-compte-clerk) ; lot Clerk d'ANH-153, réglages de Clerk au chef de projet |
-| **La nomenclature de la simulation hébergée est livrée depuis son verrou ; les SBOM ne sont ni durables (90 jours d'artefact), ni signées ou attestées** | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) : stockage durable et signature ou attestation bloqués, car ils demandent un lancement de release et de nouveaux droits du workflow |
+| **Les SBOM ne sont ni durables (90 jours d'artefact), ni signées ou attestées** ; depuis ANH-230, la simulation hébergée a la sienne, depuis son verrou | [ANH-230](https://linear.app/anheart/issue/ANH-230/dependances-figer-avec-hachages-lenvironnement-des-tests-et-de-la), avec [ANH-220](https://linear.app/anheart/issue/ANH-220/pipeline-de-release-suites-de-la-revue-danh-219-et-premier-lancement-a) : stockage durable et signature ou attestation bloqués, car ils demandent un lancement de release et de nouveaux droits du workflow |
 
 ## 13. Décisions médicales : un fichier signé (ANH-139)
 

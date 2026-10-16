@@ -1443,7 +1443,9 @@ def _locked(path: Path) -> dict[str, str]:
         assert re.search(r"--hash=sha256:[0-9a-f]{64}(?:\s|$)", entry), (
             f"{path.name}: {matched.group(1)} has no hash"
         )
-        pins[_normalized(matched.group(1))] = matched.group(2)
+        name = _normalized(matched.group(1))
+        assert name not in pins, f"{path.name}: duplicate package: {name}"
+        pins[name] = matched.group(2)
     return pins
 
 

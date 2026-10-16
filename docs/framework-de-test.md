@@ -1284,7 +1284,8 @@ Depuis `deploy/simulation-vercel/`, pour la simulation hébergée :
 uv pip compile requirements.txt -c ../../raspberry-pi/requirements-base.txt --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
 ```
 
-La date commune `--exclude-newer 2026-10-07T00:00:00Z` garde les paquets partagés
+La date commune `--exclude-newer 2026-10-07T00:00:00Z` et, pour la simulation
+hébergée, la contrainte de `requirements-base.txt` gardent les paquets partagés
 à la même version que dans l'image du Pi : c'est ce que les tests exercent.
 `raspberry-pi/tests/test_pi_install.py` compare les versions communes aux
 verrous dev et image ; `deploy/simulation-vercel/tests/test_dependencies.py`
@@ -1308,7 +1309,8 @@ uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps
 ```
 
 Sous Windows, le chemin de l'interpréteur est
-`raspberry-pi/.venv/Scripts/python.exe`. L'ancienne commande des guides,
+`raspberry-pi/.venv/Scripts/python.exe`. L'installation n'a été essayée que sur
+macOS et, en CI, sous Linux, pas sous Windows. L'ancienne commande des guides,
 `pip install -r requirements-dev.txt`, installe encore sans empreintes : la
 mise à jour de ces guides reste à suivre.
 
@@ -1340,7 +1342,7 @@ exceptée.
 Chaque environnement est audité même quand un autre a échoué, et le message
 d'erreur les nomme. Pour l'extracteur CAO, l'audit porte sur ce que la
 résolution choisit ce jour-là sur un runner Linux. Les paquets réservés à macOS
-(`pyobjc-*`) sont désormais dans le verrou dev ; d'après le source de
+et à Windows (`pyobjc-*`, `colorama`) sont désormais dans le verrou dev ; d'après le source de
 `pip-audit` 2.9.0 (lu le 16 octobre 2026), il applique leurs marqueurs de
 plateforme et les saute sur Linux. L'essai du 16 octobre
 2026 sur macOS n'a signalé aucune vulnérabilité connue ; ce n'est pas une
