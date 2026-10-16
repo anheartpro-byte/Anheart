@@ -130,6 +130,71 @@ leur séance ou leur machine, donc par l'organisation de celle-ci.
   crée l'organisation « Anheart » et y rattache toutes les lignes existantes
   ([§8](#activer-le-multi-organisation)).
 
+### `audit_log` : journal d'audit (ANH-167)
+
+Une ligne attribue une action sensible à son acteur, à sa cible et à sa
+requête. Les valeurs fermées sont définies dans
+[`convex/lib/audit.ts`](../convex/lib/audit.ts) et reprises par le schéma.
+
+| Champ | Type et sens |
+|---|---|
+| `at` | Nombre, date serveur à l'insertion, en ms Unix. |
+| `organizationId` | Identifiant d'organisation, facultatif pour une action globale. Une ligne sans organisation n'est lisible que par l'admin Anheart. |
+| `actorId` | Identifiant de `users` ou de `machines`, absent pour le système. |
+| `actorRole` | `admin`, `org_admin`, `gestionnaire`, `user`, `machine` ou `system`. Le rôle de l'acteur au moment de l'effet. |
+| `action` | Une des 42 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
+| `targetType` | `user`, `machine`, `machine_key`, `session`, `fitness_assessment`, `consent`, `organization`, `software_release`, `medical_parameters_version` ou `patient_invitation`. Déduit de l'action par `AUDIT_ACTION_TARGET`. `user.invited` cible une `patient_invitation`, y compris quand aucun profil unique ne peut être lié à l'invitation. |
+| `targetId` | Chaîne, identifiant de la cible ; il reste dans le journal après la suppression de celle-ci. |
+| `details` | Objet facultatif, dont seules les clés ci-dessous sont admises. |
+| `requestId` | Identifiant de requête Convex lu par `ctx.meta.getRequestMetadata()`, partagé par la route ou l'action d'origine et la mutation qu'elle appelle, ainsi que par les lignes d'une même requête. |
+| `source` | `site`, `machine`, `cron`, `webhook` ou `operator`. |
+
+La source **`operator` est une extension d'EX-1 décidée pendant le
+développement faute de valeur adaptée, à relire par le chef de projet**.
+Elle désigne les fonctions lancées en ligne de commande avec la clé de
+déploiement : `machineKeys.createKeyByOperator`,
+`machineKeys.revokeKeyByOperator` et `medicalParameters.registerVersion`
+(écriture par `medicalParametersStore.insertVersion`). Ces fonctions sont
+internes ; l'acteur est `system`, sans `actorId`. Le site et les routes
+machine ne peuvent pas emprunter ce chemin.
+
+Les clés autorisées de `details` sont `fields`, `role`, `previousRole`,
+`level`, `previousLevel`, `version`, `softwareVersion`,
+`medicalParametersVersion`, `machineId`, `userId`, `gestionnaireId`, `added`,
+`removed`, `count`, `outcome` et `expiresAt`. Toutes sont facultatives.
+Les chaînes contiennent des noms de champs, identifiants ou versions,
+jamais le contenu libre saisi par un utilisateur. `role` et `previousRole`
+reprennent les quatre rôles humains ci-dessus ; `level` et `previousLevel`
+reprennent les niveaux fermés de `convex/lib/releaseValidation.ts` ;
+`outcome` est seulement `completed` ou `failed`, résultat technique d'une
+séance, jamais un verdict d'aptitude.
+
+Conformément au principe 6 du processus de développement, aucune donnée de
+santé ni texte libre ne doit y entrer : ni FC max, année de naissance,
+réponses ou verdict d'aptitude, notes, code ou motif de fin de séance,
+mesures ECG ou BPM, noms, motifs ou adresses. Les validateurs ferment les
+clés ; les appels et leurs tests vérifient les valeurs réellement écrites.
+Le classement des données de santé reste à décider dans ANH-172 ; tout ajout
+de clé exige une relecture.
+
+Les dix index ordonnent les lectures par `at` : `by_at`,
+`by_organization_and_at`, `by_actor_and_at`, `by_action_and_at`,
+`by_target_and_at` (`targetType`, `targetId`, `at`),
+`by_target_type_and_at`, `by_organization_and_target_type_and_at`,
+`by_organization_and_actor_and_at`, `by_organization_and_action_and_at` et
+`by_organization_and_target_and_at`. Les variantes d'organisation ajoutent
+`organizationId` en tête des champs.
+
+La table est **append-only** : seule `audit()` y insère une ligne, dans la
+même transaction que l'effet ; aucune fonction ne la modifie ni ne la
+supprime. [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) énumère les
+fonctions qui touchent la table et interdit les écritures autres que cet
+ajout. **Aucune purge n'existe.** La rétention envisagée est de **5 ans, à
+confirmer par ANH-87a** ; rien n'est supprimé, ni avant ni après cinq ans,
+tant que cette durée et sa mise en œuvre ne sont pas décidées. La portée de
+l'immutabilité est précisée dans
+[securite.md §14](securite.md).
+
 ### `users` : comptes
 
 | Champ | Type | Rôle |
@@ -1258,6 +1323,76 @@ Résumé des fonctions les plus utilisées par le site. Dans ces tableaux,
 l'organisation concernée, et toute lecture ou liste est limitée à
 l'organisation de l'appelant, sauf pour l'admin Anheart
 ([§3](#3-règles-dautorisation)).
+
+### `audit.ts` (ANH-167)
+
+| Fonction | Type et autorisation | Rôle |
+|---|---|---|
+| `list` | Query ; admin Anheart : toutes les organisations et les actions globales ; `org_admin` : son organisation seulement ; autres rôles refusés. | Journal par `at` décroissant, filtré et paginé par curseur Convex. Renvoie `page`, `isDone`, `continueCursor`. |
+
+`paginationOpts` est obligatoire (`numItems`, `cursor`, selon le validateur
+Convex). Les filtres facultatifs sont `organizationId`, `actorId`
+(identifiant d'utilisateur ou de machine), `actorRole`, `action`,
+`targetType`, `targetId`, `from` et `to` (ms Unix, début inclus, fin exclue).
+L'organisation d'un `org_admin` est imposée par le serveur. Demander une
+autre organisation, donner un `targetId` sans `targetType`, ou une période
+avec `from >= to` renvoie une page vide.
+
+[`convex/lib/auditIndex.ts`](../convex/lib/auditIndex.ts) choisit l'index
+selon cette priorité : cible complète, acteur, action, type de cible, date ;
+avec la variante d'organisation quand elle est fixée. La période porte sur
+l'index et les autres filtres sont appliqués avant la pagination.
+
+Chaque ligne renvoyée reprend les champs du journal et ajoute
+`organizationName`, `actorLabel`, `targetLabel`, sans e-mail. Les libellés
+viennent des comptes et machines actuels, pas d'une copie de leurs noms au
+moment de l'action ; une cible autre qu'un utilisateur ou une machine, un
+identifiant invalide ou une ligne supprimée donne un libellé `null`.
+L'interface est décrite dans
+[tableau-de-bord.md](tableau-de-bord.md#audit--frdashboardaudit).
+
+### `convex/lib/audit.ts` (ANH-167)
+
+La bibliothèque définit les actions, leurs cibles et `audit(ctx, entry)`.
+Les 42 actions couvrent comptes et invitations, appartenances Clerk, liens
+gestionnaires et droits de lancement, changement de physiologie sans les
+valeurs, validation d'aptitude sans verdict, consentements, lancement et
+arrêt de séances, clés machine, création/suppression/restauration de
+machines, registre et niveaux de validation, versions logicielles et
+médicales, suppression d'enregistrements.
+
+La liste de référence est `SENSITIVE_MUTATIONS` dans
+[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 39 mutations publiques ou
+internes, avec leurs actions attendues. Les actions Convex et routes HTTP
+font écrire leurs effets par ces mutations. `NON_SENSITIVE_MUTATIONS`
+classe toutes les autres avec un motif : télémétrie et états transitoires,
+synchronisation opérationnelle, calculs de résumés, dépôts de fichiers,
+notifications, changements de nom/langue, rafraîchissement du miroir
+d'identité et les cinq migrations de `convex/migrations/`. Les purges de
+ces autres données ne purgent jamais `audit_log`.
+
+Pour ajouter une mutation sensible :
+
+1. Déclarer son action fermée et sa cible si elles n'existent pas encore,
+   puis ajouter la mutation et ses actions dans `SENSITIVE_MUTATIONS`.
+2. Appeler `await audit(ctx, ...)` après l'effet, dans la même mutation,
+   avec l'organisation et l'acteur autorisés, sans donnée de santé ni texte
+   libre ; un refus ou un rejeu sans effet ne doit pas ajouter de ligne.
+3. Ajouter dans `SCENARIOS` de
+   [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts)
+   un scénario passant par la fonction enregistrée et vérifiant l'effet
+   et la ligne attendue. Le test compare exactement les clés des scénarios
+   à celles de la liste et observe chaque action déclarée.
+
+ANH-137 (programme publié), ANH-141 (configuration approuvée) et ANH-145
+(incident clos) ajouteront leurs actions de cette façon ; elles ne sont pas
+implémentées par ANH-167.
+
+`audit()` lit une fois les métadonnées de requête puis insère une ligne,
+sans autre lecture, contrôle métier ni chemin de refus ajouté. Son contrat
+ne peut donc pas refuser une demande d'arrêt autorisée. Une défaillance de
+base ou du runtime reste un échec de transaction, comme pour toute
+insertion ; l'audit n'est pas une écriture asynchrone indépendante.
 
 ### `fitness.ts` et `convex/lib/fitness.ts` (ANH-143)
 
@@ -2836,6 +2971,9 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 
 | Fichier | Rôle |
 |---|---|
+| [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) | Métadonnées et identifiant de requête, valeurs fermées et clés de détails ; énumération des accès à `audit_log` (seul ajout par `audit()`, modules de lecture limités aux queries, aucun `patch`, `replace` ou `delete`), absence de purge et classification exhaustive des mutations, migrations comprises. |
+| [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts) | Un scénario par mutation sensible, passant par les fonctions enregistrées, avec effets et lignes attendues dans la même transaction ; toutes les actions observées, refus et rejeux sans ligne, arrêt actif et annulation en attente, absence des valeurs privées testées, source `operator` limitée aux chemins internes prévus et absente des routes HTTP. |
+| [`convex/audit.test.ts`](../convex/audit.test.ts) | Lecture réservée aux administrateurs, séparation des organisations et des lignes globales, filtres combinés, bornes de période, pagination après filtrage, priorité de chaque index et libellés sans e-mail, y compris les références disparues. |
 | `convex/test.setup.ts` | Fabriques partagées : un monde de **trois organisations** (Anheart et son admin ; le centre A avec son admin, deux gestionnaires, trois patients, deux machines ; le centre B avec son admin, un gestionnaire, un patient, une machine), un monde de machines avec de vraies clés pour les routes HTTP, et un monde « d'avant les organisations » pour la migration. Nom à deux points : non déployé. |
 | `convex/authorization.matrix.ts` | La **matrice d'autorisation** : la politique de chaque fonction publique, une ligne par rôle, par côté quand l'accès dépend de la propriété, et par organisation. Nom à deux points : non déployé. |
 | `convex/authorization.matrix.test.ts` | Parcourt la matrice : un test par cellule. |
