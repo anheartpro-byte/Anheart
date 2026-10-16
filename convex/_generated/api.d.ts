@@ -15,6 +15,7 @@ import type * as dashboard from "../dashboard.js";
 import type * as ecgData from "../ecgData.js";
 import type * as fitness from "../fitness.js";
 import type * as http from "../http.js";
+import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
 import type * as lib_contract from "../lib/contract.js";
@@ -72,6 +73,7 @@ declare const fullApi: ApiFromModules<{
   ecgData: typeof ecgData;
   fitness: typeof fitness;
   http: typeof http;
+  "lib/audit": typeof lib_audit;
   "lib/auth": typeof lib_auth;
   "lib/clerkWebhook": typeof lib_clerkWebhook;
   "lib/contract": typeof lib_contract;
