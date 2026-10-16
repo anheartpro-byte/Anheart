@@ -292,7 +292,16 @@ class Mismatch:
 class TapeDrive:
     """``drive_frames.jsonl`` as a drive. Mutable, single-use, owned by the replay loop."""
 
-    __slots__ = ("_clock", "_cursor", "_exchanges", "_mismatch", "_origin", "_proven", "_served")
+    __slots__ = (
+        "_clock",
+        "_cursor",
+        "_exchanges",
+        "_mismatch",
+        "_origin",
+        "_proven",
+        "_served",
+        "_until",
+    )
 
     def __init__(
         self, exchanges: Sequence[Exchange], clock: ManualClock, origin: Monotonic
@@ -304,6 +313,28 @@ class TapeDrive:
         self._mismatch: Mismatch | None = None
         self._served: int = 0
         self._proven: bool = False
+        self._until: Seconds | None = None
+
+    def begin_step(self, until: Seconds | None) -> None:
+        self._until = until
+
+    def finish_step(self) -> Mismatch | None:
+        recorded = self.pending
+        if (
+            self._until is not None
+            and self._mismatch is None
+            and recorded is not None
+            and self._belongs(recorded)
+        ):
+            self._mismatch = Mismatch(
+                t=recorded.t,
+                requested="missing replay call (tick or command)",
+                recorded=located(recorded),
+            )
+        return self._mismatch
+
+    def _belongs(self, recorded: Exchange) -> bool:
+        return self._until is None or round(recorded.t, 3) < self._until
 
     @property
     def mismatch(self) -> Mismatch | None:
@@ -323,6 +354,13 @@ class TapeDrive:
             return None
         now = elapsed(self._origin, self._clock.monotonic())
         recorded = self.pending
+        if recorded is not None and not self._belongs(recorded):
+            self._mismatch = Mismatch(
+                t=now,
+                requested=f"extra replay call (tick or command): {describe(call, written)}",
+                recorded=f"no exchange in this step; next {located(recorded)}",
+            )
+            return None
         if recorded is not None and _answers(recorded, call, written, now):
             self._cursor += 1
             if recorded.latency > 0.0:

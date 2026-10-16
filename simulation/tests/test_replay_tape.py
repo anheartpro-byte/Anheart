@@ -257,6 +257,41 @@ async def test_ex3_another_call_than_the_recorded_one_stops_the_tape_and_says_wh
     assert drive.mismatch == found
 
 
+async def test_a_step_cannot_consume_the_identical_call_of_the_next_step() -> None:
+    drive, _ = tape(status(t=0.0), status(t=0.2))
+    drive.begin_step(Seconds(0.2))
+    assert isinstance(await drive.read_status(), Ok)
+    assert isinstance(await drive.read_status(), Err)
+    mismatch = drive.mismatch
+    assert mismatch is not None
+    assert mismatch.t == pytest.approx(0.0)
+    assert "extra" in mismatch.requested
+    assert "t=0.200 s" in mismatch.recorded
+    drive.finish_step()
+    assert drive.mismatch == mismatch
+
+
+async def test_a_call_left_in_the_step_is_missing_at_its_own_start() -> None:
+    drive, _ = tape(status(t=0.1), status(t=0.2))
+    drive.begin_step(Seconds(0.2))
+    drive.finish_step()
+    mismatch = drive.mismatch
+    assert mismatch is not None
+    assert mismatch.t == 0.1
+    assert "missing" in mismatch.requested
+    assert mismatch.recorded == "read_status at t=0.100 s"
+
+
+async def test_a_step_keeps_later_calls_after_its_recorded_latency() -> None:
+    drive, clock = tape(frame("open", latency_ms=300.0), status(t=0.3))
+    drive.begin_step(Seconds(0.4))
+    assert isinstance(await drive.open(), Ok)
+    assert clock.monotonic() == pytest.approx(ORIGIN + 0.3)
+    assert isinstance(await drive.read_status(), Ok)
+    drive.finish_step()
+    assert drive.mismatch is None
+
+
 async def test_ex3_another_command_word_is_not_the_recorded_exchange() -> None:
     drive, _ = tape(frame("command", register=8501, value=int(ControlWord.SWITCH_ON)))
     assert isinstance(await drive.write_command(ControlWord.ENABLE_OPERATION), Err)

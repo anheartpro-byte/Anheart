@@ -4005,13 +4005,37 @@ identifiants. Il peut donc être publié dans un journal de CI.
 | consigne (`setpoint_motor_rpm`) | égale à ± 1 tr/min moteur |
 | action de sécurité et règle (`safety_action`, `safety_rule`) | les transitions sont appariées une à une, dans l'ordre ; chacune peut tomber un tic plus tôt ou plus tard ; aucune ne peut manquer, être ajoutée ou changer de nature |
 | phase | exacte, tic pour tic |
-| appels au variateur | même appel, dans le même ordre ; mot de commande exact ; vitesse écrite à ± 1 tr/min ; demandé à moins d'un tic (0,2 s) de son instant enregistré |
+| appels au variateur | même appel, dans le même ordre et la même étape ; mot de commande exact ; vitesse écrite à ± 1 tr/min ; demandé à moins d'un tic (0,2 s) de son instant enregistré |
 
 Les deux tolérances chiffrées sont `SETPOINT_TOLERANCE_RPM` et
 `VERDICT_TOLERANCE_TICKS` dans `simulation/replay_report.py`. Elles existent
 pour les séances réelles, dont les instants sont connus à la milliseconde. Un
 enregistrement de la simulation se rejoue exactement : la ligne `tolerated`
 du rapport reste à zéro.
+
+Une étape réunit les tics, commandes et remises ECG au même instant arrondi
+à la milliseconde, dans l'ordre de la section 16.1. Chaque trame appartient
+à l'intervalle qui commence à cet instant et finit strictement avant
+l'étape suivante, selon son instant de début, jamais celui de sa réponse.
+Une latence avance toujours l'horloge. Aucun champ du format n'est ajouté.
+Le regroupement conserve les commandes et le tic qui partagent un instant,
+sans prétendre déduire leur appartenance individuelle depuis cet instant.
+
+À la fin de l'étape, une trame encore attendue dans son intervalle signale
+un appel manquant ; un appel qui réclame la trame d'une étape suivante
+signale un appel en trop. La divergence nomme l'instant de la trame
+manquante ou de l'appel ajouté, le nombre de tics rejoués et les appels.
+La tolérance de 0,2 s ne permet donc plus de décaler tous les échanges
+identiques d'un palier jusqu'à son arrêt. Un vrai trou de cadence sans
+échange enregistré dans ce trou reste une entrée valable, comme une
+boucle bloquée dans le scénario d'origine.
+
+Mesure sur une séance simulée de 65 s, cible existante de 6 tr/min de sortie,
+palier à 299 tr/min moteur et arrêt à 50 s : retirer en mémoire le tic de
+40,0 s était signalé à 50,0 s (10 s de retard), ajouter un tic à 40,1 s
+était signalé à 50,0 s (9,9 s de retard). Ils sont désormais signalés à
+40,0 et 40,1 s respectivement. `test_replay_ticks.py` exige au plus un tic
+de retard, avec comparaison exacte de tous les tics atteints auparavant.
 
 ### 16.4 Les trois issues
 
@@ -4281,7 +4305,7 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
   Les échanges Modbus du pilote réel ne sont pas rejoués : un enregistrement
   qui en contient est refusé (code 2).
 * **Mode `direct`.** Les scénarios qui injectent des bpm ne sont pas
-  rejouables : seuls les quatre scénarios `*_dsp` de la batterie le sont.
+  rejouables : seuls les six scénarios `*_dsp` de la batterie le sont.
 * **Exactitude.** Un enregistrement de la simulation est rejoué sur les mêmes
   nombres flottants que l'original, donc exactement. Une séance réelle est
   connue à la milliseconde : une décision prise à moins d'une milliseconde
@@ -4292,15 +4316,19 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
   à mieux que 0,1 A, une exception levée dans le tic d'origine, un
   saut de l'horloge murale pendant l'acquisition. Détail dans
   [enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué).
-* **Coût.** Rejouer la bibliothèque prend environ trois minutes sur un Mac et
-  près de sept minutes de calcul en CI, réparties sur trois parts de la
-  batterie (les deux longs rejeux sont dans `SLOW_SECONDS`). Ses trois
-  archives pèsent 4 Mo dans le dépôt. Une régénération n'ajoute à
+* **Coût.** Les cinq rejeux totalisent 214,54 s sur le poste Mac de
+  développement (80,21 + 17,51 + 77,93 + 15,57 + 23,32 s, appels CLI
+  chronométrés, certains concurrents). Les cinq archives pèsent
+  4 919 705 octets dans le dépôt. La durée de cette bibliothèque élargie
+  en CI reste à mesurer ; les deux longs rejeux sont dans `SLOW_SECONDS`.
+  Une régénération n'ajoute à
   l'historique que les archives dont le contenu a changé (section 16.6).
 * **Dépendances numériques.** Le rejeu repasse l'ECG dans le DSP : une
   nouvelle version de numpy, scipy ou BioSPPy qui changerait une fréquence
-  cardiaque calculée se verrait ici comme un écart. Ces dépendances ne sont
-  pas épinglées (`>=` dans `raspberry-pi/requirements-base.txt`).
+  cardiaque calculée se verrait ici comme un écart. Les versions et leurs
+  empreintes sont figées par les verrous d'ANH-230, dont
+  `raspberry-pi/requirements-lock.txt` pour aarch64. L'accord numérique avec
+  un Pi reste à vérifier au banc, par la procédure de la section 16.10.
 
 ### 16.9 Les tests du rejeu
 
@@ -4308,6 +4336,7 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 |---|---|
 | `test_replay.py` | de bout en bout sur de courtes séances réellement enregistrées : rejeu sans écart (y compris boucle bloquée, liaison perdue, défaut variateur, ECG lacunaire ou perdu), écart détecté à son instant quand on altère un tic ou une trame, divergence, déterminisme, refus motivés (toutes les raisons à la fois), événements qui ne sont pas des entrées jamais lus comme des commandes, ligne de commande |
 | `test_replay_tape.py` | le magnétophone : lecture des trames, appel conforme ou non, horloge, blocs ECG |
+| `test_replay_ticks.py` | sur un palier constant, tic retiré ou ajouté en mémoire nommé à son instant, au plus un tic plus tard ; séance intacte rejouée exactement |
 | `test_replay_inputs.py` | erreur d'armement nommée rejouée sans écart et divergence sans son champ ; pings discrets et absence à 60,2 s sans eux ; lecture reçue entre deux tics, timestamp de fraîcheur conservé ; refus d'une commande mal écrite |
 | `raspberry-pi/tests/test_record_commands.py` | le vocabulaire des commandes (`src/record/commands.py`), écrit et relu à l'identique ; il est dans la gate du Pi |
 | `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées ; l'empreinte, qui distingue deux rejeux que les décomptes confondent |

@@ -790,6 +790,14 @@ def test_an_odd_tick_interval_and_an_unvetted_member_name_are_handled(
         return rows
 
     edit_ticks(folder, late)
+
+    def late_frames(lines: list[Line]) -> list[Line]:
+        for line in lines:
+            if abs(at(line) - 4.0) < 1e-9:
+                line["t"] = 4.05
+        return lines
+
+    edit_lines(folder, "drive_frames.jsonl", late_frames)
     with (folder / "checksums.sha256").open("a", encoding="utf-8") as handle:
         handle.write(f"{'0' * 64}  Passenger Sentinel.txt\n")
     report = replayed(folder)
