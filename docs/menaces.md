@@ -462,14 +462,28 @@ bash scripts/ci/check-men.sh
 ```
 
 Le validateur échoue sur catalogue absent, doublon, référence inconnue, statut
-invalide, ticket absent du registre ou lien ne correspondant pas au ticket. Un
-ticket compte dès que cette page le nomme, dans un champ Issues ou ailleurs, et
-chaque lien Linear de la page est comparé au registre, où qu'il soit.
+invalide ou ticket écrit `ANH-n` absent du registre, où qu'il soit dans la page,
+adresses et code compris. Après normalisation Unicode NFKC, toute autre écriture
+est refusée : casse, espace, autre tiret, caractère invisible ou suffixe collé.
+Ce contrôle de forme exclut les destinations des liens et les adresses, mais
+conserve les titres des liens. Il ignore aussi les fragments en minuscules
+immédiatement précédés de `/`, `#`, `.`, `_` ou `-` dans un chemin, une ancre ou
+un nom de fichier. Par exemple, un nom en minuscules collé à `/` n'est pas compté.
+Une adresse Linear est reconnue par son hôte, `linear.app` ou un sous-domaine.
+Chaque adresse de ticket Linear est comparée à celle du registre, quelle que
+soit la forme du lien, après retrait du fragment. La ponctuation finale n'est
+retirée que pour une adresse nue ; une destination explicite est conservée
+telle quelle.
+Chaque nom de ticket du libellé d'un lien Markdown vers Linear doit désigner
+le ticket lié, même en gras, en code, dans une image ou dans un lien par
+référence. Les liens HTML sont refusés. Ce contrôle de forme ne remplace pas
+la lecture des liens par le relecteur, demandée à la ligne 4 de la check-list
+de release.
 Il compare les liens au [registre Linear vérifié](../scripts/ci/men-linear-issues.tsv)
 (clé, UUID, date de lecture, URL canonique), constitué par lectures réelles
 `get_issue`. Chaque ligne porte sa date de lecture, la plus récente quand le
-ticket a été relu : 2026-10-10 pour 31 lignes, 2026-10-14 pour 15 lignes,
-2026-10-15 pour 1 ligne.
+ticket a été relu : 2026-10-10 pour 29 lignes, 2026-10-14 pour 9 lignes,
+2026-10-15 pour 1 ligne, 2026-10-16 pour 8 lignes.
 La revue de release du 10 octobre 2026 n'avait relu
 aucun ticket ; la relecture a suivi le même jour, et son résultat, ticket par
 ticket, est dans les preuves de la PR qui a redaté le registre. Les 32 tickets
@@ -493,11 +507,40 @@ des menaces » (paragraphe suivant) : identifiant, UUID et adresse n'ont pas
 changé, et leur ligne porte cette date. ANH-230, que MEN-06 nomme depuis le
 même jour, a été lu dans Linear ce jour-là (identifiant, UUID, adresse et
 description) et inscrit au registre. Le validateur refuse désormais tout ticket
-nommé par cette page et absent du registre. Le fichier de tests vérifie que la
+écrit `ANH-n` dans cette page et absent du registre, y compris dans les adresses
+et le code. Les autres écritures sont soumises au contrôle de forme et aux
+exceptions décrits ci-dessus. Le fichier de tests vérifie que la
 phrase qui donne ces dates nomme celles que porte le registre, avec le nombre
 de lignes de chacune, et aucune autre. Aucun jeton Linear n'est requis en CI.
 Ce snapshot atteste **l'existence au jour de lecture**, pas le statut actuel,
 l'achèvement d'une mesure ou la présence d'un backlink dans le ticket.
+
+Le 16 octobre 2026, ANH-180, ANH-186, ANH-187, ANH-223 et ANH-224 ont été relus
+dans Linear, identifiant, UUID, adresse, description et commentaires compris.
+Aucun ne portait de section « Traçabilité des menaces ». ANH-223 citait déjà
+MEN-04, MEN-05, MEN-14 et MEN-15 dans « Dépendances et risque » ; ANH-224 y
+citait MEN-04, MEN-18 et MEN-20, mais pas MEN-14. ANH-180, ANH-186 et ANH-187
+ne citaient aucune MEN. Une section « Traçabilité des menaces » a été ajoutée
+en fin de description de chacun, puis relue. Elle nomme MEN-08 pour ANH-180 ;
+MEN-03 et MEN-07 pour ANH-186 ; MEN-03 pour ANH-187 ; MEN-05 pour ANH-223 ;
+MEN-14 et MEN-18 pour ANH-224. Elle reprend aussi les menaces déjà citées dans
+« Dépendances et risque » : MEN-04, MEN-14 et MEN-15 pour ANH-223 ; MEN-04 et
+MEN-20 pour ANH-224. Chaque section dit que le ticket contribue au traitement
+de ces menaces, que leur fermeture exige la preuve de la fiche et qu'aucun
+statut de risque fermé ou accepté ne se déduit du statut du ticket. Aucun autre
+texte, état ni étiquette n'a changé. À l'enregistrement, Linear a remis entre
+chevrons les adresses de 13 liens de revue de PR déjà présents dans ces
+descriptions, sans changer leur libellé ni leur adresse.
+
+Le même jour, ANH-135 (MEN-08), ANH-148 (MEN-20) et ANH-230 (MEN-06) ont été
+relus de la même façon (identifiant, UUID, adresse, description et commentaires).
+Aucun ne porte de section
+« Traçabilité des menaces » ; ils n'ont pas été modifiés. Pour les huit tickets,
+identifiant, UUID et adresse sont ceux du registre, dont la date de lecture
+est maintenant le 16 octobre 2026. Ces huit tickets sont nommés hors des champs
+Issues. Les autres tickets nommés hors de ces champs sont des décisions et
+analyses séparées (ANH-98, ANH-103, ANH-104 et ANH-105), le pilote (ANH-120) et
+le ticket de ce modèle (ANH-136), pas des tickets de traitement.
 
 À chaque modification des tickets cités, chaque jalon et avant le pilote :
 relire chaque issue par son identifiant dans Linear, vérifier UUID/URL et contenu,
@@ -511,6 +554,10 @@ datée impose la fraîcheur avant livraison.
 Chaque ticket de sécurité doit citer les MEN qu'il **contribue à fermer**,
 avec mesures et preuves ; un statut Done du ticket ne ferme pas automatiquement
 la menace. Les mappings exacts sont les champs Issues de chaque fiche.
+Le constat que chaque ticket d'un champ Issues cite dans sa section chaque
+menace que cette page lui attribue porte sur ces champs. Pour les tickets
+nommés hors de ces champs, les lectures
+du 16 octobre ci-dessus disent lesquels portent une section et lesquels non.
 Le 5 octobre 2026, le responsable de l'intégration a ajouté les backlinks
 aux 27 tickets de traitement référencés ; leur texte et leur identité ont été
 revérifiés par lecture de chaque ticket dans Linear. À la relecture du
