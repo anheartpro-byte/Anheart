@@ -18,6 +18,11 @@ import { canAccessSession, sameOrganization, type CurrentUser } from "./auth";
  */
 export const SESSION_PAGE_MAX_ROWS_READ = 1000;
 
+/**
+ * The scan cap of one page: a finite client value of at least 1 is truncated,
+ * never above SESSION_PAGE_MAX_ROWS_READ; anything else, absent included,
+ * gives the cap.
+ */
 export function pageMaxRowsRead(asked?: number): number {
   return asked !== undefined && Number.isFinite(asked) && asked >= 1
     ? Math.min(Math.floor(asked), SESSION_PAGE_MAX_ROWS_READ)

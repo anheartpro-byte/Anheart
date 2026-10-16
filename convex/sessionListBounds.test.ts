@@ -298,6 +298,23 @@ describe("ANH-227 pagination: server scan cap", () => {
     },
   );
 
+  it("honours a client cap of one row on the admin page", async () => {
+    const first = await as(w.t, "admin").query(
+      api.sessions.listSessionsPaginated,
+      {
+        paginationOpts: {
+          numItems: 50,
+          cursor: null,
+          maximumRowsRead: 1,
+        },
+      },
+    );
+    expect(first.page).toHaveLength(1);
+    expect(first.pageStatus).toBe("SplitRequired");
+    expect(first.continueCursor).toEqual(expect.any(String));
+    expect(first.isDone).toBe(false);
+  });
+
   it.each([73, 73.9])(
     "honours a lower client cap of %s, including the native split boundaries",
     async (maximumRowsRead) => {

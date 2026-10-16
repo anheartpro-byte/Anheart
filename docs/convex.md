@@ -1720,7 +1720,8 @@ l'historique du centre, même s'il est lié à une machine d'une autre organisat
 **Les pages (ANH-227).** `listSessionsPaginated` conserve une seule plage et la
 pagination native Convex, avec ses pages contiguës et ses curseurs. Pour tous
 les appelants, le serveur impose `maximumRowsRead: 1000` au plus ; une valeur
-client inférieure est conservée, une valeur supérieure ramenée à 1000.
+client entière d'au moins 1 et inférieure au plafond est conservée (une décimale
+est tronquée) ; une valeur absente, inférieure à 1, non finie ou supérieure donne 1000.
 Ce plafond compte les séances parcourues avant le filtre des droits, pas
 seulement celles affichées. À la limite, Convex retourne une page incomplète
 (`SplitRequired`), un `splitCursor` et un `continueCursor` au point d'arrêt.
