@@ -36,12 +36,7 @@ import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { organizationRoleOf } from "./auth";
-import {
-  alertEmail,
-  emailSettings,
-  queueAlertEmail,
-  type NotificationType,
-} from "./notificationEmail";
+import { emailSettings, type NotificationType } from "./notificationEmail";
 
 export type { NotificationType };
 
@@ -208,91 +203,175 @@ export type MachineEvent = {
   count?: number;
 };
 
-/**
- * Alert the recipients of this machine (`recipientsOf`) of one event, or of
- * several of one kind. For each recipient, the event folds into their unread
- * alert of that kind (`NOTIFICATION_TYPES`); without one, a new alert is
- * written, and its e-mail queued when the deployment sends e-mails, the
- * recipient wants this kind by e-mail and has an address. Returns how many
- * alerts were written.
- *
- * Nothing for a deleted machine, one without organisation, or one whose
- * organisation was deleted.
- */
-export async function notifyMachine(
+export const DELIVERY_MAX_ATTEMPTS = 3;
+export const DELIVERY_RETRY_DELAYS_MS = [1_000, 10_000] as const;
+
+export type DeliveryRetry = { recipientIds?: Id<"users">[]; attempt?: number };
+
+export async function retryDelivery(
+  ctx: MutationCtx,
+  machineId: Id<"machines">,
+  type: NotificationType,
+  event: MachineEvent,
+  retry: DeliveryRetry,
+): Promise<void> {
+  const attempt = retry.attempt ?? 1;
+  if (attempt >= DELIVERY_MAX_ATTEMPTS) {
+    console.error({
+      code: "notification_delivery_failed",
+      machineId,
+      type,
+      sessionId: event.sessionId,
+      recipientIds: retry.recipientIds,
+      attempts: attempt,
+    });
+    return;
+  }
+  await ctx.scheduler.runAfter(
+    DELIVERY_RETRY_DELAYS_MS[attempt - 1],
+    internal.notifications.deliver,
+    {
+      machineId,
+      type,
+      sessionId: event.sessionId,
+      detail: event.detail ?? undefined,
+      count: event.count ?? 1,
+      recipientIds: retry.recipientIds,
+      attempt: attempt + 1,
+    },
+  );
+}
+
+export async function notifyRecipient(
   ctx: MutationCtx,
   machine: Doc<"machines">,
+  user: Doc<"users">,
   type: NotificationType,
-  event: MachineEvent = {},
+  event: MachineEvent,
 ): Promise<number> {
   const organizationId = machine.organizationId;
-  if (machine.isDeleted || organizationId === undefined) return 0;
-  const organization = await ctx.db.get(organizationId);
-  if (!organization || organization.deletedAt !== undefined) return 0;
-
+  if (organizationId === undefined) return 0;
   const now = Date.now();
-  const count = event.count ?? 1;
   const detail =
-    event.detail !== undefined && event.detail !== null && CODE.test(event.detail)
+    event.detail !== undefined &&
+    event.detail !== null &&
+    CODE.test(event.detail)
       ? event.detail
       : undefined;
-  const settings = emailSettings();
-  let written = 0;
-  for (const user of await recipientsOf(ctx, machine, organizationId)) {
-    const unread = await ctx.db
-      .query("notifications")
-      .withIndex("by_user_and_machine_and_type_and_read", (q) =>
-        q
-          .eq("userId", user._id)
-          .eq("machineId", machine._id)
-          .eq("type", type)
-          .eq("read", false),
-      )
-      .collect();
-    const same = unread.find(
-      (row) =>
-        row.organizationId === organizationId &&
-        (NOTIFICATION_TYPES[type].foldsBy === "machine" ||
-          row.sessionId === event.sessionId),
-    );
-    if (same) {
-      await ctx.db.patch(same._id, {
-        count: same.count + count,
-        updatedAt: now,
-        detail: foldedDetail(type, same.detail, detail),
-        sessionId: same.sessionId ?? event.sessionId,
-      });
-      continue;
-    }
-    const notificationId = await ctx.db.insert("notifications", {
-      organizationId,
-      userId: user._id,
-      type,
-      machineId: machine._id,
-      sessionId: event.sessionId,
-      detail,
-      count,
-      createdAt: now,
+  const unread = await ctx.db
+    .query("notifications")
+    .withIndex("by_user_and_machine_and_type_and_read", (q) =>
+      q
+        .eq("userId", user._id)
+        .eq("machineId", machine._id)
+        .eq("type", type)
+        .eq("read", false),
+    )
+    .collect();
+  const same = unread.find(
+    (row) =>
+      row.organizationId === organizationId &&
+      (NOTIFICATION_TYPES[type].foldsBy === "machine" ||
+        row.sessionId === event.sessionId),
+  );
+  if (same) {
+    await ctx.db.patch(same._id, {
+      count: same.count + (event.count ?? 1),
       updatedAt: now,
-      read: false,
+      detail: foldedDetail(type, same.detail, detail),
+      sessionId: same.sessionId ?? event.sessionId,
     });
-    written++;
-    if (settings === null || user.email.trim() === "") continue;
+    return 0;
+  }
+  const notificationId = await ctx.db.insert("notifications", {
+    organizationId,
+    userId: user._id,
+    type,
+    machineId: machine._id,
+    sessionId: event.sessionId,
+    detail,
+    count: event.count ?? 1,
+    createdAt: now,
+    updatedAt: now,
+    read: false,
+  });
+  if (emailSettings() === null || user.email.trim() === "") return 1;
+  try {
     const choices = emailChoices(
       await ctx.db
         .query("notification_settings")
         .withIndex("by_user", (q) => q.eq("userId", user._id))
         .unique(),
     );
-    if (!choices[type]) continue;
-    const emailId = await queueAlertEmail(
-      ctx,
-      settings,
-      user.email.trim(),
-      alertEmail(type, user.language, machine.name, settings.siteUrl),
-      `notification:${notificationId}`,
-    );
-    await ctx.db.patch(notificationId, { emailId });
+    if (!choices[type]) return 1;
+    await ctx.db.patch(notificationId, {
+      email: { status: "pending", attempts: 0, queuedAt: now, updatedAt: now },
+    });
+    await ctx.scheduler.runAfter(0, internal.notificationEmails.send, {
+      notificationId,
+      attempt: 0,
+    });
+  } catch {
+    await ctx.db.patch(notificationId, {
+      email: {
+        status: "failed",
+        attempts: 0,
+        queuedAt: now,
+        updatedAt: now,
+        failureCode: "email_queue_failed",
+      },
+    });
+  }
+  return 1;
+}
+
+export async function notifyMachine(
+  ctx: MutationCtx,
+  machine: Doc<"machines">,
+  type: NotificationType,
+  event: MachineEvent = {},
+  retry: DeliveryRetry = {},
+): Promise<number> {
+  const organizationId = machine.organizationId;
+  if (machine.isDeleted || organizationId === undefined) return 0;
+  let users: Doc<"users">[];
+  try {
+    const organization = await ctx.db.get(organizationId);
+    if (!organization || organization.deletedAt !== undefined) return 0;
+    users = await recipientsOf(ctx, machine, organizationId);
+  } catch {
+    await retryDelivery(ctx, machine._id, type, event, retry);
+    return 0;
+  }
+  let written = 0;
+  const failed: Id<"users">[] = [];
+  for (const user of users) {
+    if (
+      retry.recipientIds !== undefined &&
+      !retry.recipientIds.includes(user._id)
+    )
+      continue;
+    try {
+      written += await ctx.runMutation(
+        internal.notifications.deliverRecipient,
+        {
+          machineId: machine._id,
+          userId: user._id,
+          type,
+          sessionId: event.sessionId,
+          detail: event.detail ?? undefined,
+          count: event.count ?? 1,
+        },
+      );
+    } catch {
+      failed.push(user._id);
+    }
+  }
+  if (failed.length > 0) {
+    await retryDelivery(ctx, machine._id, type, event, {
+      ...retry,
+      recipientIds: failed,
+    });
   }
   return written;
 }

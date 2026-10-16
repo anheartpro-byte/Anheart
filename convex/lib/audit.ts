@@ -287,7 +287,13 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
   "notifications.updateSettings": "Recipient changes notification preferences.",
   "notifications.deliver":
     "Scheduled alert delivery writes recipients' operational notifications.",
+  "notifications.deliverRecipient":
+    "Writes one recipient's operational alert in an isolated subtransaction.",
   "notifications.purge": "Cron removes expired notifications.",
+  "notificationEmails.beginAttempt":
+    "Claims an operational alert e-mail attempt without changing access rights.",
+  "notificationEmails.finishAttempt":
+    "Records operational e-mail delivery and bounded retries without changing access rights.",
   "patientInvitations.finish":
     "Patient creation action records delivery status of an already audited invitation.",
   "recordStorage.requestUpload": "Machine prepares a record upload.",

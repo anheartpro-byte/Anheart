@@ -10,8 +10,13 @@
  * from a machine no longer sees its alerts. A patient has none.
  */
 import { limitUser } from "./lib/rateLimits";
-import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { v, type Infer } from "convex/values";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+} from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import {
@@ -25,6 +30,8 @@ import {
   NOTIFICATION_RETENTION_MS,
   emailChoices,
   notifyMachine,
+  notifyRecipient,
+  retryDelivery,
 } from "./lib/notifications";
 import { emailSettings } from "./lib/notificationEmail";
 import { notificationTypeValidator } from "./schema";
@@ -219,24 +226,55 @@ export const updateSettings = mutation({
  * a transaction of its own. Nothing for a machine whose row is gone. Returns
  * how many alerts were written.
  */
+export const deliveryArgs = v.object({
+  machineId: v.id("machines"),
+  type: notificationTypeValidator,
+  sessionId: v.optional(v.id("sessions")),
+  detail: v.optional(v.string()),
+  count: v.number(),
+  recipientIds: v.optional(v.array(v.id("users"))),
+  attempt: v.optional(v.number()),
+});
+
+export async function deliverHandler(
+  ctx: MutationCtx,
+  args: Infer<typeof deliveryArgs>,
+): Promise<number> {
+  let machine: Doc<"machines"> | null;
+  try {
+    machine = await ctx.db.get(args.machineId);
+  } catch {
+    await retryDelivery(ctx, args.machineId, args.type, args, args);
+    return 0;
+  }
+  if (machine === null) return 0;
+  return await notifyMachine(ctx, machine, args.type, args, args);
+}
+
 export const deliver = internalMutation({
-  args: {
-    machineId: v.id("machines"),
-    type: notificationTypeValidator,
-    sessionId: v.optional(v.id("sessions")),
-    detail: v.optional(v.string()),
-    count: v.number(),
-  },
+  args: deliveryArgs.fields,
   returns: v.number(),
-  handler: async (ctx, args) => {
-    const machine = await ctx.db.get(args.machineId);
-    if (machine === null) return 0;
-    return await notifyMachine(ctx, machine, args.type, {
-      sessionId: args.sessionId,
-      detail: args.detail,
-      count: args.count,
-    });
-  },
+  handler: deliverHandler,
+});
+
+export const recipientDeliveryArgs = deliveryArgs
+  .omit("recipientIds", "attempt")
+  .extend({ userId: v.id("users") });
+
+export async function deliverRecipientHandler(
+  ctx: MutationCtx,
+  args: Infer<typeof recipientDeliveryArgs>,
+): Promise<number> {
+  const machine = await ctx.db.get(args.machineId);
+  const user = await ctx.db.get(args.userId);
+  if (!machine || !user || user.clerkDeletedAt !== undefined) return 0;
+  return await notifyRecipient(ctx, machine, user, args.type, args);
+}
+
+export const deliverRecipient = internalMutation({
+  args: recipientDeliveryArgs.fields,
+  returns: v.number(),
+  handler: deliverRecipientHandler,
 });
 
 /**

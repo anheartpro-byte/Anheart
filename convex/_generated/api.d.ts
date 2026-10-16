@@ -49,6 +49,7 @@ import type * as medicalParametersStore from "../medicalParametersStore.js";
 import type * as migrations_machineApiKeys from "../migrations/machineApiKeys.js";
 import type * as migrations_multiOrganization from "../migrations/multiOrganization.js";
 import type * as migrations_retireLegacyRecording from "../migrations/retireLegacyRecording.js";
+import type * as notificationEmails from "../notificationEmails.js";
 import type * as notifications from "../notifications.js";
 import type * as organizations from "../organizations.js";
 import type * as patientInvitations from "../patientInvitations.js";
@@ -110,6 +111,7 @@ declare const fullApi: ApiFromModules<{
   "migrations/machineApiKeys": typeof migrations_machineApiKeys;
   "migrations/multiOrganization": typeof migrations_multiOrganization;
   "migrations/retireLegacyRecording": typeof migrations_retireLegacyRecording;
+  notificationEmails: typeof notificationEmails;
   notifications: typeof notifications;
   organizations: typeof organizations;
   patientInvitations: typeof patientInvitations;
@@ -152,5 +154,4 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
-  resend: import("@convex-dev/resend/_generated/component.js").ComponentApi<"resend">;
 };

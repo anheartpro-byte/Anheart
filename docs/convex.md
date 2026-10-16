@@ -841,8 +841,10 @@ serveur seul ([§5](#notificationsts-alertes-aux-gestionnaires-anh-90)).
 `organizationId` (celle de la machine, obligatoire), `userId` (le
 destinataire), `type` (`machine_offline`, `session_failed`, `drive_fault`,
 `safety_verdict`), `machineId`, `sessionId?`, `detail?`, `count`,
-`createdAt`, `updatedAt`, `read`, `emailId?` (l'e-mail mis en file pour cette
-ligne). `detail` est un **code envoyé par la machine**, jamais une phrase :
+`createdAt`, `updatedAt`, `read`, `email?` (état d'envoi sur cette ligne :
+`status` = `pending`, `sent` ou `failed`, `attempts`, `queuedAt`, `updatedAt`,
+`resendId?`, `failureCode?`). `emailId?` reste un champ ancien compatible avec
+les déploiements existants, sans nouvelle écriture. `detail` est un **code envoyé par la machine**, jamais une phrase :
 le mnémonique du défaut du variateur (`OHF`) ou l'action exigée par un
 verdict (`RAMP_DOWN`). Aucune ligne ne contient de fréquence cardiaque, de
 nom de passager ni de raison de fin de séance : la raison reste sur la
@@ -1893,6 +1895,16 @@ faire échouer ni annuler le heartbeat, le lot d'événements, la fin, le
 départ, la tâche planifiée ou le lancement qui l'a demandée. Ne passent que
 des identifiants et un code de la machine.
 
+**Livraison isolée (ANH-237).** Chaque destinataire est traité dans une
+sous-transaction (`notifications.deliverRecipient`) : lectures puis une seule
+écriture de son alerte, suivie de la partie e-mail dans son propre bloc
+d'erreur. Un réglage dupliqué laisse l'alerte du site et marque son e-mail
+`failed`. Un échec d'écriture est repris pour ce destinataire seul, sans
+recompter l'événement des autres. `DELIVERY_MAX_ATTEMPTS` vaut 3, avec
+`DELIVERY_RETRY_DELAYS_MS` de 1 s puis 10 s. Un échec avant la boucle reprend
+la livraison entière avec les mêmes bornes ; à épuisement, une seule ligne
+structurée ne contient que des identifiants et des codes.
+
 | Type | Demandée par | Quand |
 |---|---|---|
 | `machine_offline` | `machines.checkOfflineMachines` (tâche de §7) | La machine passe `offline` : aucun heartbeat depuis 90 s (`LIVE_FRESH_MS`). |
@@ -1931,7 +1943,7 @@ jour par abonnement, sans attendre.
 Tant que la console joint Convex, un gestionnaire connecté au site le voit
 donc en moins d'une minute. La machine hors ligne est écrite au passage de
 la tâche qui suit les 90 s sans heartbeat, donc entre 90 s et 150 s après
-le dernier heartbeat. L'e-mail part par le composant d'envoi, par lots,
+le dernier heartbeat. L'e-mail part par une action interne REST,
 sans délai garanti. Rien de cela n'a été mesuré contre un déploiement.
 
 | Fonction | Type | Autorisation | Effet / retour |
@@ -2607,13 +2619,12 @@ donnée existante n'est touchée. Ses lignes, une par limite et par machine ou
 compte, ne sont jamais purgées : leur nombre est borné par le nombre de
 machines et de comptes. Cela n'a été vérifié contre aucun déploiement.
 
-### Composant d'envoi d'e-mails (ANH-90)
+### Envoi d'e-mails (ANH-90, ANH-237)
 
-Le déploiement de ce code installe aussi le composant `resend`
-(`@convex-dev/resend` 0.2.8, monté par `convex/convex.config.ts`, avec ses
-propres composants : deux files de travail et un limiteur), et ses tables.
-Rien n'est à lancer à la main. **Il n'envoie rien** tant que le déploiement
-n'a pas ses trois variables :
+Le composant `resend` n'est plus monté. L'action interne
+`notificationEmails.send` appelle `POST https://api.resend.com/emails` avec
+`fetch`. **Rien n'est envoyé ni mis en attente** tant que le déploiement
+n'a pas ses trois variables valides, inchangées :
 
 | Variable | Contenu |
 |---|---|
@@ -2628,9 +2639,35 @@ npx convex env set SITE_URL https://…
 ```
 
 Sans l'une des trois, aucune alerte n'est mise en file d'envoi et la page
-des alertes du site le dit. Le composant envoie par lots, recommence en cas
-d'échec, et n'envoie jamais deux fois un e-mail mis en file avec la même clé
-(une par alerte). Le webhook de Resend (statuts de remise) n'est pas branché :
+des alertes du site le dit (`getSettings().emailAvailable`). La clé est lue
+dans l'environnement au moment de l'envoi : elle n'est jamais écrite dans
+une table, dans les arguments planifiés, dans un retour de fonction ou dans
+un journal. Retirer une variable arrête aussi les envois déjà planifiés.
+
+Chaque envoi relit l'alerte et son destinataire juste avant l'appel : aucune
+requête pour une alerte disparue ou déjà `sent`/`failed`, un compte supprimé
+ou marqué `clerkDeletedAt`, ou une adresse vide. Le contenu vient uniquement
+de `alertEmail`, dans la langue du destinataire.
+
+L'en-tête `Idempotency-Key` vaut `notification:<identifiant de l'alerte>`.
+[Resend conserve ces clés 24 heures](https://resend.com/changelog/idempotency-keys).
+Les constantes exportées de `notificationEmails.ts` bornent les reprises :
+`EMAIL_MAX_ATTEMPTS` = 5, `EMAIL_RETRY_DELAYS_MS` = 1 min, 5 min, 30 min,
+2 h, et `EMAIL_RETRY_WINDOW_MS` = 23 h depuis la mise en attente. Aucun appel
+ne commence après cette fenêtre, et chaque requête a un délai maximal de
+30 s (`EMAIL_REQUEST_TIMEOUT_MS`), donc même une reprise retardée reste
+bornée avant les 24 h. Seuls 429, 5xx et les erreurs réseau sont repris ;
+les autres réponses, dont les autres 4xx, échouent immédiatement. L'état
+`email` de l'alerte garde le nombre de tentatives, les dates, un code d'échec
+final ou l'identifiant Resend après succès. `notifications.purge` le supprime
+avec l'alerte après 90 jours sans changement de l'alerte, et `users.deleteUser`
+le retire avec les alertes des organisations supprimées pour ce compte.
+
+Pour ANH-82 : le composant `resend` n'est plus monté et ses tables n'ont
+jamais reçu d'e-mail, aucune clé n'ayant été posée. Le sort de ses anciennes
+tables au prochain déploiement n'a pas été vérifié.
+
+Le webhook de Resend (statuts de remise) n'est pas branché :
 le site ne dit pas si un e-mail est arrivé. Aucun compte, aucune clé et aucun
 domaine n'existent à ce jour ; rien de cela n'a été vérifié contre un
 déploiement ni contre Resend.
@@ -3164,7 +3201,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |
 | `convex/errors.test.ts` | La table `convex/lib/errors.ts` : chaque code a sa traduction française et anglaise, aucune traduction sans code, aucun code levé hors de la table, plus aucune `Error` simple dans `users.ts` et `machines.ts` hors du heartbeat interne (ANH-194) ; la connexion et les refus d'organisation par code, plus aucune phrase dans `softwareReleases.ts`, `notifications.ts` et `training.ts`, qui ne construit plus aucune `ConvexError` de lui-même (ANH-90). |
-| `convex/notifications.test.ts` | Les alertes aux gestionnaires (ANH-90) : qui les reçoit (gestionnaire de la machine et admin de son organisation, jamais un gestionnaire inactif ou rétrogradé, un compte supprimé dans Clerk, une machine supprimée ou sans organisation), chaque événement qui en écrit une et ceux qui n'en écrivent pas (verdict qui régule, `cleared`, séance terminée, événement renvoyé, fin renvoyée), le lancement refusé avant son départ (tâche planifiée, route de départ, expiré par un nouveau lancement ; la tâche n'écrit elle-même aucune alerte, elle en planifie une), le regroupement dans l'alerte non lue, ce que lit l'appelant (plus rien d'une machine qu'il ne gère plus, ni séance ni raison qu'il ne peut lire, nombre plafonné), les choix d'e-mail et leurs valeurs par défaut, l'e-mail mis en file une seule fois et **sans donnée de santé** (ni FC, ni nom, ni identifiant de séance, ni règle du verdict), la purge à 90 jours et la suppression avec le compte. Toutes les horloges sont figées : les livraisons planifiées sont lancées une à une, et le lot qui enverrait l'e-mail ne tourne jamais. |
+| `convex/notifications.test.ts`, `convex/notificationEmails.test.ts` | Alertes aux gestionnaires : destinataires, événements, regroupement, lectures autorisées, choix par défaut, langue et corps envoyé sans donnée de santé (sentinelles MEN-13), purge et suppression avec le compte. ANH-237 : livraison isolée, reprises bornées, erreurs HTTP et réseau, contrat REST exact, clé absente de toutes les tables et arguments planifiés. Horloges simulées et `fetch` simulé : aucun appel à Resend. |
 | `convex/gestionnairePatients.test.ts` | `users.assignPatientsToGestionnaire` : ajout seul, retrait seul, les deux, liste inchangée (aucune ligne réécrite), identifiant répété, patient d'une autre organisation traité comme un compte inconnu, admin d'une autre organisation refusé comme pour un gestionnaire inconnu, deux enregistrements successifs (ANH-208). |
 | `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |
 | `convex/cloudVersion.test.ts` | La constante `CLOUD_VERSION` est celle de `convex/VERSION` et celle que répond le code déployé (ANH-134). |

@@ -1,6 +1,6 @@
 /**
- * The e-mail that may go with a new alert (ANH-90), through the Resend
- * component (`@convex-dev/resend`, mounted by `convex/convex.config.ts`).
+ * The e-mail that may go with a new alert (ANH-90). The internal action in
+ * notificationEmails.ts sends it through the Resend REST API.
  *
  * Off unless the deployment sets all three variables:
  * - `RESEND_API_KEY`: the key of the Resend account;
@@ -14,10 +14,7 @@
  * heart rate, a passenger's name, a session's reason or an identifier: the
  * page behind the link shows them to whoever may read them.
  */
-import { Resend } from "@convex-dev/resend";
-import { components } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
 
 export type NotificationType = Doc<"notifications">["type"];
 export type Language = Doc<"users">["language"];
@@ -115,31 +112,4 @@ export function alertEmail(
     subject: words.subject(what, machine),
     text: words.body(what, machine, link),
   };
-}
-
-/**
- * Queue the e-mail of one alert; the component sends it, retries it, and
- * never sends twice an e-mail queued with the same `idempotencyKey`.
- * Returns the component's identifier of the e-mail.
- */
-export async function queueAlertEmail(
-  ctx: MutationCtx,
-  settings: EmailSettings,
-  to: string,
-  content: { subject: string; text: string },
-  idempotencyKey: string,
-): Promise<string> {
-  // `testMode: false`: the addresses are real ones. The key is passed here,
-  // read with the two other variables, never left to the component to read.
-  const resend = new Resend(components.resend, {
-    apiKey: settings.apiKey,
-    testMode: false,
-  });
-  return await resend.sendEmail(ctx, {
-    from: settings.from,
-    to,
-    subject: content.subject,
-    text: content.text,
-    idempotencyKey,
-  });
 }

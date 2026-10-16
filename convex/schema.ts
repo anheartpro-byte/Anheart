@@ -881,8 +881,23 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     read: v.boolean(),
-    // The e-mail queued for this row, when one was (`@convex-dev/resend`).
+    // Legacy component identifier, retained for existing deployments, never written.
     emailId: v.optional(v.string()),
+    // Delivery state expires and is deleted with the recipient's alert.
+    email: v.optional(
+      v.object({
+        status: v.union(
+          v.literal("pending"),
+          v.literal("sent"),
+          v.literal("failed"),
+        ),
+        attempts: v.number(),
+        queuedAt: v.number(),
+        updatedAt: v.number(),
+        resendId: v.optional(v.string()),
+        failureCode: v.optional(v.string()),
+      }),
+    ),
   })
     .index("by_user_and_organization_and_updated", [
       "userId",

@@ -5,11 +5,10 @@
  * how a new event folds into an unread alert, what the site reads, and the
  * e-mail that may go with a new alert, which never carries health data.
  *
- * Every timer is fake: the e-mail component's batch, scheduled when an e-mail
- * is queued, never runs, and nothing is sent anywhere.
+ * Every timer is fake and fetch is stubbed: nothing is sent anywhere.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, components, internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   NOTIFICATION_RETENTION_MS,
@@ -40,10 +39,12 @@ import {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => Response.json({ id: "synthetic_email" })));
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   configureAnheartOrganization(null);
 });
 
@@ -79,7 +80,7 @@ const event = (seq: number, kind: string, detail: string) => ({
 
 /**
  * Run the alert deliveries scheduled so far (`notifications.deliver`), and
- * nothing they schedule in turn: the e-mail component's batch stays queued.
+ * nothing they schedule in turn: the e-mail action stays queued.
  */
 async function delivered(w: World) {
   vi.runOnlyPendingTimers();
@@ -114,9 +115,13 @@ function setEmailVariables() {
   vi.stubEnv("SITE_URL", "https://site.example.invalid/");
 }
 
-async function emailOf(w: World, emailId: string | undefined) {
-  if (emailId === undefined) throw new Error("No e-mail queued");
-  return await w.t.query(components.resend.lib.get, { emailId });
+async function emailOf(w: World, notificationId: Id<"notifications">) {
+  await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+  const call = vi.mocked(fetch).mock.calls.find(([, init]) =>
+    new Headers(init?.headers).get("Idempotency-Key") === `notification:${notificationId}`,
+  );
+  if (!call) throw new Error("No e-mail sent");
+  return JSON.parse(String(call[1]?.body));
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +477,7 @@ describe("a launch failed before its machine armed it (ANH-144)", () => {
     const [listed] = await as(w.t, "manager").query(api.notifications.list, {});
     expect(listed.reasonCode).toBe("hr_max_changed_before_start");
     for (const row of rows) {
-      const everything = JSON.stringify(await emailOf(w, row.emailId));
+      const everything = JSON.stringify(await emailOf(w, row._id));
       for (const forbidden of ["171", "heart", "hr_max", "patient", sessionId]) {
         expect(everything).not.toContain(forbidden);
       }
@@ -900,8 +905,13 @@ describe("the e-mail of an alert", () => {
 
     const rows = await alerts(w);
     expect(rows.map((row) => row.count)).toEqual([2, 2]);
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
     for (const row of rows) {
-      const email = await emailOf(w, row.emailId);
+      const call = vi.mocked(fetch).mock.calls.find(([, init]) =>
+        new Headers(init?.headers).get("Idempotency-Key") === `notification:${row._id}`,
+      );
+      const email = JSON.parse(String(call?.[1]?.body));
       const user = await w.t.run((ctx) => ctx.db.get(row.userId));
       expect(email?.to).toEqual([user?.email]);
       expect(email?.from).toBe("Gaura <alertes@example.invalid>");
@@ -939,7 +949,7 @@ describe("the e-mail of an alert", () => {
     await markOffline(w, w.orgBMachine);
 
     const emailed = (await alerts(w))
-      .filter((row) => row.emailId !== undefined)
+      .filter((row) => row.email !== undefined)
       .map((row) => row.userId);
     // The manager has no address; centre B kept the default: no e-mail.
     expect(emailed).toEqual([w.orgAdmin]);
