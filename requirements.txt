@@ -1,1 +1,1 @@
--r deploy/simulation-vercel/requirements.txt
+-r deploy/simulation-vercel/requirements-lock.txt

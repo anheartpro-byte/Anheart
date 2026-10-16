@@ -41,6 +41,7 @@ from pathlib import Path, PurePosixPath
 from typing import Final
 
 import pytest
+from packaging.requirements import Requirement
 
 from src.contract import UNKNOWN_SOFTWARE_VERSION, VERSION_PATH, read_software_version
 from src.local_config import EcgSource, MotorBackend, load_local_config
@@ -1439,9 +1440,68 @@ def _locked(path: Path) -> dict[str, str]:
             continue
         matched = PIN.match(entry)
         assert matched is not None, f"{path.name}: unreadable entry: {entry[:60]}"
-        assert "--hash=sha256:" in entry, f"{path.name}: {matched.group(1)} has no hash"
+        assert re.search(r"--hash=sha256:[0-9a-f]{64}(?:\s|$)", entry), (
+            f"{path.name}: {matched.group(1)} has no hash"
+        )
         pins[_normalized(matched.group(1))] = matched.group(2)
     return pins
+
+
+def test_the_development_lock_covers_runtime_and_tool_requirements() -> None:
+    path = CONSOLE / "requirements-dev-lock.txt"
+    locked = _locked(path)
+    for name, version in _requirements(CONSOLE / "requirements-base.txt").items():
+        assert locked.get(name) == version, name
+    for line in _read(CONSOLE / "requirements-dev.txt").splitlines():
+        if not line.strip() or line.startswith(("#", "-r ")):
+            continue
+        requirement = Requirement(line.partition("#")[0].strip())
+        version = locked[_normalized(requirement.name)]
+        assert requirement.specifier.contains(version), requirement
+    entries = _captures(r"^(pyobjc[^\n]+)$", _read(path))
+    assert entries
+    for entry in entries:
+        requirement = Requirement(entry.removesuffix("\\").strip())
+        assert requirement.marker is not None
+        assert str(requirement.marker) == 'sys_platform == "darwin"'
+
+
+def test_the_development_lock_exercises_the_versions_of_the_image() -> None:
+    development = _locked(CONSOLE / "requirements-dev-lock.txt")
+    image = _locked(LOCK)
+    common = development.keys() & image.keys()
+    assert common
+    for name in common:
+        assert development[name] == image[name], name
+
+
+def test_the_vendor_lock_has_only_bitalino_with_the_image_hashes() -> None:
+    path = CONSOLE / "requirements-dev-nodeps-lock.txt"
+    expected = {"bitalino": _requirements(CONSOLE / "requirements-prod.txt")["bitalino"]}
+    assert _requirements(CONSOLE / "requirements-dev-nodeps.txt") == expected
+    assert _locked(path) == expected
+    pattern = r"^bitalino==[^\n]*\n((?:[ \t]+--hash=[^\n]*\n?)+)"
+    image_entry = _captures(pattern, _read(LOCK))
+    vendor_entry = _captures(pattern, _read(path))
+    assert len(image_entry) == len(vendor_entry) == 1
+    hashes = r"--hash=sha256:([0-9a-f]{64})"
+    assert set(re.findall(hashes, vendor_entry[0])) == set(re.findall(hashes, image_entry[0]))
+
+
+@pytest.mark.parametrize("name", ["requirements-dev-lock.txt", "requirements-dev-nodeps-lock.txt"])
+def test_the_development_lock_commands_keep_the_image_cutoff(name: str) -> None:
+    command = shlex.split(_read(CONSOLE / name).splitlines()[1].removeprefix("#    "))
+    image_command = shlex.split(_read(LOCK).splitlines()[1].removeprefix("#    "))
+    assert command[:3] == ["uv", "pip", "compile"]
+    assert "--generate-hashes" in command
+    assert "--universal" in command
+    assert command[command.index("--python-version") + 1] == "3.12"
+    assert (
+        command[command.index("--exclude-newer") + 1]
+        == image_command[image_command.index("--exclude-newer") + 1]
+    )
+    if name == "requirements-dev-nodeps-lock.txt":
+        assert "--no-deps" in command
 
 
 def _base_image() -> str:

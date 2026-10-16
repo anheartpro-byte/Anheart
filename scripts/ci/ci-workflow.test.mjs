@@ -684,6 +684,53 @@ test("the nightly endurance runs every night, on a manual run that asks for it, 
   assert.match(atRoot("raspberry-pi/pyproject.toml"), /^ {4}"slow: /m);
 });
 
+test("all five Python gates install only the hashed development locks", () => {
+  const installing = [...jobs.keys()].filter((id) => stepsOf(id).some((step) => step.startsWith("name: Install Python dependencies\n")));
+  assert.deepEqual(installing, ["pi-tests", "pi-gate", "simulation-battery", "simulation-report", "simulation-gate"]);
+  for (const id of installing) {
+    assert.equal(script(id, "Install Python dependencies"), [
+      "uv venv raspberry-pi/.venv",
+      "uv pip install --python raspberry-pi/.venv/bin/python --require-hashes -r raspberry-pi/requirements-dev-lock.txt",
+      "uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps -r raspberry-pi/requirements-dev-nodeps-lock.txt",
+      "",
+    ].join("\n"), id);
+  }
+});
+
+test("Python installation in every workflow requires hashes except the named CAD extractor", () => {
+  const exceptions = [];
+  for (const file of readdirSync(new URL("../../.github/workflows/", import.meta.url))) {
+    const text = atRoot(`.github/workflows/${file}`).replaceAll(/\\\n\s*/g, " ");
+    for (const step of text.split(/^ {6}- /m)) {
+      for (const line of step.split("\n").filter((line) => !line.trimStart().startsWith("#") && /\bpip install\b/.test(line))) {
+        if (/\s--require-hashes(?:\s|$)/.test(line)) continue;
+        assert.ok(step.startsWith("name: Install and verify CAD extractor\n"), `${file}: ${line}`);
+        assert.equal(line.trim(), "uv pip install --python simulation/cad/.venv-cad/bin/python -r simulation/cad/requirements.txt");
+        exceptions.push(file);
+      }
+    }
+  }
+  assert.deepEqual(exceptions, ["ci.yml"]);
+});
+
+test("simulation-gate installs the assembled hashed payload and serves it without the repository Python path", () => {
+  const id = "simulation-gate";
+  const name = "Install the hosted simulation as Vercel receives it, hashes required";
+  const steps = stepsOf(id);
+  const at = steps.findIndex((step) => step.startsWith(`name: ${name}\n`));
+  assert.ok(at > 0);
+  assert.ok(steps[at - 1]?.startsWith("name: Test the hosted simulation engine\n"));
+  assert.equal(stepCondition(id, name), "${{ !cancelled() }}");
+  assert.ok(!softened(steps[at] ?? ""));
+  const smoke = script(id, name);
+  assert.match(smoke, /^bash deploy\/simulation-vercel\/build\.sh\nhosted_venv="\$RUNNER_TEMP\/hosted-simulation-venv"\nuv venv "\$hosted_venv"\n/m);
+  assert.match(smoke, /^uv pip install --python "\$hosted_venv\/bin\/python" --require-hashes -r deploy\/simulation-vercel\/dist\/requirements\.txt$/m);
+  assert.match(smoke, /^cd deploy\/simulation-vercel\/dist\nenv -u PYTHONPATH "\$hosted_venv\/bin\/python" - <<'PY'\n/m);
+  assert.match(smoke, /^from app import app\nfrom fastapi\.testclient import TestClient$/m);
+  assert.match(smoke, /^with TestClient\(app\) as client:\n {4}response = client\.get\("\/api\/scenarios"\)\n {4}print\(response\.status_code\)\n {4}if response\.status_code != 200:\n {8}raise SystemExit\(1\)\nPY\n$/m);
+  assert.doesNotMatch(smoke, /\|\|\s*(true|:)|set \+e/);
+});
+
 // --- The hosted simulation engine, tested by a gate that existed (ANH-218) ---
 //
 // deploy/simulation-vercel/tests drive the wrapper Vercel serves, with the real simulation runtime
@@ -1016,13 +1063,13 @@ test("pip-audit audits every Python environment the project installs, skipping o
   assert.match(python, /^if \(\( \$\{#failed\[@\]\} > 0 \)\); then\n.*\n {2}exit 1\nfi\n$/m);
   const locks = loopOver(python, "lock");
   const sets = loopOver(python, "set");
-  assert.deepEqual(locks, ["raspberry-pi/requirements-lock.txt", "raspberry-pi/requirements-build-lock.txt"]);
-  assert.deepEqual(sets, ["raspberry-pi/requirements-dev.txt", "deploy/simulation-vercel/requirements.txt", "simulation/cad/requirements.txt"]);
+  assert.deepEqual(locks, ["raspberry-pi/requirements-lock.txt", "raspberry-pi/requirements-build-lock.txt", "raspberry-pi/requirements-dev-lock.txt", "raspberry-pi/requirements-dev-nodeps-lock.txt", "deploy/simulation-vercel/requirements-lock.txt"]);
+  assert.deepEqual(sets, ["simulation/cad/requirements.txt"]);
   assert.match(python, /^ {2}uv pip compile "\$set" --python-version 3\.12 --generate-hashes --quiet --output-file "\$resolved"$/m);
   // A lock file audited as it is fixes every version and every hash: pip-audit reads nothing it would resolve.
   for (const lock of locks) {
     const requirements = atRoot(lock).split("\n").filter((line) => /^[A-Za-z0-9]/.test(line));
-    assert.ok(requirements.length > 0 && requirements.every((line) => /^[\w.-]+==[\w.+!-]+ \\$/.test(line)), lock);
+    assert.ok(requirements.length > 0 && requirements.every((line) => /^[\w.-]+==[\w.+!-]+(?: ; [^\r\n\\]+)? \\$/.test(line)), lock);
     assert.equal(atRoot(lock).split("--hash=sha256:").length - 1 >= requirements.length, true, lock);
   }
   // Every requirements file of the repository is one of those, is included by one (`-r`), or is
@@ -1056,6 +1103,7 @@ test("the bill of materials is written from the lock files on every run, and kep
   assert.match(written, /^npm sbom --sbom-format cyclonedx --package-lock-only > "\$RUNNER_TEMP\/sbom\/site-convex\.cdx\.json"$/m);
   assert.deepEqual(loopOver(written, "lock"), ["requirements-lock", "requirements-build-lock"]);
   assert.match(written, /uv tool run --from cyclonedx-bom==\d+\.\d+\.\d+ cyclonedx-py requirements "raspberry-pi\/\$lock\.txt" --output-format JSON --output-file "\$RUNNER_TEMP\/sbom\/pi-\$lock\.cdx\.json"$/m);
+  assert.match(written, /^uv tool run --from cyclonedx-bom==7\.4\.0 cyclonedx-py requirements deploy\/simulation-vercel\/requirements-lock\.txt --output-format JSON --output-file "\$RUNNER_TEMP\/sbom\/simulation-requirements-lock\.cdx\.json"$/m);
   const kept = auditStep("Keep the bill of materials");
   assert.match(kept, /^ {8}uses: actions\/upload-artifact@/m);
   assert.deepEqual(

@@ -1,0 +1,3 @@
+# Install the vendor module without its PyBluez-bitalino dependency, which
+# cannot be built on every development platform. Bluetooth is imported lazily.
+bitalino==1.2.6

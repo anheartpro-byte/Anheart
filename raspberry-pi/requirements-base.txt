@@ -5,11 +5,11 @@
 # run time, so a dev install exercises the same code paths as production.
 #
 # Every version is exact (==): the development machine, the CI and the image
-# of the Pi run the same releases. The packages these pull in are fixed too,
-# with their hashes, in requirements-lock.txt, which is what the Docker image
-# installs. To move a version: change it here, regenerate the lock with the
-# command written at its top, and update the table of docs/pi-image.md
-# (tests/test_pi_install.py fails while the three disagree).
+# of the Pi run the same releases. Their transitive packages and hashes are
+# fixed in the image, development/CI and hosted simulation lock files.
+# To move a version: change it here, regenerate each lock with the command
+# written at its top, and update the table of docs/pi-image.md
+# (tests/test_pi_install.py fails while the versions disagree).
 
 # --- Acquisition ---------------------------------------------------------
 numpy==2.5.3
