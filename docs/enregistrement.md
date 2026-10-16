@@ -380,6 +380,12 @@ ou demandée, le succès et la durée mesurée par l'horloge injectée. Une lect
 ainsi que chaque nouvel essai et l'écriture d'urgence. Aucun registre absent
 de la transaction n'est reconstruit depuis `DriveStatus`.
 
+Le journal conserve aussi `modbus_connect` et `modbus_close` : ouverture et
+fermeture du maître, avec `register` et `value` à `null`, succès et latence.
+Ces deux lignes restent présentes avec `transport=False`, sous la même borne
+que les transactions de registre. Un port qui ne s'ouvre pas a donc sa propre
+observation, même quand aucun registre n'a pu être interrogé.
+
 Le client SDK instrumenté conserve aussi chaque appel `send` et `recv` :
 `modbus_send` porte dans `raw_hex` les octets que le SDK indique avoir acceptés ;
 `modbus_receive_chunk` porte exactement les octets retournés par cet appel,
@@ -486,8 +492,8 @@ natives (dont le modèle simulé). Elle ne sert jamais à fabriquer les trames
 individuelles du pilote natif.
 
 Depuis ANH-192, une observation échouée (`ok: false`) peut porter un
-objet optionnel `error`, commun aux observations d'appel et aux transactions
-de registre natives. `type` nomme une variante fermée de `DriveError` :
+objet optionnel `error`. Sur une observation d'appel, `type` nomme une
+variante fermée de `DriveError` :
 
 | `error.type` | Autres champs, tous obligatoires pour cette variante |
 | --- | --- |
@@ -510,8 +516,32 @@ Sans `error`, le rejeu garde son comportement antérieur : `CommTimeout` avec
 `after = latency_ms / 1000`. `RecordingDrive` et la prise `CallTap` écrivent
 le champ pour les retours `Err` ; une exception levée n'est pas assimilée à
 une variante de `DriveError`. L'absence du champ reste omise à l'écriture.
-Le format permet au magnétophone natif de renseigner ce même objet sur
-`modbus_read` et `modbus_write` ; le pilote natif ne le remplit pas encore.
+Sur les lignes natives, le pilote écrit la cause du maître, dans l'union
+fermée `ModbusFailure`. Le vrai pilote recalcule `DriveError` au rejeu depuis
+la réponse SDK correspondante ; aucune variante de `DriveError` n'est imbriquée.
+
+| `error.type` natif | Autres champs |
+| --- | --- |
+| `no_response` | aucun ; le SDK a retourné son objet d'absence de réponse |
+| `exception_response` | `code`, entier de 1 à 255 : code d'exception Modbus |
+| `wrong_function` | `code`, entier de 0 à 255 : fonction reçue en réponse à une écriture |
+| `port_closed` | aucun ; `connect` a rendu `false` |
+| `invalid_response` | `out_of_range`, booléen, faux par défaut ; distingue une valeur de registre hors domaine d'une réponse sans données utilisables |
+| `sdk_exception` | `category` parmi `connection`, `io`, `os`, `modbus`, `other` ; classes que le pilote distingue à la frontière SDK |
+
+Le texte de l'exception, ses octets et toute identité sont exclus. Les codes,
+types et catégories inconnus sont refusés par le reader, comme un champ
+supplémentaire, une erreur sur un succès, une cause native sur une observation
+d'appel ou une variante d'appel sur une ligne native. Les erreurs SDK levées
+pendant l'écriture d'urgence sont conservées aussi : un port refusé reste
+`NOTHING_SENT`, les autres exceptions restent `SENT_UNCONFIRMED`.
+
+`simulation/modbus.py` fournit un maître simulé adossé à `SimulatedDrive` :
+états CiA402, rampes et défauts viennent du modèle existant ; les réponses
+sont les objets du SDK construits dans son module d'isolation, sans recopier
+de parseur RTU. Les tests produisent une séance manuelle complète avec arrêt
+par le vrai `LocalPanel`, le vrai `ATV320Drive`, le journal de production et
+le vrai DSP. Aucune séance réelle ni aucun essai matériel n'est disponible.
 
 ## Échantillons bruts
 
@@ -653,7 +683,7 @@ ce que l'enregistrement contient :
 | Entrée du runtime | Où elle est | Ce qu'il faut |
 | --- | --- | --- |
 | l'horloge de chaque tic | `ticks.csv`, colonne `t` | tous les tics, y compris ceux du repos avant le départ (`t ≤ 0`) : la scrutation du variateur au repos et la fenêtre du DSP font partie de l'état au départ |
-| les réponses du variateur | `drive_frames.jsonl` | les observations d'appel (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`, `read_failed`, `read_limits`), depuis le premier tic. Un fichier vide est refusé : rien ne dit ce que le variateur a répondu |
+| les réponses du variateur | `drive_frames.jsonl` | les observations d'appel (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`, `read_failed`, `read_limits`), ou les échanges natifs (`modbus_connect`, `modbus_close`, `modbus_read`, `modbus_write`), depuis le premier tic. Mélanger les deux familles est refusé. Un fichier vide est refusé : rien ne dit ce que le variateur a répondu |
 | l'ECG | `ecg_raw/` | les blocs bruts depuis au moins 8 s avant le départ (la fenêtre du DSP), chacun avec `t_received` |
 | les demandes | `events.jsonl` | les commandes du tableau ci-dessus, pour les trois kinds d'entrée |
 
@@ -666,8 +696,22 @@ Pour tout autre producteur, dont la console en simulation, le document de
 configuration appliquée décrit ci-dessous est obligatoire. Il fournit la
 géométrie sans inventer les rayons que la console ne connaît pas ; son
 manifeste conserve `geometry: null`. Quand plusieurs entrées manquent, le
-refus les donne ensemble, séparées par « ; ». Les échanges Modbus natifs
-restent refusés tant que leur magnétophone n'est pas disponible.
+refus les donne ensemble, séparées par « ; ».
+
+Pour les échanges natifs, `simulation/replay_modbus.py` est un maître de
+bande sous le vrai `ATV320Drive` ; le vrai `TrainingRuntime` utilise ce pilote.
+Chaque appel exige le même registre adressé (offset compris), la même valeur
+brute écrite et le même ordre. Les règles d'étape ci-dessous s'appliquent,
+y compris aux ouvertures et fermetures. Un appel sans réponse correspondante
+produit une divergence nommant les registres demandé et enregistré ; aucune
+exception de divergence ne remonte dans le tic. L'exécuteur et les attentes
+sont injectés pour ce rejeu déterministe ; en production restent le groupe
+privé à un fil et `asyncio.sleep`.
+
+Les lignes `modbus_send` et `modbus_receive_chunk` sont ignorées au rejeu :
+elles diagnostiquent le SDK et le transport, pas les entrées supplémentaires
+du runtime. Elles ne déplacent pas l'horloge une seconde fois. Les réponses
+de registre restent obligatoires ; des fragments SDK seuls sont refusés.
 
 ### Configuration vérifiée au rejeu (EX-5)
 
@@ -682,6 +726,18 @@ lien variateur, l'empreinte et le verdict de signature du fichier médical.
 Les limites sont les mêmes objets de domaine sérialisés que dans la console.
 Il ne contient ni identité, ni donnée de santé individuelle, ni clé du
 tableau de bord, ni jeton de console. Aucun nom libre de programme n'y entre.
+
+Quand `drive_link` est présent, le document porte aussi `native_drive` :
+`baudrate`, `bytesize`, `parity`, `stopbits`, `timeout`, `slave_address`,
+`retries`, `offset`. Aucun port ni numéro de série n'y est ajouté. Le rejeu
+reconstruit `SerialSettings` et `RegisterMap` par leurs constructeurs ; il
+ne décode jamais la prose de `drive_link`. Un enregistrement natif sans ces
+réglages structurés est refusé : `native Modbus replay requires native_drive
+in the verified configuration document`. L'empreinte d'une configuration
+simulée sans lien reste identique à celle d'avant cet ajout. Celle d'une
+console native change une fois avec cette version ; aucune console déployée
+n'écrivait encore ce document. Un ancien lecteur de configuration refuse
+la clé nouvelle.
 
 Au démarrage, la console remet ces octets au journal, en mémoire. Le premier
 cycle du fil `record-journal` les écrit dans `config/<config_hash>.json` :
@@ -790,10 +846,9 @@ plus tard au rejeu.
 Ce qu'un rejeu ne peut pas redonner aujourd'hui, parce que le format ou le
 producteur ne le porte pas :
 
-- les échanges Modbus natifs (`modbus_read`, `modbus_write`, `modbus_send`,
-  `modbus_receive_chunk`) : il faudrait rejouer un maître Modbus sous le vrai
-  pilote ATV320. Un enregistrement qui en contient est refusé, pas rejoué à
-  moitié ;
+- les octets et le découpage des appels SDK (`modbus_send`,
+  `modbus_receive_chunk`) : ces lignes sont ignorées, les transactions de
+  registre sont rejouées sous le pilote ;
 - la nature d'un échange en échec qui ne porte pas `error`, et le délai de
   remise au runtime d'un lot sans `runtime_delivery` ;
 - le courant moteur à mieux que 0,1 A, résolution du registre dans lequel
@@ -811,6 +866,15 @@ producteur ne le porte pas :
   `latch_estop` garde l'instant réel du clic. Un clic entre deux tics se
   rejoue au même tic, avec la même consigne.
 
+Le rejeu juge les décisions et l'accord des appels avec la bande, pas la
+validité physique de chaque entrée. Une lecture LFRD altérée isolément peut
+produire `BadResponse`, puis être tolérée par le runtime sans changer ses
+appels ni ses décisions : le rapport reste `MATCH`. Changer une cause
+d'échec entre deux variantes traitées de la même façon peut avoir le même
+effet. Une altération d'ETA qui change les requêtes suivantes, elle, diverge
+à cet instant. Le contrôle d'intégrité appartient aux sommes de contrôle ;
+un rejeu conforme ne remplace pas ce contrôle.
+
 ## Utilisation et compatibilité
 
 Le reader reste strict : une clé inconnue refuse la ligne ou le bloc. Les
@@ -822,6 +886,7 @@ pas une nouvelle valeur de `schema_version` :
 | --- | --- | --- |
 | `t_received` dans l'en-tête brut | ANH-131 | refuse le bloc (clé inconnue) |
 | `error` dans `drive_frames.jsonl` | ANH-192 | refuse la ligne (clé inconnue) |
+| causes natives de `error` et `modbus_connect` / `modbus_close` | rejeu Modbus d'ANH-192 | le reader antérieur refuse une cause inconnue ; sans cause, l'ancien rejeu refuse les lignes natives (code 2) |
 | `runtime_delivery` dans l'en-tête brut | ANH-192 | refuse le bloc (clé inconnue) |
 | commande `attendant_ping` | ANH-192 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
 | commande `presence_trip` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; ni kind ni champ de manifeste nouveau |

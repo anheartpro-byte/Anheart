@@ -76,7 +76,7 @@ from src.motor.drive import (
     DriveStatus,
     EmergencyStopOutcome,
 )
-from src.motor.observation import ExchangeLog, ObservableDrive
+from src.motor.observation import ExchangeLog, ModbusFailure, ObservableDrive
 from src.record.schema import DriveFrame, RecordedFailure, record_failure
 from src.result import Err, Ok, Result
 from src.units import Monotonic, MotorRpm, Seconds
@@ -122,7 +122,7 @@ class Observation:
     ok: bool
     latency_ms: float
     raw_hex: str | None = None
-    error: RecordedFailure | None = None
+    error: RecordedFailure | ModbusFailure | None = None
 
     def frame(self, origin: Monotonic) -> DriveFrame:
         """The line of ``drive_frames.jsonl``, timed from ``origin`` to the millisecond."""
@@ -389,6 +389,7 @@ def exchange_source(log: ExchangeLog) -> FrameSource:
                     ok=exchange.ok,
                     latency_ms=exchange.latency_ms,
                     raw_hex=exchange.raw_hex,
+                    error=exchange.error,
                 )
                 for exchange in drained.entries
             ),

@@ -27,7 +27,7 @@ from src.motor.drive import (
     DriveStatus,
     EmergencyStopOutcome,
 )
-from src.motor.observation import ExchangeKind, ExchangeLog, ObservableDrive
+from src.motor.observation import ExchangeKind, ExchangeLog, ModbusFailure, ObservableDrive
 from src.record.schema import RecordedFailure, record_failure
 from src.result import Err, Ok, Result
 from src.units import Monotonic, MotorRpm, Seconds
@@ -65,7 +65,7 @@ class Frame:
     latency_ms: float = 0.0
     observations: tuple[tuple[int, int | None], ...] = ()
     raw_hex: str | None = None
-    error: RecordedFailure | None = None
+    error: RecordedFailure | ModbusFailure | None = None
 
 
 class InjectedTickError(RuntimeError):
@@ -117,6 +117,7 @@ class RecordingDrive:
                 latency_ms=item.latency_ms,
                 label=item.detail,
                 raw_hex=item.raw_hex,
+                error=item.error,
             )
             for item in self._exchanges.entries
         )

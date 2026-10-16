@@ -18,6 +18,7 @@ from src.motor.drive import (
     StopUnconfirmed,
     UnexpectedState,
 )
+from src.motor.observation import MODBUS_FAILURES, ModbusFailure
 from src.record.rows import JsonValue
 from src.units import Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
 
@@ -243,7 +244,7 @@ type RecordedFailure = Annotated[
     | StopFailure,
     Field(discriminator="type"),
 ]
-"""Closed failure vocabulary shared by call observations and native register transactions.
+"""Closed failure vocabulary for drive-call observations.
 
 Only decision-bearing fields are kept. Human diagnostics never enter this value.
 """
@@ -309,12 +310,18 @@ class DriveFrame:
     ok: bool
     latency_ms: float
     raw_hex: str | None = None
-    error: RecordedFailure | None = Field(default=None, exclude_if=_absent)
+    error: RecordedFailure | ModbusFailure | None = Field(default=None, exclude_if=_absent)
 
     @model_validator(mode="after")
     def failed_only(self) -> Self:
         if self.ok and self.error is not None:
             raise ValueError("a successful exchange cannot carry an error")
+        if self.error is not None and isinstance(
+            self.error, MODBUS_FAILURES
+        ) != self.kind.startswith("modbus_"):
+            raise ValueError(
+                "the failure vocabulary must match native exchanges or call observations"
+            )
         return self
 
 

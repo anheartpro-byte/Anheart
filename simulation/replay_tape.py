@@ -16,11 +16,10 @@ Every call after the mismatch simply fails, and the replay loop, which reads
 :class:`~src.ecg_pipeline.EcgBridge` reads: at ``runtime_delivery.t`` with its
 recorded observation timestamp, or at acquisition receipt when absent.
 
-Only the drive-call observations of :class:`~simulation.recording.RecordingDrive`
-are a tape (``open``, ``command``, ``speed``, ``read_status``...). The native
-driver's ``modbus_*`` exchanges are not: replaying those means replaying a
-Modbus master under the real ATV320 driver, which this module does not do, and
-a record holding them is refused rather than half-replayed.
+This tape serves the drive-call observations of
+:class:`~simulation.recording.RecordingDrive` (``open``, ``command``,
+``speed``, ``read_status``...). Native ``modbus_*`` exchanges use the master
+in :mod:`simulation.replay_modbus`, under the real ATV320 driver.
 
 What a tape cannot give back, because the record does not hold it:
 
@@ -33,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
-from typing import Final, final
+from typing import Final, cast, final
 
 from simulation.recording import FrameKind
 from simulation.replay_report import SETPOINT_TOLERANCE_RPM
@@ -64,7 +63,7 @@ from src.motor.drive import (
     describe_fault,
 )
 from src.record.ecg import RawBlock
-from src.record.schema import DriveFrame, replay_failure
+from src.record.schema import DriveFrame, RecordedFailure, replay_failure
 from src.result import Err, Ok, Result
 from src.units import Monotonic, MotorRpm, RawRegister, Seconds, StatusWord, UnixMillis, elapsed
 
@@ -219,7 +218,9 @@ def _exchange(frame: DriveFrame) -> Result[Exchange, str]:
             written=written.value,
             status=status,
             limits=limits,
-            error=None if frame.error is None else replay_failure(frame.error),
+            error=None
+            if frame.error is None
+            else replay_failure(cast("RecordedFailure", frame.error)),
         )
     )
 

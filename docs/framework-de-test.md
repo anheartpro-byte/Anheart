@@ -3932,8 +3932,20 @@ avec leur document de configuration vérifié par `config_hash`. Le test croisé
 de la gate passe par `LocalPanel`, le variateur et le BITalino simulés, le
 vrai DSP et une horloge simulée : un programme et une séance manuelle avec
 changement de cible, arrêt et pings de présence. Les deux ont zéro écart,
-sans tolérance consommée. Les échanges Modbus du pilote réel restent hors
-du magnétophone actuel (section 16.8).
+sans tolérance consommée. Une séance manuelle complète de cette même console
+est aussi produite sur le vrai pilote ATV320, avec un maître Modbus simulé
+adossé au modèle physique existant : elle se rejoue sous ce pilote, avec
+zéro écart et deux rapports identiques octet pour octet. Cette preuve reste
+simulée, sans variateur physique ni acquisition humaine.
+
+Pour une bande native, `simulation/replay_modbus.py` rend les réponses du
+maître au vrai `ATV320Drive`. Les registres et valeurs brutes écrites sont
+exacts, dans l'ordre et dans les étapes de 16.3. Les causes fermées du champ
+`error` rendent les mêmes variantes de `DriveError` par le vrai pilote,
+y compris le code d'exception Modbus et les catégories SDK. Les lignes
+`modbus_send` et `modbus_receive_chunk` sont ignorées : elles ne sont pas une
+seconde entrée du runtime ni une seconde latence. Des fragments SDK seuls,
+ou un mélange d'observations d'appel et d'échanges natifs, sont refusés.
 
 ### 16.2 Commande
 
@@ -3951,6 +3963,12 @@ exige un fichier adjacent `<dossier>.config.json` ou
 `<archive sans .tar.gz>.config.json`. La bibliothèque lit ce même fichier
 adjacent. Il se récupère séparément : il n'est ni synchronisé ni inclus dans
 le dépôt ou l'export de séance. Le format du manifeste reste inchangé.
+
+Une bande native exige aussi le champ structuré `native_drive` dans ce
+document vérifié : paramètres série, timeout, retries et offset. Les types
+du pilote les valident ; la description textuelle du lien n'est pas décodée.
+Sans ce champ : code 2, `native Modbus replay requires native_drive in the
+verified configuration document`.
 
 Le rejeu vérifie le SHA-256 avant toute construction du runtime. Document
 absent ou illisible : code 2, `the console configuration document is absent
@@ -4084,7 +4102,8 @@ replay of record 148716e4b06f4998bab0370bbcbac63a: DIVERGENCE
 pas de tics d'avant le départ, événement d'entrée qui n'est pas une commande,
 aucun échange du variateur, simulation sans géométrie, console sans document
 de configuration vérifié, fréquence cardiaque sans
-ECG brut, échanges Modbus natifs, phase ou action inconnue de cette version.
+ECG brut, mélange de trames natives et d'observations d'appel, bande native
+sans réglages structurés, phase ou action inconnue de cette version.
 Quand il en manque plusieurs, le message les donne ensemble, séparées par
 « ; ».
 
@@ -4181,8 +4200,8 @@ réécrite : la commande affiche `unchanged`, et git n'a rien à ajouter. La
 comparaison porte sur le contenu lu, pas sur les octets, parce que deux
 versions de zlib ne compriment pas pareil.
 
-**Une séance réelle.** Les échanges Modbus natifs restent à traiter
-(section 16.8). La console en simulation est vérifiée par le test croisé.
+**Une séance réelle.** Le rejeu Modbus natif est vérifié par une console en
+simulation ; aucune séance réelle n'est encore disponible (section 16.8).
 La marche à suivre,
 le jour où c'est possible :
 
@@ -4292,12 +4311,13 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 * **Séances réelles.** La preuve de console porte sur des séances simulées,
   pas sur du matériel ni une acquisition humaine. La console fournit les
   commandes, le repos, les trames, les remises ECG et le document de
-  configuration. Le magnétophone Modbus natif reste nécessaire pour le
-  pilote physique. Une ancienne console sans document est refusée, code 2.
-* **Échanges natifs.** Le magnétophone rejoue les observations d'appel du
-  variateur (`open`, `speed`, `read_status`...), celles qu'écrit la simulation.
-  Les échanges Modbus du pilote réel ne sont pas rejoués : un enregistrement
-  qui en contient est refusé (code 2).
+  configuration. Le magnétophone Modbus est placé sous le vrai pilote.
+  Une ancienne console sans document est refusée, code 2.
+* **Échanges natifs.** Les octets SDK restent un diagnostic ignoré au rejeu.
+  Le rejeu compare les décisions et les appels, pas chaque entrée à une
+  vérité physique externe : une perturbation tolérée sans effet peut rester
+  `MATCH`. Les sommes de contrôle sont le contrôle d'intégrité. Les deux
+  familles de trames ne peuvent pas être mélangées.
 * **Mode `direct`.** Les scénarios qui injectent des bpm ne sont pas
   rejouables : seuls les six scénarios `*_dsp` de la batterie le sont.
 * **Exactitude.** Un enregistrement de la simulation est rejoué sur les mêmes
@@ -4337,6 +4357,8 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 | `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences ; les archives et ce que l'extraction refuse (nom absolu, remontée de dossier, lien, périphérique, écriture hors du dossier) ; les deux formes d'anonymat et les identifiants de la bibliothèque ; l'écart accepté (sont refusés : un second écart derrière lui, un écart remplacé par un autre de même nature, un tic modifié après une divergence acceptée, un fichier accepté à côté d'un enregistrement de la simulation) ; l'export reproductible, et son refus d'un nom qui est un chemin |
 | `test_record_console_parity.py` | même structure des deux producteurs ; rejeu exact de deux séances de console en simulation (programme, manuelle avec cible et arrêt, pings), configuration vérifiée, fichier adjacent et `--config`, refus code 2 si absent ou altéré, rejeu identique si seul le fichier médical courant diffère ; environ 28 s pour les deux cas croisés sur le poste de développement |
 | `test_replay_config.py` | limites et géométrie issues du document, validation par les constructeurs de domaine, empreintes et tailles refusées, parties de configuration courante nommées |
+| `test_replay_modbus.py`, `test_modbus.py` | séance native de console simulée avec arrêt, rejeu exact sous le vrai pilote, rapports identiques ; ETA altérée et échange retiré nommés avec les registres ; causes d'échec, étapes, offsets et fragments SDK ; aucun scénario JSON ni archive supplémentaire |
+| `raspberry-pi/tests/test_modbus_recording.py` | causes natives fermées, variantes recalculées par le pilote via les objets SDK, refus du reader, erreurs d'ouverture et d'urgence, confidentialité et observation défaillante isolée |
 | `raspberry-pi/tests/test_record_configuration.py` | empreinte de référence inchangée, sentinelle de confidentialité, taille bornée, modes 600/700, unicité et collisions, erreurs disque et écriture bloquée sans attente des tics, exclusions de rétention/synchronisation/dépôt/export/logbook |
 
 ### 16.10 Vérification numérique unique sur un Pi

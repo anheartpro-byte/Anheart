@@ -745,7 +745,7 @@ def test_a_decision_this_build_does_not_know_is_refused(
     assert "tick 7 holds a phase or a safety action this build does not know" in refused(folder)
 
 
-def test_native_modbus_exchanges_are_refused_not_half_replayed(bench: Path, tmp_path: Path) -> None:
+def test_mixed_modbus_and_call_observations_are_refused(bench: Path, tmp_path: Path) -> None:
     folder = copy(bench, tmp_path)
 
     def change(lines: list[Line]) -> list[Line]:
@@ -754,8 +754,7 @@ def test_native_modbus_exchanges_are_refused_not_half_replayed(bench: Path, tmp_
 
     edit_lines(folder, "drive_frames.jsonl", change)
     reason = refused(folder)
-    assert reason.startswith("drive frame 3 (t=")
-    assert "native driver's Modbus exchanges are not replayable" in reason
+    assert "mixed drive-call observations and native Modbus exchanges" in reason
 
 
 def test_a_manifest_the_runtime_cannot_be_built_from_is_refused(
