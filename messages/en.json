@@ -1,4 +1,170 @@
 {
+  "audit": {
+    "title": "Audit",
+    "description": "Journal of sensitive platform actions.",
+    "accessDenied": "Only administrators can access the audit journal.",
+    "all": "All",
+    "global": "Platform",
+    "empty": "No actions match the filters.",
+    "showMore": "Show more",
+    "loading": "Loading...",
+    "export": "Export CSV",
+    "exporting": "Exporting...",
+    "exportTruncated": "The export contains the first 10,000 rows. Narrow the period to export the remaining rows.",
+    "exportError": "The export failed. Please try again.",
+    "filterTarget": "Filter by this target",
+    "filters": {
+      "actor": "Actor",
+      "action": "Action",
+      "targetType": "Target type",
+      "target": "Target: {target}",
+      "removeTarget": "Remove target",
+      "from": "From",
+      "to": "To",
+      "organization": "Organization",
+      "reset": "Reset",
+      "allMachines": "All machines"
+    },
+    "columns": {
+      "at": "Date and time",
+      "organization": "Organization",
+      "actor": "Actor",
+      "action": "Action",
+      "target": "Target",
+      "source": "Source",
+      "details": "Details",
+      "requestId": "Request reference"
+    },
+    "actions": {
+      "user": {
+        "role_changed": "Role changed",
+        "invited": "Invitation created",
+        "linked_to_account": "Account linked",
+        "deleted": "User deleted"
+      },
+      "patient_gestionnaire": {
+        "assigned": "Patient manager assigned",
+        "removed": "Patient manager removed"
+      },
+      "gestionnaire_patients": {
+        "set": "Manager patients changed"
+      },
+      "machine_gestionnaire": {
+        "assigned": "Machine manager assigned",
+        "removed": "Machine manager removed"
+      },
+      "machine_gestionnaires": {
+        "set": "Machine managers changed"
+      },
+      "gestionnaire_machines": {
+        "set": "Manager machines changed"
+      },
+      "launch_right": {
+        "granted": "Launch right granted",
+        "revoked": "Launch right revoked"
+      },
+      "membership": {
+        "created": "Membership created",
+        "role_changed": "Membership role changed",
+        "deactivated": "Membership deactivated"
+      },
+      "account": {
+        "deleted_in_clerk": "Account deleted in Clerk"
+      },
+      "organization": {
+        "deleted": "Organization deleted"
+      },
+      "physiology": {
+        "updated": "Physiology updated"
+      },
+      "fitness": {
+        "validated": "Fitness validated"
+      },
+      "consent": {
+        "signed": "Consent signed",
+        "withdrawn": "Consent withdrawn"
+      },
+      "session": {
+        "launched": "Session requested",
+        "cancelled": "Session cancelled",
+        "stop_requested": "Stop requested",
+        "started": "Session started",
+        "local_registered": "Local session registered",
+        "ended": "Session ended"
+      },
+      "machine_key": {
+        "created": "Machine key created",
+        "revoked": "Machine key revoked",
+        "expired_revoked": "Expired key revoked"
+      },
+      "machine": {
+        "created": "Machine created",
+        "deleted": "Machine deleted",
+        "restored": "Machine restored"
+      },
+      "registry": {
+        "identity_updated": "Registry identity updated",
+        "radii_recorded": "Registry radii recorded",
+        "drive_sheet_attached": "Drive sheet attached",
+        "review_added": "Registry review added",
+        "level_lowered": "Validation level lowered"
+      },
+      "software_release": {
+        "recorded": "Software release recorded"
+      },
+      "medical_parameters": {
+        "registered": "Medical parameters version registered"
+      },
+      "record": {
+        "deleted": "Recording deleted"
+      }
+    },
+    "targets": {
+      "user": "User",
+      "machine": "Machine",
+      "machine_key": "Machine key",
+      "session": "Session",
+      "fitness_assessment": "Fitness assessment",
+      "consent": "Consent",
+      "organization": "Organization",
+      "software_release": "Software release",
+      "medical_parameters_version": "Medical parameters version",
+      "patient_invitation": "Patient invitation"
+    },
+    "roles": {
+      "admin": "Anheart admin",
+      "org_admin": "Organization admin",
+      "gestionnaire": "Manager",
+      "user": "Patient",
+      "machine": "Machine",
+      "system": "System"
+    },
+    "sources": {
+      "site": "Website",
+      "machine": "Machine",
+      "cron": "Scheduled task",
+      "webhook": "Webhook",
+      "operator": "Operator"
+    },
+    "detailLabels": {
+      "fields": "Changed fields",
+      "role": "Role",
+      "previousRole": "Previous role",
+      "level": "Level",
+      "previousLevel": "Previous level",
+      "version": "Version",
+      "softwareVersion": "Software version",
+      "medicalParametersVersion": "Medical parameters version",
+      "machineId": "Machine",
+      "userId": "User",
+      "gestionnaireId": "Manager",
+      "added": "Added",
+      "removed": "Removed",
+      "count": "Count",
+      "outcome": "Outcome",
+      "expiresAt": "Expiry"
+    }
+  },
   "machineRegistry": {
     "title": "Machine registry",
     "loading": "Loading registry...",
@@ -343,6 +509,7 @@
     "done": "Done."
   },
   "nav": {
+    "audit": "Audit",
     "dashboard": "Dashboard",
     "machines": "Machines",
     "sessions": "Sessions",

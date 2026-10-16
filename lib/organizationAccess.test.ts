@@ -52,7 +52,7 @@ const MANAGEMENT = [
 describe("ANH-187 the sidebar of each role", () => {
   it("gives the Anheart admin administration, with the settings, and management", () => {
     expect(navigationFor(granted("admin"))).toEqual({
-      administration: ["gestionnaires", "members", "users", "settings"],
+      administration: ["gestionnaires", "members", "users", "audit", "settings"],
       management: MANAGEMENT,
       myHealth: [],
     });
@@ -60,7 +60,7 @@ describe("ANH-187 the sidebar of each role", () => {
 
   it("gives an organisation admin administration without the settings, and management", () => {
     expect(navigationFor(granted("org_admin"))).toEqual({
-      administration: ["gestionnaires", "members", "users"],
+      administration: ["gestionnaires", "members", "users", "audit"],
       management: MANAGEMENT,
       myHealth: [],
     });
