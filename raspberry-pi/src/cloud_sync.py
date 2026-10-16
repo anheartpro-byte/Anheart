@@ -1561,8 +1561,8 @@ class CloudSync:
             _logger.info("dashboard reachable")
 
     def _tell_refusal(self, now: Monotonic, refused: Refused, *, contract: bool) -> None:
-        """Which of the link's states a refusal speaks of. Its status and stable code only:
-        the dashboard's own sentence stays in the log.
+        """Which of the link's states a refusal speaks of. The dashboard's own sentence
+        stays in the log; a local hold names no server response.
 
         Only a refusal under one of the dashboard's stable codes is taken for
         the dashboard's answer about what was sent. A refused key and an
@@ -1573,6 +1573,14 @@ class CloudSync:
         words = f"HTTP {refused.status}"
         if refused.code is not None:
             words = f"{words} ({refused.code})"
+        # PacedTransport's synthetic refusal. A server using these exact words
+        # would only change the wording here and in the log, never the state.
+        if (
+            refused.status == TOO_MANY_REQUESTS
+            and refused.code == RATE_LIMITED
+            and refused.detail == HELD_HERE
+        ):
+            words = "requete retenue ici, non envoyee (rate_limited)"
         if refused.code == CONTRACT_UNSUPPORTED:
             sentence = unsupported_refusal(refused.supported)
             self._link.contract_refused(now, sentence, contract=contract)
@@ -1591,7 +1599,13 @@ class CloudSync:
         if refused != self._last_refused:
             self._last_refused = refused
             code = "sans code" if refused.code is None else refused.code
-            if include_words:
+            if (
+                refused.status == TOO_MANY_REQUESTS
+                and refused.code == RATE_LIMITED
+                and refused.detail == HELD_HERE
+            ):
+                _logger.warning("dashboard: a request held here, not sent (%s)", code)
+            elif include_words:
                 _logger.warning(
                     "dashboard refused a request: %s (HTTP %d): %s",
                     code,

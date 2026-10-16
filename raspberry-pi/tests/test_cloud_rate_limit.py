@@ -36,6 +36,7 @@ from src.cloud_sync import (
     STATUS_PATH,
     CloudError,
     CloudSync,
+    CloudTransport,
     Document,
     PacedTransport,
     Refused,
@@ -51,10 +52,19 @@ from src.contract import (
     SoftwareVersion,
 )
 from src.health import HealthContext, HealthWatch
+from src.link_state import MAX_DETAIL, UNREACHABLE_AFTER, LinkState
 from src.local_panel import CLOUD_PERIOD, build_panel
 from src.record.deposit import FILES_PER_STEP
 from src.record.upload import MAX_EVENTS, MAX_POINTS, read_events
-from src.record_uplink import CATCH_UP_PERIOD, LOCAL_PATH, TELEMETRY_PERIOD, Answer, Held, Refusal
+from src.record_uplink import (
+    CATCH_UP_PERIOD,
+    LOCAL_PATH,
+    START_PATH,
+    TELEMETRY_PERIOD,
+    Answer,
+    Held,
+    Refusal,
+)
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
 from src.training.types import TelemetrySnapshot
@@ -79,6 +89,21 @@ def limited(wait: Seconds | None) -> Result[Document, CloudError]:
 
 def clock() -> ManualClock:
     return ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
+
+
+def sync_over(tmp_path: Path, time: ManualClock, transport: CloudTransport) -> CloudSync:
+    panel = build_panel(
+        config_of(), clock=time, profiles_path=tmp_path / "p.json", transport=lambda _c: transport
+    )
+    return CloudSync(
+        clock=time,
+        transport=transport,
+        runtime=StubRuntime(source=panel.runtime.snapshot),
+        surface=panel.surface,
+        store=panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=True,
+    )
 
 
 # =========================================================================
@@ -296,6 +321,111 @@ async def test_the_console_keeps_to_the_wait_on_the_routes_it_calls_on_a_cadence
 
     assert len(dashboard.to(HEARTBEAT)) == 2  # at 0 s and 60 s
     assert len(dashboard.to(POLL)) == 4  # at 0, 30, 60 and 90 s
+
+
+@pytest.mark.parametrize("path", [TELEMETRY, START_PATH])
+async def test_a_local_hold_is_not_repeated_for_its_changing_wait(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, path: str
+) -> None:
+    caplog.set_level(logging.WARNING, logger="src.cloud_sync")
+    time = clock()
+    dashboard = Dashboard()
+    dashboard.answer(path, limited(Seconds(60.0)))
+    sync = sync_over(tmp_path, time, PacedTransport(dashboard, time))
+
+    for hold in range(2):
+        caplog.clear()
+        await sync.send(path, {})
+        server_line = "dashboard refused a request: rate_limited (HTTP 429)"
+        if path != START_PATH:
+            server_line += ": 'Too many requests'"
+        assert [r.getMessage() for r in caplog.records if "refused a request" in r.message] == [
+            server_line
+        ]
+        assert caplog.text.count("refused for its rate") == 1
+        caplog.clear()
+        for _ in range(3):
+            time.advance(Seconds(1.0))
+            await sync.send(path, {})
+
+        assert len(dashboard.to(path)) == hold + 1
+        assert "dashboard refused a request" not in caplog.text
+        assert caplog.text.count("dashboard: a request held here, not sent (rate_limited)") == 1
+        assert HELD_HERE not in caplog.text
+        assert "Too many requests" not in caplog.text
+        time.advance(Seconds(57.0))
+
+
+@pytest.mark.parametrize("initially_reachable", [False, True])
+async def test_a_local_hold_changes_the_reason_but_keeps_the_server_429_states(
+    tmp_path: Path, initially_reachable: bool
+) -> None:
+    time = clock()
+    server = Dashboard()
+    paced_server = Dashboard()
+    direct = sync_over(tmp_path, time, server)
+    paced = sync_over(tmp_path, time, PacedTransport(paced_server, time))
+    assert (direct.link.state, paced.link.state) == (LinkState.WAITING, LinkState.WAITING)
+    if initially_reachable:
+        await direct.send(TELEMETRY, {})
+        await paced.send(TELEMETRY, {})
+    before = direct.link.state
+    assert paced.link.state is before
+    server.answer(TELEMETRY, limited(Seconds(60.0)))
+    paced_server.answer(TELEMETRY, limited(Seconds(60.0)))
+    born = time.monotonic()
+
+    for quiet in (1.0, 2.0, 24.0, 25.0, 60.0):
+        time.advance(Seconds(quiet - (time.monotonic() - born)))
+        await direct.send(TELEMETRY, {})
+        await paced.send(TELEMETRY, {})
+        expected = before if quiet < UNREACHABLE_AFTER else LinkState.SERVER_ERROR
+        assert direct.link.state is paced.link.state is expected
+        if quiet >= UNREACHABLE_AFTER:
+            assert direct.link.detail == "HTTP 429 (rate_limited)"
+            assert paced.link.detail == "requete retenue ici, non envoyee (rate_limited)"
+            assert len(paced.link.detail) <= MAX_DETAIL
+        assert direct.link.last_answer_age == paced.link.last_answer_age
+
+    assert len(server.to(TELEMETRY)) == 5 + int(initially_reachable)
+    assert len(paced_server.to(TELEMETRY)) == 1 + int(initially_reachable)
+    time.advance(Seconds(1.0))
+    server.handlers.clear()
+    paced_server.handlers.clear()
+    await direct.send(TELEMETRY, {})
+    await paced.send(TELEMETRY, {})
+    assert direct.link == paced.link
+    assert paced.link.state is LinkState.REACHABLE
+
+
+@pytest.mark.parametrize(
+    "refused",
+    [
+        Refused(503, HELD_HERE, code=RATE_LIMITED),
+        Refused(429, HELD_HERE, code=ErrorCode("request_failed")),
+        Refused(429, HELD_HERE),
+        Refused(429, HELD_HERE + "!", code=RATE_LIMITED),
+    ],
+)
+async def test_a_server_refusal_resembling_a_local_hold_keeps_its_log_and_reason(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, refused: Refused
+) -> None:
+    caplog.set_level(logging.WARNING, logger="src.cloud_sync")
+    time = clock()
+    dashboard = Dashboard()
+    dashboard.answer(TELEMETRY, Err(refused))
+    sync = sync_over(tmp_path, time, dashboard)
+    time.advance(UNREACHABLE_AFTER)
+
+    await sync.send(TELEMETRY, {})
+
+    assert sync.link.state is LinkState.SERVER_ERROR
+    words = f"HTTP {refused.status}"
+    if refused.code is not None:
+        words += f" ({refused.code})"
+    assert sync.link.detail == words
+    assert "dashboard refused a request" in caplog.text
+    assert "a request held here" not in caplog.text
 
 
 # =========================================================================
