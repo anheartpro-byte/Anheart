@@ -65,7 +65,7 @@ from src.record.session import (
     stamp_for,
     storage_gate,
 )
-from src.result import Ok
+from src.result import Err, Ok
 from src.training.motion import DEFAULT_MOTION_LIMITS
 from src.training.plan import ProfileStore, Program
 from src.training.runtime import EndReason, RecordStorageLow, RuntimeLimits, RuntimeState
@@ -171,7 +171,11 @@ async def test_ex1_a_manual_session_is_recorded_from_arming_to_its_end(tmp_path:
     assert (EventKind.PHASE, "hold", "system") in kinds
     assert (EventKind.OPERATOR_ACTION, "stop", ALIAS) in kinds
     assert kinds[-1] == (EventKind.END, "operator_stop", "system")
-    start = next(event for event in recording.events if event.detail.startswith("start_manual "))
+    start = next(
+        event
+        for event in recording.events
+        if event.kind is EventKind.OPERATOR_ACTION and event.detail.startswith("start_manual ")
+    )
     assert start.t == pytest.approx(0.2)
     assert recorded.said() == []
     assert not recorded.recorder.recording
@@ -215,7 +219,12 @@ async def test_ex1_a_programmed_session_freezes_its_programme_numbers_only(
     assert SHORT_PROFILE.encode() not in on_disk
     assert b"failure injection" not in on_disk, "the profile's display name is not recorded"
     events = recorded.recording().events
-    assert any(event.detail == "start_programme" and event.actor == ALIAS for event in events)
+    assert any(
+        event.kind is EventKind.OPERATOR_ACTION
+        and event.detail == "start_programme"
+        and event.actor == ALIAS
+        for event in events
+    )
     assert (EventKind.PHASE, "baseline") in {(e.kind, e.detail) for e in events}
 
 
@@ -969,6 +978,10 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
         ("refusal", f"cancelled: {CANCELLED_BY_STOP}", ALIAS),
     ]
     assert all(event.t == 0.5 for event in loaded.value.events[1:])
+    annotations = [event for event in loaded.value.events if event.detail.startswith("console:")]
+    assert annotations
+    assert all(event.kind is EventKind.WARNING for event in annotations)
+    assert all(isinstance(commands.parse(event.detail), Err) for event in annotations)
 
 
 def test_the_confirming_operator_is_written_in_the_armed_session(tmp_path: Path) -> None:
@@ -989,12 +1002,92 @@ def test_the_confirming_operator_is_written_in_the_armed_session(tmp_path: Path)
     loaded = read(path)
     assert isinstance(loaded, Ok)
     confirmations = [
-        event for event in loaded.value.events if event.detail == "console: launch_confirmed"
+        event
+        for event in loaded.value.events
+        if event.kind is EventKind.WARNING and event.detail == "console: launch_confirmed"
     ]
     assert len(confirmations) == 1
     assert confirmations[0].kind is EventKind.WARNING
     assert confirmations[0].actor == operator_alias(confirmer)
     assert confirmer not in (path / "events.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("surface", "command", "kind", "operator", "automatic"),
+    [
+        (
+            SurfaceEvent.ATTESTED,
+            commands.ConfirmEstopWiring(),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            True,
+        ),
+        (
+            SurfaceEvent.START_REQUESTED,
+            commands.StartManual(MotorRpm(1380)),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            False,
+        ),
+        (
+            SurfaceEvent.LAUNCH_CONFIRMED,
+            commands.StartProgramme(),
+            EventKind.REMOTE_COMMAND,
+            DASHBOARD_OPERATOR,
+            False,
+        ),
+        (
+            SurfaceEvent.FAULT_RESET_REQUESTED,
+            commands.FaultReset(),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            False,
+        ),
+        (
+            SurfaceEvent.ACKNOWLEDGED,
+            commands.Acknowledge(True),
+            EventKind.VERDICT_ACK,
+            OPERATOR,
+            False,
+        ),
+        (SurfaceEvent.END_REQUESTED, commands.Stop(), EventKind.OPERATOR_ACTION, OPERATOR, False),
+        (
+            SurfaceEvent.EMERGENCY_STOP,
+            commands.LatchEmergencyStop(),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            True,
+        ),
+    ],
+)
+def test_console_annotations_are_not_commands_and_keep_one_attributed_input(
+    tmp_path: Path,
+    surface: SurfaceEvent,
+    command: commands.Command,
+    kind: EventKind,
+    operator: str,
+    *,
+    automatic: bool,
+) -> None:
+    recorder, journal, _clock = bare_recorder(tmp_path)
+    recorder.begin(SessionRequest(occupancy=Occupancy.BENCH, operator=OPERATOR))
+    recorder.note_event(surface_event(surface, OPERATOR, "notification", 10.5))
+    if not automatic:
+        recorder.note_command(command, operator, at=Monotonic(10.5))
+    journal.drain()
+    path = journal.status(Monotonic(0)).path
+    assert path is not None
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    annotations = [event for event in loaded.value.events if event.detail.startswith("console:")]
+    assert len(annotations) == 1
+    assert annotations[0].kind is EventKind.WARNING
+    assert annotations[0].actor == ALIAS
+    assert isinstance(commands.parse(annotations[0].detail), Err)
+    inputs = [event for event in loaded.value.events if event.kind in commands.INPUT_KINDS]
+    assert [(event.kind, event.detail, event.actor) for event in inputs] == [
+        (kind, commands.encode(command), "remote" if operator == DASHBOARD_OPERATOR else ALIAS),
+    ]
 
 
 def test_a_long_reason_is_cut_to_a_message_and_a_remote_name_is_known_both_ways(

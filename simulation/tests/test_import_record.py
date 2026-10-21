@@ -31,6 +31,7 @@ from simulation.tests.test_replay_modbus import console_native
 from src.record import writer as shared_writer
 from src.record.codec import JSON, mapping
 from src.record.reader import Recording, read
+from src.record.writer import MANIFEST
 from src.result import Err, Ok
 
 
@@ -81,11 +82,12 @@ def test_console_import_is_anonymous_intact_replayed_and_judged(
         source = tmp_path / "source.tar.gz"
         pack(folder, source)
         sidecar(source).write_bytes(config.read_bytes())
-        assert (
-            importer.main([str(source), "--name", kind, "--directory", str(tmp_path / "library")])
-            == 0
+        exit_code_3 = importer.main(
+            [str(source), "--name", kind, "--directory", str(tmp_path / "library")]
         )
-        assert capsys.readouterr().out.strip() == str(tmp_path / "library" / (kind + ".tar.gz"))
+        assert exit_code_3 == 0
+        captured_2 = capsys.readouterr()
+        assert captured_2.out.strip() == str(tmp_path / "library" / (kind + ".tar.gz"))
         report = replay_path(tmp_path / "library" / (kind + ".tar.gz"))
         assert isinstance(report, Ok)
         archive = tmp_path / "library" / (kind + ".tar.gz")
@@ -103,7 +105,8 @@ def test_console_import_is_anonymous_intact_replayed_and_judged(
     assert report.value.configuration.config_hash_verified
     assert report.value.integrity == ()
     assert sidecar(archive).read_bytes() == config.read_bytes()
-    assert judge(archive, tmp_path / "judged") is None
+    judged = judge(archive, tmp_path / "judged")
+    assert judged is None
     extracted = unpack(archive, tmp_path / "checked")
     assert isinstance(extracted, Ok)
     anon = loaded(extracted.value)
@@ -143,8 +146,64 @@ def test_console_import_is_anonymous_intact_replayed_and_judged(
                 else True
             )
     assert fingerprints(folder) == before
-    with capsys.disabled():
-        print(report.value.to_json(), end="")  # noqa: T201
+
+
+def test_import_removes_free_final_text_without_changing_the_observed_state_or_decisions(
+    sources: dict[str, tuple[Path, Path]],
+    tmp_path: Path,
+) -> None:
+    source, config = sources["manual"]
+    folder = copy(source, tmp_path / "source")
+    original = loaded(folder)
+    observation = original.manifest.end_observation
+    assert observation is not None
+    sentinel = "Mme Martin FC 192 bpm /dev/serial/by-id/FTDI-AdapterSecret"
+    poisoned = replace(observation, stop_reason=sentinel, shutdown_detail=sentinel)
+    document = mapping(
+        JSON.validate_json(MANIFEST.dump_json(replace(original.manifest, end_observation=poisoned)))
+    )
+    edit_manifest(folder, lambda value: value.update(document))
+    reseal(folder)
+    result = import_record(folder, "opaque", tmp_path / "library", config=config)
+    assert isinstance(result, Ok), result
+    source_report = replay(folder, config)
+    assert isinstance(source_report, Ok)
+    assert result.value.report.outcome == source_report.value.outcome
+    assert result.value.report.comparison == source_report.value.comparison
+    assert result.value.report.divergence == source_report.value.divergence
+    extracted = unpack(result.value.archive, tmp_path / "checked")
+    assert isinstance(extracted, Ok)
+    anon = loaded(extracted.value)
+    assert anon.manifest.end_observation == replace(
+        poisoned, stop_reason=None, shutdown_detail=None
+    )
+    assert loaded(folder).manifest.end_observation == poisoned
+    for member in extracted.value.rglob("*"):
+        if member.is_file():
+            content = member.read_bytes()
+            if member.name.endswith(".bin.gz"):
+                content = gzip.decompress(content)
+            for word in (b"Mme Martin", b"192 bpm", b"AdapterSecret", b"/dev/serial"):
+                assert word not in content
+
+
+def test_an_import_refuses_a_replay_that_changes_after_anonymization(
+    sources: dict[str, tuple[Path, Path]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, config = sources["manual"]
+
+    def changed(path: Path, config: Path | None = None) -> Ok[ReplayReport] | Err[ReplayError]:
+        result = replay(path, config)
+        if isinstance(result, Ok) and path.name.startswith("2000-"):
+            return Ok(replace(result.value, recorded_ticks=result.value.recorded_ticks + 1))
+        return result
+
+    monkeypatch.setattr(importer, "replay", changed)
+    result = import_record(source, "opaque", tmp_path / "library", config=config)
+    assert result == Err("the anonymized replay differs from the source replay")
+    assert not (tmp_path / "library").exists()
 
 
 @pytest.mark.parametrize(
@@ -202,7 +261,8 @@ def test_source_refusals_never_write_an_archive(
 
 @pytest.mark.parametrize("name", ["../outside", "", "a/b", "a-b", "a name", "x" * 256])
 def test_invalid_names_are_refused_before_reading(tmp_path: Path, name: str) -> None:
-    assert isinstance(import_record(tmp_path / "missing", name, tmp_path / "library"), Err)
+    import_record_result = import_record(tmp_path / "missing", name, tmp_path / "library")
+    assert isinstance(import_record_result, Err)
     assert not (tmp_path / "library").exists()
 
 
@@ -235,24 +295,22 @@ def test_difference_needs_explicit_ticket_and_pins_the_whole_report(
     assert isinstance(refused, Err)
     assert "--accept-ticket" in refused.error
     assert not shelf.exists()
-    assert (
-        importer.main(
-            [
-                str(folder),
-                "--name",
-                "opaque",
-                "--directory",
-                str(shelf),
-                "--config",
-                str(config),
-                "--accept-ticket",
-                "ANH-192",
-                "--accept-reason",
-                "controlled setpoint change",
-            ]
-        )
-        == 0
+    exit_code = importer.main(
+        [
+            str(folder),
+            "--name",
+            "opaque",
+            "--directory",
+            str(shelf),
+            "--config",
+            str(config),
+            "--accept-ticket",
+            "ANH-192",
+            "--accept-reason",
+            "controlled setpoint change",
+        ]
     )
+    assert exit_code == 0
     archive = shelf / "opaque.tar.gz"
     replayed = replay_path(archive)
     assert isinstance(replayed, Ok)
@@ -260,18 +318,20 @@ def test_difference_needs_explicit_ticket_and_pins_the_whole_report(
     document = mapping(JSON.validate_json((shelf / "opaque.accepted.json").read_bytes()))
     assert document["ticket"] == "ANH-192"
     assert document["report"] == JSON.validate_json(replayed.value.to_json())
-    assert judge(archive, tmp_path / "judged") is None
+    judged_2 = judge(archive, tmp_path / "judged")
+    assert judged_2 is None
 
 
 @pytest.mark.parametrize("ticket", ["", "wrong", "ANH-x", "ANH-\u0661"])
 def test_acceptance_requires_a_ticket(tmp_path: Path, ticket: str) -> None:
+    import_record_result_2 = import_record(
+        tmp_path / "missing",
+        "opaque",
+        tmp_path / "library",
+        acceptance=Acceptance(ticket, "reason"),
+    )
     assert isinstance(
-        import_record(
-            tmp_path / "missing",
-            "opaque",
-            tmp_path / "library",
-            acceptance=Acceptance(ticket, "reason"),
-        ),
+        import_record_result_2,
         Err,
     )
 
@@ -279,13 +339,12 @@ def test_acceptance_requires_a_ticket(tmp_path: Path, ticket: str) -> None:
 def test_cli_refusal_and_incomplete_acceptance(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert (
-        importer.main(
-            [str(tmp_path / "absent"), "--name", "opaque", "--directory", str(tmp_path / "library")]
-        )
-        == 2
+    exit_code_2 = importer.main(
+        [str(tmp_path / "absent"), "--name", "opaque", "--directory", str(tmp_path / "library")]
     )
-    assert "archive cannot be read" in capsys.readouterr().err
+    assert exit_code_2 == 2
+    captured = capsys.readouterr()
+    assert "archive cannot be read" in captured.err
     with pytest.raises(SystemExit) as caught:
         importer.main([str(tmp_path / "absent"), "--name", "opaque", "--accept-ticket", "ANH-192"])
     assert caught.value.code == 2
@@ -295,13 +354,15 @@ def test_links_cannot_redirect_the_library(tmp_path: Path) -> None:
     library = tmp_path / "library"
     library.mkdir()
     (library / "opaque.tar.gz").symlink_to(tmp_path / "elsewhere")
-    assert isinstance(import_record(tmp_path / "absent", "opaque", library), Err)
+    import_record_result_3 = import_record(tmp_path / "absent", "opaque", library)
+    assert isinstance(import_record_result_3, Err)
 
 
 @pytest.mark.parametrize("suffix", [".config.json", ".accepted.json"])
 def test_sidecar_links_cannot_redirect_the_library(tmp_path: Path, suffix: str) -> None:
     (tmp_path / ("opaque" + suffix)).symlink_to(tmp_path.parent / "elsewhere")
-    assert isinstance(import_record(tmp_path / "absent", "opaque", tmp_path), Err)
+    import_record_result_4 = import_record(tmp_path / "absent", "opaque", tmp_path)
+    assert isinstance(import_record_result_4, Err)
 
 
 def test_destination_io_failure_is_a_refusal_without_a_path_or_exception_text(
@@ -469,7 +530,8 @@ def test_folder_sidecar_and_event_sentinels_are_supported(
         value in content
         for value in ("sentinel_identity", "999 bpm", "2026-10-15", "another_alias")
     )
-    assert judge(result.value.archive, tmp_path / "judged") is None
+    judged_3 = judge(result.value.archive, tmp_path / "judged")
+    assert judged_3 is None
 
 
 def test_publish_cleans_only_its_own_files_on_collision(

@@ -23,9 +23,11 @@ NEUTRAL_UTC: Final[str] = "2000-01-01T00:00:00Z"
 NEUTRAL_MILLIS: Final[int] = 946_684_800_000
 NEUTRAL_FOLDER: Final[str] = "2000-01-01T000000Z"
 _DATES: Final = re.compile(
-    rb"(?<![0-9A-Za-z])(?:[12][0-9]{3}[-/][01][0-9][-/][0-3][0-9]"
-    rb"(?:T[0-9:.]+Z)?|[12][0-9]{3}[01][0-9][0-3][0-9]T[0-9]{6}Z)"
-    rb"|(?<![0-9A-Za-z.])[1-9][0-9]{9}(?:[0-9]{3})?(?![0-9A-Za-z])"
+    rb"(?<![0-9A-Za-z])(?:[12][0-9]{3}[-/.][01][0-9][-/\.][0-3][0-9]"
+    rb"(?:T[0-9:.]+Z)?|[0-3][0-9][/.][01][0-9][/.][12][0-9]{3})"
+    rb"|(?<![0-9A-Za-z])(?:[A-Za-z_]+)?[12][0-9]{3}[01][0-9][0-3][0-9]"
+    rb"(?:T[0-9]{6}Z)?(?![0-9A-Za-z])"
+    rb"|(?<![0-9A-Za-z.])[1-9][0-9]{9}(?:[0-9]{3}|[0-9]{6})?(?![0-9A-Za-z])"
 )
 _RULES: Final = frozenset((*ALL_RULES, *MOTION_RULES, *START_RULES))
 _ACTIONS: Final = frozenset(action.name for action in SafetyAction)
@@ -56,6 +58,7 @@ _COUNTERS: Final = {
 def anonymous_manifest(manifest: Manifest, name: str) -> Manifest:
     identity = library_identity(name)
     profile = manifest.profile
+    observation = manifest.end_observation
     return replace(
         manifest,
         record_id=identity,
@@ -72,6 +75,11 @@ def anonymous_manifest(manifest: Manifest, name: str) -> Manifest:
             manifest.clocks, utc_start=NEUTRAL_UTC, wall_trusted=None, ntp_offset_s=None
         ),
         profile=None if profile is None else replace(profile, resolved_at=NEUTRAL_MILLIS),
+        end_observation=(
+            None
+            if observation is None
+            else replace(observation, stop_reason=None, shutdown_detail=None)
+        ),
     )
 
 
@@ -80,7 +88,9 @@ def machine_detail(event: Event) -> Result[str, str]:  # noqa: PLR0911  # one re
     if event.kind in commands.INPUT_KINDS:
         parsed = commands.parse(text)
         return (
-            Err("an input event is not a replay command") if isinstance(parsed, Err) else Ok(text)
+            Err("an input event is not a replay command")
+            if isinstance(parsed, Err)
+            else Ok(commands.encode(parsed.value))
         )
     head = text.partition(":")[0]
     if event.kind is EventKind.VERDICT:

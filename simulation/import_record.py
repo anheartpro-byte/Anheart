@@ -171,6 +171,14 @@ def _import_folder(  # noqa: PLR0911  # one return per refusal
     if isinstance(replayed, Err):
         return Err("the anonymized record is not replayable")
     report = replayed.value
+    original_report = original_replay.value
+    if (
+        report.outcome != original_report.outcome
+        or report.comparison != original_report.comparison
+        or report.divergence != original_report.divergence
+        or report.recorded_ticks != original_report.recorded_ticks
+    ):
+        return Err("the anonymized replay differs from the source replay")
     files: list[tuple[Path, Path]] = []
     if not report.matches:
         if acceptance is None:

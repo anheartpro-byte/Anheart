@@ -124,7 +124,8 @@ def test_reader_refuses_unknown_or_malformed_failure(tmp_path: Path, payload: ob
         "error": payload,
     }
     (recording.path / "drive_frames.jsonl").write_text(json.dumps(raw) + "\n", encoding="utf-8")
-    assert isinstance(recording.close(ManualClock(), "test"), Ok)
+    closed = recording.close(ManualClock(), "test")
+    assert isinstance(closed, Ok)
     assert isinstance(read(recording.path), Err)
 
 
@@ -145,9 +146,9 @@ def test_success_cannot_claim_a_failure_and_absent_field_stays_absent() -> None:
 
 def test_exhaustive_failure_matches_reject_ill_typed_callers() -> None:
     with pytest.raises(AssertionError):
-        record_failure(cast("DriveError", object()))
+        record_failure(cast(DriveError, object()))
     with pytest.raises(AssertionError):
-        replay_failure(cast("RecordedFailure", object()))
+        replay_failure(cast(RecordedFailure, object()))
 
 
 def test_delivery_header_roundtrip_preserves_both_instants_and_old_bytes() -> None:
@@ -193,7 +194,8 @@ def test_reader_refuses_malformed_or_reversed_delivery(tmp_path: Path, delivery:
     }
     raw = gzip.compress(json.dumps(header).encode() + b"\n\x01\x00")
     (recording.path / "ecg_raw" / "000000.bin.gz").write_bytes(raw)
-    assert isinstance(recording.close(ManualClock(), "test"), Ok)
+    closed_2 = recording.close(ManualClock(), "test")
+    assert isinstance(closed_2, Ok)
     assert isinstance(read(recording.path), Err)
 
 
@@ -205,8 +207,10 @@ def test_delivery_without_acquisition_time_is_valid_and_old_record_is_readable(
         Header(0, 0.0, 1, ("ECG",), runtime_delivery=RuntimeDelivery(t=0.4, t_observed=0.3)),
         ((1,),),
     )
-    assert isinstance(recording.raw(block), Ok)
-    assert isinstance(recording.close(ManualClock(), "test"), Ok)
+    written = recording.raw(block)
+    assert isinstance(written, Ok)
+    closed_3 = recording.close(ManualClock(), "test")
+    assert isinstance(closed_3, Ok)
     loaded = read(recording.path)
     assert isinstance(loaded, Ok)
     assert loaded.value.raw == (block,)

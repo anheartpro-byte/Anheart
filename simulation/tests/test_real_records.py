@@ -8,10 +8,12 @@ anonymous, and replays as the library declares.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
 import tarfile
+import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -63,7 +65,7 @@ from simulation.tests.replay_support import (
 from src.record.codec import JSON, mapping
 from src.record.reader import Recording, read
 from src.record.rows import JsonValue
-from src.record.schema import Manifest
+from src.record.schema import EventKind, Manifest
 from src.result import Err, Ok
 from src.training.types import Phase, SafetyAction
 from src.units import MotorRpm, OutputRpm, Seconds
@@ -103,10 +105,14 @@ def test_the_library_has_manual_sessions_with_raw_ecg(
         if channel == "ECG"
     )
     targets = {
-        event.detail for event in recording.events if event.detail.startswith("manual_target ")
+        event.detail
+        for event in recording.events
+        if event.kind is EventKind.OPERATOR_ACTION and event.detail.startswith("manual_target ")
     }
     assert len(targets) >= (2 if occupancy == "occupied" else 1)
-    assert "stop" in {event.detail for event in recording.events}
+    assert "stop" in {
+        event.detail for event in recording.events if event.kind is EventKind.OPERATOR_ACTION
+    }
 
 
 @pytest.mark.parametrize("archive", LIBRARY, ids=name_of)
@@ -187,7 +193,8 @@ def test_announced_size_above_the_real_limit_is_refused_without_reading_its_payl
         member.size = library.MAX_ARCHIVE_BYTES + 1
         tar.addfile(member)
     into = tmp_path / "out"
-    assert unpack(archive, into) == Err("the archive exceeds MAX_ARCHIVE_BYTES")
+    unpack_result = unpack(archive, into)
+    assert unpack_result == Err("the archive exceeds MAX_ARCHIVE_BYTES")
     assert list(into.iterdir()) == []
 
 
@@ -202,7 +209,102 @@ def test_member_limit_also_counts_repeated_files_and_directories(
             member = tarfile.TarInfo("record" if directory else "record/empty")
             member.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
             tar.addfile(member)
-    assert unpack(archive, tmp_path / "out") == Err("the archive exceeds MAX_ARCHIVE_MEMBERS")
+    unpack_result_2 = unpack(archive, tmp_path / "out")
+    assert unpack_result_2 == Err("the archive exceeds MAX_ARCHIVE_MEMBERS")
+
+
+@pytest.mark.parametrize("size", [-4 * 1024 * 1024, 1])
+def test_a_directory_cannot_reduce_the_byte_budget_or_carry_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size: int,
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 1024 * 1024)
+    directory = tarfile.TarInfo("record/padding")
+    directory.type = tarfile.DIRTYPE
+    directory.size = size
+    manifest = tarfile.TarInfo("record/manifest.json")
+    manifest.size = 4 * 1024 * 1024 + 2
+    archive = tmp_path / "directory-size.tar.gz"
+    archive.write_bytes(
+        gzip.compress(
+            directory.tobuf(format=tarfile.GNU_FORMAT) + manifest.tobuf() + b"x" * manifest.size,
+            mtime=0,
+        )
+    )
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    reason = "negative size" if size < 0 else "non-file member with a nonzero size"
+    assert result == Err("the archive holds a " + ("member with a " if size < 0 else "") + reason)
+    assert list(into.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
+)
+@pytest.mark.parametrize("limit", ["bytes", "members"])
+def test_extension_headers_are_bounded_before_their_payload_is_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: bytes,
+    limit: str,
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 1024 * 1024)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 0 if limit == "members" else 10)
+    header = tarfile.TarInfo("extension")
+    header.type = kind
+    header.size = 32 * 1024 * 1024
+    archive = tmp_path / "extension.tar.gz"
+    archive.write_bytes(gzip.compress(header.tobuf(), mtime=0))
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    bound = "MAX_ARCHIVE_MEMBERS" if limit == "members" else "MAX_ARCHIVE_BYTES"
+    assert result == Err("the archive exceeds " + bound)
+    assert list(into.iterdir()) == []
+
+
+def test_an_extension_header_cannot_have_a_negative_size(tmp_path: Path) -> None:
+    header = tarfile.TarInfo("extension")
+    header.type = tarfile.GNUTYPE_LONGNAME
+    header.size = -1
+    archive = tmp_path / "negative-extension.tar.gz"
+    archive.write_bytes(gzip.compress(header.tobuf(format=tarfile.GNU_FORMAT), mtime=0))
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    assert result == Err("the archive holds a member with a negative size")
+    assert list(into.iterdir()) == []
+
+
+@pytest.mark.parametrize("size", [-1, 1024 * 1024 + 1])
+def test_pax_effective_size_is_checked_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size: int,
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 1024 * 1024)
+    archive = tmp_path / "effective.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        member = tarfile.TarInfo("record/manifest.json")
+        member.pax_headers = {"size": str(size)}
+        tar.addfile(member)
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    expected = (
+        "the archive cannot be read as a .tar.gz of a record folder"
+        if size < 0
+        else "the archive exceeds MAX_ARCHIVE_BYTES"
+    )
+    assert result == Err(expected)
+    assert list(into.iterdir()) == []
+
+
+def test_deflate_errors_are_a_named_archive_refusal(tmp_path: Path) -> None:
+    archive = tmp_path / "deflate.tar.gz"
+    archive.write_bytes(bytes.fromhex("1f8b08000000000002ff07"))
+    with pytest.raises(zlib.error):
+        gzip.decompress(archive.read_bytes())
+    result = unpack(archive, tmp_path / "out")
+    assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
 
 
 def test_ex5_what_is_not_the_archive_of_one_record_is_refused(

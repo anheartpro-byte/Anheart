@@ -1089,9 +1089,8 @@ async def test_local_events_take_no_rank_and_the_cursor_advances_only_after_ack(
     b.disk.current = record.path
     record.tick(2.0)
     for t, detail in ((-1.0, "confirm_estop_wiring"), (0.2, "attendant_ping"), (0.4, "stop")):
-        assert isinstance(
-            record.writer.event(Event(t=t, kind=EventKind.OPERATOR_ACTION, detail=detail)), Ok
-        )
+        written_2 = record.writer.event(Event(t=t, kind=EventKind.OPERATOR_ACTION, detail=detail))
+        assert isinstance(written_2, Ok)
     b.link.answer(EVENTS_PATH, DOWN)
     await b.step()
     assert cursor_of_record(record.path).last_seq == -1
@@ -1101,8 +1100,11 @@ async def test_local_events_take_no_rank_and_the_cursor_advances_only_after_ack(
     assert b.link.ranks() == [0, 0]
     assert cursor_of_record(record.path).last_seq == 0
     assert "cannot be read" not in caplog.text
+    written = record.writer.event(
+        Event(t=2.1, kind=EventKind.OPERATOR_ACTION, detail="attendant_ping")
+    )
     assert isinstance(
-        record.writer.event(Event(t=2.1, kind=EventKind.OPERATOR_ACTION, detail="attendant_ping")),
+        written,
         Ok,
     )
     await b.run(int(TELEMETRY_PERIOD) + 1)

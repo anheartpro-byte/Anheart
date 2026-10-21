@@ -20,7 +20,7 @@ from simulation.import_privacy import (
 )
 from simulation.real_records import ANONYMIZED, UNVERSIONED
 from src.record.reader import Recording
-from src.record.schema import DriveFrame, Event, EventKind
+from src.record.schema import DriveFrame, EndObservation, Event, EventKind
 from src.result import Err, Ok
 from src.units import Seconds
 
@@ -37,6 +37,11 @@ def recording(*events: Event, raw_hex: str | None = None) -> Recording:
     [
         (EventKind.OPERATOR_ACTION, "stop", "stop"),
         (EventKind.REMOTE_COMMAND, "manual_target output_rpm=3.0", "manual_target output_rpm=3.0"),
+        (
+            EventKind.REMOTE_COMMAND,
+            "manual_target output_rpm=03.000",
+            "manual_target output_rpm=3.0",
+        ),
         (
             EventKind.VERDICT_ACK,
             "acknowledge estop_released=true",
@@ -142,6 +147,26 @@ def test_only_identities_dates_and_export_version_change_in_manifest() -> None:
     assert anonymous_manifest(replace(source, profile=None), "opaque_02").profile is None
 
 
+def test_final_observation_loses_only_its_two_free_text_fields() -> None:
+    observation = EndObservation(
+        t=12.4,
+        runtime_state="finished",
+        drive_state="disabled",
+        runtime_output_enabled=False,
+        runtime_applied_rpm=0,
+        lfrd_motor_rpm=0,
+        shaft_motor_rpm=0,
+        energised=False,
+        silent=False,
+        stop_reason="Mme Martin FC 192 bpm",
+        shutdown_detail="port /dev/serial/by-id/FTDI-SECRET",
+    )
+    source = replace(manifest(), end_observation=observation)
+    anon = anonymous_manifest(source, "opaque_01")
+    assert anon.end_observation == replace(observation, stop_reason=None, shutdown_detail=None)
+    assert source.end_observation == observation
+
+
 @pytest.mark.parametrize(
     "content",
     [
@@ -151,6 +176,11 @@ def test_only_identities_dates_and_export_version_change_in_manifest() -> None:
         b"1792077001",
         b"1792077001.5",
         b"1792077001000",
+        b"16/10/2026",
+        b"16.10.2026",
+        b"s20261016",
+        b"20261016",
+        b"1792077001000000",
         b"OP-SECRET",
         b"somebody@example.test",
     ],
@@ -164,6 +194,7 @@ def test_neutral_dates_and_relative_instants_are_not_identifying() -> None:
         f"{NEUTRAL_UTC} {NEUTRAL_FOLDER} {NEUTRAL_MILLIS} -11.8 0.2".encode(), ("op-secret",)
     )
     assert not identifying_content(b"0.4545454545455 -11.8000000001", ())
+    assert not identifying_content(b"a10b28451935c20d20261016e22f", ())
     assert not identifying_content(b"\x00somebody@example.test\xff", (), text=False)
 
 

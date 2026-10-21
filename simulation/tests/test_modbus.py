@@ -63,7 +63,8 @@ def test_inline_executor_preserves_result_exception_and_shutdown() -> None:
     def multiply(number: int, *, factor: int) -> int:
         return number * factor
 
-    assert executor.submit(multiply, 3, factor=4).result() == 12
+    submit_result = executor.submit(multiply, 3, factor=4)
+    assert submit_result.result() == 12
 
     def fail() -> int:
         raise ValueError("scripted")
@@ -73,6 +74,14 @@ def test_inline_executor_preserves_result_exception_and_shutdown() -> None:
     executor.shutdown()
     with pytest.raises(RuntimeError, match="shutdown"):
         executor.submit(fail)
+
+
+def test_inline_executor_propagates_process_control_exceptions() -> None:
+    def interrupt() -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        InlineExecutor().submit(interrupt)
 
 
 def test_the_physical_model_must_not_suspend_inside_a_register_call() -> None:
@@ -98,13 +107,16 @@ async def test_the_real_driver_uses_the_model_for_states_ramps_limits_offset_and
     )
     log = ExchangeLog(clock, transport=False)
     drive.observe_exchanges(log)
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     limits = await drive.read_limits()
     assert isinstance(limits, Ok)
     assert limits.value == SimulatedDriveConfig().limits
     for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
-        assert isinstance(await drive.write_command(word), Ok)
-    assert isinstance(await drive.write_speed(MotorRpm(-138)), Ok)
+        write_command_result_3 = await drive.write_command(word)
+        assert isinstance(write_command_result_3, Ok)
+    write_speed_result = await drive.write_speed(MotorRpm(-138))
+    assert isinstance(write_speed_result, Ok)
     clock.advance(Seconds(0.4))
     status = await drive.read_status()
     assert isinstance(status, Ok)
@@ -112,7 +124,8 @@ async def test_the_real_driver_uses_the_model_for_states_ramps_limits_offset_and
     assert status.value.setpoint_echo_rpm == -138
     assert -138 < status.value.output_rpm < 0
     assert status.value.current > 0
-    assert isinstance(await drive.close(), Ok)
+    closed = await drive.close()
+    assert isinstance(closed, Ok)
     assert model.commanded_setpoint == 0
     assert log.entries[-1].kind is ExchangeKind.CLOSE
     assert log.entries[1].register == registers.eta
@@ -132,16 +145,21 @@ async def test_a_model_fault_is_read_from_lft_and_requires_an_explicit_reset() -
         executor_factory=InlineExecutor,
         wait=master.wait,
     )
-    assert isinstance(await drive.open(), Ok)
+    opened_2 = await drive.open()
+    assert isinstance(opened_2, Ok)
     model.inject_fault(DriveFault.OVERCURRENT)
     status = await drive.read_status()
     assert isinstance(status, Ok)
     assert status.value.fault is DriveFault.OVERCURRENT
     assert status.value.fault_code == 9
-    assert isinstance(await drive.write_command(ControlWord.SHUTDOWN), Ok)
-    assert isinstance(await drive.enable(), Err)
-    assert isinstance(await drive.write_command(ControlWord.FAULT_RESET), Ok)
-    assert isinstance(await drive.close(), Ok)
+    write_command_result = await drive.write_command(ControlWord.SHUTDOWN)
+    assert isinstance(write_command_result, Ok)
+    enable_result = await drive.enable()
+    assert isinstance(enable_result, Err)
+    write_command_result_2 = await drive.write_command(ControlWord.FAULT_RESET)
+    assert isinstance(write_command_result_2, Ok)
+    closed_2 = await drive.close()
+    assert isinstance(closed_2, Ok)
 
 
 async def test_the_slave_reports_bad_addresses_and_a_closed_or_silent_link() -> None:
@@ -156,11 +174,15 @@ async def test_the_slave_reports_bad_addresses_and_a_closed_or_silent_link() -> 
         executor_factory=InlineExecutor,
         wait=master.wait,
     )
-    assert isinstance(await driver.open(), Ok)
-    assert isinstance(await driver.read_register(RegisterAddress(0)), Err)
+    opened_3 = await driver.open()
+    assert isinstance(opened_3, Ok)
+    read_register_result = await driver.read_register(RegisterAddress(0))
+    assert isinstance(read_register_result, Err)
     master.close()
-    assert isinstance(await driver.read_status(), Err)
-    assert master.connect()
+    read_status_result = await driver.read_status()
+    assert isinstance(read_status_result, Err)
+    connect_result = master.connect()
+    assert connect_result
     master.model.inject_comms_loss(Seconds(1))
     result = await driver.read_limits()
     assert isinstance(result, Err)
@@ -201,7 +223,8 @@ async def test_each_native_failure_is_recorded_and_replayed_under_the_real_drive
     )
     log = ExchangeLog(clock)
     drive.observe_exchanges(log)
-    assert isinstance(await drive.open(), Ok)
+    opened_4 = await drive.open()
+    assert isinstance(opened_4, Ok)
     address = registers.eta if kind is ExchangeKind.READ else registers.cmd
     master.failures.append(FailedExchange(kind, error, address, Seconds(0.025)))
     original = (
@@ -243,8 +266,10 @@ def test_step_boundaries_never_borrow_the_next_step_and_leftovers_are_named() ->
     assert master.mismatch.t == Seconds(0)
     assert "register 3201" in master.mismatch.requested
     assert "next modbus_read register 3201" in master.mismatch.recorded
-    assert master.finish_step() is master.mismatch
-    assert master.connect() is False
+    finished = master.finish_step()
+    assert finished is master.mismatch
+    connect_result_2 = master.connect()
+    assert connect_result_2 is False
     master, _ = tape(frame(t=0.1))
     master.begin_step(Seconds(0.2))
     found = master.finish_step()
@@ -252,10 +277,12 @@ def test_step_boundaries_never_borrow_the_next_step_and_leftovers_are_named() ->
     assert found.t == 0.1
     assert "missing" in found.requested
     master, _ = tape(frame())
-    assert master.finish_step() is None
+    finished_2 = master.finish_step()
+    assert finished_2 is None
     master.begin_step(Seconds(0.2))
     master.read_holding_registers(3201)
-    assert master.finish_step() is None
+    finished_3 = master.finish_step()
+    assert finished_3 is None
     master.read_holding_registers(3201)
     assert master.mismatch is not None
     assert master.mismatch.recorded == "no further exchange"
@@ -361,9 +388,11 @@ async def test_port_close_failure_replays_under_the_real_driver() -> None:
     )
     log = ExchangeLog(clock)
     driver.observe_exchanges(log)
-    assert isinstance(await driver.open(), Ok)
+    opened_5 = await driver.open()
+    assert isinstance(opened_5, Ok)
     master.failures.append(FailedExchange(ExchangeKind.CLOSE, SdkException(category=SdkError.OS)))
-    assert isinstance(await driver.close(), Ok)
+    closed_3 = await driver.close()
+    assert isinstance(closed_3, Ok)
     observations = exchange_source(log)().observations
     recorded, replay_clock = tape(*(item.frame(Monotonic(0)) for item in observations))
     replay_driver = ATV320Drive(
@@ -374,8 +403,10 @@ async def test_port_close_failure_replays_under_the_real_driver() -> None:
         executor_factory=InlineExecutor,
         wait=recorded.wait,
     )
-    assert isinstance(await replay_driver.open(), Ok)
-    assert isinstance(await replay_driver.close(), Ok)
+    opened_6 = await replay_driver.open()
+    assert isinstance(opened_6, Ok)
+    closed_4 = await replay_driver.close()
+    assert isinstance(closed_4, Ok)
     assert recorded.pending is None
     assert recorded.mismatch is None
     await recorded.wait(0.2)
@@ -423,7 +454,8 @@ async def test_invalid_requests_and_filtered_failures_reach_the_driver() -> None
     clock = ManualClock()
     registers = RegisterMap()
     master = SimulatedMaster(SimulatedDrive(clock), clock, registers)
-    assert master.connect()
+    connect_result_3 = master.connect()
+    assert connect_result_3
     responses = (
         (master.read_holding_registers(3201, count=2), 3),
         (master.write_register(8501, 999), 3),
@@ -440,11 +472,13 @@ async def test_invalid_requests_and_filtered_failures_reach_the_driver() -> None
         )
         log = ExchangeLog(clock)
         driver.observe_exchanges(log)
-        assert isinstance(await driver.read_register(registers.eta), Err)
+        read_register_result_3 = await driver.read_register(registers.eta)
+        assert isinstance(read_register_result_3, Err)
         assert log.entries[-1].error == ExceptionReply(code=code)
         await driver.close()
     master.failures.append(FailedExchange(ExchangeKind.READ, NoResponse(), 123))
-    assert isinstance(immediate(master.model.write_command(ControlWord.SHUTDOWN)), Ok)
+    immediate_result = immediate(master.model.write_command(ControlWord.SHUTDOWN))
+    assert isinstance(immediate_result, Ok)
     driver = ATV320Drive(
         clock,
         master,
@@ -453,7 +487,8 @@ async def test_invalid_requests_and_filtered_failures_reach_the_driver() -> None
         executor_factory=InlineExecutor,
         wait=master.wait,
     )
-    assert isinstance(await driver.read_register(registers.eta), Ok)
+    read_register_result_2 = await driver.read_register(registers.eta)
+    assert isinstance(read_register_result_2, Ok)
     assert len(master.failures) == 1
     result = await driver.read_register(RegisterAddress(123))
     assert isinstance(result, Err)

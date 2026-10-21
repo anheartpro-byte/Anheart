@@ -49,6 +49,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Final, Literal, cast
 
+from src.record import commands
 from src.record.codec import IDENTIFIER
 from src.record.commands import INPUT_KINDS
 from src.record.cursor import (
@@ -483,7 +484,7 @@ def _event(raw: bytes, seq: int, start_ms: int) -> Wire | _Omitted | None:
         or len(actor) > _ACTOR_MAX
     ):
         return None
-    if t < 0 or (kind in INPUT_KINDS and detail == "attendant_ping"):
+    if t < 0 or (kind in INPUT_KINDS and detail == commands.encode(commands.AttendantPing())):
         return _Omitted.LOCAL
     return {
         "seq": seq,

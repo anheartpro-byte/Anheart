@@ -5,12 +5,16 @@ import errno
 import hashlib
 import stat
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from src.contract import SoftwareVersion
+from src.local_config import DriveLink
 from src.local_panel import RUNTIME_LIMITS
+from src.motor.atv320 import SerialSettings
+from src.motor.drive import RegisterMap
 from src.record import configuration
 from src.record import journal as journal_module
 from src.record.codec import Privacy
@@ -78,30 +82,51 @@ def test_document_hash_stays_identical_and_excludes_secrets_identities_and_healt
     assert len(content) < MAX_CONFIG_BYTES
 
 
+def test_native_document_excludes_the_port_and_keeps_the_structured_settings() -> None:
+    config = config_of(BENCH_ENV)
+    settings = SerialSettings(port="/dev/serial/by-id/FTDI-AdapterSecret", baudrate=19200)
+    link = DriveLink(settings, RegisterMap(offset=1))
+    native = replace(config, drive_link=link)
+    safety = SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
+    content = applied_configuration(native, RUNTIME_LIMITS, safety, DEFAULT_MOTION_LIMITS)
+    other_port = replace(native, drive_link=replace(link, settings=replace(settings, port="COM99")))
+    other = applied_configuration(other_port, RUNTIME_LIMITS, safety, DEFAULT_MOTION_LIMITS)
+    assert content == other
+    assert b'"drive_link":"native"' in content
+    assert b'"native_drive":{"baudrate":19200' in content
+    assert b'"offset":1' in content
+    assert b"AdapterSecret" not in content
+    assert b"/dev/" not in content
+    assert b"COM99" not in content
+    assert settings.port in link.describe()
+
+
 def test_one_private_file_per_hash_is_never_rewritten(tmp_path: Path) -> None:
-    assert persist(tmp_path, DOCUMENT) is None
+    persisted = persist(tmp_path, DOCUMENT)
+    assert persisted is None
     path = _path(tmp_path)
     assert path.read_bytes() == DOCUMENT
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     before = path.stat()
-    assert persist(tmp_path, DOCUMENT) is None
+    persisted_2 = persist(tmp_path, DOCUMENT)
+    assert persisted_2 is None
     assert path.stat().st_ino == before.st_ino
     assert path.stat().st_mtime_ns == before.st_mtime_ns
     assert list(path.parent.iterdir()) == [path]
     path.write_bytes(b"different")
-    assert persist(tmp_path, DOCUMENT) == f"{WARNING_PREFIX} existing_document_differs"
+    persisted_3 = persist(tmp_path, DOCUMENT)
+    assert persisted_3 == f"{WARNING_PREFIX} existing_document_differs"
     assert path.read_bytes() == b"different"
 
 
 def test_document_size_is_bounded_before_any_disk_access(tmp_path: Path) -> None:
     with watch_tree(tmp_path) as touches:
-        assert (
-            persist(tmp_path, b"x" * (MAX_CONFIG_BYTES + 1))
-            == f"{WARNING_PREFIX} document_exceeds_limit"
-        )
+        persisted_7 = persist(tmp_path, b"x" * (MAX_CONFIG_BYTES + 1))
+        assert persisted_7 == f"{WARNING_PREFIX} document_exceeds_limit"
         assert touches.seen == []
-    assert persist(tmp_path, b"x" * MAX_CONFIG_BYTES) is None
+    persisted_4 = persist(tmp_path, b"x" * MAX_CONFIG_BYTES)
+    assert persisted_4 is None
 
 
 @pytest.mark.parametrize("error_number", [errno.ENOSPC, errno.EROFS])
@@ -164,7 +189,8 @@ def test_startup_only_queues_the_document_and_never_writes_from_a_tick(tmp_path:
 async def test_config_is_ignored_by_retention_sync_deposit_export_and_logbook(
     tmp_path: Path,
 ) -> None:
-    assert persist(tmp_path, DOCUMENT) is None
+    persisted_5 = persist(tmp_path, DOCUMENT)
+    assert persisted_5 is None
     directory = tmp_path / DIRECTORY
     decoy = directory / "2026-10-05T101112Z_decoy"
     decoy.mkdir()
@@ -184,13 +210,17 @@ async def test_config_is_ignored_by_retention_sync_deposit_export_and_logbook(
     assert records(tmp_path) == ()
     assert listing(tmp_path) == ()
     assert locate(tmp_path, DIRECTORY) is None
-    assert isinstance(build_archive(tmp_path, DIRECTORY, UnixMillis(0)), Err)
-    assert sweep(tmp_path) == ()
+    build_archive_result = build_archive(tmp_path, DIRECTORY, UnixMillis(0))
+    assert isinstance(build_archive_result, Err)
+    sweep_result = sweep(tmp_path)
+    assert sweep_result == ()
     owed = owed_records(tmp_path)
     assert isinstance(owed, Ok)
     assert owed.value.names == ()
-    assert next_record(tmp_path) == Ok(None)
-    assert purge(tmp_path, UnixMillis(9_000_000_000_000), 1).removed == ()
+    next_record_result = next_record(tmp_path)
+    assert next_record_result == Ok(None)
+    purged = purge(tmp_path, UnixMillis(9_000_000_000_000), 1)
+    assert purged.removed == ()
     clock = clock_at_start()
     server = DepositServer()
     deposit = RecordDeposit(tmp_path, clock, server, server.upload)
@@ -198,19 +228,21 @@ async def test_config_is_ignored_by_retention_sync_deposit_export_and_logbook(
     await deposit.close()
     assert server.calls == 0
     logbook = Logbook(tmp_path)
+    appended = logbook.append(
+        note(
+            wall_clock=clock.unix_millis(),
+            at=clock.monotonic(),
+            kind=EventKind.WARNING,
+            detail="machine_event",
+            actor="system",
+        )
+    )
     assert isinstance(
-        logbook.append(
-            note(
-                wall_clock=clock.unix_millis(),
-                at=clock.monotonic(),
-                kind=EventKind.WARNING,
-                detail="machine_event",
-                actor="system",
-            )
-        ),
+        appended,
         Ok,
     )
-    assert isinstance(logbook.sync(), Ok)
+    synced = logbook.sync()
+    assert isinstance(synced, Ok)
     assert {
         path.relative_to(directory): path.read_bytes()
         for path in directory.rglob("*")
@@ -223,7 +255,8 @@ def test_document_refusals_are_written_in_every_session(tmp_path: Path, conflict
     clock = clock_at_start()
     journal = Journal(tmp_path, clock)
     if conflict:
-        assert persist(tmp_path, DOCUMENT) is None
+        persisted_8 = persist(tmp_path, DOCUMENT)
+        assert persisted_8 is None
         _path(tmp_path).write_bytes(b"different")
         content = DOCUMENT
         reason = "existing_document_differs"
@@ -245,7 +278,8 @@ def test_directory_sync_is_skipped_on_systems_that_cannot_sync_directories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(configuration, "DIRECTORY_SYNC", False)
-    assert persist(tmp_path, DOCUMENT) is None
+    persisted_6 = persist(tmp_path, DOCUMENT)
+    assert persisted_6 is None
     assert _path(tmp_path).read_bytes() == DOCUMENT
 
 
@@ -270,7 +304,8 @@ async def test_a_hung_configuration_write_does_not_delay_a_console_start_or_tick
     async with recorded.rig.http() as client:
         recorded.journal.start()
         try:
-            assert await asyncio.to_thread(entered.wait, 2)
+            to_thread_result = await asyncio.to_thread(entered.wait, 2)
+            assert to_thread_result
             await attest(client)
             response = await client.post(
                 "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
@@ -284,4 +319,5 @@ async def test_a_hung_configuration_write_does_not_delay_a_console_start_or_tick
             assert recorded.journal.status(recorded.clock.monotonic()).pending > 0
         finally:
             release.set()
-            assert recorded.journal.stop()
+            stop_result = recorded.journal.stop()
+            assert stop_result

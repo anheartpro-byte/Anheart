@@ -45,7 +45,8 @@ async def test_an_unattributed_attestation_refusal_changes_no_runtime_state_or_t
     baseline = recorded_rig(tmp_path / "baseline")
     if attested:
         for rig in (observed, baseline):
-            assert isinstance(rig.rig.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+            attest_estop_wiring_result_3 = rig.rig.panel.surface.attest_estop_wiring(OPERATOR)
+            assert isinstance(attest_estop_wiring_result_3, Ok)
     supervisor = observed.rig.panel.runtime.supervisor
     before = supervisor.require_estop_confirmed()
     buffered = observed.recorder.prestart_size
@@ -140,7 +141,8 @@ async def test_a_programme_refused_after_submission_never_arms_without_a_recorde
     assert rig.panel.runtime.state.value == "ending"
     assert not rig.panel.runtime.output_enabled
     await rig.panel.close()
-    assert await rig.left_stopped() == ""
+    stopped = await rig.left_stopped()
+    assert stopped == ""
 
 
 async def test_each_new_presence_ping_is_written_once_at_its_unrounded_observation(
@@ -148,14 +150,16 @@ async def test_each_new_presence_ping_is_written_once_at_its_unrounded_observati
 ) -> None:
     recorded = recorded_rig(tmp_path)
     panel, clock = recorded.rig.panel, recorded.clock
-    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    attest_estop_wiring_result = panel.surface.attest_estop_wiring(OPERATOR)
+    assert isinstance(attest_estop_wiring_result, Ok)
     clock.advance(Seconds(0.2))
     await panel.control_step()
     clock.advance(Seconds(0.0123456))
     before = panel.surface.note_presence(OPERATOR)
-    assert isinstance(
-        panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+    submit_start_manual_result = panel.surface.submit_start_manual(
+        occupancy=Occupancy.BENCH, operator=OPERATOR
     )
+    assert isinstance(submit_start_manual_result, Ok)
     clock.advance(Seconds(0.2))
     await panel.control_step()
     clock.advance(Seconds(0.0234567))
@@ -232,7 +236,8 @@ async def test_idle_window_stays_bounded_for_two_hours_and_expires_old_inputs(
     recorded = recorded_rig(tmp_path)
     recorder, clock = recorded.recorder, recorded.clock
     panel = recorded.rig.panel
-    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    attest_estop_wiring_result_2 = panel.surface.attest_estop_wiring(OPERATOR)
+    assert isinstance(attest_estop_wiring_result_2, Ok)
     steady: set[tuple[int, int]] = set()
     for tick in range(36_000):
         clock.advance(Seconds(0.2))
@@ -248,9 +253,10 @@ async def test_idle_window_stays_bounded_for_two_hours_and_expires_old_inputs(
             steady.add((entries, samples))
     assert len(steady) <= 4
     assert recorded.records() == []
-    assert isinstance(
-        panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+    submit_start_manual_result_2 = panel.surface.submit_start_manual(
+        occupancy=Occupancy.BENCH, operator=OPERATOR
     )
+    assert isinstance(submit_start_manual_result_2, Ok)
     clock.advance(Seconds(0.2))
     await panel.control_step()
     recorded.drain()
@@ -395,9 +401,10 @@ async def test_failed_runtime_start_cuts_the_window_and_preserves_the_refusal(
     async with recorded.rig.http() as http:
         await attest(http)
         await recorded.tick(12)
-        assert isinstance(
-            panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+        submit_start_manual_result_3 = panel.surface.submit_start_manual(
+            occupancy=Occupancy.BENCH, operator=OPERATOR
         )
+        assert isinstance(submit_start_manual_result_3, Ok)
 
         def no_room(_self: Journal) -> Storage:
             return Storage(0, recorded.clock.monotonic())
@@ -566,9 +573,10 @@ async def test_camera_verdicts_and_estops_are_written_as_system_commands(tmp_pat
     recorded.drain()
     async with recorded.rig.http() as http:
         await start_bench(recorded, http)
-        assert isinstance(
-            panel.surface.submit_manual_target(output_rpm=OutputRpm(3), operator=OPERATOR), Ok
+        submit_manual_target_result = panel.surface.submit_manual_target(
+            output_rpm=OutputRpm(3), operator=OPERATOR
         )
+        assert isinstance(submit_manual_target_result, Ok)
         await run(panel, clock, 15)
         recorded.drain()
         camera_of(panel).schedule(Intrusion(start=clock.monotonic(), confidence=Confidence(0.95)))

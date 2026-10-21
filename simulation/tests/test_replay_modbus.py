@@ -61,21 +61,25 @@ async def console_native(root: Path, *, failed: bool = False) -> tuple[Path, Pat
         journal=journal,
         drive=DriveSide(backend=drive, simulator=None, release=master.close),
     )
-    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    attest_estop_wiring_result = panel.surface.attest_estop_wiring(OPERATOR)
+    assert isinstance(attest_estop_wiring_result, Ok)
     await console_ticks(panel, journal, clock, 12)
-    assert isinstance(
-        panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
+    submit_start_manual_result = panel.surface.submit_start_manual(
+        occupancy=Occupancy.BENCH, operator=OPERATOR
     )
+    assert isinstance(submit_start_manual_result, Ok)
     await console_ticks(panel, journal, clock, 1)
-    assert isinstance(
-        panel.surface.submit_manual_target(output_rpm=OutputRpm(3), operator=OPERATOR), Ok
+    submit_manual_target_result = panel.surface.submit_manual_target(
+        output_rpm=OutputRpm(3), operator=OPERATOR
     )
+    assert isinstance(submit_manual_target_result, Ok)
     await console_ticks(panel, journal, clock, 3)
     assert panel.runtime.state is RuntimeState.RUNNING
     if failed:
         master.failures.append(FailedExchange(ExchangeKind.READ, NoResponse(), link.registers.eta))
     await console_ticks(panel, journal, clock, 4)
-    assert isinstance(panel.surface.submit_end(operator=OPERATOR, reason="done"), Ok)
+    submit_end_result = panel.surface.submit_end(operator=OPERATOR, reason="done")
+    assert isinstance(submit_end_result, Ok)
     await console_ticks(panel, journal, clock, 60)
     await panel.close()
     assert model.commanded_setpoint == 0
@@ -92,7 +96,7 @@ async def console_native(root: Path, *, failed: bool = False) -> tuple[Path, Pat
 def native_session(
     tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
 ) -> tuple[Path, Path, bool]:
-    failed = cast("bool", request.param)
+    failed = cast(bool, request.param)
     root = tmp_path_factory.mktemp("native")
     folder, config = asyncio.run(console_native(root, failed=failed))
     return folder, config, failed
@@ -123,8 +127,10 @@ def test_native_console_session_replays_exactly_and_report_bytes_repeat(
     two = replay(folder, config)
     assert isinstance(two, Ok), two
     assert one.value.to_json().encode() == two.value.to_json().encode()
-    assert cli.main(["--replay", str(folder), "--config", str(config), "--json"]) == 0
-    assert capsys.readouterr().out == one.value.to_json()
+    exit_code = cli.main(["--replay", str(folder), "--config", str(config), "--json"])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert captured.out == one.value.to_json()
     with capsys.disabled():
         print(one.value.to_json(), end="")  # noqa: T201  # retained replay evidence
 

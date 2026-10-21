@@ -135,7 +135,8 @@ def test_unknown_limit_fields_are_refused(tmp_path: Path, part: str) -> None:
     limits["unknown"] = 1
     owner[part] = json.dumps(limits)
     document["medical"] = medical
-    assert isinstance(_load(tmp_path, document), Err)
+    _load_result = _load(tmp_path, document)
+    assert isinstance(_load_result, Err)
 
 
 def test_absent_unreadable_large_and_modified_documents_have_named_refusals(tmp_path: Path) -> None:

@@ -689,7 +689,8 @@ def test_local_events_take_no_transmitted_rank_and_are_never_counted_unreadable(
         (1.245, EventKind.VERDICT_ACK, "acknowledge estop_released=false"),
         (2.0, EventKind.VERDICT_ACK, "attendant_ping"),
     ):
-        assert isinstance(made.event(Event(t=t, kind=kind, detail=detail)), Ok)
+        written = made.event(Event(t=t, kind=kind, detail=detail))
+        assert isinstance(written, Ok)
     with (made.path / "events.jsonl").open("ab") as handle:
         handle.write(b"unreadable\n")
     first = read_events(made.path, start_ms=START_MS, offset=0, last_seq=-1, limit=1)

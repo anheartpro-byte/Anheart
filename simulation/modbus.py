@@ -50,7 +50,7 @@ class InlineExecutor(Executor):
         future: Future[T] = Future()
         try:
             future.set_result(fn(*args, **kwargs))
-        except BaseException as error:
+        except Exception as error:
             future.set_exception(error)
         return future
 

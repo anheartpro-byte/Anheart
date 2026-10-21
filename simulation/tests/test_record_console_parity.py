@@ -256,8 +256,10 @@ def test_console_sessions_replay_exactly_with_the_applied_configuration(
         assert any(event.detail == "stop" for event in inputs)
     with capsys.disabled():
         print(report.to_json(), end="")  # noqa: T201  # retained cross-test evidence
-    assert cli.main(["--replay", str(folder), "--config", str(config), "--json"]) == 0
-    assert '"config_hash_verified":true' in capsys.readouterr().out
+    exit_code = cli.main(["--replay", str(folder), "--config", str(config), "--json"])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert '"config_hash_verified":true' in captured.out
     sidecar(folder).write_bytes(config.read_bytes())
     archive = tmp_path / "console.tar.gz"
     pack(folder, archive)
@@ -271,14 +273,16 @@ def test_console_sessions_replay_exactly_with_the_applied_configuration(
         assert isinstance(adjacent, Ok), adjacent
         assert adjacent.value.to_json() == report.to_json()
     sidecar(folder).unlink()
-    assert cli.main(["--replay", str(folder), "--json"]) == 2
+    exit_code_2 = cli.main(["--replay", str(folder), "--json"])
+    assert exit_code_2 == 2
     absent = capsys.readouterr().err
     assert "configuration document is absent" in absent
     with capsys.disabled():
         print(absent, end="")  # noqa: T201  # retained refusal evidence
     changed = tmp_path / "changed.json"
     changed.write_bytes(config.read_bytes() + b" ")
-    assert cli.main(["--replay", str(archive), "--config", str(changed)]) == 2
+    exit_code_3 = cli.main(["--replay", str(archive), "--config", str(changed)])
+    assert exit_code_3 == 2
     refused = capsys.readouterr().err
     assert "configuration hash mismatch" in refused
     assert record.manifest.config_hash[:16] in refused
@@ -301,7 +305,8 @@ def test_console_sessions_replay_exactly_with_the_applied_configuration(
         monkeypatch.undo()
         anonymous = as_real(folder, "console")
         pack(anonymous, archive)
-        assert judge(archive, tmp_path / "judged") is None
+        judged = judge(archive, tmp_path / "judged")
+        assert judged is None
 
 
 type _Shape = tuple[int | tuple[int, ...] | None, int]

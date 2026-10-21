@@ -42,6 +42,7 @@ from typing import Final, cast
 
 import pytest
 
+from src.record import commands
 from src.record.cursor import Cursor, cursor_of, load
 from src.record.journal import Journal
 from src.record.reader import Recording, read
@@ -277,15 +278,33 @@ def every_event_of_the_record_is_on_the_dashboard_once(outcome: Outcome) -> None
     expected = [
         (seq, event)
         for seq, event in enumerate(outcome.recording.events)
-        if event.t >= 0 and event.detail != "attendant_ping"
+        if event.t >= 0
+        and not (
+            event.kind in commands.INPUT_KINDS
+            and event.detail == commands.encode(commands.AttendantPing())
+        )
     ]
     assert [event["seq"] for event in events] == list(range(len(expected)))
     assert [(event["kind"], event["detail"], event["actor"]) for event in events] == [
         (event.kind.value, event.detail, event.actor) for _seq, event in expected
     ]
     kinds = [event["kind"] for event in events]
-    assert any(event.detail.startswith("start_manual ") for _seq, event in expected)
-    assert "phase" in kinds
+    assert [(event["kind"], event["detail"]) for event in events[:3]] == [
+        ("operator_action", "start_manual ceiling_motor_rpm=1380"),
+        ("warning", "replay_preamble: less than 8 s of raw ECG before the origin"),
+        ("phase", "hold"),
+    ]
+    assert kinds == [
+        "operator_action",
+        "warning",
+        "phase",
+        "operator_action",
+        "operator_action",
+        "refusal",
+        "operator_action",
+        "operator_action",
+        "refusal",
+    ]
     assert kinds.count("refusal") == 2, "one refusal before the cut, one after it"
 
 

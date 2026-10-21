@@ -242,7 +242,7 @@ def applied_configuration(
         "motor_backend": config.motor_backend.value,
         "ecg_source": config.ecg_source.value,
         "camera": config.camera.value,
-        "drive_link": None if link is None else link.describe(),
+        "drive_link": None if link is None else "native",
     }
     if link is not None:
         settings = link.settings

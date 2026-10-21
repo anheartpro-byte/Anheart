@@ -698,6 +698,9 @@ de bibliothèque, ou par `anonymized` ; `session_id` et `subject_id` deviennent
 restent. Les détails d'événement ne gardent que les commandes validées et une
 liste fermée de faits machine, sans prose ni nombre physiologique. Les
 préfixes qui font refuser le rejeu ne sont pas cachés par le nettoyage.
+Dans `end_observation`, `stop_reason` et `shutdown_detail` deviennent `null` :
+ces deux textes libres peuvent contenir un nom, une fréquence cardiaque ou
+un port série. Tous les autres champs de cette observation restent identiques.
 
 Toutes les dates de séance deviennent la constante `2000-01-01T00:00:00Z` :
 `started_at`, `ended_at`, `clocks.utc_start`, le préfixe du dossier et
@@ -706,7 +709,7 @@ conserve ses autres valeurs. `clocks.wall_trusted` et `clocks.ntp_offset_s`
 deviennent `null` : l'import ne porte aucun jugement sur l'horloge source.
 `software_version` devient `unversioned`, selon la règle d'export existante.
 Ni les instants relatifs, ni `clocks.monotonic_start`, ni le `config_hash`,
-la géométrie ou les observations finales ne changent. Le document de
+la géométrie ou les autres champs des observations finales ne changent. Le document de
 configuration est vérifié et copié tel quel à côté de l'archive.
 
 Une sentinelle d'identité source, une date absolue reconnue ou une adresse
@@ -718,7 +721,10 @@ contenant gzip doit aussi être neutre, comme celui du writer : date nulle,
 aucun nom, commentaire ou champ supplémentaire, un seul membre gzip. Une
 autre enveloppe est refusée pour conserver tous les octets des blocs acceptés.
 Le writer partagé recalcule l'inventaire et les sommes de contrôle ; les autres
-octets des flux et blocs bruts sont conservés.
+octets des flux hors événements et des blocs bruts sont conservés. Les commandes
+validées sont réécrites par `commands.encode` après `parse`. Le rejeu de la
+copie doit garder le verdict, la comparaison de décisions et la divergence
+éventuelle du rejeu de la source ; sinon l'import refuse l'archivage.
 
 Ce nettoyage ne rend pas les mesures anonymes : tics et ECG brut restent des
 données de santé pseudonymisées. Le versement d'une vraie séance dans la
@@ -783,7 +789,9 @@ Les limites sont les mêmes objets de domaine sérialisés que dans la console.
 Il ne contient ni identité, ni donnée de santé individuelle, ni clé du
 tableau de bord, ni jeton de console. Aucun nom libre de programme n'y entre.
 
-Quand `drive_link` est présent, le document porte aussi `native_drive` :
+`drive_link` vaut `null` sans lien natif, sinon la constante `native`, sans
+port système, chemin by-id ni numéro d'adaptateur. Le document porte alors
+aussi `native_drive` :
 `baudrate`, `bytesize`, `parity`, `stopbits`, `timeout`, `slave_address`,
 `retries`, `offset`. Aucun port ni numéro de série n'y est ajouté. Le rejeu
 reconstruit `SerialSettings` et `RegisterMap` par leurs constructeurs ; il
@@ -791,7 +799,8 @@ ne décode jamais la prose de `drive_link`. Un enregistrement natif sans ces
 réglages structurés est refusé : `native Modbus replay requires native_drive
 in the verified configuration document`. L'empreinte d'une configuration
 simulée sans lien reste identique à celle d'avant cet ajout. Celle d'une
-console native change une fois avec cette version ; aucune console déployée
+console native a changé à l'ajout de `native_drive`, puis change une fois de
+plus avec le retrait du port de `drive_link` ; aucune console déployée
 n'écrivait encore ce document. Un ancien lecteur de configuration refuse
 la clé nouvelle.
 
@@ -991,8 +1000,11 @@ PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m simulation.live --por
 Ouvrir `/?trace=out/<dossier>` ou `/?trace=out/<nom>.tar.gz` pour le schéma 2.
 Pour une archive, le serveur extrait temporairement par la même fonction que
 la bibliothèque : chemins confinés par `resolve_under`, fichiers ordinaires
-seulement, au plus 512 Mio et 40 000 membres (dossiers et doublons compris),
-borne vérifiée avant l'écriture du membre suivant. Il retire ensuite sa copie
+seulement, au plus 512 Mio annoncés et 40 000 membres (dossiers, doublons,
+en-têtes PAX et GNU longs compris). Les tailles négatives et les tailles non
+nulles hors fichiers ordinaires ou métadonnées PAX/GNU sont refusées. La borne
+est vérifiée avant la lecture du contenu PAX/GNU et l'écriture du membre
+suivant ; une erreur de décompression est un refus nommé. Il retire ensuite sa copie
 temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du

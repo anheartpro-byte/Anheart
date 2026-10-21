@@ -260,8 +260,10 @@ async def test_ex3_another_call_than_the_recorded_one_stops_the_tape_and_says_wh
 async def test_a_step_cannot_consume_the_identical_call_of_the_next_step() -> None:
     drive, _ = tape(status(t=0.0), status(t=0.2))
     drive.begin_step(Seconds(0.2))
-    assert isinstance(await drive.read_status(), Ok)
-    assert isinstance(await drive.read_status(), Err)
+    read_status_result = await drive.read_status()
+    assert isinstance(read_status_result, Ok)
+    read_status_result_2 = await drive.read_status()
+    assert isinstance(read_status_result_2, Err)
     mismatch = drive.mismatch
     assert mismatch is not None
     assert mismatch.t == pytest.approx(0.0)
@@ -285,9 +287,11 @@ async def test_a_call_left_in_the_step_is_missing_at_its_own_start() -> None:
 async def test_a_step_keeps_later_calls_after_its_recorded_latency() -> None:
     drive, clock = tape(frame("open", latency_ms=300.0), status(t=0.3))
     drive.begin_step(Seconds(0.4))
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok)
     assert clock.monotonic() == pytest.approx(ORIGIN + 0.3)
-    assert isinstance(await drive.read_status(), Ok)
+    read_status_result_3 = await drive.read_status()
+    assert isinstance(read_status_result_3, Ok)
     drive.finish_step()
     assert drive.mismatch is None
 
