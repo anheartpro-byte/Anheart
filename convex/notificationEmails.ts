@@ -237,8 +237,8 @@ export const send = internalAction({
       });
       return null;
     }
-    let outcome: "sent" | "retry" | "failed" = "retry";
-    let code = "email_network_error";
+    let outcome: "sent" | "retry" | "failed";
+    let code: string;
     let resendId: string | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
