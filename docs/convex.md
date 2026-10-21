@@ -1930,7 +1930,8 @@ structurée ne contient que des identifiants et des codes.
 **Refus de la console (ANH-237).** La console envoie déjà le refus d'un
 lancement par `POST /api/machine/training/end` :
 `{sessionId, failed: true, reason, endedAt?}`, avec la raison
-`refusee par la machine : <détail>` (`record_uplink.py`, `owe_refusal`).
+`refusee par la machine : <détail>`, construite par `cloud_sync.py`
+(`_owe_refusal`) et transportée par `record_uplink.owe_refusal`.
 Ce refus donne une alerte `session_failed` à chaque destinataire, nommant
 la séance, sans détail ni texte de la machine sur l'alerte. La raison reste
 sur la séance et `list` ne la rend qu'à qui peut lire cette séance.
@@ -2080,7 +2081,11 @@ d'ANH-145. Aucun type ni table d'incident n'est créé ici.
 À cette livraison, ajouter un type dans `notificationTypeValidator` et
 `notificationEmailFields` de `convex/schema.ts`, une entrée de
 `NOTIFICATION_TYPES` dans `convex/lib/notifications.ts` avec son `foldsBy`,
-sa `sessionPriority` et `emailByDefault`, et ses deux traductions dans
+sa `sessionPriority` et `emailByDefault`, le choix correspondant dans
+`emailChoicesValidator` (`convex/notifications.ts`), le type dans `TYPES`
+de la page des alertes (`app/[locale]/dashboard/notifications/page.tsx`),
+les libellés français et anglais d'`alertEmail`
+(`convex/lib/notificationEmail.ts`), et ses deux traductions dans
 `messages/fr.json` et `messages/en.json`. Appeler ensuite `scheduleAlert`
 là où l'incident est créé.
 

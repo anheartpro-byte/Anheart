@@ -323,7 +323,8 @@ export async function notifyRecipient(
     )
     .collect();
   const sameSession =
-    event.sessionId !== undefined && NOTIFICATION_TYPES[type].sessionPriority > 0
+    event.sessionId !== undefined &&
+    NOTIFICATION_TYPES[type].sessionPriority > 0
       ? unread.find(
           (row) =>
             row.sessionId === event.sessionId &&

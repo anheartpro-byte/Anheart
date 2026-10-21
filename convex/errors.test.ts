@@ -256,10 +256,10 @@ describe("T04-a: training's error guard", () => {
     "const text = 'import { ConvexError } from \"convex/values\"';",
     'import * as values from "convex/values"; values.v.string()',
     '// new TypeError(message); globalThis.Error(message); throw "phrase"',
-    '/* class Refused extends globalThis.RangeError {} */',
+    "/* class Refused extends globalThis.RangeError {} */",
     '"throw `phrase`; new globalThis.SyntaxError(message)"',
     '"class Refused extends Error {}"',
-    'try { throw refusal(code); } catch (err) { throw err; }',
+    "try { throw refusal(code); } catch (err) { throw err; }",
   ])("allows coded refusals and inert text: %s", (text) => {
     expect(trainingErrorViolations(text)).toEqual([]);
   });

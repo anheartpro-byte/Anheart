@@ -800,7 +800,11 @@ describe("the alerts a caller reads", () => {
       });
       for (const actor of ["manager", "orgAdmin"] as const) {
         expect(await as(w.t, actor).query(api.notifications.list, {})).toEqual([
-          expect.objectContaining({ type: "session_failed", reason, reasonCode }),
+          expect.objectContaining({
+            type: "session_failed",
+            reason,
+            reasonCode,
+          }),
         ]);
       }
 
@@ -829,37 +833,37 @@ describe("the alerts a caller reads", () => {
     (["drive_fault", "safety_verdict"] as const).flatMap((type) =>
       (["active", "completed"] as const).map((status) => ({ type, status })),
     ),
-  )("R1c1-2: omits the reason of a $status session's $type alert", async ({
-    type,
-    status,
-  }) => {
-    const w = await seedWorld(modules);
-    const sessionId = await addSession(w, {
-      machineId: w.machine,
-      userId: w.patient,
-      status,
-      kind: "auto",
-    });
-    await w.t.run((ctx) =>
-      ctx.db.patch(sessionId, {
-        endReason: "programme complete",
-        endCode: "expired_before_start",
-      }),
-    );
-    await w.t.mutation(internal.notifications.deliver, {
-      machineId: w.machine,
-      sessionId,
-      type,
-      count: 1,
-    });
+  )(
+    "R1c1-2: omits the reason of a $status session's $type alert",
+    async ({ type, status }) => {
+      const w = await seedWorld(modules);
+      const sessionId = await addSession(w, {
+        machineId: w.machine,
+        userId: w.patient,
+        status,
+        kind: "auto",
+      });
+      await w.t.run((ctx) =>
+        ctx.db.patch(sessionId, {
+          endReason: "programme complete",
+          endCode: "expired_before_start",
+        }),
+      );
+      await w.t.mutation(internal.notifications.deliver, {
+        machineId: w.machine,
+        sessionId,
+        type,
+        count: 1,
+      });
 
-    for (const actor of ["manager", "orgAdmin"] as const) {
-      const [row] = await as(w.t, actor).query(api.notifications.list, {});
-      expect(row.sessionId).toBe(sessionId);
-      expect(row.reason).toBeUndefined();
-      expect(row.reasonCode).toBeUndefined();
-    }
-  });
+      for (const actor of ["manager", "orgAdmin"] as const) {
+        const [row] = await as(w.t, actor).query(api.notifications.list, {});
+        expect(row.sessionId).toBe(sessionId);
+        expect(row.reason).toBeUndefined();
+        expect(row.reasonCode).toBeUndefined();
+      }
+    },
+  );
 
   it.each(["session_failed", "drive_fault", "safety_verdict"] as const)(
     "R1c1-2: hides session, reason and code when a %s recipient loses session access",
@@ -884,7 +888,9 @@ describe("the alerts a caller reads", () => {
         count: 1,
       });
 
-      await w.t.run((ctx) => ctx.db.patch(sessionId, { organizationId: w.orgB }));
+      await w.t.run((ctx) =>
+        ctx.db.patch(sessionId, { organizationId: w.orgB }),
+      );
 
       for (const actor of ["manager", "orgAdmin"] as const) {
         const [row] = await as(w.t, actor).query(api.notifications.list, {});
@@ -1672,6 +1678,8 @@ describe("session alert grouping (T03)", () => {
     ).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
 // Keeping and deleting alerts
 // ---------------------------------------------------------------------------
 
@@ -1711,7 +1719,9 @@ describe("how long an alert is kept", () => {
       [{ continuation: true }],
     ]);
     expect(
-      jobs.filter((job) => job.name.includes("notificationEmails:abandonPending")),
+      jobs.filter((job) =>
+        job.name.includes("notificationEmails:abandonPending"),
+      ),
     ).toHaveLength(1);
   });
 
