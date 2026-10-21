@@ -1144,7 +1144,7 @@ L'application et l'assemblage autonome sont dans `deploy/simulation-vercel/` :
 |---|---|
 | `app.py` | L'application FastAPI : `/`, `/viewer`, `/api/scenarios`, `/api/catalogue`, `/stream`. |
 | `bitalino.py` | Un substitut du paquet `bitalino` : `src/bitalino_client.py` l'importe au chargement, et le vrai paquet demande une pile Bluetooth. Il refuse toute connexion. |
-| `requirements.txt` | Fichier d'entrée à bornes, sous-ensemble de `raspberry-pi/requirements-base.txt` (sans BioSPPy). `requirements-lock.txt` le fige avec ses dépendances transitives, sous la contrainte de ce fichier de base ; sa commande en tête porte `--exclude-newer 2026-10-07T00:00:00Z`. `build.sh` envoie `dist/requirements.txt` : une ligne `--require-hashes`, puis le contenu exact du verrou. |
+| `requirements.txt` | Fichier d'entrée à bornes, sous-ensemble de `raspberry-pi/requirements-base.txt` (sans BioSPPy). `requirements-lock.txt` le fige avec ses dépendances transitives, sous la contrainte de ce fichier de base ; sa commande en tête porte `--exclude-newer 2026-10-21T00:00:00Z`. `build.sh` envoie `dist/requirements.txt` : une ligne `--require-hashes`, puis le contenu exact du verrou. |
 | `vercel.json` | Durée maximale de la fonction : 300 s. |
 | `build.sh` | Assemble `dist/` : ce dossier, `simulation/` (modules, scénarios, cohorte, géométrie CAO), `raspberry-pi/src` et `raspberry-pi/config`. |
 | `deploy.sh` | `build.sh`, puis `vercel deploy`. |
