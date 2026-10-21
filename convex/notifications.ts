@@ -95,7 +95,7 @@ export const list = query({
         type: row.type,
         machineId: row.machineId,
         machineName: machine?.name ?? "-",
-        machineDeleted: machine?.isDeleted === true,
+        machineDeleted: machine === null || machine.isDeleted === true,
         sessionId: readable ? session._id : undefined,
         detail: row.detail,
         reason:
@@ -291,6 +291,11 @@ export const purge = internalMutation({
   args: {},
   returns: v.object({ deleted: v.number() }),
   handler: async (ctx) => {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notificationEmails.abandonPending,
+      {},
+    );
     const cutoff = Date.now() - NOTIFICATION_RETENTION_MS;
     const old = await ctx.db
       .query("notifications")

@@ -1,7 +1,7 @@
 /**
  * Send alert e-mails through Resend's REST API without storing credentials.
  * `notifyRecipient` schedules the first action after writing a new alert;
- * `finishAttempt` schedules bounded retries for 429, 5xx and network errors.
+ * `finishAttempt` retries 429, concurrent idempotent requests, 5xx and network errors.
  * Other responses are final, including a success without a usable message ID.
  * Each action reads the API key at sending time and never stores or returns it.
  * New attempts stop after 23 hours to stay within Resend's 24-hour idempotency
@@ -15,6 +15,7 @@ import {
   internalQuery,
 } from "./_generated/server";
 import { alertEmail, emailSettings } from "./lib/notificationEmail";
+import { isMachineRecipient } from "./lib/notifications";
 import { notificationTypeValidator } from "./schema";
 
 /** Allow at most five claimed attempts for one alert e-mail. */
@@ -27,6 +28,10 @@ export const EMAIL_RETRY_DELAYS_MS = [
 ] as const;
 /** Abort a request after 30 seconds when the runtime supports a deadline. */
 export const EMAIL_REQUEST_TIMEOUT_MS = 30_000;
+/** Close abandoned attempts after the longest retry delay (2 h) plus a 1 h margin. */
+export const EMAIL_ABANDONED_AFTER_MS = 3 * 60 * 60 * 1_000;
+/** Bound the number of e-mails closed by one cleanup transaction. */
+export const EMAIL_ABANDONED_BATCH_SIZE = 500;
 
 const attemptArgs = {
   notificationId: v.id("notifications"),
@@ -52,12 +57,64 @@ export const pending = internalQuery({
     if (!user || user.clerkDeletedAt !== undefined || user.email.trim() === "")
       return null;
     const machine = await ctx.db.get(row.machineId);
+    if (
+      !machine ||
+      machine.isDeleted === true ||
+      machine.organizationId !== row.organizationId
+    )
+      return null;
+    const organization = await ctx.db.get(row.organizationId);
+    if (!organization || organization.deletedAt !== undefined) return null;
+    if (
+      !(await isMachineRecipient(
+        ctx,
+        machine._id,
+        row.organizationId,
+        user._id,
+      ))
+    )
+      return null;
     return {
       to: user.email.trim(),
       language: user.language,
-      machineName: machine?.name ?? "-",
+      machineName: machine.name,
       type: row.type,
     };
+  },
+});
+
+/** Close stalled pending e-mails from the daily purge without extending alert retention. */
+export const abandonPending = internalMutation({
+  args: {},
+  returns: v.object({ failed: v.number() }),
+  handler: async (ctx) => {
+    const now = Date.now();
+    const stale = await ctx.db
+      .query("notifications")
+      .withIndex("by_email_status_and_updated", (q) =>
+        q
+          .eq("email.status", "pending")
+          .lt("email.updatedAt", now - EMAIL_ABANDONED_AFTER_MS),
+      )
+      .take(EMAIL_ABANDONED_BATCH_SIZE);
+    for (const row of stale) {
+      await ctx.db.patch(row._id, {
+        email: {
+          ...row.email!,
+          status: "failed",
+          updatedAt: now,
+          failureCode: "email_abandoned",
+        },
+      });
+    }
+    if (stale.length === EMAIL_ABANDONED_BATCH_SIZE) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notificationEmails.abandonPending,
+        {},
+      );
+    }
+    return { failed: stale.length };
   },
 });
 
@@ -176,7 +233,7 @@ export const send = internalAction({
         ...args,
         attempt,
         outcome: "failed",
-        code: "email_unavailable",
+        code: settings === null ? "email_unavailable" : "email_recipient_gone",
       });
       return null;
     }
@@ -196,7 +253,10 @@ export const send = internalAction({
         typeof setTimeout === "function"
       ) {
         const controller = new AbortController();
-        timeout = setTimeout(() => controller.abort(), EMAIL_REQUEST_TIMEOUT_MS);
+        timeout = setTimeout(
+          () => controller.abort(),
+          EMAIL_REQUEST_TIMEOUT_MS,
+        );
         signal = controller.signal;
       }
       const response = await fetch("https://api.resend.com/emails", {
@@ -221,6 +281,20 @@ export const send = internalAction({
       code = `email_http_${response.status}`;
       outcome =
         response.status === 429 || response.status >= 500 ? "retry" : "failed";
+      if (response.status === 409) {
+        try {
+          const body: unknown = await response.json();
+          if (typeof body === "object" && body !== null && "name" in body) {
+            if (body.name === "concurrent_idempotent_requests") {
+              outcome = "retry";
+            } else if (body.name === "invalid_idempotent_request") {
+              code = "email_idempotency_conflict";
+            }
+          }
+        } catch {
+          // An unreadable conflict body remains a final email_http_409.
+        }
+      }
       if (response.ok) {
         const body: unknown = await response.json();
         if (

@@ -928,6 +928,7 @@ export default defineSchema({
       "read",
     ])
     .index("by_user", ["userId"])
+    .index("by_email_status_and_updated", ["email.status", "email.updatedAt"])
     .index("by_updated", ["updatedAt"]),
 
   // Each account's choice of alerts sent by e-mail too (ANH-90). A type left

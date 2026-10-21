@@ -37,7 +37,7 @@
  */
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { organizationRoleOf } from "./auth";
 import { emailSettings, type NotificationType } from "./notificationEmail";
 
@@ -157,6 +157,25 @@ export function foldedDetail(
 // Who receives an alert, and writing it
 // ---------------------------------------------------------------------------
 
+/** Recheck the active organisation role and, for a gestionnaire, its machine link. */
+export async function isMachineRecipient(
+  ctx: QueryCtx,
+  machineId: Id<"machines">,
+  organizationId: Id<"organizations">,
+  userId: Id<"users">,
+): Promise<boolean> {
+  const role = await organizationRoleOf(ctx, userId, organizationId);
+  if (role === "admin") return true;
+  if (role !== "gestionnaire") return false;
+  const links = await ctx.db
+    .query("machine_gestionnaires")
+    .withIndex("by_machine_and_gestionnaire", (q) =>
+      q.eq("machineId", machineId).eq("gestionnaireId", userId),
+    )
+    .collect();
+  return links.some((link) => link.organizationId === organizationId);
+}
+
 /**
  * The accounts an alert about this machine goes to: the active admins of its
  * organisation, and the gestionnaires linked to it who are still active
@@ -182,15 +201,12 @@ export async function recipientsOf(
     .withIndex("by_machine", (q) => q.eq("machineId", machine._id))
     .collect();
   for (const link of links) {
-    const role = await organizationRoleOf(
-      ctx,
-      link.gestionnaireId,
-      organizationId,
-    );
-    if (role === "gestionnaire") ids.add(link.gestionnaireId);
+    ids.add(link.gestionnaireId);
   }
   const users: Doc<"users">[] = [];
   for (const id of ids) {
+    if (!(await isMachineRecipient(ctx, machine._id, organizationId, id)))
+      continue;
     const user = await ctx.db.get(id);
     if (user && user.clerkDeletedAt === undefined) users.push(user);
   }

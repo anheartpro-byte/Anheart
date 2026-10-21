@@ -39,7 +39,12 @@ import {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
-  vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => Response.json({ id: "synthetic_email" })));
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockImplementation(async () => Response.json({ id: "synthetic_email" })),
+  );
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -117,9 +122,13 @@ function setEmailVariables() {
 
 async function emailOf(w: World, notificationId: Id<"notifications">) {
   await w.t.finishAllScheduledFunctions(vi.runAllTimers);
-  const call = vi.mocked(fetch).mock.calls.find(([, init]) =>
-    new Headers(init?.headers).get("Idempotency-Key") === `notification:${notificationId}`,
-  );
+  const call = vi
+    .mocked(fetch)
+    .mock.calls.find(
+      ([, init]) =>
+        new Headers(init?.headers).get("Idempotency-Key") ===
+        `notification:${notificationId}`,
+    );
   if (!call) throw new Error("No e-mail sent");
   return JSON.parse(String(call[1]?.body));
 }
@@ -908,9 +917,13 @@ describe("the e-mail of an alert", () => {
     await w.t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
     for (const row of rows) {
-      const call = vi.mocked(fetch).mock.calls.find(([, init]) =>
-        new Headers(init?.headers).get("Idempotency-Key") === `notification:${row._id}`,
-      );
+      const call = vi
+        .mocked(fetch)
+        .mock.calls.find(
+          ([, init]) =>
+            new Headers(init?.headers).get("Idempotency-Key") ===
+            `notification:${row._id}`,
+        );
       const email = JSON.parse(String(call?.[1]?.body));
       const user = await w.t.run((ctx) => ctx.db.get(row.userId));
       expect(email?.to).toEqual([user?.email]);

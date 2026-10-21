@@ -372,9 +372,11 @@ Entre 2 et 3, les deux clés sont valides chez Resend. Une alerte écrite
 pendant le changement reste visible sur le site quoi qu'il arrive à son
 e-mail. Retirer la variable arrête les **nouvelles** mises en file
 ([convex.md](convex.md#envoi-de-mails-anh-90-anh-237)) et les envois déjà
-planifiés : l'action relit l'environnement avant chaque appel REST et ne
-stocke jamais la clé. Les tentatives suivantes utilisent donc la nouvelle
-clé. Sur une clé compromise, sa suppression chez Resend (étape 3) la révoque
+planifiés : ils finissent `failed` (`email_unavailable`) et ne repartent pas
+quand la variable revient. L'action relit l'environnement avant chaque appel
+REST et ne stocke jamais la clé. Les tentatives encore en attente utilisent
+donc la nouvelle clé si la variable est remplacée sans être retirée.
+Sur une clé compromise, sa suppression chez Resend (étape 3) la révoque
 aussi pour tout autre détenteur.
 
 ## 4. Détection dans le dépôt

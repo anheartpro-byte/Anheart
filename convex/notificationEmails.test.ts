@@ -17,6 +17,8 @@ import {
   notifyRecipient,
 } from "./lib/notifications";
 import {
+  EMAIL_ABANDONED_AFTER_MS,
+  EMAIL_ABANDONED_BATCH_SIZE,
   EMAIL_MAX_ATTEMPTS,
   EMAIL_REQUEST_TIMEOUT_MS,
   EMAIL_RETRY_DELAYS_MS,
@@ -572,20 +574,19 @@ describe("bounded email retries (T02-d)", () => {
     ).toBeNull();
   });
 
-  it("uses the flattened fallback name for a machine whose row disappeared", async () => {
+  it("C2-d: marks a missing machine as deleted so the page cannot link to its absent record", async () => {
     const w = await seedLaunchWorld(modules);
     const row = await queue(w);
     await w.t.run((ctx) => ctx.db.delete(w.machine));
     expect(
-      (await as(w.t, "manager").query(api.notifications.list, {}))[0]
-        .machineName,
-    ).toBe("-");
+      (await as(w.t, "manager").query(api.notifications.list, {}))[0],
+    ).toMatchObject({ machineName: "-", machineDeleted: true });
     await drain(w);
-    expect(network).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse(String(network.mock.calls[0][1]?.body)).subject,
-    ).toContain("-");
-    expect((await email(w, row))?.status).toBe("sent");
+    expect(network).not.toHaveBeenCalled();
+    expect(await email(w, row)).toMatchObject({
+      status: "failed",
+      failureCode: "email_recipient_gone",
+    });
   });
 });
 
@@ -631,7 +632,10 @@ describe("deletion, expiry and availability (T02-e, T02-f, T02-g)", () => {
       });
       await drain(w);
       expect(network).not.toHaveBeenCalled();
-      expect((await email(w, row))?.status).toBe("failed");
+      expect(await email(w, row)).toMatchObject({
+        status: "failed",
+        failureCode: "email_recipient_gone",
+      });
     },
   );
 
@@ -653,12 +657,309 @@ describe("deletion, expiry and availability (T02-e, T02-f, T02-g)", () => {
     },
   );
 
-  it("reads the key at sending time and stops when configuration was removed", async () => {
+  it("C2-e: fails queued sends when configuration is removed and never restarts them when restored", async () => {
     const w = await seedLaunchWorld(modules);
     const row = await queue(w);
     vi.stubEnv("RESEND_API_KEY", "");
     await drain(w);
     expect(network).not.toHaveBeenCalled();
     expect((await email(w, row))?.failureCode).toBe("email_unavailable");
+    vi.stubEnv("RESEND_API_KEY", SECRET);
+    await w.t.action(internal.notificationEmails.send, {
+      notificationId: row._id,
+      attempt: 1,
+    });
+    expect(network).not.toHaveBeenCalled();
+    expect(await email(w, row)).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      failureCode: "email_unavailable",
+    });
+  });
+});
+
+describe("send-time access recheck (C2-a)", () => {
+  // The four R1 probe cases now expect no REST call; role and stale data cases extend them.
+  it.each([
+    "unlinked",
+    "membershipInactive",
+    "roleRemoved",
+    "organizationDeleted",
+    "organizationGone",
+    "machineDeleted",
+    "machineMoved",
+    "foreignLink",
+  ] as const)("C2-a: rejects a queued recipient after %s", async (change) => {
+    const w = await seedLaunchWorld(modules);
+    const row = await queue(w);
+    await w.t.run(async (ctx) => {
+      switch (change) {
+        case "unlinked":
+        case "foreignLink": {
+          const links = await ctx.db
+            .query("machine_gestionnaires")
+            .withIndex("by_machine_and_gestionnaire", (q) =>
+              q.eq("machineId", w.machine).eq("gestionnaireId", w.manager),
+            )
+            .collect();
+          for (const link of links) {
+            if (change === "unlinked") await ctx.db.delete(link._id);
+            else await ctx.db.patch(link._id, { organizationId: w.orgB });
+          }
+          break;
+        }
+        case "membershipInactive":
+        case "roleRemoved": {
+          const membership = await ctx.db
+            .query("memberships")
+            .withIndex("by_user_and_organization", (q) =>
+              q.eq("userId", w.manager).eq("organizationId", w.orgA),
+            )
+            .unique();
+          if (!membership) throw new Error("Missing membership");
+          await ctx.db.patch(
+            membership._id,
+            change === "roleRemoved" ? { role: "user" } : { active: false },
+          );
+          break;
+        }
+        case "organizationDeleted":
+          await ctx.db.patch(w.orgA, { deletedAt: NOW });
+          break;
+        case "organizationGone":
+          await ctx.db.delete(w.orgA);
+          break;
+        case "machineDeleted":
+          await ctx.db.patch(w.machine, { isDeleted: true });
+          break;
+        case "machineMoved":
+          await ctx.db.patch(w.machine, { organizationId: w.orgB });
+          break;
+      }
+    });
+    if (change === "unlinked") {
+      expect(
+        await as(w.t, "manager").query(api.notifications.list, {}),
+      ).toEqual([]);
+    }
+    await drain(w);
+    expect(network).not.toHaveBeenCalled();
+    expect(await email(w, row)).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      failureCode: "email_recipient_gone",
+    });
+  });
+
+  it("C2-a: rechecks access again before a retry", async () => {
+    const w = await seedLaunchWorld(modules);
+    const row = await queue(w);
+    network.mockImplementationOnce(
+      async () => new Response(null, { status: 500 }),
+    );
+    await w.t.action(internal.notificationEmails.send, {
+      notificationId: row._id,
+      attempt: 0,
+    });
+    await w.t.run((ctx) => ctx.db.patch(w.orgA, { deletedAt: NOW }));
+    await drain(w);
+    expect(network).toHaveBeenCalledTimes(1);
+    expect(await email(w, row)).toMatchObject({
+      status: "failed",
+      attempts: 2,
+      failureCode: "email_recipient_gone",
+    });
+  });
+});
+
+describe("idempotency conflicts (C2-b)", () => {
+  it("C2-b: retries concurrent_idempotent_requests with the same key and the 429 delay", async () => {
+    const times: number[] = [];
+    network.mockImplementation(async () => {
+      times.push(Date.now());
+      return times.length === 1
+        ? Response.json(
+            { name: "concurrent_idempotent_requests", message: SECRET },
+            { status: 409 },
+          )
+        : Response.json({ id: "email_synthetic" });
+    });
+    const w = await seedLaunchWorld(modules);
+    const row = await queue(w);
+    await drain(w);
+    expect(times).toEqual([NOW, NOW + EMAIL_RETRY_DELAYS_MS[0]]);
+    expect(
+      network.mock.calls.map(([, init]) =>
+        new Headers(init?.headers).get("Idempotency-Key"),
+      ),
+    ).toEqual([`notification:${row._id}`, `notification:${row._id}`]);
+    expect(await email(w, row)).toMatchObject({ status: "sent", attempts: 2 });
+    expect(JSON.stringify(await rows(w))).not.toContain(SECRET);
+  });
+
+  it("C2-b: records invalid_idempotent_request as a final email_idempotency_conflict", async () => {
+    const logs = ["log", "info", "warn", "error", "debug"] as const;
+    const spies = logs.map((method) =>
+      vi.spyOn(console, method).mockImplementation(() => {}),
+    );
+    network.mockImplementation(async () =>
+      Response.json(
+        { name: "invalid_idempotent_request", message: SECRET },
+        { status: 409 },
+      ),
+    );
+    const w = await seedLaunchWorld(modules);
+    const row = await queue(w);
+    await drain(w);
+    expect(network).toHaveBeenCalledTimes(1);
+    expect(await email(w, row)).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      failureCode: "email_idempotency_conflict",
+    });
+    expect(JSON.stringify(await rows(w))).not.toContain(SECRET);
+    expect(JSON.stringify(spies.map((spy) => spy.mock.calls))).not.toContain(
+      SECRET,
+    );
+  });
+
+  it.each([null, "unrecognised", {}, { name: "unknown" }, { name: 409 }])(
+    "C2-b: keeps an unknown 409 body %j final with email_http_409",
+    async (body) => {
+      network.mockImplementation(async () =>
+        Response.json(body, { status: 409 }),
+      );
+      const w = await seedLaunchWorld(modules);
+      const row = await queue(w);
+      await drain(w);
+      expect(network).toHaveBeenCalledTimes(1);
+      expect(await email(w, row)).toMatchObject({
+        status: "failed",
+        failureCode: "email_http_409",
+      });
+    },
+  );
+
+  it("C2-b: keeps an unreadable 409 body final with email_http_409", async () => {
+    network.mockImplementation(
+      async () => new Response("invalid JSON", { status: 409 }),
+    );
+    const w = await seedLaunchWorld(modules);
+    const row = await queue(w);
+    await drain(w);
+    expect(network).toHaveBeenCalledTimes(1);
+    expect(await email(w, row)).toMatchObject({
+      status: "failed",
+      failureCode: "email_http_409",
+    });
+  });
+});
+
+describe("abandoned pending e-mails (C2-c)", () => {
+  it("C2-c: daily purge closes only stale pending e-mails without extending alert retention", async () => {
+    const w = await seedLaunchWorld(modules);
+    const cutoff = NOW - EMAIL_ABANDONED_AFTER_MS;
+    const inserted = await w.t.run(async (ctx) => {
+      const ids = [];
+      for (const email of [
+        { status: "pending", updatedAt: cutoff - 1 },
+        { status: "pending", updatedAt: cutoff },
+        { status: "pending", updatedAt: NOW },
+        { status: "sent", updatedAt: cutoff - 1 },
+        { status: "failed", updatedAt: cutoff - 1 },
+      ] as const) {
+        ids.push(
+          await ctx.db.insert("notifications", {
+            organizationId: w.orgA,
+            userId: w.manager,
+            machineId: w.machine,
+            type: "drive_fault",
+            count: 1,
+            read: false,
+            createdAt: cutoff,
+            updatedAt: cutoff,
+            email: { ...email, attempts: 1, queuedAt: cutoff - 1 },
+          }),
+        );
+      }
+      return ids;
+    });
+    const before = await rows(w);
+    expect(await w.t.mutation(internal.notifications.purge, {})).toEqual({
+      deleted: 0,
+    });
+    await drain(w);
+    const after = await rows(w);
+    expect(after[0]).toEqual({
+      ...before[0],
+      email: {
+        ...before[0].email,
+        status: "failed",
+        updatedAt: NOW,
+        failureCode: "email_abandoned",
+      },
+    });
+    expect(after.slice(1)).toEqual(before.slice(1));
+    expect(after.map((row) => row._id)).toEqual(inserted);
+    expect(after.every((row) => row.updatedAt === cutoff)).toBe(true);
+    expect(EMAIL_ABANDONED_AFTER_MS).toBeGreaterThan(
+      Math.max(...EMAIL_RETRY_DELAYS_MS),
+    );
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it("C2-c: closes at most 500 e-mails per transaction and schedules the remaining batches", async () => {
+    const w = await seedLaunchWorld(modules);
+    const old = NOW - EMAIL_ABANDONED_AFTER_MS - 1;
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < EMAIL_ABANDONED_BATCH_SIZE * 2 + 11; i++) {
+        await ctx.db.insert("notifications", {
+          organizationId: w.orgA,
+          userId: w.manager,
+          machineId: w.machine,
+          type: "drive_fault",
+          count: 1,
+          read: false,
+          createdAt: old,
+          updatedAt: old,
+          email: {
+            status: "pending",
+            attempts: 0,
+            queuedAt: old,
+            updatedAt: old,
+          },
+        });
+      }
+    });
+    expect(
+      await w.t.mutation(internal.notificationEmails.abandonPending, {}),
+    ).toEqual({ failed: 500 });
+    const first = await rows(w);
+    expect(first.filter((row) => row.email?.status === "failed")).toHaveLength(
+      500,
+    );
+    expect(first.filter((row) => row.email?.status === "pending")).toHaveLength(
+      511,
+    );
+    await drain(w);
+    const final = await rows(w);
+    expect(final).toHaveLength(1011);
+    expect(
+      final.every(
+        (row) =>
+          row.email?.status === "failed" &&
+          row.email.failureCode === "email_abandoned",
+      ),
+    ).toBe(true);
+    expect(final.every((row) => row.updatedAt === old)).toBe(true);
+    const scheduled = await w.t.run((ctx) =>
+      ctx.db.system.query("_scheduled_functions").collect(),
+    );
+    expect(scheduled).toHaveLength(2);
+    expect(
+      scheduled.every(
+        (job) => job.name === "notificationEmails:abandonPending",
+      ),
+    ).toBe(true);
   });
 });

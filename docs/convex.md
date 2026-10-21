@@ -2646,8 +2646,13 @@ un journal. Retirer une variable arrête aussi les envois déjà planifiés.
 
 Chaque envoi relit l'alerte et son destinataire juste avant l'appel : aucune
 requête pour une alerte disparue ou déjà `sent`/`failed`, un compte supprimé
-ou marqué `clerkDeletedAt`, ou une adresse vide. Le contenu vient uniquement
-de `alertEmail`, dans la langue du destinataire.
+ou marqué `clerkDeletedAt`, ou une adresse vide. L'organisation doit encore
+exister et ne pas être supprimée ; la machine doit encore exister, ne pas
+être supprimée et appartenir à cette organisation. Le compte doit y être
+admin actif, ou gestionnaire actif avec un lien vers cette machine dans la
+même organisation, selon la règle partagée avec `recipientsOf`. Sinon,
+l'e-mail finit `failed` avec `email_recipient_gone`, sans appel REST.
+Le contenu vient uniquement de `alertEmail`, dans la langue du destinataire.
 
 L'en-tête `Idempotency-Key` vaut `notification:<identifiant de l'alerte>`.
 [Resend conserve ces clés 24 heures](https://resend.com/changelog/idempotency-keys).
@@ -2658,18 +2663,30 @@ cinq tentatives au plus ne commence après cette fenêtre ; chaque requête a
 un délai maximal de 30 s (`EMAIL_REQUEST_TIMEOUT_MS`) si le runtime fournit
 `AbortSignal.timeout` ou `AbortController` avec `setTimeout`, sinon elle part
 sans signal ni délai propre, ces fonctionnalités n'ayant pas été vérifiées
-sur le déploiement. Seuls 429, 5xx et les erreurs réseau sont repris ;
-les autres réponses, dont les autres 4xx, échouent immédiatement. L'état
+sur le déploiement. Les réponses 429, 5xx, les erreurs réseau et les 409 dont
+le champ JSON `name` vaut `concurrent_idempotent_requests` sont repris.
+Une 409 `invalid_idempotent_request` finit avec `email_idempotency_conflict` :
+l'e-mail a peut-être déjà été envoyé. Les autres 409, corps illisible compris,
+finissent avec `email_http_409`. Seul le champ `name` est examiné, sans
+conserver ni journaliser le corps. Les autres réponses, dont les autres 4xx,
+échouent immédiatement. L'état
 `email` de l'alerte garde le nombre de tentatives, les dates, un code d'échec
 final ou l'identifiant Resend après succès. `notifications.purge` le supprime
 avec l'alerte après 90 jours sans changement de l'alerte, et `users.deleteUser`
-le retire avec les alertes des organisations supprimées pour ce compte.
+le retire avec les alertes des organisations retirées pour ce compte.
 
 Une action planifiée s'exécute au plus une fois (documentation du paquet
 Convex 1.46.0 installé, `src/server/scheduler.ts`, lignes 39-40) : si elle ne
 tourne jamais ou s'arrête hors des blocs qui enregistrent son résultat lors
-d'une panne d'infrastructure, l'e-mail reste `pending` jusqu'à la purge de
-l'alerte, sans code d'échec.
+d'une panne d'infrastructure, la purge quotidienne existante planifie
+`notificationEmails.abandonPending`. Cette mutation passe en `failed` avec
+`email_abandoned` les e-mails `pending` sans changement depuis plus de
+`EMAIL_ABANDONED_AFTER_MS` (3 h : le plus long délai de reprise, 2 h, plus
+1 h de marge). Elle traite 500 lignes au plus par transaction, par l'index
+`by_email_status_and_updated`, et planifie la suite si le lot est plein.
+La trace `email_abandoned` est donc écrite au plus tard au passage quotidien
+qui suit la marge. Seul `email.updatedAt` change : la rétention de l'alerte
+reste fondée sur son propre `updatedAt`.
 
 Pour ANH-82 : le composant `resend` n'est plus monté et ses tables n'ont
 jamais reçu d'e-mail, aucune clé n'ayant été posée. Le sort de ses anciennes
