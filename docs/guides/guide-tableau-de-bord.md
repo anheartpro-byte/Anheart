@@ -701,12 +701,13 @@ gestionnaire de la machine. Sinon : « Machine introuvable » et lien
 Visible seulement pour une machine supprimée (donc seulement par un
 administrateur, les autres ne la voient plus). Date de suppression, bouton
 **Restaurer** : fenêtre « Restaurer cette machine? », « Cela réactivera la
-machine et la rendra à nouveau disponible. », puis l'avertissement : les clés
-encore valides (ni révoquées ni expirées) ouvriront de nouveau les routes machine ; révoquer d'abord,
-dans **Clés de la machine**, celles qui ne doivent plus servir. Boutons **Annuler** et
-**Restaurer**. Une machine supprimée ne montre plus ni état en direct, ni
-programmes, ni droits, ni zone de danger. L'admin Anheart garde la carte
-**Clés de la machine** pour révoquer avant de restaurer, sans créer de clé.
+machine et la rendra à nouveau disponible. », puis l'avertissement : les
+clés encore valides (ni révoquées ni expirées) ouvriront de nouveau les
+routes machine ; révoquer d'abord, dans **Clés de la machine**, celles qui
+ne doivent plus servir. Boutons **Annuler** et **Restaurer**. Une machine
+supprimée ne montre plus ni état en direct, ni programmes, ni droits, ni
+zone de danger. L'admin Anheart garde la carte **Clés de la machine** pour
+révoquer avant de restaurer, sans créer de clé.
 
 #### Carte « Configuration »
 
@@ -828,11 +829,11 @@ sa dernière utilisation ne sont connues. **Révoquer** demande
 la même confirmation et coupe cette clé dès la requête suivante. Le message
 « Aucune clé n'est enregistrée pour cette machine. » n'apparaît que sans clé.
 
-Sur une machine supprimée, les clés n'ouvrent rien. L'admin Anheart peut
-les révoquer ici, y compris la clé historique, avant de restaurer ; celles
-encore valides (ni révoquées ni expirées) ouvriront de nouveau les routes à la restauration.
-L'admin d'une organisation cliente n'a pas accès à cette carte sur une
-machine supprimée. Les droits restent les mêmes.
+Sur une machine supprimée, les clés n'ouvrent rien. L'admin Anheart peut les
+révoquer ici, y compris la clé historique, avant de restaurer ; celles
+encore valides (ni révoquées ni expirées) ouvriront de nouveau les routes à
+la restauration. L'admin d'une organisation cliente n'a pas accès à cette
+carte sur une machine supprimée. Les droits restent les mêmes.
 
 #### Registre de la machine
 
@@ -2241,7 +2242,8 @@ Restaurer (administrateur) :
 2. Dans **Clés de la machine**, révoquez d'abord les clés qui ne doivent plus
    servir, y compris la clé historique si elle est présente.
 3. Bandeau **Supprimée** → **Restaurer** : la confirmation rappelle que les
-   clés encore valides (ni révoquées ni expirées) ouvriront de nouveau les routes machine → **Restaurer**.
+   clés encore valides (ni révoquées ni expirées) ouvriront de nouveau les
+   routes machine → **Restaurer**.
 
 **Ce que vous devez voir** : le bandeau disparaît, les cartes reviennent.
 

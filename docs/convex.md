@@ -3256,11 +3256,12 @@ anciens documents ; cela ne leur accorde aucun droit d'authentification.
    Traiter aussi les machines supprimées/désactivées : leur valeur historique
    doit disparaître sans les réactiver ni distribuer leur credential. Depuis
    ANH-165, la migration `moveMachineKeysToTable`
-   ([§8](#migration-des-clés-machine-anh-165)) efface toute valeur historique,
-   machines supprimées et désactivées comprises, sauf si le sélecteur est déjà
-   tenu par une autre machine : les champs sont alors conservés, le conflit est
-   compté dans `selectorConflicts` et doit être examiné à la main (§8). Les
-   valeurs effacées sont comptées dans `legacyDiscarded` sans être exportées.
+   ([§8](#migration-des-clés-machine-anh-165)) efface toute valeur
+   réversible, machines supprimées et désactivées comprises, et la compte
+   dans `legacyDiscarded` sans l'exporter ; elle déplace les vérificateurs
+   dans la table (`keysMoved`), sauf un vérificateur dont le sélecteur est
+   déjà tenu par une autre machine : ses champs sont conservés, le conflit
+   est compté dans `selectorConflicts` et doit être examiné à la main (§8).
 5. En cas d'échec, laisser la synchronisation interrompue ou revenir uniquement
    à une version qui conserve ce schéma et ce vérificateur. Ne jamais restaurer
    la base64 réversible, les anciennes clés ou l'ancien code d'authentification.

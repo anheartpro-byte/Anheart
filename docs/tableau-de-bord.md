@@ -517,9 +517,9 @@ fait la même chose.
 Sur une machine supprimée, seul l'admin Anheart voit cette carte, comme le
 permet déjà la lecture serveur : **Révoquer** reste offert, y compris pour
 la clé historique, mais **Nouvelle clé** disparaît. Ses clés n'ouvrent rien
-tant que la machine est supprimée ; celles encore valides (ni révoquées ni expirées)
-ouvriront de nouveau les routes à la restauration. La confirmation de
-restauration demande de révoquer d'abord ici celles qui ne doivent plus
+tant que la machine est supprimée ; celles encore valides (ni révoquées ni
+expirées) ouvriront de nouveau les routes à la restauration. La confirmation
+de restauration demande de révoquer d'abord ici celles qui ne doivent plus
 servir. Une rotation proposée à la restauration rouvrirait les clés au
 moment même de la restauration, avant tout geste sur elles : la révocation
 sur la machine supprimée permet de les couper avant. Aucun droit ne change.
