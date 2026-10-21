@@ -454,7 +454,7 @@ purge supplémentaire n'est livré ici.
 | Champ | Rôle |
 |---|---|
 | `name`, `location` | Nom, lieu. |
-| `apiKey`, `apiKeySelector` | **Hérités, optionnels (ANH-165).** La clé unique d'une machine écrite avant ANH-165 : vérificateur salé versionné `hmac-sha256:1:<sel hex>:<digest hex>` et sélecteur public de 128 bits. Les clés vivent désormais dans [`machine_api_keys`](#machine_api_keys--les-clés-des-machines-anh-165) ; aucune fonction n'écrit plus ces deux champs. La migration `moveMachineKeysToTable` ([§8](#migration-des-clés-machine-anh-165)) déplace la clé dans la table et vide les deux champs ; tant qu'elle n'a pas tourné, une clé encore ici ouvre les routes machine comme avant (§6). Une valeur réversible d'avant ANH-121 n'ouvre rien ; la migration l'efface sans la déplacer. |
+| `apiKey`, `apiKeySelector` | **Hérités, optionnels (ANH-165).** La clé unique d'une machine écrite avant ANH-165 : vérificateur salé versionné `hmac-sha256:1:<sel hex>:<digest hex>` et sélecteur public de 128 bits. Les clés vivent désormais dans [`machine_api_keys`](#machine_api_keys--les-clés-des-machines-anh-165) ; aucune fonction n'écrit plus ces deux champs. La migration `moveMachineKeysToTable` ([§8](#migration-des-clés-machine-anh-165)) déplace la clé dans la table et vide les deux champs, sauf si le sélecteur est déjà tenu par une autre machine : les champs sont alors conservés, le conflit est compté dans `selectorConflicts` et doit être examiné à la main (§8) ; tant qu'elle n'a pas tourné, une clé encore ici ouvre les routes machine comme avant (§6). Une valeur réversible d'avant ANH-121 n'ouvre rien ; la migration l'efface sans la déplacer. |
 | `authenticationEnabled` | `false` refuse l'authentification ; absent ou `true` l'autorise sous réserve d'une clé valide et d'une machine non supprimée. Distinct de `status` et de `programsEnabled`. Aucun nouveau contrôle public/UI de ce champ. |
 | `status` | `"online"` \| `"offline"` \| `"in_session"`. |
 | `lastHeartbeat` | ms Unix du dernier heartbeat. |
@@ -509,7 +509,7 @@ dans la réponse de l'appel qui l'a créée.
 | `keyHash` | `hmac-sha256:1:<sel>:<digest>` de la clé entière, vérifié par `crypto.subtle.verify` (§6). |
 | `prefix` | Ce que la fiche de la machine montre : `anh1.` suivi des 8 premiers caractères du sélecteur (par exemple `anh1.3f9c01ab`). |
 | `createdAt`, `createdBy` | Création et son auteur. Pas d'auteur pour une clé créée en ligne de commande (`createKeyByOperator`) ou déplacée par la migration ; pour cette dernière, `createdAt` est la date du déplacement, celle de l'émission n'étant pas connue. |
-| `expiresAt` | Optionnel. À cet instant ou peu après (§6), la clé n'ouvre plus rien, que la tâche l'ait révoquée ou non. Posé à la création (d'une heure à dix ans plus tard, compté sur l'horloge du serveur), ou par la rotation qui remplace la clé (fin du chevauchement). |
+| `expiresAt` | Optionnel. Dès cet instant (§6), la clé n'ouvre plus rien, que la tâche l'ait révoquée ou non. Posé à la création (d'une heure à dix ans plus tard, compté sur l'horloge du serveur), ou par la rotation qui remplace la clé (fin du chevauchement). |
 | `revokedAt`, `revokedBy` | La clé n'ouvre plus rien : révoquée par quelqu'un (`revokedBy`), par une rotation sans chevauchement (`revokedBy` est alors l'auteur de la rotation), ou par la tâche `revoke-expired-machine-keys` une fois son expiration passée (sans `revokedBy`). |
 | `replacedBy` | La clé créée par la rotation qui a retiré celle-ci. |
 | `lastUsedAt` | Dernière requête que la clé a ouverte, écrite **au plus une fois par minute** (§6). |
@@ -3257,8 +3257,10 @@ anciens documents ; cela ne leur accorde aucun droit d'authentification.
    doit disparaître sans les réactiver ni distribuer leur credential. Depuis
    ANH-165, la migration `moveMachineKeysToTable`
    ([§8](#migration-des-clés-machine-anh-165)) efface toute valeur historique,
-   machines supprimées et désactivées comprises, et compte les valeurs effacées
-   (`legacyDiscarded`) sans les exporter.
+   machines supprimées et désactivées comprises, sauf si le sélecteur est déjà
+   tenu par une autre machine : les champs sont alors conservés, le conflit est
+   compté dans `selectorConflicts` et doit être examiné à la main (§8). Les
+   valeurs effacées sont comptées dans `legacyDiscarded` sans être exportées.
 5. En cas d'échec, laisser la synchronisation interrompue ou revenir uniquement
    à une version qui conserve ce schéma et ce vérificateur. Ne jamais restaurer
    la base64 réversible, les anciennes clés ou l'ancien code d'authentification.
