@@ -309,7 +309,7 @@ les paquets npm du site et de Convex, depuis `package-lock.json`, les paquets
 Python de l'image du Pi, depuis ses deux verrous, et ceux de la simulation
 hébergée, depuis `deploy/simulation-vercel/requirements-lock.txt`
 (`simulation-requirements-lock.cdx.json`). Ce verrou porte la commande de
-régénération et la date commune `--exclude-newer 2026-10-07T00:00:00Z` ;
+régénération et la date commune `--exclude-newer 2026-10-21T00:00:00Z` ;
 `simulation-gate` installe le fichier livré avec `--require-hashes` et sert
 une requête HTTP, sans preuve de la construction sur Vercel
 ([framework-de-test.md](framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153)).

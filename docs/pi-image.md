@@ -216,7 +216,7 @@ sont figés. `deploy/simulation-vercel/requirements-lock.txt` fige la simulation
 hébergée ; `build.sh` l'envoie dans `dist/requirements.txt`, précédé de
 `--require-hashes`, et `simulation-gate` l'installe avec cette option puis sert
 une requête HTTP. La construction sur Vercel n'est pas constatée. Les cinq
-verrous partagent la date `--exclude-newer 2026-10-07T00:00:00Z` ; des tests
+verrous partagent la date `--exclude-newer 2026-10-21T00:00:00Z` ; des tests
 comparent leurs versions communes. Les commandes de régénération sont en tête
 de chaque verrou. L'installation depuis les verrous sur un poste et la limite
 des anciens guides sont décrites dans

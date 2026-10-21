@@ -1272,19 +1272,25 @@ dans un workflow ou une page de la documentation.
 tête. Depuis `raspberry-pi/`, pour les quatre verrous du Pi et des tests :
 
 ```sh
-uv pip compile requirements-prod.txt --python-version 3.12 --python-platform aarch64-unknown-linux-gnu --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
-uv pip compile requirements-build.txt --python-version 3.12 --python-platform aarch64-unknown-linux-gnu --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-build-lock.txt
-uv pip compile requirements-dev.txt --universal --python-version 3.12 --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-dev-lock.txt
-uv pip compile requirements-dev-nodeps.txt --no-deps --universal --python-version 3.12 --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-dev-nodeps-lock.txt
+uv pip compile requirements-prod.txt --python-version 3.12 --python-platform aarch64-unknown-linux-gnu --exclude-newer 2026-10-21T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
+uv pip compile requirements-build.txt --python-version 3.12 --python-platform aarch64-unknown-linux-gnu --exclude-newer 2026-10-21T00:00:00Z --generate-hashes --no-annotate --output-file requirements-build-lock.txt
+uv pip compile requirements-dev.txt --universal --python-version 3.12 --exclude-newer 2026-10-21T00:00:00Z --generate-hashes --no-annotate --output-file requirements-dev-lock.txt
+uv pip compile requirements-dev-nodeps.txt --no-deps --universal --python-version 3.12 --exclude-newer 2026-10-21T00:00:00Z --generate-hashes --no-annotate --output-file requirements-dev-nodeps-lock.txt
 ```
 
 Depuis `deploy/simulation-vercel/`, pour la simulation hébergée :
 
 ```sh
-uv pip compile requirements.txt -c ../../raspberry-pi/requirements-base.txt --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --exclude-newer 2026-10-07T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
+uv pip compile requirements.txt -c ../../raspberry-pi/requirements-base.txt --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --exclude-newer 2026-10-21T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
 ```
 
-La date commune `--exclude-newer 2026-10-07T00:00:00Z` et, pour la simulation
+La date commune `--exclude-newer 2026-10-21T00:00:00Z` a été avancée au
+21 octobre 2026 (ANH-248) pour prendre `certifi` 2026.10.19 et `pillow`
+13.0.0, qui corrigent des avis publiés après le 7 octobre. Seuls ces deux
+paquets ont été mis à jour avec `--upgrade-package` ; les autres versions
+et empreintes sont restées celles du 7 octobre.
+
+La date commune et, pour la simulation
 hébergée, la contrainte de `requirements-base.txt` gardent les paquets partagés
 à la même version que dans l'image du Pi : c'est ce que les tests exercent.
 `raspberry-pi/tests/test_pi_install.py` compare les versions communes aux
