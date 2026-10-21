@@ -1000,11 +1000,16 @@ PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m simulation.live --por
 Ouvrir `/?trace=out/<dossier>` ou `/?trace=out/<nom>.tar.gz` pour le schéma 2.
 Pour une archive, le serveur extrait temporairement par la même fonction que
 la bibliothèque : chemins confinés par `resolve_under`, fichiers ordinaires
-seulement, au plus 512 Mio annoncés et 40 000 membres (dossiers, doublons,
-en-têtes PAX et GNU longs compris). Les tailles négatives et les tailles non
-nulles hors fichiers ordinaires ou métadonnées PAX/GNU sont refusées. La borne
-est vérifiée avant la lecture du contenu PAX/GNU et l'écriture du membre
-suivant ; une erreur de décompression est un refus nommé. Il retire ensuite sa copie
+seulement, au plus 512 Mio de tailles effectives et 40 000 membres (dossiers
+et doublons compris), vérifiés avant l'écriture du membre suivant. Un second
+compteur borne les octets réellement lus du flux décompressé à 512 Mio plus
+40 930 240 octets (`MAX_ARCHIVE_HEADER_BYTES` : un en-tête de 512 octets et
+au plus 511 octets de padding par membre, plus un bloc tar de 10 240 octets).
+Les extensions PAX et GNU longues, invisibles dans l'itérateur public,
+partagent ce plafond d'octets, sans compter comme membres. Aucune surcharge
+de `TarInfo` ou `TarFile` ne porte ces bornes. Les tailles négatives, tailles
+non nulles hors fichiers ordinaires, en-têtes invalides et erreurs de
+décompression donnent un refus nommé. Il retire ensuite sa copie
 temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du

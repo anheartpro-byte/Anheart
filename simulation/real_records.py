@@ -36,9 +36,8 @@ import zlib
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from tarfile import HeaderError
 from tempfile import TemporaryDirectory
-from typing import Final, Self, cast, override
+from typing import Final, override
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
@@ -59,9 +58,17 @@ REAL_DIR: Final[Path] = SCENARIO_DIR / "real"
 ARCHIVE_SUFFIX: Final[str] = ".tar.gz"
 ACCEPTED_SUFFIX: Final[str] = ".accepted.json"
 MAX_ARCHIVE_BYTES: Final[int] = 512 * 1024 * 1024
-"""At most 512 MiB announced, including PAX and GNU long-name payloads."""
+"""At most 512 MiB of effective file sizes, also bounding decompressed reads below."""
 MAX_ARCHIVE_MEMBERS: Final[int] = 40_000
 """Files and directories together, including repeated names."""
+MAX_ARCHIVE_HEADER_BYTES: Final[int] = (
+    MAX_ARCHIVE_MEMBERS * (2 * tarfile.BLOCKSIZE - 1) + tarfile.RECORDSIZE
+)
+"""One 512-byte header and up to 511 padding bytes per member, plus a tar record.
+
+Extension headers and their payloads share the decompressed byte budget;
+they are hidden by tarfile's public member iterator, so are not counted as members.
+"""
 
 SIMULATION_MACHINE: Final[str] = "simulation"
 """``machine_id`` of a record the simulation made (``simulation.session_record``)."""
@@ -156,11 +163,48 @@ class _ArchiveError(ValueError):
     pass
 
 
+class BoundedArchive(gzip.GzipFile):
+    """Count decompressed bytes before tarfile can collect an extension payload."""
+
+    def __init__(self, archive: Path) -> None:
+        super().__init__(filename=archive, mode="rb")
+        # Mutable, owned by this extraction alone.
+        self._read_bytes: int = 0
+        self.last_read: bytes = b""
+
+    @override
+    def read(self, size: int | None = -1) -> bytes:
+        remaining = MAX_ARCHIVE_BYTES + MAX_ARCHIVE_HEADER_BYTES - self._read_bytes
+        requested = remaining + 1 if size is None or size < 0 else min(size, remaining + 1)
+        content = super().read(requested)
+        self.last_read = content
+        self._read_bytes += len(content)
+        if self._read_bytes > MAX_ARCHIVE_BYTES + MAX_ARCHIVE_HEADER_BYTES:
+            raise _ArchiveError("the archive exceeds MAX_ARCHIVE_BYTES")
+        return content
+
+
 def _check_size(member: tarfile.TarInfo) -> None:
     if member.size < 0:
         raise _ArchiveError("the archive holds a member with a negative size")
     if not member.isreg() and member.size != 0:
         raise _ArchiveError("the archive holds a non-file member with a nonzero size")
+
+
+def _unpack_members(tar: tarfile.TarFile, content: BoundedArchive, into: Path) -> None:
+    total = 0
+    for count, member in enumerate(tar, start=1):
+        if count > MAX_ARCHIVE_MEMBERS:
+            raise _ArchiveError("the archive exceeds MAX_ARCHIVE_MEMBERS")
+        _check_size(member)
+        total += member.size
+        if total > MAX_ARCHIVE_BYTES:
+            raise _ArchiveError("the archive exceeds MAX_ARCHIVE_BYTES")
+        refused = _place(tar, member, into)
+        if refused is not None:
+            raise _ArchiveError(refused)
+    if content.last_read.strip(b"\0"):
+        raise _ArchiveError("the archive cannot be read as a .tar.gz of a record folder")
 
 
 def unpack(archive: Path, into: Path) -> Result[Path, str]:
@@ -170,62 +214,15 @@ def unpack(archive: Path, into: Path) -> Result[Path, str]:
     outside ``into``, and the first member that is not a plain file or folder
     inside it ends the extraction.
     """
-    # TarFile hides extension headers from iteration. Check each raw header
-    # before its PAX/GNU payload is allocated, then check the effective member.
-    total = 0
-    count = 0
-
-    class BoundedInfo(tarfile.TarInfo):
-        announced_size: int = 0
-
-        @classmethod
-        @override
-        def fromtarfile(cls, tarfile: tarfile.TarFile) -> Self:
-            try:
-                return super().fromtarfile(tarfile)
-            except HeaderError as error:
-                if type(error).__name__ == "InvalidHeaderError":
-                    raise _ArchiveError(
-                        "the archive cannot be read as a .tar.gz of a record folder"
-                    ) from error
-                raise
-
-        @classmethod
-        @override
-        def frombuf(cls, buf: bytes | bytearray, encoding: str, errors: str) -> Self:
-            nonlocal total, count
-            member = super().frombuf(buf, encoding, errors)
-            count += 1
-            if count > MAX_ARCHIVE_MEMBERS:
-                raise _ArchiveError("the archive exceeds MAX_ARCHIVE_MEMBERS")
-            if member.type not in {
-                tarfile.XHDTYPE,
-                tarfile.XGLTYPE,
-                tarfile.SOLARIS_XHDTYPE,
-                tarfile.GNUTYPE_LONGNAME,
-                tarfile.GNUTYPE_LONGLINK,
-            }:
-                _check_size(member)
-            elif member.size < 0:
-                raise _ArchiveError("the archive holds a member with a negative size")
-            total += member.size
-            if total > MAX_ARCHIVE_BYTES:
-                raise _ArchiveError("the archive exceeds MAX_ARCHIVE_BYTES")
-            member.announced_size = member.size
-            return member
-
     try:
         into.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(archive, mode="r:gz", tarinfo=BoundedInfo) as tar:
-            for member in tar:
-                _check_size(member)
-                bounded = cast(BoundedInfo, member)
-                total += member.size - bounded.announced_size
-                if total > MAX_ARCHIVE_BYTES:
-                    return Err("the archive exceeds MAX_ARCHIVE_BYTES")
-                refused = _place(tar, member, into)
-                if refused is not None:
-                    return Err(refused)
+        # A block-sized stream leaves the terminating header visible: tarfile
+        # may silently stop on an invalid header instead of a zero block.
+        with (
+            BoundedArchive(archive) as content,
+            tarfile.open(fileobj=content, mode="r|", bufsize=tarfile.BLOCKSIZE) as tar,
+        ):
+            _unpack_members(tar, content, into)
     except _ArchiveError as error:
         return Err(str(error))
     except (OSError, EOFError, tarfile.TarError, zlib.error):

@@ -4167,11 +4167,18 @@ ou un membre qu'un lien déjà présent ferait écrire ailleurs, arrête
 l'extraction : la gate échoue sur cette archive et dit pourquoi.
 `MAX_ARCHIVE_BYTES` borne à 512 Mio la somme des tailles annoncées des membres
 et `MAX_ARCHIVE_MEMBERS` à 40 000 leur nombre, dossiers et doublons compris.
-Les en-têtes PAX et GNU longs comptent aussi dans ces deux plafonds, avant
-la lecture de leurs métadonnées. Toute taille négative ou taille non nulle
-sur un membre hors fichier ordinaire ou métadonnées PAX/GNU est refusée,
-de même qu'une erreur de décompression, avec une raison nommée.
-Chaque borne est vérifiée avant d'écrire le membre suivant. L'import, le rejeu,
+Le flux décompressé compte aussi les octets réellement lus, métadonnées PAX
+et GNU longues comprises, avec une marge `MAX_ARCHIVE_HEADER_BYTES` de
+40 930 240 octets : 40 000 fois un en-tête de 512 octets et au plus 511 octets
+de padding, plus un bloc terminal tar de 10 240 octets. Les extensions,
+masquées par l'itérateur public de `tarfile`, ne prennent pas de rang de
+membre ; elles partagent ce plafond d'octets avec le contenu, les en-têtes
+et le padding. Le flux refuse avant de remettre des octets au-delà de
+512 Mio plus cette marge, quelle que soit la version de `tarfile`.
+Une taille négative, une taille non nulle hors fichier ordinaire, un en-tête
+invalide ou une erreur de décompression donne un refus nommé.
+Le compte des membres et leurs tailles effectives sont vérifiés avant
+d'écrire le membre suivant. L'import, le rejeu,
 le jugement de bibliothèque et le visualiseur utilisent cette même extraction.
 
 Contenu au 7 octobre 2026, trois scénarios de la batterie exportés par

@@ -193,8 +193,8 @@ def test_announced_size_above_the_real_limit_is_refused_without_reading_its_payl
         member.size = library.MAX_ARCHIVE_BYTES + 1
         tar.addfile(member)
     into = tmp_path / "out"
-    unpack_result = unpack(archive, into)
-    assert unpack_result == Err("the archive exceeds MAX_ARCHIVE_BYTES")
+    oversized = unpack(archive, into)
+    assert oversized == Err("the archive exceeds MAX_ARCHIVE_BYTES")
     assert list(into.iterdir()) == []
 
 
@@ -209,8 +209,8 @@ def test_member_limit_also_counts_repeated_files_and_directories(
             member = tarfile.TarInfo("record" if directory else "record/empty")
             member.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
             tar.addfile(member)
-    unpack_result_2 = unpack(archive, tmp_path / "out")
-    assert unpack_result_2 == Err("the archive exceeds MAX_ARCHIVE_MEMBERS")
+    repeated = unpack(archive, tmp_path / "out")
+    assert repeated == Err("the archive exceeds MAX_ARCHIVE_MEMBERS")
 
 
 @pytest.mark.parametrize("size", [-4 * 1024 * 1024, 1])
@@ -242,37 +242,69 @@ def test_a_directory_cannot_reduce_the_byte_budget_or_carry_content(
 @pytest.mark.parametrize(
     "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
 )
-@pytest.mark.parametrize("limit", ["bytes", "members"])
-def test_extension_headers_are_bounded_before_their_payload_is_read(
+@pytest.mark.parametrize("payload_bytes", [1, 1024])
+def test_extension_payloads_cannot_read_past_the_decompressed_byte_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     kind: bytes,
-    limit: str,
+    payload_bytes: int,
 ) -> None:
-    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 1024 * 1024)
-    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 0 if limit == "members" else 10)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", payload_bytes)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_HEADER_BYTES", tarfile.RECORDSIZE)
     header = tarfile.TarInfo("extension")
     header.type = kind
     header.size = 32 * 1024 * 1024
     archive = tmp_path / "extension.tar.gz"
-    archive.write_bytes(gzip.compress(header.tobuf(), mtime=0))
+    archive.write_bytes(
+        gzip.compress(header.tobuf() + b"x" * (payload_bytes + tarfile.RECORDSIZE), mtime=0)
+    )
     into = tmp_path / "out"
     result = unpack(archive, into)
-    bound = "MAX_ARCHIVE_MEMBERS" if limit == "members" else "MAX_ARCHIVE_BYTES"
-    assert result == Err("the archive exceeds " + bound)
+    assert result == Err("the archive exceeds MAX_ARCHIVE_BYTES")
     assert list(into.iterdir()) == []
 
 
-def test_an_extension_header_cannot_have_a_negative_size(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
+)
+@pytest.mark.parametrize("after_manifest", [False, True])
+def test_an_extension_header_cannot_have_a_negative_size(
+    tmp_path: Path, kind: bytes, after_manifest: bool
+) -> None:
     header = tarfile.TarInfo("extension")
-    header.type = tarfile.GNUTYPE_LONGNAME
+    header.type = kind
     header.size = -1
+    prefix = tarfile.TarInfo("record/manifest.json").tobuf() if after_manifest else b""
     archive = tmp_path / "negative-extension.tar.gz"
-    archive.write_bytes(gzip.compress(header.tobuf(format=tarfile.GNU_FORMAT), mtime=0))
+    archive.write_bytes(gzip.compress(prefix + header.tobuf(format=tarfile.GNU_FORMAT), mtime=0))
     into = tmp_path / "out"
     result = unpack(archive, into)
-    assert result == Err("the archive holds a member with a negative size")
-    assert list(into.iterdir()) == []
+    assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
+    files = [path.relative_to(into).as_posix() for path in into.rglob("*") if path.is_file()]
+    assert files == (["record/manifest.json"] if after_manifest else [])
+
+
+@pytest.mark.parametrize("limit", ["members", "bytes"])
+def test_archive_limits_do_not_depend_on_the_tarinfo_header_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    archive = tmp_path / "public-reader.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for index in range(3):
+            member = tarfile.TarInfo(f"record/{index}")
+            member.size = 1
+            tar.addfile(member, io.BytesIO(b"x"))
+    original = tarfile.TarInfo.fromtarfile
+
+    def plain_header(_cls: type[tarfile.TarInfo], tar: tarfile.TarFile) -> tarfile.TarInfo:
+        return original(tar)
+
+    monkeypatch.setattr(tarfile.TarInfo, "fromtarfile", classmethod(plain_header))
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 2 if limit == "members" else 10)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 2 if limit == "bytes" else 10)
+    result = unpack(archive, tmp_path / "out")
+    assert result == Err("the archive exceeds MAX_ARCHIVE_" + limit.upper())
+    assert not (tmp_path / "out" / "record" / "2").exists()
 
 
 @pytest.mark.parametrize("size", [-1, 1024 * 1024 + 1])
@@ -305,6 +337,31 @@ def test_deflate_errors_are_a_named_archive_refusal(tmp_path: Path) -> None:
         gzip.decompress(archive.read_bytes())
     result = unpack(archive, tmp_path / "out")
     assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
+
+
+def test_an_invalid_header_after_a_record_does_not_silently_end_the_archive(
+    tmp_path: Path,
+) -> None:
+    manifest = tarfile.TarInfo("record/manifest.json")
+    archive = tmp_path / "invalid-header.tar.gz"
+    archive.write_bytes(gzip.compress(manifest.tobuf() + b"x" * tarfile.BLOCKSIZE, mtime=0))
+    result = unpack(archive, tmp_path / "out")
+    assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
+
+
+@pytest.mark.parametrize("size", [None, -1])
+def test_unlimited_decompressed_reads_still_stop_at_the_byte_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: int | None
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 2)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_HEADER_BYTES", 1)
+    archive = tmp_path / "read-budget.tar.gz"
+    archive.write_bytes(gzip.compress(b"12345", mtime=0))
+    with library.BoundedArchive(archive) as content:
+        first = content.read(1)
+        assert first == b"1"
+        with pytest.raises(ValueError, match="the archive exceeds MAX_ARCHIVE_BYTES"):
+            content.read(size)
 
 
 def test_ex5_what_is_not_the_archive_of_one_record_is_refused(
