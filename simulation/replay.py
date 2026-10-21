@@ -123,6 +123,13 @@ NO_SIGNAL: Final[str] = "no_signal"
 REPLAYED: Final[str] = "replay"
 """Stands in for the free names a record never carries (profile name, passenger)."""
 
+DELIVERY_ADMISSION_MARGIN: Final[Seconds] = Seconds(5.0)
+"""Admission ceiling, not a runtime deadline: closing expires after the next tick's I/O.
+
+Five seconds admits deferred DONE deliveries and deliveries before the retained
+idle window when ticks take a few seconds. Longer delays are refused explicitly.
+"""
+
 _MEMBER: Final = re.compile(r"[A-Za-z0-9_./-]{1,80}")
 
 
@@ -395,7 +402,11 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
     end = recording.rows[-1].t
     if recording.manifest.end_observation is not None:
         end = max(end, recording.manifest.end_observation.t)
-    if any(reading.at < ticks[0].at - TICK or reading.at > end + TICK for reading in readings):
+    if any(
+        reading.at < ticks[0].at - DELIVERY_ADMISSION_MARGIN - INSTANT_EPSILON
+        or reading.at > end + DELIVERY_ADMISSION_MARGIN + INSTANT_EPSILON
+        for reading in readings
+    ):
         return Err("an ECG delivery lies outside the recorded tick window")
     steps: tuple[_Step, ...] = tuple(sorted((*ticks, *orders.value, *readings), key=_position))
     first = steps[0].t

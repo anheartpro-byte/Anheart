@@ -8,7 +8,8 @@ from typing import cast
 import pytest
 
 from simulation import run as cli
-from simulation.replay import replay_recording
+from simulation.replay import DELIVERY_ADMISSION_MARGIN, replay_recording
+from simulation.replay_tape import INSTANT_EPSILON
 from simulation.tests.replay_support import copy, edit_manifest, reseal
 from simulation.tests.test_record_console_parity import console_record
 from simulation.tests.test_replay_modbus import console_native
@@ -79,11 +80,13 @@ def test_inputs_during_serial_exchanges_do_not_split_the_emitting_tick(
     assert replayed.value.comparison.deviating_ticks == 0
 
 
-@pytest.mark.parametrize("arrival", [-1e12, 1e12])
+@pytest.mark.parametrize("arrival", [-1e12, 1e12, -5.001, 5.001])
 def test_a_delivery_outside_the_recorded_window_is_refused_before_pacing(
     interleaved_session: tuple[Recording, Path], arrival: float
 ) -> None:
     recording, config = interleaved_session
+    if abs(arrival) < 10:
+        arrival += recording.rows[0].t if arrival < 0 else recording.rows[-1].t
     block = recording.raw[0]
     altered = replace(
         block,
@@ -96,6 +99,69 @@ def test_a_delivery_outside_the_recorded_window_is_refused_before_pacing(
     replayed = asyncio.run(replay_recording(replace(recording, raw=(altered,)), config))
     assert isinstance(replayed, Err), replayed
     assert replayed.error.detail == "an ECG delivery lies outside the recorded tick window"
+
+
+@pytest.mark.parametrize("boundary", ["start", "done"])
+def test_deliveries_around_slow_boundary_ticks_replay_without_a_false_refusal(
+    interleaved_session: tuple[Recording, Path], boundary: str
+) -> None:
+    recording, config = interleaved_session
+    at_start = boundary == "start"
+    tick = recording.rows[0].t if at_start else recording.rows[-1].t
+    assert recording.rows[-1].phase == "done"
+    frames = list(recording.frames)
+    indices = [index for index, frame in enumerate(frames) if round(frame.t, 3) == tick]
+    assert indices
+    exchange_seconds = 0.01 if at_start else 0.05
+    for offset, index in enumerate(indices):
+        frames[index] = replace(
+            frames[index], t=tick + offset * exchange_seconds, latency_ms=exchange_seconds * 1000
+        )
+    blocks = list(recording.raw)
+    index = 0 if at_start else len(blocks) - 1
+    block = blocks[index]
+    arrival = tick + (-0.35 if at_start else 0.35)
+    blocks[index] = replace(
+        block,
+        header=replace(
+            block.header,
+            t_received=min(arrival, block.header.t_received or arrival),
+            runtime_delivery=RuntimeDelivery(t=arrival, t_observed=arrival),
+        ),
+    )
+    manifest = recording.manifest
+    observation = manifest.end_observation
+    assert observation is not None
+    manifest = replace(manifest, end_observation=replace(observation, t=recording.rows[-1].t))
+    replayed = asyncio.run(
+        replay_recording(
+            replace(recording, manifest=manifest, frames=tuple(frames), raw=tuple(blocks)), config
+        )
+    )
+    assert isinstance(replayed, Ok), replayed
+    assert replayed.value.matches, replayed.value.to_text()
+    assert replayed.value.comparison.deviating_ticks == 0
+
+
+@pytest.mark.parametrize("at_start", [False, True])
+def test_the_delivery_admission_boundary_includes_the_instant_epsilon(
+    interleaved_session: tuple[Recording, Path], at_start: bool
+) -> None:
+    recording, config = interleaved_session
+    tick = recording.rows[0].t if at_start else recording.rows[-1].t
+    direction = -1 if at_start else 1
+    arrival = tick + direction * (DELIVERY_ADMISSION_MARGIN + INSTANT_EPSILON / 2)
+    block = recording.raw[0]
+    altered = replace(
+        block,
+        header=replace(
+            block.header,
+            t_received=arrival,
+            runtime_delivery=RuntimeDelivery(t=arrival, t_observed=arrival),
+        ),
+    )
+    planned = asyncio.run(replay_recording(replace(recording, raw=(altered,)), config))
+    assert isinstance(planned, Ok), planned
 
 
 def test_an_optional_final_observation_is_not_required_to_replay_a_valid_delivery_window(

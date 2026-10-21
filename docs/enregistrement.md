@@ -909,8 +909,16 @@ acquittement, `stop` et `manual_target` ne coupent pas une fenêtre : leurs
 méthodes ne font aucun appel variateur, même si leurs effets seront traités
 par le tic. Les entrées à instant égal restent groupées. Cette règle est
 commune aux observations d'appel et aux transactions natives.
-Une remise ECG hors de la fenêtre des tics (avec une marge de 0,2 s et
-l'observation finale éventuelle) est refusée avant d'avancer l'horloge.
+Une remise ECG est admise de 5 s avant le premier tic à 5 s après le plus
+tard du dernier tic et de l'observation finale éventuelle, avec la même
+tolérance numérique `INSTANT_EPSILON` que les échanges. Cette constante
+`DELIVERY_ADMISSION_MARGIN` est un plafond d'admission, pas une garantie
+temporelle du runtime : la clôture différée expire après les échanges du
+tic suivant, et une remise peut donc dépasser `DONE + 0,2 s`. La même marge
+couvre le début de la fenêtre retenue quand un tic de repos est long.
+Elle admet ces cas tant que les tics durent moins de quelques secondes ;
+un retard supérieur à 5 s reste refusé explicitement avant d'avancer
+l'horloge, y compris un instant absurde de valeur absolue `1e12`.
 
 L'horloge rejouée part de l'instant de la première entrée, tel qu'il est
 écrit, et avance par les intervalles enregistrés, arrondis à la milliseconde.
