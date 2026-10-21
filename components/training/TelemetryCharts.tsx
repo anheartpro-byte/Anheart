@@ -27,6 +27,24 @@ type Row = {
   setpointRpm: number;
 };
 
+function printTimeTicks(rows: Row[]): number[] {
+  if (rows.length === 0) return [];
+  const start = rows[0].elapsedS;
+  const end = rows[rows.length - 1].elapsedS;
+  if (start === end) return [start];
+
+  const duration = end - start;
+  const step =
+    [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].find(
+      (seconds) => seconds >= duration / 5,
+    ) ?? Math.ceil(duration / (5 * 3600)) * 3600;
+  const first = Math.ceil(start / step) * step;
+  return Array.from(
+    { length: Math.floor((end - first) / step) + 1 },
+    (_, index) => first + index * step,
+  );
+}
+
 /**
  * Heart rate over time against the target zone (shaded band), and the arm
  * speed against its setpoint. Missing heart rate stays a gap in the line:
@@ -88,10 +106,11 @@ export function TelemetryCharts({
   ];
 
   const xTick = (v: number) => formatClock(v);
+  const ticks = width === undefined ? undefined : printTimeTicks(rows);
 
   return (
     <div className="space-y-6">
-      <div className="print:break-inside-avoid">
+      <div className="print:break-inside-avoid" style={{ width }}>
         <p className="text-sm font-medium mb-2">
           {t("session.hrChart")}
           {zoneLowBpm !== undefined && zoneHighBpm !== undefined && (
@@ -118,6 +137,8 @@ export function TelemetryCharts({
               tickLine={false}
               axisLine={false}
               minTickGap={32}
+              ticks={ticks}
+              tickMargin={width === undefined ? undefined : 12}
             />
             <YAxis
               domain={hrDomain}
@@ -163,7 +184,7 @@ export function TelemetryCharts({
         </ChartFrame>
       </div>
 
-      <div className="print:break-inside-avoid">
+      <div className="print:break-inside-avoid" style={{ width }}>
         <p className="text-sm font-medium mb-2">{t("session.speedChart")}</p>
         <ChartFrame config={speedConfig} height={height} width={width}>
           <LineChart
@@ -181,6 +202,8 @@ export function TelemetryCharts({
               tickLine={false}
               axisLine={false}
               minTickGap={32}
+              ticks={ticks}
+              tickMargin={width === undefined ? undefined : 12}
             />
             <YAxis tickLine={false} axisLine={false} width={36} />
             {width === undefined && (
@@ -194,34 +217,9 @@ export function TelemetryCharts({
                 }
               />
             )}
-            <ChartLegend
-              content={
-                width === undefined ? (
-                  <ChartLegendContent />
-                ) : (
-                  <div className="flex justify-center gap-4 pt-3 text-xs">
-                    {Object.entries(speedConfig).map(([key, item]) => (
-                      <span key={key} className="flex items-center gap-1.5">
-                        <svg width="12" height="8" aria-hidden="true">
-                          <line
-                            x1="0"
-                            y1="4"
-                            x2="12"
-                            y2="4"
-                            stroke={item.theme.light}
-                            strokeWidth="2"
-                            strokeDasharray={
-                              key === "setpointRpm" ? "4 4" : undefined
-                            }
-                          />
-                        </svg>
-                        {item.label}
-                      </span>
-                    ))}
-                  </div>
-                )
-              }
-            />
+            {width === undefined && (
+              <ChartLegend content={<ChartLegendContent />} />
+            )}
             <Line
               dataKey="setpointRpm"
               type="stepAfter"
@@ -249,6 +247,29 @@ export function TelemetryCharts({
             />
           </LineChart>
         </ChartFrame>
+        {width !== undefined && (
+          <div
+            className="flex justify-center gap-4 pt-3 text-xs"
+            style={{ width, height: 32 }}
+          >
+            {Object.entries(speedConfig).map(([key, item]) => (
+              <span key={key} className="flex items-center gap-1.5">
+                <svg width="12" height="8" aria-hidden="true">
+                  <line
+                    x1="0"
+                    y1="4"
+                    x2="12"
+                    y2="4"
+                    stroke={item.theme.light}
+                    strokeWidth="2"
+                    strokeDasharray={key === "setpointRpm" ? "4 4" : undefined}
+                  />
+                </svg>
+                {item.label}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

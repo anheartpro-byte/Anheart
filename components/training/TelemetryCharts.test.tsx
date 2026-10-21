@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { NextIntlClientProvider } from "next-intl";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import fr from "@/messages/fr.json";
+import en from "@/messages/en.json";
 import type { TelemetryPoint } from "@/lib/training";
 import { textOf } from "../markup.test-helpers";
 import { TelemetryCharts } from "./TelemetryCharts";
@@ -71,10 +72,17 @@ function point(over: Partial<TelemetryPoint>): TelemetryPoint {
   };
 }
 
-function draw(props: Parameters<typeof TelemetryCharts>[0]) {
+function draw(
+  props: Parameters<typeof TelemetryCharts>[0],
+  locale: "fr" | "en" = "fr",
+) {
   drawn.length = 0;
   return renderToStaticMarkup(
-    <NextIntlClientProvider locale="fr" messages={fr} timeZone="Europe/Paris">
+    <NextIntlClientProvider
+      locale={locale}
+      messages={locale === "fr" ? fr : en}
+      timeZone="Europe/Paris"
+    >
       <TelemetryCharts {...props} />
     </NextIntlClientProvider>,
   );
@@ -260,9 +268,78 @@ describe("ANH-203 telemetry charts: time and size", () => {
     ]);
     expect(given("ChartTooltip")).toHaveLength(2);
     expect(given("ChartLegendContent")).toHaveLength(1);
+    expect(given("ChartLegend")[0].height).toBeUndefined();
+    for (const axis of given("XAxis")) {
+      expect(axis.ticks).toBeUndefined();
+      expect(axis.tickMargin).toBeUndefined();
+      expect(axis.minTickGap).toBe(32);
+    }
     expect(given("ChartContainer")[0].config).toMatchObject({
       bpm: { theme: { light: "#dc2626", dark: "#f87171" } },
     });
+  });
+
+  it.each(["fr", "en"] as const)(
+    "C1-b reserves a separate 32px legend row below the printed speed SVG in %s",
+    (locale) => {
+      const html = draw(
+        { points: [point({ bpm: 120 })], width: 680, height: 180 },
+        locale,
+      );
+
+      expect(given("ChartLegend")).toHaveLength(0);
+      expect(html).toMatch(
+        /height:180px"><\/div><div[^>]+style="width:680px;height:32px"/,
+      );
+      const messages = locale === "fr" ? fr : en;
+      expect(textOf(html, "")).toContain(
+        `${messages.training.session.measured} (${messages.training.units.rpm})`,
+      );
+      expect(textOf(html, "")).toContain(
+        `${messages.training.session.setpoint} (${messages.training.units.rpm})`,
+      );
+      for (const axis of given("XAxis")) {
+        expect(axis.tickMargin).toBe(12);
+      }
+    },
+  );
+
+  it.each([
+    { start: 0, end: 1500, ticks: [0, 300, 600, 900, 1200, 1500] },
+    { start: 0, end: 1510, ticks: [0, 600, 1200] },
+    { start: 45, end: 1545, ticks: [300, 600, 900, 1200, 1500] },
+    { start: 0, end: 50, ticks: [0, 10, 20, 30, 40, 50] },
+    { start: 0, end: 21600, ticks: [0, 7200, 14400, 21600] },
+  ])(
+    "C1-b uses round regular printed ticks from $start to $end without forcing an off-step endpoint",
+    ({ start, end, ticks }) => {
+      draw({
+        points: [point({ elapsedS: start }), point({ elapsedS: end })],
+        width: 680,
+        height: 180,
+      });
+
+      expect(given("XAxis").map((axis) => axis.ticks)).toEqual([ticks, ticks]);
+      const format = given("XAxis")[0].tickFormatter as (v: number) => string;
+      if (end === 1500) {
+        expect(ticks.map(format)).toEqual([
+          "0:00",
+          "5:00",
+          "10:00",
+          "15:00",
+          "20:00",
+          "25:00",
+        ]);
+      }
+    },
+  );
+
+  it("C1-b handles empty printed data and a single timestamp without generating invalid ticks", () => {
+    draw({ points: [], width: 680, height: 180 });
+    expect(given("XAxis").map((axis) => axis.ticks)).toEqual([[], []]);
+
+    draw({ points: [point({ elapsedS: 12 })], width: 680, height: 180 });
+    expect(given("XAxis").map((axis) => axis.ticks)).toEqual([[12], [12]]);
   });
 
   it("writes the elapsed time as a clock on both axes", () => {
