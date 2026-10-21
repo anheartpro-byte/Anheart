@@ -1660,7 +1660,13 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 - **Rapport PDF** apparaît seulement pour une séance d'entraînement automatique
   ou manuelle. Il ouvre `/fr/dashboard/sessions/{id}/report` : identité de la
   séance, résumé, courbes et langue **Français / English**. **Télécharger en PDF**
-  ouvre l'impression du navigateur pour enregistrer le PDF.
+  ouvre l'impression du navigateur : choisissez **A4**, puis
+  « Enregistrer au format PDF ». Le rapport imprime l'identité de la séance,
+  le résumé, les courbes et la section « Pas encore dans le rapport ». Il
+  reste clair même en thème sombre ; menu, en-tête du tableau de bord,
+  boutons et langues sont masqués. Les courbes sont redessinées pour la
+  largeur A4, même depuis un écran étroit. Les graphiques d'arrière-plan
+  ne sont pas nécessaires pour les lire.
 - Une ancienne séance ECG garde **Voir** et porte la mention
   « Ancien enregistrement ECG : aucun rapport disponible. » Une ouverture
   directe de son adresse de rapport explique l'absence et permet le retour à
@@ -2208,7 +2214,11 @@ machine : elle n'a pas de résumé. » Les autres séances sans résumé gardent
 
 **Ce que vous devez voir** : le rapport de l'entraînement, avec son résumé et
 ses courbes. **Télécharger en PDF** ouvre l'impression du navigateur ; choisissez
-« Enregistrer au format PDF ». **Français / English** change sa langue.
+« Enregistrer au format PDF » et le papier **A4**. Le rapport reste clair même
+en thème sombre et ses courbes sont redessinées pour la page, quelle que soit
+la largeur de l'écran. Laissez les graphiques d'arrière-plan désactivés : ils
+ne sont pas nécessaires. Le menu, l'en-tête du tableau de bord et les boutons
+ne sont pas imprimés. **Français / English** change sa langue.
 
 **Séance échouée** : ouvrez **Sessions > Échouées > Voir**, puis la carte
 **Résumé de la séance > Rapport PDF**. L'historique du passager donne aussi le

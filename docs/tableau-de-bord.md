@@ -662,16 +662,20 @@ encore : le résultat du pré-vol (ANH-142) et le retour du passager (ANH-146).
 Il ne lit que ce que lit la page de la séance (`sessions.getSession`,
 `training.getTrainingSession`, `training.getSessionTelemetry`,
 `sessionReports.getSummary`), sous les mêmes droits, et n'en montre pas
-l'adresse du pratiquant ni l'opérateur. Les courbes sont dessinées à la
-largeur mesurée à l'écran, 640 px au plus pour tenir dans la page A4 : elles
-ne sont pas redessinées pour l'impression.
+l'adresse du pratiquant ni l'opérateur. À l'impression, les courbes sont
+redessinées à 680 px dans la largeur utile de 182 mm d'une page A4 (marges
+de 14 mm), quelle que soit la largeur de l'écran. À l'écran, elles restent
+adaptées à la fenêtre.
 
 - **Télécharger en PDF** ouvre l'impression du navigateur : y choisir
-  « Enregistrer au format PDF ». Le menu, l'en-tête et les boutons de la page
-  ne sont pas imprimés, la page est en A4 et claire même en thème sombre
-  (`app/globals.css`, `print:hidden`). Aucune bibliothèque PDF n'est ajoutée :
-  le fichier est celui du navigateur, et sa mise en page dépend de lui. Le
-  bouton n'est actif qu'une fois la séance terminée.
+  « Enregistrer au format PDF », avec le papier **A4**. Le menu, l'en-tête et
+  les boutons de la page ne sont pas imprimés, la page est en A4 et claire même en thème sombre
+  (`app/globals.css`, `print:hidden`). Les graphiques d'arrière-plan ne sont
+  pas nécessaires : les traits, la zone cible et les légendes restent lisibles
+  sans cette option. L'en-tête du rapport, le tableau des g, les verdicts et
+  chaque courbe restent groupés sur leur page. Aucune bibliothèque PDF n'est
+  ajoutée : le fichier est celui du navigateur, et sa mise en page dépend de
+  lui. Le bouton n'est actif qu'une fois la séance terminée.
 - **Français / English** rouvre le même rapport dans l'autre langue.
 
 Le rapport est disponible pour chaque séance d'entraînement `auto` ou `manual`
@@ -1567,7 +1571,7 @@ Pièges :
 | Compteurs du tableau de bord | Calculés par `dashboard.counters` et vérifiés par des tests Convex (deux organisations) et des tests de la page sans navigateur. Leur affichage dans un navigateur, avec une console simulée, relève de la suite de bout en bout ANH-83. Coût des lectures non mesuré sur un déploiement ([convex.md](convex.md#dashboardts-compteurs-du-tableau-de-bord-anh-159)). |
 | Libellés des actions de sécurité et de l'état du variateur | Traduits (`freeze`, `quick_stop`, `go_silent` compris). Le vocabulaire français (« Vitesse figée », « Arrêt rapide (rampe du variateur) », « Mise en silence (arrêt par le variateur) »…) reste à relire par l'équipe. |
 | Pratiquant d'une séance démarrée à la machine | Corrigé dans le code le 15 octobre 2026 (ANH-84), à vérifier au redéploiement ANH-82 : la console envoie le passager choisi dans la liste de la machine (`userId`, et son nom tant qu'elle l'a en mémoire). La séance apparaît à son nom et devient visible du patient, s'il a toujours le droit sur la machine quand elle est déclarée. Une séance de banc, sans personne à bord, n'a pas de pratiquant et reste « Unknown ». En production jusqu'au redéploiement : « Unknown » pour toutes. |
-| Rapport d'une séance d'entraînement (ANH-89) | Page testée dans le DOM simulé, Convex remplacé. **Jamais imprimée dans un navigateur** : la mise en page A4, le masquage du menu et le thème clair à l'impression ne sont pas vérifiés, ni le fichier PDF obtenu. Le calcul du résumé est testé en mémoire, et comparé le 14 octobre 2026 aux chiffres de la simulation sur quatre scénarios ([convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89)) ; jamais sur l'enregistrement d'une vraie séance. |
+| Rapport d'une séance d'entraînement (ANH-89, ANH-234) | Page et courbes testées ; PDF A4 produits le 22 octobre 2026 avec Chromium, en français et en anglais, thème clair et sombre, depuis une fenêtre de bureau et une fenêtre étroite, avec et sans arrière-plans. Le vrai CSS, la vraie page et le layout du tableau de bord sont utilisés ; Clerk et Convex sont simulés, les données sont fictives et Arial remplace Geist. Les pages rendues en images et le texte extrait vérifient la largeur des courbes, le fond clair et l'absence de navigation. Ce banc local ne prouve pas un déploiement ni l'impression depuis une vraie séance. Le calcul du résumé est testé en mémoire, et comparé le 14 octobre 2026 aux chiffres de la simulation sur quatre scénarios ([convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89)) ; jamais sur l'enregistrement d'une vraie séance. |
 | Pages retouchées au retrait de l'ancien mode ECG (Sessions, vue en direct, détail, Rapports, fenêtre machine) | Compilées et couvertes par `npm run test:lib` ; **pas rouvertes dans un navigateur** depuis. |
 | Pages Sessions et Rapports servies par pages (ANH-158) | Le serveur est testé en mémoire (`convex/sessionLists.test.ts`), les deux pages dans le DOM simulé, où Convex est remplacé par une doublure qui sert les pages d'une liste. **Pas ouvertes dans un navigateur, ni contre un vrai serveur** : ce que deviennent des pages déjà affichées quand une séance arrive ou change de statut pendant la lecture repose sur Convex et n'est pas rejoué. |
 | Textes encore en anglais | Nom « Unknown », motif « Cancelled before start by … », raison de fin brute sur les pages de séance (en suivi). Dans les alertes, l'identifiant connu est traduit ; son complément et le texte libre restent tels quels. Fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
