@@ -7,7 +7,6 @@ from typing import Annotated, Literal, Self, assert_never
 from pydantic import BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
 from pydantic.dataclasses import dataclass
 
-from src.motor.atv320 import WRITE_SINGLE_REGISTER_CODE
 from src.motor.drive import (
     BadResponse,
     CommTimeout,
@@ -21,6 +20,7 @@ from src.motor.drive import (
 )
 from src.motor.observation import (
     MODBUS_FAILURES,
+    WRITE_SINGLE_REGISTER_CODE,
     ExceptionReply,
     ExchangeKind,
     InvalidReply,

@@ -165,6 +165,7 @@ from src.motor.ftdi_link import (
 )
 from src.motor.link_health import LinkHealth
 from src.motor.observation import (
+    WRITE_SINGLE_REGISTER_CODE,
     ExceptionReply,
     Exchange,
     ExchangeKind,
@@ -236,22 +237,6 @@ class ModbusMaster(Protocol):
 
 
 MODBUS_EXCEPTION_MAX: Final[int] = 0xFF
-
-WRITE_SINGLE_REGISTER_CODE: Final[int] = 6
-"""Modbus function code 6, checked on every write reply.
-
-Without it, any object pymodbus's framer managed to decode counts as an
-acknowledgement - including the answer to a previous READ, which on a noisy
-half-duplex pair is exactly what turns up. "The write was acked" would then be
-a statement about the framer rather than about the drive.
-
-There is deliberately no matching check on the READ path, and it is not an
-oversight: a read reply is already validated by the thing a read actually needs
-(a register block of exactly one value, in range), which no other PDU shape can
-satisfy - ``ModbusPDU`` declares ``registers`` without assigning it, so a write
-echo decoded into a read's window fails there instead. Adding a redundant
-function-code test there would only make that branch unreachable.
-"""
 
 
 # --- Transport defaults, from the commissioning notes and the bench -----

@@ -12,6 +12,9 @@ from pydantic.dataclasses import dataclass as validated
 from src.clock import Clock
 from src.units import Monotonic, RawRegister, RegisterAddress
 
+WRITE_SINGLE_REGISTER_CODE: Final[int] = 6
+"""Modbus function code required for a write acknowledgement, unlike a read's register block."""
+
 
 class ExchangeKind(StrEnum):
     CONNECT = "modbus_connect"
