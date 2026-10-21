@@ -7,15 +7,20 @@ import ts from "typescript";
 /**
  * Source check for the dashboard: a mutation is only called through
  * `useMutationWithFeedback`, an action through `useActionWithFeedback`, and
- * no handler next to one swallows an error. Clients from `useConvex()`,
- * `new ConvexReactClient` or `new ConvexHttpClient` may read with `.query`.
- * Syntax inspection refuses access to their `mutation` and `action` methods,
+ * no handler next to one swallows an error. The original text rule refuses
+ * every `.mutation(...)` or `.action(...)` in a file mentioning `useConvex`,
+ * `ConvexReactClient` or `ConvexHttpClient`, regardless of the receiver.
+ * Syntax inspection also tracks clients initialized by those hooks or
+ * constructors, and variables, parameters or properties directly annotated
+ * as `ConvexReactClient` or `ConvexHttpClient`. It refuses write-method access,
  * including extraction, bind/call/apply, optional chains, literal bracket keys
  * and destructuring. Extracting a write method is refused before it is called.
- * Remaining limits include variable-computed keys (`convex[name]`), aliased
- * imports, clients passed between modules or stored in containers, and lexical
- * shadowing of client variable names. This is not an exhaustive list or a type
- * analysis. Error-handler inspection still reads text within the same file.
+ * Queries and an unrelated `state.action` property remain accepted. Syntax
+ * limits include variable-computed keys (`convex[name]`), aliased imports,
+ * clients without a recognized initializer or direct type annotation, and
+ * lexical shadowing of variable or property names. The text rule still catches
+ * direct calls outside that tracking. This is not an exhaustive list or type
+ * analysis. Error-handler inspection reads text within the same file.
  */
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -40,6 +45,7 @@ const DIRECT_CALLS: ReadonlyArray<{ pattern: RegExp; problem: string }> = [
 ];
 /** A Convex client held by the page, and what writes through it. */
 const CONVEX_CLIENT = /\b(useConvex|ConvexReactClient|ConvexHttpClient)\b/;
+const CLIENT_WRITE = /\.(mutation|action)\s*\(/;
 const ANY_CALL =
   /\b(useMutation|useMutationWithFeedback|useAction|useActionWithFeedback|useConvex)\b/;
 
@@ -52,8 +58,11 @@ function clientWrite(source: string): boolean {
     ts.ScriptKind.TSX,
   );
   const clients = new Set<string>();
+  const clientProperties = new Set<string>();
   const isClient = (expression: ts.Expression): boolean =>
     (ts.isIdentifier(expression) && clients.has(expression.text)) ||
+    (ts.isPropertyAccessExpression(expression) &&
+      clientProperties.has(expression.name.text)) ||
     (ts.isCallExpression(expression) &&
       ts.isIdentifier(expression.expression) &&
       expression.expression.text === "useConvex") ||
@@ -63,12 +72,28 @@ function clientWrite(source: string): boolean {
         expression.expression.text === "ConvexHttpClient"));
   const collect = (node: ts.Node): void => {
     if (
-      ts.isVariableDeclaration(node) &&
+      (ts.isVariableDeclaration(node) ||
+        ts.isParameter(node) ||
+        ts.isPropertyDeclaration(node) ||
+        ts.isPropertySignature(node)) &&
       ts.isIdentifier(node.name) &&
-      node.initializer &&
-      isClient(node.initializer)
+      ((node.type &&
+        ts.isTypeReferenceNode(node.type) &&
+        ts.isIdentifier(node.type.typeName) &&
+        (node.type.typeName.text === "ConvexReactClient" ||
+          node.type.typeName.text === "ConvexHttpClient")) ||
+        ("initializer" in node &&
+          node.initializer &&
+          isClient(node.initializer)))
     ) {
-      clients.add(node.name.text);
+      if (ts.isPropertyDeclaration(node) || ts.isPropertySignature(node)) {
+        clientProperties.add(node.name.text);
+      } else {
+        clients.add(node.name.text);
+        if (ts.isParameter(node) && node.modifiers?.length) {
+          clientProperties.add(node.name.text);
+        }
+      }
     }
     ts.forEachChild(node, collect);
   };
@@ -191,7 +216,10 @@ export function silentMutationProblems(source: string): string[] {
   for (const { pattern, problem } of DIRECT_CALLS) {
     if (pattern.test(code)) problems.push(problem);
   }
-  if (CONVEX_CLIENT.test(code) && clientWrite(source)) {
+  if (
+    CONVEX_CLIENT.test(code) &&
+    (CLIENT_WRITE.test(code) || clientWrite(source))
+  ) {
     problems.push(
       "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
     );
@@ -434,6 +462,62 @@ describe("ANH-194 EX-3 the other ways to write through Convex", () => {
       "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
     ]);
   });
+
+  it.each([
+    [
+      "a client parameter's direct mutation",
+      "function save(client: ConvexReactClient) { return client.mutation(api.x.y, {}); }",
+    ],
+    [
+      "a client in props beside a useConvex import",
+      'import { useConvex } from "convex/react"; props.convex.mutation(api.x.y, {});',
+    ],
+    [
+      "a client member beside a ConvexHttpClient import",
+      'import { ConvexHttpClient } from "convex/browser"; this.client.action(api.x.y, {});',
+    ],
+  ])("preserves the textual refusal of %s", (_label, source) => {
+    expect(silentMutationProblems(source)).toEqual([
+      "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
+    ]);
+  });
+
+  describe.each(["ConvexReactClient", "ConvexHttpClient"])(
+    "ANH-232 EX-5 annotated %s clients",
+    (clientType) => {
+      it.each([
+        [
+          "a parameter's bound mutation",
+          `function save(client: ${clientType}) { return client.mutation.bind(client); }`,
+        ],
+        [
+          "a property's bound action",
+          `class Editor { client: ${clientType}; save() { return this.client.action.bind(this.client); } }`,
+        ],
+        [
+          "a constructor parameter property's extracted mutation",
+          `class Editor { constructor(private client: ${clientType}) {} save() { return this.client.mutation; } }`,
+        ],
+        [
+          "an interface property's bound mutation",
+          `interface Props { convex: ${clientType}; } function save(props: Props) { return props.convex.mutation.bind(props.convex); }`,
+        ],
+      ])("refuses %s", (_label, source) => {
+        expect(silentMutationProblems(source)).toEqual([
+          "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
+        ]);
+      });
+
+      it("accepts an annotated client's query and state.action", () => {
+        expect(
+          silentMutationProblems(`
+            function read(client: ${clientType}) {
+              return client.query(api.audit.list, { action: state.action });
+            }`),
+        ).toEqual([]);
+      });
+    },
+  );
 
   it("accepts a client that only reads, and checks the handlers beside it", () => {
     const reads =

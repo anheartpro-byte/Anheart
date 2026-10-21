@@ -1502,20 +1502,28 @@ message et pas la fenêtre ouverte dessous, avec le vrai composant Radix),
 `components/training/stop-feedback.test.tsx` (le message d'arrêt est le même
 que la page ait cru la séance en attente, active ou finie),
 `convex/errors.test.ts` (chaque code de `convex/lib/errors.ts` a ses deux
-traductions, aucune traduction sans code, aucun code levé hors de la table) et
+traductions, aucune traduction sans code ; recherche textuelle des codes
+écrits en place dans `new ConvexError(...)`, entre guillemets doubles et avec
+`code` en tête si c'est un objet ; `refusal(...)` contraint par son type,
+`machineError(...)` régi par le contrat machine et hors de cette recherche) et
 `hooks/no-silent-mutation.test.ts`, qui refuse dans `app/`, `components/`,
 `lib/` et `hooks/` un appel direct à `useMutation` ou à `useAction` (hors des
-deux hooks qui les enveloppent), une écriture par un client Convex
-(issu de `useConvex`, `ConvexReactClient` ou `ConvexHttpClient`). Il refuse
-syntaxiquement l'accès à `mutation` et `action` avant même leur appel : alias
+deux hooks qui les enveloppent). La règle textuelle historique refuse tout
+`.mutation(...)` ou `.action(...)` dans un fichier mentionnant `useConvex`,
+`ConvexReactClient` ou `ConvexHttpClient`, quel que soit le receveur. En
+complément, l'analyse syntaxique suit les clients initialisés par ces hooks ou
+constructeurs, ainsi que les variables, paramètres et propriétés annotés
+directement `ConvexReactClient` ou `ConvexHttpClient`. Elle refuse l'accès à
+`mutation` et `action` avant même leur appel : alias
 de méthode, `bind`, `call`, `apply`, chaînage optionnel, crochets à clé
 littérale et déstructuration compris, avec ou sans espaces ou retours à la
 ligne après le point ; `.query` reste accepté. Il refuse aussi un handler
 vide ou réduit à des appels `console` dans un fichier utilisant ces hooks.
 Le contrôle reste local et sans analyse de types : ses limites incluent les
-clés calculées depuis une variable, les imports renommés, les clients transmis
-à un autre module ou stockés dans un conteneur et le masquage lexical des noms
-de clients ; cette liste n'est pas exhaustive.
+clés calculées depuis une variable, les imports renommés, les clients sans
+initialisation ni annotation directe reconnue et le masquage lexical des noms
+de variables ou de propriétés. La règle textuelle continue de refuser les
+appels directs hors de ce suivi ; cette liste n'est pas exhaustive.
 
 ---
 

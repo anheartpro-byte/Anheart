@@ -3492,17 +3492,24 @@ retour des mutations, chacun une seule fois :
   machine arme la séance pendant l'envoi, et il n'affirme aucune issue ;
 - `hooks/no-silent-mutation.test.ts` lit les sources de `app/`, `components/`,
   `lib/` et `hooks/`, hors tests : seuls les deux hooks d'enveloppe peuvent
-  appeler directement `useMutation` ou `useAction`. L'analyse syntaxique des
-  clients issus de `useConvex`, `ConvexReactClient` ou `ConvexHttpClient`
-  refuse l'accès à `mutation` et `action`, même via extraction, alias de
+  appeler directement `useMutation` ou `useAction`. La règle textuelle
+  historique refuse tout `.mutation(...)` ou `.action(...)` dans un fichier
+  mentionnant `useConvex`, `ConvexReactClient` ou `ConvexHttpClient`, quel que
+  soit le receveur. En complément, l'analyse syntaxique suit les clients
+  initialisés par ces hooks ou constructeurs, ainsi que les variables,
+  paramètres et propriétés annotés directement `ConvexReactClient` ou
+  `ConvexHttpClient`. Elle refuse l'accès à `mutation` et `action`, même via
+  extraction, alias de
   méthode, `bind`, `call`, `apply`, chaînage optionnel, crochets à clé
   littérale ou déstructuration ; `.query` reste accepté. Les espaces ou
   retours à la ligne après le point ne masquent pas l'accès. Une lecture
   textuelle refuse aussi les handlers vides ou réduits à des appels `console`
   dans un fichier utilisant ces hooks. Les limites, non exhaustives, incluent
   les clés calculées depuis une variable, les imports renommés, les clients
-  transmis à un autre module ou stockés dans un conteneur, le masquage lexical
-  des noms de clients et les erreurs avalées dans un autre fichier ;
+  sans initialisation ni annotation directe reconnue, le masquage lexical
+  des noms de variables ou de propriétés et les erreurs avalées dans un autre
+  fichier. La règle textuelle continue de refuser les appels directs hors de
+  ce suivi ;
 - `lib/machineForm.test.ts` (`npm run test:lib`, comme tous les tests de
   `lib/`) vérifie que l'étape « liste des gestionnaires » de la fenêtre machine
   rend la réponse de la mutation, donc un refus que le hook rapporte sans lever
