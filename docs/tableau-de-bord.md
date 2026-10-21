@@ -643,6 +643,15 @@ reste réservé aux autres séances sans résumé. Les définitions et les
 sources sont dans [convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89).
 Le bouton **Rapport PDF** ouvre le rapport de la séance.
 
+Pour une variation de g absente aux deux rayons ou à l'un d'eux, la carte et
+le rapport affichent « après l'enregistrement » seulement pour un provisoire
+sans problème de lecture. Un résumé final indique « aucune fenêtre mesurable » :
+la note rappelle qu'il faut six tics consécutifs (1 s), des mesures fraîches,
+aucun silence ni action d'urgence, le variateur en marche
+(`OPERATION_ENABLED`) et une vitesse moteur au moins égale à la plus lente
+consigne de marche. Un provisoire dont l'enregistrement est illisible indique
+« non disponible » et en donne la raison. Une valeur présente est écrite en g/s.
+
 ### Rapport d'une séance : `/fr/dashboard/sessions/{id}/report`
 
 Le rapport d'une séance d'entraînement, mis en page pour l'impression (ANH-89) :
@@ -665,8 +674,11 @@ ne sont pas redessinées pour l'impression.
   bouton n'est actif qu'une fois la séance terminée.
 - **Français / English** rouvre le même rapport dans l'autre langue.
 
-Le rapport est disponible pour chaque séance terminée, même avant que son
-résumé soit calculé (il le dit alors).
+Le rapport est disponible pour chaque séance d'entraînement `auto` ou `manual`
+terminée ou échouée, même avant que son résumé soit calculé (il le dit alors).
+Une ancienne séance ECG n'a pas de rapport d'entraînement : une ouverture
+directe de cette adresse explique pourquoi, offre le retour à la séance et
+n'affiche ni résumé vide ni bouton d'impression.
 
 Pour une séance de l'ancien mode d'enregistrement ECG (historique, lecture
 seule), la carte **Ancien enregistrement ECG** remplace la carte Entraînement :
@@ -774,8 +786,10 @@ l'enregistrement peut encore être défait. La règle des cases est dans
 ### Rapports : `/fr/dashboard/reports`
 
 Séances terminées visibles par l'utilisateur : pratiquant, machine, date,
-durée, le bouton **Voir** qui ouvre le détail et le bouton **Rapport PDF** qui
-ouvre le rapport de la séance (ANH-89). Elles sont servies par pages
+durée et le bouton **Voir** qui ouvre le détail. Le bouton **Rapport PDF**
+ouvre le rapport des seules séances d'entraînement (`auto` ou `manual`, ANH-89).
+Une séance de l'ancien mode ECG (`recording`) conserve **Voir** et indique
+« Ancien enregistrement ECG : aucun rapport disponible. » Elles sont servies par pages
 de 50, de la plus récente à la plus ancienne (`sessions.listSessionsPaginated`
 avec le statut `completed`), avec le bouton **Afficher plus** tant qu'il en
 reste ; comme pour la page Sessions, la page ne se coupe qu'après les droits.
@@ -788,8 +802,12 @@ ne s'affiche qu'une fois la liste finie et vide.
 L'ancien rapport PDF, construit sur les données ECG, a été retiré avec le mode
 d'enregistrement ; le rapport d'une séance d'entraînement est la page
 [Rapport d'une séance](#rapport-dune-séance--frdashboardsessionsidreport). La
-page Rapports ne liste que les séances `completed` ; une séance `failed` a
-aussi son rapport, depuis sa page et l'historique du pratiquant.
+page Rapports ne liste que les séances `completed`. Une phrase sous la
+description, même quand la liste est vide, explique comment ouvrir le rapport
+d'un entraînement échoué : **Sessions > Échouées > Voir**, puis la carte
+**Résumé de la séance > Rapport PDF**, ou l'historique du passager depuis sa
+fiche si vous y avez accès. Tous les rôles, y compris le passager, peuvent
+ouvrir l'onglet **Échouées** pour les séances qu'ils sont autorisés à lire.
 
 ### Membres : `/fr/dashboard/members`
 

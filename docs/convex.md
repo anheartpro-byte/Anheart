@@ -104,20 +104,57 @@ toutes : ce que compte `dashboard.counters`).
 
 ### `organizationId` : à quelle organisation appartient une ligne
 
-Dix tables portent un champ `organizationId` :
-`users` (organisation principale du compte), `machines`, `sessions`,
-`training_telemetry`, `machine_profiles`, `machine_user_permissions`,
-`machine_gestionnaires`, `user_gestionnaires`, `fitness_assessments` et
-`consents`. Les huit premières tables ont un index `by_organization` ; les
-deux dernières sont indexées par passager et organisation, puis par date, pour
-lire son historique sans mélanger les centres. Toute table créée ensuite le
-porte aussi, sauf une table **commune à tous les clients** : `training_events`
-et `session_summaries_v2` (ANH-89) le portent, copié de leur séance.
+Vingt tables portent un champ `organizationId` dans `convex/schema.ts` :
 
-Les tables qui ne le portent pas : `software_releases`, le registre des
-versions, commun à tous les clients et réservé à l'admin Anheart ; et
-`ecg_data`, `session_summaries`, `machine_heartbeats`, qu'on n'atteint que par
-leur séance ou leur machine, donc par l'organisation de celle-ci.
+- Douze ont un index `by_organization` : `memberships`, `users` (organisation
+  principale du compte), `user_gestionnaires`, `machine_gestionnaires`,
+  `machine_user_permissions`, `machine_profiles`, `machines`, `machine_registry`,
+  `sessions`, `session_summaries_v2`, `training_telemetry` et `training_events`.
+  `memberships` a aussi `by_user_and_organization` et
+  `by_active_and_organization`. `sessions` a aussi
+  `by_status_and_organization`, `by_organization_and_started`,
+  `by_organization_and_status_and_started`,
+  `by_organization_and_machine_and_started`,
+  `by_organization_and_machine_and_status_and_started`,
+  `by_organization_and_user_and_started` et
+  `by_organization_and_user_and_status_and_started`.
+- Cinq ont d'autres index par organisation : `patient_invitations`
+  (`by_organization_and_email`), `fitness_assessments` et `consents`
+  (`by_user_and_organization`, puis respectivement `submittedAt` et `signedAt`
+  dans ce même index), `audit_log` (`by_organization_and_at`,
+  `by_organization_and_actor_role_and_at`,
+  `by_organization_and_target_type_and_at`,
+  `by_organization_and_actor_and_at`, `by_organization_and_action_and_at`,
+  `by_organization_and_target_and_at`) et `notifications`
+  (`by_user_and_organization_and_updated`, `by_user_and_organization_and_read`,
+  `by_user_and_organization_and_machine_and_updated`,
+  `by_user_and_organization_and_machine_and_read`).
+- Trois n'ont pas d'index par organisation : `machine_health_history`
+  (lecture par machine et période), `session_record_files` et
+  `session_record_uploads` (lecture par séance, machine ou jeton de dépôt).
+  Leurs droits se vérifient par la machine ou la séance, dont elles copient
+  l'organisation.
+
+Toute nouvelle table de données d'une organisation porte `organizationId`.
+`training_events` et `session_summaries_v2` le copient de leur séance ; ce ne
+sont pas des tables communes à tous les clients. Les tables globales et les
+tables liées ci-dessous expliquent les absences actuelles du champ.
+
+Douze tables ne le portent pas : `organizations` décrit les organisations
+elles-mêmes ; `clerk_webhook_events` déduplique les événements Clerk au niveau
+global ; `software_releases`, `software_release_levels` et
+`medical_parameters_versions` sont des registres communs à tous les clients ;
+`record_upload_sweeps` conserve le curseur global de nettoyage des dépôts ;
+`ecg_data`, `session_summaries` et `session_record_manifest_pages` se lisent par
+leur séance ; `machine_api_keys` et `machine_heartbeats` par leur machine ;
+`notification_settings` par leur compte. Ces six dernières tables liées
+suivent les droits de leur séance, machine ou compte, sans index par
+organisation propre.
+
+Le compte « huit tables » de la migration ANH-114 plus loin décrit son
+périmètre initial : machines, comptes, liens passager-gestionnaire et les cinq
+tables alors rattachées aux machines. Ce n'est pas le compte du schéma actuel ;
+la migration actuelle inclut aussi `training_events`.
 
 - Une **machine appartient à exactement une organisation**. Ce qu'elle écrit
   par les routes machine (séances locales, télémétrie, programmes) et ce qui
@@ -686,7 +723,7 @@ laisse la séance et sa télémétrie ; la durée de conservation relève d'ANH-
 | `zone` | temps dans, au-dessus et en dessous de `[zone_low_bpm, zone_high_bpm]`, bornes comprises : chaque tic ajoute le temps écoulé depuis le tic précédent selon sa FC ; un tic sans FC confirmée ne compte nulle part ; `null` sans programme (séance manuelle) | `TrainingRuntime._accumulate` (`raspberry-pi/src/training/runtime.py`), `ZoneCounters` (`types.py`) |
 | `maxOutputRpm`, `maxMotorRpm` | maximum de la vitesse mesurée du bras et du moteur, en valeur absolue | colonnes `output_rpm`, `measured_motor_rpm` |
 | `reference.maxG`, `legTip.maxG` | maximum de `g_reference` et `g_leg_tip` : accélération **centripète** ω²r/9,80665 au rayon de référence et à la pointe du pied, pas la résultante avec la pesanteur (provisoire : `gLoad`, au rayon de référence seulement) | `output_rpm_to_g` (`raspberry-pi/src/units.py`) |
-| `reference.maxGRate`, `legTip.maxGRate` | variation de g max : sur chaque fenêtre de 1 s (5 intervalles, 6 tics consécutifs) dont tous les tics sont jugés (mesure fraîche, pas de silence, ni `QUICK_STOP` ni `GO_SILENT`, variateur `OPERATION_ENABLED`, vitesse moteur au moins la consigne minimale du programme, 55 tr/min sans programme), \|g fin − g début\| / durée ; `null` dans le résumé provisoire | `arm_windows` (`simulation/invariants.py`) ; 55 tr/min : `min_run_motor_rpm` de `raspberry-pi/config/motion_limits.json` |
+| `reference.maxGRate`, `legTip.maxGRate` | variation de g max : sur chaque fenêtre de 1 s (5 intervalles, 6 tics consécutifs) dont tous les tics sont jugés (mesure fraîche, pas de silence, ni `QUICK_STOP` ni `GO_SILENT`, variateur `OPERATION_ENABLED`, vitesse moteur au moins la consigne minimale du programme, 55 tr/min sans programme), \|g fin − g début\| / durée ; `null` dans le résumé provisoire ou si aucune fenêtre mesurable n'existe dans l'enregistrement | `arm_windows` (`simulation/invariants.py`) ; 55 tr/min : `min_run_motor_rpm` de `raspberry-pi/config/motion_limits.json` |
 | `radiusM`, `legTip.measured` | rayons et rayon de la pointe mesuré ou estimé, si le manifeste porte la géométrie (la simulation ; la console écrit `geometry: null`) | [enregistrement.md, Contexte commun](enregistrement.md#contexte-commun-aux-deux-producteurs) |
 | `verdicts`, `verdictsOmitted` | chaque règle de sécurité apparue sur un tic de séance, dans l'ordre d'apparition, avec l'action la plus sévère vue avec elle (32 règles gardées, les autres comptées) ; provisoire : les événements `verdict` | `rules_seen` (`simulation/invariants.py`), ordre de `SafetyAction` (`types.py`) |
 | `endReason`, `endRule` | `end_reason` du manifeste (provisoire : `endReason` de la séance) ; pour une fin `safety_verdict`, la règle du premier tic `ending` ou `finished`, sinon celle du tic de séance immédiatement précédent ; `null` si aucun des deux ne porte une règle ou sans tic de fin lu, sans repli sur une règle plus ancienne | `EndReason` (`raspberry-pi/src/training/runtime.py`) |
@@ -699,6 +736,22 @@ les points de télémétrie. L'intervalle en zone part toujours du dernier tic
 retenu : `[0, 10, 5, 6]` donne 10 s en zone et une durée de 10 s.
 L'historique ne dessine aucune barre quand `durationS` vaut `null`, même si
 `inZoneS` vaut 0 : une absence n'est jamais représentée par zéro.
+
+La carte et le rapport disent « après l'enregistrement » pour une variation
+de g absente seulement si le résumé est provisoire sans `recordProblem`.
+Sur un résumé final, ils disent « aucune fenêtre mesurable » et rappellent
+les conditions des six tics ; sur un provisoire avec `recordProblem`,
+« non disponible », car l'enregistrement n'a pas pu être lu. Une valeur
+présente reste affichée en g/s, quelle que soit la source.
+
+La page Rapports liste les séances `completed` lisibles, avec **Voir** pour
+toutes et **Rapport PDF** seulement pour `auto` ou `manual`. Une ancienne
+séance ECG (`recording`) porte une mention d'absence de rapport ; son URL
+`/dashboard/sessions/{id}/report` affiche cette explication et un retour à la
+séance, sans rapport vide ni bouton d'impression. La page indique aussi où
+ouvrir le rapport d'une séance `failed`, absente de cette liste :
+**Sessions > Échouées > Voir**, puis **Résumé de la séance > Rapport PDF**,
+ou l'historique du passager depuis sa fiche si le rôle permet de la lire.
 
 Deux écarts connus avec la console, vérifiés le 14 octobre 2026 sur quatre
 scénarios de la simulation (`auto_jog_150_nominal`,
