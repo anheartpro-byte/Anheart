@@ -1079,9 +1079,11 @@ dont la donnée est un code de la table `convex/lib/errors.ts`, levé par
 `refusal(code)` : elles arrivent intactes dans le navigateur, même en
 production, et le site affiche leur traduction (`errors.<code>` dans
 `messages/*.json`). Depuis ANH-90, plus aucune phrase : `convex/errors.test.ts`
-analyse l'AST TypeScript et échoue si `training.ts` importe `ConvexError`,
-même sous un alias, utilise `ConvexError` via un import d'espace de noms,
-ou construit ou appelle `Error(...)`, avec un littéral ou une variable.
+analyse l'AST TypeScript et échoue si `training.ts` importe `ConvexError`
+depuis `convex/values`, même sous un alias, ou accède à `ConvexError` via
+un import d'espace de noms de ce module. Il refuse aussi toute construction
+ou appel d'`Error`, de l'identifiant `ConvexError` ou d'une propriété nommée
+`ConvexError`, quel que soit l'objet ou l'import, avec un littéral ou une variable.
 Les commentaires et les chaînes ne comptent pas ; `refusal` et
 `machineError` restent autorisés. Les
 fonctions internes des routes machine refusent avec les codes du contrat
@@ -2057,6 +2059,12 @@ le type de l'alerte.
 
 **Extension bloquée (ANH-145).** Les alertes d'incident attendent la livraison
 d'ANH-145. Aucun type ni table d'incident n'est créé ici.
+À cette livraison, ajouter un type dans `notificationTypeValidator` et
+`notificationEmailFields` de `convex/schema.ts`, une entrée de
+`NOTIFICATION_TYPES` dans `convex/lib/notifications.ts` avec son `foldsBy`,
+sa `sessionPriority` et `emailByDefault`, et ses deux traductions dans
+`messages/fr.json` et `messages/en.json`. Appeler ensuite `scheduleAlert`
+là où l'incident est créé.
 
 ---
 
@@ -3271,7 +3279,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |
-| `convex/errors.test.ts` | La table `convex/lib/errors.ts` : chaque code a sa traduction française et anglaise, aucune traduction sans code, aucun code levé hors de la table, plus aucune `Error` simple dans `users.ts` et `machines.ts` hors du heartbeat interne (ANH-194) ; la connexion et les refus d'organisation par code, plus aucune phrase dans `softwareReleases.ts`, `notifications.ts` et `training.ts` (ANH-90). Pour `training.ts`, garde-fou AST contre l'import de `ConvexError` (alias et espace de noms compris) et les constructions ou appels d'`Error`, avec littéral ou variable ; extraits positifs et négatifs, commentaires et chaînes ignorés (ANH-237). |
+| `convex/errors.test.ts` | La table `convex/lib/errors.ts` : chaque code a sa traduction française et anglaise, aucune traduction sans code, aucun code levé hors de la table, plus aucune `Error` simple dans `users.ts` et `machines.ts` hors du heartbeat interne (ANH-194) ; la connexion et les refus d'organisation par code, plus aucune phrase dans `softwareReleases.ts`, `notifications.ts` et `training.ts` (ANH-90). Pour `training.ts`, garde-fou AST contre l'import de `ConvexError` depuis `convex/values` (alias compris), ses accès via l'espace de noms de ce module, et toute construction ou appel d'`Error`, de l'identifiant `ConvexError` ou d'une propriété nommée `ConvexError`, quel que soit l'objet ou l'import, avec littéral ou variable ; extraits positifs et négatifs, commentaires et chaînes ignorés (ANH-237). |
 | `convex/notifications.test.ts`, `convex/notificationEmails.test.ts` | Alertes aux gestionnaires : destinataires, événements, regroupement, lectures autorisées, choix par défaut, langue et corps envoyé sans donnée de santé (sentinelles MEN-13), purge et suppression avec le compte. ANH-237 : livraison isolée, reprises bornées, erreurs HTTP et réseau, contrat REST exact, clé absente de toutes les tables et arguments planifiés. Horloges simulées et `fetch` simulé : aucun appel à Resend. |
 | `convex/gestionnairePatients.test.ts` | `users.assignPatientsToGestionnaire` : ajout seul, retrait seul, les deux, liste inchangée (aucune ligne réécrite), identifiant répété, patient d'une autre organisation traité comme un compte inconnu, admin d'une autre organisation refusé comme pour un gestionnaire inconnu, deux enregistrements successifs (ANH-208). |
 | `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |

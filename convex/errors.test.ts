@@ -110,6 +110,7 @@ function sentences(path: string): string[] {
     .filter((text) => !/^[a-z][a-z0-9_]*$/.test(text));
 }
 
+/** Find direct error construction and ConvexError imports or namespace uses. */
 export function trainingErrorViolations(text: string): string[] {
   const source = ts.createSourceFile(
     "training.ts",
@@ -141,8 +142,11 @@ export function trainingErrorViolations(text: string): string[] {
   const visit = (node: ts.Node) => {
     if (
       (ts.isNewExpression(node) || ts.isCallExpression(node)) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "Error"
+      ((ts.isIdentifier(node.expression) &&
+        (node.expression.text === "Error" ||
+          node.expression.text === "ConvexError")) ||
+        (ts.isPropertyAccessExpression(node.expression) &&
+          node.expression.name.text === "ConvexError"))
     ) {
       violations.push(node.getText(source));
     }
@@ -165,6 +169,11 @@ describe("T04-a: training's error guard", () => {
     'import { ConvexError } from "convex/values";',
     'import { ConvexError as CE } from "convex/values"; throw new CE("x")',
     'import * as values from "convex/values"; throw new values.ConvexError(code)',
+    'import { ConvexError } from "./lib/errors"; throw new ConvexError("phrase")',
+    'throw new ConvexError("phrase")',
+    "throw new errors.ConvexError(code)",
+    "throw ConvexError(code)",
+    "throw errors.ConvexError(code)",
     "throw new Error(message)",
     "throw Error(message)",
     'throw new Error("x")',
@@ -177,6 +186,8 @@ describe("T04-a: training's error guard", () => {
     'throw machineError("session_not_found", "Session not found")',
     "throw refusal(code)",
     "// new Error(x)",
+    '// throw new ConvexError("phrase"); errors.ConvexError(code)',
+    '"new ConvexError(phrase); errors.ConvexError(code)"',
     '/* import { ConvexError as CE } from "convex/values"; Error(x) */',
     '"Error("',
     "`new Error(x); values.ConvexError`",
