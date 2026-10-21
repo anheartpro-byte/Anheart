@@ -64,13 +64,18 @@ export type ProgressionPoint = {
 
 /**
  * The progression of a rider: the time in zone of each session that has
- * one, in minutes, oldest first. A session without a summary, or without a
+ * one, in minutes, oldest first. A session without a summary, duration, or
  * zone (a manual session), has no bar: absence is never drawn as zero.
  */
 export function progressionOf(history: HistorySession[]): ProgressionPoint[] {
   const points: ProgressionPoint[] = [];
   for (const { sessionId, startedAt, summary } of history) {
-    if (summary === null || summary.inZoneS === null) continue;
+    if (
+      summary === null ||
+      summary.durationS === null ||
+      summary.inZoneS === null
+    )
+      continue;
     points.push({
       sessionId,
       startedAt,

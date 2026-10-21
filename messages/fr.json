@@ -1296,7 +1296,9 @@
     "warnings": {
       "record_degraded": "L'enregistrement signale des données manquantes : certaines valeurs peuvent être sous-estimées.",
       "lines_skipped": "Des lignes illisibles de l'enregistrement ont été ignorées.",
-      "telemetry_truncated": "La télémétrie dépasse ce qu'un résumé lit : seules les six premières heures sont comptées."
+      "telemetry_truncated": "La télémétrie dépasse ce qu'un résumé lit : seules les six premières heures sont comptées.",
+      "events_truncated": "Les événements dépassent ce qu'un résumé lit : certains verdicts de sécurité peuvent manquer.",
+      "ticks_out_of_order": "Des tics ou points de télémétrie dont le temps ne progressait pas ont été ignorés."
     },
     "historyTitle": "Historique et progression",
     "historyDescription": "Les séances terminées de ce pratiquant que vous pouvez consulter, les plus récentes d'abord.",

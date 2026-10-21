@@ -107,6 +107,23 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("the figures of a summary", () => {
+  it.each(["fr", "en"] as const)(
+    "renders truncation and tick ordering warnings in %s",
+    (locale) => {
+      const warnings = ["events_truncated", "ticks_out_of_order"] as const;
+      const screen = render(
+        <SessionSummaryFigures
+          figures={figures({ warnings: [...warnings] })}
+        />,
+        { locale },
+      );
+      for (const warning of warnings)
+        expect(screen.text()).toContain(
+          messages[locale].sessionReport.warnings[warning],
+        );
+    },
+  );
+
   it("writes every figure of the record, in the visitor's language", () => {
     const screen = render(<SessionSummaryFigures figures={figures()} />);
     const text = screen.text();
@@ -342,6 +359,16 @@ describe("the history of a rider", () => {
       locale: "en",
     });
     expect(screen.text()).toContain("- 15 min 00 s 138.5 bpm");
+    expect(drawn.some((d) => d.part === "BarChart")).toBe(false);
+  });
+
+  it("draws no zero-minute bar for a summary without a duration", () => {
+    answer("sessionReports:riderHistory", [
+      row({ summary: { ...row().summary!, durationS: null, inZoneS: 0 } }),
+    ]);
+    const screen = render(<RiderHistoryCard userId={userId} />);
+    expect(screen.text()).toContain(r.progressionEmpty);
+    expect(drawn.some((d) => d.part === "BarChart")).toBe(false);
   });
 });
 

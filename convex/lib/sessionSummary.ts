@@ -18,6 +18,8 @@
  * - Session ticks: `t > 0`. `t = 0` is the start command, a tick at 0 is the
  *   last tick before it, and the ticks of the rest that precede the start
  *   have a `t` at or below 0 (docs/enregistrement.md, "Tics, 5 Hz").
+ *   A tick or telemetry point at or before the last retained time is ignored
+ *   in every figure, counted, and reported as `ticks_out_of_order`.
  * - Duration: the `t` of the last session tick, in seconds, on the monotonic
  *   clock of the record (never a difference of wall-clock dates, which may be
  *   wrong when `clocks.wall_trusted` is false).
@@ -58,7 +60,9 @@
  *   severe action it stood with (order of `SafetyAction`, types.py). From the
  *   telemetry, which has no rule, the `verdict` events stand in.
  * - End: the reason of the manifest (`end_reason`), and, for a session a
- *   safety verdict ended, the rule standing on the first tick of the ending
+ *   safety verdict ended, the rule on the first `ending` or `finished` tick,
+ *   or, if absent, on the immediately preceding session tick. Null when
+ *   neither carries a rule or no ending tick was read; never an earlier rule
  *   (`EndReason.SAFETY_VERDICT`, raspberry-pi/src/training/runtime.py).
  *
  * Not in the summary yet, because nothing records them: the result of the
@@ -188,7 +192,9 @@ export const summaryFiguresValidator = v.object({
    * What the reader of the summary must know of its source, as codes:
    * `record_degraded` (the record says it misses data), `lines_skipped`
    * (lines of a file that were not of the format), `telemetry_truncated`
-   * (more points than a summary reads).
+   * (more points than a summary reads), `events_truncated` (more events than
+   * a summary reads), `ticks_out_of_order` (ticks or points ignored because
+   * their time did not strictly increase).
    */
   warnings: v.array(v.string()),
 });
@@ -214,6 +220,8 @@ export const recordProblemValidator = v.union(
   v.literal("invalid_manifest"),
   v.literal("invalid_encoding"),
   v.literal("invalid_ticks"),
+  v.literal("no_session_ticks"),
+  v.literal("summary_failed"),
 );
 export type RecordProblem = Infer<typeof recordProblemValidator>;
 
@@ -291,6 +299,8 @@ export function manifestContext(value: unknown): ManifestContext | null {
 // Reading a file line by line
 // ---------------------------------------------------------------------------
 
+class InvalidEncodingError extends Error {}
+
 /**
  * Call `onLine` with every complete line of `blob`, read by slices of
  * `chunkBytes`: the file is never held whole. As the record's reader does
@@ -310,7 +320,14 @@ export async function forEachLine(
   for (let offset = 0; offset < blob.size; offset += chunkBytes) {
     const bytes = await blob.slice(offset, offset + chunkBytes).arrayBuffer();
     const last = offset + chunkBytes >= blob.size;
-    const text = decoder.decode(new Uint8Array(bytes), { stream: !last });
+    const chunk = new Uint8Array(bytes);
+    let text: string;
+    try {
+      text = decoder.decode(chunk, { stream: !last });
+    } catch (error) {
+      if (error instanceof TypeError) throw new InvalidEncodingError();
+      throw error;
+    }
     let start = 0;
     for (
       let end = text.indexOf("\n", start);
@@ -408,7 +425,8 @@ export class SummaryBuilder {
   private window: Sample[] = [];
   private verdicts = new Map<string, Verdict>();
   private omitted = new Set<string>();
-  private lastRule: string | null = null;
+  private previousRule: string | null = null;
+  private outOfOrder = 0;
   private endingRule: string | null | undefined = undefined;
 
   constructor(
@@ -418,6 +436,10 @@ export class SummaryBuilder {
 
   add(sample: Sample): void {
     const previous = this.previousT;
+    if (previous !== null && sample.t <= previous) {
+      this.outOfOrder++;
+      return;
+    }
     this.previousT = sample.t;
     if (!(sample.t > 0)) return;
     this.samples++;
@@ -452,8 +474,8 @@ export class SummaryBuilder {
       sample.state !== null &&
       ENDING_STATES.has(sample.state)
     )
-      this.endingRule = sample.rule ?? this.lastRule;
-    if (sample.rule !== null) this.lastRule = sample.rule;
+      this.endingRule = sample.rule ?? this.previousRule;
+    this.previousRule = sample.rule;
     if (this.rates) this.judge(sample);
   }
 
@@ -505,7 +527,7 @@ export class SummaryBuilder {
   }): SummaryFigures {
     const endRule =
       context.endReason === SAFETY_VERDICT_END
-        ? (this.endingRule ?? this.lastRule)
+        ? (this.endingRule ?? null)
         : null;
     return {
       durationS: roundedOrNull(this.lastT, 1),
@@ -549,7 +571,10 @@ export class SummaryBuilder {
       verdictsOmitted: this.omitted.size,
       endReason: context.endReason,
       endRule,
-      warnings: context.warnings,
+      warnings:
+        this.outOfOrder > 0
+          ? [...context.warnings, "ticks_out_of_order"]
+          : context.warnings,
     };
   }
 }
@@ -700,34 +725,33 @@ export class EventReader {
 // ---------------------------------------------------------------------------
 
 /**
- * The figures of a deposited record, from its three files (null when one is
- * missing from storage), or why they cannot be computed. Bounded: the
+ * The figures of a deposited record, opening its files one at a time (null
+ * when missing from storage), or why they cannot be computed. Bounded: the
  * manifest is read whole (2 MiB at most), the two streams line by line, and
  * nothing else of the record is opened, however many raw blocks it holds.
  */
 export async function summarizeRecordFiles(files: {
-  manifest: Blob | null;
-  ticks: Blob | null;
-  events: Blob | null;
+  manifest: () => Promise<Blob | null>;
+  ticks: () => Promise<Blob | null>;
+  events: () => Promise<Blob | null>;
   maxFileBytes: number;
 }): Promise<{ figures: SummaryFigures } | { problem: RecordProblem }> {
-  const { manifest, ticks, events, maxFileBytes } = files;
-  if (manifest === null || ticks === null || events === null)
-    return { problem: "missing_file" };
-  if (
-    manifest.size > MAX_MANIFEST_BYTES ||
-    ticks.size > maxFileBytes ||
-    events.size > maxFileBytes
-  )
-    return { problem: "too_large" };
   let context: ManifestContext | null;
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(
-      await manifest.arrayBuffer(),
-    );
-    context = manifestContext(JSON.parse(text));
-  } catch {
-    context = null;
+  {
+    const manifest = await files.manifest();
+    if (manifest === null) return { problem: "missing_file" };
+    if (manifest.size > MAX_MANIFEST_BYTES) return { problem: "too_large" };
+    const bytes = await manifest.arrayBuffer();
+    let value: unknown;
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      value = JSON.parse(text);
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof SyntaxError)
+        return { problem: "invalid_manifest" };
+      throw error;
+    }
+    context = manifestContext(value);
   }
   if (context === null) return { problem: "invalid_manifest" };
   const builder = new SummaryBuilder(context.zone, true);
@@ -735,27 +759,38 @@ export async function summarizeRecordFiles(files: {
   const eventReader = new EventReader();
   let overlong = 0;
   try {
-    overlong += (await forEachLine(ticks, (line) => tickReader.line(line)))
-      .overlong;
-    overlong += (await forEachLine(events, (line) => eventReader.line(line)))
-      .overlong;
-  } catch {
-    return { problem: "invalid_encoding" };
+    {
+      const ticks = await files.ticks();
+      if (ticks === null) return { problem: "missing_file" };
+      if (ticks.size > files.maxFileBytes) return { problem: "too_large" };
+      overlong += (await forEachLine(ticks, (line) => tickReader.line(line)))
+        .overlong;
+    }
+    {
+      const events = await files.events();
+      if (events === null) return { problem: "missing_file" };
+      if (events.size > files.maxFileBytes) return { problem: "too_large" };
+      overlong += (await forEachLine(events, (line) => eventReader.line(line)))
+        .overlong;
+    }
+  } catch (error) {
+    if (error instanceof InvalidEncodingError)
+      return { problem: "invalid_encoding" };
+    throw error;
   }
   if (!tickReader.ready) return { problem: "invalid_ticks" };
   const warnings: string[] = [];
   if (eventReader.degraded) warnings.push("record_degraded");
   if (overlong + tickReader.skipped + eventReader.skipped > 0)
     warnings.push("lines_skipped");
-  return {
-    figures: builder.figures({
-      endReason: context.endReason,
-      referenceRadiusM: context.referenceRadiusM,
-      legTipRadiusM: context.legTipRadiusM,
-      legTipMeasured: context.legTipMeasured,
-      warnings,
-    }),
-  };
+  const figures = builder.figures({
+    endReason: context.endReason,
+    referenceRadiusM: context.referenceRadiusM,
+    legTipRadiusM: context.legTipRadiusM,
+    legTipMeasured: context.legTipMeasured,
+    warnings,
+  });
+  return figures.samples === 0 ? { problem: "no_session_ticks" } : { figures };
 }
 
 /**

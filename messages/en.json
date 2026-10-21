@@ -1296,7 +1296,9 @@
     "warnings": {
       "record_degraded": "The record says it misses data: some values may be underestimated.",
       "lines_skipped": "Unreadable lines of the record were skipped.",
-      "telemetry_truncated": "The telemetry exceeds what a summary reads: only the first six hours are counted."
+      "telemetry_truncated": "The telemetry exceeds what a summary reads: only the first six hours are counted.",
+      "events_truncated": "The events exceed what a summary reads: some safety verdicts may be missing.",
+      "ticks_out_of_order": "Ticks or telemetry points whose time did not advance were skipped."
     },
     "historyTitle": "History and progression",
     "historyDescription": "This rider's finished sessions you may read, newest first.",

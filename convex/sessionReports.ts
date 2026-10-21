@@ -277,6 +277,7 @@ export const summarizeTelemetry = internalAction({
       }
       cursor = page.cursor;
     } while (cursor !== null && pages < MAX_EVENT_PAGES);
+    if (cursor !== null) warnings.push("events_truncated");
     await ctx.runMutation(internal.sessionReports.storeSummary, {
       sessionId,
       source: "telemetry",
@@ -322,26 +323,31 @@ export const summarizeRecord = internalAction({
       sessionId,
     });
     if (files === null) return null;
-    const [manifest, ticks, events] = await Promise.all(
-      files.map((storageId) => ctx.storage.get(storageId)),
-    );
-    const outcome = await summarizeRecordFiles({
-      manifest,
-      ticks,
-      events,
-      maxFileBytes: MAX_RECORD_FILE_BYTES,
-    });
-    if ("problem" in outcome)
+    try {
+      const outcome = await summarizeRecordFiles({
+        manifest: () => ctx.storage.get(files[0]),
+        ticks: () => ctx.storage.get(files[1]),
+        events: () => ctx.storage.get(files[2]),
+        maxFileBytes: MAX_RECORD_FILE_BYTES,
+      });
+      if ("problem" in outcome)
+        await ctx.runMutation(internal.sessionReports.noteRecordProblem, {
+          sessionId,
+          problem: outcome.problem,
+        });
+      else
+        await ctx.runMutation(internal.sessionReports.storeSummary, {
+          sessionId,
+          source: "record",
+          figures: outcome.figures,
+        });
+    } catch {
+      console.warn({ sessionId, code: "summary_failed" });
       await ctx.runMutation(internal.sessionReports.noteRecordProblem, {
         sessionId,
-        problem: outcome.problem,
+        problem: "summary_failed",
       });
-    else
-      await ctx.runMutation(internal.sessionReports.storeSummary, {
-        sessionId,
-        source: "record",
-        figures: outcome.figures,
-      });
+    }
     return null;
   },
 });
