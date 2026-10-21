@@ -145,6 +145,31 @@ describe("the alerts page", () => {
         ).toBeTruthy();
       },
     );
+
+    it.each(["drive_fault", "safety_verdict"] as const)(
+      "R1c2-3: renders the translated end reason under %s",
+      async (type) => {
+        signedInAs("gestionnaire");
+        serverHas([
+          alert("promoted-end-reason", {
+            type,
+            reason: "safety_verdict: hr_drop (RAMP_DOWN)",
+          }),
+        ]);
+
+        await renderPage(<NotificationsPage />, { locale });
+
+        const expected =
+          locale === "fr"
+            ? "Verdict de sécurité : hr_drop (RAMP_DOWN)"
+            : "Safety verdict: hr_drop (RAMP_DOWN)";
+        expect(
+          item(messages.notifications.types[type]).getByText(
+            messages.notifications.reason.replace("{reason}", expected),
+          ),
+        ).toBeTruthy();
+      },
+    );
   });
 
   it.each(["fr", "en"] as const)(
