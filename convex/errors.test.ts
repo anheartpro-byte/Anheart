@@ -110,7 +110,7 @@ function sentences(path: string): string[] {
     .filter((text) => !/^[a-z][a-z0-9_]*$/.test(text));
 }
 
-/** Find direct error construction, inheritance, literal throws and ConvexError imports. */
+/** Find direct error construction, inheritance, unapproved throws and ConvexError imports. */
 export function trainingErrorViolations(text: string): string[] {
   const source = ts.createSourceFile(
     "training.ts",
@@ -131,12 +131,22 @@ export function trainingErrorViolations(text: string): string[] {
     "URIError",
     "AggregateError",
   ]);
-  const isGlobalError = (expression: ts.Expression) =>
-    (ts.isIdentifier(expression) && globalErrors.has(expression.text)) ||
-    (ts.isPropertyAccessExpression(expression) &&
-      ts.isIdentifier(expression.expression) &&
-      expression.expression.text === "globalThis" &&
-      globalErrors.has(expression.name.text));
+  const withoutParentheses = (expression: ts.Expression): ts.Expression => {
+    while (ts.isParenthesizedExpression(expression)) {
+      expression = expression.expression;
+    }
+    return expression;
+  };
+  const isGlobalError = (expression: ts.Expression) => {
+    const unwrapped = withoutParentheses(expression);
+    return (
+      (ts.isIdentifier(unwrapped) && globalErrors.has(unwrapped.text)) ||
+      (ts.isPropertyAccessExpression(unwrapped) &&
+        ts.isIdentifier(unwrapped.expression) &&
+        unwrapped.expression.text === "globalThis" &&
+        globalErrors.has(unwrapped.name.text))
+    );
+  };
   for (const statement of source.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const bindings = statement.importClause?.namedBindings;
@@ -173,13 +183,19 @@ export function trainingErrorViolations(text: string): string[] {
     ) {
       violations.push(node.getText(source));
     }
-    if (
-      ts.isThrowStatement(node) &&
-      (ts.isStringLiteral(node.expression) ||
-        ts.isNoSubstitutionTemplateLiteral(node.expression) ||
-        ts.isTemplateExpression(node.expression))
-    ) {
-      violations.push(node.getText(source));
+    if (ts.isThrowStatement(node)) {
+      const expression = withoutParentheses(node.expression);
+      if (
+        !ts.isIdentifier(expression) &&
+        !(
+          ts.isCallExpression(expression) &&
+          ts.isIdentifier(expression.expression) &&
+          (expression.expression.text === "refusal" ||
+            expression.expression.text === "machineError")
+        )
+      ) {
+        violations.push(node.getText(source));
+      }
     }
     if (
       ts.isPropertyAccessExpression(node) &&
@@ -211,6 +227,9 @@ describe("T04-a: training's error guard", () => {
         `new ${constructor}(message)`,
         `${constructor}(message)`,
         `class Refused extends ${constructor} {}`,
+        `new ((${constructor}))(message)`,
+        `((${constructor}))(message)`,
+        `class Refused extends ((${constructor})) {}`,
       ]),
     ),
   )("R1c1-3: detects a global error constructor: %s", (text) => {
@@ -226,6 +245,24 @@ describe("T04-a: training's error guard", () => {
   ])("R1c1-3: detects a literal throw or named import: %s", (text) => {
     expect(trainingErrorViolations(text)).not.toEqual([]);
   });
+
+  it.each([
+    'throw "Session " + sessionId + " not found"',
+    'throw { message: "x" }',
+    "throw String(message)",
+    'throw ("x")',
+    'throw (("x"))',
+    "new (Error)(message)",
+    "class Refused extends (Error) {}",
+    'import * as values from "convex/values"; const { ConvexError: CE } = values; throw new CE(message)',
+    "throw createError(message)",
+    'throw new globalThis["Error"](message)',
+  ])(
+    "R1c2-1: rejects a throw outside the allowlist or a parenthesized error: %s",
+    (text) => {
+      expect(trainingErrorViolations(text)).not.toEqual([]);
+    },
+  );
 
   it.each([
     'import { ConvexError } from "convex/values";',
@@ -247,6 +284,11 @@ describe("T04-a: training's error guard", () => {
   it.each([
     'throw machineError("session_not_found", "Session not found")',
     "throw refusal(code)",
+    'throw machineError("a", "b")',
+    "throw (refusal(code))",
+    'throw ((machineError("a", "b")))',
+    "try {} catch (err) { throw err; }",
+    "try {} catch (err) { throw ((err)); }",
     "// new Error(x)",
     '// throw new ConvexError("phrase"); errors.ConvexError(code)',
     '"new ConvexError(phrase); errors.ConvexError(code)"',
@@ -274,9 +316,14 @@ describe("T04-a: training's error guard", () => {
     'const { ConvexError: CE } = await import("convex/values"); new CE(message)',
     'new globalThis["Error"](message)',
     'import * as values from "convex/values"; new values["ConvexError"](message)',
-  ])("R1c1-3: leaves indirect forms outside the guard's scope: %s", (text) => {
-    expect(trainingErrorViolations(text)).toEqual([]);
-  });
+    'import * as values from "convex/values"; const { ConvexError: CE } = values; new CE(message)',
+    'const err = "Session " + sessionId + " not found"; throw err',
+  ])(
+    "R1c2-1: leaves indirect construction and identifier contents outside the guard's scope: %s",
+    (text) => {
+      expect(trainingErrorViolations(text)).toEqual([]);
+    },
+  );
 });
 
 describe("ANH-90 no English sentence reaches the site", () => {
