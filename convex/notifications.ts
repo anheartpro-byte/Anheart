@@ -90,6 +90,9 @@ export const list = query({
         row.sessionId === undefined ? null : await ctx.db.get(row.sessionId);
       const readable =
         session !== null && (await canAccessSession(ctx, session, caller));
+      const showReason =
+        readable &&
+        (row.type === "session_failed" || session.status === "failed");
       result.push({
         _id: row._id,
         type: row.type,
@@ -98,14 +101,8 @@ export const list = query({
         machineDeleted: machine === null || machine.isDeleted === true,
         sessionId: readable ? session._id : undefined,
         detail: row.detail,
-        reason:
-          readable && row.type === "session_failed"
-            ? session.endReason
-            : undefined,
-        reasonCode:
-          readable && row.type === "session_failed"
-            ? session.endCode
-            : undefined,
+        reason: showReason ? session.endReason : undefined,
+        reasonCode: showReason ? session.endCode : undefined,
         count: row.count,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,

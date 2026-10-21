@@ -777,6 +777,124 @@ describe("what the machine wrote, read as a code", () => {
 // ---------------------------------------------------------------------------
 
 describe("the alerts a caller reads", () => {
+  it.each(["drive_fault", "safety_verdict"] as const)(
+    "R1c1-2: keeps the failed session's reason and code when promoted to %s",
+    async (type) => {
+      const w = await seedWorld(modules);
+      const sessionId = await addSession(w, {
+        machineId: w.machine,
+        userId: w.patient,
+        status: "failed",
+        kind: "auto",
+      });
+      const reason = "launch refused";
+      const reasonCode = "expired_before_start";
+      await w.t.run((ctx) =>
+        ctx.db.patch(sessionId, { endReason: reason, endCode: reasonCode }),
+      );
+      await w.t.mutation(internal.notifications.deliver, {
+        machineId: w.machine,
+        sessionId,
+        type: "session_failed",
+        count: 1,
+      });
+      for (const actor of ["manager", "orgAdmin"] as const) {
+        expect(await as(w.t, actor).query(api.notifications.list, {})).toEqual([
+          expect.objectContaining({ type: "session_failed", reason, reasonCode }),
+        ]);
+      }
+
+      await w.t.mutation(internal.notifications.deliver, {
+        machineId: w.machine,
+        sessionId,
+        type,
+        count: 1,
+      });
+
+      for (const actor of ["manager", "orgAdmin"] as const) {
+        expect(await as(w.t, actor).query(api.notifications.list, {})).toEqual([
+          expect.objectContaining({
+            type,
+            sessionId,
+            count: 2,
+            reason,
+            reasonCode,
+          }),
+        ]);
+      }
+    },
+  );
+
+  it.each(
+    (["drive_fault", "safety_verdict"] as const).flatMap((type) =>
+      (["active", "completed"] as const).map((status) => ({ type, status })),
+    ),
+  )("R1c1-2: omits the reason of a $status session's $type alert", async ({
+    type,
+    status,
+  }) => {
+    const w = await seedWorld(modules);
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status,
+      kind: "auto",
+    });
+    await w.t.run((ctx) =>
+      ctx.db.patch(sessionId, {
+        endReason: "programme complete",
+        endCode: "expired_before_start",
+      }),
+    );
+    await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      sessionId,
+      type,
+      count: 1,
+    });
+
+    for (const actor of ["manager", "orgAdmin"] as const) {
+      const [row] = await as(w.t, actor).query(api.notifications.list, {});
+      expect(row.sessionId).toBe(sessionId);
+      expect(row.reason).toBeUndefined();
+      expect(row.reasonCode).toBeUndefined();
+    }
+  });
+
+  it.each(["session_failed", "drive_fault", "safety_verdict"] as const)(
+    "R1c1-2: hides session, reason and code when a %s recipient loses session access",
+    async (type) => {
+      const w = await seedWorld(modules);
+      const sessionId = await addSession(w, {
+        machineId: w.machine,
+        userId: w.patient,
+        status: "failed",
+        kind: "auto",
+      });
+      await w.t.run((ctx) =>
+        ctx.db.patch(sessionId, {
+          endReason: "launch refused",
+          endCode: "expired_before_start",
+        }),
+      );
+      await w.t.mutation(internal.notifications.deliver, {
+        machineId: w.machine,
+        sessionId,
+        type,
+        count: 1,
+      });
+
+      await w.t.run((ctx) => ctx.db.patch(sessionId, { organizationId: w.orgB }));
+
+      for (const actor of ["manager", "orgAdmin"] as const) {
+        const [row] = await as(w.t, actor).query(api.notifications.list, {});
+        expect(row.sessionId).toBeUndefined();
+        expect(row.reason).toBeUndefined();
+        expect(row.reasonCode).toBeUndefined();
+      }
+    },
+  );
+
   it("lists the newest change first, with the reason of a failed session", async () => {
     const w = await seedWorld(modules);
     const sessionId = await addSession(w, {

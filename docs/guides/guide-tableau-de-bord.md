@@ -1693,8 +1693,10 @@ accessibles à l'admin d'organisation et au gestionnaire encore lié, comme
 ses séances : **Machine supprimée** remplace le lien vers sa fiche. Le lien
 vers la séance reste disponible quand elle est lisible.
 
-Pour une **Séance échouée** que vous pouvez lire, la raison donne d'abord
-le libellé traduit du code de refus, s'il est connu. Sinon, un identifiant
+Toute alerte d'une séance échouée que vous pouvez lire affiche sa raison,
+même si son type est devenu **Défaut variateur** ou **Arrêt demandé par la
+sécurité**. La raison donne d'abord le libellé traduit du code de refus,
+s'il est connu. Sinon, un identifiant
 de fin connu est traduit et son complément est conservé :
 `safety_verdict: hr_drop (RAMP_DOWN)` devient
 « Verdict de sécurité : hr_drop (RAMP_DOWN) », et `emergency_stop` devient

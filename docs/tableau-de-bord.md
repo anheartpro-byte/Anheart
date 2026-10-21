@@ -874,7 +874,9 @@ plus, la page le dit quand la liste est coupée) :
 - **Machine hors ligne** : aucun heartbeat depuis 90 s, constaté par le
   serveur à la minute.
 
-Sur cette page, la raison d'une séance échouée privilégie le `reasonCode`
+Sur cette page, toute alerte d'une séance échouée que l'on peut lire affiche
+sa raison, même après regroupement sous **Défaut variateur** ou **Arrêt
+demandé par la sécurité**. Cette raison privilégie le `reasonCode`
 traduit. Sinon, un identifiant connu de `sessionReport.endReasons`, seul ou
 suivi de `: texte`, est remplacé par son libellé dans la langue du site :
 `safety_verdict: hr_drop (RAMP_DOWN)` donne
