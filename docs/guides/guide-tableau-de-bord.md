@@ -1698,7 +1698,8 @@ le libellé traduit du code de refus, s'il est connu. Sinon, un identifiant
 de fin connu est traduit et son complément est conservé :
 `safety_verdict: hr_drop (RAMP_DOWN)` devient
 « Verdict de sécurité : hr_drop (RAMP_DOWN) », et `emergency_stop` devient
-« Arrêt d'urgence ». Un motif inconnu ou libre, comme
+« Arrêt d'urgence ». La ponctuation suit la langue du site (sans espace
+avant `:` en anglais). Un motif inconnu ou libre, comme
 « refusee par la machine : console occupee », reste tel quel. Ce libellé
 est propre à la page des alertes ; les raisons brutes sur les pages de
 séance restent en suivi.

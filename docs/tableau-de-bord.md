@@ -878,7 +878,8 @@ Sur cette page, la raison d'une séance échouée privilégie le `reasonCode`
 traduit. Sinon, un identifiant connu de `sessionReport.endReasons`, seul ou
 suivi de `: texte`, est remplacé par son libellé dans la langue du site :
 `safety_verdict: hr_drop (RAMP_DOWN)` donne
-« Verdict de sécurité : hr_drop (RAMP_DOWN) ». Le reste du texte est conservé.
+« Verdict de sécurité : hr_drop (RAMP_DOWN) ». Le reste du texte est conservé,
+avec une ponctuation propre à chaque langue (sans espace avant `:` en anglais).
 Un identifiant inconnu ou du texte libre, comme
 « refusee par la machine : console occupee », reste tel quel. Seules les
 clés propres du catalogue comptent, jamais `constructor` ou `toString`.

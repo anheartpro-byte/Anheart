@@ -89,7 +89,14 @@ describe("the alerts page", () => {
       [
         "safety_verdict: hr_drop (RAMP_DOWN)",
         undefined,
-        `${messages.sessionReport.endReasons.safety_verdict} : hr_drop (RAMP_DOWN)`,
+        locale === "fr"
+          ? "Verdict de sécurité : hr_drop (RAMP_DOWN)"
+          : "Safety verdict: hr_drop (RAMP_DOWN)",
+      ],
+      [
+        "safety_verdict:",
+        undefined,
+        messages.sessionReport.endReasons.safety_verdict,
       ],
       [
         "emergency_stop",

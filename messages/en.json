@@ -1322,6 +1322,7 @@
     "openMachine": "View machine",
     "machineDeleted": "Machine deleted",
     "reason": "Reason: {reason}",
+    "reasonLabelled": "{label}: {detail}",
     "faultCode": "Drive code: {code}",
     "listCut": "Only the {count} most recent alerts are shown.",
     "types": {

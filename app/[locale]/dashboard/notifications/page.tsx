@@ -177,8 +177,9 @@ function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
   } else if (reason !== undefined) {
     const code = reason.split(":", 1)[0];
     if (hasOwnMessage(messages, ["sessionReport", "endReasons", code])) {
-      const suffix = reason.slice(code.length);
-      reason = tEndReasons(code) + (suffix ? ` :${suffix.slice(1)}` : "");
+      const label = tEndReasons(code);
+      const detail = reason.slice(code.length + 1).trimStart();
+      reason = detail ? t("reasonLabelled", { label, detail }) : label;
     }
   }
 
