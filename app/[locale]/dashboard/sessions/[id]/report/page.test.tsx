@@ -300,7 +300,7 @@ describe("the report of a session", () => {
     });
   });
 
-  it("draws the curves of the session against its zone, once its telemetry is there", async () => {
+  it("T04-e mounts responsive screen charts and fixed A4 charts once telemetry is available", async () => {
     serve();
     const view = await open();
     expect(wasMounted("TelemetryCharts")).toBe(false);
@@ -326,7 +326,14 @@ describe("the report of a session", () => {
       zoneLowBpm: 130,
       zoneHighBpm: 150,
       height: 180,
+      width: 680,
     });
+    const charts = screen
+      .getByRole("article")
+      .querySelectorAll('[data-stand-in="TelemetryCharts"]');
+    expect(charts).toHaveLength(2);
+    expect(charts[0].parentElement?.className).toContain("print:hidden");
+    expect(charts[1].parentElement?.className).toBe("hidden print:block");
   });
 
   it("draws no curve for a session without telemetry", async () => {

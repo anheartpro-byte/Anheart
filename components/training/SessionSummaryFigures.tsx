@@ -42,7 +42,7 @@ export function SessionSummaryFigures({
 
   return (
     <div className="space-y-5 text-sm">
-      <dl className="grid grid-cols-2 gap-4 md:grid-cols-4 print:grid-cols-4">
+      <dl className="grid grid-cols-2 gap-4 md:grid-cols-4 print:grid-cols-4 print:break-inside-avoid">
         <Figure label={t("duration")}>
           {formatDuration(figures.durationS)}
         </Figure>
@@ -87,7 +87,7 @@ export function SessionSummaryFigures({
       </dl>
 
       {zone && (
-        <dl className="grid grid-cols-3 gap-4 rounded-md border p-3">
+        <dl className="grid grid-cols-3 gap-4 rounded-md border p-3 print:break-inside-avoid">
           <Figure label={t("belowZone")}>
             {formatDuration(zone.belowZoneS)}
           </Figure>
@@ -98,7 +98,7 @@ export function SessionSummaryFigures({
         </dl>
       )}
 
-      <div>
+      <div className="print:break-inside-avoid">
         <p className="mb-2 font-semibold">{t("gTitle")}</p>
         <table className="w-full text-left">
           <thead className="text-muted-foreground">
@@ -147,7 +147,7 @@ export function SessionSummaryFigures({
           )}
       </div>
 
-      <div>
+      <div className="print:break-inside-avoid">
         <p className="mb-2 font-semibold">{t("verdicts")}</p>
         {figures.verdicts.length === 0 ? (
           <p className="text-muted-foreground">{t("noVerdicts")}</p>
@@ -179,7 +179,7 @@ export function SessionSummaryFigures({
         )}
       </div>
 
-      <dl className="grid grid-cols-2 gap-4">
+      <dl className="grid grid-cols-2 gap-4 print:break-inside-avoid">
         <Figure label={t("endReason")}>
           {figures.endReason === null ? "-" : endReason(figures.endReason)}
         </Figure>
@@ -193,7 +193,7 @@ export function SessionSummaryFigures({
       </dl>
 
       {figures.warnings.length > 0 && (
-        <ul className="space-y-1 rounded-md border border-amber-500/50 p-3 text-amber-800 dark:text-amber-300 print:text-black">
+        <ul className="space-y-1 rounded-md border border-amber-500/50 p-3 text-amber-800 dark:text-amber-300 print:text-black dark:print:text-black print:break-inside-avoid">
           {figures.warnings.map((code) => (
             <li key={code}>{warning(code)}</li>
           ))}

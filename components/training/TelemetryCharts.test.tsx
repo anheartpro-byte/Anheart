@@ -49,7 +49,10 @@ vi.mock("@/components/ui/chart", () => {
       return props.content as ReactElement;
     },
     ChartTooltipContent: part("ChartTooltipContent"),
-    ChartLegend: part("ChartLegend"),
+    ChartLegend: (props: Props) => {
+      drawn.push({ part: "ChartLegend", props });
+      return props.content as ReactElement;
+    },
     ChartLegendContent: part("ChartLegendContent"),
   };
 });
@@ -216,6 +219,52 @@ describe("ANH-203 telemetry charts: the target zone", () => {
 });
 
 describe("ANH-203 telemetry charts: time and size", () => {
+  it("T04-e draws report SVGs at explicit dimensions and light colors without a responsive container", () => {
+    const html = draw({
+      points: [point({ bpm: 120 })],
+      width: 680,
+      height: 180,
+    });
+
+    expect(given("ChartContainer")).toHaveLength(0);
+    expect(
+      given("LineChart").map(({ width, height }) => ({ width, height })),
+    ).toEqual([
+      { width: 680, height: 180 },
+      { width: 680, height: 180 },
+    ]);
+    expect(given("Line").map(({ stroke }) => stroke)).toEqual([
+      "#dc2626",
+      "#737373",
+      "#2563eb",
+    ]);
+    expect(given("ChartTooltip")).toHaveLength(0);
+    expect(textOf(html, "")).toContain("Consigne (tr/min)");
+    expect(textOf(html, "")).toContain("Mesurée (tr/min)");
+    expect(html).toContain('stroke-dasharray="4 4"');
+    expect(html.match(/width:680px;height:180px/g)).toHaveLength(2);
+  });
+
+  it("T04-e keeps live and session callers responsive with their themed strokes and interactive tooltips", () => {
+    draw({ points: [point({ bpm: 120 })] });
+
+    expect(given("ChartContainer")).toHaveLength(2);
+    for (const chart of given("LineChart")) {
+      expect(chart.width).toBeUndefined();
+      expect(chart.height).toBeUndefined();
+    }
+    expect(given("Line").map(({ stroke }) => stroke)).toEqual([
+      "var(--color-bpm)",
+      "var(--color-setpointRpm)",
+      "var(--color-outputRpm)",
+    ]);
+    expect(given("ChartTooltip")).toHaveLength(2);
+    expect(given("ChartLegendContent")).toHaveLength(1);
+    expect(given("ChartContainer")[0].config).toMatchObject({
+      bpm: { theme: { light: "#dc2626", dark: "#f87171" } },
+    });
+  });
+
   it("writes the elapsed time as a clock on both axes", () => {
     draw({ points: [point({ bpm: 120 })] });
 
