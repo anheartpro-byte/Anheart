@@ -16,10 +16,14 @@ import {
  * dialogs. A success leaves by itself after 5 s; a failure stays until its
  * cross is pressed. The cross can be pressed while a dialog is open: the
  * dialog does not take that click for a click outside it, and stays open
- * (`isFeedbackElement`, read by `components/ui/dialog.tsx`).
+ * (`isFeedbackElement`, read by DialogContent and SheetContent).
  *
  * Two live regions, present before any message: the successes are announced
  * politely (`role="status"`), the failures at once (`role="alert"`).
+ * Keep both mounted with aria-live even when empty, before any modal opens:
+ * Radix's hideOthers exempts existing [aria-live] regions. A region mounted
+ * later, or without aria-live, would be hidden with the page. This exposure
+ * was checked in Chromium's accessibility tree, not with a screen reader.
  */
 export function FeedbackToaster() {
   const t = useTranslations("common");

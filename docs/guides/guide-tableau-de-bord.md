@@ -293,6 +293,8 @@ La barre latérale (à gauche) change selon votre rôle.
   (Mac). Repliée, elle ne montre que les icônes ; survolez une icône pour voir
   son nom. Ce choix est mémorisé 7 jours dans le navigateur.
 - Sur téléphone, la barre s'ouvre par dessus la page avec le même bouton.
+  Fermer un message par sa croix laisse ce menu ouvert ; cliquer sur le voile
+  à l'extérieur ferme toujours le menu.
 
 ### 3.5 Naviguer : le fil d'Ariane
 
@@ -1609,7 +1611,10 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 - Tant que les machines ou les patients ne sont pas chargés, la carte
   correspondante affiche « Chargement... » et son bouton **Modifier** est
   inactif.
-- « Aucune machine assignée », « Aucun patient assigné » si vide.
+- « Aucune machine assignée », « Aucun patient assigné » si vide, une seule
+  fois dans le corps de chaque carte, sans description d'en-tête à zéro.
+  Au-delà de zéro, l'en-tête indique le nombre de machines ou de patients
+  assignés.
 
 > **Attention : corrigé dans le code le 8 octobre 2026, pas encore en
 > production.** Tant que le redéploiement n'a pas eu lieu, la fenêtre
@@ -2501,7 +2506,12 @@ Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée
 et, depuis ANH-156, dans un message d'échec en bas à droite de l'écran (le seul
 affichage pour les actions sans encadré : suppressions, rôle, assignations).
 Un message d'échec reste affiché jusqu'à ce que vous le fermiez par sa croix,
-même quand une fenêtre est ouverte. Depuis ANH-194, les refus des machines, des
+même quand une fenêtre ou le menu mobile est ouvert ; sa croix ne ferme que
+le message. Les régions de messages restent exposées dans l'arbre
+d'accessibilité de Chromium 153 pendant une fenêtre, une confirmation simple
+ou le menu mobile, tandis que le fond de page est masqué. Cette exposition a
+été vérifiée sans vrai lecteur d'écran et ne prouve pas l'annonce vocale.
+Depuis ANH-194, les refus des machines, des
 comptes, des gestionnaires et des rôles arrivent avec un code stable et
 s'affichent dans la langue du site ; depuis ANH-90, ceux de la connexion, de
 l'organisation, des droits de lancement, de la physiologie, de la vérification

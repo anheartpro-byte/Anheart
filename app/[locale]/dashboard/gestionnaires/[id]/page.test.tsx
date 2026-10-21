@@ -310,16 +310,61 @@ describe("gestionnaire page: what an admin sees", () => {
 
   it("says so when the manager has neither machine nor patient", async () => {
     given();
+    answer(api.users.listGestionnaires, [
+      { ...gaston, machineCount: 0, patientCount: 0 },
+    ]);
     answer(api.machines.getMachinesForGestionnaire, []);
     answer(api.users.getPatientsForGestionnaire, []);
     await open();
 
     expect(
-      card(fr.nav.machines).getByText(fr.gestionnaires.noMachinesAssigned),
-    ).toBeTruthy();
+      card(fr.nav.machines).getAllByText(fr.gestionnaires.noMachinesAssigned),
+    ).toHaveLength(1);
     expect(
-      card(fr.nav.patients).getByText(fr.gestionnaires.noPatientsAssigned),
-    ).toBeTruthy();
+      card(fr.nav.patients).getAllByText(fr.gestionnaires.noPatientsAssigned),
+    ).toHaveLength(1);
+    for (const title of [fr.nav.machines, fr.nav.patients]) {
+      const header = card(title)
+        .getByText(title)
+        .closest('[data-slot="card-header"]');
+      expect(header?.querySelector('[data-slot="card-description"]')).toBeNull();
+    }
+  });
+
+  it("keeps the plural counts in both headers for two assignments", async () => {
+    given();
+    answer(api.users.listGestionnaires, [{ ...gaston, patientCount: 2 }]);
+    answer(api.users.getPatientsForGestionnaire, [
+      ownPatient(rose, "Rose"),
+      ownPatient(remi, "Remi"),
+    ]);
+    await open();
+
+    expect(
+      card(fr.nav.machines).getByText("2 machines assignées").getAttribute("data-slot"),
+    ).toBe("card-description");
+    expect(
+      card(fr.nav.patients).getByText("2 patients assignés").getAttribute("data-slot"),
+    ).toBe("card-description");
+  });
+
+  it("keeps loading in both bodies with zero counts before their lists arrive", async () => {
+    given();
+    answer(api.users.listGestionnaires, [
+      { ...gaston, machineCount: 0, patientCount: 0 },
+    ]);
+    answer(api.machines.getMachinesForGestionnaire, undefined);
+    answer(api.users.getPatientsForGestionnaire, undefined);
+    await open();
+
+    expect(card(fr.nav.machines).getByText(fr.common.loading)).toBeTruthy();
+    expect(card(fr.nav.patients).getByText(fr.common.loading)).toBeTruthy();
+    expect(
+      card(fr.nav.machines).queryByText(fr.gestionnaires.noMachinesAssigned),
+    ).toBeNull();
+    expect(
+      card(fr.nav.patients).queryByText(fr.gestionnaires.noPatientsAssigned),
+    ).toBeNull();
   });
 
   it("does not let the machines be edited before the manager's own are known", async () => {
