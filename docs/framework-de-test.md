@@ -4479,12 +4479,14 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 ### 16.10 Vérification numérique unique sur un Pi
 
 **À faire sur banc, non faite.** Aucun essai ARM n'est déclaré réalisé.
-La table ci-dessous est celle calculée pour ANH-192 sur le commit de branche
-`38409aa8a4d7f9a5415f96ecb3dd2c6346359ba1`, à conserver dans l'historique
-accessible depuis `develop` après fusion. Ces empreintes ont été mesurées sur
-le poste de développement ; elles ne remplacent pas les rapports de CI.
-Pour l'essai, comparer les rapports du Pi aux rapports produits par la CI sur
-**le même SHA que celui installé sur le Pi**, dans leurs environnements verrouillés.
+La référence qui fait foi est l'ensemble des rapports produits par la CI,
+ou par cette même procédure dans une gate locale, sur **le même SHA que
+celui installé sur le Pi**, dans leurs environnements verrouillés.
+La table ci-dessous concerne l'arbre qu'ANH-192 fusionne dans `develop`
+par la PR #120 ; elle est à revérifier sur son commit de fusion. Elle reste
+valable tant que le code du rejeu, de la simulation et des scénarios concernés
+ne change pas ; sinon, la recalculer. Les mesures sur le poste de développement
+ne remplacent pas la comparaison des rapports complets sur le SHA installé.
 Une gate locale verte ne constitue pas cette comparaison avec le Pi.
 
 Sur le Pi de banc, utiliser ce checkout sans modification locale, avec
@@ -4500,7 +4502,7 @@ python3.12 -m venv "$HOME/.cache/anheart-replay-pi"
 "$HOME/.cache/anheart-replay-pi/bin/python" -m pip check
 ```
 
-Le SHA installé doit être celui du run CI choisi pour la comparaison, le
+Le SHA installé doit être celui du run CI ou de la gate locale choisi pour la comparaison, le
 statut vide et l'architecture
 `aarch64`. Le verrou exige numpy 2.5.3, scipy 1.18.1 et BioSPPy 2.2.4,
 comme le verrou de développement utilisé en CI. Conserver le SHA,
@@ -4521,8 +4523,8 @@ done
 cat replay-pi/SHA256SUMS
 ```
 
-Pour préparer la référence CI, exécuter cette même boucle au même SHA
-dans son environnement installé par les verrous de développement
+Pour préparer la référence CI ou locale, exécuter cette même boucle au même SHA
+dans l'environnement de la gate installé par les verrous de développement
 (section 15, ANH-230), avec `raspberry-pi/.venv/bin/python` comme
 interpréteur et `replay-ci` comme dossier de sortie. Conserver les cinq
 JSON et `SHA256SUMS` de ce run, puis les copier sous `replay-ci/` sur
