@@ -110,7 +110,7 @@ function sentences(path: string): string[] {
     .filter((text) => !/^[a-z][a-z0-9_]*$/.test(text));
 }
 
-/** Find direct error construction and ConvexError imports or namespace uses. */
+/** Find direct error construction, inheritance, literal throws and ConvexError imports. */
 export function trainingErrorViolations(text: string): string[] {
   const source = ts.createSourceFile(
     "training.ts",
@@ -121,15 +121,31 @@ export function trainingErrorViolations(text: string): string[] {
   );
   const namespaces = new Set<string>();
   const violations: string[] = [];
+  const globalErrors = new Set([
+    "Error",
+    "TypeError",
+    "RangeError",
+    "SyntaxError",
+    "ReferenceError",
+    "EvalError",
+    "URIError",
+    "AggregateError",
+  ]);
+  const isGlobalError = (expression: ts.Expression) =>
+    (ts.isIdentifier(expression) && globalErrors.has(expression.text)) ||
+    (ts.isPropertyAccessExpression(expression) &&
+      ts.isIdentifier(expression.expression) &&
+      expression.expression.text === "globalThis" &&
+      globalErrors.has(expression.name.text));
   for (const statement of source.statements) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== "convex/values"
-    )
-      continue;
+    if (!ts.isImportDeclaration(statement)) continue;
     const bindings = statement.importClause?.namedBindings;
-    if (bindings && ts.isNamespaceImport(bindings)) {
+    if (
+      bindings &&
+      ts.isNamespaceImport(bindings) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text === "convex/values"
+    ) {
       namespaces.add(bindings.name.text);
     } else if (bindings && ts.isNamedImports(bindings)) {
       for (const binding of bindings.elements) {
@@ -142,11 +158,26 @@ export function trainingErrorViolations(text: string): string[] {
   const visit = (node: ts.Node) => {
     if (
       (ts.isNewExpression(node) || ts.isCallExpression(node)) &&
-      ((ts.isIdentifier(node.expression) &&
-        (node.expression.text === "Error" ||
-          node.expression.text === "ConvexError")) ||
+      (isGlobalError(node.expression) ||
+        (ts.isIdentifier(node.expression) &&
+          node.expression.text === "ConvexError") ||
         (ts.isPropertyAccessExpression(node.expression) &&
           node.expression.name.text === "ConvexError"))
+    ) {
+      violations.push(node.getText(source));
+    }
+    if (
+      ts.isHeritageClause(node) &&
+      node.token === ts.SyntaxKind.ExtendsKeyword &&
+      node.types.some((type) => isGlobalError(type.expression))
+    ) {
+      violations.push(node.getText(source));
+    }
+    if (
+      ts.isThrowStatement(node) &&
+      (ts.isStringLiteral(node.expression) ||
+        ts.isNoSubstitutionTemplateLiteral(node.expression) ||
+        ts.isTemplateExpression(node.expression))
     ) {
       violations.push(node.getText(source));
     }
@@ -165,6 +196,37 @@ export function trainingErrorViolations(text: string): string[] {
 }
 
 describe("T04-a: training's error guard", () => {
+  it.each(
+    [
+      "Error",
+      "TypeError",
+      "RangeError",
+      "SyntaxError",
+      "ReferenceError",
+      "EvalError",
+      "URIError",
+      "AggregateError",
+    ].flatMap((name) =>
+      [name, `globalThis.${name}`].flatMap((constructor) => [
+        `new ${constructor}(message)`,
+        `${constructor}(message)`,
+        `class Refused extends ${constructor} {}`,
+      ]),
+    ),
+  )("R1c1-3: detects a global error constructor: %s", (text) => {
+    expect(trainingErrorViolations(text)).not.toEqual([]);
+  });
+
+  it.each([
+    'throw "Session not found"',
+    "throw `Session not found`",
+    "throw `Session ${sessionId} not found`",
+    'import { ConvexError as CE } from "./lib/errors";',
+    'import { type ConvexError as CE } from "another-module";',
+  ])("R1c1-3: detects a literal throw or named import: %s", (text) => {
+    expect(trainingErrorViolations(text)).not.toEqual([]);
+  });
+
   it.each([
     'import { ConvexError } from "convex/values";',
     'import { ConvexError as CE } from "convex/values"; throw new CE("x")',
@@ -193,12 +255,27 @@ describe("T04-a: training's error guard", () => {
     "`new Error(x); values.ConvexError`",
     "const text = 'import { ConvexError } from \"convex/values\"';",
     'import * as values from "convex/values"; values.v.string()',
+    '// new TypeError(message); globalThis.Error(message); throw "phrase"',
+    '/* class Refused extends globalThis.RangeError {} */',
+    '"throw `phrase`; new globalThis.SyntaxError(message)"',
+    '"class Refused extends Error {}"',
+    'try { throw refusal(code); } catch (err) { throw err; }',
   ])("allows coded refusals and inert text: %s", (text) => {
     expect(trainingErrorViolations(text)).toEqual([]);
   });
 
   it("keeps the real training.ts on coded refusals", () => {
     expect(trainingErrorViolations(sources["./training.ts"])).toEqual([]);
+  });
+
+  it.each([
+    "const E = Error; new E(message)",
+    "Reflect.construct(Error, [message])",
+    'const { ConvexError: CE } = await import("convex/values"); new CE(message)',
+    'new globalThis["Error"](message)',
+    'import * as values from "convex/values"; new values["ConvexError"](message)',
+  ])("R1c1-3: leaves indirect forms outside the guard's scope: %s", (text) => {
+    expect(trainingErrorViolations(text)).toEqual([]);
   });
 });
 
