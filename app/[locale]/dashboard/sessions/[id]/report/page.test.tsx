@@ -28,13 +28,28 @@ vi.mock(
   "@/i18n/navigation",
   async () => (await import("@/test-support/pages")).navigation,
 );
-// The figures and the curves have their own tests: the page gives them what
-// it read.
-vi.mock("@/components/training/SessionSummaryFigures", async () => ({
-  SessionSummaryFigures: (await import("@/test-support/pages")).standIn(
-    "SessionSummaryFigures",
-  ),
-}));
+vi.mock(
+  "@/components/training/SessionSummaryFigures",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/components/training/SessionSummaryFigures")
+      >();
+    const remember = (await import("@/test-support/pages")).standIn(
+      "SessionSummaryFigures",
+    );
+    return {
+      SessionSummaryFigures: (
+        props: React.ComponentProps<typeof original.SessionSummaryFigures>,
+      ) => (
+        <>
+          {remember(props)}
+          <original.SessionSummaryFigures {...props} />
+        </>
+      ),
+    };
+  },
+);
 vi.mock("@/components/training/TelemetryCharts", async () => ({
   TelemetryCharts: (await import("@/test-support/pages")).standIn(
     "TelemetryCharts",
@@ -184,6 +199,72 @@ function valueUnder(label: string): string | null {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("the report of a session", () => {
+  it.each([
+    ["fr", fr],
+    ["en", en],
+  ] as const)(
+    "T03-c explains a legacy ECG session in %s without an empty or printable report",
+    async (locale, messages) => {
+      serve({
+        session: session({ kind: "recording" }),
+        training: training({ kind: "recording" }),
+        summary: null,
+      });
+      await open(locale);
+      expect(
+        screen.getByText(messages.sessionReport.legacyEcgNoReport),
+      ).toBeTruthy();
+      expect(
+        screen
+          .getByRole("link", { name: messages.sessionReport.back })
+          .getAttribute("href"),
+      ).toBe(`/dashboard/sessions/${sessionId}`);
+      expect(screen.queryByRole("button")).toBeNull();
+      expect(screen.queryByText(messages.sessionReport.none)).toBeNull();
+      expect(screen.queryByRole("article")).toBeNull();
+      expect(wasMounted("SessionSummaryFigures")).toBe(false);
+      expect(wasMounted("TelemetryCharts")).toBe(false);
+    },
+  );
+
+  describe.each([
+    ["fr", fr],
+    ["en", en],
+  ] as const)("T03-a: g variation in the %s report", (locale, messages) => {
+    it.each([
+      ["final", false, null, "gRateNoWindow"],
+      ["waiting for the record", true, null, "notYet"],
+      ["unreadable record", true, "invalid_ticks", "gRateUnavailable"],
+    ] as const)(
+      "explains a %s report at both radii",
+      async (_state, provisional, recordProblem, key) => {
+        const report = summary({ provisional, recordProblem });
+        report.figures.reference.maxGRate = null;
+        report.figures.legTip.maxGRate = null;
+        serve({ summary: report });
+        await open(locale);
+        expect(propsOf("SessionSummaryFigures")).toEqual({
+          figures: report.figures,
+          provisional,
+          recordProblem,
+        });
+        expect(screen.getAllByText(messages.sessionReport[key])).toHaveLength(
+          2,
+        );
+        if (key !== "notYet")
+          expect(screen.queryByText(messages.sessionReport.notYet)).toBeNull();
+        if (!provisional)
+          expect(
+            screen.getByText(messages.sessionReport.gRateNoWindowNote),
+          ).toBeTruthy();
+        if (recordProblem !== null)
+          expect(
+            screen.getByText(messages.sessionReport.gRateUnavailableNote),
+          ).toBeTruthy();
+      },
+    );
+  });
+
   it.each(["fr", "en"] as const)(
     "distinguishes a session that did not start from an uncomputed summary in %s",
     async (locale) => {
@@ -304,8 +385,12 @@ describe("the report of a session", () => {
 
     expect(screen.getByText(r.final)).toBeTruthy();
     expect(screen.getByText(r.finalNote)).toBeTruthy();
+    expect(screen.getByText("0,02 g/s")).toBeTruthy();
+    expect(screen.getByText("0,03 g/s")).toBeTruthy();
     expect(propsOf("SessionSummaryFigures")).toEqual({
       figures: summary().figures,
+      provisional: false,
+      recordProblem: null,
     });
     expect(
       screen.getByText(
@@ -411,6 +496,8 @@ describe("the report of a session", () => {
     expect(valueUnder(en.sessionReport.date)).toBe(
       format(STARTED, "PPPp", { locale: enUS }),
     );
+    expect(screen.getByText("0.02 g/s")).toBeTruthy();
+    expect(screen.getByText("0.03 g/s")).toBeTruthy();
     const english = screen.getByRole("button", { name: "English" });
     expect(english.getAttribute("aria-pressed")).toBe("true");
 

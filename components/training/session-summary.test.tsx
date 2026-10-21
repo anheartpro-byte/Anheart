@@ -113,6 +113,8 @@ describe("the figures of a summary", () => {
       const warnings = ["events_truncated", "ticks_out_of_order"] as const;
       const screen = render(
         <SessionSummaryFigures
+          provisional={false}
+          recordProblem={null}
           figures={figures({ warnings: [...warnings] })}
         />,
         { locale },
@@ -125,7 +127,13 @@ describe("the figures of a summary", () => {
   );
 
   it("writes every figure of the record, in the visitor's language", () => {
-    const screen = render(<SessionSummaryFigures figures={figures()} />);
+    const screen = render(
+      <SessionSummaryFigures
+        figures={figures()}
+        provisional={false}
+        recordProblem={null}
+      />,
+    );
     const text = screen.text();
     expect(text).toContain("30 min 00 s");
     expect(text).toContain("21 min 00 s (70 %)");
@@ -157,6 +165,8 @@ describe("the figures of a summary", () => {
   it("says what a provisional summary or a manual session does not have", () => {
     const screen = render(
       <SessionSummaryFigures
+        provisional={true}
+        recordProblem={null}
         figures={figures({
           durationS: null,
           heartRate: null,
@@ -186,7 +196,11 @@ describe("the figures of a summary", () => {
 
   it("writes a time in zone without a share when the duration is not known", () => {
     const screen = render(
-      <SessionSummaryFigures figures={figures({ durationS: null })} />,
+      <SessionSummaryFigures
+        figures={figures({ durationS: null })}
+        provisional={false}
+        recordProblem={null}
+      />,
     );
     expect(screen.text()).toContain(`${r.timeInZone} 21 min 00 s`);
     expect(screen.text()).not.toContain("%");
@@ -195,6 +209,8 @@ describe("the figures of a summary", () => {
   it("writes an end reason it does not know as the machine sent it", () => {
     const screen = render(
       <SessionSummaryFigures
+        provisional={false}
+        recordProblem={null}
         figures={figures({
           endReason: "Arrêt demandé à distance",
           endRule: null,
@@ -208,6 +224,91 @@ describe("the figures of a summary", () => {
 });
 
 describe("the summary card of a session", () => {
+  describe.each(["fr", "en"] as const)(
+    "T03-a: missing g variation in %s",
+    (locale) => {
+      it.each([
+        ["final", false, null, "gRateNoWindow", "gRateNoWindowNote"],
+        ["waiting for the record", true, null, "notYet", null],
+        [
+          "unreadable record",
+          true,
+          "invalid_ticks",
+          "gRateUnavailable",
+          "gRateUnavailableNote",
+        ],
+      ] as const)(
+        "explains a %s summary at both radii",
+        (_state, provisional, recordProblem, key, note) => {
+          const catalog = messages[locale].sessionReport;
+          answer(
+            "sessionReports:getSummary",
+            summary({
+              provisional,
+              recordProblem,
+              figures: figures({
+                reference: { maxG: 0.5, maxGRate: null, radiusM: null },
+                legTip: {
+                  maxG: 0.8,
+                  maxGRate: null,
+                  radiusM: null,
+                  measured: null,
+                },
+              }),
+            }),
+          );
+          const screen = render(<SessionSummaryCard sessionId={sessionId} />, {
+            locale,
+          });
+          const rows = screen.tag("tr").slice(1).map(screen.textOf);
+          expect(rows).toHaveLength(2);
+          for (const row of rows) expect(row).toContain(catalog[key]);
+          if (key !== "notYet")
+            expect(screen.text()).not.toContain(catalog.notYet);
+          if (note) expect(screen.text()).toContain(catalog[note]);
+          else {
+            expect(screen.text()).not.toContain(catalog.gRateNoWindowNote);
+            expect(screen.text()).not.toContain(catalog.gRateUnavailableNote);
+          }
+        },
+      );
+
+      it("keeps measured values in g/s and explains only a missing radius", () => {
+        const catalog = messages[locale].sessionReport;
+        answer("sessionReports:getSummary", summary());
+        const screen = render(<SessionSummaryCard sessionId={sessionId} />, {
+          locale,
+        });
+        expect(screen.text()).toContain(
+          locale === "fr" ? "0,0199 g/s" : "0.0199 g/s",
+        );
+        expect(screen.text()).toContain(
+          locale === "fr" ? "0,0322 g/s" : "0.0322 g/s",
+        );
+        expect(screen.text()).not.toContain(catalog.gRateNoWindowNote);
+        answer(
+          "sessionReports:getSummary",
+          summary({
+            figures: figures({
+              legTip: {
+                maxG: 0.8,
+                maxGRate: null,
+                radiusM: null,
+                measured: null,
+              },
+            }),
+          }),
+        );
+        screen.rerender(<SessionSummaryCard sessionId={sessionId} />);
+        expect(screen.text()).toContain(catalog.gRateNoWindowNote);
+        expect(screen.text()).toContain(
+          locale === "fr" ? "0,0199 g/s" : "0.0199 g/s",
+        );
+        expect(screen.text()).not.toContain(catalog.notYet);
+      });
+    },
+  );
+
   it.each(["fr", "en"] as const)(
     "distinguishes a session that did not start from an uncomputed summary in %s",
     (locale) => {

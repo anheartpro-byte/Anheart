@@ -63,6 +63,57 @@ function report(reference: string) {
 }
 
 describe("reports", () => {
+  describe.each([
+    ["fr", fr],
+    ["en", en],
+  ] as const)("T03: report access in %s", (locale, messages) => {
+    it("T03-b offers reports for auto and manual sessions, keeps ECG detail and explains its missing report", async () => {
+      signedInAs("user");
+      serverLists(
+        completed("legacy-ecg", { kind: "recording" }),
+        completed("training-auto", { kind: "auto" }),
+        completed("training-manual", { kind: "manual" }),
+      );
+      await renderPage(<ReportsPage />, { locale });
+      expect(screen.getByText(messages.reports.legacyEcgNoReport)).toBeTruthy();
+      const links = screen.getAllByRole("link");
+      expect(
+        links
+          .filter((link) => link.textContent === messages.reports.view)
+          .map((link) => link.getAttribute("href")),
+      ).toEqual([
+        "/dashboard/sessions/legacy-ecg",
+        "/dashboard/sessions/training-auto",
+        "/dashboard/sessions/training-manual",
+      ]);
+      expect(
+        screen
+          .getAllByRole("link", { name: messages.sessionReport.openReport })
+          .map((link) => link.getAttribute("href")),
+      ).toEqual([
+        "/dashboard/sessions/training-auto/report",
+        "/dashboard/sessions/training-manual/report",
+      ]);
+    });
+
+    it.each(["admin", "org_admin", "gestionnaire", "user"] as const)(
+      "T03-d tells a %s where failed-session reports are, even with an empty list",
+      async (role) => {
+        signedInAs(role);
+        serverLists();
+        const view = await renderPage(<ReportsPage />, { locale });
+        expect(
+          screen.getByText(messages.reports.failedSessionsHint),
+        ).toBeTruthy();
+        serverLists(completed("training-auto"));
+        await view.refresh();
+        expect(
+          screen.getByText(messages.reports.failedSessionsHint),
+        ).toBeTruthy();
+      },
+    );
+  });
+
   it("asks for the 50 newest completed sessions of the visitor, and shows nothing until they and the visitor are known", async () => {
     signedInAs("user");
     answer(LIST, undefined);

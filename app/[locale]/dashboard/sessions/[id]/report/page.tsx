@@ -71,6 +71,19 @@ export default function SessionReportPage({
       </div>
     );
 
+  if (training.kind === "recording")
+    return (
+      <div className="py-12 text-center">
+        <p className="text-muted-foreground">{t("legacyEcgNoReport")}</p>
+        <Link
+          href={`/dashboard/sessions/${sessionId}`}
+          className="mt-2 inline-block text-primary hover:underline"
+        >
+          {t("back")}
+        </Link>
+      </div>
+    );
+
   const finished =
     session.status === "completed" || session.status === "failed";
   const dateLocale = locale === "fr" ? fr : enUS;
@@ -164,7 +177,11 @@ export default function SessionReportPage({
                   {t("recordProblem", { problem: summary.recordProblem })}
                 </p>
               )}
-              <SessionSummaryFigures figures={summary.figures} />
+              <SessionSummaryFigures
+                figures={summary.figures}
+                provisional={summary.provisional}
+                recordProblem={summary.recordProblem}
+              />
               <p className="text-xs text-muted-foreground">
                 {t("computedAt", {
                   date: format(summary.computedAt, "PPPp", {

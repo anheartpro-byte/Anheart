@@ -22,9 +22,9 @@ export type SummaryFigures = SessionSummary["figures"];
  */
 export function SessionSummaryFigures({
   figures,
-}: {
-  figures: SummaryFigures;
-}) {
+  provisional,
+  recordProblem,
+}: Pick<SessionSummary, "figures" | "provisional" | "recordProblem">) {
   const t = useTranslations("sessionReport");
   const locale = useLocale();
   const endReason = useCatalogLabel("sessionReport.endReasons");
@@ -34,6 +34,11 @@ export function SessionSummaryFigures({
     formatNumber(value, locale, digits);
   const { zone, heartRate } = figures;
   const inZoneShare = zone ? percentOf(zone.inZoneS, figures.durationS) : null;
+  const missingGRate = provisional
+    ? recordProblem === null
+      ? t("notYet")
+      : t("gRateUnavailable")
+    : t("gRateNoWindow");
 
   return (
     <div className="space-y-5 text-sm">
@@ -126,13 +131,20 @@ export function SessionSummaryFigures({
                 </td>
                 <td className="py-1 font-medium">
                   {radius.maxGRate === null
-                    ? t("notYet")
+                    ? missingGRate
                     : t("gRateValue", { value: number(radius.maxGRate, 4) })}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {(figures.reference.maxGRate === null ||
+          figures.legTip.maxGRate === null) &&
+          (!provisional || recordProblem !== null) && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t(provisional ? "gRateUnavailableNote" : "gRateNoWindowNote")}
+            </p>
+          )}
       </div>
 
       <div>

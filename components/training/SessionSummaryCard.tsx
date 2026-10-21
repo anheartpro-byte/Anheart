@@ -72,7 +72,11 @@ export function SessionSummaryCard({
               {t("recordProblem", { problem: report.recordProblem })}
             </p>
           )}
-          <SessionSummaryFigures figures={report.figures} />
+          <SessionSummaryFigures
+            figures={report.figures}
+            provisional={report.provisional}
+            recordProblem={report.recordProblem}
+          />
         </CardContent>
       )}
     </Card>
