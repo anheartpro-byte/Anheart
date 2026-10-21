@@ -1580,8 +1580,16 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   gestionnaire : cocher une machine la lui attribue, la décocher la lui
   retire. Les autres gestionnaires de ces machines gardent leur accès. Une
   machine supprimée n'a pas de case et n'est ni comptée ni listée sur la
-  fiche ; son lien est gardé, et revient si la machine est restaurée. Une
-  notification confirme ensuite, par exemple « Machines enregistrées :
+  fiche ; son lien est gardé, et revient si la machine est restaurée. Si la
+  machine est absente de la table, son ancien lien avec ce gestionnaire dans
+  l'organisation concernée est retiré dès l'enregistrement, que son
+  identifiant figure ou non dans la liste envoyée, sans erreur. Ce nettoyage
+  ne touche pas les liens d'une autre organisation. Le décompte rendu au site
+  ne compte que les machines visibles, sans ces liens orphelins. Le journal
+  `gestionnaire_machines.set` liste tous les identifiants retirés dans
+  `details.removed`, orphelins compris, et reçoit une entrée dès qu'un lien est
+  ajouté ou retiré, même pour un nettoyage seul avec `{added: 0, removed: 0}`.
+  Une notification confirme ensuite, par exemple « Machines enregistrées :
   1 ajoutée, 1 retirée. ». Si le serveur refuse, son message s'affiche en
   rouge dans la fenêtre, qui reste ouverte.
 - **Modifier** (Patients) : fenêtre **Assigner des Patients**, « Sélectionner

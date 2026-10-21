@@ -746,7 +746,16 @@ et un lien déjà présent n'est pas modifié (il garde son badge
 « Propriétaire »). Une machine supprimée reste hors de la décision, côté
 serveur : son lien n'est jamais retiré, qu'elle soit nommée ou non, il
 retrouve sa machine si elle est restaurée, et une machine supprimée n'est
-jamais liée (refus « Machine introuvable »). La fenêtre s'ouvre toujours sur
+jamais liée (refus « Machine introuvable »). Un lien de ce gestionnaire vers
+une machine absente de la table, dans l'organisation de la décision, est
+retiré dès l'enregistrement, que son identifiant soit nommé ou non dans la
+liste envoyée, sans erreur. Les liens dans une autre organisation restent
+intacts, même orphelins. Le décompte `{added, removed}` de la notification ne
+compte que les machines visibles sur la page, jamais les liens orphelins
+nettoyés. L'audit `gestionnaire_machines.set` liste au contraire tous les
+identifiants retirés dans `details.removed`, orphelins compris, et écrit une
+entrée dès qu'une ligne est ajoutée ou retirée, même si le nettoyage seul
+rend `{added: 0, removed: 0}` (ANH-232). La fenêtre s'ouvre toujours sur
 les machines actuelles du gestionnaire. Une case que l'admin a cliquée garde
 son choix jusqu'à la fermeture ; les autres suivent le serveur, de sorte qu'un
 signal de vie des machines n'annule rien et qu'un lien ajouté ou retiré

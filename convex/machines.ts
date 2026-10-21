@@ -257,6 +257,8 @@ export const assignMachineToGestionnaires = mutation({
  * A deleted machine is outside the decision: its link is kept whether or not
  * it is named (the dashboard lists no deleted machine, and a restored machine
  * gets its gestionnaires back), and a deleted machine is never linked.
+ * A link to a machine gone from the table is removed even when named. Such
+ * cleanup is audited, but does not count in the dashboard's removed total.
  */
 export const setGestionnaireMachines = mutation({
   args: {
@@ -284,19 +286,22 @@ export const setGestionnaireMachines = mutation({
         )
         .collect()
     ).filter((r) => r.organizationId === organizationId);
-    // Among them, those the decision may remove: not a link to a deleted
-    // machine (nor to a machine gone from the table).
+    // Deleted machines stay outside the decision; missing machines leave
+    // orphaned links to clean up, whether or not their IDs are requested.
     const removable: typeof relations = [];
+    const orphaned: typeof relations = [];
     for (const relation of relations) {
       const machine = await ctx.db.get(relation.machineId);
-      if (machine && !machine.isDeleted) removable.push(relation);
+      if (!machine) orphaned.push(relation);
+      else if (!machine.isDeleted) removable.push(relation);
     }
 
     const wanted = new Set(args.machineIds);
     const linked = new Set(relations.map((r) => r.machineId));
 
     const toAdd = [...wanted].filter((machineId) => !linked.has(machineId));
-    const toRemove = removable.filter((r) => !wanted.has(r.machineId));
+    const visibleToRemove = removable.filter((r) => !wanted.has(r.machineId));
+    const toRemove = [...visibleToRemove, ...orphaned];
 
     // Every machine to link must exist, in that organisation, and not be
     // deleted, before anything is written. A machine of another organisation
@@ -343,7 +348,7 @@ export const setGestionnaireMachines = mutation({
     }
     return {
       added: toAdd.length,
-      removed: new Set(toRemove.map((r) => r.machineId)).size,
+      removed: new Set(visibleToRemove.map((r) => r.machineId)).size,
     };
   },
 });
