@@ -1425,7 +1425,7 @@ machines, registre et niveaux de validation, versions logicielles et
 médicales, suppression d'enregistrements.
 
 La liste de référence est `SENSITIVE_MUTATIONS` dans
-[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 42 mutations publiques ou
+[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 43 mutations publiques ou
 internes, avec leurs actions attendues. Les actions Convex et routes HTTP
 font écrire leurs effets par ces mutations. `NON_SENSITIVE_MUTATIONS`
 classe toutes les autres avec un motif : télémétrie et états transitoires,
@@ -3259,9 +3259,10 @@ anciens documents ; cela ne leur accorde aucun droit d'authentification.
    ([§8](#migration-des-clés-machine-anh-165)) efface toute valeur
    réversible, machines supprimées et désactivées comprises, et la compte
    dans `legacyDiscarded` sans l'exporter ; elle déplace les vérificateurs
-   dans la table (`keysMoved`), sauf un vérificateur dont le sélecteur est
-   déjà tenu par une autre machine : ses champs sont conservés, le conflit
-   est compté dans `selectorConflicts` et doit être examiné à la main (§8).
+   avec leur sélecteur dans la table (`keysMoved`), sauf un vérificateur dont
+   le sélecteur est déjà tenu par une autre machine : ses champs sont
+   conservés, le conflit est compté dans `selectorConflicts` et doit être
+   examiné à la main (§8).
 5. En cas d'échec, laisser la synchronisation interrompue ou revenir uniquement
    à une version qui conserve ce schéma et ce vérificateur. Ne jamais restaurer
    la base64 réversible, les anciennes clés ou l'ancien code d'authentification.
@@ -3343,6 +3344,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
 | `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; la migration (clé historique acceptée avant, déplacée, idempotente, valeur réversible effacée, table seule juge d'un sélecteur, sélecteur déjà présent à la même machine sans doublon, conflit avec une autre machine sans effacement et rotation toujours possible, pages mixtes et sommes exactes, bornes de pageSize sans écriture, parc vide, relance après une page validée, clé pas encore déplacée prise dans une rotation). T03 : ligne historique avant migration sans secret, ligne de table après migration, absence de ligne réversible ou de sélecteur déjà présent ; révocation historique, audit et 401 sur les 13 routes, autre machine intacte, refus sans écriture et machine supprimée révoquée avant restauration ; 55 rotations dans le même chevauchement et toutes les 56 clés listées, histoire révoquée bornée aux frontières 49, 50 et 51 clés non révoquées. |
+| `convex/machineKeyClock.test.ts` | ANH-238 : l'expiration jugée à l'horloge de l'action même avec une query en cache (les deux portes, les 13 routes, avant le contrat et la limite) ; un échec d'écriture de `lastUsedAt` ne change aucune réponse et se rattrape à la requête suivante ; un heartbeat refusé 426 écrit la dernière utilisation sans prendre de jeton. |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |

@@ -47,9 +47,12 @@ function request(apiKey: string) {
 }
 
 describe("ANH-238 the action judges time even with a cached query", () => {
-  it.each([authenticateMachineRequest, validateMachineAuth])(
+  it.each([
+    ["authenticateMachineRequest", authenticateMachineRequest],
+    ["validateMachineAuth", validateMachineAuth],
+  ] as const)(
     "%s refuses at expiry and afterwards, without recording a use",
-    async (gate) => {
+    async (_name, gate) => {
       const f = await machineFixture(modules);
       const key = await keyOf(f);
       await f.t.run((ctx) => ctx.db.patch(key._id, { expiresAt: NOW + HOUR }));
