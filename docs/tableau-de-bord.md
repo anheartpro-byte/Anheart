@@ -635,7 +635,11 @@ calculé sur la télémétrie à 1 Hz (sans g à la pointe du pied ni variation 
 g, qu'on ne lit que dans l'enregistrement), **Enregistrement** une fois
 l'enregistrement déposé et vérifié. Si l'enregistrement n'a pas pu être lu, la
 carte le dit avec la raison et garde le résumé provisoire. Tant qu'aucun
-résumé n'est calculé, elle le dit. Les définitions de chaque chiffre et leurs
+résumé n'est calculé, elle le dit. Pour une annulation ou un refus avant le
+départ, la carte et le rapport indiquent « Cette séance n'a pas démarré sur
+la machine : elle n'a pas de résumé. » ; l'historique indique « Non démarrée »
+et ne dessine aucune barre de progression pour elle. « Pas encore calculé »
+reste réservé aux autres séances sans résumé. Les définitions et les
 sources sont dans [convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89).
 Le bouton **Rapport PDF** ouvre le rapport de la séance.
 

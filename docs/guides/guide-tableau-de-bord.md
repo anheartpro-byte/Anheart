@@ -2164,6 +2164,12 @@ ECG sont vides pour une séance d'entraînement : c'est normal.
 Pour l'historique d'un seul patient : **Patients** → le patient → carte
 **Sessions récentes** (10 dernières).
 
+Une séance annulée ou refusée avant son départ porte « Non démarrée » dans
+l'historique des entraînements et n'a pas de barre de progression. Sa carte
+de résumé et son rapport indiquent « Cette séance n'a pas démarré sur la
+machine : elle n'a pas de résumé. » Les autres séances sans résumé gardent
+« Pas encore calculé » : leur calcul peut encore arriver.
+
 **Si ça ne marche pas** :
 
 - « Session introuvable » : vous n'avez pas accès à cette séance ;

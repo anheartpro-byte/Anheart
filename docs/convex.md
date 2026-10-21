@@ -633,6 +633,11 @@ ou `manual`), écrite par les seules fonctions internes de `sessionReports.ts` :
 
 **Deux sources, une seule ligne.**
 
+Une séance d'entraînement terminée avant son départ n'a pas de résumé :
+annulation en attente, refus d'armement connu ou refus de la machine.
+`endedBeforeStart` reprend le prédicat de `machineRegistry.ts` ; son absence
+est présentée comme « Non démarrée », et non comme un calcul à venir.
+
 1. **Provisoire** (`source: "telemetry"`) : quand la machine envoie la fin de
    la séance, `endTrainingSession` planifie `summarizeTelemetry`, qui lit la
    télémétrie à 1 Hz (par pages de 1000 points, 22 pages au plus, soit six
@@ -1790,8 +1795,8 @@ sous les droits de sa séance, et rien de lui n'est écrit dans les journaux.
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `getSummary` | `canAccessSession` : pratiquant, accès à la machine dans l'organisation de la séance, admin Anheart | Le résumé de la séance (`provisional`, `computedAt`, `recordProblem`, `figures`), ou `null` : séance inconnue, non lisible par l'appelant, ou sans résumé encore. |
-| `riderHistory` | connecté | Les séances terminées (`completed`, `failed`) d'entraînement d'un pratiquant que l'appelant peut lire, les plus récentes d'abord, 100 au plus, avec les chiffres clés de leur résumé (durée, temps en zone, zone, FC moyenne et max, g max de référence) ou `null` s'il n'est pas encore calculé. Ce sont les séances de `listSessions` pour ce pratiquant (`readableSessions` par statut, puis `canAccessSession` sur chacune) : un gestionnaire lit celles des machines qu'il gère, un pratiquant les siennes, une autre organisation rien. |
+| `getSummary` | `canAccessSession` : pratiquant, accès à la machine dans l'organisation de la séance, admin Anheart | Le résumé de la séance (`provisional`, `computedAt`, `recordProblem`, `figures`), ou `null` pour une séance inconnue ou non lisible. Un lecteur reçoit `{ absent: "not_started" }` pour un entraînement terminé avant son départ sans résumé, `{ absent: "not_computed" }` pour toute autre absence de résumé. |
+| `riderHistory` | connecté | Les séances terminées (`completed`, `failed`) d'entraînement d'un pratiquant que l'appelant peut lire, les plus récentes d'abord, 100 au plus, avec les chiffres clés de leur résumé (durée, temps en zone, zone, FC moyenne et max, g max de référence) ou `summary: null`. `notStarted` vaut vrai uniquement pour une séance terminée avant son départ sans résumé. Ce sont les séances de `listSessions` pour ce pratiquant (`readableSessions` par statut, puis `canAccessSession` sur chacune) : un gestionnaire lit celles des machines qu'il gère, un pratiquant les siennes, une autre organisation rien. |
 
 Fonctions internes : `summarizeTelemetry` et `summarizeRecord` (actions),
 `telemetryInput`, `telemetryPage`, `verdictPage`, `recordInput` (queries),
@@ -1806,6 +1811,40 @@ reste intact. `summarizeTelemetry` signale les limites de lecture par
 `telemetry_truncated` et `events_truncated`. Les deux sources ignorent les
 tics ou points hors d'ordre avec `ticks_out_of_order` ; la règle de fin
 n'est cherchée que sur le premier tic de fin ou son prédécesseur immédiat.
+
+### Rattrapage des résumés : `sessionReportsBackfill.ts` (ANH-234)
+
+La mutation interne `backfillSummaries` est à lancer une fois après le
+déploiement d'ANH-82, par la CLI uniquement :
+
+```bash
+npx convex run sessionReportsBackfill:backfillSummaries '{}'
+```
+
+Elle n'a été lancée sur aucun déploiement ; seuls les tests en mémoire
+`convex-test` l'exécutent. Aucun cron ni fonction applicative ne l'appelle.
+Chaque appel lit une page de `sessions`, par l'index `by_status_and_started`,
+d'abord `completed`, puis `failed`. Les arguments facultatifs `status`,
+`cursor` et `batchSize` permettent de reprendre. Le lot par défaut vaut 25
+(`DEFAULT_BATCH_SIZE`), borné de 1 à 100 (`MAX_BATCH_SIZE`, partie entière) ;
+une valeur non finie reprend le défaut.
+
+Pour un entraînement `auto` ou `manual` sans résumé, elle planifie le
+provisoire sur la télémétrie. Sans final ni `recordProblem`, avec un dépôt
+non supprimé et ses trois fichiers vérifiés, elle planifie aussi le final.
+Les séances non démarrées, l'ancien mode `recording` et les résumés finaux
+ne sont jamais modifiés ; les dépôts supprimés, incomplets ou déjà signalés
+en erreur ne déclenchent pas de nouveau calcul final. Les lignes des séances
+restent intactes. Le final remplace le provisoire ; l'inverse est impossible.
+
+`SESSION_DELAY_MS` espace les séances de 1 000 ms ; le calcul sur fichier
+est planifié 500 ms après celui de la télémétrie. La suite commence après le
+dernier créneau du lot, avec une seconde de marge. `{ scheduled, done }`
+compte les actions de calcul du lot : `done: false` signifie que la suite
+est planifiée, `done: true` que la dernière page de `failed` est traitée.
+Après exécution des actions, une relance ne planifie plus de calcul et
+conserve les résumés, y compris `computedAt` ; seules les continuations de
+lecture nécessaires à la pagination restent planifiées.
 
 ### `ecgData.ts` et `sessionSummaries.ts` (historique, lecture seule)
 
