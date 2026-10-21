@@ -283,6 +283,8 @@ export const deliverRecipient = internalMutation({
  * Delete the alerts not changed for `NOTIFICATION_RETENTION_MS`, read or
  * not, 500 at a time. Run every day (`convex/crons.ts`); returns how many it
  * deleted, and runs again at once while there are more.
+ * Only the first daily pass schedules pending-email closure; continuations
+ * (`continuation: true`) do not schedule it again.
  */
 export const purge = internalMutation({
   args: { continuation: v.optional(v.boolean()) },

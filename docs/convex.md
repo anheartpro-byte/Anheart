@@ -2759,9 +2759,10 @@ le retire avec les alertes des organisations retirées pour ce compte.
 Une action planifiée s'exécute au plus une fois (documentation du paquet
 Convex 1.46.0 installé, `src/server/scheduler.ts`, lignes 39-40) : si elle ne
 tourne jamais ou s'arrête hors des blocs qui enregistrent son résultat lors
-d'une panne d'infrastructure, la purge quotidienne existante planifie
-`notificationEmails.abandonPending`. Cette mutation passe en `failed` avec
-`email_abandoned` les e-mails `pending` sans changement depuis plus de
+d'une panne d'infrastructure, seul le premier passage de la purge quotidienne
+existante planifie `notificationEmails.abandonPending` ; ses suites
+(`continuation: true`) ne la replanifient pas. Cette mutation passe en `failed`
+avec `email_abandoned` les e-mails `pending` sans changement depuis plus de
 `EMAIL_ABANDONED_AFTER_MS` (3 h : le plus long délai de reprise, 2 h, plus
 1 h de marge). Elle traite 500 lignes au plus par transaction, par l'index
 `by_email_status_and_updated`, et planifie la suite si le lot est plein.
