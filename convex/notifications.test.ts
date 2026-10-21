@@ -985,7 +985,442 @@ describe("the e-mail of an alert", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
+describe("session alert grouping (T03)", () => {
+  const deliveries = {
+    fault: { type: "drive_fault", detail: "OHF" },
+    verdict: { type: "safety_verdict", detail: "RAMP_DOWN" },
+    failed: { type: "session_failed", detail: undefined },
+    heartbeat: { type: "drive_fault", detail: undefined },
+  } as const;
+  type Delivery = keyof typeof deliveries;
+  const orders = [
+    ["fault", "verdict", "failed"],
+    ["fault", "failed", "verdict"],
+    ["verdict", "fault", "failed"],
+    ["verdict", "failed", "fault"],
+    ["failed", "fault", "verdict"],
+    ["failed", "verdict", "fault"],
+  ] as const;
+
+  async function session(w: World) {
+    return await addSession(w, {
+      machineId: w.machine,
+      userId: w.patient,
+      status: "active",
+      kind: "auto",
+    });
+  }
+
+  async function deliver(w: World, sessionId: Id<"sessions">, kind: Delivery) {
+    return await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      sessionId,
+      count: 1,
+      ...deliveries[kind],
+    });
+  }
+
+  async function expectEmails(w: World, expected: number) {
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(expected);
+    for (const row of await alerts(w)) {
+      const calls = vi
+        .mocked(fetch)
+        .mock.calls.filter(
+          ([, init]) =>
+            new Headers(init?.headers).get("Idempotency-Key") ===
+            `notification:${row._id}`,
+        );
+      expect(calls).toHaveLength(1);
+      const user = await w.t.run((ctx) => ctx.db.get(row.userId));
+      if (!user || !row.email?.type) throw new Error("Missing e-mail context");
+      expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({
+        from: "Gaura <alertes@example.invalid>",
+        to: [user.email],
+        ...alertEmail(
+          row.email.type,
+          user.language,
+          "Synthetic machine",
+          "https://site.example.invalid",
+        ),
+      });
+    }
+  }
+
+  it.each(orders.map((order) => ({ order, label: order.join(", ") })))(
+    "T03-a: folds all three deliveries in order $label, with the creation type in the only e-mail",
+    async ({ order }) => {
+      const w = await seedWorld(modules);
+      setEmailVariables();
+      const sessionId = await session(w);
+      for (const [index, kind] of order.entries()) {
+        vi.setSystemTime(NOW + index);
+        expect(await deliver(w, sessionId, kind)).toBe(index === 0 ? 2 : 0);
+      }
+      const rows = await alerts(w);
+      expect(recipients(rows)).toEqual([w.manager, w.orgAdmin].sort());
+      for (const row of rows) {
+        expect(row).toMatchObject({
+          organizationId: w.orgA,
+          machineId: w.machine,
+          sessionId,
+          type: "drive_fault",
+          detail: "OHF",
+          count: 3,
+          read: false,
+          createdAt: NOW,
+          updatedAt: NOW + 2,
+          email: { type: deliveries[order[0]].type },
+        });
+      }
+      await expectEmails(w, 2);
+    },
+  );
+
+  it.each(
+    orders.flatMap((order) =>
+      [0, 1, 2, 3].map((position) => {
+        const withHeartbeat: Delivery[] = [...order];
+        withHeartbeat.splice(position, 0, "heartbeat");
+        return { order: withHeartbeat, label: withHeartbeat.join(", ") };
+      }),
+    ),
+  )("T03-b: also folds the heartbeat in order $label", async ({ order }) => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    const sessionId = await session(w);
+    for (const kind of order) await deliver(w, sessionId, kind);
+    const rows = await alerts(w);
+    expect(recipients(rows)).toEqual([w.manager, w.orgAdmin].sort());
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        type: "drive_fault",
+        detail: "OHF",
+        sessionId,
+        count: 4,
+        read: false,
+      });
+    }
+    await expectEmails(w, 2);
+  });
+
+  it("T03-b, T03-f: groups the actual training mutations and keeps only codes from private machine text", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    const sessionId = await session(w);
+    const privateText = "HEALTH_SENTINEL_T03 193 bpm passenger Synthetic";
+    await w.t.mutation(internal.training.updateLive, {
+      machineId: w.machine,
+      live: live({ driveState: "fault", sessionId }),
+    });
+    await w.t.mutation(internal.training.storeEvents, {
+      machineId: w.machine,
+      sessionId,
+      events: [
+        event(1, "verdict", `drive_fault (RAMP_DOWN): ${privateText}`),
+        event(2, "drive_fault", `OHF (LFT 17): ${privateText}`),
+      ],
+    });
+    await w.t.mutation(internal.training.endTrainingSession, {
+      machineId: w.machine,
+      sessionId,
+      failed: true,
+      reason: privateText,
+    });
+    expect(await alerts(w)).toEqual([]);
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    const rows = await alerts(w);
+    expect(recipients(rows)).toEqual([w.manager, w.orgAdmin].sort());
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        type: "drive_fault",
+        detail: "OHF",
+        sessionId,
+        count: 4,
+        read: false,
+      });
+    }
+    await expectEmails(w, 2);
+    const stored = JSON.stringify([rows, vi.mocked(fetch).mock.calls]);
+    for (const forbidden of [
+      privateText,
+      "HEALTH_SENTINEL_T03",
+      "193",
+      "bpm",
+      "passenger",
+      "drive_fault (",
+    ])
+      expect(stored).not.toContain(forbidden);
+  });
+
+  it("T03-c: keeps a read alert unchanged and folds later deliveries separately for each recipient", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    const sessionId = await session(w);
+    await deliver(w, sessionId, "failed");
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    const first = (await alerts(w)).find((row) => row.userId === w.manager);
+    if (!first) throw new Error("Missing manager alert");
+    await as(w.t, "manager").mutation(api.notifications.markRead, {
+      notificationId: first._id,
+    });
+    vi.setSystemTime(NOW + 1);
+    await deliver(w, sessionId, "verdict");
+    vi.setSystemTime(NOW + 2);
+    await deliver(w, sessionId, "fault");
+    const rows = await alerts(w);
+    expect(rows).toHaveLength(3);
+    expect(await w.t.run((ctx) => ctx.db.get(first._id))).toEqual({
+      ...first,
+      read: true,
+    });
+    expect(
+      rows
+        .filter((row) => !row.read)
+        .map((row) => [
+          row.userId,
+          row.type,
+          row.detail,
+          row.count,
+          row.sessionId,
+        ])
+        .sort(),
+    ).toEqual(
+      [
+        [w.manager, "drive_fault", "OHF", 2, sessionId],
+        [w.orgAdmin, "drive_fault", "OHF", 3, sessionId],
+      ].sort(),
+    );
+    await expectEmails(w, 3);
+  });
+
+  it.each([
+    ["verdict", "failed"],
+    ["failed", "verdict"],
+  ] as const)(
+    "T03-d: folds a heart-rate verdict and failed end (%s then %s)",
+    async (first, second) => {
+      const w = await seedWorld(modules);
+      const sessionId = await session(w);
+      for (const kind of [first, second]) {
+        if (kind === "verdict") {
+          await storeEvents(w, sessionId, [
+            event(1, "verdict", "hr_drop (RAMP_DOWN): private medical detail"),
+          ]);
+        } else {
+          await w.t.mutation(internal.training.endTrainingSession, {
+            machineId: w.machine,
+            sessionId,
+            failed: true,
+            reason: "private medical reason",
+          });
+          await delivered(w);
+        }
+      }
+      const rows = await alerts(w);
+      expect(recipients(rows)).toEqual([w.manager, w.orgAdmin].sort());
+      for (const row of rows)
+        expect(row).toMatchObject({
+          type: "safety_verdict",
+          detail: "RAMP_DOWN",
+          count: 2,
+          sessionId,
+        });
+      expect(JSON.stringify(rows)).not.toContain("private medical");
+    },
+  );
+
+  it("T03-e: keeps drive faults of different sessions separate", async () => {
+    const w = await seedWorld(modules);
+    const first = await session(w);
+    const second = await session(w);
+    for (const id of [first, second]) {
+      await deliver(w, id, "fault");
+      await deliver(w, id, "verdict");
+      await deliver(w, id, "failed");
+    }
+    const rows = await alerts(w);
+    expect(rows).toHaveLength(4);
+    for (const userId of [w.manager, w.orgAdmin]) {
+      expect(
+        rows
+          .filter((row) => row.userId === userId)
+          .map((row) => [row.sessionId, row.type, row.count]),
+      ).toEqual([
+        [first, "drive_fault", 3],
+        [second, "drive_fault", 3],
+      ]);
+    }
+  });
+
+  it("T03-e: adopts a session on a machine fault and still folds a heartbeat without a session by machine", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await session(w);
+    await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      type: "drive_fault",
+      count: 1,
+    });
+    await deliver(w, sessionId, "fault");
+    await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      type: "drive_fault",
+      count: 1,
+    });
+    const rows = await alerts(w);
+    expect(recipients(rows)).toEqual([w.manager, w.orgAdmin].sort());
+    for (const row of rows)
+      expect(row).toMatchObject({
+        type: "drive_fault",
+        detail: "OHF",
+        sessionId,
+        count: 3,
+      });
+  });
+
+  it("T03-e: prefers the session alert over an older machine fault and ignores other types, machines and organisations", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await session(w);
+    const decoys = await w.t.run(async (ctx) => {
+      const ids: Id<"notifications">[] = [];
+      for (const [organizationId, machineId, type] of [
+        [w.orgB, w.machine, "drive_fault"],
+        [w.orgA, w.otherMachine, "drive_fault"],
+        [w.orgA, w.machine, "machine_offline"],
+      ] as const) {
+        ids.push(
+          await ctx.db.insert("notifications", {
+            organizationId,
+            machineId,
+            type,
+            userId: w.manager,
+            sessionId,
+            count: 7,
+            createdAt: NOW,
+            updatedAt: NOW,
+            read: false,
+          }),
+        );
+      }
+      return ids;
+    });
+    await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      type: "drive_fault",
+      count: 1,
+    });
+    await deliver(w, sessionId, "verdict");
+    await deliver(w, sessionId, "fault");
+    const rows = await alerts(w);
+    expect(
+      rows.filter((row) => decoys.includes(row._id)).map((row) => row.count),
+    ).toEqual([7, 7, 7]);
+    for (const userId of [w.manager, w.orgAdmin]) {
+      const own = rows.filter(
+        (row) => row.userId === userId && !decoys.includes(row._id),
+      );
+      expect(
+        own.map((row) => [row.sessionId, row.type, row.detail, row.count]),
+      ).toEqual([
+        [undefined, "drive_fault", undefined, 1],
+        [sessionId, "drive_fault", "OHF", 2],
+      ]);
+    }
+  });
+
+  it("T03-f: rejects free text even when a more precise type replaces the verdict", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await session(w);
+    await deliver(w, sessionId, "verdict");
+    await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      sessionId,
+      type: "drive_fault",
+      detail: "HEALTH_SENTINEL_T03 193 bpm",
+      count: 2,
+    });
+    const rows = await alerts(w);
+    expect(rows.map((row) => [row.type, row.detail, row.count])).toEqual([
+      ["drive_fault", undefined, 3],
+      ["drive_fault", undefined, 3],
+    ]);
+    expect(JSON.stringify(rows)).not.toContain("HEALTH_SENTINEL_T03");
+  });
+
+  it("keeps the creation type and identical e-mail bodies across a 429 retry and a type promotion", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    await w.t.run((ctx) => ctx.db.patch(w.orgAdmin, { email: "" }));
+    const sessionId = await session(w);
+    await deliver(w, sessionId, "failed");
+    const row = (await alerts(w)).find((alert) => alert.userId === w.manager);
+    if (!row) throw new Error("Missing manager alert");
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 429 }));
+    await w.t.action(internal.notificationEmails.send, {
+      notificationId: row._id,
+      attempt: 0,
+    });
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    await deliver(w, sessionId, "fault");
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+    const bodies = vi.mocked(fetch).mock.calls.map(([, init]) => init?.body);
+    expect(bodies[1]).toBe(bodies[0]);
+    const user = await w.t.run((ctx) => ctx.db.get(w.manager));
+    if (!user) throw new Error("Missing recipient");
+    expect(JSON.parse(String(bodies[0]))).toEqual({
+      from: "Gaura <alertes@example.invalid>",
+      to: [user.email],
+      ...alertEmail(
+        "session_failed",
+        user.language,
+        "Synthetic machine",
+        "https://site.example.invalid",
+      ),
+    });
+    expect(await w.t.run((ctx) => ctx.db.get(row._id))).toMatchObject({
+      type: "drive_fault",
+      count: 2,
+      email: { type: "session_failed", status: "sent", attempts: 2 },
+    });
+  });
+
+  it("uses the alert type for an existing e-mail without a stored creation type", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    await deliver(w, await session(w), "fault");
+    const row = (await alerts(w)).find((alert) => alert.userId === w.manager);
+    if (!row?.email) throw new Error("Missing e-mail state");
+    const email = row.email;
+    await w.t.run((ctx) =>
+      ctx.db.patch(row._id, { email: { ...email, type: undefined } }),
+    );
+    expect(
+      await w.t.query(internal.notificationEmails.pending, {
+        notificationId: row._id,
+      }),
+    ).toMatchObject({ type: "drive_fault" });
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not queue an e-mail on promotion when the recipient disabled the creation type", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    await as(w.t, "manager").mutation(api.notifications.updateSettings, {
+      type: "session_failed",
+      email: false,
+    });
+    const sessionId = await session(w);
+    await deliver(w, sessionId, "failed");
+    await deliver(w, sessionId, "fault");
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    expect(
+      (await alerts(w)).find((row) => row.userId === w.manager)?.email,
+    ).toBeUndefined();
+  });
+});
 // Keeping and deleting alerts
 // ---------------------------------------------------------------------------
 

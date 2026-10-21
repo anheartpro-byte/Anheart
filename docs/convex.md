@@ -843,8 +843,9 @@ destinataire), `type` (`machine_offline`, `session_failed`, `drive_fault`,
 `safety_verdict`), `machineId`, `sessionId?`, `detail?`, `count`,
 `createdAt`, `updatedAt`, `read`, `email?` (état d'envoi sur cette ligne :
 `status` = `pending`, `sent` ou `failed`, `attempts`, `queuedAt`, `updatedAt`,
-`resendId?`, `failureCode?`). `emailId?` reste un champ ancien compatible avec
-les déploiements existants, sans nouvelle écriture. `detail` est un **code envoyé par la machine**, jamais une phrase :
+`resendId?`, `failureCode?`, `type?` qui garde le type de création de l'alerte).
+`emailId?` reste un champ ancien compatible avec les déploiements existants,
+sans nouvelle écriture. `detail` est un **code envoyé par la machine**, jamais une phrase :
 le mnémonique du défaut du variateur (`OHF`) ou l'action exigée par un
 verdict (`RAMP_DOWN`). Aucune ligne ne contient de fréquence cardiaque, de
 nom de passager ni de raison de fin de séance : la raison reste sur la
@@ -853,9 +854,9 @@ séance. Index `by_user_and_organization_and_updated` (la liste),
 `by_user_and_organization_and_read` (le nombre de non lues),
 `by_user_and_organization_and_machine_and_updated` et
 `by_user_and_organization_and_machine_and_read` (liste et non lues des seules
-machines liées au gestionnaire, avant la coupe),
-`by_user_and_machine_and_type_and_read` (le regroupement), `by_user`
-(suppression d'un compte) et `by_updated` (purge à 90 jours).
+machines liées au gestionnaire, avant la coupe ; ce dernier index sert aussi
+au regroupement), `by_user_and_machine_and_type_and_read` (ancien index par
+type), `by_user` (suppression d'un compte) et `by_updated` (purge à 90 jours).
 
 `notification_settings` : une ligne par compte, `email` (un booléen
 facultatif par type : l'alerte part aussi par e-mail), `updatedAt`. Un type
@@ -1928,12 +1929,36 @@ Clerk, pas un patient, pas l'équipe Anheart en tant que telle (ses alertes
 de flotte sont celles d'ANH-150). Rien pour une machine supprimée, sans
 organisation, ou dont l'organisation est supprimée.
 
-**Regroupement.** Un nouvel événement se fond dans l'alerte **non lue** du
-même destinataire et du même type (`count` + 1, `updatedAt`) au lieu d'en
-écrire une autre : pour la même machine (`machine_offline`, `drive_fault` :
-un état de la machine), ou pour la même séance (`session_failed`,
-`safety_verdict`). Une alerte lue n'absorbe plus rien : l'événement suivant
-en écrit une nouvelle. Un e-mail ne part que pour une alerte nouvelle.
+**Regroupement (ANH-237).** Une séance donne une seule alerte **non lue** par
+destinataire, pour la même organisation et la même machine : `drive_fault`,
+`safety_verdict` et `session_failed` qui nomment la même séance s'y fondent,
+quel que soit l'ordre des livraisons. Le type gardé est le plus précis :
+`drive_fault` > `safety_verdict` > `session_failed`. Il peut monter après
+coup. `count` additionne les événements, `updatedAt` avance et `sessionId`
+reste celui de la séance. Pour le même type, `foldedDetail` garde l'action
+la plus sévère d'un verdict ou le dernier code du variateur ; quand le type
+monte, le code de l'arrivant remplace le détail ; un type moindre ne change
+pas ce détail. Seuls les codes filtrés par `CODE` sont conservés.
+
+Une alerte lue n'absorbe plus rien : l'événement suivant crée une nouvelle
+alerte, avec son e-mail selon les réglages, puis les événements suivants de
+la séance se fondent dans cette nouvelle alerte non lue. Les destinataires
+restent indépendants, chacun dans sa sous-transaction.
+
+Sans séance, les règles restent inchangées : `machine_offline` se regroupe
+par machine et type, comme un `drive_fault` sans séance dans une alerte
+`drive_fault` non lue de la machine, même si celle-ci nomme une séance.
+Un `drive_fault` qui nomme une séance cherche d'abord l'alerte de cette
+séance ; à défaut, il peut reprendre une alerte `drive_fault` non lue de la
+machine **sans séance**, qui prend alors cette séance. Il ne reprend jamais
+une alerte déjà liée à une autre séance. Les séances différentes gardent
+ainsi leurs alertes distinctes. La recherche utilise l'index existant
+`by_user_and_organization_and_machine_and_read`, sans nouvel index.
+
+Ce regroupement s'applique aussi aux verdicts hors défaut variateur : par
+exemple, `hr_drop (RAMP_DOWN)` et la fin en échec de la même séance donnent
+une seule alerte `safety_verdict`, de compteur 2, dans les deux ordres.
+`FREEZE` et `REDUCE` restent sans alerte, et le seuil hors ligne reste 90 s.
 
 **Délai.** Le défaut du variateur est demandé à la réception du heartbeat qui
 le porte (la console en envoie un toutes les 10 s) ou du lot d'événements
@@ -2006,6 +2031,16 @@ d'identifiant de séance : la page derrière le lien les montre à qui peut les
 lire. Il est écrit dans la langue du compte (`users.language`). Il n'est mis
 en file que si le déploiement a ses trois variables (§8), que le
 destinataire veut ce type par e-mail et qu'il a une adresse.
+
+Un seul e-mail est mis en file, à la création de l'alerte, selon le réglage
+du type de départ. Il ne dit que ce type de départ, même si l'alerte monte
+ensuite en précision ; cette montée ne renvoie aucun e-mail. `email.type`
+conserve le type de création, y compris si la montée précède le premier
+envoi ou arrive entre deux reprises : le type et le corps restent ainsi
+identiques malgré cette montée entre les tentatives pour la même clé
+d'idempotence. Pour une ligne antérieure sans `email.type`, l'envoi reprend
+le type de l'alerte.
+« Machine hors ligne » reste sans e-mail par défaut.
 
 **Extension (ANH-145).** Un incident sur une machine sera un type de plus
 (`notificationTypeValidator` et `notificationEmailFields` dans

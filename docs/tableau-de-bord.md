@@ -888,6 +888,14 @@ Le second traite toutes les alertes visibles non lues par lots de 500,
 avec une suite automatique sans nouveau clic. Ce que le serveur écrit, quand, et pour qui :
 [convex.md](convex.md#notificationsts-alertes-aux-gestionnaires-anh-90).
 
+Pour une même séance, le défaut variateur, le verdict de sécurité et la fin
+en échec se regroupent dans une seule alerte non lue par destinataire. Son
+type peut devenir plus précis : défaut variateur, puis arrêt demandé par la
+sécurité, puis séance échouée, par priorité décroissante. Cela regroupe aussi
+un verdict de fréquence cardiaque et la fin en échec. Une alerte déjà lue
+reste inchangée ; l'événement suivant en crée une nouvelle. Les alertes sans
+séance gardent leur regroupement par machine.
+
 En bas, **Alertes par e-mail** : un interrupteur par type d'alerte. Par
 défaut tout part aussi par e-mail sauf « Machine hors ligne ». Un e-mail ne
 contient que le type d'alerte, le nom de la machine et un lien vers cette
@@ -895,6 +903,8 @@ page : jamais de fréquence cardiaque, de nom de passager ni de raison. Tant
 que le déploiement n'a pas sa clé d'envoi, la carte l'écrit (« L'envoi
 d'e-mails n'est pas configuré sur ce déploiement : les alertes restent dans le
 site. ») ; les choix sont gardés pour le jour où elle le sera.
+L'e-mail n'est envoyé qu'à la création de l'alerte et dit son type de départ ;
+il n'est pas renvoyé si le type devient ensuite plus précis sur le site.
 
 Tests : `app/[locale]/dashboard/notifications/page.test.tsx` (refus au
 patient, contenu de chaque type, liens, marquer lu, refus traduit, liste

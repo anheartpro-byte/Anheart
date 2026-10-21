@@ -1699,6 +1699,15 @@ nouveau clic. Les alertes que vous ne pouvez plus voir restent non lues.
 Les interrupteurs **Alertes par e-mail** choisissent les types que vous
 recevez aussi par e-mail.
 
+Le défaut variateur, le verdict de sécurité et la fin en échec d'une même
+séance se regroupent dans votre alerte non lue. Le défaut variateur est
+prioritaire sur le verdict de sécurité, lui-même prioritaire sur la séance
+échouée : le type affiché peut donc devenir plus précis. Un verdict de
+fréquence cardiaque et la fin en échec se regroupent aussi. L'unique e-mail
+dit le type de départ et n'est pas renvoyé quand le type change. Une alerte
+lue reste inchangée ; l'événement suivant en crée une nouvelle. Sans séance,
+le regroupement reste par machine.
+
 ---
 
 ## 5. Procédures pas à pas

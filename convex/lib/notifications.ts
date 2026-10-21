@@ -44,22 +44,44 @@ import { emailSettings, type NotificationType } from "./notificationEmail";
 export type { NotificationType };
 
 /**
- * Each kind of alert: what a new event folds into, and whether it goes by
- * e-mail too for an account that has not chosen (`notification_settings`).
+ * Each kind of alert: its priority within a session, its fallback grouping,
+ * and whether it goes by e-mail too for an account that has not chosen
+ * (`notification_settings`).
  *
  * - "machine": a state of the machine. A new event folds into the
  *   recipient's unread alert of that kind for that machine.
  * - "session": something that happened in one session. It folds into the
- *   recipient's unread alert of that kind for that session only.
+ *   recipient's unread alert for that session only. With a session, all
+ *   kinds with a positive session priority fold together, keeping the highest.
  */
 export const NOTIFICATION_TYPES = {
-  machine_offline: { foldsBy: "machine", emailByDefault: false },
-  session_failed: { foldsBy: "session", emailByDefault: true },
-  drive_fault: { foldsBy: "machine", emailByDefault: true },
-  safety_verdict: { foldsBy: "session", emailByDefault: true },
+  machine_offline: {
+    foldsBy: "machine",
+    sessionPriority: 0,
+    emailByDefault: false,
+  },
+  session_failed: {
+    foldsBy: "session",
+    sessionPriority: 1,
+    emailByDefault: true,
+  },
+  drive_fault: {
+    foldsBy: "machine",
+    sessionPriority: 3,
+    emailByDefault: true,
+  },
+  safety_verdict: {
+    foldsBy: "session",
+    sessionPriority: 2,
+    emailByDefault: true,
+  },
 } as const satisfies Record<
   NotificationType,
-  { foldsBy: "machine" | "session"; emailByDefault: boolean }
+  {
+    foldsBy: "machine" | "session";
+    sessionPriority: number;
+    emailByDefault: boolean;
+  }
 >;
 
 export const NOTIFICATION_TYPE_NAMES = Object.keys(
@@ -292,25 +314,45 @@ export async function notifyRecipient(
       : undefined;
   const unread = await ctx.db
     .query("notifications")
-    .withIndex("by_user_and_machine_and_type_and_read", (q) =>
+    .withIndex("by_user_and_organization_and_machine_and_read", (q) =>
       q
         .eq("userId", user._id)
+        .eq("organizationId", organizationId)
         .eq("machineId", machine._id)
-        .eq("type", type)
         .eq("read", false),
     )
     .collect();
-  const same = unread.find(
-    (row) =>
-      row.organizationId === organizationId &&
-      (NOTIFICATION_TYPES[type].foldsBy === "machine" ||
-        row.sessionId === event.sessionId),
-  );
+  const sameSession =
+    event.sessionId !== undefined && NOTIFICATION_TYPES[type].sessionPriority > 0
+      ? unread.find(
+          (row) =>
+            row.sessionId === event.sessionId &&
+            NOTIFICATION_TYPES[row.type].sessionPriority > 0,
+        )
+      : undefined;
+  const same =
+    sameSession ??
+    unread.find(
+      (row) =>
+        row.type === type &&
+        (NOTIFICATION_TYPES[type].foldsBy === "machine"
+          ? event.sessionId === undefined || row.sessionId === undefined
+          : row.sessionId === event.sessionId),
+    );
   if (same) {
+    const promoted =
+      NOTIFICATION_TYPES[type].sessionPriority >
+      NOTIFICATION_TYPES[same.type].sessionPriority;
     await ctx.db.patch(same._id, {
+      type: promoted ? type : same.type,
       count: same.count + (event.count ?? 1),
       updatedAt: now,
-      detail: foldedDetail(type, same.detail, detail),
+      detail:
+        same.type === type
+          ? foldedDetail(type, same.detail, detail)
+          : promoted
+            ? detail
+            : same.detail,
       sessionId: same.sessionId ?? event.sessionId,
     });
     return 0;
@@ -337,7 +379,13 @@ export async function notifyRecipient(
     );
     if (!choices[type]) return 1;
     await ctx.db.patch(notificationId, {
-      email: { status: "pending", attempts: 0, queuedAt: now, updatedAt: now },
+      email: {
+        type,
+        status: "pending",
+        attempts: 0,
+        queuedAt: now,
+        updatedAt: now,
+      },
     });
     await ctx.scheduler.runAfter(0, internal.notificationEmails.send, {
       notificationId,
@@ -346,6 +394,7 @@ export async function notifyRecipient(
   } catch {
     await ctx.db.patch(notificationId, {
       email: {
+        type,
         status: "failed",
         attempts: 0,
         queuedAt: now,

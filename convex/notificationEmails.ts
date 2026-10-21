@@ -78,7 +78,7 @@ export const pending = internalQuery({
       to: user.email.trim(),
       language: user.language,
       machineName: machine.name,
-      type: row.type,
+      type: row.email.type ?? row.type,
     };
   },
 });

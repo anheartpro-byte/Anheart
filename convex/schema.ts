@@ -886,6 +886,7 @@ export default defineSchema({
     // Delivery state expires and is deleted with the recipient's alert.
     email: v.optional(
       v.object({
+        type: v.optional(notificationTypeValidator),
         status: v.union(
           v.literal("pending"),
           v.literal("sent"),
