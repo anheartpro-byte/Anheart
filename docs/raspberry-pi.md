@@ -1734,9 +1734,11 @@ Règles :
   le passager au moment de l'armement, en gardant l'âge et la FC max du
   lancement. Une absence du roster après le 2xx envoie une fin échouée.
   Sans confirmation, aucun `training/start` ni armement. La
-  confirmation est une notification `warning` attribuée à l'alias de
-  l'opérateur : au repos elle va au journal de bord, et l'enregistrement armé
+  confirmation est une notification `warning`, préfixée `console:`, avec
+  l'alias du confirmateur en `actor` : au repos elle va au journal de bord,
+  et l'enregistrement armé
   porte aussi `console: launch_confirmed` avec cet alias, une seule fois.
+  La commande effective reste écrite une fois sous son kind d'entrée.
   Le nom du passager n'est pas
   écrit dans l'enregistrement ou un journal et n'est pas envoyé dans la
   déclaration de séance distante; il ne sort vers la page que dans la réponse
@@ -1891,10 +1893,12 @@ lecture de la page puis à la confirmation; le nom envoyé en `subjectLabel` par
 Convex sert uniquement à retenir une éventuelle phrase de refus. Sans passager
 dans le roster tenu, la page donne la raison et la confirmation est refusée.
 L'opérateur utilise le champ existant et confirme par le bouton unique. Le clic
-est attribué comme `operator_action`, avec `actor` égal à son alias; sans
-enregistrement, il va au `logbook/events.jsonl`. À l'ouverture de
+est une annotation `warning`, préfixée `console:`, avec `actor` égal à l'alias
+du confirmateur ; sans enregistrement, il va au `logbook/events.jsonl`. À l'ouverture de
 l'enregistrement armé, le même alias est écrit dans un événement
-`launch_confirmed`. Aucun nom de passager n'est écrit dans le dossier, le
+`warning` de détail `console: launch_confirmed`. La commande effective reste
+écrite une fois sous son kind d'entrée. Aucun nom de passager n'est écrit
+dans le dossier, le
 journal de bord ou les journaux du processus; le nom affiché sort vers la page
 uniquement dans la réponse JSON locale.
 
@@ -3682,7 +3686,7 @@ ligne de `<dossier racine>/logbook/events.jsonl` (`src/record/logbook.py`) :
 | demande prise par la boucle (événement `taken` de la console) | aucune ligne | ce qu'elle a produit se lit dans les tics ; l'identifiant d'une demande n'est écrit nulle part |
 | résultat d'acquittement | `warning` | `console: acknowledged: …` |
 | réarmement du défaut variateur demandé à la surface | `warning` | `console: fault_reset_requested: reset defaut` |
-| notification d'attestation, E-STOP, fin demandée | `warning` | `console: …`, comme dans un enregistrement |
+| notification d'attestation, de confirmation distante, E-STOP, fin demandée | `warning`, avec l'alias du confirmateur en `actor` pour attestation et confirmation | `console: …`, comme dans un enregistrement ; la commande effective (`confirm_estop_wiring`, départ, `acknowledge…`) reste écrite une fois sous son kind d'entrée |
 | nouvelle du lien avec le tableau de bord | `warning` | `dashboard: …` |
 | démarrage de la console après un arrêt non propre | `warning` | `unclean_stop: demarrage apres arret non propre`, suivi de ` : enregistrement de seance <nom> non clos` quand le dernier enregistrement est resté ouvert ([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)) |
 | démarrage de la console hors service | `warning` | `out_of_service: console hors service : …`, la phrase montrée à l'opérateur |

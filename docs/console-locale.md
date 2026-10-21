@@ -2035,9 +2035,11 @@ page ne propose pas (section 6).
 Lien avec le tableau de bord (`dashboard`). Une offre distante reste sur Seance
 jusqu'au prochain poll qui ne la propose plus ou jusqu'au démarrage. Le bouton local
 **Demarrer la seance** est masqué tant que l'offre est affichée. La confirmation
-est un événement opérateur attribué par alias; hors séance il va au
-`logbook/events.jsonl`, et l'enregistrement armé porte aussi `launch_confirmed` avec
-l'alias du confirmateur. Un refus du tableau de bord ou une demande sans réponse ne
+est une annotation `warning`, préfixée `console:`, attribuée à l'alias du
+confirmateur dans `actor` ; hors séance elle va au `logbook/events.jsonl`, et
+l'enregistrement armé porte aussi `console: launch_confirmed` avec cet alias.
+La commande effective reste écrite une fois sous son kind d'entrée.
+Un refus du tableau de bord ou une demande sans réponse ne
 soumet pas le démarrage à la machine et n'envoie pas `training/end`. Un refus local
 avant la demande ou après le 2xx envoie une fin échouée; ce lancement est alors
 définitif et le bouton reste désactivé. Après une absence de réponse ou un empêchement
