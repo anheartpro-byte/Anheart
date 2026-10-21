@@ -1676,6 +1676,45 @@ describe("session alert grouping (T03)", () => {
 // ---------------------------------------------------------------------------
 
 describe("how long an alert is kept", () => {
+  it("R1c1-4: schedules pending e-mail cleanup only once across three purge batches", async () => {
+    const w = await seedWorld(modules);
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 1200; i++) {
+        await ctx.db.insert("notifications", {
+          organizationId: w.orgA,
+          userId: w.manager,
+          machineId: w.machine,
+          type: "drive_fault",
+          count: 1,
+          read: false,
+          createdAt: NOW - NOTIFICATION_RETENTION_MS - 1,
+          updatedAt: NOW - NOTIFICATION_RETENTION_MS - 1,
+        });
+      }
+    });
+
+    expect(await w.t.mutation(internal.notifications.purge, {})).toEqual({
+      deleted: 500,
+    });
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await alerts(w)).toEqual([]);
+    const jobs = await w.t.run((ctx) =>
+      ctx.db.system.query("_scheduled_functions").collect(),
+    );
+    const continuations = jobs.filter((job) =>
+      job.name.includes("notifications:purge"),
+    );
+    expect(continuations).toHaveLength(2);
+    expect(continuations.map((job) => job.args)).toEqual([
+      [{ continuation: true }],
+      [{ continuation: true }],
+    ]);
+    expect(
+      jobs.filter((job) => job.name.includes("notificationEmails:abandonPending")),
+    ).toHaveLength(1);
+  });
+
   it("is deleted 90 days after its last change, read or not", async () => {
     const w = await seedWorld(modules);
     await markOffline(w, w.machine);

@@ -285,14 +285,16 @@ export const deliverRecipient = internalMutation({
  * deleted, and runs again at once while there are more.
  */
 export const purge = internalMutation({
-  args: {},
+  args: { continuation: v.optional(v.boolean()) },
   returns: v.object({ deleted: v.number() }),
-  handler: async (ctx) => {
-    await ctx.scheduler.runAfter(
-      0,
-      internal.notificationEmails.abandonPending,
-      {},
-    );
+  handler: async (ctx, args) => {
+    if (!args.continuation) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.notificationEmails.abandonPending,
+        {},
+      );
+    }
     const cutoff = Date.now() - NOTIFICATION_RETENTION_MS;
     const old = await ctx.db
       .query("notifications")
@@ -300,7 +302,9 @@ export const purge = internalMutation({
       .take(500);
     for (const row of old) await ctx.db.delete(row._id);
     if (old.length === 500) {
-      await ctx.scheduler.runAfter(0, internal.notifications.purge, {});
+      await ctx.scheduler.runAfter(0, internal.notifications.purge, {
+        continuation: true,
+      });
     }
     return { deleted: old.length };
   },
