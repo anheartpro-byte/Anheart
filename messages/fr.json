@@ -1232,6 +1232,8 @@
     "finalNote": "Calculé sur l'enregistrement déposé de la séance (tics à 5 Hz).",
     "recordProblem": "L'enregistrement déposé n'a pas pu être lu ({problem}) : le résumé reste provisoire.",
     "none": "Le résumé de cette séance n'est pas encore calculé.",
+    "notStartedNote": "Cette séance n'a pas démarré sur la machine : elle n'a pas de résumé.",
+    "notStarted": "Non démarrée",
     "openReport": "Rapport PDF",
     "reportTitle": "Rapport de séance d'entraînement",
     "download": "Télécharger en PDF",

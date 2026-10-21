@@ -8,8 +8,9 @@ import { useCatalogLabel } from "@/components/dashboard/statusLabels";
 import { useTrainingLabel } from "./TrainingBadges";
 import { formatDuration, formatNumber, percentOf } from "@/lib/sessionReport";
 
-export type SessionSummary = NonNullable<
-  FunctionReturnType<typeof api.sessionReports.getSummary>
+export type SessionSummary = Exclude<
+  NonNullable<FunctionReturnType<typeof api.sessionReports.getSummary>>,
+  { absent: string }
 >;
 export type SummaryFigures = SessionSummary["figures"];
 

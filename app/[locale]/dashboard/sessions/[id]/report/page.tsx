@@ -142,7 +142,7 @@ export default function SessionReportPage({
         <section className="space-y-3 border-t pt-4">
           <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
             {t("summaryTitle")}
-            {finished && summary !== null && (
+            {finished && summary !== null && !("absent" in summary) && (
               <Badge variant={summary.provisional ? "outline" : "secondary"}>
                 {summary.provisional ? t("provisional") : t("final")}
               </Badge>
@@ -150,8 +150,10 @@ export default function SessionReportPage({
           </h2>
           {!finished ? (
             <p className="text-sm text-muted-foreground">{t("notFinished")}</p>
-          ) : summary === null ? (
-            <p className="text-sm text-muted-foreground">{t("none")}</p>
+          ) : summary === null || "absent" in summary ? (
+            <p className="text-sm text-muted-foreground">
+              {t(summary?.absent === "not_started" ? "notStartedNote" : "none")}
+            </p>
           ) : (
             <>
               <p className="text-sm text-muted-foreground">

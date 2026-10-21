@@ -1232,6 +1232,8 @@
     "finalNote": "Computed from the session's deposited record (5 Hz ticks).",
     "recordProblem": "The deposited record could not be read ({problem}): the summary stays provisional.",
     "none": "The summary of this session is not computed yet.",
+    "notStartedNote": "This session did not start on the machine: it has no summary.",
+    "notStarted": "Not started",
     "openReport": "PDF report",
     "reportTitle": "Training session report",
     "download": "Download as PDF",

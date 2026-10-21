@@ -51,8 +51,9 @@ type Session = NonNullable<FunctionReturnType<typeof api.sessions.getSession>>;
 type Training = NonNullable<
   FunctionReturnType<typeof api.training.getTrainingSession>
 >;
-type Summary = NonNullable<
-  FunctionReturnType<typeof api.sessionReports.getSummary>
+type Summary = Exclude<
+  NonNullable<FunctionReturnType<typeof api.sessionReports.getSummary>>,
+  { absent: string }
 >;
 
 const sessionId = "session-1" as Id<"sessions">;
@@ -151,7 +152,7 @@ function serve(
   over: {
     session?: Session | null;
     training?: Training | null;
-    summary?: Summary | null;
+    summary?: FunctionReturnType<typeof api.sessionReports.getSummary>;
   } = {},
 ) {
   answer(
@@ -183,6 +184,25 @@ function valueUnder(label: string): string | null {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("the report of a session", () => {
+  it.each(["fr", "en"] as const)(
+    "distinguishes a session that did not start from an uncomputed summary in %s",
+    async (locale) => {
+      const catalog = locale === "fr" ? fr.sessionReport : en.sessionReport;
+      serve({
+        session: session({ status: "failed" }),
+        summary: { absent: "not_started" },
+      });
+      const view = await open(locale);
+      expect(screen.getByText(catalog.notStartedNote)).toBeTruthy();
+      expect(screen.queryByText(catalog.none)).toBeNull();
+      expect(screen.queryByText(catalog.notComputed)).toBeNull();
+      expect(wasMounted("SessionSummaryFigures")).toBe(false);
+      answer(api.sessionReports.getSummary, { absent: "not_computed" });
+      await view.refresh();
+      expect(screen.getByText(catalog.none)).toBeTruthy();
+      expect(screen.queryByText(catalog.notStartedNote)).toBeNull();
+    },
+  );
   it("reads the session, its training fields and its summary, for the session of the address", async () => {
     serve();
     await open();

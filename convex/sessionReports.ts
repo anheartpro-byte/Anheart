@@ -48,6 +48,20 @@ import {
   summarySourceValidator,
 } from "./lib/sessionSummary";
 import { readableSessions, stillReadable } from "./lib/readableSessions";
+import { ARMING_REFUSAL_CODES } from "./training";
+
+/** Known pre-start endings, duplicated from machineRegistry.ts (unvalidated sessions). */
+export function endedBeforeStart(
+  session: Pick<Doc<"sessions">, "status" | "endCode" | "endReason">,
+): boolean {
+  return (
+    session.status === "failed" &&
+    (ARMING_REFUSAL_CODES.some((code) => code === session.endCode) ||
+      (session.endCode === undefined &&
+        (session.endReason?.startsWith("Cancelled before start by") === true ||
+          session.endReason?.startsWith("refusee par la machine : ") === true)))
+  );
+}
 
 /** The statuses of a session that is over: only those have a summary. */
 const FINISHED: ReadonlySet<string> = new Set(["completed", "failed"]);
@@ -85,7 +99,7 @@ async function summaryOf(
 }
 
 /** The storage of the three files a summary reads, once all are verified. */
-async function verifiedSummaryFiles(
+export async function verifiedSummaryFiles(
   ctx: QueryCtx,
   sessionId: Id<"sessions">,
 ): Promise<Id<"_storage">[] | null> {
@@ -402,12 +416,15 @@ export const noteRecordProblem = internalMutation({
 /**
  * The summary of a session, for its page and its report. Null for a session
  * the caller may not read (`canAccessSession`), exactly as for one that does
- * not exist, and for a session that has no summary yet.
+ * not exist. Only a reader learns why a summary is absent.
  */
 export const getSummary = query({
   args: { sessionId: v.id("sessions") },
   returns: v.union(
     v.null(),
+    v.object({
+      absent: v.union(v.literal("not_started"), v.literal("not_computed")),
+    }),
     v.object({
       provisional: v.boolean(),
       computedAt: v.number(),
@@ -420,7 +437,13 @@ export const getSummary = query({
     const session = await ctx.db.get(args.sessionId);
     if (!session || !(await canAccessSession(ctx, session, me))) return null;
     const summary = await summaryOf(ctx, session._id);
-    if (!summary) return null;
+    if (!summary)
+      return {
+        absent:
+          summarizable(session) && endedBeforeStart(session)
+            ? ("not_started" as const)
+            : ("not_computed" as const),
+      };
     return {
       provisional: summary.source === "telemetry",
       computedAt: summary.computedAt,
@@ -466,6 +489,7 @@ export const riderHistory = query({
       endedAt: v.optional(v.number()),
       machineName: v.string(),
       profileName: v.optional(v.string()),
+      notStarted: v.boolean(),
       summary: v.union(
         v.null(),
         v.object({
@@ -509,6 +533,7 @@ export const riderHistory = query({
         endedAt: session.endedAt,
         machineName: machine?.name ?? "-",
         profileName: session.profileName,
+        notStarted: summary === null && endedBeforeStart(session),
         summary: summary === null ? null : keyFigures(summary),
       });
     }

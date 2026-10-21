@@ -208,8 +208,27 @@ describe("the figures of a summary", () => {
 });
 
 describe("the summary card of a session", () => {
-  type Summary = NonNullable<
-    FunctionReturnType<typeof api.sessionReports.getSummary>
+  it.each(["fr", "en"] as const)(
+    "distinguishes a session that did not start from an uncomputed summary in %s",
+    (locale) => {
+      const catalog = messages[locale].sessionReport;
+      answer("sessionReports:getSummary", { absent: "not_started" });
+      const screen = render(<SessionSummaryCard sessionId={sessionId} />, {
+        locale,
+      });
+      expect(screen.text()).toContain(catalog.notStartedNote);
+      expect(screen.text()).not.toContain(catalog.none);
+      expect(screen.text()).not.toContain(catalog.notComputed);
+      expect(screen.text()).not.toContain(catalog.final);
+      answer("sessionReports:getSummary", { absent: "not_computed" });
+      screen.rerender(<SessionSummaryCard sessionId={sessionId} />);
+      expect(screen.text()).toContain(catalog.none);
+      expect(screen.text()).not.toContain(catalog.notStartedNote);
+    },
+  );
+  type Summary = Exclude<
+    NonNullable<FunctionReturnType<typeof api.sessionReports.getSummary>>,
+    { absent: string }
   >;
   const summary = (over: Partial<Summary> = {}): Summary => ({
     provisional: false,
@@ -265,6 +284,7 @@ describe("the history of a rider", () => {
     startedAt: NOW - 86_400_000,
     endedAt: NOW - 86_400_000 + 1_800_000,
     machineName: "Centri Paris",
+    notStarted: false,
     profileName: "Endurance",
     summary: {
       provisional: false,
@@ -278,6 +298,24 @@ describe("the history of a rider", () => {
     },
     ...over,
   });
+
+  it.each(["fr", "en"] as const)(
+    "labels a session that did not start and draws no progress bar in %s",
+    (locale) => {
+      const catalog = messages[locale].sessionReport;
+      answer("sessionReports:riderHistory", [
+        row({ status: "failed", notStarted: true, summary: null }),
+      ]);
+      const screen = render(<RiderHistoryCard userId={userId} />, { locale });
+      expect(screen.text()).toContain(catalog.notStarted);
+      expect(screen.text()).not.toContain(catalog.notComputed);
+      expect(drawn.some((d) => d.part === "BarChart")).toBe(false);
+      answer("sessionReports:riderHistory", [row({ summary: null })]);
+      screen.rerender(<RiderHistoryCard userId={userId} />);
+      expect(screen.text()).toContain(catalog.notComputed);
+      expect(screen.text()).not.toContain(catalog.notStarted);
+    },
+  );
 
   it("waits for the history, then says when the rider has no finished session", () => {
     const screen = render(<RiderHistoryCard userId={userId} />);

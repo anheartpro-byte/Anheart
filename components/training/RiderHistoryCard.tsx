@@ -112,7 +112,7 @@ export function RiderHistoryCard({ userId }: { userId: Id<"users"> }) {
                           colSpan={3}
                           className="text-muted-foreground"
                         >
-                          {t("notComputed")}
+                          {t(row.notStarted ? "notStarted" : "notComputed")}
                         </TableCell>
                       ) : (
                         <>

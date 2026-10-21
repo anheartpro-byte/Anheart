@@ -18,6 +18,8 @@ import { makeFunctionReference } from "convex/server";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { sha256 } from "./lib/recordStorage";
+import { endedBeforeStart } from "./sessionReports";
+import { ARMING_REFUSAL_CODES } from "./training";
 import {
   addSession,
   as,
@@ -110,11 +112,18 @@ async function end(
   await settle(w);
 }
 
-const summaryOf = (
+const summaryOf = async (
   w: World,
   sessionId: Id<"sessions">,
   actor = "patient" as const,
-) => as(w.t, actor).query(api.sessionReports.getSummary, { sessionId });
+) => {
+  const result = await as(w.t, actor).query(api.sessionReports.getSummary, {
+    sessionId,
+  });
+  if (result !== null && "absent" in result)
+    throw new Error("Expected a computed summary");
+  return result;
+};
 
 // --- The deposited record ------------------------------------------------------
 
@@ -189,6 +198,82 @@ async function depositRecord(
 
 const summaryRows = (w: World) =>
   w.t.run((ctx) => ctx.db.query("session_summaries_v2").collect());
+
+describe("ANH-234 pre-start endings and absent summary isolation", () => {
+  it("recognises only the three known pre-start endings of failed sessions", () => {
+    for (const endCode of ARMING_REFUSAL_CODES)
+      expect(endedBeforeStart({ status: "failed", endCode })).toBe(true);
+    for (const endReason of [
+      "Cancelled before start by Synthetic",
+      "refusee par la machine : busy",
+    ])
+      expect(endedBeforeStart({ status: "failed", endReason })).toBe(true);
+    for (const session of [
+      { status: "completed", endReason: "Cancelled before start by Synthetic" },
+      { status: "active", endCode: ARMING_REFUSAL_CODES[0] },
+      { status: "failed", endReason: "machine failure" },
+      { status: "failed" },
+      {
+        status: "failed",
+        endCode: "machine_failure",
+        endReason: "Cancelled before start by Synthetic",
+      },
+      { status: "completed", endReason: "programme_complete" },
+    ] as const)
+      expect(endedBeforeStart(session)).toBe(false);
+  });
+
+  it.each(["not_started", "not_computed"] as const)(
+    "returns %s only to every reader and null to every non-reader",
+    async (absent) => {
+      const w = await seedWorld(modules);
+      const sessionId = await addSession(w, {
+        machineId: w.machine,
+        userId: w.patient,
+        status: "failed",
+        kind: "auto",
+      });
+      if (absent === "not_started")
+        await w.t.run((ctx) =>
+          ctx.db.patch(sessionId, {
+            endReason: "Cancelled before start by Synthetic",
+          }),
+        );
+      for (const actor of ["patient", "manager", "orgAdmin", "admin"] as const)
+        expect(
+          await as(w.t, actor).query(api.sessionReports.getSummary, {
+            sessionId,
+          }),
+        ).toEqual({ absent });
+      for (const actor of [
+        "otherPatient",
+        "otherManager",
+        "orgBAdmin",
+        "orgBPatient",
+        "orgBManager",
+        "stranger",
+      ] as const)
+        expect(
+          await as(w.t, actor).query(api.sessionReports.getSummary, {
+            sessionId,
+          }),
+        ).toBeNull();
+      const history = await as(w.t, "patient").query(
+        api.sessionReports.riderHistory,
+        { userId: w.patient },
+      );
+      expect(history).toMatchObject([
+        { sessionId, summary: null, notStarted: absent === "not_started" },
+      ]);
+      await w.t.run((ctx) => ctx.db.delete(sessionId));
+      expect(
+        await as(w.t, "patient").query(api.sessionReports.getSummary, {
+          sessionId,
+        }),
+      ).toBeNull();
+    },
+  );
+});
 
 describe("ANH-89 provisional summary, from the telemetry", () => {
   it.each([10_000, 10_001])(
@@ -279,7 +364,9 @@ describe("ANH-89 provisional summary, from the telemetry", () => {
         },
       ],
     });
-    expect(await summaryOf(w, sessionId)).toBeNull();
+    expect(
+      await as(w.t, "patient").query(api.sessionReports.getSummary, { sessionId }),
+    ).toEqual({ absent: "not_computed" });
 
     await end(w, sessionId);
 

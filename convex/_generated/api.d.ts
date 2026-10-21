@@ -57,6 +57,7 @@ import type * as recordHttp from "../recordHttp.js";
 import type * as recordStorage from "../recordStorage.js";
 import type * as recordVerification from "../recordVerification.js";
 import type * as sessionReports from "../sessionReports.js";
+import type * as sessionReportsBackfill from "../sessionReportsBackfill.js";
 import type * as sessionSummaries from "../sessionSummaries.js";
 import type * as sessions from "../sessions.js";
 import type * as softwareReleases from "../softwareReleases.js";
@@ -119,6 +120,7 @@ declare const fullApi: ApiFromModules<{
   recordStorage: typeof recordStorage;
   recordVerification: typeof recordVerification;
   sessionReports: typeof sessionReports;
+  sessionReportsBackfill: typeof sessionReportsBackfill;
   sessionSummaries: typeof sessionSummaries;
   sessions: typeof sessions;
   softwareReleases: typeof softwareReleases;

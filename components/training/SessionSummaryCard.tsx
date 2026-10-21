@@ -33,6 +33,9 @@ export function SessionSummaryCard({
   const summary = useQuery(api.sessionReports.getSummary, { sessionId });
 
   if (summary === undefined) return <Skeleton className="h-48 w-full" />;
+  const report = summary !== null && !("absent" in summary) ? summary : null;
+  const notStarted =
+    summary !== null && "absent" in summary && summary.absent === "not_started";
 
   return (
     <Card>
@@ -40,16 +43,16 @@ export function SessionSummaryCard({
         <CardTitle className="flex flex-wrap items-center gap-2">
           <ClipboardList className="h-4 w-4" />
           {t("summaryTitle")}
-          {summary !== null && (
-            <Badge variant={summary.provisional ? "outline" : "secondary"}>
-              {summary.provisional ? t("provisional") : t("final")}
+          {report !== null && (
+            <Badge variant={report.provisional ? "outline" : "secondary"}>
+              {report.provisional ? t("provisional") : t("final")}
             </Badge>
           )}
         </CardTitle>
         <CardDescription>
-          {summary === null
-            ? t("none")
-            : summary.provisional
+          {report === null
+            ? t(notStarted ? "notStartedNote" : "none")
+            : report.provisional
               ? t("provisionalNote")
               : t("finalNote")}
         </CardDescription>
@@ -62,14 +65,14 @@ export function SessionSummaryCard({
           </Link>
         </CardAction>
       </CardHeader>
-      {summary !== null && (
+      {report !== null && (
         <CardContent className="space-y-3">
-          {summary.recordProblem !== null && (
+          {report.recordProblem !== null && (
             <p className="text-sm text-amber-700 dark:text-amber-400">
-              {t("recordProblem", { problem: summary.recordProblem })}
+              {t("recordProblem", { problem: report.recordProblem })}
             </p>
           )}
-          <SessionSummaryFigures figures={summary.figures} />
+          <SessionSummaryFigures figures={report.figures} />
         </CardContent>
       )}
     </Card>
