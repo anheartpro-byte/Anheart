@@ -644,18 +644,30 @@ ou `manual`), écrite par les seules fonctions internes de `sessionReports.ts` :
    (`manifest.json`, `ticks.csv`, `events.jsonl`) de l'enregistrement déposé
    sont vérifiés, `recordStorage.finishVerification` planifie
    `summarizeRecord`, sans attendre les blocs bruts. Il remplace le résumé
-   provisoire ; un résumé provisoire ne remplace jamais un résumé final.
+   provisoire si au moins un tic de séance (`t > 0`) est lu ; un résumé
+   provisoire ne remplace jamais un résumé final.
 
 Les deux calculs sont idempotents : recalculés sur les mêmes lignes ou les
 mêmes fichiers vérifiés (immuables), ils donnent le même résumé, seule
 `computedAt` change. Le calcul final est borné quelle que soit la taille de
 l'enregistrement : le manifeste (2 Mio au plus) est lu entier, `ticks.csv` et
 `events.jsonl` (16 Mio au plus chacun) tranche par tranche de 1 Mio et ligne
-par ligne, et aucun bloc brut n'est ouvert, qu'il y en ait 3 ou 36 000. Un
+par ligne. Les fichiers sont ouverts, contrôlés et lus l'un après l'autre :
+manifeste, puis tics, puis événements ; chaque fichier est relâché avant
+d'ouvrir le suivant. L'absence et la taille sont contrôlées avant de lire
+son contenu. Aucun bloc brut n'est ouvert, qu'il y en ait 3 ou 36 000. Un
 enregistrement illisible (fichier absent du stockage, trop grand, manifeste
 qui n'est pas un objet JSON, octets qui ne sont pas de l'UTF-8, en-tête de
 `ticks.csv` sans les colonnes lues) laisse le résumé provisoire, avec la raison
-dans `recordProblem` (un code, jamais un contenu). La suppression d'un dépôt
+dans `recordProblem` (un code, jamais un contenu) : `missing_file`,
+`too_large`, `invalid_manifest`, `invalid_encoding`, `invalid_ticks`.
+Un en-tête valide sans tic de séance (en-tête seul ou seulement des tics
+`t <= 0`) donne `no_session_ticks` : aucun final vide ne remplace le
+provisoire. Une exception inattendue de stockage, de lecture ou de calcul
+donne `summary_failed` et termine l'action sans relancer l'exception ; le
+journal ne porte que l'identifiant de séance et ce code. Ces problèmes ne
+modifient jamais un résumé final existant. Sans résumé provisoire,
+`noteRecordProblem` n'écrit rien. La suppression d'un dépôt
 (`recordStorage.remove`, rétention) ne supprime pas le résumé, comme elle
 laisse la séance et sa télémétrie ; la durée de conservation relève d'ANH-172.
 
@@ -672,8 +684,16 @@ laisse la séance et sa télémétrie ; la durée de conservation relève d'ANH-
 | `reference.maxGRate`, `legTip.maxGRate` | variation de g max : sur chaque fenêtre de 1 s (5 intervalles, 6 tics consécutifs) dont tous les tics sont jugés (mesure fraîche, pas de silence, ni `QUICK_STOP` ni `GO_SILENT`, variateur `OPERATION_ENABLED`, vitesse moteur au moins la consigne minimale du programme, 55 tr/min sans programme), \|g fin − g début\| / durée ; `null` dans le résumé provisoire | `arm_windows` (`simulation/invariants.py`) ; 55 tr/min : `min_run_motor_rpm` de `raspberry-pi/config/motion_limits.json` |
 | `radiusM`, `legTip.measured` | rayons et rayon de la pointe mesuré ou estimé, si le manifeste porte la géométrie (la simulation ; la console écrit `geometry: null`) | [enregistrement.md, Contexte commun](enregistrement.md#contexte-commun-aux-deux-producteurs) |
 | `verdicts`, `verdictsOmitted` | chaque règle de sécurité apparue sur un tic de séance, dans l'ordre d'apparition, avec l'action la plus sévère vue avec elle (32 règles gardées, les autres comptées) ; provisoire : les événements `verdict` | `rules_seen` (`simulation/invariants.py`), ordre de `SafetyAction` (`types.py`) |
-| `endReason`, `endRule` | `end_reason` du manifeste (provisoire : `endReason` de la séance) ; pour une fin `safety_verdict`, la règle du premier tic `ending` ou `finished` | `EndReason` (`raspberry-pi/src/training/runtime.py`) |
-| `warnings` | `record_degraded` (l'enregistrement dit lui-même qu'il lui manque des données), `lines_skipped` (lignes illisibles ignorées), `telemetry_truncated` | [enregistrement.md, Événements](enregistrement.md#événements) |
+| `endReason`, `endRule` | `end_reason` du manifeste (provisoire : `endReason` de la séance) ; pour une fin `safety_verdict`, la règle du premier tic `ending` ou `finished`, sinon celle du tic de séance immédiatement précédent ; `null` si aucun des deux ne porte une règle ou sans tic de fin lu, sans repli sur une règle plus ancienne | `EndReason` (`raspberry-pi/src/training/runtime.py`) |
+| `warnings` | `record_degraded` (l'enregistrement dit lui-même qu'il lui manque des données), `lines_skipped` (lignes illisibles ignorées), `telemetry_truncated` (points encore à lire après 22 pages), `events_truncated` (événements encore à lire après 20 pages), `ticks_out_of_order` (tics ou points dont le temps ne progresse pas) | [enregistrement.md, Événements](enregistrement.md#événements) |
+
+Un tic dont `t` n'est pas strictement supérieur au temps du dernier tic
+retenu, de séance ou d'avant le départ, est ignoré pour toutes les figures
+et compté pour l'avertissement `ticks_out_of_order`. La même règle vaut pour
+les points de télémétrie. L'intervalle en zone part toujours du dernier tic
+retenu : `[0, 10, 5, 6]` donne 10 s en zone et une durée de 10 s.
+L'historique ne dessine aucune barre quand `durationS` vaut `null`, même si
+`inZoneS` vaut 0 : une absence n'est jamais représentée par zéro.
 
 Deux écarts connus avec la console, vérifiés le 14 octobre 2026 sur quatre
 scénarios de la simulation (`auto_jog_150_nominal`,
@@ -1777,6 +1797,15 @@ Fonctions internes : `summarizeTelemetry` et `summarizeRecord` (actions),
 `telemetryInput`, `telemetryPage`, `verdictPage`, `recordInput` (queries),
 `storeSummary` et `noteRecordProblem` (mutations). La table et les définitions
 sont décrites [au §2](#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89).
+
+`summarizeRecord` ouvre et lit le manifeste, puis `ticks.csv`, puis
+`events.jsonl`, l'un après l'autre. `no_session_ticks` et `summary_failed`
+laissent les chiffres provisoires en place, avec le code dans
+`recordProblem` ; sans provisoire, rien n'est écrit, et un final existant
+reste intact. `summarizeTelemetry` signale les limites de lecture par
+`telemetry_truncated` et `events_truncated`. Les deux sources ignorent les
+tics ou points hors d'ordre avec `ticks_out_of_order` ; la règle de fin
+n'est cherchée que sur le premier tic de fin ou son prédécesseur immédiat.
 
 ### `ecgData.ts` et `sessionSummaries.ts` (historique, lecture seule)
 
