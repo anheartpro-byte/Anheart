@@ -1693,6 +1693,20 @@ accessibles à l'admin d'organisation et au gestionnaire encore lié, comme
 ses séances : **Machine supprimée** remplace le lien vers sa fiche. Le lien
 vers la séance reste disponible quand elle est lisible.
 
+Pour une **Séance échouée** que vous pouvez lire, la raison donne d'abord
+le libellé traduit du code de refus, s'il est connu. Sinon, un identifiant
+de fin connu est traduit et son complément est conservé :
+`safety_verdict: hr_drop (RAMP_DOWN)` devient
+« Verdict de sécurité : hr_drop (RAMP_DOWN) », et `emergency_stop` devient
+« Arrêt d'urgence ». Un motif inconnu ou libre, comme
+« refusee par la machine : console occupee », reste tel quel. Ce libellé
+est propre à la page des alertes ; les raisons brutes sur les pages de
+séance restent en suivi.
+
+Le refus d'un lancement par la console donne aussi **Séance échouée**.
+Un code dédié attend un ajout au contrat du Pi ; les alertes d'incident
+restent bloquées par ANH-145.
+
 **Marquer comme lue** marque une alerte ; **Tout marquer comme lu** marque
 toutes vos alertes visibles non lues, par lots automatiques de 500 sans
 nouveau clic. Les alertes que vous ne pouvez plus voir restent non lues.

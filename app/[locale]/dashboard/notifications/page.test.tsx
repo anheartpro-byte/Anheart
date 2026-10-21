@@ -83,6 +83,63 @@ function item(title: string) {
 }
 
 describe("the alerts page", () => {
+  describe.each(["fr", "en"] as const)("T04-c: end reasons in %s", (locale) => {
+    const messages = locale === "fr" ? fr : en;
+    it.each([
+      [
+        "safety_verdict: hr_drop (RAMP_DOWN)",
+        undefined,
+        `${messages.sessionReport.endReasons.safety_verdict} : hr_drop (RAMP_DOWN)`,
+      ],
+      [
+        "emergency_stop",
+        undefined,
+        messages.sessionReport.endReasons.emergency_stop,
+      ],
+      ["unknown_reason: x", undefined, "unknown_reason: x"],
+      [
+        "refusee par la machine : console occupee",
+        undefined,
+        "refusee par la machine : console occupee",
+      ],
+      [
+        "safety_verdict: hr_drop (RAMP_DOWN)",
+        "expired_before_start",
+        messages.errors.expired_before_start,
+      ],
+      [
+        "emergency_stop",
+        "unknown_code",
+        messages.sessionReport.endReasons.emergency_stop,
+      ],
+      ["constructor: x", undefined, "constructor: x"],
+      ["toString: x", undefined, "toString: x"],
+      ["emergency_stop_extra: x", undefined, "emergency_stop_extra: x"],
+      ["emergency_stop extra", undefined, "emergency_stop extra"],
+      [
+        "emergency_stop",
+        "constructor",
+        messages.sessionReport.endReasons.emergency_stop,
+      ],
+    ])(
+      "renders %s with reasonCode %s",
+      async (reason, reasonCode, expected) => {
+        signedInAs("gestionnaire");
+        serverHas([
+          alert("end-reason", { type: "session_failed", reason, reasonCode }),
+        ]);
+
+        await renderPage(<NotificationsPage />, { locale });
+
+        expect(
+          screen.getByText(
+            messages.notifications.reason.replace("{reason}", expected),
+          ),
+        ).toBeTruthy();
+      },
+    );
+  });
+
   it.each(["fr", "en"] as const)(
     "shows a deleted-machine notice in %s while keeping the readable session link",
     async (locale) => {

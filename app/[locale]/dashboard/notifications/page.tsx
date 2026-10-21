@@ -1,6 +1,6 @@
 "use client";
 
-import { useLocale, useTranslations } from "next-intl";
+import { useLocale, useMessages, useTranslations } from "next-intl";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { AlertTriangle, Bell, Mail } from "lucide-react";
@@ -8,6 +8,7 @@ import { api } from "@/convex/_generated/api";
 import { Link } from "@/i18n/navigation";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { isStaff } from "@/lib/organizationAccess";
+import { hasOwnMessage } from "@/components/dashboard/statusLabels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -158,6 +159,8 @@ export default function NotificationsPage() {
 function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
   const t = useTranslations("notifications");
   const tErrors = useTranslations("errors");
+  const tEndReasons = useTranslations("sessionReport.endReasons");
+  const messages = useMessages();
   const locale = useLocale();
   const at = (time: number) =>
     new Date(time).toLocaleString(locale, {
@@ -165,12 +168,19 @@ function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
       timeStyle: "short",
     });
 
-  // A code the site words (a launch refused before its machine armed it),
-  // else the sentence of the session as it is.
-  const reason =
-    alert.reasonCode !== undefined && tErrors.has(alert.reasonCode)
-      ? tErrors(alert.reasonCode)
-      : alert.reason;
+  let reason = alert.reason;
+  if (
+    alert.reasonCode !== undefined &&
+    hasOwnMessage(messages, ["errors", alert.reasonCode])
+  ) {
+    reason = tErrors(alert.reasonCode);
+  } else if (reason !== undefined) {
+    const code = reason.split(":", 1)[0];
+    if (hasOwnMessage(messages, ["sessionReport", "endReasons", code])) {
+      const suffix = reason.slice(code.length);
+      reason = tEndReasons(code) + (suffix ? ` :${suffix.slice(1)}` : "");
+    }
+  }
 
   let detail: string | null = null;
   if (alert.type === "safety_verdict") {

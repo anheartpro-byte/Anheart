@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
+import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   NOTIFICATION_RETENTION_MS,
@@ -435,6 +436,82 @@ describe("a launch failed before its machine armed it (ANH-144)", () => {
         .filter((job) => job.state.kind === "pending")
         .map((job) => job.name),
     );
+
+  it.each([undefined, NOW + 1_000])(
+    "T04-b: alerts every recipient of a console refusal in the Pi format, endedAt=%s",
+    async (endedAt) => {
+      const w = await seedWorld(modules);
+      const issued = await as(w.t, "admin").mutation(
+        api.machineKeys.createMachineKey,
+        {
+          machineId: w.machine,
+        },
+      );
+      const sessionId = await launch(w);
+      expect((await w.t.run((ctx) => ctx.db.get(sessionId)))?.status).toBe(
+        "pending",
+      );
+      const reason = "refusee par la machine : console occupee";
+      const body = {
+        sessionId,
+        failed: true,
+        reason,
+        ...(endedAt === undefined ? {} : { endedAt }),
+      };
+      const end = () =>
+        w.t.fetch("/api/machine/training/end", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${issued.apiKey}`,
+            "Content-Type": "application/json",
+            [CONTRACT_HEADER]: CONTRACT_VERSION,
+          },
+          body: JSON.stringify(body),
+        });
+
+      expect((await end()).status).toBe(200);
+      await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const rows = await alerts(w);
+      expect(recipients(rows)).toEqual([w.orgAdmin, w.manager].sort());
+      for (const row of rows) {
+        expect(row).toMatchObject({
+          type: "session_failed",
+          sessionId,
+          count: 1,
+        });
+        expect(row.detail).toBeUndefined();
+        expect(JSON.stringify(row)).not.toContain(reason);
+        expect(JSON.stringify(row)).not.toContain("console occupee");
+      }
+      expect((await w.t.run((ctx) => ctx.db.get(sessionId)))?.status).toBe(
+        "failed",
+      );
+      for (const actor of ["orgAdmin", "manager"] as const) {
+        const [listed] = await as(w.t, actor).query(api.notifications.list, {});
+        expect(listed).toMatchObject({
+          type: "session_failed",
+          sessionId,
+          reason,
+        });
+        expect(listed.reasonCode).toBeUndefined();
+      }
+
+      expect((await end()).status).toBe(200);
+      await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect(await alerts(w)).toEqual(rows);
+
+      await w.t.run((ctx) =>
+        ctx.db.patch(sessionId, { organizationId: w.orgB }),
+      );
+      for (const actor of ["orgAdmin", "manager"] as const) {
+        const [listed] = await as(w.t, actor).query(api.notifications.list, {});
+        expect(listed.sessionId).toBeUndefined();
+        expect(listed.reason).toBeUndefined();
+        expect(listed.reasonCode).toBeUndefined();
+      }
+    },
+  );
 
   it("is an alert once the sweep has failed it, written apart from the sweep", async () => {
     const w = await seedWorld(modules);

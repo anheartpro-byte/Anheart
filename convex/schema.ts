@@ -922,12 +922,6 @@ export default defineSchema({
       "machineId",
       "read",
     ])
-    .index("by_user_and_machine_and_type_and_read", [
-      "userId",
-      "machineId",
-      "type",
-      "read",
-    ])
     .index("by_user", ["userId"])
     .index("by_email_status_and_updated", ["email.status", "email.updatedAt"])
     .index("by_updated", ["updatedAt"]),
