@@ -4167,6 +4167,10 @@ ou un membre qu'un lien déjà présent ferait écrire ailleurs, arrête
 l'extraction : la gate échoue sur cette archive et dit pourquoi.
 `MAX_ARCHIVE_BYTES` borne à 512 Mio la somme des tailles annoncées des membres
 et `MAX_ARCHIVE_MEMBERS` à 40 000 leur nombre, dossiers et doublons compris.
+Les en-têtes PAX et GNU longs comptent aussi dans ces deux plafonds, avant
+la lecture de leurs métadonnées. Toute taille négative ou taille non nulle
+sur un membre hors fichier ordinaire ou métadonnées PAX/GNU est refusée,
+de même qu'une erreur de décompression, avec une raison nommée.
 Chaque borne est vérifiée avant d'écrire le membre suivant. L'import, le rejeu,
 le jugement de bibliothèque et le visualiseur utilisent cette même extraction.
 
@@ -4254,9 +4258,10 @@ avertissement d'intégrité. Il travaille sur une copie, avec ces règles :
 | `clocks.wall_trusted`, `clocks.ntp_offset_s` | `null` : l'import ne juge pas l'horloge de la console et ne conserve pas son écart NTP |
 | dossier dans l'archive | `2000-01-01T000000Z_<local_ref>` |
 | acteurs des événements | `system` et `remote` conservés ; tout alias d'opérateur devient `anonymized` |
+| `end_observation.stop_reason`, `end_observation.shutdown_detail` | `null`, car ces deux textes libres peuvent contenir identité, fréquence cardiaque ou port série ; les autres champs de l'observation finale sont conservés |
 
-Les commandes restent leurs octets d'origine après validation par le vocabulaire
-fermé. Hors commandes, seule une liste fermée de faits machine reste : verdict
+Les commandes sont validées par `commands.parse`, puis réécrites sous leur
+forme canonique par `commands.encode`. Hors commandes, seule une liste fermée de faits machine reste : verdict
 `règle (ACTION)` ou `cleared`, défaut `MNEMONIQUE (LFT code)` ou `cleared`, phase
 connue, motif de fin connu. Les refus et contrôles pré-vol deviennent
 `anonymized`. Les warnings ne gardent que les préfixes connus `record_degraded`,
@@ -4269,7 +4274,8 @@ détails d'événement. Un fait inconnu devient `anonymized`.
 L'outil refuse toute identité source connue ou date absolue reconnue encore
 présente dans les fichiers, leurs noms et la configuration : identifiants du
 manifeste, alias des événements, dates calendaires et représentations Unix en
-secondes ou millisecondes. Il vérifie aussi les en-têtes bruts décompressés et
+secondes, millisecondes ou microsecondes, dates `16/10/2026`, `16.10.2026` et
+formes compactes comme `20261016`, même dans un identifiant. Il vérifie aussi les en-têtes bruts décompressés et
 les octets décodés de `raw_hex`. Les tableaux d'échantillons sont contrôlés
 pour les sentinelles d'identité et de date, sans les interpréter comme de la
 prose. L'enveloppe gzip des blocs doit avoir une date nulle et aucun nom,
@@ -4280,11 +4286,13 @@ identiques. Cette vérification complète la frontière explicite de
 reconnaît pas un nom humain arbitraire inconnu dans un champ de provenance.
 
 Les instants relatifs `t`, y compris les instants négatifs du repos, les
-mesures, trames, blocs bruts, capteurs, géométrie et observations finales ne
+mesures, trames, blocs bruts, capteurs, géométrie et autres champs des observations finales ne
 changent pas. `clocks.monotonic_start` reste identique. Seuls le manifeste,
 les événements et les sommes de contrôle sont réécrits. `Writer.close` partagé
 recalcule l'inventaire `files` et `checksums.sha256`, puis le rejeu de la source
-et celui de la copie doivent tous deux être possibles. La copie est rejouée
+et celui de la copie doivent tous deux être possibles, avec le même verdict,
+la même comparaison de décisions et la même divergence éventuelle. Tout
+changement de ces résultats refuse l'import. La copie est rejouée
 avec son document de configuration avant d'être archivée au même format que
 l'export de scénarios.
 
@@ -4471,10 +4479,12 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 ### 16.10 Vérification numérique unique sur un Pi
 
 **À faire sur banc, non faite.** Aucun essai ARM n'est déclaré réalisé.
-La référence du code et des cinq archives est le commit
-`1494c18bb87e42144771a611d82d3bf35d182f32`. Les empreintes ci-dessous ont été mesurées
-sur le poste de développement. Elles doivent être retrouvées dans
-l'environnement verrouillé de la CI au même SHA, puis sur un Pi aarch64.
+La table ci-dessous est celle calculée pour ANH-192 sur le commit de branche
+`38409aa8a4d7f9a5415f96ecb3dd2c6346359ba1`, à conserver dans l'historique
+accessible depuis `develop` après fusion. Ces empreintes ont été mesurées sur
+le poste de développement ; elles ne remplacent pas les rapports de CI.
+Pour l'essai, comparer les rapports du Pi aux rapports produits par la CI sur
+**le même SHA que celui installé sur le Pi**, dans leurs environnements verrouillés.
 Une gate locale verte ne constitue pas cette comparaison avec le Pi.
 
 Sur le Pi de banc, utiliser ce checkout sans modification locale, avec
@@ -4490,7 +4500,8 @@ python3.12 -m venv "$HOME/.cache/anheart-replay-pi"
 "$HOME/.cache/anheart-replay-pi/bin/python" -m pip check
 ```
 
-Le SHA doit être celui de référence, le statut vide et l'architecture
+Le SHA installé doit être celui du run CI choisi pour la comparaison, le
+statut vide et l'architecture
 `aarch64`. Le verrou exige numpy 2.5.3, scipy 1.18.1 et BioSPPy 2.2.4,
 comme le verrou de développement utilisé en CI. Conserver le SHA,
 l'architecture, la sortie d'installation et les versions avec la preuve.
@@ -4516,7 +4527,8 @@ dans son environnement installé par les verrous de développement
 interpréteur et `replay-ci` comme dossier de sortie. Conserver les cinq
 JSON et `SHA256SUMS` de ce run, puis les copier sous `replay-ci/` sur
 le poste qui compare les preuves. La gate `test_real_records.py` doit
-également passer dans ce run. L'observation CI de ce SHA reste à obtenir.
+également passer dans ce run. Conserver son SHA exact avec les rapports ;
+l'observation CI de ce SHA reste à obtenir.
 
 Résultat attendu : cinq codes 0, `outcome: match`, aucune divergence ni
 alerte d'intégrité, zéro tic différent et zéro tolérance consommée.
