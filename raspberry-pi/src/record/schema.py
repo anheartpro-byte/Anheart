@@ -7,6 +7,7 @@ from typing import Annotated, Literal, Self, assert_never
 from pydantic import BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
 from pydantic.dataclasses import dataclass
 
+from src.motor.atv320 import WRITE_SINGLE_REGISTER_CODE
 from src.motor.drive import (
     BadResponse,
     CommTimeout,
@@ -18,7 +19,17 @@ from src.motor.drive import (
     StopUnconfirmed,
     UnexpectedState,
 )
-from src.motor.observation import MODBUS_FAILURES, ModbusFailure
+from src.motor.observation import (
+    MODBUS_FAILURES,
+    ExceptionReply,
+    ExchangeKind,
+    InvalidReply,
+    ModbusFailure,
+    NoResponse,
+    PortClosed,
+    SdkException,
+    WrongFunction,
+)
 from src.record.rows import JsonValue
 from src.units import Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
 
@@ -301,6 +312,28 @@ def replay_failure(error: RecordedFailure) -> DriveError:  # noqa: PLR0911  # on
     raise assert_never(error)
 
 
+def native_failure_matches(error: ModbusFailure, kind: str) -> bool:
+    match error:
+        case PortClosed():
+            return kind == ExchangeKind.CONNECT
+        case SdkException():
+            return kind in (
+                ExchangeKind.CONNECT,
+                ExchangeKind.CLOSE,
+                ExchangeKind.READ,
+                ExchangeKind.WRITE,
+            )
+        case NoResponse() | ExceptionReply():
+            return kind in (ExchangeKind.READ, ExchangeKind.WRITE)
+        case WrongFunction():
+            return kind == ExchangeKind.WRITE and error.code != WRITE_SINGLE_REGISTER_CODE
+        case InvalidReply():
+            return kind == ExchangeKind.READ or (
+                kind == ExchangeKind.WRITE and not error.out_of_range
+            )
+    raise assert_never(error)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)
 class DriveFrame:
     t: float
@@ -322,6 +355,10 @@ class DriveFrame:
             raise ValueError(
                 "the failure vocabulary must match native exchanges or call observations"
             )
+        if isinstance(self.error, MODBUS_FAILURES) and not native_failure_matches(
+            self.error, self.kind
+        ):
+            raise ValueError("the native failure does not apply to this exchange kind")
         return self
 
 

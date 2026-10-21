@@ -162,7 +162,7 @@ class ExchangeLog:
 
     @property
     def refused(self) -> int:
-        """Exchanges refused so far because the log was full: what :meth:`drain` reports.
+        """Exchanges lost to capacity or observation failures: what :meth:`drain` reports.
 
         Read without taking anything out, and without the lock: one ``int``,
         whole at any instant, for whoever needs the count at a moment of its

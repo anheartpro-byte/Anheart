@@ -235,6 +235,8 @@ class ModbusMaster(Protocol):
         """Modbus function 6."""
 
 
+MODBUS_EXCEPTION_MAX: Final[int] = 0xFF
+
 WRITE_SINGLE_REGISTER_CODE: Final[int] = 6
 """Modbus function code 6, checked on every write reply.
 
@@ -798,7 +800,11 @@ def _native_failure(
             return NoResponse()
         return SdkException(category=SdkError.MODBUS)
     if isinstance(reply, ExceptionResponse):
-        return ExceptionReply(code=reply.exception_code)
+        return (
+            ExceptionReply(code=reply.exception_code)
+            if 1 <= reply.exception_code <= MODBUS_EXCEPTION_MAX
+            else InvalidReply()
+        )
     if (
         writing
         and isinstance(reply, ModbusPDU)

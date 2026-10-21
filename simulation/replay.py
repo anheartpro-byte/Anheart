@@ -93,6 +93,7 @@ from src.geometry import MachineGeometry
 from src.motor.atv320 import ATV320Drive
 from src.motor.drive import DriveBackend
 from src.record import commands
+from src.record.configuration import WARNING_PREFIX
 from src.record.reader import Recording, read
 from src.record.rows import Row
 from src.record.schema import EventKind, GeometrySnapshot, Manifest, Profile
@@ -209,6 +210,34 @@ def _position(step: _Step) -> tuple[float, int]:
     )
 
 
+def _opens_drive_window(step: _Step) -> bool:
+    if isinstance(step, _Tick):
+        return True
+    if isinstance(step, _Reading):
+        return False
+    match step.operation:
+        case (
+            _Arm()
+            | commands.StartManual()
+            | commands.EmergencyStop()
+            | commands.FaultReset()
+            | commands.Shutdown()
+        ):
+            return True
+        case (
+            commands.ConfirmEstopWiring()
+            | commands.SetManualTarget()
+            | commands.Stop()
+            | commands.LatchEmergencyStop()
+            | commands.Acknowledge()
+            | commands.Attendant()
+            | commands.AttendantPing()
+            | commands.PresenceTrip()
+        ):
+            return False
+    raise assert_never(step.operation)
+
+
 def _decision(row: Row) -> Decision | None:
     """What one recorded tick says the runtime decided, or ``None`` if it cannot be read."""
     try:
@@ -322,7 +351,7 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
     if not recording.frames:
         problems.append("the record holds no drive exchange: nothing says what the drive answered")
     if any(
-        event.kind is EventKind.WARNING and event.detail.startswith("replay_config:")
+        event.kind is EventKind.WARNING and event.detail.startswith(WARNING_PREFIX)
         for event in recording.events
     ):
         problems.append("the console could not persist its configuration document (replay_config)")
@@ -363,6 +392,11 @@ def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan,
         for block in recording.raw
         if block.header.runtime_delivery is not None
     )
+    end = recording.rows[-1].t
+    if recording.manifest.end_observation is not None:
+        end = max(end, recording.manifest.end_observation.t)
+    if any(reading.at < ticks[0].at - TICK or reading.at > end + TICK for reading in readings):
+        return Err("an ECG delivery lies outside the recorded tick window")
     steps: tuple[_Step, ...] = tuple(sorted((*ticks, *orders.value, *readings), key=_position))
     first = steps[0].t
     entries = (
@@ -597,8 +631,14 @@ async def _run(
     actual: list[Decision] = []
     raised: str | None = None
     groups = tuple(tuple(group) for _, group in groupby(plan.steps, key=lambda step: step.t))
-    for index, group in enumerate(groups):
-        tape.begin_step(groups[index + 1][0].t if index + 1 < len(groups) else None)
+    active = tuple(
+        group[0].t for group in groups if any(_opens_drive_window(step) for step in group)
+    )
+    windows = dict(zip(active, (*active[1:], None), strict=True))
+    for group in groups:
+        opens = group[0].t in windows
+        if opens:
+            tape.begin_step(windows[group[0].t])
         for step in group:
             pace.to(step.t)
             decision: Decision | None = None
@@ -613,7 +653,7 @@ async def _run(
                 actual.append(decision)
         if raised is not None or tape.mismatch is not None:
             break
-        if tape.finish_step() is not None:
+        if opens and tape.finish_step() is not None:
             break
     pending = tape.pending
     recorded = (
@@ -672,10 +712,13 @@ async def replay_recording(
                 )
             )
         settings, registers = applied.native_drive
-        tape = TapeMaster(data, clock, plan.value.origin)
-        drive = ATV320Drive(
-            clock, tape, settings, registers, executor_factory=InlineExecutor, wait=tape.wait
-        )
+        tape = TapeMaster(data, clock, plan.value.origin, slave=settings.slave_address)
+        try:
+            drive = ATV320Drive(
+                clock, tape, settings, registers, executor_factory=InlineExecutor, wait=tape.wait
+            )
+        except ValueError:
+            return Err(ReplayError("this build refuses the native drive configuration"))
     else:
         tape = TapeDrive(data, clock, plan.value.origin)
         drive = tape

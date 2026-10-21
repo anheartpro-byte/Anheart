@@ -220,7 +220,7 @@ def _exchange(frame: DriveFrame) -> Result[Exchange, str]:
             limits=limits,
             error=None
             if frame.error is None
-            else replay_failure(cast("RecordedFailure", frame.error)),
+            else replay_failure(cast(RecordedFailure, frame.error)),
         )
     )
 

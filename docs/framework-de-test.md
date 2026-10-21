@@ -4031,10 +4031,15 @@ pour les séances réelles, dont les instants sont connus à la milliseconde. Un
 enregistrement de la simulation se rejoue exactement : la ligne `tolerated`
 du rapport reste à zéro.
 
-Une étape réunit les tics, commandes et remises ECG au même instant arrondi
-à la milliseconde, dans l'ordre de la section 16.1. Chaque trame appartient
-à l'intervalle qui commence à cet instant et finit strictement avant
-l'étape suivante, selon son instant de début, jamais celui de sa réponse.
+Une étape de variateur réunit, à la milliseconde et dans l'ordre de 16.1,
+les tics et les commandes capables de l'appeler directement : départ
+programme ou manuel, `estop`, `fault_reset`, `shutdown`. Chaque trame
+appartient à l'intervalle qui commence à cet instant et finit strictement
+avant la prochaine étape de variateur, selon son début, jamais sa réponse.
+Une remise ECG, un ping, `presence_trip` ou `latch_estop` pendant les
+échanges ne coupe donc pas le tic qui les émet. Les autres commandes sans
+appel direct (`confirm_estop_wiring`, `acknowledge`, `stop`, `manual_target`,
+`attendant`) ne coupent pas non plus la fenêtre.
 Une latence avance toujours l'horloge. Aucun champ du format n'est ajouté.
 Le regroupement conserve les commandes et le tic qui partagent un instant,
 sans prétendre déduire leur appartenance individuelle depuis cet instant.
@@ -4406,6 +4411,23 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
   connue à la milliseconde : une décision prise à moins d'une milliseconde
   d'un seuil peut tomber un tic plus tôt ou plus tard, ce que les tolérances
   absorbent pour un verdict, pas pour une phase.
+* **Entrées pendant une attente du tic.** Une remise ECG, un verdict caméra
+  ou un clic E-STOP peut atteindre la console pendant le service du
+  variateur, avant l'observation et l'évaluation de sécurité du tic courant.
+  Le rejeu termine ce tic puis remet l'entrée, visible au suivant. Les
+  instants conservés ne décrivent pas le point de reprise de la coroutine.
+  Cela peut décaler un verdict d'un tic ; un changement de consigne, de
+  phase ou d'ordre des appels peut produire un écart ou une divergence.
+  `test_replay_waited_inputs.py` montre la lecture vue plus tard et le
+  verdict caméra ; `test_replay_interleaving.py` vérifie qu'une remise et
+  un ping sans effet sur les décisions ne créent aucun faux écart avec des
+  échanges de 10 ms, sur les deux bandes.
+* **Commande variateur pendant un tic.** Si `estop`, un départ, un
+  réarmement ou une sortie entrelace ses propres échanges avec ceux du
+  tic en cours, le rejeu séquentiel ne reproduit pas cet ordre. La commande
+  ferme la fenêtre : une divergence nommée indique l'appel et l'échange
+  rencontrés à cette frontière. Le test d'entrelacement exige cette
+  divergence sur les deux bandes, sans `MATCH` silencieux.
 * **Ce que l'enregistrement ne porte pas** : la nature d'un échange en échec
   sans `error`, le délai de remise ECG sans `runtime_delivery`, le courant
   à mieux que 0,1 A, une exception levée dans le tic d'origine, un
@@ -4440,7 +4462,10 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 | `test_replay_config.py` | limites et géométrie issues du document, validation par les constructeurs de domaine, empreintes et tailles refusées, parties de configuration courante nommées |
 | `test_import_record.py`, `test_import_privacy.py` | imports de console simulée manuelle, programmée et native, neutralisation des dates et identités, événements fermés, sentinelles sur tous les fichiers et en-têtes bruts, octets des mesures conservés, intégrité et rejeu exacts, refus et acceptation explicite d'un écart |
 | `test_replay_modbus.py`, `test_modbus.py` | séance native de console simulée avec arrêt, rejeu exact sous le vrai pilote, rapports identiques ; ETA altérée et échange retiré nommés avec les registres ; causes d'échec, étapes, offsets et fragments SDK ; aucun scénario JSON ni archive supplémentaire |
+| `test_replay_interleaving.py`, `test_replay_waited_inputs.py` | échanges étalés de 10 ms, remises ECG, pings et verdict caméra transparents pour les fenêtres ; limite de visibilité des entrées pendant un service attendu et divergence nommée si une commande variateur entrelace ses échanges ; remise absurde et configuration refusées avant exécution |
+| `test_replay_native_requests.py` | esclave configuré et nombre de registres comparés ; lecture et écriture natives échouées sans cause rejouées avec l'absence de réponse historique |
 | `raspberry-pi/tests/test_modbus_recording.py` | causes natives fermées, variantes recalculées par le pilote via les objets SDK, refus du reader, erreurs d'ouverture et d'urgence, confidentialité et observation défaillante isolée |
+| `raspberry-pi/tests/test_native_failure_kinds.py` | causes permises pour chaque kind, fragments SDK sans cause typée, codes d'exception reçus hors domaine enregistrés comme réponse invalide |
 | `raspberry-pi/tests/test_record_configuration.py` | empreinte de référence inchangée, sentinelle de confidentialité, taille bornée, modes 600/700, unicité et collisions, erreurs disque et écriture bloquée sans attente des tics, exclusions de rétention/synchronisation/dépôt/export/logbook |
 
 ### 16.10 Vérification numérique unique sur un Pi

@@ -292,17 +292,21 @@ def test_native_frames_require_single_unsigned_registers_and_nonnegative_latency
 
 
 def test_native_lifecycle_has_no_registers_and_sdk_fragments_are_diagnostic_only() -> None:
-    assert isinstance(parse_native((frame(ExchangeKind.CONNECT),)), Err)
+    invalid = parse_native((frame(ExchangeKind.CONNECT),))
+    assert isinstance(invalid, Err)
     sdk = frame(ExchangeKind.SEND, register=None, value=None, raw_hex="abcd")
-    assert isinstance(parse_native((sdk,)), Err)
+    fragments = parse_native((sdk,))
+    assert isinstance(fragments, Err)
     valid = parse_native((sdk, frame(), replace(sdk, kind="modbus_receive_chunk")))
     assert isinstance(valid, Ok)
     assert len(valid.value.exchanges) == 1
-    assert isinstance(parse_native((frame(), replace(frame(), kind="open"))), Err)
+    mixed = parse_native((frame(), replace(frame(), kind="open")))
+    assert isinstance(mixed, Err)
     master, _ = tape(
-        frame(ExchangeKind.CONNECT, register=None, value=None, ok=False, error=NoResponse())
+        frame(ExchangeKind.CONNECT, register=None, value=None, ok=False, error=PortClosed())
     )
-    assert master.connect() is False
+    opened = master.connect()
+    assert opened is False
 
 
 @pytest.mark.parametrize(

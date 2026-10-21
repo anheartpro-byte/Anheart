@@ -536,6 +536,18 @@ d'appel ou une variante d'appel sur une ligne native. Les erreurs SDK levées
 pendant l'écriture d'urgence sont conservées aussi : un port refusé reste
 `NOTHING_SENT`, les autres exceptions restent `SENT_UNCONFIRMED`.
 
+Le reader vérifie aussi le kind : `port_closed` appartient seulement à
+`modbus_connect`, qui seul peut retourner `false` ; `sdk_exception` aux
+quatre opérations natives ; `no_response` et `exception_response` aux
+lectures et écritures ; `wrong_function` aux écritures, avec un code différent
+de 6 ; `invalid_response` aux lectures et écritures, `out_of_range: true`
+aux lectures seulement. Les fragments SDK ne portent aucune cause typée.
+Un code d'exception reçu hors de 1 à 255, dont 0, est enregistré comme
+`invalid_response`. Sans `error`, une lecture ou écriture native échouée
+restitue une absence de réponse SDK, donc le timeout calculé par le pilote ;
+une connexion échouée restitue `false`, une fermeture échouée sans cause
+reste sans exception restituable. La cause d'origine reste inconnue.
+
 `simulation/modbus.py` fournit un maître simulé adossé à `SimulatedDrive` :
 états CiA402, rampes et défauts viennent du modèle existant ; les réponses
 sont les objets du SDK construits dans son module d'isolation, sans recopier
@@ -744,7 +756,8 @@ refus les donne ensemble, séparées par « ; ».
 Pour les échanges natifs, `simulation/replay_modbus.py` est un maître de
 bande sous le vrai `ATV320Drive` ; le vrai `TrainingRuntime` utilise ce pilote.
 Chaque appel exige le même registre adressé (offset compris), la même valeur
-brute écrite et le même ordre. Les règles d'étape ci-dessous s'appliquent,
+brute écrite et le même ordre, l'esclave de `native_drive.slave_address` et
+un seul registre par lecture. Les règles d'étape ci-dessous s'appliquent,
 y compris aux ouvertures et fermetures. Un appel sans réponse correspondante
 produit une divergence nommant les registres demandé et enregistré ; aucune
 exception de divergence ne remonte dans le tic. L'exécuteur et les attentes
@@ -878,6 +891,18 @@ Une remise ECG explicitement datée se place juste avant le tic : avant le
 tic puis les commandes si `t ≤ 0`, après les commandes puis avant le tic si
 `t > 0`. Plusieurs lots au même instant gardent l'ordre des blocs.
 
+Les fenêtres d'échanges sont ouvertes par les tics et les commandes qui
+peuvent appeler directement le variateur : départ programme ou manuel,
+`estop`, `fault_reset`, `shutdown`. Elles finissent juste avant la prochaine
+de ces étapes, selon l'instant de début des échanges. Remise ECG,
+`attendant_ping`, `attendant`, `presence_trip`, `latch_estop`, attestation,
+acquittement, `stop` et `manual_target` ne coupent pas une fenêtre : leurs
+méthodes ne font aucun appel variateur, même si leurs effets seront traités
+par le tic. Les entrées à instant égal restent groupées. Cette règle est
+commune aux observations d'appel et aux transactions natives.
+Une remise ECG hors de la fenêtre des tics (avec une marge de 0,2 s et
+l'observation finale éventuelle) est refusée avant d'avancer l'horloge.
+
 L'horloge rejouée part de l'instant de la première entrée, tel qu'il est
 écrit, et avance par les intervalles enregistrés, arrondis à la milliseconde.
 Un enregistrement produit sur une horloge déterministe (la simulation) est
@@ -886,8 +911,9 @@ instants d'une séance réelle sont connus à la milliseconde : une décision
 prise à moins d'une milliseconde d'un seuil peut tomber un tic plus tôt ou
 plus tard au rejeu.
 
-Ce qu'un rejeu ne peut pas redonner aujourd'hui, parce que le format ou le
-producteur ne le porte pas :
+### Ce que le rejeu ne peut pas redonner
+
+Le format ou le producteur ne porte pas ces informations :
 
 - les octets et le découpage des appels SDK (`modbus_send`,
   `modbus_receive_chunk`) : ces lignes sont ignorées, les transactions de
@@ -902,12 +928,26 @@ producteur ne le porte pas :
 - une exception levée dans le tic d'origine, un saut de l'horloge murale
   pendant l'acquisition, une perte signalée par le lien d'acquisition sans
   trou dans les horodatages ;
-- l'entrelacement exact d'un clic E-STOP pendant une attente du tic. La
-  console peut lire le verrou immédiat dans ce tic déjà en cours ; le rejeu
-  remet la commande avant le tic suivant. La transition peut alors décaler
-  d'au plus un tic, dans la tolérance de transition existante, même si
-  `latch_estop` garde l'instant réel du clic. Un clic entre deux tics se
-  rejoue au même tic, avec la même consigne.
+- l'entrelacement exact d'une remise ECG, d'un verdict caméra ou d'un clic
+  E-STOP pendant une attente du tic. Le runtime attend le service du
+  variateur avant d'observer l'ECG et d'évaluer le superviseur : sur la
+  console, ces entrées peuvent donc agir dans le tic déjà commencé. Le
+  rejeu finit ce tic avant de remettre l'entrée à son instant enregistré ;
+  elle agit au suivant. `runtime_delivery` et `latch_estop` conservent les
+  instants, mais ne désignent pas le point de reprise de cette coroutine.
+  Une transition seule peut décaler d'un tic dans la tolérance existante ;
+  une consigne, une phase ou l'ordre des appels peuvent aussi changer et
+  produire une différence ou divergence. Les tests d'attente utilisent le
+  vrai `LocalPanel` et le vrai runtime, avec une remise ECG et un verdict
+  caméra pendant le service. Les entrées entre deux tics gardent leur ordre.
+- les transactions entrelacées d'une commande qui appelle elle-même le
+  variateur pendant l'attente d'un tic, par exemple `estop`. La bande peut
+  alors contenir le début du tic, les échanges d'urgence, puis la fin du
+  tic. Le rejeu exécute le tic entier puis la commande : sa fenêtre s'arrête
+  à cette commande et il signale une divergence nommée à cet instant, sans
+  annoncer `MATCH`. La même limite concerne un départ, un réarmement ou une
+  sortie qui serait reçu ainsi ; les commandes de la boîte console sont
+  normalement traitées avant le tic, et la sortie après son arrêt.
 
 Le rejeu juge les décisions et l'accord des appels avec la bande, pas la
 validité physique de chaque entrée. Une lecture LFRD altérée isolément peut

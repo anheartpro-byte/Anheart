@@ -4,7 +4,7 @@ from typing import Final, cast
 
 from simulation.replay_tape import INSTANT_EPSILON, NO_FURTHER, REGISTER_MAX, TICK, Mismatch
 from src.clock import ManualClock
-from src.motor.atv320 import failure_reply, register_reply, write_reply
+from src.motor.atv320 import DEFAULT_SLAVE_ADDRESS, failure_reply, register_reply, write_reply
 from src.motor.observation import (
     ExchangeKind,
     ModbusFailure,
@@ -83,7 +83,7 @@ def parse_native(frames: Sequence[DriveFrame]) -> Result[NativeFrames, str]:
                 frame.value,
                 frame.ok,
                 Seconds(frame.latency_ms / 1000),
-                cast("ModbusFailure | None", frame.error),
+                cast(ModbusFailure | None, frame.error),
             )
         )
     if not exchanges:
@@ -94,11 +94,19 @@ def parse_native(frames: Sequence[DriveFrame]) -> Result[NativeFrames, str]:
 class TapeMaster:
     """A single-use Modbus master that consumes only exchanges in the current replay step."""
 
-    def __init__(self, frames: NativeFrames, clock: ManualClock, origin: Monotonic) -> None:
+    def __init__(
+        self,
+        frames: NativeFrames,
+        clock: ManualClock,
+        origin: Monotonic,
+        *,
+        slave: int = DEFAULT_SLAVE_ADDRESS,
+    ) -> None:
         # Owned by one replay; no worker or wall clock changes this cursor.
         self._exchanges: tuple[NativeExchange, ...] = frames.exchanges
         self._clock: ManualClock = clock
         self._origin: Monotonic = origin
+        self._slave: int = slave
         self._cursor: int = 0
         self._until: Seconds | None = None
         self.mismatch: Mismatch | None = None
@@ -163,13 +171,11 @@ class TapeMaster:
 
     def connect(self) -> bool:
         exchange = self._take(ExchangeKind.CONNECT)
-        if exchange is None:
-            return False
-        if exchange.ok:
-            return True
-        if isinstance(exchange.error, PortClosed) or exchange.error is None:
-            return False
-        failure_reply(exchange.error)
+        if exchange is not None:
+            if exchange.ok:
+                return True
+            if exchange.error is not None and not isinstance(exchange.error, PortClosed):
+                failure_reply(exchange.error)
         return False
 
     def close(self) -> None:
@@ -177,15 +183,34 @@ class TapeMaster:
         if exchange is not None and not exchange.ok and exchange.error is not None:
             failure_reply(exchange.error)
 
-    def read_holding_registers(self, address: int, count: int = 1, slave: int = 1) -> object:  # noqa: ARG002  # ModbusMaster interface; the driver always reads one register
+    def _addressed(self, kind: ExchangeKind, slave: int, count: int) -> bool:
+        if slave == self._slave and count == 1:
+            return True
+        if self.mismatch is None:
+            self.mismatch = Mismatch(
+                elapsed(self._origin, self._clock.monotonic()),
+                f"{kind.value} slave {slave} count {count}",
+                f"{kind.value} slave {self._slave} count 1",
+            )
+        return False
+
+    def read_holding_registers(
+        self, address: int, count: int = 1, slave: int = DEFAULT_SLAVE_ADDRESS
+    ) -> object:
+        if not self._addressed(ExchangeKind.READ, slave, count):
+            return failure_reply(NoResponse())
         exchange = self._take(ExchangeKind.READ, address)
         if exchange is None or not exchange.ok:
             return failure_reply(
                 NoResponse() if exchange is None or exchange.error is None else exchange.error
             )
-        return register_reply((cast("int", exchange.value),))
+        return register_reply((cast(int, exchange.value),))
 
-    def write_register(self, address: int, value: int, slave: int = 1) -> object:  # noqa: ARG002  # ModbusMaster interface
+    def write_register(
+        self, address: int, value: int, slave: int = DEFAULT_SLAVE_ADDRESS
+    ) -> object:
+        if not self._addressed(ExchangeKind.WRITE, slave, 1):
+            return failure_reply(NoResponse())
         exchange = self._take(ExchangeKind.WRITE, address, value)
         if exchange is None or not exchange.ok:
             return failure_reply(
