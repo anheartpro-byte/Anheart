@@ -586,6 +586,37 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
       ];
     });
   },
+  "machineKeys.revokeLegacyMachineKey": async (w) => {
+    await w.t.run((ctx) =>
+      ctx.db.patch(w.machine, {
+        apiKeySelector: "ef".repeat(16),
+        apiKey: `hmac-sha256:1:${"00".repeat(16)}:${"00".repeat(32)}`,
+      }),
+    );
+    return observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(
+        api.machineKeys.revokeLegacyMachineKey,
+        { machineId: w.machine },
+      );
+      const [revoked] = await w.t.run((ctx) =>
+        ctx.db
+          .query("machine_api_keys")
+          .withIndex("by_machine", (q) => q.eq("machineId", w.machine))
+          .collect(),
+      );
+      return [
+        site(
+          w,
+          "machine_key.revoked",
+          revoked._id,
+          "machine_key",
+          "orgAdmin",
+          w.orgA,
+          { machineId: w.machine },
+        ),
+      ];
+    });
+  },
   "machineKeys.revokeExpiredKeys": async (w) => {
     const issued = await key(w);
     await w.t.run((ctx) => ctx.db.patch(issued.keyId, { expiresAt: NOW }));

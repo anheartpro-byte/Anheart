@@ -10,7 +10,7 @@
  * the call that issued it.
  */
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { refusal } from "./errors";
 import { generateApiKey, isApiKeyVerifier } from "./crypto";
 
@@ -24,7 +24,7 @@ export const MAX_OVERLAP_MINUTES = 7 * 24 * 60;
 export const MIN_KEY_LIFETIME_MINUTES = 60;
 /** The longest lifetime of a new key: ten years (365-day years). */
 export const MAX_KEY_LIFETIME_MINUTES = 10 * 365 * 24 * 60;
-/** Keys listed on a machine's page, most recent first. */
+/** Fill the list up to this total with revoked keys; never cut unrevoked keys. */
 export const LISTED_KEYS = 50;
 /** Expired keys the job revokes in one run. */
 export const EXPIRED_KEYS_PER_RUN = 100;
@@ -38,8 +38,35 @@ export function keyPrefix(selector: string): string {
   return `anh1.${selector.slice(0, 8)}`;
 }
 
+/**
+ * A historical verifier and its selector, under the migration's rules.
+ * It opens the routes through the legacy fallback only when `tableKey` is
+ * null: a selector already in the table is decided by that row alone.
+ * Deletion and disabled authentication suspend every key of a machine;
+ * keeping this key visible lets its admin revoke it before restoration.
+ */
+export async function legacyKeyOf(ctx: QueryCtx, machine: Doc<"machines">) {
+  const { apiKey, apiKeySelector: selector } = machine;
+  if (
+    apiKey === undefined ||
+    selector === undefined ||
+    !/^[a-f0-9]{32}$/.test(selector) ||
+    !isApiKeyVerifier(apiKey)
+  ) {
+    return null;
+  }
+  const tableKey = await ctx.db
+    .query("machine_api_keys")
+    .withIndex("by_selector", (q) => q.eq("selector", selector))
+    .first();
+  return { selector, keyHash: apiKey, tableKey };
+}
+
 /** Whether the key opens the machine routes at `now`. */
-export function keyIsValid(key: Key, now: number): boolean {
+export function keyIsValid(
+  key: Pick<Key, "revokedAt" | "expiresAt">,
+  now: number,
+): boolean {
   return (
     key.revokedAt === undefined &&
     (key.expiresAt === undefined || now < key.expiresAt)
@@ -47,7 +74,7 @@ export function keyIsValid(key: Key, now: number): boolean {
 }
 
 /** Whether the use of the key at `now` is to be written (once a minute at most). */
-export function keyUseIsDue(key: Key, now: number): boolean {
+export function keyUseIsDue(key: Pick<Key, "lastUsedAt">, now: number): boolean {
   return (
     key.lastUsedAt === undefined || now - key.lastUsedAt >= KEY_USE_REFRESH_MS
   );
@@ -208,31 +235,27 @@ export async function rotateMachineKey(
  *
  * A legacy value that is not a verifier with its selector (the reversible
  * encodings refused since ANH-121) opens nothing: it is cleared, not moved.
+ * A selector already in the table belongs to that row's machine alone. If
+ * it belongs to another machine, report a conflict and keep the legacy fields.
  * Idempotent: a machine without these fields is left as it is.
  */
 export async function moveLegacyKey(
   ctx: MutationCtx,
   machine: Doc<"machines">,
   now: number,
-): Promise<"moved" | "discarded" | "none"> {
+): Promise<"moved" | "discarded" | "conflict" | "none"> {
   const { apiKey, apiKeySelector: selector } = machine;
   if (apiKey === undefined && selector === undefined) return "none";
   let outcome: "moved" | "discarded" = "discarded";
-  if (
-    apiKey !== undefined &&
-    selector !== undefined &&
-    /^[a-f0-9]{32}$/.test(selector) &&
-    isApiKeyVerifier(apiKey)
-  ) {
-    const already = await ctx.db
-      .query("machine_api_keys")
-      .withIndex("by_selector", (q) => q.eq("selector", selector))
-      .first();
+  const legacy = await legacyKeyOf(ctx, machine);
+  if (legacy !== null) {
+    const { tableKey: already, selector, keyHash } = legacy;
+    if (already !== null && already.machineId !== machine._id) return "conflict";
     if (already === null) {
       await ctx.db.insert("machine_api_keys", {
         machineId: machine._id,
         selector,
-        keyHash: apiKey,
+        keyHash,
         prefix: keyPrefix(selector),
         // When the key entered the table: the day it was issued is not known.
         createdAt: now,

@@ -3,8 +3,9 @@
  * ANH-132: the machine HTTP routes in `convex/http.ts`.
  *
  * Authentication refusals (missing header, malformed/unknown key, deleted or
- * disabled machine, regenerated key) across all ten routes are already
- * proven by `machineAuth.test.ts`; this suite does not repeat them. It covers
+ * disabled machine, revoked, expired or replaced key after its overlap) across
+ * all 13 routes are proven by `machineAuth.test.ts` and `machineKeys.test.ts`;
+ * this suite does not repeat them. It covers
  * the per-route contract: malformed bodies, idempotency, machine binding, and
  * the pending-session filtering the Pi depends on.
  */

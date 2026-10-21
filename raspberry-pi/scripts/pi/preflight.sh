@@ -154,7 +154,7 @@ else
                         else
                             warn "the dashboard announces contract $server, this console speaks $contract: it will refuse every remote launch"
                         fi ;;
-                    401) fail "$url reachable, but the key is refused (regenerate it on the site)" ;;
+                    401) fail "$url reachable, but the key is refused (create a new key on the machine's page of the dashboard)" ;;
                     426) fail "$url reachable, key accepted, but it does not serve contract $contract (update the console or the dashboard)" ;;
                     000) fail "$url unreachable (network?)" ;;
                     *)   warn "$url answered HTTP $code" ;;

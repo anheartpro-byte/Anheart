@@ -424,7 +424,7 @@ describe("machine page: what each role may do", () => {
     expect(screen.getByRole("button", editButton)).toBeTruthy();
     expect(screen.getByRole("button", deleteButton)).toBeTruthy();
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
-    expect(propsOf("MachineKeysCard")).toEqual({ machineId });
+    expect(propsOf("MachineKeysCard")).toEqual({ machineId, deleted: false });
     expect(screen.queryByRole("button", restoreButton)).toBeNull();
   });
 
@@ -449,7 +449,7 @@ describe("machine page: what each role may do", () => {
     expect(screen.getByRole("button", editButton)).toBeTruthy();
     expect(screen.getByRole("button", deleteButton)).toBeTruthy();
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
-    expect(propsOf("MachineKeysCard")).toEqual({ machineId });
+    expect(propsOf("MachineKeysCard")).toEqual({ machineId, deleted: false });
     expect(screen.queryByRole("button", restoreButton)).toBeNull();
   });
 
@@ -474,7 +474,7 @@ describe("machine page: what each role may do", () => {
 });
 
 describe("machine page: a deleted machine", () => {
-  it("says when it was deleted and leaves nothing to act on it but its restoration", async () => {
+  it("says when it was deleted and offers restoration and key revocation alone to the Anheart admin", async () => {
     await open("admin", deleted());
 
     const alert = within(screen.getByRole("alert"));
@@ -491,7 +491,11 @@ describe("machine page: a deleted machine", () => {
     expect(wasMounted("MachineLiveCard")).toBe(false);
     expect(wasMounted("MachineProgramsCard")).toBe(false);
     expect(wasMounted("LaunchRightsCard")).toBe(false);
-    expect(wasMounted("MachineKeysCard")).toBe(false);
+    expect(wasMounted("MachineKeysCard")).toBe(true);
+    expect(propsOf("MachineKeysCard")).toMatchObject({
+      machineId,
+      deleted: true,
+    });
   });
 
   it("leaves the admin of a client organisation nothing to act on a deleted machine", async () => {
@@ -499,6 +503,7 @@ describe("machine page: a deleted machine", () => {
 
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
+    expect(wasMounted("MachineKeysCard")).toBe(false);
   });
 
   it("shows a dash when the date of the deletion is unknown", async () => {
@@ -516,6 +521,7 @@ describe("machine page: a deleted machine", () => {
 
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
+    expect(wasMounted("MachineKeysCard")).toBe(false);
   });
 
   it("restores it once an admin confirms, and closes the window", async () => {
@@ -524,6 +530,7 @@ describe("machine page: a deleted machine", () => {
     await user.click(screen.getByRole("button", restoreButton));
     const dialog = within(screen.getByRole("dialog"));
     expect(dialog.getByText(fr.machines.restoreConfirm)).toBeTruthy();
+    expect(dialog.getByText(fr.machines.restoreConfirmDesc)).toBeTruthy();
     expect(mutationsSent()).toEqual([]);
     await user.click(dialog.getByRole("button", restoreButton));
 
