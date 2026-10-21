@@ -874,12 +874,53 @@ plus, la page le dit quand la liste est coupée) :
 - **Machine hors ligne** : aucun heartbeat depuis 90 s, constaté par le
   serveur à la minute.
 
+Sur cette page, toute alerte d'une séance échouée que l'on peut lire affiche
+sa raison, même après regroupement sous **Défaut variateur** ou **Arrêt
+demandé par la sécurité**. Cette raison privilégie le `reasonCode`
+traduit. Sinon, un identifiant connu de `sessionReport.endReasons`, seul ou
+suivi de `: texte`, est remplacé par son libellé dans la langue du site :
+`safety_verdict: hr_drop (RAMP_DOWN)` donne
+« Verdict de sécurité : hr_drop (RAMP_DOWN) ». Le reste du texte est conservé,
+avec une ponctuation propre à chaque langue (sans espace avant `:` en anglais).
+Un identifiant inconnu ou du texte libre, comme
+« refusee par la machine : console occupee », reste tel quel. Seules les
+clés propres du catalogue comptent, jamais `constructor` ou `toString`.
+Les raisons encore brutes sur les pages de séance restent un point de suivi.
+Le refus de départ par la console est couvert par **Séance échouée** ; un
+code dédié attend un ajout au contrat du Pi. Les alertes d'incident restent
+bloquées par ANH-145.
+
 Chaque alerte donne la machine, l'heure, « N fois, dernière à … » quand
 plusieurs événements s'y sont fondus pendant qu'elle était non lue, le
 badge « Non lue », et un lien **Voir la séance** (quand le visiteur peut la
-lire) ou **Voir la machine**. **Marquer comme lue** et **Tout marquer comme
-lu** l'écrivent sur le serveur. Ce que le serveur écrit, quand, et pour qui :
+lire) ou **Voir la machine**. Si la machine a été supprimée, l'alerte reste
+visible et comptée, comme sa séance reste lisible : **Machine supprimée**
+remplace le lien vers la machine, et **Voir la séance** reste proposé quand
+la séance est lisible. Retirer le gestionnaire de la machine lui retire
+aussi ces alertes. Les alertes devenues invisibles ne consomment ni les 50
+places de la liste ni les 100 non lues comptées par la cloche.
+**Marquer comme lue** et **Tout marquer comme lu** l'écrivent sur le serveur.
+Le second traite toutes les alertes visibles non lues par lots de 500,
+avec une suite automatique sans nouveau clic. Ce que le serveur écrit, quand, et pour qui :
 [convex.md](convex.md#notificationsts-alertes-aux-gestionnaires-anh-90).
+
+Pour une même séance, le défaut variateur, le verdict de sécurité et la fin
+en échec se regroupent dans une seule alerte non lue par destinataire. Son
+type peut devenir plus précis : défaut variateur, puis arrêt demandé par la
+sécurité, puis séance échouée, par priorité décroissante. Cela regroupe aussi
+un verdict de fréquence cardiaque et la fin en échec. Une alerte déjà lue
+reste inchangée ; l'événement suivant en crée une nouvelle. Les alertes sans
+séance gardent leur regroupement par machine.
+
+Limite vérifiée : un heartbeat en défaut qui ne nomme pas la séance crée
+une alerte `drive_fault` sans séance. Si le lot d'événements de la séance
+livre ensuite le verdict avant le défaut (ordre de planification actuel de
+`storeEvents`), le verdict crée l'alerte de la séance et le défaut s'y fond :
+**2 alertes et 2 e-mails par destinataire** si l'envoi est activé, de
+compteurs 1 sans séance et 2 avec séance. Dans l'ordre inverse, défaut puis
+verdict, il reste **1 alerte de compteur 3 et 1 e-mail par destinataire**.
+L'ordre de planification dans `storeEvents`, ou une séance nommée plus tôt
+par le Pi, reste un point de suivi.
 
 En bas, **Alertes par e-mail** : un interrupteur par type d'alerte. Par
 défaut tout part aussi par e-mail sauf « Machine hors ligne ». Un e-mail ne
@@ -888,6 +929,8 @@ page : jamais de fréquence cardiaque, de nom de passager ni de raison. Tant
 que le déploiement n'a pas sa clé d'envoi, la carte l'écrit (« L'envoi
 d'e-mails n'est pas configuré sur ce déploiement : les alertes restent dans le
 site. ») ; les choix sont gardés pour le jour où elle le sera.
+L'e-mail n'est envoyé qu'à la création de l'alerte et dit son type de départ ;
+il n'est pas renvoyé si le type devient ensuite plus précis sur le site.
 
 Tests : `app/[locale]/dashboard/notifications/page.test.tsx` (refus au
 patient, contenu de chaque type, liens, marquer lu, refus traduit, liste
@@ -1387,8 +1430,9 @@ Limites :
   session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour
   continuer. », en production comme en développement, au lieu d'une phrase
   générique avec une référence. Plus aucun refus du serveur n'arrive en
-  anglais ; la raison de fin qu'envoie la machine, elle, s'affiche telle
-  quelle ;
+  anglais ; sur la page des alertes, les identifiants connus des raisons de
+  fin sont traduits, en conservant leur éventuel complément. Le texte libre
+  reste tel quel ; les raisons brutes des pages de séance restent en suivi ;
 - le test de bout en bout dans un navigateur (suppression refusée d'une machine
   en séance) attend l'infrastructure d'ANH-83.
 
@@ -1481,8 +1525,8 @@ Pièges :
 | Rapport d'une séance d'entraînement (ANH-89) | Page testée dans le DOM simulé, Convex remplacé. **Jamais imprimée dans un navigateur** : la mise en page A4, le masquage du menu et le thème clair à l'impression ne sont pas vérifiés, ni le fichier PDF obtenu. Le calcul du résumé est testé en mémoire, et comparé le 14 octobre 2026 aux chiffres de la simulation sur quatre scénarios ([convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89)) ; jamais sur l'enregistrement d'une vraie séance. |
 | Pages retouchées au retrait de l'ancien mode ECG (Sessions, vue en direct, détail, Rapports, fenêtre machine) | Compilées et couvertes par `npm run test:lib` ; **pas rouvertes dans un navigateur** depuis. |
 | Pages Sessions et Rapports servies par pages (ANH-158) | Le serveur est testé en mémoire (`convex/sessionLists.test.ts`), les deux pages dans le DOM simulé, où Convex est remplacé par une doublure qui sert les pages d'une liste. **Pas ouvertes dans un navigateur, ni contre un vrai serveur** : ce que deviennent des pages déjà affichées quand une séance arrive ou change de statut pendant la lecture repose sur Convex et n'est pas rejoué. |
-| Textes encore en anglais | Nom « Unknown », motif « Cancelled before start by … », raison de fin envoyée par la machine (affichée telle quelle, dans les alertes aussi), fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
-| Alertes aux gestionnaires (ANH-90) | Écrites et lues par Convex, testées en mémoire ; la page et la cloche testées dans le DOM simulé. **Jamais vues dans un navigateur ni contre un vrai serveur** : le délai de moins d'une minute repose sur le heartbeat de 10 s de la console et l'abonnement de Convex, **non mesuré**. **Aucun e-mail n'a été envoyé** : le compte Resend, sa clé, le domaine d'envoi et l'adresse du site sont à fournir par le responsable produit ([convex.md §8](convex.md#composant-denvoi-de-mails-anh-90)). Les alertes d'un incident attendent ANH-145. |
+| Textes encore en anglais | Nom « Unknown », motif « Cancelled before start by … », raison de fin brute sur les pages de séance (en suivi). Dans les alertes, l'identifiant connu est traduit ; son complément et le texte libre restent tels quels. Fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
+| Alertes aux gestionnaires (ANH-90) | Écrites et lues par Convex, testées en mémoire ; la page et la cloche testées dans le DOM simulé. **Jamais vues dans un navigateur ni contre un vrai serveur** : le délai de moins d'une minute repose sur le heartbeat de 10 s de la console et l'abonnement de Convex, **non mesuré**. **Aucun e-mail n'a été envoyé** : le compte Resend, sa clé, le domaine d'envoi et l'adresse du site sont à fournir par le responsable produit ([convex.md §8](convex.md#envoi-de-mails-anh-90-anh-237)). Les alertes d'un incident attendent ANH-145. |
 | Sélecteur d'organisation, page Membres | Composants de Clerk, couverts par des tests unitaires qui les remplacent. Le changement d'organisation de bout en bout (deux organisations, données qui changent) relève du test navigateur ANH-83 et de la recette sur l'instance Clerk de développement. |
 | Compte avec FC max ou année de naissance renseignée | Risque d'échec de `users.getCurrentUser` (validateur incomplet), donc de pages vides pour ce compte. **À vérifier en premier** sur un déploiement. Voir [convex.md §9](convex.md#9-défauts-connus-et-reste-à-faire). |
 | Questionnaire d'aptitude | Le questionnaire 0.1.0 contient des questions provisoires [MED] ; le médecin doit les remplacer par le contenu signé (ANH-98). |

@@ -48,7 +48,7 @@ Voir la [procédure Clerk et Convex](docs/convex.md#activer-le-multi-organisatio
 Les alertes aux gestionnaires s'affichent dans le site sans réglage. Leur envoi
 par e-mail reste coupé tant que `RESEND_API_KEY`, `NOTIFICATION_EMAIL_FROM` et
 `SITE_URL` ne sont pas définies dans Convex : voir
-[le composant d'envoi d'e-mails](docs/convex.md#composant-denvoi-de-mails-anh-90).
+[l'envoi des e-mails](docs/convex.md#envoi-de-mails-anh-90-anh-237).
 
 ## Vérifier une modification
 

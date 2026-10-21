@@ -60,7 +60,7 @@ projet de les tenir.
 | Clé secrète Clerk de **production**, `CLERK_SECRET_KEY` | l'API d'administration de l'instance Clerk : comptes, sessions, organisations | variable du projet Vercel `anheart` (le site, côté serveur) ; variable du déploiement Convex de production (`convex/users.ts`, `convex/lib/clerkWebhook.ts`) | les membres du projet Vercel et de l'équipe Convex ; les administrateurs de Clerk ; aujourd'hui aussi chaque préversion du site, qui reçoit les valeurs de production ([deploiement.md, 5.2](deploiement.md#52-les-préversions-pointent-sur-la-production)) | [3.7](#37-clé-secrète-clerk) |
 | Clé secrète Clerk de développement | la même chose sur l'instance de développement | `.env.local` ; variable du déploiement Convex de développement | le poste ; l'équipe Convex | [3.7](#37-clé-secrète-clerk) |
 | Secret de signature du webhook Clerk, `CLERK_WEBHOOK_SIGNING_SECRET` | faire accepter par Convex un événement d'organisation ou de compte comme venant de Clerk ([convex.md](convex.md#webhook-clerk-vers-le-miroir)) | variable de chaque déploiement Convex qui reçoit le webhook ; l'endpoint du webhook dans Clerk | l'équipe Convex ; les administrateurs de Clerk | [3.8](#38-secret-du-webhook-clerk) |
-| Clé d'API Resend, `RESEND_API_KEY` (ANH-90) | envoyer des e-mails au nom du domaine vérifié du compte Resend ; lire les envois de ce compte | variable du déploiement Convex qui envoie les alertes ([convex.md](convex.md#composant-denvoi-de-mails-anh-90)) ; le composant d'envoi en garde une copie dans sa table (ANH-237) ; le compte Resend | l'équipe Convex ; les membres du compte Resend | [3.9](#39-clé-dapi-resend) |
+| Clé d'API Resend, `RESEND_API_KEY` (ANH-90) | envoyer des e-mails au nom du domaine vérifié du compte Resend ; lire les envois de ce compte | variable du déploiement Convex qui envoie les alertes ([convex.md](convex.md#envoi-de-mails-anh-90-anh-237)) ; l'action REST la lit à l'envoi sans la stocker ni la planifier (ANH-237) ; le compte Resend | l'équipe Convex ; les membres du compte Resend | [3.9](#39-clé-dapi-resend) |
 | `GITHUB_TOKEN` | le dépôt, avec les droits que chaque workflow déclare : lecture seule, sauf la publication des résultats de CodeQL et l'écriture des tags par le job des tags de la pipeline de release | créé par GitHub pour chaque job, expire avec lui | le job | aucune |
 | Configuration locale des agents, `.codex/config.toml` | ce qu'elle contient : selon `.gitignore`, elle peut porter des accès d'administration à un déploiement | le poste | le poste | celle du secret qu'elle contient |
 
@@ -371,9 +371,13 @@ projet, ANH-237).
 Entre 2 et 3, les deux clés sont valides chez Resend. Une alerte écrite
 pendant le changement reste visible sur le site quoi qu'il arrive à son
 e-mail. Retirer la variable arrête les **nouvelles** mises en file
-([convex.md](convex.md#composant-denvoi-de-mails-anh-90)) ; les e-mails déjà
-en file partent encore, avec la copie de la clé que garde le composant. Sur
-une clé compromise, c'est sa suppression chez Resend (étape 3) qui coupe tout.
+([convex.md](convex.md#envoi-de-mails-anh-90-anh-237)) et les envois déjà
+planifiés : ils finissent `failed` (`email_unavailable`) et ne repartent pas
+quand la variable revient. L'action relit l'environnement avant chaque appel
+REST et ne stocke jamais la clé. Les tentatives encore en attente utilisent
+donc la nouvelle clé si la variable est remplacée sans être retirée.
+Sur une clé compromise, sa suppression chez Resend (étape 3) la révoque
+aussi pour tout autre détenteur.
 
 ## 4. Détection dans le dépôt
 

@@ -140,8 +140,11 @@ export const machineRegistryRadiiFields = {
 /**
  * What an alert to the gestionnaires is about (ANH-90). Another kind (the
  * incidents of ANH-145) is one more literal here and in
- * `notificationEmailFields`, an entry of `NOTIFICATION_TYPES`
- * (convex/lib/notifications.ts) and its translations.
+ * `notificationEmailFields`, a field of `emailChoicesValidator`
+ * (convex/notifications.ts), an entry of `NOTIFICATION_TYPES`
+ * (convex/lib/notifications.ts), a type in `TYPES` on the alerts page
+ * (app/[locale]/dashboard/notifications/page.tsx), French and English labels
+ * in `alertEmail` (convex/lib/notificationEmail.ts), and its translations.
  */
 export const notificationTypeValidator = v.union(
   v.literal("machine_offline"), // no heartbeat for LIVE_FRESH_MS
@@ -881,8 +884,24 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     read: v.boolean(),
-    // The e-mail queued for this row, when one was (`@convex-dev/resend`).
+    // Legacy component identifier, retained for existing deployments, never written.
     emailId: v.optional(v.string()),
+    // Delivery state expires and is deleted with the recipient's alert.
+    email: v.optional(
+      v.object({
+        type: v.optional(notificationTypeValidator),
+        status: v.union(
+          v.literal("pending"),
+          v.literal("sent"),
+          v.literal("failed"),
+        ),
+        attempts: v.number(),
+        queuedAt: v.number(),
+        updatedAt: v.number(),
+        resendId: v.optional(v.string()),
+        failureCode: v.optional(v.string()),
+      }),
+    ),
   })
     .index("by_user_and_organization_and_updated", [
       "userId",
@@ -894,13 +913,20 @@ export default defineSchema({
       "organizationId",
       "read",
     ])
-    .index("by_user_and_machine_and_type_and_read", [
+    .index("by_user_and_organization_and_machine_and_updated", [
       "userId",
+      "organizationId",
       "machineId",
-      "type",
+      "updatedAt",
+    ])
+    .index("by_user_and_organization_and_machine_and_read", [
+      "userId",
+      "organizationId",
+      "machineId",
       "read",
     ])
     .index("by_user", ["userId"])
+    .index("by_email_status_and_updated", ["email.status", "email.updatedAt"])
     .index("by_updated", ["updatedAt"]),
 
   // Each account's choice of alerts sent by e-mail too (ANH-90). A type left

@@ -21,6 +21,9 @@
  * is written, or the e-mail queued, never fails nor undoes the heartbeat, the
  * batch of events, the end, the start, the sweep or the offline check that
  * asked for it.
+ * Each recipient is written in a separate subtransaction, so only failed
+ * recipients are retried. A new alert may queue a REST e-mail action in
+ * `notificationEmails`, whose delivery state and retries stay on that alert.
  *
  * Recipients: the gestionnaires linked to the machine who are still active
  * gestionnaires of its organisation, and the active admins of that
@@ -34,34 +37,51 @@
  */
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { organizationRoleOf } from "./auth";
-import {
-  alertEmail,
-  emailSettings,
-  queueAlertEmail,
-  type NotificationType,
-} from "./notificationEmail";
+import { emailSettings, type NotificationType } from "./notificationEmail";
 
 export type { NotificationType };
 
 /**
- * Each kind of alert: what a new event folds into, and whether it goes by
- * e-mail too for an account that has not chosen (`notification_settings`).
+ * Each kind of alert: its priority within a session, its fallback grouping,
+ * and whether it goes by e-mail too for an account that has not chosen
+ * (`notification_settings`).
  *
  * - "machine": a state of the machine. A new event folds into the
  *   recipient's unread alert of that kind for that machine.
  * - "session": something that happened in one session. It folds into the
- *   recipient's unread alert of that kind for that session only.
+ *   recipient's unread alert for that session only. With a session, all
+ *   kinds with a positive session priority fold together, keeping the highest.
  */
 export const NOTIFICATION_TYPES = {
-  machine_offline: { foldsBy: "machine", emailByDefault: false },
-  session_failed: { foldsBy: "session", emailByDefault: true },
-  drive_fault: { foldsBy: "machine", emailByDefault: true },
-  safety_verdict: { foldsBy: "session", emailByDefault: true },
+  machine_offline: {
+    foldsBy: "machine",
+    sessionPriority: 0,
+    emailByDefault: false,
+  },
+  session_failed: {
+    foldsBy: "session",
+    sessionPriority: 1,
+    emailByDefault: true,
+  },
+  drive_fault: {
+    foldsBy: "machine",
+    sessionPriority: 3,
+    emailByDefault: true,
+  },
+  safety_verdict: {
+    foldsBy: "session",
+    sessionPriority: 2,
+    emailByDefault: true,
+  },
 } as const satisfies Record<
   NotificationType,
-  { foldsBy: "machine" | "session"; emailByDefault: boolean }
+  {
+    foldsBy: "machine" | "session";
+    sessionPriority: number;
+    emailByDefault: boolean;
+  }
 >;
 
 export const NOTIFICATION_TYPE_NAMES = Object.keys(
@@ -159,6 +179,25 @@ export function foldedDetail(
 // Who receives an alert, and writing it
 // ---------------------------------------------------------------------------
 
+/** Recheck the active organisation role and, for a gestionnaire, its machine link. */
+export async function isMachineRecipient(
+  ctx: QueryCtx,
+  machineId: Id<"machines">,
+  organizationId: Id<"organizations">,
+  userId: Id<"users">,
+): Promise<boolean> {
+  const role = await organizationRoleOf(ctx, userId, organizationId);
+  if (role === "admin") return true;
+  if (role !== "gestionnaire") return false;
+  const links = await ctx.db
+    .query("machine_gestionnaires")
+    .withIndex("by_machine_and_gestionnaire", (q) =>
+      q.eq("machineId", machineId).eq("gestionnaireId", userId),
+    )
+    .collect();
+  return links.some((link) => link.organizationId === organizationId);
+}
+
 /**
  * The accounts an alert about this machine goes to: the active admins of its
  * organisation, and the gestionnaires linked to it who are still active
@@ -184,15 +223,12 @@ export async function recipientsOf(
     .withIndex("by_machine", (q) => q.eq("machineId", machine._id))
     .collect();
   for (const link of links) {
-    const role = await organizationRoleOf(
-      ctx,
-      link.gestionnaireId,
-      organizationId,
-    );
-    if (role === "gestionnaire") ids.add(link.gestionnaireId);
+    ids.add(link.gestionnaireId);
   }
   const users: Doc<"users">[] = [];
   for (const id of ids) {
+    if (!(await isMachineRecipient(ctx, machine._id, organizationId, id)))
+      continue;
     const user = await ctx.db.get(id);
     if (user && user.clerkDeletedAt === undefined) users.push(user);
   }
@@ -208,91 +244,225 @@ export type MachineEvent = {
   count?: number;
 };
 
+/** Bound failed alert writes to three delivery attempts before logging a final code. */
+export const DELIVERY_MAX_ATTEMPTS = 3;
+/** Space the two possible delivery retries to let a transient failure recover. */
+export const DELIVERY_RETRY_DELAYS_MS = [1_000, 10_000] as const;
+
+/** Carry the attempt and only failed recipients, or omit recipients to retry discovery. */
+export type DeliveryRetry = { recipientIds?: Id<"users">[]; attempt?: number };
+
 /**
- * Alert the recipients of this machine (`recipientsOf`) of one event, or of
- * several of one kind. For each recipient, the event folds into their unread
- * alert of that kind (`NOTIFICATION_TYPES`); without one, a new alert is
- * written, and its e-mail queued when the deployment sends e-mails, the
- * recipient wants this kind by e-mail and has an address. Returns how many
- * alerts were written.
- *
- * Nothing for a deleted machine, one without organisation, or one whose
- * organisation was deleted.
+ * Reschedule failed delivery within the attempt bound, preserving its recipients.
+ * After the last attempt, log one final line of codes and IDs without error text.
  */
-export async function notifyMachine(
+export async function retryDelivery(
+  ctx: MutationCtx,
+  machineId: Id<"machines">,
+  type: NotificationType,
+  event: MachineEvent,
+  retry: DeliveryRetry,
+): Promise<void> {
+  const attempt = retry.attempt ?? 1;
+  if (attempt >= DELIVERY_MAX_ATTEMPTS) {
+    console.error({
+      code: "notification_delivery_failed",
+      machineId,
+      type,
+      sessionId: event.sessionId,
+      recipientIds: retry.recipientIds,
+      attempts: attempt,
+    });
+    return;
+  }
+  await ctx.scheduler.runAfter(
+    DELIVERY_RETRY_DELAYS_MS[attempt - 1],
+    internal.notifications.deliver,
+    {
+      machineId,
+      type,
+      sessionId: event.sessionId,
+      detail: event.detail ?? undefined,
+      count: event.count ?? 1,
+      recipientIds: retry.recipientIds,
+      attempt: attempt + 1,
+    },
+  );
+}
+
+/**
+ * Write or fold one recipient's alert inside the subtransaction of
+ * `deliverRecipient`, returning one only for a new alert. Queue its optional
+ * REST e-mail separately from the write so an e-mail setup failure keeps the
+ * site alert and records a safe failure code on it.
+ */
+export async function notifyRecipient(
   ctx: MutationCtx,
   machine: Doc<"machines">,
+  user: Doc<"users">,
   type: NotificationType,
-  event: MachineEvent = {},
+  event: MachineEvent,
 ): Promise<number> {
   const organizationId = machine.organizationId;
-  if (machine.isDeleted || organizationId === undefined) return 0;
-  const organization = await ctx.db.get(organizationId);
-  if (!organization || organization.deletedAt !== undefined) return 0;
-
+  if (organizationId === undefined) return 0;
   const now = Date.now();
-  const count = event.count ?? 1;
   const detail =
-    event.detail !== undefined && event.detail !== null && CODE.test(event.detail)
+    event.detail !== undefined &&
+    event.detail !== null &&
+    CODE.test(event.detail)
       ? event.detail
       : undefined;
-  const settings = emailSettings();
-  let written = 0;
-  for (const user of await recipientsOf(ctx, machine, organizationId)) {
-    const unread = await ctx.db
-      .query("notifications")
-      .withIndex("by_user_and_machine_and_type_and_read", (q) =>
-        q
-          .eq("userId", user._id)
-          .eq("machineId", machine._id)
-          .eq("type", type)
-          .eq("read", false),
-      )
-      .collect();
-    const same = unread.find(
+  const unread = await ctx.db
+    .query("notifications")
+    .withIndex("by_user_and_organization_and_machine_and_read", (q) =>
+      q
+        .eq("userId", user._id)
+        .eq("organizationId", organizationId)
+        .eq("machineId", machine._id)
+        .eq("read", false),
+    )
+    .collect();
+  const sameSession =
+    event.sessionId !== undefined &&
+    NOTIFICATION_TYPES[type].sessionPriority > 0
+      ? unread.find(
+          (row) =>
+            row.sessionId === event.sessionId &&
+            NOTIFICATION_TYPES[row.type].sessionPriority > 0,
+        )
+      : undefined;
+  const same =
+    sameSession ??
+    unread.find(
       (row) =>
-        row.organizationId === organizationId &&
-        (NOTIFICATION_TYPES[type].foldsBy === "machine" ||
-          row.sessionId === event.sessionId),
+        row.type === type &&
+        (NOTIFICATION_TYPES[type].foldsBy === "machine"
+          ? event.sessionId === undefined || row.sessionId === undefined
+          : row.sessionId === event.sessionId),
     );
-    if (same) {
-      await ctx.db.patch(same._id, {
-        count: same.count + count,
-        updatedAt: now,
-        detail: foldedDetail(type, same.detail, detail),
-        sessionId: same.sessionId ?? event.sessionId,
-      });
-      continue;
-    }
-    const notificationId = await ctx.db.insert("notifications", {
-      organizationId,
-      userId: user._id,
-      type,
-      machineId: machine._id,
-      sessionId: event.sessionId,
-      detail,
-      count,
-      createdAt: now,
+  if (same) {
+    const promoted =
+      NOTIFICATION_TYPES[type].sessionPriority >
+      NOTIFICATION_TYPES[same.type].sessionPriority;
+    await ctx.db.patch(same._id, {
+      type: promoted ? type : same.type,
+      count: same.count + (event.count ?? 1),
       updatedAt: now,
-      read: false,
+      detail:
+        same.type === type
+          ? foldedDetail(type, same.detail, detail)
+          : promoted
+            ? detail
+            : same.detail,
+      sessionId: same.sessionId ?? event.sessionId,
     });
-    written++;
-    if (settings === null || user.email.trim() === "") continue;
+    return 0;
+  }
+  const notificationId = await ctx.db.insert("notifications", {
+    organizationId,
+    userId: user._id,
+    type,
+    machineId: machine._id,
+    sessionId: event.sessionId,
+    detail,
+    count: event.count ?? 1,
+    createdAt: now,
+    updatedAt: now,
+    read: false,
+  });
+  if (emailSettings() === null || user.email.trim() === "") return 1;
+  try {
     const choices = emailChoices(
       await ctx.db
         .query("notification_settings")
         .withIndex("by_user", (q) => q.eq("userId", user._id))
         .unique(),
     );
-    if (!choices[type]) continue;
-    const emailId = await queueAlertEmail(
-      ctx,
-      settings,
-      user.email.trim(),
-      alertEmail(type, user.language, machine.name, settings.siteUrl),
-      `notification:${notificationId}`,
-    );
-    await ctx.db.patch(notificationId, { emailId });
+    if (!choices[type]) return 1;
+    await ctx.db.patch(notificationId, {
+      email: {
+        type,
+        status: "pending",
+        attempts: 0,
+        queuedAt: now,
+        updatedAt: now,
+      },
+    });
+    await ctx.scheduler.runAfter(0, internal.notificationEmails.send, {
+      notificationId,
+      attempt: 0,
+    });
+  } catch {
+    await ctx.db.patch(notificationId, {
+      email: {
+        type,
+        status: "failed",
+        attempts: 0,
+        queuedAt: now,
+        updatedAt: now,
+        failureCode: "email_queue_failed",
+      },
+    });
+  }
+  return 1;
+}
+
+/**
+ * Alert the machine's active organisation admins and linked gestionnaires,
+ * folding into their unread alert by machine or session and queuing an e-mail
+ * only for a new alert when their settings allow it. Each recipient has its
+ * own subtransaction, so a failed write retries only the failed recipients
+ * without recounting events for those already served. Return the new alert count.
+ * Do nothing for a deleted machine, one without an organisation, or a deleted
+ * organisation.
+ */
+export async function notifyMachine(
+  ctx: MutationCtx,
+  machine: Doc<"machines">,
+  type: NotificationType,
+  event: MachineEvent = {},
+  retry: DeliveryRetry = {},
+): Promise<number> {
+  const organizationId = machine.organizationId;
+  if (machine.isDeleted || organizationId === undefined) return 0;
+  let users: Doc<"users">[];
+  try {
+    const organization = await ctx.db.get(organizationId);
+    if (!organization || organization.deletedAt !== undefined) return 0;
+    users = await recipientsOf(ctx, machine, organizationId);
+  } catch {
+    await retryDelivery(ctx, machine._id, type, event, retry);
+    return 0;
+  }
+  let written = 0;
+  const failed: Id<"users">[] = [];
+  for (const user of users) {
+    if (
+      retry.recipientIds !== undefined &&
+      !retry.recipientIds.includes(user._id)
+    )
+      continue;
+    try {
+      written += await ctx.runMutation(
+        internal.notifications.deliverRecipient,
+        {
+          machineId: machine._id,
+          userId: user._id,
+          type,
+          sessionId: event.sessionId,
+          detail: event.detail ?? undefined,
+          count: event.count ?? 1,
+        },
+      );
+    } catch {
+      failed.push(user._id);
+    }
+  }
+  if (failed.length > 0) {
+    await retryDelivery(ctx, machine._id, type, event, {
+      ...retry,
+      recipientIds: failed,
+    });
   }
   return written;
 }

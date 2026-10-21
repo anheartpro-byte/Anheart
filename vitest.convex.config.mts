@@ -14,11 +14,10 @@ export default defineConfig({
   test: {
     environment: "edge-runtime",
     include: ["convex/**/*.test.ts"],
-    // The test helpers of the rate limiter (ANH-166) and of the e-mail
-    // sender (ANH-90) are TypeScript that lists their component's modules
+    // The test helpers of the rate limiter (ANH-166) list their modules
     // with `import.meta.glob`: Vite must transform them.
     server: {
-      deps: { inline: ["@convex-dev/rate-limiter", "@convex-dev/resend"] },
+      deps: { inline: ["@convex-dev/rate-limiter"] },
     },
     // Measured only when asked for (`npm run coverage:convex`, which the
     // `convex-tests` job of the CI runs): `npm run test:convex` measures

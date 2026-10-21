@@ -31,6 +31,7 @@ import type * as lib_machineKeys from "../lib/machineKeys.js";
 import type * as lib_machineRegistry from "../lib/machineRegistry.js";
 import type * as lib_medicalParameters from "../lib/medicalParameters.js";
 import type * as lib_notificationEmail from "../lib/notificationEmail.js";
+import type * as lib_notificationVisibility from "../lib/notificationVisibility.js";
 import type * as lib_notifications from "../lib/notifications.js";
 import type * as lib_patientInvitation from "../lib/patientInvitation.js";
 import type * as lib_rateLimits from "../lib/rateLimits.js";
@@ -48,6 +49,7 @@ import type * as medicalParametersStore from "../medicalParametersStore.js";
 import type * as migrations_machineApiKeys from "../migrations/machineApiKeys.js";
 import type * as migrations_multiOrganization from "../migrations/multiOrganization.js";
 import type * as migrations_retireLegacyRecording from "../migrations/retireLegacyRecording.js";
+import type * as notificationEmails from "../notificationEmails.js";
 import type * as notifications from "../notifications.js";
 import type * as organizations from "../organizations.js";
 import type * as patientInvitations from "../patientInvitations.js";
@@ -91,6 +93,7 @@ declare const fullApi: ApiFromModules<{
   "lib/machineRegistry": typeof lib_machineRegistry;
   "lib/medicalParameters": typeof lib_medicalParameters;
   "lib/notificationEmail": typeof lib_notificationEmail;
+  "lib/notificationVisibility": typeof lib_notificationVisibility;
   "lib/notifications": typeof lib_notifications;
   "lib/patientInvitation": typeof lib_patientInvitation;
   "lib/rateLimits": typeof lib_rateLimits;
@@ -108,6 +111,7 @@ declare const fullApi: ApiFromModules<{
   "migrations/machineApiKeys": typeof migrations_machineApiKeys;
   "migrations/multiOrganization": typeof migrations_multiOrganization;
   "migrations/retireLegacyRecording": typeof migrations_retireLegacyRecording;
+  notificationEmails: typeof notificationEmails;
   notifications: typeof notifications;
   organizations: typeof organizations;
   patientInvitations: typeof patientInvitations;
@@ -150,5 +154,4 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
-  resend: import("@convex-dev/resend/_generated/component.js").ComponentApi<"resend">;
 };

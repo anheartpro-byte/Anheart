@@ -15,7 +15,6 @@
  */
 import { convexTest } from "convex-test";
 import rateLimiterTest from "@convex-dev/rate-limiter/test";
-import resendTest from "@convex-dev/resend/test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -59,10 +58,9 @@ type BackendOptions = Pick<
 
 /**
  * An in-memory backend with the components `convex/convex.config.ts` mounts,
- * under the names the app gives them: the rate limiter (ANH-166) and the
- * e-mail sender (ANH-90). Every world of these tests is built on one. The
- * e-mail sender's own components are not: a test that queues an e-mail keeps
- * the clock still, and the batch that would send it never runs.
+ * under the names the app gives them: the rate limiter (ANH-166).
+ * Every world of these tests is built on one. Alert e-mails use a stubbed
+ * fetch in their tests, without an e-mail component.
  */
 export function backendOf(
   mods: Record<string, () => Promise<unknown>>,
@@ -70,7 +68,6 @@ export function backendOf(
 ) {
   const t = convexTest({ schema, modules: mods, ...options });
   rateLimiterTest.register(t, "rateLimiter");
-  resendTest.register(t, "resend");
   return t;
 }
 

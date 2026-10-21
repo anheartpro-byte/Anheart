@@ -280,12 +280,22 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Machine HTTP heartbeat records operational state and health, without a rights change.",
   "machines.checkOfflineMachines":
     "Cron detects offline machines and interrupts silent sessions, without confirming their end.",
+  "notifications.continueMarkAllRead":
+    "Scheduled continuation marks the recipient visible alerts read in bounded batches.",
   "notifications.markRead": "Recipient marks an alert read.",
   "notifications.markAllRead": "Recipient marks alerts read.",
   "notifications.updateSettings": "Recipient changes notification preferences.",
   "notifications.deliver":
     "Scheduled alert delivery writes recipients' operational notifications.",
+  "notifications.deliverRecipient":
+    "Writes one recipient's operational alert in an isolated subtransaction.",
   "notifications.purge": "Cron removes expired notifications.",
+  "notificationEmails.beginAttempt":
+    "Claims an operational alert e-mail attempt without changing access rights.",
+  "notificationEmails.finishAttempt":
+    "Records operational e-mail delivery and bounded retries without changing access rights.",
+  "notificationEmails.abandonPending":
+    "Daily cleanup records abandoned operational e-mails without changing access rights.",
   "patientInvitations.finish":
     "Patient creation action records delivery status of an already audited invitation.",
   "recordStorage.requestUpload": "Machine prepares a record upload.",

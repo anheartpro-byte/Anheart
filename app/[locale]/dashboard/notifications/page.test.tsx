@@ -44,6 +44,7 @@ function alert(id: string, overrides: Partial<Alert> = {}): Alert {
     type: "drive_fault",
     machineId: "machine-1" as Id<"machines">,
     machineName: "Centri Paris",
+    machineDeleted: false,
     sessionId: undefined,
     detail: undefined,
     reason: undefined,
@@ -82,6 +83,139 @@ function item(title: string) {
 }
 
 describe("the alerts page", () => {
+  describe.each(["fr", "en"] as const)("T04-c: end reasons in %s", (locale) => {
+    const messages = locale === "fr" ? fr : en;
+    it.each([
+      [
+        "safety_verdict: hr_drop (RAMP_DOWN)",
+        undefined,
+        locale === "fr"
+          ? "Verdict de sécurité : hr_drop (RAMP_DOWN)"
+          : "Safety verdict: hr_drop (RAMP_DOWN)",
+      ],
+      [
+        "safety_verdict:",
+        undefined,
+        messages.sessionReport.endReasons.safety_verdict,
+      ],
+      [
+        "emergency_stop",
+        undefined,
+        messages.sessionReport.endReasons.emergency_stop,
+      ],
+      ["unknown_reason: x", undefined, "unknown_reason: x"],
+      [
+        "refusee par la machine : console occupee",
+        undefined,
+        "refusee par la machine : console occupee",
+      ],
+      [
+        "safety_verdict: hr_drop (RAMP_DOWN)",
+        "expired_before_start",
+        messages.errors.expired_before_start,
+      ],
+      [
+        "emergency_stop",
+        "unknown_code",
+        messages.sessionReport.endReasons.emergency_stop,
+      ],
+      ["constructor: x", undefined, "constructor: x"],
+      ["toString: x", undefined, "toString: x"],
+      ["emergency_stop_extra: x", undefined, "emergency_stop_extra: x"],
+      ["emergency_stop extra", undefined, "emergency_stop extra"],
+      [
+        "emergency_stop",
+        "constructor",
+        messages.sessionReport.endReasons.emergency_stop,
+      ],
+    ])(
+      "renders %s with reasonCode %s",
+      async (reason, reasonCode, expected) => {
+        signedInAs("gestionnaire");
+        serverHas([
+          alert("end-reason", { type: "session_failed", reason, reasonCode }),
+        ]);
+
+        await renderPage(<NotificationsPage />, { locale });
+
+        expect(
+          screen.getByText(
+            messages.notifications.reason.replace("{reason}", expected),
+          ),
+        ).toBeTruthy();
+      },
+    );
+
+    it.each(["drive_fault", "safety_verdict"] as const)(
+      "R1c2-3: renders the translated end reason under %s",
+      async (type) => {
+        signedInAs("gestionnaire");
+        serverHas([
+          alert("promoted-end-reason", {
+            type,
+            reason: "safety_verdict: hr_drop (RAMP_DOWN)",
+          }),
+        ]);
+
+        await renderPage(<NotificationsPage />, { locale });
+
+        const expected =
+          locale === "fr"
+            ? "Verdict de sécurité : hr_drop (RAMP_DOWN)"
+            : "Safety verdict: hr_drop (RAMP_DOWN)";
+        expect(
+          item(messages.notifications.types[type]).getByText(
+            messages.notifications.reason.replace("{reason}", expected),
+          ),
+        ).toBeTruthy();
+      },
+    );
+  });
+
+  it.each(["fr", "en"] as const)(
+    "shows a deleted-machine notice in %s while keeping the readable session link",
+    async (locale) => {
+      signedInAs("gestionnaire");
+      serverHas([
+        alert("a1", { machineDeleted: true }),
+        alert("a2", {
+          machineDeleted: true,
+          sessionId: "session-1" as Id<"sessions">,
+        }),
+      ]);
+
+      await renderPage(<NotificationsPage />, { locale });
+
+      const messages = locale === "fr" ? fr.notifications : en.notifications;
+      expect(screen.getAllByText(messages.machineDeleted)).toHaveLength(2);
+      expect(
+        screen.queryByRole("link", { name: messages.openMachine }),
+      ).toBeNull();
+      expect(
+        screen
+          .getByRole("link", { name: messages.openSession })
+          .getAttribute("href"),
+      ).toBe("/dashboard/sessions/session-1");
+      expect(screen.queryByText(messages.empty)).toBeNull();
+      expect(
+        screen.queryByText(messages.listCut.replace("{count}", "50")),
+      ).toBeNull();
+    },
+  );
+
+  it("shows a single visible alert without an empty or truncated-list message", async () => {
+    signedInAs("gestionnaire");
+    serverHas([alert("visible")]);
+
+    await renderPage(<NotificationsPage />);
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByText(fr.notifications.empty)).toBeNull();
+    expect(
+      screen.queryByText(fr.notifications.listCut.replace("{count}", "50")),
+    ).toBeNull();
+  });
+
   it("is refused to a patient, who is never asked for alerts", async () => {
     signedInAs("user");
 
