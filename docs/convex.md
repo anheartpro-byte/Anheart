@@ -1970,6 +1970,17 @@ une alerte déjà liée à une autre séance. Les séances différentes gardent
 ainsi leurs alertes distinctes. La recherche utilise l'index existant
 `by_user_and_organization_and_machine_and_read`, sans nouvel index.
 
+Limite vérifiée : un heartbeat en défaut qui ne nomme pas la séance crée
+une alerte `drive_fault` sans séance. Si le lot d'événements de la séance
+livre ensuite le verdict avant le défaut (ordre de planification actuel de
+`storeEvents`), le verdict crée l'alerte de la séance et le défaut s'y fond :
+il reste **2 alertes et 2 e-mails par destinataire**, avec l'envoi activé,
+une alerte sans séance de compteur 1 et une alerte de la séance de compteur 2.
+Dans l'ordre inverse, défaut puis verdict, l'alerte sans séance est reprise :
+**1 alerte de compteur 3 et 1 e-mail par destinataire**. L'ordre de
+planification dans `storeEvents`, ou une séance nommée plus tôt par le Pi,
+reste un point de suivi.
+
 Ce regroupement s'applique aussi aux verdicts hors défaut variateur : par
 exemple, `hr_drop (RAMP_DOWN)` et la fin en échec de la même séance donnent
 une seule alerte `safety_verdict`, de compteur 2, dans les deux ordres.

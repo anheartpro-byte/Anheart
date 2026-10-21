@@ -1242,6 +1242,62 @@ describe("session alert grouping (T03)", () => {
     }
   }
 
+  it.each([
+    { order: ["verdict", "fault"] as const, expected: 2 },
+    { order: ["fault", "verdict"] as const, expected: 1 },
+  ])(
+    "R1c1-1: keeps $expected alerts per recipient after a sessionless heartbeat and $order",
+    async ({ order, expected }) => {
+      const w = await seedWorld(modules);
+      setEmailVariables();
+      const sessionId = await session(w);
+      await w.t.mutation(internal.training.updateLive, {
+        machineId: w.machine,
+        live: live({ driveState: "fault" }),
+      });
+      await delivered(w);
+
+      for (const kind of order) await deliver(w, sessionId, kind);
+
+      const rows = await alerts(w);
+      for (const userId of [w.manager, w.orgAdmin]) {
+        const own = rows.filter((row) => row.userId === userId);
+        expect(own).toHaveLength(expected);
+        expect(own.map((row) => [row.type, row.sessionId, row.count])).toEqual(
+          expected === 2
+            ? [
+                ["drive_fault", undefined, 1],
+                ["drive_fault", sessionId, 2],
+              ]
+            : [["drive_fault", sessionId, 3]],
+        );
+      }
+      await expectEmails(w, expected * 2);
+    },
+  );
+
+  it("R1c1-1: storeEvents schedules the verdict before the session's fault", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await session(w);
+
+    await w.t.mutation(internal.training.storeEvents, {
+      machineId: w.machine,
+      sessionId,
+      events: [
+        event(1, "drive_fault", "OHF (LFT 17): fault"),
+        event(2, "verdict", "drive_fault (RAMP_DOWN): fault"),
+      ],
+    });
+
+    const jobs = await w.t.run((ctx) =>
+      ctx.db.system.query("_scheduled_functions").collect(),
+    );
+    expect(jobs.map((job) => job.args[0])).toEqual([
+      expect.objectContaining({ type: "safety_verdict", sessionId }),
+      expect.objectContaining({ type: "drive_fault", sessionId }),
+    ]);
+  });
+
   it.each(orders.map((order) => ({ order, label: order.join(", ") })))(
     "T03-a: folds all three deliveries in order $label, with the creation type in the only e-mail",
     async ({ order }) => {

@@ -1725,6 +1725,16 @@ dit le type de départ et n'est pas renvoyé quand le type change. Une alerte
 lue reste inchangée ; l'événement suivant en crée une nouvelle. Sans séance,
 le regroupement reste par machine.
 
+Limite vérifiée : un heartbeat en défaut qui ne nomme pas la séance crée
+une alerte `drive_fault` sans séance. Si le lot d'événements de la séance
+livre ensuite le verdict avant le défaut (ordre de planification actuel de
+`storeEvents`), le verdict crée l'alerte de la séance et le défaut s'y fond :
+vous recevez **2 alertes et 2 e-mails** si l'envoi est activé, de compteurs
+1 sans séance et 2 avec séance. Dans l'ordre inverse, défaut puis verdict,
+vous recevez **1 alerte de compteur 3 et 1 e-mail**. Cette limite vaut pour
+chaque destinataire. L'ordre de planification dans `storeEvents`, ou une
+séance nommée plus tôt par le Pi, reste un point de suivi.
+
 ---
 
 ## 5. Procédures pas à pas
