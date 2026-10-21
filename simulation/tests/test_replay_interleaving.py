@@ -98,6 +98,17 @@ def test_a_delivery_outside_the_recorded_window_is_refused_before_pacing(
     assert replayed.error.detail == "an ECG delivery lies outside the recorded tick window"
 
 
+def test_an_optional_final_observation_is_not_required_to_replay_a_valid_delivery_window(
+    interleaved_session: tuple[Recording, Path],
+) -> None:
+    recording, config = interleaved_session
+    legacy = replace(recording, manifest=replace(recording.manifest, end_observation=None))
+    replayed = asyncio.run(replay_recording(legacy, config))
+    assert isinstance(replayed, Ok), replayed
+    assert replayed.value.matches, replayed.value.to_text()
+    assert replayed.value.comparison.deviating_ticks == 0
+
+
 def test_a_driver_refusal_of_a_verified_native_document_is_a_named_cli_code_two(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
