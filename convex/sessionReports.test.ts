@@ -302,6 +302,8 @@ describe("ANH-89 provisional summary, from the telemetry", () => {
       );
       expect(figures.verdicts.map(({ rule }) => rule)).toEqual(["hr_stale"]);
     },
+    // Inserting 10,000 rows and reading 20 pages needs extra time under CI coverage.
+    60_000,
   );
 
   it("ignores telemetry points whose elapsed time goes backwards or stays equal", async () => {
