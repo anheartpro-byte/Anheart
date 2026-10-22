@@ -53,6 +53,8 @@ from src.motor.sto import (
 )
 from src.result import Err, Ok, Result
 from src.training import runtime
+from src.training.preflight import StoNotReady
+from src.training.types import Occupancy
 from src.units import (
     Amperes,
     Monotonic,
@@ -62,8 +64,8 @@ from src.units import (
     RegisterAddress,
     Seconds,
 )
-from tests.test_failure_process import cruising
-from tests.test_failure_rig import make_rig
+from tests.test_failure_process import CRUISE
+from tests.test_failure_rig import make_rig, start_manual
 from tests.test_local_config import BENCH_ENV, SIM_ENV
 from tests.test_local_panel import FakeWeb
 from tests.test_runtime import FakeDrive
@@ -334,13 +336,30 @@ async def test_config_and_panel_build_each_source_with_shared_simulated_chain(
         assert isinstance(await simulator.open(), Ok)
         await panel.sto.poll()
         assert sto_ready(panel.sto.latest(clock.monotonic()))
+        assert isinstance(panel.runtime.confirm_estop_wiring("operator"), Ok)
+        assert isinstance(
+            await panel.runtime.start_manual(Occupancy.BENCH, "operator", MotorRpm(276)), Ok
+        )
         chain.open(clock.monotonic())
         await panel.sto.poll()
         assert panel.sto.latest(clock.monotonic()).state is StoState.OPEN
     elif source is StoSourceKind.NONE:
         assert reading.state is StoState.NOT_CONFIGURED
+        assert isinstance(panel.runtime.confirm_estop_wiring("operator"), Ok)
+        refused = await panel.runtime.start_manual(Occupancy.BENCH, "operator", MotorRpm(276))
+        assert isinstance(refused, Err)
+        assert isinstance(refused.error, StoNotReady)
+        assert refused.error.state is StoState.NOT_CONFIGURED
     else:
         assert sto_ready(reading) is (source is StoSourceKind.SIM_READY)
+        assert isinstance(panel.runtime.confirm_estop_wiring("operator"), Ok)
+        started = await panel.runtime.start_manual(Occupancy.BENCH, "operator", MotorRpm(276))
+        if source is StoSourceKind.SIM_READY:
+            assert isinstance(started, Ok)
+        else:
+            assert isinstance(started, Err)
+            assert isinstance(started.error, StoNotReady)
+            assert started.error.state is StoState.OPEN
         chain.open(clock.monotonic())
         assert panel.sto.latest(clock.monotonic()).state is StoState.OPEN
     await panel.close()
@@ -540,7 +559,16 @@ async def test_blocked_sto_poll_does_not_delay_stopping_a_running_drive(
         "MOTOR_MAX_RPM": "1380",
     }
     rig, _ = make_rig(tmp_path, env=from_env)
-    await cruising(rig)
+    source = rig.panel.sto
+    assert isinstance(source, DriveInputStoSource)
+    assert isinstance(await rig.simulator.open(), Ok)
+    await source.poll()
+    async with rig.http() as client:
+        await start_manual(rig, client, CRUISE)
+    for _ in range(225):
+        await source.poll()
+        await rig.tick(0.2)
+    assert abs(rig.panel.runtime.snapshot().measured.motor_rpm - 498) <= 2
     assert rig.simulator.commanded_setpoint > 0
     entered, cleaned = asyncio.Event(), asyncio.Event()
 

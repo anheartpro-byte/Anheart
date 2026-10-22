@@ -272,6 +272,7 @@ from src.training.plan import (
     ResolveError,
     UnknownProfile,
 )
+from src.training.preflight import StoNotReady, describe_sto_refusal
 from src.training.runtime import (
     AlreadyStarted,
     DriveInFault,
@@ -865,6 +866,7 @@ class LocalPanel:
 
     __slots__ = (
         "_clock",
+        "_closing",
         "_cloud",
         "_config",
         "_drive",
@@ -922,6 +924,9 @@ class LocalPanel:
     ) -> None:
         self._clock: Clock = clock
         self._sto: StoSource = sto
+        self._closing: bool = False
+        if isinstance(sto, DriveInputStoSource):
+            sto.guard_polling(self._sto_poll_permitted)
         # The riders' list: the link writes it, the routes and the starts read it.
         self._roster: Roster = Roster(linked=False) if roster is None else roster
         self._watchdog: ServiceWatchdog = watchdog
@@ -1618,6 +1623,9 @@ class LocalPanel:
 
     # --- running and stopping --------------------------------------------
 
+    def _sto_poll_permitted(self) -> bool:
+        return not self._closing and self._runtime.drive_reads_permitted
+
     async def run(self, stop: asyncio.Event, web: WebRunner) -> int:
         """Run until ``stop`` is set or a task ends; then stop everything. Returns an exit code."""
         if self._recorder is not None:
@@ -1688,6 +1696,7 @@ class LocalPanel:
         stopping, so that the time the drive takes to come to rest is not
         read as a frozen loop.
         """
+        self._closing = True
         if self._watchdog.stalled(self._clock.monotonic()):
             self._stalled_at_stop = True
             _logger.error(
@@ -1979,6 +1988,7 @@ def build_panel(
         journal.listen(tapped.source, tapped.refused)
     runtime = TrainingRuntime(
         clock=clock,
+        sto=sto,
         drive=backend,
         geometry=config.geometry,
         limits=RUNTIME_LIMITS,
@@ -2010,6 +2020,7 @@ def build_panel(
     presence = build_presence(config, clock, inputs)
     surface = ControlSurface(
         clock=clock,
+        sto=sto,
         supervisor=runtime.supervisor,
         sink=hub if recorder is None else RecordedSink(hub, recorder),
         # With a camera, an acknowledgement clears the presence latch too.
@@ -2306,6 +2317,8 @@ def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one
             return f"variateur en defaut ({code})"
         case RecordStorageLow():
             return describe_record_storage(refusal)
+        case StoNotReady():
+            return describe_sto_refusal(refusal)
     raise assert_never(refusal)
 
 

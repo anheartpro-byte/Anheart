@@ -160,6 +160,7 @@ class DriveInputStoSource:
         self._drive: StoRegisterPort = drive
         self._address: RegisterAddress = address
         self._input: LogicInput = input_
+        self._poll_permitted: Callable[[], bool] | None = None
         self._reading: StoReading = StoReading(
             state=StoState.UNKNOWN,
             source=StoSourceKind.DRIVE_INPUT,
@@ -167,8 +168,15 @@ class DriveInputStoSource:
             detail="never read",
         )
 
+    def guard_polling(self, permitted: Callable[[], bool]) -> None:
+        """Bind the console's silence/release guard at composition, before polling starts."""
+        self._poll_permitted = permitted
+
     async def poll(self) -> None:
         """One asynchronous exchange, called only by the console's polling task."""
+        permitted = self._poll_permitted
+        if permitted is not None and not permitted():
+            return
         result = await self._drive.read_register(self._address)
         match result:
             case Ok(raw):
@@ -189,7 +197,13 @@ class DriveInputStoSource:
                 assert_never(unreachable)
 
     async def run(self) -> None:
-        """Poll at the technical period until cancelled by the console owner."""
+        """Poll at the technical period until cancelled by the console owner.
+
+        The guard is checked immediately before every read. This single task
+        awaits each exchange: at most one read already in flight can complete
+        after silence/release begins, then no further frame refreshes ttO.
+        The cached success simply ages to UNKNOWN while polling is forbidden.
+        """
         while True:
             began = self._clock.monotonic()
             await self.poll()
