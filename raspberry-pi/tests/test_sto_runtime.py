@@ -16,6 +16,7 @@ from src.motor.sto import (
     StoReading,
     StoSourceKind,
     StoState,
+    UnconfiguredStoSource,
 )
 from src.result import Err, Ok, Result
 from src.training.hr_control import HeartRateController
@@ -295,15 +296,56 @@ async def test_a_single_failed_sto_read_does_not_end_motion_but_age_does() -> No
     assert rig.runtime.end_reason is EndReason.SAFETY_VERDICT
 
 
-@pytest.mark.parametrize("state", [StoState.UNKNOWN, StoState.NOT_CONFIGURED])
-async def test_never_read_sto_latches_during_possible_motion(state: StoState) -> None:
-    source = MemorySto(reading(StoState.READY))
+@pytest.mark.parametrize(
+    "phase", [Phase.BASELINE, Phase.WARMUP, Phase.HOLD, Phase.COOLDOWN, Phase.RECOVERY]
+)
+async def test_never_read_sto_latches_during_possible_motion(
+    phase: Phase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = ready_sto()
     rig = _rig(sto=source)
+    rig.fed_bpm = Bpm(82)
     assert isinstance(await rig.start(), Ok)
-    source.reading = reading(state)
+    if phase not in (Phase.BASELINE, Phase.WARMUP):
+        await reach(rig, Phase.WARMUP)
+        rig.fed_bpm = Bpm(120)
+    await reach(rig, phase)
+
+    def unreadable(_source: object, _now: Monotonic) -> StoReading:
+        return reading(StoState.UNKNOWN)
+
+    monkeypatch.setattr(type(source), "latest", unreadable)
     await rig.step()
     assert rig.runtime.standing is not None
     assert rig.runtime.standing.rule == RULE_STO_UNREADABLE
+
+
+@pytest.mark.parametrize("configured", [False, True])
+async def test_idle_unknown_speed_only_refuses_sto_start_without_latching(configured: bool) -> None:
+    source = MemorySto(reading(StoState.UNKNOWN)) if configured else UnconfiguredStoSource()
+    rig = _rig(sto=source)
+    rig.drive.status_error = CommTimeout(after=Seconds(0.1))
+    for _ in range(5):
+        await rig.step()
+    assert rig.standing() is None
+    assert not rig.runtime.silent
+    assert isinstance(rig.runtime.confirm_estop_wiring(OPERATOR), Ok)
+    refused = await rig.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276))
+    assert isinstance(refused, Err)
+    assert isinstance(refused.error, StoNotReady)
+    assert refused.error.state is (StoState.UNKNOWN if configured else StoState.NOT_CONFIGURED)
+    rig.drive.status_error = None
+    await rig.run(2)
+    assert rig.standing() is None
+
+
+async def test_not_configured_is_not_a_lost_reading_even_during_an_armed_session() -> None:
+    source = MemorySto(reading(StoState.READY))
+    rig = _rig(sto=source)
+    assert isinstance(await rig.start(), Ok)
+    source.reading = reading(StoState.NOT_CONFIGURED)
+    await rig.step()
+    assert rig.standing() is None
 
 
 @pytest.mark.parametrize("state", [StoState.OPEN, StoState.UNKNOWN, StoState.NOT_CONFIGURED])

@@ -2504,9 +2504,9 @@ class TrainingRuntime:
     def _judge_sto(self, now: Monotonic) -> None:
         """Judge the cached contact before any controller demand, including at idle.
 
-        Unknown or stale shaft speed cannot establish rest. A single failed STO
-        poll refuses arming immediately, but only the age of the last success
-        ends motion; OPEN cuts it immediately. No I/O or waiting occurs here.
+        OPEN treats unknown speed as possible motion. Unreadable STO requires
+        a configured source and positive motion evidence: an armed session,
+        our run command, or a fresh enabled/turning status. No I/O occurs here.
         """
         if not self.drive_reads_permitted:
             return
@@ -2519,6 +2519,10 @@ class TrainingRuntime:
                 else None
             )
         armed = self._started_at is not None and self._phase is not Phase.DONE
+        observed_motion = status is not None and (
+            status.state is DriveState.OPERATION_ENABLED
+            or abs(status.output_rpm) >= self._limits.standstill_rpm
+        )
         if (
             not armed
             and not self._enabled
@@ -2537,6 +2541,10 @@ class TrainingRuntime:
                 "The reference is zeroed; restore the chain, acknowledge by name "
                 "and request a new start before motion is permitted",
             )
+            return
+        if reading.state is StoState.NOT_CONFIGURED or not (
+            armed or (self._link_open and self._enabled) or observed_motion
+        ):
             return
         last = reading.last_success_at
         if last is None or elapsed(last, now) > STO_STALE_AFTER:
