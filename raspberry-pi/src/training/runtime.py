@@ -3824,6 +3824,12 @@ class TrainingRuntime:
         if self._applied_rpm != 0 or not self._at_standstill(now):
             return
         status = self._readable_status(now)
+        if status is not None and status.state is DriveState.SWITCH_ON_DISABLED:
+            # Fresh standstill and ETA confirm the output stage is already off.
+            # Closing STO cannot enable it without a new full arming sequence.
+            self._enabled = False
+            self._disable_failures = 0
+            return
         if status is not None and status.state is DriveState.FAULT:
             # No torque at standstill, and every word but FAULT_RESET is refused
             # by design: the ending waits for the operator's fault reset.
