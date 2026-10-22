@@ -64,7 +64,16 @@ d'un dossier (un marqueur de dépôt, un curseur de synchronisation, la liste
 premier démarrage de la console avec un tableau de bord configuré sur ce
 répertoire : sa télémétrie à 1 Hz, ses événements et sa fin, et rien d'autre
 (ni les trames du variateur, ni les blocs ECG, ni `sensors.csv`, ni rien du
-journal hors séance `logbook/`). Cela vaut
+journal hors séance `logbook/`). Le flux transmet les événements de séance
+seulement : les pings `attendant_ping` et
+les événements `t < 0` restent dans `events.jsonl` et dans son dépôt complet,
+sans partir dans le flux d'événements du tableau de bord. Ces lignes ne
+prennent aucun rang transmis : `seq` est le rang après ce filtrage, stable
+entre l'envoi direct et une reprise. Le curseur les passe sans les compter
+comme illisibles. Une ligne illisible prend toujours un rang et reste signalée.
+Le point de la seconde 0
+reste envoyé ; sur la console, c'est le dernier tic de repos avant la
+commande de départ. Les points de temps négatif ne partent pas. Cela vaut
 aussi pour un enregistrement fait **pendant qu'aucun tableau de bord n'était
 configuré**, s'il est postérieur à ce premier démarrage : il part au premier
 démarrage où une clé est de nouveau en place, et aucun réglage ne l'en
@@ -77,6 +86,11 @@ moyen, manuel, de garder locaux les seconds, sont dans
 enregistrements clos munis de l'inventaire `files` sont aussi déposés dans
 Convex Storage : manifeste, traces variateur, capteurs et blocs bruts compris.
 Le journal hors séance reste local. Voir [Dépôt vérifié](#dépôt-vérifié-dans-convex).
+
+**Configuration appliquée de la console.** Le fil du journal écrit aussi
+`data/records/config/<config_hash>.json`, hors de tout dossier de séance.
+Ce fichier local est décrit ci-dessous ; il ne fait partie ni du manifeste,
+ni de son inventaire, ni du contrat Pi-Convex.
 
 ## Manifeste
 
@@ -211,10 +225,15 @@ de configuration ou le dernier tic ; les indicateurs inconnus restent inconnus.
 ## Tics, 5 Hz
 
 `ticks.csv` a une ligne d'en-tête, puis une ligne par tic réellement observé.
-Le writer n'invente pas les tics manquants. Les tics de la console au repos
-qui précèdent le départ ont un `t` négatif ou nul : `t = 0` est l'instant de
-la commande de départ, et un tic horodaté 0 est le dernier tic d'avant le
-départ. Les tics de la séance ont un `t` strictement positif. La simulation
+Le writer n'invente pas les tics manquants. Sur la console, `t = 0` est le
+dernier tic de repos précédant la commande de départ. La commande conserve
+son instant propre, normalement au plus un tic après l'origine ; le tic de
+son `control_step` la suit, à `t > 0`. La boucle garde son ordre. Si le départ
+arrive dans le tout premier pas, l'origine est l'instant de la commande :
+la fenêtre manque et le rejeu refuse l'enregistrement.
+La simulation garde `t = 0` à sa commande de départ, faite après son dernier
+tic de repos du même instant. Les tics de repos ont `t <= 0`, ceux de séance
+`t > 0`, chez les deux producteurs. La simulation
 écrit les tics de sa période de repos (15 s par défaut) ; le viewer n'affiche
 que la séance. L'ordre des colonnes est celui du type partagé
 `src.record.rows.Row`, réexporté par `simulation.tracefile` :
@@ -288,16 +307,41 @@ et la simulation écrivent la même chose :
 | `manual_target output_rpm=27.0` | `set_manual_target(27.0)` |
 | `stop` | `request_stop(...)` (bouton, ou fin demandée à distance : kind `remote_command`) |
 | `estop` | `request_estop(...)` |
+| `latch_estop` | `supervisor.latch_estop(...)` : verrou immédiat de la surface, avant le traitement de `estop` par le runtime |
 | `acknowledge estop_released=true` | `acknowledge(actor, estop_released=True)` (kind `verdict_ack`) |
 | `fault_reset` | `fault_reset()` |
 | `shutdown` | `shutdown(...)` : la console quitte (signal, tâche en échec, fin d'une simulation) |
 | `attendant present=true` | tant que `true`, chaque tic note la présence de l'accompagnant |
+| `attendant_ping` | `note_presence(...)` à cet instant seulement, sans argument ni présence présumée aux tics suivants |
+| `presence_trip rule=presence_intrusion action=QUICK_STOP` | `trip_from_thread(rule, action, détail fixe)` ; `rule` appartient à `MOTION_RULES` du garde caméra, `action` est un nom de `SafetyAction` |
 
 Qui a demandé est dans `actor`. Ce que le runtime a répondu n'est pas dans la
 commande : un refus est son propre événement `refusal`, et les décisions sont
 dans `ticks.csv`. Le plafond d'une séance manuelle est écrit dans la commande
 parce que le manifeste ne le porte pas. `t` est l'horloge monotone que le
 runtime lit en traitant la commande, **non arrondie**.
+Pour `attendant_ping`, `t` est l'instant du ping que la surface passe en
+argument à `note_presence`, également non arrondi : cette méthode ne lit pas
+l'horloge. La console garde ses appels existants à chaque tic, mais écrit
+une seule commande par nouvelle valeur du ping, acteur `system`.
+Les verdicts caméra et leur éventuel `estop` sont deux commandes dans
+l'ordre des appels, acteur `system`, sans diagnostic libre dans `presence_trip`.
+Un clic E-STOP écrit `latch_estop` à l'instant non arrondi du verrou de la
+surface, puis `estop` à l'instant de l'appel du runtime au pas suivant.
+Les deux portent l'alias opaque de l'opérateur ; le garde caméra utilise
+directement l'appel du runtime et n'invente pas de clic de surface.
+Une tentative d'attestation sans opérateur est refusée avant tout effet sur
+l'état du runtime : la surface ne publie pas d'entrée et cet appel n'est pas
+écrit. L'attestation en vigueur et les décisions des tics suivants restent
+inchangées. Les autres commandes refusées par le runtime restent écrites,
+avec leur événement `refusal` séparé.
+
+Une attestation en vigueur au premier tic de la fenêtre est redite par
+`confirm_estop_wiring` à cet instant, avec l'alias opaque de son auteur lu
+dans le superviseur. Une attestation faite dans la fenêtre garde son instant
+réel et n'est pas doublée. C'est une précondition en vigueur, pas une nouvelle
+attestation de l'opérateur. Un départ réinitialise la présence : un ping
+périmé d'avant la fenêtre n'est pas rajeuni.
 
 Tout autre texte sous l'un de ces trois kinds rend l'enregistrement non
 rejouable, et le rejeu le dit : une commande ignorée en silence donnerait le
@@ -318,6 +362,9 @@ son `detail` :
 | `dashboard:` | la console : une nouvelle du lien avec le tableau de bord montrée à l'opérateur, par exemple `serveur incompatible (contrat 1.0 vs 2.0)` |
 | `record_degraded:` | le fil du journal de séance : ce qui manque à cet enregistrement, `dropped=<n> failures=<n>`, `drive_frames_lost=<n>` s'il manque des trames du variateur (ce que ce nombre compte : [Observations du variateur](#observations-du-variateur)), puis `last=<opération>:<erreur>`. Une ligne par changement de ces comptes : la dernière de l'enregistrement fait foi, et elle est écrite avant sa clôture, y compris quand il est clos `superseded` |
 | `simulation:` | la simulation : ce qu'elle a fait au modèle |
+| `console:` | la console : notification de mise en file, de confirmation ou d'attestation, distincte de la commande effectivement remise au runtime |
+| `replay_preamble:` | la console : moins de 8 s continues d'ECG brut avant l'origine ; le rejeu refuse avec cette raison |
+| `replay_incomplete: pending_ecg_delivery` | la console : un lot ECG n'a pas été résolu dans le délai de fermeture ; le rejeu refuse cette remise inconnue |
 
 ## Observations du variateur
 
@@ -332,6 +379,12 @@ ou demandée, le succès et la durée mesurée par l'horloge injectée. Une lect
 échouée garde `value: null`. Les succès avant un échec partiel restent présents,
 ainsi que chaque nouvel essai et l'écriture d'urgence. Aucun registre absent
 de la transaction n'est reconstruit depuis `DriveStatus`.
+
+Le journal conserve aussi `modbus_connect` et `modbus_close` : ouverture et
+fermeture du maître, avec `register` et `value` à `null`, succès et latence.
+Ces deux lignes restent présentes avec `transport=False`, sous la même borne
+que les transactions de registre. Un port qui ne s'ouvre pas a donc sa propre
+observation, même quand aucun registre n'a pu être interrogé.
 
 Le client SDK instrumenté conserve aussi chaque appel `send` et `recv` :
 `modbus_send` porte dans `raw_hex` les octets que le SDK indique avoir acceptés ;
@@ -381,7 +434,7 @@ ou trop de trames en attente d'un enregistrement) sont comptées dans
 l'événement `warning` `record_degraded:` (`drive_frames_lost=<n>`) : combien
 de trames du variateur manquent à cet enregistrement.
 
-- Pour les trames que la prise a refusées, ce nombre est **exact si les deux
+- Sans fenêtre de repos, pour les trames que la prise a refusées, ce nombre est **exact si les deux
   lectures de frontière réussissent** : la
   console lit le compte des refus au début de l'armement et à la fin de la
   séance, et l'enregistrement compte la différence. Ce qu'une console au repos
@@ -389,7 +442,9 @@ de trames du variateur manquent à cet enregistrement.
 - Il reste un **majorant**, jamais inférieur à la perte réelle, dans trois
   cas : les trames que le fil du journal a lâchées lui-même faute de place ;
   et tout refus de la prise quand son compte n'a pas pu être lu au début de
-  l'armement. Ces trames sont comptées pour chaque séance dont l'intervalle
+  l'armement. La console utilise aussi ce majorant quand elle joint la
+  fenêtre de repos : elle n'a pas lu le compteur au début exact de cette
+  fenêtre retenue après coup. Ces trames sont comptées pour chaque séance dont l'intervalle
   recouvre celui où elles ont pu commencer, donc par deux enregistrements
   quand deux séances le recouvrent.
 - Si seul le compte de fin manque, le fil soustrait le compte d'armement du
@@ -398,20 +453,21 @@ de trames du variateur manquent à cet enregistrement.
   la séance. C'est donc aussi un majorant, mais calculé par différence de
   compteurs, sans attribution par recouvrement d'intervalles.
 
-La ligne ne dit pas elle-même lequel des deux comptes a servi. Sur la console,
-le premier est le seul attendu : le second n'a été obtenu qu'en test (une
-borne réduite, une lecture du compte rendue fautive), et une lecture du compte
-qui échoue est écrite dans le journal de la console. Le format ne change pas :
-c'est le même texte dans le `detail` d'un événement `warning`, qu'un lecteur
-plus ancien lit comme avant, et le nombre n'est jamais plus grand que celui
-que la console écrivait jusque-là pour la même séance. Les lignes sont celles de la séance, du début de
-son armement à sa fin : ce que la console demande au variateur hors séance
-(scrutation au repos, consigne nulle après une séance, départ refusé,
-réarmement de défaut) n'y est pas, ni avant ni après, même quand cela
-attendait avec les trames de la séance que le fil du journal vienne les
-prendre. Les échanges de l'armement précèdent l'ouverture de l'enregistrement
-(leur `t` est négatif) : ils y sont tous, parce que le fil du journal garde ce
-qu'il prend pendant un armement jusqu'à l'ouverture de l'enregistrement
+La ligne ne dit pas elle-même lequel des deux comptes a servi. Avec sa
+fenêtre de repos, la console utilise normalement le majorant par intervalles.
+Une lecture de compteur qui échoue est écrite dans le journal de la console.
+Le format ne change pas : c'est le même texte dans le `detail` d'un événement
+`warning`, qu'un lecteur plus ancien lit comme avant. Le compte additionne
+chaque intervalle de perte qui recouvre la fenêtre de cet enregistrement ;
+les intervalles entièrement extérieurs n'y entrent pas. Le début de la
+fenêtre de repos est une borne comme la fin de séance pour ce majorant :
+un intervalle qui le recouvre peut inclure une trame antérieure à la fenêtre.
+Les lignes
+vont désormais du premier tic de la fenêtre retenue à la fin de la séance.
+Les échanges de repos de cette fenêtre et ceux de l'armement y sont tous ;
+ceux de l'armement ont normalement `t > 0`, après le dernier tic de repos qui
+fixe l'origine. Le fil garde ce qu'il prend avant l'ouverture jusqu'à ce que
+l'enregistrement le réclame
 ([raspberry-pi.md](raspberry-pi.md#158-ce-qui-nest-pas-enregistré-aujourdhui)).
 
 Le point existant de simulation, `RecordingDrive`, est un wrapper de
@@ -434,6 +490,70 @@ l'horloge dure zéro ; aucun délai fictif n'est ajouté.
 Cette observation groupée concerne uniquement les backends sans transactions
 natives (dont le modèle simulé). Elle ne sert jamais à fabriquer les trames
 individuelles du pilote natif.
+
+Depuis ANH-192, une observation échouée (`ok: false`) peut porter un
+objet optionnel `error`. Sur une observation d'appel, `type` nomme une
+variante fermée de `DriveError` :
+
+| `error.type` | Autres champs, tous obligatoires pour cette variante |
+| --- | --- |
+| `CommTimeout` | `after`, durée finie positive ou nulle en secondes, indépendante de `latency_ms` |
+| `BadResponse` | aucun |
+| `UnexpectedState` | `expected`, `actual` : noms exacts des membres de `DriveState` |
+| `DriveFaulted` | `fault` : nom exact d'un membre de `DriveFault` ; `raw_code` : entier de 0 à 65535 |
+| `OutOfRange` | aucun |
+| `EnableUnconfirmed` | `reference_zeroed`, `run_command_removed` : booléens |
+| `StopUnconfirmed` | `waited`, durée finie positive ou nulle en secondes ; `last_output_rpm`, entier en tr/min moteur |
+
+Exemple : `"error":{"type":"EnableUnconfirmed","reference_zeroed":true,"run_command_removed":false}`.
+Ni `BadResponse.detail`, ni les diagnostics libres des autres variantes, ni
+`OutOfRange.quantity` ne sont écrits. Le runtime ne décide pas sur ces textes
+ou les nombres diagnostiques d'`OutOfRange`. Le rejeu restitue la variante et
+les champs du tableau ; les diagnostics omis deviennent un texte fixe. Une
+variante inconnue, un champ supplémentaire ou mal typé, un nombre non fini,
+ou une erreur sur un succès sont des erreurs de lecture, jamais des warnings.
+Sans `error`, le rejeu garde son comportement antérieur : `CommTimeout` avec
+`after = latency_ms / 1000`. `RecordingDrive` et la prise `CallTap` écrivent
+le champ pour les retours `Err` ; une exception levée n'est pas assimilée à
+une variante de `DriveError`. L'absence du champ reste omise à l'écriture.
+Sur les lignes natives, le pilote écrit la cause du maître, dans l'union
+fermée `ModbusFailure`. Le vrai pilote recalcule `DriveError` au rejeu depuis
+la réponse SDK correspondante ; aucune variante de `DriveError` n'est imbriquée.
+
+| `error.type` natif | Autres champs |
+| --- | --- |
+| `no_response` | aucun ; le SDK a retourné son objet d'absence de réponse |
+| `exception_response` | `code`, entier de 1 à 255 : code d'exception Modbus |
+| `wrong_function` | `code`, entier de 0 à 255 : fonction reçue en réponse à une écriture |
+| `port_closed` | aucun ; `connect` a rendu `false` |
+| `invalid_response` | `out_of_range`, booléen, faux par défaut ; distingue une valeur de registre hors domaine d'une réponse sans données utilisables |
+| `sdk_exception` | `category` parmi `connection`, `io`, `os`, `modbus`, `other` ; classes que le pilote distingue à la frontière SDK |
+
+Le texte de l'exception, ses octets et toute identité sont exclus. Les codes,
+types et catégories inconnus sont refusés par le reader, comme un champ
+supplémentaire, une erreur sur un succès, une cause native sur une observation
+d'appel ou une variante d'appel sur une ligne native. Les erreurs SDK levées
+pendant l'écriture d'urgence sont conservées aussi : un port refusé reste
+`NOTHING_SENT`, les autres exceptions restent `SENT_UNCONFIRMED`.
+
+Le reader vérifie aussi le kind : `port_closed` appartient seulement à
+`modbus_connect`, qui seul peut retourner `false` ; `sdk_exception` aux
+quatre opérations natives ; `no_response` et `exception_response` aux
+lectures et écritures ; `wrong_function` aux écritures, avec un code différent
+de 6 ; `invalid_response` aux lectures et écritures, `out_of_range: true`
+aux lectures seulement. Les fragments SDK ne portent aucune cause typée.
+Un code d'exception reçu hors de 1 à 255, dont 0, est enregistré comme
+`invalid_response`. Sans `error`, une lecture ou écriture native échouée
+restitue une absence de réponse SDK, donc le timeout calculé par le pilote ;
+une connexion échouée restitue `false`, une fermeture échouée sans cause
+reste sans exception restituable. La cause d'origine reste inconnue.
+
+`simulation/modbus.py` fournit un maître simulé adossé à `SimulatedDrive` :
+états CiA402, rampes et défauts viennent du modèle existant ; les réponses
+sont les objets du SDK construits dans son module d'isolation, sans recopier
+de parseur RTU. Les tests produisent une séance manuelle complète avec arrêt
+par le vrai `LocalPanel`, le vrai `ATV320Drive`, le journal de production et
+le vrai DSP. Aucune séance réelle ni aucun essai matériel n'est disponible.
 
 ## Échantillons bruts
 
@@ -458,6 +578,30 @@ en entiers signés 16 bits little-endian, **canal par canal** : tous les
 est exactement `2 × n_samples × nombre_de_canaux` octets. Il n'y a aucun
 padding ni octet final de séparation. Le writer ne remplace jamais un bloc.
 
+Depuis ANH-192, l'en-tête peut aussi porter
+`"runtime_delivery":{"t":0.45,"t_observed":0.25}`. Ces deux instants sont
+ensemble ou absents, finis, en secondes relatives au début monotone : `t` est
+l'instant effectif de l'appel `observe_ecg`, `t_observed` l'argument `now`
+transmis à cet appel. Le pont lit cet argument après le DSP, avant d'attendre
+la confirmation indépendante, puis remet une seule lecture au runtime après
+cette confirmation. Celle-ci ne fait aucun second appel au runtime. Il faut
+donc deux instants pour cet unique appel ; un lot sans lecture (`frame=None`)
+omet l'objet. Le reader exige `t_observed <= t` et, si `t_received` est
+présent, `t_received <= t_observed` ; toute inversion ou forme mal typée
+refuse le bloc. Le writer conserve la précision fournie, comme pour
+`t_received` ; l'ordonnancement du rejeu se fait à la milliseconde.
+
+Quand cet objet est présent, le rejeu repasse le lot dans le DSP et le pont
+à `t`, puis transmet la lecture avec `t_observed` : un tic antérieur à `t`
+ne la voit pas. Sans cet objet, il conserve la remise en ligne à
+`t_received` (ou, si celui-ci manque aussi, à la fin des échantillons).
+Le rejeu reste déterministe, sans fil ni horloge murale. La simulation omet
+`runtime_delivery` : son traitement en ligne n'introduit aucune attente sur
+son horloge déterministe et `t_received` suffit. La console produit
+`runtime_delivery` par une enveloppe du récepteur de lectures de
+l'`EcgBridge`, sans modifier le DSP : le lot attend en mémoire sa remise,
+puis le fil écrit l'en-tête complet.
+
 Les noms de voies autorisés sont ECG, EDA, SpO2, RESP, EMG et LUX. Les limites
 du contenant int16 sont vérifiées ; elles ne changent pas la résolution du
 convertisseur réel. Un bloc 1 absent entre 0 et 2 reste absent. Le reader ne
@@ -470,7 +614,9 @@ Sur la console du Pi, un bloc est un lot d'acquisition tel que reçu (200
 la numérotation est un lot que l'enregistreur a dû refuser (file pleine). Ce
 que le BITalino lui-même a perdu est dit par un événement `warning`
 (`bitalino_loss:`, avec les compteurs de la liaison), et se voit dans les
-`t_first`. Le premier bloc d'une séance peut commencer un peu avant `t = 0`.
+`t_first`. Chaque bloc porte `t_received`, lu dans `SessionRecorder.note_batch`
+quand le tap lui remet le lot. Le premier bloc est normalement dans la
+fenêtre de repos, plusieurs secondes avant `t = 0`.
 
 Dans les scénarios DSP, le tap placé avant le traitement capture tous les
 canaux acquis, avec `t_received`. Les blocs acquis pendant le repos qui précède
@@ -538,6 +684,55 @@ des données machine sans identité inconnue. Le recorder ne reconnaît pas
 magiquement un nom humain arbitraire : le test sentinelle prouve le respect
 de cette frontière explicite, pas une détection générale de personnes.
 
+### Import dans la bibliothèque de rejeu
+
+`python -m simulation.import_record` prépare une copie destinée à la
+bibliothèque, sans modifier la source. La procédure complète et ses options
+sont dans [framework-de-test.md §16.6](framework-de-test.md#166-ajouter-un-enregistrement).
+Le reader partagé refuse les formes inconnues ; l'import exige en plus une
+séance close et intacte, puis un rejeu possible avant l'archivage.
+
+La copie remplace les identifiants du manifeste par ceux dérivés du nom opaque
+de bibliothèque, ou par `anonymized` ; `session_id` et `subject_id` deviennent
+`null`. Les alias des acteurs deviennent `anonymized`, `system` et `remote`
+restent. Les détails d'événement ne gardent que les commandes validées et une
+liste fermée de faits machine, sans prose ni nombre physiologique. Les
+préfixes qui font refuser le rejeu ne sont pas cachés par le nettoyage.
+Dans `end_observation`, `stop_reason` et `shutdown_detail` deviennent `null` :
+ces deux textes libres peuvent contenir un nom, une fréquence cardiaque ou
+un port série. Tous les autres champs de cette observation restent identiques.
+
+Toutes les dates de séance deviennent la constante `2000-01-01T00:00:00Z` :
+`started_at`, `ended_at`, `clocks.utc_start`, le préfixe du dossier et
+`profile.resolved_at` (soit `946684800000` millisecondes Unix). Le profil
+conserve ses autres valeurs. `clocks.wall_trusted` et `clocks.ntp_offset_s`
+deviennent `null` : l'import ne porte aucun jugement sur l'horloge source.
+`software_version` devient `unversioned`, selon la règle d'export existante.
+Ni les instants relatifs, ni `clocks.monotonic_start`, ni le `config_hash`,
+la géométrie ou les autres champs des observations finales ne changent. Le document de
+configuration est vérifié et copié tel quel à côté de l'archive.
+
+Une sentinelle d'identité source, une date absolue reconnue ou une adresse
+dans les textes conservés refuse l'import, au lieu de réécrire une mesure ou
+une provenance supplémentaire. Le contrôle porte sur tous les fichiers,
+les en-têtes bruts décompressés et les octets de transport décodés. Il ne
+remplace pas la règle de production ci-dessus sur les noms inconnus. Le
+contenant gzip doit aussi être neutre, comme celui du writer : date nulle,
+aucun nom, commentaire ou champ supplémentaire, un seul membre gzip. Une
+autre enveloppe est refusée pour conserver tous les octets des blocs acceptés.
+Le writer partagé recalcule l'inventaire et les sommes de contrôle ; les autres
+octets des flux hors événements et des blocs bruts sont conservés. Les commandes
+validées sont réécrites par `commands.encode` après `parse`. Le rejeu de la
+copie doit garder le verdict, la comparaison de décisions et la divergence
+éventuelle du rejeu de la source ; sinon l'import refuse l'archivage.
+
+Ce nettoyage ne rend pas les mesures anonymes : tics et ECG brut restent des
+données de santé pseudonymisées. Le versement d'une vraie séance dans la
+bibliothèque du dépôt reste une décision humaine (ANH-172), distincte de la
+commande d'import. Aucune séance réelle n'existe dans le dépôt ; les preuves
+utilisent la console en simulation, y compris le pilote natif sous un maître
+Modbus simulé. L'import d'une vraie séance reste à faire quand elle existera.
+
 ## Ce qu'un enregistrement doit contenir pour être rejoué
 
 `python -m simulation.run --replay <dossier>` redonne un enregistrement à un
@@ -549,31 +744,181 @@ ce que l'enregistrement contient :
 | Entrée du runtime | Où elle est | Ce qu'il faut |
 | --- | --- | --- |
 | l'horloge de chaque tic | `ticks.csv`, colonne `t` | tous les tics, y compris ceux du repos avant le départ (`t ≤ 0`) : la scrutation du variateur au repos et la fenêtre du DSP font partie de l'état au départ |
-| les réponses du variateur | `drive_frames.jsonl` | les observations d'appel (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`, `read_failed`, `read_limits`), depuis le premier tic. Un fichier vide est refusé : rien ne dit ce que le variateur a répondu |
+| les réponses du variateur | `drive_frames.jsonl` | les observations d'appel (`open`, `close`, `command`, `speed`, `emergency_zero`, `read_status`, `read_failed`, `read_limits`), ou les échanges natifs (`modbus_connect`, `modbus_close`, `modbus_read`, `modbus_write`), depuis le premier tic. Mélanger les deux familles est refusé. Un fichier vide est refusé : rien ne dit ce que le variateur a répondu |
 | l'ECG | `ecg_raw/` | les blocs bruts depuis au moins 8 s avant le départ (la fenêtre du DSP), chacun avec `t_received` |
 | les demandes | `events.jsonl` | les commandes du tableau ci-dessus, pour les trois kinds d'entrée |
 
-Il faut aussi la géométrie du manifeste (`geometry`) : le runtime rejoué est
-construit avec elle. Quand il manque plusieurs de ces choses, le refus les
-donne ensemble, séparées par « ; ».
+Pour un producteur `machine_id: simulation`, il faut aussi la géométrie du
+manifeste (`geometry`) : elle construit le runtime, avec les limites du
+dépôt courant. Son `config_hash` de scénario n'est pas vérifié, ce que le
+rapport dit explicitement. Les archives produites par la simulation gardent ce comportement.
 
-**L'enregistrement que la console du Pi écrit aujourd'hui est refusé**, pour
-deux raisons que le rejeu énonce : ses événements d'entrée sont du texte
-(`manual session started`, `end_requested: done`) et non des commandes du
-tableau ci-dessus ; son manifeste n'a pas de géométrie. Son
-`drive_frames.jsonl` n'est plus vide (ANH-191) : en simulation il porte les
-observations d'appel, depuis l'ouverture de l'enregistrement. Il n'a pas les
-tics du repos (son premier tic est à `t = 0`), donc pas non plus les réponses
-du variateur à ces tics, ni `t_received` sur ses blocs ; et sur le pilote
-natif ses trames sont des échanges Modbus, que le rejeu ne sait pas encore
-redonner. Même structure ne veut donc pas encore dire rejouable :
-`test_record_console_parity.py` vérifie les deux, et que la console et la
-simulation écrivent les mêmes observations d'appel.
+Pour tout autre producteur, dont la console en simulation, le document de
+configuration appliquée décrit ci-dessous est obligatoire. Il fournit la
+géométrie sans inventer les rayons que la console ne connaît pas ; son
+manifeste conserve `geometry: null`. Quand plusieurs entrées manquent, le
+refus les donne ensemble, séparées par « ; ».
 
-À instant égal (à la milliseconde), l'ordre rejoué est : avant et jusqu'au
-départ (`t ≤ 0`), le tic puis les commandes ; pendant la séance (`t > 0`), les
+Pour les échanges natifs, `simulation/replay_modbus.py` est un maître de
+bande sous le vrai `ATV320Drive` ; le vrai `TrainingRuntime` utilise ce pilote.
+Chaque appel exige le même registre adressé (offset compris), la même valeur
+brute écrite et le même ordre, l'esclave de `native_drive.slave_address` et
+un seul registre par lecture. Les règles d'étape ci-dessous s'appliquent,
+y compris aux ouvertures et fermetures. Un appel sans réponse correspondante
+produit une divergence nommant les registres demandé et enregistré ; aucune
+exception de divergence ne remonte dans le tic. L'exécuteur et les attentes
+sont injectés pour ce rejeu déterministe ; en production restent le groupe
+privé à un fil et `asyncio.sleep`.
+
+Les lignes `modbus_send` et `modbus_receive_chunk` sont ignorées au rejeu :
+elles diagnostiquent le SDK et le transport, pas les entrées supplémentaires
+du runtime. Elles ne déplacent pas l'horloge une seconde fois. Les réponses
+de registre restent obligatoires ; des fragments SDK seuls sont refusés.
+
+### Configuration vérifiée au rejeu (EX-5)
+
+`src.record.session.applied_configuration` rend les octets UTF-8 du JSON
+canonique que `stamp_for` hache : clés triées, séparateurs sans espaces,
+aucun saut de ligne. L'empreinte reste identique pour une même configuration.
+Le document contient les limites de sécurité, de mouvement et du runtime,
+la géométrie appliquée (rayon de référence, rapport, vitesse nominale,
+fréquence de base, rayon des pieds ou `null`), l'âge minimal, les plafonds et
+portes de la console, les sources et voies, la caméra, la description du
+lien variateur, l'empreinte et le verdict de signature du fichier médical.
+Les limites sont les mêmes objets de domaine sérialisés que dans la console.
+Il ne contient ni identité, ni donnée de santé individuelle, ni clé du
+tableau de bord, ni jeton de console. Aucun nom libre de programme n'y entre.
+
+`drive_link` vaut `null` sans lien natif, sinon la constante `native`, sans
+port système, chemin by-id ni numéro d'adaptateur. Le document porte alors
+aussi `native_drive` :
+`baudrate`, `bytesize`, `parity`, `stopbits`, `timeout`, `slave_address`,
+`retries`, `offset`. Aucun port ni numéro de série n'y est ajouté. Le rejeu
+reconstruit `SerialSettings` et `RegisterMap` par leurs constructeurs ; il
+ne décode jamais la prose de `drive_link`. Un enregistrement natif sans ces
+réglages structurés est refusé : `native Modbus replay requires native_drive
+in the verified configuration document`. L'empreinte d'une configuration
+simulée sans lien reste identique à celle d'avant cet ajout. Celle d'une
+console native a changé à l'ajout de `native_drive`, puis change une fois de
+plus avec le retrait du port de `drive_link` ; aucune console déployée
+n'écrivait encore ce document. Un ancien lecteur de configuration refuse
+la clé nouvelle.
+
+Au démarrage, la console remet ces octets au journal, en mémoire. Le premier
+cycle du fil `record-journal` les écrit dans `config/<config_hash>.json` :
+jamais dans un tic ni dans la boucle de contrôle, et sans attente du départ
+de séance. Le dossier est en mode 700, le fichier est créé en mode 600.
+La borne `MAX_CONFIG_BYTES` est de 65 536 octets, à l'écriture et à la lecture.
+Un fichier identique existe déjà : il n'est ni remplacé ni réécrit. Un
+fichier différent au même nom est conservé et signalé. Disque plein,
+lecture seule, collision ou dépassement de taille donnent un événement
+`warning` préfixé `replay_config:` dans chaque enregistrement, avec une
+raison machine sans chemin ni texte d'exception. La séance continue ; le
+rejeu refuse cet avertissement. Un fichier partiellement écrit n'est pas
+réparé silencieusement.
+
+`config/` n'est jamais synchronisé, déposé, exporté par l'export de séance,
+ni purgé automatiquement. La sélection des séances filtre les noms par
+`RECORD_NAME` directement sous la racine ; curseurs et marqueurs ne sont
+pas cherchés récursivement. Le journal hors séance écrit seulement dans
+`logbook/`. `test_record_configuration.py` vérifie ces exclusions, avec un
+faux dossier de séance et des métadonnées placés sous `config/`.
+
+Pour rejouer une console, copier séparément son document et fournir
+`--config <fichier>`, ou le placer à côté de la source sous
+`<dossier>.config.json` ou `<archive sans .tar.gz>.config.json`. La bibliothèque
+lit aussi `<nom>.config.json` à côté de l'archive. Le rejeu exige
+`sha256(octets du document) == manifest.config_hash` avant de construire le
+runtime. Un document absent, illisible, trop grand ou refusé par les
+constructeurs du domaine donne `ReplayError`, code de sortie 2. Une
+empreinte différente nomme les 16 premiers caractères des deux empreintes,
+`manifest` et `document`. Même un espace ajouté change l'empreinte.
+
+Le runtime utilise la géométrie et toutes les limites du document vérifié,
+validées par les mêmes constructeurs que la console. Le rapport
+`configuration` porte `config_hash_verified`, `current_configuration_differs`
+et `differing_parts` (liste fermée : `medical_file`, `safety`, `motion`,
+`runtime`, `min_rider_age`). Il compare ces parties aux valeurs livrées
+par le dépôt ; `medical_file` couvre empreinte et signature. `not_compared`
+nomme `geometry`, `machine_ceilings`, `sources`, `camera`, `drive_link`,
+réglages propres à la machine sans valeur courante dans le dépôt. Une
+différence n'empêche pas le rejeu : il reste celui de la configuration
+enregistrée. Pour la simulation, `config_hash_verified` vaut `false` et
+`current_configuration_differs` vaut `null`.
+
+Le test croisé `test_record_console_parity.py` produit une séance manuelle
+avec changement de cible et arrêt, et une séance de programme, par le vrai
+`LocalPanel`, le variateur et BITalino simulés, le vrai DSP et une horloge
+simulée. Les deux rejeux donnent zéro tic différent, zéro tolérance consommée,
+avec pings de présence. Le cas où seul le fichier médical courant diffère
+reste identique et le rapport nomme `medical_file`.
+
+La fenêtre garde **12 s** (`PRESTART_SECONDS`) : les 8 s du DSP, plus 4 s de
+marge pour les frontières des lots de 0,2 s, le dernier tic de repos et une
+première remise décalée. Elle commence au plus tard des quatre frontières :
+
+- fin de l'enregistrement précédent : aucune ligne, aucun lot ni aucune
+  trame n'appartient aux deux enregistrements ;
+- premier tic de repos sans état verrouillé, après l'acquittement ou le
+  réarmement qui l'a levé ; aucun verrou antérieur n'est réinventé ;
+- dernière tentative de départ parvenue au runtime puis refusée, dont les
+  arguments peuvent différer de ceux du futur manifeste ;
+- les 12 dernières secondes conservées en mémoire.
+
+Les lignes, commandes et lots restent dans `SessionRecorder`, au plus 512
+valeurs et 100 000 échantillons, lot en traitement compris ; les trames
+restent dans le fil du journal, au plus 8192, plus la prise de 4096.
+Les nouveaux éléments au-delà d'une borne sont refusés et comptés sans
+attente ; le journal garde sa règle pour les trames les plus anciennes.
+L'expiration normale de la fenêtre n'est pas une perte. Un débordement de la
+fenêtre est annoncé par `record_degraded: dropped=...` à l'ouverture : ce
+compte conservateur comprend les refus depuis la dernière ouverture, même
+si leur instant est sorti depuis de la fenêtre. Si les blocs retenus ne
+couvrent pas 8 s continues avant l'origine, `replay_preamble:` le dit et le
+rejeu refuse. La durée est celle de la dernière plage continue acquise,
+lot en traitement compris, jusqu'au plus tôt de sa fin et de l'origine :
+aucun échantillon n'est exigé pile à l'origine. Un décalage d'acquisition de
+50 ms ne transforme donc pas 8 s présentes en une fenêtre courte. Une vraie
+plage courte après une rupture, ou coupée par la frontière de début de
+fenêtre, reste refusée explicitement. L'ouverture ne touche pas le disque
+et n'attend pas le fil.
+
+Un lot encore dans le DSP au tic `DONE` peut retarder la clôture seule, au
+plus jusqu'au tic suivant. La borne `Closing.until` reste celle de `DONE` :
+aucun tic, événement ni échange postérieur n'est ajouté. Une remise observée
+complète l'en-tête ; le lot suivant résout un lot sans lecture. À la borne,
+avant un autre départ ou à la sortie avec l'ECG annulé, un lot non résolu
+est écrit sans remise datée avec `replay_incomplete: pending_ecg_delivery` :
+le rejeu refuse au lieu de présumer une lecture. Le moteur et la boucle
+n'attendent jamais cette clôture.
+
+À instant égal (à la milliseconde), l'ordre rejoué est : avant et jusqu'à
+l'origine (`t ≤ 0`), le tic puis les commandes ; après l'origine (`t > 0`), les
 commandes puis le tic, comme la console vide sa boîte de commandes avant de
 tiquer ; `shutdown` vient toujours après le tic de son instant.
+Une remise ECG explicitement datée se place juste avant le tic : avant le
+tic puis les commandes si `t ≤ 0`, après les commandes puis avant le tic si
+`t > 0`. Plusieurs lots au même instant gardent l'ordre des blocs.
+
+Les fenêtres d'échanges sont ouvertes par les tics et les commandes qui
+peuvent appeler directement le variateur : départ programme ou manuel,
+`estop`, `fault_reset`, `shutdown`. Elles finissent juste avant la prochaine
+de ces étapes, selon l'instant de début des échanges. Remise ECG,
+`attendant_ping`, `attendant`, `presence_trip`, `latch_estop`, attestation,
+acquittement, `stop` et `manual_target` ne coupent pas une fenêtre : leurs
+méthodes ne font aucun appel variateur, même si leurs effets seront traités
+par le tic. Les entrées à instant égal restent groupées. Cette règle est
+commune aux observations d'appel et aux transactions natives.
+Une remise ECG est admise de 5 s avant le premier tic à 5 s après le plus
+tard du dernier tic et de l'observation finale éventuelle, avec la même
+tolérance numérique `INSTANT_EPSILON` que les échanges. Cette constante
+`DELIVERY_ADMISSION_MARGIN` est un plafond d'admission, pas une garantie
+temporelle du runtime : la clôture différée expire après les échanges du
+tic suivant, et une remise peut donc dépasser `DONE + 0,2 s`. La même marge
+couvre le début de la fenêtre retenue quand un tic de repos est long.
+Elle admet ces cas tant que les tics durent moins de quelques secondes ;
+un retard supérieur à 5 s reste refusé explicitement avant d'avancer
+l'horloge, y compris un instant absurde de valeur absolue `1e12`.
 
 L'horloge rejouée part de l'instant de la première entrée, tel qu'il est
 écrit, et avance par les intervalles enregistrés, arrondis à la milliseconde.
@@ -583,16 +928,15 @@ instants d'une séance réelle sont connus à la milliseconde : une décision
 prise à moins d'une milliseconde d'un seuil peut tomber un tic plus tôt ou
 plus tard au rejeu.
 
-Ce qu'un rejeu ne peut pas redonner aujourd'hui, parce que le format ou le
-producteur ne le porte pas :
+### Ce que le rejeu ne peut pas redonner
 
-- les échanges Modbus natifs (`modbus_read`, `modbus_write`, `modbus_send`,
-  `modbus_receive_chunk`) : il faudrait rejouer un maître Modbus sous le vrai
-  pilote ATV320. Un enregistrement qui en contient est refusé, pas rejoué à
-  moitié ;
-- la nature d'un échange en échec : chaque échec est rejoué comme une absence
-  de réponse. Le runtime ne distingue que deux variantes (étage de sortie
-  peut-être sous tension), que seul le pilote natif produit ;
+Le format ou le producteur ne porte pas ces informations :
+
+- les octets et le découpage des appels SDK (`modbus_send`,
+  `modbus_receive_chunk`) : ces lignes sont ignorées, les transactions de
+  registre sont rejouées sous le pilote ;
+- la nature d'un échange en échec qui ne porte pas `error`, et le délai de
+  remise au runtime d'un lot sans `runtime_delivery` ;
 - le courant moteur à mieux que 0,1 A, résolution du registre dans lequel
   l'observation est écrite ;
 - une fréquence cardiaque qui n'est pas passée par l'acquisition : le mode
@@ -600,9 +944,59 @@ producteur ne le porte pas :
   sont refusés au rejeu ;
 - une exception levée dans le tic d'origine, un saut de l'horloge murale
   pendant l'acquisition, une perte signalée par le lien d'acquisition sans
-  trou dans les horodatages.
+  trou dans les horodatages ;
+- l'entrelacement exact d'une remise ECG, d'un verdict caméra ou d'un clic
+  E-STOP pendant une attente du tic. Le runtime attend le service du
+  variateur avant d'observer l'ECG et d'évaluer le superviseur : sur la
+  console, ces entrées peuvent donc agir dans le tic déjà commencé. Le
+  rejeu finit ce tic avant de remettre l'entrée à son instant enregistré ;
+  elle agit au suivant. `runtime_delivery` et `latch_estop` conservent les
+  instants, mais ne désignent pas le point de reprise de cette coroutine.
+  Une transition seule peut décaler d'un tic dans la tolérance existante ;
+  une consigne, une phase ou l'ordre des appels peuvent aussi changer et
+  produire une différence ou divergence. Les tests d'attente utilisent le
+  vrai `LocalPanel` et le vrai runtime, avec une remise ECG et un verdict
+  caméra pendant le service. Les entrées entre deux tics gardent leur ordre.
+- les transactions entrelacées d'une commande qui appelle elle-même le
+  variateur pendant l'attente d'un tic, par exemple `estop`. La bande peut
+  alors contenir le début du tic, les échanges d'urgence, puis la fin du
+  tic. Le rejeu exécute le tic entier puis la commande : sa fenêtre s'arrête
+  à cette commande et il signale une divergence nommée à cet instant, sans
+  annoncer `MATCH`. La même limite concerne un départ, un réarmement ou une
+  sortie qui serait reçu ainsi ; les commandes de la boîte console sont
+  normalement traitées avant le tic, et la sortie après son arrêt.
+
+Le rejeu juge les décisions et l'accord des appels avec la bande, pas la
+validité physique de chaque entrée. Une lecture LFRD altérée isolément peut
+produire `BadResponse`, puis être tolérée par le runtime sans changer ses
+appels ni ses décisions : le rapport reste `MATCH`. Changer une cause
+d'échec entre deux variantes traitées de la même façon peut avoir le même
+effet. Une altération d'ETA qui change les requêtes suivantes, elle, diverge
+à cet instant. Le contrôle d'intégrité appartient aux sommes de contrôle ;
+un rejeu conforme ne remplace pas ce contrôle.
 
 ## Utilisation et compatibilité
+
+Le reader reste strict : une clé inconnue refuse la ligne ou le bloc. Les
+ajouts restent au schéma 2 et ne modifient ni le manifeste, ni les kinds
+d'événement. Les versions ci-dessous désignent les révisions du lecteur,
+pas une nouvelle valeur de `schema_version` :
+
+| Ajout | Première version qui le relit | Lecteur antérieur |
+| --- | --- | --- |
+| `t_received` dans l'en-tête brut | ANH-131 | refuse le bloc (clé inconnue) |
+| `error` dans `drive_frames.jsonl` | ANH-192 | refuse la ligne (clé inconnue) |
+| causes natives de `error` et `modbus_connect` / `modbus_close` | rejeu Modbus d'ANH-192 | le reader antérieur refuse une cause inconnue ; sans cause, l'ancien rejeu refuse les lignes natives (code 2) |
+| `runtime_delivery` dans l'en-tête brut | ANH-192 | refuse le bloc (clé inconnue) |
+| commande `attendant_ping` | ANH-192 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
+| commande `presence_trip` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; ni kind ni champ de manifeste nouveau |
+| commande `latch_estop` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; le verrou immédiat de la surface est distinct de l'appel `estop` du runtime |
+
+Une commande mal écrite sous un kind d'entrée est aussi refusée par le rejeu
+avec sa raison. Le reader ne décode pas les commandes : il doit pouvoir
+relire les anciens événements en prose de la console. Les nouveaux champs
+optionnels absents se relisent et se rejouent comme avant. `attendant present=`
+garde son sens continu pour la simulation ; il ne remplace pas les pings.
 
 Depuis la racine, avec l'environnement Python existant :
 
@@ -611,7 +1005,20 @@ PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m simulation.run manual
 PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m simulation.live --port 8765
 ```
 
-Ouvrir `/?trace=out/<dossier>` pour le schéma 2. Le serveur utilise le reader
+Ouvrir `/?trace=out/<dossier>` ou `/?trace=out/<nom>.tar.gz` pour le schéma 2.
+Pour une archive, le serveur extrait temporairement par la même fonction que
+la bibliothèque : chemins confinés par `resolve_under`, fichiers ordinaires
+seulement, au plus 512 Mio de tailles effectives et 40 000 membres (dossiers
+et doublons compris), vérifiés avant l'écriture du membre suivant. Un second
+compteur borne les octets réellement lus du flux décompressé à 512 Mio plus
+40 930 240 octets (`MAX_ARCHIVE_HEADER_BYTES` : un en-tête de 512 octets et
+au plus 511 octets de padding par membre, plus un bloc tar de 10 240 octets).
+Les extensions PAX et GNU longues, invisibles dans l'itérateur public,
+partagent ce plafond d'octets, sans compter comme membres. Aucune surcharge
+de `TarInfo` ou `TarFile` ne porte ces bornes. Les tailles négatives, tailles
+non nulles hors fichiers ordinaires, en-têtes invalides et erreurs de
+décompression donnent un refus nommé. Il retire ensuite sa copie
+temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du
 schéma 1. `Trace.write_jsonl()` reste un export de compatibilité explicite ;

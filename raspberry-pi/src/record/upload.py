@@ -13,7 +13,7 @@ Two streams are read, each from a byte offset, a bounded amount at a time:
   reading it again, from the same place or from the beginning, gives the same
   points with the same dates, which is what lets the dashboard recognise one it
   already has;
-* ``events.jsonl`` gives the **events**, each with its rank in the file.
+* ``events.jsonl`` gives the **events**, ranked after omitting local-only lines.
 
 Dates
 -----
@@ -45,10 +45,13 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Final, Literal, cast
 
+from src.record import commands
 from src.record.codec import IDENTIFIER
+from src.record.commands import INPUT_KINDS
 from src.record.cursor import (
     Baseline,
     Cursor,
@@ -442,7 +445,7 @@ class Events:
     events: tuple[Wire, ...]
     offset: int
     last_seq: int
-    """Rank of the last line taken, readable or not; unchanged when none was."""
+    """Last transmitted rank, including unreadable lines; local-only lines take no rank."""
 
     more: bool
     skipped: int
@@ -452,8 +455,12 @@ class Events:
     """``offset`` is inside a line too long to be an event, which is being passed over."""
 
 
-def _event(raw: bytes, seq: int, start_ms: int) -> Wire | None:
-    """One line of ``events.jsonl`` as the dashboard takes it, or ``None`` if it is not one."""
+class _Omitted(Enum):
+    LOCAL = "local"
+
+
+def _event(raw: bytes, seq: int, start_ms: int) -> Wire | _Omitted | None:
+    """One wire event, a local omission, or ``None`` for an unreadable line."""
     try:
         parsed: object = json.loads(raw)  # pyright: ignore[reportAny]  # narrowed below
     except ValueError:
@@ -477,6 +484,8 @@ def _event(raw: bytes, seq: int, start_ms: int) -> Wire | None:
         or len(actor) > _ACTOR_MAX
     ):
         return None
+    if t < 0 or (kind in INPUT_KINDS and detail == commands.encode(commands.AttendantPing())):
+        return _Omitted.LOCAL
     return {
         "seq": seq,
         "t": start_ms + round(t * 1000),
@@ -498,9 +507,9 @@ def read_events(
 ) -> Result[Events, RecordError]:
     """At most ``limit`` events of ``record`` from ``offset``. Blocking; never raises.
 
-    The rank of an event is the rank of its line in the file, counted from 0:
-    it never changes, the file is only ever appended to. A line that is not an
-    event keeps its rank and is passed over.
+    Ranks start at 0 after omitting presence pings and negative-time events.
+    An unreadable line still takes a rank. Resuming from ``offset`` and
+    ``last_seq`` gives the same ranks as a new reading from the beginning.
     """
     try:
         found = _lines(record / "events.jsonl", offset, chunk, mid=mid_line)
@@ -517,6 +526,9 @@ def read_events(
         event = _event(raw, seq, start_ms)
         if event is None:
             skipped += 1
+            continue
+        if event is _Omitted.LOCAL:
+            seq -= 1
             continue
         events.append(event)
         if len(events) == limit:

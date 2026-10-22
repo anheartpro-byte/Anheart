@@ -782,8 +782,14 @@ def logbook_lines(records: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def warnings_in(records: Path) -> list[dict[str, object]]:
-    return [line for line in logbook_lines(records) if line["kind"] == "warning"]
+def unclean_warnings_in(records: Path) -> list[dict[str, object]]:
+    return [
+        line
+        for line in logbook_lines(records)
+        if line["kind"] == "warning"
+        and isinstance(detail := line.get("detail"), str)
+        and detail.startswith("unclean_stop:")
+    ]
 
 
 @pytest.mark.slow
@@ -808,8 +814,8 @@ async def test_ex3_a_start_after_a_killed_session_writes_a_warning_naming_the_op
     assert status.open_record == left[0].name
     assert status.unclean_starts == 1
     assert not status.out_of_service
-    await until(lambda: bool(warnings_in(records)), 5.0, "the warning in the logbook")
-    said = warnings_in(records)
+    await until(lambda: bool(unclean_warnings_in(records)), 5.0, "the warning in the logbook")
+    said = unclean_warnings_in(records)
     assert len(said) == 1
     assert said[0]["actor"] == "system"
     assert said[0]["detail"] == (
@@ -826,7 +832,7 @@ async def test_ex3_a_start_after_a_killed_session_writes_a_warning_naming_the_op
     assert third_service is not None
     assert not third_service.status().unclean_stop
     assert await end(third) == EXIT_OK
-    assert len(warnings_in(records)) == 1
+    assert len(unclean_warnings_in(records)) == 1
 
 
 # =========================================================================

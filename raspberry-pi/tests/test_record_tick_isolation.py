@@ -734,6 +734,11 @@ async def test_ex2_no_tick_touches_the_records_directory_or_calls_fsync(
         journal.start()
         writing = journal_threads()[0].ident
         assert writing is not None
+        for _ in range(60):
+            await rig.tick(0.2)
+        recorder = rig.panel.recorder
+        assert recorder is not None
+        assert recorder.prestart_size[0] > 0
         assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
         assert isinstance(
             surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
@@ -820,11 +825,17 @@ async def test_ex3_a_disk_that_never_answers_stalls_the_record_and_never_the_loo
 
     async def operate(panel: LocalPanel) -> tuple[RuntimeState, Cause | None, bool]:
         surface = panel.surface
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(12.3)
+        recorder = panel.recorder
+        assert recorder is not None
+        assert recorder.prestart_size[0] > 40
+        assert recorder.prestart_size[1] >= 8000
         assert isinstance(surface.attest_estop_wiring(OPERATOR), Ok)
         assert isinstance(
             surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR), Ok
         )
+        await asyncio.sleep(0.4)
+        assert panel.runtime.state is RuntimeState.RUNNING
         for _ in range(35):  # 7 s: longer than the 5 s after which a stall is declared
             surface.note_presence(OPERATOR)
             await asyncio.sleep(0.2)

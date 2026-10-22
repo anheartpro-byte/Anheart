@@ -4,24 +4,92 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import Lock
-from typing import Final, Literal, Protocol, runtime_checkable
+from typing import Annotated, Final, Literal, Protocol, runtime_checkable
+
+from pydantic import ConfigDict, Field
+from pydantic.dataclasses import dataclass as validated
 
 from src.clock import Clock
 from src.units import Monotonic, RawRegister, RegisterAddress
 
+WRITE_SINGLE_REGISTER_CODE: Final[int] = 6
+"""Modbus function code required for a write acknowledgement, unlike a read's register block."""
+
 
 class ExchangeKind(StrEnum):
+    CONNECT = "modbus_connect"
+    CLOSE = "modbus_close"
     READ = "modbus_read"
     WRITE = "modbus_write"
     SEND = "modbus_send"
     RECEIVE_CHUNK = "modbus_receive_chunk"
 
 
+FAILURE_CONFIG = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False)
+
+
+@validated(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class NoResponse:
+    type: Literal["no_response"] = "no_response"
+
+
+@validated(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class ExceptionReply:
+    type: Literal["exception_response"] = "exception_response"
+    code: Annotated[int, Field(ge=1, le=255)]
+
+
+@validated(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class WrongFunction:
+    type: Literal["wrong_function"] = "wrong_function"
+    code: Annotated[int, Field(ge=0, le=255)]
+
+
+@validated(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class PortClosed:
+    type: Literal["port_closed"] = "port_closed"
+
+
+@validated(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class InvalidReply:
+    type: Literal["invalid_response"] = "invalid_response"
+    out_of_range: bool = False
+
+
+class SdkError(StrEnum):
+    CONNECTION = "connection"
+    IO = "io"
+    OS = "os"
+    MODBUS = "modbus"
+    OTHER = "other"
+
+
+@validated(frozen=True, slots=True, kw_only=True, config=FAILURE_CONFIG)
+class SdkException:
+    type: Literal["sdk_exception"] = "sdk_exception"
+    category: SdkError
+
+
+type ModbusFailure = Annotated[
+    NoResponse | ExceptionReply | WrongFunction | PortClosed | InvalidReply | SdkException,
+    Field(discriminator="type"),
+]
+
+MODBUS_FAILURES: Final = (
+    NoResponse,
+    ExceptionReply,
+    WrongFunction,
+    PortClosed,
+    InvalidReply,
+    SdkException,
+)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RegisterRequest:
     at: Monotonic
-    kind: Literal[ExchangeKind.READ, ExchangeKind.WRITE]
-    register: RegisterAddress
+    kind: Literal[ExchangeKind.READ, ExchangeKind.WRITE, ExchangeKind.CONNECT, ExchangeKind.CLOSE]
+    register: RegisterAddress | None
     value: RawRegister | None
 
 
@@ -35,6 +103,7 @@ class Exchange:
     latency_ms: float
     detail: str
     raw_hex: str | None = None
+    error: ModbusFailure | None = None
 
 
 TRANSPORT_KINDS: Final[frozenset[ExchangeKind]] = frozenset(
@@ -96,7 +165,7 @@ class ExchangeLog:
 
     @property
     def refused(self) -> int:
-        """Exchanges refused so far because the log was full: what :meth:`drain` reports.
+        """Exchanges lost to capacity or observation failures: what :meth:`drain` reports.
 
         Read without taking anything out, and without the lock: one ``int``,
         whole at any instant, for whoever needs the count at a moment of its
@@ -112,6 +181,10 @@ class ExchangeLog:
                 self._refused += 1
                 return
             self._entries.append(exchange)
+
+    def refuse(self) -> None:
+        with self._appending:
+            self._refused += 1
 
     def drain(self) -> Drained:
         """Take out everything that waits now, oldest first. No lock: see the class."""

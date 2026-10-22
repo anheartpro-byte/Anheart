@@ -160,7 +160,12 @@ async def test_a_session_under_a_refused_contract_is_sent_whole_and_closed_once_
         for body in dashboard.to(EVENTS)
         for event in cast("list[dict[str, object]]", body["events"])
     ]
-    assert ranks == list(range(len(recording_.value.events)))
+    expected_ranks = [
+        seq
+        for seq, event in enumerate(recording_.value.events)
+        if event.t >= 0 and event.detail != "attendant_ping"
+    ]
+    assert ranks == list(range(len(expected_ranks)))
     ends = dashboard.to(END)
     assert len(ends) == 1
     assert (ends[0]["sessionId"], ends[0]["failed"], ends[0]["reason"]) == (
@@ -205,7 +210,7 @@ async def test_on_the_console_the_records_directory_holds_a_logbook_that_is_neve
     root = journal.root
     (record,) = records(root)
     assert sorted(entry.name for entry in root.iterdir()) == sorted(
-        [record.name, cursor_of(record).name, BASELINE_NAME, LOGBOOK]
+        [record.name, cursor_of(record).name, BASELINE_NAME, LOGBOOK, "config"]
     )
     assert wider_than_private(root) == {}
     closed = load(record)
@@ -216,7 +221,7 @@ async def test_on_the_console_the_records_directory_holds_a_logbook_that_is_neve
         cast("dict[str, object]", json.loads(line))
         for line in (root / LOGBOOK / LOGBOOK_ACTIVE).read_text(encoding="utf-8").splitlines()
     ]
-    assert "start_requested" in [line["detail"] for line in noted]
+    assert "console: start_requested" in [line["detail"] for line in noted]
     recording_ = read(record)
     assert isinstance(recording_, Ok)
     sent = [
@@ -224,12 +229,19 @@ async def test_on_the_console_the_records_directory_holds_a_logbook_that_is_neve
         for body in dashboard.to(EVENTS)
         for event in cast("list[dict[str, object]]", body["events"])
     ]
-    assert [event["seq"] for event in sent] == list(range(len(recording_.value.events)))
-    assert "start_requested" not in [event["detail"] for event in sent]
+    expected = [
+        seq
+        for seq, event in enumerate(recording_.value.events)
+        if event.t >= 0 and event.detail != "attendant_ping"
+    ]
+    assert [event["seq"] for event in sent] == list(range(len(expected)))
+    assert "console: start_requested" not in [event["detail"] for event in sent]
     # The next start lists nothing: the session is whole on the dashboard, and the logbook
     # is no record.
     assert owed_records(root) == Ok(Listed(()))
     assert not (root / f"{LOGBOOK}.sync.json").exists()
+    assert not (root / "config.sync.json").exists()
+    assert list((root / "config").glob("*.json"))
 
 
 @pytest.fixture

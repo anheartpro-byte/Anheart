@@ -113,8 +113,8 @@ import asyncio
 import logging
 import threading
 from abc import abstractmethod
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Awaitable, Callable, Sequence
+from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Final, Protocol, assert_never, final, override, runtime_checkable
 
@@ -122,6 +122,8 @@ from pymodbus.client import ModbusSerialClient
 from pymodbus.exceptions import ConnectionException, ModbusException, ModbusIOException
 from pymodbus.framer import FramerType
 from pymodbus.pdu import ExceptionResponse, ModbusPDU
+from pymodbus.pdu.register_read_message import ReadHoldingRegistersResponse
+from pymodbus.pdu.register_write_message import WriteSingleRegisterResponse
 
 from src.clock import Clock
 from src.motor.acquisition import AcquisitionEvidence
@@ -163,16 +165,26 @@ from src.motor.ftdi_link import (
 )
 from src.motor.link_health import LinkHealth
 from src.motor.observation import (
+    WRITE_SINGLE_REGISTER_CODE,
+    ExceptionReply,
     Exchange,
     ExchangeKind,
     ExchangeLog,
+    InvalidReply,
+    ModbusFailure,
+    NoResponse,
     ObservableDrive,
+    PortClosed,
     RegisterRequest,
+    SdkError,
+    SdkException,
+    WrongFunction,
 )
 from src.result import Err, Ok, Result, err_of
 from src.units import (
     Monotonic,
     MotorRpm,
+    OutOfRange,
     RawRegister,
     RegisterAddress,
     Seconds,
@@ -224,21 +236,7 @@ class ModbusMaster(Protocol):
         """Modbus function 6."""
 
 
-WRITE_SINGLE_REGISTER_CODE: Final[int] = 6
-"""Modbus function code 6, checked on every write reply.
-
-Without it, any object pymodbus's framer managed to decode counts as an
-acknowledgement - including the answer to a previous READ, which on a noisy
-half-duplex pair is exactly what turns up. "The write was acked" would then be
-a statement about the framer rather than about the drive.
-
-There is deliberately no matching check on the READ path, and it is not an
-oversight: a read reply is already validated by the thing a read actually needs
-(a register block of exactly one value, in range), which no other PDU shape can
-satisfy - ``ModbusPDU`` declares ``registers`` without assigning it, so a write
-echo decoded into a read's window fails there instead. Adding a redundant
-function-code test there would only make that branch unreachable.
-"""
+MODBUS_EXCEPTION_MAX: Final[int] = 0xFF
 
 
 # --- Transport defaults, from the commissioning notes and the bench -----
@@ -711,6 +709,96 @@ def _new_executor() -> ThreadPoolExecutor:
     return ThreadPoolExecutor(max_workers=1, thread_name_prefix="atv320")
 
 
+def register_reply(values: Sequence[int]) -> object:
+    """Build an SDK response at its isolation boundary, without decoding wire bytes."""
+    return ReadHoldingRegistersResponse(values=list(values))  # type: ignore[no-untyped-call]  # SDK constructor has no annotations
+
+
+def write_reply(address: int, value: int) -> object:
+    """Build the SDK's function-6 echo for an injected master."""
+    return WriteSingleRegisterResponse(address=address, value=value)  # type: ignore[no-untyped-call]  # SDK constructor has no annotations
+
+
+def failure_reply(failure: ModbusFailure) -> object:  # one SDK shape per cause
+    """Restore a master's failure through the same SDK shapes the real driver interprets."""
+    match failure:
+        case NoResponse():
+            return ModbusIOException("recorded no response")  # type: ignore[no-untyped-call]  # SDK constructor has no annotations
+        case ExceptionReply():
+            return ExceptionResponse(3, failure.code)
+        case WrongFunction():
+            reply = WriteSingleRegisterResponse(address=0, value=0)  # type: ignore[no-untyped-call]  # SDK constructor has no annotations
+            reply.function_code = failure.code
+            return reply
+        case PortClosed():
+            raise ConnectionException("recorded closed port")  # type: ignore[no-untyped-call]  # SDK constructor has no annotations
+        case InvalidReply():
+            return register_reply((65536,)) if failure.out_of_range else None
+        case SdkException():
+            return _raise_sdk_failure(failure.category)
+    raise assert_never(failure)
+
+
+def _raise_sdk_failure(category: SdkError) -> object:
+    match category:
+        case SdkError.CONNECTION:
+            raise ConnectionException("recorded SDK failure")  # type: ignore[no-untyped-call]  # SDK constructor has no annotations
+        case SdkError.IO:
+            raise ModbusIOException("recorded SDK failure")  # type: ignore[no-untyped-call]  # SDK constructor has no annotations
+        case SdkError.OS:
+            raise OSError("recorded SDK failure")
+        case SdkError.MODBUS:
+            raise ModbusException("recorded SDK failure")  # type: ignore[no-untyped-call]  # SDK constructor has no annotations
+        case SdkError.OTHER:
+            raise RuntimeError("recorded SDK failure")
+    raise assert_never(category)
+
+
+def _observation_fields(
+    request: RegisterRequest, result: Result[RawRegister | None, DriveError]
+) -> tuple[RawRegister | None, str]:
+    match result:
+        case Ok(returned):
+            return (request.value if returned is None else returned), "ok"
+        case Err(error):
+            return request.value, type(error).__name__
+    raise assert_never(result)
+
+
+def _native_failure(
+    reply: object, *, raised: bool, out_of_range: bool, writing: bool = False
+) -> ModbusFailure:
+    if raised:
+        if isinstance(reply, ConnectionException):
+            category = SdkError.CONNECTION
+        elif isinstance(reply, ModbusIOException):
+            category = SdkError.IO
+        elif isinstance(reply, ModbusException):
+            category = SdkError.MODBUS
+        elif isinstance(reply, OSError):
+            category = SdkError.OS
+        else:
+            category = SdkError.OTHER
+        return SdkException(category=category)
+    if isinstance(reply, ModbusException):
+        if isinstance(reply, ConnectionException | ModbusIOException):
+            return NoResponse()
+        return SdkException(category=SdkError.MODBUS)
+    if isinstance(reply, ExceptionResponse):
+        return (
+            ExceptionReply(code=reply.exception_code)
+            if 1 <= reply.exception_code <= MODBUS_EXCEPTION_MAX
+            else InvalidReply()
+        )
+    if (
+        writing
+        and isinstance(reply, ModbusPDU)
+        and reply.function_code != WRITE_SINGLE_REGISTER_CODE
+    ):
+        return WrongFunction(code=reply.function_code)
+    return InvalidReply(out_of_range=out_of_range)
+
+
 # Why this module uses `isinstance(outcome, Err)` early returns rather than
 # `match Ok()/Err()` throughout: it never BRANCHES on which DriveError it got,
 # it only propagates one. The nested-match-plus-`assert_never` discipline of
@@ -745,6 +833,7 @@ class ATV320Drive:
         "_emergency_budget",
         "_exchange_log",
         "_executor",
+        "_executor_factory",
         "_health",
         "_lock",
         "_master",
@@ -754,6 +843,7 @@ class ATV320Drive:
         "_settle_delay",
         "_stop_attempts",
         "_stop_poll_interval",
+        "_wait",
         "_wire_lock",
     )
 
@@ -769,6 +859,8 @@ class ATV320Drive:
         settle_delay: Seconds = DEFAULT_SETTLE_DELAY,
         stop_attempts: int = DEFAULT_STOP_ATTEMPTS,
         stop_poll_interval: Seconds = DEFAULT_STOP_POLL_INTERVAL,
+        executor_factory: Callable[[], Executor] = _new_executor,
+        wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError(
@@ -830,7 +922,9 @@ class ATV320Drive:
         # the emergency path takes it with a BOUNDED wait so it degrades to
         # "write anyway" rather than queueing behind the fault it is reacting to.
         self._wire_lock: threading.Lock = threading.Lock()
-        self._executor: ThreadPoolExecutor = _new_executor()
+        self._executor_factory: Callable[[], Executor] = executor_factory
+        self._executor: Executor = executor_factory()
+        self._wait: Callable[[float], Awaitable[None]] = wait
 
         self._health: LinkHealth = LinkHealth(failure_threshold)
 
@@ -892,7 +986,7 @@ class ATV320Drive:
             # A previous close() shut the pool down; a fresh one keeps this
             # object reusable without a branch only production would take.
             self._executor.shutdown(wait=False)
-            self._executor = _new_executor()
+            self._executor = self._executor_factory()
             self._closed = False
             self._close_error = None
 
@@ -1306,7 +1400,7 @@ class ATV320Drive:
                 return outcome
             if outcome.value is expected or outcome.value is DriveState.FAULT:
                 return outcome
-            await asyncio.sleep(self._settle_delay)
+            await self._wait(self._settle_delay)
             outcome = await self._observe_state()
         return outcome
 
@@ -1440,7 +1534,7 @@ class ATV320Drive:
         observed = MotorRpm(0)
         for attempt in range(self._stop_attempts):
             if attempt > 0:
-                await asyncio.sleep(self._stop_poll_interval)
+                await self._wait(self._stop_poll_interval)
             reading = await self._read(self._registers.rfrd)
             if isinstance(reading, Err):
                 return Err(reading.error)
@@ -1676,14 +1770,25 @@ class ATV320Drive:
 
     def _blocking_connect(self) -> Result[None, DriveError]:
         started = self._clock.monotonic()
+        failure: ModbusFailure | None = None
         try:
             with self._wire_lock:
                 opened = self._master.connect()
         except Exception as exc:
-            return Err(self._classify(exc, started))
-        if not opened:
-            return Err(CommTimeout(after=elapsed(started, self._clock.monotonic())))
-        return Ok(None)
+            result: Result[None, DriveError] = Err(self._classify(exc, started))
+            failure = _native_failure(exc, raised=True, out_of_range=False)
+        else:
+            if opened:
+                result = Ok(None)
+            else:
+                result = Err(CommTimeout(after=elapsed(started, self._clock.monotonic())))
+                failure = PortClosed()
+        self._observe_exchange(
+            RegisterRequest(at=started, kind=ExchangeKind.CONNECT, register=None, value=None),
+            result,
+            failure=failure,
+        )
+        return result
 
     def _blocking_close(self) -> None:
         """Release the port. Swallows everything: there is no useful failure here.
@@ -1692,11 +1797,19 @@ class ATV320Drive:
         stopped using, and the caller's real question - "is the motor still
         commanded?" - is answered by the stop attempt, not by this.
         """
+        started = self._clock.monotonic()
+        failure: ModbusFailure | None = None
         try:
             with self._wire_lock:
                 self._master.close()
-        except Exception:
+        except Exception as exc:
+            failure = _native_failure(exc, raised=True, out_of_range=False)
             logger.exception("ATV320: releasing %s failed", self._settings.port)
+        self._observe_exchange(
+            RegisterRequest(at=started, kind=ExchangeKind.CLOSE, register=None, value=None),
+            Ok(None) if failure is None else Err(BadResponse(detail="port close failed")),
+            failure=failure,
+        )
 
     def observe_exchanges(self, log: ExchangeLog) -> None:
         self._exchange_log = log
@@ -1707,48 +1820,58 @@ class ATV320Drive:
         self,
         request: RegisterRequest,
         result: Result[RawRegister | None, DriveError],
+        *,
+        reply: object = None,
+        raised: bool = False,
+        failure: ModbusFailure | None = None,
     ) -> None:
-        if self._exchange_log is not None:
-            match result:
-                case Ok(returned):
-                    self._exchange_log.append(
-                        Exchange(
-                            at=request.at,
-                            kind=request.kind,
-                            register=request.register,
-                            value=request.value if returned is None else returned,
-                            ok=True,
-                            latency_ms=(self._clock.monotonic() - request.at) * 1000,
-                            detail="ok",
-                        )
+        log = self._exchange_log
+        if log is None:
+            return
+        value, detail = _observation_fields(request, result)
+        try:
+            if isinstance(result, Err):
+                failure = (
+                    failure
+                    if failure is not None
+                    else _native_failure(
+                        reply,
+                        raised=raised,
+                        out_of_range=isinstance(result.error, OutOfRange),
+                        writing=request.kind is ExchangeKind.WRITE,
                     )
-                case Err(error):
-                    self._exchange_log.append(
-                        Exchange(
-                            at=request.at,
-                            kind=request.kind,
-                            register=request.register,
-                            value=request.value,
-                            ok=False,
-                            latency_ms=(self._clock.monotonic() - request.at) * 1000,
-                            detail=type(error).__name__,
-                        )
-                    )
-                case _ as unreachable:
-                    assert_never(unreachable)
+                )
+            log.append(
+                Exchange(
+                    at=request.at,
+                    kind=request.kind,
+                    register=request.register,
+                    value=value,
+                    ok=isinstance(result, Ok),
+                    latency_ms=(self._clock.monotonic() - request.at) * 1000,
+                    detail=detail,
+                    error=failure,
+                )
+            )
+        except Exception:
+            log.refuse()
 
     def _blocking_read(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
         started = self._clock.monotonic()
         observed_started = started
+        reply: object = None
+        raised = False
         try:
             with self._wire_lock:
                 self._health.note_request()
                 if self._exchange_log is not None:
                     observed_started = self._clock.monotonic()
-                reply: object = self._master.read_holding_registers(
+                reply = self._master.read_holding_registers(
                     address, count=1, slave=self._settings.slave_address
                 )
         except Exception as exc:
+            reply = exc
+            raised = True
             result: Result[RawRegister, DriveError] = Err(self._classify(exc, started))
         else:
             result = self._interpret_read(reply, address, started)
@@ -1757,6 +1880,8 @@ class ATV320Drive:
                 at=observed_started, kind=ExchangeKind.READ, register=address, value=None
             ),
             result,
+            reply=reply,
+            raised=raised,
         )
         return result
 
@@ -1765,15 +1890,19 @@ class ATV320Drive:
     ) -> Result[None, DriveError]:
         started = self._clock.monotonic()
         observed_started = started
+        reply: object = None
+        raised = False
         try:
             with self._wire_lock:
                 self._health.note_request()
                 if self._exchange_log is not None:
                     observed_started = self._clock.monotonic()
-                reply: object = self._master.write_register(
+                reply = self._master.write_register(
                     address, value, slave=self._settings.slave_address
                 )
         except Exception as exc:
+            reply = exc
+            raised = True
             result: Result[None, DriveError] = Err(self._classify(exc, started))
         else:
             result = self._interpret_write(reply, address, started)
@@ -1782,6 +1911,8 @@ class ATV320Drive:
                 at=observed_started, kind=ExchangeKind.WRITE, register=address, value=value
             ),
             result,
+            reply=reply,
+            raised=raised,
         )
         return result
 
@@ -1850,6 +1981,8 @@ class ATV320Drive:
                         at=started, kind=ExchangeKind.WRITE, register=address, value=value
                     ),
                     Err(self._classify(exc, started)),
+                    reply=exc,
+                    raised=True,
                 )
             return EmergencyStopOutcome.NOTHING_SENT
         except Exception as exc:
@@ -1868,6 +2001,8 @@ class ATV320Drive:
                         at=started, kind=ExchangeKind.WRITE, register=address, value=value
                     ),
                     Err(self._classify(exc, started)),
+                    reply=exc,
+                    raised=True,
                 )
             return EmergencyStopOutcome.SENT_UNCONFIRMED
         finally:
@@ -1877,6 +2012,7 @@ class ATV320Drive:
         self._observe_exchange(
             RegisterRequest(at=started, kind=ExchangeKind.WRITE, register=address, value=value),
             result,
+            reply=reply,
         )
         if isinstance(result, Err):
             logger.error(

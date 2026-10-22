@@ -33,6 +33,7 @@ from src.local_panel import (
 )
 from src.medical import SHIPPED_DOCUMENT
 from src.motor.drive import DriveFault
+from src.record import commands
 from src.record import journal as journal_module
 from src.record.journal import (
     MIN_FREE_BYTES,
@@ -64,7 +65,7 @@ from src.record.session import (
     stamp_for,
     storage_gate,
 )
-from src.result import Ok
+from src.result import Err, Ok
 from src.training.motion import DEFAULT_MOTION_LIMITS
 from src.training.plan import ProfileStore, Program
 from src.training.runtime import EndReason, RecordStorageLow, RuntimeLimits, RuntimeState
@@ -148,7 +149,8 @@ async def test_ex1_a_manual_session_is_recorded_from_arming_to_its_end(tmp_path:
     assert observation.stop_reason == "operator pressed STOP"
 
     rows = recording.rows
-    assert rows[0].t == 0.0
+    assert rows[0].t < 0.0
+    assert [row.t for row in rows if row.t <= 0][-1] == 0.0
     assert [round(b.t - a.t, 3) for a, b in pairwise(rows)] == [0.2] * (len(rows) - 1), (
         "one row per control tick, none invented"
     )
@@ -160,11 +162,21 @@ async def test_ex1_a_manual_session_is_recorded_from_arming_to_its_end(tmp_path:
     assert all(row.drive_status_word is not None for row in rows if row.measured_fresh)
 
     kinds = [(event.kind, event.detail, event.actor) for event in recording.events]
-    assert kinds[0] == (EventKind.OPERATOR_ACTION, "manual session started", ALIAS)
+    assert (EventKind.OPERATOR_ACTION, "start_manual ceiling_motor_rpm=1380", ALIAS) in kinds
+    assert all(
+        isinstance(commands.parse(event.detail), Ok)
+        for event in recording.events
+        if event.kind in commands.INPUT_KINDS
+    )
     assert (EventKind.PHASE, "hold", "system") in kinds
-    assert (EventKind.OPERATOR_ACTION, "end_requested: operator pressed STOP", ALIAS) in kinds
+    assert (EventKind.OPERATOR_ACTION, "stop", ALIAS) in kinds
     assert kinds[-1] == (EventKind.END, "operator_stop", "system")
-    assert all(event.t == round(event.t, 3) for event in recording.events)
+    start = next(
+        event
+        for event in recording.events
+        if event.kind is EventKind.OPERATOR_ACTION and event.detail.startswith("start_manual ")
+    )
+    assert start.t == pytest.approx(0.2)
     assert recorded.said() == []
     assert not recorded.recorder.recording
 
@@ -207,7 +219,12 @@ async def test_ex1_a_programmed_session_freezes_its_programme_numbers_only(
     assert SHORT_PROFILE.encode() not in on_disk
     assert b"failure injection" not in on_disk, "the profile's display name is not recorded"
     events = recorded.recording().events
-    assert events[0].detail == "auto session started"
+    assert any(
+        event.kind is EventKind.OPERATOR_ACTION
+        and event.detail == "start_programme"
+        and event.actor == ALIAS
+        for event in events
+    )
     assert (EventKind.PHASE, "baseline") in {(e.kind, e.detail) for e in events}
 
 
@@ -224,7 +241,8 @@ async def test_ex1_the_console_exit_closes_the_record_after_the_drive(tmp_path: 
     observation = recording.manifest.end_observation
     assert observation is not None
     assert observation.shutdown_detail == detail
-    assert recording.events[-1].kind is EventKind.END
+    assert any(event.kind is EventKind.END for event in recording.events)
+    assert recording.events[-1].detail == "replay_incomplete: pending_ecg_delivery"
     assert await recorded.rig.left_stopped() == ""
 
 
@@ -631,7 +649,11 @@ def test_anh139_every_record_of_a_console_in_bench_mode_opens_with_a_warning(
     assert path is not None
     loaded = read(path)
     assert isinstance(loaded, Ok)
-    warnings = [e.detail for e in loaded.value.events if e.kind is EventKind.WARNING]
+    warnings = [
+        e.detail
+        for e in loaded.value.events
+        if e.kind is EventKind.WARNING and not e.detail.startswith("replay_preamble:")
+    ]
     assert warnings == ([] if warning is None else [warning])
     assert loaded.value.manifest.medical_parameters_version == STAMP.medical_parameters_version
 
@@ -661,7 +683,11 @@ def test_ex5_a_batch_lost_by_the_bitalino_is_a_warning_with_the_loss_counters(
     assert path is not None
     loaded = read(path)
     assert isinstance(loaded, Ok)
-    warnings = [e.detail for e in loaded.value.events if e.kind is EventKind.WARNING]
+    warnings = [
+        e.detail
+        for e in loaded.value.events
+        if e.kind is EventKind.WARNING and e.detail.startswith("bitalino_loss:")
+    ]
     assert warnings == [
         (
             "bitalino_loss: filled_samples=+0 dropped_backlog_samples=+0 sync_losses=+0 "
@@ -744,7 +770,11 @@ async def test_ex3_a_full_disk_never_stops_the_session_and_the_operator_is_told(
     assert await recorded.rig.left_stopped() == ""
     recording = recorded.recording()
     assert recording.manifest.end_reason == "operator_stop"
-    warnings = [e.detail for e in recording.events if e.kind is EventKind.WARNING]
+    warnings = [
+        e.detail
+        for e in recording.events
+        if e.kind is EventKind.WARNING and e.detail.startswith("record_degraded:")
+    ]
     assert warnings[0].startswith("record_degraded: dropped=0 failures=")
     assert "last=append:OSError:ENOSPC" in warnings[0]
     assert len(recording.rows) == 11, "the rows written before the disk filled up are intact"
@@ -933,19 +963,25 @@ def test_console_events_land_in_the_records_closed_vocabulary(tmp_path: Path) ->
     assert isinstance(loaded, Ok)
     seen = [(e.kind.value, e.detail, e.actor) for e in loaded.value.events[1:]]
     assert seen == [
-        ("operator_action", "start_requested: manuel bench", ALIAS),
-        ("operator_action", "fault_reset_requested: reset defaut", ALIAS),
-        ("operator_action", "attested: wiring attested", ALIAS),
-        ("operator_action", "launch_confirmed", ALIAS),
-        ("operator_action", "emergency_stop: unattributed: pressed", "system"),
-        ("verdict_ack", "acknowledged: operator_estop", ALIAS),
+        ("warning", "console: start_requested: manuel bench", ALIAS),
+        ("warning", "console: fault_reset_requested: reset defaut", ALIAS),
+        ("operator_action", "confirm_estop_wiring", ALIAS),
+        ("warning", "console: attested: wiring attested", ALIAS),
+        ("warning", "console: launch_confirmed", ALIAS),
+        ("operator_action", "latch_estop", "system"),
+        ("warning", "console: emergency_stop: unattributed: pressed", "system"),
+        ("warning", "console: acknowledged: operator_estop", ALIAS),
         ("refusal", "refused: consigne refusee par [redacted]", ALIAS),
-        ("remote_command", "end_requested: arret demande par [redacted]", "remote"),
+        ("warning", "console: end_requested: arret demande par [redacted]", "remote"),
         ("refusal", "refused: refuse", "remote"),
         ("warning", "dashboard: serveur incompatible (contrat 1.0 vs 2.0)", "system"),
         ("refusal", f"cancelled: {CANCELLED_BY_STOP}", ALIAS),
     ]
     assert all(event.t == 0.5 for event in loaded.value.events[1:])
+    annotations = [event for event in loaded.value.events if event.detail.startswith("console:")]
+    assert annotations
+    assert all(event.kind is EventKind.WARNING for event in annotations)
+    assert all(isinstance(commands.parse(event.detail), Err) for event in annotations)
 
 
 def test_the_confirming_operator_is_written_in_the_armed_session(tmp_path: Path) -> None:
@@ -965,11 +1001,93 @@ def test_the_confirming_operator_is_written_in_the_armed_session(tmp_path: Path)
     assert path is not None
     loaded = read(path)
     assert isinstance(loaded, Ok)
-    confirmations = [event for event in loaded.value.events if event.detail == "launch_confirmed"]
+    confirmations = [
+        event
+        for event in loaded.value.events
+        if event.kind is EventKind.WARNING and event.detail == "console: launch_confirmed"
+    ]
     assert len(confirmations) == 1
-    assert confirmations[0].kind is EventKind.OPERATOR_ACTION
+    assert confirmations[0].kind is EventKind.WARNING
     assert confirmations[0].actor == operator_alias(confirmer)
     assert confirmer not in (path / "events.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("surface", "command", "kind", "operator", "automatic"),
+    [
+        (
+            SurfaceEvent.ATTESTED,
+            commands.ConfirmEstopWiring(),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            True,
+        ),
+        (
+            SurfaceEvent.START_REQUESTED,
+            commands.StartManual(MotorRpm(1380)),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            False,
+        ),
+        (
+            SurfaceEvent.LAUNCH_CONFIRMED,
+            commands.StartProgramme(),
+            EventKind.REMOTE_COMMAND,
+            DASHBOARD_OPERATOR,
+            False,
+        ),
+        (
+            SurfaceEvent.FAULT_RESET_REQUESTED,
+            commands.FaultReset(),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            False,
+        ),
+        (
+            SurfaceEvent.ACKNOWLEDGED,
+            commands.Acknowledge(True),
+            EventKind.VERDICT_ACK,
+            OPERATOR,
+            False,
+        ),
+        (SurfaceEvent.END_REQUESTED, commands.Stop(), EventKind.OPERATOR_ACTION, OPERATOR, False),
+        (
+            SurfaceEvent.EMERGENCY_STOP,
+            commands.LatchEmergencyStop(),
+            EventKind.OPERATOR_ACTION,
+            OPERATOR,
+            True,
+        ),
+    ],
+)
+def test_console_annotations_are_not_commands_and_keep_one_attributed_input(
+    tmp_path: Path,
+    surface: SurfaceEvent,
+    command: commands.Command,
+    kind: EventKind,
+    operator: str,
+    *,
+    automatic: bool,
+) -> None:
+    recorder, journal, _clock = bare_recorder(tmp_path)
+    recorder.begin(SessionRequest(occupancy=Occupancy.BENCH, operator=OPERATOR))
+    recorder.note_event(surface_event(surface, OPERATOR, "notification", 10.5))
+    if not automatic:
+        recorder.note_command(command, operator, at=Monotonic(10.5))
+    journal.drain()
+    path = journal.status(Monotonic(0)).path
+    assert path is not None
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    annotations = [event for event in loaded.value.events if event.detail.startswith("console:")]
+    assert len(annotations) == 1
+    assert annotations[0].kind is EventKind.WARNING
+    assert annotations[0].actor == ALIAS
+    assert isinstance(commands.parse(annotations[0].detail), Err)
+    inputs = [event for event in loaded.value.events if event.kind in commands.INPUT_KINDS]
+    assert [(event.kind, event.detail, event.actor) for event in inputs] == [
+        (kind, commands.encode(command), "remote" if operator == DASHBOARD_OPERATOR else ALIAS),
+    ]
 
 
 def test_a_long_reason_is_cut_to_a_message_and_a_remote_name_is_known_both_ways(
@@ -1023,7 +1141,7 @@ def test_the_dashboard_s_label_is_written_while_names_and_withheld_words_are_not
         json.loads(line)["detail"]
         for line in (journal.root / LOGBOOK / LOGBOOK_ACTIVE).read_text("utf-8").splitlines()
     ]
-    assert logbook == [f"refused: {kept}", f"end_requested: {stop}"]
+    assert logbook == [f"refused: {kept}", f"console: end_requested: {stop}"]
 
     recorder.begin(SessionRequest(occupancy=Occupancy.BENCH, operator=launcher))
     recorder.withhold("secret_programme", "passager de 9 ans")
@@ -1036,7 +1154,7 @@ def test_the_dashboard_s_label_is_written_while_names_and_withheld_words_are_not
     assert isinstance(loaded, Ok)
     assert [event.detail for event in loaded.value.events[-2:]] == [
         f"refused: {kept}",
-        f"end_requested: {stop}",
+        f"console: end_requested: {stop}",
     ]
 
 

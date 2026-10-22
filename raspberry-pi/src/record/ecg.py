@@ -1,7 +1,7 @@
 import gzip
-from typing import Final, Literal
+from typing import Annotated, Final, Literal, Self
 
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter, model_validator
 from pydantic.dataclasses import dataclass
 
 from src.record.codec import Privacy, document, encode, mapping
@@ -12,6 +12,14 @@ SAMPLE_RATE: Final = 1000
 INT16_MIN: Final = -32768
 INT16_MAX: Final = 32767
 MAX_RAW_BLOCK_BYTES: Final[int] = 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True, config=CONFIG)
+class RuntimeDelivery:
+    """One observe_ecg call: actual handover and the earlier timestamp passed to it."""
+
+    t: Annotated[float, Field(strict=True)]
+    t_observed: Annotated[float, Field(strict=True)]
 
 
 @dataclass(frozen=True, slots=True, config=CONFIG)
@@ -28,6 +36,17 @@ class Header:
     to hand the block back at the same instant, because ``t_first`` is the
     sample clock's time, not the moment the batch reached the DSP.
     """
+    runtime_delivery: RuntimeDelivery | None = None
+
+    @model_validator(mode="after")
+    def delivery_order(self) -> Self:
+        delivery = self.runtime_delivery
+        if delivery is not None:
+            if delivery.t_observed > delivery.t:
+                raise ValueError("ECG observation follows its delivery")
+            if self.t_received is not None and self.t_received > delivery.t_observed:
+                raise ValueError("ECG observation precedes acquisition")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +85,8 @@ def encode_block(block: RawBlock) -> bytes:
         # Left out, never written as null: a block from a producer that does not
         # know the instant stays byte-identical to what it always was.
         del fields["t_received"]
+    if header.runtime_delivery is None:
+        del fields["runtime_delivery"]
     prefix = encode(fields, Privacy()).encode("utf-8") + b"\n"
     return gzip.compress(prefix + payload, mtime=0)
 

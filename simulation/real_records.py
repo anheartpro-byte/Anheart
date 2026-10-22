@@ -29,24 +29,26 @@ from __future__ import annotations
 import asyncio
 import gzip
 import hashlib
-import os
 import re
 import shutil
 import tarfile
+import zlib
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import Final
+from typing import Final, override
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass
 
 from simulation.harness import OPERATOR, REMOTE, SYSTEM, run_scenario
 from simulation.replay import ReplayError, integrity_line, replay, replay_recording
+from simulation.replay_config import sidecar
 from simulation.replay_report import Outcome, ReplayReport
 from simulation.scenario import SCENARIO_DIR, load_scenario, scenario_paths
 from src.record.codec import JSON, Privacy, mapping
+from src.record.containment import resolve_under
 from src.record.reader import Recording, read
 from src.record.rows import JsonValue
 from src.record.schema import Manifest
@@ -55,6 +57,18 @@ from src.result import Err, Ok, Result
 REAL_DIR: Final[Path] = SCENARIO_DIR / "real"
 ARCHIVE_SUFFIX: Final[str] = ".tar.gz"
 ACCEPTED_SUFFIX: Final[str] = ".accepted.json"
+MAX_ARCHIVE_BYTES: Final[int] = 512 * 1024 * 1024
+"""At most 512 MiB of effective file sizes, also bounding decompressed reads below."""
+MAX_ARCHIVE_MEMBERS: Final[int] = 40_000
+"""Files and directories together, including repeated names."""
+MAX_ARCHIVE_HEADER_BYTES: Final[int] = (
+    MAX_ARCHIVE_MEMBERS * (2 * tarfile.BLOCKSIZE - 1) + tarfile.RECORDSIZE
+)
+"""One 512-byte header and up to 511 padding bytes per member, plus a tar record.
+
+Extension headers and their payloads share the decompressed byte budget;
+they are hidden by tarfile's public member iterator, so are not counted as members.
+"""
 
 SIMULATION_MACHINE: Final[str] = "simulation"
 """``machine_id`` of a record the simulation made (``simulation.session_record``)."""
@@ -116,46 +130,19 @@ def pack(record: Path, archive: Path) -> None:
                 tar.addfile(info, content)
 
 
-def _inside(root: Path, name: str) -> Path | None:
-    """The path ``name`` designates under ``root``, or ``None`` if it is not inside it.
-
-    Two controls, each sufficient alone, as ``src.record.export.locate`` does:
-
-    * the name is joined to the root and normalised, and refused unless the
-      result is still under the root: no parent reference gets out;
-    * with every link resolved, the result must still be under the resolved
-      root: a link planted under the root does not lead out of it either.
-
-    The normalised path is the only one returned, so the only one a caller can
-    touch. The root itself is not "inside" the root, and a name no file can
-    bear (a NUL in it) designates nothing.
-    """
-    if "\x00" in name:
-        return None
-    base = os.path.normpath(root)
-    inside = base + os.sep
-    candidate = os.path.normpath(inside + name)
-    if not candidate.startswith(inside):
-        return None
-    path = Path(candidate)
-    if not path.resolve().is_relative_to(Path(base).resolve()):
-        return None
-    return path
-
-
 def _place(tar: tarfile.TarFile, member: tarfile.TarInfo, into: Path) -> str | None:
     """Write one member of an archive under ``into``. Why it is refused, or ``None``.
 
     An archive is somebody else's file. A record folder holds plain files in
     plain folders and nothing else, so nothing else is written: no link, no
     device, and no member whose name is absolute or climbs out of the folder
-    it is extracted into. The content is copied to the path :func:`_inside`
+    it is extracted into. The content is copied to the path :func:`resolve_under`
     returns, and to no other.
     """
     name = member.name
     if name.startswith(("/", "\\")) or ".." in PurePosixPath(name.replace("\\", "/")).parts:
         return "the archive holds a member whose name is absolute or leaves its folder"
-    target = _inside(into, name)
+    target = resolve_under(into, name)
     if target is None:
         return "the archive holds a member that cannot be written inside its folder"
     if member.isdir():
@@ -172,6 +159,54 @@ def _place(tar: tarfile.TarFile, member: tarfile.TarInfo, into: Path) -> str | N
     return None
 
 
+class _ArchiveError(ValueError):
+    pass
+
+
+class BoundedArchive(gzip.GzipFile):
+    """Count decompressed bytes before tarfile can collect an extension payload."""
+
+    def __init__(self, archive: Path) -> None:
+        super().__init__(filename=archive, mode="rb")
+        # Mutable, owned by this extraction alone.
+        self._read_bytes: int = 0
+        self.last_read: bytes = b""
+
+    @override
+    def read(self, size: int | None = -1) -> bytes:
+        remaining = MAX_ARCHIVE_BYTES + MAX_ARCHIVE_HEADER_BYTES - self._read_bytes
+        requested = remaining + 1 if size is None or size < 0 else min(size, remaining + 1)
+        content = super().read(requested)
+        self.last_read = content
+        self._read_bytes += len(content)
+        if self._read_bytes > MAX_ARCHIVE_BYTES + MAX_ARCHIVE_HEADER_BYTES:
+            raise _ArchiveError("the archive exceeds MAX_ARCHIVE_BYTES")
+        return content
+
+
+def _check_size(member: tarfile.TarInfo) -> None:
+    if member.size < 0:
+        raise _ArchiveError("the archive holds a member with a negative size")
+    if not member.isreg() and member.size != 0:
+        raise _ArchiveError("the archive holds a non-file member with a nonzero size")
+
+
+def _unpack_members(tar: tarfile.TarFile, content: BoundedArchive, into: Path) -> None:
+    total = 0
+    for count, member in enumerate(tar, start=1):
+        if count > MAX_ARCHIVE_MEMBERS:
+            raise _ArchiveError("the archive exceeds MAX_ARCHIVE_MEMBERS")
+        _check_size(member)
+        total += member.size
+        if total > MAX_ARCHIVE_BYTES:
+            raise _ArchiveError("the archive exceeds MAX_ARCHIVE_BYTES")
+        refused = _place(tar, member, into)
+        if refused is not None:
+            raise _ArchiveError(refused)
+    if content.last_read.strip(b"\0"):
+        raise _ArchiveError("the archive cannot be read as a .tar.gz of a record folder")
+
+
 def unpack(archive: Path, into: Path) -> Result[Path, str]:
     """Extract one archived record under ``into``; the record folder, or why there is none.
 
@@ -181,12 +216,16 @@ def unpack(archive: Path, into: Path) -> Result[Path, str]:
     """
     try:
         into.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(archive, mode="r:gz") as tar:
-            for member in tar:
-                refused = _place(tar, member, into)
-                if refused is not None:
-                    return Err(refused)
-    except (OSError, EOFError, tarfile.TarError):
+        # A block-sized stream leaves the terminating header visible: tarfile
+        # may silently stop on an invalid header instead of a zero block.
+        with (
+            BoundedArchive(archive) as content,
+            tarfile.open(fileobj=content, mode="r|", bufsize=tarfile.BLOCKSIZE) as tar,
+        ):
+            _unpack_members(tar, content, into)
+    except _ArchiveError as error:
+        return Err(str(error))
+    except (OSError, EOFError, tarfile.TarError, zlib.error):
         return Err("the archive cannot be read as a .tar.gz of a record folder")
     folders = [path for path in sorted(into.iterdir()) if (path / "manifest.json").is_file()]
     if len(folders) != 1:
@@ -194,15 +233,15 @@ def unpack(archive: Path, into: Path) -> Result[Path, str]:
     return Ok(folders[0])
 
 
-def replay_path(path: Path) -> Result[ReplayReport, ReplayError]:
+def replay_path(path: Path, config: Path | None = None) -> Result[ReplayReport, ReplayError]:
     """Replay a record given as its folder or as its archive."""
     if path.is_dir():
-        return replay(path)
+        return replay(path, config)
     with TemporaryDirectory(prefix="anheart-replay-") as work:
         unpacked = unpack(path, Path(work))
         if isinstance(unpacked, Err):
             return Err(ReplayError(unpacked.error))
-        return replay(unpacked.value)
+        return replay(unpacked.value, sidecar(path) if config is None else config)
 
 
 # =========================================================================
@@ -349,7 +388,7 @@ def judge(archive: Path, work: Path) -> str | None:  # noqa: PLR0911  # one retu
     accepted = accepted_for(archive)
     if isinstance(accepted, Err):
         return accepted.error
-    replayed = asyncio.run(replay_recording(recording))
+    replayed = asyncio.run(replay_recording(recording, sidecar(archive)))
     if isinstance(replayed, Err):
         return f"the record is not replayable: {replayed.error.detail}"
     refused = refusal(replayed.value, accepted.value, simulated=is_simulated(recording.manifest))
@@ -404,8 +443,8 @@ def export(  # noqa: PLR0911  # one return per refusal
     """
     if SCENARIO_NAME.fullmatch(name) is None:
         return Err("a scenario is named by letters, digits and underscores, not by a path")
-    scenario = _inside(scenarios, f"{name}.json")
-    archive = _inside(directory, f"{name}{ARCHIVE_SUFFIX}")
+    scenario = resolve_under(scenarios, f"{name}.json")
+    archive = resolve_under(directory, f"{name}{ARCHIVE_SUFFIX}")
     if scenario is None or archive is None:
         return Err(f"{name} would be read or written through a link that leaves its directory")
     loaded = load_scenario(scenario)

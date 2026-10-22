@@ -27,7 +27,8 @@ from src.motor.drive import (
     DriveStatus,
     EmergencyStopOutcome,
 )
-from src.motor.observation import ExchangeKind, ExchangeLog, ObservableDrive
+from src.motor.observation import ExchangeKind, ExchangeLog, ModbusFailure, ObservableDrive
+from src.record.schema import RecordedFailure, record_failure
 from src.result import Err, Ok, Result
 from src.units import Monotonic, MotorRpm, Seconds
 
@@ -64,6 +65,7 @@ class Frame:
     latency_ms: float = 0.0
     observations: tuple[tuple[int, int | None], ...] = ()
     raw_hex: str | None = None
+    error: RecordedFailure | ModbusFailure | None = None
 
 
 class InjectedTickError(RuntimeError):
@@ -115,6 +117,7 @@ class RecordingDrive:
                 latency_ms=item.latency_ms,
                 label=item.detail,
                 raw_hex=item.raw_hex,
+                error=item.error,
             )
             for item in self._exchanges.entries
         )
@@ -138,6 +141,7 @@ class RecordingDrive:
         started: Monotonic,
         register: int | None = None,
         observations: tuple[tuple[int, int | None], ...] = (),
+        error: DriveError | None = None,
     ) -> None:
         if self._exchanges is not None:
             return
@@ -151,6 +155,7 @@ class RecordingDrive:
                 register=register,
                 latency_ms=(self._clock.monotonic() - started) * 1000,
                 observations=observations,
+                error=None if error is None else record_failure(error),
             )
         )
 
@@ -164,7 +169,12 @@ class RecordingDrive:
         started = self._clock.monotonic()
         result = await self._inner.open()
         self._note(
-            FrameKind.OPEN, None, _label(result), ok=not isinstance(result, Err), started=started
+            FrameKind.OPEN,
+            None,
+            _label(result),
+            ok=not isinstance(result, Err),
+            started=started,
+            error=_error(result),
         )
         return result
 
@@ -172,7 +182,12 @@ class RecordingDrive:
         started = self._clock.monotonic()
         result = await self._inner.close()
         self._note(
-            FrameKind.CLOSE, None, _label(result), ok=not isinstance(result, Err), started=started
+            FrameKind.CLOSE,
+            None,
+            _label(result),
+            ok=not isinstance(result, Err),
+            started=started,
+            error=_error(result),
         )
         return result
 
@@ -186,6 +201,7 @@ class RecordingDrive:
             ok=not isinstance(result, Err),
             started=started,
             register=CMD_LOGICAL,
+            error=_error(result),
         )
         return result
 
@@ -199,6 +215,7 @@ class RecordingDrive:
             ok=not isinstance(result, Err),
             started=started,
             register=LFRD_LOGICAL,
+            error=_error(result),
         )
         return result
 
@@ -210,7 +227,14 @@ class RecordingDrive:
         result = await self._inner.read_status()
         if isinstance(result, Err):
             self._status_word = None
-            self._note(FrameKind.READ_FAILED, None, _label(result), ok=False, started=started)
+            self._note(
+                FrameKind.READ_FAILED,
+                None,
+                _label(result),
+                ok=False,
+                started=started,
+                error=result.error,
+            )
         else:
             self._reads += 1
             status = result.value
@@ -247,6 +271,7 @@ class RecordingDrive:
             ok=not isinstance(result, Err),
             started=started,
             observations=observations,
+            error=_error(result),
         )
         return result
 
@@ -266,6 +291,10 @@ class RecordingDrive:
             register=LFRD_LOGICAL,
         )
         return outcome
+
+
+def _error[T](result: Result[T, DriveError]) -> DriveError | None:
+    return result.error if isinstance(result, Err) else None
 
 
 def _label[T](result: Result[T, DriveError]) -> str:

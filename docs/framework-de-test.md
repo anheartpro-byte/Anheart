@@ -278,7 +278,7 @@ usage: python -m simulation.run [-h] [--all] [--list] [--csv] [--out OUT]
 | Option | Effet |
 |---|---|
 | `scenario` | nom (`manual_27_rpm`) ou chemin d'un fichier `.json` |
-| `--list` | liste les scénarios (67 aujourd'hui) |
+| `--list` | liste les scénarios (69 aujourd'hui) |
 | `--all` | lance tous les scénarios et écrit `simulation/out/summary.md` |
 | `--csv` | écrit aussi un CSV des lignes de la trace |
 | `--out DIR` | dossier de sortie (défaut `simulation/out/`, ignoré par git) |
@@ -397,7 +397,7 @@ thèmes clair et sombre). Ouvrez-le dans un navigateur.
 ## 7. Le visualiseur 2D : `simulation.live`
 
 > Le même visualiseur est aussi **en ligne**, sans rien installer :
-> <https://anheart-simulation.vercel.app> (63 scénarios sur 67, vitesse de 10x
+> <https://anheart-simulation.vercel.app> (63 scénarios sur 69, vitesse de 10x
 > à 200x). Ses limites et son déploiement sont décrits dans
 > [deploiement.md](deploiement.md#6-le-moteur-de-simulation-hébergé).
 
@@ -3911,7 +3911,9 @@ redonne tout cela, dans l'ordre et aux instants enregistrés, à un **vrai**
 * le variateur est un « magnétophone » (`simulation/replay_tape.py`) qui répond
   à chaque appel ce que `drive_frames.jsonl` a enregistré, et qui vérifie
   d'abord que l'appel est bien celui qui a été enregistré ;
-* l'ECG repasse bloc par bloc dans le vrai DSP et le vrai `EcgBridge` ;
+* l'ECG repasse bloc par bloc dans le vrai DSP et le vrai `EcgBridge` : avec
+  `runtime_delivery`, la lecture atteint le runtime à `t` avec l'argument
+  `t_observed` enregistré ; sans ce champ, à `t_received` comme auparavant ;
 * les commandes de `events.jsonl` sont redonnées à leurs instants ;
 * l'horloge est une `ManualClock` qui avance par les intervalles enregistrés.
 
@@ -3921,11 +3923,35 @@ Une séance enregistrée devient ainsi un test de non-régression : le runtime
 d'aujourd'hui doit décider, sur les mêmes entrées, ce que celui du jour de la
 séance a décidé.
 
-> **Limite.** Aujourd'hui, seuls les enregistrements produits par la
-> simulation sont rejouables. La console écrit un enregistrement au même
-> format depuis ANH-128, mais il ne contient pas encore ce qu'un rejeu doit
-> redonner au runtime : le rejeu le refuse et dit ce qui manque. Et les
-> échanges Modbus du pilote réel ne sont pas rejoués (section 16.8).
+Depuis ANH-192, le magnétophone rend la variante d'erreur nommée par
+`drive_frames.jsonl.error`, avec ses champs de décision et sans diagnostic
+libre. Sans ce champ, il rend le `CommTimeout` historique. `attendant_ping`
+note une présence ponctuelle à l'instant de la commande ; `attendant present=`
+reste un état continu de simulation. Une remise ECG explicitement datée
+vient juste avant le tic du même instant : après les commandes pendant la
+séance, avant elles jusqu'au départ inclus. Tout tourne en ligne, sur
+l'horloge injectée, sans fil. Le contrat, les validations et les refus des
+anciens lecteurs sont dans [enregistrement.md](enregistrement.md).
+
+Les enregistrements de la vraie console en simulation sont aussi rejouables,
+avec leur document de configuration vérifié par `config_hash`. Le test croisé
+de la gate passe par `LocalPanel`, le variateur et le BITalino simulés, le
+vrai DSP et une horloge simulée : un programme et une séance manuelle avec
+changement de cible, arrêt et pings de présence. Les deux ont zéro écart,
+sans tolérance consommée. Une séance manuelle complète de cette même console
+est aussi produite sur le vrai pilote ATV320, avec un maître Modbus simulé
+adossé au modèle physique existant : elle se rejoue sous ce pilote, avec
+zéro écart et deux rapports identiques octet pour octet. Cette preuve reste
+simulée, sans variateur physique ni acquisition humaine.
+
+Pour une bande native, `simulation/replay_modbus.py` rend les réponses du
+maître au vrai `ATV320Drive`. Les registres et valeurs brutes écrites sont
+exacts, dans l'ordre et dans les étapes de 16.3. Les causes fermées du champ
+`error` rendent les mêmes variantes de `DriveError` par le vrai pilote,
+y compris le code d'exception Modbus et les catégories SDK. Les lignes
+`modbus_send` et `modbus_receive_chunk` sont ignorées : elles ne sont pas une
+seconde entrée du runtime ni une seconde latence. Des fragments SDK seuls,
+ou un mélange d'observations d'appel et d'échanges natifs, sont refusés.
 
 ### 16.2 Commande
 
@@ -3934,7 +3960,42 @@ $PY -m simulation.run auto_jog_150_dsp                 # écrit simulation/out/<
 $PY -m simulation.run --replay simulation/out/<dossier>
 $PY -m simulation.run --replay simulation/scenarios/real/fault_bitalino_disconnect_dsp.tar.gz
 $PY -m simulation.run --replay <dossier> --json        # le même rapport, une ligne de JSON
+$PY -m simulation.run --replay <console.tar.gz> --config <empreinte.json> --json
 ```
+
+`--config` désigne les octets canoniques écrits par la console sous
+`data/records/config/<config_hash>.json`. Sans cette option, une console
+exige un fichier adjacent `<dossier>.config.json` ou
+`<archive sans .tar.gz>.config.json`. La bibliothèque lit ce même fichier
+adjacent. Il se récupère séparément : il n'est ni synchronisé ni inclus dans
+le dépôt ou l'export de séance. Le format du manifeste reste inchangé.
+
+Une bande native exige aussi le champ structuré `native_drive` dans ce
+document vérifié : paramètres série, timeout, retries et offset. Les types
+du pilote les valident ; la description textuelle du lien n'est pas décodée.
+Sans ce champ : code 2, `native Modbus replay requires native_drive in the
+verified configuration document`.
+
+Le rejeu vérifie le SHA-256 avant toute construction du runtime. Document
+absent ou illisible : code 2, `the console configuration document is absent
+or unreadable`. Empreinte différente : code 2, `configuration hash mismatch:
+manifest <16 caractères>, document <16 caractères>`. Taille au-delà de
+`MAX_CONFIG_BYTES` (65 536), géométrie ou limites refusées, ou avertissement
+de production `replay_config:` : code 2 avec raison. Même un espace ajouté
+au document est refusé. Les limites et la géométrie du runtime viennent du
+document vérifié, par les constructeurs de domaine de la console.
+
+Le rapport ajoute `configuration.config_hash_verified`,
+`current_configuration_differs` et `differing_parts`. Cette dernière liste
+nomme les parties qui diffèrent des valeurs livrées par le dépôt :
+`medical_file` (empreinte ou signature), `safety`, `motion`, `runtime`,
+`min_rider_age`. Une différence laisse le rejeu utiliser la configuration
+enregistrée. `not_compared` nomme les réglages de machine sans référence
+courante dans le dépôt : `geometry`, `machine_ceilings`, `sources`, `camera`,
+`drive_link`. Pour `machine_id: simulation`, le rapport dit explicitement
+que `config_hash` n'est pas vérifié pour ce producteur ; ce champ vaut
+`false`, la comparaison courante vaut `null`, la géométrie reste celle du
+manifeste et les limites celles du dépôt.
 
 Sortie réelle de la troisième commande (environ 17 s) :
 
@@ -3962,13 +4023,42 @@ identifiants. Il peut donc être publié dans un journal de CI.
 | consigne (`setpoint_motor_rpm`) | égale à ± 1 tr/min moteur |
 | action de sécurité et règle (`safety_action`, `safety_rule`) | les transitions sont appariées une à une, dans l'ordre ; chacune peut tomber un tic plus tôt ou plus tard ; aucune ne peut manquer, être ajoutée ou changer de nature |
 | phase | exacte, tic pour tic |
-| appels au variateur | même appel, dans le même ordre ; mot de commande exact ; vitesse écrite à ± 1 tr/min ; demandé à moins d'un tic (0,2 s) de son instant enregistré |
+| appels au variateur | même appel, dans le même ordre et la même étape ; mot de commande exact ; vitesse écrite à ± 1 tr/min ; demandé à moins d'un tic (0,2 s) de son instant enregistré |
 
 Les deux tolérances chiffrées sont `SETPOINT_TOLERANCE_RPM` et
 `VERDICT_TOLERANCE_TICKS` dans `simulation/replay_report.py`. Elles existent
 pour les séances réelles, dont les instants sont connus à la milliseconde. Un
 enregistrement de la simulation se rejoue exactement : la ligne `tolerated`
 du rapport reste à zéro.
+
+Une étape de variateur réunit, à la milliseconde et dans l'ordre de 16.1,
+les tics et les commandes capables de l'appeler directement : départ
+programme ou manuel, `estop`, `fault_reset`, `shutdown`. Chaque trame
+appartient à l'intervalle qui commence à cet instant et finit strictement
+avant la prochaine étape de variateur, selon son début, jamais sa réponse.
+Une remise ECG, un ping, `presence_trip` ou `latch_estop` pendant les
+échanges ne coupe donc pas le tic qui les émet. Les autres commandes sans
+appel direct (`confirm_estop_wiring`, `acknowledge`, `stop`, `manual_target`,
+`attendant`) ne coupent pas non plus la fenêtre.
+Une latence avance toujours l'horloge. Aucun champ du format n'est ajouté.
+Le regroupement conserve les commandes et le tic qui partagent un instant,
+sans prétendre déduire leur appartenance individuelle depuis cet instant.
+
+À la fin de l'étape, une trame encore attendue dans son intervalle signale
+un appel manquant ; un appel qui réclame la trame d'une étape suivante
+signale un appel en trop. La divergence nomme l'instant de la trame
+manquante ou de l'appel ajouté, le nombre de tics rejoués et les appels.
+La tolérance de 0,2 s ne permet donc plus de décaler tous les échanges
+identiques d'un palier jusqu'à son arrêt. Un vrai trou de cadence sans
+échange enregistré dans ce trou reste une entrée valable, comme une
+boucle bloquée dans le scénario d'origine.
+
+Mesure sur une séance simulée de 65 s, cible existante de 6 tr/min de sortie,
+palier à 299 tr/min moteur et arrêt à 50 s : retirer en mémoire le tic de
+40,0 s était signalé à 50,0 s (10 s de retard), ajouter un tic à 40,1 s
+était signalé à 50,0 s (9,9 s de retard). Ils sont désormais signalés à
+40,0 et 40,1 s respectivement. `test_replay_ticks.py` exige au plus un tic
+de retard, avec comparaison exacte de tous les tics atteints auparavant.
 
 ### 16.4 Les trois issues
 
@@ -4021,16 +4111,21 @@ replay of record 148716e4b06f4998bab0370bbcbac63a: DIVERGENCE
 à juger. Les causes sont listées dans
 [enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué) :
 pas de tics d'avant le départ, événement d'entrée qui n'est pas une commande,
-aucun échange du variateur, manifeste sans géométrie, fréquence cardiaque sans
-ECG brut, échanges Modbus natifs, phase ou action inconnue de cette version.
+aucun échange du variateur, simulation sans géométrie, console sans document
+de configuration vérifié, fréquence cardiaque sans
+ECG brut, mélange de trames natives et d'observations d'appel, bande native
+sans réglages structurés, phase ou action inconnue de cette version.
 Quand il en manque plusieurs, le message les donne ensemble, séparées par
-« ; » : c'est le cas d'un enregistrement écrit par la console (section 16.8).
+« ; ».
 
 ### 16.5 La bibliothèque `simulation/scenarios/real/`
 
 Un fichier par séance : `<nom>.tar.gz`, l'archive d'un dossier
 d'enregistrement fermé. Le dossier lui-même n'est pas versionné : une séance
 de treize minutes contient environ 4000 blocs d'ECG.
+Pour une archive de console, ajouter aussi `<nom>.config.json`, le document
+appliqué dont le manifeste porte l'empreinte. Aucune archive de console
+n'est encore ajoutée à cette bibliothèque.
 
 `simulation/tests/test_real_records.py` juge **chaque archive présente dans
 le dossier** (`judge`, dans `simulation/real_records.py`). Une archive ajoutée
@@ -4060,9 +4155,9 @@ Les identifiants de la bibliothèque sont exigés sous les deux formes : un
 enregistrement de la bibliothèque ne porte jamais ceux sous lesquels sa
 source le connaît, quelle que soit la forme qu'il déclare.
 
-La date de la séance reste dans le manifeste et dans le nom du dossier : pour
-une séance réelle, c'est à l'outil d'anonymisation de la traiter (il n'existe
-pas encore, section 16.6).
+L'import de console neutralise aussi les dates de séance et le nom du dossier
+(section 16.6). Les dates des archives de scénarios viennent de l'horloge
+déterministe du harness.
 
 Une archive est le fichier de quelqu'un d'autre. Elle est extraite membre par
 membre (`unpack`), et seuls des fichiers ordinaires et des dossiers sont
@@ -4070,6 +4165,21 @@ membre (`unpack`), et seuls des fichiers ordinaires et des dossiers sont
 qui remonte d'un dossier, un lien (symbolique ou physique), un périphérique,
 ou un membre qu'un lien déjà présent ferait écrire ailleurs, arrête
 l'extraction : la gate échoue sur cette archive et dit pourquoi.
+`MAX_ARCHIVE_BYTES` borne à 512 Mio la somme des tailles annoncées des membres
+et `MAX_ARCHIVE_MEMBERS` à 40 000 leur nombre, dossiers et doublons compris.
+Le flux décompressé compte aussi les octets réellement lus, métadonnées PAX
+et GNU longues comprises, avec une marge `MAX_ARCHIVE_HEADER_BYTES` de
+40 930 240 octets : 40 000 fois un en-tête de 512 octets et au plus 511 octets
+de padding, plus un bloc terminal tar de 10 240 octets. Les extensions,
+masquées par l'itérateur public de `tarfile`, ne prennent pas de rang de
+membre ; elles partagent ce plafond d'octets avec le contenu, les en-têtes
+et le padding. Le flux refuse avant de remettre des octets au-delà de
+512 Mio plus cette marge, quelle que soit la version de `tarfile`.
+Une taille négative, une taille non nulle hors fichier ordinaire, un en-tête
+invalide ou une erreur de décompression donne un refus nommé.
+Le compte des membres et leurs tailles effectives sont vérifiés avant
+d'écrire le membre suivant. L'import, le rejeu,
+le jugement de bibliothèque et le visualiseur utilisent cette même extraction.
 
 Contenu au 7 octobre 2026, trois scénarios de la batterie exportés par
 `--export-real`, comme preuve de fonctionnement avant toute séance réelle :
@@ -4091,8 +4201,11 @@ sur un Mac et se rejouent sans écart sur le runner Linux.
 Ce sont les scénarios en `ecg.mode: dsp` : le mode `direct` injecte des bpm
 sans acquisition, et ne laisse pas d'ECG brut à rejouer.
 
-Pour regarder une archive dans le visualiseur, l'extraire sous `simulation/out/`
-puis ouvrir `?trace=out/<dossier>` (section 7).
+Le visualiseur ouvre directement une archive :
+`?trace=scenarios/real/manual_bench_dsp.tar.gz`, ou
+`?trace=out/<nom>.tar.gz` pour une copie locale. Le serveur utilise le reader
+partagé après extraction temporaire confinée et bornée ; il retire cette copie
+temporaire après la lecture. Un dossier reste accepté (section 7).
 
 ### 16.6 Ajouter un enregistrement
 
@@ -4116,18 +4229,90 @@ réécrite : la commande affiche `unchanged`, et git n'a rien à ajouter. La
 comparaison porte sur le contenu lu, pas sur les octets, parce que deux
 versions de zlib ne compriment pas pareil.
 
-**Une séance réelle.** Pas encore possible de bout en bout :
-l'enregistrement que la console écrit n'est pas encore rejouable, et les
-échanges Modbus natifs ne sont pas rejoués (section 16.8). La marche à suivre,
-le jour où c'est possible :
+**Un enregistrement de console à importer.** L'outil est prouvé sur la console
+en simulation, avec observations d'appel ou échanges Modbus natifs. Aucune
+séance réelle n'existe dans le dépôt : son import reste à faire quand elle
+sera disponible, après décision humaine sur son versement.
 
-1. récupérer l'archive `.tar.gz` de la séance ;
-2. l'anonymiser sous la forme « séance réelle » du tableau de 16.5 (manifeste,
-   acteurs des événements, identifiants de la bibliothèque, nom du dossier),
-   puis recalculer `checksums.sha256` ;
-3. vérifier `python -m simulation.run --replay <archive>` ;
-4. déposer l'archive dans `simulation/scenarios/real/` sous un nom qui ne
-   désigne ni une personne ni un lieu, et ouvrir la PR. La gate fait le reste.
+```sh
+$PY -m simulation.import_record <dossier-ou-archive.tar.gz> --name <nom_opaque> --directory <bibliotheque_de_relecture> --config <document.json>
+```
+
+Le nom accepte lettres ASCII, chiffres et `_`, sans personne, lieu ni date.
+`--directory` vaut `simulation/scenarios/real/` par défaut ; utiliser un dossier
+de relecture pour préparer un import. L'outil refuse une archive ou un fichier
+adjacent déjà présent et n'écrit aucune archive si une étape est refusée.
+Les preuves automatisées importent seulement dans des répertoires temporaires.
+
+Pour une console, `--config` désigne son document canonique. Sans cette option,
+l'outil cherche `<source>.config.json` à côté du dossier ou
+`<source sans .tar.gz>.config.json` à côté de l'archive ; pour un dossier local,
+il cherche ensuite `config/<config_hash>.json` dans son parent. Le document
+est vérifié par le rejeu et copié sans changer un octet en `<nom>.config.json`
+à côté de l'archive produite. `config_hash` reste identique.
+
+L'import lit par le reader partagé et exige un enregistrement clos, sans
+avertissement d'intégrité. Il travaille sur une copie, avec ces règles :
+
+| Élément | Règle d'import |
+| --- | --- |
+| `record_id`, `local_ref` | `library_identity(nom)` et ses 16 premiers caractères |
+| `machine_id`, `organization_id`, `operator` | constante `anonymized` |
+| `session_id`, `subject_id` | `null` |
+| `software_version` | `unversioned`, comme à l'export des scénarios |
+| `started_at`, `ended_at`, `clocks.utc_start` | même date neutre pour tous les imports : `2000-01-01T00:00:00Z`, sans durée déduite de ces champs |
+| `profile.resolved_at` | même date neutre, `946684800000` millisecondes Unix ; les autres valeurs du programme sont conservées |
+| `clocks.wall_trusted`, `clocks.ntp_offset_s` | `null` : l'import ne juge pas l'horloge de la console et ne conserve pas son écart NTP |
+| dossier dans l'archive | `2000-01-01T000000Z_<local_ref>` |
+| acteurs des événements | `system` et `remote` conservés ; tout alias d'opérateur devient `anonymized` |
+| `end_observation.stop_reason`, `end_observation.shutdown_detail` | `null`, car ces deux textes libres peuvent contenir identité, fréquence cardiaque ou port série ; les autres champs de l'observation finale sont conservés |
+
+Les commandes sont validées par `commands.parse`, puis réécrites sous leur
+forme canonique par `commands.encode`. Hors commandes, seule une liste fermée de faits machine reste : verdict
+`règle (ACTION)` ou `cleared`, défaut `MNEMONIQUE (LFT code)` ou `cleared`, phase
+connue, motif de fin connu. Les refus et contrôles pré-vol deviennent
+`anonymized`. Les warnings ne gardent que les préfixes connus `record_degraded`,
+`replay_config`, `replay_preamble`, `replay_incomplete`, `console`, `dashboard`,
+`bitalino_loss` ; les deux préfixes de compteurs ne gardent que leurs compteurs
+numériques fermés. Le marqueur `replay_incomplete: pending_ecg_delivery` reste
+intégral. Aucun diagnostic libre ni nombre physiologique ne reste dans les
+détails d'événement. Un fait inconnu devient `anonymized`.
+
+L'outil refuse toute identité source connue ou date absolue reconnue encore
+présente dans les fichiers, leurs noms et la configuration : identifiants du
+manifeste, alias des événements, dates calendaires et représentations Unix en
+secondes, millisecondes ou microsecondes, dates `16/10/2026`, `16.10.2026` et
+formes compactes comme `20261016`, même dans un identifiant. Il vérifie aussi les en-têtes bruts décompressés et
+les octets décodés de `raw_hex`. Les tableaux d'échantillons sont contrôlés
+pour les sentinelles d'identité et de date, sans les interpréter comme de la
+prose. L'enveloppe gzip des blocs doit avoir une date nulle et aucun nom,
+commentaire ou champ supplémentaire, comme à l'écriture ; un second membre
+gzip ou des octets finaux sont refusés. Les octets des blocs acceptés restent
+identiques. Cette vérification complète la frontière explicite de
+[confidentialité](enregistrement.md#frontière-de-confidentialité) ; elle ne
+reconnaît pas un nom humain arbitraire inconnu dans un champ de provenance.
+
+Les instants relatifs `t`, y compris les instants négatifs du repos, les
+mesures, trames, blocs bruts, capteurs, géométrie et autres champs des observations finales ne
+changent pas. `clocks.monotonic_start` reste identique. Seuls le manifeste,
+les événements et les sommes de contrôle sont réécrits. `Writer.close` partagé
+recalcule l'inventaire `files` et `checksums.sha256`, puis le rejeu de la source
+et celui de la copie doivent tous deux être possibles, avec le même verdict,
+la même comparaison de décisions et la même divergence éventuelle. Tout
+changement de ces résultats refuse l'import. La copie est rejouée
+avec son document de configuration avant d'être archivée au même format que
+l'export de scénarios.
+
+Un écart exige la procédure de 16.7. Après son examen, ajouter explicitement
+`--accept-ticket ANH-<numero> --accept-reason '<explication>'` à la commande :
+l'outil écrit `<nom>.accepted.json` avec le rapport entier de la copie. Sans
+ces deux options, il refuse l'archivage d'un écart. Il refuse aussi une
+acceptation sans écart. Un rejeu impossible est toujours refusé.
+
+Les tics et l'ECG brut d'une séance importée restent des **données de santé
+pseudonymisées**. L'import ne décide pas de publier une vraie séance dans la
+bibliothèque du dépôt : ce versement reste une décision humaine, suivie dans
+ANH-172. Aucune vraie séance ni archive de console n'est ajoutée par ces preuves.
 
 ### 16.7 Un écart de rejeu : la règle
 
@@ -4168,6 +4353,8 @@ la raison, et **le rapport JSON du rejeu tout entier**, tel que
    "recorded": "speed 82 motor rpm at t=3.000 s",
    "requested": "speed 77 motor rpm", "t": 3.0, "tick": 64
   },
+  "configuration": {"config_hash_verified": true, "current_configuration_differs": false,
+   "differing_parts": [], "not_compared": ["geometry", "machine_ceilings", "sources", "camera", "drive_link"]},
   "integrity": [], "outcome": "divergence",
   "record": "148716e4b06f4998bab0370bbcbac63a", "recorded_ticks": 95,
   "tolerances": {"setpoint_motor_rpm": 1, "verdict_ticks": 1}
@@ -4222,43 +4409,58 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 
 ### 16.8 Limites connues
 
-* **Séances réelles.** La console écrit un enregistrement au format commun
-  (ANH-128), que le rejeu refuse aujourd'hui (code 2) en donnant ses deux
-  raisons : ses événements d'entrée sont du texte (`manual session started`,
-  `end_requested: done`) et non les commandes du vocabulaire ; son manifeste
-  n'a pas de géométrie. Son `drive_frames.jsonl` n'est plus vide (ANH-191) :
-  la console en simulation y écrit les observations d'appel que le rejeu
-  attend, depuis l'ouverture de l'enregistrement. Il lui manque encore les
-  tics du repos, avec les réponses du variateur à ces tics, et `t_received`
-  sur les blocs d'ECG.
-  `test_record_console_parity.py` construit cet enregistrement avec la vraie
-  console, vérifie ce refus, et vérifie que la console et la simulation
-  écrivent les mêmes observations d'appel : le jour où la console écrit ce
-  qu'il faut, le test du refus échoue, et se remplace par un rejeu.
-* **Échanges natifs.** Le magnétophone rejoue les observations d'appel du
-  variateur (`open`, `speed`, `read_status`...), celles qu'écrit la simulation.
-  Les échanges Modbus du pilote réel ne sont pas rejoués : un enregistrement
-  qui en contient est refusé (code 2).
+* **Séances réelles.** La preuve de console porte sur des séances simulées,
+  pas sur du matériel ni une acquisition humaine. La console fournit les
+  commandes, le repos, les trames, les remises ECG et le document de
+  configuration. Le magnétophone Modbus est placé sous le vrai pilote.
+  Une ancienne console sans document est refusée, code 2.
+* **Échanges natifs.** Les octets SDK restent un diagnostic ignoré au rejeu.
+  Le rejeu compare les décisions et les appels, pas chaque entrée à une
+  vérité physique externe : une perturbation tolérée sans effet peut rester
+  `MATCH`. Les sommes de contrôle sont le contrôle d'intégrité. Les deux
+  familles de trames ne peuvent pas être mélangées.
 * **Mode `direct`.** Les scénarios qui injectent des bpm ne sont pas
-  rejouables : seuls les quatre scénarios `*_dsp` de la batterie le sont.
+  rejouables : seuls les six scénarios `*_dsp` de la batterie le sont.
 * **Exactitude.** Un enregistrement de la simulation est rejoué sur les mêmes
   nombres flottants que l'original, donc exactement. Une séance réelle est
   connue à la milliseconde : une décision prise à moins d'une milliseconde
   d'un seuil peut tomber un tic plus tôt ou plus tard, ce que les tolérances
   absorbent pour un verdict, pas pour une phase.
-* **Ce que l'enregistrement ne porte pas** : la nature d'un échange en échec,
-  le courant à mieux que 0,1 A, une exception levée dans le tic d'origine, un
+* **Entrées pendant une attente du tic.** Une remise ECG, un verdict caméra
+  ou un clic E-STOP peut atteindre la console pendant le service du
+  variateur, avant l'observation et l'évaluation de sécurité du tic courant.
+  Le rejeu termine ce tic puis remet l'entrée, visible au suivant. Les
+  instants conservés ne décrivent pas le point de reprise de la coroutine.
+  Cela peut décaler un verdict d'un tic ; un changement de consigne, de
+  phase ou d'ordre des appels peut produire un écart ou une divergence.
+  `test_replay_waited_inputs.py` montre la lecture vue plus tard et le
+  verdict caméra ; `test_replay_interleaving.py` vérifie qu'une remise et
+  un ping sans effet sur les décisions ne créent aucun faux écart avec des
+  échanges de 10 ms, sur les deux bandes.
+* **Commande variateur pendant un tic.** Si `estop`, un départ, un
+  réarmement ou une sortie entrelace ses propres échanges avec ceux du
+  tic en cours, le rejeu séquentiel ne reproduit pas cet ordre. La commande
+  ferme la fenêtre : une divergence nommée indique l'appel et l'échange
+  rencontrés à cette frontière. Le test d'entrelacement exige cette
+  divergence sur les deux bandes, sans `MATCH` silencieux.
+* **Ce que l'enregistrement ne porte pas** : la nature d'un échange en échec
+  sans `error`, le délai de remise ECG sans `runtime_delivery`, le courant
+  à mieux que 0,1 A, une exception levée dans le tic d'origine, un
   saut de l'horloge murale pendant l'acquisition. Détail dans
   [enregistrement.md](enregistrement.md#ce-quun-enregistrement-doit-contenir-pour-être-rejoué).
-* **Coût.** Rejouer la bibliothèque prend environ trois minutes sur un Mac et
-  près de sept minutes de calcul en CI, réparties sur trois parts de la
-  batterie (les deux longs rejeux sont dans `SLOW_SECONDS`). Ses trois
-  archives pèsent 4 Mo dans le dépôt. Une régénération n'ajoute à
+* **Coût.** Les cinq rejeux totalisent 214,54 s sur le poste Mac de
+  développement (80,21 + 17,51 + 77,93 + 15,57 + 23,32 s, appels CLI
+  chronométrés, certains concurrents). Les cinq archives pèsent
+  4 919 705 octets dans le dépôt. La durée de cette bibliothèque élargie
+  en CI reste à mesurer ; les deux longs rejeux sont dans `SLOW_SECONDS`.
+  Une régénération n'ajoute à
   l'historique que les archives dont le contenu a changé (section 16.6).
 * **Dépendances numériques.** Le rejeu repasse l'ECG dans le DSP : une
   nouvelle version de numpy, scipy ou BioSPPy qui changerait une fréquence
-  cardiaque calculée se verrait ici comme un écart. Ces dépendances ne sont
-  pas épinglées (`>=` dans `raspberry-pi/requirements-base.txt`).
+  cardiaque calculée se verrait ici comme un écart. Les versions et leurs
+  empreintes sont figées par les verrous d'ANH-230, dont
+  `raspberry-pi/requirements-lock.txt` pour aarch64. L'accord numérique avec
+  un Pi reste à vérifier au banc, par la procédure de la section 16.10.
 
 ### 16.9 Les tests du rejeu
 
@@ -4266,10 +4468,102 @@ On ne modifie jamais un enregistrement à la main. La gate le verrait
 |---|---|
 | `test_replay.py` | de bout en bout sur de courtes séances réellement enregistrées : rejeu sans écart (y compris boucle bloquée, liaison perdue, défaut variateur, ECG lacunaire ou perdu), écart détecté à son instant quand on altère un tic ou une trame, divergence, déterminisme, refus motivés (toutes les raisons à la fois), événements qui ne sont pas des entrées jamais lus comme des commandes, ligne de commande |
 | `test_replay_tape.py` | le magnétophone : lecture des trames, appel conforme ou non, horloge, blocs ECG |
+| `test_replay_ticks.py` | sur un palier constant, tic retiré ou ajouté en mémoire nommé à son instant, au plus un tic plus tard ; séance intacte rejouée exactement |
+| `test_replay_inputs.py` | erreur d'armement nommée rejouée sans écart et divergence sans son champ ; pings discrets et absence à 60,2 s sans eux ; lecture reçue entre deux tics, timestamp de fraîcheur conservé ; refus d'une commande mal écrite |
 | `raspberry-pi/tests/test_record_commands.py` | le vocabulaire des commandes (`src/record/commands.py`), écrit et relu à l'identique ; il est dans la gate du Pi |
 | `test_replay_compare.py` | la comparaison pure : tolérances aux bornes, transitions décalées, perdues ou ajoutées ; l'empreinte, qui distingue deux rejeux que les décomptes confondent |
 | `test_real_records.py` | la gate de la bibliothèque et chacune de ses exigences ; les archives et ce que l'extraction refuse (nom absolu, remontée de dossier, lien, périphérique, écriture hors du dossier) ; les deux formes d'anonymat et les identifiants de la bibliothèque ; l'écart accepté (sont refusés : un second écart derrière lui, un écart remplacé par un autre de même nature, un tic modifié après une divergence acceptée, un fichier accepté à côté d'un enregistrement de la simulation) ; l'export reproductible, et son refus d'un nom qui est un chemin |
-| `test_record_console_parity.py` | écrit pour ANH-128 (même structure sur la console et en simulation) ; il vérifie aussi que le rejeu refuse l'enregistrement de la console en donnant ses raisons, et que `t_received` est la seule clé d'en-tête de bloc que la simulation écrit en plus |
+| `test_record_console_parity.py` | même structure des deux producteurs ; rejeu exact de deux séances de console en simulation (programme, manuelle avec cible et arrêt, pings), configuration vérifiée, fichier adjacent et `--config`, refus code 2 si absent ou altéré, rejeu identique si seul le fichier médical courant diffère ; environ 28 s pour les deux cas croisés sur le poste de développement |
+| `test_replay_config.py` | limites et géométrie issues du document, validation par les constructeurs de domaine, empreintes et tailles refusées, parties de configuration courante nommées |
+| `test_import_record.py`, `test_import_privacy.py` | imports de console simulée manuelle, programmée et native, neutralisation des dates et identités, événements fermés, sentinelles sur tous les fichiers et en-têtes bruts, octets des mesures conservés, intégrité et rejeu exacts, refus et acceptation explicite d'un écart |
+| `test_replay_modbus.py`, `test_modbus.py` | séance native de console simulée avec arrêt, rejeu exact sous le vrai pilote, rapports identiques ; ETA altérée et échange retiré nommés avec les registres ; causes d'échec, étapes, offsets et fragments SDK ; aucun scénario JSON ni archive supplémentaire |
+| `test_replay_interleaving.py`, `test_replay_waited_inputs.py` | échanges étalés de 10 ms, remises ECG, pings et verdict caméra transparents pour les fenêtres ; limite de visibilité des entrées pendant un service attendu et divergence nommée si une commande variateur entrelace ses échanges ; remise absurde et configuration refusées avant exécution |
+| `test_replay_native_requests.py` | esclave configuré et nombre de registres comparés ; lecture et écriture natives échouées sans cause rejouées avec l'absence de réponse historique |
+| `raspberry-pi/tests/test_modbus_recording.py` | causes natives fermées, variantes recalculées par le pilote via les objets SDK, refus du reader, erreurs d'ouverture et d'urgence, confidentialité et observation défaillante isolée |
+| `raspberry-pi/tests/test_native_failure_kinds.py` | causes permises pour chaque kind, fragments SDK sans cause typée, codes d'exception reçus hors domaine enregistrés comme réponse invalide |
+| `raspberry-pi/tests/test_record_configuration.py` | empreinte de référence inchangée, sentinelle de confidentialité, taille bornée, modes 600/700, unicité et collisions, erreurs disque et écriture bloquée sans attente des tics, exclusions de rétention/synchronisation/dépôt/export/logbook |
+
+### 16.10 Vérification numérique unique sur un Pi
+
+**À faire sur banc, non faite.** Aucun essai ARM n'est déclaré réalisé.
+La référence qui fait foi est l'ensemble des rapports produits par la CI,
+ou par cette même procédure dans une gate locale, sur **le même SHA que
+celui installé sur le Pi**, dans leurs environnements verrouillés.
+La table ci-dessous concerne l'arbre qu'ANH-192 fusionne dans `develop`
+par la PR #120 ; elle est à revérifier sur son commit de fusion. Elle reste
+valable tant que le code du rejeu, de la simulation et des scénarios concernés
+ne change pas ; sinon, la recalculer. Les mesures sur le poste de développement
+ne remplacent pas la comparaison des rapports complets sur le SHA installé.
+Une gate locale verte ne constitue pas cette comparaison avec le Pi.
+
+Sur le Pi de banc, utiliser ce checkout sans modification locale, avec
+Python 3.12, et installer l'environnement depuis le verrou aarch64
+d'ANH-230, sans le résoudre à nouveau :
+
+```sh
+git rev-parse HEAD
+git status --porcelain
+uname -m
+python3.12 -m venv "$HOME/.cache/anheart-replay-pi"
+"$HOME/.cache/anheart-replay-pi/bin/python" -m pip install --require-hashes -r raspberry-pi/requirements-lock.txt
+"$HOME/.cache/anheart-replay-pi/bin/python" -m pip check
+```
+
+Le SHA installé doit être celui du run CI ou de la gate locale choisi pour la comparaison, le
+statut vide et l'architecture
+`aarch64`. Le verrou exige numpy 2.5.3, scipy 1.18.1 et BioSPPy 2.2.4,
+comme le verrou de développement utilisé en CI. Conserver le SHA,
+l'architecture, la sortie d'installation et les versions avec la preuve.
+
+Depuis la racine, exécuter exactement les cinq rejeux :
+
+```sh
+set -eu
+export PYTHONPATH=.:raspberry-pi
+mkdir -p replay-pi
+sha256sum raspberry-pi/requirements-lock.txt simulation/scenarios/real/*.tar.gz > replay-pi/inputs.sha256
+for archive in simulation/scenarios/real/*.tar.gz; do
+  name=$(basename "$archive" .tar.gz)
+  "$HOME/.cache/anheart-replay-pi/bin/python" -m simulation.run --replay "$archive" --json > "replay-pi/$name.json" 2> "replay-pi/$name.stderr.log"
+done
+(cd replay-pi && sha256sum *.json > SHA256SUMS)
+cat replay-pi/SHA256SUMS
+```
+
+Pour préparer la référence CI ou locale, exécuter cette même boucle au même SHA
+dans l'environnement de la gate installé par les verrous de développement
+(section 15, ANH-230), avec `raspberry-pi/.venv/bin/python` comme
+interpréteur et `replay-ci` comme dossier de sortie. Conserver les cinq
+JSON et `SHA256SUMS` de ce run, puis les copier sous `replay-ci/` sur
+le poste qui compare les preuves. La gate `test_real_records.py` doit
+également passer dans ce run. Conserver son SHA exact avec les rapports ;
+l'observation CI de ce SHA reste à obtenir.
+
+Résultat attendu : cinq codes 0, `outcome: match`, aucune divergence ni
+alerte d'intégrité, zéro tic différent et zéro tolérance consommée.
+Les tics enregistrés et rejoués sont respectivement 4000, 1348, 4000,
+703 et 1082 dans l'ordre du tableau. Comparer les rapports complets,
+octet pour octet, et pas seulement leur verdict :
+
+```sh
+diff -u replay-ci/SHA256SUMS replay-pi/SHA256SUMS
+```
+
+| Rapport | SHA-256 du JSON complet, LF final inclus |
+| --- | --- |
+| `auto_jog_150_dsp.json` | `ee4049ae45c8eb42a79c758822611be6eed734b6eee7ec30e562bb43454eaa49` |
+| `fault_bitalino_disconnect_dsp.json` | `56470107fa21b0be4aa7afdd5e8ee15c1fcff89ac452691fd106e27764d8a877` |
+| `fault_ecg_electrode_off_dsp.json` | `75f709a5ebfeada5274c2c4d265f4737948ed3173f951dd4392e2f71146712c7` |
+| `manual_bench_dsp.json` | `7a667b83a2f701655712f2e24298a02bf7fbf58dc97fe93b602d6c95fe22034d` |
+| `manual_occupied_retarget_dsp.json` | `5b253ee86e91e26b21e8ed2fad7c68cb61c21c0422c8510d5381511d4577baf8` |
+
+Si une installation, un code de sortie, une empreinte ou un rapport
+diffère : conserver les deux jeux de JSON, stderr, empreintes des entrées,
+SHA, architecture et versions ; lire l'instant et la nature du premier
+écart ; vérifier d'abord les octets du code, des archives et des verrous,
+puis les calculs DSP. Ouvrir un ticket avec ces preuves selon la section
+16.7. Ne pas régénérer les archives, accepter un écart ou élargir une
+tolérance tant que sa cause n'est pas établie. L'essai reste non validé.
 
 ## 17. Endurance de la console
 

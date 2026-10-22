@@ -39,7 +39,7 @@ from src.record.logbook import ACTIVE as LOGBOOK_ACTIVE
 from src.record.logbook import DIRECTORY as LOGBOOK
 from src.record.logbook import PREVIOUS as LOGBOOK_PREVIOUS
 from src.record.rows import JsonValue
-from src.record.schema import RecordError
+from src.record.schema import Event, EventKind, RecordError
 from src.record.upload import MAX_POINTS, READ_CHUNK, TAIL_CHUNK, Batch, read_batch, read_head
 from src.record_uplink import (
     BIND_GRACE,
@@ -1078,6 +1078,40 @@ async def test_what_the_dashboard_did_not_store_is_said_counted_and_passed(
     await b.run(5)
     assert b.link.seconds() == [float(second) for second in range(8)]
     assert cursor_of_record(record.path).rejected_points == 4
+
+
+async def test_local_events_take_no_rank_and_the_cursor_advances_only_after_ack(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    b = bench(tmp_path)
+    b.uplink.begin(armed(b.clock))
+    record = recording(tmp_path, b.clock)
+    b.disk.current = record.path
+    record.tick(2.0)
+    for t, detail in ((-1.0, "confirm_estop_wiring"), (0.2, "attendant_ping"), (0.4, "stop")):
+        written_2 = record.writer.event(Event(t=t, kind=EventKind.OPERATOR_ACTION, detail=detail))
+        assert isinstance(written_2, Ok)
+    b.link.answer(EVENTS_PATH, DOWN)
+    await b.step()
+    assert cursor_of_record(record.path).last_seq == -1
+    b.link.answer(EVENTS_PATH, stored(1))
+    with caplog.at_level(logging.WARNING, logger="src.record_uplink"):
+        await b.run(int(RETRY_PERIOD) + 1)
+    assert b.link.ranks() == [0, 0]
+    assert cursor_of_record(record.path).last_seq == 0
+    assert "cannot be read" not in caplog.text
+    written = record.writer.event(
+        Event(t=2.1, kind=EventKind.OPERATOR_ACTION, detail="attendant_ping")
+    )
+    assert isinstance(
+        written,
+        Ok,
+    )
+    await b.run(int(TELEMETRY_PERIOD) + 1)
+    assert b.link.ranks() == [0, 0]
+    cursor = cursor_of_record(record.path)
+    assert cursor.last_seq == 0
+    assert cursor.events_offset == (record.path / "events.jsonl").stat().st_size
 
 
 async def test_lines_of_a_record_that_cannot_be_read_are_passed_over_and_said(

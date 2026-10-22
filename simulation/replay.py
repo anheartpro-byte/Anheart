@@ -50,6 +50,7 @@ import asyncio
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
 from typing import Final, assert_never, final
 
@@ -60,8 +61,18 @@ from simulation.harness import (
     RUNTIME_LIMITS,
     load_motion,
 )
+from simulation.modbus import InlineExecutor
 from simulation.replay_compare import Decision, RuleKey, SafetyDecision, compare_decisions
-from simulation.replay_report import Divergence, ReplayReport
+from simulation.replay_config import AppliedRuntime, load_configuration, sidecar
+from simulation.replay_modbus import (
+    NATIVE_KINDS,
+    SDK_KINDS,
+    NativeExchange,
+    NativeFrames,
+    TapeMaster,
+    parse_native,
+)
+from simulation.replay_report import ConfigurationCheck, Divergence, ReplayReport
 from simulation.replay_tape import (
     INSTANT_EPSILON,
     NO_FURTHER,
@@ -79,17 +90,20 @@ from src.bitalino_client import SampleBatch
 from src.clock import ManualClock
 from src.ecg_pipeline import EcgBridge, EcgFrame, Treatment, load_treatment, treat_ecg
 from src.geometry import MachineGeometry
+from src.motor.atv320 import ATV320Drive
+from src.motor.drive import DriveBackend
 from src.record import commands
+from src.record.configuration import WARNING_PREFIX
 from src.record.reader import Recording, read
 from src.record.rows import Row
-from src.record.schema import GeometrySnapshot, Manifest, Profile
+from src.record.schema import EventKind, GeometrySnapshot, Manifest, Profile
 from src.result import Err, Ok, Result
 from src.sensors import ecg as typed_ecg
 from src.sensors.base import SensorReading
 from src.training.plan import Channel, Program, StoreRev, TrainingProfile
 from src.training.runtime import Subject, TrainingRuntime
 from src.training.safety import SafetyLimits
-from src.training.types import Occupancy, Phase, SafetyAction
+from src.training.types import Occupancy, Phase, SafetyAction, SignalQuality
 from src.units import (
     Bpm,
     GearRatio,
@@ -108,6 +122,13 @@ NO_SIGNAL: Final[str] = "no_signal"
 
 REPLAYED: Final[str] = "replay"
 """Stands in for the free names a record never carries (profile name, passenger)."""
+
+DELIVERY_ADMISSION_MARGIN: Final[Seconds] = Seconds(5.0)
+"""Admission ceiling, not a runtime deadline: closing expires after the next tick's I/O.
+
+Five seconds admits deferred DONE deliveries and deliveries before the retained
+idle window when ticks take a few seconds. Longer delays are refused explicitly.
+"""
 
 _MEMBER: Final = re.compile(r"[A-Za-z0-9_./-]{1,80}")
 
@@ -132,8 +153,6 @@ class _Tick:
     at: float
     """The instant as written."""
 
-    index: int
-
 
 @dataclass(frozen=True, slots=True)
 class _Arm:
@@ -149,10 +168,13 @@ type _Operation = (
     | commands.SetManualTarget
     | commands.Stop
     | commands.EmergencyStop
+    | commands.LatchEmergencyStop
     | commands.Acknowledge
     | commands.FaultReset
     | commands.Shutdown
     | commands.Attendant
+    | commands.AttendantPing
+    | commands.PresenceTrip
 )
 
 
@@ -164,24 +186,63 @@ class _Order:
     operation: _Operation
 
 
-type _Step = _Tick | _Order
+@dataclass(frozen=True, slots=True)
+class _Reading:
+    t: Seconds
+    at: float
+
+
+type _Step = _Tick | _Order | _Reading
 
 
 @dataclass(frozen=True, slots=True)
 class _Plan:
     expected: tuple[Decision, ...]
     steps: tuple[_Step, ...]
-    exchanges: tuple[Exchange, ...]
+    exchanges: tuple[Exchange, ...] | NativeFrames
     blocks: tuple[Delivery, ...]
     origin: Monotonic
-    geometry: GeometrySnapshot
+    geometry: GeometrySnapshot | AppliedRuntime
 
 
 def _position(step: _Step) -> tuple[float, int]:
     """Where a step stands in the replay (module docstring, "The order of things")."""
     if isinstance(step, _Tick):
+        return (step.t, 3 if step.t > 0.0 else 1)
+    if isinstance(step, _Reading):
         return (step.t, 2 if step.t > 0.0 else 0)
-    return (step.t, 3 if isinstance(step.operation, commands.Shutdown) else 1)
+    return (
+        step.t,
+        4 if isinstance(step.operation, commands.Shutdown) else (1 if step.t > 0.0 else 2),
+    )
+
+
+def _opens_drive_window(step: _Step) -> bool:
+    if isinstance(step, _Tick):
+        return True
+    if isinstance(step, _Reading):
+        return False
+    match step.operation:
+        case (
+            _Arm()
+            | commands.StartManual()
+            | commands.EmergencyStop()
+            | commands.FaultReset()
+            | commands.Shutdown()
+        ):
+            return True
+        case (
+            commands.ConfirmEstopWiring()
+            | commands.SetManualTarget()
+            | commands.Stop()
+            | commands.LatchEmergencyStop()
+            | commands.Acknowledge()
+            | commands.Attendant()
+            | commands.AttendantPing()
+            | commands.PresenceTrip()
+        ):
+            return False
+    raise assert_never(step.operation)
 
 
 def _decision(row: Row) -> Decision | None:
@@ -282,21 +343,37 @@ def _orders(recording: Recording) -> Result[tuple[_Order, ...], str]:
     return Ok(tuple(orders))
 
 
-def _plan(recording: Recording) -> Result[_Plan, str]:
+def _plan(recording: Recording, applied: AppliedRuntime | None) -> Result[_Plan, str]:
     """Everything a replay needs from the record, or EVERY reason it is not replayable.
 
-    All of them, not the first: a record the console writes today lacks several
-    things at once (commands in prose, no drive exchange, no geometry), and
-    whoever closes that gap needs the whole list.
+    An older producer can lack several inputs at once (commands, drive
+    exchanges, geometry). The refusal names each missing input.
     """
     problems: list[str] = []
     expected = _decisions(recording.rows)
     orders = _orders(recording)
-    exchanges = parse_frames(recording.frames)
+    native = any(frame.kind in NATIVE_KINDS | SDK_KINDS for frame in recording.frames)
+    exchanges = parse_native(recording.frames) if native else parse_frames(recording.frames)
     problems.extend(part.error for part in (expected, orders, exchanges) if isinstance(part, Err))
     if not recording.frames:
         problems.append("the record holds no drive exchange: nothing says what the drive answered")
-    geometry = recording.manifest.geometry
+    if any(
+        event.kind is EventKind.WARNING and event.detail.startswith(WARNING_PREFIX)
+        for event in recording.events
+    ):
+        problems.append("the console could not persist its configuration document (replay_config)")
+    if any(
+        event.kind is EventKind.WARNING and event.detail.startswith("replay_preamble:")
+        for event in recording.events
+    ):
+        problems.append("the console recorded less than 8 s of raw ECG before the origin")
+    if any(
+        event.kind is EventKind.WARNING
+        and event.detail == "replay_incomplete: pending_ecg_delivery"
+        for event in recording.events
+    ):
+        problems.append("the console closed with an unresolved ECG delivery")
+    geometry = recording.manifest.geometry if applied is None else applied
     if geometry is None:
         problems.append("the manifest holds no geometry: the runtime cannot be built as it was")
     if not recording.raw and any(
@@ -314,12 +391,29 @@ def _plan(recording: Recording) -> Result[_Plan, str]:
         or problems
     ):
         return Err("; ".join(problems))
-    ticks = tuple(
-        _Tick(Seconds(round(row.t, 3)), row.t, index) for index, row in enumerate(recording.rows)
+    ticks = tuple(_Tick(Seconds(round(row.t, 3)), row.t) for row in recording.rows)
+    readings = tuple(
+        _Reading(
+            Seconds(round(block.header.runtime_delivery.t, 3)), block.header.runtime_delivery.t
+        )
+        for block in recording.raw
+        if block.header.runtime_delivery is not None
     )
-    steps: tuple[_Step, ...] = tuple(sorted((*ticks, *orders.value), key=_position))
+    end = recording.rows[-1].t
+    if recording.manifest.end_observation is not None:
+        end = max(end, recording.manifest.end_observation.t)
+    if any(
+        reading.at < ticks[0].at - DELIVERY_ADMISSION_MARGIN - INSTANT_EPSILON
+        or reading.at > end + DELIVERY_ADMISSION_MARGIN + INSTANT_EPSILON
+        for reading in readings
+    ):
+        return Err("an ECG delivery lies outside the recorded tick window")
+    steps: tuple[_Step, ...] = tuple(sorted((*ticks, *orders.value, *readings), key=_position))
     first = steps[0].t
-    if any(exchange.t < first - TICK - INSTANT_EPSILON for exchange in exchanges.value):
+    entries = (
+        exchanges.value.exchanges if isinstance(exchanges.value, NativeFrames) else exchanges.value
+    )
+    if any(exchange.t < first - TICK - INSTANT_EPSILON for exchange in entries):
         return Err(
             "drive exchanges were recorded before the first tick or command: the record "
             "does not hold the idle ticks that made them (t <= 0)"
@@ -364,9 +458,12 @@ async def _confirm_inline(
 
 
 def _runtime(
-    geometry: GeometrySnapshot, profile: Profile | None, clock: ManualClock, drive: TapeDrive
+    geometry: GeometrySnapshot | AppliedRuntime,
+    profile: Profile | None,
+    clock: ManualClock,
+    drive: DriveBackend,
 ) -> Result[TrainingRuntime, str]:
-    """The runtime as the producer built it: the record's geometry, this checkout's limits."""
+    """Build from verified console settings, or simulation geometry and repository limits."""
     safety = (
         PANEL_SAFETY
         if profile is None
@@ -375,6 +472,18 @@ def _runtime(
         )
     )
     try:
+        if isinstance(geometry, AppliedRuntime):
+            return Ok(
+                TrainingRuntime(
+                    clock=clock,
+                    drive=drive,
+                    geometry=geometry.geometry,
+                    limits=geometry.runtime,
+                    safety=geometry.safety,
+                    motion=geometry.motion,
+                    limit_radius=geometry.limit_radius,
+                )
+            )
         machine = MachineGeometry(
             radius=Metres(geometry.reference_radius_m),
             ratio=GearRatio(geometry.gear_ratio),
@@ -407,6 +516,7 @@ class _Session:
         "_occupancy",
         "_origin",
         "_runtime",
+        "_source",
         "_subject",
     )
 
@@ -419,11 +529,12 @@ class _Session:
         self._occupancy: Occupancy = Occupancy(manifest.occupancy)
         self._subject: str = manifest.subject_id or REPLAYED
         self._attendant: bool = False
+        self._source: TapeSource = TapeSource(plan.blocks, clock, plan.origin)
         self._bridge: EcgBridge = EcgBridge(
             clock=clock,
-            source=TapeSource(plan.blocks, clock, plan.origin),
+            source=self._source,
             treatment=load_treatment(ECG_SAMPLE_RATE, DSP_OUTPUT_RATE),
-            heart_rate=runtime,
+            heart_rate=self,
             waveform=_NoWaveform(),
             sample_rate=ECG_SAMPLE_RATE,
             treat=_treat_inline,
@@ -433,6 +544,26 @@ class _Session:
     def now(self) -> Seconds:
         """The replay instant on the record's axis."""
         return elapsed(self._origin, self._clock.monotonic())
+
+    def observe_ecg(
+        self, now: Monotonic, seq: int, quality: SignalQuality, heart_rate: Bpm | None
+    ) -> None:
+        observed = self._source.observed
+        at = now if observed is None else Monotonic(self._origin + observed)
+        self._runtime.observe_ecg(at, seq, quality, heart_rate)
+
+    async def reading(self) -> None:
+        while await self._bridge.pump():
+            pass
+
+    async def apply(self, step: _Step) -> Decision | None:
+        if isinstance(step, _Tick):
+            return await self.tick(Seconds(step.at))
+        if isinstance(step, _Reading):
+            await self.reading()
+        else:
+            await self.issue(step)
+        return None
 
     async def tick(self, t: Seconds) -> Decision:
         """One tick, in the console's order: presence, ECG, then the runtime."""
@@ -469,14 +600,29 @@ class _Session:
                 runtime.request_stop(f"{actor}: stop")
             case commands.EmergencyStop():
                 runtime.request_estop(f"{actor}: e-stop")
+            case commands.LatchEmergencyStop():
+                runtime.supervisor.latch_estop(f"{actor}: e-stop")
             case commands.Acknowledge(estop_released):
                 runtime.acknowledge(actor, estop_released=estop_released)
             case commands.FaultReset():
                 await runtime.fault_reset()
             case commands.Shutdown():
                 await runtime.shutdown("replay: the recorded console exit")
+            case commands.Attendant() | commands.AttendantPing() | commands.PresenceTrip():
+                self._presence(order.operation)
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    def _presence(
+        self, command: commands.Attendant | commands.AttendantPing | commands.PresenceTrip
+    ) -> None:
+        match command:
             case commands.Attendant(present):
                 self._attendant = present
+            case commands.AttendantPing():
+                self._runtime.note_presence(self._clock.monotonic())
+            case commands.PresenceTrip(rule, action):
+                self._runtime.trip_from_thread(rule, action, "recorded camera movement verdict")
             case _ as unreachable:
                 assert_never(unreachable)
 
@@ -489,30 +635,43 @@ class ReplayedSession:
     divergence: Divergence | None
 
 
-async def _run(plan: _Plan, session: _Session, tape: TapeDrive, pace: Pace) -> ReplayedSession:
+async def _run(
+    plan: _Plan, session: _Session, tape: TapeDrive | TapeMaster, pace: Pace
+) -> ReplayedSession:
     """Walk the plan until its end or until the tape no longer holds."""
     actual: list[Decision] = []
     raised: str | None = None
-    for step in plan.steps:
-        pace.to(step.t)
-        decision: Decision | None = None
-        try:
-            if isinstance(step, _Tick):
-                decision = await session.tick(plan.expected[step.index].t)
-            else:
-                await session.issue(step)
-        except Exception as error:  # the code under test failing on recorded inputs: a finding
-            raised = type(error).__name__
+    groups = tuple(tuple(group) for _, group in groupby(plan.steps, key=lambda step: step.t))
+    active = tuple(
+        group[0].t for group in groups if any(_opens_drive_window(step) for step in group)
+    )
+    windows = dict(zip(active, (*active[1:], None), strict=True))
+    for group in groups:
+        opens = group[0].t in windows
+        if opens:
+            tape.begin_step(windows[group[0].t])
+        for step in group:
+            pace.to(step.t)
+            decision: Decision | None = None
+            try:
+                decision = await session.apply(step)
+            except Exception as error:  # the code under test failing on recorded inputs: a finding
+                raised = type(error).__name__
+                break
+            if tape.mismatch is not None:
+                break
+            if decision is not None:
+                actual.append(decision)
+        if raised is not None or tape.mismatch is not None:
             break
-        if tape.mismatch is not None:
-            # The step ran to its end on a tape that had stopped answering: what
-            # it decided is not a decision about the recorded session, and
-            # nothing after it is replayed.
+        if opens and tape.finish_step() is not None:
             break
-        if decision is not None:
-            actual.append(decision)
     pending = tape.pending
-    recorded = NO_FURTHER if pending is None else located(pending)
+    recorded = (
+        NO_FURTHER
+        if pending is None
+        else (pending.located() if isinstance(pending, NativeExchange) else located(pending))
+    )
     mismatch = tape.mismatch
     divergence: Divergence | None = None
     # To the millisecond, like every instant of a record: the report is what an
@@ -536,16 +695,45 @@ def integrity_line(file: str, code: str) -> str:
     return f"{file if _MEMBER.fullmatch(file) is not None else '<member>'}: {code}"
 
 
-async def replay_recording(recording: Recording) -> Result[ReplayReport, ReplayError]:
+async def replay_recording(
+    recording: Recording, config: Path | None = None
+) -> Result[ReplayReport, ReplayError]:
     """Replay one record already read from disk. Must run on a loop of its own."""
-    plan = _plan(recording)
+    applied: AppliedRuntime | None = None
+    if recording.manifest.machine_id != "simulation":
+        configured = load_configuration(config, recording.manifest.config_hash)
+        if isinstance(configured, Err):
+            return Err(ReplayError(configured.error))
+        applied = configured.value
+    plan = _plan(recording, applied)
     if isinstance(plan, Err):
         return Err(ReplayError(plan.error))
     # The first step's instant AS WRITTEN: the one place an absolute instant is
     # rebuilt, and why the producer does not round the stamp of its first command.
     clock = ManualClock(start=Monotonic(plan.value.origin + plan.value.steps[0].at))
-    tape = TapeDrive(plan.value.exchanges, clock, plan.value.origin)
-    runtime = _runtime(plan.value.geometry, recording.manifest.profile, clock, tape)
+    data = plan.value.exchanges
+    tape: TapeDrive | TapeMaster
+    drive: DriveBackend
+    if isinstance(data, NativeFrames):
+        if applied is None or applied.native_drive is None:
+            return Err(
+                ReplayError(
+                    "native Modbus replay requires native_drive "
+                    "in the verified configuration document"
+                )
+            )
+        settings, registers = applied.native_drive
+        tape = TapeMaster(data, clock, plan.value.origin, slave=settings.slave_address)
+        try:
+            drive = ATV320Drive(
+                clock, tape, settings, registers, executor_factory=InlineExecutor, wait=tape.wait
+            )
+        except ValueError:
+            return Err(ReplayError("this build refuses the native drive configuration"))
+    else:
+        tape = TapeDrive(data, clock, plan.value.origin)
+        drive = tape
+    runtime = _runtime(plan.value.geometry, recording.manifest.profile, clock, drive)
     if isinstance(runtime, Err):
         return Err(ReplayError(runtime.error))
     session = _Session(plan.value, recording.manifest, runtime.value, clock)
@@ -563,13 +751,14 @@ async def replay_recording(recording: Recording) -> Result[ReplayReport, ReplayE
             ),
             divergence=replayed.divergence,
             integrity=tuple(integrity_line(w.file, w.code) for w in recording.warnings),
+            configuration=ConfigurationCheck() if applied is None else applied.check,
         )
     )
 
 
-def replay(path: Path) -> Result[ReplayReport, ReplayError]:
+def replay(path: Path, config: Path | None = None) -> Result[ReplayReport, ReplayError]:
     """Read the record folder at ``path`` and replay it."""
     loaded = read(path)
     if isinstance(loaded, Err):
         return Err(ReplayError(f"the record cannot be read ({loaded.error.detail})"))
-    return asyncio.run(replay_recording(loaded.value))
+    return asyncio.run(replay_recording(loaded.value, sidecar(path) if config is None else config))

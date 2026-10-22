@@ -8,9 +8,12 @@ anonymous, and replays as the library declares.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import io
 import json
 import tarfile
+import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -49,6 +52,7 @@ from simulation.tests.replay_support import (
     as_library,
     as_real,
     at,
+    configuration_for,
     copy,
     edit_lines,
     edit_manifest,
@@ -61,7 +65,7 @@ from simulation.tests.replay_support import (
 from src.record.codec import JSON, mapping
 from src.record.reader import Recording, read
 from src.record.rows import JsonValue
-from src.record.schema import Manifest
+from src.record.schema import EventKind, Manifest
 from src.result import Err, Ok
 from src.training.types import Phase, SafetyAction
 from src.units import MotorRpm, OutputRpm, Seconds
@@ -76,6 +80,39 @@ LIBRARY = archives()
 def test_ex5_the_library_holds_at_least_three_scenarios_of_the_battery() -> None:
     assert len(simulated()) >= 3
     assert [name_of(archive) for archive in LIBRARY] == sorted(name_of(a) for a in LIBRARY)
+
+
+@pytest.mark.parametrize(
+    ("name", "occupancy"),
+    [("manual_bench_dsp", "bench"), ("manual_occupied_retarget_dsp", "occupied")],
+)
+def test_the_library_has_manual_sessions_with_raw_ecg(
+    name: str, occupancy: str, tmp_path: Path
+) -> None:
+    archive = next(archive for archive in LIBRARY if name_of(archive) == name)
+    unpacked = unpack(archive, tmp_path)
+    assert isinstance(unpacked, Ok)
+    recording = loaded(unpacked.value)
+    assert recording.manifest.kind == "manual"
+    assert recording.manifest.occupancy == occupancy
+    assert recording.manifest.profile is None
+    assert recording.manifest.machine_id == "simulation"
+    assert recording.raw
+    assert any(
+        samples
+        for block in recording.raw
+        for channel, samples in zip(block.header.channels, block.samples, strict=True)
+        if channel == "ECG"
+    )
+    targets = {
+        event.detail
+        for event in recording.events
+        if event.kind is EventKind.OPERATOR_ACTION and event.detail.startswith("manual_target ")
+    }
+    assert len(targets) >= (2 if occupancy == "occupied" else 1)
+    assert "stop" in {
+        event.detail for event in recording.events if event.kind is EventKind.OPERATOR_ACTION
+    }
 
 
 @pytest.mark.parametrize("archive", LIBRARY, ids=name_of)
@@ -126,6 +163,205 @@ def test_ex5_a_record_survives_its_archive_byte_for_byte(session: Path, tmp_path
     }
     assert restored == original
     assert loaded(unpacked.value).warnings == ()
+
+
+@pytest.mark.parametrize("limit", ["bytes", "members"])
+def test_archive_limits_are_checked_before_writing_the_next_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 3)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 2)
+    archive = tmp_path / "bounded.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for index in range(3):
+            member = tarfile.TarInfo(f"record/{index}")
+            member.size = 2 if limit == "bytes" else 0
+            tar.addfile(member, io.BytesIO(b"xx") if member.size > 0 else None)
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    expected = "MAX_ARCHIVE_MEMBERS" if limit == "members" else "MAX_ARCHIVE_BYTES"
+    assert result == Err("the archive exceeds " + expected)
+    assert not (into / "record" / ("2" if limit == "members" else "1")).exists()
+
+
+def test_announced_size_above_the_real_limit_is_refused_without_reading_its_payload(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "oversized.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        member = tarfile.TarInfo("record/manifest.json")
+        member.size = library.MAX_ARCHIVE_BYTES + 1
+        tar.addfile(member)
+    into = tmp_path / "out"
+    oversized = unpack(archive, into)
+    assert oversized == Err("the archive exceeds MAX_ARCHIVE_BYTES")
+    assert list(into.iterdir()) == []
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_member_limit_also_counts_repeated_files_and_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: bool
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 2)
+    archive = tmp_path / "repeated.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for _ in range(3):
+            member = tarfile.TarInfo("record" if directory else "record/empty")
+            member.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
+            tar.addfile(member)
+    repeated = unpack(archive, tmp_path / "out")
+    assert repeated == Err("the archive exceeds MAX_ARCHIVE_MEMBERS")
+
+
+@pytest.mark.parametrize("size", [-4 * 1024 * 1024, 1])
+def test_a_directory_cannot_reduce_the_byte_budget_or_carry_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size: int,
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 1024 * 1024)
+    directory = tarfile.TarInfo("record/padding")
+    directory.type = tarfile.DIRTYPE
+    directory.size = size
+    manifest = tarfile.TarInfo("record/manifest.json")
+    manifest.size = 4 * 1024 * 1024 + 2
+    archive = tmp_path / "directory-size.tar.gz"
+    archive.write_bytes(
+        gzip.compress(
+            directory.tobuf(format=tarfile.GNU_FORMAT) + manifest.tobuf() + b"x" * manifest.size,
+            mtime=0,
+        )
+    )
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    reason = "negative size" if size < 0 else "non-file member with a nonzero size"
+    assert result == Err("the archive holds a " + ("member with a " if size < 0 else "") + reason)
+    assert list(into.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
+)
+@pytest.mark.parametrize("payload_bytes", [1, 1024])
+def test_extension_payloads_cannot_read_past_the_decompressed_byte_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: bytes,
+    payload_bytes: int,
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", payload_bytes)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_HEADER_BYTES", tarfile.RECORDSIZE)
+    header = tarfile.TarInfo("extension")
+    header.type = kind
+    header.size = 32 * 1024 * 1024
+    archive = tmp_path / "extension.tar.gz"
+    archive.write_bytes(
+        gzip.compress(header.tobuf() + b"x" * (payload_bytes + tarfile.RECORDSIZE), mtime=0)
+    )
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    assert result == Err("the archive exceeds MAX_ARCHIVE_BYTES")
+    assert list(into.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
+)
+@pytest.mark.parametrize("after_manifest", [False, True])
+def test_an_extension_header_cannot_have_a_negative_size(
+    tmp_path: Path, kind: bytes, after_manifest: bool
+) -> None:
+    header = tarfile.TarInfo("extension")
+    header.type = kind
+    header.size = -1
+    prefix = tarfile.TarInfo("record/manifest.json").tobuf() if after_manifest else b""
+    archive = tmp_path / "negative-extension.tar.gz"
+    archive.write_bytes(gzip.compress(prefix + header.tobuf(format=tarfile.GNU_FORMAT), mtime=0))
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
+    files = [path.relative_to(into).as_posix() for path in into.rglob("*") if path.is_file()]
+    assert files == (["record/manifest.json"] if after_manifest else [])
+
+
+@pytest.mark.parametrize("limit", ["members", "bytes"])
+def test_archive_limits_do_not_depend_on_the_tarinfo_header_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    archive = tmp_path / "public-reader.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for index in range(3):
+            member = tarfile.TarInfo(f"record/{index}")
+            member.size = 1
+            tar.addfile(member, io.BytesIO(b"x"))
+    original = tarfile.TarInfo.fromtarfile
+
+    def plain_header(_cls: type[tarfile.TarInfo], tar: tarfile.TarFile) -> tarfile.TarInfo:
+        return original(tar)
+
+    monkeypatch.setattr(tarfile.TarInfo, "fromtarfile", classmethod(plain_header))
+    monkeypatch.setattr(library, "MAX_ARCHIVE_MEMBERS", 2 if limit == "members" else 10)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 2 if limit == "bytes" else 10)
+    result = unpack(archive, tmp_path / "out")
+    assert result == Err("the archive exceeds MAX_ARCHIVE_" + limit.upper())
+    assert not (tmp_path / "out" / "record" / "2").exists()
+
+
+@pytest.mark.parametrize("size", [-1, 1024 * 1024 + 1])
+def test_pax_effective_size_is_checked_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size: int,
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 1024 * 1024)
+    archive = tmp_path / "effective.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        member = tarfile.TarInfo("record/manifest.json")
+        member.pax_headers = {"size": str(size)}
+        tar.addfile(member)
+    into = tmp_path / "out"
+    result = unpack(archive, into)
+    expected = (
+        "the archive cannot be read as a .tar.gz of a record folder"
+        if size < 0
+        else "the archive exceeds MAX_ARCHIVE_BYTES"
+    )
+    assert result == Err(expected)
+    assert list(into.iterdir()) == []
+
+
+def test_deflate_errors_are_a_named_archive_refusal(tmp_path: Path) -> None:
+    archive = tmp_path / "deflate.tar.gz"
+    archive.write_bytes(bytes.fromhex("1f8b08000000000002ff07"))
+    with pytest.raises(zlib.error):
+        gzip.decompress(archive.read_bytes())
+    result = unpack(archive, tmp_path / "out")
+    assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
+
+
+def test_an_invalid_header_after_a_record_does_not_silently_end_the_archive(
+    tmp_path: Path,
+) -> None:
+    manifest = tarfile.TarInfo("record/manifest.json")
+    archive = tmp_path / "invalid-header.tar.gz"
+    archive.write_bytes(gzip.compress(manifest.tobuf() + b"x" * tarfile.BLOCKSIZE, mtime=0))
+    result = unpack(archive, tmp_path / "out")
+    assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
+
+
+@pytest.mark.parametrize("size", [None, -1])
+def test_unlimited_decompressed_reads_still_stop_at_the_byte_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: int | None
+) -> None:
+    monkeypatch.setattr(library, "MAX_ARCHIVE_BYTES", 2)
+    monkeypatch.setattr(library, "MAX_ARCHIVE_HEADER_BYTES", 1)
+    archive = tmp_path / "read-budget.tar.gz"
+    archive.write_bytes(gzip.compress(b"12345", mtime=0))
+    with library.BoundedArchive(archive) as content:
+        first = content.read(1)
+        assert first == b"1"
+        with pytest.raises(ValueError, match="the archive exceeds MAX_ARCHIVE_BYTES"):
+            content.read(size)
 
 
 def test_ex5_what_is_not_the_archive_of_one_record_is_refused(
@@ -541,9 +777,17 @@ def test_ex6_an_accepted_difference_is_a_file_next_to_the_archive(tmp_path: Path
 
 def _shelve(folder: Path, shelf: Path, name: str) -> Path:
     """Seal the (altered) record folder and put it in the library ``shelf`` as ``name``."""
+    manifest = loaded(folder).manifest
+    config: bytes | None = None
+    if manifest.machine_id != "simulation":
+        config = configuration_for(manifest)
+        digest = hashlib.sha256(config).hexdigest()
+        edit_manifest(folder, lambda line: line.update(config_hash=digest))
     reseal(folder)
     archive = shelf / f"{name}.tar.gz"
     pack(folder, archive)
+    if config is not None:
+        archive.with_name(name + ".config.json").write_bytes(config)
     return archive
 
 

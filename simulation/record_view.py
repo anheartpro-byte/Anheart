@@ -1,10 +1,13 @@
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Final
 
 from pydantic import TypeAdapter
 
+from simulation.real_records import unpack
 from src.record.codec import document, mapping
+from src.record.containment import resolve_under
 from src.record.reader import read
 from src.record.rows import JsonValue
 from src.record.schema import EndObservation, GeometrySnapshot, RecordError
@@ -15,9 +18,19 @@ OBSERVATION: Final[TypeAdapter[EndObservation]] = TypeAdapter(EndObservation)
 
 
 def view_record(root: Path, requested: str) -> Result[str, RecordError]:
-    path = (root / requested.lstrip("/")).resolve()
-    if not path.is_relative_to(root.resolve()):
+    path = resolve_under(root, requested.lstrip("/"))
+    if path is None:
         return Err(RecordError("view", "outside_root"))
+    if path.is_dir():
+        return _view_folder(path)
+    with TemporaryDirectory(prefix="anheart-view-") as work:
+        unpacked = unpack(path, Path(work))
+        if isinstance(unpacked, Err):
+            return Err(RecordError("view", unpacked.error))
+        return _view_folder(unpacked.value)
+
+
+def _view_folder(path: Path) -> Result[str, RecordError]:
     loaded = read(path)
     if isinstance(loaded, Err):
         return loaded
