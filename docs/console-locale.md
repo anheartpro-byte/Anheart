@@ -1914,11 +1914,23 @@ demander un nouveau départ. Au repos observé immobile, l'état non prêt refus
 seulement le départ, sans créer un verrou STO.
 
 Si seul le contrôle s'interrompt, la lecture affichée peut devenir `inconnue`
-car le sondage attend les tics terminés. L'écart est jugé par `loop_stall` seul ;
-il ne crée pas `sto_unreadable`. Après la reprise, une lecture réussie revient
-fraîche dans la période de sondage de 0,5 s. Des lectures qui échouent ou
-n'aboutissent pas alors que les tics continuent normalement verrouillent
-`sto_unreadable / ramp_down` au plus tard 2 s plus un tic après la dernière réussite.
+car le sondage attend les tics terminés. `loop_stall` juge cet écart ; il reste
+seul si aucune tentative postérieure à la dernière réussite n'est en échec ou
+en suspens. Le jeton du dernier tic peut encore permettre une lecture pendant
+la pause. Dès qu'une lecture commence, aucune nouvelle pause n'est déduite du
+budget STO avant une réussite. Une lecture échouée ou en suspens pendant la
+pause peut donc ajouter `sto_unreadable / ramp_down` à `loop_stall`.
+
+Une réussite remet le crédit de pause à zéro ; après la reprise, elle peut
+revenir dans la période de sondage de 0,5 s. Sans crédit antérieur, la perte
+de lecture est détectée au plus tard 2 s plus un intervalle de tic après la
+dernière réussite, pauses comprises. Avec un crédit D déjà acquis, la borne
+depuis cette réussite est 2 s + D + un intervalle de tic. D additionne les
+portions d'intervalles `loop_stall` excusées avant la première tentative non
+résolue, sans tentative pendant ces portions ; dès la première
+tentative sans réussite suivante, D ne peut plus croître et la détection arrive
+au plus tard 2 s plus un intervalle de tic après son début. Si le lien lui-même
+est perdu, les règles de communication dominent.
 
 Au premier démarrage, une source configurée apparaît `inconnue` avec son nom
 avant le premier tic. Si le variateur est absent ou hors tension et que ce
