@@ -266,7 +266,7 @@ a typo cannot silently turn a fault scenario into a nominal one. See the
 docstring of `scenario.py` for the full schema. Actions (`"do"`):
 
 `manual_target` (`output_rpm`, `expect`: accepted/refused/any), `operator_stop`,
-`remote_stop`, `estop`, `acknowledge` (`estop_released`), `drive_fault`
+`remote_stop`, `estop`, `acknowledge` (`estop_released`, `expect`), `drive_fault`
 (`fault`: a `DriveFault` name), `comms_loss` (`duration_s`), `drive_latency`
 (`latency_s`, `duration_s`), `drive_reverse`, `register_offset`, `ecg_dropout`,
 `ecg_quality` (`quality`), `ecg_repeat_seq`, `ecg_value` (`bpm`) (the four `ecg_*`
@@ -274,6 +274,15 @@ need `direct` mode), `bitalino_disconnect`, `attendant_leaves`, `tick_exception`
 `shutdown`. Subject events (`subject_events`) are the plant's own scripted
 events: `vasovagal_drop`, `hr_spike`, `electrode_off`, `mains_burst`, `nonresponder`.
 A drive fault already latched at the start is `"drive": {"initial_fault": ...}`.
+
+`sto_open` et `sto_close` prennent uniquement `at_s` et `do`, par exemple
+`{"at_s": 40, "do": "sto_open"}` puis `{"at_s": 50, "do": "sto_close"}`.
+Une faute dans ces noms, un instant absent, negatif ou non numerique, ou un
+parametre supplementaire est refuse. Le contact simule est partage par le
+variateur et la source STO du runtime : l'ouverture coupe le couple immediatement
+et laisse l'arbre ralentir en roue libre. La fermeture restaure le contact ;
+elle ne vaut ni acquittement nomme ni nouveau depart. Le rejeu des anciens
+enregistrements conserve sa source prete explicite.
 
 Failure-injection actions (the vocabulary of `failures.py`, all in the same schema):
 `drive_refuse_command` (`word`: a `ControlWord` name; the drive answers it with a
@@ -365,7 +374,7 @@ fraction is the share of HOLD ticks with a usable rate inside the zone;
 
 ## The failure matrix (`failures.py`)
 
-187 cases, each a scenario DOCUMENT in the ordinary schema plus what must be
+198 cases, each a scenario DOCUMENT in the ordinary schema plus what must be
 true afterwards. For every case `tests/test_failures.py` asserts: every
 invariant (motor at 0 after teardown, no torque, LFRD 0 where writable, no NaN,
 safety dominating, no frame after going silent), the output disabled or - when
@@ -384,6 +393,33 @@ messages and deadlines are in [`failures.py`](failures.py). The generated
 quick `report.json` / `report.html` contains each observed verdict, replacing
 the duplicated static result table. [`tests/test_failures.py`](tests/test_failures.py)
 also corrupts traces deliberately to verify that the judge detects broken promises.
+
+ANH-92 ajoute onze cas STO : `sto_open_auto_{baseline,warmup,hold,cooldown,recovery}`,
+`sto_open_manual_{ramp_up,at_speed,ramp_down}`, `sto_idle_start_gate`,
+`sto_close_without_acknowledgement` et `sto_acknowledgement_then_new_start`.
+Le juge verifie la phase avant injection, le verrou `sto_open / QUICK_STOP`,
+sa detection sous `STO_POLL_PERIOD + TICK` (0,7 s), la fin de seance, les
+consignes nulles et l'absence de reactivation jusqu'au nouveau depart explicite.
+Il verifie aussi l'etage de sortie coupe, le courant nul et la decroissance
+exponentielle en roue libre lorsqu'un arbre tourne. Le repos refuse le depart
+ouvert sans verrou puis accepte ferme ; un acquittement est refuse ouvert,
+accepte ferme, et ne reprend pas la seance. Les observations du verrou et de la
+fin restent en memoire dans `RunResult.sto`, hors du format d'enregistrement.
+Les mesures de 187 cas ci-dessus restent historiques ; les onze nouveaux cas
+sont disponibles avec `simulation.quick --all` et `--failures`, via le meme juge.
+Le keepalive reste en tete du tic de detection : il peut seulement reecrire
+la reference precedente, jamais la depasser. Le juge exige ensuite une ecriture
+zero dans ce meme tic, puis aucune reference non nulle ni activation jusqu'au
+nouveau depart. Le couple est deja coupe par le contact pendant ce tic.
+
+`SimulatedStoSource` lit instantanement le contact et n'injecte pas d'echec de
+lecture. `sto_unreadable / RAMP_DOWN` reste prouve par les tests Pi T02
+`test_a_single_failed_sto_read_does_not_end_motion_but_age_does` et
+`test_never_read_sto_latches_during_possible_motion`, avec la source de registre.
+Une perte du lien du variateur dans ce harnais teste `comms_lost` ; elle
+n'isolerait pas la lecture STO. Les deux noms STO sont conserves a l'import
+anonymise, tandis que le detail libre est retire. Aucun essai materiel n'est
+revendique ; le cablage et la validation au banc restent a faire.
 
 The same families run against the REAL composition root (`build_panel`, HTTP
 API, `LocalPanel.run` for SIGTERM and a dying web server) in

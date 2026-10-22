@@ -15,7 +15,7 @@ from src.record.codec import EMAIL
 from src.record.reader import Recording
 from src.record.schema import Event, EventKind, Manifest
 from src.result import Err, Ok, Result
-from src.training.runtime import EndReason
+from src.training.runtime import RULE_STO_OPEN, RULE_STO_UNREADABLE, EndReason
 from src.training.safety import ALL_RULES
 from src.training.types import Phase, SafetyAction
 
@@ -29,7 +29,9 @@ _DATES: Final = re.compile(
     rb"(?:T[0-9]{6}Z)?(?![0-9A-Za-z])"
     rb"|(?<![0-9A-Za-z.])[1-9][0-9]{9}(?:[0-9]{3}|[0-9]{6})?(?![0-9A-Za-z])"
 )
-_RULES: Final = frozenset((*ALL_RULES, *MOTION_RULES, *START_RULES))
+_RULES: Final = frozenset(
+    (*ALL_RULES, *MOTION_RULES, *START_RULES, RULE_STO_OPEN, RULE_STO_UNREADABLE)
+)
 _ACTIONS: Final = frozenset(action.name for action in SafetyAction)
 _FAULTS: Final = frozenset(fault.mnemonic for fault in DriveFault)
 _PHASES: Final = frozenset(phase.value for phase in Phase)

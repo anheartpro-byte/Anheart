@@ -33,17 +33,20 @@ real composition root in ``raspberry-pi/tests/test_failure_*.py``.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
+from itertools import pairwise
 from typing import Final
 
-from simulation.harness import RunResult, run_scenario
+from simulation.harness import TICK, RunResult, run_scenario
 from simulation.invariants import Violation, check_expectations, check_invariants, rules_seen
 from simulation.scenario import Scenario, parse_scenario
 from simulation.tracefile import JsonValue
-from src.motor.drive import DriveFault, describe_fault
-from src.motor.simulated import lft_code_for
+from src.motor.drive import ControlWord, DriveFault, describe_fault
+from src.motor.simulated import SimulatedDriveConfig, lft_code_for
+from src.motor.sto import STO_POLL_PERIOD, StoState
 from src.result import Err
 
 FAILURE_PROFILE: Final[str] = "jog_150_short"
@@ -94,6 +97,7 @@ class Category(Enum):
     ECG = "ecg"
     PROCESS = "process"
     OPERATOR = "operator"
+    STO = "sto"
 
 
 type Document = Mapping[str, JsonValue]
@@ -859,9 +863,113 @@ def _operator_cases() -> list[FailureCase]:
     ]
 
 
+def _sto_cases() -> list[FailureCase]:
+    result: list[FailureCase] = []
+    for kind, phases in (("auto", AUTO_PHASES), ("manual", MANUAL_PHASES)):
+        for phase, at in phases.items():
+            name = f"sto_open_{kind}_{phase}"
+            actions: list[Document] = [{"at_s": at, "do": "sto_open"}]
+            result.append(
+                FailureCase(
+                    name=name,
+                    category=Category.STO,
+                    description=f"STO opens during {kind} {phase}; torque is removed and latched.",
+                    document=(
+                        _auto(name, actions, at=at) if kind == "auto" else _manual(name, actions)
+                    ),
+                    end_reasons=(
+                        frozenset({"operator_stop"})
+                        if kind == "manual" and at > MANUAL_STOP_S
+                        else VERDICT
+                    ),
+                    rules=("sto_open",),
+                    messages=("sto_open (QUICK_STOP)",),
+                    silent=False,
+                    at=at,
+                    phase=phase if kind == "auto" else MANUAL_PHASE_NAMES[phase],
+                    deadline=at + STO_POLL_PERIOD + TICK,
+                )
+            )
+    result.extend(
+        (
+            FailureCase(
+                name="sto_idle_start_gate",
+                category=Category.STO,
+                description="At standstill, OPEN refuses START without a latch; READY permits it.",
+                document=_manual(
+                    "sto_idle_start_gate",
+                    [
+                        {"at_s": 1, "do": "operator_stop"},
+                        {"at_s": 10, "do": "sto_open"},
+                        {"at_s": 11, "do": "start_again", "expect": "refused"},
+                        {"at_s": 12, "do": "sto_close"},
+                        {"at_s": 13, "do": "start_again", "expect": "accepted"},
+                        {"at_s": 14, "do": "operator_stop"},
+                    ],
+                    climb=False,
+                    duration_s=25,
+                ),
+                end_reasons=frozenset({"operator_stop"}),
+                messages=("STO",),
+                silent=False,
+                at=10,
+                phase="done",
+            ),
+            FailureCase(
+                name="sto_close_without_acknowledgement",
+                category=Category.STO,
+                description="Closing the contact never clears the latch or restarts the session.",
+                document=_manual(
+                    "sto_close_without_acknowledgement",
+                    [
+                        {"at_s": 170, "do": "sto_open"},
+                        {"at_s": 171, "do": "sto_close"},
+                        {"at_s": 172, "do": "start_again", "expect": "refused"},
+                        {"at_s": 329, "do": "start_again", "expect": "refused"},
+                    ],
+                ),
+                end_reasons=VERDICT,
+                rules=("sto_open",),
+                messages=("sto_open (QUICK_STOP)",),
+                silent=False,
+                at=170,
+                phase="hold",
+                deadline=170 + STO_POLL_PERIOD + TICK,
+            ),
+            FailureCase(
+                name="sto_acknowledgement_then_new_start",
+                category=Category.STO,
+                description="Acknowledgement requires READY, followed by a new START.",
+                document=_manual(
+                    "sto_acknowledgement_then_new_start",
+                    [
+                        {"at_s": 40, "do": "sto_open"},
+                        {"at_s": 41, "do": "acknowledge", "expect": "refused"},
+                        {"at_s": 42, "do": "start_again", "expect": "refused"},
+                        {"at_s": 43, "do": "sto_close"},
+                        {"at_s": 44, "do": "start_again", "expect": "refused"},
+                        {"at_s": 190, "do": "acknowledge", "expect": "accepted"},
+                        {"at_s": 210, "do": "start_again", "expect": "accepted"},
+                        {"at_s": 211, "do": "manual_target", "output_rpm": 3},
+                        {"at_s": 240, "do": "operator_stop"},
+                    ],
+                ),
+                end_reasons=frozenset({"operator_stop"}),
+                rules=("sto_open",),
+                messages=("sto_open (QUICK_STOP)",),
+                silent=False,
+                at=40,
+                phase="hold",
+                deadline=40 + STO_POLL_PERIOD + TICK,
+            ),
+        )
+    )
+    return result
+
+
 def cases() -> tuple[FailureCase, ...]:
     """The whole matrix, in a stable order."""
-    return (*_drive_cases(), *_ecg_cases(), *_process_cases(), *_operator_cases())
+    return (*_drive_cases(), *_ecg_cases(), *_process_cases(), *_operator_cases(), *_sto_cases())
 
 
 # =========================================================================
@@ -1016,6 +1124,133 @@ def _check_idle(result: RunResult) -> list[Violation]:
     ]
 
 
+def _check_sto(case: FailureCase, result: RunResult) -> list[Violation]:
+    if case.category is not Category.STO:
+        return []
+    at = case.at
+    if at is None:
+        return [Violation("sto_evidence", None, "missing contact injection instant")]
+    rows = [row for row in result.trace.rows if row.t >= at - 1e-6]
+    observations = [view for view in result.sto if view.at >= at - 1e-6]
+    if not rows or not observations:
+        return [Violation("sto_evidence", at, "no post-injection observation")]
+    if not case.rules:
+        opened = [view for view in observations if view.state is StoState.OPEN]
+        refused = [request for request in result.requests if not request.accepted]
+        accepted = [request for request in result.requests if request.accepted]
+        if (
+            not opened
+            or any(view.latched for view in opened)
+            or not any("StoNotReady" in request.detail for request in refused)
+            or not accepted
+        ):
+            return [
+                Violation(
+                    "sto_idle_gate", at, "OPEN must refuse START without a latch; READY permits it"
+                )
+            ]
+        return []
+    restart = next(
+        (
+            request.at
+            for request in result.requests
+            if request.request == "start" and request.accepted
+        ),
+        float("inf"),
+    )
+    acknowledge = next(
+        (
+            request.at
+            for request in result.requests
+            if request.request == "acknowledge" and request.accepted
+        ),
+        float("inf"),
+    )
+    found: list[Violation] = []
+    locked = [view for view in observations if view.at < acknowledge - 1e-6]
+    if not locked or any(not view.latched or view.end_reason is None for view in locked):
+        found.append(
+            Violation("sto_latch", at, "OPEN must latch and end the session until acknowledgement")
+        )
+    stopped = [row for row in rows if row.t < restart - 1e-6]
+    if any(
+        row.setpoint_motor_rpm != 0
+        or row.lfrd_motor_rpm != 0
+        or row.sim_state in {"OPERATION_ENABLED", "FAULT_REACTION_RAMP_STOP", "DISABLING_ON_RAMP"}
+        or (
+            (row.safety_action != "QUICK_STOP" or row.safety_rule != "sto_open")
+            and row.t < acknowledge - 1e-6
+        )
+        for row in stopped
+    ):
+        found.append(
+            Violation("sto_output", at, "zero reference and no torque required before a new START")
+        )
+    found.extend(_check_sto_frames(result, at, restart))
+    first = rows[0]
+    if first.sim_state != "SWITCH_ON_DISABLED" or first.current_a != 0:
+        found.append(
+            Violation("sto_torque", first.t, "STO must disable the output stage with zero current")
+        )
+    turning = [row for row in stopped if row.measured_motor_rpm > 1]
+    tau = SimulatedDriveConfig().tau_coast
+    if any(
+        abs(
+            after.measured_motor_rpm
+            - before.measured_motor_rpm * math.exp(-(after.t - before.t) / tau)
+        )
+        > 1
+        for before, after in pairwise(turning)
+    ):
+        found.append(
+            Violation(
+                "sto_coast", at, "the turning shaft must follow the simulator's freewheel decay"
+            )
+        )
+    return found
+
+
+def _check_sto_frames(result: RunResult, at: float, restart: float) -> list[Violation]:
+    found: list[Violation] = []
+    zeroed = False
+    prior = next(
+        (row.setpoint_motor_rpm for row in reversed(result.trace.rows) if row.t < at - 1e-6),
+        0,
+    )
+    detection = next(row.t for row in result.trace.rows if row.t >= at - 1e-6)
+    for frame in result.trace.frames:
+        stamp = frame["t"]
+        if not isinstance(stamp, float | int) or not at <= stamp < restart:
+            continue
+        value = frame["value"]
+        if (
+            not zeroed
+            and frame["kind"] == "speed"
+            and value != 0
+            and (not isinstance(value, int) or value > prior or stamp > detection + 1e-6)
+        ):
+            found.append(
+                Violation(
+                    "sto_keepalive", stamp, "only the previous reference may precede detection"
+                )
+            )
+        if frame["kind"] in {"speed", "emergency_zero"} and frame["value"] == 0:
+            if not zeroed and stamp > detection + 1e-6:
+                found.append(
+                    Violation("sto_zero", stamp, "zero reference missed the detection tick")
+                )
+            zeroed = True
+        if (zeroed and frame["kind"] == "speed" and frame["value"] != 0) or (
+            frame["kind"] == "command" and frame["value"] == ControlWord.ENABLE_OPERATION.value
+        ):
+            found.append(
+                Violation("sto_reactivation", stamp, "drive reactivated before a new START")
+            )
+    if not zeroed:
+        found.append(Violation("sto_zero", at, "no zero reference was sent after STO detection"))
+    return found
+
+
 def judge(case: FailureCase, result: RunResult) -> tuple[Violation, ...]:
     """Every invariant, the scenario's own expectations, and the failure-specific checks."""
     return (
@@ -1029,4 +1264,5 @@ def judge(case: FailureCase, result: RunResult) -> tuple[Violation, ...]:
         *_check_rates(case, result),
         *_check_stopped(case, result),
         *_check_idle(result),
+        *_check_sto(case, result),
     )
