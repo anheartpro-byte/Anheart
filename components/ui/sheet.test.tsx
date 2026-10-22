@@ -122,6 +122,17 @@ describe("ANH-203 sheet: the parts", () => {
 });
 
 describe("ANH-203 sheet: the content", () => {
+  it.each(SIDES)(
+    "side %s: reserves feedback space only for a lateral mobile sidebar",
+    (side) => {
+      const page = draw(<SheetContent side={side} data-mobile="true" className="p-0" />);
+      expect(page.slot("sheet-content").classes.includes(
+        "data-[mobile=true]:pb-[var(--feedback-toaster-space,0px)]",
+      )).toBe(side === "left" || side === "right");
+      expect(page.slot("sheet-content").classes).toContain("p-0");
+    },
+  );
+
   it("draws the sheet in a portal, after the overlay that dims the page", () => {
     const page = draw(<SheetContent>Menu</SheetContent>);
 

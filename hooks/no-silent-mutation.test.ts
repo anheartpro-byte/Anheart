@@ -2,12 +2,25 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 
 /**
  * Source check for the dashboard: a mutation is only called through
  * `useMutationWithFeedback`, an action through `useActionWithFeedback`, and
- * no handler next to one swallows an error. A Convex client (`useConvex()`)
- * may read with `.query`, never write with `.mutation` or `.action`.
+ * no handler next to one swallows an error. The original text rule refuses
+ * every `.mutation(...)` or `.action(...)` in a file mentioning `useConvex`,
+ * `ConvexReactClient` or `ConvexHttpClient`, regardless of the receiver.
+ * Syntax inspection also tracks clients initialized by those hooks or
+ * constructors, and variables, parameters or properties directly annotated
+ * as `ConvexReactClient` or `ConvexHttpClient`. It refuses write-method access,
+ * including extraction, bind/call/apply, optional chains, literal bracket keys
+ * and destructuring. Extracting a write method is refused before it is called.
+ * Queries and an unrelated `state.action` property remain accepted. Syntax
+ * limits include variable-computed keys (`convex[name]`), aliased imports,
+ * clients without a recognized initializer or direct type annotation, and
+ * lexical shadowing of variable or property names. The text rule still catches
+ * direct calls outside that tracking. This is not an exhaustive list or type
+ * analysis. Error-handler inspection reads text within the same file.
  */
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -35,6 +48,94 @@ const CONVEX_CLIENT = /\b(useConvex|ConvexReactClient|ConvexHttpClient)\b/;
 const CLIENT_WRITE = /\.(mutation|action)\s*\(/;
 const ANY_CALL =
   /\b(useMutation|useMutationWithFeedback|useAction|useActionWithFeedback|useConvex)\b/;
+
+function clientWrite(source: string): boolean {
+  const tree = ts.createSourceFile(
+    "source.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.TSX,
+  );
+  const clients = new Set<string>();
+  const clientProperties = new Set<string>();
+  const isClient = (expression: ts.Expression): boolean =>
+    (ts.isIdentifier(expression) && clients.has(expression.text)) ||
+    (ts.isPropertyAccessExpression(expression) &&
+      clientProperties.has(expression.name.text)) ||
+    (ts.isCallExpression(expression) &&
+      ts.isIdentifier(expression.expression) &&
+      expression.expression.text === "useConvex") ||
+    (ts.isNewExpression(expression) &&
+      ts.isIdentifier(expression.expression) &&
+      (expression.expression.text === "ConvexReactClient" ||
+        expression.expression.text === "ConvexHttpClient"));
+  const collect = (node: ts.Node): void => {
+    if (
+      (ts.isVariableDeclaration(node) ||
+        ts.isParameter(node) ||
+        ts.isPropertyDeclaration(node) ||
+        ts.isPropertySignature(node)) &&
+      ts.isIdentifier(node.name) &&
+      ((node.type &&
+        ts.isTypeReferenceNode(node.type) &&
+        ts.isIdentifier(node.type.typeName) &&
+        (node.type.typeName.text === "ConvexReactClient" ||
+          node.type.typeName.text === "ConvexHttpClient")) ||
+        ("initializer" in node &&
+          node.initializer &&
+          isClient(node.initializer)))
+    ) {
+      if (ts.isPropertyDeclaration(node) || ts.isPropertySignature(node)) {
+        clientProperties.add(node.name.text);
+      } else {
+        clients.add(node.name.text);
+        if (ts.isParameter(node) && node.modifiers?.length) {
+          clientProperties.add(node.name.text);
+        }
+      }
+    }
+    ts.forEachChild(node, collect);
+  };
+  collect(tree);
+
+  const isWrite = (name: string): boolean =>
+    name === "mutation" || name === "action";
+  const visit = (node: ts.Node): boolean | undefined => {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      isClient(node.expression) &&
+      isWrite(node.name.text)
+    ) {
+      return true;
+    }
+    if (
+      ts.isElementAccessExpression(node) &&
+      isClient(node.expression) &&
+      ts.isStringLiteralLike(node.argumentExpression) &&
+      isWrite(node.argumentExpression.text)
+    ) {
+      return true;
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer &&
+      isClient(node.initializer) &&
+      node.name.elements.some((element) => {
+        const name = element.propertyName ?? element.name;
+        return (
+          (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) &&
+          isWrite(name.text)
+        );
+      })
+    ) {
+      return true;
+    }
+    return ts.forEachChild(node, visit);
+  };
+  return visit(tree) === true;
+}
 
 function withoutComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -115,7 +216,10 @@ export function silentMutationProblems(source: string): string[] {
   for (const { pattern, problem } of DIRECT_CALLS) {
     if (pattern.test(code)) problems.push(problem);
   }
-  if (CONVEX_CLIENT.test(code) && CLIENT_WRITE.test(code)) {
+  if (
+    CONVEX_CLIENT.test(code) &&
+    (CLIENT_WRITE.test(code) || clientWrite(source))
+  ) {
     problems.push(
       "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
     );
@@ -303,6 +407,117 @@ describe("ANH-194 EX-3 the other ways to write through Convex", () => {
       "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
     ]);
   });
+
+  describe.each([
+    ["useConvex", "useConvex()"],
+    ["ConvexReactClient", "new ConvexReactClient(url)"],
+    ["ConvexHttpClient", "new ConvexHttpClient(url)"],
+  ])("ANH-232 EX-5 writes through %s", (_client, initializer) => {
+    it.each([
+      [
+        "bind followed by a call",
+        "const send = convex.mutation.bind(convex); await send(api.x.y, {});",
+      ],
+      ["call", "await convex.mutation.call(convex, api.x.y, {});"],
+      ["apply", "await convex.action.apply(convex, [api.x.y, {}]);"],
+      [
+        "a method alias followed by a call",
+        "const send = convex.mutation; await send(api.x.y, {});",
+      ],
+      ["an optional call", "await convex.mutation?.(api.x.y, {});"],
+      ["an optional client", "await convex?.mutation(api.x.y, {});"],
+      ["double-quoted brackets", 'await convex["mutation"](api.x.y, {});'],
+      ["single-quoted brackets", "await convex['action'](api.x.y, {});"],
+      ["a literal template key", "await convex[`mutation`](api.x.y, {});"],
+      [
+        "a destructured action alias",
+        "const { action: run } = convex; await run(api.x.y, {});",
+      ],
+      ["spaces after the dot", "await convex.  mutation(api.x.y, {});"],
+      ["a newline after the dot", "await convex.\n action(api.x.y, {});"],
+    ])("refuses %s", (_label, write) => {
+      expect(
+        silentMutationProblems(`const convex = ${initializer};\n${write}`),
+      ).toEqual([
+        "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
+      ]);
+    });
+
+    it("accepts queries and an unrelated object's action property", () => {
+      expect(
+        silentMutationProblems(`
+          const convex = ${initializer};
+          const filter = { action: state.action };
+          await convex.query(api.audit.list, filter);`),
+      ).toEqual([]);
+    });
+  });
+
+  it("refuses a mutation destructured directly from useConvex", () => {
+    expect(
+      silentMutationProblems(
+        "const { mutation } = useConvex(); await mutation(api.x.y, {});",
+      ),
+    ).toEqual([
+      "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
+    ]);
+  });
+
+  it.each([
+    [
+      "a client parameter's direct mutation",
+      "function save(client: ConvexReactClient) { return client.mutation(api.x.y, {}); }",
+    ],
+    [
+      "a client in props beside a useConvex import",
+      'import { useConvex } from "convex/react"; props.convex.mutation(api.x.y, {});',
+    ],
+    [
+      "a client member beside a ConvexHttpClient import",
+      'import { ConvexHttpClient } from "convex/browser"; this.client.action(api.x.y, {});',
+    ],
+  ])("preserves the textual refusal of %s", (_label, source) => {
+    expect(silentMutationProblems(source)).toEqual([
+      "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
+    ]);
+  });
+
+  describe.each(["ConvexReactClient", "ConvexHttpClient"])(
+    "ANH-232 EX-5 annotated %s clients",
+    (clientType) => {
+      it.each([
+        [
+          "a parameter's bound mutation",
+          `function save(client: ${clientType}) { return client.mutation.bind(client); }`,
+        ],
+        [
+          "a property's bound action",
+          `class Editor { client: ${clientType}; save() { return this.client.action.bind(this.client); } }`,
+        ],
+        [
+          "a constructor parameter property's extracted mutation",
+          `class Editor { constructor(private client: ${clientType}) {} save() { return this.client.mutation; } }`,
+        ],
+        [
+          "an interface property's bound mutation",
+          `interface Props { convex: ${clientType}; } function save(props: Props) { return props.convex.mutation.bind(props.convex); }`,
+        ],
+      ])("refuses %s", (_label, source) => {
+        expect(silentMutationProblems(source)).toEqual([
+          "a Convex client writes directly: call useMutationWithFeedback or useActionWithFeedback instead",
+        ]);
+      });
+
+      it("accepts an annotated client's query and state.action", () => {
+        expect(
+          silentMutationProblems(`
+            function read(client: ${clientType}) {
+              return client.query(api.audit.list, { action: state.action });
+            }`),
+        ).toEqual([]);
+      });
+    },
+  );
 
   it("accepts a client that only reads, and checks the handlers beside it", () => {
     const reads =

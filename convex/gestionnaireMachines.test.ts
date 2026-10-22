@@ -299,6 +299,205 @@ describe("ANH-194 EX-4 a deleted machine on the gestionnaire's page", () => {
   });
 });
 
+describe("ANH-232 orphaned gestionnaire machine links", () => {
+  const auditEntries = (w: World) =>
+    w.t.run((ctx) => ctx.db.query("audit_log").collect());
+  const seed = async () => {
+    const w = await seedWorld(modules);
+    const auditBefore = await auditEntries(w);
+    return { w, auditBefore };
+  };
+
+  it("T01-a removes an unnamed orphan, counts only visible removals, and audits both", async () => {
+    const { w, auditBefore } = await seed();
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("machine_gestionnaires", {
+        organizationId: w.orgA,
+        machineId: w.otherMachine,
+        gestionnaireId: w.manager,
+        isOwner: false,
+        createdAt: NOW,
+        createdBy: w.admin,
+      });
+      await ctx.db.delete(w.otherMachine);
+    });
+    const before = await links(w);
+
+    expect(await setMachines(w, w.manager, [])).toEqual({ added: 0, removed: 1 });
+
+    const after = await links(w);
+    expect(linkOf(after, w.otherMachine, w.manager)).toBeUndefined();
+    expect(linkOf(after, w.machine, w.manager)).toBeUndefined();
+    expect(linksOfOthers(after, w.manager)).toEqual(
+      linksOfOthers(before, w.manager),
+    );
+    const entries = (await auditEntries(w)).slice(auditBefore.length);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      action: "gestionnaire_machines.set",
+      organizationId: w.orgA,
+      targetId: w.manager,
+      details: {
+        added: [],
+        removed: expect.arrayContaining([w.machine, w.otherMachine]),
+      },
+    });
+    expect(entries[0].details?.removed).toHaveLength(2);
+  });
+
+  it("T01-b removes a named orphan without error or recreating its link", async () => {
+    const { w, auditBefore } = await seed();
+    await w.t.run((ctx) => ctx.db.delete(w.machine));
+
+    expect(
+      await setMachines(w, w.manager, [w.machine, w.otherMachine, w.machine]),
+    ).toEqual({ added: 1, removed: 0 });
+
+    const after = await links(w);
+    expect(linkOf(after, w.machine, w.manager)).toBeUndefined();
+    expect(linkOf(after, w.otherMachine, w.manager)).toMatchObject({
+      organizationId: w.orgA,
+      isOwner: false,
+    });
+    expect((await auditEntries(w)).slice(auditBefore.length)).toMatchObject([
+      {
+        action: "gestionnaire_machines.set",
+        details: { added: [w.otherMachine], removed: [w.machine] },
+      },
+    ]);
+  });
+
+  it("T01-c audits an orphan-only cleanup despite zero visible changes", async () => {
+    const { w, auditBefore } = await seed();
+    await w.t.run((ctx) => ctx.db.delete(w.machine));
+
+    expect(await setMachines(w, w.manager, [])).toEqual({ added: 0, removed: 0 });
+    expect(linkOf(await links(w), w.machine, w.manager)).toBeUndefined();
+    const entries = (await auditEntries(w)).slice(auditBefore.length);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      action: "gestionnaire_machines.set",
+      organizationId: w.orgA,
+      targetId: w.manager,
+      details: { added: [], removed: [w.machine] },
+    });
+
+    expect(await setMachines(w, w.manager, [])).toEqual({ added: 0, removed: 0 });
+    expect(await auditEntries(w)).toEqual([...auditBefore, ...entries]);
+  });
+
+  it.each([false, true])(
+    "T01-d preserves a soft-deleted link without counting or auditing it (named: %s)",
+    async (named) => {
+      const { w, auditBefore } = await seed();
+      await deleteMachine(w, w.machine);
+      const before = await links(w);
+
+      expect(await setMachines(w, w.manager, named ? [w.machine] : [])).toEqual({
+        added: 0,
+        removed: 0,
+      });
+      expect(await links(w)).toEqual(before);
+      expect(await auditEntries(w)).toEqual(auditBefore);
+    },
+  );
+
+  it("T01-e cleans local orphans and leaves the same gestionnaire's foreign orphan untouched", async () => {
+    const { w, auditBefore } = await seed();
+    const foreignLink = await w.t.run(async (ctx) => {
+      const id = await ctx.db.insert("machine_gestionnaires", {
+        organizationId: w.orgB,
+        machineId: w.orgBMachine,
+        gestionnaireId: w.manager,
+        isOwner: false,
+        createdAt: NOW,
+        createdBy: w.admin,
+      });
+      await ctx.db.delete(w.orgBMachine);
+      await ctx.db.delete(w.machine);
+      return await ctx.db.get(id);
+    });
+
+    expect(await setMachines(w, w.manager, [w.otherMachine])).toEqual({
+      added: 1,
+      removed: 0,
+    });
+    const after = await links(w);
+    expect(linkOf(after, w.machine, w.manager)).toBeUndefined();
+    expect(linkOf(after, w.orgBMachine, w.manager)).toEqual(foreignLink);
+    expect(linkOf(after, w.otherMachine, w.manager)?.organizationId).toBe(w.orgA);
+    expect((await auditEntries(w)).slice(auditBefore.length)).toMatchObject([
+      {
+        organizationId: w.orgA,
+        details: { added: [w.otherMachine], removed: [w.machine] },
+      },
+    ]);
+  });
+
+  it.each(["live", "deleted", "missing"] as const)(
+    "T01-e refuses an unlinked foreign machine (%s) before any cleanup or audit",
+    async (state) => {
+      const { w, auditBefore } = await seed();
+      await w.t.run((ctx) => ctx.db.delete(w.machine));
+      if (state === "deleted") await deleteMachine(w, w.orgBMachine);
+      if (state === "missing") {
+        await w.t.run((ctx) => ctx.db.delete(w.orgBMachine));
+      }
+      const before = await links(w);
+
+      for (const actor of ["orgAdmin", "admin"] as const) {
+        await expect(
+          as(w.t, actor).mutation(api.machines.setGestionnaireMachines, {
+            gestionnaireId: w.manager,
+            machineIds: [w.otherMachine, w.orgBMachine],
+          }),
+        ).rejects.toThrow(/machine_not_found/);
+        expect(await links(w)).toEqual(before);
+        expect(await auditEntries(w)).toEqual(auditBefore);
+      }
+    },
+  );
+
+  it.each(["deleted", "missing"] as const)(
+    "T01-e refuses an unlinked local machine (%s) before any cleanup or audit",
+    async (state) => {
+      const { w, auditBefore } = await seed();
+      await w.t.run((ctx) => ctx.db.delete(w.machine));
+      if (state === "deleted") await deleteMachine(w, w.otherMachine);
+      else await w.t.run((ctx) => ctx.db.delete(w.otherMachine));
+      const before = await links(w);
+
+      await expect(setMachines(w, w.manager, [w.otherMachine])).rejects.toThrow(
+        /machine_not_found/,
+      );
+      expect(await links(w)).toEqual(before);
+      expect(await auditEntries(w)).toEqual(auditBefore);
+    },
+  );
+
+  it.each([
+    { actor: "manager", message: /not_authorized/ },
+    { actor: "patient", message: /not_authorized/ },
+    { actor: "orgBAdmin", message: /gestionnaire_not_found/ },
+  ] as const)(
+    "T01-e preserves the refusal for $actor without cleanup or audit",
+    async ({ actor, message }) => {
+      const { w, auditBefore } = await seed();
+      await w.t.run((ctx) => ctx.db.delete(w.machine));
+      const before = await links(w);
+
+      await expect(
+        as(w.t, actor).mutation(api.machines.setGestionnaireMachines, {
+          gestionnaireId: w.manager,
+          machineIds: [],
+        }),
+      ).rejects.toThrow(message);
+      expect(await links(w)).toEqual(before);
+      expect(await auditEntries(w)).toEqual(auditBefore);
+    },
+  );
+});
+
 describe("ANH-194 EX-4 machines.assignMachineToGestionnaires", () => {
   function assign(w: World, gestionnaireIds: Id<"users">[]) {
     return as(w.t, "admin").mutation(api.machines.assignMachineToGestionnaires, {

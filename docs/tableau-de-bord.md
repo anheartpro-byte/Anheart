@@ -736,7 +736,10 @@ nombres de machines et de patients. Fiche : **Assigner des machines** et
 La carte **Machines** de la fiche et le nombre de machines de la liste
 laissent de côté les machines supprimées (`machines.getMachinesForGestionnaire`
 et `users.listGestionnaires`), et la carte affiche « Chargement... » tant que
-ses machines ne sont pas arrivées.
+ses machines ne sont pas arrivées. À zéro, « Aucune machine assignée » ou
+« Aucun patient assigné » apparaît une seule fois dans le corps de la carte
+correspondante, sans description d'en-tête. Au-delà de zéro, l'en-tête garde
+le décompte « N machine(s) assignée(s) » ou « N patient(s) assigné(s) ».
 
 **Assigner des machines** : une case par machine non supprimée, cochée si le
 gestionnaire la gère déjà. **Enregistrer** applique exactement les cases à ce
@@ -746,7 +749,16 @@ et un lien déjà présent n'est pas modifié (il garde son badge
 « Propriétaire »). Une machine supprimée reste hors de la décision, côté
 serveur : son lien n'est jamais retiré, qu'elle soit nommée ou non, il
 retrouve sa machine si elle est restaurée, et une machine supprimée n'est
-jamais liée (refus « Machine introuvable »). La fenêtre s'ouvre toujours sur
+jamais liée (refus « Machine introuvable »). Un lien de ce gestionnaire vers
+une machine absente de la table, dans l'organisation de la décision, est
+retiré dès l'enregistrement, que son identifiant soit nommé ou non dans la
+liste envoyée, sans erreur. Les liens dans une autre organisation restent
+intacts, même orphelins. Le décompte `{added, removed}` de la notification ne
+compte que les machines visibles sur la page, jamais les liens orphelins
+nettoyés. L'audit `gestionnaire_machines.set` liste au contraire tous les
+identifiants retirés dans `details.removed`, orphelins compris, et écrit une
+entrée dès qu'une ligne est ajoutée ou retirée, même si le nettoyage seul
+rend `{added: 0, removed: 0}` (ANH-232). La fenêtre s'ouvre toujours sur
 les machines actuelles du gestionnaire. Une case que l'admin a cliquée garde
 son choix jusqu'à la fermeture ; les autres suivent le serveur, de sorte qu'un
 signal de vie des machines n'annule rien et qu'un lien ajouté ou retiré
@@ -1431,14 +1443,37 @@ droite de l'écran (`components/FeedbackToaster.tsx`, monté dans
 bout de 5 s ; un échec reste jusqu'à ce qu'on le ferme par sa croix, car il
 est parfois le seul endroit où son motif s'affiche. Au plus quatre messages
 sont visibles : un succès plus ancien part avant un échec. La croix reste
-cliquable quand une fenêtre est ouverte, sans fermer la fenêtre
-(`components/ui/dialog.tsx` ne prend pas ce clic pour un clic à l'extérieur).
+cliquable quand une fenêtre ou le menu mobile est ouvert, sans le fermer
+(`components/ui/dialog.tsx` et `components/ui/sheet.tsx` ne prennent pas ce
+clic pour un clic à l'extérieur). Un clic sur le voile ferme toujours le menu.
+Au doigt, la garde reconnaît aussi le message détaché par sa fermeture,
+avant le traitement différé du clic par Radix : la fenêtre ou le menu reste ouvert.
 Les succès sont annoncés dans une région `role="status"` (polie), les échecs
 dans une région `role="alert"` (immédiate) ; les deux existent avant le
-premier message. Pendant qu'une fenêtre modale est ouverte, Radix masque le
-reste de la page aux lecteurs d'écran, ces deux régions comprises
-(comportement documenté par Radix, non vérifié ici) : les fenêtres qui
-affichent leur propre encadré d'erreur le donnent aussi dans la fenêtre.
+premier message, avec leur attribut `aria-live`. Radix Dialog 1.1.15 utilise
+`hideOthers` d'aria-hidden 1.2.6, qui préserve les régions `[aria-live]`
+présentes à l'ouverture : les messages restent exposés, même dans une
+confirmation simple sans encadré d'erreur ou dans le menu mobile, tandis que
+le fond de page est masqué. Vérifié dans l'arbre d'accessibilité de Chromium
+153, pas avec un vrai lecteur d'écran ; cela ne prouve pas l'annonce vocale.
+Ces deux régions doivent donc rester montées avec `aria-live` même vides,
+avant toute ouverture de fenêtre.
+
+La pile reste en bas à droite, mais sa hauteur avec son décalage et un écart
+ne dépasse pas la moitié de la hauteur visible de l'écran. Elle défile si
+nécessaire : chaque texte et chaque croix restent accessibles sans fermer
+d'autre message. Le toaster mesure cette place avec `ResizeObserver` et la
+publie dans `--feedback-toaster-space` sur `<html>` ; la réservation disparaît
+avec le dernier message ou au démontage. Sans `ResizeObserver`, les messages
+restent utilisables mais aucune place n'est réservée.
+Les fenêtres se centrent dans l'espace libre au-dessus de la pile, à toutes
+les largeurs. Une grande fenêtre défile à l'intérieur ; les boutons d'un
+`DialogFooter` collant restent visibles. Les formulaires sans ce pied
+(`MachineFormModal`, `PatientFormModal`, `LaunchTrainingModal`) gardent leurs
+boutons atteignables en faisant défiler la fenêtre. Sans message, une fenêtre
+qui tient dans l'écran garde sa taille et sa position.
+Le menu latéral mobile réserve la même place sous son contenu, y compris
+sous le pied du menu, afin que les messages ne le recouvrent pas.
 
 | Cas | Ce qui s'affiche |
 |---|---|
@@ -1489,16 +1524,35 @@ Tests : `hooks/use-mutation-with-feedback.test.tsx` (succès, texte de succès
 qui ne peut pas être composé, erreur codée, erreur brute, erreur masquée,
 journal), `lib/feedback.test.ts` (durée de vie et limite de la liste),
 `components/feedback-over-dialog.test.tsx` (la croix d'un message ferme le
-message et pas la fenêtre ouverte dessous, avec le vrai composant Radix),
+message et pas la fenêtre ouverte dessous, avec le vrai composant Radix ;
+les régions live restent exposées), `components/feedback-over-sheet.test.tsx`
+(mêmes contrôles sur le menu mobile, appel de `onInteractOutside` préservé et
+fermeture par le voile),
 `components/training/stop-feedback.test.tsx` (le message d'arrêt est le même
 que la page ait cru la séance en attente, active ou finie),
 `convex/errors.test.ts` (chaque code de `convex/lib/errors.ts` a ses deux
-traductions, aucune traduction sans code, aucun code levé hors de la table) et
+traductions, aucune traduction sans code ; recherche textuelle des codes
+écrits en place dans `new ConvexError(...)`, entre guillemets doubles et avec
+`code` en tête si c'est un objet ; `refusal(...)` contraint par son type,
+`machineError(...)` régi par le contrat machine et hors de cette recherche) et
 `hooks/no-silent-mutation.test.ts`, qui refuse dans `app/`, `components/`,
 `lib/` et `hooks/` un appel direct à `useMutation` ou à `useAction` (hors des
-deux hooks qui les enveloppent), une écriture par un client Convex
-(`useConvex().mutation(...)`, `.action(...)`), ainsi qu'un `catch` vide ou
-réduit à un `console.error` dans un fichier qui fait un de ces appels.
+deux hooks qui les enveloppent). La règle textuelle historique refuse tout
+`.mutation(...)` ou `.action(...)` dans un fichier mentionnant `useConvex`,
+`ConvexReactClient` ou `ConvexHttpClient`, quel que soit le receveur. En
+complément, l'analyse syntaxique suit les clients initialisés par ces hooks ou
+constructeurs, ainsi que les variables, paramètres et propriétés annotés
+directement `ConvexReactClient` ou `ConvexHttpClient`. Elle refuse l'accès à
+`mutation` et `action` avant même leur appel : alias
+de méthode, `bind`, `call`, `apply`, chaînage optionnel, crochets à clé
+littérale et déstructuration compris, avec ou sans espaces ou retours à la
+ligne après le point ; `.query` reste accepté. Il refuse aussi un handler
+vide ou réduit à des appels `console` dans un fichier utilisant ces hooks.
+Le contrôle reste local et sans analyse de types : ses limites incluent les
+clés calculées depuis une variable, les imports renommés, les clients sans
+initialisation ni annotation directe reconnue et le masquage lexical des noms
+de variables ou de propriétés. La règle textuelle continue de refuser les
+appels directs hors de ce suivi ; cette liste n'est pas exhaustive.
 
 ---
 

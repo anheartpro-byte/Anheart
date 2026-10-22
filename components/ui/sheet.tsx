@@ -4,6 +4,7 @@ import * as React from "react"
 import * as SheetPrimitive from "@radix-ui/react-dialog"
 import { XIcon } from "lucide-react"
 
+import { isFeedbackElement } from "@/lib/feedback"
 import { cn } from "@/lib/utils"
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
@@ -48,6 +49,7 @@ function SheetContent({
   className,
   children,
   side = "right",
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
@@ -67,8 +69,14 @@ function SheetContent({
             "data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 h-auto border-b",
           side === "bottom" &&
             "data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t",
+          (side === "left" || side === "right") &&
+            "data-[mobile=true]:pb-[var(--feedback-toaster-space,0px)]",
           className
         )}
+        onInteractOutside={(event) => {
+          onInteractOutside?.(event)
+          if (isFeedbackElement(event.target)) event.preventDefault()
+        }}
         {...props}
       >
         {children}

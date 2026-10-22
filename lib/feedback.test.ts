@@ -1,9 +1,11 @@
+// @vitest-environment jsdom
 import { ConvexError } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   describeMutationError,
   dismissFeedback,
   getFeedbackToasts,
+  isFeedbackElement,
   NO_FEEDBACK,
   pushFeedback,
   subscribeFeedback,
@@ -20,6 +22,24 @@ import {
 
 const messages = () =>
   getFeedbackToasts().map(({ kind, message }) => `${kind}: ${message}`);
+
+describe("ANH-232 detached feedback targets", () => {
+  it("recognizes a detached button by its message ancestor, and rejects unrelated targets", () => {
+    const stack = document.createElement("div");
+    stack.setAttribute("data-feedback-toaster", "");
+    const message = document.createElement("div");
+    message.setAttribute("data-feedback-message", "");
+    const button = document.createElement("button");
+    stack.append(message);
+    message.append(button);
+    expect(isFeedbackElement(button)).toBe(true);
+    message.remove();
+    expect(button.isConnected).toBe(false);
+    expect(isFeedbackElement(button)).toBe(true);
+    expect(isFeedbackElement(document.createElement("button"))).toBe(false);
+    expect(isFeedbackElement(null)).toBe(false);
+  });
+});
 
 /** A catalog with one translated error code and the two generic sentences. */
 const translate: FeedbackTranslator = Object.assign(

@@ -245,11 +245,13 @@ export default function GestionnaireDetailPage({
                   <Cpu className="h-4 w-4" />
                   {t("nav.machines")}
                 </CardTitle>
-                <CardDescription>
-                  {t("gestionnaires.machinesAssigned", {
-                    count: gestionnaire.machineCount,
-                  })}
-                </CardDescription>
+                {gestionnaire.machineCount > 0 && (
+                  <CardDescription>
+                    {t("gestionnaires.machinesAssigned", {
+                      count: gestionnaire.machineCount,
+                    })}
+                  </CardDescription>
+                )}
               </div>
               <Button
                 variant="outline"
@@ -298,11 +300,13 @@ export default function GestionnaireDetailPage({
                   <Users className="h-4 w-4" />
                   {t("nav.patients")}
                 </CardTitle>
-                <CardDescription>
-                  {t("gestionnaires.patientsAssigned", {
-                    count: gestionnaire.patientCount,
-                  })}
-                </CardDescription>
+                {gestionnaire.patientCount > 0 && (
+                  <CardDescription>
+                    {t("gestionnaires.patientsAssigned", {
+                      count: gestionnaire.patientCount,
+                    })}
+                  </CardDescription>
+                )}
               </div>
               <Button
                 variant="outline"

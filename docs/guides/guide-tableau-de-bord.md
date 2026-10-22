@@ -293,6 +293,8 @@ La barre latérale (à gauche) change selon votre rôle.
   (Mac). Repliée, elle ne montre que les icônes ; survolez une icône pour voir
   son nom. Ce choix est mémorisé 7 jours dans le navigateur.
 - Sur téléphone, la barre s'ouvre par dessus la page avec le même bouton.
+  Fermer un message par sa croix laisse ce menu ouvert ; cliquer sur le voile
+  à l'extérieur ferme toujours le menu.
 
 ### 3.5 Naviguer : le fil d'Ariane
 
@@ -1580,8 +1582,16 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   gestionnaire : cocher une machine la lui attribue, la décocher la lui
   retire. Les autres gestionnaires de ces machines gardent leur accès. Une
   machine supprimée n'a pas de case et n'est ni comptée ni listée sur la
-  fiche ; son lien est gardé, et revient si la machine est restaurée. Une
-  notification confirme ensuite, par exemple « Machines enregistrées :
+  fiche ; son lien est gardé, et revient si la machine est restaurée. Si la
+  machine est absente de la table, son ancien lien avec ce gestionnaire dans
+  l'organisation concernée est retiré dès l'enregistrement, que son
+  identifiant figure ou non dans la liste envoyée, sans erreur. Ce nettoyage
+  ne touche pas les liens d'une autre organisation. Le décompte rendu au site
+  ne compte que les machines visibles, sans ces liens orphelins. Le journal
+  `gestionnaire_machines.set` liste tous les identifiants retirés dans
+  `details.removed`, orphelins compris, et reçoit une entrée dès qu'un lien est
+  ajouté ou retiré, même pour un nettoyage seul avec `{added: 0, removed: 0}`.
+  Une notification confirme ensuite, par exemple « Machines enregistrées :
   1 ajoutée, 1 retirée. ». Si le serveur refuse, son message s'affiche en
   rouge dans la fenêtre, qui reste ouverte.
 - **Modifier** (Patients) : fenêtre **Assigner des Patients**, « Sélectionner
@@ -1601,7 +1611,10 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 - Tant que les machines ou les patients ne sont pas chargés, la carte
   correspondante affiche « Chargement... » et son bouton **Modifier** est
   inactif.
-- « Aucune machine assignée », « Aucun patient assigné » si vide.
+- « Aucune machine assignée », « Aucun patient assigné » si vide, une seule
+  fois dans le corps de chaque carte, sans description d'en-tête à zéro.
+  Au-delà de zéro, l'en-tête indique le nombre de machines ou de patients
+  assignés.
 
 > **Attention : corrigé dans le code le 8 octobre 2026, pas encore en
 > production.** Tant que le redéploiement n'a pas eu lieu, la fenêtre
@@ -2493,7 +2506,22 @@ Ils s'affichent dans un encadré rouge de la fenêtre ou de la carte concernée
 et, depuis ANH-156, dans un message d'échec en bas à droite de l'écran (le seul
 affichage pour les actions sans encadré : suppressions, rôle, assignations).
 Un message d'échec reste affiché jusqu'à ce que vous le fermiez par sa croix,
-même quand une fenêtre est ouverte. Depuis ANH-194, les refus des machines, des
+même quand une fenêtre ou le menu mobile est ouvert ; sa croix ne ferme que
+le message. Les régions de messages restent exposées dans l'arbre
+d'accessibilité de Chromium 153 pendant une fenêtre, une confirmation simple
+ou le menu mobile, tandis que le fond de page est masqué. Cette exposition a
+été vérifiée sans vrai lecteur d'écran et ne prouve pas l'annonce vocale.
+Les messages restent en bas à droite et leur pile occupe au plus la moitié
+de la hauteur visible de l'écran, avec son écart du bas. Faites défiler cette
+pile pour lire tous les messages ou atteindre leur croix. Une fenêtre ouverte
+se place au-dessus de cette zone et défile à l'intérieur si elle est grande ;
+les boutons de son pied collant, par exemple **Enregistrer** et **Annuler**,
+restent visibles sans fermer les messages. Dans les formulaires de machine,
+de patient et de lancement d'une séance, qui n'ont pas de pied collant, faites
+défiler la fenêtre pour atteindre les boutons du bas. Sans message, la fenêtre
+garde sa position habituelle.
+Le menu mobile laisse aussi cette place sous ses derniers éléments.
+Depuis ANH-194, les refus des machines, des
 comptes, des gestionnaires et des rôles arrivent avec un code stable et
 s'affichent dans la langue du site ; depuis ANH-90, ceux de la connexion, de
 l'organisation, des droits de lancement, de la physiologie, de la vérification

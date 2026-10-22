@@ -10,8 +10,9 @@ import {
   pushFeedback,
 } from "@/lib/feedback";
 import fr from "@/messages/fr.json";
-import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { FeedbackToaster } from "./FeedbackToaster";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "./ui/sheet";
 
 /**
  * ANH-194 EX-3: a failure shown while a window is open can be closed without
@@ -38,15 +39,56 @@ function page(onOpenChange: (open: boolean) => void) {
 }
 
 describe("ANH-194 a message above an open window", () => {
+  it.each(["dialog", "sheet"] as const)(
+    "a touch closes only its message above a real %s, while the overlay still closes it",
+    async (kind) => {
+      const Root = kind === "dialog" ? Dialog : Sheet;
+      const Content = kind === "dialog" ? DialogContent : SheetContent;
+      const Title = kind === "dialog" ? DialogTitle : SheetTitle;
+      const Trigger = kind === "dialog" ? DialogTrigger : SheetTrigger;
+      const onOpenChange = vi.fn();
+      render(
+        <NextIntlClientProvider locale="fr" messages={fr} timeZone="Europe/Paris">
+          <Root onOpenChange={onOpenChange}>
+            <Trigger>Ouvrir</Trigger>
+            <Content aria-describedby={undefined}><Title>Fenêtre tactile</Title></Content>
+          </Root>
+          <FeedbackToaster />
+        </NextIntlClientProvider>,
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Ouvrir" }));
+      onOpenChange.mockClear();
+      act(() => pushFeedback("error", "Refus tactile"));
+      const cross = within(screen.getByRole("alert")).getByRole("button", { name: fr.common.close });
+      await user.pointer([
+        { keys: "[TouchA>]", target: cross },
+        { keys: "[/TouchA]" },
+      ]);
+      expect(getFeedbackToasts()).toEqual([]);
+      expect(cross.isConnected).toBe(false);
+      expect(isFeedbackElement(cross)).toBe(true);
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      const overlay = document.querySelector<HTMLElement>(`[data-slot="${kind}-overlay"]`)!;
+      await user.pointer([
+        { keys: "[TouchB>]", target: overlay },
+        { keys: "[/TouchB]" },
+      ]);
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    },
+  );
+
   it("closes when its cross is pressed, and the window stays open", async () => {
     const onOpenChange = vi.fn();
     page(onOpenChange);
     act(() => pushFeedback("error", "Machine introuvable."));
     const user = userEvent.setup();
 
-    const alert = screen.getByRole("alert", { hidden: true });
+    const alert = screen.getByRole("alert");
     await user.click(
-      within(alert).getByRole("button", { name: fr.common.close, hidden: true }),
+      within(alert).getByRole("button", { name: fr.common.close }),
     );
 
     expect(getFeedbackToasts()).toEqual([]);
@@ -64,5 +106,50 @@ describe("ANH-194 a message above an open window", () => {
       isFeedbackElement(screen.getByText("Derrière la fenêtre")),
     ).toBe(false);
     expect(isFeedbackElement(null)).toBe(false);
+  });
+
+  it("keeps both pre-existing live regions exposed when a failure arrives in a simple confirmation", async () => {
+    render(
+      <NextIntlClientProvider locale="fr" messages={fr} timeZone="Europe/Paris">
+        <main>Fond de page</main>
+        <Dialog>
+          <DialogTrigger>Ouvrir la confirmation</DialogTrigger>
+          <DialogContent aria-describedby={undefined}>
+            <DialogTitle>Confirmer la suppression</DialogTitle>
+            <button type="button">Supprimer</button>
+          </DialogContent>
+        </Dialog>
+        <FeedbackToaster />
+      </NextIntlClientProvider>,
+    );
+    const alert = screen.getByRole("alert");
+    const status = screen.getByRole("status");
+    expect(alert.getAttribute("aria-live")).toBe("assertive");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(alert.textContent).toBe("");
+    expect(status.textContent).toBe("");
+    const background = screen.getByRole("main");
+    await userEvent.setup().click(
+      screen.getByRole("button", { name: "Ouvrir la confirmation" }),
+    );
+    act(() => pushFeedback("error", "Suppression refusée."));
+
+    expect(screen.getByRole("alert")).toBe(alert);
+    expect(within(alert).getByText("Suppression refusée.")).toBeTruthy();
+    expect(screen.getByRole("status")).toBe(status);
+    expect(within(screen.getByRole("dialog")).queryByRole("alert")).toBeNull();
+    for (const region of [alert, status]) {
+      for (
+        let element: HTMLElement | null = region;
+        element;
+        element = element.parentElement
+      ) {
+        expect(element.hasAttribute("aria-hidden")).toBe(false);
+        expect(element.hasAttribute("data-aria-hidden")).toBe(false);
+      }
+    }
+    expect(background.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(background.closest('[data-aria-hidden="true"]')).not.toBeNull();
+    expect(screen.queryByRole("main")).toBeNull();
   });
 });

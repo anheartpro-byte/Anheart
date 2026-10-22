@@ -17,14 +17,16 @@ const SUCCESS_VISIBLE_MS = 5_000;
 const MAX_TOASTS = 4;
 
 /**
- * Whether a click or a focus landed on the messages (`data-feedback-toaster`
- * on their container): a dialog must not take it for a click outside itself.
+ * Whether a click or a focus landed on the messages: `data-feedback-toaster`
+ * marks their container, and `data-feedback-message` also recognizes a message
+ * subtree detached by touch dismissal before Radix handles the deferred click.
+ * A dialog or sheet must not take that interaction for a click outside itself.
  */
 export function isFeedbackElement(target: EventTarget | null): boolean {
   const element = target as { closest?: unknown } | null;
   return (
     typeof element?.closest === "function" &&
-    (target as Element).closest("[data-feedback-toaster]") !== null
+    (target as Element).closest("[data-feedback-toaster], [data-feedback-message]") !== null
   );
 }
 
