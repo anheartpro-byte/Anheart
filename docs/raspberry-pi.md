@@ -165,7 +165,10 @@ validation matérielle ; consigner les mesures dans le tableau avant de conclure
    l'arbre en roue libre, la référence logicielle à zéro et le verdict
    verrouillé `sto_open / quick_stop`. Relever ETA et le temps d'immobilisation.
 6. Refermer la chaîne : vérifier qu'aucun mouvement ne reprend et qu'un départ
-   reste refusé. Attendre l'arrêt mesuré, acquitter avec le nom de l'opérateur,
+   reste refusé. Relever aussi CMD (attendu : 15 après `sto_open`) et ETA après
+   refermeture : ETA doit rester `SWITCH_ON_DISABLED` avec cette valeur de CMD.
+   Consigner tout autre état et suspendre la validation jusqu'à explication.
+   Attendre l'arrêt mesuré, acquitter avec le nom de l'opérateur,
    vérifier que l'acquittement seul ne redémarre rien, puis demander un nouveau
    départ explicite et vérifier la séquence d'activation complète.
 7. Essai « Pi débranché », toujours sans personne à bord : selon le montage
@@ -1264,16 +1267,32 @@ La tâche attend chaque lecture avant la suivante ; une seule lecture déjà en
 vol peut encore aboutir lors du passage en silence ou de la fermeture. Ensuite
 le cache vieillit simplement vers `UNKNOWN`, sans rafraîchir le `ttO`.
 
-Un écart entre tics dépassant la borne existante de `loop_stall` reste jugé
-par cette seule règle. Le runtime déduit cet intervalle du budget de lecture
-STO, car aucun nouveau jeton n'était accordé pendant la pause. Il conserve
-cette déduction jusqu'à la prochaine réussite, y compris pendant l'attente du
-premier sondage après la reprise (au plus une période de 0,5 s). La lecture
-affichée continue à vieillir en temps réel et peut donc être `UNKNOWN`
-pendant cette pause, sans nouveau verrou `sto_unreadable`. Si les tics
-progressent normalement mais que les lectures échouent ou restent en attente,
-`sto_unreadable / RAMP_DOWN` arrive au plus tard 2 s plus un tic après la
-dernière réussite. Aucune nouvelle constante de durée n'est introduite.
+`loop_stall` reste seul juge d'un écart entre tics dépassant sa borne existante.
+Le runtime ne déduit cet intervalle du budget de fraîcheur STO que si aucune
+tentative postérieure à la dernière réussite n'est en échec ou en suspens.
+Le jeton du dernier tic peut encore permettre une lecture pendant une pause.
+Dès qu'une lecture commence, aucune nouvelle déduction n'est donc accordée
+avant une réussite. Une réussite remet la déduction à zéro ; si elle arrive
+pendant un intervalle `loop_stall`, seule la partie après cette réussite peut
+être déduite. Le crédit déjà acquis reste valable jusqu'à la réussite suivante.
+Une pause sans tentative en échec ni en suspens conserve ainsi `loop_stall`
+seul, y compris pendant l'attente du sondage après la reprise (au plus une
+période de 0,5 s). La lecture affichée continue à vieillir en temps réel et
+peut être `UNKNOWN` pendant cette pause.
+
+La borne exacte est le premier tic autorisant les lectures où l'âge depuis la
+dernière réussite, moins la déduction acquise D, dépasse `STO_STALE_AFTER`
+(2 s). D est la somme des portions d'intervalles `loop_stall` excusées avant
+la première tentative non résolue, sans tentative pendant ces portions.
+Sans déduction antérieure, la détection arrive au plus tard 2 s plus
+un intervalle de tic après cette réussite, pauses comprises. Sinon, la borne
+depuis cette réussite est 2 s + D + un intervalle de tic. Dès la première
+tentative sans réussite suivante, D ne peut plus croître : la détection arrive
+au plus tard 2 s plus un intervalle de tic après le début de cette tentative,
+en comptant aussi les pauses dans cet intervalle. Une pause avec une lecture
+échouée ou en suspens peut donc ajouter `sto_unreadable / RAMP_DOWN` à
+`loop_stall`. Si le lien lui-même ne répond plus, les règles de perte de
+communication dominent. Aucune nouvelle constante de durée n'est introduite.
 
 Tout acquittement, même pour un autre verrou, est refusé tant que la lecture
 STO n'est pas `READY` (`StoNotReady`, HTTP 409). La refermeture de la chaîne

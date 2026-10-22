@@ -184,6 +184,63 @@ async def test_every_drive_error_invalidates_immediately_and_keeps_only_variant(
     assert source.latest(clock.monotonic()).detail == type(error).__name__
 
 
+async def test_only_a_success_clears_an_attempt_pending_or_failed_since_last_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock, port = ManualClock(), RegisterPort()
+    source = DriveInputStoSource(
+        clock=clock, drive=port, address=LOGIC_INPUTS_LOGICAL, input_=LogicInput.LI1
+    )
+    source.guard_polling(lambda: False)
+    await source.poll()
+    assert not source.latest(clock.monotonic()).read_unresolved
+    assert port.addresses == []
+    source.guard_polling(lambda: True)
+    port.result = Ok(RawRegister(1))
+    await source.poll()
+    assert not source.latest(clock.monotonic()).read_unresolved
+    original = RegisterPort.read_register
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed_failure(
+        _port: RegisterPort, _address: RegisterAddress
+    ) -> Result[RawRegister, DriveError]:
+        entered.set()
+        await release.wait()
+        return Err(CommTimeout(after=Seconds(0.1)))
+
+    monkeypatch.setattr(RegisterPort, "read_register", delayed_failure)
+    pending = asyncio.create_task(source.poll())
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        reading = source.latest(clock.monotonic())
+        assert reading.state is StoState.READY
+        assert reading.read_unresolved
+        clock.advance(Seconds(STO_STALE_AFTER + 0.1))
+        stale = source.latest(clock.monotonic())
+        assert stale.state is StoState.UNKNOWN
+        assert stale.read_unresolved
+        release.set()
+        await asyncio.wait_for(pending, 3)
+        failed = source.latest(clock.monotonic())
+        assert failed.state is StoState.UNKNOWN
+        assert failed.read_unresolved
+        assert failed.last_success_at == reading.last_success_at
+        source.guard_polling(lambda: False)
+        await source.poll()
+        assert source.latest(clock.monotonic()) == failed
+        monkeypatch.setattr(RegisterPort, "read_register", original)
+        source.guard_polling(lambda: True)
+        await source.poll()
+        recovered = source.latest(clock.monotonic())
+        assert recovered.state is StoState.READY
+        assert recovered.last_success_at == clock.monotonic()
+        assert not recovered.read_unresolved
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
 async def test_polling_loop_yields_at_technical_period_and_is_cancellable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from abc import abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, unique
 from typing import Final, Protocol, assert_never, runtime_checkable
 
@@ -55,12 +55,17 @@ class StoState(Enum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StoReading:
-    """A memory-only observation, stamped at the last successful read."""
+    """A memory-only observation, stamped at the last successful read.
+
+    read_unresolved marks an attempt pending or failed since that success.
+    Only a successful read clears it, including after cancellation of a poll.
+    """
 
     state: StoState
     source: StoSourceKind
     last_success_at: Monotonic | None
     detail: str
+    read_unresolved: bool = False
 
 
 def sto_ready(reading: StoReading) -> bool:
@@ -177,6 +182,7 @@ class DriveInputStoSource:
         permitted = self._poll_permitted
         if permitted is not None and not permitted():
             return
+        self._reading = replace(self._reading, read_unresolved=True)
         result = await self._drive.read_register(self._address)
         match result:
             case Ok(raw):
@@ -192,6 +198,7 @@ class DriveInputStoSource:
                     source=StoSourceKind.DRIVE_INPUT,
                     last_success_at=self._reading.last_success_at,
                     detail=_error_variant(error),
+                    read_unresolved=True,
                 )
             case _ as unreachable:
                 assert_never(unreachable)
@@ -220,6 +227,7 @@ class DriveInputStoSource:
                 source=StoSourceKind.DRIVE_INPUT,
                 last_success_at=last,
                 detail="stale reading",
+                read_unresolved=self._reading.read_unresolved,
             )
         return self._reading
 

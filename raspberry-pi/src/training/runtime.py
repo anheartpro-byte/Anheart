@@ -1481,6 +1481,8 @@ class TrainingRuntime:
         )
         self._attendant_last_seen: Monotonic | None = None
         self._previous_tick_at: Monotonic | None = None
+        # Pause credit belongs to this cached success, resets on the next one,
+        # and stops growing as soon as a later read is pending or has failed.
         self._sto_last_success_at: Monotonic | None = None
         self._sto_loop_delay: Seconds = Seconds(0)
         self._latched: SafetyVerdict | None = None
@@ -2517,13 +2519,21 @@ class TrainingRuntime:
         a configured source and positive motion evidence: an armed session,
         our run command, or a fresh enabled/turning status. No I/O occurs here.
 
-        Polling spends one completed-tick token per read. Exclude intervals
-        already judged by loop_stall from the unreadable budget: no ticks
-        replenished polling tokens during that gap. Keep this deduction until the next
-        successful read, so a poll due up to one polling period after recovery
-        does not relabel the loop stall as an STO failure on the next tick.
-        Normal ticking still expires at STO_STALE_AFTER plus at most one tick.
-        The existing loop_stall bound is used; no extra duration is introduced.
+        Deduct a loop_stall interval only while no read since the last success
+        is pending or failed. The last tick's token can permit a read during
+        a pause. A success resets the credit; only the part of its interval
+        after that success can count. Retain earned credit until the next
+        success, allowing polling to resume without a false STO verdict.
+
+        With credit D, latch on the first permitted tick where age - D exceeds
+        STO_STALE_AFTER: at most STO_STALE_AFTER + D + one tick interval after
+        the last success. D sums excused loop_stall portions with no attempt,
+        before the first unresolved attempt. From that attempt, D cannot grow
+        and detection takes at most STO_STALE_AFTER plus one tick interval,
+        pauses included. Without earlier credit the bound starts at the last success.
+        A pause with an unresolved read can therefore raise both loop_stall and
+        sto_unreadable. Communication-loss rules still dominate if the link
+        itself stops answering. No extra duration or I/O is introduced.
         """
         if not self.drive_reads_permitted:
             return
@@ -2535,6 +2545,7 @@ class TrainingRuntime:
         if (
             previous is not None
             and last is not None
+            and not reading.read_unresolved
             and elapsed(previous, now) > self._supervisor.limits.loop_stall_freeze_gap
         ):
             self._sto_loop_delay = Seconds(self._sto_loop_delay + elapsed(max(previous, last), now))
