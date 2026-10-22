@@ -71,6 +71,7 @@ from src.motor.drive import (
     decode_status_word,
     describe_fault,
 )
+from src.motor.sto import StoSource, StoState
 from src.result import Err, Ok, Result, is_err, is_ok
 from src.training.hr_control import (
     Gains,
@@ -80,6 +81,7 @@ from src.training.hr_control import (
 )
 from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, motor_rate_limit
 from src.training.plan import INITIAL_REV, Channel, Program, TrainingProfile
+from src.training.preflight import StoNotReady
 from src.training.runtime import (
     IDLE_POLL_PERIOD,
     RULE_DISABLE_REFUSED,
@@ -153,6 +155,7 @@ from src.units import (
     StatusWord,
     UnixMillis,
 )
+from tests.sto_support import ready_sto
 
 RUNTIME_SOURCE: Final[Path] = (
     Path(__file__).resolve().parent.parent / "src" / "training" / "runtime.py"
@@ -727,6 +730,9 @@ class Rig:
         """Read the standing action through a call, for the reason :meth:`phase` gives."""
         return self.runtime.standing_action
 
+    def standing(self) -> SafetyVerdict | None:
+        return self.runtime.standing
+
     def last_failure(self) -> DriveFailure | None:
         """Read the last drive failure through a call, for the reason :meth:`phase` gives."""
         return self.runtime.last_failure
@@ -785,6 +791,7 @@ def _rig(
     shared_supervisor: bool = False,
     motion: MotionLimits = RIG_MOTION,
     limit_radius: Metres | None = None,
+    sto: StoSource | None = None,
 ) -> Rig:
     clock = ManualClock(Monotonic(1000.0), UnixMillis(1_700_000_000_000))
     drive = FakeDrive(clock, state=state, rpm=rpm, tto=tto)
@@ -792,6 +799,7 @@ def _rig(
     resolved_safety = _safety_for(resolved) if safety is None else safety
     runtime = TrainingRuntime(
         clock=clock,
+        sto=ready_sto() if sto is None else sto,
         drive=drive,
         geometry=GEOMETRY,
         limits=limits,
@@ -806,6 +814,12 @@ def _rig(
     return Rig(
         clock=clock, drive=drive, runtime=runtime, program=_program(resolved), occupant=occupant
     )
+
+
+def sto_rig(
+    *, sto: StoSource | None = None, rpm: MotorRpm = MotorRpm(0), safety: SafetyLimits | None = None
+) -> Rig:
+    return _rig(sto=sto, rpm=rpm, safety=safety)
 
 
 async def _running_rig(**kwargs: object) -> Rig:
@@ -1381,6 +1395,7 @@ def test_every_start_refusal_is_handled_somewhere() -> None:
         DrivePrecommanded(state=DriveState.OPERATION_ENABLED, output_rpm=MotorRpm(1)),
         DriveInFault(report=None, state=DriveState.FAULT),
         RecordStorageLow(free_bytes=None, required_bytes=1, where="data/records"),
+        StoNotReady(state=StoState.OPEN, detail="relay open"),
     )
     assert len({_classify_refusal(case) for case in cases}) == len(cases)
 
@@ -1408,6 +1423,8 @@ def _classify_refusal(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one ret
             return "drive_in_fault"
         case RecordStorageLow():
             return "record_storage_low"
+        case StoNotReady():
+            return "sto_not_ready"
     raise assert_never(refusal)
 
 
@@ -2328,6 +2345,7 @@ def test_every_acknowledgement_refusal_is_handled() -> None:
         NothingLatched(),
         GoSilentIsTerminal("rule"),
         EmergencyStopStillLatched(since=Monotonic(0.0)),
+        StoNotReady(state=StoState.OPEN, detail="relay open"),
     )
     assert len({_classify_ack(case) for case in cases}) == len(cases)
 
@@ -2343,6 +2361,8 @@ def _classify_ack(refusal: AcknowledgeRefusal) -> str:
             return "silent"
         case EmergencyStopStillLatched():
             return "estop"
+        case StoNotReady():
+            return "sto_not_ready"
     raise assert_never(refusal)
 
 

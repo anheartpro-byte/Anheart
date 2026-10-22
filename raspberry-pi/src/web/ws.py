@@ -52,6 +52,7 @@ from typing import Final
 from fastapi import FastAPI, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
+from src.clock import Clock
 from src.telemetry import PayloadKind, TelemetryClient, TelemetryHub
 from src.web.deps import TOKEN_QUERY_PARAM, Services, WebConfig
 from src.web.schemas import WsEnvelope, encode_envelope, payload_is_terminal
@@ -134,7 +135,7 @@ async def serve_telemetry(websocket: WebSocket, *, services: Services, config: W
     client = hub.subscribe()
     reader = asyncio.create_task(_watch_for_disconnect(websocket, client))
     try:
-        await _stream(websocket, hub, client, services.instance)
+        await _stream(websocket, hub, client, services.instance, services.clock)
     finally:
         # Release first: the hub must stop publishing to a client whose socket
         # is going away before anything else is attempted, because that is the
@@ -146,7 +147,7 @@ async def serve_telemetry(websocket: WebSocket, *, services: Services, config: W
 
 
 async def _stream(
-    websocket: WebSocket, hub: TelemetryHub, client: TelemetryClient, instance: str
+    websocket: WebSocket, hub: TelemetryHub, client: TelemetryClient, instance: str, clock: Clock
 ) -> None:
     """Write payloads until the client is evicted or the socket fails.
 
@@ -157,7 +158,9 @@ async def _stream(
     try:
         while True:
             payload = await client.next_payload()
-            await websocket.send_text(encode_envelope(WsEnvelope.of(payload, instance)))
+            await websocket.send_text(
+                encode_envelope(WsEnvelope.of(payload, instance, now=clock.monotonic()))
+            )
             if payload_is_terminal(payload.kind):
                 await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER, reason=_FELL_BEHIND)
                 return

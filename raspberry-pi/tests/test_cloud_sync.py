@@ -300,10 +300,15 @@ def rig(
     medical: MedicalStatus | None = None,
     record_root: Path | None = None,
     with_roster: bool = True,
+    sto_source: str = "sim_ready",
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
-    config = config_of(PROGRAMS_ENABLED="true" if panel_programs else "false")
+    config = config_of(
+        PROGRAMS_ENABLED="true" if panel_programs else "false",
+        STO_SOURCE=sto_source,
+        STO_DRIVE_INPUT="LI1" if sto_source == "drive_input" else "",
+    )
     dashboard = Dashboard()
     journal = None if record_root is None else Journal(record_root, clock)
     panel = build_panel(

@@ -47,6 +47,7 @@ from src.training.types import Occupancy
 from src.units import Bpm, Metres, Monotonic, MotorRpm, OutputRpm, RpmPerSecond, UnixMillis
 from tests.record_journal_support import refuse_writes
 from tests.roster_support import RIDER_ID
+from tests.sto_support import ready_sto
 from tests.test_cloud_sync import (
     LAUNCH,
     OPERATOR,
@@ -81,6 +82,7 @@ def gated_runtime(gate: Gate | None) -> tuple[TrainingRuntime, SimulatedDrive]:
     clock = ManualClock(Monotonic(100.0), UnixMillis(1_700_000_000_000))
     drive = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
     runtime = TrainingRuntime(
+        sto=ready_sto(),
         clock=clock,
         drive=drive,
         geometry=MachineGeometry(radius=Metres(1.5)),

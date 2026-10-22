@@ -9,6 +9,7 @@ from src.training.runtime import Subject, TrainingRuntime
 from src.training.safety import SafetyLimits
 from src.training.types import Phase
 from src.units import Bpm, Monotonic, UnixMillis
+from tests.sto_support import ready_sto
 from tests.test_runtime import GEOMETRY, LIMITS, REAL_PROFILE, RIG_MOTION, FakeDrive, Rig
 
 
@@ -18,6 +19,7 @@ def privacy_rig() -> Rig:
     drive = FakeDrive(clock)
     profile = REAL_PROFILE
     runtime = TrainingRuntime(
+        sto=ready_sto(),
         clock=clock,
         drive=drive,
         geometry=GEOMETRY,

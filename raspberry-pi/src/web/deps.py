@@ -48,6 +48,7 @@ from uuid import uuid4
 from src.clock import Clock
 from src.control_surface import ControlSurface
 from src.geometry import MachineGeometry
+from src.motor.sto import StoSource
 from src.panel_status import PanelSource
 from src.presence.monitor import PresenceDecision, PresenceMonitor
 from src.record.export import RecordExporter
@@ -524,6 +525,8 @@ class Services:
     store: ProfileStore
     ports: PortLister
     geometry: MachineGeometry
+
+    sto: StoSource | None = None
 
     motion_enabled: bool = True
     """Whether a route may ask for motion at all.

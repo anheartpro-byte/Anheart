@@ -46,6 +46,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
 from typing import Final, assert_never
@@ -66,6 +67,7 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
+from src.motor.sto import StoState, UnconfiguredStoSource
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
 from src.remote_launch import ConfirmationCode
@@ -99,6 +101,7 @@ from src.training.plan import (
     is_profile_id,
     parse_profile,
 )
+from src.training.preflight import StoNotReady, describe_sto_refusal
 from src.training.safety import (
     ESTOP_ATTESTATION,
     AcknowledgeRefusal,
@@ -153,6 +156,7 @@ from src.web.schemas import (
     SnapshotRow,
     StartBody,
     StatusRow,
+    StoRow,
 )
 
 _logger: logging.Logger = logging.getLogger(__name__)
@@ -233,6 +237,7 @@ ALREADY_STOPPING: Final[str] = "already_stopping"
 NO_MANUAL_SESSION: Final[str] = "no_manual_session"
 VERDICT_LATCHED: Final[str] = "verdict_latched"
 ESTOP_UNATTESTED: Final[str] = "estop_unattested"
+STO_NOT_READY: Final[str] = "sto_not_ready"
 
 START_PENDING_DETAIL: Final[str] = (
     "demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas "
@@ -509,10 +514,22 @@ def _register_reads(
         accepted, refused, published = surface.counters
         pending = surface.pending
         drive_state, drive_fault = _drive_seen(surface.latest, now)
+        latest = surface.latest
+        if latest is not None:
+            sto = latest.sto
+        elif services.sto is None:
+            sto = UnconfiguredStoSource().latest(now)
+        else:
+            sto = services.sto.latest(now)
+            if sto.state is not StoState.NOT_CONFIGURED:
+                sto = replace(
+                    sto, state=StoState.UNKNOWN, last_success_at=None, detail="control tick pending"
+                )
         return StatusRow(
             at=now,
             instance=services.instance,
             run_state=surface.run_state.value,
+            sto=StoRow.of(sto, now),
             estop_latched=surface.estop_latched,
             supervisor_estop=SafetyRow.of(supervisor.estop, now),
             attested=isinstance(attested, Ok),
@@ -554,7 +571,11 @@ def _register_reads(
         numbers rather than frozen ones.
         """
         snapshot = surface.latest
-        return None if snapshot is None else SnapshotRow.of(snapshot, services.instance)
+        return (
+            None
+            if snapshot is None
+            else SnapshotRow.of(snapshot, services.instance, now=services.clock.monotonic())
+        )
 
     @app.get("/api/ecg", dependencies=auth, tags=["session"])
     async def read_ecg(after: int | None = None, limit: int | None = None) -> EcgRow:
@@ -996,6 +1017,12 @@ def _start_failure(refusal: StartRefusal) -> Refusal:
                 code=ESTOP_UNATTESTED,
                 detail=f"nobody has attested the emergency stop this boot: {refusal.statement}",
             )
+        case StoNotReady():
+            return Refusal(
+                HTTPStatus.PRECONDITION_FAILED,
+                code=STO_NOT_READY,
+                detail=describe_sto_refusal(refusal),
+            )
     raise assert_never(refusal)
 
 
@@ -1101,6 +1128,11 @@ def _acknowledge_failure(refusal: AcknowledgeRefusal) -> HTTPException:
         case NothingLatched():
             return HTTPException(
                 status_code=HTTPStatus.CONFLICT, detail="nothing is latched to acknowledge"
+            )
+        case StoNotReady():
+            return HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"acquittement refuse : {describe_sto_refusal(refusal)}",
             )
     raise assert_never(refusal)
 

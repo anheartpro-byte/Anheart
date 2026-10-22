@@ -959,6 +959,7 @@ EXPECTED_FIELDS: Final[tuple[tuple[type, tuple[tuple[str, str], ...]], ...]] = (
             ("counters", "ZoneCounters"),
             ("mode", "RunMode"),
             ("manual", "ManualView | None"),
+            ("sto", "StoReading"),
         ),
     ),
 )
@@ -1050,7 +1051,7 @@ def test_the_vocabulary_depends_on_nothing_in_the_training_package() -> None:
     """
     imported = _imported_modules(TYPES_SOURCE)
     project_imports = {name for name in imported if name.startswith("src.")}
-    assert project_imports == {"src.units", "src.motor.drive"}
+    assert project_imports == {"src.units", "src.motor.drive", "src.motor.sto"}
 
 
 def test_the_vocabulary_never_reads_a_clock() -> None:

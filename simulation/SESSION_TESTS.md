@@ -20,6 +20,23 @@ PASS rows below refer to the 2026-10-05 reconciliation; rerun the named checks
 for a new revision. The remaining cohort XFAIL is S07 AUTO jog; proposals are
 not counted as passing tests.
 
+ANH-92 ajoute la matrice STO suivante (simulation logicielle uniquement) :
+
+| Parcours | Cas | Preuve |
+|---|---|---|
+| AUTO | `sto_open_auto_{baseline,warmup,hold,cooldown,recovery}` | phase constatee avant injection, `sto_open / QUICK_STOP` verrouille sous 0,7 s, seance terminee, consignes nulles, couple coupe et roue libre si l'arbre tourne |
+| Manuel | `sto_open_manual_{ramp_up,at_speed,ramp_down}` | memes controles pendant montee, palier et descente ; une fin deja demandee conserve sa raison |
+| Repos | `sto_idle_start_gate` | aucun verrou, depart refuse avec `StoNotReady` ouvert puis accepte ferme |
+| Fermeture seule | `sto_close_without_acknowledgement` | verrou maintenu et aucune consigne non nulle ni activation jusqu'a la fin du scenario |
+| Reprise explicite | `sto_acknowledgement_then_new_start` | acquittement nomme refuse ouvert, accepte ferme, puis consigne nulle jusqu'au nouveau depart |
+
+`tests/test_failures.py` execute ces onze cas et corrompt les preuves pour
+verifier le juge. `tests/test_scenario.py` refuse les actions STO mal formees ;
+`tests/test_import_privacy.py` conserve les deux identifiants de verdict STO
+sans conserver leur detail libre. La perte de lecture n'est pas injectable dans
+la source simulee instantanee ; `sto_unreadable` reste couvert dans les tests Pi
+cites par leur nom dans le README. Le banc apres cablage reste hors de ces preuves.
+
 ## 1. AUTO (heart-rate driven programme)
 
 | # | test | what it proves | status |

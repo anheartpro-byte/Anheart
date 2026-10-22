@@ -20,6 +20,7 @@ from src.clock import ManualClock
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
+from src.motor.sto import SimulatedStoSource, StoState
 from src.presence.adapter import (
     ESTOP_SOURCE_PREFIX,
     PRESENCE_PERIOD,
@@ -46,6 +47,7 @@ from src.presence.monitor import (
 from src.presence.simulated import CapsuleChange, Freeze, Intrusion, SimulatedCamera
 from src.presence.types import CapsuleState, Confidence, MotionState
 from src.result import Err, Ok, Result
+from src.training.preflight import StoNotReady
 from src.training.runtime import (
     EndReason,
     ManualSession,
@@ -81,6 +83,7 @@ from src.units import (
     UnixMillis,
     motor_to_output_rpm,
 )
+from tests.sto_support import ready_sto
 
 OPERATOR: Final[str] = "Dr Ada Okonkwo"
 GEOMETRY: Final[MachineGeometry] = MachineGeometry(radius=Metres(1.5))
@@ -93,10 +96,15 @@ TICK_EVERY: Final[int] = 4
 """One control tick (0.2 s) every four presence steps (0.05 s), as the console runs them."""
 
 
-def _runtime(clock: ManualClock) -> tuple[TrainingRuntime, SimulatedDrive]:
-    drive = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
+def _runtime(
+    clock: ManualClock, sto: SimulatedStoSource | None = None
+) -> tuple[TrainingRuntime, SimulatedDrive]:
+    source = ready_sto() if sto is None else sto
+    drive = SimulatedDrive(
+        clock, SimulatedDriveConfig(reads_reset_watchdog=True), sto_chain=source.chain
+    )
     runtime = TrainingRuntime(
-        clock=clock, drive=drive, geometry=GEOMETRY, limits=LIMITS, safety=SAFETY
+        sto=source, clock=clock, drive=drive, geometry=GEOMETRY, limits=LIMITS, safety=SAFETY
     )
     return runtime, drive
 
@@ -490,14 +498,38 @@ def _latched(loop: Loop) -> SafetyVerdict | None:
     return loop.guard.monitor.latched
 
 
-def _loop() -> Loop:
+def _loop(sto: SimulatedStoSource | None = None) -> Loop:
     clock = ManualClock(Monotonic(100.0), UnixMillis(1_700_000_000_000))
-    runtime, drive = _runtime(clock)
+    runtime, drive = _runtime(clock, sto)
     camera = SimulatedCamera(clock)
     guard = PresenceGuard(runtime=runtime, source=camera, monitor=PresenceMonitor(clock=clock))
     acknowledger = PresenceAcknowledger(runtime, guard)
     assert isinstance(runtime.confirm_estop_wiring(OPERATOR), Ok)
     return Loop(clock, runtime, drive, camera, guard, acknowledger)
+
+
+async def test_sto_refusal_preserves_presence_and_runtime_latches() -> None:
+    source = ready_sto()
+    loop = _loop(source)
+    await loop.spin_up()
+    loop.camera.schedule(Intrusion(start=loop.now, confidence=Confidence(0.9)))
+    await loop.run(0.5)
+    await loop.until_stopped()
+    runtime_latch = loop.runtime.standing
+    presence_latch = _latched(loop)
+    assert runtime_latch is not None
+    assert presence_latch is not None
+    source.chain.open(loop.now)
+    outcome = loop.acknowledger.acknowledge(OPERATOR, estop_released=True)
+    assert outcome == Err(StoNotReady(state=StoState.OPEN, detail="simulated relay contact"))
+    assert loop.runtime.standing == runtime_latch
+    assert _latched(loop) == presence_latch
+    source.chain.close(loop.now)
+    assert isinstance(loop.acknowledger.acknowledge(OPERATOR, estop_released=True), Ok)
+    assert loop.runtime.floor is None
+    assert loop.runtime.supervisor.standing is None
+    assert _latched(loop) is None
+    assert loop.drive.commanded_setpoint == 0
 
 
 async def test_an_intrusion_while_turning_brings_the_motor_to_zero_and_stays_latched() -> None:

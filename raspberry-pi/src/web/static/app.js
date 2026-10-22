@@ -408,6 +408,7 @@ function refreshLiveness() {
   renderEstopUnanswered();
   renderStopUnanswered();
   renderDriveFault();
+  renderSto();
   markStale(FRAME_FED, !fresh);
   markStale(PANEL_FED, performance.now() - state.panelAt >= PANEL_STALE_MS);
   markStale(STATUS_FED, performance.now() - state.statusAt >= STATUS_STALE_MS);
@@ -959,6 +960,45 @@ function renderDriveFault() {
   showBanner(el("drive-fault-banner"), faulted, reworded);
 }
 
+var STO_LABELS = { ready: "prete", open: "ouverte", unknown: "inconnue", not_configured: "non configuree" };
+var STO_ACTIONS = {
+  ready: "La lecture permet le depart. L'attestation humaine du cablage reste obligatoire.",
+  open: "Relacher le champignon et verifier le relais de securite, puis acquitter le verdict par votre nom et demander un nouveau depart. Au repos, une chaine ouverte apres un appui est normale.",
+  unknown: "Verifier le relais et la liaison de lecture STO, puis attendre une lecture fiable avant d'acquitter ou de demarrer.",
+  not_configured: "Configurer STO_SOURCE pour lire la chaine de securite. Cette lecture non configuree n'est pas une panne.",
+};
+
+function renderSto() {
+  var report = statusLeads() ? state.status : state.snapshot;
+  var row = report && report.sto;
+  var received = report === state.status ? state.statusAt : state.snapshotAt;
+  var age = row && row.age_s !== null ? row.age_s + (performance.now() - received) / 1000 : null;
+  var kind = row ? row.state : "unknown";
+  if ((kind === "ready" || kind === "open") && (age === null || age > row.stale_after_s)) {
+    kind = "unknown";
+  }
+  var ready = kind === "ready";
+  var reason = kind === "unknown" && row && row.state !== "unknown"
+    ? row.unknown_refusal
+    : row && row.refusal ? row.refusal : ready ? "" : "etat STO inconnu : lecture en attente";
+  var action = STO_ACTIONS[kind] || STO_ACTIONS.unknown;
+  pill(el("sto-pill"), (STO_LABELS[kind] || STO_LABELS.unknown) + (row ? " (" + row.source + ")" : ""), ready ? "good" : "warn");
+  pill(el("side-sto"), STO_LABELS[kind] || STO_LABELS.unknown, ready ? "good" : "warn");
+  text(el("sto-age"), "Derniere lecture reussie : " + (age !== null ? num(age, 1) + " s" : "aucune"));
+  text(el("sto-note"), (reason ? reason + ". " : "") + action);
+  var detail = reason + ". Depart et acquittement refuses. " + action;
+  var banner = el("sto-banner-detail");
+  var reworded = banner.textContent !== detail;
+  text(banner, detail);
+  showBanner(el("sto-banner"), !ready, reworded);
+  text(el("start-sto-note"), reason);
+  text(el("manual-sto-note"), reason);
+  text(el("ack-sto-note"), ready ? "" : "Acquittement refuse : " + reason + ". " + action);
+  var status = state.status;
+  el("start").disabled = !ready || !status || !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
+  el("manual-start").disabled = !ready || !state.motionEnabled;
+}
+
 /*
   The banners take room at the top of the page, and the emergency-stop one
   stays for as long as a stop is latched. The stylesheet starts the sidebar
@@ -1131,6 +1171,8 @@ function faultText(fault) {
 
 function renderSnapshot(snapshot) {
   state.snapshot = snapshot;
+  state.snapshotAt = performance.now();
+  renderSto();
   renderMode(snapshot);
   renderConsole(snapshot);
   renderManual(snapshot);
@@ -1460,7 +1502,7 @@ function renderPanel(panel) {
   show(el("console-readonly"), !panel.motion_enabled);
   show(el("programs-note"), !panel.programs_enabled);
   el("start").disabled = el("start").disabled || !panel.motion_enabled || !panel.programs_enabled;
-  el("manual-start").disabled = !panel.motion_enabled;
+  renderSto();
   el("manual-step-up").disabled = panel.radius_m === null;
   el("manual-step-down").disabled = panel.radius_m === null;
 
@@ -3125,8 +3167,7 @@ function loadStatus() {
           " (valable jusqu'au prochain redemarrage du Pi)"
       );
     }
-    el("start").disabled =
-      !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
+    renderSto();
     renderStatusGrids(status);
     var live = el("verdicts-live");
     live.textContent = "";
@@ -3508,7 +3549,8 @@ function doAcknowledge() {
     .catch(function (error) {
       state.ackGiven = null;
       problem(el("ack-note"), error);
-      window.alert("acquittement refuse : " + error.message);
+      window.alert(error.message.indexOf("acquittement refuse :") === 0
+        ? error.message : "acquittement refuse : " + error.message);
     });
 }
 

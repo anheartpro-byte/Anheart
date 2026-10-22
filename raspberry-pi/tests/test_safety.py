@@ -67,6 +67,7 @@ from src.geometry import MachineGeometry
 from src.motor.drive import LFT_FAULT_CODES, DriveFault, DriveState, FaultReport, describe_fault
 from src.result import Err, Ok
 from src.training import safety
+from src.training.preflight import StoNotReady
 from src.training.safety import (
     ALL_RULES,
     ESTOP_ATTESTATION,
@@ -589,6 +590,7 @@ def test_the_supervisor_touches_no_hardware() -> None:
         "src.clock",
         "src.motor.drive",
         "src.result",
+        "src.training.preflight",
         "src.training.types",
         "src.units",
     }
@@ -3124,6 +3126,8 @@ def _refusal_kind(refusal: AcknowledgeRefusal) -> str:
             return "estop-latched"
         case NothingLatched():
             return "nothing-latched"
+        case StoNotReady():
+            return "sto-not-ready"
     raise assert_never(refusal)
 
 

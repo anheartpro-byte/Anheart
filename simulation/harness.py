@@ -71,6 +71,8 @@ from simulation.scenario import (
     SessionKind,
     Shutdown,
     StartAgain,
+    StoClose,
+    StoOpen,
     TickException,
 )
 from simulation.sensors import DirectSensor
@@ -86,6 +88,7 @@ from src.local_panel import (
 )
 from src.medical import SHIPPED_PARAMETERS
 from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
+from src.motor.sto import SimulatedStoChain, SimulatedStoSource, StoSourceKind, StoState
 from src.record import commands
 from src.record.schema import EventKind, Manifest
 from src.result import Err, Ok, Result
@@ -96,6 +99,7 @@ from src.training.hr_control import HeartRateRejection, TrackerReading
 from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits
 from src.training.plan import INITIAL_REV, Program, TrainingProfile
 from src.training.runtime import (
+    EndReason,
     RuntimeLimits,
     RuntimeState,
     StartRefusal,
@@ -350,6 +354,16 @@ class PrerollView:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class StoObservation:
+    """Memory-only safety evidence alongside the unchanged recording schema."""
+
+    at: Seconds
+    state: StoState
+    latched: bool
+    end_reason: EndReason | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class RunResult:
     """A finished run: the trace plus everything the checks need to judge it."""
 
@@ -367,6 +381,7 @@ class RunResult:
     preroll: PrerollView = PrerollView(peak_motor_rpm=0, final_motor_rpm=0, rules=())
     readings: tuple[EcgObservation, ...] = ()
     counters: ZoneCounters = EMPTY_COUNTERS
+    sto: tuple[StoObservation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -571,6 +586,8 @@ class Session:
         "_stalled",
         "_start_at",
         "_start_refusal",
+        "_sto_chain",
+        "_sto_observations",
         "_subject",
         "_targets",
         "_ticker",
@@ -595,6 +612,7 @@ class Session:
         clock = self._ticker.clock
         self._motion: MotionLimits = load_motion()
         enabled = scenario.drive.initial_enabled_rpm
+        self._sto_chain: SimulatedStoChain = SimulatedStoChain()
         self._sim: SimulatedDrive = SimulatedDrive(
             clock,
             SimulatedDriveConfig(
@@ -606,6 +624,7 @@ class Session:
             ),
             initial_state=SimState.SWITCH_ON_DISABLED if enabled is None else _ENABLED,
             initial_rpm=MotorRpm(0) if enabled is None else enabled,
+            sto_chain=self._sto_chain,
         )
         if scenario.drive.initial_fault is not None:
             self._sim.inject_fault(scenario.drive.initial_fault)
@@ -614,6 +633,7 @@ class Session:
             self._faulty.refuse(word)
         self._drive: RecordingDrive = RecordingDrive(self._faulty, clock)
         self._runtime: TrainingRuntime = TrainingRuntime(
+            sto=SimulatedStoSource(chain=self._sto_chain, source=StoSourceKind.SIM_READY),
             clock=clock,
             drive=self._drive,
             geometry=rig.machine,
@@ -650,6 +670,7 @@ class Session:
         self._last_measured: MotorRpm = MotorRpm(0)
         self._latency_until: Monotonic | None = None
         self._rows: list[Row] = []
+        self._sto_observations: list[StoObservation] = []
         # The idle ticks before the start, with their instants: they are inputs of
         # a replay (the DSP and the idle poll are warm when the session starts),
         # written to the record with t <= 0. Not part of ``Trace.rows``.
@@ -794,6 +815,14 @@ class Session:
         if record:
             row = self._row(now, snapshot)
             self._rows.append(row)
+            self._sto_observations.append(
+                StoObservation(
+                    at=elapsed(self._start_at, now),
+                    state=snapshot.sto.state,
+                    latched=snapshot.safety is not None and snapshot.safety.latched,
+                    end_reason=self._runtime.end_reason,
+                )
+            )
             self._note_changes(now, snapshot)
             if self._sink is not None:
                 await self._sink(row)
@@ -869,9 +898,15 @@ class Session:
                 self._input(commands.EmergencyStop())
                 runtime.request_estop("operator: e-stop")
                 detail = None
+            case StoOpen():
+                self._sto_chain.open(now)
+            case StoClose():
+                self._sto_chain.close(now)
             case Acknowledge(estop_released=released):
                 self._input(commands.Acknowledge(released))
                 acknowledged = runtime.acknowledge(OPERATOR, estop_released=released)
+                if action.expect is not Expectation.ANY:
+                    self._request(action.at, "acknowledge", action.expect, acknowledged)
                 if isinstance(acknowledged, Err):
                     self._event(now, EventKind.REFUSAL, repr(acknowledged.error))
                 detail = None
@@ -1223,6 +1258,7 @@ class Session:
                 for reading in self._observed_hr.readings
             ),
             counters=self._counters,
+            sto=tuple(self._sto_observations),
         )
 
     def meta(self) -> dict[str, str | float | int | bool | list[str] | None]:

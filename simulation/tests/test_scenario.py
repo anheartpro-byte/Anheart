@@ -22,6 +22,8 @@ from simulation.scenario import (
     ManualTarget,
     Scenario,
     SessionKind,
+    StoClose,
+    StoOpen,
     load_scenario,
     parse_scenario,
     resolve,
@@ -258,6 +260,31 @@ def test_every_action_name_has_a_builder() -> None:
         }.get(name, [])
         action = {"at_s": 1, "do": name, **{key: extra[key] for key in keys}}
         assert len(_parse({**MINIMAL, "actions": [action]}).actions) == 1, name
+
+
+def test_sto_actions_are_timed_and_sorted() -> None:
+    scenario = _parse(
+        {**MINIMAL, "actions": [{"at_s": 5, "do": "sto_close"}, {"at_s": 2, "do": "sto_open"}]}
+    )
+    assert scenario.actions == (StoOpen(Seconds(2)), StoClose(Seconds(5)))
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"at_s": 1, "do": "sto_opne"},
+        {"at_s": 1, "do": "STO_OPEN"},
+        {"at_s": 1, "do": "sto_closed"},
+        {"at_s": 1, "do": "sto_open", "duration_s": 1},
+        {"at_s": 1, "do": "sto_close", "expect": "accepted"},
+        {"at_s": -1, "do": "sto_open"},
+        {"at_s": "now", "do": "sto_close"},
+        {"do": "sto_open"},
+        {"at_s": True, "do": "sto_close"},
+    ],
+)
+def test_malformed_sto_actions_are_refused(action: dict[str, object]) -> None:
+    assert isinstance(parse_scenario(json.dumps({**MINIMAL, "actions": [action]})), Err)
 
 
 def test_the_harness_refuses_what_it_cannot_run_faithfully() -> None:

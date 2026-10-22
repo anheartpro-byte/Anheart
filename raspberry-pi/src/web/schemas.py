@@ -52,6 +52,7 @@ from src.control_surface import (
 from src.link_state import LinkStatus, label_of
 from src.medical import MedicalStatus
 from src.motor.drive import FaultReport
+from src.motor.sto import STO_STALE_AFTER, StoReading, StoState
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.monitor import (
     Clear,
@@ -75,6 +76,7 @@ from src.service_state import THRESHOLD, WINDOW, ServiceStatus
 from src.service_watchdog import WatchdogStatus
 from src.telemetry import EcgWindow, Payload, PayloadKind
 from src.training.plan import PhaseSpan, Program, TrainingProfile
+from src.training.preflight import StoNotReady, describe_sto_refusal
 from src.training.runtime import IdleLink
 from src.training.safety import EstopAttestation, SafetyAcknowledgement
 from src.training.types import (
@@ -86,7 +88,7 @@ from src.training.types import (
     TelemetrySnapshot,
     ZoneCounters,
 )
-from src.units import Monotonic, Seconds, UnixMillis
+from src.units import Monotonic, Seconds, UnixMillis, elapsed
 from src.wall_clock import (
     Synchronised,
     WallClockState,
@@ -501,6 +503,39 @@ class CountersRow:
 
 
 @dataclass(frozen=True, slots=True)
+class StoRow:
+    """Local STO state and the age of its last success, never a heartbeat field."""
+
+    state: str
+    source: str
+    age_s: float | None
+    refusal: str | None
+    stale_after_s: float
+    unknown_refusal: str
+
+    @classmethod
+    def of(cls, reading: StoReading, now: Monotonic | None) -> StoRow:
+        """Age a memory observation at the response time, without doing I/O."""
+        last = reading.last_success_at
+        age = None if last is None or now is None else elapsed(last, now)
+        state = reading.state
+        if state in (StoState.READY, StoState.OPEN) and (age is None or age > STO_STALE_AFTER):
+            state = StoState.UNKNOWN
+        return cls(
+            state=state.value,
+            source=reading.source.value,
+            age_s=_finite(age),
+            stale_after_s=STO_STALE_AFTER,
+            unknown_refusal=describe_sto_refusal(StoNotReady(state=StoState.UNKNOWN, detail="")),
+            refusal=(
+                None
+                if state is StoState.READY
+                else describe_sto_refusal(StoNotReady(state=state, detail=reading.detail))
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SnapshotRow:
     """One telemetry snapshot, as the page receives it.
 
@@ -546,6 +581,8 @@ class SnapshotRow:
 
     manual: ManualRow | None
 
+    sto: StoRow
+
     instance: str = ""
     """Which run of the console wrote this (:attr:`~src.web.deps.Services.instance`).
 
@@ -555,7 +592,9 @@ class SnapshotRow:
     """
 
     @classmethod
-    def of(cls, snapshot: TelemetrySnapshot, instance: str = "") -> SnapshotRow:
+    def of(
+        cls, snapshot: TelemetrySnapshot, instance: str = "", *, now: Monotonic | None = None
+    ) -> SnapshotRow:
         """Render a snapshot for the wire, as written by the run ``instance``."""
         return cls(
             instance=instance,
@@ -585,6 +624,7 @@ class SnapshotRow:
             counters=CountersRow.of(snapshot.counters),
             mode=snapshot.mode.value,
             manual=ManualRow.of(snapshot.manual),
+            sto=StoRow.of(snapshot.sto, now),
         )
 
 
@@ -1519,6 +1559,7 @@ class StatusRow:
     """
 
     run_state: str
+    sto: StoRow
     estop_latched: bool
     """The interface's own flag: set by its E-STOP route, by nothing else."""
 
@@ -1644,7 +1685,9 @@ class WsEnvelope:
     notice: str = ""
 
     @classmethod
-    def of(cls, payload: Payload, instance: str = "") -> WsEnvelope:
+    def of(
+        cls, payload: Payload, instance: str = "", *, now: Monotonic | None = None
+    ) -> WsEnvelope:
         """Render one hub payload. Total over :class:`~src.telemetry.PayloadKind`.
 
         ``instance`` is the run of the console that serves the socket: a
@@ -1654,7 +1697,7 @@ class WsEnvelope:
         event = payload.event
         return cls(
             kind=payload.kind.value,
-            snapshot=None if snapshot is None else SnapshotRow.of(snapshot, instance),
+            snapshot=None if snapshot is None else SnapshotRow.of(snapshot, instance, now=now),
             event=None if event is None else EventRow.of(event),
             ecg=None,
             notice=payload.notice,

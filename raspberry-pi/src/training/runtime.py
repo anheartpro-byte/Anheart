@@ -197,6 +197,7 @@ from src.motor.drive import (
     describe_fault,
     describe_violation,
 )
+from src.motor.sto import STO_STALE_AFTER, StoSource, StoState, UnconfiguredStoSource
 from src.result import Err, Ok, Result
 from src.task_completion import complete_owned
 from src.training.drive_inspection import OpenFailed, StatusFailed, begin_inspection
@@ -227,6 +228,7 @@ from src.training.plan import (
     MIN_RECOVERY_S,
     Program,
 )
+from src.training.preflight import StoNotReady, check_sto_ready
 from src.training.safety import (
     RULE_COMMS_LOST,
     RULE_DRIVE_FAULT,
@@ -296,6 +298,11 @@ IdleLink = _IdleLink
 
 RULE_DRIVE_PRECOMMANDED: Final[str] = "drive_precommanded"
 """The drive was already enabled when this process arrived. See :meth:`TrainingRuntime.start`."""
+
+RULE_STO_OPEN: Final[str] = "sto_open"
+"""The hardware chain has already cut torque; zero and require acknowledgement."""
+RULE_STO_UNREADABLE: Final[str] = "sto_unreadable"
+"""No successful STO observation within the technical freshness budget."""
 
 RULE_TICK_EXCEPTION: Final[str] = "tick_exception"
 """Something inside the tick raised. This process's state is no longer trusted."""
@@ -702,6 +709,7 @@ type StartRefusal = (
     | DrivePrecommanded
     | DriveInFault
     | RecordStorageLow
+    | StoNotReady
 )
 """Every way :meth:`TrainingRuntime.start` can refuse. Closed; match it nested."""
 
@@ -1270,6 +1278,9 @@ class TrainingRuntime:
         "_silent",
         "_snapshot",
         "_started_at",
+        "_sto",
+        "_sto_last_success_at",
+        "_sto_loop_delay",
         "_stop_requested",
         "_stopped_by",
         "_subject",
@@ -1293,6 +1304,7 @@ class TrainingRuntime:
         motion: MotionLimits = DEFAULT_MOTION_LIMITS,
         limit_radius: Metres | None = None,
         arming_gate: ArmingGate | None = None,
+        sto: StoSource | None = None,
     ) -> None:
         """Build an idle runtime. Raises ``ValueError`` on a mismatched supervisor.
 
@@ -1328,8 +1340,12 @@ class TrainingRuntime:
         every other precondition has passed and before the drive is touched:
         the console passes the session record's free-space check. ``None``:
         nothing records, nothing to ask.
+
+        ``sto`` supplies memory-only observations. Omitted means NOT_CONFIGURED,
+        which refuses every arming and acknowledgement until a ready source exists.
         """
         self._clock: Clock = clock
+        self._sto: StoSource = UnconfiguredStoSource() if sto is None else sto
         self._arming_gate: ArmingGate | None = arming_gate
         self._drive: DriveBackend = drive
         self._geometry: MachineGeometry = geometry
@@ -1465,6 +1481,10 @@ class TrainingRuntime:
         )
         self._attendant_last_seen: Monotonic | None = None
         self._previous_tick_at: Monotonic | None = None
+        # Pause credit belongs to this cached success, resets on the next one,
+        # and stops growing as soon as a later read is pending or has failed.
+        self._sto_last_success_at: Monotonic | None = None
+        self._sto_loop_delay: Seconds = Seconds(0)
         self._latched: SafetyVerdict | None = None
         # What this module's own latch held when GO_SILENT took its place, for
         # the screen alone: written by _latch, read by the `silenced` property.
@@ -1556,6 +1576,16 @@ class TrainingRuntime:
     def silent(self) -> bool:
         """Whether this runtime has stopped writing to the drive. One-way."""
         return self._silent
+
+    @property
+    def drive_reads_permitted(self) -> bool:
+        """Auxiliary reads must not refresh ttO after silence or link release."""
+        return not self._silent and self._shutdown is None
+
+    @property
+    def drive_link_acquired(self) -> bool:
+        """Whether this runtime holds a link acquired by a successful open()."""
+        return self._link_open or self._idle_link.open
 
     @property
     def ending(self) -> Ending | None:
@@ -2109,6 +2139,9 @@ class TrainingRuntime:
         standing = self.standing
         if standing is not None:
             return SafetyStanding(standing)
+        sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+        if sto is not None:
+            return sto
         if state not in (RuntimeState.IDLE, RuntimeState.FINISHED):
             return AlreadyStarted(state)
         # Last, so the operator is first told what only they can clear.
@@ -2288,6 +2321,10 @@ class TrainingRuntime:
         refused = await self._check_drive_limits()
         if refused is not None:
             return refused
+        # Inspection awaited transport I/O: revalidate the contact before enabling.
+        sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+        if sto is not None:
+            return sto
         try:
             return await self._energise(now)
         except CancelledError:
@@ -2463,6 +2500,7 @@ class TrainingRuntime:
         # 1. THE KEEPALIVE FIRST.
         await self._service_drive(now)
         await self._finish_fault_reset(now)
+        self._judge_sto(now, previous)
         self._advance_phase(now)
         # 2. Safety, and its verdict.
         verdict = self._supervisor.evaluate(self._observe(now, self._envelope(now)))
@@ -2473,6 +2511,88 @@ class TrainingRuntime:
         await self._settle(now)
         self._accumulate(now, interval)
         self._snapshot = self._build_snapshot(now)
+
+    def _judge_sto(self, now: Monotonic, previous: Monotonic | None) -> None:
+        """Judge the cached contact before any controller demand, including at idle.
+
+        OPEN treats unknown speed as possible motion. Unreadable STO requires
+        a configured source and positive motion evidence: an armed session,
+        our run command, or a fresh enabled/turning status. No I/O occurs here.
+
+        Deduct a loop_stall interval only while no read since the last success
+        is pending or failed. The last tick's token can permit a read during
+        a pause. A success resets the credit; only the part of its interval
+        after that success can count. Retain earned credit until the next
+        success, allowing polling to resume without a false STO verdict.
+
+        With credit D, latch on the first permitted tick where age - D exceeds
+        STO_STALE_AFTER: at most STO_STALE_AFTER + D + one tick interval after
+        the last success. D sums excused loop_stall portions with no attempt,
+        before the first unresolved attempt. From that attempt, D cannot grow
+        and detection takes at most STO_STALE_AFTER plus one tick interval,
+        pauses included. Without earlier credit the bound starts at the last success.
+        A pause with an unresolved read can therefore raise both loop_stall and
+        sto_unreadable. Communication-loss rules still dominate if the link
+        itself stops answering. No extra duration or I/O is introduced.
+        """
+        if not self.drive_reads_permitted:
+            return
+        reading = self._sto.latest(now)
+        last = reading.last_success_at
+        if last != self._sto_last_success_at:
+            self._sto_last_success_at = last
+            self._sto_loop_delay = Seconds(0)
+        if (
+            previous is not None
+            and last is not None
+            and not reading.read_unresolved
+            and elapsed(previous, now) > self._supervisor.limits.loop_stall_freeze_gap
+        ):
+            self._sto_loop_delay = Seconds(self._sto_loop_delay + elapsed(max(previous, last), now))
+        status = self._readable_status(now)
+        if not self._link_open:
+            stamp = self._idle_status_at
+            status = (
+                self._idle_status
+                if stamp is not None and elapsed(stamp, now) <= self._limits.status_stale_after
+                else None
+            )
+        armed = self._started_at is not None and self._phase is not Phase.DONE
+        observed_motion = status is not None and (
+            status.state is DriveState.OPERATION_ENABLED
+            or abs(status.output_rpm) >= self._limits.standstill_rpm
+        )
+        if (
+            not armed
+            and not self._enabled
+            and status is not None
+            and status.state is not DriveState.OPERATION_ENABLED
+            and abs(status.output_rpm) < self._limits.standstill_rpm
+        ):
+            return
+        if reading.state is StoState.OPEN:
+            self._latch(
+                now,
+                RULE_STO_OPEN,
+                SafetyAction.QUICK_STOP,
+                "the hardware STO safety chain has cut torque; the shaft coasts. "
+                "The reference is zeroed; restore the chain, acknowledge by name "
+                "and request a new start before motion is permitted",
+            )
+            return
+        if reading.state is StoState.NOT_CONFIGURED or not (
+            armed or (self._link_open and self._enabled) or observed_motion
+        ):
+            return
+        if last is None or elapsed(last, now) - self._sto_loop_delay > STO_STALE_AFTER:
+            self._latch(
+                now,
+                RULE_STO_UNREADABLE,
+                SafetyAction.RAMP_DOWN,
+                "no successful STO reading within the freshness budget while control ticks "
+                "permit polling; controlled stop. "
+                "Restore a ready reading, acknowledge by name and request a new start",
+            )
 
     def _interval(self, now: Monotonic) -> Seconds | None:
         """Time since the previous tick, or ``None`` on the first one.
@@ -3095,6 +3215,9 @@ class TrainingRuntime:
         mine = self._latched
         if mine is not None and mine.action is SafetyAction.GO_SILENT:
             return Err(GoSilentIsTerminal(mine.rule))
+        sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+        if sto is not None:
+            return Err(sto)
         outcome = self._supervisor.acknowledge(operator, estop_released=estop_released)
         if isinstance(outcome, Ok):
             self._latched = None
@@ -3137,7 +3260,9 @@ class TrainingRuntime:
                         cleared=(mine.rule,),
                     )
                 )
-            case Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched():
+            case (
+                Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched() | StoNotReady()
+            ):
                 return Err(refusal)
         raise assert_never(refusal)
 
@@ -3745,6 +3870,12 @@ class TrainingRuntime:
         if self._applied_rpm != 0 or not self._at_standstill(now):
             return
         status = self._readable_status(now)
+        if status is not None and status.state is DriveState.SWITCH_ON_DISABLED:
+            # Fresh standstill and ETA confirm the output stage is already off.
+            # Closing STO cannot enable it without a new full arming sequence.
+            self._enabled = False
+            self._disable_failures = 0
+            return
         if status is not None and status.state is DriveState.FAULT:
             # No torque at standstill, and every word but FAULT_RESET is refused
             # by design: the ending waits for the operator's fault reset.
@@ -4330,6 +4461,7 @@ class TrainingRuntime:
             counters=self._counters,
             mode=self.mode,
             manual=self._manual_view(),
+            sto=self._sto.latest(now),
         )
 
     def _manual_view(self) -> ManualView | None:

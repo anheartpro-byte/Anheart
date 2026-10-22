@@ -57,6 +57,7 @@ from src.clock import Clock
 from src.motor.acquisition import AcquisitionEvidence
 from src.motor.drive import (
     LFT_FAULT_CODES,
+    LOGIC_INPUTS_LOGICAL,
     BadResponse,
     CommTimeout,
     ControlWord,
@@ -68,10 +69,12 @@ from src.motor.drive import (
     DriveStatus,
     EmergencyStopOutcome,
     FaultReport,
+    LogicInput,
     UnexpectedState,
     decode_status_word,
     describe_fault,
 )
+from src.motor.sto import SimulatedStoChain
 from src.result import Err, Ok, Result, is_err
 from src.units import (
     Amperes,
@@ -79,6 +82,7 @@ from src.units import (
     Monotonic,
     MotorRpm,
     RawRegister,
+    RegisterAddress,
     RpmPerSecond,
     Seconds,
     StatusWord,
@@ -459,6 +463,8 @@ class SimulatedDriveConfig:
     reference up to it, so a non-zero value here exists to test the refusal,
     never to model a machine anyone may run."""
 
+    sto_input: LogicInput = LogicInput.LI1
+
     def __post_init__(self) -> None:
         # Only the knobs that break the arithmetic are checked, and they raise
         # rather than returning a Result: this is built at startup with nothing
@@ -526,6 +532,15 @@ class SimulatedDrive:
 
     Mixing them is safe but pointless: integrating to a ``now`` ahead of the
     clock just means the next clock-driven call finds nothing to do.
+
+    The optional shared STO chain cuts torque synchronously, even without a
+    Modbus reader. The shaft coasts and ETA becomes SWITCH_ON_DISABLED (0x40).
+    Closing the contact never enables the output stage: a complete new enable
+    sequence is required. This is the selected model; the real ATV320 behaviour
+    must be verified on the bench after the safety relay is wired.
+    An already latched fault keeps FAULT and its LFT code across opening and
+    closing; an active fault ramp becomes a freewheel. The existing explicit
+    fault reset and a full enable sequence are still required afterwards.
     """
 
     __slots__ = (
@@ -548,6 +563,7 @@ class SimulatedDrive:
         "_rpm",
         "_setpoint",
         "_state",
+        "_sto_chain",
     )
 
     def __init__(
@@ -558,6 +574,7 @@ class SimulatedDrive:
         initial_state: SimState = SimState.SWITCH_ON_DISABLED,
         initial_rpm: MotorRpm = MotorRpm(0),
         fault_codes: Mapping[RawRegister, DriveFault] = LFT_FAULT_CODES,
+        sto_chain: SimulatedStoChain | None = None,
     ) -> None:
         """Build a drive that is already powered and resting, unless told otherwise.
 
@@ -611,6 +628,32 @@ class SimulatedDrive:
         self._latency: Seconds = Seconds(0.0)
         self._misaddressed: bool = False
         self._reversed: bool = False
+        self._sto_chain: SimulatedStoChain | None = None
+        if sto_chain is not None:
+            self.connect_sto(sto_chain)
+
+    @property
+    def sto_chain(self) -> SimulatedStoChain | None:
+        return self._sto_chain
+
+    def connect_sto(self, chain: SimulatedStoChain) -> None:
+        """Wire one shared relay before running the console or simulation."""
+        if self._sto_chain is not None:
+            raise ValueError("STO chain already connected")
+        self._sto_chain = chain
+        chain.connect(self._sto_opened)
+        if not chain.ready:
+            self._sto_opened(self._clock.monotonic())
+
+    def _sto_opened(self, now: Monotonic) -> None:
+        self._integrate(now)
+        self._state = (
+            SimState.SWITCH_ON_DISABLED
+            if self._fault is None
+            else SimState.FAULT_REACTION_FREEWHEEL
+        )
+        self._rate = 0.0
+        self._settle_standstill()
 
     # -- observation -------------------------------------------------------
 
@@ -805,6 +848,9 @@ class SimulatedDrive:
         ):
             return Err(DriveFaulted(fault=latched.fault, raw_code=latched.raw_code))
 
+        if self._sto_chain is not None and not self._sto_chain.ready:
+            return Err(UnexpectedState(expected=COMMAND_REQUIRES[word], actual=self._drive_state()))
+
         target = LEGAL_TRANSITIONS.get((self._state, word))
         if target is None:
             return Err(UnexpectedState(expected=COMMAND_REQUIRES[word], actual=self._drive_state()))
@@ -888,6 +934,19 @@ class SimulatedDrive:
                 fault_code=None if latched is None else latched.raw_code,
             )
         )
+
+    async def read_register(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
+        """Only the simulated relay-feedback register is modelled; others are refused."""
+        self._integrate(self._clock.monotonic())
+        error = self._transport_check()
+        if error is not None:
+            return Err(error)
+        self._note_frame(is_write=False)
+        if address != LOGIC_INPUTS_LOGICAL:
+            return Err(BadResponse(detail="unsupported simulated register"))
+        chain = self._sto_chain
+        ready = chain is not None and chain.ready
+        return Ok(RawRegister((1 << self._config.sto_input) if ready else 0))
 
     async def read_limits(self) -> Result[DriveLimits, DriveError]:
         """The configured tFr/HSP/LSP/ACC/dEC, through the same link checks as a read.
@@ -1149,7 +1208,9 @@ class SimulatedDrive:
         self._fault = report
         if self._at_standstill():
             self._state = SimState.FAULT
-        elif FAULT_REACTIONS[report.fault] is FaultReaction.RAMP_TO_STOP:
+        elif FAULT_REACTIONS[report.fault] is FaultReaction.RAMP_TO_STOP and (
+            self._sto_chain is None or self._sto_chain.ready
+        ):
             self._state = SimState.FAULT_REACTION_RAMP_STOP
         else:
             self._state = SimState.FAULT_REACTION_FREEWHEEL
