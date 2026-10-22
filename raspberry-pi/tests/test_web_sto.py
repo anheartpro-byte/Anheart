@@ -10,7 +10,6 @@ from pydantic import TypeAdapter
 
 from src.cloud_sync import HEARTBEAT_PERIOD, live_row
 from src.motor.sto import STO_STALE_AFTER, DriveInputStoSource, StoReading, StoSourceKind, StoState
-from src.result import Ok
 from src.training.preflight import StoNotReady, describe_sto_refusal
 from src.training.runtime import RULE_STO_OPEN
 from src.units import Monotonic, Seconds
@@ -88,7 +87,7 @@ async def test_cached_ready_expires_in_snapshot_and_status_even_without_another_
     try:
         source = rig.panel.sto
         assert isinstance(source, DriveInputStoSource)
-        assert isinstance(await rig.simulator.open(), Ok)
+        await rig.panel.control_step()
         await source.poll()
         fresh = await rig.tick(0.2)
         assert fresh.sto.state is StoState.READY

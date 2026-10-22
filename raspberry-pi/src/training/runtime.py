@@ -1577,6 +1577,11 @@ class TrainingRuntime:
         return not self._silent and self._shutdown is None
 
     @property
+    def drive_link_acquired(self) -> bool:
+        """Whether this runtime holds a link acquired by a successful open()."""
+        return self._link_open or self._idle_link.open
+
+    @property
     def ending(self) -> Ending | None:
         """The ending in progress, or ``None``."""
         return self._ending
