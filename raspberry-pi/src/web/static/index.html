@@ -102,6 +102,10 @@
     <strong>VARIATEUR EN DEFAUT</strong>
     <span id="drive-fault-banner-detail">aucun demarrage n'est accepte tant que le variateur signale un defaut</span>
   </div>
+  <div id="sto-banner" class="banner hidden" role="alert" aria-live="assertive">
+    <strong>CHAINE STO NON PRETE</strong>
+    <span id="sto-banner-detail">depart et acquittement refuses : lecture en attente</span>
+  </div>
   <!--
     The medical parameters (config/medical_parameters.json) are not proven
     signed: the console started in bench mode only. A standing state from
@@ -166,6 +170,7 @@
     <dt>Liaison</dt><dd><span id="link-state" class="pill pill-bad">hors ligne</span></dd>
     <dt>Rotation</dt><dd><span id="side-motion" class="pill">&mdash;</span></dd>
     <dt>Securite</dt><dd><span id="side-safety" class="pill">&mdash;</span></dd>
+    <dt>Chaine STO</dt><dd><span id="side-sto" class="pill pill-warn">inconnue</span></dd>
     <dt>Console</dt><dd><span id="console-mode" class="pill">&mdash;</span></dd>
     <dt>Serveur</dt><dd><span id="dashboard-link" class="pill">-</span></dd>
     <dt>Version</dt><dd><span id="software-version" class="pill">-</span></dd>
@@ -248,6 +253,7 @@
         <div class="unit">cible, tr/min de sortie (bras) &middot; un palier = 0,1 Gr</div>
         <dl class="grid" id="manual-grid"></dl>
       </div>
+      <p id="manual-sto-note" class="note"></p>
       <p id="manual-note" class="note"></p>
     </div>
 
@@ -393,6 +399,7 @@
         <p id="programs-note" class="note hidden">
           seances programmees desactivees sur cette console (jalon M5) : utiliser le mode MANUEL
         </p>
+        <p id="start-sto-note" class="note"></p>
         <p id="start-note" class="note"></p>
       </div>
 
@@ -526,7 +533,7 @@
         <ul id="verdicts-live" class="events"></ul>
         <!--
           The acknowledgement: by name, never automatic, and the mushroom
-          release is a separate statement because software cannot see the contact.
+          release remains a separate operator statement alongside the STO reading.
         -->
         <div class="ackrow">
           <input id="ack-operator" type="text" autocomplete="off" placeholder="votre nom" />
@@ -536,6 +543,7 @@
           </label>
           <button id="ack" class="btn" type="button">Acquitter</button>
         </div>
+        <p id="ack-sto-note" class="note"></p>
         <p id="ack-note" class="note"></p>
         <!--
           Out of service only. Putting the console back in service is by name
@@ -582,9 +590,18 @@
           Enregistree par demarrage, pas par installation : un Pi qui a redemarre
           est un Pi dont personne n'a garanti le cablage depuis.
         </p>
+        <p class="note"><strong>Important.</strong> Le logiciel lit le retour de la chaine STO
+          configuree (simule en mode sim_*). Il ne peut pas verifier que le pont STO est retire
+          ni que le champignon est cable normalement ferme sur P24 -&gt; STO.
+          La lecture ne remplace pas ces deux confirmations humaines.</p>
       </div>
     </div>
 
+    <div class="card" id="card-sto">
+      <h2>Chaine STO <span id="sto-pill" class="pill pill-warn">inconnue</span></h2>
+      <p id="sto-age" class="note">Derniere lecture reussie : aucune</p>
+      <p id="sto-note" class="note">Lecture en attente.</p>
+    </div>
     <!--
       Filled from GET /api/camera. When no camera is configured it says so in
       so many words, so nobody reads its absence as "presence checked".

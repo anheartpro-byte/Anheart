@@ -4409,6 +4409,7 @@ class TrainingRuntime:
             counters=self._counters,
             mode=self.mode,
             manual=self._manual_view(),
+            sto=self._sto.latest(now),
         )
 
     def _manual_view(self) -> ManualView | None:

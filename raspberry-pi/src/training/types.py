@@ -41,12 +41,13 @@ from __future__ import annotations
 import re
 from abc import abstractmethod
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, IntEnum, unique
 from types import MappingProxyType
 from typing import Final, Protocol
 
 from src.motor.drive import DriveState, FaultReport
+from src.motor.sto import StoReading, StoSourceKind, StoState
 from src.units import (
     Amperes,
     Bpm,
@@ -959,6 +960,22 @@ class TelemetrySnapshot:
 
     manual: ManualView | None = None
     """The manual session's target and limits, or ``None`` outside a manual session."""
+
+    sto: StoReading = field(
+        default_factory=lambda: StoReading(
+            state=StoState.NOT_CONFIGURED,
+            source=StoSourceKind.NONE,
+            last_success_at=None,
+            detail="not configured",
+        )
+    )
+    """The local STO observation, never added to the dashboard heartbeat."""
+
+    @property
+    def sto_age(self) -> Seconds | None:
+        """Age of the last successful STO read; None when none has succeeded."""
+        last = self.sto.last_success_at
+        return None if last is None else elapsed(last, self.at)
 
     @property
     def safety_action(self) -> SafetyAction:

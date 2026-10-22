@@ -154,8 +154,9 @@ dans un navigateur. Elle fonctionne sans internet.
   sécurité est le **coup de poing câblé**. Sur cette machine, l'entrée STO du variateur
   est pontée (voir [securite.md](../securite.md)) : même l'arrêt d'urgence le plus
   rapide est une rampe, pas une coupure.
-* elle ne vérifie pas le câblage : l'attestation « pont STO retiré, coup de poing
-  câblé » est une **déclaration humaine**, le logiciel ne mesure rien ;
+* elle lit le retour de la chaîne STO configurée, mais ne vérifie ni le retrait du
+  pont ni le câblage NF du champignon sur P24 -> STO : l'attestation reste une
+  **déclaration humaine**, obligatoire avec ses deux cases ;
 * elle ne voit pas réellement la capsule : **il n'existe aujourd'hui qu'une caméra
   simulée**, qui ne regarde jamais la vraie machine ;
 * elle ne permet pas, depuis la page, de déclarer une personne à bord en séance
@@ -991,6 +992,42 @@ erreurs `a valid x-anheart-token header is required`.
 
 ## 11. Visite guidée : page Securite
 
+### La carte Chaine STO et le champignon
+
+La carte **Chaine STO** indique `prete`, `ouverte`, `inconnue` ou `non configuree`,
+la source entre parenthèses et l'âge de la dernière lecture réussie (`aucune` si
+absente). La barre latérale rappelle l'état sur toutes les pages. `sim_ready` et
+`sim_open` lisent une chaîne simulée ; `drive_input` lit le retour du relais par le
+variateur. Une lecture absente, en échec ou ancienne ne vaut jamais `prete`.
+
+Quand la chaîne n'est pas prête, le bandeau rouge **CHAINE STO NON PRETE** explique
+le refus du départ et de l'acquittement. Il est placé sous **VARIATEUR EN DEFAUT**,
+avec les conditions qui empêchent le départ, avant l'avis sur les paramètres
+médicaux. Les deux boutons de départ sont grisés avec la raison donnée par le Pi.
+`non configuree` signifie qu'il faut configurer `STO_SOURCE` ; ce n'est pas une
+panne. Au repos, `ouverte` après un appui sur le champignon est un état normal.
+
+En séance, appuyer sur le champignon ouvre la chaîne : le matériel doit couper le
+couple indépendamment du Pi. Le logiciel affiche `ouverte` et le verdict
+`sto_open / quick_stop`, avec son détail et `verrouille oui`. La vitesse mesurée
+peut rester non nulle pendant la roue libre. Si c'est la lecture qui devient
+indisponible trop longtemps pendant un mouvement possible, le verdict verrouillé
+est `sto_unreadable / ramp_down`.
+
+Après vérification, relâcher le champignon et vérifier le relais. Attendre `prete`,
+puis **Acquitter** par son nom et demander un **nouveau départ**. Refermer seul ne
+relance rien. Tant que la chaîne reste ouverte, inconnue ou non configurée, même
+l'acquittement d'un autre verdict est refusé : le texte exact reste sous le bouton
+et une alerte dit `acquittement refuse`. En cas de lecture inconnue, rétablir la
+liaison de lecture et le retour du relais avant de réessayer.
+
+L'encadré **Important** de l'attestation précise la limite de la lecture : elle
+ne prouve ni le retrait du pont STO ni le câblage normalement fermé du champignon
+sur P24 -> STO. Les deux confirmations humaines restent nécessaires à chaque
+démarrage de la console. Les captures précédentes ne montrent pas encore cette
+nouvelle carte ; les états et refus sont vérifiés en simulation et par les tests
+de la console.
+
 ### Avant l'attestation
 
 ![Securite, câblage non attesté](img/console-02-securite-non-atteste.png)
@@ -1237,7 +1274,7 @@ Repères :
 
 Repères :
 
-1. Les neuf pastilles d'état, dont **Serveur**, **Version** et **Service** (§5).
+1. Les dix pastilles d'état, dont **Chaine STO**, **Serveur**, **Version** et **Service** (§5).
 2. La navigation complète, avec les capteurs.
 3. Toucher la zone de droite (le contenu) referme le menu.
 
@@ -2324,8 +2361,13 @@ variateur que le moteur est à l'arrêt avant de relancer l'outil. Vérifié ave
 signaux envoyés à l'outil sur un pilote factice, jamais sur un variateur réel.
 
 **Le coup de poing a été frappé, mais la page ne le montre pas.**
-Normal : le logiciel ne voit pas ce contact. C'est pour cela que l'acquittement vous
-demande de **déclarer** qu'il a été tiré.
+Regarder la carte **Chaine STO** (§11). `ouverte` demande de relâcher le champignon
+et de vérifier le relais ; `inconnue` demande de rétablir une lecture fiable ;
+`non configuree` demande de configurer `STO_SOURCE`. En mode `sim_*`, seule la chaîne
+simulée est lue. Une chaîne affichée `prete` ne prouve ni le retrait du pont ni le
+câblage du champignon : la vérification humaine et les deux cases d'attestation
+restent nécessaires. Après un verdict verrouillé, relâcher puis acquitter par son
+nom et demander un nouveau départ.
 
 **L'onglet du navigateur change de nom.**
 Il porte le nom de la page affichée : `Tableau de bord - AnHeart`,
@@ -2339,9 +2381,11 @@ Pour être clair sur ce que ce guide garantit :
 
 * **Tout a été rejoué en simulation seulement** (variateur, BITalino et caméra simulés).
   Aucune capture ne vient de la vraie centrifugeuse.
-* **STO ponté** : sur la machine actuelle, l'entrée de sécurité du variateur est pontée.
-  Même un arrêt d'urgence est une rampe. L'attestation du câblage est une déclaration
-  que le logiciel ne vérifie pas.
+* **Chaîne STO au banc** : le câblage du champignon et du relais, le retrait du pont
+  et la coupure du couple Pi débranché restent à valider après câblage. La lecture,
+  les refus, le verdict verrouillé et la séquence relâcher, acquitter, nouveau départ
+  sont vérifiés en simulation seulement. Aucun essai matériel n'est revendiqué.
+  La lecture configurée ne remplace pas l'attestation humaine du câblage.
 * **Caméra** : seule une caméra simulée existe. Les règles de présence n'ont jamais vu
   une vraie image.
 * **Personne à bord** : refusée par configuration (jalon M6). La séance programmée n'a
