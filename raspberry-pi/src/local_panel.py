@@ -2078,6 +2078,7 @@ def build_panel(
     )
     services = Services(
         clock=clock,
+        sto=sto,
         surface=surface,
         hub=hub,
         supervisor=runtime.supervisor,
