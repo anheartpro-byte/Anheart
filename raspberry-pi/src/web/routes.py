@@ -99,6 +99,7 @@ from src.training.plan import (
     is_profile_id,
     parse_profile,
 )
+from src.training.preflight import StoNotReady, describe_sto_refusal
 from src.training.safety import (
     ESTOP_ATTESTATION,
     AcknowledgeRefusal,
@@ -233,6 +234,7 @@ ALREADY_STOPPING: Final[str] = "already_stopping"
 NO_MANUAL_SESSION: Final[str] = "no_manual_session"
 VERDICT_LATCHED: Final[str] = "verdict_latched"
 ESTOP_UNATTESTED: Final[str] = "estop_unattested"
+STO_NOT_READY: Final[str] = "sto_not_ready"
 
 START_PENDING_DETAIL: Final[str] = (
     "demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas "
@@ -996,6 +998,12 @@ def _start_failure(refusal: StartRefusal) -> Refusal:
                 code=ESTOP_UNATTESTED,
                 detail=f"nobody has attested the emergency stop this boot: {refusal.statement}",
             )
+        case StoNotReady():
+            return Refusal(
+                HTTPStatus.PRECONDITION_FAILED,
+                code=STO_NOT_READY,
+                detail=describe_sto_refusal(refusal),
+            )
     raise assert_never(refusal)
 
 
@@ -1101,6 +1109,11 @@ def _acknowledge_failure(refusal: AcknowledgeRefusal) -> HTTPException:
         case NothingLatched():
             return HTTPException(
                 status_code=HTTPStatus.CONFLICT, detail="nothing is latched to acknowledge"
+            )
+        case StoNotReady():
+            return HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"acquittement refuse : {describe_sto_refusal(refusal)}",
             )
     raise assert_never(refusal)
 

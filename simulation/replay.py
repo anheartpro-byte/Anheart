@@ -92,6 +92,7 @@ from src.ecg_pipeline import EcgBridge, EcgFrame, Treatment, load_treatment, tre
 from src.geometry import MachineGeometry
 from src.motor.atv320 import ATV320Drive
 from src.motor.drive import DriveBackend
+from src.motor.sto import SimulatedStoChain, SimulatedStoSource, StoSourceKind
 from src.record import commands
 from src.record.configuration import WARNING_PREFIX
 from src.record.reader import Recording, read
@@ -475,6 +476,9 @@ def _runtime(
         if isinstance(geometry, AppliedRuntime):
             return Ok(
                 TrainingRuntime(
+                    sto=SimulatedStoSource(
+                        chain=SimulatedStoChain(), source=StoSourceKind.SIM_READY
+                    ),
                     clock=clock,
                     drive=drive,
                     geometry=geometry.geometry,
@@ -492,6 +496,7 @@ def _runtime(
         )
         return Ok(
             TrainingRuntime(
+                sto=SimulatedStoSource(chain=SimulatedStoChain(), source=StoSourceKind.SIM_READY),
                 clock=clock,
                 drive=drive,
                 geometry=machine,

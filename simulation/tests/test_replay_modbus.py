@@ -6,28 +6,33 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from tests.sto_support import ready_sto
 
 from simulation import run as cli
 from simulation.modbus import FailedExchange, InlineExecutor, SimulatedMaster
 from simulation.replay import replay, replay_recording
 from simulation.replay_modbus import SDK_KINDS
 from simulation.tests.test_record_console_parity import ENV, OPERATOR, console_inline, console_ticks
-from src.clock import ManualClock
-from src.local_config import load_local_config
+from src import local_panel
+from src.clock import Clock, ManualClock
+from src.local_config import LocalConfig, load_local_config
 from src.local_panel import DriveSide, build_panel
 from src.motor.atv320 import ATV320Drive
+from src.motor.drive import DriveBackend
 from src.motor.observation import (
     ExceptionReply,
     ExchangeKind,
     NoResponse,
 )
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
+from src.motor.sto import SimulatedStoChain, StoSource, StoState
 from src.record.codec import JSON, mapping
 from src.record.journal import Journal
 from src.record.reader import Recording, read
 from src.record.retention import records
 from src.record.schema import DriveFrame
 from src.result import Err, Ok
+from src.training.preflight import StoNotReady
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
 from src.units import Monotonic, OutputRpm, UnixMillis
@@ -53,14 +58,25 @@ async def console_native(root: Path, *, failed: bool = False) -> tuple[Path, Pat
         wait=master.wait,
     )
     journal = Journal(root / "records", clock)
-    panel = build_panel(
-        config,
-        clock=clock,
-        profiles_path=root / "profiles.json",
-        treat=console_inline,
-        journal=journal,
-        drive=DriveSide(backend=drive, simulator=None, release=master.close),
-    )
+
+    def ready_source(
+        _config: LocalConfig, _clock: Clock, _drive: DriveBackend, _chain: SimulatedStoChain | None
+    ) -> StoSource:
+        return ready_sto()
+
+    # This fixture records and replays native Modbus exchanges. Its STO chain
+    # is explicitly ready: drive_input polling happens outside the tick and
+    # native replay does not yet reproduce those exchanges (ANH-192 follow-up).
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(local_panel, "build_sto", ready_source)
+        panel = build_panel(
+            config,
+            clock=clock,
+            profiles_path=root / "profiles.json",
+            treat=console_inline,
+            journal=journal,
+            drive=DriveSide(backend=drive, simulator=None, release=master.close),
+        )
     attest_estop_wiring_result = panel.surface.attest_estop_wiring(OPERATOR)
     assert isinstance(attest_estop_wiring_result, Ok)
     await console_ticks(panel, journal, clock, 12)
@@ -90,6 +106,41 @@ async def console_native(root: Path, *, failed: bool = False) -> tuple[Path, Pat
     assert result.value.warnings == ()
     assert result.value.manifest.end_reason is not None
     return found[0], journal.root / "config" / (result.value.manifest.config_hash + ".json")
+
+
+async def test_native_console_without_sto_replacement_refuses_arming(tmp_path: Path) -> None:
+    loaded = load_local_config(
+        {**ENV, "MOTOR_BACKEND": "serial", "MOTOR_PORT": "simulated", "MOTOR_REG_OFFSET": "-1"}
+    )
+    assert isinstance(loaded, Ok), loaded
+    config = loaded.value
+    link = config.drive_link
+    assert link is not None
+    clock = ManualClock(Monotonic(10), UnixMillis(1_700_000_000_000))
+    model = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
+    master = SimulatedMaster(model, clock, link.registers)
+    drive = ATV320Drive(
+        clock,
+        master,
+        link.settings,
+        link.registers,
+        executor_factory=InlineExecutor,
+        wait=master.wait,
+    )
+    panel = build_panel(
+        config,
+        clock=clock,
+        profiles_path=tmp_path / "profiles.json",
+        treat=console_inline,
+        drive=DriveSide(backend=drive, simulator=None, release=master.close),
+    )
+    assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    refused = panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+    assert isinstance(refused, Err)
+    assert isinstance(refused.error, StoNotReady)
+    assert refused.error.state is StoState.NOT_CONFIGURED
+    assert model.acquisition_evidence.possible_frames == 0
+    await panel.close()
 
 
 @pytest.fixture(scope="module", params=[False, True], ids=["healthy", "failed_read"])

@@ -42,6 +42,7 @@ from src.presence.monitor import (
 )
 from src.presence.types import MachineContext, MotionState, PresenceSource
 from src.result import Err, Ok, Result
+from src.training.preflight import StoNotReady
 from src.training.runtime import ManualSession, RuntimeState
 from src.training.safety import (
     AcknowledgeRefusal,
@@ -255,7 +256,9 @@ class PresenceAcknowledger:
                 if isinstance(presence, Ok):
                     return Ok(presence.value)
                 return Err(error)
-            case Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched():
+            case (
+                Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched() | StoNotReady()
+            ):
                 return Err(error)
         raise assert_never(error)
 

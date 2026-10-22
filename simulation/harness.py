@@ -86,6 +86,7 @@ from src.local_panel import (
 )
 from src.medical import SHIPPED_PARAMETERS
 from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
+from src.motor.sto import SimulatedStoChain, SimulatedStoSource, StoSourceKind
 from src.record import commands
 from src.record.schema import EventKind, Manifest
 from src.result import Err, Ok, Result
@@ -614,6 +615,7 @@ class Session:
             self._faulty.refuse(word)
         self._drive: RecordingDrive = RecordingDrive(self._faulty, clock)
         self._runtime: TrainingRuntime = TrainingRuntime(
+            sto=SimulatedStoSource(chain=SimulatedStoChain(), source=StoSourceKind.SIM_READY),
             clock=clock,
             drive=self._drive,
             geometry=rig.machine,

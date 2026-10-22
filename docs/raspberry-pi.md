@@ -532,20 +532,27 @@ en attente de validation médicale (ANH-98) et d'ingénierie (jalon M6). Aucun
 
 ### 4.2 Portes communes à tout départ (`_refuse_arming`, `_arm`)
 
-Dans l'ordre, rien ne touche le variateur avant les cinq premières :
+Dans l'ordre, rien ne touche le variateur avant les six premières :
 
 1. Le runtime n'est ni arrêté (`shutdown`) ni silencieux.
 2. **Attestation E-STOP** faite depuis ce démarrage du processus (texte exact :
    « a latching mushroom emergency stop is wired normally-closed into P24 -> STO
    and the STO jumper has been removed »), par un opérateur nommé.
 3. Aucun verdict en vigueur (sinon il faut acquitter).
-4. Runtime au repos (`IDLE` ou `FINISHED`).
-5. Sur la console : au moins 500 Mo et 36 016 inodes libres sous le dossier
+4. Controle de pre-vol **STO pret** : seule une lecture `READY` permet
+   l'armement. `OPEN`, `UNKNOWN` (echec, lecture ancienne ou jamais recue) et
+   `NOT_CONFIGURED` donnent le refus nomme `StoNotReady`, avec l'etat et son
+   detail. Une source absente signifie non configuree, jamais prete. Le tic
+   et cette porte lisent uniquement la valeur en memoire ; la tache STO fait
+   les lectures Modbus. Ce seul controle est ajoute ici ; les autres controles
+   automatiques du pre-vol restent a ANH-142.
+5. Runtime au repos (`IDLE` ou `FINISHED`).
+6. Sur la console : au moins 500 Mo et 36 016 inodes libres sous le dossier
    d'enregistrement de séance, d'après la dernière mesure du fil du journal ;
    refus aussi si cet espace n'a pas pu être mesuré, ou si la mesure a plus de
    15 s (`RecordStorageLow`, [15.4](#154-départ-refusé-sous-500-mo)). Demandée en
    dernier, pour que l'opérateur entende d'abord ce que lui seul peut lever.
-6. Ouverture de la liaison et lecture du variateur. S'il est en
+7. Ouverture de la liaison et lecture du variateur. S'il est en
    `OPERATION_ENABLED` : arrêt, verrou `drive_precommanded`, refus. S'il est en
    défaut : refus (`DriveInFault`), **sans réarmement automatique**. Depuis le
    11 octobre 2026, la console refuse ce départ plus tôt quand elle le peut :
@@ -554,13 +561,21 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
    ([console-locale.md, section 6](console-locale.md#6-page--tableau-de-bord-)).
    Cette porte-ci reste la seule qui compte : la route ne la remplace pas, et
    un lancement venu du tableau de bord distant ne passe que par elle.
-7. Relecture de tFr, HSP, LSP, ACC, dEC ; refus si LSP ≠ 0, HSP > tFr ou
+8. Relecture de tFr, HSP, LSP, ACC, dEC ; refus si LSP ≠ 0, HSP > tFr ou
    HSP > 50,0 Hz. ttO et SLL ne sont **pas** relus (adresses Modbus non
    vérifiées) : chaque armement écrit un avertissement dans le journal demandant
    de les vérifier au clavier.
-8. Mise sous tension de l'étage de sortie : LFRD = 0, puis `SHUTDOWN` →
+9. Nouvelle verification STO apres ces lectures, puis mise sous tension de
+   l'étage de sortie : LFRD = 0, puis `SHUTDOWN` →
    `SWITCH_ON` → `ENABLE_OPERATION`. Si le mot d'activation échoue sans réponse,
    la sortie est supposée active : verrou `enable_unconfirmed` (QUICK_STOP).
+
+L'attestation et l'acquittement viennent avant les controles qui peuvent se
+retablir : l'operateur voit d'abord l'action humaine exigee. Le controle STO
+precede l'occupation du runtime et l'espace disque. La surface locale le
+verifie aussi avant de deposer un depart manuel ou programme ; le tableau de
+bord distant recoit sa raison de refus. Cette verification precoce ne remplace
+jamais celle du runtime au moment de l'armement.
 
 **Avant ces portes, sur la console : l'horloge murale, pour une personne à
 bord seulement.** Un départ déclaré « personne à bord » (séance manuelle
@@ -1151,7 +1166,7 @@ numéro de séquence a avancé et dont la qualité est `good` comptent.
 Sans baisse de charge (HOLD, φ = 1) c'est la règle des 25 bpm en 30 s ; charge
 retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 
-### 5.3 Les 4 règles ajoutées par le runtime
+### 5.3 Les 6 règles ajoutées par le runtime
 
 | Id | Condition | Action | Verrou |
 |---|---|---|---|
@@ -1159,6 +1174,28 @@ retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 | `enable_unconfirmed` | le mot qui active l'étage de sortie a pu partir sans réponse | QUICK_STOP | oui |
 | `disable_refused` | le variateur refuse 5 fois de suite (`disable_attempts`) les mots d'arrêt à l'arrêt confirmé | RAMP_DOWN si `SHUTDOWN` direct a réussi ; GO_SILENT sinon | oui |
 | `tick_exception` | une exception dans le tic | GO_SILENT | oui, définitif |
+| `sto_open` | lecture STO `OPEN` quand un mouvement est possible : seance armee a toute phase, marche presente, arbre tournant, vitesse inconnue ou relevé variateur ancien | QUICK_STOP, consigne zero dans ce tic ; le materiel a deja coupe le couple | oui |
+| `sto_unreadable` | mouvement possible, aucune lecture STO reussie depuis plus de `STO_STALE_AFTER` (2 s), ou jamais | RAMP_DOWN, arret controle | oui |
+
+Les deux regles STO sont jugees avant le calcul de consigne. Un echec de
+lecture isole rend `UNKNOWN` et refuse un depart, mais ne termine pas une
+seance tant que la derniere reussite n'a pas plus de 2 s. Une lecture `OPEN`
+declenche immediatement `sto_open`. Au repos sans seance et avec arbre
+observe immobile, aucun verrou STO : seul le depart est refuse tant que la
+chaine n'est pas prete. A severite egale, le premier verrou du runtime garde
+son nom et son instant (par exemple `drive_precommanded`) ; il continue de
+refuser tout depart.
+
+Le sondage STO respecte aussi `GO_SILENT` et la liberation de la liaison :
+une garde relue juste avant chaque lecture interdit toute nouvelle trame.
+La tache attend chaque lecture avant la suivante ; une seule lecture deja en
+vol peut encore aboutir lors du passage en silence ou de la fermeture. Ensuite
+le cache vieillit simplement vers `UNKNOWN`, sans rafraichir le `ttO`.
+
+Tout acquittement, meme pour un autre verrou, est refuse tant que la lecture
+STO n'est pas `READY` (`StoNotReady`, HTTP 409). La refermeture de la chaine
+ne leve aucun verrou. Apres acquittement nomme accepte, la seance terminee
+ne reprend pas : il faut un nouveau depart, avec toutes les portes ci-dessus.
 
 Ces verrous vivent dans le runtime, pas dans le plancher du superviseur.
 Depuis le 11 octobre 2026, `GET /api/status` les rapporte comme ceux du
@@ -1624,6 +1661,7 @@ Conséquences :
 | Arrêt demandé plus vite que la rampe du variateur | défaut **ObF** (surtension du bus, LFT 18) : le variateur passe en **roue libre**, le bras ralentit sans contrôle, plus longtemps. Aucun « arrêt rapide » n'existe donc dans le code. |
 | `SHUTDOWN` (6) envoyé sur un arbre qui tourne | transition CiA402 8 : l'étage de sortie tombe, **roue libre**. Mesuré sur le modèle du dépôt : arrêt à t = 144,6 s avec 6, contre t = 10,0 s en gardant la commande de marche. D'où l'ordre `SWITCH_ON` (7) puis `SHUTDOWN` (6), et seulement à l'arrêt confirmé par RFRD. |
 | QUICK_STOP, E-STOP, arrêt de sortie du processus | LFRD = 0, commande de marche **gardée** : le variateur suit sa rampe dEC. |
+| Ouverture materielle du STO (`sto_open`) | le relais et l'entree STO coupent deja le couple independamment du Pi : l'arbre ralentit en roue libre. La console met LFRD a 0 dans le tic de detection, puis retire la marche a l'arret constate par RFRD (`_settle`). Refermer ne reactive rien ; acquittement nomme puis nouveau depart requis. Le modele simule ce comportement ; la verification au banc reste a faire apres cablage. |
 | STOP opérateur, local ou demandé depuis le site | demande de fin enregistrée ; au tic suivant la consigne commence à descendre vers 0 aux limites de mouvement, sans verdict comme sous FREEZE (verrouillé ou non). Un verdict plus sévère décide à sa place : REDUCE et RAMP_DOWN descendent eux-mêmes, QUICK_STOP met la consigne à 0, GO_SILENT se tait. |
 | Cible manuelle remise à 0 | même descente, sous FREEZE aussi ; la séance n'est pas en train de se terminer pendant la descente (mode « MANUEL »). À l'arrivée à 0 : la séance continue si aucun avertissement ne tient, elle se termine sur `session_standstill` si un avertissement tient. |
 | Programme arrivé à son retour au calme (phase COOLDOWN) | dès le premier tic de la phase, la consigne descend vers 0 aux limites de mouvement, sans verdict comme sous FREEZE (verrouillé ou non) ; le mode reste « SEANCE ». À l'arrivée à 0, rien n'est verrouillé : la séance suit sa chronologie (RECOVERY, puis fin `programme_complete` à la durée prévue). |
