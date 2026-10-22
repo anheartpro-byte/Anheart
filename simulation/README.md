@@ -413,7 +413,7 @@ zero dans ce meme tic, puis aucune reference non nulle ni activation jusqu'au
 nouveau depart. Le couple est deja coupe par le contact pendant ce tic.
 
 `SimulatedStoSource` lit instantanement le contact et n'injecte pas d'echec de
-lecture. `sto_unreadable / RAMP_DOWN` reste prouve par les tests Pi T02
+lecture. `sto_unreadable / RAMP_DOWN` reste prouve par les tests Pi
 `test_a_single_failed_sto_read_does_not_end_motion_but_age_does` et
 `test_never_read_sto_latches_during_possible_motion`, avec la source de registre.
 Une perte du lien du variateur dans ce harnais teste `comms_lost` ; elle

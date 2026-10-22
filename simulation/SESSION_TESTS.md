@@ -35,7 +35,7 @@ verifier le juge. `tests/test_scenario.py` refuse les actions STO mal formees ;
 `tests/test_import_privacy.py` conserve les deux identifiants de verdict STO
 sans conserver leur detail libre. La perte de lecture n'est pas injectable dans
 la source simulee instantanee ; `sto_unreadable` reste couvert dans les tests Pi
-T02 cites dans le README. Le banc apres cablage reste hors de ces preuves.
+cites par leur nom dans le README. Le banc apres cablage reste hors de ces preuves.
 
 ## 1. AUTO (heart-rate driven programme)
 
