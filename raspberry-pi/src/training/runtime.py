@@ -1279,6 +1279,8 @@ class TrainingRuntime:
         "_snapshot",
         "_started_at",
         "_sto",
+        "_sto_last_success_at",
+        "_sto_loop_delay",
         "_stop_requested",
         "_stopped_by",
         "_subject",
@@ -1479,6 +1481,8 @@ class TrainingRuntime:
         )
         self._attendant_last_seen: Monotonic | None = None
         self._previous_tick_at: Monotonic | None = None
+        self._sto_last_success_at: Monotonic | None = None
+        self._sto_loop_delay: Seconds = Seconds(0)
         self._latched: SafetyVerdict | None = None
         # What this module's own latch held when GO_SILENT took its place, for
         # the screen alone: written by _latch, read by the `silenced` property.
@@ -2494,7 +2498,7 @@ class TrainingRuntime:
         # 1. THE KEEPALIVE FIRST.
         await self._service_drive(now)
         await self._finish_fault_reset(now)
-        self._judge_sto(now)
+        self._judge_sto(now, previous)
         self._advance_phase(now)
         # 2. Safety, and its verdict.
         verdict = self._supervisor.evaluate(self._observe(now, self._envelope(now)))
@@ -2506,15 +2510,34 @@ class TrainingRuntime:
         self._accumulate(now, interval)
         self._snapshot = self._build_snapshot(now)
 
-    def _judge_sto(self, now: Monotonic) -> None:
+    def _judge_sto(self, now: Monotonic, previous: Monotonic | None) -> None:
         """Judge the cached contact before any controller demand, including at idle.
 
         OPEN treats unknown speed as possible motion. Unreadable STO requires
         a configured source and positive motion evidence: an armed session,
         our run command, or a fresh enabled/turning status. No I/O occurs here.
+
+        Polling spends one completed-tick token per read. Exclude intervals
+        already judged by loop_stall from the unreadable budget: no ticks
+        replenished polling tokens during that gap. Keep this deduction until the next
+        successful read, so a poll due up to one polling period after recovery
+        does not relabel the loop stall as an STO failure on the next tick.
+        Normal ticking still expires at STO_STALE_AFTER plus at most one tick.
+        The existing loop_stall bound is used; no extra duration is introduced.
         """
         if not self.drive_reads_permitted:
             return
+        reading = self._sto.latest(now)
+        last = reading.last_success_at
+        if last != self._sto_last_success_at:
+            self._sto_last_success_at = last
+            self._sto_loop_delay = Seconds(0)
+        if (
+            previous is not None
+            and last is not None
+            and elapsed(previous, now) > self._supervisor.limits.loop_stall_freeze_gap
+        ):
+            self._sto_loop_delay = Seconds(self._sto_loop_delay + elapsed(max(previous, last), now))
         status = self._readable_status(now)
         if not self._link_open:
             stamp = self._idle_status_at
@@ -2536,7 +2559,6 @@ class TrainingRuntime:
             and abs(status.output_rpm) < self._limits.standstill_rpm
         ):
             return
-        reading = self._sto.latest(now)
         if reading.state is StoState.OPEN:
             self._latch(
                 now,
@@ -2551,13 +2573,13 @@ class TrainingRuntime:
             armed or (self._link_open and self._enabled) or observed_motion
         ):
             return
-        last = reading.last_success_at
-        if last is None or elapsed(last, now) > STO_STALE_AFTER:
+        if last is None or elapsed(last, now) - self._sto_loop_delay > STO_STALE_AFTER:
             self._latch(
                 now,
                 RULE_STO_UNREADABLE,
                 SafetyAction.RAMP_DOWN,
-                "no successful STO reading within the freshness budget; controlled stop. "
+                "no successful STO reading within the freshness budget while control ticks "
+                "permit polling; controlled stop. "
                 "Restore a ready reading, acknowledge by name and request a new start",
             )
 

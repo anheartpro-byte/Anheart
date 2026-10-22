@@ -11,13 +11,13 @@ from src.local_panel import DriveSide, LocalPanel, build_panel
 from src.motor import sto as sto_module
 from src.motor.atv320 import ATV320Drive
 from src.motor.drive import DriveError, DriveFault, RegisterMap
-from src.motor.simulated import SimState
+from src.motor.simulated import SimState, SimulatedDrive
 from src.motor.sto import DriveInputStoSource, StoState
 from src.result import Err, Ok, Result
 from src.training.preflight import StoNotReady
 from src.training.runtime import IDLE_POLL_PERIOD
 from src.training.types import Occupancy
-from src.units import MotorRpm, OutputRpm, Seconds
+from src.units import MotorRpm, OutputRpm, RawRegister, RegisterAddress, Seconds
 from tests.test_atv320 import Behave, FakeBus, build_drive, connection_exception
 from tests.test_failure_rig import OPERATOR, config_of, make_rig
 from tests.test_local_panel import FakeWeb
@@ -91,6 +91,78 @@ async def test_live_sto_poller_cannot_feed_watchdog_when_only_control_stalls(
     finally:
         stop.set()
         await asyncio.wait_for(runner, 3)
+
+
+async def test_inflight_read_and_last_tick_allow_two_frames_then_watchdog_expires(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig, _ = make_rig(tmp_path, env=STO_ENV)
+    panel = rig.panel
+    source = panel.sto
+    assert isinstance(source, DriveInputStoSource)
+    await panel.control_cycle()
+    await source.poll()
+    assert isinstance(panel.runtime.confirm_estop_wiring(OPERATOR), Ok)
+    assert isinstance(
+        await panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276)), Ok
+    )
+    assert isinstance(panel.runtime.set_manual_target(OutputRpm(3)), Ok)
+    for _ in range(100):
+        rig.clock.advance(Seconds(0.2))
+        await panel.control_cycle()
+        await source.poll()
+    assert rig.simulator.commanded_setpoint > 0
+    await panel.control_cycle()
+    entered, release = asyncio.Event(), asyncio.Event()
+    attempts: asyncio.Queue[None] = asyncio.Queue()
+    original_read = SimulatedDrive.read_register
+    original_poll = DriveInputStoSource.poll
+    calls = 0
+
+    async def inflight(
+        drive: SimulatedDrive, address: RegisterAddress
+    ) -> Result[RawRegister, DriveError]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return await original_read(drive, address)
+
+    async def observed_poll(self: DriveInputStoSource) -> None:
+        await original_poll(self)
+        attempts.put_nowait(None)
+
+    monkeypatch.setattr(SimulatedDrive, "read_register", inflight)
+    monkeypatch.setattr(DriveInputStoSource, "poll", observed_poll)
+    monkeypatch.setattr(sto_module, "STO_POLL_PERIOD", Seconds(0.001))
+    poller = asyncio.create_task(source.run())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        rig.clock.advance(Seconds(0.2))
+        await panel.control_cycle()
+        before = rig.simulator.acquisition_evidence.possible_frames
+        release.set()
+        for _ in range(3):
+            await asyncio.wait_for(attempts.get(), 2)
+        assert calls == 2
+        assert rig.simulator.acquisition_evidence.possible_frames == before + 2
+        for _ in range(10):
+            rig.clock.advance(Seconds(0.5))
+            await asyncio.wait_for(attempts.get(), 2)
+            rig.simulator.advance(rig.clock.monotonic())
+        assert calls == 2
+        assert rig.simulator.acquisition_evidence.possible_frames == before + 2
+        assert not panel.runtime.silent
+        assert rig.simulator.sim_state is SimState.FAULT
+        status = await rig.simulator.read_status()
+        assert isinstance(status, Ok)
+        assert status.value.fault is DriveFault.MODBUS_COMM_LOSS
+        assert status.value.output_rpm == 0
+    finally:
+        poller.cancel()
+        await asyncio.gather(poller, return_exceptions=True)
+        await panel.close()
 
 
 @pytest.mark.parametrize("interleave", [False, True])
