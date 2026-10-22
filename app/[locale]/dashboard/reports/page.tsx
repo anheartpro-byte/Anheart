@@ -46,6 +46,9 @@ export default function ReportsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
         <p className="text-muted-foreground">{t("description")}</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {t("failedSessionsHint")}
+        </p>
       </div>
 
       {sessions.length > 0 ? (
@@ -89,6 +92,7 @@ interface SessionReportCardProps {
     endedAt?: number;
     patientName: string;
     machineName: string;
+    kind: string;
   };
 }
 
@@ -117,16 +121,23 @@ function SessionReportCard({ session }: SessionReportCardProps) {
                 {t("view")}
               </Button>
             </Link>
-            <Link href={`/dashboard/sessions/${session._id}/report`}>
-              <Button variant="outline" size="sm">
-                <FileDown className="h-4 w-4 mr-2" />
-                {tReport("openReport")}
-              </Button>
-            </Link>
+            {(session.kind === "auto" || session.kind === "manual") && (
+              <Link href={`/dashboard/sessions/${session._id}/report`}>
+                <Button variant="outline" size="sm">
+                  <FileDown className="h-4 w-4 mr-2" />
+                  {tReport("openReport")}
+                </Button>
+              </Link>
+            )}
           </div>
         </div>
       </CardHeader>
       <CardContent>
+        {session.kind === "recording" && (
+          <p className="mb-3 text-sm text-muted-foreground">
+            {t("legacyEcgNoReport")}
+          </p>
+        )}
         <div className="flex flex-wrap gap-4 text-sm">
           <div className="flex items-center gap-2 text-muted-foreground">
             <User className="h-4 w-4" />

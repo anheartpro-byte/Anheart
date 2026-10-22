@@ -18,6 +18,8 @@ import { makeFunctionReference } from "convex/server";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { sha256 } from "./lib/recordStorage";
+import { endedBeforeStart } from "./sessionReports";
+import { ARMING_REFUSAL_CODES } from "./training";
 import {
   addSession,
   as,
@@ -32,6 +34,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -109,11 +112,18 @@ async function end(
   await settle(w);
 }
 
-const summaryOf = (
+const summaryOf = async (
   w: World,
   sessionId: Id<"sessions">,
   actor = "patient" as const,
-) => as(w.t, actor).query(api.sessionReports.getSummary, { sessionId });
+) => {
+  const result = await as(w.t, actor).query(api.sessionReports.getSummary, {
+    sessionId,
+  });
+  if (result !== null && "absent" in result)
+    throw new Error("Expected a computed summary");
+  return result;
+};
 
 // --- The deposited record ------------------------------------------------------
 
@@ -189,7 +199,141 @@ async function depositRecord(
 const summaryRows = (w: World) =>
   w.t.run((ctx) => ctx.db.query("session_summaries_v2").collect());
 
+describe("ANH-234 pre-start endings and absent summary isolation", () => {
+  it("recognises only the three known pre-start endings of failed sessions", () => {
+    for (const endCode of ARMING_REFUSAL_CODES)
+      expect(endedBeforeStart({ status: "failed", endCode })).toBe(true);
+    for (const endReason of [
+      "Cancelled before start by Synthetic",
+      "refusee par la machine : busy",
+    ])
+      expect(endedBeforeStart({ status: "failed", endReason })).toBe(true);
+    for (const session of [
+      { status: "completed", endReason: "Cancelled before start by Synthetic" },
+      { status: "active", endCode: ARMING_REFUSAL_CODES[0] },
+      { status: "failed", endReason: "machine failure" },
+      { status: "failed" },
+      {
+        status: "failed",
+        endCode: "machine_failure",
+        endReason: "Cancelled before start by Synthetic",
+      },
+      { status: "completed", endReason: "programme_complete" },
+    ] as const)
+      expect(endedBeforeStart(session)).toBe(false);
+  });
+
+  it.each(["not_started", "not_computed"] as const)(
+    "returns %s only to every reader and null to every non-reader",
+    async (absent) => {
+      const w = await seedWorld(modules);
+      const sessionId = await addSession(w, {
+        machineId: w.machine,
+        userId: w.patient,
+        status: "failed",
+        kind: "auto",
+      });
+      if (absent === "not_started")
+        await w.t.run((ctx) =>
+          ctx.db.patch(sessionId, {
+            endReason: "Cancelled before start by Synthetic",
+          }),
+        );
+      for (const actor of ["patient", "manager", "orgAdmin", "admin"] as const)
+        expect(
+          await as(w.t, actor).query(api.sessionReports.getSummary, {
+            sessionId,
+          }),
+        ).toEqual({ absent });
+      for (const actor of [
+        "otherPatient",
+        "otherManager",
+        "orgBAdmin",
+        "orgBPatient",
+        "orgBManager",
+        "stranger",
+      ] as const)
+        expect(
+          await as(w.t, actor).query(api.sessionReports.getSummary, {
+            sessionId,
+          }),
+        ).toBeNull();
+      const history = await as(w.t, "patient").query(
+        api.sessionReports.riderHistory,
+        { userId: w.patient },
+      );
+      expect(history).toMatchObject([
+        { sessionId, summary: null, notStarted: absent === "not_started" },
+      ]);
+      await w.t.run((ctx) => ctx.db.delete(sessionId));
+      expect(
+        await as(w.t, "patient").query(api.sessionReports.getSummary, {
+          sessionId,
+        }),
+      ).toBeNull();
+    },
+  );
+});
+
 describe("ANH-89 provisional summary, from the telemetry", () => {
+  it.each([10_000, 10_001])(
+    "reports event truncation only with events beyond twenty pages: %i",
+    async (count) => {
+      const w = await seedWorld(modules);
+      const sessionId = await activeSession(w);
+      await sendTelemetry(w, sessionId, [100, 140]);
+      await w.t.run(async (ctx) => {
+        for (let seq = 0; seq < count; seq++)
+          await ctx.db.insert("training_events", {
+            organizationId: w.orgA,
+            machineId: w.machine,
+            sessionId,
+            seq,
+            t: MACHINE_START + 1000,
+            kind: "verdict",
+            detail: seq === 10_000 ? "beyond_limit" : "hr_stale",
+            actor: "system",
+          });
+      });
+      await end(w, sessionId);
+      const figures = (await summaryOf(w, sessionId))!.figures;
+      expect(figures.warnings).toEqual(
+        count > 10_000 ? ["events_truncated"] : [],
+      );
+      expect(figures.verdicts.map(({ rule }) => rule)).toEqual(["hr_stale"]);
+    },
+    // Inserting 10,000 rows and reading 20 pages needs extra time under CI coverage.
+    60_000,
+  );
+
+  it("ignores telemetry points whose elapsed time goes backwards or stays equal", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await activeSession(w);
+    await sendTelemetry(w, sessionId, [140, 140, 140, 140, 140]);
+    await w.t.run(async (ctx) => {
+      const points = await ctx.db
+        .query("training_telemetry")
+        .withIndex("by_session_and_t", (q) => q.eq("sessionId", sessionId))
+        .collect();
+      const elapsed = [0, 10, 5, 6, 10];
+      for (let i = 0; i < points.length; i++)
+        await ctx.db.patch(points[i]._id, {
+          elapsedS: elapsed[i],
+          ...(i > 1 ? { bpm: 200, motorRpm: 9999, gLoad: 9 } : {}),
+        });
+    });
+    await end(w, sessionId);
+    expect((await summaryOf(w, sessionId))?.figures).toMatchObject({
+      samples: 1,
+      durationS: 10,
+      heartRate: { minBpm: 140, maxBpm: 140, samples: 1 },
+      zone: { inZoneS: 10, aboveZoneS: 0, belowZoneS: 0 },
+      maxMotorRpm: 901,
+      reference: { maxG: 0.501 },
+      warnings: ["ticks_out_of_order"],
+    });
+  });
+
   it("is computed when the machine reports the end, and marked provisional", async () => {
     const w = await seedWorld(modules);
     const sessionId = await activeSession(w);
@@ -222,7 +366,9 @@ describe("ANH-89 provisional summary, from the telemetry", () => {
         },
       ],
     });
-    expect(await summaryOf(w, sessionId)).toBeNull();
+    expect(
+      await as(w.t, "patient").query(api.sessionReports.getSummary, { sessionId }),
+    ).toEqual({ absent: "not_computed" });
 
     await end(w, sessionId);
 
@@ -311,6 +457,87 @@ async function placeholderFigures(w: World) {
 }
 
 describe("ANH-89 final summary, from the deposited record", () => {
+  it.each(["manifest", "ticks", "events"] as const)(
+    "records an unexpected %s read failure without logging file contents or replacing a final summary",
+    async (file) => {
+      const w = await seedWorld(modules);
+      const sessionId = await activeSession(w);
+      await sendTelemetry(w, sessionId, [100, 140, 140]);
+      await end(w, sessionId);
+      const provisional = await summaryOf(w, sessionId);
+      await depositRecord(w, sessionId);
+      const final = await summaryOf(w, sessionId);
+      const row = (await summaryRows(w))[0];
+      await w.t.run((ctx) =>
+        ctx.db.patch(row._id, {
+          source: "telemetry",
+          figures: provisional!.figures,
+        }),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const method = file === "ticks" ? "slice" : "arrayBuffer";
+      const original = Blob.prototype[method];
+      const failure = vi
+        .spyOn(Blob.prototype, method)
+        .mockImplementation(function (this: Blob, ...args: unknown[]) {
+          if (
+            (file === "events" && this.size === new Blob([EVENTS]).size) ||
+            file !== "events"
+          )
+            throw Error("private file content: 186 bpm");
+          return Reflect.apply(original, this, args);
+        });
+      await expect(
+        w.t.action(internal.sessionReports.summarizeRecord, { sessionId }),
+      ).resolves.toBeNull();
+      expect(await summaryOf(w, sessionId)).toEqual({
+        ...provisional,
+        recordProblem: "summary_failed",
+      });
+      expect(warn.mock.calls).toEqual([
+        [{ sessionId, code: "summary_failed" }],
+      ]);
+      failure.mockRestore();
+      await w.t.action(internal.sessionReports.summarizeRecord, { sessionId });
+      const restored = await summaryOf(w, sessionId);
+      expect(restored).toEqual(final);
+      vi.spyOn(Blob.prototype, "slice").mockImplementation(() => {
+        throw Error("private file content: 187 bpm");
+      });
+      await expect(
+        w.t.action(internal.sessionReports.summarizeRecord, { sessionId }),
+      ).resolves.toBeNull();
+      expect(await summaryOf(w, sessionId)).toEqual(restored);
+      expect(warn.mock.calls).toEqual([
+        [{ sessionId, code: "summary_failed" }],
+        [{ sessionId, code: "summary_failed" }],
+      ]);
+    },
+  );
+
+  it.each([
+    ["header only", HEADER + "\n"],
+    [
+      "ticks at or before the start",
+      ticks().split("\n").slice(0, 2).join("\n") + "\n",
+    ],
+  ])(
+    "keeps the provisional figures when the record has %s",
+    async (_name, csv) => {
+      const w = await seedWorld(modules);
+      const sessionId = await activeSession(w);
+      await sendTelemetry(w, sessionId, [100, 140, 140]);
+      await end(w, sessionId);
+      const provisional = await summaryOf(w, sessionId);
+      await depositRecord(w, sessionId, { ticks: csv });
+      expect(await summaryOf(w, sessionId)).toEqual({
+        ...provisional,
+        provisional: true,
+        recordProblem: "no_session_ticks",
+      });
+    },
+  );
+
   it("replaces the provisional summary once manifest, ticks and events are verified", async () => {
     const w = await seedWorld(modules);
     const sessionId = await activeSession(w);

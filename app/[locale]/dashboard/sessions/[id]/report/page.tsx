@@ -71,6 +71,19 @@ export default function SessionReportPage({
       </div>
     );
 
+  if (training.kind === "recording")
+    return (
+      <div className="py-12 text-center">
+        <p className="text-muted-foreground">{t("legacyEcgNoReport")}</p>
+        <Link
+          href={`/dashboard/sessions/${sessionId}`}
+          className="mt-2 inline-block text-primary hover:underline"
+        >
+          {t("back")}
+        </Link>
+      </div>
+    );
+
   const finished =
     session.status === "completed" || session.status === "failed";
   const dateLocale = locale === "fr" ? fr : enUS;
@@ -86,7 +99,7 @@ export default function SessionReportPage({
       : "-";
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4 print:max-w-none">
+    <div className="session-report mx-auto max-w-4xl space-y-4 print:max-w-none">
       <div className="flex flex-wrap items-center gap-2 print:hidden">
         <Link href={`/dashboard/sessions/${sessionId}`}>
           <Button variant="ghost" size="sm">
@@ -122,7 +135,7 @@ export default function SessionReportPage({
       </p>
 
       <article className="space-y-6 rounded-lg border bg-card p-6 text-card-foreground print:border-0 print:p-0">
-        <header className="space-y-3">
+        <header className="space-y-3 print:break-inside-avoid">
           <h1 className="text-2xl font-bold">{t("reportTitle")}</h1>
           <dl className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3 print:grid-cols-3">
             <Item label={t("rider")}>{rider}</Item>
@@ -142,7 +155,7 @@ export default function SessionReportPage({
         <section className="space-y-3 border-t pt-4">
           <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
             {t("summaryTitle")}
-            {finished && summary !== null && (
+            {finished && summary !== null && !("absent" in summary) && (
               <Badge variant={summary.provisional ? "outline" : "secondary"}>
                 {summary.provisional ? t("provisional") : t("final")}
               </Badge>
@@ -150,19 +163,25 @@ export default function SessionReportPage({
           </h2>
           {!finished ? (
             <p className="text-sm text-muted-foreground">{t("notFinished")}</p>
-          ) : summary === null ? (
-            <p className="text-sm text-muted-foreground">{t("none")}</p>
+          ) : summary === null || "absent" in summary ? (
+            <p className="text-sm text-muted-foreground">
+              {t(summary?.absent === "not_started" ? "notStartedNote" : "none")}
+            </p>
           ) : (
             <>
               <p className="text-sm text-muted-foreground">
                 {summary.provisional ? t("provisionalNote") : t("finalNote")}
               </p>
               {summary.recordProblem !== null && (
-                <p className="text-sm text-amber-700 dark:text-amber-400 print:text-black">
+                <p className="text-sm text-amber-700 dark:text-amber-400 print:text-black dark:print:text-black">
                   {t("recordProblem", { problem: summary.recordProblem })}
                 </p>
               )}
-              <SessionSummaryFigures figures={summary.figures} />
+              <SessionSummaryFigures
+                figures={summary.figures}
+                provisional={summary.provisional}
+                recordProblem={summary.recordProblem}
+              />
               <p className="text-xs text-muted-foreground">
                 {t("computedAt", {
                   date: format(summary.computedAt, "PPPp", {
@@ -177,9 +196,7 @@ export default function SessionReportPage({
         {telemetry !== undefined && telemetry.length > 0 && (
           <section className="space-y-3 border-t pt-4 print:break-inside-avoid">
             <h2 className="text-lg font-semibold">{t("telemetry")}</h2>
-            {/* A fixed width that fits the printed page: the curves are
-                drawn at the width measured on screen, not redrawn for A4. */}
-            <div className="mx-auto w-full max-w-[640px]">
+            <div className="mx-auto w-full max-w-[640px] print:hidden">
               <TelemetryCharts
                 points={telemetry}
                 zoneLowBpm={training.zoneLowBpm}
@@ -187,10 +204,21 @@ export default function SessionReportPage({
                 height={180}
               />
             </div>
+            {/* 680 CSS pixels fit within A4's 182 mm printable width.
+                These SVGs exist before printing, independently of the viewport. */}
+            <div className="hidden print:block">
+              <TelemetryCharts
+                points={telemetry}
+                zoneLowBpm={training.zoneLowBpm}
+                zoneHighBpm={training.zoneHighBpm}
+                height={180}
+                width={680}
+              />
+            </div>
           </section>
         )}
 
-        <section className="space-y-1 border-t pt-4 text-sm">
+        <section className="space-y-1 border-t pt-4 text-sm print:break-inside-avoid">
           <h2 className="font-semibold">{t("notAvailableTitle")}</h2>
           <p className="text-muted-foreground">{t("preflight")}</p>
           <p className="text-muted-foreground">{t("feedback")}</p>

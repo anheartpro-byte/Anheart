@@ -900,6 +900,8 @@
   "reports": {
     "title": "Rapports de sessions",
     "description": "Consultez vos sessions terminées",
+    "failedSessionsHint": "Les séances échouées ne figurent pas ici. Pour ouvrir leur rapport : Sessions > Échouées > Voir, puis « Résumé de la séance » > « Rapport PDF », ou l'historique du passager depuis sa fiche si vous y avez accès.",
+    "legacyEcgNoReport": "Ancien enregistrement ECG : aucun rapport disponible.",
     "patientInfo": "Informations patient",
     "sessionInfo": "Informations session",
     "metrics": "Métriques",
@@ -1232,6 +1234,8 @@
     "finalNote": "Calculé sur l'enregistrement déposé de la séance (tics à 5 Hz).",
     "recordProblem": "L'enregistrement déposé n'a pas pu être lu ({problem}) : le résumé reste provisoire.",
     "none": "Le résumé de cette séance n'est pas encore calculé.",
+    "notStartedNote": "Cette séance n'a pas démarré sur la machine : elle n'a pas de résumé.",
+    "notStarted": "Non démarrée",
     "openReport": "Rapport PDF",
     "reportTitle": "Rapport de séance d'entraînement",
     "download": "Télécharger en PDF",
@@ -1240,6 +1244,7 @@
     "back": "Retour à la séance",
     "notFound": "Séance introuvable.",
     "notFinished": "Le rapport est disponible quand la séance est terminée.",
+    "legacyEcgNoReport": "Cette séance est un ancien enregistrement ECG : le rapport d'entraînement n'est pas disponible pour ce type de séance.",
     "rider": "Pratiquant",
     "machine": "Machine",
     "date": "Début",
@@ -1271,6 +1276,10 @@
     "gRate": "Variation de g max",
     "gRateValue": "{value} g/s",
     "notYet": "après l'enregistrement",
+    "gRateNoWindow": "aucune fenêtre mesurable",
+    "gRateNoWindowNote": "Aucune fenêtre mesurable n'a été trouvée pour cette variation : il faut six tics consécutifs (1 s) avec des mesures fraîches, sans silence ni action d'urgence, le variateur en marche (OPERATION_ENABLED) et une vitesse moteur au moins égale à la plus lente consigne de marche.",
+    "gRateUnavailable": "non disponible",
+    "gRateUnavailableNote": "La variation de g n'est pas disponible : l'enregistrement n'a pas pu être lu.",
     "verdicts": "Verdicts de sécurité",
     "noVerdicts": "Aucun verdict pendant la séance.",
     "verdictAt": "à {seconds} s",
@@ -1296,7 +1305,9 @@
     "warnings": {
       "record_degraded": "L'enregistrement signale des données manquantes : certaines valeurs peuvent être sous-estimées.",
       "lines_skipped": "Des lignes illisibles de l'enregistrement ont été ignorées.",
-      "telemetry_truncated": "La télémétrie dépasse ce qu'un résumé lit : seules les six premières heures sont comptées."
+      "telemetry_truncated": "La télémétrie dépasse ce qu'un résumé lit : seules les six premières heures sont comptées.",
+      "events_truncated": "Les événements dépassent ce qu'un résumé lit : certains verdicts de sécurité peuvent manquer.",
+      "ticks_out_of_order": "Des tics ou points de télémétrie dont le temps ne progressait pas ont été ignorés."
     },
     "historyTitle": "Historique et progression",
     "historyDescription": "Les séances terminées de ce pratiquant que vous pouvez consulter, les plus récentes d'abord.",

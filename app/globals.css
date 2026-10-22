@@ -169,17 +169,35 @@
     size: A4;
     margin: 14mm;
   }
+  *,
+  ::before,
+  ::after {
+    animation: none !important;
+    transition: none !important;
+  }
   [data-slot="sidebar"] {
     display: none !important;
   }
+  :root,
   .dark {
+    color-scheme: light;
     --background: oklch(1 0 0);
     --foreground: oklch(0.13 0.028 261.692);
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.13 0.028 261.692);
+    --secondary: oklch(0.967 0.001 286.375);
+    --secondary-foreground: oklch(0.21 0.006 285.885);
     --muted: oklch(0.967 0.003 264.542);
     --muted-foreground: oklch(0.45 0.027 264.364);
     --border: oklch(0.85 0.006 264.531);
+  }
+  .session-report {
+    width: 182mm;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .session-report h2 {
+    break-after: avoid;
   }
 }
 

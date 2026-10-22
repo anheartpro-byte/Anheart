@@ -313,6 +313,8 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Internal summary actions store the computed session summary containing health data.",
   "sessionReports.noteRecordProblem":
     "Internal record summary action annotates the provisional summary with a recording problem.",
+  "sessionReportsBackfill.backfillSummaries":
+    "Internal one-off backfill schedules missing summaries without changing access rights.",
   "training.sweepPendingSessions":
     "Cron fails pending launches that expired or no longer pass arming checks.",
   "training.updateLive":

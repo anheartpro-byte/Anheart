@@ -8,8 +8,9 @@ import { useCatalogLabel } from "@/components/dashboard/statusLabels";
 import { useTrainingLabel } from "./TrainingBadges";
 import { formatDuration, formatNumber, percentOf } from "@/lib/sessionReport";
 
-export type SessionSummary = NonNullable<
-  FunctionReturnType<typeof api.sessionReports.getSummary>
+export type SessionSummary = Exclude<
+  NonNullable<FunctionReturnType<typeof api.sessionReports.getSummary>>,
+  { absent: string }
 >;
 export type SummaryFigures = SessionSummary["figures"];
 
@@ -21,9 +22,9 @@ export type SummaryFigures = SessionSummary["figures"];
  */
 export function SessionSummaryFigures({
   figures,
-}: {
-  figures: SummaryFigures;
-}) {
+  provisional,
+  recordProblem,
+}: Pick<SessionSummary, "figures" | "provisional" | "recordProblem">) {
   const t = useTranslations("sessionReport");
   const locale = useLocale();
   const endReason = useCatalogLabel("sessionReport.endReasons");
@@ -33,10 +34,15 @@ export function SessionSummaryFigures({
     formatNumber(value, locale, digits);
   const { zone, heartRate } = figures;
   const inZoneShare = zone ? percentOf(zone.inZoneS, figures.durationS) : null;
+  const missingGRate = provisional
+    ? recordProblem === null
+      ? t("notYet")
+      : t("gRateUnavailable")
+    : t("gRateNoWindow");
 
   return (
     <div className="space-y-5 text-sm">
-      <dl className="grid grid-cols-2 gap-4 md:grid-cols-4 print:grid-cols-4">
+      <dl className="grid grid-cols-2 gap-4 md:grid-cols-4 print:grid-cols-4 print:break-inside-avoid">
         <Figure label={t("duration")}>
           {formatDuration(figures.durationS)}
         </Figure>
@@ -81,7 +87,7 @@ export function SessionSummaryFigures({
       </dl>
 
       {zone && (
-        <dl className="grid grid-cols-3 gap-4 rounded-md border p-3">
+        <dl className="grid grid-cols-3 gap-4 rounded-md border p-3 print:break-inside-avoid">
           <Figure label={t("belowZone")}>
             {formatDuration(zone.belowZoneS)}
           </Figure>
@@ -92,7 +98,7 @@ export function SessionSummaryFigures({
         </dl>
       )}
 
-      <div>
+      <div className="print:break-inside-avoid">
         <p className="mb-2 font-semibold">{t("gTitle")}</p>
         <table className="w-full text-left">
           <thead className="text-muted-foreground">
@@ -125,16 +131,23 @@ export function SessionSummaryFigures({
                 </td>
                 <td className="py-1 font-medium">
                   {radius.maxGRate === null
-                    ? t("notYet")
+                    ? missingGRate
                     : t("gRateValue", { value: number(radius.maxGRate, 4) })}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {(figures.reference.maxGRate === null ||
+          figures.legTip.maxGRate === null) &&
+          (!provisional || recordProblem !== null) && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t(provisional ? "gRateUnavailableNote" : "gRateNoWindowNote")}
+            </p>
+          )}
       </div>
 
-      <div>
+      <div className="print:break-inside-avoid">
         <p className="mb-2 font-semibold">{t("verdicts")}</p>
         {figures.verdicts.length === 0 ? (
           <p className="text-muted-foreground">{t("noVerdicts")}</p>
@@ -166,7 +179,7 @@ export function SessionSummaryFigures({
         )}
       </div>
 
-      <dl className="grid grid-cols-2 gap-4">
+      <dl className="grid grid-cols-2 gap-4 print:break-inside-avoid">
         <Figure label={t("endReason")}>
           {figures.endReason === null ? "-" : endReason(figures.endReason)}
         </Figure>
@@ -180,7 +193,7 @@ export function SessionSummaryFigures({
       </dl>
 
       {figures.warnings.length > 0 && (
-        <ul className="space-y-1 rounded-md border border-amber-500/50 p-3 text-amber-800 dark:text-amber-300 print:text-black">
+        <ul className="space-y-1 rounded-md border border-amber-500/50 p-3 text-amber-800 dark:text-amber-300 print:text-black dark:print:text-black print:break-inside-avoid">
           {figures.warnings.map((code) => (
             <li key={code}>{warning(code)}</li>
           ))}

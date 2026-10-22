@@ -44,11 +44,18 @@ describe("session report helpers (ANH-89)", () => {
         { sessionId: "c", startedAt: 3, summary: summary(450, true) },
         { sessionId: "manual", startedAt: 2, summary: summary(null) },
         { sessionId: "none", startedAt: 2, summary: null },
+        {
+          sessionId: "empty",
+          startedAt: 2,
+          summary: { ...summary(0), durationS: null },
+        },
+        { sessionId: "zero", startedAt: 4, summary: summary(0) },
         { sessionId: "a", startedAt: 1, summary: summary(125) },
       ]),
     ).toEqual([
       { sessionId: "a", startedAt: 1, inZoneMin: 2.1, provisional: false },
       { sessionId: "c", startedAt: 3, inZoneMin: 7.5, provisional: true },
+      { sessionId: "zero", startedAt: 4, inZoneMin: 0, provisional: false },
     ]);
   });
 });

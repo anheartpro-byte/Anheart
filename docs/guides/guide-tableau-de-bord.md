@@ -152,7 +152,7 @@ un message d'accès refusé.
 | Sessions `/fr/dashboard/sessions` | Toutes les séances. | Séances de ses machines. | Ses séances. |
 | Séance en direct `/fr/dashboard/sessions/{id}/live` | Voit ; **Annuler la séance** / **Arrêter la séance**. | Séances de ses machines ; idem. | Ses séances ; idem. |
 | Détail séance `/fr/dashboard/sessions/{id}` | Voit. | Séances de ses machines. | Ses séances. |
-| Rapports `/fr/dashboard/reports` | Séances terminées ; **Voir**. | Séances terminées de ses machines. | Ses séances terminées. |
+| Rapports `/fr/dashboard/reports` | Séances terminées ; **Voir**, **Rapport PDF** pour les entraînements. | Séances terminées de ses machines ; mêmes boutons. | Ses séances terminées ; mêmes boutons. Les anciennes séances ECG n'ont pas de rapport. Les entraînements échoués se retrouvent dans **Sessions > Échouées**. |
 
 ### 2.3 Qui peut lancer une séance auto, pour qui
 
@@ -1631,7 +1631,7 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
 
 *Capture réelle, serveur de développement, 2 octobre 2026.*
 
-*Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : elle montre encore le bouton « Download PDF », le badge du canal et la ligne « 126 data batches • 133s of recording • ~12600 samples », retirés.*
+*Capture antérieure au retrait de l'ancien mode d'enregistrement ECG : elle montre encore le bouton « Download PDF », le badge du canal et la ligne « 126 data batches • 133s of recording • ~12600 samples », retirés. Elle ne montre pas le bouton actuel « Rapport PDF » des séances d'entraînement ni les explications sur les anciennes séances ECG et les séances échouées.*
 
 **Adresse** : `/fr/dashboard/reports`. **Pour qui** : tous.
 
@@ -1657,9 +1657,32 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   restent à lire » et explique qu'**Afficher plus** poursuit la lecture. Elle
   reste visible pendant le chargement suivant. « Aucun rapport disponible
   pour le moment » s'affiche seulement quand la liste est finie et vide.
-- Il n'y a plus de bouton **Télécharger PDF** : l'ancien rapport, construit
-  sur les données ECG, a été retiré avec le mode d'enregistrement. Le rapport
-  d'une séance d'entraînement n'existe pas encore sur le site.
+- **Rapport PDF** apparaît seulement pour une séance d'entraînement automatique
+  ou manuelle. Il ouvre `/fr/dashboard/sessions/{id}/report` : identité de la
+  séance, résumé, courbes et langue **Français / English**. **Télécharger en PDF**
+  ouvre l'impression du navigateur : choisissez **A4**, puis
+  « Enregistrer au format PDF ». Le rapport imprime l'identité de la séance,
+  le résumé, les courbes et la section « Pas encore dans le rapport ». Il
+  reste clair même en thème sombre ; menu, en-tête du tableau de bord,
+  boutons et langues sont masqués. Les courbes sont redessinées pour la
+  largeur A4, même depuis un écran étroit. Les graphiques d'arrière-plan
+  ne sont pas nécessaires pour les lire.
+- Une ancienne séance ECG garde **Voir** et porte la mention
+  « Ancien enregistrement ECG : aucun rapport disponible. » Une ouverture
+  directe de son adresse de rapport explique l'absence et permet le retour à
+  la séance, sans résumé vide ni bouton d'impression.
+- La phrase sous la description reste visible quand la liste est vide : les
+  séances échouées ne figurent pas ici. Ouvrez **Sessions > Échouées > Voir**,
+  puis **Résumé de la séance > Rapport PDF**, ou l'historique du passager
+  depuis sa fiche si vous y avez accès. Le passager peut consulter ses propres
+  séances échouées par cet onglet ; sa fiche n'est pas accessible à tous les rôles.
+- La variation de g manquante dit « après l'enregistrement » seulement pour un
+  résumé provisoire sans problème de lecture. Sur un résumé final, elle dit
+  « aucune fenêtre mesurable » avec une note : six tics consécutifs (1 s),
+  mesures fraîches, sans silence ni action d'urgence, variateur en marche et
+  vitesse moteur au moins égale à la plus lente consigne de marche. Sur un
+  provisoire dont l'enregistrement est illisible, elle dit « non disponible ».
+  Les valeurs présentes restent en g/s, dans la carte et le rapport.
 
 ### 4.20 Paramètres
 
@@ -2164,6 +2187,12 @@ ECG sont vides pour une séance d'entraînement : c'est normal.
 Pour l'historique d'un seul patient : **Patients** → le patient → carte
 **Sessions récentes** (10 dernières).
 
+Une séance annulée ou refusée avant son départ porte « Non démarrée » dans
+l'historique des entraînements et n'a pas de barre de progression. Sa carte
+de résumé et son rapport indiquent « Cette séance n'a pas démarré sur la
+machine : elle n'a pas de résumé. » Les autres séances sans résumé gardent
+« Pas encore calculé » : leur calcul peut encore arriver.
+
 **Si ça ne marche pas** :
 
 - « Session introuvable » : vous n'avez pas accès à cette séance ;
@@ -2180,14 +2209,21 @@ Pour l'historique d'un seul patient : **Patients** → le patient → carte
 
 1. **Rapports**.
 2. Repérez la séance (nom, machine, date, durée).
-3. **Voir** pour ouvrir le détail.
+3. **Rapport PDF** pour ouvrir le rapport d'un entraînement, ou **Voir** pour
+   ouvrir le détail de toute séance.
 
-**Ce que vous devez voir** : le détail de la séance, avec la carte
-**Entraînement** et ses courbes.
+**Ce que vous devez voir** : le rapport de l'entraînement, avec son résumé et
+ses courbes. **Télécharger en PDF** ouvre l'impression du navigateur ; choisissez
+« Enregistrer au format PDF » et le papier **A4**. Le rapport reste clair même
+en thème sombre et ses courbes sont redessinées pour la page, quelle que soit
+la largeur de l'écran. Laissez les graphiques d'arrière-plan désactivés : ils
+ne sont pas nécessaires. Le menu, l'en-tête du tableau de bord et les boutons
+ne sont pas imprimés. **Français / English** change sa langue.
 
-**Limite** : le site ne produit plus de fichier PDF (l'ancien rapport ECG a été
-retiré avec le mode d'enregistrement). Pour garder une trace, faites une
-capture d'écran de la carte **Entraînement** ou imprimez la page du navigateur.
+**Séance échouée** : ouvrez **Sessions > Échouées > Voir**, puis la carte
+**Résumé de la séance > Rapport PDF**. L'historique du passager donne aussi le
+rapport si vous avez accès à sa fiche. Les anciennes séances ECG n'ont pas de
+rapport ; **Voir** reste disponible.
 
 ### P15. Régler les paramètres (changer un rôle)
 
@@ -2589,9 +2625,11 @@ patient (§6.4) : son gestionnaire la voit, avec « Unknown ». Le code qui la
 rattache au passager choisi à la console (ANH-84) attend le redéploiement.
 
 **Où est le rapport PDF d'une séance ?**
-Il n'y en a plus : l'ancien rapport ne savait lire que l'ECG, que la console
-d'entraînement n'envoie pas, et il a été retiré. Ouvrez le détail de la séance
-(**Voir**) : les courbes y sont.
+Pour un entraînement terminé, ouvrez **Rapports > Rapport PDF**. Pour un
+entraînement échoué, ouvrez **Sessions > Échouées > Voir**, puis
+**Résumé de la séance > Rapport PDF**, ou l'historique du passager si vous
+avez accès à sa fiche. **Télécharger en PDF** ouvre l'impression du navigateur.
+Les anciens enregistrements ECG n'ont pas de rapport.
 
 **Faut il recharger la page pour voir les nouvelles valeurs ?**
 Non, tout se met à jour seul. Les courbes avancent par paquets de 5 s.
@@ -2656,7 +2694,7 @@ direct et télémétrie, nouvelles routes de la machine) et les nouvelles pages
 | 9 | Messages du serveur en anglais, et peut être masqués en production. (Depuis ANH-156, un message masqué est remplacé par « L'action a échoué. Réessayez. Référence à transmettre si le problème persiste : … ». La traduction des messages du serveur reste à faire.) | Messages peu compréhensibles. | Tableau du §7.2. |
 | 10 | Compteur Utilisateurs / Patients du tableau de bord non programmé ; « Sessions actives » compté sur les 10 dernières séances seulement. | Chiffres faux ou absents. | Regarder les listes. |
 | 11 | (Corrigé dans le code le 14 octobre 2026, à vérifier au redéploiement.) Listes des patients et gestionnaires : le serveur prenait les 50 à 100 séances **les plus récentes de toute la base**, puis filtrait. Les listes appliquent maintenant les droits avant de couper, et les pages Sessions et Rapports arrivent par pages de 50 avec **Afficher plus** (ANH-158). | Sur une base active, un patient ou un gestionnaire pouvait ne pas voir ses séances plus anciennes. | Jusqu'au redéploiement : aucun. |
-| 12 | (Retirés avec l'ancien mode d'enregistrement ECG.) Le rapport PDF, sans télémétrie, et les cartes ECG, inutiles sur les séances d'entraînement, n'existent plus. Il n'y a pas encore de rapport pour une séance d'entraînement. | Pas de fichier à télécharger. | Utiliser le détail de la séance. |
+| 12 | (Ancien mode d'enregistrement ECG retiré.) Les séances ECG n'ont pas de rapport. Les séances d'entraînement ont un **Rapport PDF** avec résumé et télémétrie (ANH-89). | Le PDF s'enregistre par l'impression du navigateur. | **Rapports > Rapport PDF** pour les entraînements terminés ; **Sessions > Échouées > Voir > Résumé de la séance > Rapport PDF** pour les échoués. |
 | 13 | Textes non traduits. (Corrigé par ANH-123 pour la fiche machine, le fil d'Ariane, les fiches de séance, la fenêtre de régénération de clé, la vue ECG et le rapport.) Restent en anglais : la confirmation de suppression d'un compte, la fiche d'un administrateur ou d'un gestionnaire, les messages d'accès des pages Gestionnaires, les erreurs de saisie du formulaire patient. | Quelques écrans encore mi français mi anglais. | Aucun. |
 | 14 | Motifs de fin bruts (`programme_complete`, `operator_stop`...). (Corrigé par ANH-123 pour les actions de sécurité et l'état du variateur, désormais traduits.) | Moins lisible. | Tableaux des §4.6 et §4.12. |
 | 15 | « Mis à jour il y a ... » et « En direct » ne se rafraîchissent qu'au changement de donnée ; « Données périmées » peut tarder jusqu'à environ 2,5 min. (Corrigé par ANH-160 : ces trois affichages sont recalculés chaque seconde, « Données périmées » apparaît 90 s après le dernier état.) Le statut « En ligne », le compteur « Machines en ligne » et « Dernier signal » restaient au rythme du serveur : corrigé par ANH-193, ils sont recalculés chaque seconde, sur l'heure du serveur.) Reste : le serveur accepte encore un lancement sur une machine muette depuis moins de 2,5 min environ, depuis la fenêtre ouverte sur le détail de cette machine. | Une séance lancée sur une machine muette reste « en attente ». | L'annuler ([§6.3](#63-si-la-machine-est-hors-ligne)). |

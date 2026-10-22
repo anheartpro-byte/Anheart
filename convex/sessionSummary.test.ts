@@ -3,16 +3,18 @@
  * console writes them (docs/enregistrement.md, schema 2). Each figure is
  * checked against its definition in `convex/lib/sessionSummary.ts`.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   csvFields,
   DEFAULT_MIN_RUN_MOTOR_RPM,
   forEachLine,
   manifestContext,
   MAX_LINE_CHARS,
+  MAX_MANIFEST_BYTES,
   MAX_TEXT_CHARS,
   MAX_VERDICTS,
   parseVerdict,
+  READ_CHUNK_BYTES,
   summarizeRecordFiles,
   type SummaryFigures,
 } from "./lib/sessionSummary";
@@ -117,9 +119,9 @@ async function summarize(files: {
   events?: string;
 }): Promise<SummaryFigures> {
   const outcome = await summarizeRecordFiles({
-    manifest: new Blob([files.manifest ?? manifest()]),
-    ticks: new Blob([files.ticks]),
-    events: new Blob([files.events ?? ""]),
+    manifest: async () => new Blob([files.manifest ?? manifest()]),
+    ticks: async () => new Blob([files.ticks]),
+    events: async () => new Blob([files.events ?? ""]),
     maxFileBytes: 16 * 1024 * 1024,
   });
   if ("problem" in outcome) throw new Error(outcome.problem);
@@ -170,17 +172,68 @@ describe("summary of a record: duration and heart rate", () => {
     expect(figures.durationS).toBe(2);
   });
 
-  it("has no duration when the record holds no session tick", async () => {
-    const figures = await summarize({ ticks: ticksCsv([{ t: 0 }]) });
-    expect(figures).toMatchObject({
-      durationS: null,
-      samples: 0,
-      heartRate: null,
-      maxOutputRpm: null,
-      maxMotorRpm: null,
-      reference: { maxG: null, maxGRate: null },
-      legTip: { maxG: null, maxGRate: null },
+  it.each([{ ticks: [] }, { ticks: [{ t: -1 }, { t: 0 }] }])(
+    "refuses a record without session ticks: %j",
+    async ({ ticks }) => {
+      expect(
+        await summarizeRecordFiles({
+          manifest: async () => new Blob([manifest()]),
+          ticks: async () => new Blob([ticksCsv(ticks)]),
+          events: async () => new Blob([""]),
+          maxFileBytes: 1024 * 1024,
+        }),
+      ).toEqual({ problem: "no_session_ticks" });
+    },
+  );
+
+  it.each([
+    { times: [0, 10, 5, 6] },
+    { times: [0, 10, 10] },
+    { times: [0, -1, 10] },
+  ])("ignores out-of-order ticks in every figure: %j", async ({ times }) => {
+    const figures = await summarize({
+      ticks: ticksCsv(
+        times.map((t, i) => ({
+          t,
+          ...(i > 0 && t <= Math.max(...times.slice(0, i))
+            ? {
+                hr: 200,
+                motor: 9999,
+                gRef: 9,
+                rule: "ignored",
+                state: "ending",
+              }
+            : {}),
+        })),
+      ),
+      manifest: manifest({ end_reason: "safety_verdict" }),
     });
+    expect(figures).toMatchObject({
+      durationS: 10,
+      samples: 1,
+      heartRate: { minBpm: 140, maxBpm: 140, meanBpm: 140, samples: 1 },
+      zone: { inZoneS: 10, aboveZoneS: 0, belowZoneS: 0 },
+      maxMotorRpm: 900,
+      reference: { maxG: 0.5 },
+      verdicts: [],
+      endRule: null,
+      warnings: ["ticks_out_of_order"],
+    });
+  });
+
+  it("has no out-of-order warning for ordered ticks", async () => {
+    expect(
+      (await summarize({ ticks: ticksCsv([{ t: 0 }, { t: 10 }]) })).warnings,
+    ).toEqual([]);
+  });
+
+  it("keeps ten seconds in zone for the review's [0, 10, 5, 6] ticks all in zone", async () => {
+    const figures = await summarize({
+      ticks: ticksCsv([0, 10, 5, 6].map((t) => ({ t }))),
+    });
+    expect(figures.durationS).toBe(10);
+    expect(figures.zone?.inZoneS).toBe(10);
+    expect(figures.warnings).toEqual(["ticks_out_of_order"]);
   });
 });
 
@@ -375,7 +428,7 @@ describe("summary of a record: verdicts and the end", () => {
     expect(figures.endRule).toBe("hr_critical");
   });
 
-  it("takes the last rule seen when the first tick of the ending carries none", async () => {
+  it("takes the preceding session tick's rule when the first ending tick carries none", async () => {
     const figures = await summarize({
       manifest: manifest({ end_reason: "safety_verdict" }),
       ticks: ticksCsv([
@@ -384,6 +437,43 @@ describe("summary of a record: verdicts and the end", () => {
       ]),
     });
     expect(figures.endRule).toBe("session_overrun");
+  });
+
+  it("does not name a rule cleared long before the first ending tick", async () => {
+    const figures = await summarize({
+      manifest: manifest({ end_reason: "safety_verdict" }),
+      ticks: ticksCsv([
+        { t: 1, rule: "hr_stale", action: "FREEZE" },
+        { t: 2 },
+        { t: 301, state: "ending" },
+        { t: 302, state: "finished", rule: "later_rule" },
+      ]),
+    });
+    expect(figures.endRule).toBeNull();
+  });
+
+  it("names no ending rule when no ending tick was read", async () => {
+    const figures = await summarize({
+      manifest: manifest({ end_reason: "safety_verdict" }),
+      ticks: ticksCsv([{ t: 1, rule: "hr_stale" }]),
+    });
+    expect(figures.endRule).toBeNull();
+  });
+
+  it("uses a first finished tick's rule without borrowing a pre-start rule", async () => {
+    const withoutRule = await summarize({
+      manifest: manifest({ end_reason: "safety_verdict" }),
+      ticks: ticksCsv([
+        { t: 0, rule: "hr_stale" },
+        { t: 1, state: "finished" },
+      ]),
+    });
+    expect(withoutRule.endRule).toBeNull();
+    const withRule = await summarize({
+      manifest: manifest({ end_reason: "safety_verdict" }),
+      ticks: ticksCsv([{ t: 1, state: "finished", rule: "hr_critical" }]),
+    });
+    expect(withRule.endRule).toBe("hr_critical");
   });
 
   it("names no rule for an end that is not a safety verdict", async () => {
@@ -432,6 +522,81 @@ describe("summary of a record: verdicts and the end", () => {
 });
 
 describe("summary of a record: reading the files", () => {
+  it("opens each file only after the previous file was completely read", async () => {
+    let active = 0;
+    let peak = 0;
+    const opened: string[] = [];
+    const open = (name: string, text: string) => async () => {
+      opened.push(name);
+      active++;
+      peak = Math.max(peak, active);
+      const blob = new Blob([text]);
+      const read = blob.arrayBuffer.bind(blob);
+      vi.spyOn(blob, "arrayBuffer").mockImplementation(async () => {
+        const bytes = await read();
+        active--;
+        return bytes;
+      });
+      const slice = blob.slice.bind(blob);
+      vi.spyOn(blob, "slice").mockImplementation((start, end, type) => {
+        const chunk = slice(start, end, type);
+        const readChunk = chunk.arrayBuffer.bind(chunk);
+        vi.spyOn(chunk, "arrayBuffer").mockImplementation(async () => {
+          const bytes = await readChunk();
+          if (end! >= blob.size) active--;
+          return bytes;
+        });
+        return chunk;
+      });
+      return blob;
+    };
+    const outcome = await summarizeRecordFiles({
+      manifest: open("manifest", manifest()),
+      ticks: open(
+        "ticks",
+        ticksCsv([{ t: 0 }, { t: 1 }]) + "x".repeat(READ_CHUNK_BYTES) + "\n",
+      ),
+      events: open("events", event("phase", "hold") + "\n"),
+      maxFileBytes: 2 * READ_CHUNK_BYTES,
+    });
+    expect(outcome).toHaveProperty("figures.samples", 1);
+    expect(opened).toEqual(["manifest", "ticks", "events"]);
+    expect(peak).toBe(1);
+    expect(active).toBe(0);
+  });
+
+  it.each(["manifest", "ticks", "events"] as const)(
+    "checks absence and size of %s before reading its content",
+    async (file) => {
+      for (const problem of ["missing_file", "too_large"] as const) {
+        const rejected = new Blob([
+          "x".repeat(file === "manifest" ? MAX_MANIFEST_BYTES + 1 : 2049),
+        ]);
+        const read = vi.spyOn(rejected, "arrayBuffer");
+        const slice = vi.spyOn(rejected, "slice");
+        const openers = {
+          manifest: vi.fn(
+            async (): Promise<Blob | null> => new Blob([manifest()]),
+          ),
+          ticks: vi.fn(
+            async (): Promise<Blob | null> => new Blob([ticksCsv([{ t: 1 }])]),
+          ),
+          events: vi.fn(async (): Promise<Blob | null> => new Blob([""])),
+        };
+        openers[file].mockResolvedValue(
+          problem === "missing_file" ? null : rejected,
+        );
+        expect(
+          await summarizeRecordFiles({ ...openers, maxFileBytes: 2048 }),
+        ).toEqual({ problem });
+        expect(read).not.toHaveBeenCalled();
+        expect(slice).not.toHaveBeenCalled();
+        if (file === "manifest") expect(openers.ticks).not.toHaveBeenCalled();
+        if (file !== "events") expect(openers.events).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("finds the columns by name, whatever their order, and reads quoted fields", async () => {
     const header = [
       "hr_confirmed",
@@ -492,16 +657,17 @@ describe("summary of a record: reading the files", () => {
     ],
   ])("refuses a record when %s", async (_what, change, problem) => {
     const outcome = await summarizeRecordFiles({
-      manifest: new Blob([
-        "manifest" in change ? (change.manifest as string) : manifest(),
-      ]),
-      ticks:
+      manifest: async () =>
+        new Blob([
+          "manifest" in change ? (change.manifest as string) : manifest(),
+        ]),
+      ticks: async () =>
         "ticks" in change
           ? change.ticks === null
             ? null
             : new Blob([change.ticks as string])
           : new Blob([ticksCsv([{ t: 0.2 }])]),
-      events: new Blob([""]),
+      events: async () => new Blob([""]),
       maxFileBytes: "tooLarge" in change ? 10 : 16 * 1024 * 1024,
     });
     expect(outcome).toEqual({ problem });
@@ -509,9 +675,10 @@ describe("summary of a record: reading the files", () => {
 
   it("refuses a stream that is not UTF-8", async () => {
     const outcome = await summarizeRecordFiles({
-      manifest: new Blob([manifest()]),
-      ticks: new Blob([HEADER + "\n", new Uint8Array([0xff, 0xfe, 0x0a])]),
-      events: new Blob([""]),
+      manifest: async () => new Blob([manifest()]),
+      ticks: async () =>
+        new Blob([HEADER + "\n", new Uint8Array([0xff, 0xfe, 0x0a])]),
+      events: async () => new Blob([""]),
       maxFileBytes: 1024 * 1024,
     });
     expect(outcome).toEqual({ problem: "invalid_encoding" });
