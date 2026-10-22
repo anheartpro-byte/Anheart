@@ -163,6 +163,7 @@ const speed = { motor_rpm: 0, output_rpm: 0, hertz: 0, g_load: 0, resultant_g: 1
 
 function snapshot(overrides = {}) {
   return {
+    sto: { state: "ready", source: "sim_ready", age_s: 0, stale_after_s: 2, refusal: null, unknown_refusal: "STO unknown refusal" },
     at: 50,
     wall_clock: 0,
     phase: "done",
@@ -199,6 +200,7 @@ function verdict(action, rule, latched = true) {
 // `at`: like a frame's, it is the instant of the default frame unless the test says another.
 function status(overrides = {}) {
   return {
+    sto: { state: "ready", source: "sim_ready", age_s: 0, stale_after_s: 2, refusal: null, unknown_refusal: "STO unknown refusal" },
     at: 50,
     run_state: "idle",
     estop_latched: false,
@@ -270,6 +272,89 @@ function panelRow(overrides = {}) {
 }
 
 const receipt = { operator: "", reason: "", at: 60, wall_clock: 0, action: "quick_stop", rule: "operator_estop", detail: "" };
+
+const stoRow = (state) => ({
+  state, source: "drive_input", age_s: state === "not_configured" ? null : 0.4,
+  stale_after_s: 2,
+  unknown_refusal: "STO unknown refusal",
+  refusal: state === "ready" ? null : `STO refusal ${state}`,
+});
+
+for (const [kind, label] of [["ready", "prete"], ["open", "ouverte"], ["unknown", "inconnue"], ["not_configured", "non configuree"]]) {
+  test(`STO ${kind} is visible with source, age, banner and start gates`, async () => {
+    const page = panel();
+    const { context } = page;
+    context.state.motionEnabled = true;
+    context.state.programsEnabled = true;
+    context.state.connected = false;
+    context.api = () => Promise.resolve(status({ sto: stoRow(kind) }));
+    await context.loadStatus();
+    assert.equal(page.node("sto-pill").textContent, `${label} (drive_input)`);
+    assert.equal(page.shown("sto-banner"), kind !== "ready");
+    assert.equal(page.node("start").disabled, kind !== "ready");
+    assert.equal(page.node("manual-start").disabled, kind !== "ready");
+    assert.equal(page.node("start-sto-note").textContent, kind === "ready" ? "" : stoRow(kind).refusal);
+    assert.equal(page.node("manual-sto-note").textContent, page.node("start-sto-note").textContent);
+    assert.ok(page.node("sto-age").textContent.includes(kind === "not_configured" ? "aucune" : "0.4 s"));
+    if (kind !== "ready") assert.ok(page.node("ack-sto-note").textContent.includes(stoRow(kind).refusal));
+    if (kind === "not_configured") assert.ok(page.node("sto-note").textContent.includes("STO_SOURCE"));
+  });
+}
+
+test("fresh STO frames replace the banner and keep both start gates current", () => {
+  const page = panel();
+  page.context.state.status = status();
+  page.context.state.motionEnabled = page.context.state.programsEnabled = true;
+  page.frame(snapshot({ sto: stoRow("open") }));
+  assert.equal(page.shown("sto-banner"), true);
+  page.frame(snapshot({ sto: stoRow("ready") }));
+  assert.equal(page.shown("sto-banner"), false);
+  assert.equal(page.node("start").disabled, false);
+  assert.equal(page.node("manual-start").disabled, false);
+  page.clock.now += 2001;
+  page.context.refreshLiveness();
+  assert.equal(page.node("sto-pill").textContent, "inconnue (sim_ready)");
+  assert.equal(page.node("start-sto-note").textContent, "STO unknown refusal");
+  assert.equal(page.shown("sto-banner"), true);
+  assert.equal(page.node("start").disabled, true);
+});
+
+for (const rule of ["sto_open", "sto_unreadable"]) {
+  test(`${rule} uses the existing locked verdict rendering`, () => {
+    const page = panel();
+    const carried = verdict(rule === "sto_open" ? "quick_stop" : "ramp_down", rule);
+    carried.safety.detail = "STO relay detail";
+    page.frame(snapshot({ ...carried, sto: stoRow("open") }));
+    const cells = rows(page.node("safety-grid"));
+    assert.equal(cells.regle.textContent, rule);
+    assert.equal(cells.verrouille.textContent, "oui");
+    assert.equal(cells.detail.textContent, carried.safety.detail);
+  });
+}
+
+for (const prefix of ["", "acquittement refuse : "]) {
+  test(`STO acknowledgement refusal preserves the response text with prefix '${prefix}'`, async () => {
+    const page = panel();
+    const refusal = prefix + "chaine STO ouverte : retablir la chaine de securite";
+    const alerts = [];
+    page.context.window.alert = (value) => alerts.push(value);
+    page.context.api = () => Promise.reject(new Error(refusal));
+    page.context.doAcknowledge();
+    await settle();
+    assert.equal(page.node("ack-note").textContent, refusal);
+    assert.deepEqual(alerts, [prefix ? refusal : `acquittement refuse : ${refusal}`]);
+  });
+}
+
+test("a ready label without a successful read is shown as unknown", () => {
+  const page = panel();
+  page.context.state.status = status();
+  page.frame(snapshot({ sto: { ...stoRow("ready"), age_s: null } }));
+  assert.equal(page.node("sto-pill").textContent, "inconnue (drive_input)");
+  assert.equal(page.shown("sto-banner"), true);
+  assert.equal(page.node("start").disabled, true);
+  assert.equal(page.node("manual-start").disabled, true);
+});
 
 const silent = () => verdict("go_silent", "comms_lost");
 
@@ -2632,6 +2717,7 @@ test("the STOP notice is in the stack every page shows, as an alarm, under that 
     "estop-banner",
     "service-banner",
     "drive-fault-banner",
+    "sto-banner",
     "medical-banner",
     "resume-banner",
   ]);
@@ -2958,6 +3044,8 @@ test("the red banners are together in the stack, those about a stop first, and t
 test("the page makes room for the out-of-service banner when it appears, and takes it back when it goes", () => {
   // Given a page with no ResizeObserver and nothing in its stack.
   const { context, announced, published, stack } = panel();
+  context.state.snapshot = snapshot();
+  context.state.snapshotAt = 1000;
   context.renderPanel(panelRow());
   assert.equal(announced(OUT), false);
   // When the console says it is out of service.

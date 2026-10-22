@@ -164,6 +164,7 @@ const speed = { motor_rpm: 0, output_rpm: 0, hertz: 0, g_load: 0, resultant_g: 1
 
 function snapshot(overrides = {}) {
   return {
+    sto: { state: "ready", source: "sim_ready", age_s: 0, stale_after_s: 2, refusal: null, unknown_refusal: "STO unknown refusal" },
     at: 50,
     wall_clock: 0,
     phase: "done",
@@ -200,6 +201,7 @@ function verdict(action, rule, latched = true) {
 // go_silent stands over, and the drive's state are always there.
 function status(overrides = {}) {
   return {
+    sto: { state: "ready", source: "sim_ready", age_s: 0, stale_after_s: 2, refusal: null, unknown_refusal: "STO unknown refusal" },
     at: 50,
     instance: "run-a",
     run_state: "idle",

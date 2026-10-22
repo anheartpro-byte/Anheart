@@ -66,6 +66,7 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
+from src.motor.sto import UnconfiguredStoSource
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
 from src.remote_launch import ConfirmationCode
@@ -154,6 +155,7 @@ from src.web.schemas import (
     SnapshotRow,
     StartBody,
     StatusRow,
+    StoRow,
 )
 
 _logger: logging.Logger = logging.getLogger(__name__)
@@ -515,6 +517,12 @@ def _register_reads(
             at=now,
             instance=services.instance,
             run_state=surface.run_state.value,
+            sto=StoRow.of(
+                UnconfiguredStoSource().latest(now)
+                if surface.latest is None
+                else surface.latest.sto,
+                now,
+            ),
             estop_latched=surface.estop_latched,
             supervisor_estop=SafetyRow.of(supervisor.estop, now),
             attested=isinstance(attested, Ok),
@@ -556,7 +564,11 @@ def _register_reads(
         numbers rather than frozen ones.
         """
         snapshot = surface.latest
-        return None if snapshot is None else SnapshotRow.of(snapshot, services.instance)
+        return (
+            None
+            if snapshot is None
+            else SnapshotRow.of(snapshot, services.instance, now=services.clock.monotonic())
+        )
 
     @app.get("/api/ecg", dependencies=auth, tags=["session"])
     async def read_ecg(after: int | None = None, limit: int | None = None) -> EcgRow:
