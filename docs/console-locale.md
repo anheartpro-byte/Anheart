@@ -344,7 +344,7 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 ### Pastilles d'état
 
 La pastille **Chaine STO** reste visible dans la barre latérale sur chaque page :
-`prete`, `ouverte`, `inconnue` ou `non configuree`. La carte du même nom dans Securite
+`prete`, `ouverte`, `inconnue` ou `non configuree`. La carte du même nom dans Sécurité
 donne aussi la source et l'âge de la dernière lecture réussie. Ces états ne disent
 pas que le bras est arrêté : seule la vitesse mesurée renseigne sur son mouvement.
 
@@ -1887,8 +1887,8 @@ Sans attestation, tout démarrage (manuel ou programmé) répond 412 :
 
 La source figure entre parenthèses : `none`, `sim_ready`, `sim_open`, `drive_input`.
 `Derniere lecture reussie` donne l'âge en secondes, ou `aucune`. Une lecture ancienne
-ne reste jamais `prete` : l'etat devient `unknown` au-delà de 2 s ; la source reste
-affichee et les réponses
+ne reste jamais `prete` : l'état devient `unknown` au-delà de 2 s ; la source reste
+affichée et les réponses
 locales et la page tiennent aussi compte du temps écoulé depuis cette lecture.
 
 Le bandeau rouge **CHAINE STO NON PRETE** apparaît sur toutes les pages tant que
@@ -1898,29 +1898,36 @@ avec les autres conditions qui empêchent le départ. Le texte propose une actio
 dit qu'une chaîne ouverte au repos après un appui est normale ; il ne nomme pas cet
 état « panne ». Les boutons de départ manuel et **Demarrer la seance** sont grisés
 avec la phrase de refus fournie par le Pi. La porte du runtime reste décisive.
-Le bouton manuel conserve sa regle de disponibilite du mouvement, completee
-par le seul controle STO. L'attestation et la disponibilite de la machine sont
-toujours verifiees par le Pi au clic ; leurs refus restent visibles. Le depart
-programme conserve aussi ses conditions d'attestation et d'etat `idle` dans la page.
+Le bouton manuel conserve sa règle de disponibilité du mouvement, complétée
+par le seul contrôle STO. L'attestation et la disponibilité de la machine sont
+toujours vérifiées par le Pi au clic ; leurs refus restent visibles. Le départ
+programmé conserve aussi ses conditions d'attestation et d'état `idle` dans la page.
 
 Si la chaîne s'ouvre alors qu'un mouvement est possible, le verdict existant
 `sto_open / quick_stop` apparaît dans **Verdict en cours**, avec son détail et
 `verrouille oui`. Le matériel a déjà coupé le couple ; la masse peut rester en
-rotation. Avec une source configuree et une preuve positive de mouvement
-(seance armee, marche tenue par ce runtime ou statut frais en rotation/etage actif),
+rotation. Avec une source configurée et une preuve positive de mouvement
+(séance armée, marche tenue par ce runtime ou statut frais en rotation/étage actif),
 l'absence de lecture valable au-delà de la durée admise verrouille
 `sto_unreadable / ramp_down`. Refermer ne libère pas le verdict : acquitter par son nom puis
 demander un nouveau départ. Au repos observé immobile, l'état non prêt refuse
 seulement le départ, sans créer un verrou STO.
 
-Au premier demarrage, une source configuree apparait `inconnue` avec son nom
+Si seul le contrôle s'interrompt, la lecture affichée peut devenir `inconnue`
+car le sondage attend les tics terminés. L'écart est jugé par `loop_stall` seul ;
+il ne crée pas `sto_unreadable`. Après la reprise, une lecture réussie revient
+fraîche dans la période de sondage de 0,5 s. Des lectures qui échouent ou
+n'aboutissent pas alors que les tics continuent normalement verrouillent
+`sto_unreadable / ramp_down` au plus tard 2 s plus un tic après la dernière réussite.
+
+Au premier démarrage, une source configurée apparaît `inconnue` avec son nom
 avant le premier tic. Si le variateur est absent ou hors tension et que ce
-processus n'a encore rien arme ni active, la vitesse inconnue seule ne cree
-aucun verrou STO : le depart est refuse avec la raison STO et une panne sans
-trame reste reessayable. Retablir le lien et attendre `prete` avant de demander
-le depart ; aucun acquittement STO n'est necessaire dans ce cas.
-`non configuree (none)` ne cree jamais `sto_unreadable` : configurer la source
-avant le depart. Une lecture `ouverte` reussie peut toujours verrouiller
+processus n'a encore rien armé ni activé, la vitesse inconnue seule ne crée
+aucun verrou STO : le départ est refusé avec la raison STO et une panne sans
+trame reste réessayable. Rétablir le lien et attendre `prete` avant de demander
+le départ ; aucun acquittement STO n'est nécessaire dans ce cas.
+`non configuree (none)` ne crée jamais `sto_unreadable` : configurer la source
+avant le départ. Une lecture `ouverte` réussie peut toujours verrouiller
 `sto_open` lorsque la vitesse est inconnue.
 
 ### Carte « Camera / presence »
