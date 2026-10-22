@@ -24,7 +24,7 @@ async def test_polling_runs_at_idle_and_armed_but_never_after_release(
     rig, _ = make_rig(tmp_path, env=STO_ENV)
     source = rig.panel.sto
     assert isinstance(source, DriveInputStoSource)
-    assert isinstance(await rig.simulator.open(), Ok)
+    await rig.panel.control_step()
     before = rig.simulator.acquisition_evidence.possible_frames
     await source.poll()
     assert rig.simulator.acquisition_evidence.possible_frames == before + 1
@@ -35,6 +35,7 @@ async def test_polling_runs_at_idle_and_armed_but_never_after_release(
             await rig.panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276)), Ok
         )
     rig.clock.advance(Seconds(0.2))
+    await rig.panel.control_step()
     await source.poll()
     assert source.latest(rig.clock.monotonic()).last_success_at == rig.clock.monotonic()
     if release == "runtime_shutdown":
@@ -58,7 +59,7 @@ async def test_one_inflight_sto_read_then_no_frame_after_silence_and_watchdog_ex
     rig, _ = make_rig(tmp_path, env=STO_ENV)
     source = rig.panel.sto
     assert isinstance(source, DriveInputStoSource)
-    assert isinstance(await rig.simulator.open(), Ok)
+    await rig.panel.control_step()
     await source.poll()
     runtime = rig.panel.runtime
     assert isinstance(runtime.confirm_estop_wiring(OPERATOR), Ok)

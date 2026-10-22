@@ -333,7 +333,7 @@ async def test_config_and_panel_build_each_source_with_shared_simulated_chain(
     chain = simulator.sto_chain
     assert chain is not None
     if isinstance(panel.sto, DriveInputStoSource):
-        assert isinstance(await simulator.open(), Ok)
+        await panel.control_step()
         await panel.sto.poll()
         assert sto_ready(panel.sto.latest(clock.monotonic()))
         assert isinstance(panel.runtime.confirm_estop_wiring("operator"), Ok)
@@ -341,6 +341,7 @@ async def test_config_and_panel_build_each_source_with_shared_simulated_chain(
             await panel.runtime.start_manual(Occupancy.BENCH, "operator", MotorRpm(276)), Ok
         )
         chain.open(clock.monotonic())
+        await panel.control_step()
         await panel.sto.poll()
         assert panel.sto.latest(clock.monotonic()).state is StoState.OPEN
     elif source is StoSourceKind.NONE:
@@ -504,6 +505,7 @@ async def test_sto_polling_task_is_owned_and_cancelled_on_every_exit(
     config = config_for({**SIM_ENV, "STO_SOURCE": "drive_input", "STO_DRIVE_INPUT": "LI1"})
     clock = ManualClock()
     panel = build_panel(config, clock=clock, profiles_path=tmp_path / "p.json")
+    await panel.control_step()
     entered, cleaned, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     async def blocked_read(
@@ -561,7 +563,7 @@ async def test_blocked_sto_poll_does_not_delay_stopping_a_running_drive(
     rig, _ = make_rig(tmp_path, env=from_env)
     source = rig.panel.sto
     assert isinstance(source, DriveInputStoSource)
-    assert isinstance(await rig.simulator.open(), Ok)
+    await rig.panel.control_step()
     await source.poll()
     async with rig.http() as client:
         await start_manual(rig, client, CRUISE)

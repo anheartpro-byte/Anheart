@@ -887,6 +887,7 @@ class LocalPanel:
         "_sim_ecg",
         "_stalled_at_stop",
         "_sto",
+        "_sto_tick_pending",
         "_store",
         "_surface",
         "_ticked",
@@ -925,6 +926,8 @@ class LocalPanel:
         self._clock: Clock = clock
         self._sto: StoSource = sto
         self._closing: bool = False
+        # One completed control tick permits one auxiliary frame, never a backlog.
+        self._sto_tick_pending: bool = False
         if isinstance(sto, DriveInputStoSource):
             sto.guard_polling(self._sto_poll_permitted)
         # The riders' list: the link writes it, the routes and the starts read it.
@@ -1132,6 +1135,7 @@ class LocalPanel:
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
+        self._sto_tick_pending = True
         return snapshot
 
     def _record(self, now: Monotonic, snapshot: TelemetrySnapshot) -> None:
@@ -1624,7 +1628,15 @@ class LocalPanel:
     # --- running and stopping --------------------------------------------
 
     def _sto_poll_permitted(self) -> bool:
-        return not self._closing and self._runtime.drive_reads_permitted
+        if (
+            self._closing
+            or not self._runtime.drive_reads_permitted
+            or not self._runtime.drive_link_acquired
+            or not self._sto_tick_pending
+        ):
+            return False
+        self._sto_tick_pending = False
+        return True
 
     async def run(self, stop: asyncio.Event, web: WebRunner) -> int:
         """Run until ``stop`` is set or a task ends; then stop everything. Returns an exit code."""

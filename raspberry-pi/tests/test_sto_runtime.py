@@ -526,7 +526,7 @@ async def test_local_http_starts_return_the_named_sto_refusal(
     source = rig.panel.sto
     if mode in ("failed", "stale"):
         assert isinstance(source, DriveInputStoSource)
-        assert isinstance(await rig.simulator.open(), Ok)
+        await rig.panel.control_step()
         await source.poll()
         if mode == "failed":
 
@@ -536,6 +536,7 @@ async def test_local_http_starts_return_the_named_sto_refusal(
                 return Err(CommTimeout(after=Seconds(0.1)))
 
             monkeypatch.setattr(SimulatedDrive, "read_register", failed_read)
+            await rig.panel.control_step()
             await source.poll()
         else:
             rig.clock.advance(Seconds(STO_STALE_AFTER + 0.001))
@@ -567,12 +568,14 @@ async def test_dashboard_launch_reports_each_sto_refusal_before_confirming_start
     sim = r.panel.drive.simulator
     assert sim is not None
     if isinstance(source, DriveInputStoSource):
-        assert isinstance(await sim.open(), Ok)
+        await r.panel.control_step()
         await source.poll()
     r.dashboard.answer(
         dashboard_tests.POLL_PATH, dashboard_tests.launch_answer(dict(dashboard_tests.LAUNCH))
     )
-    await r.step()
+    await r.step(0.2)
+    if isinstance(source, DriveInputStoSource):
+        await r.panel.control_step()
     r.confirm_offer()
     if mode == "open":
         assert sim.sto_chain is not None
@@ -593,6 +596,7 @@ async def test_dashboard_launch_reports_each_sto_refusal_before_confirming_start
 
         monkeypatch.setattr(SimulatedDrive, "read_register", failed_read)
         assert isinstance(source, DriveInputStoSource)
+        await r.panel.control_step()
         await source.poll()
     elif mode == "stale":
         r.clock.advance(Seconds(STO_STALE_AFTER + 0.001))
