@@ -5,6 +5,7 @@ from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -184,13 +185,35 @@ async def test_open_during_session_reaches_socket_status_and_refuses_restart_and
         await rig.panel.close()
 
 
-async def test_status_before_first_tick_is_explicitly_not_ready(tmp_path: Path) -> None:
-    rig, _ = make_rig(tmp_path)
+@pytest.mark.parametrize("source", ["sim_ready", "sim_open", "drive_input", "none"])
+async def test_status_before_first_tick_is_explicitly_not_ready(
+    tmp_path: Path, source: str
+) -> None:
+    env = {**BENCH_ENV, "STO_SOURCE": source}
+    if source == "drive_input":
+        env["STO_DRIVE_INPUT"] = "LI1"
+    rig, _ = make_rig(tmp_path, env=env)
     try:
+        assert rig.panel.services.sto is rig.panel.sto
         async with rig.http() as client:
             status = parse(StatusRow, await client.get("/api/status"))
-        assert status.sto.state == "not_configured"
+        assert status.sto.state == ("not_configured" if source == "none" else "unknown")
+        assert status.sto.source == source
         assert status.sto.age_s is None
+    finally:
+        await rig.panel.close()
+
+
+async def test_status_without_a_source_or_tick_is_not_ready(tmp_path: Path) -> None:
+    rig, _ = make_rig(tmp_path)
+    try:
+        app = create_app(services=replace(rig.panel.services, sto=None), config=rig.config.web)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            status = parse(StatusRow, await client.get("/api/status"))
+        assert status.sto.state == "not_configured"
+        assert status.sto.source == "none"
     finally:
         await rig.panel.close()
 

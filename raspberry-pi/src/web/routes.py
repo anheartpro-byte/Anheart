@@ -46,6 +46,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
 from typing import Final, assert_never
@@ -66,7 +67,7 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
-from src.motor.sto import UnconfiguredStoSource
+from src.motor.sto import StoState, UnconfiguredStoSource
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
 from src.remote_launch import ConfirmationCode
@@ -513,16 +514,22 @@ def _register_reads(
         accepted, refused, published = surface.counters
         pending = surface.pending
         drive_state, drive_fault = _drive_seen(surface.latest, now)
+        latest = surface.latest
+        if latest is not None:
+            sto = latest.sto
+        elif services.sto is None:
+            sto = UnconfiguredStoSource().latest(now)
+        else:
+            sto = services.sto.latest(now)
+            if sto.state is not StoState.NOT_CONFIGURED:
+                sto = replace(
+                    sto, state=StoState.UNKNOWN, last_success_at=None, detail="control tick pending"
+                )
         return StatusRow(
             at=now,
             instance=services.instance,
             run_state=surface.run_state.value,
-            sto=StoRow.of(
-                UnconfiguredStoSource().latest(now)
-                if surface.latest is None
-                else surface.latest.sto,
-                now,
-            ),
+            sto=StoRow.of(sto, now),
             estop_latched=surface.estop_latched,
             supervisor_estop=SafetyRow.of(supervisor.estop, now),
             attested=isinstance(attested, Ok),

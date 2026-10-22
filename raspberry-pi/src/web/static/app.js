@@ -996,7 +996,7 @@ function renderSto() {
   text(el("ack-sto-note"), ready ? "" : "Acquittement refuse : " + reason + ". " + action);
   var status = state.status;
   el("start").disabled = !ready || !status || !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
-  el("manual-start").disabled = !ready || !status || !status.attested || status.run_state !== "idle" || !state.motionEnabled;
+  el("manual-start").disabled = !ready || !state.motionEnabled;
 }
 
 /*

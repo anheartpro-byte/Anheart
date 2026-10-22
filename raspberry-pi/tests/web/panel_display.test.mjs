@@ -319,6 +319,25 @@ test("fresh STO frames replace the banner and keep both start gates current", ()
   assert.equal(page.node("start").disabled, true);
 });
 
+for (const runState of ["idle", "running", "stopping"]) {
+  for (const attested of [false, true]) {
+    test(`manual start adds only STO to its motion gate: ${runState}, attested ${attested}`, async () => {
+      const page = panel();
+      const { context } = page;
+      context.state.motionEnabled = true;
+      context.state.programsEnabled = true;
+      context.state.connected = false;
+      context.api = () => Promise.resolve(status({ sto: stoRow("ready"), run_state: runState, attested }));
+      await context.loadStatus();
+      assert.equal(page.node("manual-start").disabled, false);
+      assert.equal(page.node("start").disabled, !attested || runState !== "idle");
+      context.state.motionEnabled = false;
+      context.renderSto();
+      assert.equal(page.node("manual-start").disabled, true);
+    });
+  }
+}
+
 for (const rule of ["sto_open", "sto_unreadable"]) {
   test(`${rule} uses the existing locked verdict rendering`, () => {
     const page = panel();
