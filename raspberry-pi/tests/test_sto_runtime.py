@@ -8,7 +8,15 @@ import pytest
 
 from src.cloud_sync import describe_surface_refusal
 from src.local_panel import describe_start_refusal
-from src.motor.drive import CommTimeout, ControlWord, DriveError, DriveLimits, LogicInput
+from src.motor.drive import (
+    CommTimeout,
+    ControlWord,
+    DriveError,
+    DriveLimits,
+    DriveState,
+    DriveStatus,
+    LogicInput,
+)
 from src.motor.simulated import SimulatedDrive
 from src.motor.sto import (
     STO_STALE_AFTER,
@@ -346,6 +354,79 @@ async def test_not_configured_is_not_a_lost_reading_even_during_an_armed_session
     source.reading = reading(StoState.NOT_CONFIGURED)
     await rig.step()
     assert rig.standing() is None
+
+
+@pytest.mark.parametrize(
+    ("state", "rpm"),
+    [(DriveState.SWITCH_ON_DISABLED, MotorRpm(100)), (DriveState.OPERATION_ENABLED, MotorRpm(0))],
+)
+async def test_finished_session_with_fresh_motion_evidence_latches_unreadable_sto(
+    state: DriveState, rpm: MotorRpm, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = ready_sto()
+    rig = _rig(sto=source)
+    assert isinstance(rig.runtime.confirm_estop_wiring(OPERATOR), Ok)
+    assert isinstance(await rig.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276)), Ok)
+    rig.runtime.request_stop("operator")
+    await reach(rig, Phase.DONE)
+    assert rig.state() is RuntimeState.FINISHED
+    assert not rig.runtime.output_enabled
+    original = FakeDrive.read_status
+
+    async def moving_status(drive: FakeDrive) -> Result[DriveStatus, DriveError]:
+        status = await original(drive)
+        assert isinstance(status, Ok)
+        return Ok(replace(status.value, state=state, output_rpm=rpm))
+
+    def unreadable(_source: object, _now: Monotonic) -> StoReading:
+        return reading(StoState.UNKNOWN, Monotonic(rig.now - STO_STALE_AFTER - 1))
+
+    monkeypatch.setattr(FakeDrive, "read_status", moving_status)
+    monkeypatch.setattr(type(source), "latest", unreadable)
+    snapshot = await rig.step()
+    assert snapshot.drive_state is state
+    verdict = rig.standing()
+    assert verdict is not None
+    assert (verdict.rule, verdict.action, verdict.latched) == (
+        RULE_STO_UNREADABLE,
+        SafetyAction.RAMP_DOWN,
+        True,
+    )
+
+
+async def test_done_session_with_held_run_command_latches_unreadable_sto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = ready_sto()
+    rig = _rig(
+        sto=source,
+        safety=SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158), comms_lost_failures=1000),
+    )
+    assert isinstance(rig.runtime.confirm_estop_wiring(OPERATOR), Ok)
+    assert isinstance(await rig.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276)), Ok)
+    assert isinstance(rig.runtime.set_manual_target(OutputRpm(3)), Ok)
+    await rig.run(6)
+    assert rig.runtime.applied_rpm > 0
+    rig.runtime.request_stop("operator")
+    rig.drive.status_error = CommTimeout(after=Seconds(0.1))
+    await reach(rig, Phase.DONE)
+    assert rig.runtime.drive_link_acquired
+    assert rig.runtime.output_enabled
+    assert rig.standing() is None
+
+    def unreadable(_source: object, _now: Monotonic) -> StoReading:
+        return reading(StoState.UNKNOWN)
+
+    monkeypatch.setattr(type(source), "latest", unreadable)
+    snapshot = await rig.step()
+    assert snapshot.drive_state is DriveState.COMM_LOST
+    verdict = rig.standing()
+    assert verdict is not None
+    assert (verdict.rule, verdict.action, verdict.latched) == (
+        RULE_STO_UNREADABLE,
+        SafetyAction.RAMP_DOWN,
+        True,
+    )
 
 
 @pytest.mark.parametrize("state", [StoState.OPEN, StoState.UNKNOWN, StoState.NOT_CONFIGURED])
