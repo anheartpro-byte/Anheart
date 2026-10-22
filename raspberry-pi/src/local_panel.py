@@ -197,8 +197,17 @@ from src.local_config import (
 )
 from src.log_format import json_handler
 from src.motor.atv320 import ATV320Drive, serial_master
-from src.motor.drive import DriveBackend
+from src.motor.drive import DriveBackend, LogicInput, RegisterMap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
+from src.motor.sto import (
+    DriveInputStoSource,
+    SimulatedStoChain,
+    SimulatedStoSource,
+    StoRegisterPort,
+    StoSource,
+    StoSourceKind,
+    UnconfiguredStoSource,
+)
 from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
@@ -875,6 +884,7 @@ class LocalPanel:
         "_services",
         "_sim_ecg",
         "_stalled_at_stop",
+        "_sto",
         "_store",
         "_surface",
         "_ticked",
@@ -908,8 +918,10 @@ class LocalPanel:
         service: ServiceDesk | None = None,
         health: HealthWatch | None = None,
         roster: Roster | None = None,
+        sto: StoSource,
     ) -> None:
         self._clock: Clock = clock
+        self._sto: StoSource = sto
         # The riders' list: the link writes it, the routes and the starts read it.
         self._roster: Roster = Roster(linked=False) if roster is None else roster
         self._watchdog: ServiceWatchdog = watchdog
@@ -939,6 +951,10 @@ class LocalPanel:
         self._last_measured: MotorRpm = MotorRpm(0)
 
     # --- read access, for the tests and the entry point ------------------
+
+    @property
+    def sto(self) -> StoSource:
+        return self._sto
 
     @property
     def runtime(self) -> TrainingRuntime:
@@ -1607,7 +1623,7 @@ class LocalPanel:
         if self._recorder is not None:
             self._recorder.journal.start()
         control = asyncio.create_task(self._every(CONTROL_PERIOD, self.control_cycle, stop))
-        observers = (
+        observers: tuple[asyncio.Task[None], ...] = (
             asyncio.create_task(self._every(ECG_PERIOD, self.ecg_step, stop)),
             asyncio.create_task(self._every(SENSOR_PERIOD, self.sensor_step, stop)),
             asyncio.create_task(self._every(PRESENCE_PERIOD, self.presence_step, stop)),
@@ -1615,6 +1631,8 @@ class LocalPanel:
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
         )
+        if isinstance(self._sto, DriveInputStoSource):
+            observers += (asyncio.create_task(self._sto.run(), name="sto-poll"),)
         started = asyncio.create_task(self._record_start())
         try:
             failed = await PanelTasks(stop, web, self.close).run(control, observers)
@@ -1730,12 +1748,61 @@ def build_presence(
     return PresenceGuard(runtime=runtime, source=camera, monitor=PresenceMonitor(clock=clock))
 
 
+def build_sto(
+    config: LocalConfig, clock: Clock, drive: DriveBackend, chain: SimulatedStoChain | None
+) -> StoSource:
+    """Compose the observation source around the inner, unrecorded drive."""
+    match config.sto_source:
+        case StoSourceKind.NONE:
+            return UnconfiguredStoSource()
+        case StoSourceKind.SIM_READY | StoSourceKind.SIM_OPEN:
+            if chain is None or config.motor_backend is MotorBackend.SERIAL:
+                raise ValueError("simulated STO needs a shared simulated drive chain")
+            return SimulatedStoSource(chain=chain, source=config.sto_source)
+        case StoSourceKind.DRIVE_INPUT:
+            if config.sto_drive_input is None:
+                raise ValueError("drive_input needs STO_DRIVE_INPUT")
+            if not isinstance(drive, StoRegisterPort):
+                raise TypeError("drive_input needs a register-reading drive")
+            registers = RegisterMap() if config.drive_link is None else config.drive_link.registers
+            return DriveInputStoSource(
+                clock=clock,
+                drive=drive,
+                address=registers.logic_inputs,
+                input_=config.sto_drive_input,
+            )
+    raise assert_never(config.sto_source)
+
+
+def _sto_chain(config: LocalConfig, drive: DriveSide) -> SimulatedStoChain | None:
+    if drive.simulator is None:
+        return (
+            SimulatedStoChain(ready=config.sto_source is not StoSourceKind.SIM_OPEN)
+            if config.motor_backend is MotorBackend.SIM
+            else None
+        )
+    chain = drive.simulator.sto_chain
+    if chain is None:
+        chain = SimulatedStoChain(ready=config.sto_source is not StoSourceKind.SIM_OPEN)
+        drive.simulator.connect_sto(chain)
+    return chain
+
+
 def build_drive(config: LocalConfig, clock: Clock) -> DriveSide:
     """The simulator, or the ATV320 on the project's one Modbus master. Opens nothing."""
     link = config.drive_link
     match config.motor_backend:
         case MotorBackend.SIM:
-            simulator = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
+            simulator = SimulatedDrive(
+                clock,
+                SimulatedDriveConfig(
+                    reads_reset_watchdog=True,
+                    sto_input=(
+                        LogicInput.LI1 if config.sto_drive_input is None else config.sto_drive_input
+                    ),
+                ),
+                sto_chain=SimulatedStoChain(ready=config.sto_source is not StoSourceKind.SIM_OPEN),
+            )
             return DriveSide(backend=simulator, simulator=simulator, release=_nothing)
         case MotorBackend.SERIAL:
             if link is None:
@@ -1898,6 +1965,7 @@ def build_panel(
     link_health = None if config.cloud is None else LinkHealth(clock.monotonic())
     motion = config.motion
     drive = build_drive(config, clock) if drive is None else drive
+    sto = build_sto(config, clock, drive.backend, _sto_chain(config, drive))
     safety = SafetyLimits(
         hard_max_bpm=config.tiers.hard_max_bpm, critical_bpm=config.tiers.critical_bpm
     )
@@ -2031,6 +2099,7 @@ def build_panel(
         wall_clock=watch,
         service=service,
         roster=riders,
+        sto=sto,
     )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None

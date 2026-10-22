@@ -1172,6 +1172,31 @@ LCR_AMPS_PER_COUNT: Final[float] = 0.1
 """LCR (3204) is in units of 0.1 A."""
 
 
+@unique
+class LogicInput(IntEnum):
+    """Bit positions in the ATV320 logic-input status word."""
+
+    LI1 = 0
+    LI2 = 1
+    LI3 = 2
+    LI4 = 3
+    LI5 = 4
+    LI6 = 5
+
+
+def decode_logic_input(raw: RawRegister, input_: LogicInput) -> bool:
+    """Active high: a closed safety-relay feedback contact means ready."""
+    return bool(raw & (1 << input_))
+
+
+LOGIC_INPUTS_LOGICAL: Final[RegisterAddress] = RegisterAddress(5202)
+"""Logic-input status, bit 0 = LI1 through bit 5 = LI6.
+
+Schneider FAQ FA245502: https://www.se.com/us/en/faqs/FA245502/
+and FA320881: https://www.se.com/uk/en/faqs/FA320881/.
+"""
+
+
 def decode_speed(raw: RawRegister) -> MotorRpm:
     """Decode LFRD or RFRD: **signed** rpm at the motor shaft.
 
@@ -1328,6 +1353,11 @@ class RegisterMap:
     def lft(self) -> RegisterAddress:
         """LFT, read: the last fault code."""
         return self.resolve(LFT_LOGICAL)
+
+    @property
+    def logic_inputs(self) -> RegisterAddress:
+        """Logic-input status (5202), with the one configured indexing offset."""
+        return self.resolve(LOGIC_INPUTS_LOGICAL)
 
     @property
     def tfr(self) -> RegisterAddress:

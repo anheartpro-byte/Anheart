@@ -85,6 +85,59 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `motor/ftdi_link.py` | Le câble Schneider USB-RS485 via `pyftdi` (macOS n'en crée pas de `/dev/cu.*`). URL : `ftdi://schneider:rs485/1`. | Seul module qui importe `pyftdi`/`usb`. Porte 100 %. |
 | `motor/simulated.py` | Un ATV320 simulé : machine d'états CiA402 stricte, rampes, roue libre, chien de garde ttO. | Refuse un mot hors séquence. Rampe d'accélération 10 s pour 1380 tr/min, roue libre en `exp(-dt/20 s)`, ttO de 3 s (valeurs de modèle, pas des mesures). Porte 100 %. |
 
+#### Retour du relais de securite et STO
+
+`motor/sto.py` expose `StoSource.latest(now)` : une lecture typee, immediate,
+sans acces au fil. `STO_SOURCE=none` donne `NOT_CONFIGURED`, `sim_ready` et
+`sim_open` lisent une chaine simulee initialement fermee ou ouverte, et
+`drive_input` lit le retour du relais sur l'entree `STO_DRIVE_INPUT=LI1..LI6`.
+Les quatre etats sont `READY` (contact ferme, couple permis), `OPEN` (contact
+ouvert, couple coupe), `UNKNOWN` (jamais lu, lecture echouee ou trop ancienne)
+et `NOT_CONFIGURED` (aucune source configuree). Seul `READY` atteste la
+disponibilite de la chaine ; aucun etat ne prouve l'immobilite de l'arbre.
+
+Prerequis materiels : retirer le pont STO et cabler la chaine de securite
+independante du Pi ; cabler un contact de retour du relais de securite sur
+une entree logique libre, non affectee a une autre fonction du variateur.
+Le retour est actif haut : 1 signifie pret, 0 signifie ouvert, y compris
+sur un fil coupe. Aucune inversion logicielle n'est configurable. Les
+interrupteurs SW1/SW2 et le commun des entrees doivent suivre le manuel
+d'installation de l'ATV320 et le cablage retenu par l'electricien.
+
+Le registre logique 5202 porte LI1 en bit 0 jusqu'a LI6 en bit 5, selon
+les FAQ Schneider [FA245502](https://www.se.com/us/en/faqs/FA245502/) et
+[FA320881](https://www.se.com/uk/en/faqs/FA320881/). Le decalage configure
+dans `RegisterMap` est applique une seule fois. La source utilise le
+`read_register` du variateur interieur, avec son verrou, son executeur et
+son comptage des echecs du lien : une lecture STO en echec affecte donc la
+sante du meme lien serie, comme toute autre lecture.
+
+Le sondage tourne dans sa propre tache asyncio, hors du tic, toutes les
+0,5 s (`STO_POLL_PERIOD`). Budget technique a 19200 bauds, 8E1 : une requete
+de 8 octets, une reponse de 7 octets et deux silences de 3,5 caracteres
+occupent environ 13 ms ; retenir 20 ms par lecture, comme pour les lectures
+du statut variateur, donne 40 ms/s de trafic STO, soit environ 4 % du lien.
+Cela s'ajoute au budget du statut : quatre registres, environ 80 ms sur les
+200 ms d'un tic, ou 100 ms avec LFT en defaut, puis les ecritures du controle.
+Le delai
+d'echange configure reste applicable. `latest` ne consulte que la memoire.
+Une tentative echouee donne `UNKNOWN` immediatement, avec le nom de la
+variante d'erreur, sans recopier le texte libre de l'appareil. Une lecture
+reussie agee de plus de 2 s (`STO_STALE_AFTER`, quatre periodes techniques,
+comme la fraicheur du statut variateur) donne aussi `UNKNOWN`. Ces deux
+constantes sont techniques et ne constituent pas des seuils medicaux.
+
+En simulation, le variateur et la source partagent la meme chaine, y compris
+avec `drive_input` qui lit alors le registre 5202 du variateur simule.
+L'ouverture coupe son couple immediatement et l'arbre ralentit en roue libre ;
+ETA indique `SWITCH_ON_DISABLED` (0x40). Les consignes restent acceptees
+sans produire de couple. La refermeture laisse cet etat jusqu'a une nouvelle
+sequence complete 6, 7, 15. Si un defaut etait deja verrouille, il garde
+`FAULT` et son code LFT ; toute reaction en rampe passe en roue libre, et
+le reset explicite existant reste necessaire avant une nouvelle activation.
+Ce comportement est le modele retenu : la validation au banc de l'ATV320
+reel reste a faire apres cablage. Aucun essai materiel STO n'est atteste ici.
+
 ### 2.3 Le BITalino et l'ECG
 
 | Module | Rôle | Garanties |
@@ -2395,6 +2448,8 @@ sort avec le code 2.
 | Clé | Défaut | Rôle | Contrainte |
 |---|---|---|---|
 | `MOTOR_BACKEND` | **aucun (obligatoire)** | `sim` (variateur simulé) ou `serial` (ATV320 réel) | autre valeur refusée |
+| `STO_SOURCE` | provisoire : `sim_ready` si `sim`, `none` si `serial` | source du retour STO : `none`, `sim_ready`, `sim_open`, `drive_input` | `sim_*` refuse avec `serial` ; valeur inconnue refusee |
+| `STO_DRIVE_INPUT` | aucun | entree du retour du relais de securite, actif haut | `LI1` a `LI6`, obligatoire pour `drive_input`, refusee avec toute autre source |
 | `MOTOR_PORT` | `ftdi://schneider:rs485/1` | port du variateur : périphérique série (`/dev/ttyUSB0`, `COM3`, `/dev/cu.usbserial-…`) ou URL pyftdi | lu seulement si `serial` ; non vide |
 | `MOTOR_SLAVE_ID` | `248` | adresse Modbus (248 = adresse point à point Schneider, mesurée au banc) | 1..247 ou 248 ; 0 (diffusion) refusé |
 | `MODBUS_BAUDRATE` | `19200` | débit | entier |
