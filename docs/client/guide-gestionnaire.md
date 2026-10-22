@@ -122,9 +122,6 @@ Sur téléphone, le menu s'ouvre par-dessus la page. Fermer un message par sa
 croix laisse le menu ouvert ; cliquer sur le voile à l'extérieur ferme le
 menu. Un message d'échec en bas à droite reste affiché jusqu'à sa fermeture,
 même quand une fenêtre est ouverte. Sa croix ferme seulement le message.
-Les régions de messages restent exposées dans l'arbre d'accessibilité de
-Chromium 153 pendant une fenêtre, une confirmation simple ou le menu mobile.
-Cela a été vérifié sans vrai lecteur d'écran et ne prouve pas l'annonce vocale.
 
 ## 4. Préparer un patient
 

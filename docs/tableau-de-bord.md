@@ -1467,9 +1467,11 @@ publie dans `--feedback-toaster-space` sur `<html>` ; la réservation disparaît
 avec le dernier message ou au démontage. Sans `ResizeObserver`, les messages
 restent utilisables mais aucune place n'est réservée.
 Les fenêtres se centrent dans l'espace libre au-dessus de la pile, à toutes
-les largeurs. Une grande fenêtre défile à l'intérieur et son pied garde les
-boutons d'action visibles. Sans message, une fenêtre qui tient dans l'écran
-garde sa taille et sa position.
+les largeurs. Une grande fenêtre défile à l'intérieur ; les boutons d'un
+`DialogFooter` collant restent visibles. Les formulaires sans ce pied
+(`MachineFormModal`, `PatientFormModal`, `LaunchTrainingModal`) gardent leurs
+boutons atteignables en faisant défiler la fenêtre. Sans message, une fenêtre
+qui tient dans l'écran garde sa taille et sa position.
 Le menu latéral mobile réserve la même place sous son contenu, y compris
 sous le pied du menu, afin que les messages ne le recouvrent pas.
 

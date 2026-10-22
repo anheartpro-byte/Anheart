@@ -123,7 +123,9 @@ describe("ANH-203 dialog: the content", () => {
     expect(page.slot("dialog-content").classes).toContain("top-[calc((100dvh-var(--feedback-toaster-space,0px))/2)]");
     expect(page.slot("dialog-content").classes).toContain("max-h-[calc(100dvh-var(--feedback-toaster-space,0px)-2rem)]");
     expect(page.slot("dialog-content").classes).toContain("overflow-y-auto");
-    for (const rule of ["sticky", "bottom-0", "bg-background", "z-10"]) {
+    expect(page.slot("dialog-content").classes).toContain("scroll-pb-26");
+    expect(page.slot("dialog-content").classes).toContain("sm:scroll-pb-15");
+    for (const rule of ["sticky", "-bottom-6", "-mb-6", "pb-6", "bg-background", "z-10"]) {
       expect(page.slot("dialog-footer").classes).toContain(rule);
     }
   });

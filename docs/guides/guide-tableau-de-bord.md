@@ -2515,8 +2515,11 @@ Les messages restent en bas à droite et leur pile occupe au plus la moitié
 de la hauteur visible de l'écran, avec son écart du bas. Faites défiler cette
 pile pour lire tous les messages ou atteindre leur croix. Une fenêtre ouverte
 se place au-dessus de cette zone et défile à l'intérieur si elle est grande ;
-ses boutons du bas, par exemple **Enregistrer** et **Annuler**, restent visibles
-sans fermer les messages. Sans message, la fenêtre garde sa position habituelle.
+les boutons de son pied collant, par exemple **Enregistrer** et **Annuler**,
+restent visibles sans fermer les messages. Dans les formulaires de machine,
+de patient et de lancement d'une séance, qui n'ont pas de pied collant, faites
+défiler la fenêtre pour atteindre les boutons du bas. Sans message, la fenêtre
+garde sa position habituelle.
 Le menu mobile laisse aussi cette place sous ses derniers éléments.
 Depuis ANH-194, les refus des machines, des
 comptes, des gestionnaires et des rôles arrivent avec un code stable et
