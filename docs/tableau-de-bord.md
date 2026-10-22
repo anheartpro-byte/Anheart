@@ -1446,6 +1446,8 @@ sont visibles : un succès plus ancien part avant un échec. La croix reste
 cliquable quand une fenêtre ou le menu mobile est ouvert, sans le fermer
 (`components/ui/dialog.tsx` et `components/ui/sheet.tsx` ne prennent pas ce
 clic pour un clic à l'extérieur). Un clic sur le voile ferme toujours le menu.
+Au doigt, la garde reconnaît aussi le message détaché par sa fermeture,
+avant le traitement différé du clic par Radix : la fenêtre ou le menu reste ouvert.
 Les succès sont annoncés dans une région `role="status"` (polie), les échecs
 dans une région `role="alert"` (immédiate) ; les deux existent avant le
 premier message, avec leur attribut `aria-live`. Radix Dialog 1.1.15 utilise
@@ -1456,6 +1458,20 @@ le fond de page est masqué. Vérifié dans l'arbre d'accessibilité de Chromium
 153, pas avec un vrai lecteur d'écran ; cela ne prouve pas l'annonce vocale.
 Ces deux régions doivent donc rester montées avec `aria-live` même vides,
 avant toute ouverture de fenêtre.
+
+La pile reste en bas à droite, mais sa hauteur avec son décalage et un écart
+ne dépasse pas la moitié de la hauteur visible de l'écran. Elle défile si
+nécessaire : chaque texte et chaque croix restent accessibles sans fermer
+d'autre message. Le toaster mesure cette place avec `ResizeObserver` et la
+publie dans `--feedback-toaster-space` sur `<html>` ; la réservation disparaît
+avec le dernier message ou au démontage. Sans `ResizeObserver`, les messages
+restent utilisables mais aucune place n'est réservée.
+Les fenêtres se centrent dans l'espace libre au-dessus de la pile, à toutes
+les largeurs. Une grande fenêtre défile à l'intérieur et son pied garde les
+boutons d'action visibles. Sans message, une fenêtre qui tient dans l'écran
+garde sa taille et sa position.
+Le menu latéral mobile réserve la même place sous son contenu, y compris
+sous le pied du menu, afin que les messages ne le recouvrent pas.
 
 | Cas | Ce qui s'affiche |
 |---|---|

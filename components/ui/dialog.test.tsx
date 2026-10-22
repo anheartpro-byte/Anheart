@@ -118,6 +118,16 @@ describe("ANH-203 dialog: the parts", () => {
 });
 
 describe("ANH-203 dialog: the content", () => {
+  it("centers in the space above messages and scrolls with a visible footer", () => {
+    const page = draw(<DialogContent><DialogFooter>Actions</DialogFooter></DialogContent>);
+    expect(page.slot("dialog-content").classes).toContain("top-[calc((100dvh-var(--feedback-toaster-space,0px))/2)]");
+    expect(page.slot("dialog-content").classes).toContain("max-h-[calc(100dvh-var(--feedback-toaster-space,0px)-2rem)]");
+    expect(page.slot("dialog-content").classes).toContain("overflow-y-auto");
+    for (const rule of ["sticky", "bottom-0", "bg-background", "z-10"]) {
+      expect(page.slot("dialog-footer").classes).toContain(rule);
+    }
+  });
+
   it("draws the window in a portal, after the overlay that dims the page", () => {
     const page = draw(<DialogContent>Confirmer ?</DialogContent>);
 

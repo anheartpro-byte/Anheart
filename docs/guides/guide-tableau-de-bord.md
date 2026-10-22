@@ -2511,6 +2511,13 @@ le message. Les régions de messages restent exposées dans l'arbre
 d'accessibilité de Chromium 153 pendant une fenêtre, une confirmation simple
 ou le menu mobile, tandis que le fond de page est masqué. Cette exposition a
 été vérifiée sans vrai lecteur d'écran et ne prouve pas l'annonce vocale.
+Les messages restent en bas à droite et leur pile occupe au plus la moitié
+de la hauteur visible de l'écran, avec son écart du bas. Faites défiler cette
+pile pour lire tous les messages ou atteindre leur croix. Une fenêtre ouverte
+se place au-dessus de cette zone et défile à l'intérieur si elle est grande ;
+ses boutons du bas, par exemple **Enregistrer** et **Annuler**, restent visibles
+sans fermer les messages. Sans message, la fenêtre garde sa position habituelle.
+Le menu mobile laisse aussi cette place sous ses derniers éléments.
 Depuis ANH-194, les refus des machines, des
 comptes, des gestionnaires et des rôles arrivent avec un code stable et
 s'affichent dans la langue du site ; depuis ANH-90, ceux de la connexion, de

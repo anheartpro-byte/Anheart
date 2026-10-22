@@ -12,6 +12,7 @@ import {
 import fr from "@/messages/fr.json";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { FeedbackToaster } from "./FeedbackToaster";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "./ui/sheet";
 
 /**
  * ANH-194 EX-3: a failure shown while a window is open can be closed without
@@ -38,6 +39,47 @@ function page(onOpenChange: (open: boolean) => void) {
 }
 
 describe("ANH-194 a message above an open window", () => {
+  it.each(["dialog", "sheet"] as const)(
+    "a touch closes only its message above a real %s, while the overlay still closes it",
+    async (kind) => {
+      const Root = kind === "dialog" ? Dialog : Sheet;
+      const Content = kind === "dialog" ? DialogContent : SheetContent;
+      const Title = kind === "dialog" ? DialogTitle : SheetTitle;
+      const Trigger = kind === "dialog" ? DialogTrigger : SheetTrigger;
+      const onOpenChange = vi.fn();
+      render(
+        <NextIntlClientProvider locale="fr" messages={fr} timeZone="Europe/Paris">
+          <Root onOpenChange={onOpenChange}>
+            <Trigger>Ouvrir</Trigger>
+            <Content aria-describedby={undefined}><Title>Fenêtre tactile</Title></Content>
+          </Root>
+          <FeedbackToaster />
+        </NextIntlClientProvider>,
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Ouvrir" }));
+      onOpenChange.mockClear();
+      act(() => pushFeedback("error", "Refus tactile"));
+      const cross = within(screen.getByRole("alert")).getByRole("button", { name: fr.common.close });
+      await user.pointer([
+        { keys: "[TouchA>]", target: cross },
+        { keys: "[/TouchA]" },
+      ]);
+      expect(getFeedbackToasts()).toEqual([]);
+      expect(cross.isConnected).toBe(false);
+      expect(isFeedbackElement(cross)).toBe(true);
+      expect(onOpenChange).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      const overlay = document.querySelector<HTMLElement>(`[data-slot="${kind}-overlay"]`)!;
+      await user.pointer([
+        { keys: "[TouchB>]", target: overlay },
+        { keys: "[/TouchB]" },
+      ]);
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    },
+  );
+
   it("closes when its cross is pressed, and the window stays open", async () => {
     const onOpenChange = vi.fn();
     page(onOpenChange);

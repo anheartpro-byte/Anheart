@@ -24,7 +24,7 @@ export function isFeedbackElement(target: EventTarget | null): boolean {
   const element = target as { closest?: unknown } | null;
   return (
     typeof element?.closest === "function" &&
-    (target as Element).closest("[data-feedback-toaster]") !== null
+    (target as Element).closest("[data-feedback-toaster], [data-feedback-message]") !== null
   );
 }
 
