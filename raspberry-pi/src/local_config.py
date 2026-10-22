@@ -90,8 +90,9 @@ from src.motor.atv320 import (
     DEFAULT_TIMEOUT,
     SerialSettings,
 )
-from src.motor.drive import RegisterMap
+from src.motor.drive import LogicInput, RegisterMap
 from src.motor.ftdi_link import SCHNEIDER_CABLE_URL, Parity
+from src.motor.sto import StoSourceKind
 from src.panel_status import EcgSource as _EcgSource
 from src.panel_status import MotorBackend as _MotorBackend
 from src.result import Err, Ok, Result
@@ -117,6 +118,8 @@ from src.web.deps import (
 
 # --- Keys ----------------------------------------------------------------
 KEY_MOTOR_BACKEND: Final[str] = "MOTOR_BACKEND"
+KEY_STO_SOURCE: Final[str] = "STO_SOURCE"
+KEY_STO_DRIVE_INPUT: Final[str] = "STO_DRIVE_INPUT"
 KEY_MOTOR_PORT: Final[str] = "MOTOR_PORT"
 KEY_MOTOR_SLAVE_ID: Final[str] = "MOTOR_SLAVE_ID"
 KEY_MODBUS_BAUDRATE: Final[str] = "MODBUS_BAUDRATE"
@@ -348,6 +351,8 @@ class LocalConfig:
     """The BITalino channels acquired and shown (``SENSORS``). Always contains ECG."""
 
     camera: CameraSource = CameraSource.NONE
+    sto_source: StoSourceKind = StoSourceKind.NONE
+    sto_drive_input: LogicInput | None = None
     leg_tip_radius: Metres | None = None
     """The rider's farthest point from the axis (``LEG_TIP_RADIUS_M``); the anti-nausea
     g-rate limit is judged there. ``None``: judged at ``ARM_RADIUS_M``, which
@@ -712,6 +717,47 @@ def _leg_tip(env: Mapping[str, str], arm: Metres | None) -> Result[Metres | None
     return Ok(Metres(value.value))
 
 
+def default_sto_source(backend: MotorBackend) -> StoSourceKind:
+    """Provisional policy: simulation ready, real hardware unconfigured."""
+    match backend:
+        case MotorBackend.SIM:
+            return StoSourceKind.SIM_READY
+        case MotorBackend.SERIAL:
+            return StoSourceKind.NONE
+    raise assert_never(backend)
+
+
+def _sto(
+    env: Mapping[str, str], backend: MotorBackend
+) -> Result[tuple[StoSourceKind, LogicInput | None], tuple[ConfigProblem, ...]]:
+    text = _text(env, KEY_STO_SOURCE, default_sto_source(backend).value).lower()
+    source = next((source for source in StoSourceKind if source.value == text), None)
+    input_text = _text(env, KEY_STO_DRIVE_INPUT, "")
+    input_ = next((input_ for input_ in LogicInput if input_.name == input_text), None)
+    problems: list[ConfigProblem] = []
+    if source is None:
+        known = ", ".join(source.value for source in StoSourceKind)
+        problems.append(ConfigProblem(KEY_STO_SOURCE, f"{text!r} inconnu (connus : {known})"))
+    if input_text and input_ is None:
+        problems.append(
+            ConfigProblem(KEY_STO_DRIVE_INPUT, "attendu LI1, LI2, LI3, LI4, LI5 ou LI6")
+        )
+    if source is StoSourceKind.DRIVE_INPUT and not input_text:
+        problems.append(
+            ConfigProblem(KEY_STO_DRIVE_INPUT, "obligatoire avec STO_SOURCE=drive_input")
+        )
+    if input_text and source is not StoSourceKind.DRIVE_INPUT:
+        problems.append(ConfigProblem(KEY_STO_DRIVE_INPUT, "reserve a STO_SOURCE=drive_input"))
+    if backend is MotorBackend.SERIAL and source in (
+        StoSourceKind.SIM_READY,
+        StoSourceKind.SIM_OPEN,
+    ):
+        problems.append(ConfigProblem(KEY_STO_SOURCE, "sim_* interdit avec MOTOR_BACKEND=serial"))
+    if problems or source is None:
+        return Err(tuple(problems))
+    return Ok((source, input_))
+
+
 def _presence(env: Mapping[str, str]) -> Result[CameraSource, ConfigProblem]:
     text = _text(env, KEY_PRESENCE_SOURCE, CameraSource.NONE.value).lower()
     for source in CameraSource:
@@ -895,6 +941,7 @@ def load_local_config(
     """
     status = shipped_status() if medical is None else medical
     backend = _backend(env)
+    sto = _sto(env, backend.value if isinstance(backend, Ok) else MotorBackend.SERIAL)
     link: Result[DriveLink | None, ConfigProblem] = (
         drive_link_from_env(env)
         if isinstance(backend, Ok) and backend.value is MotorBackend.SERIAL
@@ -939,12 +986,14 @@ def load_local_config(
         )
         + (web.error if isinstance(web, Err) else ())
         + (record.error if isinstance(record, Err) else ())
+        + (sto.error if isinstance(sto, Err) else ())
         + _medical_keys(env)
         + (motion.error if isinstance(motion, Err) else ())
     )
     if (
         problems
         or isinstance(record, Err)
+        or isinstance(sto, Err)
         or isinstance(backend, Err)
         or isinstance(link, Err)
         or isinstance(source, Err)
@@ -979,6 +1028,8 @@ def load_local_config(
             cloud=cloud.value,
             sensors=sensors.value,
             camera=presence.value,
+            sto_source=sto.value[0],
+            sto_drive_input=sto.value[1],
             leg_tip_radius=leg_tip.value,
             record=record.value,
         )
