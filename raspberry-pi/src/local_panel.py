@@ -925,6 +925,7 @@ class LocalPanel:
     ) -> None:
         self._clock: Clock = clock
         self._sto: StoSource = sto
+        # Set once by close(), never cleared: no auxiliary frame starts after it.
         self._closing: bool = False
         # One completed control tick permits one auxiliary frame, never a backlog.
         self._sto_tick_pending: bool = False
