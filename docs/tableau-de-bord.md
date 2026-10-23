@@ -597,7 +597,9 @@ d'enregistrement ECG, retiré.
   aucune nouvelle pendant 10 min, [convex.md](convex.md#7-tâche-planifiée)) :
   le même panneau, avec le bandeau orange « Séance interrompue, fin
   inconnue », aucune valeur donnée pour actuelle (indicateurs grisés, « - »),
-  le temps écoulé compté jusqu'à son dernier point, le bouton **Arrêter la
+  le temps écoulé que la machine avait compté à son dernier point (`elapsedS`,
+  0:00 sans point ; pas l'écart entre la date du point et le début de la
+  séance, qui peuvent venir de deux horloges), le bouton **Arrêter la
   séance** (§5.4) et le bouton **Voir le détail**. Elle redevient active, et
   la page avec elle, dès que la machine la nomme de nouveau ; la fin envoyée
   par la machine, même tard, la clôt.
