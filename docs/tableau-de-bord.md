@@ -699,7 +699,10 @@ réessayer. La fiche apparaît dans la liste après acceptation et rattachement
 par le webhook. Un compte déjà présent ailleurs rejoint cette organisation
 sans créer un deuxième dossier ni écraser ses champs communs.
 
-Fiche patient : identité, séances, bouton Modifier, suppression, les cartes
+Fiche patient : identité, **Sessions récentes** (les 10 dernières : machine,
+statut, début, durée, comme la page Sessions : « Fin inconnue » pour une
+séance interrompue, temps depuis le début pour une séance active ou en
+attente), bouton Modifier, suppression, les cartes
 **Physiologie** (voir §5.1), **Aptitude** et **Consentement**, et la carte
 **Historique et progression** (ANH-89,
 `components/training/RiderHistoryCard.tsx`). Celle-ci liste les séances
@@ -717,7 +720,9 @@ d'ANH-146, et la carte le dit.
 
 Admin et admin d'organisation (entrée de menu). Tous les comptes pour l'admin,
 les membres actifs de son organisation pour un admin d'organisation ; filtre
-par rôle, recherche. La fiche affiche le rôle, les séances ; pour un patient :
+par rôle, recherche. La fiche affiche le rôle, les séances (pour un patient,
+avec la même durée que la fiche patient : « Fin inconnue » pour une séance
+interrompue) ; pour un patient :
 Modifier, Physiologie ; suppression (admin : tous sauf soi ; admin
 d'organisation : les membres de son organisation sauf soi, retirés de cette
 organisation seulement ; gestionnaire : ses patients seulement).

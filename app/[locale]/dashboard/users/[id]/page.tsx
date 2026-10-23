@@ -48,10 +48,11 @@ import {
   Shield,
   Building,
 } from "lucide-react";
-import { format, formatDistanceToNow } from "date-fns";
+import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { PatientFormModal } from "@/components/modals/PatientFormModal";
 import { PhysiologyCard } from "@/components/training/PhysiologyCard";
+import { sessionDuration } from "@/lib/sessionDuration";
 
 export default function UserDetailPage({
   params,
@@ -286,13 +287,11 @@ export default function UserDetailPage({
                           })}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {session.endedAt
-                            ? formatDuration(
-                                session.endedAt - session.startedAt,
-                              )
-                            : formatDistanceToNow(session.startedAt, {
-                                locale: dateLocale,
-                              })}
+                          {sessionDuration(
+                            session,
+                            t("sessions.unknownEnd"),
+                            dateLocale,
+                          )}
                         </TableCell>
                         <TableCell>
                           {session.status === "active" ? (
@@ -434,20 +433,6 @@ function SessionStatusBadge({ status }: { status: string }) {
   return (
     <Badge variant={variants[status] || "outline"}>{statusLabel(status)}</Badge>
   );
-}
-
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  }
-  return `${seconds}s`;
 }
 
 function UserDetailSkeleton() {
