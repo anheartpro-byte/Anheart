@@ -634,6 +634,93 @@ describe("ANH-89 final summary, from the deposited record", () => {
   });
 });
 
+describe("ANH-234 time in zone counted by the console", () => {
+  /** The console counted 1.6 s in zone and 0.2 s above; the ticks say 2 s in zone. */
+  const COUNTED = JSON.stringify({
+    ...JSON.parse(MANIFEST),
+    end_observation: {
+      t: 2,
+      runtime_state: "finished",
+      zone_in_s: 1.6000000000000003,
+      zone_above_s: 0.2,
+      zone_below_s: 0,
+    },
+  });
+
+  it("is what the final summary, its share of the duration and the history show", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await activeSession(w);
+    await sendTelemetry(w, sessionId, [100, 140, 140]);
+    await end(w, sessionId);
+    const provisional = await summaryOf(w, sessionId);
+    expect(provisional?.provisional).toBe(true);
+    expect(provisional?.figures.zone).not.toHaveProperty("source");
+
+    await depositRecord(w, sessionId, { manifest: COUNTED });
+
+    const summary = await summaryOf(w, sessionId);
+    expect(summary?.provisional).toBe(false);
+    expect(summary?.figures.durationS).toBe(2);
+    expect(summary?.figures.zone).toEqual({
+      lowBpm: 130,
+      highBpm: 150,
+      inZoneS: 1.6,
+      aboveZoneS: 0.2,
+      belowZoneS: 0,
+      source: "console",
+    });
+    const history = await as(w.t, "patient").query(
+      api.sessionReports.riderHistory,
+      { userId: w.patient },
+    );
+    expect(history[0].summary).toMatchObject({
+      provisional: false,
+      durationS: 2,
+      inZoneS: 1.6,
+    });
+  });
+
+  it("is counted on the ticks again for a record written before the console wrote it", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await activeSession(w);
+    await end(w, sessionId);
+    await depositRecord(w, sessionId);
+    expect((await summaryOf(w, sessionId))?.figures.zone).toEqual({
+      lowBpm: 130,
+      highBpm: 150,
+      inZoneS: 2,
+      aboveZoneS: 0,
+      belowZoneS: 0,
+      source: "ticks",
+    });
+  });
+
+  it("leaves valid a summary stored before the zone said who counted it", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await activeSession(w);
+    await end(w, sessionId);
+    await depositRecord(w, sessionId);
+    const final = await summaryOf(w, sessionId);
+    const zone = final!.figures.zone!;
+    const older = {
+      lowBpm: zone.lowBpm,
+      highBpm: zone.highBpm,
+      inZoneS: zone.inZoneS,
+      aboveZoneS: zone.aboveZoneS,
+      belowZoneS: zone.belowZoneS,
+    };
+    await w.t.run(async (ctx) => {
+      const row = await ctx.db.query("session_summaries_v2").unique();
+      await ctx.db.patch(row!._id, {
+        figures: { ...row!.figures, zone: older },
+      });
+    });
+    const read = await summaryOf(w, sessionId);
+    expect(read?.figures.zone).toEqual(older);
+    expect(read?.figures.zone).not.toHaveProperty("source");
+  });
+});
+
 describe("ANH-89 summary and history: who reads them", () => {
   it("serves the summary under the rights of its session only", async () => {
     const w = await seedWorld(modules);
