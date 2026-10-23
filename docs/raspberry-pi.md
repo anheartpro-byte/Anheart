@@ -2243,8 +2243,10 @@ lequel la même requête serait encore refusée.
   10 min, ou jamais : un point ou un événement renvoyé et déjà stocké ne
   compte pas, ni un point d'un `t` plus petit, ou un événement d'un rang
   plus petit, que le plus grand déjà reçu. Sa première déclaration (séance
-  démarrée à la machine) ou la confirmation de son départ (lancement du
-  site) date de plus de 10 min ; une déclaration refaite ne compte pas. Toutes ces dates sont celles du serveur : la date de
+  démarrée à la machine) ou la confirmation de son départ (`startedAt` d'un
+  lancement du site : l'arrivée de la confirmation moins l'âge que la console
+  donne de la séance, jamais avant le lancement) date de plus de 10 min ; une
+  déclaration refaite ne compte pas. Toutes ces dates sont celles du serveur : la date de
   début que la machine a écrite n'est pas lue. C'est la tâche de Convex qui
   passe toutes les minutes
   ([convex.md, Tâche planifiée](convex.md#7-tâche-planifiée)). Sont concernées
