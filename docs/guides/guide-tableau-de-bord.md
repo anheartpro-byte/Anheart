@@ -1247,7 +1247,7 @@ machine, « Démarrée il y a ... », badges de type et d'origine.
 | **Vitesse du bras** | tr/min du bras ; dessous « Moteur N tr/min ». |
 | **Charge** | g. |
 | **Phase** | Mesure de référence, Échauffement, Maintien, Retour au calme, Récupération, Terminé ; avec un bouclier orange et « Action de sécurité : ... » si la machine applique une action de sécurité. |
-| **Écoulé** | Chronomètre depuis le départ réel ; dessous « Restant » (durée prévue moins écoulé). |
+| **Écoulé** | Chronomètre depuis le départ réel ; dessous « Restant » (durée prévue moins écoulé). Sur une séance interrompue, fin inconnue : le temps que la machine avait compté à son dernier point (0:00 sans point), et non un calcul entre l'horloge de la machine et celle du serveur. |
 | Courbe **Fréquence cardiaque** | FC dans le temps (ligne rouge) sur la **bande verte de la zone cible**. Une absence de FC reste un **trou** dans la ligne. Survoler la courbe affiche l'instant et la valeur. |
 | Courbe **Vitesse du bras** | **Mesurée** (ligne pleine bleue) et **Consigne** (tirets gris, convertie en tr/min bras). |
 | Axe horizontal | Temps depuis le début (minutes:secondes). Au plus la dernière heure. |

@@ -118,13 +118,15 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   // Only a fresh point may stand for the current heart rate.
   const bpm = lastFresh && last?.bpm !== undefined ? last.bpm : undefined;
 
-  // An interrupted session has no end: it ran at least until its last point.
+  // An interrupted session has no end: it ran at least until its last point,
+  // for the time the machine counted there (`elapsedS`). The point's `t` is
+  // not used: it may be on the machine's clock, `startedAt` on the server's.
   const elapsedS = isPending
     ? 0
     : isActive
       ? (now - training.startedAt) / 1000
       : isInterrupted
-        ? Math.max(0, ((last?.t ?? training.startedAt) - training.startedAt) / 1000)
+        ? (last?.elapsedS ?? 0)
         : ((training.endedAt ?? training.startedAt) - training.startedAt) / 1000;
   const remainingS =
     training.totalDurationS !== undefined

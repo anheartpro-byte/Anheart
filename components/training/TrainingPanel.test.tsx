@@ -456,7 +456,8 @@ describe("ANH-203 training panel: what it says of a session", () => {
   });
 
   it("an interrupted session says its end is unknown, shows nothing as current, and counts up to its last point", () => {
-    // Started 20 minutes ago; its last point was measured 5 minutes in.
+    // Started 20 minutes ago; the machine had counted 5 minutes at its last
+    // point. The date of that point is 4 minutes in: it is not what is counted.
     session({
       status: "interrupted",
       startedAt: NOW - 1_200_000,
@@ -464,7 +465,9 @@ describe("ANH-203 training panel: what it says of a session", () => {
       lastSignalAt: null,
       lastMeasuredAt: null,
     });
-    telemetry([point({ t: NOW - 900_000, bpm: 128, outputRpm: 21.456 })]);
+    telemetry([
+      point({ t: NOW - 960_000, elapsedS: 300, bpm: 128, outputRpm: 21.456 }),
+    ]);
 
     const screen = panel();
 
@@ -477,9 +480,38 @@ describe("ANH-203 training panel: what it says of a session", () => {
     expect(screen.text()).not.toContain("128");
     expect(screen.text()).not.toContain("21.5");
     expect(screen.text()).toContain(`5:00 ${t.elapsed}`);
+    expect(screen.text()).not.toContain(`4:00 ${t.elapsed}`);
+    expect(screen.text()).toContain(`${t.remaining} 25:00`);
     expect(screen.text()).not.toContain(t.completed);
     expect(screen.text()).not.toContain(t.failed);
   });
+
+  // ANH-231: without a machine axis, a point is dated on the machine's clock
+  // and the start on the server's. What the machine counted is read instead
+  // of the gap between the two clocks.
+  it.each([
+    ["an hour ahead of", 3_600_000, "1:05:00"],
+    ["a day behind", -86_400_000, "0:00"],
+  ])(
+    "an interrupted session counts what the machine counted, its clock %s the server's",
+    (_case, offsetMs, gap) => {
+      const startedAt = NOW - 1_200_000;
+      session({
+        status: "interrupted",
+        startedAt,
+        interruptedAt: NOW - 60_000,
+        lastSignalAt: null,
+        lastMeasuredAt: null,
+      });
+      telemetry([point({ t: startedAt + 300_000 + offsetMs, elapsedS: 300 })]);
+
+      const screen = panel();
+
+      expect(screen.text()).toContain(`5:00 ${t.elapsed}`);
+      expect(screen.text()).toContain(`${t.remaining} 25:00`);
+      expect(screen.text()).not.toContain(`${gap} ${t.elapsed}`);
+    },
+  );
 
   it("an interrupted session without any point has run for an unknown time: none is counted", () => {
     session({
@@ -494,6 +526,7 @@ describe("ANH-203 training panel: what it says of a session", () => {
 
     expect(screen.text()).toContain(t.interrupted);
     expect(screen.text()).toContain(`0:00 ${t.elapsed}`);
+    expect(screen.text()).toContain(`${t.remaining} 30:00`);
   });
 
   it("a completed session shows how long it lasted and why it ended", () => {
