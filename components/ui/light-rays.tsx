@@ -97,6 +97,9 @@ export function LightRays({
   const cycleDuration = Math.max(speed, 0.1)
 
   useEffect(() => {
+    // The rays come from Math.random: drawn once mounted, so that the server
+    // and the first render in the browser agree and hydration does not fail.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRays(createRays(count, cycleDuration))
   }, [count, cycleDuration])
 

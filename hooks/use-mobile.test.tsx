@@ -1,5 +1,6 @@
 import { render, settle } from "@/test-support/render";
 import { installViewport } from "@/test-support/browser";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { useIsMobile } from "./use-mobile";
 
@@ -59,5 +60,40 @@ describe("ANH-203 useIsMobile", () => {
     screen.unmount();
 
     expect(viewport.listeners()).toBe(0);
+  });
+});
+
+describe("ANH-249 useIsMobile, read from the window as an external store", () => {
+  function Recorder({ seen }: { seen: boolean[] }) {
+    seen.push(useIsMobile());
+    return null;
+  }
+
+  it("is right from its first render, follows the breakpoint, then lets go of the window", async () => {
+    const viewport = installViewport(767);
+    const seen: boolean[] = [];
+    const screen = render(<Recorder seen={seen} />);
+
+    // Before any resize, not even one render says wide on a narrow window.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).not.toContain(false);
+
+    await settle(() => viewport.resizeTo(768));
+    expect(seen.at(-1)).toBe(false);
+    await settle(() => viewport.resizeTo(767));
+    expect(seen.at(-1)).toBe(true);
+
+    screen.unmount();
+    expect(viewport.listeners()).toBe(0);
+    const renders = seen.length;
+    await settle(() => viewport.resizeTo(1280));
+    expect(seen).toHaveLength(renders);
+  });
+
+  it("says wide on the server, where there is no window to measure", () => {
+    const viewport = installViewport(320);
+
+    expect(renderToStaticMarkup(<Probe />)).toBe("<p>wide</p>");
+    expect(viewport.asked()).toEqual([]);
   });
 });
