@@ -445,3 +445,43 @@ async def test_earned_pause_credit_cannot_grow_after_an_unresolved_attempt(
     assert (verdict.rule, verdict.action) == (RULE_STO_UNREADABLE, SafetyAction.RAMP_DOWN)
     assert clock.monotonic() - began <= STO_STALE_AFTER + 0.7 + 1e-9
     assert clock.monotonic() - last <= STO_STALE_AFTER + 0.8 + 0.7 + 1e-9
+
+
+async def test_normal_ticks_before_a_pause_are_not_credited(
+    live_sto: LiveSto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D sums only the loop_stall portions: not the normal ticks between a success and a pause."""
+    live = live_sto
+    clock = live.rig.clock
+    runtime = live.rig.panel.runtime
+    last = live.source.latest(clock.monotonic()).last_success_at
+    assert last is not None
+    for _ in range(3):  # 0.6 s of normal ticks, no attempt
+        await live.step()
+    await live.step(Seconds(0.8))  # a loop_stall interval, still no attempt: D = 0.8 s
+    verdict = runtime.standing
+    assert verdict is not None
+    assert verdict.rule == RULE_LOOP_STALL
+    original = SimulatedDrive.read_register
+
+    async def failed_read(
+        drive: SimulatedDrive, address: RegisterAddress
+    ) -> Result[RawRegister, DriveError]:
+        if address == LOGIC_INPUTS_LOGICAL:
+            return Err(CommTimeout(after=Seconds(0.1)))
+        return await original(drive, address)
+
+    monkeypatch.setattr(SimulatedDrive, "read_register", failed_read)
+    assert (await live.poll()).state is StoState.UNKNOWN
+    for _ in range(20):
+        await live.step()
+        verdict = runtime.standing
+        if verdict is not None and verdict.rule == RULE_STO_UNREADABLE:
+            break
+        await live.poll()
+    verdict = runtime.standing
+    assert verdict is not None
+    assert (verdict.rule, verdict.action) == (RULE_STO_UNREADABLE, SafetyAction.RAMP_DOWN)
+    # STO_STALE_AFTER + D + one tick, D the 0.8 s gap alone; crediting the
+    # 0.6 s of normal ticks before it as well would detect at 3.6 s.
+    assert clock.monotonic() - last <= STO_STALE_AFTER + 0.8 + 0.2 + 1e-9
