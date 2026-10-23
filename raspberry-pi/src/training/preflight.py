@@ -1,7 +1,8 @@
 """The STO-ready preflight control, shared by all arming paths.
 
-ANH-142 will add the other automatic preflight controls and their orchestration;
-this module implements only the memory-only STO readiness check.
+This is the preflight module: ANH-142's automatic preflight controls and their
+orchestration will be added here, next to the memory-only STO readiness check,
+which is the only control implemented today.
 """
 
 from dataclasses import dataclass
