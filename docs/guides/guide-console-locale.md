@@ -1014,6 +1014,9 @@ avec les conditions qui empêchent le départ, avant l'avis sur les paramètres
 médicaux. Les deux boutons de départ sont grisés avec la raison donnée par le Pi.
 `non configuree` signifie qu'il faut configurer `STO_SOURCE` ; ce n'est pas une
 panne. Au repos, `ouverte` après un appui sur le champignon est un état normal.
+Pendant un arrêt (STOP, fin de séance, verdict, cible 0), la console suspend la
+lecture pour laisser le lien aux écritures d'arrêt : `inconnue` s'affiche 2 s
+après la dernière lecture, sans panne, et `prete` revient après l'arrêt.
 
 En séance, appuyer sur le champignon ouvre la chaîne : le matériel doit couper le
 couple indépendamment du Pi. Le logiciel affiche `ouverte` et le verdict

@@ -1150,6 +1150,13 @@ class ATV320Drive:
         and an auxiliary read is no part of the control path it replays. The
         SDK's own transport calls, appended only for a log that keeps them,
         still carry its bytes: a diagnostic of the wire sees every frame.
+
+        It keeps the line's one serial timeout. pymodbus 3.7.4 has a single
+        ``timeout_connect`` for every transaction and closes the port after
+        any exchange left without an answer, the FTDI port fixes its timeout
+        when it opens, and a second connection is excluded (one master on the
+        cable): a read left unanswered can hold the link past the next tick,
+        as :data:`AUXILIARY_READ_BUDGET` states.
         """
         async with self._lock:
             refusal = self._refusal(stopping=False)

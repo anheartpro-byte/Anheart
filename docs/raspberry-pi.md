@@ -120,19 +120,108 @@ d'installation de l'ATV320 et le câblage retenu par l'électricien.
 Le registre logique 5202 porte LI1 en bit 0 jusqu'à LI6 en bit 5, selon
 les FAQ Schneider [FA245502](https://www.se.com/us/en/faqs/FA245502/) et
 [FA320881](https://www.se.com/uk/en/faqs/FA320881/). Le décalage configuré
-dans `RegisterMap` est appliqué une seule fois. La source utilise le
-`read_register` du variateur intérieur, avec son verrou, son exécuteur et
-son comptage des échecs du lien : une lecture STO en échec affecte donc la
-santé du même lien série, comme toute autre lecture.
+dans `RegisterMap` est appliqué une seule fois.
 
-Le sondage tourne dans sa propre tâche asyncio, hors du tic, toutes les
-0,5 s (`STO_POLL_PERIOD`). Budget technique à 19200 bauds, 8E1 : une requête
-de 8 octets, une réponse de 7 octets et deux silences de 3,5 caractères
-occupent environ 13 ms ; retenir 20 ms par lecture, comme pour les lectures
-du statut variateur, donne 40 ms/s de trafic STO, soit environ 4 % du lien.
-Cela s'ajoute au budget du statut : quatre registres, environ 80 ms sur les
-200 ms d'un tic, ou 100 ms avec LFT en défaut, puis les écritures du contrôle.
-Le délai d'échange configuré reste applicable. `latest` ne consulte que la mémoire.
+**Un seul maître sur le câble (MEN-14).** La lecture du registre 5202 passe
+exclusivement par le lien variateur existant : la même instance `ATV320Drive`
+que le runtime, avec son verrou, sa file de requêtes, son exécuteur et son
+comptage des échecs, jamais par une seconde connexion série. `build_sto` donne
+à la source `AuxiliaryRegisterReads`, qui appelle
+`ATV320Drive.read_auxiliary_register`. Une lecture STO en échec affecte donc
+la santé du même lien série, comme toute autre lecture. Avec le variateur
+simulé, la source lit le même `SimulatedDrive` que le runtime. Test :
+`tests/test_sto_single_master.py` (une seule ouverture du port, une seule
+instance, toutes les transactions 5202 sur le même maître).
+
+**Le tic garde le lien.** Le sondage tourne dans sa propre tâche asyncio,
+hors du tic, et part juste après un tic terminé : au plus une lecture par
+`STO_POLL_PERIOD` (0,5 s), donc en pratique après un tic sur trois (0,6 s),
+et seulement avec la permission d'un tic terminé. Aucune lecture ne part
+pendant un tic. La garde n'accepte la lecture que si son budget de lien se
+termine avant l'instant prévu du tic suivant (début du tic terminé plus
+`CONTROL_PERIOD`) ; sinon la lecture n'est pas tentée, elle est comptée
+(`LocalPanel.sto_window_misses`) et attend la permission du tic suivant. Une
+lecture sautée n'est ni une réussite ni une tentative : elle ne touche ni
+l'instant de la dernière réussite ni `read_unresolved`. Le budget dépend du
+port : `AUXILIARY_READ_BUDGET` = 0,05 s sur l'ATV320 (une lecture saine occupe
+environ 13 ms sur le fil, 20 ms retenus ci-dessous, avec marge), 0 pour le
+variateur simulé, dont les échanges ne suspendent pas. Si les tics occupent
+toute la période, aucune lecture ne part : la lecture devient `UNKNOWN` au
+bout de `STO_STALE_AFTER`, le départ est refusé au repos, et
+`sto_unreadable / RAMP_DOWN` se verrouille en séance avec mouvement possible.
+Mesures en temps virtuel, avec une latence par échange sous le budget, sur
+le variateur simulé et sur le faux bus de l'ATV320 : les instants de toutes
+les écritures de commande sont identiques avec et sans
+`STO_SOURCE=drive_input` (`tests/test_sto_scheduling.py`).
+
+**Aucune lecture pendant un arrêt.** La garde refuse aussi toute lecture
+quand un arrêt est en cours ou demandé, pour que les écritures d'arrêt
+gardent le lien. Un arrêt est en cours
+(`TrainingRuntime.stop_in_progress`) pendant une fin de séance tant que la
+consigne descend ou que l'ordre de marche est tenu (STOP à la console ou
+depuis le site, verdict d'arrêt, limite de la séance manuelle, dépassement de
+durée, immobilité, E-STOP), pendant un verdict qui baisse ou arrête une séance
+en cours (REDUCE, RAMP_DOWN, QUICK_STOP, GO_SILENT, ce dernier coupant déjà
+tout trafic), pendant la descente vers une cible manuelle de zéro, et tant
+que l'ordre de marche est tenu hors séance (variateur trouvé en marche). Il
+est demandé, en séance, quand une fin ou une cible de zéro attend dans la
+boîte aux lettres, ou quand un verdict de la caméra n'a pas encore atteint le
+runtime. FREEZE seul tient la vitesse et n'arrête rien. La fermeture de la
+console, `GO_SILENT` et la libération du lien coupaient déjà toute lecture.
+Il n'existe pas de bouton d'arrêt dans la capsule ([securite.md](securite.md)) :
+un tel bouton entrera dans cette liste. Le temps retenu n'est pas compté contre
+la fraîcheur (section 5.3). Pendant l'arrêt, la carte passe à `inconnue` 2 s
+après la dernière lecture, puis la lecture reprend juste après la fin de
+l'arrêt. Tests :
+`tests/test_sto_scheduling.py` (sept catégories d'arrêt, variateur muet sur
+5202 dès la demande, instants des écritures d'arrêt identiques à ceux d'une
+séance sans lecture STO) et `tests/test_sto_stop_guard.py`.
+
+**Le résiduel, borné.** Une lecture partie dans la fenêtre mais restée sans
+réponse ne s'interrompt pas. Elle occupe le lien jusqu'à
+`transaction_worst_case` (0,683 s sur la ligne par défaut, plus d'une période
+de contrôle), puis pymodbus 3.7.4 ferme le port, que la transaction suivante
+rouvre : sur `ftdi://`, la réouverture inclut `settle` (0,25 à 1,0 s). Les
+écritures du tic suivant attendent d'autant, comme après un échange en échec
+du tic lui-même, et l'échec compte dans la santé du lien. Mesuré sur le chemin
+pymodbus avec une puce simulée et le délai série par défaut : lecture sans
+réponse 0,21 s, puis keepalive suivant 0,26 s, réouverture comprise. Une telle
+attente peut lever `loop_stall`. Elle survient au plus une fois par
+`STO_POLL_PERIOD`, jamais avec deux lectures en vol ; un arrêt demandé pendant
+une lecture déjà en vol n'attend que la fin de celle-ci, puis aucune lecture
+ne part avant la fin de l'arrêt (tests du faux bus). Un délai de réponse
+propre à la lecture STO, borné pour finir avant le tic suivant, n'est pas
+réalisable sans contournement : pymodbus 3.7.4 n'a qu'un délai
+(`comm_params.timeout_connect`) pour toutes les transactions et ferme le port
+après tout échange sans réponse (`transaction.py`, `_transact` et `execute`),
+le port FTDI fixe son délai à l'ouverture et sa réouverture impose `settle`,
+un transfert USB bloqué coûte jusqu'à `USB_STALL_BOUND` (0,1 s), et une
+seconde connexion est exclue (MEN-14). Une réponse tardive n'est jamais prise
+pour celle de la transaction suivante : le port est rouvert et vidé, et
+pymodbus jette les octets en attente avant chaque envoi
+(`tests/test_sto_exchange_log.py`).
+
+**Hors du journal des échanges.** Les lectures STO ne sont pas ajoutées au
+journal des échanges du pilote (`ExchangeLog`, alimenté par
+`ATV320Drive._observe_exchange`), qui nourrit `drive_frames.jsonl` ; elles
+comptent toujours dans la santé du lien. L'enregistrement d'une séance garde
+ainsi exactement les transactions du chemin de commande, et le rejeu natif,
+dont le runtime lit une chaîne simulée prête et ne demande jamais 5202, s'y
+applique sans divergence. Conséquence pour la boîte noire : elle ne garde de
+la chaîne STO que les verdicts `sto_open` et `sto_unreadable` ; ni les
+lectures 5202 ni l'état lu n'y figurent (point de suivi). Seuls les octets de
+ces trames restent visibles au niveau transport, en lignes `modbus_send` et
+`modbus_receive_chunk` sans registre, quand `RECORD_DRIVE_SDK_FRAMES` les
+demande, et le rejeu ignore ces lignes. Tests :
+`tests/test_sto_exchange_log.py`, `simulation/tests/test_replay_modbus_sto.py`.
+
+Budget technique à 19200 bauds, 8E1 : une requête de 8 octets, une réponse
+de 7 octets et deux silences de 3,5 caractères occupent environ 13 ms ;
+retenir 20 ms par lecture, comme pour les lectures du statut variateur, donne
+environ 33 ms/s de trafic STO à une lecture toutes les 0,6 s, soit environ 3 %
+du lien. Cela s'ajoute au budget du statut : quatre registres, environ 80 ms
+sur les 200 ms d'un tic, ou 100 ms avec LFT en défaut, puis les écritures du
+contrôle. `latest` ne consulte que la mémoire.
 Une tentative échouée donne `UNKNOWN` immédiatement, avec le nom de la
 variante d'erreur, sans recopier le texte libre de l'appareil. Une lecture
 réussie âgée de plus de 2 s (`STO_STALE_AFTER`, quatre périodes techniques,
@@ -195,10 +284,18 @@ validation matérielle ; consigner les mesures dans le tableau avant de conclure
    progresse, les lectures doivent cesser pour laisser expirer le ttO.
    Observer le trafic lors d'une suspension du seul contrôle, sondage actif :
    au plus une lecture STO déjà en vol peut aboutir, puis une nouvelle lecture
-   est autorisée par le dernier tic terminé. Cela donne au plus deux trames
-   STO après ce tic, puis plus aucune jusqu'au retour du contrôle. Vérifier
-   ensuite l'expiration du ttO et SLF sans ordre STOP explicite. Relever les
-   trames et les instants, y compris dans ce cas combiné.
+   peut partir dans la fenêtre qui suit le dernier tic terminé, jamais plus
+   tard. Cela donne au plus deux trames STO après ce tic, puis plus aucune
+   jusqu'au retour du contrôle. Vérifier ensuite l'expiration du ttO et SLF
+   sans ordre STOP explicite. Relever les trames et les instants, y compris
+   dans ce cas combiné.
+9. En séance à basse vitesse, sans personne à bord, relever à l'analyseur
+   de trames la durée d'un tic, celle d'une lecture 5202 et leurs instants :
+   chaque lecture doit partir juste après un tic et finir avant le tic
+   suivant, avec la marge de `AUXILIARY_READ_BUDGET` (0,05 s), et
+   `sto_window_misses` ne doit pas croître en marche normale. Demander un
+   STOP : aucune lecture 5202 jusqu'au retrait de l'ordre de marche.
+   Consigner toute lecture qui chevauche un tic.
 
 | Essai | Date / opérateur / version | Valeurs ou observations | Conforme / écart |
 |---|---|---|---|
@@ -210,6 +307,7 @@ validation matérielle ; consigner les mesures dans le tableau avant de conclure
 | Refermeture, acquittement nommé, nouveau départ | à remplir | à remplir | non fait |
 | Pi débranché, coupure indépendante du couple | à remplir | à remplir | non fait |
 | Lectures et ttO, contrôle suspendu, SLF | à remplir | à remplir | non fait |
+| Fenêtre de lecture après le tic, aucune lecture pendant un STOP | à remplir | à remplir | non fait |
 
 ### 2.3 Le BITalino et l'ECG
 
@@ -1269,12 +1367,14 @@ configurée à perdre, et le pré-vol refuse déjà tout armement. Une lecture
 
 Le sondage STO exige un lien acquis par le runtime, au repos ou en séance :
 aucune lecture avant le premier `open()` réussi ni pendant une panne au repos
-où le lien n'est plus acquis. Chaque lecture consomme un jeton produit à la
-fin d'un tic de contrôle ; plusieurs tics ne cumulent pas de jetons. La garde
-est évaluée juste avant la lecture. Si seul le contrôle cale et que la boucle
-asyncio reste vivante, au plus une nouvelle lecture part après le dernier tic
-terminé, en plus de l'unique lecture déjà en vol. Au plus deux trames STO
-peuvent donc suivre ce tic, puis plus aucune ; le ttO peut expirer.
+où le lien n'est plus acquis. Chaque lecture consomme la permission d'un tic
+de contrôle terminé, valable jusqu'à l'instant prévu du tic suivant ;
+plusieurs tics ne cumulent pas de permissions (section 2.2). La garde est
+évaluée juste avant la lecture. Si seul le contrôle cale et que la boucle
+asyncio reste vivante, au plus une nouvelle lecture part, dans la fenêtre qui
+suit le dernier tic terminé, en plus de l'unique lecture déjà en vol ; aucune
+ne part pendant la pause elle-même. Au plus deux trames STO peuvent donc
+suivre ce tic, puis plus aucune ; le ttO peut expirer.
 La garde respecte aussi `GO_SILENT` et la libération de la liaison.
 La tâche attend chaque lecture avant la suivante ; une seule lecture déjà en
 vol peut encore aboutir lors du passage en silence ou de la fermeture. Ensuite
@@ -1282,29 +1382,33 @@ le cache vieillit simplement vers `UNKNOWN`, sans rafraîchir le `ttO`.
 
 `loop_stall` reste seul juge d'un écart entre tics dépassant sa borne existante.
 Le runtime ne déduit cet intervalle du budget de fraîcheur STO que si aucune
-tentative postérieure à la dernière réussite n'est en échec ou en suspens.
-Le jeton du dernier tic peut encore permettre une lecture pendant une pause.
-Dès qu'une lecture commence, aucune nouvelle déduction n'est donc accordée
-avant une réussite. Une réussite remet la déduction à zéro ; si elle arrive
-pendant un intervalle `loop_stall`, seule la partie après cette réussite peut
-être déduite. Le crédit déjà acquis reste valable jusqu'à la réussite suivante.
-Une pause sans tentative en échec ni en suspens conserve ainsi `loop_stall`
-seul, y compris pendant l'attente du sondage après la reprise (au plus une
-période de 0,5 s). La lecture affichée continue à vieillir en temps réel et
-peut être `UNKNOWN` pendant cette pause.
+tentative postérieure à la dernière réussite n'est en échec ou en suspens. Il
+déduit de même, sous la même condition, l'intervalle qui suit un tic laissant
+un arrêt en cours : la console ne lit pas pendant un arrêt (section 2.2).
+Aucune lecture ne part pendant une pause : la permission du dernier tic expire
+à l'instant prévu du tic suivant, si bien qu'une réussite suit normalement le
+tic précédent de moins d'une période de contrôle. Dès qu'une lecture commence,
+aucune nouvelle déduction n'est donc accordée avant une réussite. Une réussite
+remet la déduction à zéro ; seule la partie d'un intervalle après cette
+réussite peut être déduite. Le crédit déjà acquis reste valable jusqu'à la
+réussite suivante. Une pause sans tentative en échec ni en suspens conserve
+ainsi `loop_stall` seul ; la lecture reprend juste après le premier tic
+terminé après la reprise. La lecture affichée continue à vieillir en temps
+réel et peut être `UNKNOWN` pendant cette pause ou cet arrêt.
 
 La borne exacte est le premier tic autorisant les lectures où l'âge depuis la
 dernière réussite, moins la déduction acquise D, dépasse `STO_STALE_AFTER`
-(2 s). D est la somme des portions d'intervalles `loop_stall` excusées avant
-la première tentative non résolue, sans tentative pendant ces portions.
+(2 s). D est la somme des portions d'intervalles excusées (`loop_stall`, ou
+arrêt en cours) avant la première tentative non résolue, sans tentative
+pendant ces portions.
 Sans déduction antérieure, la détection arrive au plus tard 2 s plus
 un intervalle de tic après cette réussite, pauses comprises. Sinon, la borne
 depuis cette réussite est 2 s + D + un intervalle de tic. Dès la première
 tentative sans réussite suivante, D ne peut plus croître : la détection arrive
 au plus tard 2 s plus un intervalle de tic après le début de cette tentative,
-en comptant aussi les pauses dans cet intervalle. Une pause avec une lecture
-échouée ou en suspens peut donc ajouter `sto_unreadable / RAMP_DOWN` à
-`loop_stall`. Si le lien lui-même ne répond plus, les règles de perte de
+en comptant aussi les pauses et les arrêts dans cet intervalle. Une pause ou
+un arrêt avec une lecture échouée ou en suspens peut donc ajouter
+`sto_unreadable / RAMP_DOWN` au verdict en cours. Si le lien lui-même ne répond plus, les règles de perte de
 communication dominent. Aucune nouvelle constante de durée n'est introduite.
 
 Tout acquittement, même pour un autre verrou, est refusé tant que la lecture

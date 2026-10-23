@@ -1925,16 +1925,29 @@ l'absence de lecture valable au-delà de la durée admise verrouille
 demander un nouveau départ. Au repos observé immobile, l'état non prêt refuse
 seulement le départ, sans créer un verrou STO.
 
-Si seul le contrôle s'interrompt, la lecture affichée peut devenir `inconnue`
-car le sondage attend les tics terminés. `loop_stall` juge cet écart ; il reste
+La lecture part juste après un tic terminé, au plus une fois par 0,5 s, et
+seulement si elle peut finir avant le tic suivant : elle ne retarde pas les
+écritures de commande du tic. Si seul le contrôle s'interrompt, la lecture
+affichée peut devenir `inconnue` car le sondage attend les tics terminés :
+aucune lecture ne part pendant la pause. `loop_stall` juge cet écart ; il reste
 seul si aucune tentative postérieure à la dernière réussite n'est en échec ou
-en suspens. Le jeton du dernier tic peut encore permettre une lecture pendant
-la pause. Dès qu'une lecture commence, aucune nouvelle pause n'est déduite du
-budget STO avant une réussite. Une lecture échouée ou en suspens pendant la
-pause peut donc ajouter `sto_unreadable / ramp_down` à `loop_stall`.
+en suspens. Dès qu'une lecture commence, aucune nouvelle pause n'est déduite
+du budget STO avant une réussite. Une lecture échouée ou en suspens au début
+de la pause peut donc ajouter `sto_unreadable / ramp_down` à `loop_stall`.
 
-Une réussite remet le crédit de pause à zéro ; après la reprise, elle peut
-revenir dans la période de sondage de 0,5 s. Sans crédit antérieur, la perte
+Pendant un arrêt, la console ne lit pas la chaîne, pour que les écritures
+d'arrêt gardent le lien : fin de séance (STOP local ou depuis le site, verdict,
+E-STOP, limite) tant que la consigne descend ou que la marche est tenue, verdict
+qui baisse ou arrête la séance, descente vers une cible manuelle de 0. La carte
+passe alors à `inconnue` 2 s après la dernière lecture, sans panne, et redevient
+`prete` juste après la fin de l'arrêt ; ce temps n'est pas compté contre la
+lecture. Le matériel coupe le couple de toute façon si la chaîne s'ouvre. Une
+lecture déjà partie quand l'arrêt est demandé, restée sans réponse, peut
+retarder ses écritures du temps de cette seule lecture, comme un échange
+variateur en échec ([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)).
+
+Une réussite remet le crédit de pause à zéro ; après la reprise, elle revient
+juste après le premier tic terminé. Sans crédit antérieur, la perte
 de lecture est détectée au plus tard 2 s plus un intervalle de tic après la
 dernière réussite, pauses comprises. Avec un crédit D déjà acquis, la borne
 depuis cette réussite est 2 s + D + un intervalle de tic. D additionne les
