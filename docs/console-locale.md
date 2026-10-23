@@ -1938,9 +1938,13 @@ de la pause peut donc ajouter `sto_unreadable / ramp_down` à `loop_stall`.
 Pendant un arrêt, la console ne lit pas la chaîne, pour que les écritures
 d'arrêt gardent le lien : fin de séance (STOP local ou depuis le site, verdict,
 E-STOP, limite) tant que la consigne descend ou que la marche est tenue, verdict
-qui baisse ou arrête la séance, descente vers une cible manuelle de 0. La carte
-passe alors à `inconnue` 2 s après la dernière lecture, sans panne, et redevient
-`prete` juste après la fin de l'arrêt ; ce temps n'est pas compté contre la
+qui arrête la séance, descente vers une cible manuelle de 0, et E-STOP de la
+page pas encore pris par la boucle, même au repos. Un `freeze` ou un `reduce`
+n'est pas un arrêt : la séance continue de réguler, la lecture continue aussi,
+la carte reste `prete` et une chaîne ouverte pendant un `reduce` verrouille
+`sto_open / quick_stop` comme ailleurs. Pendant un arrêt, la carte passe à
+`inconnue` 2 s après la dernière lecture, sans panne, et redevient `prete`
+juste après la fin de l'arrêt ; ce temps n'est pas compté contre la
 lecture. Le matériel coupe le couple de toute façon si la chaîne s'ouvre. Une
 lecture déjà partie quand l'arrêt est demandé, restée sans réponse, peut
 retarder ses écritures du temps de cette seule lecture, comme un échange

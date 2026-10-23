@@ -160,22 +160,38 @@ gardent le lien. Un arrêt est en cours
 (`TrainingRuntime.stop_in_progress`) pendant une fin de séance tant que la
 consigne descend ou que l'ordre de marche est tenu (STOP à la console ou
 depuis le site, verdict d'arrêt, limite de la séance manuelle, dépassement de
-durée, immobilité, E-STOP), pendant un verdict qui baisse ou arrête une séance
-en cours (REDUCE, RAMP_DOWN, QUICK_STOP, GO_SILENT, ce dernier coupant déjà
-tout trafic), pendant la descente vers une cible manuelle de zéro, et tant
-que l'ordre de marche est tenu hors séance (variateur trouvé en marche). Il
-est demandé, en séance, quand une fin ou une cible de zéro attend dans la
-boîte aux lettres, ou quand un verdict de la caméra n'a pas encore atteint le
-runtime. FREEZE seul tient la vitesse et n'arrête rien. La fermeture de la
-console, `GO_SILENT` et la libération du lien coupaient déjà toute lecture.
+durée, immobilité, E-STOP), pendant un verdict qui arrête une séance en
+cours (RAMP_DOWN, QUICK_STOP, GO_SILENT, ce dernier coupant déjà tout
+trafic), pendant la descente vers une cible manuelle de zéro, et tant que
+l'ordre de marche est tenu hors séance (variateur trouvé en marche). Il est
+demandé, dans tous les états, même au repos, quand un E-STOP de l'écran
+attend le tic qui le prend (`ControlSurface.estop_pending`, de la demande
+jusqu'à ce tic, qui écrit le zéro) ; et, en séance, quand une fin ou une
+cible de zéro attend dans la boîte aux lettres, ou quand un verdict de la
+caméra n'a pas encore atteint le runtime. Le verrou d'arrêt d'urgence du
+superviseur n'entre pas dans la garde : il tient jusqu'à l'acquittement, qui
+exige lui-même une lecture `READY`. FREEZE et REDUCE ne sont pas des arrêts :
+la séance continue de réguler sous eux (FREEZE tient la vitesse, REDUCE la
+baisse), la lecture continue donc aussi et reste `READY`, un acquittement
+sous un REDUCE n'est pas refusé pour une lecture vieillie, et une chaîne qui
+s'ouvre sous un REDUCE verrouille `sto_open` au tic qui juge la lecture
+ouverte, comme hors REDUCE. La fermeture de la console, `GO_SILENT` et la
+libération du lien coupaient déjà toute lecture.
 Il n'existe pas de bouton d'arrêt dans la capsule ([securite.md](securite.md)) :
 un tel bouton entrera dans cette liste. Le temps retenu n'est pas compté contre
 la fraîcheur (section 5.3). Pendant l'arrêt, la carte passe à `inconnue` 2 s
 après la dernière lecture, puis la lecture reprend juste après la fin de
-l'arrêt. Tests :
-`tests/test_sto_scheduling.py` (sept catégories d'arrêt, variateur muet sur
+l'arrêt. Après un E-STOP au repos, la lecture reprend dès le tic qui l'a
+pris. Sur l'ATV320, l'écriture d'urgence verrouille la santé du lien jusqu'à
+ce que la console le rouvre au sondage de repos suivant : la première lecture
+qui suit peut donc échouer (carte `inconnue`), puis la carte redevient `prete`
+et l'acquittement reste possible. Tests :
+`tests/test_sto_scheduling.py` (six catégories d'arrêt, variateur muet sur
 5202 dès la demande, instants des écritures d'arrêt identiques à ceux d'une
-séance sans lecture STO) et `tests/test_sto_stop_guard.py`.
+séance sans lecture STO ; sous un REDUCE, lectures après les tics comme hors
+REDUCE, lecture `READY`, instants des écritures inchangés et acquittement
+accepté ; E-STOP de l'écran demandé au repos juste après un tic) et
+`tests/test_sto_stop_guard.py`.
 
 **Le résiduel, borné.** Une lecture partie dans la fenêtre mais restée sans
 réponse ne s'interrompt pas. Elle occupe le lien jusqu'à
