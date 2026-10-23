@@ -280,7 +280,7 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
   "machines.recordHeartbeat":
     "Machine HTTP heartbeat records operational state and health, without a rights change.",
   "machines.checkOfflineMachines":
-    "Cron detects offline machines and interrupts silent sessions, without confirming their end.",
+    "Cron detects offline machines, without reading or changing any session.",
   "notifications.continueMarkAllRead":
     "Scheduled continuation marks the recipient visible alerts read in bounded batches.",
   "notifications.markRead": "Recipient marks an alert read.",
@@ -315,6 +315,8 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Internal record summary action annotates the provisional summary with a recording problem.",
   "sessionReportsBackfill.backfillSummaries":
     "Internal one-off backfill schedules missing summaries without changing access rights.",
+  "training.interruptSilentSessions":
+    "Cron marks silent sessions interrupted in bounded batches, without confirming their end.",
   "training.sweepPendingSessions":
     "Cron fails pending launches that expired or no longer pass arming checks.",
   "training.updateLive":
