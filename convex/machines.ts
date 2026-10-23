@@ -27,7 +27,7 @@ import { refusal } from "./lib/errors";
 import { insertMachineKey } from "./lib/machineKeys";
 import { authenticateMachine, authenticatedMachine } from "./lib/machineAuth";
 import { scheduleAlert } from "./lib/notifications";
-import { interruptSilentSessions, resumeNamedSession } from "./training";
+import { resumeNamedSession } from "./training";
 import {
   currentMedicalParameters,
   medicalParametersStatus,
@@ -797,18 +797,19 @@ export const recordHeartbeat = internalMutation({
 });
 
 /**
- * Check for machines that have gone offline, then for training sessions the
- * server has had no news of for `SESSION_SILENCE_MS` (marked interrupted, end
- * unknown: `training.interruptSilentSessions`).
+ * Check for machines that have gone offline: no heartbeat for `LIVE_FRESH_MS`.
  * Called by cron job every minute. A machine marked offline is an alert to
  * its gestionnaires and its organisation's admins (`machine_offline`, ANH-90).
+ * No session is read or written here: the training sessions the server has
+ * had no news of are marked by their own job, in bounded batches
+ * (`training.interruptSilentSessions`): their number, their cost or a
+ * failure there never keeps a machine from being marked offline.
  */
 export const checkOfflineMachines = internalMutation({
   args: {},
   returns: v.object({
     checkedCount: v.number(),
     markedOfflineCount: v.number(),
-    interruptedSessionCount: v.number(),
   }),
   handler: async (ctx) => {
     const now = Date.now();
@@ -844,7 +845,6 @@ export const checkOfflineMachines = internalMutation({
     return {
       checkedCount: allActiveMachines.length,
       markedOfflineCount,
-      interruptedSessionCount: await interruptSilentSessions(ctx, now),
     };
   },
 });

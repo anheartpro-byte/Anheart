@@ -1310,6 +1310,7 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine que la revérification à l'armement accepterait, au format attendu par le Pi. Jamais un lancement expiré ni refusé, même avant le passage de la tâche planifiée, ni un lancement qui expire dans moins de `POLL_MARGIN_S` (45 s). |
 | `markTrainingStarted` | Revérifie d'abord le lancement ([ci-dessous](#revérification-à-larmement-anh-144)). Refusé : la séance passe `failed` avec `endCode`, la machine reste comme elle était, et la fonction rend `{armed: false, code, message}`, que la route répond **409**. Une confirmation répétée d'un lancement déjà refusé ainsi reçoit la même réponse. Accepté : `pending` → `active`, `startedAt` = maintenant, machine `in_session`, et `{armed: true}`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Refuse une séance d'une autre machine (`session_not_found`) ou qui n'attend plus son départ pour une autre raison (`session_not_pending` : annulée sur le site, déjà démarrée, terminée). |
 | `sweepPendingSessions` | Tâche planifiée toutes les minutes : passe `failed`, avec `endCode`, tout lancement `pending` (`kind: auto`) que la revérification refuse, expirés compris, et planifie pour chacun l'alerte `session_failed` (ANH-90). Rend `{failed}`. Les séances de l'ancien mode ne sont pas touchées. |
+| `interruptSilentSessions` | Tâche planifiée toutes les minutes (`interrupt-silent-sessions`), à part de `check-offline-machines` : passe `interrupted`, avec `interruptedAt`, toute séance `active` (`kind` renseigné) dont Convex n'a eu aucune nouvelle depuis `SESSION_SILENCE_MS`, jamais `completed` ni `failed`. Lit `INTERRUPT_BATCH` (50) séances au plus par transaction et planifie aussitôt la page suivante. Rend `{marked, done}` ([§7](#7-tâche-planifiée)). |
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
 | `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Planifie le résumé provisoire de la séance (`sessionReports.summarizeTelemetry`, ANH-89) et, pour une séance `failed`, l'alerte `session_failed` (ANH-90). |
 | `getTrainingStatus` | `{status, active, stopRequested}`. `active` vaut vrai pour une séance `active` **et** pour une séance `interrupted` : le Pi arrête sa séance sur `active: false`, et Convex ne demande jamais l'arrêt d'une séance faute d'en avoir des nouvelles. |
@@ -2657,15 +2658,17 @@ seuil du site) passe `offline`. Le site n'attend pas ce passage pour
 l'afficher hors ligne : il le fait à 90 s, sur `lastHeartbeat` et `serverNow`.
 Ce passage écrit l'alerte `machine_offline` de ses gestionnaires et des
 admins de son organisation (ANH-90, [§5](#notificationsts-alertes-aux-gestionnaires-anh-90)) ;
-une machine déjà `offline` n'en écrit pas d'autre.
+une machine déjà `offline` n'en écrit pas d'autre. Il ne lit ni n'écrit
+aucune séance, et rend `{checkedCount, markedOfflineCount}`.
 
 `purge-notifications`, **chaque jour** à 3 h 47 UTC : supprime les alertes
 inchangées depuis 90 jours (`notifications.purge`).
 
-**Séance sans nouvelles (ANH-216).** Le même passage marque `interrupted`,
-avec `interruptedAt`, toute séance d'entraînement `active` dont Convex n'a eu
-**aucune nouvelle depuis 10 min** (`SESSION_SILENCE_MS`, `lib/training.ts` ;
-`interruptSilentSessions`, `convex/training.ts`). Une nouvelle d'une séance,
+**Séance sans nouvelles (ANH-216, ANH-231).** `interrupt-silent-sessions`,
+**toutes les minutes** (`training.interruptSilentSessions`, appelée avec
+`{cursor: null}`), marque `interrupted`, avec `interruptedAt`, toute séance
+d'entraînement `active` dont Convex n'a eu **aucune nouvelle depuis 10 min**
+(`SESSION_SILENCE_MS`, `lib/training.ts`). Une nouvelle d'une séance,
 toujours datée par le serveur, c'est :
 
 - un heartbeat de **sa** machine qui la nomme (`activeSessionId`) : une
@@ -2677,10 +2680,24 @@ toujours datée par le serveur, c'est :
 - sa déclaration par la machine (`_creationTime` d'une séance locale) ou la
   confirmation de son départ (`startedAt` d'un lancement du site).
 
-Le passage n'est donc pas celui de la machine hors ligne : une machine qui
+Ce n'est donc pas le critère de la machine hors ligne : une machine qui
 répond mais ne nomme plus la séance (console redémarrée sur un enregistrement
 illisible) la voit marquée aussi, et une machine muette 2 min ne fait rien
 marquer. Les séances de l'ancien mode (sans `kind`) ne sont pas touchées.
+
+C'est une tâche à part, bornée. Une transaction lit au plus
+`INTERRUPT_BATCH` (50) séances actives, une page de l'index
+`by_status_and_organization`, marque celles qui se taisent (`interruptedAt`
+lu sur sa propre horloge, jamais sur celle d'une page précédente), et
+planifie aussitôt la page suivante avec son curseur (`runAfter(0)`) tant que
+la dernière n'est pas lue. Une séance qui se tait coûte les heartbeats de
+sa machine sur 10 min qui ne la nomment pas, jusqu'à 120 (un par 5 s au
+plus) : 50 séances restent loin des limites d'une transaction Convex. Le
+marquage ne tourne pas dans la transaction de `check-offline-machines` : avec
+beaucoup de séances orphelines, ces limites atteintes empêcheraient aussi de
+passer les machines hors ligne. Ni son coût ni son échec ne retiennent ce
+passage. Chaque page rend `{marked, done}` : combien de séances elle a
+marquées, et si c'était la dernière.
 
 `interrupted` n'est **pas une fin** : la séance peut tourner encore sur une
 machine dont le lien est coupé depuis 10 min. Rien n'est demandé à la
@@ -2689,8 +2706,7 @@ demande d'arrêt qu'elle lira si elle revient, le premier heartbeat qui la
 nomme la rend `active`, et la fin qu'elle envoie, même tard, la passe
 `completed` ou `failed` avec sa date et sa raison. Ses points et ses
 événements sont stockés comme avant (aucune borne de fin : `endedAt` est
-absent). Le passage rend `{checkedCount, markedOfflineCount,
-interruptedSessionCount}`.
+absent).
 
 **Avec les limites de débit (ANH-166).** Un heartbeat, un lot de points ou
 d'événements refusé en 429 n'écrit rien, il n'est donc pas une nouvelle.
@@ -3466,8 +3482,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/sessionReports.test.ts` | Le résumé de bout en bout (ANH-89) : provisoire à la fin, final après le dépôt des trois fichiers, jamais remplacé par le provisoire, idempotent, enregistrement illisible, séance non terminée ou de l'ancien mode ; et qui lit le résumé et l'historique d'un pratiquant. |
 | `convex/rateLimits.test.ts`, `convex/rateLimitsSource.test.ts` | La limitation de débit et la taille des corps (ANH-166) : chaque limite du contrat partagé sur sa route (sa réserve, puis 429 avec l'attente, puis de nouveau acceptée, une autre machine jamais retenue), rien d'écrit pour un heartbeat refusé, la limite avant le corps, la demande d'arrêt jamais limitée, **1000 heartbeats en 10 s** limités sans erreur (2 acceptés, 998 refusés 429), les tailles (16 Kio exactement accepté, un octet de plus refusé, octets et non caractères, `Content-Length` trop grand ou trop petit), 601 points refusés avant d'en lire un, le plus grand lot valide accepté ; par compte, 60 écritures puis `rate_limited`, un refus rend son jeton, 5 lancements par minute, l'arrêt jamais limité, et **chaque** mutation et action publique de la matrice refusée une fois les écritures de son acteur épuisées, l'arrêt excepté. Le second fichier remplace `contracts/machine-api.json` par un autre et vérifie que les limites et les tailles le suivent, et que le module refuse de se charger sans la limite ou la taille d'une route qu'il borne. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire d'autre que la dernière utilisation de la clé), clé vérifiée avant le contrat, rien d'écrit de la machine, de ses séances ni de ses heartbeats pour une requête refusée (la dernière utilisation de la clé, elle, est écrite pour toute requête dont la clé est acceptée, au plus une fois par minute : §6), `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
-| `convex/crons.test.ts` | Le cron `check-offline-machines` (celui des clés expirées est dans `convex/machineKeys.test.ts`). |
-| `convex/interruptedSessions.test.ts` | La séance sans nouvelles (ANH-216) : marquée `interrupted` 10 min après la dernière nouvelle et pas avant, une seule fois ; marquée aussi quand la machine répond sans la nommer ; un lancement daté de sa confirmation ; ni l'ancien mode, ni `pending`, ni une séance finie touchés. Jamais marquée tant que sa machine la nomme (trois heures) ni pendant que ses points ou ses événements arrivent ; toujours `active: true` pour la machine ; rendue `active` par le heartbeat qui la nomme ; arrêt demandé transmis ; fin tardive acceptée avec sa date, mesures tardives stockées. Une machine ne ranime ni ne couvre la séance d'une autre ; lecture et arrêt réservés à ceux d'une séance active, jamais à un compte du centre B. |
+| `convex/crons.test.ts` | Le cron `check-offline-machines` (celui des clés expirées est dans `convex/machineKeys.test.ts`), qui ne touche aucune séance, et `interrupt-silent-sessions`, une autre tâche, toutes les minutes elle aussi (ANH-231). |
+| `convex/interruptedSessions.test.ts` | La séance sans nouvelles (ANH-216) : marquée `interrupted` 10 min après la dernière nouvelle et pas avant, une seule fois ; marquée aussi quand la machine répond sans la nommer ; un lancement daté de sa confirmation ; ni l'ancien mode, ni `pending`, ni une séance finie touchés. Jamais marquée tant que sa machine la nomme (trois heures) ni pendant que ses points ou ses événements arrivent ; toujours `active: true` pour la machine ; rendue `active` par le heartbeat qui la nomme ; arrêt demandé transmis ; fin tardive acceptée avec sa date, mesures tardives stockées. Une machine ne ranime ni ne couvre la séance d'une autre ; lecture et arrêt réservés à ceux d'une séance active, jamais à un compte du centre B. Sous les limites d'une transaction Convex (`transactionLimits`), avec 507 séances muettes dont les heartbeats dépassent ce qu'une transaction peut lire (ANH-231, EX-3) : les machines passent hors ligne avec leur alerte sans qu'aucune séance change ; la tâche marque `INTERRUPT_BATCH` séances au plus par transaction, chaque page à sa propre heure, la suivante planifiée aussitôt, jusqu'à la dernière, et s'arrête sur une page vide ; mêlées aux muettes sur toutes les pages, les séances nommées par leur machine, ou avec un point, un événement, un départ confirmé ou une déclaration récents restent actives. Lien coupé 11 min pendant une séance (EX-5) : un lancement est refusé sur sa machine (`machine_offline`) et pour son pratiquant sur une autre (`rider_busy`), encore après le heartbeat qui nomme la séance (`machine_busy`, `rider_busy`), et accepté quand la machine revient sans la nommer. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée, membre de deux organisations compté dans chacune), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |

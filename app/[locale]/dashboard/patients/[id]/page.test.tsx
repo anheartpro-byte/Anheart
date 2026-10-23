@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { screen, within } from "@testing-library/react";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import { enUS, fr as frLocale } from "date-fns/locale";
 import type { FunctionReturnType } from "convex/server";
 import { describe, expect, it, vi } from "vitest";
@@ -302,6 +302,36 @@ describe("patient page: the sessions of the patient", () => {
     expect(rowOf("Machine A").getAllByRole("cell")[3].textContent).toBe(
       "10 minutes",
     );
+  });
+
+  // ANH-231: as on the Sessions page, an interrupted session has had no news
+  // for a while. Its end is unknown: no time since its start is counted.
+  it("gives an interrupted session no length and no time since its start, and the others theirs", async () => {
+    // A day after these sessions started.
+    const later = NOW + 86_400_000;
+    vi.setSystemTime(later);
+    answer(api.sessions.listSessions, [
+      listed("A", { status: "interrupted", endedAt: undefined }),
+      listed("B"),
+      listed("C", {
+        status: "active",
+        startedAt: later - 600_000,
+        endedAt: undefined,
+      }),
+    ]);
+    await open("gestionnaire");
+
+    const length = (machine: string) =>
+      rowOf(machine).getAllByRole("cell")[3].textContent;
+    const since = formatDistanceToNow(NOW - 7_200_000, { locale: frLocale });
+    expect(since).toBe("1 jour");
+    expect(
+      rowOf("Machine A").getByText(fr.sessions.status.interrupted),
+    ).toBeTruthy();
+    expect(length("Machine A")).toBe(fr.sessions.unknownEnd);
+    expect(rowOf("Machine A").queryByText(since)).toBeNull();
+    expect(length("Machine B")).toBe("30m 0s");
+    expect(length("Machine C")).toBe("10 minutes");
   });
 
   it("leads to the live view of an active session and to the report of a completed one, and nowhere for the others", async () => {

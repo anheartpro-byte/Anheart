@@ -17,15 +17,27 @@ crons.interval(
 
 /**
  * Check for offline machines every minute
- * Machines are marked offline if no heartbeat received in 90 seconds, and
- * training sessions the server has had no news of for 10 minutes are marked
- * interrupted, end unknown (`training.interruptSilentSessions`)
+ * Machines are marked offline if no heartbeat received in 90 seconds
  */
 crons.interval(
   "check-offline-machines",
   { minutes: 1 },
   internal.machines.checkOfflineMachines,
   {},
+);
+
+/**
+ * Every minute: the training sessions the server has had no news of for 10
+ * minutes are marked interrupted, end unknown, a bounded batch per
+ * transaction (`training.interruptSilentSessions`, ANH-216, ANH-231). Its own
+ * job: however many sessions are silent, the machines above are still marked
+ * offline.
+ */
+crons.interval(
+  "interrupt-silent-sessions",
+  { minutes: 1 },
+  internal.training.interruptSilentSessions,
+  { cursor: null },
 );
 
 /**
