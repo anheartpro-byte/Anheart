@@ -2172,11 +2172,29 @@ async function heardOfSince(
 }
 
 /**
+ * How many active sessions one transaction of `interruptSilentSessions` reads.
+ * A session whose first news, last point and last event are older than
+ * `SESSION_SILENCE_MS` costs the heartbeats its machine sent over that time,
+ * when none of them names it: at most about 120 in 10 min, at the one per 5 s
+ * the machine API allows (`contracts/machine-api.json`). Fifty sessions read
+ * some 6,000 heartbeats and 150 index ranges at worst, however many sessions
+ * are silent: a fraction of the 32,000 documents and 4,096 index ranges one
+ * Convex transaction may read (convex/interruptedSessions.test.ts runs the
+ * job under these limits).
+ */
+export const INTERRUPT_BATCH = 50;
+
+/**
  * Mark `interrupted` every active training session the server has heard
  * nothing of for `SESSION_SILENCE_MS` (`heardOfSince`): its console stopped
  * before sending its end, its machine is off, or its link has been down that
- * long. Run once a minute by the job of `machines.checkOfflineMachines`.
- * Returns how many it marked.
+ * long. Run once a minute from the first active session (`cursor: null`) by
+ * the job `interrupt-silent-sessions`. One transaction reads
+ * `INTERRUPT_BATCH` active sessions at most, dates on its own clock what it
+ * marks, and schedules the next page at once. Its own job, apart from
+ * `machines.checkOfflineMachines`: however many sessions are silent, its cost
+ * or its failure never keeps a machine from being marked offline. Returns how
+ * many sessions this page marked, and whether it was the last page.
  *
  * Never `completed` nor `failed`: its end is unknown, and it may still be
  * running on a machine that cannot reach the server. Nothing is asked of the
@@ -2186,27 +2204,36 @@ async function heardOfSince(
  * closes it. Sessions of the retired recording mode (no `kind`) are history,
  * left as they are.
  */
-export async function interruptSilentSessions(
-  ctx: MutationCtx,
-  now: number,
-): Promise<number> {
-  const since = now - SESSION_SILENCE_MS;
-  const active = await ctx.db
-    .query("sessions")
-    .withIndex("by_status_and_organization", (q) => q.eq("status", "active"))
-    .collect();
-  let marked = 0;
-  for (const session of active) {
-    if (session.kind === undefined) continue;
-    if (await heardOfSince(ctx, session, since)) continue;
-    await ctx.db.patch(session._id, {
-      status: "interrupted",
-      interruptedAt: now,
-    });
-    marked++;
-  }
-  return marked;
-}
+export const interruptSilentSessions = internalMutation({
+  args: { cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ marked: v.number(), done: v.boolean() }),
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const since = now - SESSION_SILENCE_MS;
+    const page = await ctx.db
+      .query("sessions")
+      .withIndex("by_status_and_organization", (q) => q.eq("status", "active"))
+      .paginate({ cursor: args.cursor, numItems: INTERRUPT_BATCH });
+    let marked = 0;
+    for (const session of page.page) {
+      if (session.kind === undefined) continue;
+      if (await heardOfSince(ctx, session, since)) continue;
+      await ctx.db.patch(session._id, {
+        status: "interrupted",
+        interruptedAt: now,
+      });
+      marked++;
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.training.interruptSilentSessions,
+        { cursor: page.continueCursor },
+      );
+    }
+    return { marked, done: page.isDone };
+  },
+});
 
 /**
  * A heartbeat of `machineId` names `sessionId` as the session it runs: a

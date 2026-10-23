@@ -641,7 +641,7 @@ export default defineSchema({
     .index("by_organization", ["organizationId"])
     // The active or pending sessions of one organisation, or of all of them:
     // what the dashboard counts (`dashboard.counters`), and the active ones
-    // the job of `interruptSilentSessions` looks at.
+    // `training.interruptSilentSessions` reads, a bounded page at a time.
     .index("by_status_and_organization", ["status", "organizationId"])
     // The lists of sessions (`convex/sessions.ts`), most recent start first.
     .index("by_started", ["startedAt"])
