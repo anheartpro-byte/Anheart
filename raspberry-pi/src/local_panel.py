@@ -196,7 +196,7 @@ from src.local_config import (
     retired_keys,
 )
 from src.log_format import json_handler
-from src.motor.atv320 import ATV320Drive, serial_master
+from src.motor.atv320 import ATV320Drive, AuxiliaryRegisterReads, serial_master
 from src.motor.drive import DriveBackend, LogicInput, RegisterMap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.motor.sto import (
@@ -1773,7 +1773,13 @@ def build_presence(
 def build_sto(
     config: LocalConfig, clock: Clock, drive: DriveBackend, chain: SimulatedStoChain | None
 ) -> StoSource:
-    """Compose the observation source around the inner, unrecorded drive."""
+    """Compose the observation source around the inner, unrecorded drive.
+
+    ``drive_input`` reads through the runtime's own drive instance, never a
+    second master on the cable. The ATV320 driver's reads go through
+    :class:`~src.motor.atv320.AuxiliaryRegisterReads`: same lock and link
+    health, outside the exchange log that feeds the session record.
+    """
     match config.sto_source:
         case StoSourceKind.NONE:
             return UnconfiguredStoSource()
@@ -1784,12 +1790,17 @@ def build_sto(
         case StoSourceKind.DRIVE_INPUT:
             if config.sto_drive_input is None:
                 raise ValueError("drive_input needs STO_DRIVE_INPUT")
-            if not isinstance(drive, StoRegisterPort):
-                raise TypeError("drive_input needs a register-reading drive")
             registers = RegisterMap() if config.drive_link is None else config.drive_link.registers
+            port: StoRegisterPort
+            if isinstance(drive, ATV320Drive):
+                port = AuxiliaryRegisterReads(drive)
+            elif isinstance(drive, StoRegisterPort):
+                port = drive
+            else:
+                raise TypeError("drive_input needs a register-reading drive")
             return DriveInputStoSource(
                 clock=clock,
-                drive=drive,
+                drive=port,
                 address=registers.logic_inputs,
                 input_=config.sto_drive_input,
             )

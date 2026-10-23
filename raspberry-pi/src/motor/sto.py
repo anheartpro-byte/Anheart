@@ -173,6 +173,11 @@ class DriveInputStoSource:
             detail="never read",
         )
 
+    @property
+    def port(self) -> StoRegisterPort:
+        """The drive transport every read goes through."""
+        return self._drive
+
     def guard_polling(self, permitted: Callable[[], bool]) -> None:
         """Bind the console's silence/release guard at composition, before polling starts."""
         self._poll_permitted = permitted

@@ -1137,6 +1137,26 @@ class ATV320Drive:
                 return Err(refusal)
             return await self._read(address)
 
+    async def read_auxiliary_register(
+        self, address: RegisterAddress
+    ) -> Result[RawRegister, DriveError]:
+        """:meth:`read_register`, for an observation polled between control ticks.
+
+        The same transaction on the same link: single flight under the same
+        lock, the same executor, the same refusal once the link is latched,
+        and the same failure accounting, so it still counts in the link's
+        health. Only its exchange is not appended to the exchange log: that
+        log feeds the session record, which a replay reproduces tick by tick,
+        and an auxiliary read is no part of the control path it replays. The
+        SDK's own transport calls, appended only for a log that keeps them,
+        still carry its bytes: a diagnostic of the wire sees every frame.
+        """
+        async with self._lock:
+            refusal = self._refusal(stopping=False)
+            if refusal is not None:
+                return Err(refusal)
+            return await self._transact(lambda: self._blocking_read(address, observed=False))
+
     async def read_limits(self) -> Result[DriveLimits, DriveError]:
         """Read tFr, HSP, LSP, ACC and dEC, parsed. Five READS; nothing is written.
 
@@ -1856,7 +1876,9 @@ class ATV320Drive:
         except Exception:
             log.refuse()
 
-    def _blocking_read(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
+    def _blocking_read(
+        self, address: RegisterAddress, *, observed: bool = True
+    ) -> Result[RawRegister, DriveError]:
         started = self._clock.monotonic()
         observed_started = started
         reply: object = None
@@ -1875,14 +1897,15 @@ class ATV320Drive:
             result: Result[RawRegister, DriveError] = Err(self._classify(exc, started))
         else:
             result = self._interpret_read(reply, address, started)
-        self._observe_exchange(
-            RegisterRequest(
-                at=observed_started, kind=ExchangeKind.READ, register=address, value=None
-            ),
-            result,
-            reply=reply,
-            raised=raised,
-        )
+        if observed:
+            self._observe_exchange(
+                RegisterRequest(
+                    at=observed_started, kind=ExchangeKind.READ, register=address, value=None
+                ),
+                result,
+                reply=reply,
+                raised=raised,
+            )
         return result
 
     def _blocking_write(
@@ -2160,3 +2183,27 @@ class ATV320Drive:
         return BadResponse(
             detail=f"unexpected {type(exc).__name__} from the Modbus transport: {exc}"
         )
+
+
+@final
+class AuxiliaryRegisterReads:
+    """One driver's reads through :meth:`ATV320Drive.read_auxiliary_register`.
+
+    Given to an observation that polls between control ticks (the STO relay
+    feedback): every read goes through this one driver instance, its lock, its
+    request queue and its link, never through a second master on the cable.
+    """
+
+    __slots__ = ("_drive",)
+
+    def __init__(self, drive: ATV320Drive) -> None:
+        self._drive: ATV320Drive = drive
+
+    @property
+    def drive(self) -> ATV320Drive:
+        """The one driver every read goes through."""
+        return self._drive
+
+    async def read_register(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
+        """Read one register through the driver, outside its exchange log."""
+        return await self._drive.read_auxiliary_register(address)
