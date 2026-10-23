@@ -1200,6 +1200,7 @@ class Session:
             final_observed_t=elapsed(self._start_at, self._ticker.clock.monotonic()),
             raw=tuple(self._capture.blocks),
             sensors=tuple(self._capture.sensors),
+            counters=self._counters,
         )
         return RunResult(
             scenario=self._scenario,

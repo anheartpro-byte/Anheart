@@ -167,6 +167,21 @@ def test_final_observation_loses_only_its_two_free_text_fields() -> None:
     assert source.end_observation == observation
 
 
+def test_final_observation_keeps_the_runtimes_zone_counters() -> None:
+    observation = EndObservation(
+        t=1212.0,
+        stop_reason="Mme Martin FC 192 bpm",
+        zone_in_s=Seconds(812.4),
+        zone_above_s=Seconds(37.2),
+        zone_below_s=Seconds(306.8),
+    )
+    anon = anonymous_manifest(replace(manifest(), end_observation=observation), "opaque_03")
+    kept = anon.end_observation
+    assert kept is not None
+    assert kept.stop_reason is None
+    assert (kept.zone_in_s, kept.zone_above_s, kept.zone_below_s) == (812.4, 37.2, 306.8)
+
+
 @pytest.mark.parametrize(
     "content",
     [
