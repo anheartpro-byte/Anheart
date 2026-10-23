@@ -2209,6 +2209,21 @@ reopens it, which no read timeout covers either (on an ``ftdi://`` port it
 includes :func:`~src.motor.ftdi_link.settle`). Until then the tick's own
 writes wait for the driver's lock, exactly as after a failed exchange of the
 tick itself, and the failure counts in the link's health.
+
+The worst case in total, for the writes that wait: the rest of the read, up to
+:func:`transaction_worst_case` (0.683 s on the default line), plus the reopen,
+whose :func:`~src.motor.ftdi_link.settle` is bounded by
+:data:`~src.motor.ftdi_link.SETTLE_BUDGET` (1.0 s) on an ``ftdi://`` port:
+about 1.7 s. An OS serial device has no settle. The OS call that opens the
+device is bounded by no timeout, as after any failed exchange. These are
+bounds; what docs/raspberry-pi.md reports as measured is not one.
+
+That is the one case in which an STO read can delay a stop write: a read
+already in flight, left unanswered, when the stop is asked for. The console
+starts no read while a stop is asked for or under way, so a stop meets at most
+that one read; and reads start at most once per STO poll period, never two in
+flight, so this happens at most once per period. It is the same delay as a
+failed transaction of the tick itself.
 """
 
 

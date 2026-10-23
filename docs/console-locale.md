@@ -1947,8 +1947,9 @@ la carte reste `prete` et une chaîne ouverte pendant un `reduce` verrouille
 juste après la fin de l'arrêt ; ce temps n'est pas compté contre la
 lecture. Le matériel coupe le couple de toute façon si la chaîne s'ouvre. Une
 lecture déjà partie quand l'arrêt est demandé, restée sans réponse, peut
-retarder ses écritures du temps de cette seule lecture, comme un échange
-variateur en échec ([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)).
+retarder ses écritures du reste de cette seule lecture et de la réouverture du
+port, au pire environ 1,7 s sur `ftdi://`, comme un échange variateur en échec
+([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)).
 
 Une réussite remet le crédit de pause à zéro ; après la reprise, elle revient
 juste après le premier tic terminé. Sans crédit antérieur, la perte

@@ -199,13 +199,25 @@ réponse ne s'interrompt pas. Elle occupe le lien jusqu'à
 de contrôle), puis pymodbus 3.7.4 ferme le port, que la transaction suivante
 rouvre : sur `ftdi://`, la réouverture inclut `settle` (0,25 à 1,0 s). Les
 écritures du tic suivant attendent d'autant, comme après un échange en échec
-du tic lui-même, et l'échec compte dans la santé du lien. Mesuré sur le chemin
+du tic lui-même, et l'échec compte dans la santé du lien. **Pire cas total**
+pour ces écritures : le reste de la lecture, jusqu'à `transaction_worst_case`
+(0,683 s), plus la réouverture, dont `settle` est borné par `SETTLE_BUDGET`
+(1,0 s) sur `ftdi://`, soit **environ 1,7 s** ; sur un port série du système,
+la réouverture n'a pas de `settle`. L'appel système qui ouvre le périphérique
+n'est borné par aucun délai, comme après tout échange en échec. Ce sont des
+bornes ; la mesure qui suit n'en est pas une. Mesuré sur le chemin
 pymodbus avec une puce simulée et le délai série par défaut : lecture sans
 réponse 0,21 s, puis keepalive suivant 0,26 s, réouverture comprise. Une telle
 attente peut lever `loop_stall`. Elle survient au plus une fois par
-`STO_POLL_PERIOD`, jamais avec deux lectures en vol ; un arrêt demandé pendant
-une lecture déjà en vol n'attend que la fin de celle-ci, puis aucune lecture
-ne part avant la fin de l'arrêt (tests du faux bus). Un délai de réponse
+`STO_POLL_PERIOD`, jamais avec deux lectures en vol.
+
+**Le seul écart à l'invariant « une lecture STO ne retarde jamais une écriture
+d'arrêt »** est ce cas exact : une lecture STO déjà en vol, restée sans
+réponse, au moment où l'arrêt est demandé. Il survient au plus une fois par
+`STO_POLL_PERIOD`, et une seule fois par arrêt : l'arrêt n'attend que la fin
+de cette lecture et la réouverture du port (pire cas ci-dessus), puis aucune
+lecture ne part avant la fin de l'arrêt (tests du faux bus). Il est de même
+nature que l'échec d'une transaction du tic lui-même. Un délai de réponse
 propre à la lecture STO, borné pour finir avant le tic suivant, n'est pas
 réalisable sans contournement : pymodbus 3.7.4 n'a qu'un délai
 (`comm_params.timeout_connect`) pour toutes les transactions et ferme le port
