@@ -25,7 +25,7 @@ import pytest
 
 from src.clock import ManualClock
 from src.cloud_sync import DASHBOARD_OPERATOR
-from src.local_panel import DriveSide, LocalPanel, build_panel
+from src.local_panel import CONTROL_PERIOD, DriveSide, LocalPanel, build_panel
 from src.motor.atv320 import ATV320Drive, transaction_worst_case
 from src.motor.drive import (
     LOGIC_INPUTS_LOGICAL,
@@ -50,6 +50,7 @@ from src.result import Err, Ok, Result
 from src.training import runtime as runtime_module
 from src.training.preflight import StoNotReady
 from src.training.runtime import RULE_STO_UNREADABLE, RuntimeState
+from src.training.safety import RULE_HR_RATE, AcknowledgeRefusal, SafetyAcknowledgement
 from src.training.types import Occupancy, SafetyAction, SafetyVerdict, TelemetrySnapshot
 from src.units import Monotonic, MotorRpm, OutputRpm, RawRegister, RegisterAddress, Seconds
 from tests.test_atv320 import SETTINGS, FakeBus, io_exception
@@ -755,3 +756,126 @@ def test_no_read_starts_once_a_stop_is_asked_for_and_stop_writes_keep_their_inst
     assert reading.stopped == silent.stopped
     assert reading.commands
     assert reading.commands == silent.commands
+
+
+# =========================================================================
+# REDUCE is no stop: the session regulates on under it, and so do the reads
+# =========================================================================
+
+CONTROL_STEP: Final[Callable[[LocalPanel], Awaitable[TelemetrySnapshot]]] = LocalPanel.control_step
+"""The console's own tick, wrapped afresh by each run below."""
+
+
+@dataclass(frozen=True, slots=True)
+class Tick:
+    """One completed tick, and what the polling task finds once it is over."""
+
+    began: float
+    ended: float
+    state: RuntimeState
+    action: SafetyAction
+    reading: StoState
+
+
+@dataclass(frozen=True, slots=True)
+class Reduced:
+    """A bench session under a standing REDUCE: its ticks, command writes and STO reads."""
+
+    ticks: tuple[Tick, ...]
+    measured: Measured
+    reads: tuple[tuple[float, float], ...]
+    """When each STO read held the link, from its first frame to its answer."""
+
+    def window(self) -> tuple[Tick, ...]:
+        """The ticks the REDUCE stood over, the session running."""
+        return tuple(
+            tick
+            for tick in self.ticks
+            if tick.state is RuntimeState.RUNNING and tick.action is SafetyAction.REDUCE
+        )
+
+
+def under_reduce(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variant: str,
+    env: Mapping[str, str],
+    events: tuple[tuple[float, Event], ...] = (),
+) -> Reduced:
+    """The session, then a REDUCE at ``ASKED`` that walks the bench setpoint down for 3 s."""
+    ticks: list[Tick] = []
+
+    async def noted_step(panel: LocalPanel) -> TelemetrySnapshot:
+        began = now()
+        snapshot = await CONTROL_STEP(panel)
+        ended = now()
+        runtime = panel.runtime
+        state = panel.sto.latest(Monotonic(ended)).state
+        ticks.append(Tick(began, ended, runtime.state, runtime.standing_action, state))
+        return snapshot
+
+    monkeypatch.setattr(LocalPanel, "control_step", noted_step)
+    clock = ManualClock(Monotonic(10.0))
+    scenario = (*SESSION, (ASKED, verdict(RULE_HR_RATE, SafetyAction.REDUCE)), *events)
+    if variant == "simulated":
+        panel, link = latent_panel(tmp_path, clock, env)
+        run_virtual(clock, console(panel, scenario, 13.95))
+        measured = from_link(link, panel)
+        reads = measured.feedback
+    else:
+        panel, bus = bus_panel(tmp_path, clock, env)
+        run_virtual(clock, console(panel, scenario, 13.95))
+        measured = from_bus(bus, panel)
+        reads = tuple((began, began + LATENCY) for began, _ in measured.feedback)
+    return Reduced(tuple(ticks), measured, reads)
+
+
+@pytest.mark.parametrize("variant", ["simulated", "fake_bus"])
+def test_reads_go_on_under_a_reduce_and_leave_every_command_write_at_its_instant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: str
+) -> None:
+    """REDUCE lowers the speed and the session regulates on: it withholds no read."""
+    reading = under_reduce(tmp_path / "reading", monkeypatch, variant, STO_ENV)
+    silent = under_reduce(tmp_path / "silent", monkeypatch, variant, NO_READ_ENV)
+    window = reading.window()
+    assert window, "the REDUCE never stood over the running session"
+    first, last = window[0].ended, window[-1].ended
+    assert last - first > STO_STALE_AFTER  # a reading withheld that long would be UNKNOWN
+    assert [tick.reading for tick in window] == [StoState.READY] * len(window)
+    reads = [(began, ended) for began, ended in reading.reads if first <= began <= last]
+    assert len(reads) >= 5
+    # A read follows every third tick or so, all through the REDUCE ...
+    starts = [first, *(began for began, _ in reads), last]
+    for earlier, later in itertools.pairwise(starts):
+        assert later - earlier <= STO_POLL_PERIOD + CONTROL_PERIOD + 1e-9
+    # ... each in the gap after a completed tick, over before the next one begins.
+    for began, ended in reads:
+        assert not any(tick.began < ended and began < tick.ended for tick in reading.ticks)
+    assert len(reading.measured.commands) >= 60
+    assert reading.measured.commands == silent.measured.commands
+    assert reading.measured.waited == ()
+
+
+@pytest.mark.parametrize("variant", ["simulated", "fake_bus"])
+def test_an_acknowledgement_under_a_reduce_is_not_refused_for_a_stale_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: str
+) -> None:
+    answers: list[tuple[StoReading, Result[SafetyAcknowledgement, AcknowledgeRefusal]]] = []
+
+    def acknowledge(panel: LocalPanel) -> None:
+        assert panel.runtime.state is RuntimeState.RUNNING
+        assert panel.runtime.standing_action is SafetyAction.REDUCE
+        reading = panel.sto.latest(Monotonic(now()))
+        answers.append((reading, panel.surface.acknowledge(OPERATOR)))
+
+    # Past STO_STALE_AFTER since the REDUCE: a reading withheld since then would be UNKNOWN.
+    late = ASKED + STO_STALE_AFTER + 0.6
+    run = under_reduce(tmp_path, monkeypatch, variant, STO_ENV, ((late, acknowledge),))
+    ((reading, acknowledged),) = answers
+    assert reading.state is StoState.READY
+    assert isinstance(acknowledged, Ok)
+    assert acknowledged.value.cleared == (RULE_HR_RATE,)
+    after = [tick for tick in run.ticks if tick.began > 10.0 + late]
+    assert after
+    assert after[0].action is SafetyAction.NONE
+    assert after[0].state is RuntimeState.RUNNING

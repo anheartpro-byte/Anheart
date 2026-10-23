@@ -23,7 +23,13 @@ from src.motor.sto import DriveInputStoSource, StoReading, StoSourceKind, StoSta
 from src.presence.monitor import RampDown
 from src.presence.simulated import Dropout, SimulatedCamera
 from src.result import Ok
-from src.training.runtime import RULE_STO_UNREADABLE, RuntimeState, TrainingRuntime
+from src.training.runtime import (
+    RULE_STO_OPEN,
+    RULE_STO_UNREADABLE,
+    RuntimeState,
+    TrainingRuntime,
+)
+from src.training.safety import RULE_HR_RATE
 from src.training.types import Occupancy, Phase, SafetyAction
 from src.units import Monotonic, MotorRpm, OutputRpm, RawRegister, Seconds
 from tests.test_atv320 import FakeBus, build_drive
@@ -264,6 +270,58 @@ async def test_a_camera_verdict_not_yet_applied_withholds_the_next_read(tmp_path
             break
         assert source.attempts == attempts + 1
     assert withheld
+    await panel.close()
+
+
+# =========================================================================
+# REDUCE is no stop: a chain that opens under it is read, and latches
+# =========================================================================
+
+
+@pytest.mark.parametrize("reduce", [False, True], ids=["no_verdict", "under_reduce"])
+async def test_a_chain_opening_under_a_reduce_latches_sto_open_in_the_tick_that_judges_it(
+    tmp_path: Path, reduce: bool
+) -> None:
+    rig, _ = make_rig(tmp_path, env=STO_ENV)
+    panel = rig.panel
+    source = panel.sto
+    chain = rig.simulator.sto_chain
+    assert isinstance(source, DriveInputStoSource)
+    assert chain is not None
+    await panel.control_step()
+    await source.poll()
+    assert isinstance(panel.runtime.confirm_estop_wiring(OPERATOR), Ok)
+    assert isinstance(
+        await panel.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276)), Ok
+    )
+    assert isinstance(panel.runtime.set_manual_target(OutputRpm(3)), Ok)
+    for _ in range(20):
+        rig.clock.advance(Seconds(0.2))
+        await panel.control_step()
+        await source.poll()
+    if reduce:
+        panel.runtime.trip_from_thread(RULE_HR_RATE, SafetyAction.REDUCE, "injected")
+    rig.clock.advance(Seconds(0.2))
+    await panel.control_step()  # takes the REDUCE, if any, and permits one read
+    standing = SafetyAction.REDUCE if reduce else SafetyAction.NONE
+    assert panel.runtime.state is RuntimeState.RUNNING
+    assert panel.runtime.standing_action is standing
+    assert panel.runtime.applied_rpm > 0
+    chain.open(rig.clock.monotonic())  # the mushroom, just after the tick
+    attempts = source.attempts
+    await source.poll()
+    assert source.attempts == attempts + 1
+    assert source.latest(rig.clock.monotonic()).state is StoState.OPEN
+    rig.clock.advance(Seconds(0.2))
+    await panel.control_step()  # the tick that judges the open reading
+    verdict = panel.runtime.standing
+    assert verdict is not None
+    assert (verdict.rule, verdict.action, verdict.latched) == (
+        RULE_STO_OPEN,
+        SafetyAction.QUICK_STOP,
+        True,
+    )
+    assert panel.runtime.applied_rpm == 0
     await panel.close()
 
 
