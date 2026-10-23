@@ -259,6 +259,8 @@ l'emporte sur `.env`.**
 | `UI_TLS_CERT`, `UI_TLS_KEY` | obligatoires si `UI_HOST` n'est pas `127.0.0.1` | deux chemins : le certificat de la console et sa clé privée | hors boucle locale, la page n'est servie qu'en TLS (`https://`) |
 | `UI_TLS_NAMES` | non | adresses et noms séparés par des virgules | les adresses auxquelles une tablette ouvre la console, celles du certificat |
 | `SENSORS` | non (défaut `ECG`) | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` | capteurs affichés ; `ECG` toujours présent |
+| `STO_SOURCE` | non (défaut `sim_ready` avec `sim`, `none` avec `serial`) | `none`, `sim_ready`, `sim_open`, `drive_input` | lecture de la chaîne STO. `sim_*` est refusé avec `serial`. Avec `none`, tout départ et tout acquittement sont refusés |
+| `STO_DRIVE_INPUT` | avec `drive_input` seulement, sans défaut | `LI1` à `LI6` | entrée du variateur qui reçoit le retour du relais de sécurité |
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
 | `PROGRAMS_ENABLED` | non (défaut `false`) | `true` / `false` | autorise les séances programmées (jalon M5) |
 | `OCCUPANCY_OCCUPIED_ENABLED` | non (défaut `false`) | `true` / `false` | autorise « personne à bord » (jalon M6, accords ingénierie et médical requis) |
@@ -309,6 +311,12 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
 
    Dans ce fichier, une ligne est `CLÉ=valeur` et rien d'autre : ni guillemets,
    ni commentaire en fin de ligne (ils feraient partie de la valeur).
+
+   Sans `STO_SOURCE`, la console d'un variateur réel démarre avec la chaîne STO
+   `non configuree (none)` et refuse tout départ et tout acquittement : c'est voulu,
+   aucune exemption banc n'existe. Il faut d'abord câbler la chaîne de sécurité,
+   retirer le pont STO, puis régler `STO_SOURCE=drive_input` et `STO_DRIVE_INPUT`
+   avec l'entrée câblée ([console-locale.md, carte « Chaine STO »](../console-locale.md#carte--chaine-sto-)).
 
 3. Redémarrer la console, **au repos** : `sudo systemctl restart anheart`.
 4. Lire la ligne de résumé, `journalctl -u anheart -n 20` : elle doit dire
@@ -1317,7 +1325,10 @@ le bras est couplé avec la capsule **vide**.
 Réglage nécessaire : 27 tr/min au bras = environ 1345 tr/min moteur. Avec le plafond
 par défaut (`MOTOR_MAX_RPM=300`, environ 6 tr/min), c'est impossible. Il faut
 `MOTOR_MAX_RPM=1380` (le maximum, plaque signalétique) et relancer la console. Sur la
-vraie machine, montez ce plafond **par paliers délibérés**, pas d'un coup.
+vraie machine, montez ce plafond **par paliers délibérés**, pas d'un coup. Sur la
+vraie machine, cette séance n'est possible qu'une fois la chaîne STO câblée et lue
+`prete` : tant que le pont STO est en place et `STO_SOURCE` vaut `none`, le départ
+est refusé (§3.4).
 
 1. Faites l'attestation (§13.1).
 2. Cliquez **Tableau de bord**.

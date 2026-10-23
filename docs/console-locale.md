@@ -1886,7 +1886,19 @@ Sans attestation, tout démarrage (manuel ou programmé) répond 412 :
 | `non configuree` | `STO_SOURCE=none` ; configurer la source, ce n'est pas une panne |
 
 La source figure entre parenthèses : `none`, `sim_ready`, `sim_open`, `drive_input`.
-`Derniere lecture reussie` donne l'âge en secondes, ou `aucune`. Une lecture ancienne
+`Derniere lecture reussie` donne l'âge en secondes, ou `aucune`.
+
+**Sur le banc réel, aucun départ avant le câblage, et c'est voulu.** Avec
+`MOTOR_BACKEND=serial`, `STO_SOURCE` vaut `none` par défaut et `sim_*` est refusé
+au démarrage : la console démarre, la carte affiche `non configuree (none)`, et
+tout départ comme tout acquittement de verdict est refusé avec la raison STO tant
+qu'une source réelle n'est pas câblée, configurée et prête. Le banc actuel, dont le
+pont STO est en place, ne peut donc plus armer ni acquitter un verdict. C'est la
+décision du responsable du projet du 22 octobre 2026 : il n'existe aucune
+exemption banc, parce que la lecture de la chaîne de sécurité est la condition de
+l'armement et de l'acquittement. Le banc redevient utilisable une fois la chaîne
+câblée, le pont retiré et `STO_SOURCE=drive_input` configuré avec son entrée
+([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)). Une lecture ancienne
 ne reste jamais `prete` : l'état devient `unknown` au-delà de 2 s ; la source reste
 affichée et les réponses
 locales et la page tiennent aussi compte du temps écoulé depuis cette lecture.

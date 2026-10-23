@@ -718,7 +718,13 @@ def _leg_tip(env: Mapping[str, str], arm: Metres | None) -> Result[Metres | None
 
 
 def default_sto_source(backend: MotorBackend) -> StoSourceKind:
-    """Provisional policy: simulation ready, real hardware unconfigured."""
+    """Simulation reads a ready simulated chain; a real drive starts unconfigured.
+
+    With MOTOR_BACKEND=serial nothing attests the safety chain until a real
+    source is wired, configured and ready, so arming and acknowledgement are
+    refused until then. There is no bench exemption: reading the chain is the
+    condition for arming and for acknowledging a verdict.
+    """
     match backend:
         case MotorBackend.SIM:
             return StoSourceKind.SIM_READY

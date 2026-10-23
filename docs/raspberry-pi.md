@@ -96,6 +96,19 @@ ouvert, couple coupé), `UNKNOWN` (jamais lu, lecture échouée ou trop ancienne
 et `NOT_CONFIGURED` (aucune source configurée). Seul `READY` atteste la
 disponibilité de la chaîne ; aucun état ne prouve l'immobilité de l'arbre.
 
+**Le banc réel ne peut plus armer avant le câblage, et c'est voulu.** Avec
+`MOTOR_BACKEND=serial`, `STO_SOURCE` vaut `none` par défaut et les valeurs
+`sim_*` sont refusées au démarrage. La console démarre et affiche la chaîne
+`non configuree (none)`, mais elle refuse tout départ et tout acquittement de
+verdict, avec la raison STO, tant qu'une source réelle n'est pas câblée,
+configurée et prête (`drive_input` et une lecture `READY`). Le banc actuel, dont
+le pont STO est en place, ne peut donc plus armer ni acquitter un verdict. C'est
+la décision du responsable du projet du 22 octobre 2026 : aucune exemption banc,
+parce que la lecture de la chaîne de sécurité est la condition de l'armement et
+de l'acquittement. Une exemption laisserait commander un variateur réel sans
+chaîne observée. Le banc redevient utilisable une fois la chaîne câblée, le pont
+retiré et `STO_SOURCE=drive_input` configuré avec son entrée.
+
 Prérequis matériels : retirer le pont STO et câbler la chaîne de sécurité
 indépendante du Pi ; câbler un contact de retour du relais de sécurité sur
 une entrée logique libre, non affectée à une autre fonction du variateur.
@@ -2588,7 +2601,7 @@ sort avec le code 2.
 | Clé | Défaut | Rôle | Contrainte |
 |---|---|---|---|
 | `MOTOR_BACKEND` | **aucun (obligatoire)** | `sim` (variateur simulé) ou `serial` (ATV320 réel) | autre valeur refusée |
-| `STO_SOURCE` | provisoire : `sim_ready` si `sim`, `none` si `serial` | source du retour STO : `none`, `sim_ready`, `sim_open`, `drive_input` | `sim_*` refusé avec `serial` ; valeur inconnue refusée |
+| `STO_SOURCE` | `sim_ready` si `sim`, `none` si `serial` (le banc réel ne peut donc pas armer avant le câblage, voir [2.2](#22-le-variateur-srcmotor)) | source du retour STO : `none`, `sim_ready`, `sim_open`, `drive_input` | `sim_*` refusé avec `serial` ; valeur inconnue refusée |
 | `STO_DRIVE_INPUT` | aucun | entrée du retour du relais de sécurité, actif haut | `LI1` à `LI6`, obligatoire pour `drive_input`, refusée avec toute autre source |
 | `MOTOR_PORT` | `ftdi://schneider:rs485/1` | port du variateur : périphérique série (`/dev/ttyUSB0`, `COM3`, `/dev/cu.usbserial-…`) ou URL pyftdi | lu seulement si `serial` ; non vide |
 | `MOTOR_SLAVE_ID` | `248` | adresse Modbus (248 = adresse point à point Schneider, mesurée au banc) | 1..247 ou 248 ; 0 (diffusion) refusé |
