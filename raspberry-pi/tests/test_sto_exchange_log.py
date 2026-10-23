@@ -13,9 +13,9 @@ from src.motor.atv320 import ATV320Drive, AuxiliaryRegisterReads
 from src.motor.drive import LOGIC_INPUTS_LOGICAL, CommTimeout, DriveError, RegisterMap
 from src.motor.observation import Exchange, ExchangeKind, ExchangeLog
 from src.result import Err, Ok, Result
-from src.units import RawRegister, Seconds
+from src.units import MotorRpm, RawRegister, Seconds
 from tests.test_atv320 import FakeBus, build_drive, connection_exception
-from tests.test_ftdi_link import FakeAltivar, ftdi_master
+from tests.test_ftdi_link import DRIVE_ADDRESS, FakeAltivar, crc16, ftdi_master
 
 REGISTERS = RegisterMap()
 STATUS = {3201: 64, 8602: 0, 8604: 0, 3204: 0, 7121: 0, 8501: 0}
@@ -114,5 +114,39 @@ async def test_the_wire_bytes_of_an_auxiliary_read_stay_visible_to_a_transport_d
         assert added[0].kind is ExchangeKind.SEND
         assert added[0].raw_hex == chip.requests[requests].hex()
         assert all(entry.register is None for entry in added)
+    finally:
+        await drive.close()
+
+
+async def test_a_feedback_reply_arriving_after_its_read_expired_is_never_taken_for_the_next() -> (
+    None
+):
+    """The drive answers 5202 late, just before the next frame: that answer is discarded.
+
+    pymodbus closes the port on a read left without an answer and reopens it for
+    the next transaction; the reopened chip is settled, and pymodbus drops any
+    byte waiting before it sends. The next exchanges read their own replies.
+    """
+    clock = RealClock()
+    chip = FakeAltivar({**STATUS, LOGIC_INPUTS_LOGICAL: 0x0001})
+    master, settings = ftdi_master(chip, timeout=Seconds(0.05))
+    drive = ATV320Drive(clock, master, settings, REGISTERS)
+    try:
+        assert isinstance(await drive.open(), Ok)
+        chip.silent = True
+        expired = await AuxiliaryRegisterReads(drive).read_register(LOGIC_INPUTS_LOGICAL)
+        assert isinstance(expired, Err)
+        assert isinstance(expired.error, CommTimeout)
+        assert chip.close_calls == 1  # the port was closed on the silence
+        chip.silent = False
+        late = bytes((DRIVE_ADDRESS, 3, 2, 0x00, 0x01))
+        chip.pending.extend((late + crc16(late))[index : index + 3] for index in (0, 3, 6))
+        sent = len(chip.requests)
+        assert await drive.write_speed(MotorRpm(0)) == Ok(None)  # its echo, not the late word
+        status = await drive.read_status()
+        assert isinstance(status, Ok)
+        assert int(status.value.status_word) == 64  # ETA, not the late 0x0001
+        assert len(chip.requests) == sent + 6  # LFRD write, echo, then the four status reads
+        assert not chip.pending
     finally:
         await drive.close()
