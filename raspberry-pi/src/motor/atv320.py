@@ -2185,6 +2185,26 @@ class ATV320Drive:
         )
 
 
+AUXILIARY_READ_BUDGET: Final[Seconds] = Seconds(0.05)
+"""Link time planned for one auxiliary single-register read, before the next tick.
+
+A healthy read is an 8-byte request and a 7-byte reply at 19200 8E1, about
+13 ms on the wire with its two silences; docs/raspberry-pi.md budgets 20 ms per
+read. 0.05 s leaves margin for the drive's turnaround and the USB latency
+periods, and stays under the serial timeout (:data:`DEFAULT_TIMEOUT`). A
+technical constant, not a medical one.
+
+It plans a read that is answered; it cannot bound one that is not. Such a read
+runs for up to :func:`transaction_worst_case` (0.683 s on the default line,
+longer than a control period: no budget that short can cover it without
+forbidding every read), then pymodbus closes the port and the next transaction
+reopens it, which no read timeout covers either (on an ``ftdi://`` port it
+includes :func:`~src.motor.ftdi_link.settle`). Until then the tick's own
+writes wait for the driver's lock, exactly as after a failed exchange of the
+tick itself, and the failure counts in the link's health.
+"""
+
+
 @final
 class AuxiliaryRegisterReads:
     """One driver's reads through :meth:`ATV320Drive.read_auxiliary_register`.

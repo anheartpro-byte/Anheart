@@ -1,10 +1,17 @@
-"""Non-blocking STO observations; Modbus polling belongs outside the control tick."""
+"""Non-blocking STO observations; Modbus polling belongs outside the control tick.
+
+The console paces the relay feedback read after its control ticks: a read
+starts just after a completed tick, at most once per ``STO_POLL_PERIOD``, and
+only when the link time planned for it (the port's read budget) ends before
+the next scheduled tick. Otherwise it waits for the next completed tick, so
+the tick keeps the link for its command writes.
+"""
 
 from __future__ import annotations
 
 import asyncio
 from abc import abstractmethod
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from enum import Enum, unique
 from typing import Final, Protocol, assert_never, runtime_checkable
@@ -156,16 +163,31 @@ class DriveInputStoSource:
 
     A failed attempt invalidates the value immediately, retaining only the
     instant of the last success for diagnostics, never the device's free text.
+
+    ``read_budget`` is the link time planned for one read, judged by the
+    console's guard against the next scheduled tick: zero for a port whose
+    exchanges never suspend (the simulated drive), the ATV320's
+    ``AUXILIARY_READ_BUDGET`` on the real link.
     """
 
     def __init__(
-        self, *, clock: Clock, drive: StoRegisterPort, address: RegisterAddress, input_: LogicInput
+        self,
+        *,
+        clock: Clock,
+        drive: StoRegisterPort,
+        address: RegisterAddress,
+        input_: LogicInput,
+        read_budget: Seconds = Seconds(0.0),
     ) -> None:
         self._clock: Clock = clock
         self._drive: StoRegisterPort = drive
         self._address: RegisterAddress = address
         self._input: LogicInput = input_
+        self._read_budget: Seconds = read_budget
         self._poll_permitted: Callable[[], bool] | None = None
+        self._next_tick: Callable[[Seconds], Awaitable[None]] | None = None
+        # Counted when a read starts, after the guard: what run() paces on.
+        self._attempts: int = 0
         self._reading: StoReading = StoReading(
             state=StoState.UNKNOWN,
             source=StoSourceKind.DRIVE_INPUT,
@@ -178,15 +200,30 @@ class DriveInputStoSource:
         """The drive transport every read goes through."""
         return self._drive
 
+    @property
+    def read_budget(self) -> Seconds:
+        """The link time planned for one read, before the next scheduled tick."""
+        return self._read_budget
+
+    @property
+    def attempts(self) -> int:
+        """Reads started so far: a refused poll starts none."""
+        return self._attempts
+
     def guard_polling(self, permitted: Callable[[], bool]) -> None:
         """Bind the console's silence/release guard at composition, before polling starts."""
         self._poll_permitted = permitted
+
+    def pace_polling(self, next_tick: Callable[[Seconds], Awaitable[None]]) -> None:
+        """Bind the console's wait for its next completed tick, bounded by the given time."""
+        self._next_tick = next_tick
 
     async def poll(self) -> None:
         """One asynchronous exchange, called only by the console's polling task."""
         permitted = self._poll_permitted
         if permitted is not None and not permitted():
             return
+        self._attempts += 1
         self._reading = replace(self._reading, read_unresolved=True)
         result = await self._drive.read_register(self._address)
         match result:
@@ -209,18 +246,29 @@ class DriveInputStoSource:
                 assert_never(unreachable)
 
     async def run(self) -> None:
-        """Poll at the technical period until cancelled by the console owner.
+        """Poll until cancelled by the console owner, paced by its completed ticks.
 
-        The guard is checked immediately before every read. This single task
-        awaits each exchange: at most one read already in flight can complete
-        after silence/release begins, then no further frame refreshes ttO.
-        The cached success simply ages to UNKNOWN while polling is forbidden.
+        After a read, wait out the rest of ``STO_POLL_PERIOD`` from its start;
+        then, with the console's pacing bound, wait for its next completed tick
+        (at most one period, so the task stays alive while control stalls) and
+        poll again: a read starts just after a tick, never at a random point of
+        the period. A refused poll starts no read and goes straight back to
+        waiting for a tick. The guard is checked immediately before every read.
+        This single task awaits each exchange: at most one read already in
+        flight can complete after silence/release begins, then no further frame
+        refreshes ttO. The cached success simply ages to UNKNOWN while polling
+        is forbidden.
         """
         while True:
             began = self._clock.monotonic()
+            attempts = self._attempts
             await self.poll()
-            remaining = max(0.0, STO_POLL_PERIOD - elapsed(began, self._clock.monotonic()))
-            await asyncio.sleep(remaining)
+            next_tick = self._next_tick
+            if self._attempts != attempts or next_tick is None:
+                remaining = max(0.0, STO_POLL_PERIOD - elapsed(began, self._clock.monotonic()))
+                await asyncio.sleep(remaining)
+            if next_tick is not None:
+                await next_tick(STO_POLL_PERIOD)
 
     def latest(self, now: Monotonic) -> StoReading:
         last = self._reading.last_success_at

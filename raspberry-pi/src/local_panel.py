@@ -196,7 +196,12 @@ from src.local_config import (
     retired_keys,
 )
 from src.log_format import json_handler
-from src.motor.atv320 import ATV320Drive, AuxiliaryRegisterReads, serial_master
+from src.motor.atv320 import (
+    AUXILIARY_READ_BUDGET,
+    ATV320Drive,
+    AuxiliaryRegisterReads,
+    serial_master,
+)
 from src.motor.drive import DriveBackend, LogicInput, RegisterMap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.motor.sto import (
@@ -212,7 +217,7 @@ from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
 from src.presence.adapter import RuntimePort as PresenceRuntimePort
-from src.presence.monitor import PresenceMonitor
+from src.presence.monitor import EmergencyStop, PresenceMonitor, RampDown
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
 from src.record import commands as record_commands
@@ -887,7 +892,10 @@ class LocalPanel:
         "_sim_ecg",
         "_stalled_at_stop",
         "_sto",
-        "_sto_tick_pending",
+        "_sto_read_budget",
+        "_sto_ticked",
+        "_sto_window",
+        "_sto_window_misses",
         "_store",
         "_surface",
         "_ticked",
@@ -927,10 +935,20 @@ class LocalPanel:
         self._sto: StoSource = sto
         # Set once by close(), never cleared: no auxiliary frame starts after it.
         self._closing: bool = False
-        # One completed control tick permits one auxiliary frame, never a backlog.
-        self._sto_tick_pending: bool = False
+        # One completed control tick permits one auxiliary frame, never a backlog:
+        # the instant that frame must end by (the tick's start plus one control
+        # period), or None while a tick runs and once the frame is taken or refused.
+        self._sto_window: Monotonic | None = None
+        # Set by each completed tick, cleared by the polling task before it waits.
+        self._sto_ticked: asyncio.Event = asyncio.Event()
+        # Frames a completed tick permitted but left too little time for.
+        self._sto_window_misses: int = 0
+        self._sto_read_budget: Seconds = (
+            sto.read_budget if isinstance(sto, DriveInputStoSource) else Seconds(0.0)
+        )
         if isinstance(sto, DriveInputStoSource):
             sto.guard_polling(self._sto_poll_permitted)
+            sto.pace_polling(self._sto_next_tick)
         # The riders' list: the link writes it, the routes and the starts read it.
         self._roster: Roster = Roster(linked=False) if roster is None else roster
         self._watchdog: ServiceWatchdog = watchdog
@@ -964,6 +982,11 @@ class LocalPanel:
     @property
     def sto(self) -> StoSource:
         return self._sto
+
+    @property
+    def sto_window_misses(self) -> int:
+        """STO reads a completed tick permitted but skipped: too little time before the next."""
+        return self._sto_window_misses
 
     @property
     def runtime(self) -> TrainingRuntime:
@@ -1095,7 +1118,13 @@ class LocalPanel:
         requests meanwhile: a request can be accepted into the mailbox while a
         tick is under way. It is taken by the NEXT tick, and the surface keeps
         its place until then (:meth:`~src.control_surface.ControlSurface.note_idle`).
+
+        A completed tick, and only one, permits one STO read in the gap before
+        the next scheduled tick (:meth:`_sto_poll_permitted`); none can start
+        while a tick is under way.
         """
+        began = self._clock.monotonic()
+        self._sto_window = None
         estop = self._surface.take_estop()
         if estop is not None:
             self._record_command(record_commands.EmergencyStop(), estop.operator)
@@ -1136,7 +1165,8 @@ class LocalPanel:
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
-        self._sto_tick_pending = True
+        self._sto_window = Monotonic(began + CONTROL_PERIOD)
+        self._sto_ticked.set()
         return snapshot
 
     def _record(self, now: Monotonic, snapshot: TelemetrySnapshot) -> None:
@@ -1629,15 +1659,55 @@ class LocalPanel:
     # --- running and stopping --------------------------------------------
 
     def _sto_poll_permitted(self) -> bool:
+        """Whether one STO read may start now; takes the completed tick's permission.
+
+        Never while closing, silent, released or unacquired, nor while a stop
+        is under way or asked for (stop writes keep the link), and only in the
+        gap after a completed tick, with the read's budget left before the next
+        scheduled tick. A read skipped for lack of time starts nothing, so it
+        is no attempt: it is counted and waits for the next completed tick.
+        """
+        window = self._sto_window
         if (
             self._closing
             or not self._runtime.drive_reads_permitted
             or not self._runtime.drive_link_acquired
-            or not self._sto_tick_pending
+            or window is None
+            or self._stop_pending()
         ):
             return False
-        self._sto_tick_pending = False
+        self._sto_window = None
+        if self._clock.monotonic() + self._sto_read_budget > window:
+            self._sto_window_misses += 1
+            return False
         return True
+
+    def _stop_pending(self) -> bool:
+        """Whether a stop is under way, or asked for and not yet taken by a tick.
+
+        Under way: :attr:`~src.training.runtime.TrainingRuntime.stop_in_progress`.
+        Asked for, during a session: an end (local STOP or the dashboard's) or a
+        manual target of zero waiting in the mailbox, or a camera verdict that
+        stops the machine and reaches the runtime at its next tick.
+        """
+        runtime = self._runtime
+        if runtime.stop_in_progress:
+            return True
+        if runtime.state is not RuntimeState.RUNNING:
+            return False
+        pending = self._surface.pending
+        if isinstance(pending, EndSession) or (
+            isinstance(pending, SetManualTarget) and pending.output_rpm <= 0.0
+        ):
+            return True
+        decision = None if self._presence is None else self._presence.last_decision
+        return isinstance(decision, RampDown | EmergencyStop)
+
+    async def _sto_next_tick(self, bound: Seconds) -> None:
+        """Wait for the next completed tick, or ``bound``, whichever comes first."""
+        self._sto_ticked.clear()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._sto_ticked.wait(), bound)
 
     async def run(self, stop: asyncio.Event, web: WebRunner) -> int:
         """Run until ``stop`` is set or a task ends; then stop everything. Returns an exit code."""
@@ -1792,10 +1862,12 @@ def build_sto(
                 raise ValueError("drive_input needs STO_DRIVE_INPUT")
             registers = RegisterMap() if config.drive_link is None else config.drive_link.registers
             port: StoRegisterPort
+            budget = Seconds(0.0)
             if isinstance(drive, ATV320Drive):
                 port = AuxiliaryRegisterReads(drive)
+                budget = AUXILIARY_READ_BUDGET
             elif isinstance(drive, StoRegisterPort):
-                port = drive
+                port = drive  # the simulator: its exchanges never suspend
             else:
                 raise TypeError("drive_input needs a register-reading drive")
             return DriveInputStoSource(
@@ -1803,6 +1875,7 @@ def build_sto(
                 drive=port,
                 address=registers.logic_inputs,
                 input_=config.sto_drive_input,
+                read_budget=budget,
             )
     raise assert_never(config.sto_source)
 

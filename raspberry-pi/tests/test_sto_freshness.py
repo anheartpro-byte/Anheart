@@ -312,14 +312,30 @@ async def test_success_during_pause_starts_its_own_freshness_budget(
     live = live_sto
     clock = live.rig.clock
     runtime = live.rig.panel.runtime
-    # The last tick's token can still complete a successful read during a pause.
+    simulator = live.rig.simulator
+    # Once the next tick was due, the last tick's permission starts no read:
+    # no 5202 frame during the pause, no attempt, the cached success unchanged.
     await live.step()
+    before = live.source.latest(clock.monotonic()).last_success_at
+    frames = simulator.acquisition_evidence.possible_frames
+    attempts = live.source.attempts
+    misses = live.rig.panel.sto_window_misses
     clock.advance(Seconds(2.4))
+    refused = await live.poll()
+    assert simulator.acquisition_evidence.possible_frames == frames
+    assert live.source.attempts == attempts
+    assert live.rig.panel.sto_window_misses == misses + 1
+    assert refused.last_success_at == before
+    assert not refused.read_unresolved
+    # The first permission after the control resumes reads again, READY.
+    await live.step(Seconds(0.1))
+    resumed = runtime.standing
+    assert resumed is not None
+    assert resumed.rule == RULE_LOOP_STALL
     reading = await live.poll()
     last = reading.last_success_at
     assert last == clock.monotonic()
     assert reading.state is StoState.READY
-    await live.step(Seconds(0.1))
     original = SimulatedDrive.read_register
 
     async def failed_read(
@@ -330,6 +346,7 @@ async def test_success_during_pause_starts_its_own_freshness_budget(
         return await original(drive, address)
 
     monkeypatch.setattr(SimulatedDrive, "read_register", failed_read)
+    await live.step(Seconds(0.19))
     assert (await live.poll()).state is StoState.UNKNOWN
     for _ in range(11):
         await live.step(Seconds(0.19))
@@ -342,6 +359,49 @@ async def test_success_during_pause_starts_its_own_freshness_budget(
     assert (verdict.rule, verdict.action) == (RULE_STO_UNREADABLE, SafetyAction.RAMP_DOWN)
     assert last is not None
     assert clock.monotonic() - last <= STO_STALE_AFTER + 0.19 + 1e-9
+
+
+async def test_a_success_late_in_the_gap_after_a_tick_bounds_the_pause_credit(
+    live_sto: LiveSto, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the part of a pause after the last success is credited, never the tick before it."""
+    live = live_sto
+    clock = live.rig.clock
+    runtime = live.rig.panel.runtime
+    # A real control period: the read may end late in the gap after its tick.
+    monkeypatch.setattr(panel_module, "CONTROL_PERIOD", Seconds(0.2))
+    await live.step()
+    clock.advance(Seconds(0.15))
+    reading = await live.poll()
+    last = reading.last_success_at
+    assert last == clock.monotonic()
+    assert reading.state is StoState.READY
+    await live.step(Seconds(2.5))  # a pause: D is the 2.5 s after the success
+    verdict = runtime.standing
+    assert verdict is not None
+    assert verdict.rule == RULE_LOOP_STALL
+    original = SimulatedDrive.read_register
+
+    async def failed_read(
+        drive: SimulatedDrive, address: RegisterAddress
+    ) -> Result[RawRegister, DriveError]:
+        if address == LOGIC_INPUTS_LOGICAL:
+            return Err(CommTimeout(after=Seconds(0.1)))
+        return await original(drive, address)
+
+    monkeypatch.setattr(SimulatedDrive, "read_register", failed_read)
+    assert (await live.poll()).state is StoState.UNKNOWN
+    for _ in range(14):
+        await live.step(Seconds(0.19))
+        verdict = runtime.standing
+        if verdict is not None and verdict.rule == RULE_STO_UNREADABLE:
+            break
+        await live.poll()
+    verdict = runtime.standing
+    assert verdict is not None
+    assert (verdict.rule, verdict.action) == (RULE_STO_UNREADABLE, SafetyAction.RAMP_DOWN)
+    assert last is not None
+    assert clock.monotonic() - last <= STO_STALE_AFTER + 2.5 + 0.19 + 1e-9
 
 
 @pytest.mark.parametrize("hang", [False, True], ids=["failed", "pending"])

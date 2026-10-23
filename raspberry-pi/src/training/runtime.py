@@ -1281,6 +1281,7 @@ class TrainingRuntime:
         "_sto",
         "_sto_last_success_at",
         "_sto_loop_delay",
+        "_sto_reads_withheld",
         "_stop_requested",
         "_stopped_by",
         "_subject",
@@ -1485,6 +1486,9 @@ class TrainingRuntime:
         # and stops growing as soon as a later read is pending or has failed.
         self._sto_last_success_at: Monotonic | None = None
         self._sto_loop_delay: Seconds = Seconds(0)
+        # Whether the last completed tick left a stop under way: the console
+        # then withholds STO reads until the next tick. Written at each tick's end.
+        self._sto_reads_withheld: bool = False
         self._latched: SafetyVerdict | None = None
         # What this module's own latch held when GO_SILENT took its place, for
         # the screen alone: written by _latch, read by the `silenced` property.
@@ -1586,6 +1590,29 @@ class TrainingRuntime:
     def drive_link_acquired(self) -> bool:
         """Whether this runtime holds a link acquired by a successful open()."""
         return self._link_open or self._idle_link.open
+
+    @property
+    def stop_in_progress(self) -> bool:
+        """Whether a stop is under way: the console starts no auxiliary drive read then.
+
+        True while a session ending walks the setpoint down or still holds the
+        run command, while a standing verdict lowers or stops a running session
+        (REDUCE or worse), while a manual target of zero walks the setpoint
+        down, and while the run command is held outside a session (a drive
+        found running is being stopped). FREEZE alone holds the speed and stops
+        nothing. Read from memory only.
+        """
+        state = self.state
+        match state:
+            case RuntimeState.ENDING:
+                return self._applied_rpm != 0 or self._enabled
+            case RuntimeState.RUNNING:
+                return self.standing_action >= SafetyAction.REDUCE or (
+                    self._manual is not None and self._manual_target == 0 and self._applied_rpm != 0
+                )
+            case RuntimeState.IDLE | RuntimeState.FINISHED:
+                return self._enabled
+        raise assert_never(state)
 
     @property
     def ending(self) -> Ending | None:
@@ -2511,6 +2538,7 @@ class TrainingRuntime:
         await self._settle(now)
         self._accumulate(now, interval)
         self._snapshot = self._build_snapshot(now)
+        self._sto_reads_withheld = self.stop_in_progress
 
     def _judge_sto(self, now: Monotonic, previous: Monotonic | None) -> None:
         """Judge the cached contact before any controller demand, including at idle.
@@ -2519,20 +2547,25 @@ class TrainingRuntime:
         a configured source and positive motion evidence: an armed session,
         our run command, or a fresh enabled/turning status. No I/O occurs here.
 
-        Deduct a loop_stall interval only while no read since the last success
-        is pending or failed. The last tick's token can permit a read during
-        a pause. A success resets the credit; only the part of its interval
-        after that success can count. Retain earned credit until the next
-        success, allowing polling to resume without a false STO verdict.
+        Deduct an interval in which the console could not read: a loop_stall
+        interval, or one after a tick that left a stop under way (the console
+        withholds reads during a stop, so that no stop write waits for one).
+        Only while no read since the last success is pending or failed. A read
+        starts only in the gap after a completed tick and is planned to end
+        before the next scheduled tick, so a success normally follows the
+        previous tick by less than one control period. A success resets the
+        credit; only the part of its interval after that success can count.
+        Retain earned credit until the next success, allowing polling to resume
+        without a false STO verdict.
 
         With credit D, latch on the first permitted tick where age - D exceeds
         STO_STALE_AFTER: at most STO_STALE_AFTER + D + one tick interval after
-        the last success. D sums excused loop_stall portions with no attempt,
-        before the first unresolved attempt. From that attempt, D cannot grow
-        and detection takes at most STO_STALE_AFTER plus one tick interval,
-        pauses included. Without earlier credit the bound starts at the last success.
-        A pause with an unresolved read can therefore raise both loop_stall and
-        sto_unreadable. Communication-loss rules still dominate if the link
+        the last success. D sums excused portions with no attempt, before the
+        first unresolved attempt. From that attempt, D cannot grow and detection
+        takes at most STO_STALE_AFTER plus one tick interval, pauses and stops
+        included. Without earlier credit the bound starts at the last success.
+        A pause or a stop with an unresolved read can therefore raise
+        sto_unreadable too. Communication-loss rules still dominate if the link
         itself stops answering. No extra duration or I/O is introduced.
         """
         if not self.drive_reads_permitted:
@@ -2546,7 +2579,10 @@ class TrainingRuntime:
             previous is not None
             and last is not None
             and not reading.read_unresolved
-            and elapsed(previous, now) > self._supervisor.limits.loop_stall_freeze_gap
+            and (
+                self._sto_reads_withheld
+                or elapsed(previous, now) > self._supervisor.limits.loop_stall_freeze_gap
+            )
         ):
             self._sto_loop_delay = Seconds(self._sto_loop_delay + elapsed(max(previous, last), now))
         status = self._readable_status(now)
