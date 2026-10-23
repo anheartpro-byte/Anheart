@@ -114,6 +114,7 @@ class LatentLink(Wrapped):
         self.link: asyncio.Lock = asyncio.Lock()
         self.frames: list[Frame] = []
         self.silent_feedback: bool = False
+        self.latency: Seconds = LATENCY
 
     async def _held[R](
         self,
@@ -122,12 +123,12 @@ class LatentLink(Wrapped):
         *,
         register: int | None = None,
         value: int | None = None,
-        latency: Seconds = LATENCY,
+        latency: Seconds | None = None,
     ) -> R:
         asked = now()
         async with self.link:
             began = now()
-            await asyncio.sleep(latency)
+            await asyncio.sleep(self.latency if latency is None else latency)
             result = await call()
         self.frames.append(Frame(kind, register, value, asked, began, now()))
         return result
@@ -388,26 +389,28 @@ async def console(panel: LocalPanel, events: tuple[tuple[float, Event], ...], en
 
 
 def measure(
-    tmp_path: Path,
-    variant: str,
-    env: Mapping[str, str],
-    end: float,
-    events: tuple[tuple[float, Event], ...] = SESSION,
+    tmp_path: Path, variant: str, env: Mapping[str, str], end: float, latency: Seconds
 ) -> Measured:
     clock = ManualClock(Monotonic(10.0))
     if variant == "simulated":
         panel, link = latent_panel(tmp_path, clock, env)
-        run_virtual(clock, console(panel, events, end))
+        link.latency = latency
+        run_virtual(clock, console(panel, SESSION, end))
         return from_link(link, panel)
     panel, bus = bus_panel(tmp_path, clock, env)
-    run_virtual(clock, console(panel, events, end))
+    bus.exchange_latency = bus.latency_of_next = latency
+    run_virtual(clock, console(panel, SESSION, end))
     return from_bus(bus, panel)
 
 
+@pytest.mark.parametrize("latency", [Seconds(0.01), Seconds(0.015)])
 @pytest.mark.parametrize("variant", ["simulated", "fake_bus"])
-def test_sto_reads_leave_every_command_write_at_its_instant(tmp_path: Path, variant: str) -> None:
-    reading = measure(tmp_path / "reading", variant, STO_ENV, 13.95)
-    silent = measure(tmp_path / "silent", variant, NO_READ_ENV, 13.95)
+def test_sto_reads_leave_every_command_write_at_its_instant(
+    tmp_path: Path, variant: str, latency: Seconds
+) -> None:
+    """Two latencies under the read budget: the ticks fall at two phases of the period."""
+    reading = measure(tmp_path / "reading", variant, STO_ENV, 13.95, latency)
+    silent = measure(tmp_path / "silent", variant, NO_READ_ENV, 13.95, latency)
     assert silent.feedback == ()
     assert len(reading.feedback) >= 15
     assert len(reading.commands) >= 60  # dozens of ticks, each with its keepalive
