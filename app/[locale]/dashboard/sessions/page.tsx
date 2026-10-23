@@ -21,9 +21,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Activity, Search, Eye, Radio } from "lucide-react";
-import { formatDistanceToNow, format } from "date-fns";
+import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { SessionKindCell } from "@/components/training/SessionKindCell";
+import { sessionDuration } from "@/lib/sessionDuration";
 import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import {
   useReactTable,
@@ -124,13 +125,11 @@ export default function SessionsPage() {
         header: t("sessions.duration"),
         cell: ({ row }) => (
           <span className="text-muted-foreground text-sm">
-            {row.original.endedAt
-              ? formatDuration(row.original.endedAt - row.original.startedAt)
-              : row.original.status === "interrupted"
-                ? t("sessions.unknownEnd")
-                : formatDistanceToNow(row.original.startedAt, {
-                    locale: dateLocale,
-                  })}
+            {sessionDuration(
+              row.original,
+              t("sessions.unknownEnd"),
+              dateLocale,
+            )}
           </span>
         ),
       },
@@ -339,20 +338,6 @@ function SessionStatusBadge({ status }: { status: string }) {
   return (
     <Badge variant={variants[status] || "outline"}>{statusLabel(status)}</Badge>
   );
-}
-
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  }
-  return `${seconds}s`;
 }
 
 /** The table while the first page of the tab is loading. */
