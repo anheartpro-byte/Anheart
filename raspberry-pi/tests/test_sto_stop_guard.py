@@ -58,12 +58,18 @@ async def cruising(rig: Rig) -> None:
 
 
 @pytest.mark.parametrize(
-    "action",
-    [SafetyAction.FREEZE, SafetyAction.REDUCE, SafetyAction.RAMP_DOWN, SafetyAction.QUICK_STOP],
+    ("action", "state", "stops"),
+    [
+        (SafetyAction.FREEZE, RuntimeState.RUNNING, False),
+        (SafetyAction.REDUCE, RuntimeState.RUNNING, False),
+        (SafetyAction.RAMP_DOWN, RuntimeState.ENDING, True),
+        (SafetyAction.QUICK_STOP, RuntimeState.ENDING, True),
+    ],
 )
-async def test_a_verdict_that_lowers_or_stops_the_machine_is_a_stop_freeze_is_not(
-    action: SafetyAction,
+async def test_a_verdict_that_stops_the_machine_is_a_stop_freeze_and_reduce_are_not(
+    action: SafetyAction, state: RuntimeState, stops: bool
 ) -> None:
+    """FREEZE holds the speed and REDUCE lowers it while the session regulates on."""
     rig = runtime_rig()
     await cruising(rig)
     rig.runtime.trip_from_thread("presence_camera_lost", action, "injected")
@@ -71,7 +77,8 @@ async def test_a_verdict_that_lowers_or_stops_the_machine_is_a_stop_freeze_is_no
     verdict = rig.standing()
     assert verdict is not None
     assert verdict.action is action
-    assert stopping(rig) is (action >= SafetyAction.REDUCE)
+    assert rig.state() is state
+    assert stopping(rig) is stops
 
 
 async def test_a_manual_target_of_zero_is_a_stop_until_the_setpoint_reaches_zero() -> None:

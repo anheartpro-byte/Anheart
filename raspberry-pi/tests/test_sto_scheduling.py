@@ -50,7 +50,6 @@ from src.result import Err, Ok, Result
 from src.training import runtime as runtime_module
 from src.training.preflight import StoNotReady
 from src.training.runtime import RULE_STO_UNREADABLE, RuntimeState
-from src.training.safety import RULE_HR_RATE
 from src.training.types import Occupancy, SafetyAction, SafetyVerdict, TelemetrySnapshot
 from src.units import Monotonic, MotorRpm, OutputRpm, RawRegister, RegisterAddress, Seconds
 from tests.test_atv320 import SETTINGS, FakeBus, io_exception
@@ -683,7 +682,6 @@ STOPS: Final[Mapping[str, Event]] = {
     "web_estop": web_estop,
     "ramp_down_verdict": verdict(RULE_PRESENCE_CAMERA_LOST, SafetyAction.RAMP_DOWN),
     "quick_stop_verdict": verdict(RULE_PRESENCE_INTRUSION, SafetyAction.QUICK_STOP),
-    "reduce_verdict": verdict(RULE_HR_RATE, SafetyAction.REDUCE),
 }
 
 ASKED: Final[float] = 5.15

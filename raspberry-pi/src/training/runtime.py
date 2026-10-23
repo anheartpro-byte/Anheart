@@ -1596,18 +1596,20 @@ class TrainingRuntime:
         """Whether a stop is under way: the console starts no auxiliary drive read then.
 
         True while a session ending walks the setpoint down or still holds the
-        run command, while a standing verdict lowers or stops a running session
-        (REDUCE or worse), while a manual target of zero walks the setpoint
+        run command, while a standing verdict stops a running session
+        (RAMP_DOWN or worse), while a manual target of zero walks the setpoint
         down, and while the run command is held outside a session (a drive
-        found running is being stopped). FREEZE alone holds the speed and stops
-        nothing. Read from memory only.
+        found running is being stopped). FREEZE and REDUCE stop nothing: the
+        session goes on regulating under them, so the reads go on too, and an
+        STO chain that opens under a REDUCE is seen at the next read. Read from
+        memory only.
         """
         state = self.state
         match state:
             case RuntimeState.ENDING:
                 return self._applied_rpm != 0 or self._enabled
             case RuntimeState.RUNNING:
-                return self.standing_action >= SafetyAction.REDUCE or (
+                return self.standing_action >= SafetyAction.RAMP_DOWN or (
                     self._manual is not None and self._manual_target == 0 and self._applied_rpm != 0
                 )
             case RuntimeState.IDLE | RuntimeState.FINISHED:
