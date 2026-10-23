@@ -720,7 +720,7 @@ laisse la séance et sa télémétrie ; la durée de conservation relève d'ANH-
 |---|---|---|
 | `durationS` | `t` du dernier tic de séance (`t > 0`), horloge monotone de l'enregistrement | [enregistrement.md, Tics](enregistrement.md#tics-5-hz) |
 | `heartRate` | min, moyenne arithmétique, max de `hr_confirmed` sur les tics qui la portent (provisoire : `bpm` des points) | `TelemetrySnapshot.live_bpm` (`raspberry-pi/src/training/types.py`), écrit par `_row` (`raspberry-pi/src/record/session.py`) |
-| `zone` | temps dans, au-dessus et en dessous de `[zone_low_bpm, zone_high_bpm]`, bornes comprises : chaque tic ajoute le temps écoulé depuis le tic précédent selon sa FC ; un tic sans FC confirmée ne compte nulle part ; `null` sans programme (séance manuelle) | `TrainingRuntime._accumulate` (`raspberry-pi/src/training/runtime.py`), `ZoneCounters` (`types.py`) |
+| `zone` | temps dans, au-dessus et en dessous de `[zone_low_bpm, zone_high_bpm]`, bornes comprises, arrondis à 0,1 s ; `null` sans programme (séance manuelle). Résumé final : les compteurs de la console quand le manifeste porte les trois (`end_observation.zone_in_s`, `zone_above_s`, `zone_below_s`, nombres finis positifs ou nuls), avec `source: "console"` ; sinon (enregistrement plus ancien, compteurs absents, partiels ou invalides) le recalcul sur les tics, avec `source: "ticks"` : chaque tic ajoute le temps écoulé depuis le tic précédent selon sa FC confirmée, un tic sans FC confirmée ne compte nulle part. Résumé provisoire : le même recalcul sur les points, sans `source`. Un résumé final calculé avant ce champ n'a pas de `source` et reste valide | `TrainingRuntime._accumulate` (`raspberry-pi/src/training/runtime.py`), `ZoneCounters` (`types.py`) ; compteurs écrits par `_end` (`raspberry-pi/src/record/session.py`), [enregistrement.md, Contexte commun](enregistrement.md#contexte-commun-aux-deux-producteurs) |
 | `maxOutputRpm`, `maxMotorRpm` | maximum de la vitesse mesurée du bras et du moteur, en valeur absolue | colonnes `output_rpm`, `measured_motor_rpm` |
 | `reference.maxG`, `legTip.maxG` | maximum de `g_reference` et `g_leg_tip` : accélération **centripète** ω²r/9,80665 au rayon de référence et à la pointe du pied, pas la résultante avec la pesanteur (provisoire : `gLoad`, au rayon de référence seulement) | `output_rpm_to_g` (`raspberry-pi/src/units.py`) |
 | `reference.maxGRate`, `legTip.maxGRate` | variation de g max : sur chaque fenêtre de 1 s (5 intervalles, 6 tics consécutifs) dont tous les tics sont jugés (mesure fraîche, pas de silence, ni `QUICK_STOP` ni `GO_SILENT`, variateur `OPERATION_ENABLED`, vitesse moteur au moins la consigne minimale du programme, 55 tr/min sans programme), \|g fin − g début\| / durée ; `null` dans le résumé provisoire ou si aucune fenêtre mesurable n'existe dans l'enregistrement | `arm_windows` (`simulation/invariants.py`) ; 55 tr/min : `min_run_motor_rpm` de `raspberry-pi/config/motion_limits.json` |
@@ -753,16 +753,22 @@ ouvrir le rapport d'une séance `failed`, absente de cette liste :
 **Sessions > Échouées > Voir**, puis **Résumé de la séance > Rapport PDF**,
 ou l'historique du passager depuis sa fiche si le rôle permet de la lire.
 
-Deux écarts connus avec la console, vérifiés le 14 octobre 2026 sur quatre
+Écarts connus avec la console, vérifiés le 14 octobre 2026 sur quatre
 scénarios de la simulation (`auto_jog_150_nominal`,
-`auto_jog_150_leg_tip_estimate`, `hr_critical`, `estop_manual_27`) : le temps
-en zone est classé ici sur la FC confirmée que l'enregistrement contient, la
-console classe la FC filtrée de son suivi (`HeartRateTracker.usable`), qui
-n'est pas enregistrée (1 s d'écart sur 1212 s pour `hr_critical`, aucun pour
-`auto_jog_150_nominal`) ; la variation de g est calculée sur les colonnes g
-écrites à quatre décimales, la simulation sur la vitesse moteur (écart au
-quatrième chiffre). Les maxima de vitesse et de g, les règles et la règle de
-fin y sont identiques.
+`auto_jog_150_leg_tip_estimate`, `hr_critical`, `estop_manual_27`). Le temps
+en zone n'en est plus un quand le manifeste porte les compteurs de la
+console : le résumé final les reprend tels quels (`source: "console"`), et
+`hr_critical` rejoué le 23 octobre 2026 donne 104 s dans la zone, 30 s
+au-dessus et 1078,2 s en dessous, exactement les compteurs du runtime
+(0 s d'écart sur 1212,2 s). L'écart demeure pour un enregistrement écrit
+avant ces compteurs (`source: "ticks"`) : la FC confirmée de l'enregistrement
+y est classée, alors que la console classe la FC filtrée de son suivi
+(`HeartRateTracker.usable`), qui n'est pas enregistrée ; sur le même
+enregistrement de `hr_critical` privé des trois champs, 103 s dans la zone et
+1079,2 s en dessous, soit 1 s d'écart, aucun pour `auto_jog_150_nominal`.
+La variation de g est calculée sur les colonnes g écrites à quatre décimales,
+la simulation sur la vitesse moteur (écart au quatrième chiffre). Les maxima
+de vitesse et de g, les règles et la règle de fin y sont identiques.
 
 **Pas encore dans le résumé** : le résultat du pré-vol (ANH-142) et le retour
 du passager (ANH-146), que rien n'enregistre aujourd'hui. Chacun sera un champ
@@ -3619,6 +3625,54 @@ et les réservations conservées sont détaillées dans
 Une console 1.2 face à un serveur antérieur garde ses fichiers localement lorsque
 les routes de dépôt répondent 404. La télémétrie continue selon les capacités
 de ce serveur. Aucune confirmation de dépôt n'est fabriquée.
+
+#### Compteurs de zone et ordre de déploiement (ANH-234)
+
+Le manifeste déposé est validé par `depositManifest`
+(`convex/lib/recordStorage.ts`), dont l'observation finale est un objet
+strict : une clé inconnue y fait refuser le manifeste. Depuis ANH-234, il
+accepte dans `end_observation` les trois compteurs de zone que la console
+écrit à la fermeture (`zone_in_s`, `zone_above_s`, `zone_below_s`,
+[enregistrement.md](enregistrement.md#contexte-commun-aux-deux-producteurs)) :
+chacun facultatif, `null` ou un nombre fini positif ou nul. Un manifeste sans
+eux est accepté comme avant ; une valeur négative, non finie, une chaîne ou
+une autre clé inconnue le font refuser (`invalid_manifest`). Le résumé final
+les reprend ([`session_summaries_v2`](#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89)).
+Le contrat machine (`contracts/machine-api.json`) ne change pas : les routes
+et leurs corps sont les mêmes, seul le contenu du fichier déposé s'enrichit.
+
+**Ordre de déploiement pour ANH-82 : Convex d'abord, puis l'image du Pi qui
+écrit ces champs.** Une console plus ancienne, sans les compteurs, reste
+acceptée par le nouveau Convex ; ses séances gardent le recalcul
+(`source: "ticks"`).
+
+Dans l'ordre inverse, une console récente face à un Convex qui ne connaît pas
+encore ces champs perd ses dépôts de fichiers, pas ses données :
+
+- `records/upload-url` et `records/commit` répondent 200 (`accepted: true`) :
+  la vérification est asynchrone. `recordVerification.verify` refuse ensuite
+  le manifeste (`invalid_manifest`), efface l'objet déposé, et la séance passe
+  à `record: "rejected"`. Aucun autre fichier n'est accepté tant que le
+  manifeste n'est pas vérifié.
+- `RecordDeposit` (`raspberry-pi/src/record/deposit.py`) lit ce refus dans
+  `records/status` et renvoie le même manifeste avec une nouvelle
+  réservation. Chaque envoi recevant 200, aucun recul ne s'applique : il
+  recommence à chaque passage du lien hors séance (`CloudSync.step`, une
+  fois par seconde), bien sous les plafonds des deux routes (dix par
+  seconde), et les enregistrements suivants attendent derrière celui-ci.
+- Rien n'est perdu : l'enregistrement reste sur la carte du Pi, sans
+  marqueur de dépôt, et la purge locale ne touche jamais un enregistrement
+  non confirmé ([enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex)).
+  La télémétrie et la fin de séance passent par leurs routes habituelles :
+  le résumé provisoire existe.
+- Dès que Convex accepte les champs, l'envoi suivant du même manifeste est
+  vérifié, la séance redevient `partial` puis `complete`, et le résumé final
+  est calculé avec les compteurs de la console.
+
+Revenir à une image du Pi antérieure après avoir écrit ces champs laisse
+les enregistrements concernés sur le disque sans les déposer : son lecteur
+refuse lui aussi une clé qu'il ne connaît pas, et passe à l'enregistrement
+suivant.
 
 ### Ce que chaque mineure ajoute
 
