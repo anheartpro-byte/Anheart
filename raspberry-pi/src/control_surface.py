@@ -674,6 +674,18 @@ class ControlSurface:
         return self._estop_latched
 
     @property
+    def estop_pending(self) -> bool:
+        """Whether an emergency stop waits for the loop: submitted, not yet taken by a tick.
+
+        True from :meth:`submit_estop` until :meth:`take_estop` hands the
+        receipt over (or an acknowledgement drops it first). Unlike
+        :attr:`estop_latched` it does not outlive the loop's reaction, so a
+        reader that waits for it to clear never waits for an acknowledgement.
+        Read from memory only.
+        """
+        return self._estop_receipt is not None
+
+    @property
     def attendant_last_seen(self) -> Monotonic | None:
         """When the attendant's screen last pinged, or ``None`` if never.
 

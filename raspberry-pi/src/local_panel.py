@@ -1686,12 +1686,16 @@ class LocalPanel:
         """Whether a stop is under way, or asked for and not yet taken by a tick.
 
         Under way: :attr:`~src.training.runtime.TrainingRuntime.stop_in_progress`.
+        Asked for, in any state, even at rest: an emergency stop from a screen
+        that no tick has taken yet (its zero write goes out at the next tick).
         Asked for, during a session: an end (local STOP or the dashboard's) or a
         manual target of zero waiting in the mailbox, or a camera verdict that
-        stops the machine and reaches the runtime at its next tick.
+        stops the machine and reaches the runtime at its next tick. The
+        supervisor's emergency latch is not read: it holds until an
+        acknowledgement, which itself needs a fresh reading.
         """
         runtime = self._runtime
-        if runtime.stop_in_progress:
+        if runtime.stop_in_progress or self._surface.estop_pending:
             return True
         if runtime.state is not RuntimeState.RUNNING:
             return False

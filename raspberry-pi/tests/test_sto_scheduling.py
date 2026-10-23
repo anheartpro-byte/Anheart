@@ -50,7 +50,13 @@ from src.result import Err, Ok, Result
 from src.training import runtime as runtime_module
 from src.training.preflight import StoNotReady
 from src.training.runtime import RULE_STO_UNREADABLE, RuntimeState
-from src.training.safety import RULE_HR_RATE, AcknowledgeRefusal, SafetyAcknowledgement
+from src.training.safety import (
+    RULE_HR_RATE,
+    RULE_OPERATOR_ESTOP,
+    AcknowledgeRefusal,
+    NothingLatched,
+    SafetyAcknowledgement,
+)
 from src.training.types import Occupancy, SafetyAction, SafetyVerdict, TelemetrySnapshot
 from src.units import Monotonic, MotorRpm, OutputRpm, RawRegister, RegisterAddress, Seconds
 from tests.test_atv320 import SETTINGS, FakeBus, io_exception
@@ -879,3 +885,114 @@ def test_an_acknowledgement_under_a_reduce_is_not_refused_for_a_stale_reading(
     assert after
     assert after[0].action is SafetyAction.NONE
     assert after[0].state is RuntimeState.RUNNING
+
+
+# =========================================================================
+# An emergency stop asked for at rest: no read before the tick that takes it
+# =========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class Rest:
+    """One completed tick at rest, as the polling task finds it once it is over."""
+
+    began: float
+    ended: float
+    stopping: bool
+    estop_pending: bool
+    attempts: int
+    reading: StoReading
+
+
+@dataclass(frozen=True, slots=True)
+class AtRest:
+    ticks: tuple[Rest, ...]
+    reads: tuple[float, ...]
+    answers: tuple[tuple[StoReading, Result[SafetyAcknowledgement, AcknowledgeRefusal]], ...]
+
+
+ACKNOWLEDGED_AT: Final[float] = 4.15
+"""When the operator acknowledges the stop: well after the reads have resumed."""
+
+
+def at_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: str, estop_at: float | None
+) -> AtRest:
+    """The console at rest, nothing armed nor attested; a screen's E-STOP as a tick ends.
+
+    ``estop_at`` is the instant a tick ends: the stop is asked for right then,
+    before the polling task has woken to that tick's permission.
+    """
+    ticks: list[Rest] = []
+    answers: list[tuple[StoReading, Result[SafetyAcknowledgement, AcknowledgeRefusal]]] = []
+
+    async def noted_step(panel: LocalPanel) -> TelemetrySnapshot:
+        began = now()
+        snapshot = await CONTROL_STEP(panel)
+        ended = now()
+        if estop_at is not None and abs(ended - estop_at) < 1e-9:
+            panel.surface.submit_estop(operator=OPERATOR, reason="test")
+        source = panel.sto
+        assert isinstance(source, DriveInputStoSource)
+        ticks.append(
+            Rest(
+                began,
+                ended,
+                panel.runtime.stop_in_progress,
+                panel.surface.estop_pending,
+                source.attempts,
+                source.latest(Monotonic(ended)),
+            )
+        )
+        return snapshot
+
+    def acknowledge(panel: LocalPanel) -> None:
+        reading = panel.sto.latest(Monotonic(now()))
+        answers.append((reading, panel.surface.acknowledge(OPERATOR, estop_released=True)))
+
+    monkeypatch.setattr(LocalPanel, "control_step", noted_step)
+    clock = ManualClock(Monotonic(10.0))
+    events = ((ACKNOWLEDGED_AT, acknowledge),)
+    if variant == "simulated":
+        panel, link = latent_panel(tmp_path, clock, STO_ENV)
+        run_virtual(clock, console(panel, events, 4.95))
+        measured = from_link(link, panel)
+    else:
+        panel, bus = bus_panel(tmp_path, clock, STO_ENV)
+        run_virtual(clock, console(panel, events, 4.95))
+        measured = from_bus(bus, panel)
+    return AtRest(tuple(ticks), tuple(began for began, _ in measured.feedback), tuple(answers))
+
+
+@pytest.mark.parametrize("variant", ["simulated", "fake_bus"])
+def test_an_estop_asked_at_rest_withholds_the_read_until_its_tick_then_reads_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: str
+) -> None:
+    free = at_rest(tmp_path / "free", monkeypatch, variant, None)
+    # A read the polling task starts at rest, right as a tick ends.
+    due = next(began for began in free.reads if began >= 12.0)
+    assert any(abs(tick.ended - due) < 1e-9 for tick in free.ticks)
+    stopped = at_rest(tmp_path / "estop", monkeypatch, variant, due)
+    assert not any(tick.stopping for tick in stopped.ticks)  # nothing under way at rest
+    asked = next(tick for tick in stopped.ticks if abs(tick.ended - due) < 1e-9)
+    taken = next(tick for tick in stopped.ticks if tick.began > due)
+    assert asked.estop_pending
+    assert not taken.estop_pending  # the tick that takes it, and writes its zero
+    # Nothing read from the request until that tick is over.
+    assert taken.attempts == asked.attempts
+    assert [began for began in stopped.reads if due - 1e-9 <= began < taken.ended] == []
+    # At rest after it, the reads resume, and a fresh one is READY again.
+    resumed = next(tick for tick in stopped.ticks if tick.attempts > taken.attempts)
+    assert resumed.ended - taken.ended <= STO_POLL_PERIOD + CONTROL_PERIOD + 1e-9
+    assert any(
+        tick.reading.state is StoState.READY
+        and tick.reading.last_success_at is not None
+        and tick.reading.last_success_at >= taken.ended
+        for tick in stopped.ticks
+    )
+    # No interlock: the acknowledgement, which needs a READY reading, clears the stop.
+    ((reading, acknowledged),) = stopped.answers
+    assert reading.state is StoState.READY
+    assert isinstance(acknowledged, Ok)
+    assert acknowledged.value.cleared == (RULE_OPERATOR_ESTOP,)
+    assert [answer for _, answer in free.answers] == [Err(NothingLatched())]
