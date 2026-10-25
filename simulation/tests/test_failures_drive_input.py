@@ -27,7 +27,7 @@ from simulation.failures import (
     scenario_of,
     stop_under_way,
 )
-from simulation.harness import TICK, RunResult, StoObservation
+from simulation.harness import TICK, RunResult, StoObservation, run_scenario
 from simulation.scenario import StoVariant
 from simulation.tracefile import Row
 from src.local_panel import StoReadGate
@@ -110,6 +110,28 @@ def test_a_stop_withholds_every_read_then_the_reads_resume_and_show_the_chain(na
     final = StoState.READY if name.endswith("closed_again") else StoState.OPEN
     assert result.sto[-1].state is final
     assert all(not request.accepted for request in result.requests)
+
+
+@pytest.mark.parametrize(
+    "name", [case.name for case in DRIVE_INPUT if "faulted_drive_coast" not in case.name]
+)
+def test_the_reads_change_no_write_nor_any_row_of_the_same_case_read_from_memory(
+    name: str,
+) -> None:
+    """A read never delays a write: the control path is the one a chain read at once gives.
+
+    The same document with ``sim_ready``, whose chain is read from memory at
+    the tick: every frame the runtime wrote, at the same instant, and every
+    row. A faulted drive's coast is the exception: its chain is read, so an
+    opening there is seen at the next read, not at the tick.
+    """
+    case = CASES[name]
+    reading = _run(case)
+    memory = asyncio.run(run_scenario(replace(scenario_of(case), sto=StoVariant.SIM_READY)))
+    assert any(view.reads for view in reading.sto)
+    assert not any(view.reads for view in memory.sto)
+    assert reading.trace.frames == memory.trace.frames
+    assert reading.trace.rows == memory.trace.rows
 
 
 @pytest.mark.parametrize("shape", ["left_open", "closed_again"])
