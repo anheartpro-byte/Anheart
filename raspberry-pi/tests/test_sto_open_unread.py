@@ -9,11 +9,16 @@ latches at the next tick (``TrainingRuntime._deduce_sto_open``), in a manual
 session and through a programme, stop or not. Then the usual way back: the
 setpoint at zero, a new start refused until a named acknowledgement, itself
 refused until a READY reading taken since the stop.
+
+A FREEZE that walks a programme's setpoint down to zero is such a stop: no
+reading is taken then, and the drive's word is what shows an opening. A
+programme's own descent with no verdict standing is regulation, and is read.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, override
 
@@ -32,7 +37,8 @@ from src.training.runtime import (
     RuntimeState,
     SafetyStanding,
 )
-from src.training.types import Phase, SafetyAction
+from src.training.safety import RULE_LOOP_STALL
+from src.training.types import Phase, SafetyAction, SafetyVerdict
 from src.units import Monotonic, MotorRpm, OutputRpm, Seconds
 from tests.test_cooldown_freeze_console import START
 from tests.test_failure_rig import MIN_RUN, OPERATOR, PROGRAMME_ENV, start_programme
@@ -242,4 +248,128 @@ async def test_a_short_opening_during_a_programme_latches_and_nothing_starts_una
         await start_programme(session)
         await scene.run(5)
         assert state_of(scene) is RuntimeState.RUNNING
+    await scene.panel.close()
+
+
+# =========================================================================
+# A FREEZE walking a programme's setpoint down to zero is a stop: no reading
+# =========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenDescent:
+    """A programme's descent under a FREEZE, from its first COOLDOWN tick to the end of the stop."""
+
+    writes: tuple[tuple[float, str, int], ...]
+    ended: float
+    attempts: tuple[int, int]
+    """STO read attempts at the first COOLDOWN tick, and at the end of the stop."""
+    opened: float | None
+    latched: SafetyVerdict | None
+
+
+async def frozen_descent(scene: ProgrammeScene, *, opening: bool) -> FrozenDescent:
+    """HOLD under a latched ``loop_stall``, then COOLDOWN; the chain opens on the way, or not."""
+    async with scene.rig.http() as session:
+        await scene.run(50)
+        await start_programme(session)
+    await scene.turning_in(Phase.HOLD)
+    await scene.step(after=Seconds(TICK + 1.0))  # the loop misses a second: a FREEZE latches
+    await scene.read()
+    frozen = standing(scene.runtime)
+    assert frozen is not None
+    assert (frozen.rule, frozen.action) == (RULE_LOOP_STALL, SafetyAction.FREEZE)
+    for _ in range(2000):
+        await scene.step()
+        if scene.runtime.phase is Phase.COOLDOWN:
+            break
+        assert not stopping(scene.runtime)  # a FREEZE that holds a speed stops nothing
+        await scene.read()
+    cooling = scene.now
+    assert scene.runtime.phase is Phase.COOLDOWN
+    assert scene.runtime.applied_rpm > 0
+    assert stopping(scene.runtime)  # the walk down to zero is a stop from its first tick
+    attempts = scene.attempts()
+    opened = None
+    if opening:
+        await scene.run(5)
+        opened = scene.now
+        scene.chain.open(scene.rig.clock.monotonic())
+    for _ in range(2000):
+        await scene.step()
+        if not stopping(scene.runtime):
+            return FrozenDescent(
+                writes=tuple(w for w in scene.writes if cooling <= w[0] <= scene.now),
+                ended=scene.now,
+                attempts=(attempts, scene.attempts()),
+                opened=opened,
+                latched=scene.sto_open[0] if scene.sto_open else None,
+            )
+        await scene.read()  # refused by the guard: no attempt while the stop is under way
+    raise AssertionError("the stop never ended")
+
+
+@pytest.mark.parametrize("opening", [False, True], ids=["walked_down", "opened_on_the_way"])
+async def test_a_freeze_walking_a_programme_down_is_a_stop_that_no_read_delays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opening: bool
+) -> None:
+    """No 5202 read from the first COOLDOWN tick to the end of the stop; the drive's word judges.
+
+    The writes are those of the same programme with a chain read at once, at the
+    same instants, and an opening on the way down latches at the same tick.
+    """
+    reference = ProgrammeScene(tmp_path / "instant", PROGRAMME_SIM_READY, monkeypatch)
+    instant = await frozen_descent(reference, opening=opening)
+    await reference.panel.close()
+    monkeypatch.undo()
+    scene = ProgrammeScene(tmp_path / "reading", PROGRAMME_DRIVE_INPUT, monkeypatch)
+    descent = await frozen_descent(scene, opening=opening)
+    assert descent.attempts[1] == descent.attempts[0]
+    assert descent.writes
+    assert descent.writes == instant.writes
+    assert descent.ended == instant.ended
+    if descent.opened is None:
+        assert descent.latched is None
+        assert scene.runtime.applied_rpm == 0
+        assert state_of(scene) is RuntimeState.RUNNING  # walked down, still under its FREEZE
+        await scene.run(5)
+        assert scene.attempts() > descent.attempts[1]  # the reads resume at the end of the stop
+    else:
+        assert descent.latched is not None
+        assert instant.latched is not None
+        assert (descent.latched.rule, descent.latched.action) == (
+            RULE_STO_OPEN,
+            SafetyAction.QUICK_STOP,
+        )
+        assert descent.latched.detail == STO_OPEN_DEDUCED
+        assert descent.latched.since - descent.opened <= TICK + 1e-9
+        assert descent.latched.since == instant.latched.since
+    await scene.panel.close()
+
+
+async def test_a_programme_s_own_descent_with_no_verdict_is_regulation_and_the_reads_go_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """COOLDOWN with no verdict standing: the controller brings the arm down, and is read."""
+    scene = ProgrammeScene(tmp_path, PROGRAMME_DRIVE_INPUT, monkeypatch)
+    async with scene.rig.http() as session:
+        await scene.run(50)
+        await start_programme(session)
+    await scene.turning_in(Phase.HOLD)
+    for _ in range(2000):
+        await scene.run(1)
+        if scene.runtime.phase is Phase.COOLDOWN:
+            break
+    descending = 0
+    for _ in range(20):
+        await scene.step()
+        assert scene.runtime.phase is Phase.COOLDOWN
+        assert standing(scene.runtime) is None
+        assert scene.runtime.applied_rpm > 0
+        assert not stopping(scene.runtime)
+        before = scene.attempts()
+        await scene.read()
+        assert scene.attempts() == before + 1
+        descending += 1
+    assert descending == 20
     await scene.panel.close()

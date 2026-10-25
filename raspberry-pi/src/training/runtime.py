@@ -1626,12 +1626,16 @@ class TrainingRuntime:
 
         True while a session ending walks the setpoint down or still holds the
         run command, while a standing verdict stops a running session
-        (RAMP_DOWN or worse), while a manual target of zero walks the setpoint
-        down, and while the run command is held outside a session (a drive
-        found running is being stopped). FREEZE and REDUCE stop nothing: the
-        session goes on regulating under them, so the reads go on too, and an
-        STO chain that opens under a REDUCE is seen at the next read. Read from
-        memory only.
+        (RAMP_DOWN or worse), while a FREEZE walks the setpoint of a stop
+        somebody asked for down to zero (:meth:`_stop_under_freeze`), while a
+        manual target of zero walks the setpoint down, and while the run
+        command is held outside a session (a drive found running is being
+        stopped). REDUCE stops nothing, nor does a FREEZE that holds a speed:
+        the session goes on regulating under them, so the reads go on too, and
+        an STO chain that opens under a REDUCE is seen at the next read. Nor
+        is a programme's own planned descent with no verdict standing (its
+        COOLDOWN and RECOVERY, the setpoint above zero) a stop: the controller
+        still regulates it, and the reads go on. Read from memory only.
 
         A drive that signals a fault is under no stop of this console's, at
         any speed and whatever the setpoint (:meth:`_drive_signals_fault`).
@@ -1649,8 +1653,15 @@ class TrainingRuntime:
             case RuntimeState.ENDING:
                 return self._applied_rpm != 0 or self._enabled
             case RuntimeState.RUNNING:
-                return self.standing_action >= SafetyAction.RAMP_DOWN or (
-                    self._manual is not None and self._manual_target == 0 and self._applied_rpm != 0
+                action = self.standing_action
+                return (
+                    action >= SafetyAction.RAMP_DOWN
+                    or (action is SafetyAction.FREEZE and self._stop_asked())
+                    or (
+                        self._manual is not None
+                        and self._manual_target == 0
+                        and self._applied_rpm != 0
+                    )
                 )
             case RuntimeState.IDLE | RuntimeState.FINISHED:
                 return self._enabled
