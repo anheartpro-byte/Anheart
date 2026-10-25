@@ -2616,9 +2616,9 @@ class TrainingRuntime:
         our run command, or a fresh enabled/turning status. No I/O occurs here.
         While this runtime holds the run command, the drive's status word
         shows an opening no reading saw (:meth:`_deduce_sto_open`): during a
-        stop, when no read is taken, and between two reads. And once reads were withheld
-        while motion was possible, the shaft at rest is no excuse: an OPEN
-        reading latches until a READY one postdates that stop
+        stop, when no read is taken, and between two reads. And once reads
+        were withheld while motion was possible, the shaft at rest is no
+        excuse: an OPEN reading latches until a READY one postdates that stop
         (:meth:`_sto_reading_postdates_stop`).
 
         Deduct an interval in which the console could not read: a loop_stall
