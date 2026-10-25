@@ -34,6 +34,7 @@ from src.record.schema import (
 from src.record.writer import DEFAULT_PRIVACY, FRAME, TICK_COLUMNS, Writer, csv_line, tick_line
 from src.result import Err, Result
 from src.sensors.base import SensorReading
+from src.training.types import ZoneCounters
 from src.units import UnixMillis
 
 __all__ = [
@@ -145,6 +146,11 @@ class Trace:
     """The idle ticks before the start command (``t`` <= 0), in the v2 record only:
     a replay needs them, the checks and the schema-1 exports never did."""
 
+    counters: ZoneCounters | None = None
+    """The runtime's time in, above and below the zone after the last tick, as the
+    console writes them at the end of its record. ``None``: not observed, and the
+    record says nothing of them; a run without a programme has no zone either."""
+
     def write_record(self, root: Path, privacy: Privacy) -> Path:
         writer = _required(Writer.create(root, self.manifest, privacy))
         for row in (*self.preamble, *self.rows):
@@ -172,6 +178,7 @@ class Trace:
                 )
             )
         )
+        counters = None if self.manifest.profile is None else self.counters
         _required(
             writer.close(
                 ManualClock(epoch_millis=self.ended_at),
@@ -188,6 +195,9 @@ class Trace:
                     silent=self.final.silent,
                     stop_reason=self.final.stop_reason,
                     shutdown_detail=self.final.shutdown_detail,
+                    zone_in_s=None if counters is None else counters.in_zone,
+                    zone_above_s=None if counters is None else counters.above_zone,
+                    zone_below_s=None if counters is None else counters.below_zone,
                 ),
             )
         )

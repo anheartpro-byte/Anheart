@@ -556,6 +556,9 @@ class _Live:
     fault: str | None = None
     raw_seq: int = 0
     link: LinkStats | None = None
+    zoned: bool = False
+    """Whether the session runs a programme. Only a programme has a zone, and the
+    runtime counts time in it only then (``TrainingRuntime._accumulate``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -728,6 +731,7 @@ class SessionRecorder:
         live = _Live(
             origin=origin,
             names=tuple(dict.fromkeys((*names_of(request.operator), *confirming_names))),
+            zoned=request.program is not None,
         )
         self._live = live
         self._journal.open(
@@ -853,6 +857,10 @@ class SessionRecorder:
         words = INTERRUPTED if reason is None else reason.value
         status = _fresh_status(snapshot, runtime)
         stop = runtime.stop_reason
+        # The runtime's own count of the time in zone, from the snapshot the record
+        # closes with: the ticks hold the confirmed rate, not the filtered one the
+        # runtime classifies, so no reader of the record could recount it exactly.
+        counters = snapshot.counters if live.zoned else None
         self._event(live, now, EventKind.END, words, SYSTEM)
         closing = Closing(
             ended_at=self._clock.unix_millis(),
@@ -870,6 +878,9 @@ class SessionRecorder:
                 silent=runtime.silent,
                 stop_reason=None if stop is None else self._text(live, stop),
                 shutdown_detail=None if detail is None else self._text(live, detail),
+                zone_in_s=None if counters is None else counters.in_zone,
+                zone_above_s=None if counters is None else counters.above_zone,
+                zone_below_s=None if counters is None else counters.below_zone,
             ),
             # Read now, not ``now``: the exchanges of this last tick began after the
             # tick's own instant, and they are the session's. The next ones are not.

@@ -652,3 +652,97 @@ describe("ANH-249 the schemas of a deposit, under zod 4.6", () => {
     ).toEqual([["too_big", "files"]]);
   });
 });
+
+describe("ANH-234 the console's zone counters in the final observation", () => {
+  const zoneKeys = ["zone_in_s", "zone_above_s", "zone_below_s"] as const;
+  const piObservation = completePiManifest.end_observation;
+  function withObservation(observation: Record<string, unknown>) {
+    return { ...completePiManifest, end_observation: observation };
+  }
+  function withoutCounters() {
+    const observation: Record<string, unknown> = { ...piObservation };
+    for (const key of zoneKeys) delete observation[key];
+    return withObservation(observation);
+  }
+
+  it("is carried by the complete manifest the Pi writes", () => {
+    expect(piObservation).toMatchObject({
+      zone_in_s: 14.2,
+      zone_above_s: 3.4,
+      zone_below_s: 6,
+    });
+    expect(depositManifest.safeParse(completePiManifest).success).toBe(true);
+  });
+
+  it("accepts a manifest written before the counters, and counters that are null", () => {
+    expect(depositManifest.safeParse(withoutCounters()).success).toBe(true);
+    expect(
+      depositManifest.safeParse(
+        withObservation({
+          ...piObservation,
+          zone_in_s: null,
+          zone_above_s: null,
+          zone_below_s: null,
+        }),
+      ).success,
+    ).toBe(true);
+    expect(
+      depositManifest.safeParse(
+        withObservation({ ...piObservation, zone_in_s: 0 }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it.each(
+    zoneKeys.flatMap((key) =>
+      [-0.1, Infinity, -Infinity, NaN, "12.0", true, {}].map(
+        (value) => [key, value] as const,
+      ),
+    ),
+  )("refuses %s = %s", (key, value) => {
+    expect(
+      depositManifest.safeParse(
+        withObservation({ ...piObservation, [key]: value }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("still refuses a key of the final observation it does not know", () => {
+    expect(
+      depositManifest.safeParse(
+        withObservation({ ...piObservation, zone_total_s: 23.6 }),
+      ).success,
+    ).toBe(false);
+  });
+
+  // JSON has no infinity: a number too large for a double is how one arrives.
+  const overflowing = JSON.stringify(completePiManifest).replace(
+    '"zone_in_s":14.2',
+    '"zone_in_s":1e400',
+  );
+
+  it("reads a counter too large for a double as an infinity", () => {
+    expect(JSON.parse(overflowing).end_observation.zone_in_s).toBe(Infinity);
+  });
+
+  it.each([
+    ["with the counters", JSON.stringify(completePiManifest), true],
+    ["without them", JSON.stringify(withoutCounters()), true],
+    [
+      "with a negative one",
+      JSON.stringify(withObservation({ ...piObservation, zone_above_s: -3.4 })),
+      false,
+    ],
+    ["with an infinite one", overflowing, false],
+  ])("verifies or rejects a deposited manifest %s", async (_, text, valid) => {
+    const w = await fixture();
+    await upload(w, w.sessionId, "manifest.json", text);
+    const file = await w.t.run(
+      async (ctx) => await ctx.db.query("session_record_files").first(),
+    );
+    expect(file?.verified).toBe(valid);
+    expect(file?.rejection).toBe(valid ? undefined : "invalid_manifest");
+    const session = await w.t.run(async (ctx) => await ctx.db.get(w.sessionId));
+    expect(session?.record).toBe(valid ? "partial" : "rejected");
+  });
+});

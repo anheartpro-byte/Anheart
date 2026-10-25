@@ -16,6 +16,8 @@ import {
   parseVerdict,
   READ_CHUNK_BYTES,
   summarizeRecordFiles,
+  SummaryBuilder,
+  finalZone,
   type SummaryFigures,
 } from "./lib/sessionSummary";
 
@@ -168,6 +170,7 @@ describe("summary of a record: duration and heart rate", () => {
       inZoneS: 0,
       aboveZoneS: 0,
       belowZoneS: 0,
+      source: "ticks",
     });
     expect(figures.durationS).toBe(2);
   });
@@ -256,6 +259,7 @@ describe("summary of a record: time in zone, as the console counts it", () => {
       inZoneS: 1.4,
       aboveZoneS: 0.2,
       belowZoneS: 0.2,
+      source: "ticks",
     });
   });
 
@@ -276,6 +280,160 @@ describe("summary of a record: time in zone, as the console counts it", () => {
     });
     expect(figures.zone).toBeNull();
     expect(figures.heartRate?.samples).toBe(5);
+  });
+});
+
+describe("summary of a record: the console's own zone counters (ANH-234)", () => {
+  /** In zone 0.2 s, above 0.4 s, below 0.2 s, counted on the ticks. */
+  const TICKS = ticksCsv([
+    { t: 0, hr: 140 },
+    { t: 0.2, hr: 140 },
+    { t: 0.4, hr: 160 },
+    { t: 0.6, hr: 160 },
+    { t: 0.8, hr: 120 },
+  ]);
+  const COUNTED = {
+    lowBpm: 130,
+    highBpm: 150,
+    inZoneS: 0.2,
+    aboveZoneS: 0.4,
+    belowZoneS: 0.2,
+    source: "ticks",
+  };
+  const observed = (fields: Record<string, unknown>) =>
+    manifest({
+      end_observation: { t: 0.8, runtime_state: "finished", ...fields },
+    });
+
+  it("takes the console's three counters as they are, whatever the ticks say", async () => {
+    const figures = await summarize({
+      manifest: observed({
+        zone_in_s: 812.4400000000117,
+        zone_above_s: 37.2,
+        zone_below_s: 0,
+      }),
+      ticks: TICKS,
+    });
+    expect(figures.zone).toEqual({
+      lowBpm: 130,
+      highBpm: 150,
+      inZoneS: 812.4,
+      aboveZoneS: 37.2,
+      belowZoneS: 0,
+      source: "console",
+    });
+    // Every other figure is still read from the ticks.
+    expect(figures.durationS).toBe(0.8);
+    expect(figures.heartRate).toMatchObject({ minBpm: 120, maxBpm: 160 });
+  });
+
+  it.each([
+    ["no final observation", manifest()],
+    ["a null final observation", manifest({ end_observation: null })],
+    ["a record older than the counters", observed({})],
+    [
+      "counters that are null",
+      observed({ zone_in_s: null, zone_above_s: null, zone_below_s: null }),
+    ],
+    ["two counters of three", observed({ zone_in_s: 5, zone_above_s: 1 })],
+    [
+      "a negative counter",
+      observed({ zone_in_s: 5, zone_above_s: -1, zone_below_s: 0 }),
+    ],
+    [
+      "a counter in a string",
+      observed({ zone_in_s: "5", zone_above_s: 1, zone_below_s: 0 }),
+    ],
+    [
+      "a counter that is not a number",
+      observed({ zone_in_s: 5, zone_above_s: 1, zone_below_s: true }),
+    ],
+  ])("counts the ticks again for %s", async (_, text) => {
+    const figures = await summarize({ manifest: text, ticks: TICKS });
+    expect(figures.zone).toEqual(COUNTED);
+  });
+
+  it("counts the ticks again for a counter too large to be a number", async () => {
+    const text = observed({
+      zone_in_s: 5,
+      zone_above_s: 1,
+      zone_below_s: 0,
+    }).replace('"zone_in_s":5', '"zone_in_s":1e400');
+    expect(text).toContain('"zone_in_s":1e400');
+    const figures = await summarize({ manifest: text, ticks: TICKS });
+    expect(figures.zone).toEqual(COUNTED);
+  });
+
+  it("has no zone without a programme, even with counters", async () => {
+    const figures = await summarize({
+      manifest: manifest({
+        kind: "manual",
+        profile: null,
+        end_observation: {
+          t: 0.8,
+          zone_in_s: 1,
+          zone_above_s: 0,
+          zone_below_s: 0,
+        },
+      }),
+      ticks: TICKS,
+    });
+    expect(figures.zone).toBeNull();
+  });
+
+  it("leaves the provisional summary without a source", () => {
+    const builder = new SummaryBuilder({ lowBpm: 130, highBpm: 150 }, false);
+    for (const [t, bpm] of [
+      [0, 140],
+      [1, 140],
+      [2, 160],
+    ])
+      builder.add({
+        t,
+        bpm,
+        outputRpm: 18,
+        motorRpm: 900,
+        gReference: 0.5,
+        gLegTip: null,
+        rule: null,
+        action: null,
+        state: null,
+        judged: false,
+      });
+    const { zone } = builder.figures({
+      endReason: null,
+      referenceRadiusM: null,
+      legTipRadiusM: null,
+      legTipMeasured: null,
+      warnings: [],
+    });
+    expect(zone).toEqual({
+      lowBpm: 130,
+      highBpm: 150,
+      inZoneS: 1,
+      aboveZoneS: 1,
+      belowZoneS: 0,
+    });
+    expect(zone).not.toHaveProperty("source");
+  });
+
+  it("keeps the zone of a final summary as it is with a source, and none without a zone", () => {
+    const zone = {
+      lowBpm: 130,
+      highBpm: 150,
+      inZoneS: 2,
+      aboveZoneS: 0,
+      belowZoneS: 0,
+    };
+    expect(finalZone(zone, null)).toEqual({ ...zone, source: "ticks" });
+    expect(finalZone(zone, { inS: 1.04, aboveS: 0.96, belowS: 0.05 })).toEqual({
+      ...zone,
+      inZoneS: 1,
+      aboveZoneS: 1,
+      belowZoneS: 0.1,
+      source: "console",
+    });
+    expect(finalZone(null, { inS: 1, aboveS: 0, belowS: 0 })).toBeNull();
   });
 });
 
@@ -713,6 +871,7 @@ describe("summary helpers", () => {
   it("reads what it needs of a manifest, and only what has the expected shape", () => {
     expect(manifestContext({})).toEqual({
       zone: null,
+      zoneCounters: null,
       minRunMotorRpm: DEFAULT_MIN_RUN_MOTOR_RPM,
       endReason: null,
       referenceRadiusM: null,
@@ -732,6 +891,20 @@ describe("summary helpers", () => {
     });
     expect(manifestContext("text")).toBeNull();
     expect(manifestContext(null)).toBeNull();
+    expect(
+      manifestContext({
+        end_observation: {
+          t: 1,
+          stop_reason: null,
+          zone_in_s: 3,
+          zone_above_s: 2,
+          zone_below_s: 1,
+        },
+      })?.zoneCounters,
+    ).toEqual({ inS: 3, aboveS: 2, belowS: 1 });
+    expect(
+      manifestContext({ end_observation: "finished" })?.zoneCounters,
+    ).toBeNull();
   });
 
   it("reads the verdict events of the console and of the simulation", () => {

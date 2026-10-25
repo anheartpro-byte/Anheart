@@ -66,11 +66,12 @@ from src.record.session import (
     storage_gate,
 )
 from src.result import Err, Ok
+from src.sim.physiology import Physiology, SubjectState
 from src.training.motion import DEFAULT_MOTION_LIMITS
 from src.training.plan import ProfileStore, Program
 from src.training.runtime import EndReason, RecordStorageLow, RuntimeLimits, RuntimeState
 from src.training.safety import SafetyLimits
-from src.training.types import Occupancy, SafetyAction
+from src.training.types import Occupancy, Phase, SafetyAction, ZoneCounters
 from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, Seconds, UnixMillis
 from tests.medical_support import unsigned
 from tests.record_console_support import (
@@ -89,8 +90,10 @@ from tests.test_failure_rig import (
     SHORT_STORE,
     attest,
     config_of,
+    make_rig,
     start_programme,
 )
+from tests.test_standstill_console import Electrodes
 
 ALIAS = operator_alias(OPERATOR)
 RECORD_NAME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{6}Z_[0-9a-f]{16}")
@@ -147,6 +150,12 @@ async def test_ex1_a_manual_session_is_recorded_from_arming_to_its_end(tmp_path:
     assert observation.shaft_motor_rpm == 0
     assert observation.runtime_output_enabled is False
     assert observation.stop_reason == "operator pressed STOP"
+    # A manual session has no zone: nothing counted, nothing written.
+    assert (observation.zone_in_s, observation.zone_above_s, observation.zone_below_s) == (
+        None,
+        None,
+        None,
+    )
 
     rows = recording.rows
     assert rows[0].t < 0.0
@@ -228,6 +237,75 @@ async def test_ex1_a_programmed_session_freezes_its_programme_numbers_only(
     assert (EventKind.PHASE, "baseline") in {(e.kind, e.detail) for e in events}
 
 
+async def test_t05_the_console_exit_writes_the_runtimes_zone_counters_of_a_programme(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The rider's true rate, read from the simulated subject once a second, as
+    # the standstill tests of the console read it.
+    electrodes = Electrodes()
+    original_advance = Physiology.advance
+
+    def advance(self: Physiology, now: Monotonic, motor_rpm: MotorRpm) -> SubjectState:
+        state = original_advance(self, now, motor_rpm)
+        electrodes.state = state
+        return state
+
+    monkeypatch.setattr(Physiology, "advance", advance)
+    recorded = recorded_rig(tmp_path, env=PROGRAMME_ENV, treat=electrodes)
+    async with recorded.rig.http() as session:
+        await start_programme(session)
+        await recorded.tick(12.0)
+    runtime = recorded.rig.panel.runtime
+    await recorded.rig.panel.close()
+    counted = runtime.snapshot().counters
+    assert counted.total > 5.0, "the rider's rate was usable for most of the session"
+    recording = recorded.recording()
+    assert recording.manifest.end_reason == "shutdown"
+    observation = recording.manifest.end_observation
+    assert observation is not None
+    assert (observation.zone_in_s, observation.zone_above_s, observation.zone_below_s) == (
+        counted.in_zone,
+        counted.above_zone,
+        counted.below_zone,
+    )
+
+
+@pytest.mark.parametrize("programme", [True, False])
+def test_t05_the_record_closed_at_done_carries_the_counters_of_its_last_snapshot(
+    tmp_path: Path, *, programme: bool
+) -> None:
+    recorder, journal, clock = bare_recorder(tmp_path / "recorded")
+    rig, _ = make_rig(tmp_path)
+    runtime = rig.panel.runtime
+    store = tmp_path / "programme"
+    store.mkdir()
+    recorder.begin(
+        SessionRequest(
+            occupancy=Occupancy.OCCUPIED if programme else Occupancy.BENCH,
+            operator=OPERATOR,
+            program=short_program(store) if programme else None,
+        )
+    )
+    clock.advance(Seconds(0.2))
+    counted = ZoneCounters(
+        in_zone=Seconds(812.4), above_zone=Seconds(37.2), below_zone=Seconds(306.8)
+    )
+    assert runtime.snapshot().counters != counted
+    recorder.observe(
+        clock.monotonic(), replace(runtime.snapshot(), phase=Phase.DONE, counters=counted), runtime
+    )
+    assert not recorder.recording
+    journal.drain()
+    path = journal.status(clock.monotonic()).path
+    assert path is not None
+    loaded = read(path)
+    assert isinstance(loaded, Ok)
+    observation = loaded.value.manifest.end_observation
+    assert observation is not None
+    zone = (observation.zone_in_s, observation.zone_above_s, observation.zone_below_s)
+    assert zone == ((812.4, 37.2, 306.8) if programme else (None, None, None))
+
+
 async def test_ex1_the_console_exit_closes_the_record_after_the_drive(tmp_path: Path) -> None:
     recorded = recorded_rig(tmp_path)
     async with recorded.rig.http() as session:
@@ -241,6 +319,11 @@ async def test_ex1_the_console_exit_closes_the_record_after_the_drive(tmp_path: 
     observation = recording.manifest.end_observation
     assert observation is not None
     assert observation.shutdown_detail == detail
+    assert (observation.zone_in_s, observation.zone_above_s, observation.zone_below_s) == (
+        None,
+        None,
+        None,
+    )
     assert any(event.kind is EventKind.END for event in recording.events)
     assert recording.events[-1].detail == "replay_incomplete: pending_ecg_delivery"
     assert await recorded.rig.left_stopped() == ""

@@ -36,11 +36,16 @@
  *   to its rate against `[zone_low_bpm, zone_high_bpm]`, both bounds in the
  *   zone; a tick without a rate adds to none, so the three do not add up to
  *   the duration. Only a programme has a zone: a manual session has none.
- *   The rate classified here is the confirmed one the record holds; the
- *   console classifies the filtered rate of its tracker
- *   (`HeartRateTracker.usable`, hr_control.py), which no record holds: the
- *   two counts may differ by a few seconds (1 s out of 1212 s on the
- *   simulation's `hr_critical` scenario).
+ *   The console classifies the filtered rate of its tracker
+ *   (`HeartRateTracker.usable`, hr_control.py), which no record holds, and
+ *   writes its three counters at the end of the record (`zone_in_s`,
+ *   `zone_above_s`, `zone_below_s` of `end_observation`): the final summary
+ *   takes them as they are when all three are there (`zone.source:
+ *   "console"`). Otherwise, for a record written before the console wrote
+ *   them, it classifies the confirmed rate the record holds (`"ticks"`),
+ *   which may differ by a few seconds (1 s out of 1212 s on the
+ *   simulation's `hr_critical` scenario). The provisional summary always
+ *   classifies its points and says no source.
  * - g at the reference radius and at the foot tip: the columns `g_reference`
  *   and `g_leg_tip`, the centripetal load omega^2 r / 9.80665 at each radius
  *   (`output_rpm_to_g`, raspberry-pi/src/units.py), not the resultant felt
@@ -133,6 +138,12 @@ export type SummarySource = Infer<typeof summarySourceValidator>;
 
 const nullableNumber = v.union(v.number(), v.null());
 
+/** Who counted the time in zone of a final summary (see the definitions). */
+export const zoneSourceValidator = v.union(
+  v.literal("console"),
+  v.literal("ticks"),
+);
+
 /** The figures of one session (the definitions are at the top of this file). */
 export const summaryFiguresValidator = v.object({
   /** Seconds, monotonic; null when no session tick was read. */
@@ -158,6 +169,13 @@ export const summaryFiguresValidator = v.object({
       inZoneS: v.number(),
       aboveZoneS: v.number(),
       belowZoneS: v.number(),
+      /**
+       * Final summary only: `console` when the three times are the
+       * console's own counters, `ticks` when they were counted on the
+       * ticks of the record. Absent from a provisional summary, and from a
+       * final one computed before the console wrote its counters.
+       */
+      source: v.optional(zoneSourceValidator),
     }),
   ),
   maxOutputRpm: nullableNumber,
@@ -203,9 +221,14 @@ export type SummaryFigures = Infer<typeof summaryFiguresValidator>;
 /** The zone of a programme, both bounds in it. */
 export type Zone = { lowBpm: number; highBpm: number };
 
+/** The console's own counts of the time in, above and below the zone, seconds. */
+export type ZoneCounters = { inS: number; aboveS: number; belowS: number };
+
 /** What the summary needs of the manifest; every field may be missing. */
 export type ManifestContext = {
   zone: Zone | null;
+  /** Null unless the manifest carries all three counters, each finite and not negative. */
+  zoneCounters: ZoneCounters | null;
   minRunMotorRpm: number;
   endReason: string | null;
   referenceRadiusM: number | null;
@@ -253,6 +276,7 @@ function severity(action: string | null): number {
 // ---------------------------------------------------------------------------
 
 const positive = z.number().positive();
+const seconds = z.number().nonnegative();
 const manifestShape = z.object({
   end_reason: z.string().nullish().catch(null),
   profile: z
@@ -271,21 +295,37 @@ const manifestShape = z.object({
     })
     .nullish()
     .catch(null),
+  end_observation: z
+    .object({
+      zone_in_s: seconds,
+      zone_above_s: seconds,
+      zone_below_s: seconds,
+    })
+    .nullish()
+    .catch(null),
 });
 
 /**
  * What the summary reads of a manifest: the programme's zone and slowest
- * running setpoint, the end reason and the geometry. A field the manifest
- * does not carry, or carries in another shape, is unknown, never guessed;
- * null when the manifest is not an object at all.
+ * running setpoint, the console's zone counters, the end reason and the
+ * geometry. A field the manifest does not carry, or carries in another
+ * shape, is unknown, never guessed; null when the manifest is not an object
+ * at all.
  */
 export function manifestContext(value: unknown): ManifestContext | null {
   const parsed = manifestShape.safeParse(value);
   if (!parsed.success) return null;
-  const { end_reason, profile, geometry } = parsed.data;
+  const { end_reason, profile, geometry, end_observation } = parsed.data;
   return {
     zone: profile
       ? { lowBpm: profile.zone_low_bpm, highBpm: profile.zone_high_bpm }
+      : null,
+    zoneCounters: end_observation
+      ? {
+          inS: end_observation.zone_in_s,
+          aboveS: end_observation.zone_above_s,
+          belowS: end_observation.zone_below_s,
+        }
       : null,
     minRunMotorRpm: profile?.min_run_rpm ?? DEFAULT_MIN_RUN_MOTOR_RPM,
     endReason: end_reason ? bounded(end_reason) : null,
@@ -579,6 +619,27 @@ export class SummaryBuilder {
   }
 }
 
+/**
+ * The zone of a final summary: the console's own counters when the manifest
+ * carries them, otherwise the times counted on the ticks, each saying which.
+ * Null, whatever the counters, without a programme's zone.
+ */
+export function finalZone(
+  zone: SummaryFigures["zone"],
+  counters: ZoneCounters | null,
+): SummaryFigures["zone"] {
+  if (zone === null) return null;
+  if (counters === null) return { ...zone, source: "ticks" };
+  return {
+    lowBpm: zone.lowBpm,
+    highBpm: zone.highBpm,
+    inZoneS: rounded(counters.inS, 1),
+    aboveZoneS: rounded(counters.aboveS, 1),
+    belowZoneS: rounded(counters.belowS, 1),
+    source: "console",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // ticks.csv
 // ---------------------------------------------------------------------------
@@ -790,7 +851,13 @@ export async function summarizeRecordFiles(files: {
     legTipMeasured: context.legTipMeasured,
     warnings,
   });
-  return figures.samples === 0 ? { problem: "no_session_ticks" } : { figures };
+  if (figures.samples === 0) return { problem: "no_session_ticks" };
+  return {
+    figures: {
+      ...figures,
+      zone: finalZone(figures.zone, context.zoneCounters),
+    },
+  };
 }
 
 /**

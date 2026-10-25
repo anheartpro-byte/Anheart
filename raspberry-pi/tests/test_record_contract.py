@@ -4,13 +4,16 @@ import json
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from src.clock import ManualClock
 from src.record.codec import JSON, Privacy, encode, mapping
 from src.record.ecg import Header, RawBlock, decode_block, encode_block
 from src.record.reader import read
+from src.record.rows import JsonValue
 from src.record.schema import (
     DriveFrame,
     EndObservation,
@@ -20,7 +23,7 @@ from src.record.schema import (
     Preflight,
     Profile,
 )
-from src.record.writer import TICK_COLUMNS, Writer
+from src.record.writer import MANIFEST, TICK_COLUMNS, Writer
 from src.result import Err, Ok
 from src.sensors.base import Metric, SensorKind, SensorReading
 from src.training.types import SignalQuality
@@ -93,6 +96,9 @@ def complete_manifest_record(root: Path) -> Path:
             silent=True,
             stop_reason="operator_stop",
             shutdown_detail="synthetic-stop-observed",
+            zone_in_s=Seconds(14.2),
+            zone_above_s=Seconds(3.4),
+            zone_below_s=Seconds(6.0),
         ),
     )
     assert isinstance(closed, Ok)
@@ -123,6 +129,66 @@ def test_older_manifest_without_fitness_fields_still_reads(tmp_path: Path) -> No
     assert isinstance(loaded, Ok)
     assert loaded.value.manifest.subject_fit is None
     assert loaded.value.manifest.fitness_questionnaire_version is None
+
+
+ZONE_KEYS: Final[tuple[str, ...]] = ("zone_in_s", "zone_above_s", "zone_below_s")
+
+
+def fixture_without_zone_counters() -> dict[str, JsonValue]:
+    """The complete manifest as a console older than the zone counters wrote it."""
+    document = dict(mapping(JSON.validate_json(MANIFEST_FIXTURE.read_bytes())))
+    observation = dict(mapping(document["end_observation"]))
+    for key in ZONE_KEYS:
+        del observation[key]
+    document["end_observation"] = observation
+    return document
+
+
+def test_the_complete_manifest_carries_the_runtimes_zone_counters() -> None:
+    observation = MANIFEST.validate_json(MANIFEST_FIXTURE.read_bytes()).end_observation
+    assert observation is not None
+    assert (observation.zone_in_s, observation.zone_above_s, observation.zone_below_s) == (
+        14.2,
+        3.4,
+        6.0,
+    )
+
+
+def test_older_manifest_without_zone_counters_still_reads() -> None:
+    older = fixture_without_zone_counters()
+    current = MANIFEST.validate_json(MANIFEST_FIXTURE.read_bytes())
+    read_back = MANIFEST.validate_json(encode(older, Privacy()))
+    observation = read_back.end_observation
+    assert observation is not None
+    assert (observation.zone_in_s, observation.zone_above_s, observation.zone_below_s) == (
+        None,
+        None,
+        None,
+    )
+    assert current.end_observation is not None
+    assert read_back == replace(
+        current,
+        end_observation=replace(
+            current.end_observation, zone_in_s=None, zone_above_s=None, zone_below_s=None
+        ),
+    )
+
+
+def test_an_unknown_key_of_the_final_observation_is_still_refused() -> None:
+    document = fixture_without_zone_counters()
+    document["end_observation"] = {**mapping(document["end_observation"]), "zone_total_s": 1.0}
+    with pytest.raises(ValidationError, match="zone_total_s"):
+        MANIFEST.validate_json(encode(document, Privacy()))
+
+
+@pytest.mark.parametrize("key", ZONE_KEYS)
+@pytest.mark.parametrize("bad", ["-0.2", "NaN", "Infinity", "-Infinity", "1e400"])
+def test_a_zone_counter_that_is_not_a_finite_duration_is_refused(key: str, bad: str) -> None:
+    text = MANIFEST_FIXTURE.read_text(encoding="utf-8")
+    written = {"zone_in_s": "14.2", "zone_above_s": "3.4", "zone_below_s": "6.0"}[key]
+    assert text.count(f'"{key}":{written}') == 1
+    with pytest.raises(ValidationError, match=key):
+        MANIFEST.validate_json(text.replace(f'"{key}":{written}', f'"{key}":{bad}'))
 
 
 @pytest.mark.parametrize("key", ["answers", "notes", "outcome", "consent", "fitnessValidUntil"])

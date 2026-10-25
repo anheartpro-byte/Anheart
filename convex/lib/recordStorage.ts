@@ -84,6 +84,12 @@ const endObservation = z.strictObject({
   silent: z.boolean().nullable().optional(),
   stop_reason: z.string().nullable().optional(),
   shutdown_detail: z.string().nullable().optional(),
+  // The console's zone counters (`ZoneCounters`, raspberry-pi/src/training/
+  // types.py), in seconds: finite and never negative; null without a zone,
+  // absent from a record written before the console wrote them.
+  zone_in_s: z.number().nonnegative().nullable().optional(),
+  zone_above_s: z.number().nonnegative().nullable().optional(),
+  zone_below_s: z.number().nonnegative().nullable().optional(),
 });
 export const depositManifest = z
   .object({

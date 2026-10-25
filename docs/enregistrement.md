@@ -198,6 +198,25 @@ champs peuvent individuellement être `null` s'ils n'ont pas été observés :
 | `silent` | état de silence du runtime observé |
 | `stop_reason` | motif d'arrêt du runtime, éventuellement absent |
 | `shutdown_detail` | diagnostic de fermeture nettoyé à la frontière de confidentialité |
+| `zone_in_s` | secondes passées dans la zone cible, bornes comprises, comptées par le runtime (`ZoneCounters.in_zone`) ; `null` sans programme |
+| `zone_above_s` | secondes au-dessus de la zone (`ZoneCounters.above_zone`) ; `null` sans programme |
+| `zone_below_s` | secondes en dessous de la zone (`ZoneCounters.below_zone`) ; `null` sans programme |
+
+Les trois compteurs de zone sont ceux que le runtime tient pendant la séance
+(`TrainingRuntime._accumulate`) : chaque tic dont la fréquence filtrée du
+suivi est utilisable ajoute son intervalle à l'un des trois, un tic sans
+fréquence utilisable à aucun. Ils ne s'additionnent donc pas à la durée.
+Ce sont des secondes, finies et positives ou nulles ; le reader refuse une
+valeur négative ou non finie. Ils ne sont écrits que pour une séance à
+programme, la seule qui ait une zone (le runtime ne compte que pendant un
+programme) ; une séance manuelle, ou un producteur qui ne les a pas observés,
+écrit les trois à `null`. Un enregistrement écrit avant ces champs se relit
+comme avant, les trois valant `null`. Les tics ne contiennent que la
+fréquence confirmée, pas la fréquence filtrée que le runtime classe : sans
+ces compteurs, un lecteur ne peut que les recompter de façon approchée
+(résumé de séance de Convex, [convex.md](convex.md#session_summaries_v2--résumé-dune-séance-dentraînement-anh-89)).
+Le dépôt Convex accepte ces trois champs ; il doit être déployé avant la
+console qui les écrit ([convex.md](convex.md#compteurs-de-zone-et-ordre-de-déploiement-anh-234)).
 
 Le producteur appelle `Writer.close(clock, end_reason, observation)` avec
 cette valeur typée. Sans observation, la fermeture ne déduit rien du dernier
@@ -208,7 +227,10 @@ fournit les mêmes champs depuis ses propres observations : l'état du runtime,
 l'état du variateur de son dernier instantané, la consigne appliquée, LFRD et
 la vitesse de l'arbre du dernier statut lu **s'il est encore frais** (`null`
 sinon), le motif d'arrêt. `energised` y reste `null` : la console n'observe
-pas la présence de couple.
+pas la présence de couple. Les compteurs de zone sont ceux de l'instantané
+avec lequel l'enregistrement se ferme, quand la phase passe à `DONE` ou à
+l'arrêt de la console ; la simulation écrit ceux du runtime après son dernier
+tic, par la même règle (`null` quand le manifeste n'a pas de programme).
 
 Sur la console, `geometry` vaut `null` : elle connaît son rayon de référence
 et la pointe des pieds, pas les rayons de capsule et de contrepoids que
@@ -700,7 +722,9 @@ liste fermée de faits machine, sans prose ni nombre physiologique. Les
 préfixes qui font refuser le rejeu ne sont pas cachés par le nettoyage.
 Dans `end_observation`, `stop_reason` et `shutdown_detail` deviennent `null` :
 ces deux textes libres peuvent contenir un nom, une fréquence cardiaque ou
-un port série. Tous les autres champs de cette observation restent identiques.
+un port série. Tous les autres champs de cette observation restent identiques,
+dont les trois compteurs de zone `zone_in_s`, `zone_above_s` et
+`zone_below_s` : des durées de la séance, ni un texte ni une date.
 
 Toutes les dates de séance deviennent la constante `2000-01-01T00:00:00Z` :
 `started_at`, `ended_at`, `clocks.utc_start`, le préfixe du dossier et
@@ -977,10 +1001,13 @@ un rejeu conforme ne remplace pas ce contrôle.
 
 ## Utilisation et compatibilité
 
-Le reader reste strict : une clé inconnue refuse la ligne ou le bloc. Les
-ajouts restent au schéma 2 et ne modifient ni le manifeste, ni les kinds
-d'événement. Les versions ci-dessous désignent les révisions du lecteur,
-pas une nouvelle valeur de `schema_version` :
+Le reader reste strict : une clé inconnue refuse la ligne, le bloc ou le
+manifeste. Les ajouts restent au schéma 2 et n'ajoutent aucun kind
+d'événement. Certains ajoutent des clés au manifeste, dont `subject_fit` et
+`fitness_questionnaire_version` (ANH-143, dernier paragraphe de cette
+section) et les trois compteurs de zone de `end_observation` (ANH-234). Les
+versions ci-dessous désignent les révisions du lecteur, pas une nouvelle
+valeur de `schema_version` :
 
 | Ajout | Première version qui le relit | Lecteur antérieur |
 | --- | --- | --- |
@@ -991,6 +1018,7 @@ pas une nouvelle valeur de `schema_version` :
 | commande `attendant_ping` | ANH-192 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
 | commande `presence_trip` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; ni kind ni champ de manifeste nouveau |
 | commande `latch_estop` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; le verrou immédiat de la surface est distinct de l'appel `estop` du runtime |
+| `zone_in_s`, `zone_above_s`, `zone_below_s` dans `end_observation` | ANH-234 | le lecteur du Pi refuse le manifeste (clé inconnue), même aux trois `null` d'une séance manuelle ; le dépôt Convex antérieur le refuse aussi ([convex.md](convex.md#compteurs-de-zone-et-ordre-de-déploiement-anh-234)) |
 
 Une commande mal écrite sous un kind d'entrée est aussi refusée par le rejeu
 avec sa raison. Le reader ne décode pas les commandes : il doit pouvoir
