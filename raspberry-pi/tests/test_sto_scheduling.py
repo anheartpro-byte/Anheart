@@ -808,18 +808,24 @@ def not_judged(_runtime: TrainingRuntime, _now: Monotonic, _status: DriveStatus 
 
 
 def stop_frames(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, judged: bool, dropped: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    judged: bool,
+    dropped: bool,
+    stopped: bool = True,
 ) -> tuple[tuple[Sent, ...], SafetyVerdict | None]:
-    """An operator stop over the fake bus: every frame sent, and the verdict standing at the end."""
+    """A session over the fake bus, stopped by the operator or not: its frames, its last verdict."""
     with monkeypatch.context() as patch:
         if not judged:
             patch.setattr(TrainingRuntime, "_deduce_sto_open", not_judged)
         clock = ManualClock(Monotonic(10.0))
         panel, bus = bus_panel(tmp_path, clock, STO_ENV)
-        events = (*SESSION, (ASKED, operator_stop))
+        events = (*SESSION, (ASKED, operator_stop)) if stopped else SESSION
         if dropped:
             events = (*events, (ASKED + 1.0, output_stage_dropped(bus)))
-        run_virtual(clock, console(panel, events, 11.95))
+        # Unstopped, it ends before the fake drive's missing current would raise no_load.
+        run_virtual(clock, console(panel, events, 11.95 if stopped else ASKED + 2.8))
         return tuple(bus.sent), panel.runtime.standing
 
 
@@ -841,6 +847,40 @@ def test_judging_the_drive_word_during_a_stop_adds_no_frame(
     unlatched, _ = stop_frames(tmp_path / "unlatched", monkeypatch, judged=False, dropped=True)
     assert verdict is not None
     assert (verdict.rule, verdict.detail) == (RULE_STO_OPEN, STO_OPEN_DEDUCED)
+    first = next(
+        index
+        for index, (one, other) in enumerate(zip(latched, unlatched, strict=False))
+        if one != other
+    )
+    assert latched[first].access == "write"
+    assert latched[first].at >= verdict.since
+    assert latched[:first] == unlatched[:first]
+
+
+def test_judging_the_drive_word_outside_a_stop_adds_no_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session nobody stops, its drive's word judged at every tick: the same frames again."""
+    judged, nothing = stop_frames(
+        tmp_path / "judged", monkeypatch, judged=True, dropped=False, stopped=False
+    )
+    plain, _ = stop_frames(
+        tmp_path / "plain", monkeypatch, judged=False, dropped=False, stopped=False
+    )
+    assert nothing is None
+    assert any(sent.access == "read" and sent.at >= 10.0 + ASKED for sent in judged)
+    assert judged == plain
+    # The drive drops its output stage while the session runs: the first frame that
+    # differs is the verdict's own command write, and every frame before it is the same.
+    latched, verdict = stop_frames(
+        tmp_path / "latched", monkeypatch, judged=True, dropped=True, stopped=False
+    )
+    unlatched, _ = stop_frames(
+        tmp_path / "unlatched", monkeypatch, judged=False, dropped=True, stopped=False
+    )
+    assert verdict is not None
+    assert (verdict.rule, verdict.detail) == (RULE_STO_OPEN, STO_OPEN_DEDUCED)
+    assert verdict.since >= 10.0 + ASKED + 1.0
     first = next(
         index
         for index, (one, other) in enumerate(zip(latched, unlatched, strict=False))

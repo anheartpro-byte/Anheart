@@ -312,12 +312,14 @@ RULE_STO_UNREADABLE: Final[str] = "sto_unreadable"
 
 STO_OPEN_DEDUCED: Final[str] = (
     "the drive removed its output stage by itself (SWITCH_ON_DISABLED: DC bus not ready, "
-    "or the STO safety chain open) while this console held the run command during a stop, "
-    "when no STO reading is taken: the opening is deduced from the drive's state, not read "
-    "from the chain. The reference is zeroed; restore the chain, acknowledge by name and "
-    "request a new start before motion is permitted"
+    "or the STO safety chain open) while this console held the run command, and no STO "
+    "reading showed it: none is taken during a stop, and outside one a reading misses an "
+    "opening shorter than the interval between two of them, or a cut between the safety "
+    "relay's contact and the drive's STO terminal. The opening is deduced from the drive's "
+    "state, not read from the chain. The reference is zeroed; restore the chain, acknowledge "
+    "by name and request a new start before motion is permitted"
 )
-"""The ``sto_open`` detail when the drive's status word stands in for a withheld reading."""
+"""The ``sto_open`` detail when the drive's status word shows an opening no reading saw."""
 
 RULE_TICK_EXCEPTION: Final[str] = "tick_exception"
 """Something inside the tick raised. This process's state is no longer trusted."""
@@ -2594,8 +2596,9 @@ class TrainingRuntime:
         OPEN treats unknown speed as possible motion. Unreadable STO requires
         a configured source and positive motion evidence: an armed session,
         our run command, or a fresh enabled/turning status. No I/O occurs here.
-        During a stop, when no read is taken, the drive's status word stands
-        in for one (:meth:`_deduce_sto_open`). And once reads were withheld
+        While this runtime holds the run command, the drive's status word
+        shows an opening no reading saw (:meth:`_deduce_sto_open`): during a
+        stop, when no read is taken, and between two reads. And once reads were withheld
         while motion was possible, the shaft at rest is no excuse: an OPEN
         reading latches until a READY one postdates that stop
         (:meth:`_sto_reading_postdates_stop`).
@@ -2698,27 +2701,42 @@ class TrainingRuntime:
         return withheld is None or (last is not None and last >= withheld)
 
     def _deduce_sto_open(self, now: Monotonic, status: DriveStatus | None) -> None:
-        """During a stop no STO read is taken: the drive's own status word stands in for one.
+        """The drive's own status word shows an STO opening that no reading saw.
 
         A fresh SWITCH_ON_DISABLED while this runtime holds the run command
         means the drive removed its output stage by itself, which its status
         word decodes as DC bus not ready or STO open: ``sto_open`` latches,
-        whether the chain is still open or already closed again. No word this
-        module writes leads there while it holds the run command: an arming ends in
-        OPERATION_ENABLED, :meth:`_settle` and the escalation end in
-        READY_TO_SWITCH_ON and clear the run command, a fault reset clears it
-        before its word, an emergency zero writes LFRD only, and a silent
-        runtime reads nothing. The status is the one the tick already read:
-        no frame is added. Outside a stop the reads go on and judge alone.
+        whether the chain is still open or already closed again, stop or not.
+        During a stop no STO read is taken at all; outside one, a reading
+        misses an opening shorter than the interval between two of them, and
+        a cut between the safety relay's contact and the drive's STO terminal
+        whatever its length. No word this module writes leads there while it
+        holds the run command: an arming ends in OPERATION_ENABLED,
+        :meth:`_settle` and the escalation end in READY_TO_SWITCH_ON and clear
+        the run command, a fault reset clears it before its word, an emergency
+        zero writes LFRD only, and a silent runtime reads nothing. Nor is the
+        status the start's own inspection read before the arming taken for one
+        read since (:meth:`_status_postdates_start`): a drive just powered up
+        shows SWITCH_ON_DISABLED until it is armed. The status is the one the
+        tick already read: no frame is added.
         """
         if (
-            (self._sto_reads_withheld or self.stop_in_progress)
-            and self._link_open
+            self._link_open
             and self._enabled
             and status is not None
             and status.state is DriveState.SWITCH_ON_DISABLED
+            and self._status_postdates_start()
         ):
             self._latch(now, RULE_STO_OPEN, SafetyAction.QUICK_STOP, STO_OPEN_DEDUCED)
+
+    def _status_postdates_start(self) -> bool:
+        """Whether the last status was read after this session's start, not by its inspection.
+
+        A start reads the drive before arming it, at the instant the session
+        starts, and that status stands until a tick reads another one.
+        """
+        stamp, started = self._last_status_at, self._started_at
+        return stamp is not None and (started is None or stamp > started)
 
     def _interval(self, now: Monotonic) -> Seconds | None:
         """Time since the previous tick, or ``None`` on the first one.

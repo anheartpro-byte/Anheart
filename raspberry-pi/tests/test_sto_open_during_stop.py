@@ -20,12 +20,15 @@ from typing import Final, override
 import pytest
 
 from src.cloud_sync import DASHBOARD_OPERATOR
+from src.ecg_pipeline import TreatFunction
 from src.local_panel import LocalPanel
 from src.motor.drive import (
+    CommTimeout,
     ControlWord,
     DriveError,
     DriveFault,
     DriveState,
+    DriveStatus,
     EmergencyStopOutcome,
     UnexpectedState,
 )
@@ -94,10 +97,15 @@ class Scene:
     """The real console over a noted simulator, ticked as its loop does."""
 
     def __init__(
-        self, tmp_path: Path, env: Mapping[str, str], *, wrap: type[Noted] = Noted
+        self,
+        tmp_path: Path,
+        env: Mapping[str, str],
+        *,
+        wrap: type[Noted] = Noted,
+        treat: TreatFunction | None = None,
     ) -> None:
         tmp_path.mkdir(parents=True, exist_ok=True)
-        rig, wrapper = make_rig(tmp_path, env=env, wrap=wrap)
+        rig, wrapper = make_rig(tmp_path, env=env, wrap=wrap, treat=treat)
         assert isinstance(wrapper, Noted)
         chain = rig.simulator.sto_chain
         assert chain is not None
@@ -119,6 +127,10 @@ class Scene:
         """One control tick, without the STO read that may follow it."""
         self.rig.clock.advance(TICK)
         self.panel.surface.note_presence(OPERATOR)
+        await self.control()
+
+    async def control(self) -> None:
+        """The control step at the current instant: its command writes and any sto_open noted."""
         await self.panel.control_step()
         self.writes.extend((self.now, kind, value) for kind, value in self.noted.writes)
         self.noted.writes.clear()
@@ -372,29 +384,30 @@ async def test_a_speed_asked_after_an_opening_during_a_walk_down_to_zero_is_refu
 
 
 # =========================================================================
-# Outside a stop the reads go on, and judge alone
+# Outside a stop too, the drive's word latches an opening no reading has shown
 # =========================================================================
 
 
-async def test_outside_a_stop_an_opening_is_judged_by_the_reading_alone(tmp_path: Path) -> None:
+async def test_outside_a_stop_the_drive_word_latches_an_opening_before_any_reading_shows_it(
+    tmp_path: Path,
+) -> None:
+    """The reads go on outside a stop, and the drive's word does not wait for the next one."""
     scene = Scene(tmp_path, DRIVE_INPUT)
     runtime = scene.runtime
     await scene.cruise()
+    opened = scene.now
     scene.chain.open(scene.rig.clock.monotonic())
     await scene.step()  # the drive shows its output stage off; the reading is not refreshed yet
     status = runtime.drive_status
     assert status is not None
     assert status.state is DriveState.SWITCH_ON_DISABLED
-    assert not stopping(runtime)
     assert scene.reading().state is StoState.READY
-    assert runtime.standing is None  # nothing is deduced outside a stop
-    await scene.read()
-    assert scene.reading().state is StoState.OPEN
-    await scene.step()
     verdict = standing(runtime)
     assert verdict is not None
     assert (verdict.rule, verdict.action) == (RULE_STO_OPEN, SafetyAction.QUICK_STOP)
-    assert verdict.detail != STO_OPEN_DEDUCED
+    assert verdict.detail == STO_OPEN_DEDUCED
+    assert verdict.since - opened <= TICK + 1e-9
+    assert runtime.applied_rpm == 0
     await scene.panel.close()
 
 
@@ -414,6 +427,32 @@ class RefusesTheRampStop(Noted):
                 UnexpectedState(expected=DriveState.READY, actual=DriveState.OPERATION_ENABLED)
             )
         return await super().write_command(word)
+
+
+class LosesTheReadAfterArming(Noted):
+    """The first status read after the arming goes unanswered.
+
+    The status the start read before arming the drive (SWITCH_ON_DISABLED, as a
+    drive just powered up shows) then stands as the last one read.
+    """
+
+    def __init__(self, inner: SimulatedDrive) -> None:
+        super().__init__(inner)
+        # Set by the arming's last word, cleared by the one read it then fails.
+        self.armed: bool = False
+
+    @override
+    async def write_command(self, word: ControlWord) -> Result[None, DriveError]:
+        written = await super().write_command(word)
+        self.armed = self.armed or word is ControlWord.ENABLE_OPERATION
+        return written
+
+    @override
+    async def read_status(self) -> Result[DriveStatus, DriveError]:
+        if self.armed:
+            self.armed = False
+            return Err(CommTimeout(after=Seconds(0.05)))
+        return await self.inner.read_status()
 
 
 async def until_finished(scene: Scene) -> None:
@@ -487,6 +526,7 @@ async def console_close(scene: Scene) -> str | None:
 
 EXPECTED_ENDS: Final[Mapping[str, tuple[type[Noted], Callable[[Scene], Awaitable[str | None]]]]] = {
     "normal_stop": (Noted, normal_stop),
+    "arming_read_lost": (LosesTheReadAfterArming, normal_stop),
     "screen_estop": (Noted, screen_estop),
     "go_silent": (Noted, go_silent),
     "fault_reset": (Noted, fault_reset),
@@ -499,7 +539,12 @@ EXPECTED_ENDS: Final[Mapping[str, tuple[type[Noted], Callable[[Scene], Awaitable
 async def test_the_console_leaving_the_output_stage_itself_latches_no_sto_open(
     tmp_path: Path, case: str
 ) -> None:
-    """Arming, then each way this console removes the run command or stops writing."""
+    """Arming, then each way this console removes the run command or stops writing.
+
+    The drive's word is judged outside a stop as during one, so the arming and
+    the session that follows it are judged too, the arming whose first read
+    after the last word goes unanswered included.
+    """
     wrap, scenario = EXPECTED_ENDS[case]
     scene = Scene(tmp_path, DRIVE_INPUT, wrap=wrap)
     await scene.cruise()  # the arming sequence: SHUTDOWN, SWITCH_ON, ENABLE_OPERATION
