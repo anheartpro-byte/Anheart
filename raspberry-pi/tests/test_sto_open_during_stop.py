@@ -30,7 +30,13 @@ from src.motor.drive import (
     UnexpectedState,
 )
 from src.motor.simulated import SimState, SimulatedDrive
-from src.motor.sto import DriveInputStoSource, SimulatedStoChain, StoReading, StoState
+from src.motor.sto import (
+    STO_STALE_AFTER,
+    DriveInputStoSource,
+    SimulatedStoChain,
+    StoReading,
+    StoState,
+)
 from src.presence.monitor import RULE_PRESENCE_CAMERA_LOST
 from src.result import Err, Ok, Result
 from src.training import runtime as runtime_module
@@ -460,4 +466,75 @@ async def test_the_console_leaving_the_output_stage_itself_latches_no_sto_open(
     assert scene.sto_open == []
     verdict = scene.runtime.standing
     assert (None if verdict is None else verdict.rule) == remaining
+    await scene.panel.close()
+
+
+# =========================================================================
+# The acknowledgement after a stop needs a reading taken since
+# =========================================================================
+
+
+def acknowledged(scene: Scene) -> Result[object, object]:
+    answer = scene.panel.surface.acknowledge(OPERATOR, estop_released=True)
+    return Ok(None) if isinstance(answer, Ok) else Err(answer.error)
+
+
+async def test_after_a_stop_only_a_reading_taken_since_lets_an_acknowledgement_through(
+    tmp_path: Path,
+) -> None:
+    """The deduced opening is not acknowledged on the reading from before the stop."""
+    scene = Scene(tmp_path, DRIVE_INPUT)
+    runtime = scene.runtime
+    await scene.cruise()
+    assert isinstance(scene.panel.surface.submit_end(operator=OPERATOR, reason="stop"), Ok)
+    await scene.run(1)  # the tick takes the stop: no read from here
+    scene.chain.open(scene.rig.clock.monotonic())
+    await scene.run(1)
+    verdict = standing(runtime)
+    assert verdict is not None
+    assert (verdict.rule, verdict.detail) == (RULE_STO_OPEN, STO_OPEN_DEDUCED)
+    before = scene.reading()
+    last = before.last_success_at
+    assert before.state is StoState.READY  # read before the stop, still recent
+    assert last is not None
+    assert scene.now - last < STO_STALE_AFTER
+    refused = acknowledged(scene)
+    assert isinstance(refused, Err)
+    assert isinstance(refused.error, StoNotReady)
+    assert refused.error.state is StoState.UNKNOWN
+    assert standing(runtime) == verdict
+    scene.chain.close(scene.rig.clock.monotonic())  # closed again before the stop is over
+    ended = False
+    for _ in range(1000):
+        await scene.step()
+        if not stopping(runtime):
+            ended = True
+            break
+        await scene.read()
+        assert isinstance(acknowledged(scene), Err)
+    assert ended
+    assert isinstance(acknowledged(scene), Err)  # over, but nothing read since
+    await scene.read()  # the first read after the stop
+    after = scene.reading()
+    assert after.state is StoState.READY
+    assert after.last_success_at is not None
+    assert after.last_success_at > last
+    assert isinstance(acknowledged(scene), Ok)
+    assert standing(runtime) is None
+    await scene.panel.close()
+
+
+async def test_a_chain_read_at_once_is_never_too_old_to_acknowledge_during_a_stop(
+    tmp_path: Path,
+) -> None:
+    """A simulated chain is read at the instant asked: the requirement changes nothing for it."""
+    scene = Scene(tmp_path, SIM_READY)
+    await scene.cruise()
+    scene.panel.surface.submit_estop(operator=OPERATOR, reason="test")
+    await scene.run(2)
+    assert stopping(scene.runtime)
+    verdict = standing(scene.runtime)
+    assert verdict is not None
+    assert verdict.rule == RULE_OPERATOR_ESTOP
+    assert isinstance(acknowledged(scene), Ok)
     await scene.panel.close()

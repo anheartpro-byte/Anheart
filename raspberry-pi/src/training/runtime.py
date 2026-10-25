@@ -3331,6 +3331,10 @@ class TrainingRuntime:
         ``estop_released`` is the operator stating that the latching mushroom has
         been pulled back out. Software cannot see that contact, so the default is
         ``False`` and forgetting the question fails closed.
+
+        The chain must read READY, and after a stop that withheld the reads,
+        READY from a read taken since: a reading from before the stop says
+        nothing of the chain during it, however recent.
         """
         if not operator.strip():
             return Err(
@@ -3342,9 +3346,17 @@ class TrainingRuntime:
         mine = self._latched
         if mine is not None and mine.action is SafetyAction.GO_SILENT:
             return Err(GoSilentIsTerminal(mine.rule))
-        sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+        reading = self._sto.latest(self._clock.monotonic())
+        sto = check_sto_ready(reading)
         if sto is not None:
             return Err(sto)
+        if not self._sto_reading_postdates_stop(reading):
+            return Err(
+                StoNotReady(
+                    state=StoState.UNKNOWN,
+                    detail="the last ready reading predates a stop that withheld the reads",
+                )
+            )
         outcome = self._supervisor.acknowledge(operator, estop_released=estop_released)
         if isinstance(outcome, Ok):
             self._latched = None
