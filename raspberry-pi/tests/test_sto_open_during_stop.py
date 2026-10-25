@@ -52,7 +52,7 @@ from src.training.runtime import (
     SafetyStanding,
     TrainingRuntime,
 )
-from src.training.safety import RULE_OPERATOR_ESTOP
+from src.training.safety import RULE_OPERATOR_ESTOP, NothingLatched
 from src.training.types import Occupancy, SafetyAction, SafetyVerdict
 from src.units import MotorRpm, OutputRpm, RawRegister, RegisterAddress, Seconds
 from tests.test_failure_rig import BENCH_ENV, OPERATOR, Rig, Wrapped, make_rig
@@ -191,6 +191,11 @@ def enabled(runtime: TrainingRuntime) -> bool:
 def state(runtime: TrainingRuntime) -> RuntimeState:
     """Read afresh, for the reason :func:`stopping` gives."""
     return runtime.state
+
+
+def sim_state(scene: Scene) -> SimState:
+    """The simulated drive's state, read afresh for the reason :func:`stopping` gives."""
+    return scene.rig.simulator.sim_state
 
 
 # =========================================================================
@@ -639,6 +644,59 @@ async def test_the_console_leaving_the_output_stage_itself_latches_no_sto_open(
     assert scene.sto_open == []
     verdict = scene.runtime.standing
     assert (None if verdict is None else verdict.rule) == remaining
+    await scene.panel.close()
+
+
+class ResetLandsUnanswered(Noted):
+    """FAULT_RESET reaches the drive, and its answer is lost."""
+
+    @override
+    async def write_command(self, word: ControlWord) -> Result[None, DriveError]:
+        if word is not ControlWord.FAULT_RESET:
+            return await super().write_command(word)
+        self.writes.append(("command", word.value))
+        landed = await self.inner.write_command(word)
+        assert isinstance(landed, Ok)  # the drive took it
+        return Err(CommTimeout(after=Seconds(0.5)))
+
+
+async def test_a_fault_reset_whose_answer_is_lost_is_no_sto_opening(tmp_path: Path) -> None:
+    """The reset leaves the drive SWITCH_ON_DISABLED with the run command still held.
+
+    That is the reset's doing, not the chain's: no ``sto_open``. The session ends,
+    the reading is READY, nothing is left to acknowledge, and the next start goes
+    through.
+    """
+    scene = Scene(tmp_path, DRIVE_INPUT, wrap=ResetLandsUnanswered)
+    runtime, surface = scene.runtime, scene.panel.surface
+    await scene.cruise()
+    scene.rig.simulator.inject_fault(DriveFault.MOTOR_OVERLOAD)
+    await until_at_rest(scene)
+    await scene.run(5)
+    assert enabled(runtime)  # the ending waits for the reset
+    assert isinstance(surface.acknowledge(OPERATOR), Ok)
+    assert isinstance(surface.submit_fault_reset(operator=OPERATOR), Ok)
+    shown: list[DriveState] = []
+    for _ in range(10):
+        await scene.run(1)
+        status = runtime.drive_status
+        if status is not None:
+            shown.append(status.state)
+    assert ("command", ControlWord.FAULT_RESET.value) in [w[1:] for w in scene.writes]
+    assert DriveState.SWITCH_ON_DISABLED in shown
+    assert scene.rig.simulator.sim_state is SimState.SWITCH_ON_DISABLED  # no SHUTDOWN followed
+    assert scene.sto_open == []
+    assert not enabled(runtime)
+    assert state(runtime) is RuntimeState.FINISHED
+    assert scene.reading().state is StoState.READY
+    assert standing(runtime) is None  # the fault's acknowledgement was the last one needed
+    nothing = surface.acknowledge(OPERATOR)
+    assert isinstance(nothing, Err)
+    assert isinstance(nothing.error, NothingLatched)
+    assert isinstance(await scene.start(), Ok)
+    await scene.run(5)
+    assert scene.sto_open == []
+    assert sim_state(scene) is SimState.OPERATION_ENABLED
     await scene.panel.close()
 
 

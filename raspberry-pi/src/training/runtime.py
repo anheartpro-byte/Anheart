@@ -1252,6 +1252,7 @@ class TrainingRuntime:
         "_decision",
         "_descent_from",
         "_disable_failures",
+        "_disable_follows_fault",
         "_drive",
         "_enabled",
         "_end_reason",
@@ -1434,6 +1435,12 @@ class TrainingRuntime:
         self._applied_rpm: MotorRpm = MotorRpm(0)
         self._last_status: DriveStatus | None = None
         self._last_status_at: Monotonic | None = None
+        # Whether the last state other than SWITCH_ON_DISABLED a tick read was
+        # FAULT (or its fault reaction), or a fault reset was attempted since:
+        # the drive then reaches SWITCH_ON_DISABLED through the reset, not
+        # through an STO opening (_deduce_sto_open). Written by _service_drive
+        # on every status read and by fault_reset before its word.
+        self._disable_follows_fault: bool = False
         # Run lengths of failed exchanges, one per kind (see ``Exchange``).
         # Mutable, owned by this loop alone. A read run is reset only by a
         # successful read, a write run only by an acknowledged write, and the
@@ -2139,6 +2146,9 @@ class TrainingRuntime:
         if isinstance(checked, Err):
             return Err(checked.error)
         readable = checked.value
+        # Noted before the word: a reset that lands with its answer lost still
+        # takes the drive to SWITCH_ON_DISABLED under the run command.
+        self._disable_follows_fault = True
         written = await self._drive.write_command(ControlWord.FAULT_RESET)
         if isinstance(written, Err):
             return Err(ResetUndelivered(describe_drive_error(written.error).detail))
@@ -2710,16 +2720,22 @@ class TrainingRuntime:
         whatever its length. No word this module writes leads there while it
         holds the run command: an arming ends in OPERATION_ENABLED,
         :meth:`_settle` and the escalation end in READY_TO_SWITCH_ON and clear
-        the run command, a fault reset clears it before its word, an emergency
-        zero writes LFRD only, and a silent runtime reads nothing. Nor is the
-        status the start's own inspection read before the arming taken for one
-        read since (:meth:`_status_postdates_start`): a drive just powered up
-        shows SWITCH_ON_DISABLED until it is armed. The status is the one the
-        tick already read: no frame is added.
+        the run command, an emergency zero writes LFRD only, and a silent
+        runtime reads nothing. A fault reset does lead there, and keeps the run
+        command when its answer is lost; so would a drive that reset its own
+        fault. A SWITCH_ON_DISABLED that follows a fault, or a reset attempt,
+        is therefore not taken for an opening (``_disable_follows_fault``):
+        the reads, which a faulted drive does not withhold, judge the chain
+        then, and READY is needed before any start. Nor is the status the
+        start's own inspection read before the arming taken for one read since
+        (:meth:`_status_postdates_start`): a drive just powered up shows
+        SWITCH_ON_DISABLED until it is armed. The status is the one the tick
+        already read: no frame is added.
         """
         if (
             self._link_open
             and self._enabled
+            and not self._disable_follows_fault
             and status is not None
             and status.state is DriveState.SWITCH_ON_DISABLED
             and self._status_postdates_start()
@@ -2788,6 +2804,9 @@ class TrainingRuntime:
         self._note_success(Exchange.READ)
         self._last_status = status.value
         self._last_status_at = now
+        state = status.value.state
+        if state is not DriveState.SWITCH_ON_DISABLED:
+            self._disable_follows_fault = state is DriveState.FAULT
 
     async def _poll_idle(self, now: Monotonic) -> None:
         """Read the drive at :data:`IDLE_POLL_PERIOD` while no session was ever started.
