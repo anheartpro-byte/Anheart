@@ -2703,9 +2703,8 @@ class TrainingRuntime:
         A fresh SWITCH_ON_DISABLED while this runtime holds the run command
         means the drive removed its output stage by itself, which its status
         word decodes as DC bus not ready or STO open: ``sto_open`` latches,
-        whether the chain
-        is still open or already closed again. No word this module writes
-        leads there while it holds the run command: an arming ends in
+        whether the chain is still open or already closed again. No word this
+        module writes leads there while it holds the run command: an arming ends in
         OPERATION_ENABLED, :meth:`_settle` and the escalation end in
         READY_TO_SWITCH_ON and clear the run command, a fault reset clears it
         before its word, an emergency zero writes LFRD only, and a silent
