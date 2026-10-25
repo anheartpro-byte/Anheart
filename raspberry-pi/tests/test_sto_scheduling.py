@@ -865,13 +865,49 @@ def chain_opened(bus: TimedBus) -> Event:
     return opened
 
 
-def test_an_opening_the_drive_does_not_show_latches_at_the_first_reading_after_the_stop(
+def answering(bus: TimedBus) -> Event:
+    """The drive answers 5202 again."""
+
+    def answers(_panel: LocalPanel) -> None:
+        bus.silent_feedback = False
+
+    return answers
+
+
+@dataclass(frozen=True, slots=True)
+class AfterStop:
+    """What the console holds once a stop is over, before the drive answers 5202 again."""
+
+    state: RuntimeState
+    verdict: SafetyVerdict | None
+    reading: StoState
+
+
+def test_an_opening_the_drive_does_not_show_latches_at_the_first_reading_at_rest(
     tmp_path: Path,
 ) -> None:
-    """The stop withheld the reads while motion was possible: OPEN latches even at rest."""
+    """The stop withheld the reads while motion was possible: OPEN latches at rest too.
+
+    The fake drive's status word says nothing of the chain, and the reads that
+    follow the stop go unanswered until the console is at rest: only the memory
+    of the stop judges the first reading that succeeds.
+    """
     clock = ManualClock(Monotonic(10.0))
     panel, bus = bus_panel(tmp_path, clock, STO_ENV)
-    events = (*SESSION, (ASKED, operator_stop), (ASKED + 1.0, chain_opened(bus)))
+    seen: list[AfterStop] = []
+
+    def note(console: LocalPanel) -> None:
+        reading = console.sto.latest(Monotonic(now())).state
+        seen.append(AfterStop(console.runtime.state, console.runtime.standing, reading))
+
+    events = (
+        *SESSION,
+        (ASKED, operator_stop),
+        (ASKED + 1.0, chain_opened(bus)),
+        (ASKED + 1.0, silence(bus)),
+        (ASKED + 5.0, note),
+        (ASKED + 5.0, answering(bus)),
+    )
     run_virtual(clock, console(panel, events, 13.95))
     stopped = next(
         sent.at
@@ -885,8 +921,12 @@ def test_an_opening_the_drive_does_not_show_latches_at_the_first_reading_after_t
         for sent in bus.sent
         if sent.access == "read" and sent.address == REGISTERS.logic_inputs
     ]
-    first = next(at for at in feedback if at >= 10.0 + ASKED)
-    assert first > stopped  # none during the stop
+    assert next(at for at in feedback if at >= 10.0 + ASKED) > stopped  # none during the stop
+    (rest,) = seen
+    assert rest.state is RuntimeState.FINISHED  # at rest, the run command removed
+    # Nothing has seen the opening yet (unanswered reads may raise loop_stall: the residual).
+    assert rest.verdict is None or rest.verdict.rule != RULE_STO_OPEN
+    assert rest.reading is StoState.UNKNOWN
     verdict = panel.runtime.standing
     assert verdict is not None
     assert (verdict.rule, verdict.action, verdict.latched) == (
@@ -895,8 +935,9 @@ def test_an_opening_the_drive_does_not_show_latches_at_the_first_reading_after_t
         True,
     )
     assert verdict.detail != STO_OPEN_DEDUCED  # read: the drive's word showed nothing
-    assert 0 < verdict.since - first <= CONTROL_PERIOD + 1e-9  # the tick after that reading
-    assert panel.runtime.state is RuntimeState.FINISHED  # at rest, the run command removed
+    answered = next(at for at in feedback if at >= 10.0 + ASKED + 5.0)
+    assert 0 < verdict.since - answered <= CONTROL_PERIOD + WORST + 1e-9
+    assert panel.runtime.state is RuntimeState.FINISHED
 
 
 # =========================================================================
