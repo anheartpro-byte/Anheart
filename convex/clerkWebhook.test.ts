@@ -1,7 +1,11 @@
 /// <reference types="vite/client" />
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./_generated/api";
-import { verifyClerkSignature } from "./lib/clerkWebhook";
+import {
+  parseClerkEvent,
+  verifiedClerkEmails,
+  verifyClerkSignature,
+} from "./lib/clerkWebhook";
 import {
   as,
   backendOf,
@@ -612,5 +616,72 @@ describe("membership boundaries", () => {
       .withIdentity({ subject: "patient" })
       .query(api.users.getCurrentUser, {});
     expect(user?.role).toBe("user");
+  });
+});
+
+describe("ANH-249 the schemas of a Clerk payload, under zod 4.6", () => {
+  it("reads an envelope only with a type, a valid timestamp and its data", () => {
+    expect(parseClerkEvent(event("user.updated", {}))).toBe("ignored");
+    for (const value of [
+      { type: "user.updated", timestamp: NOW },
+      event("user.updated", {}, -1),
+      { ...event("user.updated", {}), type: 1 },
+      "text",
+    ])
+      expect(parseClerkEvent(value)).toBeNull();
+  });
+
+  it("reads a deletion only with the identifier of what is deleted", () => {
+    expect(parseClerkEvent(event("user.deleted", { id: "user_qa" }))).toEqual({
+      kind: "userDeleted",
+      userId: "user_qa",
+      occurredAt: NOW,
+      updatedAt: NOW,
+    });
+    expect(
+      parseClerkEvent(event("organization.deleted", { id: org.id })),
+    ).toMatchObject({ kind: "organization", deleted: true, organization: { id: org.id } });
+    for (const type of ["user.deleted", "organization.deleted"])
+      for (const data of [{}, { id: "" }, { id: "x".repeat(257) }])
+        expect(parseClerkEvent(event(type, data))).toBeNull();
+  });
+
+  it("keeps the length limit of an organization name", () => {
+    const named = (name: string) =>
+      parseClerkEvent(event("organization.created", { ...org, name }));
+    expect(named("x".repeat(1024))).toMatchObject({ kind: "organization" });
+    expect(named("x".repeat(1025))).toBeNull();
+  });
+
+  it("takes the public identifier as the email only when it is an address", () => {
+    const identified = (identifier: string) =>
+      parseClerkEvent(
+        event("organizationMembership.created", {
+          ...member,
+          public_user_data: { ...member.public_user_data, identifier },
+        }),
+      );
+    expect(identified("qa@example.invalid")).toMatchObject({
+      email: "qa@example.invalid",
+    });
+    expect(identified("qa-user-name")).toMatchObject({ email: "" });
+  });
+
+  it("refuses a Clerk account whose addresses are not email addresses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          id: "user_qa",
+          email_addresses: [
+            {
+              email_address: "not-an-address",
+              verification: { status: "verified" },
+            },
+          ],
+        }),
+      ),
+    );
+    expect(await verifiedClerkEmails("user_qa")).toBeNull();
   });
 });

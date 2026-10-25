@@ -88,3 +88,33 @@ describe("verified record export", () => {
     }
   });
 });
+
+describe("ANH-249 the schemas of a record export, under zod 4.6", () => {
+  const manifest = (extra: object = {}) =>
+    JSON.stringify({
+      record_id: "qa",
+      kind: "manual",
+      end_reason: null,
+      profile: null,
+      ...extra,
+    });
+
+  it("reads an event with its text and a geometry of numbers and flags", () => {
+    const trace = recordTrace(
+      manifest({ geometry: { gear_ratio: 10, leg_tip_measured: true } }),
+      "t\n1\n",
+      '{"t":1,"kind":"note","detail":"ok"}\n',
+    );
+    expect(trace).toContain('"gear_ratio":10,"leg_tip_measured":true');
+    expect(trace).toContain('"detail":"ok","type":"event"');
+  });
+
+  it("refuses an event without its text and a geometry carrying text", () => {
+    expect(() =>
+      recordTrace(manifest(), "t\n1\n", '{"t":1,"kind":"note"}\n'),
+    ).toThrow();
+    expect(() =>
+      recordTrace(manifest({ geometry: { gear_ratio: "ten" } }), "t\n1\n", ""),
+    ).toThrow();
+  });
+});

@@ -9,7 +9,14 @@ import {
   seedMachineWorld,
   type World,
 } from "./test.setup";
-import { depositManifest, sha256, uploadRequest } from "./lib/recordStorage";
+import {
+  commitRequest,
+  depositManifest,
+  MAX_RECORD_FILE_BYTES,
+  MAX_RECORD_FILES,
+  sha256,
+  uploadRequest,
+} from "./lib/recordStorage";
 import { makeFunctionReference } from "convex/server";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
@@ -605,5 +612,43 @@ describe("ANH-130 verified session deposits", () => {
         machineId: w.machine,
       }),
     ).toHaveProperty("error");
+  });
+});
+
+describe("ANH-249 the schemas of a deposit, under zod 4.6", () => {
+  const file = {
+    sessionId: "session",
+    path: "ticks.csv",
+    sha256: "a".repeat(64),
+    size: 10,
+  };
+
+  it("accepts upload and commit metadata and refuses what is outside their bounds", () => {
+    expect(uploadRequest.safeParse(file).success).toBe(true);
+    expect(commitRequest.parse({ ...file, storageId: "storage" }).storageId).toBe(
+      "storage",
+    );
+    for (const bad of [
+      { ...file, path: "../ticks.csv" },
+      { ...file, path: `${"a".repeat(157)}.csv` },
+      { ...file, sha256: "A".repeat(64) },
+      { ...file, size: MAX_RECORD_FILE_BYTES + 1 },
+      { ...file, path: "manifest.json", size: 2 * 1024 * 1024 + 1 },
+    ])
+      expect(uploadRequest.safeParse(bad).success).toBe(false);
+    expect(commitRequest.safeParse(file).success).toBe(false);
+    expect(commitRequest.safeParse({ ...file, storageId: "" }).success).toBe(false);
+  });
+
+  it("refuses an inventory over the file limit from its length alone, before reading its paths", () => {
+    const files = Array.from(
+      { length: MAX_RECORD_FILES + 1 },
+      (_, i) => `../f${i}.csv`,
+    );
+    const result = depositManifest.safeParse({ ...completePiManifest, files });
+    expect(result.success).toBe(false);
+    expect(
+      result.error?.issues.map((issue) => [issue.code, issue.path.join(".")]),
+    ).toEqual([["too_big", "files"]]);
   });
 });

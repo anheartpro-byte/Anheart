@@ -3,6 +3,7 @@ import type { Infer } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { as, modules, NOW, seedMachineWorld, seedWorld } from "./test.setup";
 import {
+  machineHealthSchema,
   machineHealthValidator,
   HEARTBEAT_RETENTION_MS,
   HEALTH_RETENTION_MS,
@@ -200,5 +201,41 @@ describe("ANH-148 machine health", () => {
     expect(
       await w.t.run((ctx) => ctx.db.query("machine_health_history").collect()),
     ).toHaveLength(1);
+  });
+});
+
+describe("ANH-249 the machine health schema, under zod 4.6", () => {
+  const withFaults = (codes: unknown) => ({
+    ...reading(65),
+    counters: { ...reading(65).counters, drive_faults_by_code: codes },
+  });
+  const issues = (value: unknown) => {
+    const result = machineHealthSchema.safeParse(value);
+    return result.success ? [] : result.error.issues.map((issue) => issue.code);
+  };
+  const codes = (count: number) =>
+    Object.fromEntries(Array.from({ length: count }, (_, i) => [`E${i}`, 1]));
+
+  it("accepts the fault codes of the drive under their pattern, up to 128 of them", () => {
+    expect(
+      machineHealthSchema.parse(withFaults({ E01: 2, "F:12_a-b": 0 })).counters
+        .drive_faults_by_code,
+    ).toEqual({ E01: 2, "F:12_a-b": 0 });
+    expect(issues(withFaults(codes(128)))).toEqual([]);
+  });
+
+  it("refuses a fault code outside its pattern, even beside valid ones, a negative count and a 129th code", () => {
+    expect(issues(withFaults({ "bad key!": 1 }))).toEqual(["invalid_key"]);
+    expect(issues(withFaults({ E01: 1, "x y": 2 }))).toEqual(["invalid_key"]);
+    expect(issues(withFaults({ ["A".repeat(33)]: 1 }))).toEqual(["invalid_key"]);
+    expect(issues(withFaults({ E01: -1 }))).toEqual(["too_small"]);
+    expect(issues(withFaults(codes(129)))).toEqual(["custom"]);
+  });
+
+  it("refuses a measurement it does not know, at the top and among the counters", () => {
+    expect(issues({ ...reading(65), extra: 1 })).toEqual(["unrecognized_keys"]);
+    expect(
+      issues({ ...reading(65), counters: { ...reading(65).counters, extra: 1 } }),
+    ).toEqual(["unrecognized_keys"]);
   });
 });
