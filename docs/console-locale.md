@@ -1975,7 +1975,10 @@ mouvement était possible, la première lecture `ouverte` verrouille aussi
 compte comme un tel arrêt. Tout acquittement attend alors une lecture `prete`
 faite après l'arrêt : celle d'avant l'arrêt, même encore récente, ne suffit
 pas, et le refus le dit (`inconnue`). Un nouveau départ suit l'acquittement
-nommé, comme ailleurs. Deux ouvertures ne portent pas le nom `sto_open` :
+nommé, comme ailleurs. Avant lui, un départ demandé depuis la page est refusé au
+clic (409 `verdict_latched`, section 13) dès que la chaîne est lue `prete` : rien
+n'entre dans la boîte aux lettres. Tant qu'elle ne l'est pas, c'est le refus STO
+qui répond (412 `sto_not_ready`). Deux ouvertures ne portent pas le nom `sto_open` :
 pendant un arrêt déjà verrouillé `quick_stop` par la console (variateur trouvé
 en marche, armement non confirmé), ce verrou tient et refuse tout départ ;
 pendant la roue libre d'un variateur en défaut, une ouverture plus courte que
@@ -2093,7 +2096,7 @@ même si le verdict à libérer porte sur une autre cause.
 |---|---|---|
 | `an operator name is required: an unattributable session record is not one` | 400 | nom d'opérateur vide (démarrage, cible, fin, reset, acquittement) |
 | `nobody has attested the emergency stop this boot: …` | 412 | attestation du câblage non faite depuis le démarrage du Pi |
-| `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | 409 | un verdict verrouillé attend un acquittement |
+| `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | 409 | `verdict_latched` : un verdict verrouillé attend un acquittement, quel qu'en soit l'auteur : le superviseur, ou la console elle-même (`sto_open`, `drive_precommanded`, `enable_unconfirmed`, son propre `comms_lost`...). Sous un verdict de la console elle-même, la règle nommée est celle de la ligne `plancher verrouille` de la page Securite. La console répond au clic, sans rien déposer dans la boîte aux lettres. Jusqu'au 25 octobre 2026, un verdict verrouillé par la console elle-même n'était pas lu ici : le démarrage était accepté (202) puis refusé un cycle plus tard par la boucle |
 | `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` | 409 | `start_pending` : un démarrage ou un reset pendant qu'un démarrage accepté attend ou est armé (double clic, ou un autre écran). Jusqu'au 11 octobre 2026 : `the machine is starting, not idle (pending: …)`, avec la demande en attente imprimée |
 | `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` | 409 | `request_waiting` : la boîte aux lettres (une seule place) tient une autre demande jusqu'au prochain cycle |
 | `the machine is running, not idle` | 409 | `machine_running` : une séance tourne déjà |
@@ -2129,7 +2132,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 |---|---|
 | `demarrage refuse : la machine est deja <état>` | une séance existe déjà |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante |
-| `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente |
+| `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente. Depuis le 25 octobre 2026 un démarrage demandé depuis la page sous un verdict verrouillé est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un verdict non verrouillé, pour un verrou posé entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord sous un verdict verrouillé par la console elle-même (section 15) |
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ ceux du fichier médical (`hr_hard_max_bpm` / `hr_critical_bpm`) |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
 | `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent quand la boucle relit le variateur pour armer. Depuis le 11 octobre 2026 un démarrage demandé depuis la page est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un défaut apparu entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord |
@@ -2430,11 +2433,15 @@ répondu à temps. Détail dans
   plus caché à l'opérateur : le bandeau `VARIATEUR EN DEFAUT` le dit sur toutes les
   pages, et la console refuse le démarrage au clic, avec la raison (section 6). Aucune
   règle de sécurité n'a été ajoutée pour cela.
-- Un démarrage demandé alors qu'un verdict verrouillé par le runtime lui-même tient
-  (`drive_precommanded`, par exemple) est encore accepté par la console (202), puis
-  refusé un cycle plus tard par la boucle : la porte de la console ne lit que le
-  superviseur. Le verdict, lui, est à l'écran avant le clic (pastille **Securite**,
-  bandeau, et maintenant `/api/status`), et la note du bouton donne le refus.
+- Depuis le 25 octobre 2026, un démarrage demandé depuis la page alors qu'un verdict
+  verrouillé par le runtime lui-même tient (`sto_open`, `drive_precommanded`, par
+  exemple) est refusé au clic (409 `verdict_latched`, section 13), comme sous un
+  verdict du superviseur ; jusque-là il était accepté (202), puis refusé un cycle plus
+  tard par la boucle. Un lancement venu du tableau de bord sous un tel verdict ne
+  passe pas par cette porte : la console accepte encore sa confirmation et annonce le
+  départ au tableau de bord, puis la boucle le refuse. Rien n'est armé ; la
+  vérification faite avant d'annoncer le départ ne lit que les verdicts du
+  superviseur.
 - Le bandeau `ARRET D'URGENCE VERROUILLE` garde trois cas, du côté prudent (section 5) :
   un WebSocket tombé sur une image qui montrait un arrêt verrouillé ; un arrêt
   d'urgence posé depuis un autre écran sous `go_silent`, vu au tour de statut suivant
