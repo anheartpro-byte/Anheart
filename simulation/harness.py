@@ -73,6 +73,7 @@ from simulation.scenario import (
     StartAgain,
     StoClose,
     StoOpen,
+    StoVariant,
     TickException,
 )
 from simulation.sensors import DirectSensor
@@ -82,13 +83,24 @@ from src.bitalino_client import SampleBatch
 from src.clock import Clock, SimClock
 from src.ecg_pipeline import EcgBridge, EcgFrame, Treatment, load_treatment, treat_ecg
 from src.local_panel import (
+    StoReadGate,
     describe_reset_refusal,
     describe_start_refusal,
     describe_target_refusal,
+    sto_stop_pending,
 )
 from src.medical import SHIPPED_PARAMETERS
+from src.motor.drive import DriveError, LogicInput, RegisterMap
 from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
-from src.motor.sto import SimulatedStoChain, SimulatedStoSource, StoSourceKind, StoState
+from src.motor.sto import (
+    DriveInputStoSource,
+    SimulatedStoChain,
+    SimulatedStoSource,
+    StoSource,
+    StoSourceKind,
+    StoState,
+    rest_of_poll_period,
+)
 from src.record import commands
 from src.record.schema import EventKind, Manifest
 from src.result import Err, Ok, Result
@@ -115,6 +127,8 @@ from src.units import (
     Monotonic,
     MotorRpm,
     OutputRpm,
+    RawRegister,
+    RegisterAddress,
     RpmPerSecond,
     Seconds,
     UnixMillis,
@@ -172,6 +186,9 @@ DIRECT_ONLY_ACTIONS: Final[tuple[type[object], ...]] = (
 )
 
 DSP_ONLY_ACTIONS: Final[tuple[type[object], ...]] = (BitalinoSignal,)
+
+STO_INPUT: Final[LogicInput] = LogicInput.LI1
+"""The logic input the simulated relay feedback is wired to: this rig's ``STO_DRIVE_INPUT``."""
 
 
 def load_motion() -> MotionLimits:
@@ -361,6 +378,9 @@ class StoObservation:
     state: StoState
     latched: bool
     end_reason: EndReason | None
+    reads: int = 0
+    """Register 5202 frames that reached the simulated drive in the gap after this tick
+    (``sto_source: drive_input``; none with ``sim_ready``, which reads from memory)."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -539,6 +559,125 @@ def _wire_ecg(
 
 
 # =========================================================================
+# The STO chain, read as the console reads it (``sto_source: drive_input``)
+# =========================================================================
+
+
+@final
+class StoFeedbackPort:
+    """Register 5202 of the bare simulated drive, each frame that reaches it counted.
+
+    The simulator itself, as ``build_sto`` hands it to the source with
+    ``MOTOR_BACKEND=sim``, not the recorded and fault-injecting drive the
+    runtime writes to: the trace keeps the control path's frames only, as the
+    console keeps this read out of the exchange log of its session record.
+    The link checks are the drive's own, so a comms loss fails these reads too.
+    """
+
+    __slots__ = ("_drive", "_frames")
+
+    def __init__(self, drive: SimulatedDrive) -> None:
+        self._drive: SimulatedDrive = drive
+        # Counted by the one source that reads through this port.
+        self._frames: int = 0
+
+    @property
+    def frames(self) -> int:
+        """Register reads sent to the simulated drive so far, answered or not."""
+        return self._frames
+
+    async def read_register(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
+        self._frames += 1
+        return await self._drive.read_register(address)
+
+
+async def poll_after_tick(
+    source: DriveInputStoSource, last_read: Monotonic | None, now: Monotonic
+) -> Monotonic | None:
+    """The console's polling task, after the tick that completed at ``now``, in whole ticks.
+
+    :meth:`~src.motor.sto.DriveInputStoSource.run` waits out the rest of
+    ``STO_POLL_PERIOD`` after a read, then for the next completed tick; a poll
+    the guard refuses waits for the next completed tick only. On a clock that
+    moves by whole ticks that is: ask after the first completed tick at which
+    :func:`~src.motor.sto.rest_of_poll_period` of the last read is zero, and
+    after every tick while refused. The read itself, and the guard it asks, are
+    the source's. Returns when the last read started: ``now`` if one did here.
+    """
+    if last_read is not None and rest_of_poll_period(last_read, now) > 0.0:
+        return last_read
+    attempts = source.attempts
+    await source.poll()
+    return now if source.attempts != attempts else last_read
+
+
+@final
+class DriveInputPoll:
+    """The console's STO reading, wired around the harness's own runtime.
+
+    :class:`~src.motor.sto.DriveInputStoSource` on :class:`StoFeedbackPort`,
+    with no read budget (the simulator's exchanges never suspend), guarded by
+    :class:`~src.local_panel.StoReadGate`: no read while silent, released or
+    unacquired, while a stop is under way, nor outside the gap after a
+    completed tick. The harness's actions reach the runtime at the tick, as
+    the console's mailbox does, so nothing is ever pending for the gate:
+    :func:`~src.local_panel.sto_stop_pending` is asked with no mailbox command,
+    no screen emergency stop and no camera. Mutable, owned by one session.
+    """
+
+    __slots__ = ("_gate", "_last_read", "_port", "_source")
+
+    def __init__(
+        self,
+        *,
+        clock: Clock,
+        runtime: TrainingRuntime,
+        source: DriveInputStoSource,
+        port: StoFeedbackPort,
+    ) -> None:
+        def stop_pending() -> bool:
+            return sto_stop_pending(runtime, estop_pending=False, pending=None, decision=None)
+
+        self._source: DriveInputStoSource = source
+        self._port: StoFeedbackPort = port
+        self._gate: StoReadGate = StoReadGate(
+            clock=clock, runtime=runtime, budget=source.read_budget, stop_pending=stop_pending
+        )
+        source.guard_polling(self._gate.permitted)
+        # When the last read started; None before the first.
+        self._last_read: Monotonic | None = None
+
+    def tick_began(self) -> None:
+        """A tick starts: no read until it completes."""
+        self._gate.tick_began()
+
+    async def tick_completed(self, now: Monotonic) -> int:
+        """The tick at ``now`` completed; then the poll that may follow it, in the gap.
+
+        A harness tick takes no simulated time: it began and completed at
+        ``now``. Returns the 5202 frames that reached the simulated drive.
+        """
+        self._gate.tick_completed(now)
+        frames = self._port.frames
+        self._last_read = await poll_after_tick(self._source, self._last_read, now)
+        return self._port.frames - frames
+
+
+def sto_source_for(
+    variant: StoVariant, chain: SimulatedStoChain, clock: Clock, port: StoFeedbackPort
+) -> StoSource:
+    """The runtime's STO source for the scenario's ``sto_source``, on the shared chain."""
+    match variant:
+        case StoVariant.SIM_READY:
+            return SimulatedStoSource(chain=chain, source=StoSourceKind.SIM_READY)
+        case StoVariant.DRIVE_INPUT:
+            return DriveInputStoSource(
+                clock=clock, drive=port, address=RegisterMap().logic_inputs, input_=STO_INPUT
+            )
+    raise assert_never(variant)
+
+
+# =========================================================================
 # The session
 # =========================================================================
 
@@ -588,6 +727,7 @@ class Session:
         "_start_refusal",
         "_sto_chain",
         "_sto_observations",
+        "_sto_poll",
         "_subject",
         "_targets",
         "_ticker",
@@ -621,6 +761,7 @@ class Session:
                 acceleration_time=scenario.drive.acceleration_time,
                 # The read-only idle poll must not trip SLF, as on the console.
                 reads_reset_watchdog=True,
+                sto_input=STO_INPUT,
             ),
             initial_state=SimState.SWITCH_ON_DISABLED if enabled is None else _ENABLED,
             initial_rpm=MotorRpm(0) if enabled is None else enabled,
@@ -632,8 +773,10 @@ class Session:
         for word in scenario.drive.refuse_commands:
             self._faulty.refuse(word)
         self._drive: RecordingDrive = RecordingDrive(self._faulty, clock)
+        port = StoFeedbackPort(self._sim)
+        sto = sto_source_for(scenario.sto, self._sto_chain, clock, port)
         self._runtime: TrainingRuntime = TrainingRuntime(
-            sto=SimulatedStoSource(chain=self._sto_chain, source=StoSourceKind.SIM_READY),
+            sto=sto,
             clock=clock,
             drive=self._drive,
             geometry=rig.machine,
@@ -643,6 +786,11 @@ class Session:
             # The anti-nausea g-rate is judged at the rider's farthest point: the
             # feet, or the reference radius if a scenario puts the feet inside it.
             limit_radius=Metres(max(float(rig.leg_tip_radius), float(rig.machine.radius))),
+        )
+        self._sto_poll: DriveInputPoll | None = (
+            DriveInputPoll(clock=clock, runtime=self._runtime, source=sto, port=port)
+            if isinstance(sto, DriveInputStoSource)
+            else None
         )
         self._ceiling: MotorRpm | None = _manual_ceiling(scenario, rig)
         origin = clock.monotonic()
@@ -781,7 +929,14 @@ class Session:
         return await runtime.start_manual(occupancy, OPERATOR, ceiling)
 
     async def _step(self, now: Monotonic, *, record: bool) -> bool:
-        """One tick in ``LocalPanel.control_step`` order. ``False`` once the process is gone."""
+        """One tick in ``LocalPanel.control_step`` order. ``False`` once the process is gone.
+
+        With ``sto_source: drive_input``, the console's STO poll follows the
+        completed tick, in the gap before the next one.
+        """
+        poll = self._sto_poll
+        if poll is not None:
+            poll.tick_began()
         if record:
             alive = await self._apply_actions(now)
             if not alive:
@@ -806,6 +961,7 @@ class Session:
             self._event(now, EventKind.END, report.detail)
             self._message(now, "shutdown", report.detail)
             return False
+        reads = 0 if poll is None else await poll.tick_completed(now)
         self._last_measured = snapshot.measured.motor_rpm
         self._counters = snapshot.counters
         self._note_messages(now, snapshot)
@@ -821,6 +977,7 @@ class Session:
                     state=snapshot.sto.state,
                     latched=snapshot.safety is not None and snapshot.safety.latched,
                     end_reason=self._runtime.end_reason,
+                    reads=reads,
                 )
             )
             self._note_changes(now, snapshot)
