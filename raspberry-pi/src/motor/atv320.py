@@ -2218,12 +2218,17 @@ about 1.7 s. An OS serial device has no settle. The OS call that opens the
 device is bounded by no timeout, as after any failed exchange. These are
 bounds; what docs/raspberry-pi.md reports as measured is not one.
 
-That is the one case in which an STO read can delay a stop write: a read
-already in flight, left unanswered, when the stop is asked for. The console
-starts no read while a stop is asked for or under way, so a stop meets at most
-that one read; and reads start at most once per STO poll period, never two in
-flight, so this happens at most once per period. It is the same delay as a
-failed transaction of the tick itself.
+The one case in which an STO read can delay a stop write is a read already in
+flight when the stop is asked for, answered or not. Answered within this
+budget, it ends before the next tick and delays only the stop writes made
+outside the tick (the camera's emergency stop, the console's close) by the rest
+of the read: a few milliseconds, at most this budget. Answered beyond it, it
+delays the next tick by as much. Left unanswered, it delays them up to the
+worst case above, about 1.7 s plus the OS call that opens the port, which no
+timeout bounds; that is the same delay as a failed transaction of the tick
+itself. The console starts no read while a stop is asked for or under way, so
+a stop meets at most that one read; and reads start at most once per STO poll
+period, never two in flight, so this happens at most once per period.
 """
 
 
