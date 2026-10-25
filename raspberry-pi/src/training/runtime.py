@@ -197,7 +197,13 @@ from src.motor.drive import (
     describe_fault,
     describe_violation,
 )
-from src.motor.sto import STO_STALE_AFTER, StoSource, StoState, UnconfiguredStoSource
+from src.motor.sto import (
+    STO_STALE_AFTER,
+    StoReading,
+    StoSource,
+    StoState,
+    UnconfiguredStoSource,
+)
 from src.result import Err, Ok, Result
 from src.task_completion import complete_owned
 from src.training.drive_inspection import OpenFailed, StatusFailed, begin_inspection
@@ -1291,6 +1297,7 @@ class TrainingRuntime:
         "_sto_last_success_at",
         "_sto_loop_delay",
         "_sto_reads_withheld",
+        "_sto_withheld_at",
         "_stop_requested",
         "_stopped_by",
         "_subject",
@@ -1498,6 +1505,10 @@ class TrainingRuntime:
         # Whether the last completed tick left a stop under way: the console
         # then withholds STO reads until the next tick. Written at each tick's end.
         self._sto_reads_withheld: bool = False
+        # The last tick that left a stop under way, so withheld the reads while
+        # motion was possible; None once a READY reading postdates it. Written
+        # at each such tick's end, cleared by _judge_sto only.
+        self._sto_withheld_at: Monotonic | None = None
         self._latched: SafetyVerdict | None = None
         # What this module's own latch held when GO_SILENT took its place, for
         # the screen alone: written by _latch, read by the `silenced` property.
@@ -2572,6 +2583,10 @@ class TrainingRuntime:
         self._accumulate(now, interval)
         self._snapshot = self._build_snapshot(now)
         self._sto_reads_withheld = self.stop_in_progress
+        if self._sto_reads_withheld:
+            # A stop under way holds the run command or an armed session:
+            # motion was possible while the reads were withheld.
+            self._sto_withheld_at = now
 
     def _judge_sto(self, now: Monotonic, previous: Monotonic | None) -> None:
         """Judge the cached contact before any controller demand, including at idle.
@@ -2580,7 +2595,10 @@ class TrainingRuntime:
         a configured source and positive motion evidence: an armed session,
         our run command, or a fresh enabled/turning status. No I/O occurs here.
         During a stop, when no read is taken, the drive's status word stands
-        in for one (:meth:`_deduce_sto_open`).
+        in for one (:meth:`_deduce_sto_open`). And once reads were withheld
+        while motion was possible, the shaft at rest is no excuse: an OPEN
+        reading latches until a READY one postdates that stop
+        (:meth:`_sto_reading_postdates_stop`).
 
         Deduct an interval in which the console could not read: a loop_stall
         interval, or one after a tick that left a stop under way (the console
@@ -2607,6 +2625,8 @@ class TrainingRuntime:
             return
         reading = self._sto.latest(now)
         last = reading.last_success_at
+        if reading.state is StoState.READY and self._sto_reading_postdates_stop(reading):
+            self._sto_withheld_at = None
         if last != self._sto_last_success_at:
             self._sto_last_success_at = last
             self._sto_loop_delay = Seconds(0)
@@ -2636,6 +2656,7 @@ class TrainingRuntime:
         if (
             not armed
             and not self._enabled
+            and self._sto_withheld_at is None
             and status is not None
             and status.state is not DriveState.OPERATION_ENABLED
             and abs(status.output_rpm) < self._limits.standstill_rpm
@@ -2665,6 +2686,16 @@ class TrainingRuntime:
                 "permit polling; controlled stop. "
                 "Restore a ready reading, acknowledge by name and request a new start",
             )
+
+    def _sto_reading_postdates_stop(self, reading: StoReading) -> bool:
+        """Whether ``reading`` was taken no earlier than the last tick that withheld reads.
+
+        A reading from before a stop says nothing of the chain during it. A
+        simulated chain is read at the instant it is asked, so it always does.
+        """
+        withheld = self._sto_withheld_at
+        last = reading.last_success_at
+        return withheld is None or (last is not None and last >= withheld)
 
     def _deduce_sto_open(self, now: Monotonic, status: DriveStatus | None) -> None:
         """During a stop no STO read is taken: the drive's own status word stands in for one.

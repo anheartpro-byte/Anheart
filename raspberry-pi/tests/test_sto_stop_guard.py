@@ -190,6 +190,48 @@ async def test_reads_withheld_by_a_stop_age_no_reading_into_a_verdict(unresolved
         assert rig.now - last > 2.0 + 0.2  # well past the budget, all of it withheld
 
 
+def opened_at(at: Monotonic) -> StoReading:
+    return replace(fresh(at), state=StoState.OPEN)
+
+
+@pytest.mark.parametrize(
+    ("after_the_stop", "latches"),
+    [("ready_reading", False), ("ready_reading_from_before", True), ("open_reading", True)],
+)
+async def test_after_a_stop_an_open_reading_latches_at_rest_until_a_later_ready_one(
+    after_the_stop: str, latches: bool
+) -> None:
+    """Reads were withheld while the shaft could turn: rest excuses nothing until READY again."""
+    clock = ManualClock(Monotonic(1000.0))
+    held = HeldSto(fresh(clock.monotonic()))
+    rig = runtime_rig(sto=held)
+    assert isinstance(rig.runtime.confirm_estop_wiring(OPERATOR), Ok)
+    assert isinstance(await rig.runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276)), Ok)
+    assert isinstance(rig.runtime.set_manual_target(OutputRpm(3)), Ok)
+    for _ in range(20):
+        await rig.step()
+        held.reading = fresh(rig.now)  # the console reads after each tick
+    assert rig.runtime.applied_rpm > 0
+    before = rig.now
+    rig.runtime.request_stop("operator")
+    for _ in range(400):  # the console withholds every read meanwhile
+        await rig.step()
+        if rig.state() is RuntimeState.FINISHED:
+            break
+    assert rig.state() is RuntimeState.FINISHED
+    assert not rig.runtime.output_enabled
+    assert held.reading.last_success_at == before  # the last success predates the stop
+    if after_the_stop == "ready_reading":
+        held.reading = fresh(rig.now)  # the first read after the stop
+    if after_the_stop != "open_reading":
+        await rig.step()  # READY at rest: no verdict either way
+        assert rig.standing() is None
+    held.reading = opened_at(rig.now)
+    await rig.step()
+    verdict = rig.standing()
+    assert (verdict is not None and verdict.rule == RULE_STO_OPEN) is latches
+
+
 # =========================================================================
 # The console's guard: a stop asked for withholds the read too
 # =========================================================================

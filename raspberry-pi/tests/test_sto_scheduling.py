@@ -833,6 +833,54 @@ def test_judging_the_drive_word_during_a_stop_adds_no_frame(
 
 
 # =========================================================================
+# A drive that says nothing of the chain: the first reading after the stop judges it
+# =========================================================================
+
+
+def chain_opened(bus: TimedBus) -> Event:
+    """The relay contact reads 0 from now on; the fake drive's status word is unaffected."""
+
+    def opened(_panel: LocalPanel) -> None:
+        bus.fake.registers[REGISTERS.logic_inputs] = 0
+
+    return opened
+
+
+def test_an_opening_the_drive_does_not_show_latches_at_the_first_reading_after_the_stop(
+    tmp_path: Path,
+) -> None:
+    """The stop withheld the reads while motion was possible: OPEN latches even at rest."""
+    clock = ManualClock(Monotonic(10.0))
+    panel, bus = bus_panel(tmp_path, clock, STO_ENV)
+    events = (*SESSION, (ASKED, operator_stop), (ASKED + 1.0, chain_opened(bus)))
+    run_virtual(clock, console(panel, events, 13.95))
+    stopped = next(
+        sent.at
+        for sent in bus.sent
+        if sent.address == REGISTERS.cmd
+        and sent.value == ControlWord.SHUTDOWN.value
+        and sent.at >= 10.0 + ASKED
+    )
+    feedback = [
+        sent.at
+        for sent in bus.sent
+        if sent.access == "read" and sent.address == REGISTERS.logic_inputs
+    ]
+    first = next(at for at in feedback if at >= 10.0 + ASKED)
+    assert first > stopped  # none during the stop
+    verdict = panel.runtime.standing
+    assert verdict is not None
+    assert (verdict.rule, verdict.action, verdict.latched) == (
+        RULE_STO_OPEN,
+        SafetyAction.QUICK_STOP,
+        True,
+    )
+    assert verdict.detail != STO_OPEN_DEDUCED  # read: the drive's word showed nothing
+    assert 0 < verdict.since - first <= CONTROL_PERIOD + 1e-9  # the tick after that reading
+    assert panel.runtime.state is RuntimeState.FINISHED  # at rest, the run command removed
+
+
+# =========================================================================
 # REDUCE is no stop: the session regulates on under it, and so do the reads
 # =========================================================================
 
