@@ -35,15 +35,15 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, unique
 from itertools import pairwise
 from typing import Final
 
 from simulation.harness import TICK, RunResult, run_scenario
 from simulation.invariants import Violation, check_expectations, check_invariants, rules_seen
-from simulation.scenario import Scenario, parse_scenario
-from simulation.tracefile import JsonValue
+from simulation.scenario import Scenario, StoVariant, parse_scenario
+from simulation.tracefile import JsonValue, Row
 from src.motor.drive import ControlWord, DriveFault, describe_fault
 from src.motor.simulated import SimulatedDriveConfig, lft_code_for
 from src.motor.sto import STO_POLL_PERIOD, StoState
@@ -967,9 +967,280 @@ def _sto_cases() -> list[FailureCase]:
     return result
 
 
+# -- the STO chain read as the console reads it (``sto_source: drive_input``) --
+
+BENCH_RPM: Final[float] = 3.0
+"""The bench speed of the drive_input stop cases, output rpm (149 motor rpm): the
+coast after an opening ends inside the case, and the reads that resume are judged."""
+
+DRIVE_INPUT_STOP_S: Final[float] = 60.0
+"""When a drive_input bench case asks for its stop (STOP, target zero, a drive fault)."""
+
+OPEN_INTO_STOP_S: Final[float] = 2.1
+"""How long after its stop began the chain opens, between two ticks; closed as long after.
+
+Between two ticks, as a contact opens: the tick that follows is the first to see it,
+and an instant off the tick grid stays off it however long the case runs."""
+
+READ_LATCH_S: Final[float] = STO_POLL_PERIOD + 2 * TICK
+"""The longest an opening seen by a reading takes to latch: the read the console's
+cadence (one every three ticks) starts after it, then the tick that judges it."""
+
+
+def _with_reading(document: Document) -> Document:
+    """The same document, with the chain read through register 5202."""
+    return {**document, "sto_source": StoVariant.DRIVE_INPUT.value}
+
+
+def _bench(name: str, actions: Sequence[Document], *, duration: float) -> Document:
+    """The bench session to :data:`BENCH_RPM`, its chain read through register 5202."""
+    return _with_reading(
+        {
+            "name": name,
+            "kind": "manual",
+            "duration_s": duration,
+            "actions": [{"at_s": 2.0, "do": "manual_target", "output_rpm": BENCH_RPM}, *actions],
+        }
+    )
+
+
+def _programme(name: str, actions: Sequence[Document], *, duration: float) -> Document:
+    """The 13-minute jog, its chain read through register 5202."""
+    return _with_reading(
+        {
+            "name": name,
+            "kind": "auto",
+            "profile": FAILURE_PROFILE,
+            "duration_s": duration,
+            "actions": list(actions),
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Stop:
+    """One category of stop, the chain opening :data:`OPEN_INTO_STOP_S` into it."""
+
+    name: str
+    kind: str
+    stop: tuple[Document, ...]
+    opens_at: float
+    phase: str
+    end_reasons: frozenset[str]
+    after: float
+    """When the stop is over and the reads have resumed: the requests that must be refused."""
+
+    duration: float
+    category: Category = Category.STO
+    rules: tuple[str, ...] = ("sto_open",)
+    deadline: float = TICK
+    """After the opening, by when ``sto_open`` must stand."""
+
+
+DRIVE_INPUT_STOPS: Final[tuple[_Stop, ...]] = (
+    _Stop(
+        name="operator_stop",
+        kind="manual",
+        stop=({"at_s": DRIVE_INPUT_STOP_S, "do": "operator_stop"},),
+        opens_at=DRIVE_INPUT_STOP_S + OPEN_INTO_STOP_S,
+        phase="cooldown",
+        end_reasons=frozenset({"operator_stop"}),
+        after=200.0,
+        duration=240.0,
+    ),
+    _Stop(
+        # The only end of a programme that is a stop: a programme run to the end
+        # of its timeline opens no ending, its own descent is regulation.
+        name="manual_session_limit",
+        kind="manual",
+        stop=(),
+        opens_at=3600.0 + OPEN_INTO_STOP_S,
+        phase="cooldown",
+        end_reasons=frozenset({"programme_complete"}),
+        after=3740.0,
+        duration=3780.0,
+    ),
+    _Stop(
+        name="manual_target_zero",
+        kind="manual",
+        stop=({"at_s": DRIVE_INPUT_STOP_S, "do": "manual_target", "output_rpm": 0.0},),
+        opens_at=DRIVE_INPUT_STOP_S + OPEN_INTO_STOP_S,
+        phase="hold",
+        end_reasons=VERDICT,
+        after=200.0,
+        duration=240.0,
+    ),
+    _Stop(
+        # attendant_absent: FREEZE after 60 s with no ping, RAMP_DOWN (latched) after 120 s.
+        name="ramp_down_verdict",
+        kind="manual",
+        stop=({"at_s": 40.0, "do": "attendant_leaves"},),
+        opens_at=160.0 + OPEN_INTO_STOP_S,
+        phase="cooldown",
+        end_reasons=VERDICT,
+        after=300.0,
+        duration=340.0,
+    ),
+    _Stop(
+        # A faulted drive is under no stop of this console's: its coast is read.
+        name="faulted_drive_coast",
+        kind="manual",
+        stop=({"at_s": DRIVE_INPUT_STOP_S, "do": "drive_fault", "fault": "MOTOR_OVERLOAD"},),
+        opens_at=DRIVE_INPUT_STOP_S + OPEN_INTO_STOP_S,
+        phase="cooldown",
+        end_reasons=VERDICT,
+        after=200.0,
+        duration=240.0,
+        category=Category.DRIVE,
+        rules=("drive_fault", "sto_open"),
+        deadline=READ_LATCH_S,
+    ),
+    _Stop(
+        # loop_stall latches a FREEZE in HOLD; from COOLDOWN (660 s) it walks the arm down.
+        name="freeze_descent",
+        kind="auto",
+        stop=({"at_s": 500.0, "do": "loop_stall", "duration_s": 1.4},),
+        opens_at=660.0 + OPEN_INTO_STOP_S,
+        phase="cooldown",
+        end_reasons=VERDICT,
+        after=830.0,
+        duration=860.0,
+    ),
+)
+"""Every category of stop: no 5202 read is taken while one is under way."""
+
+
+def _stop_case(stop: _Stop, *, closed: bool) -> FailureCase:
+    shape = "closed_again" if closed else "left_open"
+    name = f"sto_drive_input_{stop.name}_{shape}"
+    at = stop.opens_at
+    contact: list[Document] = [{"at_s": at, "do": "sto_open"}]
+    if closed:
+        contact.append({"at_s": at + OPEN_INTO_STOP_S, "do": "sto_close"})
+        after: list[Document] = [{"at_s": stop.after, "do": "start_again", "expect": "refused"}]
+    else:
+        after = [
+            {"at_s": stop.after, "do": "acknowledge", "expect": "refused"},
+            {"at_s": stop.after + 1.0, "do": "start_again", "expect": "refused"},
+        ]
+    actions = [*stop.stop, *contact, *after]
+    document = (
+        _bench(name, actions, duration=stop.duration)
+        if stop.kind == "manual"
+        else _programme(name, actions, duration=stop.duration)
+    )
+    return FailureCase(
+        name=name,
+        category=stop.category,
+        description=(
+            f"drive_input: the chain opens during a stop ({stop.name}) and is "
+            f"{'closed again before it ends' if closed else 'left open'}; no 5202 read during "
+            "the stop, sto_open latched, nothing restarts unacknowledged."
+        ),
+        document=document,
+        end_reasons=stop.end_reasons,
+        rules=stop.rules,
+        messages=("sto_open (QUICK_STOP)",),
+        silent=False,
+        at=at,
+        phase=stop.phase,
+        deadline=at + stop.deadline,
+    )
+
+
+def _drive_input_cases() -> list[FailureCase]:
+    result = [
+        _stop_case(stop, closed=closed) for stop in DRIVE_INPUT_STOPS for closed in (False, True)
+    ]
+    brief: tuple[tuple[str, str, float, float, float], ...] = (
+        # name, kind, opening (between two ticks), when to try a start, duration
+        ("manual", "manual", 60.05, 200.0, 240.0),
+        ("programme", "auto", 500.05, 700.0, 740.0),
+    )
+    for label, kind, at, later, duration in brief:
+        name = f"sto_drive_input_brief_opening_{label}"
+        actions: list[Document] = [
+            {"at_s": at, "do": "sto_open"},
+            {"at_s": at + 0.1, "do": "sto_close"},
+            {"at_s": later, "do": "start_again", "expect": "refused"},
+        ]
+        result.append(
+            FailureCase(
+                name=name,
+                category=Category.STO,
+                description=(
+                    f"drive_input: a 0.1 s opening between two ticks of a {label}, outside any "
+                    "stop, never read: latched from the drive's state at the next tick."
+                ),
+                document=(
+                    _bench(name, actions, duration=duration)
+                    if kind == "manual"
+                    else _programme(name, actions, duration=duration)
+                ),
+                end_reasons=VERDICT,
+                rules=("sto_open",),
+                messages=("sto_open (QUICK_STOP)",),
+                silent=False,
+                at=at,
+                phase="hold",
+                deadline=at + TICK,
+            )
+        )
+    for phase, at in (("cooldown", 690.1), ("recovery", 725.1)):
+        # A programme's own descent is regulation, not a stop: the reads go on.
+        name = f"sto_drive_input_programme_descent_{phase}"
+        actions = [
+            {"at_s": at, "do": "sto_open"},
+            {"at_s": 850.0, "do": "acknowledge", "expect": "refused"},
+            {"at_s": 851.0, "do": "start_again", "expect": "refused"},
+        ]
+        result.append(
+            FailureCase(
+                name=name,
+                category=Category.STO,
+                description=(
+                    f"drive_input: the chain opens during the programme's planned {phase}, "
+                    "which is no stop (the reads go on): sto_open latched at the next tick."
+                ),
+                document=_programme(name, actions, duration=880.0),
+                end_reasons=VERDICT,
+                rules=("sto_open",),
+                messages=("sto_open (QUICK_STOP)",),
+                silent=False,
+                at=at,
+                phase=phase,
+                deadline=at + TICK,
+            )
+        )
+    existing = {case.name: case for case in _sto_cases()}
+    for name in (
+        "sto_close_without_acknowledgement",
+        "sto_acknowledgement_then_new_start",
+        "sto_idle_start_gate",
+    ):
+        case = existing[name]
+        reading = f"sto_drive_input_{name.removeprefix('sto_')}"
+        result.append(
+            replace(
+                case,
+                name=reading,
+                description=f"drive_input: {case.description}",
+                document=_with_reading({**case.document, "name": reading}),
+            )
+        )
+    return result
+
+
 def cases() -> tuple[FailureCase, ...]:
     """The whole matrix, in a stable order."""
-    return (*_drive_cases(), *_ecg_cases(), *_process_cases(), *_operator_cases(), *_sto_cases())
+    return (
+        *_drive_cases(),
+        *_ecg_cases(),
+        *_process_cases(),
+        *_operator_cases(),
+        *_sto_cases(),
+        *_drive_input_cases(),
+    )
 
 
 # =========================================================================
@@ -1251,6 +1522,77 @@ def _check_sto_frames(result: RunResult, at: float, restart: float) -> list[Viol
     return found
 
 
+STOPPING_ACTIONS: Final[frozenset[str]] = frozenset({"RAMP_DOWN", "QUICK_STOP", "GO_SILENT"})
+PAST_LAST_SPEED: Final[frozenset[str]] = frozenset({"cooldown", "recovery", "done"})
+
+
+def stop_under_way(row: Row) -> bool:
+    """A stop the trace shows under way after this tick, read from its own columns.
+
+    The stops of ``docs/raspberry-pi.md`` 2.2, apart from the runtime's code:
+    an ending that walks the setpoint down or still holds the run command; a
+    running session under a verdict that stops it (RAMP_DOWN or worse), under
+    a FREEZE walking an arm down that nobody wants turning any more (a
+    programme past its last speed, a manual target of zero), or with a manual
+    target of zero walked down; the run command held outside a session. A
+    drive that shows a fault is under none: its coast is read.
+    """
+    if row.drive_state == "FAULT":
+        return False
+    turning = row.setpoint_motor_rpm != 0
+    target_zero = row.mode == "manuel" and row.manual_target_motor_rpm == 0
+    if row.state == "ending":
+        return turning or row.output_enabled
+    if row.state == "running":
+        walked_down = target_zero or (
+            row.safety_action == "FREEZE" and row.phase in PAST_LAST_SPEED
+        )
+        return row.safety_action in STOPPING_ACTIONS or (turning and walked_down)
+    return row.output_enabled
+
+
+def _check_drive_input(case: FailureCase, result: RunResult) -> list[Violation]:
+    """``sto_source: drive_input``: the chain is read, never during a stop, and a latch holds.
+
+    Each observation counts the 5202 frames that reached the simulated drive
+    in the gap after its tick; the row of that tick says whether a stop was
+    under way (:func:`stop_under_way`). Once ``sto_open`` stands it stands,
+    with a zero reference, until an acknowledgement is accepted.
+    """
+    if result.scenario.sto is not StoVariant.DRIVE_INPUT:
+        return []
+    found: list[Violation] = []
+    rows = result.trace.rows
+    if not any(view.reads for view in result.sto):
+        found.append(Violation("sto_reads", None, "register 5202 was never read"))
+    found.extend(
+        Violation(
+            "sto_read_in_stop",
+            row.t,
+            f"a 5202 read after a tick under a stop ({row.state}, {row.safety_action})",
+        )
+        for row, view in zip(rows, result.sto, strict=False)
+        if view.reads and stop_under_way(row)
+    )
+    first = next((row.t for row in rows if row.safety_rule == "sto_open"), None)
+    if first is None or "sto_open" not in case.rules:
+        return found
+    acknowledge = next(
+        (
+            request.at
+            for request in result.requests
+            if request.request == "acknowledge" and request.accepted
+        ),
+        float("inf"),
+    )
+    held = [row for row in rows if first <= row.t < acknowledge - 1e-6]
+    if any(row.safety_rule != "sto_open" or row.setpoint_motor_rpm != 0 for row in held):
+        found.append(
+            Violation("sto_latch_held", first, "sto_open must stand, at zero, until acknowledged")
+        )
+    return found
+
+
 def judge(case: FailureCase, result: RunResult) -> tuple[Violation, ...]:
     """Every invariant, the scenario's own expectations, and the failure-specific checks."""
     return (
@@ -1265,4 +1607,5 @@ def judge(case: FailureCase, result: RunResult) -> tuple[Violation, ...]:
         *_check_stopped(case, result),
         *_check_idle(result),
         *_check_sto(case, result),
+        *_check_drive_input(case, result),
     )
