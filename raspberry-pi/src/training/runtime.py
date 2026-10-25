@@ -1438,8 +1438,12 @@ class TrainingRuntime:
         # Whether the last state other than SWITCH_ON_DISABLED a tick read was
         # FAULT (or its fault reaction), or a fault reset was attempted since:
         # the drive then reaches SWITCH_ON_DISABLED through the reset, not
-        # through an STO opening (_deduce_sto_open). Written by _service_drive
-        # on every status read and by fault_reset before its word.
+        # through an STO opening (_deduce_sto_open). Set by _service_drive when
+        # a tick reads FAULT and by fault_reset before its word. Cleared by
+        # _service_drive when a tick reads any state but SWITCH_ON_DISABLED or
+        # FAULT, and by _energise once an arming is acknowledged: the drive was
+        # inspected out of fault, so a SWITCH_ON_DISABLED read under that run
+        # command follows no reset.
         self._disable_follows_fault: bool = False
         # Run lengths of failed exchanges, one per kind (see ``Exchange``).
         # Mutable, owned by this loop alone. A read run is reset only by a
@@ -2528,6 +2532,8 @@ class TrainingRuntime:
                     break
         if failure is None:
             self._enabled = True
+            # _arm refused a faulted drive: no reset leads where this run command goes.
+            self._disable_follows_fault = False
             return None
         return await self._abandon_enable(now, failure)
 
@@ -2735,7 +2741,8 @@ class TrainingRuntime:
         runtime reads nothing. A fault reset does lead there, and keeps the run
         command when its answer is lost; so would a drive that reset its own
         fault. A SWITCH_ON_DISABLED that follows a fault, or a reset attempt,
-        is therefore not taken for an opening (``_disable_follows_fault``):
+        is therefore not taken for an opening (``_disable_follows_fault``,
+        until a tick reads another state or the next arming is acknowledged):
         the reads, which a faulted drive does not withhold, judge the chain
         then, and READY is needed before any start. Nor is the status the
         start's own inspection read before the arming taken for one read since
