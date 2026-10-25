@@ -288,8 +288,13 @@ l'arrêt :
   plus ancienne, même encore fraîche, est refusée comme `UNKNOWN`
   (`StoNotReady`) : un `sto_open` déduit ne s'acquitte pas sur la lecture
   d'avant l'arrêt, il faut attendre la première lecture `READY` après la fin
-  de l'arrêt. Une chaîne simulée, lue à l'instant demandé, n'est pas
-  concernée ; sans arrêt qui ait retenu la lecture, rien ne change.
+  de l'arrêt. De même, un `sto_open`, lu ou déduit, ne s'acquitte que sur une
+  lecture `READY` réussie après l'instant de son verrou, même quand l'arrêt
+  finit dans le tic du verrou (arbre déjà immobile, juste après l'armement)
+  sans avoir retenu de lecture : la lecture d'avant l'ouverture est refusée
+  comme `UNKNOWN`. Une chaîne simulée, lue à l'instant demandé, n'est pas
+  concernée ; sans arrêt qui ait retenu la lecture ni `sto_open` verrouillé,
+  rien ne change.
 
 **Deux cas où l'ouverture n'est pas nommée `sto_open`.** À sévérité égale, le
 premier verrou du runtime garde son nom et son instant : une ouverture pendant
@@ -326,7 +331,9 @@ suivant : verrou au premier tic, départ refusé jusqu'à l'acquittement nommé 
 après un réarmement à réponse perdue, coupure entre le relais et la borne
 STO, avant le départ ou juste après l'armement : verrou au premier tic,
 lecture restée `READY` ; variateur qui réarme seul son défaut : aucun
-`sto_open`, la lecture juge la chaîne),
+`sto_open`, la lecture juge la chaîne ; ouverture déduite juste après
+l'armement, arrêt fini dans le tic du verrou : acquittement refusé sur la
+lecture d'avant l'ouverture, accepté sur la suivante, nouveau départ exigé),
 `tests/test_sto_scheduling.py` (mêmes trames avec et sans la déduction, avec
 et sans arrêt ; variateur dont le mot d'état ne montre pas la chaîne) et
 `tests/test_sto_stop_guard.py` (mémoire de l'arrêt ; variateur en défaut).
@@ -1536,7 +1543,7 @@ retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 | `enable_unconfirmed` | le mot qui active l'étage de sortie a pu partir sans réponse | QUICK_STOP | oui |
 | `disable_refused` | le variateur refuse 5 fois de suite (`disable_attempts`) les mots d'arrêt à l'arrêt confirmé | RAMP_DOWN si `SHUTDOWN` direct a réussi ; GO_SILENT sinon | oui |
 | `tick_exception` | une exception dans le tic | GO_SILENT | oui, définitif |
-| `sto_open` | lecture STO `OPEN` quand un mouvement est possible : séance armée à toute phase, marche présente, arbre tournant, vitesse inconnue ou relevé variateur ancien ; sans lecture qui la montre, arrêt ou non : statut frais `SWITCH_ON_DISABLED`, lu après le départ, alors que la console tient la marche et hors suite d'un défaut ou d'une tentative de réarmement, suite qui prend fin au prochain armement réussi ou à la lecture d'un autre état (ouverture déduite de l'état du variateur) ; après un arrêt pendant lequel un mouvement était possible : lecture `OPEN`, même au repos, jusqu'à une lecture `READY` postérieure | QUICK_STOP, consigne zéro dans ce tic ; le matériel a déjà coupé le couple | oui ; l'acquittement exige une lecture `READY` faite après le dernier tic qui a retenu les lectures |
+| `sto_open` | lecture STO `OPEN` quand un mouvement est possible : séance armée à toute phase, marche présente, arbre tournant, vitesse inconnue ou relevé variateur ancien ; sans lecture qui la montre, arrêt ou non : statut frais `SWITCH_ON_DISABLED`, lu après le départ, alors que la console tient la marche et hors suite d'un défaut ou d'une tentative de réarmement, suite qui prend fin au prochain armement réussi ou à la lecture d'un autre état (ouverture déduite de l'état du variateur) ; après un arrêt pendant lequel un mouvement était possible : lecture `OPEN`, même au repos, jusqu'à une lecture `READY` postérieure | QUICK_STOP, consigne zéro dans ce tic ; le matériel a déjà coupé le couple | oui ; l'acquittement exige une lecture `READY` faite après l'instant du verrou et après le dernier tic qui a retenu les lectures |
 | `sto_unreadable` | source configurée, preuve positive de mouvement (séance armée à toute phase, marche tenue par ce runtime, ou statut frais en rotation/`OPERATION_ENABLED`), aucune lecture STO réussie depuis plus de `STO_STALE_AFTER` (2 s) de contrôle progressant, ou jamais | RAMP_DOWN, arrêt contrôlé | oui |
 
 Les deux règles STO sont jugées avant le calcul de consigne. Un échec de

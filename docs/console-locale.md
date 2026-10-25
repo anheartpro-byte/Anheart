@@ -1977,7 +1977,9 @@ mouvement était possible, la première lecture `ouverte` verrouille aussi
 `sto_open`, même au repos ; une inspection du variateur au repos en échec
 compte comme un tel arrêt. Tout acquittement attend alors une lecture `prete`
 faite après l'arrêt : celle d'avant l'arrêt, même encore récente, ne suffit
-pas, et le refus le dit (`inconnue`). Un nouveau départ suit l'acquittement
+pas, et le refus le dit (`inconnue`). Un `sto_open`, lu ou déduit, ne
+s'acquitte de même que sur une lecture `prete` faite après son verrou, même
+quand l'arrêt a fini dans le tic du verrou. Un nouveau départ suit l'acquittement
 nommé, comme ailleurs. Avant lui, un départ demandé depuis la page est refusé au
 clic (409 `verdict_latched`, section 13) dès que la chaîne est lue `prete` : rien
 n'entre dans la boîte aux lettres. Tant qu'elle ne l'est pas, c'est le refus STO
