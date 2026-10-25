@@ -304,6 +304,15 @@ RULE_STO_OPEN: Final[str] = "sto_open"
 RULE_STO_UNREADABLE: Final[str] = "sto_unreadable"
 """No successful STO observation within the technical freshness budget."""
 
+STO_OPEN_DEDUCED: Final[str] = (
+    "the drive removed its output stage by itself (SWITCH_ON_DISABLED: DC bus not ready, "
+    "or the STO safety chain open) while this console held the run command during a stop, "
+    "when no STO reading is taken: the opening is deduced from the drive's state, not read "
+    "from the chain. The reference is zeroed; restore the chain, acknowledge by name and "
+    "request a new start before motion is permitted"
+)
+"""The ``sto_open`` detail when the drive's status word stands in for a withheld reading."""
+
 RULE_TICK_EXCEPTION: Final[str] = "tick_exception"
 """Something inside the tick raised. This process's state is no longer trusted."""
 
@@ -2570,6 +2579,8 @@ class TrainingRuntime:
         OPEN treats unknown speed as possible motion. Unreadable STO requires
         a configured source and positive motion evidence: an armed session,
         our run command, or a fresh enabled/turning status. No I/O occurs here.
+        During a stop, when no read is taken, the drive's status word stands
+        in for one (:meth:`_deduce_sto_open`).
 
         Deduct an interval in which the console could not read: a loop_stall
         interval, or one after a tick that left a stop under way (the console
@@ -2644,6 +2655,7 @@ class TrainingRuntime:
             armed or (self._link_open and self._enabled) or observed_motion
         ):
             return
+        self._deduce_sto_open(now, status)
         if last is None or elapsed(last, now) - self._sto_loop_delay > STO_STALE_AFTER:
             self._latch(
                 now,
@@ -2653,6 +2665,30 @@ class TrainingRuntime:
                 "permit polling; controlled stop. "
                 "Restore a ready reading, acknowledge by name and request a new start",
             )
+
+    def _deduce_sto_open(self, now: Monotonic, status: DriveStatus | None) -> None:
+        """During a stop no STO read is taken: the drive's own status word stands in for one.
+
+        A fresh SWITCH_ON_DISABLED while this runtime holds the run command
+        means the drive removed its output stage by itself, which its status
+        word decodes as DC bus not ready or STO open: ``sto_open`` latches,
+        whether the chain
+        is still open or already closed again. No word this module writes
+        leads there while it holds the run command: an arming ends in
+        OPERATION_ENABLED, :meth:`_settle` and the escalation end in
+        READY_TO_SWITCH_ON and clear the run command, a fault reset clears it
+        before its word, an emergency zero writes LFRD only, and a silent
+        runtime reads nothing. The status is the one the tick already read:
+        no frame is added. Outside a stop the reads go on and judge alone.
+        """
+        if (
+            (self._sto_reads_withheld or self.stop_in_progress)
+            and self._link_open
+            and self._enabled
+            and status is not None
+            and status.state is DriveState.SWITCH_ON_DISABLED
+        ):
+            self._latch(now, RULE_STO_OPEN, SafetyAction.QUICK_STOP, STO_OPEN_DEDUCED)
 
     def _interval(self, now: Monotonic) -> Seconds | None:
         """Time since the previous tick, or ``None`` on the first one.
@@ -3933,6 +3969,9 @@ class TrainingRuntime:
         if status is not None and status.state is DriveState.SWITCH_ON_DISABLED:
             # Fresh standstill and ETA confirm the output stage is already off.
             # Closing STO cannot enable it without a new full arming sequence.
+            # Judged before the run command is cleared: a stop asked for since
+            # the last read may settle in this very tick.
+            self._deduce_sto_open(now, status)
             self._enabled = False
             self._disable_failures = 0
             return

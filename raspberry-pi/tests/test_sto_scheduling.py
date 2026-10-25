@@ -49,7 +49,13 @@ from src.presence.monitor import RULE_PRESENCE_CAMERA_LOST, RULE_PRESENCE_INTRUS
 from src.result import Err, Ok, Result
 from src.training import runtime as runtime_module
 from src.training.preflight import StoNotReady
-from src.training.runtime import RULE_STO_UNREADABLE, RuntimeState
+from src.training.runtime import (
+    RULE_STO_OPEN,
+    RULE_STO_UNREADABLE,
+    STO_OPEN_DEDUCED,
+    RuntimeState,
+    TrainingRuntime,
+)
 from src.training.safety import (
     RULE_HR_RATE,
     RULE_OPERATOR_ESTOP,
@@ -762,6 +768,68 @@ def test_no_read_starts_once_a_stop_is_asked_for_and_stop_writes_keep_their_inst
     assert reading.stopped == silent.stopped
     assert reading.commands
     assert reading.commands == silent.commands
+
+
+# =========================================================================
+# The drive's own word stands in for a withheld read: it adds no frame
+# =========================================================================
+
+
+def output_stage_dropped(bus: TimedBus) -> Event:
+    """The drive reports SWITCH_ON_DISABLED from now on; the fake bus has no chain."""
+
+    def dropped(_panel: LocalPanel) -> None:
+        bus.fake.registers[REGISTERS.eta] = 0x40
+
+    return dropped
+
+
+def not_judged(_runtime: TrainingRuntime, _now: Monotonic, _status: DriveStatus | None) -> None:
+    """The deduction taken out: what the console sends without it."""
+
+
+def stop_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, judged: bool, dropped: bool
+) -> tuple[tuple[Sent, ...], SafetyVerdict | None]:
+    """An operator stop over the fake bus: every frame sent, and the verdict standing at the end."""
+    with monkeypatch.context() as patch:
+        if not judged:
+            patch.setattr(TrainingRuntime, "_deduce_sto_open", not_judged)
+        clock = ManualClock(Monotonic(10.0))
+        panel, bus = bus_panel(tmp_path, clock, STO_ENV)
+        events = (*SESSION, (ASKED, operator_stop))
+        if dropped:
+            events = (*events, (ASKED + 1.0, output_stage_dropped(bus)))
+        run_virtual(clock, console(panel, events, 11.95))
+        return tuple(bus.sent), panel.runtime.standing
+
+
+def test_judging_the_drive_word_during_a_stop_adds_no_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deduction reads the status the tick already read: the same frames with and without it."""
+    judged, nothing = stop_frames(tmp_path / "judged", monkeypatch, judged=True, dropped=False)
+    plain, _ = stop_frames(tmp_path / "plain", monkeypatch, judged=False, dropped=False)
+    assert nothing is None
+    assert any(
+        sent.address == REGISTERS.cmd and sent.value == ControlWord.SHUTDOWN.value
+        for sent in judged
+        if sent.at >= 10.0 + ASKED
+    )  # the stop ran to the end: the run command removed
+    assert judged == plain
+    # When it latches, the first frame that differs is the verdict's own command write.
+    latched, verdict = stop_frames(tmp_path / "latched", monkeypatch, judged=True, dropped=True)
+    unlatched, _ = stop_frames(tmp_path / "unlatched", monkeypatch, judged=False, dropped=True)
+    assert verdict is not None
+    assert (verdict.rule, verdict.detail) == (RULE_STO_OPEN, STO_OPEN_DEDUCED)
+    first = next(
+        index
+        for index, (one, other) in enumerate(zip(latched, unlatched, strict=False))
+        if one != other
+    )
+    assert latched[first].access == "write"
+    assert latched[first].at >= verdict.since
+    assert latched[:first] == unlatched[:first]
 
 
 # =========================================================================
