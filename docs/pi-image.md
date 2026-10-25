@@ -204,7 +204,7 @@ Les paquets que le code demande directement (`requirements-base.txt`,
 | `pyobjc-framework-IOBluetooth` | `12.2.2` | base, macOS seulement : absent de l'image |
 | `bitalino` | `1.2.6` | prod |
 | `pexpect` | `4.9.0` | prod |
-| `setuptools` | `84.0.0` | build |
+| `setuptools` | `84.1.0` | build |
 | `wheel` | `0.48.0` | build |
 
 `requirements-base.txt` contraint aussi les verrous des tests et de la
