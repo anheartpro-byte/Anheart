@@ -306,7 +306,7 @@ async def test_success_restores_pause_deduction_after_a_failed_attempt(
     assert RULE_STO_UNREADABLE not in caplog.text
 
 
-async def test_success_during_pause_starts_its_own_freshness_budget(
+async def test_no_read_starts_during_a_pause_and_the_first_after_it_opens_its_own_budget(
     live_sto: LiveSto, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     live = live_sto

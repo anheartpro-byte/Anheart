@@ -418,16 +418,35 @@ def measure(
 @pytest.mark.parametrize("latency", [Seconds(0.01), Seconds(0.015)])
 @pytest.mark.parametrize("variant", ["simulated", "fake_bus"])
 def test_sto_reads_leave_every_command_write_at_its_instant(
-    tmp_path: Path, variant: str, latency: Seconds
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: str, latency: Seconds
 ) -> None:
     """Two latencies under the read budget: the ticks fall at two phases of the period."""
+    ticks: list[tuple[float, float]] = []
+
+    async def noted_step(panel: LocalPanel) -> TelemetrySnapshot:
+        began = now()
+        snapshot = await CONTROL_STEP(panel)
+        ticks.append((began, now()))
+        return snapshot
+
+    monkeypatch.setattr(LocalPanel, "control_step", noted_step)
     reading = measure(tmp_path / "reading", variant, STO_ENV, 13.95, latency)
+    spans = tuple(ticks)
     silent = measure(tmp_path / "silent", variant, NO_READ_ENV, 13.95, latency)
     assert silent.feedback == ()
     assert len(reading.feedback) >= 15
     assert len(reading.commands) >= 60  # dozens of ticks, each with its keepalive
     assert reading.commands == silent.commands
     assert reading.waited == ()
+    # Each read in the gap after a completed tick, over before the next one begins.
+    reads = (
+        reading.feedback
+        if variant == "simulated"
+        else tuple((began, began + latency) for began, _ in reading.feedback)
+    )
+    assert len(spans) >= 60
+    for began, ended in reads:
+        assert not any(start < ended and began < end for start, end in spans)
 
 
 # =========================================================================
