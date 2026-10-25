@@ -2724,6 +2724,34 @@ class TrainingRuntime:
         last = reading.last_success_at
         return withheld is None or (last is not None and last >= withheld)
 
+    def _sto_reading_too_old(self, reading: StoReading) -> StoNotReady | None:
+        """Why a READY ``reading`` is too old to acknowledge on, or ``None``."""
+        if not self._sto_reading_postdates_stop(reading):
+            return StoNotReady(
+                state=StoState.UNKNOWN,
+                detail="the last ready reading predates a stop that withheld the reads",
+            )
+        if not self._sto_reading_postdates_latch(reading):
+            return StoNotReady(
+                state=StoState.UNKNOWN,
+                detail="the last ready reading predates the sto_open latch",
+            )
+        return None
+
+    def _sto_reading_postdates_latch(self, reading: StoReading) -> bool:
+        """Whether ``reading`` was taken no earlier than the ``sto_open`` this runtime latched.
+
+        A reading from before the opening says nothing of the chain since,
+        whether the opening was read or deduced from the drive's word, and a
+        stop that ends in the tick that latched it withholds no read. A
+        simulated chain is read at the instant it is asked, so it always is.
+        """
+        latched = self._latched
+        if latched is None or latched.rule != RULE_STO_OPEN:
+            return True
+        last = reading.last_success_at
+        return last is not None and last >= latched.since
+
     def _deduce_sto_open(self, now: Monotonic, status: DriveStatus | None) -> None:
         """The drive's own status word shows an STO opening that no reading saw.
 
@@ -3385,7 +3413,9 @@ class TrainingRuntime:
 
         The chain must read READY, and after a stop that withheld the reads,
         READY from a read taken since: a reading from before the stop says
-        nothing of the chain during it, however recent.
+        nothing of the chain during it, however recent. An ``sto_open`` of this
+        runtime's, read or deduced, likewise needs READY from a read taken
+        since it latched.
         """
         if not operator.strip():
             return Err(
@@ -3399,15 +3429,10 @@ class TrainingRuntime:
             return Err(GoSilentIsTerminal(mine.rule))
         reading = self._sto.latest(self._clock.monotonic())
         sto = check_sto_ready(reading)
+        if sto is None:
+            sto = self._sto_reading_too_old(reading)
         if sto is not None:
             return Err(sto)
-        if not self._sto_reading_postdates_stop(reading):
-            return Err(
-                StoNotReady(
-                    state=StoState.UNKNOWN,
-                    detail="the last ready reading predates a stop that withheld the reads",
-                )
-            )
         outcome = self._supervisor.acknowledge(operator, estop_released=estop_released)
         if isinstance(outcome, Ok):
             self._latched = None
