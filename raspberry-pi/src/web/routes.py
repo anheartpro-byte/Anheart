@@ -485,7 +485,7 @@ def _register_reads(
     hub = services.hub
     supervisor = services.supervisor
     store = services.store
-    verdicts: VerdictSource = supervisor if services.verdicts is None else services.verdicts
+    verdicts = _verdicts(services)
 
     @app.get("/api/status", dependencies=auth, tags=["system"])
     async def read_status() -> StatusRow:
@@ -788,6 +788,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
             services, body.profile_id, body.total_duration_s, hr_max=passenger.hr_max
         )
         _require_drive_not_faulted(services)
+        _require_nothing_latched(services)
         submitted = surface.submit_start(
             profile_id=body.profile_id,
             operator=operator,
@@ -873,6 +874,7 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         _require_occupancy_allowed(services, occupancy)
         subject = _require_rider_for(services, occupancy, body.subject_id)
         _require_drive_not_faulted(services)
+        _require_nothing_latched(services)
         submitted = surface.submit_start_manual(
             occupancy=occupancy, operator=operator, subject_id=subject
         )
@@ -1299,6 +1301,34 @@ def _require_drive_not_faulted(services: Services) -> None:
     raise HTTPException(
         status_code=HTTPStatus.CONFLICT, detail=DRIVE_FAULT_DETAIL.format(code=code)
     )
+
+
+def _verdicts(services: Services) -> VerdictSource:
+    """Where the verdicts in force are read, whoever latched them (:class:`VerdictSource`)."""
+    return services.supervisor if services.verdicts is None else services.verdicts
+
+
+def _require_nothing_latched(services: Services) -> None:
+    """Refuse a start with a 409 while a latched verdict stands, whoever latched it.
+
+    The surface's gate reads the supervisor's verdicts alone. The runtime
+    latches some on its own behalf (an STO chain found open, a drive found
+    running, an enable that was not confirmed, a link it gave up on): a start
+    was then accepted here (202) and refused a tick later by the loop, which
+    reads every verdict before arming. The latched floor is read where
+    ``/api/status`` reads it (:func:`_verdicts`), the one the page shows, and
+    refused in the words of :class:`~src.control_surface.SafetyHolding`, so
+    the answer comes with the click and nothing is put in the mailbox.
+
+    A start the surface refuses itself is left to it, so every refusal it gave
+    is given as before, in its words and counted by it: only a start it would
+    have accepted is refused here. The loop keeps its own refusal.
+    """
+    if isinstance(services.surface.check_start(), Err):
+        return
+    floor = _verdicts(services).floor
+    if floor is not None:
+        raise _start_failure(SafetyHolding(floor))
 
 
 def _require_occupancy(value: str) -> Occupancy:

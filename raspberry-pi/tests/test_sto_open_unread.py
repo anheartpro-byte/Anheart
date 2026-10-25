@@ -234,9 +234,12 @@ async def test_a_short_opening_during_a_programme_latches_and_nothing_starts_una
             assert runtime.applied_rpm == 0
         assert runtime.state is RuntimeState.FINISHED
         assert runtime.end_reason is EndReason.SAFETY_VERDICT
-        # A START typed now is taken by the loop and refused there: nothing is armed.
+        # A START typed now is refused with the click, on the runtime's latch: nothing is armed.
         typed = await session.post("/api/session/start", json=START)
-        assert typed.status_code == httpx.codes.ACCEPTED, typed.text
+        assert typed.status_code == httpx.codes.CONFLICT, typed.text
+        assert typed.json()["code"] == "verdict_latched"
+        assert f"({RULE_STO_OPEN})" in typed.json()["detail"]
+        assert scene.panel.surface.pending is None
         await scene.run(5)
         assert runtime.state is RuntimeState.FINISHED
         assert runtime.end_reason is EndReason.SAFETY_VERDICT
