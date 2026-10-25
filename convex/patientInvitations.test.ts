@@ -6,7 +6,10 @@ import {
   mockClerkInvitations,
 } from "./patientInvitation.fixtures";
 import { verifiedClerkEmails } from "./lib/clerkWebhook";
-import { sendPatientInvitation } from "./lib/patientInvitation";
+import {
+  invitationInput,
+  sendPatientInvitation,
+} from "./lib/patientInvitation";
 
 const input = {
   firstName: "Invited",
@@ -379,6 +382,62 @@ describe("Clerk response verification", () => {
           role: "org:patient",
         }),
       ),
+    );
+    expect(
+      await sendPatientInvitation("synthetic", "org_test", input.email),
+    ).toBeNull();
+  });
+});
+
+describe("ANH-249 the schemas of an invitation, under zod 4.6", () => {
+  it("keeps the length limits of the names and of the address", () => {
+    const valid = (args: typeof input) => invitationInput.safeParse(args).success;
+    expect(
+      invitationInput.parse({ ...input, firstName: ` ${"a".repeat(100)} ` })
+        .firstName,
+    ).toBe("a".repeat(100));
+    expect(valid({ ...input, firstName: "a".repeat(101) })).toBe(false);
+    expect(valid({ ...input, lastName: "a".repeat(101) })).toBe(false);
+    const domain = (last: number) =>
+      `${"b".repeat(60)}.${"c".repeat(60)}.${"d".repeat(last)}.com`;
+    expect(valid({ ...input, email: `${"a".repeat(64)}@${domain(63)}` })).toBe(
+      true,
+    );
+    expect(
+      valid({ ...input, email: `${"a".repeat(65)}@${domain(63)}` }),
+    ).toBe(false);
+  });
+
+  it("refuses a provider answer that is not an invitation, and a page that is not a list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          id: "orginv_partial",
+          email_address: input.email,
+          status: "pending",
+        }),
+      ),
+    );
+    expect(
+      await sendPatientInvitation("synthetic", "org_test", input.email),
+    ).toBeNull();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 422 }))
+        .mockResolvedValueOnce(
+          Response.json({
+            data: {
+              id: "orginv_held",
+              email_address: input.email,
+              status: "pending",
+              role: "org:patient",
+            },
+            total_count: 1,
+          }),
+        ),
     );
     expect(
       await sendPatientInvitation("synthetic", "org_test", input.email),
