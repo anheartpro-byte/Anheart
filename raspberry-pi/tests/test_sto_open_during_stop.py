@@ -171,6 +171,11 @@ def standing(runtime: TrainingRuntime) -> SafetyVerdict | None:
     return runtime.standing
 
 
+def enabled(runtime: TrainingRuntime) -> bool:
+    """Read afresh, for the reason :func:`stopping` gives."""
+    return runtime.output_enabled
+
+
 # =========================================================================
 # Every category of stop
 # =========================================================================
@@ -297,6 +302,43 @@ async def test_a_chain_opening_during_any_stop_latches_at_the_next_tick_until_ac
     assert isinstance(surface.acknowledge(OPERATOR, estop_released=True), Ok)
     assert runtime.standing is None
     assert isinstance(await scene.start(), Ok)
+    await scene.panel.close()
+
+
+async def test_an_opening_just_before_a_stop_that_settles_at_once_still_latches(
+    tmp_path: Path,
+) -> None:
+    """Armed at standstill: the stop is taken and the run command removed in one tick.
+
+    The chain opens after the last read and the STOP comes before the next one, so
+    no reading and no withholding tick ever shows it: only the drive's word, judged
+    before the run command is cleared, does.
+    """
+    scene = Scene(tmp_path, DRIVE_INPUT)
+    runtime = scene.runtime
+    await scene.cruise()
+    assert isinstance(runtime.set_manual_target(OutputRpm(0)), Ok)
+    for _ in range(1000):
+        await scene.run(1)
+        status = runtime.drive_status
+        if not stopping(runtime) and status is not None and status.output_rpm == 0:
+            break
+    await scene.run(5)
+    assert runtime.state is RuntimeState.RUNNING
+    assert runtime.applied_rpm == 0
+    assert enabled(runtime)  # armed at standstill, the run command held
+    assert standing(runtime) is None
+    scene.chain.open(scene.rig.clock.monotonic())  # just after a tick and its read
+    assert isinstance(scene.panel.surface.submit_end(operator=OPERATOR, reason="stop"), Ok)
+    await scene.run(1)  # takes the stop, and removes the run command in the same tick
+    assert not enabled(runtime)
+    assert not stopping(runtime)
+    verdict = standing(runtime)
+    assert verdict is not None
+    assert (verdict.rule, verdict.detail) == (RULE_STO_OPEN, STO_OPEN_DEDUCED)
+    refused = await scene.start()
+    assert isinstance(refused, Err)
+    assert isinstance(refused.error, SafetyStanding)
     await scene.panel.close()
 
 
