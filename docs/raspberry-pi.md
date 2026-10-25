@@ -160,13 +160,12 @@ gardent le lien. Un arrêt est en cours
 (`TrainingRuntime.stop_in_progress`) pendant une fin de séance tant que la
 consigne descend ou que l'ordre de marche est tenu (STOP à la console ou
 depuis le site, verdict d'arrêt, limite de la séance manuelle, dépassement de
-durée, immobilité, E-STOP), sauf sur un variateur en défaut à l'arrêt mesuré
-(RFRD) dont la marche n'attend plus que le réarmement de l'opérateur : plus
-aucune écriture d'arrêt ne reste à envoyer, la lecture reprend, et
-l'acquittement des autres verdicts, puis le réarmement, restent possibles sans
-redémarrer la console ; pendant un verdict qui arrête une séance en
+durée, immobilité, E-STOP) ; pendant un verdict qui arrête une séance en
 cours (RAMP_DOWN, QUICK_STOP, GO_SILENT, ce dernier coupant déjà tout
-trafic), pendant la descente vers une cible manuelle de zéro, et tant que
+trafic) ; pendant la descente vers zéro qu'un FREEZE conduit pour un arrêt
+demandé (`_stop_under_freeze` : STOP, fin commencée, cible 0, ou programme
+entré dans sa phase COOLDOWN sous un FREEZE), tant que la consigne n'est pas
+nulle ; pendant la descente vers une cible manuelle de zéro ; et tant que
 l'ordre de marche est tenu hors séance (variateur trouvé en marche). Il est
 demandé, dans tous les états, même au repos, quand un E-STOP de l'écran
 attend le tic qui le prend (`ControlSurface.estop_pending`, de la demande
@@ -174,26 +173,30 @@ jusqu'à ce tic, qui écrit le zéro) ; et, en séance, quand une fin ou une
 cible de zéro attend dans la boîte aux lettres, ou quand un verdict de la
 caméra n'a pas encore atteint le runtime. Le verrou d'arrêt d'urgence du
 superviseur n'entre pas dans la garde : il tient jusqu'à l'acquittement, qui
-exige lui-même une lecture `READY`. FREEZE et REDUCE ne sont pas des arrêts :
-la séance continue de réguler sous eux (FREEZE tient la vitesse, REDUCE la
-baisse), la lecture continue donc aussi et reste `READY`, un acquittement
-sous un REDUCE n'est pas refusé pour une lecture vieillie, et une chaîne qui
-s'ouvre sous un REDUCE verrouille `sto_open` au tic qui juge la lecture
-ouverte, comme hors REDUCE. La fermeture de la console, `GO_SILENT` et la
-libération du lien coupaient déjà toute lecture.
+exige lui-même une lecture `READY`. REDUCE n'est pas un arrêt, ni un FREEZE
+qui tient une vitesse : la séance continue de réguler sous eux (FREEZE tient
+la vitesse, REDUCE la baisse), la lecture continue donc aussi et reste
+`READY`, un acquittement sous un REDUCE n'est pas refusé pour une lecture
+vieillie, et une chaîne qui s'ouvre sous un REDUCE verrouille `sto_open` au
+tic qui juge la lecture ouverte, comme hors REDUCE. La descente planifiée d'un
+programme, sans verdict (phases COOLDOWN puis RECOVERY, consigne non nulle),
+n'est pas non plus un arrêt : le régulateur la conduit, c'est de la
+régulation, et la lecture continue (décision du 25 octobre 2026). La
+fermeture de la console, `GO_SILENT` et la libération du lien coupaient déjà
+toute lecture.
 Il n'existe pas de bouton d'arrêt dans la capsule ([securite.md](securite.md)) :
 un tel bouton entrera dans cette liste. Le temps retenu n'est pas compté contre
 la fraîcheur (section 5.3). Pendant l'arrêt, la carte passe à `inconnue` 2 s
 après la dernière lecture. La fin de l'arrêt est le premier tic qui n'en
 laisse plus en cours : consigne nulle et ordre de marche retiré à l'arrêt
-mesuré, consigne nulle atteinte vers une cible 0, ou consigne nulle, arrêt
-mesuré et variateur en défaut qui n'attend que son réarmement ; la lecture
-reprend juste après ce tic. Aucune de ces conditions ne reste vraie sans fin
+mesuré, consigne nulle atteinte vers une cible 0 ou sous un FREEZE, ou
+variateur qui signale un défaut (paragraphe suivant) ; la lecture reprend
+juste après ce tic. Aucune de ces conditions ne reste vraie sans fin
 pendant qu'un acquittement ou un réarmement est attendu : la consigne descend
 à chaque tic ou le lien se perd (`comms_lost`, puis `GO_SILENT`, qui coupe de
 toute façon les lectures) ; la marche tenue est retirée à l'arrêt mesuré, ou
 l'escalade de `disable_refused` la retire ou passe en `GO_SILENT` ; un
-variateur en défaut à l'arrêt ne retient plus la lecture ; un E-STOP de
+variateur en défaut ne retient pas la lecture ; un E-STOP de
 l'écran, une fin ou une cible 0 dans la boîte aux lettres et un verdict de la
 caméra sont pris au tic suivant. Après un E-STOP au repos, la lecture reprend
 dès le tic qui l'a pris. Sur l'ATV320, l'écriture d'urgence verrouille la santé du lien jusqu'à
@@ -205,46 +208,93 @@ et l'acquittement reste possible. Tests :
 séance sans lecture STO ; sous un REDUCE, lectures après les tics comme hors
 REDUCE, lecture `READY`, instants des écritures inchangés et acquittement
 accepté ; E-STOP de l'écran demandé au repos juste après un tic) et
-`tests/test_sto_stop_guard.py` (dont le défaut à l'arrêt avec un E-STOP de
-l'écran, un `sto_open` ou un verdict du superviseur : lecture reprise,
-acquittement puis réarmement acceptés).
+`tests/test_sto_stop_guard.py` (dont un variateur en défaut avec un E-STOP de
+l'écran, un `sto_open` ou un verdict du superviseur : lecture continue pendant
+la roue libre puis à l'arrêt, acquittement puis réarmement acceptés).
 
-**Une ouverture pendant un arrêt n'échappe pas au verrou.** Faute de lecture
-de la chaîne pendant un arrêt, deux preuves la remplacent, et l'acquittement
-attend une lecture faite après l'arrêt :
+**Un variateur en défaut ne retient pas la lecture.** Tant qu'un statut frais
+montre le variateur en défaut (`FAULT`, ou la réaction de défaut pendant
+laquelle l'arbre tourne encore), aucun arrêt n'est en cours pour la garde, à
+toute vitesse et quelle que soit la consigne. La règle qui retient la lecture
+sert à ne retarder aucune écriture d'arrêt ; un variateur en défaut n'accepte
+que le réarmement, aucune écriture d'arrêt n'y agit, donc la lecture continue,
+pendant sa roue libre comme à l'arrêt. Une chaîne qui s'ouvre pendant cette
+roue libre est lue, et `sto_open` se verrouille au tic qui juge la première
+lecture ouverte, sans attendre l'arrêt : 0,4 s après l'ouverture dans les
+tests, où une lecture suit chaque tic, au plus 0,8 s avec une lecture tous les
+trois tics. L'acquittement des autres verdicts, puis le réarmement, restent
+possibles sans redémarrer la console. Une lecture déjà en vol quand un arrêt
+est demandé garde le résiduel borné décrit plus bas.
+
+**Une ouverture que la lecture ne montre pas n'échappe pas au verrou.**
+Pendant un arrêt, la chaîne n'est pas lue. Hors arrêt, une lecture tous les
+trois tics (0,6 s) manque une ouverture plus courte que cet intervalle, et le
+contact de retour du relais ne montre pas une coupure entre la sortie du
+relais et la borne STO du variateur, quelle qu'en soit la durée. Deux preuves
+complètent la lecture, et l'acquittement attend une lecture faite après
+l'arrêt :
 
 - **le mot d'état du variateur**, que chaque tic lit déjà (aucune trame
-  ajoutée) : tant qu'un arrêt retient la lecture et que la console tient
-  l'ordre de marche, un statut frais `SWITCH_ON_DISABLED` signifie que le
-  variateur a retiré son étage de sortie sans que la console l'ait commandé
-  (bus continu non prêt ou STO ouvert). `sto_open / QUICK_STOP` se verrouille
-  alors dans ce tic, avec un détail qui dit que l'ouverture est déduite de
-  l'état du variateur, faute de lecture de la chaîne : au plus un tic (0,2 s)
-  après l'ouverture, chaîne restée ouverte ou déjà refermée, et avant que
-  `_settle` ne retire la marche, y compris quand un arrêt demandé depuis la
-  dernière lecture se termine dans le tic même qui le prend. Aucun mot de la console ne mène à cet état tant qu'elle tient la
-  marche : l'armement finit en `OPERATION_ENABLED`, `_settle` et l'escalade
-  finissent en `READY_TO_SWITCH_ON` et retirent la marche, le réarmement d'un
-  défaut retire la marche avant son mot, l'E-STOP n'écrit que LFRD et
-  `GO_SILENT` ne lit plus rien. Hors arrêt, la lecture continue et juge seule,
-  comme avant (`TrainingRuntime._deduce_sto_open`) ;
+  ajoutée) : tant que la console tient l'ordre de marche, arrêt ou non, un
+  statut frais `SWITCH_ON_DISABLED` signifie que le variateur a retiré son
+  étage de sortie sans que la console l'ait commandé (bus continu non prêt ou
+  STO ouvert). `sto_open / QUICK_STOP` se verrouille alors dans ce tic, avec
+  un détail qui dit que l'ouverture est déduite de l'état du variateur, aucune
+  lecture ne l'ayant montrée : au plus un tic (0,2 s) après l'ouverture,
+  chaîne restée ouverte ou déjà refermée, en séance manuelle comme pendant un
+  programme, et avant que `_settle` ne retire la marche, y compris quand un
+  arrêt demandé depuis la dernière lecture se termine dans le tic même qui le
+  prend. La consigne est nulle dans ce tic, une nouvelle cible est refusée, et
+  tout départ attend l'acquittement nommé. Aucun mot de la console ne mène à
+  cet état tant qu'elle tient la marche : l'armement finit en
+  `OPERATION_ENABLED`, `_settle` et l'escalade finissent en
+  `READY_TO_SWITCH_ON` et retirent la marche, l'E-STOP n'écrit que LFRD et
+  `GO_SILENT` ne lit plus rien. Le statut lu par l'inspection d'un départ,
+  avant l'armement, n'est pas jugé : un variateur juste mis sous tension
+  montre `SWITCH_ON_DISABLED` jusqu'à son armement, et seul un statut lu après
+  le départ compte. Le réarmement d'un défaut, lui, mène à
+  `SWITCH_ON_DISABLED`, et la marche reste tenue quand sa réponse est perdue ;
+  un variateur qui réarmerait seul son défaut y mènerait aussi. Un
+  `SWITCH_ON_DISABLED` qui suit un statut `FAULT` (ou la réaction de défaut),
+  ou une tentative de réarmement, notée avant son mot, n'est donc pas pris
+  pour une ouverture. Si la chaîne est réellement ouverte dans ce cas, la
+  lecture, qui continue sur un variateur en défaut, la voit : `sto_open`
+  pendant la roue libre, et au repos un départ refusé, comme tout
+  acquittement, tant que la lecture n'est pas `READY`
+  (`TrainingRuntime._deduce_sto_open`) ;
 - **la mémoire de l'arrêt** : quand la lecture a été retenue alors qu'un
   mouvement était possible (un arrêt en cours tient toujours la marche ou une
   séance armée), la première lecture `OPEN` qui suit est jugée comme avec
   mouvement possible, même arbre immobile et marche retirée, et `sto_open` se
   verrouille. La mémoire ne s'efface qu'à une lecture `READY` réussie après le
   dernier tic qui a retenu les lectures. Elle couvre un variateur dont le mot
-  d'état ne dirait rien d'une chaîne restée ouverte. Une chaîne ouverte puis
-  refermée avant la fin de l'arrêt n'est vue, elle, que par le mot d'état :
-  un variateur réel qui ne passerait pas en `SWITCH_ON_DISABLED` la laisserait
-  échapper au verrou, d'où l'étape 4 au banc ;
+  d'état ne dirait rien d'une chaîne restée ouverte. Une inspection au repos
+  en échec, qui a pu envoyer une trame, suppose l'ordre de marche tenu et
+  compte comme un arrêt : elle pose aussi cette mémoire, et une première
+  lecture `OPEN` verrouille alors `sto_open` même au repos, machine garée, à
+  acquitter une fois la lecture `READY` (sens prudent). Une chaîne ouverte puis
+  refermée sans qu'aucune lecture ne la voie, pendant un arrêt ou hors arrêt
+  plus brièvement que l'intervalle de lecture, n'est vue, elle, que par le
+  mot d'état : un variateur réel qui ne passerait pas en `SWITCH_ON_DISABLED`
+  la laisserait échapper au verrou, d'où l'étape 4 au banc ;
 - **l'acquittement après un arrêt** : tout acquittement exige une lecture
   `READY` réussie après le dernier tic qui a retenu les lectures. Une lecture
   plus ancienne, même encore fraîche, est refusée comme `UNKNOWN`
   (`StoNotReady`) : un `sto_open` déduit ne s'acquitte pas sur la lecture
   d'avant l'arrêt, il faut attendre la première lecture `READY` après la fin
   de l'arrêt. Une chaîne simulée, lue à l'instant demandé, n'est pas
-  concernée ; hors arrêt rien ne change.
+  concernée ; sans arrêt qui ait retenu la lecture, rien ne change.
+
+**Deux cas où l'ouverture n'est pas nommée `sto_open`.** À sévérité égale, le
+premier verrou du runtime garde son nom et son instant : une ouverture pendant
+un arrêt déjà verrouillé QUICK_STOP par le runtime (variateur trouvé en
+marche, `drive_precommanded`, ou armement non confirmé, `enable_unconfirmed`)
+laisse ce verrou, qui refuse tout départ, et son acquittement nommé exige la
+lecture `READY` postérieure à l'arrêt. Pendant la roue libre d'un variateur en
+défaut, le variateur garde `FAULT` et son mot ne montre pas l'ouverture : la
+lecture, qui continue, la voit si elle dure plus que l'intervalle de lecture ;
+une ouverture plus courte n'est pas vue, et le verrou `drive_fault` tient
+(acquittement nommé, réarmement, puis nouveau départ sur une chaîne `READY`).
 
 Tests : `tests/test_sto_open_during_stop.py` (STOP à la console et depuis le
 site, limite de la séance manuelle, descente vers une cible 0, verdict
@@ -252,11 +302,21 @@ RAMP_DOWN ; chaîne restée ouverte ou refermée avant l'arrêt mesuré : verrou
 tic qui suit l'ouverture, aucune lecture pendant l'arrêt, écritures d'arrêt
 identiques à celles d'une chaîne lue à l'instant, départ refusé jusqu'à
 l'acquittement nommé, lui-même refusé tant que la lecture n'est pas `READY` ;
-nouvelle cible refusée après une ouverture pendant la descente ; aucun
-`sto_open` sur les chemins où la console retire elle-même la marche ou se
-tait), `tests/test_sto_scheduling.py` (mêmes trames avec et sans la
-déduction ; variateur dont le mot d'état ne montre pas la chaîne) et
-`tests/test_sto_stop_guard.py` (mémoire de l'arrêt).
+nouvelle cible refusée après une ouverture pendant la descente ; défaut
+variateur : ouverture pendant la roue libre, refermée ou non, lue et
+verrouillée avant l'arrêt ; réarmement dont la réponse est perdue : aucun
+`sto_open` ; aucun `sto_open` sur les chemins où la console retire elle-même
+la marche ou se tait, ni à l'armement dont la première lecture d'état est
+perdue ; hors arrêt, verrou par le mot d'état avant toute lecture),
+`tests/test_sto_open_unread.py` (ouverture de 0,1 s hors arrêt, en séance
+manuelle et pendant un programme, en WARMUP et en HOLD, avec `drive_input` et
+`sim_ready` : verrou au tic suivant, consigne nulle, nouvelle cible refusée,
+départ refusé jusqu'à l'acquittement nommé ; descente sous un FREEZE : aucune
+lecture, écritures aux mêmes instants, ouverture verrouillée par le mot
+d'état ; descente d'un programme sans verdict : lecture continue),
+`tests/test_sto_scheduling.py` (mêmes trames avec et sans la déduction, avec
+et sans arrêt ; variateur dont le mot d'état ne montre pas la chaîne) et
+`tests/test_sto_stop_guard.py` (mémoire de l'arrêt ; variateur en défaut).
 
 **Le résiduel, borné.** Une lecture partie dans la fenêtre mais restée sans
 réponse ne s'interrompt pas. Elle occupe le lien jusqu'à
@@ -359,13 +419,17 @@ validation matérielle ; consigner les mesures dans le tableau avant de conclure
    Le décalage d'adresse doit être appliqué une seule fois.
 4. Chaîne ouverte au repos, relever ETA brut et son état décodé. Le modèle, le
    retrait logiciel de la marche dans `_settle` et le verrou `sto_open` déduit
-   pendant un arrêt supposent `SWITCH_ON_DISABLED` (0x40) : **à constater sur
-   le variateur réel**. Consigner tout autre état et suspendre la validation
-   jusqu'à explication.
+   du mot d'état (pendant un arrêt, et hors arrêt pour une ouverture que la
+   lecture ne voit pas) supposent `SWITCH_ON_DISABLED` (0x40) : **à constater
+   sur le variateur réel**. Consigner tout autre état et suspendre la
+   validation jusqu'à explication.
 5. Après attestation du câblage, demander un départ à basse vitesse, sans
    personne à bord. Appuyer sur le champignon : constater le couple coupé,
    l'arbre en roue libre, la référence logicielle à zéro et le verdict
    verrouillé `sto_open / quick_stop`. Relever ETA et le temps d'immobilisation.
+   Après acquittement et nouveau départ, appuyer brièvement sur le champignon,
+   moins de 0,6 s : `sto_open / quick_stop` doit se verrouiller au tic suivant
+   l'appui, même si aucune lecture ne l'a vu ouvert.
 6. Refermer la chaîne : vérifier qu'aucun mouvement ne reprend et qu'un départ
    reste refusé. Relever aussi CMD (attendu : 15 après `sto_open`) et ETA après
    refermeture : ETA doit rester `SWITCH_ON_DISABLED` avec cette valeur de CMD.
@@ -1449,7 +1513,7 @@ retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 | `enable_unconfirmed` | le mot qui active l'étage de sortie a pu partir sans réponse | QUICK_STOP | oui |
 | `disable_refused` | le variateur refuse 5 fois de suite (`disable_attempts`) les mots d'arrêt à l'arrêt confirmé | RAMP_DOWN si `SHUTDOWN` direct a réussi ; GO_SILENT sinon | oui |
 | `tick_exception` | une exception dans le tic | GO_SILENT | oui, définitif |
-| `sto_open` | lecture STO `OPEN` quand un mouvement est possible : séance armée à toute phase, marche présente, arbre tournant, vitesse inconnue ou relevé variateur ancien ; pendant un arrêt, sans lecture : statut frais `SWITCH_ON_DISABLED` alors que la console tient la marche (ouverture déduite de l'état du variateur) ; après un arrêt pendant lequel un mouvement était possible : lecture `OPEN`, même au repos, jusqu'à une lecture `READY` postérieure | QUICK_STOP, consigne zéro dans ce tic ; le matériel a déjà coupé le couple | oui ; l'acquittement exige une lecture `READY` faite après le dernier tic qui a retenu les lectures |
+| `sto_open` | lecture STO `OPEN` quand un mouvement est possible : séance armée à toute phase, marche présente, arbre tournant, vitesse inconnue ou relevé variateur ancien ; sans lecture qui la montre, arrêt ou non : statut frais `SWITCH_ON_DISABLED`, lu après le départ, alors que la console tient la marche et hors suite d'un défaut ou d'une tentative de réarmement (ouverture déduite de l'état du variateur) ; après un arrêt pendant lequel un mouvement était possible : lecture `OPEN`, même au repos, jusqu'à une lecture `READY` postérieure | QUICK_STOP, consigne zéro dans ce tic ; le matériel a déjà coupé le couple | oui ; l'acquittement exige une lecture `READY` faite après le dernier tic qui a retenu les lectures |
 | `sto_unreadable` | source configurée, preuve positive de mouvement (séance armée à toute phase, marche tenue par ce runtime, ou statut frais en rotation/`OPERATION_ENABLED`), aucune lecture STO réussie depuis plus de `STO_STALE_AFTER` (2 s) de contrôle progressant, ou jamais | RAMP_DOWN, arrêt contrôlé | oui |
 
 Les deux règles STO sont jugées avant le calcul de consigne. Un échec de
@@ -1460,9 +1524,13 @@ observé immobile, aucun verrou STO : seul le départ est refusé tant que la
 chaîne n'est pas prête. L'exception est la première lecture qui suit un arrêt
 pendant lequel la lecture a été retenue alors qu'un mouvement était possible :
 `OPEN` y verrouille `sto_open` même au repos, faute d'avoir pu lire la chaîne
-pendant cet arrêt (section 2.2). À sévérité égale, le premier verrou du runtime garde
-son nom et son instant (par exemple `drive_precommanded`) ; il continue de
-refuser tout départ.
+pendant cet arrêt (section 2.2). Le mot d'état du variateur verrouille aussi
+`sto_open`, arrêt ou non, quand aucune lecture ne montre l'ouverture (section
+2.2). À sévérité égale, le premier verrou du runtime garde son nom et son
+instant (par exemple `drive_precommanded`) ; il continue de refuser tout
+départ. Pendant la roue libre d'un variateur en défaut, une ouverture plus
+courte que l'intervalle de lecture n'est pas vue ; le verrou `drive_fault`
+tient.
 
 Au démarrage, variateur absent ou hors tension, une vitesse inconnue seule
 ne lève pas `sto_unreadable` si ce processus n'a ni armé une séance ni tenu

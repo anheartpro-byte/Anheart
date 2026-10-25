@@ -1917,8 +1917,9 @@ programmé conserve aussi ses conditions d'attestation et d'état `idle` dans la
 
 Si la chaîne s'ouvre alors qu'un mouvement est possible, le verdict existant
 `sto_open / quick_stop` apparaît dans **Verdict en cours**, avec son détail et
-`verrouille oui`. Le matériel a déjà coupé le couple ; la masse peut rester en
-rotation. Avec une source configurée et une preuve positive de mouvement
+`verrouille oui`, même quand aucune lecture ne l'a vue ouverte (voir plus bas).
+Le matériel a déjà coupé le couple ; la masse peut rester en rotation. Avec
+une source configurée et une preuve positive de mouvement
 (séance armée, marche tenue par ce runtime ou statut frais en rotation/étage actif),
 l'absence de lecture valable au-delà de la durée admise verrouille
 `sto_unreadable / ramp_down`. Refermer ne libère pas le verdict : acquitter par son nom puis
@@ -1939,29 +1940,47 @@ de la pause peut donc ajouter `sto_unreadable / ramp_down` à `loop_stall`.
 Pendant un arrêt, la console ne lit pas la chaîne, pour que les écritures
 d'arrêt gardent le lien : fin de séance (STOP local ou depuis le site, verdict,
 E-STOP, limite) tant que la consigne descend ou que la marche est tenue, verdict
-qui arrête la séance, descente vers une cible manuelle de 0, et E-STOP de la
-page pas encore pris par la boucle, même au repos. Un `freeze` ou un `reduce`
-n'est pas un arrêt : la séance continue de réguler, la lecture continue aussi,
-la carte reste `prete` et une chaîne ouverte pendant un `reduce` verrouille
-`sto_open / quick_stop` comme ailleurs. Un variateur en défaut, arbre arrêté,
-dont la marche n'attend plus que le réarmement n'est pas non plus un arrêt en
-cours : la lecture reprend, ce qui permet d'acquitter les autres verdicts puis
-de réarmer sans redémarrer la console. Pendant un arrêt, la carte passe à
+qui arrête la séance, descente vers zéro sous un `freeze` (après un STOP, ou
+dans la phase `cooldown` d'un programme), descente vers une cible manuelle de
+0, et E-STOP de la page pas encore pris par la boucle, même au repos. Un
+`reduce` n'est pas un arrêt, ni un `freeze` qui tient une vitesse : la séance
+continue de réguler, la lecture continue aussi, la carte reste `prete` et une
+chaîne ouverte pendant un `reduce` verrouille `sto_open / quick_stop` comme
+ailleurs. La descente prévue d'un programme sans verdict (`cooldown` puis
+`recovery`) est de la régulation : la lecture continue. Un variateur en
+défaut n'est jamais un arrêt en cours, même quand l'arbre tourne encore : il
+n'accepte que le réarmement et aucune écriture d'arrêt n'y agit, donc la
+lecture continue pendant sa roue libre et après. Une chaîne ouverte pendant
+cette roue libre est lue et verrouille `sto_open / quick_stop` sans attendre
+l'arrêt, et les autres verdicts s'acquittent avant le réarmement sans
+redémarrer la console. Pendant un arrêt, la carte passe à
 `inconnue` 2 s après la dernière lecture, sans panne, et redevient `prete`
 juste après la fin de l'arrêt (le premier tic qui n'en laisse plus en cours) ;
 ce temps n'est pas compté contre la lecture.
 
-Une ouverture de la chaîne pendant un arrêt n'échappe pas au verrou, même
-sans lecture. Le variateur signale qu'il a retiré son étage de sortie
+Une ouverture de la chaîne que la lecture ne montre pas n'échappe pas au
+verrou : pendant un arrêt, où la console ne lit pas, et hors arrêt, quand elle
+dure moins que l'intervalle entre deux lectures (environ 0,6 s) ou qu'elle se
+trouve entre le relais et la borne STO du variateur, que le retour du relais
+ne voit pas. Le variateur signale qu'il a retiré son étage de sortie
 (`SWITCH_ON_DISABLED`) alors que la console tient la marche : `sto_open /
 quick_stop` se verrouille au tic suivant, avec un détail qui dit que
 l'ouverture est déduite de l'état du variateur, même si le champignon est
-relâché avant la fin de l'arrêt. Après un arrêt pendant lequel un mouvement
-était possible, la première lecture `ouverte` verrouille aussi `sto_open`,
-même au repos. Tout acquittement attend alors une lecture `prete` faite après
-l'arrêt : celle d'avant l'arrêt, même encore récente, ne suffit pas, et le
-refus le dit (`inconnue`). Un nouveau départ suit l'acquittement nommé, comme
-ailleurs.
+relâché aussitôt. Un défaut du variateur ou une demande de réarmement mènent
+aussi à cet état : il n'est alors pas pris pour une ouverture, et la lecture,
+qui continue sur un variateur en défaut, juge la chaîne ; le départ reste
+refusé tant qu'elle n'est pas `prete`. Après un arrêt pendant lequel un
+mouvement était possible, la première lecture `ouverte` verrouille aussi
+`sto_open`, même au repos ; une inspection du variateur au repos en échec
+compte comme un tel arrêt. Tout acquittement attend alors une lecture `prete`
+faite après l'arrêt : celle d'avant l'arrêt, même encore récente, ne suffit
+pas, et le refus le dit (`inconnue`). Un nouveau départ suit l'acquittement
+nommé, comme ailleurs. Deux ouvertures ne portent pas le nom `sto_open` :
+pendant un arrêt déjà verrouillé `quick_stop` par la console (variateur trouvé
+en marche, armement non confirmé), ce verrou tient et refuse tout départ ;
+pendant la roue libre d'un variateur en défaut, une ouverture plus courte que
+l'intervalle de lecture n'est vue ni par la lecture ni par le variateur, et le
+verrou `drive_fault` tient.
 
 Une lecture déjà partie quand l'arrêt est demandé peut retarder les écritures
 d'arrêt, répondue ou non : répondue, de quelques millisecondes (au plus

@@ -1014,15 +1014,18 @@ avec les conditions qui empêchent le départ, avant l'avis sur les paramètres
 médicaux. Les deux boutons de départ sont grisés avec la raison donnée par le Pi.
 `non configuree` signifie qu'il faut configurer `STO_SOURCE` ; ce n'est pas une
 panne. Au repos, `ouverte` après un appui sur le champignon est un état normal.
-Pendant un arrêt (STOP, fin de séance, verdict d'arrêt, cible 0, ou E-STOP de
-l'écran pas encore pris par la console), la console suspend la lecture pour
-laisser le lien aux écritures d'arrêt : `inconnue` s'affiche 2 s après la
-dernière lecture, sans panne, et `prete` revient juste après l'arrêt. Un
-`freeze` ou un `reduce` n'est pas un arrêt. Un variateur en défaut, arbre
-arrêté, n'attend plus que le réarmement : la lecture reprend, pour pouvoir
-acquitter puis réarmer. Si le champignon est actionné pendant l'arrêt, le
-verdict `sto_open / quick_stop` apparaît au tic suivant même sans lecture, et
-il reste si le champignon est relâché avant la fin de l'arrêt.
+Pendant un arrêt (STOP, fin de séance, verdict d'arrêt, cible 0, descente sous
+un `freeze`, ou E-STOP de l'écran pas encore pris par la console), la console
+suspend la lecture pour laisser le lien aux écritures d'arrêt : `inconnue`
+s'affiche 2 s après la dernière lecture, sans panne, et `prete` revient juste
+après l'arrêt. Un `reduce`, un `freeze` qui tient la vitesse ou la descente
+prévue d'un programme sans verdict ne sont pas des arrêts. Un variateur en
+défaut n'en est pas un non plus, même quand l'arbre tourne encore : la lecture
+continue, pour voir le champignon pendant la roue libre, puis pour pouvoir
+acquitter et réarmer. Si le champignon est actionné pendant l'arrêt, ou en
+séance plus brièvement que l'intervalle entre deux lectures, le verdict
+`sto_open / quick_stop` apparaît au tic suivant même sans lecture, et il reste
+si le champignon est relâché aussitôt.
 
 En séance, appuyer sur le champignon ouvre la chaîne : le matériel doit couper le
 couple indépendamment du Pi. Le logiciel affiche `ouverte` et le verdict
