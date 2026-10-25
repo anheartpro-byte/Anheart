@@ -17,10 +17,10 @@ import pytest
 from src.clock import ManualClock
 from src.local_panel import build_sto
 from src.motor.atv320 import AUXILIARY_READ_BUDGET
-from src.motor.drive import LogicInput, RegisterMap
-from src.motor.simulated import SimulatedDrive
+from src.motor.drive import DriveFault, DriveState, LogicInput, RegisterMap
+from src.motor.simulated import SimState, SimulatedDrive
 from src.motor.sto import DriveInputStoSource, StoReading, StoSourceKind, StoState
-from src.presence.monitor import RampDown
+from src.presence.monitor import RULE_PRESENCE_INTRUSION, RampDown
 from src.presence.simulated import Dropout, SimulatedCamera
 from src.result import Ok
 from src.training.runtime import (
@@ -29,7 +29,7 @@ from src.training.runtime import (
     RuntimeState,
     TrainingRuntime,
 )
-from src.training.safety import RULE_HR_RATE
+from src.training.safety import RULE_HR_RATE, RULE_OPERATOR_ESTOP
 from src.training.types import Occupancy, Phase, SafetyAction
 from src.units import Monotonic, MotorRpm, OutputRpm, RawRegister, Seconds
 from tests.test_atv320 import FakeBus, build_drive
@@ -271,6 +271,109 @@ async def test_a_camera_verdict_not_yet_applied_withholds_the_next_read(tmp_path
         assert source.attempts == attempts + 1
     assert withheld
     await panel.close()
+
+
+# =========================================================================
+# A faulted drive at standstill waits for its reset alone: the reads resume
+# =========================================================================
+
+
+@pytest.mark.parametrize(
+    ("other", "rule"),
+    [
+        ("screen_estop", RULE_OPERATOR_ESTOP),
+        ("sto_open", RULE_STO_OPEN),
+        ("supervisor_verdict", RULE_PRESENCE_INTRUSION),
+    ],
+)
+async def test_a_fault_at_standstill_lets_the_reads_resume_then_acknowledgement_and_reset_pass(
+    tmp_path: Path, other: str, rule: str
+) -> None:
+    """No stop write is left once a faulted drive is stopped: the read must not wait for one.
+
+    Behind another verdict the fault reset waits for that verdict's acknowledgement, and
+    the acknowledgement waits for a fresh READY reading: reads withheld for as long as the
+    run command is held would refuse both until the console restarts.
+    """
+    rig, _ = make_rig(tmp_path, env=STO_ENV)
+    panel = rig.panel
+    runtime = panel.runtime
+    source = panel.sto
+    chain = rig.simulator.sto_chain
+    assert isinstance(source, DriveInputStoSource)
+    assert chain is not None
+
+    async def tick(count: int = 1) -> None:
+        for _ in range(count):
+            rig.clock.advance(Seconds(0.2))
+            panel.surface.note_presence(OPERATOR)
+            await panel.control_step()
+            await source.poll()
+
+    await tick()
+    assert isinstance(runtime.confirm_estop_wiring(OPERATOR), Ok)
+    assert isinstance(await runtime.start_manual(Occupancy.BENCH, OPERATOR, MotorRpm(276)), Ok)
+    assert isinstance(runtime.set_manual_target(OutputRpm(3)), Ok)
+    await tick(75)
+    if other == "sto_open":
+        chain.open(rig.clock.monotonic())  # read while the session runs: latched at once
+        await tick(4)
+    rig.simulator.inject_fault(DriveFault.MOTOR_OVERLOAD)
+    await tick()
+    if other == "screen_estop":
+        panel.surface.submit_estop(operator=OPERATOR, reason="the drive faulted")
+    elif other == "supervisor_verdict":
+        runtime.trip_from_thread(RULE_PRESENCE_INTRUSION, SafetyAction.QUICK_STOP, "injected")
+    await tick()
+    attempts = source.attempts
+    for _ in range(1000):
+        assert stopping_now(runtime)  # the shaft still turns: the stop keeps the link
+        assert source.attempts == attempts
+        rig.clock.advance(Seconds(0.2))
+        panel.surface.note_presence(OPERATOR)
+        await panel.control_step()
+        if not stopping_now(runtime):
+            break
+        await source.poll()
+    # Stopped, faulted, run command held: the ending waits for the reset alone.
+    assert state_now(runtime) is RuntimeState.ENDING
+    assert enabled_now(runtime)
+    status = runtime.drive_status
+    assert status is not None
+    assert status.state is DriveState.FAULT
+    verdict = runtime.standing
+    assert verdict is not None
+    assert verdict.rule == rule
+    if other == "sto_open":
+        await tick(5)
+        assert source.latest(rig.clock.monotonic()).state is StoState.OPEN
+        chain.close(rig.clock.monotonic())
+    await tick(5)
+    assert source.attempts > attempts
+    assert source.latest(rig.clock.monotonic()).state is StoState.READY
+    assert isinstance(panel.surface.acknowledge(OPERATOR, estop_released=True), Ok)
+    assert isinstance(panel.surface.submit_fault_reset(operator=OPERATOR), Ok)
+    await tick(10)  # the reset, then its SHUTDOWN once settled
+    assert rig.simulator.sim_state is SimState.READY_TO_SWITCH_ON
+    assert not enabled_now(runtime)
+    assert runtime.standing is None  # the acknowledgement cleared the fault's latch too
+    assert state_now(runtime) is RuntimeState.FINISHED
+    await panel.close()
+
+
+def stopping_now(runtime: TrainingRuntime) -> bool:
+    """Read afresh, for the reason :func:`stopping` gives."""
+    return runtime.stop_in_progress
+
+
+def enabled_now(runtime: TrainingRuntime) -> bool:
+    """Read afresh, for the reason :func:`stopping` gives."""
+    return runtime.output_enabled
+
+
+def state_now(runtime: TrainingRuntime) -> RuntimeState:
+    """Read afresh, for the reason :func:`stopping` gives."""
+    return runtime.state
 
 
 # =========================================================================

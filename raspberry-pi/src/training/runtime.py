@@ -1603,11 +1603,17 @@ class TrainingRuntime:
         session goes on regulating under them, so the reads go on too, and an
         STO chain that opens under a REDUCE is seen at the next read. Read from
         memory only.
+
+        An ending that holds the run command on a faulted drive at standstill
+        is no stop under way (:meth:`_awaits_fault_reset`): no stop write is
+        left to send, only the operator's fault reset ends it, and that reset
+        follows the acknowledgement of any other verdict, which needs a fresh
+        reading.
         """
         state = self.state
         match state:
             case RuntimeState.ENDING:
-                return self._applied_rpm != 0 or self._enabled
+                return self._applied_rpm != 0 or (self._enabled and not self._awaits_fault_reset())
             case RuntimeState.RUNNING:
                 return self.standing_action >= SafetyAction.RAMP_DOWN or (
                     self._manual is not None and self._manual_target == 0 and self._applied_rpm != 0
@@ -1615,6 +1621,22 @@ class TrainingRuntime:
             case RuntimeState.IDLE | RuntimeState.FINISHED:
                 return self._enabled
         raise assert_never(state)
+
+    def _awaits_fault_reset(self) -> bool:
+        """Whether an ending's run command now waits for the operator's fault reset alone.
+
+        :meth:`_settle`'s FAULT arm, read from memory: a fresh RFRD shows the
+        shaft stopped and the drive says FAULT, so with the setpoint at zero
+        it returns without a word. An ending's phase is always one after which
+        no motion is asked for.
+        """
+        now = self._clock.monotonic()
+        status = self._readable_status(now)
+        return (
+            status is not None
+            and status.state is DriveState.FAULT
+            and abs(status.output_rpm) < self._limits.standstill_rpm
+        )
 
     @property
     def ending(self) -> Ending | None:
