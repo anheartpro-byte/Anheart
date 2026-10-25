@@ -190,7 +190,8 @@ async def test_the_simulated_master_answers_the_relay_feedback_from_its_model() 
         executor_factory=InlineExecutor,
         wait=master.wait,
     )
-    assert isinstance(await driver.open(), Ok)
+    opened_link = await driver.open()
+    assert isinstance(opened_link, Ok)
     reads = AuxiliaryRegisterReads(driver)
     assert await reads.read_register(registers.logic_inputs) == Ok(RawRegister(1))
     chain.open(clock.monotonic())

@@ -525,7 +525,8 @@ async def test_real_console_never_reactivates_after_close_without_acknowledgemen
     async with rig.http() as client:
         if phase is RuntimeState.IDLE:
             await attest(client)
-            assert isinstance(await rig.simulator.open(), Ok)
+            opened_link = await rig.simulator.open()
+            assert isinstance(opened_link, Ok)
             for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
                 assert isinstance(await rig.simulator.write_command(word), Ok)
             assert isinstance(await rig.simulator.write_speed(MotorRpm(100)), Ok)

@@ -117,14 +117,14 @@ async def test_inflight_read_and_last_tick_allow_two_frames_then_watchdog_expire
     attempts: asyncio.Queue[None] = asyncio.Queue()
     original_read = SimulatedDrive.read_register
     original_poll = DriveInputStoSource.poll
-    calls = 0
+    # Appended by the patched read alone: one entry per 5202 read that reached the drive.
+    reads: list[RegisterAddress] = []
 
     async def inflight(
         drive: SimulatedDrive, address: RegisterAddress
     ) -> Result[RawRegister, DriveError]:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
+        reads.append(address)
+        if len(reads) == 1:
             entered.set()
             await release.wait()
         return await original_read(drive, address)
@@ -145,13 +145,13 @@ async def test_inflight_read_and_last_tick_allow_two_frames_then_watchdog_expire
         release.set()
         for _ in range(3):
             await asyncio.wait_for(attempts.get(), 2)
-        assert calls == 2
+        assert len(reads) == 2
         assert rig.simulator.acquisition_evidence.possible_frames == before + 2
         for _ in range(10):
             rig.clock.advance(Seconds(0.5))
             await asyncio.wait_for(attempts.get(), 2)
             rig.simulator.advance(rig.clock.monotonic())
-        assert calls == 2
+        assert len(reads) == 2
         assert rig.simulator.acquisition_evidence.possible_frames == before + 2
         assert not panel.runtime.silent
         assert rig.simulator.sim_state is SimState.FAULT

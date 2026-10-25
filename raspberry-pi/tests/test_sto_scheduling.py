@@ -391,7 +391,7 @@ async def console(panel: LocalPanel, events: tuple[tuple[float, Event], ...], en
         event(panel)
     await asyncio.sleep(origin + end - now())
     stop.set()
-    await runner
+    await asyncio.gather(runner)
 
 
 def measure(

@@ -309,7 +309,8 @@ async def enable(drive: SimulatedDrive) -> None:
 async def test_sto_cuts_torque_without_polling_and_never_restarts_on_closing() -> None:
     clock, chain = ManualClock(), SimulatedStoChain()
     drive = SimulatedDrive(clock, sto_chain=chain, initial_rpm=MotorRpm(900))
-    assert isinstance(await drive.open(), Ok)
+    opened_link = await drive.open()
+    assert isinstance(opened_link, Ok)
     await enable(drive)
     assert isinstance(await drive.write_speed(MotorRpm(900)), Ok)
     chain.open(clock.monotonic())
@@ -344,7 +345,8 @@ async def test_simulated_drive_open_chain_refuses_enable_and_models_only_relay_r
     clock, chain = ManualClock(), SimulatedStoChain(ready=False)
     drive = SimulatedDrive(clock, SimulatedDriveConfig(sto_input=LogicInput.LI6), sto_chain=chain)
     assert isinstance(await drive.read_register(LOGIC_INPUTS_LOGICAL), Err)
-    assert isinstance(await drive.open(), Ok)
+    opened_link = await drive.open()
+    assert isinstance(opened_link, Ok)
     for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
         refused = await drive.write_command(word)
         assert isinstance(refused, Err)
@@ -359,7 +361,8 @@ async def test_simulated_drive_open_chain_refuses_enable_and_models_only_relay_r
     with pytest.raises(ValueError, match="already connected"):
         drive.connect_sto(chain)
     bare = SimulatedDrive(clock)
-    assert isinstance(await bare.open(), Ok)
+    opened_link = await bare.open()
+    assert isinstance(opened_link, Ok)
     assert await bare.read_register(LOGIC_INPUTS_LOGICAL) == Ok(RawRegister(0))
 
 
@@ -502,7 +505,8 @@ async def test_opening_and_closing_sto_preserves_latched_fault_and_lft(
 ) -> None:
     clock, chain = ManualClock(), SimulatedStoChain()
     drive = SimulatedDrive(clock, sto_chain=chain, initial_rpm=initial_rpm)
-    assert isinstance(await drive.open(), Ok)
+    opened_link = await drive.open()
+    assert isinstance(opened_link, Ok)
     drive.inject_fault(DriveFault.MODBUS_COMM_LOSS)
     before = await drive.read_status()
     assert isinstance(before, Ok)
@@ -526,7 +530,8 @@ async def test_opening_and_closing_sto_preserves_latched_fault_and_lft(
 async def test_a_fault_arriving_after_sto_open_cannot_restore_torque() -> None:
     clock, chain = ManualClock(), SimulatedStoChain()
     drive = SimulatedDrive(clock, sto_chain=chain, initial_rpm=MotorRpm(500))
-    assert isinstance(await drive.open(), Ok)
+    opened_link = await drive.open()
+    assert isinstance(opened_link, Ok)
     chain.open(clock.monotonic())
     drive.inject_fault(DriveFault.MODBUS_COMM_LOSS)
     assert drive.sim_state is SimState.FAULT_REACTION_FREEWHEEL

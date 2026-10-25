@@ -33,7 +33,8 @@ def lost(drive: ATV320Drive) -> bool:
 
 async def opened(clock: ManualClock, bus: FakeBus) -> ATV320Drive:
     drive = build_drive(clock, bus)
-    assert isinstance(await drive.open(), Ok)
+    opened_link = await drive.open()
+    assert isinstance(opened_link, Ok)
     return drive
 
 
@@ -102,7 +103,8 @@ async def test_the_wire_bytes_of_an_auxiliary_read_stay_visible_to_a_transport_d
     diagnostic = ExchangeLog(clock)
     drive.observe_exchanges(diagnostic)
     try:
-        assert isinstance(await drive.open(), Ok)
+        opened_link = await drive.open()
+        assert isinstance(opened_link, Ok)
         before = len(diagnostic.entries)
         requests = len(chip.requests)
         assert await AuxiliaryRegisterReads(drive).read_register(LOGIC_INPUTS_LOGICAL) == Ok(
@@ -132,7 +134,8 @@ async def test_a_feedback_reply_arriving_after_its_read_expired_is_never_taken_f
     master, settings = ftdi_master(chip, timeout=Seconds(0.05))
     drive = ATV320Drive(clock, master, settings, REGISTERS)
     try:
-        assert isinstance(await drive.open(), Ok)
+        opened_link = await drive.open()
+        assert isinstance(opened_link, Ok)
         chip.silent = True
         expired = await AuxiliaryRegisterReads(drive).read_register(LOGIC_INPUTS_LOGICAL)
         assert isinstance(expired, Err)

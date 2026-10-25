@@ -796,7 +796,7 @@ async def test_emergency_stop_returns_before_the_loop_has_ticked_once(
     assert parse(EstopRow, response).action == "quick_stop"
 
     gate.set()
-    await loop_task
+    await asyncio.gather(loop_task)
 
 
 async def test_the_emergency_stop_needs_neither_a_name_nor_a_reason(
