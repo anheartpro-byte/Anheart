@@ -80,6 +80,18 @@ def sto_ready(reading: StoReading) -> bool:
     return reading.state is StoState.READY
 
 
+def rest_of_poll_period(began: Monotonic, now: Monotonic) -> Seconds:
+    """What is left of ``STO_POLL_PERIOD`` at ``now`` after a read that began at ``began``.
+
+    The polling task waits it out before it looks for the next completed tick
+    (:meth:`DriveInputStoSource.run`). The simulation's ``drive_input`` variant,
+    whose clock moves by whole control ticks, starts its next read after the
+    first completed tick at which it is zero: the same cadence, from the same
+    function.
+    """
+    return Seconds(max(0.0, STO_POLL_PERIOD - elapsed(began, now)))
+
+
 class StoSource(Protocol):
     """A future GPIO adapter can provide the same memory-only seam."""
 
@@ -265,8 +277,7 @@ class DriveInputStoSource:
             await self.poll()
             next_tick = self._next_tick
             if self._attempts != attempts or next_tick is None:
-                remaining = max(0.0, STO_POLL_PERIOD - elapsed(began, self._clock.monotonic()))
-                await asyncio.sleep(remaining)
+                await asyncio.sleep(rest_of_poll_period(began, self._clock.monotonic()))
             if next_tick is not None:
                 await next_tick(STO_POLL_PERIOD)
 

@@ -6,7 +6,7 @@ import signal
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, cast, override
 
 import pytest
 from hypothesis import given
@@ -49,6 +49,7 @@ from src.motor.sto import (
     StoSourceKind,
     StoState,
     UnconfiguredStoSource,
+    rest_of_poll_period,
     sto_ready,
 )
 from src.result import Err, Ok, Result
@@ -259,6 +260,42 @@ async def test_polling_loop_yields_at_technical_period_and_is_cancellable(
         await source.run()
     assert len(port.addresses) == 1
     assert periods == [STO_POLL_PERIOD]
+
+
+def test_the_rest_of_the_poll_period_counts_from_the_start_of_a_read() -> None:
+    began = Monotonic(10.0)
+    assert rest_of_poll_period(began, began) == STO_POLL_PERIOD
+    assert rest_of_poll_period(began, Monotonic(10.4)) == pytest.approx(STO_POLL_PERIOD - 0.4)
+    assert rest_of_poll_period(began, Monotonic(10.0 + STO_POLL_PERIOD)) == 0.0
+    assert rest_of_poll_period(began, Monotonic(13.0)) == 0.0
+
+
+async def test_the_polling_task_waits_out_only_the_rest_of_the_period_after_a_slow_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = ManualClock(Monotonic(10.0))
+
+    class SlowPort(RegisterPort):
+        @override
+        async def read_register(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
+            clock.advance(Seconds(0.2))
+            return await super().read_register(address)
+
+    port = SlowPort()
+    source = DriveInputStoSource(
+        clock=clock, drive=port, address=LOGIC_INPUTS_LOGICAL, input_=LogicInput.LI1
+    )
+    periods: list[float] = []
+
+    async def sleep(period: float) -> None:
+        periods.append(period)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await source.run()
+    assert periods == [rest_of_poll_period(Monotonic(10.0), clock.monotonic())]
+    assert periods == [pytest.approx(STO_POLL_PERIOD - 0.2)]
 
 
 async def test_source_rejects_impossible_result_and_error_variants() -> None:
