@@ -10,8 +10,10 @@ reset: an opening too short for any reading, just after the arming, or a cut
 between the safety relay's contact and the drive's STO terminal, which no
 reading shows at all, latches ``sto_open`` at the next tick, whichever way the
 reset before it went. A drive that resets its own fault is excluded all the
-same, and the reading judges the chain then. On the real console, with
-``STO_SOURCE=drive_input``.
+same, and the reading judges the chain then. An ``sto_open``, read or
+deduced, is acknowledged only on a READY reading taken since it latched, even
+when its stop ends in that very tick and withholds no read. On the real
+console, with ``STO_SOURCE=drive_input``.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from tests.test_sto_open_during_stop import (
     sim_state,
     standing,
     state,
+    stopping,
     until_at_rest,
     until_finished,
 )
@@ -233,4 +236,38 @@ async def test_a_drive_that_resets_its_own_fault_is_no_sto_opening_and_the_readi
     await scene.run(5)
     assert sim_state(scene) is SimState.OPERATION_ENABLED
     assert scene.sto_open == []
+    await scene.panel.close()
+
+
+async def test_an_sto_open_is_acknowledged_only_on_a_ready_reading_taken_since_it_latched(
+    tmp_path: Path,
+) -> None:
+    """A deduced opening just after the arming, its stop over in the tick that latches it.
+
+    That stop withholds no read, so the latch's own instant is what refuses the
+    READY reading from before the opening. The reading taken after it is
+    accepted, and a new start is still needed.
+    """
+    scene = Scene(tmp_path, DRIVE_INPUT)
+    runtime = scene.runtime
+    await scene.run(1)
+    assert isinstance(await scene.start(), Ok)
+    opened = await pulse(scene, across_a_tick=False)
+    assert_latched_unread(scene, opened)
+    assert not stopping(runtime)  # over in the tick that latched: no read was withheld
+    taken = scene.reading().last_success_at
+    assert taken is not None
+    assert taken <= opened
+    early = acknowledged(scene)
+    assert isinstance(early, Err)
+    assert isinstance(early.error, StoNotReady)
+    assert early.error.state is StoState.UNKNOWN
+    assert standing(runtime) is not None
+    await acknowledge_once_read(scene)
+    assert state(runtime) is not RuntimeState.RUNNING
+    assert sim_state(scene) is SimState.SWITCH_ON_DISABLED  # nothing restarted
+    await until_finished(scene)
+    assert isinstance(await scene.start(), Ok)
+    await scene.run(5)
+    assert sim_state(scene) is SimState.OPERATION_ENABLED
     await scene.panel.close()
