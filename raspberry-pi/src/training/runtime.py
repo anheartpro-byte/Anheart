@@ -1626,16 +1626,21 @@ class TrainingRuntime:
         STO chain that opens under a REDUCE is seen at the next read. Read from
         memory only.
 
-        An ending that holds the run command on a faulted drive at standstill
-        is no stop under way (:meth:`_awaits_fault_reset`): no stop write is
-        left to send, only the operator's fault reset ends it, and that reset
-        follows the acknowledgement of any other verdict, which needs a fresh
-        reading.
+        A drive that signals a fault is under no stop of this console's, at
+        any speed and whatever the setpoint (:meth:`_drive_signals_fault`).
+        Reads are withheld during a stop so that no stop write waits for one;
+        a faulted drive refuses every word but the operator's fault reset, so
+        no stop write acts on it and none can be delayed: the reads go on
+        through its coast, and an STO chain that opens then is read. They also
+        let the operator's fault reset follow the acknowledgement of any other
+        verdict, which needs a fresh reading.
         """
+        if self._drive_signals_fault():
+            return False
         state = self.state
         match state:
             case RuntimeState.ENDING:
-                return self._applied_rpm != 0 or (self._enabled and not self._awaits_fault_reset())
+                return self._applied_rpm != 0 or self._enabled
             case RuntimeState.RUNNING:
                 return self.standing_action >= SafetyAction.RAMP_DOWN or (
                     self._manual is not None and self._manual_target == 0 and self._applied_rpm != 0
@@ -1644,21 +1649,13 @@ class TrainingRuntime:
                 return self._enabled
         raise assert_never(state)
 
-    def _awaits_fault_reset(self) -> bool:
-        """Whether an ending's run command now waits for the operator's fault reset alone.
+    def _drive_signals_fault(self) -> bool:
+        """Whether a fresh status shows the drive in FAULT, or in the fault reaction it coasts in.
 
-        :meth:`_settle`'s FAULT arm, read from memory: a fresh RFRD shows the
-        shaft stopped and the drive says FAULT, so with the setpoint at zero
-        it returns without a word. An ending's phase is always one after which
-        no motion is asked for.
+        Read from memory: the status the last tick read, while it is evidence.
         """
-        now = self._clock.monotonic()
-        status = self._readable_status(now)
-        return (
-            status is not None
-            and status.state is DriveState.FAULT
-            and abs(status.output_rpm) < self._limits.standstill_rpm
-        )
+        status = self._readable_status(self._clock.monotonic())
+        return status is not None and status.state is DriveState.FAULT
 
     @property
     def ending(self) -> Ending | None:

@@ -316,7 +316,7 @@ async def test_a_camera_verdict_not_yet_applied_withholds_the_next_read(tmp_path
 
 
 # =========================================================================
-# A faulted drive at standstill waits for its reset alone: the reads resume
+# A faulted drive takes no stop write: the reads go on through its coast
 # =========================================================================
 
 
@@ -328,13 +328,14 @@ async def test_a_camera_verdict_not_yet_applied_withholds_the_next_read(tmp_path
         ("supervisor_verdict", RULE_PRESENCE_INTRUSION),
     ],
 )
-async def test_a_fault_at_standstill_lets_the_reads_resume_then_acknowledgement_and_reset_pass(
+async def test_a_faulted_drive_lets_the_reads_go_on_then_acknowledgement_and_reset_pass(
     tmp_path: Path, other: str, rule: str
 ) -> None:
-    """No stop write is left once a faulted drive is stopped: the read must not wait for one.
+    """A faulted drive refuses every word but the reset: no stop write can wait for a read.
 
-    Behind another verdict the fault reset waits for that verdict's acknowledgement, and
-    the acknowledgement waits for a fresh READY reading: reads withheld for as long as the
+    So the reads go on through its coast, at any speed, and after it. Behind another
+    verdict the fault reset waits for that verdict's acknowledgement, and the
+    acknowledgement waits for a fresh READY reading: reads withheld for as long as the
     run command is held would refuse both until the console restarts.
     """
     rig, _ = make_rig(tmp_path, env=STO_ENV)
@@ -368,15 +369,22 @@ async def test_a_fault_at_standstill_lets_the_reads_resume_then_acknowledgement_
         runtime.trip_from_thread(RULE_PRESENCE_INTRUSION, SafetyAction.QUICK_STOP, "injected")
     await tick()
     attempts = source.attempts
+    coasted = 0
     for _ in range(1000):
-        assert stopping_now(runtime)  # the shaft still turns: the stop keeps the link
-        assert source.attempts == attempts
         rig.clock.advance(Seconds(0.2))
         panel.surface.note_presence(OPERATOR)
         await panel.control_step()
-        if not stopping_now(runtime):
+        status = runtime.drive_status
+        assert status is not None
+        assert status.state is DriveState.FAULT
+        assert not stopping_now(runtime)  # the shaft still turns, and no read waits
+        if status.output_rpm == 0:
             break
+        coasted += 1
+        before = source.attempts
         await source.poll()
+        assert source.attempts == before + 1
+    assert coasted > 10  # a coast, read all the way down
     # Stopped, faulted, run command held: the ending waits for the reset alone.
     assert state_now(runtime) is RuntimeState.ENDING
     assert enabled_now(runtime)

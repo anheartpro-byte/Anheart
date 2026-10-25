@@ -123,9 +123,9 @@ class Scene:
     def now(self) -> float:
         return float(self.rig.clock.monotonic())
 
-    async def step(self) -> None:
-        """One control tick, without the STO read that may follow it."""
-        self.rig.clock.advance(TICK)
+    async def step(self, after: Seconds = TICK) -> None:
+        """One control tick ``after`` the last instant, without the STO read that may follow it."""
+        self.rig.clock.advance(after)
         self.panel.surface.note_presence(OPERATOR)
         await self.control()
 
@@ -186,6 +186,11 @@ def standing(runtime: TrainingRuntime) -> SafetyVerdict | None:
 def enabled(runtime: TrainingRuntime) -> bool:
     """Read afresh, for the reason :func:`stopping` gives."""
     return runtime.output_enabled
+
+
+def state(runtime: TrainingRuntime) -> RuntimeState:
+    """Read afresh, for the reason :func:`stopping` gives."""
+    return runtime.state
 
 
 # =========================================================================
@@ -384,6 +389,80 @@ async def test_a_speed_asked_after_an_opening_during_a_walk_down_to_zero_is_refu
 
 
 # =========================================================================
+# A drive fault: the drive keeps FAULT, and the reads, which go on, see the chain
+# =========================================================================
+
+
+@pytest.mark.parametrize("reclosed", [False, True], ids=["left_open", "closed_again"])
+async def test_a_chain_opening_during_a_faulted_drive_s_coast_is_read_and_latches_while_it_turns(
+    tmp_path: Path, reclosed: bool
+) -> None:
+    """A faulted drive shows FAULT, not its output stage: the reading names the opening.
+
+    No stop write acts on a faulted drive, so no read is withheld through its coast,
+    and the chain is read open before the shaft stops, whether it closes again 2 s
+    later or not. Then the usual way back: the named acknowledgement once READY, the
+    operator's fault reset, a new start.
+    """
+    scene = Scene(tmp_path, DRIVE_INPUT)
+    runtime = scene.runtime
+    await scene.cruise()
+    scene.rig.simulator.inject_fault(DriveFault.MOTOR_OVERLOAD)
+    await scene.run(1)
+    status = runtime.drive_status
+    assert status is not None
+    assert status.state is DriveState.FAULT
+    assert not stopping(runtime)
+    attempts = scene.attempts()
+    opened = scene.now
+    scene.chain.open(scene.rig.clock.monotonic())
+    for _ in range(10):
+        await scene.run(1)
+        if scene.sto_open:
+            break
+    assert scene.sto_open, "no sto_open verdict"
+    verdict = scene.sto_open[0]
+    assert (verdict.rule, verdict.action, verdict.latched) == (
+        RULE_STO_OPEN,
+        SafetyAction.QUICK_STOP,
+        True,
+    )
+    assert verdict.detail != STO_OPEN_DEDUCED  # read: the faulted drive kept its word
+    # The first read after the opening, then the tick that judges it.
+    assert verdict.since - opened <= 2 * TICK + 1e-9
+    status = runtime.drive_status
+    assert status is not None
+    assert status.state is DriveState.FAULT
+    assert status.output_rpm > 0  # the shaft still coasts: no wait for the stop
+    assert scene.attempts() > attempts
+    await scene.run(10)
+    if reclosed:
+        scene.chain.close(scene.rig.clock.monotonic())
+    await until_at_rest(scene)
+    await scene.run(5)
+    assert state(runtime) is RuntimeState.ENDING  # the run command waits for the reset
+    assert scene.sto_open[0] == verdict
+    surface = scene.panel.surface
+    if not reclosed:
+        assert scene.reading().state is StoState.OPEN
+        not_ready = surface.acknowledge(OPERATOR, estop_released=True)
+        assert isinstance(not_ready, Err)
+        assert isinstance(not_ready.error, StoNotReady)
+        assert not_ready.error.state is StoState.OPEN
+        scene.chain.close(scene.rig.clock.monotonic())
+        await scene.run(5)
+    assert scene.reading().state is StoState.READY
+    assert isinstance(surface.acknowledge(OPERATOR, estop_released=True), Ok)
+    assert isinstance(surface.submit_fault_reset(operator=OPERATOR), Ok)
+    await scene.run(10)
+    assert scene.rig.simulator.sim_state is SimState.READY_TO_SWITCH_ON
+    assert state(runtime) is RuntimeState.FINISHED
+    assert standing(runtime) is None
+    assert isinstance(await scene.start(), Ok)
+    await scene.panel.close()
+
+
+# =========================================================================
 # Outside a stop too, the drive's word latches an opening no reading has shown
 # =========================================================================
 
@@ -455,6 +534,16 @@ class LosesTheReadAfterArming(Noted):
         return await self.inner.read_status()
 
 
+async def until_at_rest(scene: Scene) -> None:
+    """Tick until the drive's RFRD shows the shaft stopped."""
+    for _ in range(1000):
+        await scene.run(1)
+        status = scene.runtime.drive_status
+        if status is not None and status.output_rpm == 0:
+            return
+    raise AssertionError("the shaft never stopped")
+
+
 async def until_finished(scene: Scene) -> None:
     for _ in range(1000):
         await scene.run(1)
@@ -490,10 +579,7 @@ async def go_silent(scene: Scene) -> str | None:
 async def fault_reset(scene: Scene) -> str | None:
     """FAULT_RESET leaves the drive SWITCH_ON_DISABLED, the run command cleared first."""
     scene.rig.simulator.inject_fault(DriveFault.MOTOR_OVERLOAD)
-    for _ in range(1000):
-        await scene.run(1)
-        if not stopping(scene.runtime):
-            break
+    await until_at_rest(scene)
     await scene.run(5)
     assert isinstance(scene.panel.surface.acknowledge(OPERATOR), Ok)
     assert isinstance(scene.panel.surface.submit_fault_reset(operator=OPERATOR), Ok)

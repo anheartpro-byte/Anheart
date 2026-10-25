@@ -33,7 +33,7 @@ from src.training.runtime import (
     SafetyStanding,
 )
 from src.training.types import Phase, SafetyAction
-from src.units import Monotonic, MotorRpm, OutputRpm
+from src.units import Monotonic, MotorRpm, OutputRpm, Seconds
 from tests.test_cooldown_freeze_console import START
 from tests.test_failure_rig import MIN_RUN, OPERATOR, PROGRAMME_ENV, start_programme
 from tests.test_standstill_console import Electrodes
@@ -55,19 +55,25 @@ PROGRAMME_DRIVE_INPUT: Final[Mapping[str, str]] = {
 PROGRAMME_SIM_READY: Final[Mapping[str, str]] = {**PROGRAMME_ENV, "STO_SOURCE": "sim_ready"}
 
 
+PULSE: Final[Seconds] = Seconds(0.1)
+"""An opening shorter than a tick, so shorter than the interval between two readings."""
+
+
 async def pulse(scene: Scene, *, across_a_tick: bool) -> float:
     """Open the chain just after a tick and its reading; close it before the next reading.
 
-    Between two ticks, or across one tick whose reading is not yet due. Returns
-    the instant it opened.
+    For :data:`PULSE` between two ticks, or for the length of one tick whose
+    reading is not yet due. Returns the instant it opened.
     """
     opened = scene.now
     scene.chain.open(scene.rig.clock.monotonic())
     if across_a_tick:
         await scene.step()
+        scene.chain.close(scene.rig.clock.monotonic())
+        return opened
+    scene.rig.clock.advance(PULSE)
     scene.chain.close(scene.rig.clock.monotonic())
-    if not across_a_tick:
-        await scene.step()
+    await scene.step(after=Seconds(TICK - PULSE))
     return opened
 
 
@@ -173,9 +179,9 @@ class ProgrammeScene(Scene):
         super().__init__(tmp_path, env, treat=electrodes)
 
     @override
-    async def step(self) -> None:
+    async def step(self, after: Seconds = TICK) -> None:
         """One control tick as the console's loop runs it, the ECG taken first."""
-        self.rig.clock.advance(TICK)
+        self.rig.clock.advance(after)
         self.panel.surface.note_presence(OPERATOR)
         await self.panel.ecg_step()
         await self.control()
