@@ -1969,7 +1969,10 @@ l'ouverture est déduite de l'état du variateur, même si le champignon est
 relâché aussitôt. Un défaut du variateur ou une demande de réarmement mènent
 aussi à cet état : il n'est alors pas pris pour une ouverture, et la lecture,
 qui continue sur un variateur en défaut, juge la chaîne ; le départ reste
-refusé tant qu'elle n'est pas `prete`. Après un arrêt pendant lequel un
+refusé tant qu'elle n'est pas `prete`. Cette exception prend fin dès que le
+variateur montre un autre état, ou au départ suivant, une fois le variateur
+armé : une ouverture juste après ce départ, ou une coupure entre le relais et
+la borne STO, verrouille `sto_open` au premier tic. Après un arrêt pendant lequel un
 mouvement était possible, la première lecture `ouverte` verrouille aussi
 `sto_open`, même au repos ; une inspection du variateur au repos en échec
 compte comme un tel arrêt. Tout acquittement attend alors une lecture `prete`
