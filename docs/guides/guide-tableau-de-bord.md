@@ -1247,7 +1247,7 @@ machine, « Démarrée il y a ... », badges de type et d'origine.
 | **Vitesse du bras** | tr/min du bras ; dessous « Moteur N tr/min ». |
 | **Charge** | g. |
 | **Phase** | Mesure de référence, Échauffement, Maintien, Retour au calme, Récupération, Terminé ; avec un bouclier orange et « Action de sécurité : ... » si la machine applique une action de sécurité. |
-| **Écoulé** | Chronomètre depuis le départ réel ; dessous « Restant » (durée prévue moins écoulé). |
+| **Écoulé** | Chronomètre depuis le départ réel ; dessous « Restant » (durée prévue moins écoulé). Sur une séance interrompue, fin inconnue : le temps que la machine avait compté à son dernier point (0:00 sans point), et non un calcul entre l'horloge de la machine et celle du serveur. |
 | Courbe **Fréquence cardiaque** | FC dans le temps (ligne rouge) sur la **bande verte de la zone cible**. Une absence de FC reste un **trou** dans la ligne. Survoler la courbe affiche l'instant et la valeur. |
 | Courbe **Vitesse du bras** | **Mesurée** (ligne pleine bleue) et **Consigne** (tirets gris, convertie en tr/min bras). |
 | Axe horizontal | Temps depuis le début (minutes:secondes). Au plus la dernière heure. |
@@ -1456,7 +1456,7 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 |---|---|
 | En tête | Flèche retour vers **Patients**, nom, adresse, bouton **Modifier** (fenêtre du [§4.13](#413-patients-liste-et-fenêtres-patient)). |
 | **Informations patient** | Nom, badge de rôle, adresse, langue, date de création. Bouton **Supprimer** : fenêtre « Êtes-vous sûr de vouloir supprimer cet utilisateur? », texte anglais « This action cannot be undone... », **Annuler** / **Supprimer**. La suppression est **définitive** ; en cas de refus, un message d'échec s'affiche en bas à droite de l'écran. |
-| **Sessions récentes** | Les 10 dernières séances du patient visibles par vous : machine, statut, début, durée. Action : **Voir en direct** (active), **Voir le rapport** (terminée, ouvre le détail), « - » sinon. Une séance échouée ou en attente s'ouvre depuis **Sessions**. |
+| **Sessions récentes** | Les 10 dernières séances du patient visibles par vous : machine, statut, début, durée. La durée suit la règle de **Sessions** : séance finie, sa durée (« 25m 3s ») ; séance interrompue, « Fin inconnue » ; autre séance non finie, temps écoulé depuis le début (« 12 minutes »). Action : **Voir en direct** (active), **Voir le rapport** (terminée, ouvre le détail), « - » sinon. Une séance échouée, en attente ou interrompue s'ouvre depuis **Sessions**. |
 | **Physiologie** | Voir ci dessous. |
 
 **Carte « Physiologie »** :
