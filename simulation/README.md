@@ -284,6 +284,13 @@ et laisse l'arbre ralentir en roue libre. La fermeture restaure le contact ;
 elle ne vaut ni acquittement nomme ni nouveau depart. Le rejeu des anciens
 enregistrements conserve sa source prete explicite.
 
+La cle `"sto_source"` choisit comment le runtime lit ce contact, comme
+`STO_SOURCE` sur la console : `"sim_ready"` (le defaut, celui de tous les
+scenarios existants) le lit en memoire a chaque tic ; `"drive_input"` le lit
+par le registre 5202 du variateur simule, avec la source et la garde de la
+console (`DriveInputStoSource`, `StoReadGate`), apres les tics, a la cadence de
+sa tache de sondage. Toute autre valeur est refusee.
+
 Failure-injection actions (the vocabulary of `failures.py`, all in the same schema):
 `drive_refuse_command` (`word`: a `ControlWord` name; the drive answers it with a
 Modbus exception from then on), `drive_echo_mismatch` (the LFRD echo stops
@@ -374,7 +381,7 @@ fraction is the share of HOLD ticks with a usable rate inside the zone;
 
 ## The failure matrix (`failures.py`)
 
-198 cases, each a scenario DOCUMENT in the ordinary schema plus what must be
+217 cases, each a scenario DOCUMENT in the ordinary schema plus what must be
 true afterwards. For every case `tests/test_failures.py` asserts: every
 invariant (motor at 0 after teardown, no torque, LFRD 0 where writable, no NaN,
 safety dominating, no frame after going silent), the output disabled or - when
@@ -412,8 +419,63 @@ la reference precedente, jamais la depasser. Le juge exige ensuite une ecriture
 zero dans ce meme tic, puis aucune reference non nulle ni activation jusqu'au
 nouveau depart. Le couple est deja coupe par le contact pendant ce tic.
 
-`SimulatedStoSource` lit instantanement le contact et n'injecte pas d'echec de
-lecture. `sto_unreadable / RAMP_DOWN` reste prouve par les tests Pi
+### La variante `drive_input` : la vraie lecture de la chaine
+
+Les onze cas ci-dessus lisent le contact en memoire (`sim_ready`) : ils ne
+passent ni par le sondage du registre 5202, ni par la garde qui retient la
+lecture pendant un arret. Les dix-neuf cas `sto_drive_input_*` passent par la
+lecture de la console. Le harnais y compose `DriveInputStoSource`
+(`src/motor/sto.py`) sur le registre 5202 du variateur simule nu, sans budget
+de lecture comme `build_sto` avec `MOTOR_BACKEND=sim`, et la garde
+`StoReadGate` de `src/local_panel.py`, celle de la console : aucune lecture en
+silence, lien libere ou non acquis, pendant un arret, ni hors de la fenetre
+qui suit un tic termine. Il sonde apres un tic termine quand le reste de
+`STO_POLL_PERIOD` depuis la lecture precedente est nul (`rest_of_poll_period`,
+la fonction qu'attend la tache de la console) : une lecture tous les trois tics,
+0,6 s, et un sondage refuse reessaie au tic suivant.
+`tests/test_sto_drive_input.py` compare ces instants a ceux de la vraie tache
+`DriveInputStoSource.run` en temps virtuel. La lecture 5202 ne passe ni par
+`RecordingDrive` ni par les fautes injectees : la trace et ses trames restent
+celles du chemin de controle, comme la console tient cette lecture hors du
+journal des echanges de son enregistrement. Chaque observation de
+`RunResult.sto` compte les trames 5202 arrivees au variateur simule apres son
+tic.
+
+Cas et ce qu'ils prouvent, juges comme les autres (`judge`), plus deux
+controles propres a la variante : au moins une trame 5202 lue (`sto_reads`) et
+aucune apres un tic dont la ligne de trace montre un arret en cours
+(`sto_read_in_stop`, d'apres les colonnes de la trace seules : fin qui descend
+ou tient la marche, verdict RAMP_DOWN ou pire, FREEZE qui descend un arret
+demande, cible manuelle 0 en descente, marche tenue hors seance ; un variateur
+en defaut n'est sous aucun arret), puis, des que `sto_open` est leve, le verrou
+tenu a consigne nulle jusqu'a l'acquittement (`sto_latch_held`) :
+
+| Cas | Arret, ouverture | Verrou `sto_open / QUICK_STOP` |
+|---|---|---|
+| `sto_drive_input_operator_stop_{left_open,closed_again}` | STOP a 60 s, banc a 3 tr/min, ouverture a 62,1 s, restee ouverte ou refermee 2,1 s plus tard | au tic suivant (0,1 s), par le mot d'etat du variateur |
+| `sto_drive_input_manual_session_limit_{left_open,closed_again}` | fin `programme_complete` de la seance manuelle a sa limite de 3600 s | au tic suivant (0,1 s) |
+| `sto_drive_input_manual_target_zero_{left_open,closed_again}` | cible 0 a 60 s | au tic suivant (0,1 s) |
+| `sto_drive_input_ramp_down_verdict_{left_open,closed_again}` | `attendant_absent` (FREEZE a 100 s, RAMP_DOWN verrouille a 160 s) | au tic suivant (0,1 s) |
+| `sto_drive_input_faulted_drive_coast_{left_open,closed_again}` | defaut `MOTOR_OVERLOAD` a 60 s, roue libre lue | par la lecture, 0,7 s apres l'ouverture (au plus 0,8 s : la lecture suivante, puis le tic qui la juge) |
+| `sto_drive_input_freeze_descent_{left_open,closed_again}` | programme, `loop_stall` verrouille en HOLD, descente sous FREEZE des 660 s | au tic suivant (0,1 s) |
+| `sto_drive_input_brief_opening_{manual,programme}` | hors arret, 0,1 s entre deux tics, jamais lue | au tic suivant (0,15 s) |
+| `sto_drive_input_programme_descent_{cooldown,recovery}` | descente planifiee du programme, sans verdict : pas un arret, la lecture continue | au tic suivant (0,1 s) |
+| `sto_drive_input_close_without_acknowledgement`, `..._acknowledgement_then_new_start`, `..._idle_start_gate` | les trois cas `sim_ready` de meme nom, lus par 5202 | comme ces cas |
+
+Une fin de programme n'est un arret que par la limite de la seance manuelle :
+un programme qui va au bout de sa ligne de temps n'ouvre pas de fin, et sa
+descente (COOLDOWN, RECOVERY) est de la regulation (decision du 25 octobre
+2026) ; la lecture continue, et la marche est retiree au repos avant `DONE`.
+Apres chaque arret, les lectures reprennent et montrent la chaine (`OPEN`
+restee ouverte, `READY` refermee) ; tout depart et tout acquittement tentes
+alors sont refuses. Sans pre-roll, aucune lecture n'a encore atteste la
+chaine au depart : le depart est refuse (`StoNotReady`).
+`tests/test_failures_drive_input.py` le verifie cas par cas, et montre qu'avec
+la garde contournee le meme arret est lu et nomme par le juge. Les cas existants
+restent en `sim_ready`, sans aucune trame 5202.
+
+`SimulatedStoSource` (`sim_ready`) lit instantanement le contact et n'injecte
+pas d'echec de lecture. `sto_unreadable / RAMP_DOWN` reste prouve par les tests Pi
 `test_a_single_failed_sto_read_does_not_end_motion_but_age_does` et
 `test_never_read_sto_latches_during_possible_motion`, avec la source de registre.
 Une perte du lien du variateur dans ce harnais teste `comms_lost` ; elle

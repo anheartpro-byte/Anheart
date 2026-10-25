@@ -317,6 +317,11 @@ d'état ; descente d'un programme sans verdict : lecture continue),
 `tests/test_sto_scheduling.py` (mêmes trames avec et sans la déduction, avec
 et sans arrêt ; variateur dont le mot d'état ne montre pas la chaîne) et
 `tests/test_sto_stop_guard.py` (mémoire de l'arrêt ; variateur en défaut).
+La matrice de pannes de la simulation rejoue ces scènes avec la même lecture :
+ses cas `sto_drive_input_*` (`simulation/failures.py`, décrits dans
+`simulation/README.md`) lisent le registre 5202 du variateur simulé par
+`DriveInputStoSource` et la garde de la console (`StoReadGate`), à la cadence
+de sa tâche de sondage, et le juge refuse toute lecture pendant un arrêt.
 
 **Le résiduel, borné.** Une lecture partie dans la fenêtre mais restée sans
 réponse ne s'interrompt pas. Elle occupe le lien jusqu'à

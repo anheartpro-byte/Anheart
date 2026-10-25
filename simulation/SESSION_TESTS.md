@@ -37,6 +37,21 @@ sans conserver leur detail libre. La perte de lecture n'est pas injectable dans
 la source simulee instantanee ; `sto_unreadable` reste couvert dans les tests Pi
 cites par leur nom dans le README. Le banc apres cablage reste hors de ces preuves.
 
+Les dix-neuf cas `sto_drive_input_*` lisent la meme chaine par le registre 5202
+du variateur simule, avec la source et la garde de la console, a sa cadence
+(variante `drive_input`, decrite dans le README) :
+
+| Parcours | Cas | Preuve |
+|---|---|---|
+| Chaque categorie d'arret | `sto_drive_input_{operator_stop,manual_session_limit,manual_target_zero,ramp_down_verdict,freeze_descent}_{left_open,closed_again}` | aucune trame 5202 pendant l'arret, `sto_open / QUICK_STOP` verrouille au tic qui suit l'ouverture, chaine restee ouverte ou refermee avant la fin de l'arret ; lectures reprises ensuite, depart et acquittement refuses |
+| Variateur en defaut | `sto_drive_input_faulted_drive_coast_{left_open,closed_again}` | roue libre lue, ouverture verrouillee par la lecture sous 0,8 s |
+| Hors arret | `sto_drive_input_brief_opening_{manual,programme}`, `sto_drive_input_programme_descent_{cooldown,recovery}` | ouverture de 0,1 s jamais lue, ou ouverture pendant la descente planifiee (lecture continue) : verrou au tic suivant |
+| Refermeture, reprise, repos | `sto_drive_input_{close_without_acknowledgement,acknowledgement_then_new_start,idle_start_gate}` | memes preuves que les cas `sim_ready` de meme nom |
+
+`tests/test_failures_drive_input.py` et `tests/test_sto_drive_input.py` les
+completent : trames comptees au variateur simule, chacune permise par la garde,
+instants de lecture identiques a ceux de la tache de sondage reelle.
+
 ## 1. AUTO (heart-rate driven programme)
 
 | # | test | what it proves | status |
