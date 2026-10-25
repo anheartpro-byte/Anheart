@@ -1014,9 +1014,15 @@ avec les conditions qui empêchent le départ, avant l'avis sur les paramètres
 médicaux. Les deux boutons de départ sont grisés avec la raison donnée par le Pi.
 `non configuree` signifie qu'il faut configurer `STO_SOURCE` ; ce n'est pas une
 panne. Au repos, `ouverte` après un appui sur le champignon est un état normal.
-Pendant un arrêt (STOP, fin de séance, verdict, cible 0), la console suspend la
-lecture pour laisser le lien aux écritures d'arrêt : `inconnue` s'affiche 2 s
-après la dernière lecture, sans panne, et `prete` revient après l'arrêt.
+Pendant un arrêt (STOP, fin de séance, verdict d'arrêt, cible 0, ou E-STOP de
+l'écran pas encore pris par la console), la console suspend la lecture pour
+laisser le lien aux écritures d'arrêt : `inconnue` s'affiche 2 s après la
+dernière lecture, sans panne, et `prete` revient juste après l'arrêt. Un
+`freeze` ou un `reduce` n'est pas un arrêt. Un variateur en défaut, arbre
+arrêté, n'attend plus que le réarmement : la lecture reprend, pour pouvoir
+acquitter puis réarmer. Si le champignon est actionné pendant l'arrêt, le
+verdict `sto_open / quick_stop` apparaît au tic suivant même sans lecture, et
+il reste si le champignon est relâché avant la fin de l'arrêt.
 
 En séance, appuyer sur le champignon ouvre la chaîne : le matériel doit couper le
 couple indépendamment du Pi. Le logiciel affiche `ouverte` et le verdict
@@ -1027,7 +1033,8 @@ est `sto_unreadable / ramp_down`.
 
 Après vérification, relâcher le champignon et vérifier le relais. Attendre `prete`,
 puis **Acquitter** par son nom et demander un **nouveau départ**. Refermer seul ne
-relance rien. Tant que la chaîne reste ouverte, inconnue ou non configurée, même
+relance rien. Après un arrêt, l'acquittement attend la première lecture `prete`
+faite après l'arrêt : la lecture d'avant l'arrêt ne suffit pas. Tant que la chaîne reste ouverte, inconnue ou non configurée, même
 l'acquittement d'un autre verdict est refusé : le texte exact reste sous le bouton
 et une alerte dit `acquittement refuse`. En cas de lecture inconnue, rétablir la
 liaison de lecture et le retour du relais avant de réessayer.

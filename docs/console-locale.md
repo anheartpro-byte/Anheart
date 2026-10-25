@@ -1923,7 +1923,8 @@ rotation. Avec une source configurée et une preuve positive de mouvement
 l'absence de lecture valable au-delà de la durée admise verrouille
 `sto_unreadable / ramp_down`. Refermer ne libère pas le verdict : acquitter par son nom puis
 demander un nouveau départ. Au repos observé immobile, l'état non prêt refuse
-seulement le départ, sans créer un verrou STO.
+seulement le départ, sans créer un verrou STO, sauf pour la première lecture
+qui suit un arrêt (voir plus bas).
 
 La lecture part juste après un tic terminé, au plus une fois par 0,5 s, et
 seulement si elle peut finir avant le tic suivant : elle ne retarde pas les
@@ -1942,14 +1943,34 @@ qui arrête la séance, descente vers une cible manuelle de 0, et E-STOP de la
 page pas encore pris par la boucle, même au repos. Un `freeze` ou un `reduce`
 n'est pas un arrêt : la séance continue de réguler, la lecture continue aussi,
 la carte reste `prete` et une chaîne ouverte pendant un `reduce` verrouille
-`sto_open / quick_stop` comme ailleurs. Pendant un arrêt, la carte passe à
+`sto_open / quick_stop` comme ailleurs. Un variateur en défaut, arbre arrêté,
+dont la marche n'attend plus que le réarmement n'est pas non plus un arrêt en
+cours : la lecture reprend, ce qui permet d'acquitter les autres verdicts puis
+de réarmer sans redémarrer la console. Pendant un arrêt, la carte passe à
 `inconnue` 2 s après la dernière lecture, sans panne, et redevient `prete`
-juste après la fin de l'arrêt ; ce temps n'est pas compté contre la
-lecture. Le matériel coupe le couple de toute façon si la chaîne s'ouvre. Une
-lecture déjà partie quand l'arrêt est demandé, restée sans réponse, peut
-retarder ses écritures du reste de cette seule lecture et de la réouverture du
-port, au pire environ 1,7 s sur `ftdi://`, comme un échange variateur en échec
-([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)).
+juste après la fin de l'arrêt (le premier tic qui n'en laisse plus en cours) ;
+ce temps n'est pas compté contre la lecture.
+
+Une ouverture de la chaîne pendant un arrêt n'échappe pas au verrou, même
+sans lecture. Le variateur signale qu'il a retiré son étage de sortie
+(`SWITCH_ON_DISABLED`) alors que la console tient la marche : `sto_open /
+quick_stop` se verrouille au tic suivant, avec un détail qui dit que
+l'ouverture est déduite de l'état du variateur, même si le champignon est
+relâché avant la fin de l'arrêt. Après un arrêt pendant lequel un mouvement
+était possible, la première lecture `ouverte` verrouille aussi `sto_open`,
+même au repos. Tout acquittement attend alors une lecture `prete` faite après
+l'arrêt : celle d'avant l'arrêt, même encore récente, ne suffit pas, et le
+refus le dit (`inconnue`). Un nouveau départ suit l'acquittement nommé, comme
+ailleurs.
+
+Une lecture déjà partie quand l'arrêt est demandé peut retarder les écritures
+d'arrêt, répondue ou non : répondue, de quelques millisecondes (au plus
+0,05 s) pour celles faites hors du tic, comme l'E-STOP de la caméra ou la
+fermeture de la console, ou de son retard pour le tic suivant si elle répond
+au-delà de ce budget ; restée sans réponse, du reste de cette lecture et de la
+réouverture du port, au pire environ 1,7 s sur `ftdi://`, plus l'appel système
+qui ouvre le port et qu'aucun délai ne borne, comme un échange variateur en
+échec ([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)).
 
 Une réussite remet le crédit de pause à zéro ; après la reprise, elle revient
 juste après le premier tic terminé. Sans crédit antérieur, la perte
