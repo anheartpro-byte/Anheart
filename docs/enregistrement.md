@@ -1001,10 +1001,13 @@ un rejeu conforme ne remplace pas ce contrôle.
 
 ## Utilisation et compatibilité
 
-Le reader reste strict : une clé inconnue refuse la ligne ou le bloc. Les
-ajouts restent au schéma 2 et ne modifient ni le manifeste, ni les kinds
-d'événement. Les versions ci-dessous désignent les révisions du lecteur,
-pas une nouvelle valeur de `schema_version` :
+Le reader reste strict : une clé inconnue refuse la ligne, le bloc ou le
+manifeste. Les ajouts restent au schéma 2 et n'ajoutent aucun kind
+d'événement. Certains ajoutent des clés au manifeste, dont `subject_fit` et
+`fitness_questionnaire_version` (ANH-143, dernier paragraphe de cette
+section) et les trois compteurs de zone de `end_observation` (ANH-234). Les
+versions ci-dessous désignent les révisions du lecteur, pas une nouvelle
+valeur de `schema_version` :
 
 | Ajout | Première version qui le relit | Lecteur antérieur |
 | --- | --- | --- |
@@ -1015,6 +1018,7 @@ pas une nouvelle valeur de `schema_version` :
 | commande `attendant_ping` | ANH-192 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
 | commande `presence_trip` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; ni kind ni champ de manifeste nouveau |
 | commande `latch_estop` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; le verrou immédiat de la surface est distinct de l'appel `estop` du runtime |
+| `zone_in_s`, `zone_above_s`, `zone_below_s` dans `end_observation` | ANH-234 | le lecteur du Pi refuse le manifeste (clé inconnue), même aux trois `null` d'une séance manuelle ; le dépôt Convex antérieur le refuse aussi ([convex.md](convex.md#compteurs-de-zone-et-ordre-de-déploiement-anh-234)) |
 
 Une commande mal écrite sous un kind d'entrée est aussi refusée par le rejeu
 avec sa raison. Le reader ne décode pas les commandes : il doit pouvoir

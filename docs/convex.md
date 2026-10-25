@@ -3484,8 +3484,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/journalTrace.test.ts` | Le test d'acceptation de la synchronisation, côté Convex : il rejoue, dans l'ordre et aux mêmes instants, **les requêtes que la console du Pi a réellement envoyées** pendant son propre test d'acceptation (`contracts/fixtures/journal-sync-trace.json` : séance, coupure réseau à 3 min, console tuée à 5 min, retour du réseau à 8 min, machine datée de 1970). Convex doit répondre à chacune comme la trace l'a noté, et détenir à la fin chaque point 1 Hz et chaque événement une seule fois, et la fin avec sa raison. Le test du Pi échoue si le fichier n'est plus ce que la console envoie. |
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance que le résumé provisoire d'ANH-89, et les deux mutations de migration. |
-| `convex/sessionSummary.test.ts` | Les chiffres d'un résumé (ANH-89) sur des enregistrements de fixture écrits comme la console les écrit : durée, FC absente ou présente, temps en zone et ses bornes, vitesse, g aux deux rayons avec et sans géométrie, fenêtres de variation de g et chaque raison de ne pas juger un tic, verdicts et règle de fin, colonnes trouvées par leur nom, lignes illisibles, fichiers refusés. |
-| `convex/sessionReports.test.ts` | Le résumé de bout en bout (ANH-89) : provisoire à la fin, final après le dépôt des trois fichiers, jamais remplacé par le provisoire, idempotent, enregistrement illisible, séance non terminée ou de l'ancien mode ; et qui lit le résumé et l'historique d'un pratiquant. |
+| `convex/sessionSummary.test.ts` | Les chiffres d'un résumé (ANH-89) sur des enregistrements de fixture écrits comme la console les écrit : durée, FC absente ou présente, temps en zone et ses bornes, vitesse, g aux deux rayons avec et sans géométrie, fenêtres de variation de g et chaque raison de ne pas juger un tic, verdicts et règle de fin, colonnes trouvées par leur nom, lignes illisibles, fichiers refusés ; temps en zone repris des compteurs de la console quand le manifeste porte les trois, valides, recompté sur les tics sinon, avec `zone.source` (`"console"` ou `"ticks"`) sur le seul résumé final (ANH-234). |
+| `convex/sessionReports.test.ts` | Le résumé de bout en bout (ANH-89) : provisoire à la fin, final après le dépôt des trois fichiers, jamais remplacé par le provisoire, idempotent, enregistrement illisible, séance non terminée ou de l'ancien mode ; et qui lit le résumé et l'historique d'un pratiquant ; compteurs de la console retenus par le résumé final et l'historique (`zone.source: "console"`), recalcul (`"ticks"`) pour un enregistrement qui ne les porte pas, et résumé stocké sans `zone.source` toujours valide (ANH-234). |
 | `convex/rateLimits.test.ts`, `convex/rateLimitsSource.test.ts` | La limitation de débit et la taille des corps (ANH-166) : chaque limite du contrat partagé sur sa route (sa réserve, puis 429 avec l'attente, puis de nouveau acceptée, une autre machine jamais retenue), rien d'écrit pour un heartbeat refusé, la limite avant le corps, la demande d'arrêt jamais limitée, **1000 heartbeats en 10 s** limités sans erreur (2 acceptés, 998 refusés 429), les tailles (16 Kio exactement accepté, un octet de plus refusé, octets et non caractères, `Content-Length` trop grand ou trop petit), 601 points refusés avant d'en lire un, le plus grand lot valide accepté ; par compte, 60 écritures puis `rate_limited`, un refus rend son jeton, 5 lancements par minute, l'arrêt jamais limité, et **chaque** mutation et action publique de la matrice refusée une fois les écritures de son acteur épuisées, l'arrêt excepté. Le second fichier remplace `contracts/machine-api.json` par un autre et vérifie que les limites et les tailles le suivent, et que le module refuse de se charger sans la limite ou la taille d'une route qu'il borne. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire d'autre que la dernière utilisation de la clé), clé vérifiée avant le contrat, rien d'écrit de la machine, de ses séances ni de ses heartbeats pour une requête refusée (la dernière utilisation de la clé, elle, est écrite pour toute requête dont la clé est acceptée, au plus une fois par minute : §6), `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines` (celui des clés expirées est dans `convex/machineKeys.test.ts`), qui ne touche aucune séance, et `interrupt-silent-sessions`, une autre tâche, toutes les minutes elle aussi (ANH-231). |
@@ -3647,12 +3647,16 @@ acceptée par le nouveau Convex ; ses séances gardent le recalcul
 (`source: "ticks"`).
 
 Dans l'ordre inverse, une console récente face à un Convex qui ne connaît pas
-encore ces champs perd ses dépôts de fichiers, pas ses données :
+encore ces champs perd ses dépôts de fichiers, pas ses données. Les séances
+manuelles sont touchées aussi : la console écrit toujours les trois clés, à
+`null` sans programme, et l'ancien Convex refuse une clé inconnue quelle
+que soit sa valeur :
 
-- `records/upload-url` et `records/commit` répondent 200 (`accepted: true`) :
-  la vérification est asynchrone. `recordVerification.verify` refuse ensuite
-  le manifeste (`invalid_manifest`), efface l'objet déposé, et la séance passe
-  à `record: "rejected"`. Aucun autre fichier n'est accepté tant que le
+- `records/upload-url` répond 200 avec la réservation, et `records/commit`
+  répond 200 (`accepted: true`) : la vérification est asynchrone.
+  `recordVerification.verify` refuse ensuite le manifeste
+  (`invalid_manifest`), efface l'objet déposé, et la séance passe à
+  `record: "rejected"`. Aucun autre fichier n'est accepté tant que le
   manifeste n'est pas vérifié.
 - `RecordDeposit` (`raspberry-pi/src/record/deposit.py`) lit ce refus dans
   `records/status` et renvoie le même manifeste avec une nouvelle
@@ -3660,6 +3664,11 @@ encore ces champs perd ses dépôts de fichiers, pas ses données :
   recommence à chaque passage du lien hors séance (`CloudSync.step`, une
   fois par seconde), bien sous les plafonds des deux routes (dix par
   seconde), et les enregistrements suivants attendent derrière celui-ci.
+  Chaque renvoi remplace la ligne refusée et repasse la séance à `partial`
+  (`attachUpload`, `convex/recordStorage.ts`) avant que la vérification ne
+  la remette à `rejected` : le statut bascule à chaque renvoi, environ une
+  fois par seconde, et un objet de manifeste est stocké puis effacé à
+  chaque fois.
 - Rien n'est perdu : l'enregistrement reste sur la carte du Pi, sans
   marqueur de dépôt, et la purge locale ne touche jamais un enregistrement
   non confirmé ([enregistrement.md](enregistrement.md#dépôt-vérifié-dans-convex)).
@@ -3672,7 +3681,11 @@ encore ces champs perd ses dépôts de fichiers, pas ses données :
 Revenir à une image du Pi antérieure après avoir écrit ces champs laisse
 les enregistrements concernés sur le disque sans les déposer : son lecteur
 refuse lui aussi une clé qu'il ne connaît pas, et passe à l'enregistrement
-suivant.
+suivant. Son lecteur pour le tableau de bord, `read_head`
+(`raspberry-pi/src/record/upload.py`), refuse aussi ces manifestes : un
+enregistrement dont la télémétrie ou la fin n'était pas encore envoyée
+n'est plus rattaché, et ce qui en restait ne part plus (`RecordUplink._next`,
+`raspberry-pi/src/record_uplink.py`, le laisse de côté à chaque démarrage).
 
 ### Ce que chaque mineure ajoute
 
