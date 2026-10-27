@@ -1237,26 +1237,26 @@
     "description": "Inviter, retirer et changer le rôle des membres de l'organisation active. Ces changements se font dans Clerk et parviennent au serveur par son webhook.",
     "accessDenied": "Accès refusé. Réservé aux administrateurs de l'organisation."
   },
-    "sessionFeedback": {
-      "title": "Retour du passager",
-      "description": "Ce que le passager a ressenti après la séance : nausée, malaise ou vertige, ressenti général. Le passager le donne ou le modifie pendant les 24 h qui suivent la fin de la séance.",
-      "notProvided": "Non renseigné",
-      "notEligible": "Le retour ne concerne que les séances avec une personne à bord.",
-      "comfort": "Ressenti",
-      "freeText": "Commentaire",
-      "submittedBy": "Saisi par",
-      "submittedAt": "Le",
-      "by": {
-        "rider": "Le passager",
-        "operator": "L'opérateur, à la machine"
-      },
-      "editableUntil": "Vous pouvez donner ou modifier votre retour jusqu'au {date}.",
-      "windowClosed": "Le retour ne peut plus être donné ni modifié : plus de 24 h ont passé depuis la fin de la séance.",
-      "choose": "Choisir",
-      "characters": "{count, number} / {max, number} caractères",
-      "save": "Enregistrer le retour",
-      "saved": "Retour enregistré"
+  "sessionFeedback": {
+    "title": "Retour du passager",
+    "description": "Ce que le passager a ressenti après la séance : nausée, malaise ou vertige, ressenti général. Le passager le donne ou le modifie pendant les 24 h qui suivent la fin de la séance.",
+    "notProvided": "Non renseigné",
+    "notEligible": "Le retour ne concerne que les séances avec une personne à bord.",
+    "comfort": "Ressenti",
+    "freeText": "Commentaire",
+    "submittedBy": "Saisi par",
+    "submittedAt": "Le",
+    "by": {
+      "rider": "Le passager",
+      "operator": "L'opérateur, à la machine"
     },
+    "editableUntil": "Vous pouvez donner ou modifier votre retour jusqu'au {date}.",
+    "windowClosed": "Le retour ne peut plus être donné ni modifié : plus de 24 h ont passé depuis la fin de la séance.",
+    "choose": "Choisir",
+    "characters": "{count, number} / {max, number} caractères",
+    "save": "Enregistrer le retour",
+    "saved": "Retour enregistré"
+  },
   "sessionReport": {
     "summaryTitle": "Résumé de la séance",
     "provisional": "Provisoire",

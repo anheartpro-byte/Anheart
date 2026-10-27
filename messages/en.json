@@ -1237,26 +1237,26 @@
     "description": "Invite, remove and change the role of the members of the active organization. These changes are made in Clerk and reach the server through its webhook.",
     "accessDenied": "Access denied. Organization admins only."
   },
-    "sessionFeedback": {
-      "title": "Rider feedback",
-      "description": "How the rider felt after the session: nausea, discomfort or dizziness, overall comfort. The rider gives or changes it within 24 hours of the end of the session.",
-      "notProvided": "Not provided",
-      "notEligible": "Feedback only concerns sessions with someone on board.",
-      "comfort": "Comfort",
-      "freeText": "Comment",
-      "submittedBy": "Entered by",
-      "submittedAt": "On",
-      "by": {
-        "rider": "The rider",
-        "operator": "The operator, at the machine"
-      },
-      "editableUntil": "You can give or change your feedback until {date}.",
-      "windowClosed": "The feedback can no longer be given or changed: more than 24 hours have passed since the session ended.",
-      "choose": "Choose",
-      "characters": "{count, number} / {max, number} characters",
-      "save": "Save feedback",
-      "saved": "Feedback saved"
+  "sessionFeedback": {
+    "title": "Rider feedback",
+    "description": "How the rider felt after the session: nausea, discomfort or dizziness, overall comfort. The rider gives or changes it within 24 hours of the end of the session.",
+    "notProvided": "Not provided",
+    "notEligible": "Feedback only concerns sessions with someone on board.",
+    "comfort": "Comfort",
+    "freeText": "Comment",
+    "submittedBy": "Entered by",
+    "submittedAt": "On",
+    "by": {
+      "rider": "The rider",
+      "operator": "The operator, at the machine"
     },
+    "editableUntil": "You can give or change your feedback until {date}.",
+    "windowClosed": "The feedback can no longer be given or changed: more than 24 hours have passed since the session ended.",
+    "choose": "Choose",
+    "characters": "{count, number} / {max, number} characters",
+    "save": "Save feedback",
+    "saved": "Feedback saved"
+  },
   "sessionReport": {
     "summaryTitle": "Session summary",
     "provisional": "Provisional",
