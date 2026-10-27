@@ -148,6 +148,11 @@ dashboard that answered. A refusal that carries none, or a word that is not
 one of these, could come from anything that listens at the address.
 """
 
+FEEDBACK_SINCE: Final[ContractVersion] = ContractVersion("1.7")
+"""The first minor of this major whose dashboard takes the rider's feedback
+(``feedback_events`` of the shared file): an earlier one would keep it as an
+ordinary event of the session, with the session's other events."""
+
 UNKNOWN_SOFTWARE_VERSION: Final[SoftwareVersion] = SoftwareVersion("pi-unknown")
 """Reported when ``VERSION`` is missing or unreadable: never a guess."""
 
@@ -232,6 +237,25 @@ def server_refusal(announced: object) -> str | None:
     if major_of(theirs) == major_of(CONTRACT_VERSION):
         return None
     return incompatible_server(theirs)
+
+
+def minor_of(version: ContractVersion) -> int:
+    """The minor of a contract version: what one side may add to a major."""
+    return int(version.partition(".")[2])
+
+
+def takes_feedback(announced: ContractVersion | None) -> bool:
+    """Whether a dashboard that announced ``announced`` may be sent the rider's feedback.
+
+    Only one of this console's major and of :data:`FEEDBACK_SINCE` or a later
+    minor. A version not known (no heartbeat answered yet, or an unreadable
+    one) is not one: the feedback waits rather than land among the events.
+    """
+    return (
+        announced is not None
+        and major_of(announced) == major_of(CONTRACT_VERSION)
+        and minor_of(announced) >= minor_of(FEEDBACK_SINCE)
+    )
 
 
 def unsupported_refusal(supported: Sequence[str]) -> str:

@@ -212,6 +212,7 @@ main { flex: 1 1 auto; min-width: 0; padding: 1rem; }
 
 .remote-launch { border-color: var(--warn); }
 .remote-launch .grid { margin: 0.75rem 0; }
+.feedback { border-color: var(--accent); }
 
 .card h2 {
   margin: 0 0 0.7rem;
@@ -344,7 +345,7 @@ label {
 label.check { display: flex; gap: 0.5rem; align-items: flex-start; color: var(--ink); }
 label.check input { margin-top: 0.25rem; }
 
-input[type="text"], input[type="password"], input[type="number"], select {
+input[type="text"], input[type="password"], input[type="number"], select, textarea {
   display: block;
   width: 100%;
   margin-top: 0.25rem;

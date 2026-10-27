@@ -71,6 +71,11 @@ var state = {
   remoteLaunch: null,
   remoteLaunchMessage: null,
   remoteLaunchSubmitting: false,
+  feedback: null,        // the last /api/feedback answer (ANH-146); the values typed stay in the card's fields
+  feedbackShown: null,   // ended_at_ms of the session the card was last opened for: another one starts it empty
+  feedbackFilled: false, // the scales' choices are written into the lists once
+  feedbackSending: false,
+  feedbackMessage: null, // the console's words for a refused request, until another session or answer
   status: null,          // the last /api/status answer
   statusAt: 0,           // performance.now() when it came
   statusSent: 0,         // /api/status requests sent so far
@@ -1621,6 +1626,126 @@ function doConfirmRemoteLaunch() {
   });
 }
 
+/* ---------------------------------------------------------- rider feedback */
+
+/*
+  The rider's feedback after a session with someone on board (ANH-146): the console offers it
+  (GET /api/feedback) and the operator enters it or skips it. The values stay in the card's fields
+  and in the request that sends them: never in storage, the address, an identifier or the log.
+*/
+function feedbackOption(value, label) {
+  var node = make("option", "", label);
+  node.value = value;
+  return node;
+}
+
+/** The scales' choices, written into the lists once: rebuilding them would lose a choice made. */
+function fillFeedbackChoices(answer) {
+  if (state.feedbackFilled) {
+    return;
+  }
+  state.feedbackFilled = true;
+  [
+    ["feedback-nausea", answer.scales.nausea],
+    ["feedback-dizziness", answer.scales.dizziness],
+  ].forEach(function (pair) {
+    var select = el(pair[0]);
+    text(el(pair[0] + "-title"), pair[1].title);
+    select.appendChild(feedbackOption("", "choisir"));
+    pair[1].labels.forEach(function (label, score) {
+      select.appendChild(feedbackOption(String(score), score + " - " + label));
+    });
+  });
+  var comfort = el("feedback-comfort");
+  comfort.appendChild(feedbackOption("", "choisir"));
+  answer.comfort.forEach(function (choice) {
+    comfort.appendChild(feedbackOption(choice.value, choice.label));
+  });
+  el("feedback-text").maxLength = answer.free_text_max;
+}
+
+function clearFeedbackFields() {
+  ["feedback-nausea", "feedback-dizziness", "feedback-comfort", "feedback-text"].forEach(function (id) {
+    el(id).value = "";
+  });
+}
+
+function renderFeedback(answer) {
+  var current = answer && answer.current ? answer.current : null;
+  state.feedback = current ? answer : null;
+  show(el("feedback-card"), Boolean(current));
+  if (!current) {
+    // Closed: nothing typed stays in the page.
+    state.feedbackShown = null;
+    state.feedbackMessage = null;
+    clearFeedbackFields();
+    return;
+  }
+  fillFeedbackChoices(answer);
+  if (state.feedbackShown !== current.ended_at_ms) {
+    // Another session: nothing typed for the one before stays on screen.
+    state.feedbackShown = current.ended_at_ms;
+    state.feedbackMessage = null;
+    clearFeedbackFields();
+  }
+  show(el("feedback-form"), current.can_submit);
+  show(el("feedback-close"), !current.can_submit);
+  text(el("feedback-status"), state.feedbackMessage || current.status_text || "");
+  text(
+    el("feedback-given-up"),
+    answer.given_up > 0 ? answer.given_up + " retour(s) abandonné(s) : trop de retours en attente" : ""
+  );
+  feedbackChanged();
+}
+
+/** The counter, and Envoyer only once both scores and the comfort are chosen. */
+function feedbackChanged() {
+  var max = state.feedback ? state.feedback.free_text_max : 500;
+  text(el("feedback-count"), el("feedback-text").value.length + " / " + max);
+  el("feedback-send").disabled =
+    state.feedbackSending ||
+    !el("feedback-nausea").value ||
+    !el("feedback-dizziness").value ||
+    !el("feedback-comfort").value;
+}
+
+function loadFeedback() {
+  return api("/api/feedback").then(renderFeedback).catch(function () {});
+}
+
+function postFeedback(path, body) {
+  state.feedbackSending = true;
+  state.feedbackMessage = null;
+  feedbackChanged();
+  return api(path, { method: "POST", body: body }).then(function (answer) {
+    state.feedbackSending = false;
+    renderFeedback(answer);
+  }).catch(function (error) {
+    // The console's sentence: it names a field, never a value. What was typed stays in the fields.
+    state.feedbackSending = false;
+    state.feedbackMessage = error.message;
+    text(el("feedback-status"), error.message);
+    feedbackChanged();
+  });
+}
+
+function doSendFeedback() {
+  var body = {
+    nausea_score: Number(el("feedback-nausea").value),
+    dizziness_score: Number(el("feedback-dizziness").value),
+    comfort: el("feedback-comfort").value,
+  };
+  var typed = el("feedback-text").value.trim();
+  if (typed) {
+    body.free_text = typed;
+  }
+  return postFeedback("/api/feedback", body);
+}
+
+function doSkipFeedback() {
+  return postFeedback("/api/feedback/skip", {});
+}
+
 /* ------------------------------------------------------------ manual mode */
 
 /*
@@ -2142,6 +2267,8 @@ function followRequests(event) {
     }
   } else if (event.kind === "session_idle") {
     sessionOver(event.request_id);
+    // A session with someone on board that ends opens the rider's feedback.
+    loadFeedback();
   }
 }
 
@@ -3803,6 +3930,13 @@ function start() {
   el("preview").onclick = doPreview;
   el("start").onclick = doStart;
   el("remote-launch-confirm").onclick = doConfirmRemoteLaunch;
+  el("feedback-send").onclick = doSendFeedback;
+  el("feedback-skip").onclick = doSkipFeedback;
+  el("feedback-close").onclick = doSkipFeedback;
+  el("feedback-nausea").onchange = feedbackChanged;
+  el("feedback-dizziness").onchange = feedbackChanged;
+  el("feedback-comfort").onchange = feedbackChanged;
+  el("feedback-text").oninput = feedbackChanged;
   el("stop").onclick = doStop;
   el("estop").onclick = doEstop;
   el("ack").onclick = doAcknowledge;
@@ -3843,6 +3977,7 @@ function start() {
   window.setInterval(refreshLiveness, 500);
   window.setInterval(loadPanel, PANEL_MS);
   window.setInterval(loadRemoteLaunch, PANEL_MS);
+  window.setInterval(loadFeedback, PANEL_MS);
   window.setInterval(loadSensors, SENSORS_MS);
   window.setInterval(loadRoster, ROSTER_MS);
   window.setInterval(loadCamera, 1000);
@@ -3859,6 +3994,7 @@ function start() {
 function boot() {
   loadPanel();
   loadRemoteLaunch();
+  loadFeedback();
   loadSensors();
   loadRoster();
   loadStatus()

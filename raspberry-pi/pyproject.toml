@@ -266,6 +266,7 @@ include = [
     # The versioned contract of that link: it decides whether a launch that
     # came down from the dashboard may be armed at all.
     "src/contract.py",
+    "src/passenger_feedback.py",
     # The riders' list that link keeps: which person a start with somebody on
     # board may name, and the maximum heart rate and age it is vetted on.
     "src/roster.py",

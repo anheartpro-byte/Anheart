@@ -217,6 +217,7 @@ from src.motor.sto import (
 )
 from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
+from src.passenger_feedback import PassengerFeedback, SessionIdReader
 from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
 from src.presence.adapter import RuntimePort as PresenceRuntimePort
 from src.presence.monitor import EmergencyStop, PresenceDecision, PresenceMonitor, RampDown
@@ -1006,10 +1007,12 @@ class LocalPanel:
         "_config",
         "_drive",
         "_ecg",
+        "_feedback",
         "_health",
         "_hub",
         "_last_measured",
         "_listener",
+        "_on_board",
         "_presence",
         "_recorded_presence",
         "_recorder",
@@ -1096,6 +1099,11 @@ class LocalPanel:
         self._cloud: CloudSync | None = cloud
         self._transport: HttpxTransport | None = transport
         self._last_measured: MotorRpm = MotorRpm(0)
+        # The rider's feedback after a session with somebody on board (ANH-146),
+        # memory only; and how to find, later, the dashboard's identifier of
+        # the session followed to its end for it, while it runs.
+        self._feedback: PassengerFeedback = PassengerFeedback(clock)
+        self._on_board: SessionIdReader | None = None
 
     # --- read access, for the tests and the entry point ------------------
 
@@ -1169,6 +1177,8 @@ class LocalPanel:
             self._services,
             remote_launch_current=cloud.current_remote_launch,
             remote_launch_confirm=cloud.confirm_remote_launch,
+            # Only a linked console offers it: the feedback has nowhere else to go.
+            feedback=self._feedback,
         )
 
     @property
@@ -1276,6 +1286,7 @@ class LocalPanel:
             self._surface.note_withdrawn(describe_withdrawn_target(withdrawn))
         self._record(now, snapshot)
         self._surface.publish(snapshot)
+        self._watch_end()
         match self._runtime.state:
             case RuntimeState.IDLE | RuntimeState.FINISHED:
                 self._surface.note_idle()
@@ -1439,6 +1450,25 @@ class LocalPanel:
                     subject_label=None if rider is None else rider.name,
                 )
             )
+        self._note_armed(on_board=occupancy is Occupancy.OCCUPIED)
+
+    def _note_armed(self, *, on_board: bool) -> None:
+        """A session was armed: the feedback card of the one before closes (ANH-146).
+
+        This one is followed to its end for its own feedback when somebody is
+        on board and a dashboard will hear of it. Called once the link was told
+        of the session, so that the reader it gives follows this session.
+        """
+        self._feedback.began()
+        cloud = self._cloud
+        self._on_board = cloud.session_id_reader() if on_board and cloud is not None else None
+
+    def _watch_end(self) -> None:
+        """The session followed for its feedback has finished: its card opens."""
+        reader = self._on_board
+        if reader is not None and self._runtime.state is RuntimeState.FINISHED:
+            self._on_board = None
+            self._feedback.ended(reader)
 
     def _on_board_refusal(self, rider: Rider) -> Result[str, str]:
         """The admitted questionnaire version, or why this manual start is refused.
@@ -1541,6 +1571,8 @@ class LocalPanel:
                     subject_label=label,
                 )
             )
+        # A programme regulates on the rider's heart rate: always somebody on board.
+        self._note_armed(on_board=True)
 
     def _rider_for(self, command: StartSession) -> Result[RiderFacts, str]:
         """What this programmed start is vetted on, or why it has nothing to be vetted on.
@@ -1756,6 +1788,7 @@ class LocalPanel:
             return
         try:
             await cloud.step()
+            await self._feedback.step(cloud)
         except Exception:  # see the docstring: an observer must not stop the machine
             _logger.exception("dashboard link step failed; the session is unaffected")
 

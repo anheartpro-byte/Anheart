@@ -567,6 +567,18 @@ class RecordUplink:
         """The dashboard's identifier of the running session, once known."""
         return None if self._live is None else self._live.cursor.session_id
 
+    def session_id_reader(self) -> Callable[[], str | None] | None:
+        """How to read, later, the dashboard's identifier of the session running now.
+
+        The identifier of a session started at the machine is learned once it is
+        declared, which may be after its end; the reader follows that session
+        and no other, whatever runs then. ``None`` when no session runs.
+        """
+        live = self._live
+        if live is None:
+            return None
+        return lambda: live.cursor.session_id
+
     @property
     def following(self) -> str | None:
         """The running session while the dashboard holds it started and not ended.

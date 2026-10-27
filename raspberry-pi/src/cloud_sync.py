@@ -126,12 +126,14 @@ from src.contract import (
     SERVER_VERSION_FIELD,
     STABLE_CODES,
     UNKNOWN_SOFTWARE_VERSION,
+    ContractVersion,
     ErrorCode,
     SoftwareVersion,
     error_code_of,
     majors_of,
     server_refusal,
     unsupported_refusal,
+    version_of,
 )
 from src.control_surface import (
     LOCAL_SUBJECT,
@@ -145,6 +147,7 @@ from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
 from src.medical import MedicalStatus
 from src.record_uplink import (
+    EVENTS_PATH,
     START_PATH,
     Acked,
     Answer,
@@ -867,6 +870,7 @@ class CloudSync:
         "_roster",
         "_runtime",
         "_said_at",
+        "_server_contract",
         "_software_version",
         "_store",
         "_surface",
@@ -930,6 +934,9 @@ class CloudSync:
         self._said_at: Monotonic | None = None
         self._refused_launch: str | None = None
         self._last_refused: Refused | None = None
+        # What the dashboard's last answered heartbeat announced: the rider's
+        # feedback goes only to one that takes it (contract 1.7).
+        self._server_contract: ContractVersion | None = None
         # What every session owes the dashboard is sent from its record. This
         # object keeps the state of the session that is running, and no queue.
         self._uplink: RecordUplink = RecordUplink(
@@ -973,6 +980,17 @@ class CloudSync:
     def owed(self) -> int:
         """Sessions the dashboard has not acknowledged whole, as far as this run knows."""
         return self._uplink.owed
+
+    @property
+    def server_contract(self) -> ContractVersion | None:
+        """The contract the dashboard announced in the last heartbeat it answered;
+        ``None`` before one was, or when it announced none readable."""
+        return self._server_contract
+
+    def session_id_reader(self) -> Callable[[], str | None] | None:
+        """How to read, later, the dashboard's identifier of the session running now
+        (:meth:`~src.record_uplink.RecordUplink.session_id_reader`)."""
+        return self._uplink.session_id_reader()
 
     def current_remote_launch(self) -> RemoteLaunchView | None:
         launch = self._offered_launch
@@ -1147,6 +1165,16 @@ class CloudSync:
         self._note(sent, log_refusal_words=path != START_PATH)
         return answer_of(sent)
 
+    async def send_feedback(self, body: Mapping[str, JsonValue]) -> Answer:
+        """POST the rider's feedback to the events route (:mod:`src.passenger_feedback`).
+
+        As :meth:`send`, except that a refusal's words are never logged, only
+        its code: the request carried health data.
+        """
+        sent = await self._transport.post(EVENTS_PATH, body)
+        self._note(sent, log_refusal_words=False)
+        return answer_of(sent)
+
     # --- heartbeat and presets --------------------------------------------
 
     async def _heartbeat(self, now: Monotonic, snapshot: TelemetrySnapshot) -> None:
@@ -1185,6 +1213,7 @@ class CloudSync:
         sent = await self._transport.post("/api/machine/heartbeat", body)
         match sent:
             case Ok(document):
+                self._server_contract = version_of(document.get(SERVER_VERSION_FIELD))
                 refusal = server_refusal(document.get(SERVER_VERSION_FIELD))
                 self._link.heartbeat_answered(refusal)
                 if refusal is not None:

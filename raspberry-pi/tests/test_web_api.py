@@ -457,9 +457,13 @@ async def test_every_command_endpoint_is_behind_the_token(client: httpx.AsyncCli
         "/api/presence",
         "/api/plan/preview",
         "/api/remote-launch/confirm",
+        "/api/feedback",
+        "/api/feedback/skip",
     ):
         response = await client.post(path, json={})
         assert response.status_code == HTTPStatus.UNAUTHORIZED, path
+    # The rider's feedback card is read behind it too (ANH-146).
+    assert (await client.get("/api/feedback")).status_code == HTTPStatus.UNAUTHORIZED
 
 
 # =========================================================================

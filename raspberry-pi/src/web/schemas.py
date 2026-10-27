@@ -54,6 +54,15 @@ from src.medical import MedicalStatus
 from src.motor.drive import FaultReport
 from src.motor.sto import STO_STALE_AFTER, StoReading, StoState
 from src.panel_status import EcgLinkStatus, PanelStatus
+from src.passenger_feedback import (
+    COMFORT_LABELS,
+    DIZZINESS,
+    FREE_TEXT_MAX,
+    NAUSEA,
+    FeedbackView,
+    Scale,
+    describe_delivery,
+)
 from src.presence.monitor import (
     Clear,
     EmergencyStop,
@@ -191,6 +200,77 @@ class RemoteLaunchRow:
                 view.passenger_name is not None
                 and view.stage in (LaunchStage.WAITING_CONFIRMATION, LaunchStage.UNCONFIRMED)
             ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackCurrentRow:
+    """The card's session: when it ended, where its feedback stands, and whether it may
+    be entered (again). Never the feedback itself: the page does not read it back."""
+
+    ended_at_ms: int
+    status: str
+    status_text: str
+    code: str | None
+    can_submit: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackScaleRow:
+    title: str
+    labels: tuple[str, ...]
+
+    @classmethod
+    def of(cls, scale: Scale) -> FeedbackScaleRow:
+        return cls(title=scale.title, labels=scale.labels)
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackChoiceRow:
+    value: str
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackScalesRow:
+    nausea: FeedbackScaleRow
+    dizziness: FeedbackScaleRow
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackRow:
+    """``GET /api/feedback`` (ANH-146): the card, if any, and what its form offers."""
+
+    current: FeedbackCurrentRow | None
+    given_up: int
+    scales: FeedbackScalesRow
+    comfort: tuple[FeedbackChoiceRow, ...]
+    free_text_max: int
+
+    @classmethod
+    def of(cls, view: FeedbackView) -> FeedbackRow:
+        current = view.current
+        return cls(
+            current=(
+                None
+                if current is None
+                else FeedbackCurrentRow(
+                    ended_at_ms=int(current.ended_at),
+                    status=current.delivery.value,
+                    status_text=describe_delivery(current.delivery, current.code),
+                    code=current.code,
+                    can_submit=current.can_submit,
+                )
+            ),
+            given_up=view.given_up,
+            scales=FeedbackScalesRow(
+                nausea=FeedbackScaleRow.of(NAUSEA), dizziness=FeedbackScaleRow.of(DIZZINESS)
+            ),
+            comfort=tuple(
+                FeedbackChoiceRow(value=comfort.value, label=label)
+                for comfort, label in COMFORT_LABELS.items()
+            ),
+            free_text_max=FREE_TEXT_MAX,
         )
 
 
