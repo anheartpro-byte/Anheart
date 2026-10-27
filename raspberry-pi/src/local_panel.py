@@ -91,6 +91,8 @@ first at exit: neither a tick nor the stop of the drive ever waits for them.
 A stop asked for from the dashboard is looked for by another task
 (:meth:`LocalPanel.cloud_stop_step`), which does nothing else: the question
 keeps its cadence while the sending waits on a slow disk or a slow upload.
+The riders' list is asked for by a third (:meth:`LocalPanel.roster_step`):
+a list slow to come delays neither the heartbeat nor the poll for a launch.
 
 The wall clock dates, and decides nothing
 -----------------------------------------
@@ -1773,6 +1775,22 @@ class LocalPanel:
         except Exception:  # as cloud_step: an observer must not stop the machine
             _logger.exception("dashboard stop watch failed; the session is unaffected")
 
+    async def roster_step(self) -> None:
+        """Ask the dashboard for the riders' list when it is due. No-op without a link.
+
+        A task of its own, apart from :meth:`cloud_step`: a list that takes as
+        long as the transport allows must hold neither the heartbeat nor the
+        poll for a launch. The same fence, for the same reason: a bug in
+        asking for the list must not bring a running session down.
+        """
+        cloud = self._cloud
+        if cloud is None:
+            return
+        try:
+            await cloud.refresh_roster()
+        except Exception:  # as cloud_step: an observer must not stop the machine
+            _logger.exception("dashboard riders' list request failed; the session is unaffected")
+
     # --- running and stopping --------------------------------------------
 
     def _stop_pending(self) -> bool:
@@ -1800,6 +1818,7 @@ class LocalPanel:
             asyncio.create_task(self._every(PRESENCE_PERIOD, self.presence_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.cloud_step, stop)),
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
+            asyncio.create_task(self._every(CLOUD_PERIOD, self.roster_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
         )
         if isinstance(self._sto, DriveInputStoSource):

@@ -536,7 +536,7 @@ validation matérielle ; consigner les mesures dans le tableau avant de conclure
 |---|---|---|
 | `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. Chaque ordre accepté reçoit un identifiant, et son sort (pris, refusé, annulé par un STOP) est publié une fois, sous cet identifiant. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite ; aucun ordre n'en remplace un autre en silence : un départ n'entre que dans une boîte vide au repos, et seul un STOP prend la place de ce qui attend, en le disant ; l'état ne redevient pas `idle` tant qu'un départ ou un arrêt accepté attend ; l'identifiant n'entre dans aucune décision. Table et courses dans [console-locale.md](console-locale.md#la-boîte-aux-lettres--une-demande-un-sort-et-la-console-le-dit), tenues par `tests/test_request_fates.py`. |
-| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
+| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; demande la liste des passagers par une autre tâche à part, que ni le battement de cœur ni l'interrogation des lancements n'attendent ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
 | `src/roster.py` | La liste des passagers que le tableau de bord donne à la machine : lecture de la réponse, liste tenue en mémoire, âge d'un passager à bord et FC max pour une séance programmée ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)). | Une réponse remplace la liste en entier ; sans réponse, la liste n'est plus proposée 15 min après sa réception ; une clé refusée la vide ; une valeur absente du site reste inconnue, jamais remplacée ; le nom n'est jamais écrit ni journalisé. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
 | `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure`. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; `joignable` seulement sur une réponse du tableau de bord, dans sa propre forme, qui prend ce que la console envoie, et jamais au-delà de 25 s sans une telle réponse ; jamais changé par une seule requête perdue, ni par les réponses à la question d'arrêt (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
@@ -1156,7 +1156,10 @@ affiche et ne les modifie pas.
 
 * **Quand** : au démarrage de la console, puis toutes les 60 s
   (`ROSTER_PERIOD`) **au repos** ; jamais pendant une séance. La route n'est pas
-  limitée en débit côté Convex.
+  limitée en débit côté Convex. La demande part d'une tâche à elle
+  (`LocalPanel.roster_step`, `CloudSync.refresh_roster`), une à la fois : une
+  liste lente ou qui ne vient pas ne retarde ni le battement de cœur ni
+  l'interrogation des lancements ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)).
 * **Une réponse remplace la liste tenue, en entier** : un passager qu'elle ne
   porte plus n'est plus proposé, et un départ qui le nomme est refusé, par la
   route puis par la boucle à l'armement.
@@ -2214,7 +2217,7 @@ exactement pareil, sans tableau de bord.
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, rangés après filtrage des pings `attendant_ping` et événements `t < 0` | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
 | Convex → Pi | le lancement AUTO proposé au dernier poll : profil, identifiant de passager, FC max, âge (déduit de l'année de naissance), libellé reçu pour la retenue locale, avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos, y compris tant qu'une offre attend une décision et qu'aucune séance ne tourne |
-| Convex → Pi | la liste des passagers de la machine : identifiant, nom, FC max, année de naissance ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)), gardée en mémoire seulement | `GET /api/machine/roster` | au démarrage, puis toutes les 60 s au repos |
+| Convex → Pi | la liste des passagers de la machine : identifiant, nom, FC max, année de naissance ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)), gardée en mémoire seulement | `GET /api/machine/roster` | au démarrage, puis toutes les 60 s au repos, par une tâche à elle |
 | Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | dès que le tableau de bord tient la séance pour démarrée, puis toutes les 3 s tant qu'elle n'est pas finie, par une **tâche à part** (`cloud_stop_step`) : la question ne passe derrière aucun envoi ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)) |
 
 Règles :
@@ -2649,6 +2652,20 @@ Après un redémarrage **du système**, plus rien ne relie les deux horloges :
   posée avant, ni pour un lancement dont le serveur n'a pas pris le départ (la
   séance est alors déjà arrêtée). La question elle-même n'a pas d'attente
   d'échec : restée sans réponse, elle est reposée 3 s plus tard.
+- **La liste des passagers ne retient rien.** Une tâche à elle,
+  `roster_step`, la demande ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)),
+  une demande à la fois, jamais pendant une séance : l'étape d'envoi ne
+  l'attend plus. Mesuré en temps simulé (`tests/test_roster_task.py`), au repos
+  pendant 130 s, une liste qui met 45 s à venir, ou retenue jusqu'à 100 s :
+  battement de cœur à 0, 10, 20... 130 s, interrogation des lancements à 0, 3,
+  6... 129 s, la liste demandée à 0, 60 et 120 s (à 0 et 100 s quand elle est
+  retenue). Séance démarrée à la machine à 30 s pendant que la liste est
+  attendue : déclarée à 30,05 s, première question d'arrêt à 30,05 s, puis
+  toutes les 3,00 à 3,05 s. Demandée par l'étape d'envoi, comme avant, la même
+  liste de 45 s faisait partir le premier battement de cœur et la première
+  interrogation à 45 s, et les battements suivants à 55, 105 et 115 s. À la
+  sortie, cette tâche est annulée avec les autres avant l'arrêt du variateur :
+  une demande restée sans réponse ne retarde ni la sortie ni cet arrêt.
 - **La sortie n'attend pas.** À la sortie de la console, la tâche du lien est
   annulée avant l'arrêt du variateur ; une étape qui attendait le disque ou le
   réseau rend la main à l'instant, et le fil de lecture, démon, ne retient pas

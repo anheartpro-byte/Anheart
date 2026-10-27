@@ -282,10 +282,12 @@ class Rig:
         assert isinstance(accepted, Ok), accepted
 
     async def step(self, seconds: float = 1.0) -> None:
-        """One second of the link's two tasks: the stop watch looks before and after
-        the sending, as it does on the console, where it looks four times a second."""
+        """One second of the link's three tasks: the riders' list, then the sending, the
+        stop watch looking before and after them, as it does on the console, where it
+        looks four times a second."""
         self.clock.advance(Seconds(seconds))
         await self.sync.watch_stop()
+        await self.sync.refresh_roster()
         await self.sync.step()
         await self.sync.watch_stop()
 
@@ -690,12 +692,15 @@ async def test_the_list_s_answer_says_the_dashboard_is_there(tmp_path: Path) -> 
     r, _roster = roster_rig(tmp_path, programs=False)
     r.dashboard.answer("/api/machine/heartbeat", DOWN)
     r.dashboard.answer("/api/machine/profiles", DOWN)
+    await r.sync.step()
+    after_the_step = r.sync.online
     # When the list is answered, the link is heard online.
-    await r.step()
-    assert r.sync.online
+    await r.sync.refresh_roster()
+    assert (after_the_step, r.sync.online) == (False, True)
     # And when it is not, offline.
     r.dashboard.answer(ROSTER_PATH, DOWN)
-    await r.step(ROSTER_PERIOD)
+    r.clock.advance(ROSTER_PERIOD)
+    await r.sync.refresh_roster()
     assert not r.sync.online
 
 
@@ -963,6 +968,8 @@ async def test_a_roster_refresh_removing_the_rider_abandons_the_queued_confirmat
     r.confirm_offer()
     r.dashboard.answer(ROSTER_PATH, ok({"riders": []}))
 
+    # The list's own task refreshes it, then the sending processes the confirmation.
+    await r.sync.refresh_roster()
     await r.sync.step()
 
     unavailable = r.sync.current_remote_launch()
@@ -977,6 +984,7 @@ async def test_a_roster_refresh_removing_the_rider_abandons_the_queued_confirmat
 
     r.dashboard.answer(ROSTER_PATH, ok(roster_document()))
     r.clock.advance(ROSTER_PERIOD)
+    await r.sync.refresh_roster()
     await r.sync.step()
     recovered = r.sync.current_remote_launch()
     assert recovered is not None
@@ -1616,6 +1624,7 @@ async def test_a_dashboard_launch_fails_closed_without_local_preflight(tmp_path:
     r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
 
     r.clock.advance(Seconds(1.0))
+    await sync.refresh_roster()
     await sync.step()
     accepted = sync.confirm_remote_launch("remote-1", OPERATOR)
     assert isinstance(accepted, Ok)
@@ -2607,10 +2616,11 @@ class Linked:
             self.panel.surface.note_presence(OPERATOR)
             await self.panel.ecg_step()
             await self.panel.control_step()
-            # The link's two tasks: the stop watch four times a second (here at
-            # each tick), the sending once a second.
+            # The link's three tasks: the stop watch four times a second (here at
+            # each tick), the riders' list and the sending once a second.
             await self.panel.cloud_stop_step()
             if n % 5 == 0:
+                await self.panel.roster_step()
                 await self.panel.cloud_step()
 
 
@@ -3160,7 +3170,7 @@ async def test_a_local_programme_is_registered_as_auto_for_its_rider(tmp_path: P
     # Given a console that has the dashboard's riders' list.
     rig_ = linked(tmp_path)
     rig_.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-3"}))
-    await rig_.panel.cloud_step()
+    await rig_.panel.roster_step()
     # When a programme is started at the console for a rider of that list.
     submitted = rig_.panel.surface.submit_start(
         profile_id=PROFILE, operator=OPERATOR, total_duration_s=None, subject_id=RIDER_ID
@@ -3236,6 +3246,20 @@ async def test_a_failure_of_the_stop_watch_never_reaches_the_console(
     await rig_.panel.close()
 
 
+async def test_a_failure_of_the_riders_list_request_never_reaches_the_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig_ = linked(tmp_path)
+
+    async def broken(_self: CloudSync) -> None:
+        raise RuntimeError("bug in the list")
+
+    monkeypatch.setattr(CloudSync, "refresh_roster", broken)
+    await rig_.panel.roster_step()
+    assert "dashboard riders' list request failed" in caplog.text
+    await rig_.panel.close()
+
+
 async def test_an_unlinked_console_has_no_link_step(tmp_path: Path) -> None:
     clock = ManualClock()
     config = config_of(MACHINE_API_KEY="")
@@ -3243,6 +3267,8 @@ async def test_an_unlinked_console_has_no_link_step(tmp_path: Path) -> None:
     assert panel.cloud is None
     await panel.cloud_step()
     await panel.cloud_stop_step()
+    await panel.roster_step()
+    assert panel.roster.state(clock.monotonic()) is RosterState.UNLINKED
     await panel.close()
 
 

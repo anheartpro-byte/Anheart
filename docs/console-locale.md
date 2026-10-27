@@ -1385,7 +1385,9 @@ l'armement qui ne porte plus le passager fait refuser le départ.
 
 La console demande au tableau de bord la liste de ses passagers
 (`GET /api/machine/roster`) à son démarrage, puis toutes les 60 s **tant qu'aucune
-séance ne tourne**. La liste porte, pour chaque personne qui détient le droit de
+séance ne tourne**. Elle la demande par une tâche à elle : une liste lente à venir, ou
+qui ne vient pas, ne retarde ni le battement de cœur envoyé au tableau de bord ni
+l'interrogation des lancements. La liste porte, pour chaque personne qui détient le droit de
 lancement sur cette machine et reste membre active de son organisation : son
 identifiant, son nom, sa FC max et son année de naissance, réglées sur le site par un
 gestionnaire. La console les affiche et ne permet pas de les modifier.

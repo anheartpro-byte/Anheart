@@ -512,6 +512,7 @@ class SimulatedWorld:
             self._console.journal.drain()
             await panel.cloud_stop_step()
         await panel.sensor_step()
+        await panel.roster_step()
         await panel.cloud_step()
         if panel.runtime.state in (RuntimeState.IDLE, RuntimeState.FINISHED):
             await self._console.deposit.step()
