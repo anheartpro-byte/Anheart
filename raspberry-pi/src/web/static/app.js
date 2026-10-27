@@ -1688,8 +1688,12 @@ function renderFeedback(answer) {
     state.feedbackMessage = null;
     clearFeedbackFields();
   }
+  // Nothing entered yet: « Ignorer (non renseigné) ». Once entered: « Fermer », which closes the
+  // card and still lets the console send it; the form stays to change it while it waits.
+  var entered = current.status !== "to_fill";
   show(el("feedback-form"), current.can_submit);
-  show(el("feedback-close"), !current.can_submit);
+  show(el("feedback-skip"), !entered);
+  show(el("feedback-close"), entered);
   text(el("feedback-status"), state.feedbackMessage || current.status_text || "");
   text(
     el("feedback-given-up"),

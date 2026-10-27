@@ -15,7 +15,8 @@ The operator acts through the console's HTTP routes, as the page does.
 * P5: a dashboard of 1.6 is sent nothing; a lost link sends it on its return;
   a session declared only after the entry gets it once declared; a refusal is
   said with its code;
-* P6: skipped, nothing is sent and nothing more is offered;
+* P6: skipped before any entry, nothing is sent and nothing more is offered;
+  closed once entered, it is still sent;
 * P8: the comment and the scores are in no log line, no file, no event of the
   record and no error answer.
 
@@ -283,6 +284,28 @@ async def test_p6_a_skipped_card_sends_nothing_and_offers_nothing_more(tmp_path:
         assert refused.status_code == httpx.codes.CONFLICT
     assert console.feedback_requests() == []
     assert console.dashboard.feedback == {}
+    await console.recorded.rig.panel.close()
+
+
+async def test_p6_a_card_closed_after_the_entry_still_sends_the_feedback(
+    tmp_path: Path,
+) -> None:
+    console = linked(tmp_path)
+    async with console.recorded.rig.http() as session:
+        await occupied(console, session)
+        console.dashboard.online = False
+        entered = await session.post("/api/feedback", json=ENTERED)
+        assert entered.status_code == httpx.codes.ACCEPTED
+        await console.seconds(2)
+        # Fermer: the card closes, and nothing of what was entered is dropped.
+        closed = await session.post("/api/feedback/skip", json={})
+        assert closed.status_code == httpx.codes.OK
+        assert closed.json()["current"] is None
+        console.dashboard.online = True
+        await console.seconds(20)
+        assert await card(session) is None
+    (server,) = console.dashboard.sessions.values()
+    assert console.dashboard.feedback == {server.session_id: DETAIL}
     await console.recorded.rig.panel.close()
 
 

@@ -242,6 +242,36 @@ test("a feedback sent shows its status and Fermer, without the form", async () =
   assert.equal(hidden(node("feedback-card")), true);
 });
 
+test("once entered, the card offers to change it and Fermer, which keeps it to send", async () => {
+  const waiting = toFill({ status: "waiting_link", status_text: "En attente du tableau de bord" });
+  let current = toFill();
+  const { context, node, calls } = page((path, options) => {
+    if (path === "/api/feedback/skip") {
+      return Promise.resolve(answer(null));
+    }
+    if (options?.method === "POST") {
+      current = waiting;
+    }
+    return Promise.resolve(answer(current));
+  });
+  await context.loadFeedback();
+  assert.equal(hidden(node("feedback-skip")), false, "Ignorer before anything is entered");
+  assert.equal(hidden(node("feedback-close")), true);
+  node("feedback-nausea").value = "3";
+  node("feedback-dizziness").value = "4";
+  node("feedback-comfort").value = "good";
+  await node("feedback-send").onclick();
+  // Entered: no Ignorer that would drop it, the form to change it, and Fermer.
+  assert.equal(hidden(node("feedback-skip")), true);
+  assert.equal(hidden(node("feedback-close")), false);
+  assert.equal(hidden(node("feedback-form")), false);
+  assert.equal(node("feedback-nausea").value, "3", "what was entered stays to be changed");
+  assert.equal(node("feedback-status").textContent, "En attente du tableau de bord");
+  await node("feedback-close").onclick();
+  assert.deepEqual(calls.at(-1), { path: "/api/feedback/skip", method: "POST", body: {} });
+  assert.equal(hidden(node("feedback-card")), true);
+});
+
 test("another session's card starts empty", async () => {
   let current = toFill();
   const { context, node } = page(() => Promise.resolve(answer(current)));

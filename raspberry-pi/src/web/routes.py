@@ -827,7 +827,7 @@ def _register_feedback(app: FastAPI, *, services: Services, auth: Sequence[param
 
     @app.post("/api/feedback/skip", dependencies=auth, tags=["session"])
     async def skip_feedback() -> FeedbackRow:
-        """Close the card: "non renseigne". A feedback not sent yet is not sent at all."""
+        """Close the card: "non renseigne" if nothing was entered; one entered is still sent."""
         store = _require_feedback(services)
         if isinstance(store.skip(), Err):
             raise Refusal(HTTPStatus.CONFLICT, code=NOTHING_TO_FILL, detail=NOTHING_TO_FILL_DETAIL)

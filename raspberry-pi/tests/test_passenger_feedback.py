@@ -9,7 +9,8 @@
 * P5 (in memory): what each answer of the link does to a feedback, the wait
   for the session's identifier and for a dashboard of 1.7, the 24 h after
   the end, and the bound of what is held;
-* P6: a skipped card sends nothing.
+* P6: a card skipped before anything was entered sends nothing; one closed
+  after the entry still sends it.
 
 The console's own wiring, its routes and a whole session are
 ``tests/test_feedback_console.py``.
@@ -327,14 +328,26 @@ def test_the_card_opens_at_the_end_and_a_second_entry_replaces_the_first() -> No
     assert offered(store).can_submit
 
 
-async def test_p6_a_skipped_card_closes_and_sends_nothing() -> None:
-    _, store = entered()
+async def test_p6_a_card_skipped_before_any_entry_closes_and_sends_nothing() -> None:
+    store = PassengerFeedback(clock())
+    store.ended(reader("SESSION-1"))
     assert store.skip() == Ok(None)
     assert store.view().current is None
     link = Link()
     await store.step(link)
     assert link.sent == []
     assert store.submit(FEEDBACK) == Err(NothingToFill())
+
+
+async def test_p6_a_card_closed_once_entered_still_sends_the_feedback() -> None:
+    _, store = entered()
+    assert store.skip() == Ok(None), "Fermer"
+    assert store.view().current is None
+    link = Link()
+    await store.step(link)
+    assert [body["sessionId"] for body in link.sent] == ["SESSION-1"]
+    await store.step(link)
+    assert len(link.sent) == 1
 
 
 def test_the_next_session_closes_a_card_left_to_fill_and_keeps_one_entered() -> None:
@@ -513,34 +526,68 @@ async def test_a_feedback_entered_again_while_one_travels_goes_at_the_next_step(
 
 
 @pytest.mark.parametrize(
+    ("answer", "delivery", "again"),
+    [
+        (Acked({}), Delivery.SENT, 1),
+        (Held("lost"), Delivery.WAITING_LINK, 2),
+        (
+            Refusal("not over", final=False, status=400, code=SESSION_NOT_ENDED),
+            Delivery.WAITING_END,
+            2,
+        ),
+    ],
+)
+async def test_a_card_closed_while_its_feedback_travels_keeps_sending_it(
+    answer: Answer, delivery: Delivery, again: int
+) -> None:
+    ticking = clock()
+    store = PassengerFeedback(ticking)
+    store.ended(reader("SESSION-1"))
+    assert store.submit(FEEDBACK) == Ok(None)
+    (entry,) = store._entries  # pyright: ignore[reportPrivateUsage]  # what the closed card holds
+    await store.step(Link(answers=[answer], during=[store.skip]))
+    assert store.view().current is None
+    assert entry.delivery is delivery
+    ticking.advance(Seconds(RETRY_PERIOD))
+    link = Link()
+    await store.step(link)
+    assert 1 + len(link.sent) == again
+    assert entry.delivery is Delivery.SENT
+
+
+@pytest.mark.parametrize(
     ("answer", "delivery"),
     [
         (Acked({}), Delivery.SENT),
         (Refusal("no", final=True, status=409, code=None), Delivery.REFUSED),
-        (Held("lost"), Delivery.NOT_PROVIDED),
-        (RouteMissing(), Delivery.NOT_PROVIDED),
+        (Held("lost"), Delivery.EXPIRED),
+        (RouteMissing(), Delivery.EXPIRED),
         (
             Refusal("not over", final=False, status=400, code=SESSION_NOT_ENDED),
-            Delivery.NOT_PROVIDED,
+            Delivery.EXPIRED,
         ),
     ],
 )
-async def test_a_card_skipped_while_its_feedback_travels_is_told_what_became_of_it(
+async def test_a_feedback_given_up_while_it_travels_is_told_what_became_of_it(
     answer: Answer, delivery: Delivery
 ) -> None:
     ticking = clock()
     store = PassengerFeedback(ticking)
-    store.ended(lambda: "SESSION-1")
+    store.ended(reader("SESSION-1"))
     assert store.submit(FEEDBACK) == Ok(None)
-    link = Link(answers=[answer], during=[store.skip])
-    store_entries = store._entries  # pyright: ignore[reportPrivateUsage]  # what the closed card holds
-    (entry,) = store_entries
+    (entry,) = store._entries  # pyright: ignore[reportPrivateUsage]  # what the card holds
+
+    def window_over() -> None:
+        ticking.advance(Seconds(EDIT_WINDOW + 1))
+        store.view()
+
+    link = Link(answers=[answer], during=[window_over])
     await store.step(link)
     assert entry.delivery is delivery
     assert entry.feedback is None
     ticking.advance(Seconds(RETRY_PERIOD))
     await store.step(link)
-    assert len(link.sent) == 1, "a skipped feedback is never sent again"
+    assert len(link.sent) == 1, "a feedback given up is never sent again"
 
 
 def test_every_delivery_has_its_words_and_a_refusal_only_its_code() -> None:

@@ -1402,8 +1402,11 @@ est vide. L'échelle et ses libellés sont ceux de
 console est déployée sans ce fichier). Ils sont provisoires, sans validité
 médicale, à valider avec ANH-98. **Envoyer** n'est actif qu'une fois les deux
 notes et le ressenti choisis ; une seconde saisie avant l'envoi remplace la
-première. **Ignorer (non renseigné)** ferme la carte : rien n'est envoyé, et
-une saisie pas encore partie ne part plus. L'opérateur n'est pas nommé : la
+première. Tant que rien n'est saisi, **Ignorer (non renseigné)** ferme la
+carte : rien n'est envoyé. Une fois le retour saisi, ce bouton disparaît :
+la carte garde le formulaire pour le modifier tant qu'il n'est pas parti, et
+**Fermer** la ferme **sans jeter le retour**, qui continue de partir en
+arrière-plan, comme quand la séance suivante démarre. L'opérateur n'est pas nommé : la
 saisie passe par l'accès de la console (son jeton), comme toute requête, et
 le tableau de bord la range sous `submittedBy: "operator"` en attendant
 l'authentification nommée (ANH-152).
@@ -2393,7 +2396,7 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 | GET | `/api/remote-launch` | - | l'offre du dernier poll pour la carte Seance : `{session_id, profile_id, program, launched_by, passenger_name, passenger_reason, state, reason, can_confirm}` ; `passenger_name` vient du roster tenu par recherche `subject_id`, jamais de `subject_label`; `null` si aucune offre | 200 |
 | GET | `/api/feedback` | - | la carte « Retour du passager » (ANH-146) : `{current, given_up, scales, comfort, free_text_max}` ; `current` vaut `null` sans carte, sinon `{ended_at_ms, status, status_text, code, can_submit}` ; jamais les valeurs saisies | 200 |
 | POST | `/api/feedback` | `{"nausea_score", "dizziness_score", "comfort", "free_text"?}` | saisit le retour de la séance de la carte, ou remplace la saisie pas encore envoyée ; mémoire seulement | 202 (même corps que la lecture) ; 400 `malformed_body` ; 422 `invalid_feedback` (le champ nommé, jamais sa valeur) ; 409 `nothing_to_fill` |
-| POST | `/api/feedback/skip` | `{}` | ferme la carte : « non renseigné », rien n'est envoyé | 200 (même corps) ; 409 `nothing_to_fill` |
+| POST | `/api/feedback/skip` | `{}` | ferme la carte : « non renseigné » si rien n'était saisi, rien n'est envoyé ; un retour saisi part quand même | 200 (même corps) ; 409 `nothing_to_fill` |
 | POST | `/api/remote-launch/confirm` | `{"session_id", "operator"}` | confirme localement l'offre et attribue l'action à l'opérateur; la route ne fait aucun appel réseau, CloudSync traite ensuite la demande | 202 `{session_id, state}` ; 400 (opérateur vide) ; 409 (`launch_not_pending`, `launch_in_progress`, `passenger_unavailable`, `launch_refused`) |
 | GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}]}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
 | POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_id"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi) ; 409 (dont : passager refusé, variateur en défaut) ; 412 |

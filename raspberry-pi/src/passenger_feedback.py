@@ -4,7 +4,8 @@ When a session with somebody on board ends - a manual session declared
 occupied, or any programmed session - the console offers the operator a card:
 the rider's nausea and discomfort or dizziness, each a whole number from 0 to
 10, a comfort, and a comment if any. The operator enters it, or skips it ("non
-renseigne"): nothing is ever asked for a bench session.
+renseigne") before entering anything; a card closed once it was entered still
+sends it. Nothing is ever asked for a bench session.
 
 Where it goes, and where it never goes
 --------------------------------------
@@ -449,15 +450,15 @@ class PassengerFeedback:
         return Ok(None)
 
     def skip(self) -> Result[None, NothingToFill]:
-        """Close the card. A feedback not sent yet is not provided: nothing is sent."""
+        """Close the card: "Ignorer (non renseigne)" before anything was entered, "Fermer" after.
+
+        Nothing entered: not provided, nothing is ever sent. Entered: the card
+        closes and the feedback is still sent, as when the next session starts.
+        """
         self._expire()
-        shown = self._shown
-        if shown is None:
+        if self._shown is None:
             return Err(NothingToFill())
-        if shown.delivery in OPEN:
-            shown.delivery = Delivery.NOT_PROVIDED
-            shown.feedback = None
-        self._shown = None
+        self._close_card()
         self._prune()
         return Ok(None)
 
@@ -495,7 +496,7 @@ class PassengerFeedback:
         """What the dashboard's answer does to ``entry``.
 
         A feedback entered again while this one travelled goes at the next
-        step; a card skipped meanwhile is told what became of the one sent.
+        step; one given up meanwhile (its 24 h over) is told what became of it.
         """
         current = entry.feedback
         if current is not None and current is not sent:
@@ -525,7 +526,7 @@ class PassengerFeedback:
 
     @staticmethod
     def _later(entry: _Entry, current: Feedback | None, delivery: Delivery, now: Monotonic) -> None:
-        """Not taken this time: tried again after :data:`RETRY_PERIOD`, unless skipped meanwhile."""
+        """Not taken this time: tried again after :data:`RETRY_PERIOD`, unless given up meanwhile."""
         if current is None:
             return
         entry.delivery = delivery
