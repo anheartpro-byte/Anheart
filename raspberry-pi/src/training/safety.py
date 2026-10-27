@@ -926,12 +926,14 @@ class SafetyObservation:
     """
 
     resting_bpm: Bpm | None = None
-    """The resting rate measured at standstill in BASELINE, or ``None``.
+    """The resting rate measured at standstill, or ``None``.
 
-    What a heart rate recovering from a removed load falls TOWARDS, and the
-    reference ``hr_drop`` measures a collapse during that recovery against.
-    ``None`` (no BASELINE, as in a manual session) keeps the unconditional
-    fall threshold: nothing is inferred from a rate nobody measured.
+    Measured in BASELINE in a programme, and before the arm first moves in a
+    manual session with a person on board. What a heart rate recovering from
+    a removed load falls TOWARDS, and the reference ``hr_drop`` measures a
+    collapse during that recovery against. ``None`` (nothing measured) keeps
+    the unconditional fall threshold: nothing is inferred from a rate nobody
+    measured.
     """
 
     manual_session: bool = False
