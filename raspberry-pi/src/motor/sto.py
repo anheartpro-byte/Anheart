@@ -200,6 +200,7 @@ class DriveInputStoSource:
         self._next_tick: Callable[[Seconds], Awaitable[None]] | None = None
         # Counted when a read starts, after the guard: what run() paces on.
         self._attempts: int = 0
+        self._last_word: RawRegister | None = None
         self._reading: StoReading = StoReading(
             state=StoState.UNKNOWN,
             source=StoSourceKind.DRIVE_INPUT,
@@ -222,6 +223,20 @@ class DriveInputStoSource:
         """Reads started so far: a refused poll starts none."""
         return self._attempts
 
+    @property
+    def last_word(self) -> RawRegister | None:
+        """The whole logic-input word of the last successful read, unmasked.
+
+        The other logic inputs wired to the drive are read from it, in the same
+        frame as the relay feedback, without another Modbus transaction. None
+        before any success, and again as soon as an attempt fails, so an older
+        word is never presented as the last one; a read still in flight keeps
+        the word of the last success, as :meth:`latest` keeps its reading with
+        ``read_unresolved``. Its freshness is judged by :meth:`latest`: the
+        same ``last_success_at`` and the same ageing.
+        """
+        return self._last_word
+
     def guard_polling(self, permitted: Callable[[], bool]) -> None:
         """Bind the console's silence/release guard at composition, before polling starts."""
         self._poll_permitted = permitted
@@ -240,6 +255,7 @@ class DriveInputStoSource:
         result = await self._drive.read_register(self._address)
         match result:
             case Ok(raw):
+                self._last_word = raw
                 self._reading = StoReading(
                     state=StoState.READY if decode_logic_input(raw, self._input) else StoState.OPEN,
                     source=StoSourceKind.DRIVE_INPUT,
@@ -247,6 +263,7 @@ class DriveInputStoSource:
                     detail="logic input relay contact",
                 )
             case Err(error):
+                self._last_word = None
                 self._reading = StoReading(
                     state=StoState.UNKNOWN,
                     source=StoSourceKind.DRIVE_INPUT,
