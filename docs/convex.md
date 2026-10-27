@@ -657,7 +657,9 @@ ou un identifiant opaque d'opérateur, jamais un nom). Index
 de nouveau (`storeEvents`). Aucune fonction publique ne lit encore cette
 table : la machine l'écrit, les tests la lisent. Seuls les événements d'une
 séance y arrivent, ceux de son enregistrement : rien de ce que la console
-noterait hors séance n'est envoyé.
+noterait hors séance n'est envoyé. Le retour du passager que la console
+envoie par la même route (`kind: "feedback"`, contrat 1.7) n'y est jamais
+écrit : il va dans [`session_feedback`](#session_feedback--retour-du-passager-après-une-séance-anh-146).
 
 ### `session_summaries_v2` : résumé d'une séance d'entraînement (ANH-89)
 
@@ -770,10 +772,58 @@ La variation de g est calculée sur les colonnes g écrites à quatre décimales
 la simulation sur la vitesse moteur (écart au quatrième chiffre). Les maxima
 de vitesse et de g, les règles et la règle de fin y sont identiques.
 
-**Pas encore dans le résumé** : le résultat du pré-vol (ANH-142) et le retour
-du passager (ANH-146), que rien n'enregistre aujourd'hui. Chacun sera un champ
-de `figures` calculé par `convex/lib/sessionSummary.ts` ; le rapport dit déjà
-qu'ils manquent.
+**Pas encore dans le résumé** : le résultat du pré-vol (ANH-142), que rien
+n'enregistre aujourd'hui. Il sera un champ de `figures` calculé par
+`convex/lib/sessionSummary.ts` ; le rapport dit déjà qu'il manque. Le retour
+du passager (ANH-146) n'est pas un chiffre du résumé : il a sa propre table,
+[`session_feedback`](#session_feedback--retour-du-passager-après-une-séance-anh-146),
+lue à côté du résumé.
+
+### `session_feedback` : retour du passager après une séance (ANH-146)
+
+Une ligne par séance au plus, écrite par les seules mutations de
+[`sessionFeedback.ts`](#sessionfeedbackts-retour-du-passager-anh-146) :
+`organizationId` (celui de la séance), `sessionId`, `nauseaScore` et
+`dizzinessScore` (entiers de 0 à 10), `comfort` (`good`, `acceptable` ou
+`bad`), `freeText` facultatif (500 caractères au plus une fois rogné, jamais
+vide), `submittedBy` (`rider` depuis le site, `operator` depuis la console de
+la machine) et `submittedAt` (horloge du serveur). Index `by_session`
+(l'unicité : chaque écriture lit d'abord la ligne de la séance et la
+remplace), `by_organization_and_submittedAt` et `by_submittedAt` (l'export,
+du plus récent au plus ancien). Pas de ligne : pas de retour, ce que le site
+affiche « Non renseigné ».
+
+L'échelle a une source unique, [`contracts/feedback.json`](../contracts/feedback.json),
+lue et vérifiée au chargement par `convex/lib/feedback.ts`, pour Convex et le
+site : bornes, un libellé par niveau en français et en anglais (« Nausée »,
+« Malaise ou vertige »), libellés du ressenti, longueur du texte, fenêtre de
+24 h. Ces libellés sont **provisoires, sans validité médicale**
+(`[MED]`, à valider avec ANH-98) ; le contrat ne porte aucun seuil.
+
+Règles :
+
+- **Séances concernées** : une séance d'entraînement avec une personne à
+  bord (`personOnBoard` de `convex/lib/machineRegistry.ts` : automatique, ou
+  manuelle dont `notes` contient exactement `Occupancy: occupied`). Une
+  séance d'atelier ou de l'ancien mode d'enregistrement n'en a jamais.
+- **Quand** : une fois la séance terminée (`completed` ou `failed`, avec
+  `endedAt`), et pendant 24 h après `endedAt`, mesurées sur l'horloge du
+  serveur. Avant la fin, ou après la fenêtre, toute écriture est refusée.
+- **Une seule ligne** : la dernière écriture dans la fenêtre gagne, qu'elle
+  vienne du passager ou de l'opérateur ; la ligne est remplacée entière (un
+  texte absent de la nouvelle saisie disparaît).
+- **Qui lit** : qui peut lire la séance (`canAccessSession`) : son
+  passager, qui accède à sa machine dans son organisation, l'admin Anheart.
+  L'historique d'un passager (`riderHistory`) porte la note de nausée de
+  chaque séance sous les mêmes droits.
+
+**Donnée de santé.** Les deux notes, le ressenti et le texte ne sont écrits
+que dans cette table. Ils ne vont jamais dans `training_events`, dans
+l'enregistrement de séance du Pi, dans un journal, un message d'erreur, une
+notification, les détails d'une ligne d'audit (l'action
+`session.feedback_submitted` n'en porte aucun), une URL ou un nom de fichier.
+L'export n'en sort que les notes et le ressenti, avec des identifiants, sans
+nom, sans adresse et sans le texte libre.
 
 ### Deux horloges
 
@@ -1118,6 +1168,11 @@ Autres règles notables :
   de modifier lui-même son nom et sa langue.
   Les gestionnaires conservent leurs droits habituels sur un compte qui n'a
   qu'une organisation active. Les données ne sont pas dupliquées par organisation.
+- **Retour du passager après une séance** (ANH-146) : le donner ou le
+  modifier, depuis le site, est réservé au passager de la séance, dans son
+  organisation ; le lire suit `canAccessSession` ; l'exporter est réservé à
+  l'admin Anheart (toutes organisations) et à l'admin d'organisation (la
+  sienne). Voir [`sessionFeedback.ts`](#sessionfeedbackts-retour-du-passager-anh-146).
 - **Demander l'arrêt de sa séance** : le passager peut le demander depuis une
   autre organisation active de son compte. Cette exception ne donne aucun accès
   supplémentaire aux mesures ou aux séances des autres personnes.
@@ -1470,6 +1525,20 @@ ANH-139 ajoute deux codes à `training.launchAutoSession` :
 |---|---|
 | `medical_parameters_unavailable` | Aucun paramètre médical courant n'est enregistré sur le serveur ; le lancement distant échoue fermé. |
 | `medical_parameters_unsigned` | La machine a annoncé `medicalParametersVersion: null` ; le Pi est en mode banc et ne peut pas démarrer une séance auto. Ce contrôle passe avant `programs_disabled`. |
+
+ANH-146 ajoute cinq codes au retour du passager (`sessionFeedback.ts`).
+Aucun ne cite une valeur saisie :
+
+| Code | Sens |
+|---|---|
+| `feedback_rider_only` | L'appelant lit la séance mais n'en est pas le passager : seul le passager donne ou modifie son retour depuis le site. |
+| `feedback_not_eligible` | La séance n'a pas eu de personne à bord (atelier, ancien mode d'enregistrement). |
+| `feedback_session_not_ended` | La séance n'est pas terminée, ou n'a pas de date de fin. |
+| `feedback_window_closed` | Plus de 24 h ont passé depuis la fin de la séance. |
+| `feedback_invalid` | Une note qui n'est pas un entier de 0 à 10, un ressenti hors de la liste, un texte de plus de 500 caractères une fois rogné. |
+
+Une séance que l'appelant ne peut pas lire répond `session_not_found`, comme
+une séance inconnue.
 
 ### Fonctions par fichier
 
@@ -1946,7 +2015,7 @@ sous les droits de sa séance, et rien de lui n'est écrit dans les journaux.
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `getSummary` | `canAccessSession` : pratiquant, accès à la machine dans l'organisation de la séance, admin Anheart | Le résumé de la séance (`provisional`, `computedAt`, `recordProblem`, `figures`), ou `null` pour une séance inconnue ou non lisible. Un lecteur reçoit `{ absent: "not_started" }` pour un entraînement terminé avant son départ sans résumé, `{ absent: "not_computed" }` pour toute autre absence de résumé. |
-| `riderHistory` | connecté | Les séances terminées (`completed`, `failed`) d'entraînement d'un pratiquant que l'appelant peut lire, les plus récentes d'abord, 100 au plus, avec les chiffres clés de leur résumé (durée, temps en zone, zone, FC moyenne et max, g max de référence) ou `summary: null`. `notStarted` vaut vrai uniquement pour une séance terminée avant son départ sans résumé. Ce sont les séances de `listSessions` pour ce pratiquant (`readableSessions` par statut, puis `canAccessSession` sur chacune) : un gestionnaire lit celles des machines qu'il gère, un pratiquant les siennes, une autre organisation rien. |
+| `riderHistory` | connecté | Les séances terminées (`completed`, `failed`) d'entraînement d'un pratiquant que l'appelant peut lire, les plus récentes d'abord, 100 au plus, avec les chiffres clés de leur résumé (durée, temps en zone, zone, FC moyenne et max, g max de référence) ou `summary: null`. `notStarted` vaut vrai uniquement pour une séance terminée avant son départ sans résumé. `nauseaScore` porte la note de nausée du retour du passager (ANH-146), ou `null` sans retour. Ce sont les séances de `listSessions` pour ce pratiquant (`readableSessions` par statut, puis `canAccessSession` sur chacune) : un gestionnaire lit celles des machines qu'il gère, un pratiquant les siennes, une autre organisation rien. |
 
 Fonctions internes : `summarizeTelemetry` et `summarizeRecord` (actions),
 `telemetryInput`, `telemetryPage`, `verdictPage`, `recordInput` (queries),
@@ -1961,6 +2030,26 @@ reste intact. `summarizeTelemetry` signale les limites de lecture par
 `telemetry_truncated` et `events_truncated`. Les deux sources ignorent les
 tics ou points hors d'ordre avec `ticks_out_of_order` ; la règle de fin
 n'est cherchée que sur le premier tic de fin ou son prédécesseur immédiat.
+
+### `sessionFeedback.ts` (retour du passager, ANH-146)
+
+Le retour est une donnée de santé : la table et ses règles sont
+[au §2](#session_feedback--retour-du-passager-après-une-séance-anh-146).
+
+| Fonction | Autorisation | Rôle |
+|---|---|---|
+| `getSessionFeedback` | `canAccessSession` | `{eligible, feedback, endedAt, editableUntil, canEdit}`, ou `null` pour une séance inconnue ou non lisible. `feedback` vaut `null` sans retour, sinon les deux notes, le ressenti, le texte, `submittedBy` et `submittedAt` (sans l'organisation). `editableUntil` (fin de la fenêtre) vaut `null` pour une séance non concernée ou non terminée. `canEdit` est vrai pour le seul passager d'une séance concernée et terminée : le site compare `editableUntil` à l'heure, la mutation tranche. |
+| `submitSessionFeedback` | le passager de la séance | Donne ou modifie le retour (`submittedBy: "rider"`) ; limitée comme toute écriture d'un compte. Refus dans cet ordre : `session_not_found` (séance non lisible), `feedback_rider_only`, `feedback_not_eligible`, `feedback_session_not_ended`, `feedback_window_closed`, `feedback_invalid`. Écrit une ligne d'audit `session.feedback_submitted`, sans détail. |
+| `exportFeedback` | `requireRole(admin, org_admin)` | Une page (100 lignes au plus, du plus récent au plus ancien) de `sessionId`, `organizationId`, `machineId`, `userId` (ou `null`), `startedAt`, `durationS`, `legTipMaxG` et `legTipMaxGRate` (pic de g et de variation de g à la pointe du pied, repris du résumé de la séance, `null` sans résumé), `nauseaScore`, `dizzinessScore`, `comfort`, `submittedBy`, `submittedAt`. Jamais de nom, d'adresse ni de texte libre. L'admin Anheart lit toutes les organisations, ou celle qu'il demande (`organizationId`) ; l'admin d'organisation la sienne, et une page vide s'il en demande une autre. |
+
+Mutation interne : `storeMachineFeedback`, appelée par la route des
+événements pour un événement `feedback` (contrat 1.7, [§6](#6-routes-http-machine-convexhttpts)).
+Elle vérifie que la séance est de cette machine (`session_not_found`
+sinon, identifiant illisible compris), la saisie (`invalid_request`,
+« Malformed feedback »), puis la séance (`feedback_not_eligible`,
+`feedback_session_not_ended`, `feedback_window_closed`), écrit la ligne
+avec `submittedBy: "operator"` et une ligne d'audit dont l'acteur est la
+machine, sans détail.
 
 ### Rattrapage des résumés : `sessionReportsBackfill.ts` (ANH-234)
 
@@ -2436,6 +2525,7 @@ changer. La liste des codes est dans `contracts/machine-api.json` :
 | `request_failed` | 400 | Toute autre erreur levée pendant le traitement ; `message` porte son texte. |
 | `rate_limited` | 429 | La machine a dépassé la limite de débit de la route ; la réponse porte `retryAfterMs` et l'en-tête `Retry-After` (contrat 1.4, [ci-dessous](#limitation-de-débit-et-taille-des-corps-anh-166)). |
 | `payload_too_large` | 413 | Corps au-delà de la taille de la route, ou lot de plus de 600 points ou 200 événements, refusé avant d'être parcouru (contrat 1.4). |
+| `feedback_not_eligible`, `feedback_session_not_ended`, `feedback_window_closed` | 400 | `training/events` seulement, depuis le contrat 1.7 : le retour du passager porté par un événement `feedback` est refusé (séance sans personne à bord, pas terminée, ou finie depuis plus de 24 h), [ci-dessous](#routes-utilisées-par-la-console-locale-raspberry-pisrccloud_syncpy). |
 | `expired_before_start`, `machine_deleted_before_start`, `organization_changed_before_start`, `right_revoked_before_start`, `age_refused_before_start`, `hr_max_changed_before_start`, `rider_busy` ; depuis 1.6 : `rider_not_fit`, `fitness_expired`, `consent_missing` | 409 | `training/start` seulement (depuis le contrat 1.5) : le lancement, revérifié au moment où la machine l'arme, est refusé ; la séance est `failed` avec ce code, et la machine ne doit pas la faire tourner ([Revérification à l'armement](#revérification-à-larmement-anh-144)). |
 
 Côté Pi, une absence de réponse devient `Unreachable`, toute réponse ≥ 400
@@ -2611,7 +2701,7 @@ déploiement.
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local ; limite 1 par minute, réserve 20 |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
 | `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points et 300 Kio max) | `{stored, duplicates, rejected}` | lots de 300 points max : toutes les 5 s pour une séance à jour, toutes les 3 s pour ce qui est en retard |
-| `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements et 2,5 Mio max, 2000 caractères de texte par événement) | `{stored, duplicates, rejected}` | avec la télémétrie, 200 événements max par envoi |
+| `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements et 2,5 Mio max, 2000 caractères de texte par événement) ; depuis 1.7, ou un seul événement `kind: "feedback"` (retour du passager) | `{stored, duplicates, rejected}` ; `{stored: 1, duplicates: 0, rejected: 0}` pour un retour enregistré | avec la télémétrie, 200 événements max par envoi ; un retour à part, à un serveur qui annonce 1.7 ou plus |
 | `POST /api/machine/training/end` | `{sessionId, failed, reason, endedAt?}` | `{success: true}` | quand l'enregistrement de la séance est fermé et sa télémétrie acquittée ; sans `endedAt` pour un lancement que la machine a refusé |
 
 Détails du contrat :
@@ -2705,6 +2795,23 @@ Détails du contrat :
   de 2000 caractères au plus, `actor` de 1 à 64 caractères parmi lettres,
   chiffres, `_` et `-`. Un événement mal formé refuse tout le lot (400
   `invalid_request`, « Malformed event »), comme un point mal formé.
+- **Retour du passager** (contrat 1.7, ANH-146, entrée `feedback_events` de
+  [`contracts/machine-api.json`](../contracts/machine-api.json)) : un
+  événement `kind: "feedback"` de forme inchangée, dont `detail` porte le
+  JSON strict `{nauseaScore, dizzinessScore, comfort, freeText?}` (clés
+  fermées, échelle de [`contracts/feedback.json`](../contracts/feedback.json)).
+  `seq`, `t` et `actor` sont vérifiés comme pour tout événement, puis
+  ignorés. La route le détourne vers `sessionFeedback.storeMachineFeedback`
+  (`submittedBy: "operator"`) et ne l'écrit **jamais** dans
+  `training_events`. Il voyage seul : un retour mêlé à un autre événement, ou
+  deux retours dans la même requête, sont refusés (400 `invalid_request`, « A
+  feedback event travels alone ») ; un `detail` illisible ou hors échelle
+  aussi (400 `invalid_request`, « Malformed feedback »), sans citer de
+  valeur. Une séance d'une autre machine répond `session_not_found` ; une
+  séance sans personne à bord, non terminée ou finie depuis plus de 24 h,
+  `feedback_not_eligible`, `feedback_session_not_ended` ou
+  `feedback_window_closed`. Retour enregistré : 200
+  `{stored: 1, duplicates: 0, rejected: 0}`.
 - **Réseau perdu, serveur d'un autre contrat, console redémarrée** : la
   séance continue sous le seul superviseur local, et rien de ce qu'elle doit
   au tableau de bord n'attend en mémoire. C'est dans son enregistrement sur
@@ -3567,7 +3674,9 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance que le résumé provisoire d'ANH-89, et les deux mutations de migration. |
 | `convex/sessionSummary.test.ts` | Les chiffres d'un résumé (ANH-89) sur des enregistrements de fixture écrits comme la console les écrit : durée, FC absente ou présente, temps en zone et ses bornes, vitesse, g aux deux rayons avec et sans géométrie, fenêtres de variation de g et chaque raison de ne pas juger un tic, verdicts et règle de fin, colonnes trouvées par leur nom, lignes illisibles, fichiers refusés ; temps en zone repris des compteurs de la console quand le manifeste porte les trois, valides, recompté sur les tics sinon, avec `zone.source` (`"console"` ou `"ticks"`) sur le seul résumé final (ANH-234). |
-| `convex/sessionReports.test.ts` | Le résumé de bout en bout (ANH-89) : provisoire à la fin, final après le dépôt des trois fichiers, jamais remplacé par le provisoire, idempotent, enregistrement illisible, séance non terminée ou de l'ancien mode ; et qui lit le résumé et l'historique d'un pratiquant ; compteurs de la console retenus par le résumé final et l'historique (`zone.source: "console"`), recalcul (`"ticks"`) pour un enregistrement qui ne les porte pas, et résumé stocké sans `zone.source` toujours valide (ANH-234). |
+| `convex/sessionReports.test.ts` | Le résumé de bout en bout (ANH-89) : provisoire à la fin, final après le dépôt des trois fichiers, jamais remplacé par le provisoire, idempotent, enregistrement illisible, séance non terminée ou de l'ancien mode ; et qui lit le résumé et l'historique d'un pratiquant ; compteurs de la console retenus par le résumé final et l'historique (`zone.source: "console"`), recalcul (`"ticks"`) pour un enregistrement qui ne les porte pas, et résumé stocké sans `zone.source` toujours valide (ANH-234) ; note de nausée du retour dans l'historique, `null` sans retour (ANH-146). |
+| `convex/sessionFeedback.test.ts` | Le retour du passager (ANH-146) : une ligne par séance, remplacée par la dernière écriture du passager ou de l'opérateur, dans les deux ordres ; fenêtre de 24 h à la milliseconde près, horloge simulée, pour le site et la machine ; séance d'atelier, non terminée ou de l'ancien mode refusée des deux côtés ; bornes de la saisie par la mutation du site ; événement `feedback` de la route des événements : ligne `operator`, aucune ligne `training_events`, refus d'un retour mêlé, double ou illisible, séance d'une autre machine, événements ordinaires inchangés ; valeurs sentinelles absentes des refus, de l'audit, des notifications, de `training_events` et des journaux ; export par organisation, identifiants seuls, chiffres du résumé ou `null`, pages de 100 au plus. Les droits, rôle par rôle, sont dans la matrice. |
+| `convex/feedbackScale.test.ts` | L'échelle (ANH-146) : `convex/lib/feedback.ts` sert les valeurs de `contracts/feedback.json`, onze niveaux libellés en français et en anglais par échelle, aucun seuil ; un contrat mal formé refusé au chargement ; notes, ressenti et texte acceptés ou refusés à leurs bornes ; `detail` de la console en JSON strict à clés fermées. |
 | `convex/rateLimits.test.ts`, `convex/rateLimitsSource.test.ts` | La limitation de débit et la taille des corps (ANH-166) : chaque limite du contrat partagé sur sa route (sa réserve, puis 429 avec l'attente, puis de nouveau acceptée, une autre machine jamais retenue), rien d'écrit pour un heartbeat refusé, la limite avant le corps, la demande d'arrêt jamais limitée, **1000 heartbeats en 10 s** limités sans erreur (2 acceptés, 998 refusés 429), les tailles (16 Kio exactement accepté, un octet de plus refusé, octets et non caractères, `Content-Length` trop grand ou trop petit), 601 points refusés avant d'en lire un, le plus grand lot valide accepté ; par compte, 60 écritures puis `rate_limited`, un refus rend son jeton, 5 lancements par minute, l'arrêt jamais limité, et **chaque** mutation et action publique de la matrice refusée une fois les écritures de son acteur épuisées, l'arrêt excepté. Le second fichier remplace `contracts/machine-api.json` par un autre et vérifie que les limites et les tailles le suivent, et que le module refuse de se charger sans la limite ou la taille d'une route qu'il borne. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire d'autre que la dernière utilisation de la clé), clé vérifiée avant le contrat, rien d'écrit de la machine, de ses séances ni de ses heartbeats pour une requête refusée (la dernière utilisation de la clé, elle, est écrite pour toute requête dont la clé est acceptée, au plus une fois par minute : §6), `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines` (celui des clés expirées est dans `convex/machineKeys.test.ts`), qui ne touche aucune séance, et `interrupt-silent-sessions`, une autre tâche, toutes les minutes elle aussi (ANH-231). |
@@ -3781,6 +3890,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.7` | Le retour du passager après une séance (ANH-146) : un événement `kind: "feedback"`, seul dans sa requête, sur `POST /api/machine/training/events`, stocké dans `session_feedback` et jamais dans `training_events` ([entrée `feedback_events`](../contracts/machine-api.json), [§6](#routes-utilisées-par-la-console-locale-raspberry-pisrccloud_syncpy)). Trois codes en **400** : `feedback_not_eligible`, `feedback_session_not_ended`, `feedback_window_closed`. Rien ne change pour les autres événements ni les autres routes. |
 | `1.6` | Trois refus à l'armement en **409** : `rider_not_fit`, `fitness_expired`, `consent_missing`. Le poll et la tâche de chaque minute appliquent le même contrôle. Le roster ajoute `fit` (booléen), `fitnessValidUntil` (ms Unix ou `null`), `consent` (booléen) et `fitnessQuestionnaireVersion` (chaîne de la saisie validée qui rend `fit` vrai, sinon `null`), sans réponses ni notes. Leur définition est dans [`contracts/machine-api.json`, entrée `roster`](../contracts/machine-api.json) ; une console qui ne reçoit pas ces champs considère le passager non apte et sans consentement. La porte locale `cleared_to_board` applique ce contrôle avant tout départ avec personne à bord. |
 | `1.5` | `POST /api/machine/training/start` peut répondre **409** avec l'un des sept codes de refus à l'armement (`arming_refusals` du contrat partagé) : le lancement est revérifié au moment où la machine l'arme et la séance passe `failed` avec ce code (ANH-144). Le poll n'offre plus un lancement expiré, qui expire dans moins de 45 s, ou que ces contrôles refuseraient. |
 | `1.4` | Deux codes d'erreur : `rate_limited` (429, avec `retryAfterMs` et `Retry-After`) sur les routes limitées par machine, et `payload_too_large` (413) pour un corps au-delà de la taille de sa route ou un lot de plus de 600 points ou 200 événements (400 avant). Bornes de `seq` (999 999) et de `t` (entier) d'un événement. La liste des limites et des tailles est dans le contrat partagé (`rate_limits`, `max_body_bytes`). |
@@ -3795,7 +3905,19 @@ n'appelle pas la route des événements. Ses séances sont datées, stockées et
 servies comme avant ; la seule différence est qu'un lot qu'elle renvoie n'est
 plus stocké deux fois.
 
-La console de ce dépôt est en `1.6`. Elle connaît les codes de refus à
+#### Retour du passager et ordre de déploiement (ANH-146)
+
+**Convex d'abord, puis l'image du Pi.** Un serveur `1.6` ne connaît pas le
+détournement : il stockerait un événement `feedback` comme un événement
+ordinaire, c'est-à-dire des données de santé dans `training_events`. Une
+console `1.7` n'envoie donc un retour qu'à un serveur qui annonce `1.7` ou
+plus (`server_contract_version`) ; face à un serveur `1.6`, elle n'envoie
+rien et le dit à l'opérateur. Une console `1.6` face à un serveur `1.7` ne
+change pas : elle n'envoie pas de retour, et ses autres événements sont
+stockés comme avant ; le passager peut toujours donner le sien depuis le
+site.
+
+La console de ce dépôt est en `1.7`. Elle connaît les codes de refus à
 l'armement et demande le départ après confirmation de son opérateur, avant
 d'armer ; elle n'arme que sur un 2xx de `training/start` et n'envoie pas de
 fin sur un 409. Une console antérieure, qui arme avant de confirmer, s'arrête
