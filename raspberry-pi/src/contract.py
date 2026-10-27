@@ -47,6 +47,16 @@ dashboard stores apart and never among the session's events, refused with
 only to a dashboard that announces 1.7 or later: an earlier one would keep it
 as an ordinary event.
 
+Since 1.7 a confirmation sent again for a start the dashboard already confirmed
+is answered 2xx, and changes nothing, while the machine has sent nothing of the
+session (no point, no event, no heartbeat naming it, no end) and no stop was
+asked for: a console whose 2xx was lost may ask again and arm. The console keeps
+for it the offer left unanswered that the poll no longer offers, for that
+session only and for 60 s at most after the click of the first confirmation
+left unanswered, and drops it as soon as the dashboard refuses
+(:mod:`src.cloud_sync`). Every other start that is no longer pending is refused
+as before.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer

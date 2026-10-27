@@ -450,6 +450,9 @@ http.route({
  * failed with that code and the machine must not run it. Never rate limited:
  * only writes for a pending launch, already bounded by launchAutoSession;
  * a 429 would stop an armed console from before 1.5.
+ *
+ * 200 again, and nothing changed, for a start already confirmed of which the
+ * machine has sent nothing yet (ANH-240, contract 1.7): `markTrainingStarted`.
  */
 http.route({
   path: "/api/machine/training/start",
