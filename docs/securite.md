@@ -196,11 +196,25 @@ que mesure la batterie aujourd'hui.
 ## 5. Le résiduel connu
 
 - **S07, séance jog (xfail strict).** Cohorte, femme de 48 ans sujette au malaise
-  vagal. Une hausse de +8 tr/min moteur (887 vers 895) décidée au tic exact où
-  l'effondrement scripté commence, avant que le capteur ne montre la moindre
-  baisse (133 bpm réels, 132 lus), est encore exécutée jusqu'au bout. Rien ne
-  monte après la première baisse mesurable. C'est le seul xfail strict restant
-  dans les deux suites de tests.
+  vagal. L'effondrement scripté commence à 679,0 s, pendant la montée vers la
+  zone jog 145-155. Au tic suivant (679,2 s), le régulateur décide une hausse à
+  132 bpm lus et vrais, 13 bpm sous la zone, avant que le capteur ne montre la
+  moindre baisse : +8 tr/min moteur (887 → 895), soit +0,16 tr/min de sortie,
+  +0,016 g au bout des pieds et +0,010 g au rayon de référence. Elle est faite
+  en 0,8 s, sous la limite anti-nausée, et tenue 21 s, jusqu'à `hr_drop`, 22 s
+  après le début de l'effondrement (701 s). Aucune mesure de FC ne peut montrer
+  la chute avant 2 s. Rien ne monte après la première baisse mesurable. C'est
+  le seul xfail strict restant dans les deux suites de tests.
+  Une limitation des pas « quand la FC est déjà haute » tirée des valeurs
+  existantes (seuil au bas, au milieu ou en haut de la zone ; pas nul, de 37 ou
+  de 55 tr/min moteur) ne change rien à S07. La seule qui agit ailleurs (aucune
+  hausse dès le bas de la zone) garde les mêmes verdicts et réduit de 14,5 % le
+  temps en zone des séances jog. Supprimer le cas demanderait une valeur
+  médicale nouvelle.
+  Décision du 27 octobre 2026, prise par l'utilisateur, chef de projet : S07
+  reste un résiduel connu et documenté, sans valeur nouvelle ni limitation des
+  pas. Elle est à revoir avec le médecin avant toute personne à bord (ANH-98).
+  Mesures faites en simulation seulement (ANH-101).
   Voir [framework-de-test.md](framework-de-test.md#12-les--xfail-strict--et-le-cas-résiduel-s07).
 - **Un statut variateur figé à vitesse constante** est indiscernable d'un statut
   vrai. Il n'est détecté que quand la consigne bouge (escalade vers GO_SILENT).
