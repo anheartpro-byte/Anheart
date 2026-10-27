@@ -1715,6 +1715,43 @@ export const getPendingTrainingSession = internalQuery({
 });
 
 /**
+ * Whether an active session is a launch from the dashboard whose start this
+ * route confirmed and of which its machine has sent nothing since (ANH-240):
+ * no stop asked for, no point, no event, and no heartbeat of its machine
+ * naming it. Only `markTrainingStarted` starts a remote session, the heartbeat
+ * that makes an interrupted one active again names it, and its end would have
+ * made it something else.
+ */
+async function startConfirmedWithoutNews(
+  ctx: QueryCtx,
+  s: Doc<"sessions">,
+): Promise<boolean> {
+  if (s.origin !== "remote" || s.stopRequestedAt !== undefined) return false;
+  const point = await ctx.db
+    .query("training_telemetry")
+    .withIndex("by_session_and_t", (q) => q.eq("sessionId", s._id))
+    .first();
+  if (point !== null) return false;
+  const event = await ctx.db
+    .query("training_events")
+    .withIndex("by_session_and_seq", (q) => q.eq("sessionId", s._id))
+    .first();
+  if (event !== null) return false;
+  // A heartbeat is dated at its reception, and `firstNewsOf` is never later
+  // than the first confirmation: no heartbeat received since is missed.
+  const beats = ctx.db
+    .query("machine_heartbeats")
+    .withIndex("by_machine_and_timestamp", (q) =>
+      q.eq("machineId", s.machineId).gte("timestamp", firstNewsOf(s)),
+    );
+  // Bounded: no news for SESSION_SILENCE_MS interrupts it; a beat naming it ends the loop.
+  for await (const beat of beats) {
+    if (beat.activeSessionId === s._id) return false;
+  }
+  return true;
+}
+
+/**
  * The machine armed a launch from the dashboard: the session starts at the
  * reception of this call.
  *
@@ -1728,6 +1765,12 @@ export const getPendingTrainingSession = internalQuery({
  * `{armed: false, code, message}` is returned, which the start route answers
  * 409: the machine must not run. A launch already failed that way gets the
  * same answer again, so that a confirmation sent twice reads the same.
+ *
+ * A start already confirmed, of which the machine has sent nothing since
+ * (`startConfirmedWithoutNews`), is answered `{armed: true}` again and nothing
+ * is changed: not its dates, not the machine's state (ANH-240). A console
+ * whose 200 was lost can ask again and arm. Every other session that is no
+ * longer pending is refused as before.
  */
 export const markTrainingStarted = internalMutation({
   args: {
@@ -1750,6 +1793,9 @@ export const markTrainingStarted = internalMutation({
       throw machineError("session_not_found", "Session not found");
     if (s.status === "failed" && isArmingRefusalCode(s.endCode)) {
       return { armed: false as const, ...refusalFor(s.endCode) };
+    }
+    if (s.status === "active" && (await startConfirmedWithoutNews(ctx, s))) {
+      return { armed: true as const };
     }
     if (s.status !== "pending")
       throw machineError(

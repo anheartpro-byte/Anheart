@@ -485,10 +485,27 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
       name: "training/start: a session that is no longer pending",
       status: 400,
       code: "session_not_pending",
-      run: async (w) =>
-        post(w, "/api/machine/training/start", {
-          sessionId: await seedSession(w, w.machine, "active"),
-        }),
+      run: async (w) => {
+        // Active, and its machine already sent a point of it: a start it
+        // sent nothing of since is answered 200 again (ANH-240).
+        const sessionId = await seedSession(w, w.machine, "active");
+        await w.t.run((ctx) =>
+          ctx.db.insert("training_telemetry", {
+            organizationId: w.organizationId,
+            sessionId,
+            machineId: w.machine,
+            t: Date.now(),
+            elapsedS: 1,
+            phase: "hold",
+            motorRpm: 1000,
+            outputRpm: 20,
+            setpointMotorRpm: 1000,
+            gLoad: 1.1,
+            safetyAction: "none",
+          }),
+        );
+        return post(w, "/api/machine/training/start", { sessionId });
+      },
     },
     // ANH-144: the launch is checked again when the machine arms it.
     {
