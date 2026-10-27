@@ -1428,8 +1428,9 @@ le rangerait avec les événements de la séance.
 | En attente du tableau de bord | lien coupé, ou version du serveur pas encore connue : nouvel essai 15 s après un échec |
 | En attente de la séance sur le tableau de bord | une séance démarrée à la machine n'a son identifiant qu'une fois déclarée : envoi dès qu'elle l'est |
 | Serveur trop ancien (contrat 1.7 requis) : non envoyé | rien n'est envoyé ; envoi si le serveur annonce 1.7 plus tard |
+| En attente de la fin de séance sur le serveur : nouvel essai | le tableau de bord ne prend un retour qu'une fois la fin de la séance reçue (`feedback_session_not_ended`), et la console n'envoie cette fin qu'après l'acquittement de ses points : nouvel essai 15 s plus tard, ce refus n'est pas définitif |
 | Envoyé au tableau de bord | fait, une seule fois ; **Fermer** ferme la carte |
-| Refusé par le tableau de bord (code) | refus définitif, avec le code stable (`feedback_window_closed`, par exemple), sans valeur |
+| Refusé par le tableau de bord (code) | refus définitif, avec le code stable (`feedback_not_eligible`, `feedback_window_closed`, `session_not_found`, `invalid_request`), sans valeur |
 | Abandonné : plus de 24 h depuis la fin de la séance | la fenêtre du tableau de bord est fermée : la saisie est effacée |
 
 La console garde au plus huit retours en attente ; au-delà, le plus ancien est

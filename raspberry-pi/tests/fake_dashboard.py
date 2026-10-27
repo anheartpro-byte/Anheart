@@ -18,7 +18,8 @@ the request was received. And it lists the machine's riders (``roster``), the
 synthetic rider of :mod:`tests.roster_support` unless a test sets others.
 
 Contract 1.7 (ANH-146): an event of kind ``feedback`` travels alone and is
-kept in ``feedback``, by session, never among the session's ``events``. A
+kept in ``feedback``, by session, never among the session's ``events``; not
+before the session's end has reached it (``feedback_session_not_ended``). A
 dashboard set to announce an older minor (``server_version``) keeps it as an
 ordinary event, as a real one of that minor would: what the console must never
 send it.
@@ -204,6 +205,15 @@ class FakeDashboard:
             return Err(Refused(400, "A feedback event travels alone", ErrorCode("invalid_request")))
         if self.refuse_feedback is not None:
             return Err(self.refuse_feedback)
+        if session.status == "active":
+            # As Convex: not before the session's end has reached it.
+            return Err(
+                Refused(
+                    400,
+                    "The session is not over: no feedback yet",
+                    ErrorCode("feedback_session_not_ended"),
+                )
+            )
         self.feedback[session.session_id] = json.loads(str(events[0]["detail"]))
         return Ok({"stored": 1, "duplicates": 0, "rejected": 0})
 

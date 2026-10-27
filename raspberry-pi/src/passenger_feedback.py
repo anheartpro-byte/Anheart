@@ -84,6 +84,11 @@ FIELDS: Final[frozenset[str]] = frozenset(
 
 _ALLOWED_CONTROLS: Final[frozenset[str]] = frozenset({"\n", "\t"})
 
+SESSION_NOT_ENDED: Final[ErrorCode] = ErrorCode("feedback_session_not_ended")
+"""The one refusal that is not final here: the dashboard takes a feedback only once it
+has the session's end, which this console sends after its points are acknowledged,
+so sometimes after the feedback was entered. It is sent again later."""
+
 
 @unique
 class Comfort(Enum):
@@ -266,6 +271,9 @@ class Delivery(Enum):
     SERVER_TOO_OLD = "server_too_old"
     """Entered: the dashboard is older than 1.7, and is not sent it."""
 
+    WAITING_END = "waiting_end"
+    """Entered: the dashboard does not have the session's end yet (:data:`SESSION_NOT_ENDED`)."""
+
     SENT = "sent"
     REFUSED = "refused"
     EXPIRED = "expired"
@@ -276,7 +284,12 @@ class Delivery(Enum):
 
 
 WAITING: Final[frozenset[Delivery]] = frozenset(
-    {Delivery.WAITING_LINK, Delivery.WAITING_SESSION, Delivery.SERVER_TOO_OLD}
+    {
+        Delivery.WAITING_LINK,
+        Delivery.WAITING_SESSION,
+        Delivery.SERVER_TOO_OLD,
+        Delivery.WAITING_END,
+    }
 )
 OPEN: Final[frozenset[Delivery]] = WAITING | {Delivery.TO_FILL}
 """What may still be entered, or entered again: the new one replaces the old."""
@@ -290,6 +303,7 @@ DELIVERY_WORDS: Final[Mapping[Delivery, str]] = MappingProxyType(
             "En attente de la séance sur le tableau de bord : envoi dès qu'elle y est"
         ),
         Delivery.SERVER_TOO_OLD: "Serveur trop ancien (contrat 1.7 requis) : non envoyé",
+        Delivery.WAITING_END: "En attente de la fin de séance sur le serveur : nouvel essai",
         Delivery.SENT: "Envoyé au tableau de bord",
         Delivery.REFUSED: "Refusé par le tableau de bord",
         Delivery.EXPIRED: "Abandonné : plus de 24 h depuis la fin de la séance",
@@ -492,6 +506,9 @@ class PassengerFeedback:
                 entry.feedback = None
                 _logger.info("rider feedback sent to the dashboard")
             case Refusal():
+                if answer.code == SESSION_NOT_ENDED:
+                    self._later(entry, current, Delivery.WAITING_END, now)
+                    return
                 entry.delivery = Delivery.REFUSED
                 entry.code = answer.code
                 entry.feedback = None
@@ -499,15 +516,20 @@ class PassengerFeedback:
                     "rider feedback refused by the dashboard: %s",
                     "sans code" if answer.code is None else answer.code,
                 )
-            case Held() | RouteMissing():
-                if current is None:
-                    return
-                entry.delivery = (
-                    Delivery.WAITING_LINK if isinstance(answer, Held) else Delivery.SERVER_TOO_OLD
-                )
-                entry.next_try = Monotonic(now + RETRY_PERIOD)
+            case Held():
+                self._later(entry, current, Delivery.WAITING_LINK, now)
+            case RouteMissing():
+                self._later(entry, current, Delivery.SERVER_TOO_OLD, now)
             case _ as unreachable:
                 assert_never(unreachable)
+
+    @staticmethod
+    def _later(entry: _Entry, current: Feedback | None, delivery: Delivery, now: Monotonic) -> None:
+        """Not taken this time: tried again after :data:`RETRY_PERIOD`, unless skipped meanwhile."""
+        if current is None:
+            return
+        entry.delivery = delivery
+        entry.next_try = Monotonic(now + RETRY_PERIOD)
 
     # --- bookkeeping ----------------------------------------------------------
 

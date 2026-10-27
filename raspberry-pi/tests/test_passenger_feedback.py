@@ -47,6 +47,7 @@ from src.passenger_feedback import (
     RETRY_PERIOD,
     SCALE_MAX,
     SCALE_MIN,
+    SESSION_NOT_ENDED,
     Comfort,
     Delivery,
     Feedback,
@@ -518,6 +519,10 @@ async def test_a_feedback_entered_again_while_one_travels_goes_at_the_next_step(
         (Refusal("no", final=True, status=409, code=None), Delivery.REFUSED),
         (Held("lost"), Delivery.NOT_PROVIDED),
         (RouteMissing(), Delivery.NOT_PROVIDED),
+        (
+            Refusal("not over", final=False, status=400, code=SESSION_NOT_ENDED),
+            Delivery.NOT_PROVIDED,
+        ),
     ],
 )
 async def test_a_card_skipped_while_its_feedback_travels_is_told_what_became_of_it(
@@ -549,3 +554,25 @@ async def test_an_answer_of_no_known_kind_is_a_programming_error() -> None:
     _, store = entered()
     with pytest.raises(AssertionError):
         await store.step(Link(answers=[cast("Answer", "not an answer")]))
+
+
+async def test_p5_a_session_not_ended_on_the_dashboard_is_tried_again_and_then_taken() -> None:
+    """The dashboard has the end only once the console's points are acknowledged."""
+    ticking, store = entered()
+    not_over = Refusal("not over", final=False, status=400, code=SESSION_NOT_ENDED)
+    link = Link(answers=[not_over])
+    await store.step(link)
+    current = offered(store)
+    assert (current.delivery, current.can_submit, current.code) == (
+        Delivery.WAITING_END,
+        True,
+        None,
+    )
+    assert "fin de séance" in describe_delivery(current.delivery, current.code)
+    await store.step(link)
+    assert len(link.sent) == 1, "nothing again before the retry period"
+    ticking.advance(Seconds(RETRY_PERIOD))
+    await store.step(link)
+    assert len(link.sent) == 2
+    assert link.sent[1]["sessionId"] == "SESSION-1"
+    assert offered(store).delivery is Delivery.SENT

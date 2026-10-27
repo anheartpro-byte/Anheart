@@ -366,6 +366,35 @@ async def test_p5_a_session_declared_after_the_entry_gets_it_once_declared(
     await console.recorded.rig.panel.close()
 
 
+async def test_p5_a_session_whose_end_has_not_reached_the_dashboard_waits_for_it(
+    tmp_path: Path,
+) -> None:
+    """Convex takes a feedback once it has the end, sent after the points: not final here."""
+    console = linked(tmp_path)
+    async with console.recorded.rig.http() as session:
+        await occupied(console, session)
+        await console.seconds(5)
+        (server,) = console.dashboard.sessions.values()
+        assert server.status == "completed", "its end was delivered"
+        # As if the end were still behind the session's points.
+        ended = server.status
+        server.status = "active"
+        await session.post("/api/feedback", json=ENTERED)
+        await console.seconds(5)
+        current = await card(session)
+        assert current is not None
+        assert (current["status"], current["can_submit"]) == ("waiting_end", True)
+        assert console.dashboard.feedback == {}
+        server.status = ended
+        await console.seconds(20)
+        current = await card(session)
+        assert current is not None
+        assert current["status"] == "sent"
+    assert console.dashboard.feedback == {server.session_id: DETAIL}
+    assert len(console.feedback_requests()) == 2
+    await console.recorded.rig.panel.close()
+
+
 @pytest.mark.parametrize("status", [409, 400])
 async def test_p5_a_refusal_is_said_with_its_code(tmp_path: Path, status: int) -> None:
     console = linked(
