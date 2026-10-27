@@ -1699,16 +1699,80 @@ qu'il compte (tous les membres actifs pour l'admin Anheart, ceux d'une
 organisation pour son admin, les machines et les séances actives ou en attente
 de son périmètre), plus quelques-unes qu'il écarte : les machines supprimées
 de l'organisation pour son admin, les séances ouvertes de toute
-l'organisation pour un gestionnaire ou un patient. La query se relance
-à chaque changement d'une ligne lue, donc à chaque heartbeat d'une machine
-comptée (toutes les 10 s par machine). Pour quelques machines et quelques
-dizaines de comptes, c'est négligeable ; rien n'a été mesuré sur un
-déploiement. Le composant d'agrégation de Convex
-(`@convex-dev/aggregate`) tiendrait les comptes sans lire les lignes, mais il
-se monte par un `convex.config.ts` que `scripts/ci/convex-generated-api.mjs`
-refuse aujourd'hui ([§8](#convex_generatedapidts--tenu-par-un-script)) : il
-n'est pas utilisé, et le seuil de volume où il deviendrait nécessaire n'a pas
-été mesuré.
+l'organisation pour un gestionnaire ou un patient.
+
+Mesuré par un test, `convex/dashboard.cost.test.ts` (ANH-226), et non sur un
+déploiement : `convex-test` compte en mémoire les documents, les plages
+d'index et les octets que lit un appel, face aux limites de Convex pour un
+appel (32 000 documents, 16 Mio, 4 096 plages). Deux jeux : « aujourd'hui »,
+Anheart et 3 centres de 2 machines et 40 comptes (2 admins, 3 gestionnaires,
+35 patients), 2 séances ouvertes ; « cible », Anheart et 20 centres de
+5 machines et 150 comptes (2, 8, 140), 20 séances ouvertes, plus des lignes
+qu'aucun chiffre ne compte : 500 séances terminées, 10 machines supprimées,
+200 appartenances inactives, 1 000 heartbeats.
+
+| Appelant | « aujourd'hui » | « cible » |
+|---|---|---|
+| admin Anheart | 131 documents, 7 plages, 38 554 octets | 3 123 documents (9,8 % de la limite), 7 plages (0,2 %), 883 184 octets (5,3 %) |
+| admin du centre 1 | 45 documents, 6 plages, 13 230 octets | 159 documents, 6 plages, 45 571 octets |
+| gestionnaire du centre 1 | 29 documents, 19 plages, 8 494 octets | 41 documents, 25 plages, 11 621 octets |
+| patient du centre 1 | 3 documents, 4 plages, 985 octets | 3 documents, 4 plages, 985 octets |
+
+Pour l'admin Anheart, un appel lit exactement 2 documents pour l'appelant
+(son compte, son organisation), plus les appartenances actives, les machines
+non supprimées et les séances ouvertes (« cible » : 2 + 3 001 + 100 + 20),
+en 7 plages quel que soit le volume. Le test l'affirme. Il affirme aussi que
+des séances terminées, des machines supprimées, des appartenances inactives
+ou des heartbeats en plus ne changent rien à ce que l'appel lit. Enfin, il
+affirme que l'appel d'un admin, d'un gestionnaire ou d'un patient d'un centre
+ne bouge pas quand un autre centre grossit. La marge est mince en documents :
+10 % de la limite sont atteints vers 3 080 appartenances actives (à
+100 machines et 20 séances ouvertes), la limite elle-même vers 31 900.
+
+La query se relance à chaque écriture d'une ligne qu'elle a lue ou qui entre
+dans ses plages. Pour l'admin Anheart, ce sont toute machine non supprimée,
+toute séance active ou en attente, toute appartenance active, ainsi que son
+compte et son organisation. Chaque heartbeat (toutes les 10 s par machine
+allumée) écrit deux fois la machine : la route `POST /api/machine/heartbeat`
+appelle `machines.recordHeartbeat`, puis `training.updateLive`, car la console
+envoie `live` à chaque heartbeat. Cela fait une ou deux relances, selon que
+Convex relance la query entre les deux écritures ou après la seconde.
+D'autres écritures la relancent aussi :
+
+- les tâches de chaque minute : `checkOfflineMachines` quand une machine se
+  tait, `interruptSilentSessions`, `sweepPendingSessions` ;
+- la vie d'une séance : `launchAutoSession`, `requestStop`,
+  `markTrainingStarted`, `registerLocalSession`, `endTrainingSession`, et le
+  heartbeat qui rend active une séance interrompue ;
+- celle d'une machine : `createMachine`, `updateMachine`, `deleteMachine`,
+  `restoreMachine`, `syncProfiles` quand la console pousse de nouveaux
+  programmes, `moveLegacyKey` ;
+- les appartenances : le webhook Clerk (`clerkWebhook.applyEvent`),
+  `users.getOrCreateUser`, `updateUserRole`, `deleteUser`,
+  `patientInvitations.prepare`.
+
+Une ligne de `machine_heartbeats`, de télémétrie ou d'événements ne la relance
+pas.
+
+Volume pour un onglet ouvert de l'admin Anheart, au jeu « cible », les
+100 machines allumées : 100 × 6 heartbeats par minute font 600 heartbeats,
+donc 600 à 1 200 relances par minute, 36 000 à 72 000 par heure. À
+3 123 documents et 883 184 octets par appel, cela fait 112 à 225 millions de
+documents et 31,8 à 63,6 Go lus par heure. Au jeu « aujourd'hui »
+(6 machines, 131 documents, 38 554 octets par appel) : 2 160 à 4 320
+relances, 0,28 à 0,57 million de documents et 83 à 167 Mo par heure.
+
+Décision (ANH-226) : au jeu « cible », un appel de l'admin Anheart reste sous
+10 % des limites de documents (9,8 %) et d'octets (5,3 %). Le composant
+d'agrégation de Convex (`@convex-dev/aggregate`) n'est donc pas ajouté. Il ne
+supprimerait pas les relances, pour deux raisons. La carte des machines a
+besoin du dernier signal de chaque machine connectée : la query lit donc les
+machines, et chaque heartbeat la relance. Et le nombre de comptes distincts
+n'est pas une simple somme : un agrégat des appartenances compterait deux
+fois un compte membre de deux organisations. Le volume horaire vient des
+appartenances, 3 001 des 3 123 documents relus à chaque heartbeat. Les
+compter dans une query à part, qu'aucun heartbeat ne relance, le réduirait ;
+ce n'est pas fait ici.
 
 ### `machines.ts`
 
@@ -3492,6 +3556,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/interruptedSessions.test.ts` | La séance sans nouvelles (ANH-216) : marquée `interrupted` 10 min après la dernière nouvelle et pas avant, une seule fois ; marquée aussi quand la machine répond sans la nommer ; un lancement daté de sa confirmation ; ni l'ancien mode, ni `pending`, ni une séance finie touchés. Jamais marquée tant que sa machine la nomme (trois heures) ni pendant que ses points ou ses événements arrivent ; toujours `active: true` pour la machine ; rendue `active` par le heartbeat qui la nomme ; arrêt demandé transmis ; fin tardive acceptée avec sa date, mesures tardives stockées. Une machine ne ranime ni ne couvre la séance d'une autre ; lecture et arrêt réservés à ceux d'une séance active, jamais à un compte du centre B. Sous les limites d'une transaction Convex (`transactionLimits`), avec 507 séances muettes dont les heartbeats dépassent ce qu'une transaction peut lire (ANH-231, EX-3) : les machines passent hors ligne avec leur alerte sans qu'aucune séance change ; la tâche marque `INTERRUPT_BATCH` séances au plus par transaction, chaque page à sa propre heure, la suivante planifiée aussitôt, jusqu'à la dernière, et s'arrête sur une page vide ; mêlées aux muettes sur toutes les pages, les séances nommées par leur machine, ou avec un point, un événement, un départ confirmé ou une déclaration récents restent actives. Lien coupé 11 min pendant une séance (EX-5) : un lancement est refusé sur sa machine (`machine_offline`) et pour son pratiquant sur une autre (`rider_busy`), encore après le heartbeat qui nomme la séance (`machine_busy`, `rider_busy`), et accepté quand la machine revient sans la nommer. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée), les membres comptés comme des comptes (un patient de deux organisations compté une fois par l'admin Anheart et encore par le centre B, un compte gestionnaire dans un centre et patient dans l'autre compté une fois en tout et une fois dans chaque rôle, une seconde appartenance inactive écartée, des rôles dont la somme est le total pour un admin d'organisation), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |
+| `convex/dashboard.cost.test.ts` | Ce que lit un appel de `dashboard.counters` (ANH-226), mesuré en mémoire sur deux jeux réalistes (« aujourd'hui », « cible ») : documents, plages d'index et octets par rôle. Pour l'admin Anheart, exactement l'appelant, les appartenances actives, les machines non supprimées et les séances ouvertes, en 7 plages. Rien de plus quand s'ajoutent séances terminées, machines supprimées, appartenances inactives ou heartbeats. Rien de plus pour un admin, un gestionnaire ou un patient d'un centre quand un autre centre grossit. Au jeu « cible », moins de 10 % des limites d'un appel. Le résultat mesuré est celui que reçoit le site. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
 | `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; la migration (clé historique acceptée avant, déplacée, idempotente, valeur réversible effacée, table seule juge d'un sélecteur, sélecteur déjà présent à la même machine sans doublon, conflit avec une autre machine sans effacement et rotation toujours possible, pages mixtes et sommes exactes, bornes de pageSize sans écriture, parc vide, relance après une page validée, clé pas encore déplacée prise dans une rotation). T03 : ligne historique avant migration sans secret, ligne de table après migration, absence de ligne réversible ou de sélecteur déjà présent ; révocation historique, audit et 401 sur les 13 routes, autre machine intacte, refus sans écriture et machine supprimée révoquée avant restauration ; 55 rotations dans le même chevauchement et toutes les 56 clés listées, histoire révoquée bornée aux frontières 49, 50 et 51 clés non révoquées. |
