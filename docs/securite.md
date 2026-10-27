@@ -206,6 +206,18 @@ que mesure la batterie aujourd'hui.
   vrai. Il n'est détecté que quand la consigne bouge (escalade vers GO_SILENT).
 - **Une écriture mal adressée à vitesse constante** est indiscernable d'une
   écriture correcte ; la détection attend que la consigne bouge.
+- **Personne à bord en manuel : `hr_drop` retient le plus strict des deux
+  seuils (ANH-101).** La FC de repos est la dernière lecture utilisable avant
+  le premier mouvement du bras, figée dès ce mouvement. Le seuil est le plus
+  haut de celui des programmes et de la chute de 25 bpm depuis le pic : la
+  règle se déclenche chaque fois qu'un programme se déclencherait sur les
+  mêmes lectures, et chaque fois qu'elle se déclenchait avant. Écart assumé :
+  pendant une baisse de vitesse, un retour au calme normal peut encore
+  terminer la séance, comme avant. Sans lecture utilisable avant le premier
+  mouvement, la règle reste la chute de 25 bpm. En simulation
+  (`vasovagal_manual_occupied_recovery`) : FC tombée à 53 bpm pendant la
+  récupération, 17 sous la FC de repos de 70 et 22 sous le pic ; `hr_drop`
+  termine la séance à 163,2 s, ce que la chute de 25 bpm seule ne faisait pas.
 - **Personne à bord en manuel** : la FC monte assez pour déclencher `hr_rate`
   (REDUCE) avant 19 tr/min, à la rampe anti-nausée (`manual_occupied_ceiling`).
   C'est un comportement voulu, mais il limite l'usage manuel avec passager.
