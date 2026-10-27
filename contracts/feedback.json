@@ -1,0 +1,52 @@
+{
+  "description": "Retour du passager après une séance (ANH-146) : deux échelles de 0 à 10, un ressenti, un texte libre facultatif. Source unique : convex/lib/feedback.ts lit ce fichier pour Convex et pour le site. Voir docs/convex.md, table session_feedback.",
+  "version": "1",
+  "provisional": true,
+  "medicalStatus": "[MED] Libellés provisoires, sans validité médicale : à valider avec ANH-98",
+  "scales": {
+    "nausea": {
+      "title": { "fr": "Nausée", "en": "Nausea" },
+      "min": 0,
+      "max": 10,
+      "levels": [
+        { "value": 0, "label": { "fr": "Aucune", "en": "None" } },
+        { "value": 1, "label": { "fr": "Très légère", "en": "Very mild" } },
+        { "value": 2, "label": { "fr": "Légère", "en": "Mild" } },
+        { "value": 3, "label": { "fr": "Légère à modérée", "en": "Mild to moderate" } },
+        { "value": 4, "label": { "fr": "Modérée", "en": "Moderate" } },
+        { "value": 5, "label": { "fr": "Moyenne", "en": "Medium" } },
+        { "value": 6, "label": { "fr": "Assez forte", "en": "Fairly strong" } },
+        { "value": 7, "label": { "fr": "Forte", "en": "Strong" } },
+        { "value": 8, "label": { "fr": "Très forte", "en": "Very strong" } },
+        { "value": 9, "label": { "fr": "Extrême", "en": "Extreme" } },
+        { "value": 10, "label": { "fr": "Maximale imaginable", "en": "Worst imaginable" } }
+      ]
+    },
+    "dizziness": {
+      "title": { "fr": "Malaise ou vertige", "en": "Discomfort or dizziness" },
+      "min": 0,
+      "max": 10,
+      "levels": [
+        { "value": 0, "label": { "fr": "Aucun", "en": "None" } },
+        { "value": 1, "label": { "fr": "Très léger", "en": "Very mild" } },
+        { "value": 2, "label": { "fr": "Léger", "en": "Mild" } },
+        { "value": 3, "label": { "fr": "Léger à modéré", "en": "Mild to moderate" } },
+        { "value": 4, "label": { "fr": "Modéré", "en": "Moderate" } },
+        { "value": 5, "label": { "fr": "Moyen", "en": "Medium" } },
+        { "value": 6, "label": { "fr": "Assez fort", "en": "Fairly strong" } },
+        { "value": 7, "label": { "fr": "Fort", "en": "Strong" } },
+        { "value": 8, "label": { "fr": "Très fort", "en": "Very strong" } },
+        { "value": 9, "label": { "fr": "Extrême", "en": "Extreme" } },
+        { "value": 10, "label": { "fr": "Maximal imaginable", "en": "Worst imaginable" } }
+      ]
+    }
+  },
+  "comfort": [
+    { "value": "good", "label": { "fr": "Bon", "en": "Good" } },
+    { "value": "acceptable", "label": { "fr": "Acceptable", "en": "Acceptable" } },
+    { "value": "bad", "label": { "fr": "Mauvais", "en": "Bad" } }
+  ],
+  "freeTextMaxLength": 500,
+  "editWindowHours": 24,
+  "submittedBy": ["rider", "operator"]
+}

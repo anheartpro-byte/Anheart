@@ -91,7 +91,8 @@
         "stop_requested": "Stop requested",
         "started": "Session started",
         "local_registered": "Local session registered",
-        "ended": "Session ended"
+        "ended": "Session ended",
+        "feedback_submitted": "Rider feedback recorded"
       },
       "machine_key": {
         "created": "Machine key created",
@@ -295,6 +296,11 @@
     "invalid_duration": "Duration must be a positive number.",
     "session_not_found": "Session not found. It may have been deleted.",
     "session_not_managed": "You cannot stop this session.",
+    "feedback_rider_only": "Only the session's rider can give their feedback.",
+    "feedback_not_eligible": "This session had no one on board: it takes no feedback.",
+    "feedback_session_not_ended": "The session is not over: feedback opens at its end.",
+    "feedback_window_closed": "The feedback can no longer be given or changed: more than 24 hours have passed since the session ended.",
+    "feedback_invalid": "The feedback is not valid: whole scores from 0 to 10, a comfort from the list, 500 characters of text at most.",
     "invalid_release_version": "Invalid version: expected \"component-X.Y.Z\", for example pi-1.2.0.",
     "validation_level_required": "A Pi version needs a validation level.",
     "validation_level_pi_only": "Only a Pi version carries a validation level.",

@@ -80,6 +80,7 @@ export const AUDIT_ACTIONS = [
   "session.started", // Machine confirms start; target: session.
   "session.local_registered", // Machine registers a local session; target: session.
   "session.ended", // Machine records the end, without reason or measures; target: session.
+  "session.feedback_submitted", // Rider (site) or machine gives or changes feedback, without any value; target: session.
   "machine_key.created", // Admin or operator creates a key; target: machine key.
   "machine_key.revoked", // Admin or operator revokes a key; target: machine key.
   "machine_key.expired_revoked", // Cron revokes an expired key; target: machine key.
@@ -130,6 +131,7 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "session.started": "session",
   "session.local_registered": "session",
   "session.ended": "session",
+  "session.feedback_submitted": "session",
   "machine_key.created": "machine_key",
   "machine_key.revoked": "machine_key",
   "machine_key.expired_revoked": "machine_key",
@@ -251,6 +253,8 @@ export const SENSITIVE_MUTATIONS: Readonly<
   "patientInvitations.prepare": ["user.invited"],
   "recordStorage.remove": ["record.deleted"],
   "recordStorage.enforceRetention": ["record.deleted"],
+  "sessionFeedback.storeMachineFeedback": ["session.feedback_submitted"],
+  "sessionFeedback.submitSessionFeedback": ["session.feedback_submitted"],
   "softwareReleases.recordRelease": ["software_release.recorded"],
   "training.grantLaunchRight": ["launch_right.granted"],
   "training.revokeLaunchRight": ["launch_right.revoked"],

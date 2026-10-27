@@ -28,6 +28,7 @@ import {
   type MachineLimit,
 } from "./lib/rateLimits";
 import { isMedicalVersion } from "./lib/medicalParameters";
+import { parseMachineFeedback } from "./lib/feedback";
 
 const http = httpRouter();
 http.route({
@@ -659,6 +660,8 @@ const MAX_EVENT_SEQ = 999_999;
 const MAX_EVENT_DETAIL = 2000;
 /** A kind of the record's vocabulary: lower case, digits and underscores. */
 const EVENT_KIND = /^[a-z][a-z0-9_]{0,63}$/;
+/** The kind of the event that carries the rider's feedback (contract 1.7). */
+const FEEDBACK_KIND = "feedback";
 /** `system`, `remote` or an opaque operator identifier: never a name. */
 const EVENT_ACTOR = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -698,6 +701,13 @@ function eventOf(raw: unknown) {
  * many times it is sent. Sizes are bounded here: 2.5 MiB of body and 200
  * events per request, both refused (413) before an event is read; 2000
  * characters of text per event. Ten requests a second per machine at most.
+ *
+ * Contract 1.7: an event of kind `feedback` is the rider's feedback the
+ * operator entered (`feedback_events` of `contracts/machine-api.json`). It
+ * travels alone, its `detail` is the JSON of the feedback, and it is stored
+ * in `session_feedback` by `sessionFeedback.storeMachineFeedback`, never in
+ * `training_events`: health data. Its `seq`, `t` and `actor` are checked as
+ * any event's, then ignored. No refusal names a value.
  */
 http.route({
   path: "/api/machine/training/events",
@@ -719,6 +729,21 @@ http.route({
         return refuse(400, "invalid_request", "Malformed event");
       }
       events.push(event);
+    }
+    if (events.some((event) => event.kind === FEEDBACK_KIND)) {
+      if (events.length !== 1) {
+        return refuse(400, "invalid_request", "A feedback event travels alone");
+      }
+      const feedback = parseMachineFeedback(events[0].detail);
+      if (feedback === null) {
+        return refuse(400, "invalid_request", "Malformed feedback");
+      }
+      await ctx.runMutation(internal.sessionFeedback.storeMachineFeedback, {
+        machineId,
+        sessionId,
+        feedback,
+      });
+      return json(200, { stored: 1, duplicates: 0, rejected: 0 });
     }
     const result = await ctx.runMutation(internal.training.storeEvents, {
       machineId,

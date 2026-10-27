@@ -6,6 +6,10 @@ import {
   auditSourceValidator,
   auditTargetTypeValidator,
 } from "./lib/audit";
+import {
+  feedbackComfortValidator,
+  feedbackSubmitterValidator,
+} from "./lib/feedback";
 import { recordState } from "./lib/recordStorage";
 import {
   summaryFiguresValidator,
@@ -753,6 +757,29 @@ export default defineSchema({
   })
     .index("by_session", ["sessionId"])
     .index("by_organization", ["organizationId"]),
+
+  // The rider's feedback after a training session with someone on board
+  // (ANH-146), one row per session at most, written only by
+  // `convex/sessionFeedback.ts`: by the rider from the site, or by the
+  // operator from the machine's console, within `EDIT_WINDOW_MS` of the end;
+  // the last write wins. No row: no feedback. Health data: read only under
+  // the rights of its session, and exported without the free text. The
+  // scale is `contracts/feedback.json` (`convex/lib/feedback.ts`).
+  session_feedback: defineTable({
+    organizationId, // Always the session's organisation
+    sessionId: v.id("sessions"),
+    nauseaScore: v.number(), // whole number of the scale
+    dizzinessScore: v.number(), // whole number of the scale
+    comfort: feedbackComfortValidator,
+    freeText: v.optional(v.string()), // trimmed, never empty
+    submittedBy: feedbackSubmitterValidator,
+    submittedAt: v.number(), // server's clock
+  })
+    // One row per session: every write reads it first (`upsert`).
+    .index("by_session", ["sessionId"])
+    // The export (`exportFeedback`), newest first: one organisation, or all.
+    .index("by_organization_and_submittedAt", ["organizationId", "submittedAt"])
+    .index("by_submittedAt", ["submittedAt"]),
 
   // Training telemetry, ~1 Hz, as the Pi reads it back from the session's
   // local record. One row per (sessionId, t): a point sent twice is stored

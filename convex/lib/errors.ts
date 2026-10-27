@@ -176,6 +176,19 @@ export const DASHBOARD_ERRORS = {
     "The session does not exist, or belongs to another organisation.",
   session_not_managed: "The caller may not stop this session.",
 
+  // The rider's feedback after a session (convex/sessionFeedback.ts, ANH-146).
+  // No refusal names a value given.
+  feedback_rider_only:
+    "Only the session's rider gives or changes its feedback from the site.",
+  feedback_not_eligible:
+    "The session had no one on board (bench session, or the retired recording mode): it takes no feedback.",
+  feedback_session_not_ended:
+    "The session is not over: its feedback opens at its end.",
+  feedback_window_closed:
+    "More than EDIT_WINDOW_MS (24 h) have passed since the session's end: its feedback can no longer be given or changed.",
+  feedback_invalid:
+    "The feedback is not of the scale: whole scores from 0 to 10, a comfort of the list, 500 characters of text at most.",
+
   // The register of released versions (convex/softwareReleases.ts).
   invalid_release_version: "The version is not <component>-X.Y.Z.",
   validation_level_required: "A Pi version needs a validation level.",

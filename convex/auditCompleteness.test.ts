@@ -141,6 +141,28 @@ async function observe(w: Pick<World, "t">, call: () => Promise<Expected[]>) {
   }
   return written;
 }
+/** A feedback whose text must never reach an audit entry (ANH-146). */
+const PRIVATE_FEEDBACK = {
+  nauseaScore: 7,
+  dizzinessScore: 9,
+  comfort: "bad",
+  freeText: "synthetic-private-feedback-text",
+};
+/** A completed auto session of `riderId`, ended a second before `NOW`. */
+async function endedSession(
+  w: Pick<World, "t">,
+  machineId: Id<"machines">,
+  riderId: Id<"users">,
+) {
+  const sessionId = await addSession(w, {
+    machineId,
+    userId: riderId,
+    status: "completed",
+    kind: "auto",
+  });
+  await w.t.run((ctx) => ctx.db.patch(sessionId, { endedAt: NOW - 1000 }));
+  return sessionId;
+}
 async function key(w: World) {
   return await as(w.t, "admin").mutation(api.machineKeys.createMachineKey, {
     machineId: w.machine,
@@ -1108,6 +1130,53 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
       ];
     });
   },
+  // ANH-146: the feedback is health data; its entry carries no value at all.
+  "sessionFeedback.submitSessionFeedback": async (w) => {
+    const sessionId = await endedSession(w, w.machine, w.patient);
+    const written = await observe(w, async () => {
+      await as(w.t, "patient").mutation(
+        api.sessionFeedback.submitSessionFeedback,
+        { sessionId, ...PRIVATE_FEEDBACK },
+      );
+      return [
+        site(w, "session.feedback_submitted", sessionId, "session", "patient"),
+      ];
+    });
+    expect(written[0].details).toBeUndefined();
+    return written;
+  },
+  "sessionFeedback.storeMachineFeedback": async () => {
+    const w = await seedMachineWorld(modules);
+    const sessionId = await endedSession(w, w.machine, w.patient);
+    const written = await observe(w, async () => {
+      const response = await machinePost(w, "events", {
+        sessionId,
+        events: [
+          {
+            seq: 0,
+            t: NOW,
+            kind: "feedback",
+            detail: JSON.stringify(PRIVATE_FEEDBACK),
+            actor: "operator",
+          },
+        ],
+      });
+      expect(response.status).toBe(200);
+      return [
+        {
+          action: "session.feedback_submitted",
+          targetId: sessionId,
+          targetType: "session",
+          source: "machine",
+          actorRole: "machine",
+          actorId: w.machine,
+          organizationId: w.organizationId,
+        },
+      ];
+    });
+    expect(written[0].details).toBeUndefined();
+    return written;
+  },
   "training.endTrainingSession": async () => {
     const w = await seedMachineWorld(modules);
     const sessionId = await addSession(w, {
@@ -1280,6 +1349,7 @@ describe("ANH-167 T02-a completeness through registered entry points", () => {
           "synthetic-private-postal-address",
           "synthetic-private-downgrade-reason",
           "synthetic-private-end-code-and-reason",
+          PRIVATE_FEEDBACK.freeText,
         ])
           expect(JSON.stringify(row)).not.toContain(privateValue);
       }

@@ -70,10 +70,12 @@
  *   neither carries a rule or no ending tick was read; never an earlier rule
  *   (`EndReason.SAFETY_VERDICT`, raspberry-pi/src/training/runtime.py).
  *
- * Not in the summary yet, because nothing records them: the result of the
- * preflight (ANH-142) and the rider's feedback after the session (ANH-146).
- * Each will be a field of `summaryFiguresValidator` computed here from what
- * its ticket records; the report already says that they are not available.
+ * Not in the summary yet, because nothing records it: the result of the
+ * preflight (ANH-142). It will be a field of `summaryFiguresValidator`
+ * computed here from what its ticket records; the report already says that
+ * it is not available. The rider's feedback after the session (ANH-146) is
+ * not a figure: it has its own table, `session_feedback`
+ * (`convex/sessionFeedback.ts`), and is read beside the summary.
  */
 import { v, type Infer } from "convex/values";
 import { z } from "zod";

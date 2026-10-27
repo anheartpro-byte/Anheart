@@ -39,6 +39,14 @@ active consent at arming: ``rider_not_fit``, ``fitness_expired`` and
 status, its expiry and questionnaire version, and consent, never answers or
 review notes.
 
+Since 1.7 the events route takes the rider's feedback after a session, entered
+by the operator: one event of kind ``feedback`` alone in its request, which the
+dashboard stores apart and never among the session's events, refused with
+``feedback_not_eligible``, ``feedback_session_not_ended`` or
+``feedback_window_closed`` when the session takes none. A console sends it
+only to a dashboard that announces 1.7 or later: an earlier one would keep it
+as an ordinary event.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -81,7 +89,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.6")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.7")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -128,6 +136,9 @@ STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
         RATE_LIMITED,
         PAYLOAD_TOO_LARGE,
         *ARMING_REFUSALS,
+        ErrorCode("feedback_not_eligible"),
+        ErrorCode("feedback_session_not_ended"),
+        ErrorCode("feedback_window_closed"),
     }
 )
 """Every stable code the dashboard refuses a request under. Pinned to the shared file.

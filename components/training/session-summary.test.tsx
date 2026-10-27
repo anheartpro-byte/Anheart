@@ -397,6 +397,7 @@ describe("the history of a rider", () => {
       maxBpm: 152,
       maxGReference: 1.2,
     },
+    nauseaScore: null,
     ...over,
   });
 
