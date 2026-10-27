@@ -97,7 +97,9 @@ export default function DashboardPage() {
             <Counter outcome={counters} pick={(c) => c.members}>
               {(members) => (
                 <Figure
-                  value={members.admin + members.gestionnaire + members.user}
+                  // The accounts, each once: an account holding two roles
+                  // counts in both below, so the roles can add up to more.
+                  value={members.total}
                   detail={t("dashboard.membersByRole", {
                     admins: members.admin,
                     managers: members.gestionnaire,

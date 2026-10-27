@@ -1,8 +1,8 @@
 /**
  * The figures of the dashboard's first page (ANH-159).
  *
- * Each figure counts what the caller can already list on another page, and
- * nothing more, so that a card never says more than the page it leads to:
+ * Each figure counts within what the caller can already list on another page,
+ * never beyond, so that a card never says more than the page it leads to:
  *
  * - the Anheart admin: every organisation;
  * - an organisation admin: their organisation;
@@ -10,6 +10,10 @@
  *   open (on their machines, or ridden by themselves); never a figure of the
  *   whole organisation;
  * - a patient: their own sessions only; no machine, no member.
+ *
+ * Members are counted as accounts: the Anheart admin counts once an account
+ * that is an active member of two organisations. Their Users page lists more:
+ * every account, with or without an active membership.
  *
  * Every figure is read through an index, never by reading a whole table. The
  * cost of a call grows with what it counts (the members of an organisation,
@@ -25,8 +29,13 @@ import {
   type CurrentUser,
 } from "./lib/auth";
 
-/** Active members by the role they hold in their organisation. */
-const membersByRoleValidator = v.object({
+/**
+ * The accounts that are active members, and those holding each role in at
+ * least one of the memberships counted: an account holding two roles counts
+ * once in `total` and once in each role, so the roles can add up to more.
+ */
+const membersValidator = v.object({
+  total: v.number(),
   admin: v.number(),
   gestionnaire: v.number(),
   user: v.number(),
@@ -48,7 +57,7 @@ export const counters = query({
     serverNow: v.number(),
     // Organisation admins (the Anheart admin: every organisation). Null for
     // anyone else: a gestionnaire or a patient lists no member.
-    members: v.union(membersByRoleValidator, v.null()),
+    members: v.union(membersValidator, v.null()),
     // A gestionnaire's own patients. Null for anyone else.
     patients: v.union(v.number(), v.null()),
     // The machines the caller lists (deleted ones left out). `signals` holds
@@ -87,7 +96,7 @@ export const counters = query({
       serverNow: Date.now(),
       members:
         caller.role === "admin" || caller.role === "org_admin"
-          ? await membersByRole(ctx, caller)
+          ? await membersOf(ctx, caller)
           : null,
       patients:
         caller.role === "gestionnaire" ? await patientsOf(ctx, caller) : null,
@@ -196,11 +205,14 @@ async function openSessions(
   ).length;
 }
 
-/** Active members by role: of every organisation for the Anheart admin. */
-async function membersByRole(
+/**
+ * The accounts that are active members, in all and by role: of every
+ * organisation for the Anheart admin, each account counted once.
+ */
+async function membersOf(
   ctx: QueryCtx,
   caller: CurrentUser,
-): Promise<Record<Doc<"memberships">["role"], number>> {
+): Promise<Record<"total" | Doc<"memberships">["role"], number>> {
   const members =
     caller.role === "admin"
       ? await ctx.db
@@ -215,9 +227,22 @@ async function membersByRole(
             q.eq("active", true).eq("organizationId", caller.organizationId),
           )
           .collect();
-  const counts = { admin: 0, gestionnaire: 0, user: 0 };
-  for (const member of members) counts[member.role] += 1;
-  return counts;
+  const accounts = new Set<Id<"users">>();
+  const byRole = {
+    admin: new Set<Id<"users">>(),
+    gestionnaire: new Set<Id<"users">>(),
+    user: new Set<Id<"users">>(),
+  };
+  for (const { userId, role } of members) {
+    accounts.add(userId);
+    byRole[role].add(userId);
+  }
+  return {
+    total: accounts.size,
+    admin: byRole.admin.size,
+    gestionnaire: byRole.gestionnaire.size,
+    user: byRole.user.size,
+  };
 }
 
 /**
