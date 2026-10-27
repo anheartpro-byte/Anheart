@@ -526,7 +526,7 @@ class PassengerFeedback:
 
     @staticmethod
     def _later(entry: _Entry, current: Feedback | None, delivery: Delivery, now: Monotonic) -> None:
-        """Not taken this time: tried again after :data:`RETRY_PERIOD`, unless given up meanwhile."""
+        """Not taken this time: tried again after :data:`RETRY_PERIOD`, unless given up."""
         if current is None:
             return
         entry.delivery = delivery
