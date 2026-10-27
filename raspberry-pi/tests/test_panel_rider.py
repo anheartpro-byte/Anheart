@@ -243,7 +243,10 @@ async def test_a_rider_of_a_list_too_old_is_refused_until_the_dashboard_answers(
         stale = await session.post("/api/session/start", json=start_body(RIDER_ID))
         listed = await session.get("/api/roster")
     assert stale.status_code == httpx.codes.CONFLICT
-    assert "liste des passagers perimee : recue il y a 16 min" in stale.text
+    assert stale.json()["detail"] == (
+        "demarrage refuse : liste des passagers perimee : recue il y a 16 min 0 s, "
+        "au-dela de 15 min personne n'est propose"
+    )
     assert listed.json()["state"] == "stale"
     assert listed.json()["riders"] == []
     await recorded.rig.panel.close()

@@ -1385,7 +1385,9 @@ l'armement qui ne porte plus le passager fait refuser le départ.
 
 La console demande au tableau de bord la liste de ses passagers
 (`GET /api/machine/roster`) à son démarrage, puis toutes les 60 s **tant qu'aucune
-séance ne tourne**. La liste porte, pour chaque personne qui détient le droit de
+séance ne tourne**. Elle la demande par une tâche à elle : une liste lente à venir, ou
+qui ne vient pas, ne retarde ni le battement de cœur envoyé au tableau de bord ni
+l'interrogation des lancements. La liste porte, pour chaque personne qui détient le droit de
 lancement sur cette machine et reste membre active de son organisation : son
 identifiant, son nom, sa FC max et son année de naissance, réglées sur le site par un
 gestionnaire. La console les affiche et ne permet pas de les modifier.
@@ -1405,6 +1407,15 @@ console) et aucune phrase de refus ne le cite. L'enregistrement de séance porte
 l'identifiant du passager (`subject_id`), un pseudonyme. La durée de 15 minutes est une
 décision du responsable produit (15 octobre 2026) ; c'est une constante du logiciel
 (`ROSTER_MAX_AGE`), pas un réglage de la machine : aucune clé du `.env` ne la change.
+L'âge de la liste se compte sur l'horloge monotone de la console, jamais sur son heure
+murale : une heure murale qui saute (poste macOS du banc en avance, Pi sans service de
+temps) ne vieillit ni ne rajeunit la liste. Au-delà de 900 s, la phrase donne cet âge à
+la seconde, arrondi à la seconde supérieure (`recue il y a 15 min 1 s`) : une liste
+périmée ne se lit jamais « 15 min » ou moins. L'âge du **passager**, lui, se compte sur
+l'heure murale (année de naissance) : sur le Pi, une horloge que personne ne tient
+refuse toute personne à bord ; sur le Mac du banc, qui ne juge pas son horloge
+([Ligne horloge](#ligne-horloge--lheure-de-la-machine)), une heure en avance vieillit
+le passager.
 
 Ce que la liste ne garantit pas : ce qui change sur le site après la dernière réponse
 n'est vu qu'à la réponse suivante. C'est vrai d'un droit retiré, et aussi d'une **FC max
@@ -2150,7 +2161,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : passager requis avec une personne a bord, a choisir dans la liste du tableau de bord` | aucun passager choisi (séance programmée, ou manuelle avec personne à bord) |
 | `demarrage refuse : ce passager n'est pas dans la derniere liste du tableau de bord (droit retire, ou liste changee) : le choisir de nouveau` | la liste tenue ne porte pas (ou plus) ce passager |
 | `demarrage refuse : liste des passagers pas encore recue du tableau de bord` | aucune réponse depuis le démarrage de la console |
-| `demarrage refuse : liste des passagers perimee : recue il y a <n> min, au-dela de 15 min personne n'est propose` | dernière réponse trop ancienne |
+| `demarrage refuse : liste des passagers perimee : recue il y a <n> min <s> s, au-dela de 15 min personne n'est propose` | dernière réponse reçue il y a plus de 900 s, sur l'horloge monotone ; l'âge est arrondi à la seconde supérieure (`15 min 1 s` dès que 900 s sont dépassées) |
 | `demarrage refuse : aucun tableau de bord configure sur cette console : la liste des passagers vient du site` | console sans `MACHINE_API_KEY` |
 | `demarrage refuse : le tableau de bord refuse la cle de cette machine : aucun passager n'est propose` | clé refusée (401, 403) à la dernière demande de liste |
 | `demarrage refuse : FC max du passager non renseignee sur le site (a regler par un gestionnaire)` | séance programmée, FC max absente sur le site |

@@ -31,9 +31,11 @@ Down, from the dashboard to this machine, exactly three things:
   may try again;
 * the list of the riders this machine may offer (:mod:`src.roster`), asked
   for at the start and every :data:`~src.roster.ROSTER_PERIOD` while no
-  session runs, kept in memory only. It starts nothing: a start at the
-  console names one of them and goes through every gate as before, the
-  rider's maximum heart rate and age from that list;
+  session runs, kept in memory only. It is asked for by
+  :meth:`CloudSync.refresh_roster`, from a task of its own: a list slow to
+  come delays neither the heartbeat nor the question for a launch. It starts
+  nothing: a start at the console names one of them and goes through every
+  gate as before, the rider's maximum heart rate and age from that list;
 * a stop request, forwarded as an ordinary end on the commissioned ramp. It
   is looked for by :meth:`CloudSync.watch_stop`, from a task of its own: the
   question keeps its cadence whatever the sending waits for. A session armed
@@ -1098,13 +1100,14 @@ class CloudSync:
         Everything but the stop asked for from the dashboard, which
         :meth:`watch_stop` looks for from a task of its own: this pass may wait
         on a slow disk or a slow upload, and a stop must never wait behind it.
+        Nor the riders' list, which :meth:`refresh_roster` asks for from
+        another: a list slow to come must not hold the heartbeat or the poll.
         """
         now = self._clock.monotonic()
         snapshot = self._runtime.snapshot()
         self._observe()
         await self._heartbeat(now, snapshot)
         await self._push_profiles(now)
-        await self._refresh_roster(now)
         if (
             not self._uplink.running
             and self._runtime.state not in (RuntimeState.RUNNING, RuntimeState.ENDING)
@@ -1221,14 +1224,20 @@ class CloudSync:
 
     # --- the riders' list --------------------------------------------------
 
-    async def _refresh_roster(self, now: Monotonic) -> None:
+    async def refresh_roster(self) -> None:
         """Ask for the riders' list: at the start, then every period, never during a session.
 
         An answer replaces the list held, whole. No answer keeps it, to age
         (:data:`~src.roster.ROSTER_MAX_AGE`). A refused key empties it: a
         machine the dashboard no longer recognises offers nobody.
+
+        Stepped from a task of its own, never from :meth:`step`: an answer
+        that takes as long as the transport allows delays neither the
+        heartbeat nor the poll for a launch. One request at a time: the task
+        waits for this one before it looks again.
         """
         roster = self._roster
+        now = self._clock.monotonic()
         if roster is None or not roster.due(now):
             return
         if self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING):
