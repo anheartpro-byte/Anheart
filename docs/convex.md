@@ -3917,6 +3917,12 @@ change pas : elle n'envoie pas de retour, et ses autres événements sont
 stockés comme avant ; le passager peut toujours donner le sien depuis le
 site.
 
+**Retour arrière : ne pas redescendre Convex sous `1.7` tant qu'une console
+`1.7` est en service.** La console décide d'envoyer d'après le dernier
+heartbeat : pendant un intervalle de heartbeat, elle croirait encore parler à
+un serveur `1.7`, et un retour envoyé à ce moment finirait dans
+`training_events`.
+
 La console de ce dépôt est en `1.7`. Elle connaît les codes de refus à
 l'armement et demande le départ après confirmation de son opérateur, avant
 d'armer ; elle n'arme que sur un 2xx de `training/start` et n'envoie pas de
