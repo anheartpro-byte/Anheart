@@ -31,6 +31,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final, cast
 
 import httpx
@@ -43,6 +44,7 @@ from src.training.plan import JsonValue
 from src.training.runtime import RuntimeState
 from src.training.types import SignalQuality
 from src.units import Bpm
+from src.web import routes
 from tests.fake_dashboard import EVENTS, FakeDashboard
 from tests.record_console_support import RecordedRig, recorded_rig
 from tests.roster_support import RIDER, RIDER_ID, roster_document
@@ -478,9 +480,18 @@ async def test_p7_the_route_refuses_off_the_scale_naming_the_field(
     await console.recorded.rig.panel.close()
 
 
-@pytest.mark.parametrize("raw", [b"{not json", b"[1, 2]", b"null", b"x" * 9000])
+@pytest.mark.parametrize(
+    ("raw", "status", "code"),
+    [
+        (b"{not json", httpx.codes.BAD_REQUEST, "malformed_body"),
+        (b"[1, 2]", httpx.codes.UNPROCESSABLE_ENTITY, "invalid_feedback"),
+        (b"null", httpx.codes.BAD_REQUEST, "malformed_body"),
+        (b"x" * 9000, httpx.codes.BAD_REQUEST, "malformed_body"),
+        (b"[" * 8000, httpx.codes.BAD_REQUEST, "malformed_body"),
+    ],
+)
 async def test_a_body_that_is_not_a_json_object_is_refused_without_reading_further(
-    tmp_path: Path, raw: bytes
+    tmp_path: Path, raw: bytes, status: int, code: str
 ) -> None:
     console = linked(tmp_path)
     async with console.recorded.rig.http() as session:
@@ -488,7 +499,30 @@ async def test_a_body_that_is_not_a_json_object_is_refused_without_reading_furth
         refused = await session.post(
             "/api/feedback", content=raw, headers={"Content-Type": "application/json"}
         )
-        assert refused.status_code in (httpx.codes.BAD_REQUEST, httpx.codes.UNPROCESSABLE_ENTITY)
+        assert (refused.status_code, refused.json()["code"]) == (status, code)
+    await console.recorded.rig.panel.close()
+
+
+async def test_a_body_too_deep_for_the_decoder_is_refused_as_malformed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Python 3.12 decodes 8 KiB of brackets; an older one, or a deeper stack, gives up."""
+
+    def too_deep(_raw: bytes) -> object:
+        raise RecursionError
+
+    console = linked(tmp_path)
+    async with console.recorded.rig.http() as session:
+        await occupied(console, session)
+        monkeypatch.setattr(routes, "json", SimpleNamespace(loads=too_deep))
+        refused = await session.post(
+            "/api/feedback", content=b"[]", headers={"Content-Type": "application/json"}
+        )
+        monkeypatch.undo()
+        assert (refused.status_code, refused.json()["code"]) == (
+            httpx.codes.BAD_REQUEST,
+            "malformed_body",
+        )
     await console.recorded.rig.panel.close()
 
 

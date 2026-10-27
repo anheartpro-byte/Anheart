@@ -806,7 +806,7 @@ def _register_feedback(app: FastAPI, *, services: Services, auth: Sequence[param
         raw = await request.body()
         try:
             decoded: object = json.loads(raw) if len(raw) <= MAX_FEEDBACK_BYTES else None
-        except ValueError:
+        except (ValueError, RecursionError):
             decoded = None
         if decoded is None:
             raise Refusal(
