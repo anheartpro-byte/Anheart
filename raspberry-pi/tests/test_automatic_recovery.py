@@ -12,6 +12,7 @@ from src.training.types import Occupancy, SafetyAction
 from src.units import Bpm, MotorRpm
 from src.web.schemas import SnapshotRow
 from tests import test_atv320
+from tests.sto_support import ready_sto
 from tests.test_atv320 import Behave, FakeBus, build_drive, parameter_exception
 from tests.test_runtime import GEOMETRY, LIMITS
 
@@ -22,6 +23,7 @@ make_bus = test_atv320.make_bus
 
 def runtime_for(clock: ManualClock, drive: ATV320Drive, failures: int = 3) -> TrainingRuntime:
     return TrainingRuntime(
+        sto=ready_sto(),
         clock=clock,
         drive=drive,
         geometry=GEOMETRY,

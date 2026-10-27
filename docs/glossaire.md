@@ -246,7 +246,9 @@ cette machine, elle est aujourd'hui pontée** (commentaires du code, par exemple
 `SafetyAction` dans `src/training/types.py`) : aucune action logicielle ne coupe
 le couple instantanément. L'arrêt le plus rapide est une rampe. L'attestation
 demandée au démarrage affirme au contraire que le pont a été retiré ; sur le
-banc actuel, elle serait donc fausse.
+banc actuel, elle serait donc fausse. Depuis ANH-92, le logiciel lit l'état de la
+chaîne une fois câblée ; le pont reste en place sur le banc actuel, qui ne peut donc
+plus armer.
 
 **Superviseur de sécurité** (`SafetySupervisor`, `src/training/safety.py`)\
 Le module qui évalue toutes les règles à chaque cycle et rend un

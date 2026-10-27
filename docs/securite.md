@@ -153,7 +153,7 @@ les 67 traces et leurs annexes.
 
 | Limite | Conséquence |
 |---|---|
-| **STO ponté.** L'entrée Safe Torque Off du variateur est pontée. | Aucun moyen indépendant de couper le couple. L'arrêt le plus rapide est une rampe de 3 à 4 s. L'E-STOP de la page web est un arrêt logiciel, pas un arrêt d'urgence certifié. Attention : l'attestation exigée au démarrage (`ESTOP_ATTESTATION`) affirme qu'un coup-de-poing est câblé sur STO et que le pont STO a été retiré. Le logiciel ne peut pas le vérifier ; sur le banc actuel, cocher ces cases serait faux. |
+| **STO ponté.** L'entrée Safe Torque Off du variateur est pontée. | Aucun moyen indépendant de couper le couple. L'arrêt le plus rapide est une rampe de 3 à 4 s. L'E-STOP de la page web est un arrêt logiciel, pas un arrêt d'urgence certifié. Attention : l'attestation exigée au démarrage (`ESTOP_ATTESTATION`) affirme qu'un coup-de-poing est câblé sur STO et que le pont STO a été retiré. Le logiciel ne peut pas le vérifier ; sur le banc actuel, cocher ces cases serait faux. Depuis ANH-92, le logiciel lit l'état de la chaîne une fois câblée ; le pont reste en place sur le banc actuel, qui ne peut donc plus armer. |
 | **Pas de frein mécanique commandé.** La CAO montre un disque de frein, mais aucun frein n'est commandé par le logiciel ni documenté comme installé. | Si le variateur passe en roue libre (par exemple sur ObF), le bras ralentit seul, en ~145 s, sans contrôle. |
 | **Pas d'arrêt dans la capsule.** La personne à bord n'a aucun moyen d'arrêter la machine. | Tout arrêt dépend de l'opérateur, du superviseur ou du variateur. |
 | **ttO et SLL jamais relus.** Le délai de perte de communication (ttO) et la réaction à cette perte (SLL) sont réglés dans le variateur ; le logiciel ne les vérifie pas. Le simulateur suppose ttO = 3 s. | Si SLL est réglé sur roue libre ou « ignorer », GO_SILENT ne garantit plus un arrêt sur rampe. À vérifier sur le variateur. |
@@ -256,6 +256,8 @@ préalables :
 
 1. Une sécurité matérielle indépendante : STO câblé sur un vrai arrêt d'urgence,
    un arrêt accessible depuis la capsule, un frein si l'analyse de risques le demande.
+   Depuis ANH-92, le logiciel lit l'état de la chaîne une fois câblée ; le pont reste
+   en place sur le banc actuel, qui ne peut donc plus armer.
 2. Vérifier ttO et SLL sur le variateur ; abaisser HSP.
 3. Mesurer `ARM_RADIUS_M` et `LEG_TIP_RADIUS_M` sur la vraie machine et le vrai passager.
 4. Faire signer toutes les valeurs [MED] par l'équipe médicale : remplacer la

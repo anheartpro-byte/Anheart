@@ -1137,6 +1137,33 @@ class ATV320Drive:
                 return Err(refusal)
             return await self._read(address)
 
+    async def read_auxiliary_register(
+        self, address: RegisterAddress
+    ) -> Result[RawRegister, DriveError]:
+        """:meth:`read_register`, for an observation polled between control ticks.
+
+        The same transaction on the same link: single flight under the same
+        lock, the same executor, the same refusal once the link is latched,
+        and the same failure accounting, so it still counts in the link's
+        health. Only its exchange is not appended to the exchange log: that
+        log feeds the session record, which a replay reproduces tick by tick,
+        and an auxiliary read is no part of the control path it replays. The
+        SDK's own transport calls, appended only for a log that keeps them,
+        still carry its bytes: a diagnostic of the wire sees every frame.
+
+        It keeps the line's one serial timeout. pymodbus 3.7.4 has a single
+        ``timeout_connect`` for every transaction and closes the port after
+        any exchange left without an answer, the FTDI port fixes its timeout
+        when it opens, and a second connection is excluded (one master on the
+        cable): a read left unanswered can hold the link past the next tick,
+        as :data:`AUXILIARY_READ_BUDGET` states.
+        """
+        async with self._lock:
+            refusal = self._refusal(stopping=False)
+            if refusal is not None:
+                return Err(refusal)
+            return await self._transact(lambda: self._blocking_read(address, observed=False))
+
     async def read_limits(self) -> Result[DriveLimits, DriveError]:
         """Read tFr, HSP, LSP, ACC and dEC, parsed. Five READS; nothing is written.
 
@@ -1856,7 +1883,9 @@ class ATV320Drive:
         except Exception:
             log.refuse()
 
-    def _blocking_read(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
+    def _blocking_read(
+        self, address: RegisterAddress, *, observed: bool = True
+    ) -> Result[RawRegister, DriveError]:
         started = self._clock.monotonic()
         observed_started = started
         reply: object = None
@@ -1875,14 +1904,15 @@ class ATV320Drive:
             result: Result[RawRegister, DriveError] = Err(self._classify(exc, started))
         else:
             result = self._interpret_read(reply, address, started)
-        self._observe_exchange(
-            RegisterRequest(
-                at=observed_started, kind=ExchangeKind.READ, register=address, value=None
-            ),
-            result,
-            reply=reply,
-            raised=raised,
-        )
+        if observed:
+            self._observe_exchange(
+                RegisterRequest(
+                    at=observed_started, kind=ExchangeKind.READ, register=address, value=None
+                ),
+                result,
+                reply=reply,
+                raised=raised,
+            )
         return result
 
     def _blocking_write(
@@ -2160,3 +2190,67 @@ class ATV320Drive:
         return BadResponse(
             detail=f"unexpected {type(exc).__name__} from the Modbus transport: {exc}"
         )
+
+
+AUXILIARY_READ_BUDGET: Final[Seconds] = Seconds(0.05)
+"""Link time planned for one auxiliary single-register read, before the next tick.
+
+A healthy read is an 8-byte request and a 7-byte reply at 19200 8E1, about
+13 ms on the wire with its two silences; docs/raspberry-pi.md budgets 20 ms per
+read. 0.05 s leaves margin for the drive's turnaround and the USB latency
+periods, and stays under the serial timeout (:data:`DEFAULT_TIMEOUT`). A
+technical constant, not a medical one.
+
+It plans a read that is answered; it cannot bound one that is not. Such a read
+runs for up to :func:`transaction_worst_case` (0.683 s on the default line,
+longer than a control period: no budget that short can cover it without
+forbidding every read), then pymodbus closes the port and the next transaction
+reopens it, which no read timeout covers either (on an ``ftdi://`` port it
+includes :func:`~src.motor.ftdi_link.settle`). Until then the tick's own
+writes wait for the driver's lock, exactly as after a failed exchange of the
+tick itself, and the failure counts in the link's health.
+
+The worst case in total, for the writes that wait: the rest of the read, up to
+:func:`transaction_worst_case` (0.683 s on the default line), plus the reopen,
+whose :func:`~src.motor.ftdi_link.settle` is bounded by
+:data:`~src.motor.ftdi_link.SETTLE_BUDGET` (1.0 s) on an ``ftdi://`` port:
+about 1.7 s. An OS serial device has no settle. The OS call that opens the
+device is bounded by no timeout, as after any failed exchange. These are
+bounds; what docs/raspberry-pi.md reports as measured is not one.
+
+The one case in which an STO read can delay a stop write is a read already in
+flight when the stop is asked for, answered or not. Answered within this
+budget, it ends before the next tick and delays only the stop writes made
+outside the tick (the camera's emergency stop, the console's close) by the rest
+of the read: a few milliseconds, at most this budget. Answered beyond it, it
+delays the next tick by as much. Left unanswered, it delays them up to the
+worst case above, about 1.7 s plus the OS call that opens the port, which no
+timeout bounds; that is the same delay as a failed transaction of the tick
+itself. The console starts no read while a stop is asked for or under way, so
+a stop meets at most that one read; and reads start at most once per STO poll
+period, never two in flight, so this happens at most once per period.
+"""
+
+
+@final
+class AuxiliaryRegisterReads:
+    """One driver's reads through :meth:`ATV320Drive.read_auxiliary_register`.
+
+    Given to an observation that polls between control ticks (the STO relay
+    feedback): every read goes through this one driver instance, its lock, its
+    request queue and its link, never through a second master on the cable.
+    """
+
+    __slots__ = ("_drive",)
+
+    def __init__(self, drive: ATV320Drive) -> None:
+        self._drive: ATV320Drive = drive
+
+    @property
+    def drive(self) -> ATV320Drive:
+        """The one driver every read goes through."""
+        return self._drive
+
+    async def read_register(self, address: RegisterAddress) -> Result[RawRegister, DriveError]:
+        """Read one register through the driver, outside its exchange log."""
+        return await self._drive.read_auxiliary_register(address)

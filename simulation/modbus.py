@@ -15,6 +15,7 @@ from src.motor.drive import (
     LCR_LOGICAL,
     LFRD_LOGICAL,
     LFT_LOGICAL,
+    LOGIC_INPUTS_LOGICAL,
     LSP_LOGICAL,
     RFRD_LOGICAL,
     TFR_LOGICAL,
@@ -131,6 +132,18 @@ class SimulatedMaster:
         if count != 1:
             return failure_reply(ExceptionReply(code=3))
         logical = RegisterAddress(address - self.registers.offset)
+        if logical == LOGIC_INPUTS_LOGICAL:
+            return self._logic_inputs()
+        return self._modelled(logical)
+
+    def _logic_inputs(self) -> object:
+        """The relay feedback, answered by the model from its own simulated chain."""
+        inputs = immediate(self.model.read_register(LOGIC_INPUTS_LOGICAL))
+        if isinstance(inputs, Err):
+            return _rejected(inputs)
+        return register_reply((int(inputs.value),))
+
+    def _modelled(self, logical: RegisterAddress) -> object:
         if logical in (TFR_LOGICAL, HSP_LOGICAL, LSP_LOGICAL, ACC_LOGICAL, DEC_LOGICAL):
             limits = immediate(self.model.read_limits())
             if isinstance(limits, Err):

@@ -92,6 +92,21 @@ elif [ "$backend" = "serial" ]; then
         *) fail "MOTOR_PORT=$port is neither a /dev node nor an ftdi:// URL" ;;
     esac
 fi
+# The STO chain's feedback: the console lowercases the value, and so does this.
+sto="$(value STO_SOURCE | tr '[:upper:]' '[:lower:]')"
+case "$sto" in
+    "")
+        warn "STO_SOURCE not set: with MOTOR_BACKEND=serial none applies, and every start and acknowledgement is refused until the safety chain is wired, configured and ready (STO_SOURCE=drive_input with STO_DRIVE_INPUT)" ;;
+    none)
+        warn "STO_SOURCE=none: every start and acknowledgement is refused until the safety chain is wired, configured and ready (STO_SOURCE=drive_input with STO_DRIVE_INPUT)" ;;
+    sim_*)
+        if [ "$backend" = "serial" ]; then
+            fail "STO_SOURCE=$sto is a simulated chain, refused with MOTOR_BACKEND=serial: the console will not start"
+        else
+            ok "STO_SOURCE=$sto"
+        fi ;;
+    *) ok "STO_SOURCE=$sto" ;;
+esac
 
 echo "4. BITalino"
 source_kind="$(value ECG_SOURCE)"

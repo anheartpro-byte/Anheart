@@ -197,6 +197,13 @@ from src.motor.drive import (
     describe_fault,
     describe_violation,
 )
+from src.motor.sto import (
+    STO_STALE_AFTER,
+    StoReading,
+    StoSource,
+    StoState,
+    UnconfiguredStoSource,
+)
 from src.result import Err, Ok, Result
 from src.task_completion import complete_owned
 from src.training.drive_inspection import OpenFailed, StatusFailed, begin_inspection
@@ -227,6 +234,7 @@ from src.training.plan import (
     MIN_RECOVERY_S,
     Program,
 )
+from src.training.preflight import StoNotReady, check_sto_ready
 from src.training.safety import (
     RULE_COMMS_LOST,
     RULE_DRIVE_FAULT,
@@ -296,6 +304,22 @@ IdleLink = _IdleLink
 
 RULE_DRIVE_PRECOMMANDED: Final[str] = "drive_precommanded"
 """The drive was already enabled when this process arrived. See :meth:`TrainingRuntime.start`."""
+
+RULE_STO_OPEN: Final[str] = "sto_open"
+"""The hardware chain has already cut torque; zero and require acknowledgement."""
+RULE_STO_UNREADABLE: Final[str] = "sto_unreadable"
+"""No successful STO observation within the technical freshness budget."""
+
+STO_OPEN_DEDUCED: Final[str] = (
+    "the drive removed its output stage by itself (SWITCH_ON_DISABLED: DC bus not ready, "
+    "or the STO safety chain open) while this console held the run command, and no STO "
+    "reading showed it: none is taken during a stop, and outside one a reading misses an "
+    "opening shorter than the interval between two of them, or a cut between the safety "
+    "relay's contact and the drive's STO terminal. The opening is deduced from the drive's "
+    "state, not read from the chain. The reference is zeroed; restore the chain, acknowledge "
+    "by name and request a new start before motion is permitted"
+)
+"""The ``sto_open`` detail when the drive's status word shows an opening no reading saw."""
 
 RULE_TICK_EXCEPTION: Final[str] = "tick_exception"
 """Something inside the tick raised. This process's state is no longer trusted."""
@@ -702,6 +726,7 @@ type StartRefusal = (
     | DrivePrecommanded
     | DriveInFault
     | RecordStorageLow
+    | StoNotReady
 )
 """Every way :meth:`TrainingRuntime.start` can refuse. Closed; match it nested."""
 
@@ -1227,6 +1252,7 @@ class TrainingRuntime:
         "_decision",
         "_descent_from",
         "_disable_failures",
+        "_disable_follows_fault",
         "_drive",
         "_enabled",
         "_end_reason",
@@ -1270,6 +1296,11 @@ class TrainingRuntime:
         "_silent",
         "_snapshot",
         "_started_at",
+        "_sto",
+        "_sto_last_success_at",
+        "_sto_loop_delay",
+        "_sto_reads_withheld",
+        "_sto_withheld_at",
         "_stop_requested",
         "_stopped_by",
         "_subject",
@@ -1293,6 +1324,7 @@ class TrainingRuntime:
         motion: MotionLimits = DEFAULT_MOTION_LIMITS,
         limit_radius: Metres | None = None,
         arming_gate: ArmingGate | None = None,
+        sto: StoSource | None = None,
     ) -> None:
         """Build an idle runtime. Raises ``ValueError`` on a mismatched supervisor.
 
@@ -1328,8 +1360,12 @@ class TrainingRuntime:
         every other precondition has passed and before the drive is touched:
         the console passes the session record's free-space check. ``None``:
         nothing records, nothing to ask.
+
+        ``sto`` supplies memory-only observations. Omitted means NOT_CONFIGURED,
+        which refuses every arming and acknowledgement until a ready source exists.
         """
         self._clock: Clock = clock
+        self._sto: StoSource = UnconfiguredStoSource() if sto is None else sto
         self._arming_gate: ArmingGate | None = arming_gate
         self._drive: DriveBackend = drive
         self._geometry: MachineGeometry = geometry
@@ -1399,6 +1435,16 @@ class TrainingRuntime:
         self._applied_rpm: MotorRpm = MotorRpm(0)
         self._last_status: DriveStatus | None = None
         self._last_status_at: Monotonic | None = None
+        # Whether the last state other than SWITCH_ON_DISABLED a tick read was
+        # FAULT (or its fault reaction), or a fault reset was attempted since:
+        # the drive then reaches SWITCH_ON_DISABLED through the reset, not
+        # through an STO opening (_deduce_sto_open). Set by _service_drive when
+        # a tick reads FAULT and by fault_reset before its word. Cleared by
+        # _service_drive when a tick reads any state but SWITCH_ON_DISABLED or
+        # FAULT, and by _energise once an arming is acknowledged: the drive was
+        # inspected out of fault, so a SWITCH_ON_DISABLED read under that run
+        # command follows no reset.
+        self._disable_follows_fault: bool = False
         # Run lengths of failed exchanges, one per kind (see ``Exchange``).
         # Mutable, owned by this loop alone. A read run is reset only by a
         # successful read, a write run only by an acknowledged write, and the
@@ -1465,6 +1511,17 @@ class TrainingRuntime:
         )
         self._attendant_last_seen: Monotonic | None = None
         self._previous_tick_at: Monotonic | None = None
+        # Pause credit belongs to this cached success, resets on the next one,
+        # and stops growing as soon as a later read is pending or has failed.
+        self._sto_last_success_at: Monotonic | None = None
+        self._sto_loop_delay: Seconds = Seconds(0)
+        # Whether the last completed tick left a stop under way: the console
+        # then withholds STO reads until the next tick. Written at each tick's end.
+        self._sto_reads_withheld: bool = False
+        # The last tick that left a stop under way, so withheld the reads while
+        # motion was possible; None once a READY reading postdates it. Written
+        # at each such tick's end, cleared by _judge_sto only.
+        self._sto_withheld_at: Monotonic | None = None
         self._latched: SafetyVerdict | None = None
         # What this module's own latch held when GO_SILENT took its place, for
         # the screen alone: written by _latch, read by the `silenced` property.
@@ -1556,6 +1613,71 @@ class TrainingRuntime:
     def silent(self) -> bool:
         """Whether this runtime has stopped writing to the drive. One-way."""
         return self._silent
+
+    @property
+    def drive_reads_permitted(self) -> bool:
+        """Auxiliary reads must not refresh ttO after silence or link release."""
+        return not self._silent and self._shutdown is None
+
+    @property
+    def drive_link_acquired(self) -> bool:
+        """Whether this runtime holds a link acquired by a successful open()."""
+        return self._link_open or self._idle_link.open
+
+    @property
+    def stop_in_progress(self) -> bool:
+        """Whether a stop is under way: the console starts no auxiliary drive read then.
+
+        True while a session ending walks the setpoint down or still holds the
+        run command, while a standing verdict stops a running session
+        (RAMP_DOWN or worse), while a FREEZE walks the setpoint of a stop
+        somebody asked for down to zero (:meth:`_stop_under_freeze`), while a
+        manual target of zero walks the setpoint down, and while the run
+        command is held outside a session (a drive found running is being
+        stopped). REDUCE stops nothing, nor does a FREEZE that holds a speed:
+        the session goes on regulating under them, so the reads go on too, and
+        an STO chain that opens under a REDUCE is seen at the next read. Nor
+        is a programme's own planned descent with no verdict standing (its
+        COOLDOWN and RECOVERY, the setpoint above zero) a stop: the controller
+        still regulates it, and the reads go on. Read from memory only.
+
+        A drive that signals a fault is under no stop of this console's, at
+        any speed and whatever the setpoint (:meth:`_drive_signals_fault`).
+        Reads are withheld during a stop so that no stop write waits for one;
+        a faulted drive refuses every word but the operator's fault reset, so
+        no stop write acts on it and none can be delayed: the reads go on
+        through its coast, and an STO chain that opens then is read. They also
+        let the operator's fault reset follow the acknowledgement of any other
+        verdict, which needs a fresh reading.
+        """
+        if self._drive_signals_fault():
+            return False
+        state = self.state
+        match state:
+            case RuntimeState.ENDING:
+                return self._applied_rpm != 0 or self._enabled
+            case RuntimeState.RUNNING:
+                action = self.standing_action
+                return (
+                    action >= SafetyAction.RAMP_DOWN
+                    or (action is SafetyAction.FREEZE and self._stop_asked())
+                    or (
+                        self._manual is not None
+                        and self._manual_target == 0
+                        and self._applied_rpm != 0
+                    )
+                )
+            case RuntimeState.IDLE | RuntimeState.FINISHED:
+                return self._enabled
+        raise assert_never(state)
+
+    def _drive_signals_fault(self) -> bool:
+        """Whether a fresh status shows the drive in FAULT, or in the fault reaction it coasts in.
+
+        Read from memory: the status the last tick read, while it is evidence.
+        """
+        status = self._readable_status(self._clock.monotonic())
+        return status is not None and status.state is DriveState.FAULT
 
     @property
     def ending(self) -> Ending | None:
@@ -2039,6 +2161,9 @@ class TrainingRuntime:
         if isinstance(checked, Err):
             return Err(checked.error)
         readable = checked.value
+        # Noted before the word: a reset that lands with its answer lost still
+        # takes the drive to SWITCH_ON_DISABLED under the run command.
+        self._disable_follows_fault = True
         written = await self._drive.write_command(ControlWord.FAULT_RESET)
         if isinstance(written, Err):
             return Err(ResetUndelivered(describe_drive_error(written.error).detail))
@@ -2109,6 +2234,9 @@ class TrainingRuntime:
         standing = self.standing
         if standing is not None:
             return SafetyStanding(standing)
+        sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+        if sto is not None:
+            return sto
         if state not in (RuntimeState.IDLE, RuntimeState.FINISHED):
             return AlreadyStarted(state)
         # Last, so the operator is first told what only they can clear.
@@ -2288,6 +2416,10 @@ class TrainingRuntime:
         refused = await self._check_drive_limits()
         if refused is not None:
             return refused
+        # Inspection awaited transport I/O: revalidate the contact before enabling.
+        sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+        if sto is not None:
+            return sto
         try:
             return await self._energise(now)
         except CancelledError:
@@ -2400,6 +2532,8 @@ class TrainingRuntime:
                     break
         if failure is None:
             self._enabled = True
+            # _arm refused a faulted drive: no reset leads where this run command goes.
+            self._disable_follows_fault = False
             return None
         return await self._abandon_enable(now, failure)
 
@@ -2463,6 +2597,7 @@ class TrainingRuntime:
         # 1. THE KEEPALIVE FIRST.
         await self._service_drive(now)
         await self._finish_fault_reset(now)
+        self._judge_sto(now, previous)
         self._advance_phase(now)
         # 2. Safety, and its verdict.
         verdict = self._supervisor.evaluate(self._observe(now, self._envelope(now)))
@@ -2473,6 +2608,194 @@ class TrainingRuntime:
         await self._settle(now)
         self._accumulate(now, interval)
         self._snapshot = self._build_snapshot(now)
+        self._sto_reads_withheld = self.stop_in_progress
+        if self._sto_reads_withheld:
+            # A stop under way holds the run command or an armed session:
+            # motion was possible while the reads were withheld.
+            self._sto_withheld_at = now
+
+    def _judge_sto(self, now: Monotonic, previous: Monotonic | None) -> None:
+        """Judge the cached contact before any controller demand, including at idle.
+
+        OPEN treats unknown speed as possible motion. Unreadable STO requires
+        a configured source and positive motion evidence: an armed session,
+        our run command, or a fresh enabled/turning status. No I/O occurs here.
+        While this runtime holds the run command, the drive's status word
+        shows an opening no reading saw (:meth:`_deduce_sto_open`): during a
+        stop, when no read is taken, and between two reads. And once reads
+        were withheld while motion was possible, the shaft at rest is no
+        excuse: an OPEN reading latches until a READY one postdates that stop
+        (:meth:`_sto_reading_postdates_stop`).
+
+        Deduct an interval in which the console could not read: a loop_stall
+        interval, or one after a tick that left a stop under way (the console
+        withholds reads during a stop, so that no stop write waits for one).
+        Only while no read since the last success is pending or failed. A read
+        starts only in the gap after a completed tick and is planned to end
+        before the next scheduled tick, so a success normally follows the
+        previous tick by less than one control period. A success resets the
+        credit; only the part of its interval after that success can count.
+        Retain earned credit until the next success, allowing polling to resume
+        without a false STO verdict.
+
+        With credit D, latch on the first permitted tick where age - D exceeds
+        STO_STALE_AFTER: at most STO_STALE_AFTER + D + one tick interval after
+        the last success. D sums excused portions with no attempt, before the
+        first unresolved attempt. From that attempt, D cannot grow and detection
+        takes at most STO_STALE_AFTER plus one tick interval, pauses and stops
+        included. Without earlier credit the bound starts at the last success.
+        A pause or a stop with an unresolved read can therefore raise
+        sto_unreadable too. Communication-loss rules still dominate if the link
+        itself stops answering. No extra duration or I/O is introduced.
+        """
+        if not self.drive_reads_permitted:
+            return
+        reading = self._sto.latest(now)
+        last = reading.last_success_at
+        if reading.state is StoState.READY and self._sto_reading_postdates_stop(reading):
+            self._sto_withheld_at = None
+        if last != self._sto_last_success_at:
+            self._sto_last_success_at = last
+            self._sto_loop_delay = Seconds(0)
+        if (
+            previous is not None
+            and last is not None
+            and not reading.read_unresolved
+            and (
+                self._sto_reads_withheld
+                or elapsed(previous, now) > self._supervisor.limits.loop_stall_freeze_gap
+            )
+        ):
+            self._sto_loop_delay = Seconds(self._sto_loop_delay + elapsed(max(previous, last), now))
+        status = self._readable_status(now)
+        if not self._link_open:
+            stamp = self._idle_status_at
+            status = (
+                self._idle_status
+                if stamp is not None and elapsed(stamp, now) <= self._limits.status_stale_after
+                else None
+            )
+        armed = self._started_at is not None and self._phase is not Phase.DONE
+        observed_motion = status is not None and (
+            status.state is DriveState.OPERATION_ENABLED
+            or abs(status.output_rpm) >= self._limits.standstill_rpm
+        )
+        if (
+            not armed
+            and not self._enabled
+            and self._sto_withheld_at is None
+            and status is not None
+            and status.state is not DriveState.OPERATION_ENABLED
+            and abs(status.output_rpm) < self._limits.standstill_rpm
+        ):
+            return
+        if reading.state is StoState.OPEN:
+            self._latch(
+                now,
+                RULE_STO_OPEN,
+                SafetyAction.QUICK_STOP,
+                "the hardware STO safety chain has cut torque; the shaft coasts. "
+                "The reference is zeroed; restore the chain, acknowledge by name "
+                "and request a new start before motion is permitted",
+            )
+            return
+        if reading.state is StoState.NOT_CONFIGURED or not (
+            armed or (self._link_open and self._enabled) or observed_motion
+        ):
+            return
+        self._deduce_sto_open(now, status)
+        if last is None or elapsed(last, now) - self._sto_loop_delay > STO_STALE_AFTER:
+            self._latch(
+                now,
+                RULE_STO_UNREADABLE,
+                SafetyAction.RAMP_DOWN,
+                "no successful STO reading within the freshness budget while control ticks "
+                "permit polling; controlled stop. "
+                "Restore a ready reading, acknowledge by name and request a new start",
+            )
+
+    def _sto_reading_postdates_stop(self, reading: StoReading) -> bool:
+        """Whether ``reading`` was taken no earlier than the last tick that withheld reads.
+
+        A reading from before a stop says nothing of the chain during it. A
+        simulated chain is read at the instant it is asked, so it always does.
+        """
+        withheld = self._sto_withheld_at
+        last = reading.last_success_at
+        return withheld is None or (last is not None and last >= withheld)
+
+    def _sto_reading_too_old(self, reading: StoReading) -> StoNotReady | None:
+        """Why a READY ``reading`` is too old to acknowledge on, or ``None``."""
+        if not self._sto_reading_postdates_stop(reading):
+            return StoNotReady(
+                state=StoState.UNKNOWN,
+                detail="the last ready reading predates a stop that withheld the reads",
+            )
+        if not self._sto_reading_postdates_latch(reading):
+            return StoNotReady(
+                state=StoState.UNKNOWN,
+                detail="the last ready reading predates the sto_open latch",
+            )
+        return None
+
+    def _sto_reading_postdates_latch(self, reading: StoReading) -> bool:
+        """Whether ``reading`` was taken no earlier than the ``sto_open`` this runtime latched.
+
+        A reading from before the opening says nothing of the chain since,
+        whether the opening was read or deduced from the drive's word, and a
+        stop that ends in the tick that latched it withholds no read. A
+        simulated chain is read at the instant it is asked, so it always is.
+        """
+        latched = self._latched
+        if latched is None or latched.rule != RULE_STO_OPEN:
+            return True
+        last = reading.last_success_at
+        return last is not None and last >= latched.since
+
+    def _deduce_sto_open(self, now: Monotonic, status: DriveStatus | None) -> None:
+        """The drive's own status word shows an STO opening that no reading saw.
+
+        A fresh SWITCH_ON_DISABLED while this runtime holds the run command
+        means the drive removed its output stage by itself, which its status
+        word decodes as DC bus not ready or STO open: ``sto_open`` latches,
+        whether the chain is still open or already closed again, stop or not.
+        During a stop no STO read is taken at all; outside one, a reading
+        misses an opening shorter than the interval between two of them, and
+        a cut between the safety relay's contact and the drive's STO terminal
+        whatever its length. No word this module writes leads there while it
+        holds the run command: an arming ends in OPERATION_ENABLED,
+        :meth:`_settle` and the escalation end in READY_TO_SWITCH_ON and clear
+        the run command, an emergency zero writes LFRD only, and a silent
+        runtime reads nothing. A fault reset does lead there, and keeps the run
+        command when its answer is lost; so would a drive that reset its own
+        fault. A SWITCH_ON_DISABLED that follows a fault, or a reset attempt,
+        is therefore not taken for an opening (``_disable_follows_fault``,
+        until a tick reads another state or the next arming is acknowledged):
+        the reads, which a faulted drive does not withhold, judge the chain
+        then, and READY is needed before any start. Nor is the status the
+        start's own inspection read before the arming taken for one read since
+        (:meth:`_status_postdates_start`): a drive just powered up shows
+        SWITCH_ON_DISABLED until it is armed. The status is the one the tick
+        already read: no frame is added.
+        """
+        if (
+            self._link_open
+            and self._enabled
+            and not self._disable_follows_fault
+            and status is not None
+            and status.state is DriveState.SWITCH_ON_DISABLED
+            and self._status_postdates_start()
+        ):
+            self._latch(now, RULE_STO_OPEN, SafetyAction.QUICK_STOP, STO_OPEN_DEDUCED)
+
+    def _status_postdates_start(self) -> bool:
+        """Whether the last status was read after this session's start, not by its inspection.
+
+        A start reads the drive before arming it, at the instant the session
+        starts, and that status stands until a tick reads another one.
+        """
+        stamp, started = self._last_status_at, self._started_at
+        return stamp is not None and (started is None or stamp > started)
 
     def _interval(self, now: Monotonic) -> Seconds | None:
         """Time since the previous tick, or ``None`` on the first one.
@@ -2527,6 +2850,9 @@ class TrainingRuntime:
         self._note_success(Exchange.READ)
         self._last_status = status.value
         self._last_status_at = now
+        state = status.value.state
+        if state is not DriveState.SWITCH_ON_DISABLED:
+            self._disable_follows_fault = state is DriveState.FAULT
 
     async def _poll_idle(self, now: Monotonic) -> None:
         """Read the drive at :data:`IDLE_POLL_PERIOD` while no session was ever started.
@@ -3084,6 +3410,12 @@ class TrainingRuntime:
         ``estop_released`` is the operator stating that the latching mushroom has
         been pulled back out. Software cannot see that contact, so the default is
         ``False`` and forgetting the question fails closed.
+
+        The chain must read READY, and after a stop that withheld the reads,
+        READY from a read taken since: a reading from before the stop says
+        nothing of the chain during it, however recent. An ``sto_open`` of this
+        runtime's, read or deduced, likewise needs READY from a read taken
+        since it latched.
         """
         if not operator.strip():
             return Err(
@@ -3095,6 +3427,12 @@ class TrainingRuntime:
         mine = self._latched
         if mine is not None and mine.action is SafetyAction.GO_SILENT:
             return Err(GoSilentIsTerminal(mine.rule))
+        reading = self._sto.latest(self._clock.monotonic())
+        sto = check_sto_ready(reading)
+        if sto is None:
+            sto = self._sto_reading_too_old(reading)
+        if sto is not None:
+            return Err(sto)
         outcome = self._supervisor.acknowledge(operator, estop_released=estop_released)
         if isinstance(outcome, Ok):
             self._latched = None
@@ -3137,7 +3475,9 @@ class TrainingRuntime:
                         cleared=(mine.rule,),
                     )
                 )
-            case Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched():
+            case (
+                Unattributed() | GoSilentIsTerminal() | EmergencyStopStillLatched() | StoNotReady()
+            ):
                 return Err(refusal)
         raise assert_never(refusal)
 
@@ -3745,6 +4085,15 @@ class TrainingRuntime:
         if self._applied_rpm != 0 or not self._at_standstill(now):
             return
         status = self._readable_status(now)
+        if status is not None and status.state is DriveState.SWITCH_ON_DISABLED:
+            # Fresh standstill and ETA confirm the output stage is already off.
+            # Closing STO cannot enable it without a new full arming sequence.
+            # Judged before the run command is cleared: a stop asked for since
+            # the last read may settle in this very tick.
+            self._deduce_sto_open(now, status)
+            self._enabled = False
+            self._disable_failures = 0
+            return
         if status is not None and status.state is DriveState.FAULT:
             # No torque at standstill, and every word but FAULT_RESET is refused
             # by design: the ending waits for the operator's fault reset.
@@ -4330,6 +4679,7 @@ class TrainingRuntime:
             counters=self._counters,
             mode=self.mode,
             manual=self._manual_view(),
+            sto=self._sto.latest(now),
         )
 
     def _manual_view(self) -> ManualView | None:

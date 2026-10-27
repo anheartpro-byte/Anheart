@@ -264,8 +264,8 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 
 | Zone | Contenu |
 |---|---|
-| Bandeaux en haut | Sept rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4) ; `VARIATEUR EN DEFAUT`, tant que le variateur signale un défaut (section 6) ; `PARAMETRES MEDICAUX NON SIGNES`, tant que la console tourne en mode banc parce que la signature de son fichier médical ne s'est pas vérifiée au démarrage, suivi de la raison ([raspberry-pi.md, 12.6](raspberry-pi.md#126-les-paramètres-médicaux-signés-anh-139)) ; il ne part qu'avec un fichier signé de nouveau et un redémarrage. Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
-| Barre latérale (à gauche) | la marque, neuf pastilles (six sur l'état de la machine, puis **Serveur**, **Version** et **Service** sur la console elle-même), la navigation |
+| Bandeaux en haut | Huit rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4) ; `VARIATEUR EN DEFAUT`, tant que le variateur signale un défaut (section 6) ; `CHAINE STO NON PRETE`, avec la raison et l'action pour rétablir une chaîne prête (section 11) ; `PARAMETRES MEDICAUX NON SIGNES`, tant que la console tourne en mode banc parce que la signature de son fichier médical ne s'est pas vérifiée au démarrage, suivi de la raison ([raspberry-pi.md, 12.6](raspberry-pi.md#126-les-paramètres-médicaux-signés-anh-139)) ; il ne part qu'avec un fichier signé de nouveau et un redémarrage. Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
+| Barre latérale (à gauche) | la marque, dix pastilles (sept sur l'état de la machine, puis **Serveur**, **Version** et **Service** sur la console elle-même), la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
 | Pied de page fixe | la version des paramètres médicaux (`parametres medicaux 0.1.0`, en rouge avec `NON SIGNES` en mode banc), l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages. La page et la barre latérale s'arrêtent au-dessus de lui : sa hauteur est mesurée par la page (`--footer-h`), plus déclarée dans la feuille de style |
 
@@ -342,6 +342,11 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 ## 4. Barre latérale
 
 ### Pastilles d'état
+
+La pastille **Chaine STO** reste visible dans la barre latérale sur chaque page :
+`prete`, `ouverte`, `inconnue` ou `non configuree`. La carte du même nom dans Sécurité
+donne aussi la source et l'âge de la dernière lecture réussie. Ces états ne disent
+pas que le bras est arrêté : seule la vitesse mesurée renseigne sur son mouvement.
 
 | Pastille | Valeurs | Source |
 |---|---|---|
@@ -1751,10 +1756,17 @@ pas rejoué dans un navigateur, ni sur la vraie machine. Règle et vérification
 
 ### Acquittement
 
+Tout acquittement, même celui d'un autre verdict, est refusé tant que la chaîne STO
+n'est pas prête. Le motif est affiché avant le clic, puis la réponse exacte du Pi
+reste sous le bouton et dans l'alerte en cas de refus (HTTP 409). Relâcher le
+champignon, vérifier le relais de sécurité et rétablir une lecture fiable ; pour
+`non configuree`, configurer `STO_SOURCE`. Ensuite acquitter par son nom, puis
+demander un nouveau départ. La refermeture de la chaîne ne relance aucune séance.
+
 | Élément | Rôle |
 |---|---|
 | champ `votre nom` | obligatoire |
-| case `le coup de poing a ete deverrouille (tire)` | déclaration séparée : le logiciel ne voit pas le contact. Par défaut non cochée, pour échouer du côté sûr |
+| case `le coup de poing a ete deverrouille (tire)` | déclaration séparée : la lecture STO ne remplace pas la confirmation humaine du déverrouillage. Par défaut non cochée, pour échouer du côté sûr |
 | bouton `Acquitter` | `POST /api/safety/acknowledge` : efface les verdicts verrouillés. **Rien d'autre ne le fait**, jamais automatiquement |
 
 Résultats possibles (vérifiés en simulation) :
@@ -1859,8 +1871,154 @@ garanti le câblage. La pastille passe de `non atteste` à `atteste`, avec
 Sans attestation, tout démarrage (manuel ou programmé) répond 412 :
 `nobody has attested the emergency stop this boot: …`.
 
-> **Important.** L'attestation est une déclaration humaine, pas une mesure. Le logiciel ne
-> vérifie pas que le pont STO est retiré. Voir [securite.md](securite.md).
+> **Important.** Le logiciel lit le retour de la chaîne STO configurée (simulé avec
+> `sim_*`). Cette lecture ne vérifie ni le retrait du pont STO ni le câblage
+> normalement fermé du champignon sur P24 -> STO. L'attestation reste une déclaration
+> humaine obligatoire, avec ses deux cases distinctes. Voir [securite.md](securite.md).
+
+### Carte « Chaine STO »
+
+| État affiché | Sens et action |
+|---|---|
+| `prete` | lecture fraîche de la chaîne fermée ; l'attestation humaine reste nécessaire |
+| `ouverte` | relâcher le champignon et vérifier le relais ; au repos après un appui, c'est un état normal |
+| `inconnue` | lecture absente, en échec ou trop ancienne ; rétablir une lecture fiable |
+| `non configuree` | `STO_SOURCE=none` ; configurer la source, ce n'est pas une panne |
+
+La source figure entre parenthèses : `none`, `sim_ready`, `sim_open`, `drive_input`.
+`Derniere lecture reussie` donne l'âge en secondes, ou `aucune`.
+
+**Sur le banc réel, aucun départ avant le câblage, et c'est voulu.** Avec
+`MOTOR_BACKEND=serial`, `STO_SOURCE` vaut `none` par défaut et `sim_*` est refusé
+au démarrage : la console démarre, la carte affiche `non configuree (none)`, et
+tout départ comme tout acquittement de verdict est refusé avec la raison STO tant
+qu'une source réelle n'est pas câblée, configurée et prête. Le banc actuel, dont le
+pont STO est en place, ne peut donc plus armer ni acquitter un verdict. C'est la
+décision du responsable du projet du 22 octobre 2026 : il n'existe aucune
+exemption banc, parce que la lecture de la chaîne de sécurité est la condition de
+l'armement et de l'acquittement. Le banc redevient utilisable une fois la chaîne
+câblée, le pont retiré et `STO_SOURCE=drive_input` configuré avec son entrée
+([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)). Une lecture ancienne
+ne reste jamais `prete` : l'état devient `unknown` au-delà de 2 s ; la source reste
+affichée et les réponses
+locales et la page tiennent aussi compte du temps écoulé depuis cette lecture.
+
+Le bandeau rouge **CHAINE STO NON PRETE** apparaît sur toutes les pages tant que
+le départ et l'acquittement sont refusés. Il vient après **VARIATEUR EN DEFAUT** et
+avant **PARAMETRES MEDICAUX NON SIGNES** : après les alarmes sur un arrêt ou un défaut,
+avec les autres conditions qui empêchent le départ. Le texte propose une action et
+dit qu'une chaîne ouverte au repos après un appui est normale ; il ne nomme pas cet
+état « panne ». Les boutons de départ manuel et **Demarrer la seance** sont grisés
+avec la phrase de refus fournie par le Pi. La porte du runtime reste décisive.
+Le bouton manuel conserve sa règle de disponibilité du mouvement, complétée
+par le seul contrôle STO. L'attestation et la disponibilité de la machine sont
+toujours vérifiées par le Pi au clic ; leurs refus restent visibles. Le départ
+programmé conserve aussi ses conditions d'attestation et d'état `idle` dans la page.
+
+Si la chaîne s'ouvre alors qu'un mouvement est possible, le verdict existant
+`sto_open / quick_stop` apparaît dans **Verdict en cours**, avec son détail et
+`verrouille oui`, même quand aucune lecture ne l'a vue ouverte (voir plus bas).
+Le matériel a déjà coupé le couple ; la masse peut rester en rotation. Avec
+une source configurée et une preuve positive de mouvement
+(séance armée, marche tenue par ce runtime ou statut frais en rotation/étage actif),
+l'absence de lecture valable au-delà de la durée admise verrouille
+`sto_unreadable / ramp_down`. Refermer ne libère pas le verdict : acquitter par son nom puis
+demander un nouveau départ. Au repos observé immobile, l'état non prêt refuse
+seulement le départ, sans créer un verrou STO, sauf pour la première lecture
+qui suit un arrêt (voir plus bas).
+
+La lecture part juste après un tic terminé, au plus une fois par 0,5 s, et
+seulement si elle peut finir avant le tic suivant : elle ne retarde pas les
+écritures de commande du tic. Si seul le contrôle s'interrompt, la lecture
+affichée peut devenir `inconnue` car le sondage attend les tics terminés :
+aucune lecture ne part pendant la pause. `loop_stall` juge cet écart ; il reste
+seul si aucune tentative postérieure à la dernière réussite n'est en échec ou
+en suspens. Dès qu'une lecture commence, aucune nouvelle pause n'est déduite
+du budget STO avant une réussite. Une lecture échouée ou en suspens au début
+de la pause peut donc ajouter `sto_unreadable / ramp_down` à `loop_stall`.
+
+Pendant un arrêt, la console ne lit pas la chaîne, pour que les écritures
+d'arrêt gardent le lien : fin de séance (STOP local ou depuis le site, verdict,
+E-STOP, limite) tant que la consigne descend ou que la marche est tenue, verdict
+qui arrête la séance, descente vers zéro sous un `freeze` (après un STOP, ou
+dans la phase `cooldown` d'un programme), descente vers une cible manuelle de
+0, et E-STOP de la page pas encore pris par la boucle, même au repos. Un
+`reduce` n'est pas un arrêt, ni un `freeze` qui tient une vitesse : la séance
+continue de réguler, la lecture continue aussi, la carte reste `prete` et une
+chaîne ouverte pendant un `reduce` verrouille `sto_open / quick_stop` comme
+ailleurs. La descente prévue d'un programme sans verdict (`cooldown` puis
+`recovery`) est de la régulation : la lecture continue. Un variateur en
+défaut n'est jamais un arrêt en cours, même quand l'arbre tourne encore : il
+n'accepte que le réarmement et aucune écriture d'arrêt n'y agit, donc la
+lecture continue pendant sa roue libre et après. Une chaîne ouverte pendant
+cette roue libre est lue et verrouille `sto_open / quick_stop` sans attendre
+l'arrêt, et les autres verdicts s'acquittent avant le réarmement sans
+redémarrer la console. Pendant un arrêt, la carte passe à
+`inconnue` 2 s après la dernière lecture, sans panne, et redevient `prete`
+juste après la fin de l'arrêt (le premier tic qui n'en laisse plus en cours) ;
+ce temps n'est pas compté contre la lecture.
+
+Une ouverture de la chaîne que la lecture ne montre pas n'échappe pas au
+verrou : pendant un arrêt, où la console ne lit pas, et hors arrêt, quand elle
+dure moins que l'intervalle entre deux lectures (environ 0,6 s) ou qu'elle se
+trouve entre le relais et la borne STO du variateur, que le retour du relais
+ne voit pas. Le variateur signale qu'il a retiré son étage de sortie
+(`SWITCH_ON_DISABLED`) alors que la console tient la marche : `sto_open /
+quick_stop` se verrouille au tic suivant, avec un détail qui dit que
+l'ouverture est déduite de l'état du variateur, même si le champignon est
+relâché aussitôt. Un défaut du variateur ou une demande de réarmement mènent
+aussi à cet état : il n'est alors pas pris pour une ouverture, et la lecture,
+qui continue sur un variateur en défaut, juge la chaîne ; le départ reste
+refusé tant qu'elle n'est pas `prete`. Cette exception prend fin dès que le
+variateur montre un autre état, ou au départ suivant, une fois le variateur
+armé : une ouverture juste après ce départ, ou une coupure entre le relais et
+la borne STO, verrouille `sto_open` au premier tic. Après un arrêt pendant lequel un
+mouvement était possible, la première lecture `ouverte` verrouille aussi
+`sto_open`, même au repos ; une inspection du variateur au repos en échec
+compte comme un tel arrêt. Tout acquittement attend alors une lecture `prete`
+faite après l'arrêt : celle d'avant l'arrêt, même encore récente, ne suffit
+pas, et le refus le dit (`inconnue`). Un `sto_open`, lu ou déduit, ne
+s'acquitte de même que sur une lecture `prete` faite après son verrou, même
+quand l'arrêt a fini dans le tic du verrou. Un nouveau départ suit l'acquittement
+nommé, comme ailleurs. Avant lui, un départ demandé depuis la page est refusé au
+clic (409 `verdict_latched`, section 13) dès que la chaîne est lue `prete` : rien
+n'entre dans la boîte aux lettres. Tant qu'elle ne l'est pas, c'est le refus STO
+qui répond (412 `sto_not_ready`). Deux ouvertures ne portent pas le nom `sto_open` :
+pendant un arrêt déjà verrouillé `quick_stop` par la console (variateur trouvé
+en marche, armement non confirmé), ce verrou tient et refuse tout départ ;
+pendant la roue libre d'un variateur en défaut, une ouverture plus courte que
+l'intervalle de lecture n'est vue ni par la lecture ni par le variateur, et le
+verrou `drive_fault` tient.
+
+Une lecture déjà partie quand l'arrêt est demandé peut retarder les écritures
+d'arrêt, répondue ou non : répondue, de quelques millisecondes (au plus
+0,05 s) pour celles faites hors du tic, comme l'E-STOP de la caméra ou la
+fermeture de la console, ou de son retard pour le tic suivant si elle répond
+au-delà de ce budget ; restée sans réponse, du reste de cette lecture et de la
+réouverture du port, au pire environ 1,7 s sur `ftdi://`, plus l'appel système
+qui ouvre le port et qu'aucun délai ne borne, comme un échange variateur en
+échec ([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)).
+
+Une réussite remet le crédit de pause à zéro ; après la reprise, elle revient
+juste après le premier tic terminé. Sans crédit antérieur, la perte
+de lecture est détectée au plus tard 2 s plus un intervalle de tic après la
+dernière réussite, pauses comprises. Avec un crédit D déjà acquis, la borne
+depuis cette réussite est 2 s + D + un intervalle de tic. D additionne les
+portions d'intervalles `loop_stall` excusées avant la première tentative non
+résolue, sans tentative pendant ces portions ; dès la première
+tentative sans réussite suivante, D ne peut plus croître et la détection arrive
+au plus tard 2 s plus un intervalle de tic après son début. Si le lien lui-même
+est perdu, les règles de communication dominent.
+
+Au premier démarrage, une source configurée apparaît `inconnue` avec son nom
+avant le premier tic. Si le variateur est absent ou hors tension et que ce
+processus n'a encore rien armé ni activé, la vitesse inconnue seule ne crée
+aucun verrou STO : le départ est refusé avec la raison STO et une panne sans
+trame reste réessayable. Rétablir le lien et attendre `prete` avant de demander
+le départ ; aucun acquittement STO n'est nécessaire dans ce cas.
+`non configuree (none)` ne crée jamais `sto_unreadable` : configurer la source
+avant le départ. Une lecture `ouverte` réussie peut toujours verrouiller
+`sto_open` lorsque la vitesse est inconnue.
 
 ### Carte « Camera / presence »
 
@@ -1929,11 +2087,21 @@ sous le bouton de l'écran qui a fait la demande, précédés de
 
 ### Refus immédiats (réponse HTTP)
 
+Les départs manuel et programmé peuvent répondre `412`, code `sto_not_ready`, avec
+l'une des phrases communes suivantes, également affichées à côté des boutons :
+
+- `chaine STO ouverte : retablir la chaine de securite` ;
+- `etat STO inconnu : retablir une lecture fiable de la chaine de securite` ;
+- `lecture STO non configuree : configurer la source de la chaine de securite`.
+
+L'acquittement répond `409` avec la même phrase tant que la chaîne n'est pas prête,
+même si le verdict à libérer porte sur une autre cause.
+
 | Message | Code | Sens |
 |---|---|---|
 | `an operator name is required: an unattributable session record is not one` | 400 | nom d'opérateur vide (démarrage, cible, fin, reset, acquittement) |
 | `nobody has attested the emergency stop this boot: …` | 412 | attestation du câblage non faite depuis le démarrage du Pi |
-| `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | 409 | un verdict verrouillé attend un acquittement |
+| `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | 409 | `verdict_latched` : un verdict verrouillé attend un acquittement, quel qu'en soit l'auteur : le superviseur, ou la console elle-même (`sto_open`, `drive_precommanded`, `enable_unconfirmed`, son propre `comms_lost`...). Sous un verdict de la console elle-même, la règle nommée est celle de la ligne `plancher verrouille` de la page Securite. La console répond au clic, sans rien déposer dans la boîte aux lettres. Jusqu'au 25 octobre 2026, un verdict verrouillé par la console elle-même n'était pas lu ici : le démarrage était accepté (202) puis refusé un cycle plus tard par la boucle |
 | `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` | 409 | `start_pending` : un démarrage ou un reset pendant qu'un démarrage accepté attend ou est armé (double clic, ou un autre écran). Jusqu'au 11 octobre 2026 : `the machine is starting, not idle (pending: …)`, avec la demande en attente imprimée |
 | `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` | 409 | `request_waiting` : la boîte aux lettres (une seule place) tient une autre demande jusqu'au prochain cycle |
 | `the machine is running, not idle` | 409 | `machine_running` : une séance tourne déjà |
@@ -1969,7 +2137,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 |---|---|
 | `demarrage refuse : la machine est deja <état>` | une séance existe déjà |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante |
-| `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente |
+| `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente. Depuis le 25 octobre 2026 un démarrage demandé depuis la page sous un verdict verrouillé est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un verdict non verrouillé, pour un verrou posé entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord sous un verdict verrouillé par la console elle-même (section 15) |
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ ceux du fichier médical (`hr_hard_max_bpm` / `hr_critical_bpm`) |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
 | `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent quand la boucle relit le variateur pour armer. Depuis le 11 octobre 2026 un démarrage demandé depuis la page est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un défaut apparu entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord |
@@ -2119,6 +2287,15 @@ servi ; `/docs` et `/redoc` sont désactivés.
 
 ### Lectures (jeton si configuré)
 
+`GET /api/status`, `GET /api/snapshot` et les images de `/ws/telemetry` portent
+l'objet local `sto` : `state` (`ready`, `open`, `unknown`, `not_configured`), `source`
+(`none`, `sim_ready`, `sim_open`, `drive_input`), `age_s` (dernière réussite, `null`
+si absente), `refusal` (phrase commune du refus, `null` si prête), `stale_after_s`
+(durée technique de validité, 2 s), `unknown_refusal` (phrase commune à afficher si
+la lecture vieillit sur l'écran sans nouvelle réponse). `TelemetrySnapshot.sto` garde la lecture typée
+et `sto_age` son âge au moment du snapshot. Aucun de ces champs ne part dans le
+heartbeat Convex ni dans son objet strict `live` ; leur contrat reste inchangé.
+
 | Méthode | Chemin | Rôle | Retour |
 |---|---|---|---|
 | GET | `/api/status` | tout ce que la mise en route demande : `at` (l'horloge de la machine à l'écriture de la réponse, celle du champ `at` des images et du reçu d'E-STOP ; donnée d'affichage, dont la page se sert pour ordonner ce qu'elle reçoit), `instance` (le nom que ce lancement de la console s'est tiré au hasard, 32 chiffres hexadécimaux : le même dans toutes ses réponses et toutes ses images, un autre après tout redémarrage ; donnée d'affichage), `run_state`, `estop_latched` (le drapeau de l'interface web, posé par sa route E-STOP seulement), `supervisor_estop` (l'arrêt d'urgence que le superviseur tient verrouillé, quel qu'en soit l'auteur, caméra comprise ; `null` sinon ; il reste lisible quand `go_silent` a pris la place de `standing` et de `floor`), `attested`, `attestation`, `attestation_statement`, `standing` (le verdict en vigueur, quel qu'en soit l'auteur, superviseur ou runtime : celui qu'une image prise à cet instant porterait), `floor` (le verdict verrouillé le plus sévère, quel qu'en soit l'auteur, arrêt d'urgence à part), `silenced` (le verdict verrouillé le plus sévère dont `go_silent` a pris la place, où qu'il soit tenu ; `null` hors `go_silent` et quand rien n'était verrouillé avant lui), `drive_state` et `drive_fault` (l'état du variateur et son défaut tels que la boucle les a lus en dernier, ceux du dernier instantané ; `comm_lost` avant le premier cycle et dès que cette lecture a plus de 2 s), `live` (verdicts actifs), `retained_hr_samples`, `pending` (la demande qui attend dans la boîte, avec son `request_id`), `requests` (ce que sont devenues les 16 dernières demandes auxquelles la console a répondu, la plus ancienne d'abord : `request_id`, `fate` parmi `taken`, `refused`, `cancelled`, `detail`, `at`, `wall_clock` ; aucun nom d'opérateur), `session_request` (l'identifiant du démarrage dont vient la séance en cours, de son acceptation au retour à `idle` ; `null` au repos), `attendant_last_seen`, `clients`, `evictions`, `ecg_fs_hz`, `ecg_seq`, `profile_rev`, `profile_ids`, `ports`, `bind`, `counters` | 200 |
@@ -2261,11 +2438,15 @@ répondu à temps. Détail dans
   plus caché à l'opérateur : le bandeau `VARIATEUR EN DEFAUT` le dit sur toutes les
   pages, et la console refuse le démarrage au clic, avec la raison (section 6). Aucune
   règle de sécurité n'a été ajoutée pour cela.
-- Un démarrage demandé alors qu'un verdict verrouillé par le runtime lui-même tient
-  (`drive_precommanded`, par exemple) est encore accepté par la console (202), puis
-  refusé un cycle plus tard par la boucle : la porte de la console ne lit que le
-  superviseur. Le verdict, lui, est à l'écran avant le clic (pastille **Securite**,
-  bandeau, et maintenant `/api/status`), et la note du bouton donne le refus.
+- Depuis le 25 octobre 2026, un démarrage demandé depuis la page alors qu'un verdict
+  verrouillé par le runtime lui-même tient (`sto_open`, `drive_precommanded`, par
+  exemple) est refusé au clic (409 `verdict_latched`, section 13), comme sous un
+  verdict du superviseur ; jusque-là il était accepté (202), puis refusé un cycle plus
+  tard par la boucle. Un lancement venu du tableau de bord sous un tel verdict ne
+  passe pas par cette porte : la console accepte encore sa confirmation et annonce le
+  départ au tableau de bord, puis la boucle le refuse. Rien n'est armé ; la
+  vérification faite avant d'annoncer le départ ne lit que les verdicts du
+  superviseur.
 - Le bandeau `ARRET D'URGENCE VERROUILLE` garde trois cas, du côté prudent (section 5) :
   un WebSocket tombé sur une image qui montrait un arrêt verrouillé ; un arrêt
   d'urgence posé depuis un autre écran sous `go_silent`, vu au tour de statut suivant

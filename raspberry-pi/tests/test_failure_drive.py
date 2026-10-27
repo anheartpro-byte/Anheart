@@ -223,15 +223,16 @@ async def test_a_drive_found_turning_refuses_the_start_and_is_zeroed(tmp_path: P
         started = await session.post(
             "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
         )
-        assert started.status_code == httpx.codes.ACCEPTED
+        assert started.status_code == httpx.codes.CONFLICT
+        assert started.json()["code"] == "verdict_latched"
         last = await rig.tick(20.0)
     assert last.safety is not None
     assert last.safety.rule == "drive_precommanded"
     assert last.safety.action is SafetyAction.QUICK_STOP
     # The idle console now stops the drive and latches drive_precommanded within
-    # its first poll, so START is refused on that standing verdict (it used to be
-    # refused as DrivePrecommanded, "deja en marche", because nothing had looked).
-    assert any("drive_precommanded" in refusal for refusal in rig.refusals()), rig.refusals()
+    # its first poll, so START is refused at once on that latched verdict (it used to
+    # be refused as DrivePrecommanded, "deja en marche", because nothing had looked).
+    assert "(drive_precommanded)" in started.json()["detail"], started.text
     assert abs(last.measured.motor_rpm) < 1
     await rig.panel.close()
     assert await rig.left_stopped() == ""

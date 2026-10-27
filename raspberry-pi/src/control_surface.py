@@ -99,7 +99,9 @@ from enum import Enum, unique
 from typing import Final, Protocol, assert_never, final, runtime_checkable
 
 from src.clock import Clock
+from src.motor.sto import StoSource
 from src.result import Err, Ok, Result
+from src.training.preflight import StoNotReady, check_sto_ready
 from src.training.safety import (
     AcknowledgeRefusal,
     AttestationRefusal,
@@ -490,7 +492,7 @@ class NothingRunning:
     state: RunState
 
 
-type StartRefusal = SurfaceBusy | SafetyHolding | EstopUnattested
+type StartRefusal = SurfaceBusy | SafetyHolding | EstopUnattested | StoNotReady
 """Every way a start can be refused. Closed.
 
 :class:`~src.training.safety.EstopUnattested` is reused from the safety module
@@ -577,6 +579,7 @@ class ControlSurface:
         "_session_request",
         "_sink",
         "_starting",
+        "_sto",
         "_supervisor",
     )
 
@@ -588,6 +591,7 @@ class ControlSurface:
         sink: TelemetrySink,
         acknowledger: Acknowledger | None = None,
         boot: str | None = None,
+        sto: StoSource | None = None,
     ) -> None:
         """Wire the surface to the clock, the supervisor and the telemetry sink.
 
@@ -602,6 +606,7 @@ class ControlSurface:
         system for anything.
         """
         self._clock: Clock = clock
+        self._sto: StoSource | None = sto
         self._supervisor: SafetySupervisor = supervisor
         self._sink: TelemetrySink = sink
         self._acknowledger: Acknowledger = supervisor if acknowledger is None else acknowledger
@@ -667,6 +672,18 @@ class ControlSurface:
     def estop_latched(self) -> bool:
         """Whether an emergency stop is latched here. Sticky until acknowledged."""
         return self._estop_latched
+
+    @property
+    def estop_pending(self) -> bool:
+        """Whether an emergency stop waits for the loop: submitted, not yet taken by a tick.
+
+        True from :meth:`submit_estop` until :meth:`take_estop` hands the
+        receipt over (or an acknowledgement drops it first). Unlike
+        :attr:`estop_latched` it does not outlive the loop's reaction, so a
+        reader that waits for it to clear never waits for an acknowledgement.
+        Read from memory only.
+        """
+        return self._estop_receipt is not None
 
     @property
     def attendant_last_seen(self) -> Monotonic | None:
@@ -801,13 +818,15 @@ class ControlSurface:
     ) -> Result[StartSession, StartRefusal]:
         """Ask for a session to start. Refused unless everything below is true.
 
-        Three gates, in this order, and the order is from least to most
+        Four gates, in this order, and the order is from least to most
         recoverable so the operator is told the thing they can act on:
 
         1. the emergency-stop wiring must be attested this boot
            (:meth:`~src.training.safety.SafetySupervisor.require_estop_confirmed`);
         2. no latched safety verdict may stand;
-        3. the surface must be IDLE **and its mailbox empty**. A start never
+        3. the configured STO source must report READY, when wired here; the
+           runtime independently requires its source at the actual arming;
+        4. the surface must be IDLE **and its mailbox empty**. A start never
            takes the place of a request that waits: while another start waits
            or is being armed this one is refused at once, and so is one that
            finds a reset, a target or a stop still waiting for the loop.
@@ -838,13 +857,17 @@ class ControlSurface:
         return Ok(command)
 
     def check_start(self) -> Result[None, StartRefusal]:
-        """Check the three start gates without recording or submitting a request."""
+        """Check the start gates without recording or submitting a request."""
         attested = self._supervisor.require_estop_confirmed()
         if isinstance(attested, Err):
             return Err(attested.error)
         standing = self._supervisor.standing
         if standing is not None and standing.latched:
             return Err(SafetyHolding(standing))
+        if self._sto is not None:
+            sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+            if sto is not None:
+                return Err(sto)
         busy = self._in_the_way_of_a_start()
         if busy is not None:
             return Err(busy)
@@ -853,20 +876,14 @@ class ControlSurface:
     def submit_start_manual(
         self, *, occupancy: Occupancy, operator: str, subject_id: str = ""
     ) -> Result[StartManual, StartRefusal]:
-        """Ask for a manual session to start. The same three gates as :meth:`submit_start`.
+        """Ask for a manual session to start. The same gates as :meth:`submit_start`.
 
         ``subject_id`` names the rider with a person on board; the loop checks
         it against the riders' list when it arms, as it checks the occupancy.
         """
-        attested = self._supervisor.require_estop_confirmed()
-        if isinstance(attested, Err):
-            return self._refuse_start(attested.error)
-        standing = self._supervisor.standing
-        if standing is not None and standing.latched:
-            return self._refuse_start(SafetyHolding(standing))
-        busy = self._in_the_way_of_a_start()
-        if busy is not None:
-            return self._refuse_start(busy)
+        checked = self.check_start()
+        if isinstance(checked, Err):
+            return self._refuse_start(checked.error)
         command = StartManual(
             occupancy=occupancy,
             operator=operator,

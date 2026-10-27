@@ -109,6 +109,7 @@ from typing import Final, final
 from src.clock import Clock
 from src.motor.drive import DriveState, FaultReport
 from src.result import Err, Ok, Result
+from src.training.preflight import StoNotReady
 from src.training.types import (
     HeartRateSample,
     Phase,
@@ -1158,7 +1159,7 @@ class NothingLatched:
 
 
 type AcknowledgeRefusal = (
-    Unattributed | GoSilentIsTerminal | EmergencyStopStillLatched | NothingLatched
+    Unattributed | GoSilentIsTerminal | EmergencyStopStillLatched | NothingLatched | StoNotReady
 )
 """Every way :meth:`SafetySupervisor.acknowledge` can refuse. Closed; match it
 with the nested form (``case Err(error):`` then ``match error:``) ending in

@@ -177,6 +177,7 @@ from src.roster import (
     describe_passenger_refusal,
 )
 from src.training.plan import JsonValue, ProfileStore, TrainingProfile
+from src.training.preflight import StoNotReady, describe_sto_refusal
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import EstopUnattested
 from src.training.types import Occupancy, TelemetrySnapshot
@@ -744,6 +745,8 @@ def describe_surface_refusal(refusal: StartRefusal) -> str:
             return f"verdict de securite {verdict.rule} a acquitter a la console"
         case SurfaceBusy(state=state):
             return f"console occupee ({state.value})"
+        case StoNotReady():
+            return describe_sto_refusal(refusal)
     raise assert_never(refusal)
 
 

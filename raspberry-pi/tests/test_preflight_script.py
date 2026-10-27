@@ -76,6 +76,18 @@ class Verdict:
         end = lines.index("", start)
         return tuple(line.strip() for line in lines[start:end])
 
+    @property
+    def drive(self) -> tuple[str, ...]:
+        """The lines of the "Drive link" section, without their indentation."""
+        lines = self.output.splitlines()
+        start = lines.index("3. Drive link") + 1
+        end = lines.index("4. BITalino", start)
+        return tuple(line.strip() for line in lines[start:end])
+
+    def sto(self) -> tuple[str, ...]:
+        """The drive lines that judge STO_SOURCE."""
+        return tuple(line for line in self.drive if "STO_SOURCE" in line)
+
     def said(self, level: str, *words: str) -> bool:
         """Whether one dashboard line of that level contains every one of ``words``."""
         return any(
@@ -85,7 +97,12 @@ class Verdict:
 
 
 def preflight(
-    tmp_path: Path, *, code: str, body: str, contract_source: str | None = None
+    tmp_path: Path,
+    *,
+    code: str,
+    body: str,
+    contract_source: str | None = None,
+    env_file: str = ENV_FILE,
 ) -> Verdict:
     """Run the real script in a copy of the console's tree, against a scripted dashboard."""
     assert BASH is not None
@@ -100,7 +117,7 @@ def preflight(
         else contract_source
     )
     (tree / "src" / "contract.py").write_text(source, encoding="utf-8")
-    (tree / ".env").write_text(ENV_FILE, encoding="utf-8")
+    (tree / ".env").write_text(env_file, encoding="utf-8")
     tools = tmp_path / "bin"
     tools.mkdir()
     for name, text in (("curl", FAKE_CURL), ("docker", FAKE_DOCKER)):
@@ -256,3 +273,78 @@ def test_a_contract_version_that_cannot_be_read_fails_the_preflight(tmp_path: Pa
     assert verdict.dashboard == (verdict.dashboard[0],)  # that line and nothing else
     assert verdict.curl_arguments == ()  # the dashboard is not asked without a version
     assert verdict.exit_code == 1
+
+
+# =========================================================================
+# The STO chain's source (ANH-92)
+# =========================================================================
+
+SERIAL_ENV: Final[str] = """MOTOR_BACKEND=serial
+MOTOR_PORT=ftdi://schneider:rs485/1
+ECG_SOURCE=sim
+ARM_RADIUS_M=1.5
+MACHINE_API_KEY=
+"""
+
+
+@pytest.mark.parametrize(
+    ("line", "words"),
+    [
+        ("", ("STO_SOURCE not set", "none applies", "every start and acknowledgement is refused")),
+        ("STO_SOURCE=\n", ("STO_SOURCE not set", "none applies")),
+        ("STO_SOURCE=none\n", ("STO_SOURCE=none", "every start and acknowledgement is refused")),
+    ],
+    ids=["absent", "empty", "none"],
+)
+def test_an_unconfigured_sto_chain_is_a_warning_and_nothing_else(
+    tmp_path: Path, line: str, words: tuple[str, ...]
+) -> None:
+    verdict = preflight(tmp_path, code="000", body="", env_file=SERIAL_ENV + line)
+    assert len(verdict.sto()) == 1
+    assert verdict.sto()[0].startswith("WARN")
+    assert all(word in verdict.sto()[0] for word in words)
+    assert not any(line.startswith("FAIL") for line in verdict.drive)
+    assert verdict.exit_code == 0  # the console runs; it arms nothing
+
+
+@pytest.mark.parametrize("source", ["sim_ready", "sim_open", "SIM_READY"])
+def test_a_simulated_chain_in_front_of_a_real_drive_fails_the_preflight(
+    tmp_path: Path, source: str
+) -> None:
+    verdict = preflight(
+        tmp_path, code="000", body="", env_file=SERIAL_ENV + f"STO_SOURCE={source}\n"
+    )
+    assert len(verdict.sto()) == 1
+    assert verdict.sto()[0].startswith("FAIL")
+    assert f"STO_SOURCE={source.lower()}" in verdict.sto()[0]
+    assert "refused with MOTOR_BACKEND=serial" in verdict.sto()[0]
+    assert verdict.exit_code == 1
+
+
+@pytest.mark.parametrize(
+    ("env_file", "source"),
+    [
+        (SERIAL_ENV + "STO_SOURCE=drive_input\nSTO_DRIVE_INPUT=LI2\n", "drive_input"),
+        (ENV_FILE + "STO_SOURCE=sim_open\n", "sim_open"),
+    ],
+    ids=["wired_chain_on_the_real_drive", "simulated_chain_on_the_simulator"],
+)
+def test_a_valid_sto_source_is_neither_warned_nor_failed(
+    tmp_path: Path, env_file: str, source: str
+) -> None:
+    verdict = preflight(tmp_path, code="000", body="", env_file=env_file)
+    assert verdict.sto() == (f"ok    STO_SOURCE={source}",)
+    assert not any(line.startswith("FAIL") for line in verdict.drive)
+
+
+def test_the_pi_template_leaves_the_sto_source_to_its_default_and_is_warned(
+    tmp_path: Path,
+) -> None:
+    """``.env.pi.example`` comments the line out: none applies on the Pi, and is warned."""
+    template = (CONSOLE / ".env.pi.example").read_text(encoding="utf-8")
+    assert "\nSTO_SOURCE=" not in template
+    assert "\n# STO_SOURCE=none\n" in template
+    verdict = preflight(tmp_path, code="000", body="", env_file=template)
+    assert len(verdict.sto()) == 1
+    assert verdict.sto()[0].startswith("WARN")
+    assert "STO_SOURCE not set" in verdict.sto()[0]

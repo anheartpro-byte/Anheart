@@ -196,14 +196,28 @@ from src.local_config import (
     retired_keys,
 )
 from src.log_format import json_handler
-from src.motor.atv320 import ATV320Drive, serial_master
-from src.motor.drive import DriveBackend
+from src.motor.atv320 import (
+    AUXILIARY_READ_BUDGET,
+    ATV320Drive,
+    AuxiliaryRegisterReads,
+    serial_master,
+)
+from src.motor.drive import DriveBackend, LogicInput, RegisterMap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
+from src.motor.sto import (
+    DriveInputStoSource,
+    SimulatedStoChain,
+    SimulatedStoSource,
+    StoRegisterPort,
+    StoSource,
+    StoSourceKind,
+    UnconfiguredStoSource,
+)
 from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.presence.adapter import PRESENCE_PERIOD, PresenceAcknowledger, PresenceGuard
 from src.presence.adapter import RuntimePort as PresenceRuntimePort
-from src.presence.monitor import PresenceMonitor
+from src.presence.monitor import EmergencyStop, PresenceDecision, PresenceMonitor, RampDown
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
 from src.record import commands as record_commands
@@ -263,6 +277,7 @@ from src.training.plan import (
     ResolveError,
     UnknownProfile,
 )
+from src.training.preflight import StoNotReady, describe_sto_refusal
 from src.training.runtime import (
     AlreadyStarted,
     DriveInFault,
@@ -840,6 +855,135 @@ class UvicornRunner:
 # =========================================================================
 
 
+def sto_stop_pending(
+    runtime: TrainingRuntime,
+    *,
+    estop_pending: bool,
+    pending: Command | None,
+    decision: PresenceDecision | None,
+) -> bool:
+    """Whether a stop is under way, or asked for and not yet taken by a tick.
+
+    Under way: :attr:`~src.training.runtime.TrainingRuntime.stop_in_progress`.
+    Asked for, in any state, even at rest: an emergency stop from a screen
+    that no tick has taken yet (its zero write goes out at the next tick).
+    Asked for, during a session: an end (local STOP or the dashboard's) or a
+    manual target of zero waiting in the mailbox, or a camera verdict that
+    stops the machine and reaches the runtime at its next tick. The
+    supervisor's emergency latch is not read: it holds until an
+    acknowledgement, which itself needs a fresh reading.
+
+    A function of what it is given, so that the simulation's ``drive_input``
+    variant asks the console's own question: its actions reach the runtime at
+    the tick, as the mailbox does, so nothing is ever pending there.
+    """
+    if runtime.stop_in_progress or estop_pending:
+        return True
+    if runtime.state is not RuntimeState.RUNNING:
+        return False
+    if isinstance(pending, EndSession) or (
+        isinstance(pending, SetManualTarget) and pending.output_rpm <= 0.0
+    ):
+        return True
+    return isinstance(decision, RampDown | EmergencyStop)
+
+
+@final
+class StoReadGate:
+    """When one STO read may start: the same guard for the console and the simulation.
+
+    The console's polling task asks it before every read
+    (:meth:`~src.motor.sto.DriveInputStoSource.guard_polling`) and waits on it
+    for the next completed tick (:meth:`~src.motor.sto.DriveInputStoSource.pace_polling`).
+    The simulation's ``drive_input`` variant builds the same gate around its
+    own runtime, so the failure matrix judges the guard the console runs, not
+    a copy of it. Mutable: owned by one control loop, on one event loop.
+    """
+
+    __slots__ = (
+        "_budget",
+        "_clock",
+        "_closing",
+        "_misses",
+        "_runtime",
+        "_stop_pending",
+        "_ticked",
+        "_window",
+    )
+
+    def __init__(
+        self,
+        *,
+        clock: Clock,
+        runtime: TrainingRuntime,
+        budget: Seconds,
+        stop_pending: Callable[[], bool],
+    ) -> None:
+        """``budget``: the link time one read takes; ``stop_pending``: a stop under way or asked."""
+        self._clock: Clock = clock
+        self._runtime: TrainingRuntime = runtime
+        self._budget: Seconds = budget
+        self._stop_pending: Callable[[], bool] = stop_pending
+        # Set once by close(), never cleared: no auxiliary frame starts after it.
+        self._closing: bool = False
+        # One completed control tick permits one auxiliary frame, never a backlog:
+        # the instant that frame must end by (the tick's start plus one control
+        # period), or None while a tick runs and once the frame is taken or refused.
+        self._window: Monotonic | None = None
+        # Set by each completed tick, cleared by the polling task before it waits.
+        self._ticked: asyncio.Event = asyncio.Event()
+        # Frames a completed tick permitted but left too little time for.
+        self._misses: int = 0
+
+    @property
+    def misses(self) -> int:
+        """Reads a completed tick permitted but skipped: too little time before the next."""
+        return self._misses
+
+    def tick_began(self) -> None:
+        """A control tick starts: no read may start until it completes."""
+        self._window = None
+
+    def tick_completed(self, began: Monotonic) -> None:
+        """The tick that began at ``began`` completed: one read may start before the next."""
+        self._window = Monotonic(began + CONTROL_PERIOD)
+        self._ticked.set()
+
+    def close(self) -> None:
+        """The console is closing: no read starts any more."""
+        self._closing = True
+
+    def permitted(self) -> bool:
+        """Whether one STO read may start now; takes the completed tick's permission.
+
+        Never while closing, silent, released or unacquired, nor while a stop
+        is under way or asked for (stop writes keep the link), and only in the
+        gap after a completed tick, with the read's budget left before the next
+        scheduled tick. A read skipped for lack of time starts nothing, so it
+        is no attempt: it is counted and waits for the next completed tick.
+        """
+        window = self._window
+        if (
+            self._closing
+            or not self._runtime.drive_reads_permitted
+            or not self._runtime.drive_link_acquired
+            or window is None
+            or self._stop_pending()
+        ):
+            return False
+        self._window = None
+        if self._clock.monotonic() + self._budget > window:
+            self._misses += 1
+            return False
+        return True
+
+    async def next_tick(self, bound: Seconds) -> None:
+        """Wait for the next completed tick, or ``bound``, whichever comes first."""
+        self._ticked.clear()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._ticked.wait(), bound)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DriveSide:
     """The drive as built: the backend, the simulator behind it if any, the port release."""
@@ -875,6 +1019,8 @@ class LocalPanel:
         "_services",
         "_sim_ecg",
         "_stalled_at_stop",
+        "_sto",
+        "_sto_gate",
         "_store",
         "_surface",
         "_ticked",
@@ -908,8 +1054,19 @@ class LocalPanel:
         service: ServiceDesk | None = None,
         health: HealthWatch | None = None,
         roster: Roster | None = None,
+        sto: StoSource,
     ) -> None:
         self._clock: Clock = clock
+        self._sto: StoSource = sto
+        self._sto_gate: StoReadGate = StoReadGate(
+            clock=clock,
+            runtime=runtime,
+            budget=sto.read_budget if isinstance(sto, DriveInputStoSource) else Seconds(0.0),
+            stop_pending=self._stop_pending,
+        )
+        if isinstance(sto, DriveInputStoSource):
+            sto.guard_polling(self._sto_gate.permitted)
+            sto.pace_polling(self._sto_gate.next_tick)
         # The riders' list: the link writes it, the routes and the starts read it.
         self._roster: Roster = Roster(linked=False) if roster is None else roster
         self._watchdog: ServiceWatchdog = watchdog
@@ -939,6 +1096,15 @@ class LocalPanel:
         self._last_measured: MotorRpm = MotorRpm(0)
 
     # --- read access, for the tests and the entry point ------------------
+
+    @property
+    def sto(self) -> StoSource:
+        return self._sto
+
+    @property
+    def sto_window_misses(self) -> int:
+        """STO reads a completed tick permitted but skipped: too little time before the next."""
+        return self._sto_gate.misses
 
     @property
     def runtime(self) -> TrainingRuntime:
@@ -1070,7 +1236,13 @@ class LocalPanel:
         requests meanwhile: a request can be accepted into the mailbox while a
         tick is under way. It is taken by the NEXT tick, and the surface keeps
         its place until then (:meth:`~src.control_surface.ControlSurface.note_idle`).
+
+        A completed tick, and only one, permits one STO read in the gap before
+        the next scheduled tick (:meth:`StoReadGate.permitted`); none can start
+        while a tick is under way.
         """
+        began = self._clock.monotonic()
+        self._sto_gate.tick_began()
         estop = self._surface.take_estop()
         if estop is not None:
             self._record_command(record_commands.EmergencyStop(), estop.operator)
@@ -1111,6 +1283,7 @@ class LocalPanel:
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
+        self._sto_gate.tick_completed(began)
         return snapshot
 
     def _record(self, now: Monotonic, snapshot: TelemetrySnapshot) -> None:
@@ -1602,12 +1775,26 @@ class LocalPanel:
 
     # --- running and stopping --------------------------------------------
 
+    def _stop_pending(self) -> bool:
+        """:func:`sto_stop_pending`, asked of this console's mailbox, screens and camera.
+
+        Each is read from memory: what waits in the mailbox, whether a
+        screen's emergency stop waits for a tick, the camera's last decision.
+        """
+        presence = self._presence
+        return sto_stop_pending(
+            self._runtime,
+            estop_pending=self._surface.estop_pending,
+            pending=self._surface.pending,
+            decision=None if presence is None else presence.last_decision,
+        )
+
     async def run(self, stop: asyncio.Event, web: WebRunner) -> int:
         """Run until ``stop`` is set or a task ends; then stop everything. Returns an exit code."""
         if self._recorder is not None:
             self._recorder.journal.start()
         control = asyncio.create_task(self._every(CONTROL_PERIOD, self.control_cycle, stop))
-        observers = (
+        observers: tuple[asyncio.Task[None], ...] = (
             asyncio.create_task(self._every(ECG_PERIOD, self.ecg_step, stop)),
             asyncio.create_task(self._every(SENSOR_PERIOD, self.sensor_step, stop)),
             asyncio.create_task(self._every(PRESENCE_PERIOD, self.presence_step, stop)),
@@ -1615,6 +1802,8 @@ class LocalPanel:
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
         )
+        if isinstance(self._sto, DriveInputStoSource):
+            observers += (asyncio.create_task(self._sto.run(), name="sto-poll"),)
         started = asyncio.create_task(self._record_start())
         try:
             failed = await PanelTasks(stop, web, self.close).run(control, observers)
@@ -1670,6 +1859,7 @@ class LocalPanel:
         stopping, so that the time the drive takes to come to rest is not
         read as a frozen loop.
         """
+        self._sto_gate.close()
         if self._watchdog.stalled(self._clock.monotonic()):
             self._stalled_at_stop = True
             _logger.error(
@@ -1730,12 +1920,75 @@ def build_presence(
     return PresenceGuard(runtime=runtime, source=camera, monitor=PresenceMonitor(clock=clock))
 
 
+def build_sto(
+    config: LocalConfig, clock: Clock, drive: DriveBackend, chain: SimulatedStoChain | None
+) -> StoSource:
+    """Compose the observation source around the inner, unrecorded drive.
+
+    ``drive_input`` reads through the runtime's own drive instance, never a
+    second master on the cable. The ATV320 driver's reads go through
+    :class:`~src.motor.atv320.AuxiliaryRegisterReads`: same lock and link
+    health, outside the exchange log that feeds the session record.
+    """
+    match config.sto_source:
+        case StoSourceKind.NONE:
+            return UnconfiguredStoSource()
+        case StoSourceKind.SIM_READY | StoSourceKind.SIM_OPEN:
+            if chain is None or config.motor_backend is MotorBackend.SERIAL:
+                raise ValueError("simulated STO needs a shared simulated drive chain")
+            return SimulatedStoSource(chain=chain, source=config.sto_source)
+        case StoSourceKind.DRIVE_INPUT:
+            if config.sto_drive_input is None:
+                raise ValueError("drive_input needs STO_DRIVE_INPUT")
+            registers = RegisterMap() if config.drive_link is None else config.drive_link.registers
+            port: StoRegisterPort
+            budget = Seconds(0.0)
+            if isinstance(drive, ATV320Drive):
+                port = AuxiliaryRegisterReads(drive)
+                budget = AUXILIARY_READ_BUDGET
+            elif isinstance(drive, StoRegisterPort):
+                port = drive  # the simulator: its exchanges never suspend
+            else:
+                raise TypeError("drive_input needs a register-reading drive")
+            return DriveInputStoSource(
+                clock=clock,
+                drive=port,
+                address=registers.logic_inputs,
+                input_=config.sto_drive_input,
+                read_budget=budget,
+            )
+    raise assert_never(config.sto_source)
+
+
+def _sto_chain(config: LocalConfig, drive: DriveSide) -> SimulatedStoChain | None:
+    if drive.simulator is None:
+        return (
+            SimulatedStoChain(ready=config.sto_source is not StoSourceKind.SIM_OPEN)
+            if config.motor_backend is MotorBackend.SIM
+            else None
+        )
+    chain = drive.simulator.sto_chain
+    if chain is None:
+        chain = SimulatedStoChain(ready=config.sto_source is not StoSourceKind.SIM_OPEN)
+        drive.simulator.connect_sto(chain)
+    return chain
+
+
 def build_drive(config: LocalConfig, clock: Clock) -> DriveSide:
     """The simulator, or the ATV320 on the project's one Modbus master. Opens nothing."""
     link = config.drive_link
     match config.motor_backend:
         case MotorBackend.SIM:
-            simulator = SimulatedDrive(clock, SimulatedDriveConfig(reads_reset_watchdog=True))
+            simulator = SimulatedDrive(
+                clock,
+                SimulatedDriveConfig(
+                    reads_reset_watchdog=True,
+                    sto_input=(
+                        LogicInput.LI1 if config.sto_drive_input is None else config.sto_drive_input
+                    ),
+                ),
+                sto_chain=SimulatedStoChain(ready=config.sto_source is not StoSourceKind.SIM_OPEN),
+            )
             return DriveSide(backend=simulator, simulator=simulator, release=_nothing)
         case MotorBackend.SERIAL:
             if link is None:
@@ -1898,6 +2151,7 @@ def build_panel(
     link_health = None if config.cloud is None else LinkHealth(clock.monotonic())
     motion = config.motion
     drive = build_drive(config, clock) if drive is None else drive
+    sto = build_sto(config, clock, drive.backend, _sto_chain(config, drive))
     safety = SafetyLimits(
         hard_max_bpm=config.tiers.hard_max_bpm, critical_bpm=config.tiers.critical_bpm
     )
@@ -1911,6 +2165,7 @@ def build_panel(
         journal.listen(tapped.source, tapped.refused)
     runtime = TrainingRuntime(
         clock=clock,
+        sto=sto,
         drive=backend,
         geometry=config.geometry,
         limits=RUNTIME_LIMITS,
@@ -1942,6 +2197,7 @@ def build_panel(
     presence = build_presence(config, clock, inputs)
     surface = ControlSurface(
         clock=clock,
+        sto=sto,
         supervisor=runtime.supervisor,
         sink=hub if recorder is None else RecordedSink(hub, recorder),
         # With a camera, an acknowledgement clears the presence latch too.
@@ -1987,6 +2243,7 @@ def build_panel(
     )
     services = Services(
         clock=clock,
+        sto=sto,
         surface=surface,
         hub=hub,
         supervisor=runtime.supervisor,
@@ -2031,6 +2288,7 @@ def build_panel(
         wall_clock=watch,
         service=service,
         roster=riders,
+        sto=sto,
     )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
@@ -2237,6 +2495,8 @@ def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one
             return f"variateur en defaut ({code})"
         case RecordStorageLow():
             return describe_record_storage(refusal)
+        case StoNotReady():
+            return describe_sto_refusal(refusal)
     raise assert_never(refusal)
 
 

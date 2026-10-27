@@ -143,11 +143,14 @@ async def test_http_terminal_recovery_retains_unknown_output_and_stops_all_traff
     start = await client.post(
         "/api/manual/start", json={"occupancy": "bench", "operator": "synthetic bench operator"}
     )
-    assert start.status_code == HTTPStatus.ACCEPTED
+    assert start.status_code == HTTPStatus.CONFLICT
+    assert start.json()["code"] == "verdict_latched"
+    assert f"({RULE_COMMS_LOST})" in start.json()["detail"]
     await step(panel, clock)
     refused_start = parse(StatusRow, await client.get("/api/status"))
     assert refused_start.pending is None
-    assert refused_start.counters[1] == status.counters[1] + 1
+    # Refused by the route on the runtime's latch, before the surface counts anything.
+    assert refused_start.counters[1] == status.counters[1]
     reset = await client.post(
         "/api/drive/fault-reset", json={"operator": "synthetic bench operator"}
     )
@@ -155,7 +158,7 @@ async def test_http_terminal_recovery_retains_unknown_output_and_stops_all_traff
     await step(panel, clock)
     refused_reset = parse(StatusRow, await client.get("/api/status"))
     assert refused_reset.pending is None
-    assert refused_reset.counters[1] == status.counters[1] + 2
+    assert refused_reset.counters[1] == status.counters[1] + 1
     acknowledged = await client.post(
         "/api/safety/acknowledge",
         json={"operator": "synthetic bench operator", "estop_released": True},

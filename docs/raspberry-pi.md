@@ -85,6 +85,428 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 | `motor/ftdi_link.py` | Le câble Schneider USB-RS485 via `pyftdi` (macOS n'en crée pas de `/dev/cu.*`). URL : `ftdi://schneider:rs485/1`. | Seul module qui importe `pyftdi`/`usb`. Porte 100 %. |
 | `motor/simulated.py` | Un ATV320 simulé : machine d'états CiA402 stricte, rampes, roue libre, chien de garde ttO. | Refuse un mot hors séquence. Rampe d'accélération 10 s pour 1380 tr/min, roue libre en `exp(-dt/20 s)`, ttO de 3 s (valeurs de modèle, pas des mesures). Porte 100 %. |
 
+#### Retour du relais de sécurité et STO
+
+`motor/sto.py` expose `StoSource.latest(now)` : une lecture typée, immédiate,
+sans accès au fil. `STO_SOURCE=none` donne `NOT_CONFIGURED`, `sim_ready` et
+`sim_open` lisent une chaîne simulée initialement fermée ou ouverte, et
+`drive_input` lit le retour du relais sur l'entrée `STO_DRIVE_INPUT=LI1..LI6`.
+Les quatre états sont `READY` (contact fermé, couple permis), `OPEN` (contact
+ouvert, couple coupé), `UNKNOWN` (jamais lu, lecture échouée ou trop ancienne)
+et `NOT_CONFIGURED` (aucune source configurée). Seul `READY` atteste la
+disponibilité de la chaîne ; aucun état ne prouve l'immobilité de l'arbre.
+
+**Le banc réel ne peut plus armer avant le câblage, et c'est voulu.** Avec
+`MOTOR_BACKEND=serial`, `STO_SOURCE` vaut `none` par défaut et les valeurs
+`sim_*` sont refusées au démarrage. La console démarre et affiche la chaîne
+`non configuree (none)`, mais elle refuse tout départ et tout acquittement de
+verdict, avec la raison STO, tant qu'une source réelle n'est pas câblée,
+configurée et prête (`drive_input` et une lecture `READY`). Le banc actuel, dont
+le pont STO est en place, ne peut donc plus armer ni acquitter un verdict. C'est
+la décision du responsable du projet du 22 octobre 2026 : aucune exemption banc,
+parce que la lecture de la chaîne de sécurité est la condition de l'armement et
+de l'acquittement. Une exemption laisserait commander un variateur réel sans
+chaîne observée. Le banc redevient utilisable une fois la chaîne câblée, le pont
+retiré et `STO_SOURCE=drive_input` configuré avec son entrée.
+
+Prérequis matériels : retirer le pont STO et câbler la chaîne de sécurité
+indépendante du Pi ; câbler un contact de retour du relais de sécurité sur
+une entrée logique libre, non affectée à une autre fonction du variateur.
+Le retour est actif haut : 1 signifie prêt, 0 signifie ouvert, y compris
+sur un fil coupé. Aucune inversion logicielle n'est configurable. Les
+interrupteurs SW1/SW2 et le commun des entrées doivent suivre le manuel
+d'installation de l'ATV320 et le câblage retenu par l'électricien.
+
+Le registre logique 5202 porte LI1 en bit 0 jusqu'à LI6 en bit 5, selon
+les FAQ Schneider [FA245502](https://www.se.com/us/en/faqs/FA245502/) et
+[FA320881](https://www.se.com/uk/en/faqs/FA320881/). Le décalage configuré
+dans `RegisterMap` est appliqué une seule fois.
+
+**Un seul maître sur le câble (MEN-14).** La lecture du registre 5202 passe
+exclusivement par le lien variateur existant : la même instance `ATV320Drive`
+que le runtime, avec son verrou, sa file de requêtes, son exécuteur et son
+comptage des échecs, jamais par une seconde connexion série. `build_sto` donne
+à la source `AuxiliaryRegisterReads`, qui appelle
+`ATV320Drive.read_auxiliary_register`. Une lecture STO en échec affecte donc
+la santé du même lien série, comme toute autre lecture. Avec le variateur
+simulé, la source lit le même `SimulatedDrive` que le runtime. Test :
+`tests/test_sto_single_master.py` (une seule ouverture du port, une seule
+instance, toutes les transactions 5202 sur le même maître).
+
+**Le tic garde le lien.** Le sondage tourne dans sa propre tâche asyncio,
+hors du tic, et part juste après un tic terminé : au plus une lecture par
+`STO_POLL_PERIOD` (0,5 s), donc en pratique après un tic sur trois (0,6 s),
+et seulement avec la permission d'un tic terminé. Aucune lecture ne part
+pendant un tic. La garde n'accepte la lecture que si son budget de lien se
+termine avant l'instant prévu du tic suivant (début du tic terminé plus
+`CONTROL_PERIOD`) ; sinon la lecture n'est pas tentée, elle est comptée
+(`LocalPanel.sto_window_misses`) et attend la permission du tic suivant. Une
+lecture sautée n'est ni une réussite ni une tentative : elle ne touche ni
+l'instant de la dernière réussite ni `read_unresolved`. Le budget dépend du
+port : `AUXILIARY_READ_BUDGET` = 0,05 s sur l'ATV320 (une lecture saine occupe
+environ 13 ms sur le fil, 20 ms retenus ci-dessous, avec marge), 0 pour le
+variateur simulé, dont les échanges ne suspendent pas. Si les tics occupent
+toute la période, aucune lecture ne part : la lecture devient `UNKNOWN` au
+bout de `STO_STALE_AFTER`, le départ est refusé au repos, et
+`sto_unreadable / RAMP_DOWN` se verrouille en séance avec mouvement possible.
+Mesures en temps virtuel, avec une latence par échange sous le budget, sur
+le variateur simulé et sur le faux bus de l'ATV320 : les instants de toutes
+les écritures de commande sont identiques avec et sans
+`STO_SOURCE=drive_input` (`tests/test_sto_scheduling.py`).
+
+**Aucune lecture pendant un arrêt.** La garde refuse aussi toute lecture
+quand un arrêt est en cours ou demandé, pour que les écritures d'arrêt
+gardent le lien. Un arrêt est en cours
+(`TrainingRuntime.stop_in_progress`) pendant une fin de séance tant que la
+consigne descend ou que l'ordre de marche est tenu (STOP à la console ou
+depuis le site, verdict d'arrêt, limite de la séance manuelle, dépassement de
+durée, immobilité, E-STOP) ; pendant un verdict qui arrête une séance en
+cours (RAMP_DOWN, QUICK_STOP, GO_SILENT, ce dernier coupant déjà tout
+trafic) ; pendant la descente vers zéro qu'un FREEZE conduit pour un arrêt
+demandé (`_stop_under_freeze` : STOP, fin commencée, cible 0, ou programme
+entré dans sa phase COOLDOWN sous un FREEZE), tant que la consigne n'est pas
+nulle ; pendant la descente vers une cible manuelle de zéro ; et tant que
+l'ordre de marche est tenu hors séance (variateur trouvé en marche). Il est
+demandé, dans tous les états, même au repos, quand un E-STOP de l'écran
+attend le tic qui le prend (`ControlSurface.estop_pending`, de la demande
+jusqu'à ce tic, qui écrit le zéro) ; et, en séance, quand une fin ou une
+cible de zéro attend dans la boîte aux lettres, ou quand un verdict de la
+caméra n'a pas encore atteint le runtime. Le verrou d'arrêt d'urgence du
+superviseur n'entre pas dans la garde : il tient jusqu'à l'acquittement, qui
+exige lui-même une lecture `READY`. REDUCE n'est pas un arrêt, ni un FREEZE
+qui tient une vitesse : la séance continue de réguler sous eux (FREEZE tient
+la vitesse, REDUCE la baisse), la lecture continue donc aussi et reste
+`READY`, un acquittement sous un REDUCE n'est pas refusé pour une lecture
+vieillie, et une chaîne qui s'ouvre sous un REDUCE verrouille `sto_open` au
+tic qui juge la lecture ouverte, comme hors REDUCE. La descente planifiée d'un
+programme, sans verdict (phases COOLDOWN puis RECOVERY, consigne non nulle),
+n'est pas non plus un arrêt : le régulateur la conduit, c'est de la
+régulation, et la lecture continue (décision du 25 octobre 2026). La
+fermeture de la console, `GO_SILENT` et la libération du lien coupaient déjà
+toute lecture.
+Il n'existe pas de bouton d'arrêt dans la capsule ([securite.md](securite.md)) :
+un tel bouton entrera dans cette liste. Le temps retenu n'est pas compté contre
+la fraîcheur (section 5.3). Pendant l'arrêt, la carte passe à `inconnue` 2 s
+après la dernière lecture. La fin de l'arrêt est le premier tic qui n'en
+laisse plus en cours : consigne nulle et ordre de marche retiré à l'arrêt
+mesuré, consigne nulle atteinte vers une cible 0 ou sous un FREEZE, ou
+variateur qui signale un défaut (paragraphe suivant) ; la lecture reprend
+juste après ce tic. Aucune de ces conditions ne reste vraie sans fin
+pendant qu'un acquittement ou un réarmement est attendu : la consigne descend
+à chaque tic ou le lien se perd (`comms_lost`, puis `GO_SILENT`, qui coupe de
+toute façon les lectures) ; la marche tenue est retirée à l'arrêt mesuré, ou
+l'escalade de `disable_refused` la retire ou passe en `GO_SILENT` ; un
+variateur en défaut ne retient pas la lecture ; un E-STOP de
+l'écran, une fin ou une cible 0 dans la boîte aux lettres et un verdict de la
+caméra sont pris au tic suivant. Après un E-STOP au repos, la lecture reprend
+dès le tic qui l'a pris. Sur l'ATV320, l'écriture d'urgence verrouille la santé du lien jusqu'à
+ce que la console le rouvre au sondage de repos suivant : la première lecture
+qui suit peut donc échouer (carte `inconnue`), puis la carte redevient `prete`
+et l'acquittement reste possible. Tests :
+`tests/test_sto_scheduling.py` (six catégories d'arrêt, variateur muet sur
+5202 dès la demande, instants des écritures d'arrêt identiques à ceux d'une
+séance sans lecture STO ; sous un REDUCE, lectures après les tics comme hors
+REDUCE, lecture `READY`, instants des écritures inchangés et acquittement
+accepté ; E-STOP de l'écran demandé au repos juste après un tic) et
+`tests/test_sto_stop_guard.py` (dont un variateur en défaut avec un E-STOP de
+l'écran, un `sto_open` ou un verdict du superviseur : lecture continue pendant
+la roue libre puis à l'arrêt, acquittement puis réarmement acceptés).
+
+**Un variateur en défaut ne retient pas la lecture.** Tant qu'un statut frais
+montre le variateur en défaut (`FAULT`, ou la réaction de défaut pendant
+laquelle l'arbre tourne encore), aucun arrêt n'est en cours pour la garde, à
+toute vitesse et quelle que soit la consigne. La règle qui retient la lecture
+sert à ne retarder aucune écriture d'arrêt ; un variateur en défaut n'accepte
+que le réarmement, aucune écriture d'arrêt n'y agit, donc la lecture continue,
+pendant sa roue libre comme à l'arrêt. Une chaîne qui s'ouvre pendant cette
+roue libre est lue, et `sto_open` se verrouille au tic qui juge la première
+lecture ouverte, sans attendre l'arrêt : 0,4 s après l'ouverture dans les
+tests, où une lecture suit chaque tic, au plus 0,8 s avec une lecture tous les
+trois tics. L'acquittement des autres verdicts, puis le réarmement, restent
+possibles sans redémarrer la console. Une lecture déjà en vol quand un arrêt
+est demandé garde le résiduel borné décrit plus bas.
+
+**Une ouverture que la lecture ne montre pas n'échappe pas au verrou.**
+Pendant un arrêt, la chaîne n'est pas lue. Hors arrêt, une lecture tous les
+trois tics (0,6 s) manque une ouverture plus courte que cet intervalle, et le
+contact de retour du relais ne montre pas une coupure entre la sortie du
+relais et la borne STO du variateur, quelle qu'en soit la durée. Deux preuves
+complètent la lecture, et l'acquittement attend une lecture faite après
+l'arrêt :
+
+- **le mot d'état du variateur**, que chaque tic lit déjà (aucune trame
+  ajoutée) : tant que la console tient l'ordre de marche, arrêt ou non, un
+  statut frais `SWITCH_ON_DISABLED` signifie que le variateur a retiré son
+  étage de sortie sans que la console l'ait commandé (bus continu non prêt ou
+  STO ouvert). `sto_open / QUICK_STOP` se verrouille alors dans ce tic, avec
+  un détail qui dit que l'ouverture est déduite de l'état du variateur, aucune
+  lecture ne l'ayant montrée : au plus un tic (0,2 s) après l'ouverture,
+  chaîne restée ouverte ou déjà refermée, en séance manuelle comme pendant un
+  programme, et avant que `_settle` ne retire la marche, y compris quand un
+  arrêt demandé depuis la dernière lecture se termine dans le tic même qui le
+  prend. La consigne est nulle dans ce tic, une nouvelle cible est refusée, et
+  tout départ attend l'acquittement nommé. Aucun mot de la console ne mène à
+  cet état tant qu'elle tient la marche : l'armement finit en
+  `OPERATION_ENABLED`, `_settle` et l'escalade finissent en
+  `READY_TO_SWITCH_ON` et retirent la marche, l'E-STOP n'écrit que LFRD et
+  `GO_SILENT` ne lit plus rien. Le statut lu par l'inspection d'un départ,
+  avant l'armement, n'est pas jugé : un variateur juste mis sous tension
+  montre `SWITCH_ON_DISABLED` jusqu'à son armement, et seul un statut lu après
+  le départ compte. Le réarmement d'un défaut, lui, mène à
+  `SWITCH_ON_DISABLED`, et la marche reste tenue quand sa réponse est perdue ;
+  un variateur qui réarmerait seul son défaut y mènerait aussi. Un
+  `SWITCH_ON_DISABLED` qui suit un statut `FAULT` (ou la réaction de défaut),
+  ou une tentative de réarmement, notée avant son mot, n'est donc pas pris
+  pour une ouverture. Si la chaîne est réellement ouverte dans ce cas, la
+  lecture, qui continue sur un variateur en défaut, la voit : `sto_open`
+  pendant la roue libre, et au repos un départ refusé, comme tout
+  acquittement, tant que la lecture n'est pas `READY`. Cette exclusion vaut
+  jusqu'au prochain armement réussi, ou jusqu'à ce qu'un tic lise un autre
+  état : l'armement commence par inspecter un variateur hors défaut, et un
+  `SWITCH_ON_DISABLED` lu ensuite sous sa marche ne suit aucun réarmement.
+  Après un réarmement, que sa réponse soit perdue, qu'il soit confirmé ou
+  fait au repos, une ouverture juste après l'armement suivant, ou une coupure
+  entre le relais et la borne STO, se verrouille donc au premier tic qui lit
+  l'état du variateur (`TrainingRuntime._deduce_sto_open`) ;
+- **la mémoire de l'arrêt** : quand la lecture a été retenue alors qu'un
+  mouvement était possible (un arrêt en cours tient toujours la marche ou une
+  séance armée), la première lecture `OPEN` qui suit est jugée comme avec
+  mouvement possible, même arbre immobile et marche retirée, et `sto_open` se
+  verrouille. La mémoire ne s'efface qu'à une lecture `READY` réussie après le
+  dernier tic qui a retenu les lectures. Elle couvre un variateur dont le mot
+  d'état ne dirait rien d'une chaîne restée ouverte. Une inspection au repos
+  en échec, qui a pu envoyer une trame, suppose l'ordre de marche tenu et
+  compte comme un arrêt : elle pose aussi cette mémoire, et une première
+  lecture `OPEN` verrouille alors `sto_open` même au repos, machine garée, à
+  acquitter une fois la lecture `READY` (sens prudent). Une chaîne ouverte puis
+  refermée sans qu'aucune lecture ne la voie, pendant un arrêt ou hors arrêt
+  plus brièvement que l'intervalle de lecture, n'est vue, elle, que par le
+  mot d'état : un variateur réel qui ne passerait pas en `SWITCH_ON_DISABLED`
+  la laisserait échapper au verrou, d'où l'étape 4 au banc ;
+- **l'acquittement après un arrêt** : tout acquittement exige une lecture
+  `READY` réussie après le dernier tic qui a retenu les lectures. Une lecture
+  plus ancienne, même encore fraîche, est refusée comme `UNKNOWN`
+  (`StoNotReady`) : un `sto_open` déduit ne s'acquitte pas sur la lecture
+  d'avant l'arrêt, il faut attendre la première lecture `READY` après la fin
+  de l'arrêt. De même, un `sto_open`, lu ou déduit, ne s'acquitte que sur une
+  lecture `READY` réussie après l'instant de son verrou, même quand l'arrêt
+  finit dans le tic du verrou (arbre déjà immobile, juste après l'armement)
+  sans avoir retenu de lecture : la lecture d'avant l'ouverture est refusée
+  comme `UNKNOWN`. Une chaîne simulée, lue à l'instant demandé, n'est pas
+  concernée ; sans arrêt qui ait retenu la lecture ni `sto_open` verrouillé,
+  rien ne change.
+
+**Deux cas où l'ouverture n'est pas nommée `sto_open`.** À sévérité égale, le
+premier verrou du runtime garde son nom et son instant : une ouverture pendant
+un arrêt déjà verrouillé QUICK_STOP par le runtime (variateur trouvé en
+marche, `drive_precommanded`, ou armement non confirmé, `enable_unconfirmed`)
+laisse ce verrou, qui refuse tout départ, et son acquittement nommé exige la
+lecture `READY` postérieure à l'arrêt. Pendant la roue libre d'un variateur en
+défaut, le variateur garde `FAULT` et son mot ne montre pas l'ouverture : la
+lecture, qui continue, la voit si elle dure plus que l'intervalle de lecture ;
+une ouverture plus courte n'est pas vue, et le verrou `drive_fault` tient
+(acquittement nommé, réarmement, puis nouveau départ sur une chaîne `READY`).
+
+Tests : `tests/test_sto_open_during_stop.py` (STOP à la console et depuis le
+site, limite de la séance manuelle, descente vers une cible 0, verdict
+RAMP_DOWN ; chaîne restée ouverte ou refermée avant l'arrêt mesuré : verrou au
+tic qui suit l'ouverture, aucune lecture pendant l'arrêt, écritures d'arrêt
+identiques à celles d'une chaîne lue à l'instant, départ refusé jusqu'à
+l'acquittement nommé, lui-même refusé tant que la lecture n'est pas `READY` ;
+nouvelle cible refusée après une ouverture pendant la descente ; défaut
+variateur : ouverture pendant la roue libre, refermée ou non, lue et
+verrouillée avant l'arrêt ; réarmement dont la réponse est perdue : aucun
+`sto_open` ; aucun `sto_open` sur les chemins où la console retire elle-même
+la marche ou se tait, ni à l'armement dont la première lecture d'état est
+perdue ; hors arrêt, verrou par le mot d'état avant toute lecture),
+`tests/test_sto_open_unread.py` (ouverture de 0,1 s hors arrêt, en séance
+manuelle et pendant un programme, en WARMUP et en HOLD, avec `drive_input` et
+`sim_ready` : verrou au tic suivant, consigne nulle, nouvelle cible refusée,
+départ refusé jusqu'à l'acquittement nommé ; descente sous un FREEZE : aucune
+lecture, écritures aux mêmes instants, ouverture verrouillée par le mot
+d'état ; descente d'un programme sans verdict : lecture continue),
+`tests/test_sto_reset_memory.py` (réarmement dont la réponse est perdue,
+confirmé ou fait au repos, puis ouverture de 0,1 s juste après l'armement
+suivant : verrou au premier tic, départ refusé jusqu'à l'acquittement nommé ;
+après un réarmement à réponse perdue, coupure entre le relais et la borne
+STO, avant le départ ou juste après l'armement : verrou au premier tic,
+lecture restée `READY` ; variateur qui réarme seul son défaut : aucun
+`sto_open`, la lecture juge la chaîne ; ouverture déduite juste après
+l'armement, arrêt fini dans le tic du verrou : acquittement refusé sur la
+lecture d'avant l'ouverture, accepté sur la suivante, nouveau départ exigé),
+`tests/test_sto_scheduling.py` (mêmes trames avec et sans la déduction, avec
+et sans arrêt ; variateur dont le mot d'état ne montre pas la chaîne) et
+`tests/test_sto_stop_guard.py` (mémoire de l'arrêt ; variateur en défaut).
+La matrice de pannes de la simulation rejoue ces scènes avec la même lecture :
+ses cas `sto_drive_input_*` (`simulation/failures.py`, décrits dans
+`simulation/README.md`) lisent le registre 5202 du variateur simulé par
+`DriveInputStoSource` et la garde de la console (`StoReadGate`), à la cadence
+de sa tâche de sondage, et le juge refuse toute lecture pendant un arrêt.
+
+**Le résiduel, borné.** Une lecture partie dans la fenêtre mais restée sans
+réponse ne s'interrompt pas. Elle occupe le lien jusqu'à
+`transaction_worst_case` (0,683 s sur la ligne par défaut, plus d'une période
+de contrôle), puis pymodbus 3.7.4 ferme le port, que la transaction suivante
+rouvre : sur `ftdi://`, la réouverture inclut `settle` (0,25 à 1,0 s). Les
+écritures du tic suivant attendent d'autant, comme après un échange en échec
+du tic lui-même, et l'échec compte dans la santé du lien. **Pire cas total**
+pour ces écritures : le reste de la lecture, jusqu'à `transaction_worst_case`
+(0,683 s), plus la réouverture, dont `settle` est borné par `SETTLE_BUDGET`
+(1,0 s) sur `ftdi://`, soit **environ 1,7 s** ; sur un port série du système,
+la réouverture n'a pas de `settle`. L'appel système qui ouvre le périphérique
+n'est borné par aucun délai, comme après tout échange en échec. Ce sont des
+bornes ; la mesure qui suit n'en est pas une. Mesuré sur le chemin
+pymodbus avec une puce simulée et le délai série par défaut : lecture sans
+réponse 0,21 s, puis keepalive suivant 0,26 s, réouverture comprise. Une telle
+attente peut lever `loop_stall`. Elle survient au plus une fois par
+`STO_POLL_PERIOD`, jamais avec deux lectures en vol.
+
+**L'écart à l'invariant « une lecture STO ne retarde jamais une écriture
+d'arrêt »** est ce cas exact : une lecture STO déjà en vol au moment où
+l'arrêt est demandé, répondue ou non. Répondue dans son budget, elle finit
+avant le tic suivant et ne retarde que les écritures d'arrêt faites hors du
+tic (E-STOP de la caméra, fermeture de la console), du reste de la lecture :
+quelques millisecondes, au plus `AUXILIARY_READ_BUDGET` (0,05 s). Répondue
+au-delà de son budget, elle retarde le tic suivant d'autant. Restée sans
+réponse, elle les retarde jusqu'au pire cas ci-dessus, environ 1,7 s plus
+l'appel système qui ouvre le port, qu'aucun délai ne borne : c'est la même
+nature que l'échec d'une transaction du tic lui-même. Il survient au plus une
+fois par `STO_POLL_PERIOD`, et une seule fois par arrêt : l'arrêt n'attend que
+la fin de cette lecture (et, sans réponse, la réouverture du port), puis
+aucune lecture ne part avant la fin de l'arrêt (tests du faux bus). Un délai de réponse
+propre à la lecture STO, borné pour finir avant le tic suivant, n'est pas
+réalisable sans contournement : pymodbus 3.7.4 n'a qu'un délai
+(`comm_params.timeout_connect`) pour toutes les transactions et ferme le port
+après tout échange sans réponse (`transaction.py`, `_transact` et `execute`),
+le port FTDI fixe son délai à l'ouverture et sa réouverture impose `settle`,
+un transfert USB bloqué coûte jusqu'à `USB_STALL_BOUND` (0,1 s), et une
+seconde connexion est exclue (MEN-14). Une réponse tardive n'est jamais prise
+pour celle de la transaction suivante : le port est rouvert et vidé, et
+pymodbus jette les octets en attente avant chaque envoi
+(`tests/test_sto_exchange_log.py`).
+
+**Hors du journal des échanges.** Les lectures STO ne sont pas ajoutées au
+journal des échanges du pilote (`ExchangeLog`, alimenté par
+`ATV320Drive._observe_exchange`), qui nourrit `drive_frames.jsonl` ; elles
+comptent toujours dans la santé du lien. L'enregistrement d'une séance garde
+ainsi exactement les transactions du chemin de commande, et le rejeu natif,
+dont le runtime lit une chaîne simulée prête et ne demande jamais 5202, s'y
+applique sans divergence. Conséquence pour la boîte noire : elle ne garde de
+la chaîne STO que les verdicts `sto_open` et `sto_unreadable` ; ni les
+lectures 5202 ni l'état lu n'y figurent (point de suivi). Seuls les octets de
+ces trames restent visibles au niveau transport, en lignes `modbus_send` et
+`modbus_receive_chunk` sans registre, quand `RECORD_DRIVE_SDK_FRAMES` les
+demande, et le rejeu ignore ces lignes. Tests :
+`tests/test_sto_exchange_log.py`, `simulation/tests/test_replay_modbus_sto.py`.
+
+Budget technique à 19200 bauds, 8E1 : une requête de 8 octets, une réponse
+de 7 octets et deux silences de 3,5 caractères occupent environ 13 ms ;
+retenir 20 ms par lecture, comme pour les lectures du statut variateur, donne
+environ 33 ms/s de trafic STO à une lecture toutes les 0,6 s, soit environ 3 %
+du lien. Cela s'ajoute au budget du statut : quatre registres, environ 80 ms
+sur les 200 ms d'un tic, ou 100 ms avec LFT en défaut, puis les écritures du
+contrôle. `latest` ne consulte que la mémoire.
+Une tentative échouée donne `UNKNOWN` immédiatement, avec le nom de la
+variante d'erreur, sans recopier le texte libre de l'appareil. Une lecture
+réussie âgée de plus de 2 s (`STO_STALE_AFTER`, quatre périodes techniques,
+comme la fraîcheur du statut variateur) donne aussi `UNKNOWN`. Ces deux
+constantes sont techniques et ne constituent pas des seuils médicaux.
+
+En simulation, le variateur et la source partagent la même chaîne, y compris
+avec `drive_input` qui lit alors le registre 5202 du variateur simulé.
+L'ouverture coupe son couple immédiatement et l'arbre ralentit en roue libre ;
+ETA indique `SWITCH_ON_DISABLED` (0x40). Les consignes restent acceptées
+sans produire de couple. La refermeture laisse cet état jusqu'à une nouvelle
+séquence complète 6, 7, 15. Si un défaut était déjà verrouillé, il garde
+`FAULT` et son code LFT ; toute réaction en rampe passe en roue libre, et
+le reset explicite existant reste nécessaire avant une nouvelle activation.
+Ce comportement est le modèle retenu : la validation au banc de l'ATV320
+réel reste à faire après câblage. Aucun essai matériel STO n'est attesté ici.
+
+#### Procédure STO au banc après câblage : non faite
+
+Cette procédure reste **non faite**. Elle ne vaut ni réception du câblage ni
+validation matérielle ; consigner les mesures dans le tableau avant de conclure.
+
+1. Faire vérifier par l'électricien le champignon normalement fermé sur
+   P24 -> STO, le relais de sécurité, le retrait du pont STO et le contact de
+   retour sur une entrée logique libre. Relever les positions SW1/SW2 et le
+   commun des entrées selon le manuel d'installation et le schéma retenu.
+   Garder la zone libre et personne à bord pour tous les essais.
+2. Configurer `STO_SOURCE=drive_input` et `STO_DRIVE_INPUT=LIx`, avec l'entrée
+   réellement câblée parmi LI1 à LI6. Relever le décalage Modbus, le ttO et sa
+   réaction de perte de communication, qui doit arrêter le moteur en rampe.
+   Redémarrer la console et conserver les valeurs avec la version logicielle.
+3. Au repos, champignon relâché et relais prêt, vérifier `prete (drive_input)`
+   dans la console. Relever le mot logique 5202 et le bit de LIx (LI1 = bit 0,
+   LI6 = bit 5). Appuyer sur le champignon : le bit doit passer de 1 à 0 et la
+   console à `ouverte (drive_input)`. Relâcher et vérifier le retour à 1/prête.
+   Le décalage d'adresse doit être appliqué une seule fois.
+4. Chaîne ouverte au repos, relever ETA brut et son état décodé. Le modèle, le
+   retrait logiciel de la marche dans `_settle` et le verrou `sto_open` déduit
+   du mot d'état (pendant un arrêt, et hors arrêt pour une ouverture que la
+   lecture ne voit pas) supposent `SWITCH_ON_DISABLED` (0x40) : **à constater
+   sur le variateur réel**. Consigner tout autre état et suspendre la
+   validation jusqu'à explication. Relever aussi ETA brut et son état décodé
+   quand la chaîne s'ouvre pendant un défaut du variateur (un défaut
+   réarmable provoqué comme en 6.4, capsule vide), pendant la roue libre puis
+   à l'arrêt : le modèle suppose que le variateur garde `FAULT`. S'il n'est
+   pas `FAULT`, la lecture permise sur un variateur en défaut et l'exclusion
+   après un défaut sont à revoir. Non fait.
+5. Après attestation du câblage, demander un départ à basse vitesse, sans
+   personne à bord. Appuyer sur le champignon : constater le couple coupé,
+   l'arbre en roue libre, la référence logicielle à zéro et le verdict
+   verrouillé `sto_open / quick_stop`. Relever ETA et le temps d'immobilisation.
+   Après acquittement et nouveau départ, appuyer brièvement sur le champignon,
+   moins de 0,6 s : `sto_open / quick_stop` doit se verrouiller au tic suivant
+   l'appui, même si aucune lecture ne l'a vu ouvert.
+6. Refermer la chaîne : vérifier qu'aucun mouvement ne reprend et qu'un départ
+   reste refusé. Relever aussi CMD (attendu : 15 après `sto_open`) et ETA après
+   refermeture : ETA doit rester `SWITCH_ON_DISABLED` avec cette valeur de CMD.
+   Consigner tout autre état et suspendre la validation jusqu'à explication.
+   Attendre l'arrêt mesuré, acquitter avec le nom de l'opérateur,
+   vérifier que l'acquittement seul ne redémarre rien, puis demander un nouveau
+   départ explicite et vérifier la séquence d'activation complète.
+7. Essai « Pi débranché », toujours sans personne à bord : selon le montage
+   de banc validé par l'électricien, établir un mouvement à basse vitesse puis
+   débrancher le Pi. Actionner le champignon sans attendre le ttO ; constater
+   la coupure du couple par la chaîne matérielle, indépendamment du Pi.
+   Distinguer cette coupure de l'arrêt en rampe du ttO et relever les instants.
+   Ce résultat reste à obtenir pour le critère EX-6a.
+8. Vérifier sur le banc que les lectures Modbus, dont 5202, remettent le ttO
+   à zéro. C'est le fondement de la garde du sondage : sans contrôle qui
+   progresse, les lectures doivent cesser pour laisser expirer le ttO.
+   Observer le trafic lors d'une suspension du seul contrôle, sondage actif :
+   au plus une lecture STO déjà en vol peut aboutir, puis une nouvelle lecture
+   peut partir dans la fenêtre qui suit le dernier tic terminé, jamais plus
+   tard. Cela donne au plus deux trames STO après ce tic, puis plus aucune
+   jusqu'au retour du contrôle. Vérifier ensuite l'expiration du ttO et SLF
+   sans ordre STOP explicite. Relever les trames et les instants, y compris
+   dans ce cas combiné.
+9. En séance à basse vitesse, sans personne à bord, relever à l'analyseur
+   de trames la durée d'un tic, celle d'une lecture 5202 et leurs instants :
+   chaque lecture doit partir juste après un tic et finir avant le tic
+   suivant, avec la marge de `AUXILIARY_READ_BUDGET` (0,05 s), et
+   `sto_window_misses` ne doit pas croître en marche normale. Demander un
+   STOP : aucune lecture 5202 jusqu'au retrait de l'ordre de marche.
+   Consigner toute lecture qui chevauche un tic. Au STOP suivant, appuyer sur
+   le champignon pendant la descente puis le relâcher avant l'arrêt mesuré :
+   `sto_open / quick_stop` doit se verrouiller au tic suivant l'appui, sans
+   lecture 5202, et l'acquittement doit être refusé jusqu'à la première
+   lecture `prete` après l'arrêt.
+
+| Essai | Date / opérateur / version | Valeurs ou observations | Conforme / écart |
+|---|---|---|---|
+| Câblage, pont retiré, LIx, SW1/SW2 | à remplir | à remplir | non fait |
+| Configuration, décalage, ttO et réaction | à remplir | à remplir | non fait |
+| 5202 et bit prêt puis ouvert au repos | à remplir | à remplir | non fait |
+| ETA chaîne ouverte, au repos et pendant un défaut, état décodé | à remplir | à remplir | non fait |
+| Ouverture à basse vitesse, verdict, couple, roue libre | à remplir | à remplir | non fait |
+| Refermeture, acquittement nommé, nouveau départ | à remplir | à remplir | non fait |
+| Pi débranché, coupure indépendante du couple | à remplir | à remplir | non fait |
+| Lectures et ttO, contrôle suspendu, SLF | à remplir | à remplir | non fait |
+| Fenêtre de lecture après le tic, aucune lecture pendant un STOP, champignon pendant un STOP | à remplir | à remplir | non fait |
+
 ### 2.3 Le BITalino et l'ECG
 
 | Module | Rôle | Garanties |
@@ -479,20 +901,27 @@ en attente de validation médicale (ANH-98) et d'ingénierie (jalon M6). Aucun
 
 ### 4.2 Portes communes à tout départ (`_refuse_arming`, `_arm`)
 
-Dans l'ordre, rien ne touche le variateur avant les cinq premières :
+Dans l'ordre, rien ne touche le variateur avant les six premières :
 
 1. Le runtime n'est ni arrêté (`shutdown`) ni silencieux.
 2. **Attestation E-STOP** faite depuis ce démarrage du processus (texte exact :
    « a latching mushroom emergency stop is wired normally-closed into P24 -> STO
    and the STO jumper has been removed »), par un opérateur nommé.
 3. Aucun verdict en vigueur (sinon il faut acquitter).
-4. Runtime au repos (`IDLE` ou `FINISHED`).
-5. Sur la console : au moins 500 Mo et 36 016 inodes libres sous le dossier
+4. Contrôle de pré-vol **STO pret** : seule une lecture `READY` permet
+   l'armement. `OPEN`, `UNKNOWN` (échec, lecture ancienne ou jamais reçue) et
+   `NOT_CONFIGURED` donnent le refus nommé `StoNotReady`, avec l'état et son
+   détail. Une source absente signifie non configurée, jamais prête. Le tic
+   et cette porte lisent uniquement la valeur en mémoire ; la tâche STO fait
+   les lectures Modbus. Ce seul contrôle est ajouté ici ; les autres contrôles
+   automatiques du pré-vol restent à ANH-142.
+5. Runtime au repos (`IDLE` ou `FINISHED`).
+6. Sur la console : au moins 500 Mo et 36 016 inodes libres sous le dossier
    d'enregistrement de séance, d'après la dernière mesure du fil du journal ;
    refus aussi si cet espace n'a pas pu être mesuré, ou si la mesure a plus de
    15 s (`RecordStorageLow`, [15.4](#154-départ-refusé-sous-500-mo)). Demandée en
    dernier, pour que l'opérateur entende d'abord ce que lui seul peut lever.
-6. Ouverture de la liaison et lecture du variateur. S'il est en
+7. Ouverture de la liaison et lecture du variateur. S'il est en
    `OPERATION_ENABLED` : arrêt, verrou `drive_precommanded`, refus. S'il est en
    défaut : refus (`DriveInFault`), **sans réarmement automatique**. Depuis le
    11 octobre 2026, la console refuse ce départ plus tôt quand elle le peut :
@@ -501,13 +930,21 @@ Dans l'ordre, rien ne touche le variateur avant les cinq premières :
    ([console-locale.md, section 6](console-locale.md#6-page--tableau-de-bord-)).
    Cette porte-ci reste la seule qui compte : la route ne la remplace pas, et
    un lancement venu du tableau de bord distant ne passe que par elle.
-7. Relecture de tFr, HSP, LSP, ACC, dEC ; refus si LSP ≠ 0, HSP > tFr ou
+8. Relecture de tFr, HSP, LSP, ACC, dEC ; refus si LSP ≠ 0, HSP > tFr ou
    HSP > 50,0 Hz. ttO et SLL ne sont **pas** relus (adresses Modbus non
    vérifiées) : chaque armement écrit un avertissement dans le journal demandant
    de les vérifier au clavier.
-8. Mise sous tension de l'étage de sortie : LFRD = 0, puis `SHUTDOWN` →
+9. Nouvelle vérification STO après ces lectures, puis mise sous tension de
+   l'étage de sortie : LFRD = 0, puis `SHUTDOWN` →
    `SWITCH_ON` → `ENABLE_OPERATION`. Si le mot d'activation échoue sans réponse,
    la sortie est supposée active : verrou `enable_unconfirmed` (QUICK_STOP).
+
+L'attestation et l'acquittement viennent avant les contrôles qui peuvent se
+rétablir : l'opérateur voit d'abord l'action humaine exigée. Le contrôle STO
+précède l'occupation du runtime et l'espace disque. La surface locale le
+vérifie aussi avant de déposer un départ manuel ou programmé ; le tableau de
+bord distant reçoit sa raison de refus. Cette vérification précoce ne remplace
+jamais celle du runtime au moment de l'armement.
 
 **Avant ces portes, sur la console : l'horloge murale, pour une personne à
 bord seulement.** Un départ déclaré « personne à bord » (séance manuelle
@@ -1098,7 +1535,7 @@ numéro de séquence a avancé et dont la qualité est `good` comptent.
 Sans baisse de charge (HOLD, φ = 1) c'est la règle des 25 bpm en 30 s ; charge
 retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 
-### 5.3 Les 4 règles ajoutées par le runtime
+### 5.3 Les 6 règles ajoutées par le runtime
 
 | Id | Condition | Action | Verrou |
 |---|---|---|---|
@@ -1106,6 +1543,83 @@ retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
 | `enable_unconfirmed` | le mot qui active l'étage de sortie a pu partir sans réponse | QUICK_STOP | oui |
 | `disable_refused` | le variateur refuse 5 fois de suite (`disable_attempts`) les mots d'arrêt à l'arrêt confirmé | RAMP_DOWN si `SHUTDOWN` direct a réussi ; GO_SILENT sinon | oui |
 | `tick_exception` | une exception dans le tic | GO_SILENT | oui, définitif |
+| `sto_open` | lecture STO `OPEN` quand un mouvement est possible : séance armée à toute phase, marche présente, arbre tournant, vitesse inconnue ou relevé variateur ancien ; sans lecture qui la montre, arrêt ou non : statut frais `SWITCH_ON_DISABLED`, lu après le départ, alors que la console tient la marche et hors suite d'un défaut ou d'une tentative de réarmement, suite qui prend fin au prochain armement réussi ou à la lecture d'un autre état (ouverture déduite de l'état du variateur) ; après un arrêt pendant lequel un mouvement était possible : lecture `OPEN`, même au repos, jusqu'à une lecture `READY` postérieure | QUICK_STOP, consigne zéro dans ce tic ; le matériel a déjà coupé le couple | oui ; l'acquittement exige une lecture `READY` faite après l'instant du verrou et après le dernier tic qui a retenu les lectures |
+| `sto_unreadable` | source configurée, preuve positive de mouvement (séance armée à toute phase, marche tenue par ce runtime, ou statut frais en rotation/`OPERATION_ENABLED`), aucune lecture STO réussie depuis plus de `STO_STALE_AFTER` (2 s) de contrôle progressant, ou jamais | RAMP_DOWN, arrêt contrôlé | oui |
+
+Les deux règles STO sont jugées avant le calcul de consigne. Un échec de
+lecture isolé rend `UNKNOWN` et refuse un départ, mais ne termine pas une
+séance tant que le budget de 2 s n'est pas épuisé. Une lecture `OPEN`
+déclenche immédiatement `sto_open`. Au repos sans séance et avec arbre
+observé immobile, aucun verrou STO : seul le départ est refusé tant que la
+chaîne n'est pas prête. L'exception est la première lecture qui suit un arrêt
+pendant lequel la lecture a été retenue alors qu'un mouvement était possible :
+`OPEN` y verrouille `sto_open` même au repos, faute d'avoir pu lire la chaîne
+pendant cet arrêt (section 2.2). Le mot d'état du variateur verrouille aussi
+`sto_open`, arrêt ou non, quand aucune lecture ne montre l'ouverture (section
+2.2). À sévérité égale, le premier verrou du runtime garde son nom et son
+instant (par exemple `drive_precommanded`) ; il continue de refuser tout
+départ. Pendant la roue libre d'un variateur en défaut, une ouverture plus
+courte que l'intervalle de lecture n'est pas vue ; le verrou `drive_fault`
+tient.
+
+Au démarrage, variateur absent ou hors tension, une vitesse inconnue seule
+ne lève pas `sto_unreadable` si ce processus n'a ni armé une séance ni tenu
+la marche. La lecture `UNKNOWN` refuse le départ avec la raison STO, sans
+acquittement à demander ; la panne sans trame au repos reste réessayable.
+`NOT_CONFIGURED` ne lève jamais `sto_unreadable` : il n'y a aucune lecture
+configurée à perdre, et le pré-vol refuse déjà tout armement. Une lecture
+`OPEN` réussie conserve sa règle, y compris avec une vitesse inconnue.
+
+Le sondage STO exige un lien acquis par le runtime, au repos ou en séance :
+aucune lecture avant le premier `open()` réussi ni pendant une panne au repos
+où le lien n'est plus acquis. Chaque lecture consomme la permission d'un tic
+de contrôle terminé, valable jusqu'à l'instant prévu du tic suivant ;
+plusieurs tics ne cumulent pas de permissions (section 2.2). La garde est
+évaluée juste avant la lecture. Si seul le contrôle cale et que la boucle
+asyncio reste vivante, au plus une nouvelle lecture part, dans la fenêtre qui
+suit le dernier tic terminé, en plus de l'unique lecture déjà en vol ; aucune
+ne part pendant la pause elle-même. Au plus deux trames STO peuvent donc
+suivre ce tic, puis plus aucune ; le ttO peut expirer.
+La garde respecte aussi `GO_SILENT` et la libération de la liaison.
+La tâche attend chaque lecture avant la suivante ; une seule lecture déjà en
+vol peut encore aboutir lors du passage en silence ou de la fermeture. Ensuite
+le cache vieillit simplement vers `UNKNOWN`, sans rafraîchir le `ttO`.
+
+`loop_stall` reste seul juge d'un écart entre tics dépassant sa borne existante.
+Le runtime ne déduit cet intervalle du budget de fraîcheur STO que si aucune
+tentative postérieure à la dernière réussite n'est en échec ou en suspens. Il
+déduit de même, sous la même condition, l'intervalle qui suit un tic laissant
+un arrêt en cours : la console ne lit pas pendant un arrêt (section 2.2).
+Aucune lecture ne part pendant une pause : la permission du dernier tic expire
+à l'instant prévu du tic suivant, si bien qu'une réussite suit normalement le
+tic précédent de moins d'une période de contrôle. Dès qu'une lecture commence,
+aucune nouvelle déduction n'est donc accordée avant une réussite. Une réussite
+remet la déduction à zéro ; seule la partie d'un intervalle après cette
+réussite peut être déduite. Le crédit déjà acquis reste valable jusqu'à la
+réussite suivante. Une pause sans tentative en échec ni en suspens conserve
+ainsi `loop_stall` seul ; la lecture reprend juste après le premier tic
+terminé après la reprise. La lecture affichée continue à vieillir en temps
+réel et peut être `UNKNOWN` pendant cette pause ou cet arrêt.
+
+La borne exacte est le premier tic autorisant les lectures où l'âge depuis la
+dernière réussite, moins la déduction acquise D, dépasse `STO_STALE_AFTER`
+(2 s). D est la somme des portions d'intervalles excusées (`loop_stall`, ou
+arrêt en cours) avant la première tentative non résolue, sans tentative
+pendant ces portions.
+Sans déduction antérieure, la détection arrive au plus tard 2 s plus
+un intervalle de tic après cette réussite, pauses comprises. Sinon, la borne
+depuis cette réussite est 2 s + D + un intervalle de tic. Dès la première
+tentative sans réussite suivante, D ne peut plus croître : la détection arrive
+au plus tard 2 s plus un intervalle de tic après le début de cette tentative,
+en comptant aussi les pauses et les arrêts dans cet intervalle. Une pause ou
+un arrêt avec une lecture échouée ou en suspens peut donc ajouter
+`sto_unreadable / RAMP_DOWN` au verdict en cours. Si le lien lui-même ne répond plus, les règles de perte de
+communication dominent. Aucune nouvelle constante de durée n'est introduite.
+
+Tout acquittement, même pour un autre verrou, est refusé tant que la lecture
+STO n'est pas `READY` (`StoNotReady`, HTTP 409). La refermeture de la chaîne
+ne lève aucun verrou. Après acquittement nommé accepté, la séance terminée
+ne reprend pas : il faut un nouveau départ, avec toutes les portes ci-dessus.
 
 Ces verrous vivent dans le runtime, pas dans le plancher du superviseur.
 Depuis le 11 octobre 2026, `GET /api/status` les rapporte comme ceux du
@@ -1571,6 +2085,7 @@ Conséquences :
 | Arrêt demandé plus vite que la rampe du variateur | défaut **ObF** (surtension du bus, LFT 18) : le variateur passe en **roue libre**, le bras ralentit sans contrôle, plus longtemps. Aucun « arrêt rapide » n'existe donc dans le code. |
 | `SHUTDOWN` (6) envoyé sur un arbre qui tourne | transition CiA402 8 : l'étage de sortie tombe, **roue libre**. Mesuré sur le modèle du dépôt : arrêt à t = 144,6 s avec 6, contre t = 10,0 s en gardant la commande de marche. D'où l'ordre `SWITCH_ON` (7) puis `SHUTDOWN` (6), et seulement à l'arrêt confirmé par RFRD. |
 | QUICK_STOP, E-STOP, arrêt de sortie du processus | LFRD = 0, commande de marche **gardée** : le variateur suit sa rampe dEC. |
+| Ouverture matérielle du STO (`sto_open`) | le relais et l'entrée STO coupent déjà le couple indépendamment du Pi : l'arbre ralentit en roue libre. La console met LFRD à 0 dans le tic de détection. À l'arrêt constaté par RFRD, un statut frais `SWITCH_ON_DISABLED` confirme que la sortie est déjà retirée : `_settle` le constate sans envoyer de mot de commande. Le verdict `sto_open / QUICK_STOP` reste verrouillé. Refermer ne réactive rien ; acquittement nommé puis nouveau départ et séquence complète d'activation requis. Le modèle simule ce comportement ; la vérification au banc reste à faire après câblage. |
 | STOP opérateur, local ou demandé depuis le site | demande de fin enregistrée ; au tic suivant la consigne commence à descendre vers 0 aux limites de mouvement, sans verdict comme sous FREEZE (verrouillé ou non). Un verdict plus sévère décide à sa place : REDUCE et RAMP_DOWN descendent eux-mêmes, QUICK_STOP met la consigne à 0, GO_SILENT se tait. |
 | Cible manuelle remise à 0 | même descente, sous FREEZE aussi ; la séance n'est pas en train de se terminer pendant la descente (mode « MANUEL »). À l'arrivée à 0 : la séance continue si aucun avertissement ne tient, elle se termine sur `session_standstill` si un avertissement tient. |
 | Programme arrivé à son retour au calme (phase COOLDOWN) | dès le premier tic de la phase, la consigne descend vers 0 aux limites de mouvement, sans verdict comme sous FREEZE (verrouillé ou non) ; le mode reste « SEANCE ». À l'arrivée à 0, rien n'est verrouillé : la séance suit sa chronologie (RECOVERY, puis fin `programme_complete` à la durée prévue). |
@@ -2395,6 +2910,8 @@ sort avec le code 2.
 | Clé | Défaut | Rôle | Contrainte |
 |---|---|---|---|
 | `MOTOR_BACKEND` | **aucun (obligatoire)** | `sim` (variateur simulé) ou `serial` (ATV320 réel) | autre valeur refusée |
+| `STO_SOURCE` | `sim_ready` si `sim`, `none` si `serial` (le banc réel ne peut donc pas armer avant le câblage, voir [2.2](#22-le-variateur-srcmotor)) | source du retour STO : `none`, `sim_ready`, `sim_open`, `drive_input` | `sim_*` refusé avec `serial` ; valeur inconnue refusée |
+| `STO_DRIVE_INPUT` | aucun | entrée du retour du relais de sécurité, actif haut | `LI1` à `LI6`, obligatoire pour `drive_input`, refusée avec toute autre source |
 | `MOTOR_PORT` | `ftdi://schneider:rs485/1` | port du variateur : périphérique série (`/dev/ttyUSB0`, `COM3`, `/dev/cu.usbserial-…`) ou URL pyftdi | lu seulement si `serial` ; non vide |
 | `MOTOR_SLAVE_ID` | `248` | adresse Modbus (248 = adresse point à point Schneider, mesurée au banc) | 1..247 ou 248 ; 0 (diffusion) refusé |
 | `MODBUS_BAUDRATE` | `19200` | débit | entier |

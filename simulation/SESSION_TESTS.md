@@ -20,6 +20,38 @@ PASS rows below refer to the 2026-10-05 reconciliation; rerun the named checks
 for a new revision. The remaining cohort XFAIL is S07 AUTO jog; proposals are
 not counted as passing tests.
 
+ANH-92 ajoute la matrice STO suivante (simulation logicielle uniquement) :
+
+| Parcours | Cas | Preuve |
+|---|---|---|
+| AUTO | `sto_open_auto_{baseline,warmup,hold,cooldown,recovery}` | phase constatee avant injection, `sto_open / QUICK_STOP` verrouille sous 0,7 s, seance terminee, consignes nulles, couple coupe et roue libre si l'arbre tourne |
+| Manuel | `sto_open_manual_{ramp_up,at_speed,ramp_down}` | memes controles pendant montee, palier et descente ; une fin deja demandee conserve sa raison |
+| Repos | `sto_idle_start_gate` | aucun verrou, depart refuse avec `StoNotReady` ouvert puis accepte ferme |
+| Fermeture seule | `sto_close_without_acknowledgement` | verrou maintenu et aucune consigne non nulle ni activation jusqu'a la fin du scenario |
+| Reprise explicite | `sto_acknowledgement_then_new_start` | acquittement nomme refuse ouvert, accepte ferme, puis consigne nulle jusqu'au nouveau depart |
+
+`tests/test_failures.py` execute ces onze cas et corrompt les preuves pour
+verifier le juge. `tests/test_scenario.py` refuse les actions STO mal formees ;
+`tests/test_import_privacy.py` conserve les deux identifiants de verdict STO
+sans conserver leur detail libre. La perte de lecture n'est pas injectable dans
+la source simulee instantanee ; `sto_unreadable` reste couvert dans les tests Pi
+cites par leur nom dans le README. Le banc apres cablage reste hors de ces preuves.
+
+Les dix-neuf cas `sto_drive_input_*` lisent la meme chaine par le registre 5202
+du variateur simule, avec la source et la garde de la console, a sa cadence
+(variante `drive_input`, decrite dans le README) :
+
+| Parcours | Cas | Preuve |
+|---|---|---|
+| Chaque categorie d'arret | `sto_drive_input_{operator_stop,manual_session_limit,manual_target_zero,ramp_down_verdict,freeze_descent}_{left_open,closed_again}` | aucune trame 5202 pendant l'arret, `sto_open / QUICK_STOP` verrouille au tic qui suit l'ouverture, chaine restee ouverte ou refermee avant la fin de l'arret ; lectures reprises ensuite, depart et acquittement refuses |
+| Variateur en defaut | `sto_drive_input_faulted_drive_coast_{left_open,closed_again}` | roue libre lue, ouverture verrouillee par la lecture sous 0,8 s |
+| Hors arret | `sto_drive_input_brief_opening_{manual,programme}`, `sto_drive_input_programme_descent_{cooldown,recovery}` | ouverture de 0,1 s jamais lue, ou ouverture pendant la descente planifiee (lecture continue) : verrou au tic suivant |
+| Refermeture, reprise, repos | `sto_drive_input_{close_without_acknowledgement,acknowledgement_then_new_start,idle_start_gate}` | memes preuves que les cas `sim_ready` de meme nom |
+
+`tests/test_failures_drive_input.py` et `tests/test_sto_drive_input.py` les
+completent : trames comptees au variateur simule, chacune permise par la garde,
+instants de lecture identiques a ceux de la tache de sondage reelle.
+
 ## 1. AUTO (heart-rate driven programme)
 
 | # | test | what it proves | status |

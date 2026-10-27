@@ -48,6 +48,8 @@ def recording(*events: Event, raw_hex: str | None = None) -> Recording:
             "acknowledge estop_released=true",
         ),
         (EventKind.VERDICT, "hr_stale (FREEZE): 999 bpm SECRET 2026-10-15", "hr_stale (FREEZE)"),
+        (EventKind.VERDICT, "sto_open (QUICK_STOP): SECRET", "sto_open (QUICK_STOP)"),
+        (EventKind.VERDICT, "sto_unreadable (RAMP_DOWN): SECRET", "sto_unreadable (RAMP_DOWN)"),
         (EventKind.VERDICT, "unknown (FREEZE): SECRET", ANONYMIZED),
         (EventKind.VERDICT, "hr_stale (UNKNOWN): SECRET", ANONYMIZED),
         (EventKind.VERDICT, "SECRET", ANONYMIZED),

@@ -24,6 +24,7 @@ silently turn a fault scenario into a nominal one)::
       "subject_events": [{"event": "vasovagal_drop", "at_s": 600, "duration_s": 20}],
       "ecg": {"mode": "direct" | "dsp", "period_s": 1.0, "noise_bpm": 0, "seed": 1},
       "drive": {"tto_s": 3.0, "acceleration_time_s": 10.0, "hsp_motor_rpm": 1380},
+      "sto_source": "sim_ready" | "drive_input",
       "actions": [{"at_s": 5, "do": "manual_target", "output_rpm": 27, "expect": "accepted"}],
       "expect": {"start": "accepted", "end_reason": "operator_stop",
                  "final_state": "finished", "rules": ["hr_drop"], "forbid_rules": [],
@@ -36,6 +37,12 @@ motion_noise_bpm_per_g, connect_fails}``, ``drive.{initial_enabled_rpm,
 refuse_commands}`` and the :data:`Injection` actions.
 
 See README.md for the list of ``do`` actions.
+``{"at_s": 40, "do": "sto_open"}`` opens the shared simulated safety chain;
+``{"at_s": 50, "do": "sto_close"}`` closes it without acknowledging or restarting.
+These names are exact and take no parameters other than ``at_s``.
+``"sto_source": "drive_input"`` has the runtime read that chain as the console
+does with ``STO_SOURCE=drive_input``: register 5202 of the simulated drive,
+polled after the ticks; ``"sim_ready"``, the default, reads it at every tick.
 """
 
 from __future__ import annotations
@@ -98,6 +105,20 @@ class EcgMode(Enum):
 
 
 @unique
+class StoVariant(Enum):
+    """How the runtime reads the simulated STO chain: the console's ``STO_SOURCE``.
+
+    ``SIM_READY``, the default: the shared contact, read from memory at every
+    tick. ``DRIVE_INPUT``: register 5202 of the simulated drive, polled in the
+    gaps after the ticks by the console's own source and guard
+    (``DriveInputStoSource``, ``StoReadGate``), at the console's cadence.
+    """
+
+    SIM_READY = "sim_ready"
+    DRIVE_INPUT = "drive_input"
+
+
+@unique
 class Expectation(Enum):
     """What an operator request is expected to meet."""
 
@@ -136,9 +157,24 @@ class EmergencyStop:
 
 
 @dataclass(frozen=True, slots=True)
+class StoOpen:
+    """Open the relay contact, cutting the simulated drive's torque immediately."""
+
+    at: Seconds
+
+
+@dataclass(frozen=True, slots=True)
+class StoClose:
+    """Close the contact; acknowledgement and a new START remain separate actions."""
+
+    at: Seconds
+
+
+@dataclass(frozen=True, slots=True)
 class Acknowledge:
     at: Seconds
     estop_released: bool
+    expect: Expectation = Expectation.ANY
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +398,8 @@ type Action = (
     | OperatorStop
     | RemoteStop
     | EmergencyStop
+    | StoOpen
+    | StoClose
     | Acknowledge
     | InjectDriveFault
     | CommsLoss
@@ -459,6 +497,7 @@ class Scenario:
     events: tuple[EventWindow, ...] = ()
     ecg: EcgSpec = field(default_factory=EcgSpec)
     drive: DriveSpec = field(default_factory=DriveSpec)
+    sto: StoVariant = StoVariant.SIM_READY
     actions: tuple[Action, ...] = ()
     expect: Expect = field(default_factory=Expect)
     known_defect: str | None = None
@@ -495,6 +534,7 @@ _TOP_KEYS: Final[frozenset[str]] = frozenset(
         "subject_events",
         "ecg",
         "drive",
+        "sto_source",
         "actions",
         "expect",
         "known_defect",
@@ -653,7 +693,11 @@ _ACTION_BUILDERS: Final[Mapping[str, Callable[[Reader, Seconds], Action | None]]
     "operator_stop": lambda _sub, at: OperatorStop(at),
     "remote_stop": lambda _sub, at: RemoteStop(at),
     "estop": lambda _sub, at: EmergencyStop(at),
-    "acknowledge": lambda sub, at: Acknowledge(at, sub.flag("estop_released", default=True)),
+    "sto_open": lambda _sub, at: StoOpen(at),
+    "sto_close": lambda _sub, at: StoClose(at),
+    "acknowledge": lambda sub, at: Acknowledge(
+        at, sub.flag("estop_released", default=True), _expected(sub, Expectation.ANY)
+    ),
     "drive_fault": _action_fault,
     "comms_loss": lambda sub, at: CommsLoss(at, _positive(sub, "duration_s")),
     "drive_latency": lambda sub, at: DriveLatency(
@@ -715,6 +759,8 @@ def _actions(reader: Reader) -> tuple[Action, ...]:
         if at < 0.0:
             sub.note("'at_s' must not be negative")
         name = sub.text("do")
+        if name in {"sto_open", "sto_close"}:
+            sub.unknown_keys(frozenset({"at_s", "do"}))
         builder = _ACTION_BUILDERS.get(name)
         if builder is None:
             sub.note(f"'do' = {name!r} is not one of {list(ACTION_NAMES)}")
@@ -910,6 +956,7 @@ def parse_scenario(raw: str, *, where: str = "scenario") -> Result[Scenario, Sce
         events=_events(reader),
         ecg=_ecg(reader),
         drive=_drive(reader),
+        sto=_enum(reader, "sto_source", StoVariant, StoVariant.SIM_READY) or StoVariant.SIM_READY,
         actions=_actions(reader),
         expect=_expect(reader),
         known_defect=reader.text("known_defect") if reader.has("known_defect") else None,

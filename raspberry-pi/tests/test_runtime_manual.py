@@ -78,6 +78,7 @@ from src.units import (
     motor_to_output_rpm,
 )
 from src.web.schemas import ManualRow, SnapshotRow
+from tests.sto_support import ready_sto
 from tests.test_failure_rig import OPERATOR as CONSOLE_OPERATOR
 from tests.test_record_endurance import Console
 from tests.test_runtime import (
@@ -211,6 +212,7 @@ async def test_motion_limits_too_slow_to_ever_move_refuse_the_start() -> None:
     rig = _rig()
     crawling = replace(DEFAULT_MOTION_LIMITS, output_accel=OutputRpmPerSecond(0.01))
     runtime = TrainingRuntime(
+        sto=ready_sto(),
         clock=rig.clock,
         drive=rig.drive,
         geometry=GEOMETRY,

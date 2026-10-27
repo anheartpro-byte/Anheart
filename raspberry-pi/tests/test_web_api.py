@@ -796,7 +796,7 @@ async def test_emergency_stop_returns_before_the_loop_has_ticked_once(
     assert parse(EstopRow, response).action == "quick_stop"
 
     gate.set()
-    await loop_task
+    await asyncio.gather(loop_task)
 
 
 async def test_the_emergency_stop_needs_neither_a_name_nor_a_reason(
@@ -1809,6 +1809,22 @@ def test_the_loop_takes_the_estop_receipt_once_but_the_latch_persists() -> None:
     assert surface.take_estop() is not None
     assert surface.take_estop() is None
     assert surface.estop_latched
+
+
+@pytest.mark.parametrize("taken_by", ["tick", "acknowledgement"])
+def test_an_estop_is_pending_from_its_request_until_the_loop_takes_it(taken_by: str) -> None:
+    """Pending is the loop's part of the demand: it ends there, the latch outlives it."""
+    _clock, _supervisor, _sink, surface = surface_rig()
+    before = surface.estop_pending
+    surface.submit_estop(operator=OPERATOR, reason="pain")
+    asked = surface.estop_pending
+    if taken_by == "tick":
+        assert surface.take_estop() is not None
+        assert surface.estop_latched
+    else:
+        assert isinstance(surface.acknowledge(OPERATOR, estop_released=True), Ok)
+        assert not surface.estop_latched
+    assert (before, asked, surface.estop_pending) == (False, True, False)
 
 
 def test_an_end_request_fills_the_mailbox() -> None:
