@@ -44,6 +44,11 @@ vi.mock("@/components/training/SessionSummaryCard", async () => ({
     "SessionSummaryCard",
   ),
 }));
+vi.mock("@/components/training/SessionFeedbackCard", async () => ({
+  SessionFeedbackCard: (await import("@/test-support/pages")).standIn(
+    "SessionFeedbackCard",
+  ),
+}));
 
 /** The detail of one session, running or over, of training or of the former recording mode. */
 
@@ -229,6 +234,29 @@ describe("session detail: a training session", () => {
       await open();
 
       expect(propsOf("SessionSummaryCard")).toEqual({ sessionId });
+    },
+  );
+
+  // ANH-146 S4: the rider's feedback, on a finished training session only.
+  it.each(["completed", "failed"] as const)(
+    "ANH-146 S4 mounts the feedback card of a %s session",
+    async (status) => {
+      answer(api.sessions.getSession, session({ status }));
+      answer(api.training.getTrainingSession, training({ status }));
+      await open();
+
+      expect(propsOf("SessionFeedbackCard")).toEqual({ sessionId });
+    },
+  );
+
+  it.each(["pending", "active", "interrupted"] as const)(
+    "ANH-146 S4 mounts no feedback card while the session is %s",
+    async (status) => {
+      answer(api.sessions.getSession, session({ status, endedAt: undefined }));
+      answer(api.training.getTrainingSession, training({ status }));
+      await open();
+
+      expect(wasMounted("SessionFeedbackCard")).toBe(false);
     },
   );
 
@@ -557,6 +585,7 @@ describe("session detail: a session of the former recording mode", () => {
     expect(screen.getByText(fr.training.kind.recording)).toBeTruthy();
     expect(wasMounted("TrainingDetailsCard")).toBe(false);
     expect(wasMounted("SessionSummaryCard")).toBe(false);
+    expect(wasMounted("SessionFeedbackCard")).toBe(false);
   });
 
   it("lists the recorded channels, the batches, the length and the hours of the data", async () => {

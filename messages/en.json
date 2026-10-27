@@ -915,7 +915,12 @@
     "noReports": "No reports available yet",
     "nothingYet": "No reports to show yet: more sessions remain to be read. \"Show more\" continues reading.",
     "view": "View",
-    "durationMinutes": "{minutes, number} min"
+    "durationMinutes": "{minutes, number} min",
+    "exportFeedback": "Export feedback (CSV)",
+    "exportingFeedback": "Exporting…",
+    "exportFeedbackHint": "Rider feedback crossed with the duration and the peaks of g at the leg tip: identifiers only, no name and no comment.",
+    "exportFeedbackTruncated": "The export stops at 10,000 feedback rows: the oldest are not in it.",
+    "exportFeedbackError": "The feedback export failed. Try again."
   },
   "privacy": {
     "title": "Privacy Policy",
@@ -1232,6 +1237,26 @@
     "description": "Invite, remove and change the role of the members of the active organization. These changes are made in Clerk and reach the server through its webhook.",
     "accessDenied": "Access denied. Organization admins only."
   },
+    "sessionFeedback": {
+      "title": "Rider feedback",
+      "description": "How the rider felt after the session: nausea, discomfort or dizziness, overall comfort. The rider gives or changes it within 24 hours of the end of the session.",
+      "notProvided": "Not provided",
+      "notEligible": "Feedback only concerns sessions with someone on board.",
+      "comfort": "Comfort",
+      "freeText": "Comment",
+      "submittedBy": "Entered by",
+      "submittedAt": "On",
+      "by": {
+        "rider": "The rider",
+        "operator": "The operator, at the machine"
+      },
+      "editableUntil": "You can give or change your feedback until {date}.",
+      "windowClosed": "The feedback can no longer be given or changed: more than 24 hours have passed since the session ended.",
+      "choose": "Choose",
+      "characters": "{count, number} / {max, number} characters",
+      "save": "Save feedback",
+      "saved": "Feedback saved"
+    },
   "sessionReport": {
     "summaryTitle": "Session summary",
     "provisional": "Provisional",
@@ -1295,7 +1320,7 @@
     "endRule": "Rule",
     "notAvailableTitle": "Not in the report yet",
     "preflight": "Preflight result: not recorded by the machine yet (ANH-142).",
-    "feedback": "Rider feedback: not collected yet (ANH-146).",
+    "feedback": "Rider feedback",
     "computedAt": "Computed on {date}",
     "telemetry": "Telemetry (1 Hz)",
     "endReasons": {
@@ -1324,7 +1349,7 @@
     "meanHr": "Mean HR",
     "notComputed": "Not computed yet",
     "report": "Report",
-    "nausea": "Nausea and wellbeing: not collected yet (ANH-146)."
+    "nausea": "Nausea"
   },
   "notifications": {
     "title": "Alerts",

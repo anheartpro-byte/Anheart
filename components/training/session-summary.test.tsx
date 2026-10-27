@@ -427,7 +427,34 @@ describe("the history of a rider", () => {
     answer("sessionReports:riderHistory", []);
     screen.rerender(<RiderHistoryCard userId={userId} />);
     expect(screen.text()).toContain(r.historyEmpty);
-    expect(screen.text()).toContain(r.nausea);
+    // ANH-146: the old "not collected yet" note is gone.
+    expect(screen.text()).not.toContain("ANH-146");
+  });
+
+  it("ANH-146 S6 gives each session its nausea score, or a dash without feedback", () => {
+    const rated = "session-rated" as Id<"sessions">;
+    answer("sessionReports:riderHistory", [
+      row({ sessionId: rated, nauseaScore: 7 }),
+      row({ nauseaScore: null }),
+      row({
+        sessionId: "session-0" as Id<"sessions">,
+        status: "failed",
+        summary: null,
+        nauseaScore: 0,
+      }),
+    ]);
+    const screen = render(<RiderHistoryCard userId={userId} />);
+    const headers = screen.tag("th").map((th) => screen.textOf(th));
+    expect(headers).toContain(r.nausea);
+    const column = headers.indexOf(r.nausea);
+    // The cell before the link to the report, on every row.
+    const nausea = screen
+      .tag("tr")
+      .slice(1)
+      .map((tr) => screen.textOf(tr.children[tr.children.length - 2]));
+    expect(column).toBe(headers.length - 2);
+    expect(nausea).toEqual(["7", "-", "0"]);
+    expect(screen.text()).not.toContain("ANH-146");
   });
 
   it("lists each session with its figures and its report, and draws the time in zone, oldest first", () => {

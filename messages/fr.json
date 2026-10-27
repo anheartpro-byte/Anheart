@@ -915,7 +915,12 @@
     "noReports": "Aucun rapport disponible pour le moment",
     "nothingYet": "Aucun rapport à afficher pour l'instant : d'autres séances restent à lire. « Afficher plus » poursuit la lecture.",
     "view": "Voir",
-    "durationMinutes": "{minutes, number} min"
+    "durationMinutes": "{minutes, number} min",
+    "exportFeedback": "Exporter les retours (CSV)",
+    "exportingFeedback": "Export en cours…",
+    "exportFeedbackHint": "Retours des passagers croisés avec la durée et les pics de g à la pointe du pied : identifiants seulement, sans nom ni commentaire.",
+    "exportFeedbackTruncated": "L'export s'arrête à 10 000 retours : les plus anciens n'y sont pas.",
+    "exportFeedbackError": "L'export des retours a échoué. Réessayez."
   },
   "privacy": {
     "title": "Politique de Confidentialité",
@@ -1232,6 +1237,26 @@
     "description": "Inviter, retirer et changer le rôle des membres de l'organisation active. Ces changements se font dans Clerk et parviennent au serveur par son webhook.",
     "accessDenied": "Accès refusé. Réservé aux administrateurs de l'organisation."
   },
+    "sessionFeedback": {
+      "title": "Retour du passager",
+      "description": "Ce que le passager a ressenti après la séance : nausée, malaise ou vertige, ressenti général. Le passager le donne ou le modifie pendant les 24 h qui suivent la fin de la séance.",
+      "notProvided": "Non renseigné",
+      "notEligible": "Le retour ne concerne que les séances avec une personne à bord.",
+      "comfort": "Ressenti",
+      "freeText": "Commentaire",
+      "submittedBy": "Saisi par",
+      "submittedAt": "Le",
+      "by": {
+        "rider": "Le passager",
+        "operator": "L'opérateur, à la machine"
+      },
+      "editableUntil": "Vous pouvez donner ou modifier votre retour jusqu'au {date}.",
+      "windowClosed": "Le retour ne peut plus être donné ni modifié : plus de 24 h ont passé depuis la fin de la séance.",
+      "choose": "Choisir",
+      "characters": "{count, number} / {max, number} caractères",
+      "save": "Enregistrer le retour",
+      "saved": "Retour enregistré"
+    },
   "sessionReport": {
     "summaryTitle": "Résumé de la séance",
     "provisional": "Provisoire",
@@ -1295,7 +1320,7 @@
     "endRule": "Règle",
     "notAvailableTitle": "Pas encore dans le rapport",
     "preflight": "Résultat du pré-vol : pas encore enregistré par la machine (ANH-142).",
-    "feedback": "Retour du passager : pas encore recueilli (ANH-146).",
+    "feedback": "Retour du passager",
     "computedAt": "Calculé le {date}",
     "telemetry": "Télémétrie (1 Hz)",
     "endReasons": {
@@ -1324,7 +1349,7 @@
     "meanHr": "FC moyenne",
     "notComputed": "Pas encore calculé",
     "report": "Rapport",
-    "nausea": "Nausée et ressenti : pas encore recueillis (ANH-146)."
+    "nausea": "Nausée"
   },
   "notifications": {
     "title": "Alertes",
