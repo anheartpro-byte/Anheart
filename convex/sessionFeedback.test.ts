@@ -370,6 +370,8 @@ describe("ANH-146 M4 the bounds of a feedback, from the site", () => {
     ["dizzinessScore as an object", "dizzinessScore", { note: SECRET }],
     ["freeText as an object", "freeText", { note: SECRET }],
     ["freeText as a list", "freeText", [SECRET]],
+    ["comfort as a number", "comfort", 7654321],
+    ["comfort as an object", "comfort", { note: SECRET }],
   ])("refuses %s as feedback_invalid, without quoting it", async (_name, field, value) => {
     const w = await seedWorld(modules);
     const sessionId = await session(w);
@@ -377,6 +379,7 @@ describe("ANH-146 M4 the bounds of a feedback, from the site", () => {
       submit(w, sessionId, { ...FEEDBACK, freeText: "ok", [field]: value }),
     );
     expect(text).toContain("feedback_invalid");
+    expect(text).not.toContain(String(value));
     expect(text).not.toContain(SECRET);
     expect(await rowsOf(w)).toEqual([]);
   });

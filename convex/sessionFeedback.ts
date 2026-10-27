@@ -195,11 +195,12 @@ export const getSessionFeedback = query({
 export const submitSessionFeedback = mutation({
   args: {
     sessionId: v.id("sessions"),
-    // Loose here, checked below by validateFeedback: a validator would quote a
-    // wrong value back, in the refusal and in the deployment's log.
+    // Every value entered is loose here, whatever its type, and checked below
+    // by validateFeedback: a validator would quote a wrong value back, in the
+    // refusal and in the deployment's log.
     nauseaScore: v.any(),
     dizzinessScore: v.any(),
-    comfort: v.string(),
+    comfort: v.any(),
     freeText: v.optional(v.any()),
   },
   returns: v.null(),
