@@ -365,6 +365,22 @@ describe("ANH-146 M4 the bounds of a feedback, from the site", () => {
     expect(await rowsOf(w)).toEqual([]);
   });
 
+  it.each([
+    ["nauseaScore as text", "nauseaScore", `7 ${SECRET}`],
+    ["dizzinessScore as an object", "dizzinessScore", { note: SECRET }],
+    ["freeText as an object", "freeText", { note: SECRET }],
+    ["freeText as a list", "freeText", [SECRET]],
+  ])("refuses %s as feedback_invalid, without quoting it", async (_name, field, value) => {
+    const w = await seedWorld(modules);
+    const sessionId = await session(w);
+    const text = await refusalText(
+      submit(w, sessionId, { ...FEEDBACK, freeText: "ok", [field]: value }),
+    );
+    expect(text).toContain("feedback_invalid");
+    expect(text).not.toContain(SECRET);
+    expect(await rowsOf(w)).toEqual([]);
+  });
+
   it("accepts 0 and 10, and 500 characters of text", async () => {
     const w = await seedWorld(modules);
     const low = await session(w);
