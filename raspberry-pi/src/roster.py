@@ -243,10 +243,14 @@ def describe_state(state: RosterState, age: Seconds | None) -> str:
         case RosterState.WAITING:
             return "liste des passagers pas encore recue du tableau de bord"
         case RosterState.STALE:
-            minutes = "?" if age is None else str(math.floor(age / 60))
+            ago = "? min"
+            if age is not None:
+                # To the second above: a list past the limit never reads as within it.
+                minutes, seconds = divmod(math.ceil(age), 60)
+                ago = f"{minutes} min {seconds} s"
             limit = round(ROSTER_MAX_AGE / 60)
             return (
-                f"liste des passagers perimee : recue il y a {minutes} min, "
+                f"liste des passagers perimee : recue il y a {ago}, "
                 f"au-dela de {limit} min personne n'est propose"
             )
         case RosterState.REFUSED:

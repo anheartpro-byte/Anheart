@@ -471,7 +471,7 @@ def test_a_value_missing_on_the_site_is_a_refusal(rider: Rider, refusal: Passeng
         ),
         (
             NoList(RosterState.STALE, Seconds(965.0)),
-            "demarrage refuse : liste des passagers perimee : recue il y a 16 min, "
+            "demarrage refuse : liste des passagers perimee : recue il y a 16 min 5 s, "
             "au-dela de 15 min personne n'est propose",
         ),
         (
@@ -511,7 +511,27 @@ def test_each_refusal_is_said_without_the_rider(refusal: PassengerRefusal, words
 
 def test_a_current_list_needs_no_words_and_an_undated_stale_one_says_so() -> None:
     assert describe_state(RosterState.CURRENT, Seconds(10.0)) == ""
-    assert "recue il y a ? min" in describe_state(RosterState.STALE, None)
+    assert describe_state(RosterState.STALE, None) == (
+        "liste des passagers perimee : recue il y a ? min, au-dela de 15 min personne n'est propose"
+    )
+
+
+@pytest.mark.parametrize(
+    ("age", "ago"),
+    [
+        (900.001, "15 min 1 s"),
+        (901.0, "15 min 1 s"),
+        (959.001, "16 min 0 s"),
+        (960.0, "16 min 0 s"),
+        (7261.0, "121 min 1 s"),
+    ],
+)
+def test_a_stale_list_says_its_age_to_the_second_above(age: float, ago: str) -> None:
+    """Never "15 min" or less for a list past 15 minutes (ANH-239)."""
+    assert describe_state(RosterState.STALE, Seconds(age)) == (
+        f"liste des passagers perimee : recue il y a {ago}, "
+        "au-dela de 15 min personne n'est propose"
+    )
 
 
 def test_an_unknown_refusal_or_state_fails_loudly() -> None:
