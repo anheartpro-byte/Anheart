@@ -189,6 +189,19 @@ describe("dashboard home: what each role sees", () => {
     expect(screen.queryByText(fr.dashboard.allOrganizations)).toBeNull();
   });
 
+  // The card counts the machines in a session too: "connected", not "online".
+  it("titles the machines card « Machines connectées » in French and « Connected machines » in English", async () => {
+    signedInAs("admin");
+    answer(api.dashboard.counters, counted());
+    answer(api.sessions.listSessions, []);
+    const french = await renderPage(<DashboardPage />);
+    expect(card("Machines connectées").href).toBe("/dashboard/machines");
+    french.unmount();
+
+    await renderPage(<DashboardPage />, { locale: "en" });
+    expect(card("Connected machines").href).toBe("/dashboard/machines");
+  });
+
   it.each([["a patient", "user"]] as const)(
     "shows %s the active sessions only, neither machines nor people",
     async (_name, role) => {

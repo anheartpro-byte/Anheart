@@ -3430,7 +3430,7 @@ de maintenant, et aucune valeur :
   part qu'au premier point mesuré depuis moins de 20 s, y compris pour une
   séance démarrée à la console et enregistrée au retour de la liaison ;
 - `components/machines/machine-signal.test.tsx` fait de même pour le badge de
-  statut, le compteur « Machines en ligne », « Dernier signal » et la ligne des
+  statut, le compteur « Machines connectées », « Dernier signal » et la ligne des
   versions ;
 - `components/freshness-hook.test.tsx` remplace le hook par un verdict imposé :
   chaque composant ci-dessus doit afficher ce que le hook dit, même quand ses
