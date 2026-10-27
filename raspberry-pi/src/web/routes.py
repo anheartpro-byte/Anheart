@@ -816,10 +816,11 @@ def _register_feedback(app: FastAPI, *, services: Services, auth: Sequence[param
             )
         parsed = parse_feedback(decoded)
         if isinstance(parsed, Err):
+            field = parsed.error.field.value
             raise Refusal(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
                 code=INVALID_FEEDBACK,
-                detail=f"retour refuse par la console : {parsed.error.field} hors de l'echelle",
+                detail=f"retour refuse par la console : {field} hors de l'echelle",
             )
         if isinstance(store.submit(parsed.value), Err):
             raise Refusal(HTTPStatus.CONFLICT, code=NOTHING_TO_FILL, detail=NOTHING_TO_FILL_DETAIL)

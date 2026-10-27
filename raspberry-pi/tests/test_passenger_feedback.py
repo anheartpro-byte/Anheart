@@ -52,6 +52,7 @@ from src.passenger_feedback import (
     Comfort,
     Delivery,
     Feedback,
+    FeedbackField,
     FeedbackOffer,
     InvalidField,
     NothingToFill,
@@ -196,7 +197,9 @@ def test_p7_whole_scores_of_the_scale_are_accepted(score: int) -> None:
 @pytest.mark.parametrize("score", [-1, 11, 2.5, 3.0, "3", None, True, [3]])
 @pytest.mark.parametrize("field_name", ["nausea_score", "dizziness_score"])
 def test_p7_a_score_off_the_scale_is_refused_by_its_field(score: object, field_name: str) -> None:
-    assert parse_feedback({**VALID, field_name: score}) == Err(InvalidField(field_name))
+    assert parse_feedback({**VALID, field_name: score}) == Err(
+        InvalidField(FeedbackField(field_name))
+    )
 
 
 @pytest.mark.parametrize("comfort", list(Comfort))
@@ -208,7 +211,7 @@ def test_p7_each_comfort_of_the_list_is_accepted(comfort: Comfort) -> None:
 
 @pytest.mark.parametrize("comfort", ["great", "", "Good", 1, None])
 def test_p7_a_comfort_off_the_list_is_refused(comfort: object) -> None:
-    assert parse_feedback({**VALID, "comfort": comfort}) == Err(InvalidField("comfort"))
+    assert parse_feedback({**VALID, "comfort": comfort}) == Err(InvalidField(FeedbackField.COMFORT))
 
 
 def test_p7_500_characters_of_comment_are_accepted_and_501_refused() -> None:
@@ -216,7 +219,9 @@ def test_p7_500_characters_of_comment_are_accepted_and_501_refused() -> None:
     accepted = parse_feedback({**VALID, "free_text": f"  {text}\n"})
     assert isinstance(accepted, Ok)
     assert accepted.value.free_text == text
-    assert parse_feedback({**VALID, "free_text": f"{text}x"}) == Err(InvalidField("free_text"))
+    assert parse_feedback({**VALID, "free_text": f"{text}x"}) == Err(
+        InvalidField(FeedbackField.FREE_TEXT)
+    )
 
 
 def test_p7_the_comment_is_measured_as_the_page_and_the_dashboard_measure_it() -> None:
@@ -224,7 +229,9 @@ def test_p7_the_comment_is_measured_as_the_page_and_the_dashboard_measure_it() -
     wide = "\U0001f600" * (FREE_TEXT_MAX // 2)
     assert utf16_length(wide) == FREE_TEXT_MAX
     assert isinstance(parse_feedback({**VALID, "free_text": wide}), Ok)
-    assert parse_feedback({**VALID, "free_text": f"{wide}a"}) == Err(InvalidField("free_text"))
+    assert parse_feedback({**VALID, "free_text": f"{wide}a"}) == Err(
+        InvalidField(FeedbackField.FREE_TEXT)
+    )
 
 
 @pytest.mark.parametrize("text", ["", "   ", "\n\t ", None])
@@ -242,16 +249,16 @@ def test_p7_a_comment_keeps_its_lines_and_refuses_other_control_characters() -> 
     assert kept.value.free_text == "un\tdeux\ntrois\u202f!"
     for control in ("\x00", "\x1b", "\r", "\x7f"):
         assert parse_feedback({**VALID, "free_text": f"a{control}b"}) == Err(
-            InvalidField("free_text")
+            InvalidField(FeedbackField.FREE_TEXT)
         )
-    assert parse_feedback({**VALID, "free_text": 12}) == Err(InvalidField("free_text"))
+    assert parse_feedback({**VALID, "free_text": 12}) == Err(InvalidField(FeedbackField.FREE_TEXT))
 
 
 @pytest.mark.parametrize(
     "body", [[VALID], "feedback", None, {**VALID, "rider": SENTINEL}, {**VALID, "operator": "x"}]
 )
 def test_p7_a_body_that_is_not_an_object_of_feedback_keys_is_refused(body: object) -> None:
-    assert parse_feedback(body) == Err(InvalidField("body"))
+    assert parse_feedback(body) == Err(InvalidField(FeedbackField.BODY))
     assert {"nausea_score", "dizziness_score", "comfort", "free_text"} == FIELDS
 
 

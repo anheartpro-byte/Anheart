@@ -171,11 +171,22 @@ class Feedback:
     """Trimmed, never empty; ``None`` when there is none."""
 
 
+@unique
+class FeedbackField(Enum):
+    """What a refusal names: a key of the body, or the body itself."""
+
+    BODY = "body"
+    NAUSEA_SCORE = "nausea_score"
+    DIZZINESS_SCORE = "dizziness_score"
+    COMFORT = "comfort"
+    FREE_TEXT = "free_text"
+
+
 @dataclass(frozen=True, slots=True)
 class InvalidField:
     """A feedback refused: the field named, never its value."""
 
-    field: str
+    field: FeedbackField
 
 
 def _score(value: object) -> Score | None:
@@ -193,13 +204,13 @@ def _free_text(value: object) -> Result[str | None, InvalidField]:
     if value is None:
         return Ok(None)
     if not isinstance(value, str):
-        return Err(InvalidField("free_text"))
+        return Err(InvalidField(FeedbackField.FREE_TEXT))
     text = value.strip()
     if utf16_length(text) > FREE_TEXT_MAX or any(
         unicodedata.category(character) == "Cc" and character not in _ALLOWED_CONTROLS
         for character in text
     ):
-        return Err(InvalidField("free_text"))
+        return Err(InvalidField(FeedbackField.FREE_TEXT))
     return Ok(text or None)
 
 
@@ -221,17 +232,17 @@ def parse_feedback(raw: object) -> Result[Feedback, InvalidField]:
     """
     body = _object(raw)
     if body is None:
-        return Err(InvalidField("body"))
+        return Err(InvalidField(FeedbackField.BODY))
     nausea = _score(body.get("nausea_score"))
     if nausea is None:
-        return Err(InvalidField("nausea_score"))
+        return Err(InvalidField(FeedbackField.NAUSEA_SCORE))
     dizziness = _score(body.get("dizziness_score"))
     if dizziness is None:
-        return Err(InvalidField("dizziness_score"))
+        return Err(InvalidField(FeedbackField.DIZZINESS_SCORE))
     named = body.get("comfort")
     comfort = _COMFORTS.get(named) if isinstance(named, str) else None
     if comfort is None:
-        return Err(InvalidField("comfort"))
+        return Err(InvalidField(FeedbackField.COMFORT))
     text = _free_text(body.get("free_text"))
     if isinstance(text, Err):
         return text
