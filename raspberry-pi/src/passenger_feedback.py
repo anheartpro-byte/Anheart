@@ -477,7 +477,11 @@ class PassengerFeedback:
     # --- the sending ----------------------------------------------------------
 
     async def step(self, link: FeedbackLink) -> None:
-        """Send what may be sent now, once each; say why the others wait."""
+        """Send what may be sent now, once each; say why the others wait.
+
+        An answer that says the link or its route is down ends the round: the
+        others wait for the next one rather than each wait for the link's delay.
+        """
         self._expire()
         now = self._clock.monotonic()
         for entry in tuple(self._entries):
@@ -502,6 +506,8 @@ class PassengerFeedback:
                 feedback_body(session_id, feedback, self._clock.unix_millis())
             )
             self._heard(entry, feedback, answer, now)
+            if isinstance(answer, Held | RouteMissing):
+                break
         self._prune()
 
     def _heard(self, entry: _Entry, sent: Feedback, answer: Answer, now: Monotonic) -> None:

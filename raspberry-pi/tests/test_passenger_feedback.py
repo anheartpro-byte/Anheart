@@ -414,6 +414,19 @@ async def test_p5_a_lost_link_is_tried_again_after_the_retry_period() -> None:
     assert offered(store).delivery is Delivery.SENT
 
 
+@pytest.mark.parametrize("down", [Held("no route to host"), RouteMissing()])
+async def test_a_link_down_ends_the_round_and_the_others_go_at_the_next(down: Answer) -> None:
+    store = PassengerFeedback(clock())
+    for session in range(3):
+        store.ended(reader(f"SESSION-{session}"))
+        assert store.submit(FEEDBACK) == Ok(None)
+    link = Link(answers=[down])
+    await store.step(link)
+    assert [body["sessionId"] for body in link.sent] == ["SESSION-0"]
+    await store.step(link)
+    assert [body["sessionId"] for body in link.sent] == ["SESSION-0", "SESSION-1", "SESSION-2"]
+
+
 async def test_p5_an_unknown_route_waits_as_a_dashboard_too_old() -> None:
     ticking, store = entered()
     link = Link(answers=[RouteMissing()])
