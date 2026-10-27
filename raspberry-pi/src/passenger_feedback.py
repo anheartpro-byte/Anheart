@@ -545,10 +545,7 @@ class PassengerFeedback:
                 entry.delivery = Delivery.REFUSED
                 entry.code = answer.code
                 entry.feedback = None
-                _logger.warning(
-                    "rider feedback refused by the dashboard: %s",
-                    "sans code" if answer.code is None else answer.code,
-                )
+                _logger.warning("rider feedback refused by the dashboard: %s", answer.code)
             case Held():
                 self._later(entry, current, Delivery.WAITING_LINK, now)
             case RouteMissing():
