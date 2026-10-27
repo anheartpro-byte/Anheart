@@ -727,7 +727,7 @@
     "title": "Dashboard",
     "welcome": "Welcome, {name}",
     "activeSessions": "Active sessions",
-    "onlineMachines": "Online machines",
+    "onlineMachines": "Connected machines",
     "totalPatients": "Total patients",
     "recentSessions": "Recent sessions",
     "noActiveSessions": "No active sessions",

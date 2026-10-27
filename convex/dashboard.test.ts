@@ -6,9 +6,10 @@
  * of both centres is counted. These tests check the cases the matrix does not
  * express: what a figure leaves out (a removed member, a deleted machine, a
  * session of another organisation), what the Anheart admin alone is counted
- * (rows without an organisation, a restored machine), what a gestionnaire's
- * figures are made of, and that a machine is never counted online by the
- * server on the strength of a record the site would show offline.
+ * (rows without an organisation, a restored machine), how an account member of
+ * two organisations is counted, what a gestionnaire's figures are made of, and
+ * that a machine is never counted online by the server on the strength of a
+ * record the site would show offline.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -82,7 +83,7 @@ describe("dashboard.counters: what no figure counts", () => {
 
     const counted = await as(w.t, "orgAdmin").query(api.dashboard.counters, {});
 
-    expect(counted.members).toEqual({ admin: 1, gestionnaire: 2, user: 3 });
+    expect(counted.members).toEqual({ total: 6, admin: 1, gestionnaire: 2, user: 3 });
     expect(counted.machines?.total).toBe(2);
     expect(counted.sessions).toEqual({ active: 0, pending: 0 });
   });
@@ -120,34 +121,85 @@ describe("dashboard.counters: what no figure counts", () => {
     const centreA = await as(w.t, "orgAdmin").query(api.dashboard.counters, {});
     const centreB = await as(w.t, "orgBAdmin").query(api.dashboard.counters, {});
 
-    expect(centreA.members).toEqual({ admin: 1, gestionnaire: 2, user: 3 });
+    expect(centreA.members).toEqual({ total: 6, admin: 1, gestionnaire: 2, user: 3 });
     expect(centreA.machines?.total).toBe(2);
     expect(centreA.sessions).toEqual({ active: 0, pending: 0 });
-    expect(centreB.members).toEqual({ admin: 1, gestionnaire: 1, user: 2 });
+    expect(centreB.members).toEqual({ total: 4, admin: 1, gestionnaire: 1, user: 2 });
     expect(centreB.machines?.total).toBe(2);
     expect(centreB.sessions).toEqual({ active: 1, pending: 1 });
   });
 });
 
-describe("dashboard.counters: the Anheart admin", () => {
-  it("counts a member of two organisations once in each", async () => {
+/** A further membership of an account seeded in one organisation. */
+async function addMembership(
+  w: World,
+  userId: Id<"users">,
+  organizationId: Id<"organizations">,
+  role: "admin" | "gestionnaire" | "user",
+  active = true,
+): Promise<void> {
+  await w.t.run(async (ctx) => {
+    await ctx.db.insert("memberships", { userId, organizationId, role, active });
+  });
+}
+
+/** The seeded world as the Anheart admin counts its members: one account each. */
+const EVERY_MEMBER = { total: 10, admin: 3, gestionnaire: 3, user: 4 };
+
+describe("dashboard.counters: members are accounts", () => {
+  it("counts once, for the Anheart admin, a patient of two organisations, still counted by centre B", async () => {
     const w = await seedWorld(modules);
-    await w.t.run((ctx) =>
-      ctx.db.insert("memberships", {
-        userId: w.patient,
-        organizationId: w.orgB,
-        role: "user",
-        active: true,
-      }),
-    );
+    const before = await as(w.t, "admin").query(api.dashboard.counters, {});
+    await addMembership(w, w.patient, w.orgB, "user");
 
     const admin = await as(w.t, "admin").query(api.dashboard.counters, {});
     const centreB = await as(w.t, "orgBAdmin").query(api.dashboard.counters, {});
 
-    expect(admin.members).toEqual({ admin: 3, gestionnaire: 3, user: 5 });
-    expect(centreB.members).toEqual({ admin: 1, gestionnaire: 1, user: 2 });
+    expect(before.members).toEqual(EVERY_MEMBER);
+    expect(admin.members).toEqual(EVERY_MEMBER);
+    expect(centreB.members).toEqual({ total: 4, admin: 1, gestionnaire: 1, user: 2 });
   });
 
+  it("counts once in all, and once in each role, a gestionnaire of centre A who is a patient of centre B", async () => {
+    const w = await seedWorld(modules);
+    await addMembership(w, w.manager, w.orgB, "user");
+
+    const { members } = await as(w.t, "admin").query(api.dashboard.counters, {});
+
+    expect(members).toEqual({ total: 10, admin: 3, gestionnaire: 3, user: 5 });
+    // The roles add up to more than the accounts.
+    expect(members!.admin + members!.gestionnaire + members!.user).toBe(11);
+  });
+
+  it("leaves out a second membership that is no longer active", async () => {
+    const w = await seedWorld(modules);
+    await addMembership(w, w.patient, w.orgB, "gestionnaire", false);
+
+    const admin = await as(w.t, "admin").query(api.dashboard.counters, {});
+    const centreB = await as(w.t, "orgBAdmin").query(api.dashboard.counters, {});
+
+    expect(admin.members).toEqual(EVERY_MEMBER);
+    expect(centreB.members).toEqual({ total: 3, admin: 1, gestionnaire: 1, user: 1 });
+  });
+
+  it.each([
+    ["orgAdmin", { total: 6, admin: 1, gestionnaire: 2, user: 3 }],
+    ["orgBAdmin", { total: 4, admin: 1, gestionnaire: 1, user: 2 }],
+  ] as const)(
+    "counts for %s members whose roles add up to the total, an account of two organisations included",
+    async (actor, expected) => {
+      const w = await seedWorld(modules);
+      await addMembership(w, w.manager, w.orgB, "user");
+
+      const { members } = await as(w.t, actor).query(api.dashboard.counters, {});
+
+      expect(members).toEqual(expected);
+      expect(members!.admin + members!.gestionnaire + members!.user).toBe(members!.total);
+    },
+  );
+});
+
+describe("dashboard.counters: the Anheart admin", () => {
   it("counts a restored machine and the rows written before organisations, no one else does", async () => {
     const w = await seedWorld(modules);
     await addMachine(w, {

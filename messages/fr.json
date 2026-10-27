@@ -727,7 +727,7 @@
     "title": "Tableau de bord",
     "welcome": "Bienvenue, {name}",
     "activeSessions": "Sessions actives",
-    "onlineMachines": "Machines en ligne",
+    "onlineMachines": "Machines connectées",
     "totalPatients": "Patients total",
     "recentSessions": "Sessions récentes",
     "noActiveSessions": "Aucune session active",

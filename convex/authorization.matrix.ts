@@ -3823,7 +3823,7 @@ async function seedCountedWorld(w: World): Promise<void> {
 }
 
 type Counted = {
-  members: { admin: number; gestionnaire: number; user: number } | null;
+  members: { total: number; admin: number; gestionnaire: number; user: number } | null;
   patients: number | null;
   machines: { total: number; signals: string[] } | null;
   sessions: { active: number; pending: number };
@@ -3833,14 +3833,14 @@ type Counted = {
 const COUNTED: Partial<Record<Actor, Counted>> = {
   admin: {
     // Anheart: 1 admin. Centre A: 1 admin, 2 gestionnaires, 3 patients.
-    // Centre B: 1 of each.
-    members: { admin: 3, gestionnaire: 3, user: 4 },
+    // Centre B: 1 of each. Ten accounts, each a member of one organisation.
+    members: { total: 10, admin: 3, gestionnaire: 3, user: 4 },
     patients: null,
     machines: { total: 3, signals: ["in_session", "online"] },
     sessions: { active: 2, pending: 1 },
   },
   orgAdmin: {
-    members: { admin: 1, gestionnaire: 2, user: 3 },
+    members: { total: 6, admin: 1, gestionnaire: 2, user: 3 },
     patients: null,
     machines: { total: 2, signals: ["online"] },
     sessions: { active: 1, pending: 1 },
@@ -3861,7 +3861,7 @@ const COUNTED: Partial<Record<Actor, Counted>> = {
   otherPatient: { members: null, patients: null, machines: null, sessions: { active: 0, pending: 1 } },
   stranger: { members: null, patients: null, machines: null, sessions: { active: 0, pending: 0 } },
   orgBAdmin: {
-    members: { admin: 1, gestionnaire: 1, user: 1 },
+    members: { total: 3, admin: 1, gestionnaire: 1, user: 1 },
     patients: null,
     machines: { total: 1, signals: ["in_session"] },
     sessions: { active: 1, pending: 0 },

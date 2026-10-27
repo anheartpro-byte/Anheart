@@ -34,7 +34,7 @@ type Listed = FunctionReturnType<typeof api.sessions.listSessions>[number];
 function counted(overrides: Partial<Counters> = {}): Counters {
   return {
     serverNow: NOW,
-    members: { admin: 2, gestionnaire: 3, user: 11 },
+    members: { total: 16, admin: 2, gestionnaire: 3, user: 11 },
     patients: null,
     machines: {
       total: 4,
@@ -189,6 +189,19 @@ describe("dashboard home: what each role sees", () => {
     expect(screen.queryByText(fr.dashboard.allOrganizations)).toBeNull();
   });
 
+  // The card counts the machines in a session too: "connected", not "online".
+  it("titles the machines card « Machines connectées » in French and « Connected machines » in English", async () => {
+    signedInAs("admin");
+    answer(api.dashboard.counters, counted());
+    answer(api.sessions.listSessions, []);
+    const french = await renderPage(<DashboardPage />);
+    expect(card("Machines connectées").href).toBe("/dashboard/machines");
+    french.unmount();
+
+    await renderPage(<DashboardPage />, { locale: "en" });
+    expect(card("Connected machines").href).toBe("/dashboard/machines");
+  });
+
   it.each([["a patient", "user"]] as const)(
     "shows %s the active sessions only, neither machines nor people",
     async (_name, role) => {
@@ -318,11 +331,32 @@ describe("dashboard home: the counts", () => {
 
     answer(
       api.dashboard.counters,
-      counted({ members: { admin: 1, gestionnaire: 0, user: 1 } }),
+      counted({ members: { total: 2, admin: 1, gestionnaire: 0, user: 1 } }),
     );
     await renderPage(<DashboardPage />, { locale: "en" });
     expect(figureOf(en.nav.users)).toBe("2");
     expect(detailOf(en.nav.users)).toBe("1 admin · 0 managers · 1 patient");
+  });
+
+  it("shows the accounts the server counted, not the sum of the roles, which can be more", async () => {
+    // One account is a gestionnaire in one centre and a patient in another:
+    // counted once in all, and once in each role.
+    signedInAs("admin");
+    answer(
+      api.dashboard.counters,
+      counted({ members: { total: 10, admin: 3, gestionnaire: 3, user: 5 } }),
+    );
+    answer(api.sessions.listSessions, []);
+    const french = await renderPage(<DashboardPage />);
+    expect(figureOf(fr.nav.users)).toBe("10");
+    expect(detailOf(fr.nav.users)).toBe(
+      "3 administrateurs · 3 gestionnaires · 5 patients",
+    );
+    french.unmount();
+
+    await renderPage(<DashboardPage />, { locale: "en" });
+    expect(figureOf(en.nav.users)).toBe("10");
+    expect(detailOf(en.nav.users)).toBe("3 admins · 3 managers · 5 patients");
   });
 
   it("counts a manager's own patients", async () => {

@@ -301,14 +301,15 @@ Les chiffres des cartes viennent d'une seule query, `dashboard.counters`
 ([convex.md](convex.md#dashboardts-compteurs-du-tableau-de-bord-anh-159)),
 comptés par le serveur dans l'organisation de l'appel ; pour l'admin Anheart,
 dans toutes, ce que la page dit sous le titre (« Les compteurs portent sur
-toutes les organisations. »). Chaque carte compte ce que la page vers laquelle
-elle mène liste, rien de plus.
+toutes les organisations. »). Chaque carte compte dans le périmètre de la page
+vers laquelle elle mène, jamais au-delà ; le tableau dit ce qu'elle compte, qui
+n'est pas toujours tout ce que la page liste.
 
 | Carte | Pour | Chiffre | Sous le chiffre |
 |---|---|---|---|
-| **Machines en ligne** | admin, admin d'organisation, gestionnaire | Machines affichées « En ligne » ou « En session », jugées comme leur badge (§6) : une machine n'y compte plus 90 s après son dernier signal, même si Convex la dit encore en ligne. Admin : celles de l'organisation (toutes pour l'admin Anheart) ; gestionnaire : les siennes. | « / N au total » (machines non supprimées), puis « dont N en session » s'il y en a. |
+| **Machines connectées** | admin, admin d'organisation, gestionnaire | Machines affichées « En ligne » ou « En session », jugées comme leur badge (§6) : une machine n'y compte plus 90 s après son dernier signal, même si Convex la dit encore en ligne. Admin : celles de l'organisation (toutes pour l'admin Anheart) ; gestionnaire : les siennes. | « / N au total » (machines non supprimées), puis « dont N en session » s'il y en a. |
 | **Sessions actives** | tous | Séances actives que l'on peut ouvrir : toutes celles de l'organisation pour un admin, celles de ses machines ou qu'il pratique pour un gestionnaire, les siennes pour un patient. Une séance « Interrompue, fin inconnue » n'y compte pas. | « N en attente », ou « Aucune en attente ». |
-| **Utilisateurs** | admin, admin d'organisation | Membres actifs de l'organisation (de toutes pour l'admin Anheart, un compte membre de deux organisations compté dans chacune). | Par rôle : « 2 administrateurs · 3 gestionnaires · 11 patients ». |
+| **Utilisateurs** | admin, admin d'organisation | Comptes membres actifs, chacun une fois. Admin d'organisation : les membres actifs de la sienne, ceux que liste sa page Utilisateurs. Admin Anheart : les comptes membres actifs d'au moins une organisation (Anheart comprise) ; un compte membre de deux organisations compte une fois. Sa page Utilisateurs liste en plus les comptes sans appartenance active (tous les comptes de la table `users`, chacun avec le rôle de `users.role`) : la carte peut compter moins de comptes que la page n'en liste. | Par rôle : « 2 administrateurs · 3 gestionnaires · 11 patients ». Un compte compte une fois dans chaque rôle qu'il tient : pour l'admin Anheart, un compte gestionnaire dans un centre et patient dans un autre compte dans les deux rôles, et la somme peut dépasser le chiffre. Pour un admin d'organisation, la somme est le chiffre. |
 | **Patients** | gestionnaire | Ses patients, encore patients actifs de l'organisation, comme la page Patients les liste. Jamais un chiffre de toute l'organisation. | « Patients que vous suivez ». |
 
 Pendant le chargement, chaque carte affiche un emplacement grisé (et
@@ -1250,13 +1251,13 @@ redémarrage du système, dont elle ne sait plus compter l'âge.
   de Mes machines, le panneau d'entraînement, et tout ce qui affiche le statut
   d'une machine ou son dernier signal (`components/machines/MachineSignal.tsx` :
   liste des machines, détail d'une machine, fiche d'un gestionnaire, carte
-  « Machines en ligne » du tableau de bord). Le badge « En direct » et le
+  « Machines connectées » du tableau de bord). Le badge « En direct » et le
   statut « En ligne » ne sont jamais affichés sans lui.
 
 | Moment | Ce que le site affiche |
 |---|---|
 | Moins de 90 s après le dernier signal | Statut écrit dans Convex (« En ligne » ou « En session »), badge « En direct », valeurs normales. |
-| 90 s après le dernier signal (page déjà ouverte : à la seconde près ; page qui vient de s'ouvrir : jusqu'à 107 s, voir les limites) | Statut « Hors ligne », badge « Données périmées », valeurs grisées, cœur gris, « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » La machine ne compte plus dans « Machines en ligne ». Sur Mes machines, le bouton de lancement est grisé, avec « La machine est hors ligne. ». « Dernier signal » et « Mis à jour il y a … » continuent d'avancer. |
+| 90 s après le dernier signal (page déjà ouverte : à la seconde près ; page qui vient de s'ouvrir : jusqu'à 107 s, voir les limites) | Statut « Hors ligne », badge « Données périmées », valeurs grisées, cœur gris, « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » La machine ne compte plus dans « Machines connectées ». Sur Mes machines, le bouton de lancement est grisé, avec « La machine est hors ligne. ». « Dernier signal » et « Mis à jour il y a … » continuent d'avancer. |
 | Signal suivant reçu (heartbeat toutes les 10 s) | Retour immédiat au statut écrit et à « En direct ». |
 
 **Statut affiché et statut écrit.** Convex n'écrit `offline` sur une machine
