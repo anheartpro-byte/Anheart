@@ -86,9 +86,21 @@ FIELDS: Final[frozenset[str]] = frozenset(
 _ALLOWED_CONTROLS: Final[frozenset[str]] = frozenset({"\n", "\t"})
 
 SESSION_NOT_ENDED: Final[ErrorCode] = ErrorCode("feedback_session_not_ended")
-"""The one refusal that is not final here: the dashboard takes a feedback only once it
-has the session's end, which this console sends after its points are acknowledged,
-so sometimes after the feedback was entered. It is sent again later."""
+"""Not final: the dashboard takes a feedback only once it has the session's end, which
+this console sends after its points are acknowledged, so sometimes after the feedback
+was entered. It is sent again later."""
+
+FINAL_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
+    {
+        ErrorCode("feedback_not_eligible"),
+        ErrorCode("feedback_window_closed"),
+        ErrorCode("session_not_found"),
+        ErrorCode("invalid_request"),
+    }
+)
+"""The refusals after which the same feedback would always be refused: it is dropped.
+Any other (``request_failed``, a refusal with no code) may be of the moment: it waits
+and is sent again, within the 24 hours."""
 
 
 @unique
@@ -509,6 +521,9 @@ class PassengerFeedback:
             case Refusal():
                 if answer.code == SESSION_NOT_ENDED:
                     self._later(entry, current, Delivery.WAITING_END, now)
+                    return
+                if answer.code not in FINAL_REFUSALS:
+                    self._later(entry, current, Delivery.WAITING_LINK, now)
                     return
                 entry.delivery = Delivery.REFUSED
                 entry.code = answer.code

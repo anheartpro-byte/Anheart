@@ -439,26 +439,71 @@ async def test_p5_the_session_s_identifier_learned_after_the_entry_lets_it_go() 
 
 @pytest.mark.parametrize(
     ("status", "code"),
-    [(409, "feedback_window_closed"), (400, "feedback_not_eligible"), (400, None)],
+    [
+        (400, "feedback_window_closed"),
+        (400, "feedback_not_eligible"),
+        (404, "session_not_found"),
+        (400, "invalid_request"),
+    ],
 )
-async def test_p5_a_refusal_is_said_with_its_code_and_never_sent_again(
-    status: int, code: str | None
+async def test_p5_a_final_refusal_is_said_with_its_code_and_never_sent_again(
+    status: int, code: str
 ) -> None:
-    _, store = entered()
-    error = None if code is None else ErrorCode(code)
-    link = Link(answers=[Refusal("refused", final=False, status=status, code=error)])
+    ticking, store = entered()
+    link = Link(answers=[Refusal("refused", final=True, status=status, code=ErrorCode(code))])
     await store.step(link)
     current = offered(store)
     assert (current.delivery, current.code, current.can_submit) == (
         Delivery.REFUSED,
-        error,
+        ErrorCode(code),
         False,
     )
-    assert describe_delivery(current.delivery, current.code).endswith(
-        f"({'sans code' if code is None else code})"
-    )
+    assert describe_delivery(current.delivery, current.code).endswith(f"({code})")
+    ticking.advance(Seconds(RETRY_PERIOD))
     await store.step(link)
     assert len(link.sent) == 1
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        Refusal("failed", final=False, status=400, code=ErrorCode("request_failed")),
+        Refusal("refused", final=False, status=400, code=None),
+        Refusal("refused", final=True, status=403, code=None),
+        Refusal("refused", final=True, status=400, code=ErrorCode("payload_too_large")),
+    ],
+    ids=["request_failed", "no_code", "no_code_final", "other_code"],
+)
+async def test_p5_any_other_refusal_waits_and_is_tried_again_then_taken(
+    refusal: Refusal,
+) -> None:
+    ticking, store = entered()
+    link = Link(answers=[refusal])
+    await store.step(link)
+    current = offered(store)
+    assert (current.delivery, current.code, current.can_submit) == (
+        Delivery.WAITING_LINK,
+        None,
+        True,
+    )
+    await store.step(link)
+    assert len(link.sent) == 1, "nothing again before the retry period"
+    ticking.advance(Seconds(RETRY_PERIOD))
+    await store.step(link)
+    assert len(link.sent) == 2
+    assert link.sent[1] == feedback_body("SESSION-1", FEEDBACK, ticking.unix_millis())
+    assert offered(store).delivery is Delivery.SENT
+
+
+async def test_p5_a_refusal_that_waits_is_still_given_up_24_hours_after_the_end() -> None:
+    ticking, store = entered()
+    failing = Refusal("failed", final=False, status=400, code=ErrorCode("request_failed"))
+    link = Link(answers=[failing] * 3)
+    await store.step(link)
+    ticking.advance(Seconds(EDIT_WINDOW + 1))
+    await store.step(link)
+    assert len(link.sent) == 1
+    assert offered(store).delivery is Delivery.EXPIRED
 
 
 async def test_p5_given_up_24_hours_after_the_end() -> None:
@@ -559,7 +604,14 @@ async def test_a_card_closed_while_its_feedback_travels_keeps_sending_it(
     ("answer", "delivery"),
     [
         (Acked({}), Delivery.SENT),
-        (Refusal("no", final=True, status=409, code=None), Delivery.REFUSED),
+        (
+            Refusal("no", final=True, status=400, code=ErrorCode("feedback_window_closed")),
+            Delivery.REFUSED,
+        ),
+        (
+            Refusal("failed", final=False, status=400, code=ErrorCode("request_failed")),
+            Delivery.EXPIRED,
+        ),
         (Held("lost"), Delivery.EXPIRED),
         (RouteMissing(), Delivery.EXPIRED),
         (
