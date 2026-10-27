@@ -1770,9 +1770,27 @@ besoin du dernier signal de chaque machine connectée : la query lit donc les
 machines, et chaque heartbeat la relance. Et le nombre de comptes distincts
 n'est pas une simple somme : un agrégat des appartenances compterait deux
 fois un compte membre de deux organisations. Le volume horaire vient des
-appartenances, 3 001 des 3 123 documents relus à chaque heartbeat. Les
-compter dans une query à part, qu'aucun heartbeat ne relance, le réduirait ;
-ce n'est pas fait ici.
+appartenances, 3 001 des 3 123 documents relus à chaque heartbeat. Ni
+composant d'agrégation ni seconde query ne sont ajoutés maintenant.
+
+Méthode : la mesure est faite en mémoire par `convex-test`, sans aucun
+déploiement. Les métriques du déploiement de développement n'ont pas pu être
+lues en lecture seule depuis le poste de travail : l'outil Convex refuse ses
+statistiques dans ce mode d'accès, et ce déploiement ne contient que quelques
+lignes de démonstration. Le nombre exact de relances par heartbeat (une ou
+deux) ne se mesure que sur un déploiement.
+
+Ce qui ferait changer d'avis : un appel de l'admin Anheart au-dessus de 10 %
+des limites d'un appel (vers 3 080 appartenances actives, à 100 machines et
+20 séances ouvertes), ou un volume relu par onglet ouvert qui devient gênant
+pour le forfait Convex (au jeu « cible » : 31,8 à 63,6 Go par heure). Deux
+leviers, non faits ici :
+
+- compter `members` dans une query à part, qu'aucun heartbeat ne relance :
+  au jeu « cible », environ 25 fois moins de documents relus par heartbeat
+  (122 au lieu de 3 123) ;
+- une table légère des signaux des machines (un changement de schéma), pour
+  que la carte ne relise pas les fiches complètes des machines.
 
 ### `machines.ts`
 
