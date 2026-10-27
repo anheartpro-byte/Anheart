@@ -508,10 +508,15 @@ acceptance. Current verdicts come from the commands above.
    **S07 AUTO jog remains a strict XFAIL.** Reproduced on 2026-10-05
    (macOS arm64, Python 3.12.13, committed cohort and source `7b1857b`):
    the setpoint walks **887 → 895 motor rpm** over t=679.0–679.8 s.
-   At the decision tick the true rate is 133 bpm and the sensor reads 132;
-   the four rising ticks have a true rate of 132 bpm. The sensor next drops
-   to 128 at t=681 s, with no further increase; `hr_drop` fires at **t=701 s**.
+   The rise is decided at t=679.2 s, the tick after the scripted collapse
+   starts at t=679.0 s, with a true rate of 132 bpm and a sensor reading of
+   132, 13 bpm below the 145-155 zone; the four rising ticks have a true rate
+   of 132 bpm. The sensor next drops to 128 at t=681 s, with no further
+   increase; `hr_drop` fires at **t=701 s**.
    The invariant still reports four `vasovagal_no_accel` violations.
+   Decision of 2026-10-27 (the project lead): keep S07 as a documented
+   strict XFAIL, with no new value and no limit on setpoint steps, to be
+   reviewed with the physician before anyone rides (ANH-98).
    Reproduce with `$PY -m simulation.quick S07`; classification lives in
    `cohort/battery.py:KNOWN_VASOVAGAL_ONSET`.
 2. **FIXED — programmes bypassed the motion limits.**

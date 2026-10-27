@@ -80,17 +80,18 @@ _PROFILE_OF: Final[Mapping[SessionType, tuple[str, Path]]] = {
 VASOVAGAL_ONSET_DEFECT: Final[str] = (
     "RESIDUAL (raspberry-pi/src/training/runtime.py vasovagal gate, README finding 1): the "
     "setpoint no longer rises once a collapse is measurable - the controller may not raise it "
-    "while the 5-reading heart-rate trend is below -20 bpm/min - but a rise decided on the very "
-    "tick a collapse begins, before any fall has reached the sensor, is still walked out "
+    "while the 5-reading heart-rate trend is below -20 bpm/min - but a rise decided in the first "
+    "ticks of a collapse, before any fall has reached the sensor, is still walked out "
     "(invariant vasovagal_no_accel). Evidence ({pair}): {evidence}."
 )
 
 KNOWN_VASOVAGAL_ONSET: Final[Mapping[tuple[str, SessionType], str]] = {
     ("S07", SessionType.AUTO_JOG): (
         "Measured 2026-10-05: 887 -> 895 motor rpm (+0.16 output rpm) over t=679.0-679.8 s, "
-        "decided at t=679.0 s when the scripted collapse starts (true rate 133 bpm, sensor "
-        "132); the four rising ticks read true 132 bpm. The next lower sensor reading is "
-        "128 bpm at t=681 s; nothing rises after it, and hr_drop fires at t=701 s. "
+        "decided at t=679.2 s, the tick after the scripted collapse starts at t=679.0 s (true "
+        "rate 132 bpm, sensor 132); the four rising ticks read true 132 bpm. The next lower "
+        "sensor reading is 128 bpm at t=681 s; nothing rises after it, and hr_drop fires at "
+        "t=701 s. "
         "Before the gate: the controller "
         "kept raising the setpoint through the collapse until hr_drop"
     ),
