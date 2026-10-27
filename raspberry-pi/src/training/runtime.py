@@ -3194,6 +3194,7 @@ class TrainingRuntime:
             attendant_last_seen=self._attendant_last_seen,
             commanded_g=self._geometry.view(self._applied_rpm).g_load,
             resting_bpm=self._resting_bpm,
+            manual_session=self._manual is not None,
             setpoint_echo_rpm=echo,
             envelope=envelope,
             heart_rate_supervised=self._occupied(),
