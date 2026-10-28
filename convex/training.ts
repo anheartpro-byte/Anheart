@@ -1717,9 +1717,10 @@ export const getPendingTrainingSession = internalQuery({
 /**
  * How long after its first news a start already confirmed may be confirmed
  * again (ANH-240): the console keeps the offer 60 s after the click
- * (`LAUNCH_TIMEOUT`), plus a step of its loop (1 s), its HTTP timeout (3 s)
- * and margin. `firstNewsOf` is on the server's clock and, for a console that
- * says no age (this repository's), never before the click.
+ * (`LAUNCH_TIMEOUT`), plus a step of its loop (1 s), its HTTP timeouts (3 s
+ * a phase) and margin. `firstNewsOf` is on the server's clock and, for a
+ * console that says an age of 0 or none (this repository's), never before the
+ * click.
  */
 export const REPEATED_START_WINDOW_MS = 90_000;
 

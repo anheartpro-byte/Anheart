@@ -1347,7 +1347,7 @@ elle ne réalise pas ce geste et n'ajoute pas son délai. L'opérateur est le no
 console connaît aujourd'hui; ANH-152 reste hors de ce parcours. Si Convex a pris le
 départ mais que sa réponse 2xx se perd, une nouvelle confirmation dans ces 60 s reçoit
 200 aux conditions ci-dessus, dans les 90 s qui suivent le départ daté par le serveur
-à la première confirmation, et la machine démarre (contrat 1.7) ; sans nouveau clic
+à la première confirmation, et la machine démarre (contrat 1.8) ; sans nouveau clic
 dans ces 60 s, la machine peut rester tenue jusqu'à l'interruption.
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas

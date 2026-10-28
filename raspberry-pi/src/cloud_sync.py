@@ -31,7 +31,8 @@ Down, from the dashboard to this machine, exactly three things:
   operator: while the poll offers the launch, as before, and also once it no
   longer does, for the dashboard may hold it active with its answer lost, and
   answers a repeated confirmation 200 while this machine has sent nothing of
-  it, within 90 s of the start it dated at the first confirmation. Then for
+  it and no stop was asked for, within 90 s of the start it dated at the
+  first confirmation. Then for
   :data:`LAUNCH_TIMEOUT` at most after the click of the first
   confirmation left unanswered since the poll last offered the launch, even
   with the polls failing meanwhile, and never for another launch: the offer

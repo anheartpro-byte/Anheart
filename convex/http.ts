@@ -453,8 +453,9 @@ http.route({
  * heartbeats; a 429 would stop an armed console from before 1.5.
  *
  * 200 again, and nothing changed, for a start already confirmed of which the
- * machine has sent nothing yet, within 90 s of the start the server dated at
- * the first confirmation (ANH-240, contract 1.7): `markTrainingStarted`.
+ * machine has sent nothing yet, and no stop asked for, within 90 s of the
+ * start the server dated at the first confirmation (ANH-240, contract 1.8):
+ * `markTrainingStarted`.
  */
 http.route({
   path: "/api/machine/training/start",

@@ -2267,7 +2267,7 @@ Règles :
   armement ni fin : un nouveau clic explicite est possible tant que le poll
   offre encore ce lancement, et aussi, une fois qu'il ne l'offre plus, 60 s au
   plus après le clic de la première confirmation restée sans réponse
-  (`LAUNCH_TIMEOUT`, contrat 1.7). Convex tient alors la séance active, son 2xx
+  (`LAUNCH_TIMEOUT`, contrat 1.8). Convex tient alors la séance active, son 2xx
   perdu, et répond 200 à la confirmation répétée tant que la machine n'a rien
   envoyé de la séance et que l'arrêt n'a pas été demandé, dans les 90 s qui
   suivent le départ daté par le serveur à la première confirmation. Passé les
@@ -2442,7 +2442,7 @@ plus être confirmé. Une absence de réponse ou un empêchement temporaire ne
 demande pas de fin; seul un nouveau clic explicite peut refaire une demande :
 si le poll propose toujours la séance, ou, une fois qu'il ne la propose plus,
 60 s au plus après le clic de la première confirmation restée sans réponse
-(contrat 1.7).
+(contrat 1.8).
 
 Les phrases de refus sont celles réellement produites : un autre refus dit
 `depart distant refuse (HTTP <n>, <code>)` (ou sans code), un lien retenu dit
@@ -2455,7 +2455,7 @@ perd, la console reste non armée et garde l'offre que le poll ne propose plus.
 Une nouvelle confirmation dans les 60 s envoie de nouveau `training/start`, qui
 reçoit 200 tant que la machine n'a rien envoyé de la séance et que l'arrêt n'a
 pas été demandé, dans les 90 s qui suivent le départ daté par le serveur à la
-première confirmation (contrat 1.7, ANH-240) : la console arme une seule fois.
+première confirmation (contrat 1.8, ANH-240) : la console arme une seule fois.
 Sans nouveau clic dans les 60 s,
 Convex peut garder la séance active jusqu'à son interruption. ANH-85 doit
 encore apporter le geste physique et son délai; le bouton ne les réalise pas.
@@ -3388,14 +3388,14 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.7`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.8`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.7`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.8`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`
@@ -3439,14 +3439,14 @@ Ce que fait la console :
   récente de la même majeure, et face à un serveur plus ancien elle n'envoie
   rien et le dit sur la carte ([console-locale.md](console-locale.md#carte--retour-du-passager--anh-146)).
   L'ordre de déploiement est donc Convex d'abord, puis l'image du Pi.
-* **Une confirmation répétée** (contrat 1.7, ANH-240) : si le 2xx de
+* **Une confirmation répétée** (contrat 1.8, ANH-240) : si le 2xx de
   `training/start` se perd, Convex tient la séance active et le poll ne la
   propose plus ; la console garde l'offre restée sans réponse, pour cette
   séance seulement et 60 s au plus après le clic. Une nouvelle confirmation
   reçoit 200 tant que la machine n'a rien envoyé de la séance et que l'arrêt
   n'a pas été demandé, dans les 90 s qui suivent le départ daté par le serveur
   à la première confirmation, et la console arme une seule fois ; un refus du
-  serveur la rend non confirmable. Face à un serveur `1.6`, la répétition
+  serveur la rend non confirmable. Face à un serveur `1.7`, la répétition
   reçoit 400 `session_not_pending` : la console n'arme pas, et l'offre est
   retirée au poll suivant.
 * **Un serveur qui refuse le contrat** (réponse 426, code

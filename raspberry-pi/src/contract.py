@@ -47,7 +47,7 @@ dashboard stores apart and never among the session's events, refused with
 only to a dashboard that announces 1.7 or later: an earlier one would keep it
 as an ordinary event.
 
-Since 1.7 a confirmation sent again for a start the dashboard already confirmed
+Since 1.8 a confirmation sent again for a start the dashboard already confirmed
 is answered 2xx, and changes nothing, while the machine has sent nothing of the
 session (no point, no event, no heartbeat naming it, no end) and no stop was
 asked for, within 90 s of the start the dashboard dated at the first
@@ -101,7 +101,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.7")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.8")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"

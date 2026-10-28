@@ -891,7 +891,7 @@ Si le serveur a reçu `training/start` mais que le 2xx s'est perdu, une nouvelle
 confirmation dans les 60 s qui suivent le clic reçoit 200 si la machine n'a rien envoyé
 de la séance et que l'arrêt n'a pas été demandé, dans les 90 s qui suivent le départ
 daté par le serveur à la première confirmation : la console arme une seule fois
-(contrat 1.7). Après un refus du serveur, l'offre n'est plus confirmable; sans nouveau
+(contrat 1.8). Après un refus du serveur, l'offre n'est plus confirmable; sans nouveau
 clic dans les 60 s, la machine peut garder cette séance jusqu'à son interruption.
 
 Constat sur ce profil : son plafond (276 tr/min moteur = 5,54 tr/min = 0,052 g) est
