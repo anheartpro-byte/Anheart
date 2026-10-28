@@ -367,6 +367,39 @@
       </button>
     </div>
 
+    <!--
+      The rider's feedback after a session with someone on board (ANH-146), offered by the
+      console (GET /api/feedback) and never for a bench session. Its values stay in these
+      fields and the request that sends them: never in storage, the address or the log.
+    -->
+    <div class="card feedback hidden" id="feedback-card">
+      <h2>Retour du passager</h2>
+      <p class="note">
+        Ce que le passager a ressenti, saisi par l'opérateur. Gardé en mémoire seulement
+        jusqu'à l'envoi au tableau de bord : un redémarrage de la console le perd.
+      </p>
+      <div id="feedback-form">
+        <label for="feedback-nausea"><span id="feedback-nausea-title">Nausée</span>
+          <select id="feedback-nausea"></select>
+        </label>
+        <label for="feedback-dizziness"><span id="feedback-dizziness-title">Malaise ou vertige</span>
+          <select id="feedback-dizziness"></select>
+        </label>
+        <label for="feedback-comfort">Ressenti
+          <select id="feedback-comfort"></select>
+        </label>
+        <label for="feedback-text">Commentaire (facultatif)
+          <textarea id="feedback-text" rows="3" maxlength="500"></textarea>
+        </label>
+        <p id="feedback-count" class="note">0 / 500</p>
+        <button id="feedback-send" class="btn btn-go" type="button" disabled>Envoyer</button>
+        <button id="feedback-skip" class="btn" type="button">Ignorer (non renseigné)</button>
+      </div>
+      <p id="feedback-status" class="note" role="status"></p>
+      <p id="feedback-given-up" class="note"></p>
+      <button id="feedback-close" class="btn hidden" type="button">Fermer</button>
+    </div>
+
     <div class="row">
       <div class="card" id="card-profile">
         <h2>Programme</h2>

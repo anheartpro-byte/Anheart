@@ -623,9 +623,10 @@ d'entraînement terminée (`completed` ou `failed`), la carte **Résumé de la
 séance** (ANH-89, ci-dessous) ; une séance interrompue n'est pas terminée et
 n'en a pas. Pour toute séance d'entraînement, la carte
 **Entraînement** : type, origine, programme, zone cible, durée prévue, FC max du
-pratiquant, opérateur, motif de fin, et les courbes de télémétrie. Suivent les
-cartes « Informations patient », « Chronologie de la session » et, s'il y en a,
-« Notes de session ».
+pratiquant, opérateur, motif de fin, et les courbes de télémétrie, puis la carte
+de l'enregistrement et, pour une séance terminée, la carte **Retour du
+passager** (ANH-146, ci-dessous). Suivent les cartes « Informations patient »,
+« Chronologie de la session » et, s'il y en a, « Notes de session ».
 
 **Résumé de la séance** (`components/training/SessionSummaryCard.tsx`, lu par
 `sessionReports.getSummary`, sous les droits de la séance) : durée, temps en
@@ -655,17 +656,53 @@ aucun silence ni action d'urgence, le variateur en marche
 consigne de marche. Un provisoire dont l'enregistrement est illisible indique
 « non disponible » et en donne la raison. Une valeur présente est écrite en g/s.
 
+**Retour du passager** (ANH-146, `components/training/SessionFeedbackCard.tsx`,
+lu par `sessionFeedback.getSessionFeedback` sous les droits de la séance) :
+la nausée et le malaise ou vertige, chacun avec sa note et le libellé de
+l'échelle (« 3 - Légère à modérée »), le ressenti (Bon, Acceptable, Mauvais),
+le commentaire, qui l'a saisi (le passager, ou l'opérateur à la machine) et
+quand. Sans retour : « Non renseigné ». L'échelle et ses libellés viennent de
+[`contracts/feedback.json`](../contracts/feedback.json) ; ils sont provisoires,
+sans validité médicale, à valider avec ANH-98.
+
+- **Qui lit** : qui peut lire la séance, c'est-à-dire son passager, le
+  gestionnaire de sa machine, l'admin de son organisation et l'admin Anheart.
+  Pour eux la carte est en lecture seule.
+- **Qui écrit** : le passager de la séance seul, pendant les **24 h qui
+  suivent la fin de la séance** (date de fin du serveur). La carte affiche
+  alors la date limite et un formulaire : deux listes de 0 à 10 avec leurs
+  libellés, le ressenti, un commentaire facultatif de 500 caractères au plus
+  avec son compteur. Il remplit ou modifie le retour ; le dernier envoyé
+  remplace le précédent, qu'il vienne du passager ou de l'opérateur. Passé
+  la fenêtre, la carte reste en lecture et dit que le retour ne peut plus
+  être donné ni modifié. Le serveur tranche : un envoi refusé affiche la
+  raison (`feedback_window_closed`, par exemple), et le formulaire garde la
+  saisie.
+- **Quelles séances** : une séance d'entraînement terminée (`completed` ou
+  `failed`) avec une personne à bord. Une séance d'atelier, sans personne à
+  bord, n'a pas de carte ; une séance en attente, en cours, interrompue ou de
+  l'ancien mode ECG non plus.
+
+Le retour est une donnée de santé : il n'est envoyé qu'à Convex, dans sa
+table, et le site ne l'écrit ni dans la console du navigateur, ni dans une
+adresse, ni dans un nom de fichier. Règles côté serveur :
+[convex.md](convex.md#session_feedback--retour-du-passager-après-une-séance-anh-146).
+
 ### Rapport d'une séance : `/fr/dashboard/sessions/{id}/report`
 
 Le rapport d'une séance d'entraînement, mis en page pour l'impression (ANH-89) :
 pratiquant, machine, début, type, programme, zone, statut, puis le résumé
 (mêmes chiffres que la carte, avec la date du calcul), les courbes de
-télémétrie à 1 Hz (FC face à la zone, vitesse du bras), et ce qui n'y est pas
-encore : le résultat du pré-vol (ANH-142) et le retour du passager (ANH-146).
+télémétrie à 1 Hz (FC face à la zone, vitesse du bras), le **retour du
+passager** (ANH-146 : mêmes éléments que la carte de la page, en lecture
+seule, sans formulaire ; « Non renseigné » sans retour ; pour une séance sans
+personne à bord, la phrase qui dit que le retour ne la concerne pas), et ce
+qui n'y est pas encore : le résultat du pré-vol (ANH-142).
 Il ne lit que ce que lit la page de la séance (`sessions.getSession`,
 `training.getTrainingSession`, `training.getSessionTelemetry`,
-`sessionReports.getSummary`), sous les mêmes droits, et n'en montre pas
-l'adresse du pratiquant ni l'opérateur. À l'impression, les courbes sont
+`sessionReports.getSummary`, `sessionFeedback.getSessionFeedback`), sous les
+mêmes droits, et n'en montre pas l'adresse du pratiquant ni l'opérateur. Il
+attend chacune de ces lectures avant de s'afficher. À l'impression, les courbes sont
 redessinées à 680 px dans la largeur utile de 182 mm d'une page A4 (marges
 de 14 mm), quelle que soit la largeur de l'écran. À l'écran, elles restent
 adaptées à la fenêtre.
@@ -713,11 +750,11 @@ terminées du pratiquant que le visiteur peut lire, 100 au plus, les plus
 récentes d'abord (`sessionReports.riderHistory`, sous les droits de chaque
 séance : un gestionnaire n'y voit que les séances des machines qu'il gère) :
 date, programme et machine, statut, durée, temps en zone et sa part, FC
-moyenne, et le lien vers le rapport. Au-dessus, le temps en zone de chaque
-séance programmée, en minutes, de la plus ancienne à la plus récente ; une
-séance sans temps en zone (manuelle, ou sans résumé encore) n'y a pas de barre.
-La nausée et le ressenti du passager n'y sont pas encore : ils viendront
-d'ANH-146, et la carte le dit.
+moyenne, **Nausée** (la note de 0 à 10 du retour du passager, ANH-146, ou un
+tiret sans retour, même quand le résumé manque), et le lien vers le rapport.
+Au-dessus, le temps en zone de chaque séance programmée, en minutes, de la
+plus ancienne à la plus récente ; une séance sans temps en zone (manuelle, ou
+sans résumé encore) n'y a pas de barre.
 
 ### Utilisateurs : `/fr/dashboard/users` et `/fr/dashboard/users/{id}`
 
@@ -832,6 +869,30 @@ d'un entraînement échoué : **Sessions > Échouées > Voir**, puis la carte
 **Résumé de la séance > Rapport PDF**, ou l'historique du passager depuis sa
 fiche si vous y avez accès. Tous les rôles, y compris le passager, peuvent
 ouvrir l'onglet **Échouées** pour les séances qu'ils sont autorisés à lire.
+
+**Exporter les retours (CSV)** (ANH-146, `components/training/FeedbackExportButton.tsx`
+et `feedbackCsv.ts`) : réservé à l'admin Anheart et à l'admin
+d'organisation, avec une organisation acceptée par le serveur (la même porte
+que la page Audit) ; le bouton n'apparaît pas pour un gestionnaire ou un
+passager, et le serveur les refuse (`not_authorized`). L'admin d'organisation
+exporte son organisation, l'admin Anheart toutes. Le site lit toutes les pages
+de `sessionFeedback.exportFeedback` (100 lignes par page), 10 000 lignes au
+plus : au-delà, le fichier s'arrête et la page dit que les plus anciens
+retours n'y sont pas. Le fichier `retours-passagers-AAAA-MM-JJ.csv` (la date
+du jour, rien de personnel) est en UTF-8 avec BOM, lignes en CRLF, une
+cellule qui commence par `=`, `+`, `-` ou `@` neutralisée par une apostrophe
+comme l'export d'audit. Une ligne par séance qui a un retour, colonnes :
+`identifiant_seance`, `identifiant_organisation`, `identifiant_machine`,
+`identifiant_passager` (vide pour une séance sans passager choisi),
+`debut_utc`, `duree_s`, `pic_g_pointe_pied`,
+`pic_variation_g_pointe_pied_g_par_s` (repris du résumé de la séance, vides
+sans résumé), `nausee_0_10`, `malaise_vertige_0_10`, `ressenti` (`good`,
+`acceptable`, `bad`), `saisi_par` (`rider` ou `operator`) et `saisi_le_utc`.
+Dates en ISO 8601 UTC. **Aucun nom, aucune adresse, aucun commentaire** :
+seulement des identifiants, pour l'analyse médicale. Un échec de l'export
+est dit sur la page, sans rien télécharger, et peut être relancé.
+L'avis sur les données de santé (ANH-172) n'est pas rendu ; cet export devra
+s'y conformer.
 
 ### Membres : `/fr/dashboard/members`
 
@@ -1643,6 +1704,7 @@ Pièges :
 | Questionnaire d'aptitude | Le questionnaire 0.1.0 contient des questions provisoires [MED] ; le médecin doit les remplacer par le contenu signé (ANH-98). |
 | Texte de consentement | Le texte 0.1.0 est provisoire et non valide juridiquement ; il doit être remplacé après ANH-87b. Les avis d'hébergement et de rétention des réponses restent à traiter dans ANH-172. |
 | Signature à la console | La signature est disponible sur le site seulement. La console ne propose pas de signer un consentement. |
+| Retour du passager (ANH-146) | Carte, rapport, colonne de l'historique et export CSV testés dans le DOM simulé, Convex remplacé ; le serveur testé en mémoire. **Jamais vus dans un navigateur ni contre un vrai serveur.** Les libellés de l'échelle sont provisoires, sans validité médicale (ANH-98). L'avis sur les données de santé (ANH-172) n'est pas rendu, et l'export devra s'y conformer. |
 | Aptitude et consentement à l'armement | Depuis le contrat 1.6, le serveur les contrôle au lancement depuis le site et à l'armement. Un passager devenu non prêt pendant l'attente est refusé avec sa raison (ANH-143). Tests en mémoire, jamais sur une vraie machine. |
 | Aptitude et consentement au départ de la console | Depuis le contrat 1.6, la console les contrôle avant tout départ avec personne à bord, pour un programme ou une séance manuelle `occupied`. Tests avec variateur simulé, jamais sur une vraie machine ; limites de fraîcheur dans [console-locale.md](console-locale.md). |
 

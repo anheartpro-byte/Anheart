@@ -476,7 +476,9 @@ function keyFigures(summary: Doc<"session_summaries_v2">) {
  * the rider's history and progression. The sessions are those of
  * `sessions.listSessions` for this rider (`readableSessions`, then
  * `canAccessSession` on each): a gestionnaire reads those on the machines
- * they manage, a rider their own, another organisation nothing.
+ * they manage, a rider their own, another organisation nothing. Each row
+ * also carries the rider's nausea score of `session_feedback` (ANH-146), or
+ * null without feedback, under the same rights.
  */
 export const riderHistory = query({
   args: { userId: v.id("users") },
@@ -503,6 +505,7 @@ export const riderHistory = query({
           maxGReference: nullableNumber,
         }),
       ),
+      nauseaScore: nullableNumber,
     }),
   ),
   handler: async (ctx, { userId }) => {
@@ -525,6 +528,10 @@ export const riderHistory = query({
       if (!summarizable(session)) continue;
       const machine = await ctx.db.get(session.machineId);
       const summary = await summaryOf(ctx, session._id);
+      const feedback = await ctx.db
+        .query("session_feedback")
+        .withIndex("by_session", (q) => q.eq("sessionId", session._id))
+        .unique();
       rows.push({
         sessionId: session._id,
         status: session.status,
@@ -535,6 +542,7 @@ export const riderHistory = query({
         profileName: session.profileName,
         notStarted: summary === null && endedBeforeStart(session),
         summary: summary === null ? null : keyFigures(summary),
+        nauseaScore: feedback?.nauseaScore ?? null,
       });
     }
     return rows;

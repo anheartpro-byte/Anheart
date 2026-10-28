@@ -17,6 +17,7 @@ import {
   useSessionStatusLabel,
 } from "@/components/dashboard/statusLabels";
 import { SessionSummaryFigures } from "@/components/training/SessionSummaryFigures";
+import { FeedbackReadout } from "@/components/training/SessionFeedbackCard";
 import { TelemetryCharts } from "@/components/training/TelemetryCharts";
 
 /** The languages a report is written in. */
@@ -42,6 +43,7 @@ export default function SessionReportPage({
   const { id } = use(params);
   const sessionId = id as Id<"sessions">;
   const t = useTranslations("sessionReport");
+  const tFeedback = useTranslations("sessionFeedback");
   const kind = useCatalogLabel("training.kind");
   const status = useSessionStatusLabel();
   const locale = useLocale();
@@ -49,13 +51,22 @@ export default function SessionReportPage({
   const session = useQuery(api.sessions.getSession, { sessionId });
   const training = useQuery(api.training.getTrainingSession, { sessionId });
   const summary = useQuery(api.sessionReports.getSummary, { sessionId });
+  // The rider's feedback (ANH-146), under the same rights.
+  const feedback = useQuery(api.sessionFeedback.getSessionFeedback, {
+    sessionId,
+  });
   // The curves of the session page, under the same rights.
   const telemetry = useQuery(api.training.getSessionTelemetry, {
     sessionId,
     limit: 7200,
   });
 
-  if (session === undefined || training === undefined || summary === undefined)
+  if (
+    session === undefined ||
+    training === undefined ||
+    summary === undefined ||
+    feedback === undefined
+  )
     return <Skeleton className="mx-auto h-[600px] max-w-4xl" />;
 
   if (session === null || training === null)
@@ -218,10 +229,24 @@ export default function SessionReportPage({
           </section>
         )}
 
+        <section className="space-y-3 border-t pt-4 print:break-inside-avoid">
+          <h2 className="text-lg font-semibold">{t("feedback")}</h2>
+          {feedback !== null && !feedback.eligible ? (
+            <p className="text-sm text-muted-foreground">
+              {tFeedback("notEligible")}
+            </p>
+          ) : feedback?.feedback ? (
+            <FeedbackReadout feedback={feedback.feedback} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {tFeedback("notProvided")}
+            </p>
+          )}
+        </section>
+
         <section className="space-y-1 border-t pt-4 text-sm print:break-inside-avoid">
           <h2 className="font-semibold">{t("notAvailableTitle")}</h2>
           <p className="text-muted-foreground">{t("preflight")}</p>
-          <p className="text-muted-foreground">{t("feedback")}</p>
         </section>
       </article>
     </div>

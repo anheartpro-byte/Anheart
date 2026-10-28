@@ -3374,14 +3374,14 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.5`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.7`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.5`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.7`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`
@@ -3420,6 +3420,11 @@ Ce que fait la console :
   permet pas non plus d'armer ; le poll peut présenter le lancement de nouveau.
   Après un 2xx, le Pi soumet et arme à travers ses contrôles locaux, puis
   marque le curseur déjà confirmé ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)).
+* **Le retour du passager** (contrat 1.7, ANH-146) : la console ne l'envoie
+  qu'à un serveur dont le dernier heartbeat a annoncé 1.7 ou une mineure plus
+  récente de la même majeure, et face à un serveur plus ancien elle n'envoie
+  rien et le dit sur la carte ([console-locale.md](console-locale.md#carte--retour-du-passager--anh-146)).
+  L'ordre de déploiement est donc Convex d'abord, puis l'image du Pi.
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les

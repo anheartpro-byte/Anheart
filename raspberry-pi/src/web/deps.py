@@ -50,6 +50,7 @@ from src.control_surface import ControlSurface
 from src.geometry import MachineGeometry
 from src.motor.sto import StoSource
 from src.panel_status import PanelSource
+from src.passenger_feedback import PassengerFeedback
 from src.presence.monitor import PresenceDecision, PresenceMonitor
 from src.record.export import RecordExporter
 from src.remote_launch import ConfirmationRefusal, RemoteLaunchView
@@ -589,6 +590,10 @@ class Services:
 
     remote_launch_current: Callable[[], RemoteLaunchView | None] | None = None
     remote_launch_confirm: Callable[[str, str], Result[None, ConfirmationRefusal]] | None = None
+
+    feedback: PassengerFeedback | None = None
+    """The rider's feedback after a session with somebody on board (``/api/feedback``,
+    ANH-146); ``None``: this console has no dashboard to send it to, and offers none."""
 
     instance: str = field(default_factory=new_instance)
     """What this run of the console calls itself (:func:`new_instance`).

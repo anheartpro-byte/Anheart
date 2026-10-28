@@ -43,6 +43,7 @@ into it.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -68,6 +69,7 @@ from src.control_surface import (
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
 from src.motor.sto import StoState, UnconfiguredStoSource
+from src.passenger_feedback import FeedbackView, PassengerFeedback, parse_feedback
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
 from src.remote_launch import ConfirmationCode
@@ -130,6 +132,7 @@ from src.web.schemas import (
     EstopRow,
     FaultResetBody,
     FaultRow,
+    FeedbackRow,
     HealthRow,
     ManualStartBody,
     ManualTargetBody,
@@ -356,6 +359,7 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_profiles(app, services=services, auth=auth)
     _register_riders(app, services=services, auth=auth)
     _register_remote_launch(app, services=services, auth=auth)
+    _register_feedback(app, services=services, auth=auth)
     _register_session(app, services=services, auth=auth)
     _register_manual(app, services=services, auth=auth)
     _register_safety(app, services=services, auth=auth)
@@ -753,6 +757,89 @@ def _register_remote_launch(
             session_id=body.session_id,
             state="request_in_progress",
         )
+
+
+NOTHING_TO_FILL: Final[str] = "nothing_to_fill"
+INVALID_FEEDBACK: Final[str] = "invalid_feedback"
+MALFORMED_BODY: Final[str] = "malformed_body"
+
+MAX_FEEDBACK_BYTES: Final[int] = 8 * 1024
+"""The largest feedback body read: 500 characters of comment fit many times over."""
+
+NOTHING_TO_FILL_DETAIL: Final[str] = (
+    "aucun retour du passager a saisir : aucune seance avec une personne a bord ne vient "
+    "de se terminer, ou la carte a ete fermee"
+)
+
+
+def _register_feedback(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+    """The rider's feedback after a session with somebody on board (ANH-146).
+
+    The card is the console's, the feedback is the rider's: health data. It is
+    read from the request here, never echoed back, never logged; a refusal
+    names the field, never what was in it (:mod:`src.passenger_feedback`).
+    The operator is the console's access, as for every other request: no
+    named operator yet (ANH-152).
+    """
+
+    @app.get("/api/feedback", dependencies=auth, tags=["session"])
+    async def read_feedback() -> FeedbackRow:
+        """The card, if one is open, and what its form offers. An unlinked console offers none."""
+        store = services.feedback
+        view = FeedbackView(current=None, given_up=0) if store is None else store.view()
+        return FeedbackRow.of(view)
+
+    @app.post(
+        "/api/feedback",
+        dependencies=auth,
+        status_code=HTTPStatus.ACCEPTED,
+        tags=["session"],
+    )
+    async def give_feedback(request: Request) -> FeedbackRow:
+        """Enter the feedback of the card's session; one entered before is replaced.
+
+        The body is read here, not by a model: a refused model would quote the
+        values it refused. 202: held in memory, sent when the dashboard may
+        take it (the card's status says when).
+        """
+        store = _require_feedback(services)
+        raw = await request.body()
+        try:
+            decoded: object = json.loads(raw) if len(raw) <= MAX_FEEDBACK_BYTES else None
+        except (ValueError, RecursionError):
+            decoded = None
+        if decoded is None:
+            raise Refusal(
+                HTTPStatus.BAD_REQUEST,
+                code=MALFORMED_BODY,
+                detail="retour refuse par la console : le corps n'est pas un objet JSON lisible",
+            )
+        parsed = parse_feedback(decoded)
+        if isinstance(parsed, Err):
+            field = parsed.error.field.value
+            raise Refusal(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                code=INVALID_FEEDBACK,
+                detail=f"retour refuse par la console : {field} hors de l'echelle",
+            )
+        if isinstance(store.submit(parsed.value), Err):
+            raise Refusal(HTTPStatus.CONFLICT, code=NOTHING_TO_FILL, detail=NOTHING_TO_FILL_DETAIL)
+        return FeedbackRow.of(store.view())
+
+    @app.post("/api/feedback/skip", dependencies=auth, tags=["session"])
+    async def skip_feedback() -> FeedbackRow:
+        """Close the card: "non renseigne" if nothing was entered; one entered is still sent."""
+        store = _require_feedback(services)
+        if isinstance(store.skip(), Err):
+            raise Refusal(HTTPStatus.CONFLICT, code=NOTHING_TO_FILL, detail=NOTHING_TO_FILL_DETAIL)
+        return FeedbackRow.of(store.view())
+
+
+def _require_feedback(services: Services) -> PassengerFeedback:
+    store = services.feedback
+    if store is None:
+        raise Refusal(HTTPStatus.CONFLICT, code=NOTHING_TO_FILL, detail=NOTHING_TO_FILL_DETAIL)
+    return store
 
 
 def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:

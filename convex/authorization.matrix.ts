@@ -2828,7 +2828,7 @@ export const MATRIX: Entry[] = [
     // `orgBMachine`). The rider asked for is `patient`, by identifier, unless
     // the cell asks for the caller's own history or for another rider.
     build: async (w, actor, scope) => {
-      await addSummarizedSession(w, w.machine, w.patient);
+      await addFeedback(w, await addSummarizedSession(w, w.machine, w.patient));
       await addSummarizedSession(w, w.otherMachine, w.otherPatient);
       await addSummarizedSession(w, w.orgBMachine, w.orgBPatient);
       if (scope === "self") return { userId: userId(w, actor) };
@@ -2836,16 +2836,25 @@ export const MATRIX: Entry[] = [
         return { userId: w.otherPatient };
       return { userId: w.patient };
     },
+    // Only `patient`'s session has a feedback (ANH-146): its nausea score.
     onSuccess: (res) => {
-      const rows = asArray(res) as { summary: unknown }[];
+      const rows = asArray(res) as { summary: unknown; nauseaScore: unknown }[];
       if (rows.length !== 1 || rows[0].summary === null)
         throw new Error("Expected the rider's session with its summary");
+      if (rows[0].nauseaScore !== FEEDBACK_NAUSEA)
+        throw new Error("Expected the nausea score of the session's feedback");
     },
     onFiltered: (res, w, actor, scope) => {
       const rider = scope === "self" ? userId(w, actor) : w.patient;
-      const rows = asArray(res) as { sessionId: Id<"sessions">; summary: unknown }[];
+      const rows = asArray(res) as {
+        sessionId: Id<"sessions">;
+        summary: unknown;
+        nauseaScore: unknown;
+      }[];
       if (rows.length !== 1 || rows[0].summary === null)
         throw new Error("Expected exactly one session, with its summary");
+      if (rows[0].nauseaScore !== (rider === w.patient ? FEEDBACK_NAUSEA : null))
+        throw new Error("Expected the nausea score, or null without feedback");
       return w.t.run(async (ctx) => {
         const session = await ctx.db.get(rows[0].sessionId);
         if (session?.userId !== rider)
@@ -2865,6 +2874,130 @@ export const MATRIX: Entry[] = [
       { actor: "orgBManager", scope: "foreign", expect: empty, note: "[] for a rider of another organisation" },
       { actor: "orgBPatient", scope: "foreign", expect: empty, note: "[] for a rider of another organisation" },
       { actor: "orgBPatient", scope: "self", expect: filtered, note: "their own history, in centre B" },
+    ],
+  },
+
+  // =========================================================================
+  // sessionFeedback.ts  (ANH-146: the rider's feedback, health data)
+  // =========================================================================
+  {
+    id: "sessionFeedback.getSessionFeedback",
+    ref: api.sessionFeedback.getSessionFeedback,
+    kind: "query",
+    // The rule of every read of a session (`canAccessSession`); only its
+    // rider may edit. The feedback is `patient`'s, on `machine`.
+    build: async (w) => ({
+      sessionId: await addFeedback(
+        w,
+        await endedSession(w, w.machine, w.patient),
+      ),
+    }),
+    onSuccess: (res, _w, actor) => {
+      const read = res as {
+        eligible: boolean;
+        feedback: Record<string, unknown> | null;
+        editableUntil: number | null;
+        canEdit: boolean;
+      } | null;
+      if (
+        read === null ||
+        !read.eligible ||
+        read.editableUntil === null ||
+        read.feedback?.nauseaScore !== FEEDBACK_NAUSEA ||
+        read.feedback.freeText !== FEEDBACK_SENTINEL ||
+        read.feedback.submittedBy !== "rider"
+      )
+        throw new Error("Expected the session's feedback");
+      if ("organizationId" in read.feedback)
+        throw new Error("The feedback is served without its organisation");
+      if (read.canEdit !== (actor === "patient"))
+        throw new Error("Only the session's rider may edit its feedback");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "self", expect: ok, note: "the rider, who may edit" },
+      { actor: "otherPatient", scope: "other", expect: empty, note: "null for another rider's session" },
+      { actor: "stranger", scope: "other", expect: empty, note: "null for an unrelated user" },
+      { actor: "manager", scope: "own", expect: ok, note: "manages the machine: reads, may not edit" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "null for an unrelated machine" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the session's organisation: reads" },
+      { actor: "admin", expect: ok, note: "Anheart admin: reads" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
+      { actor: "orgBManager", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
+      { actor: "orgBPatient", scope: "foreign", expect: empty, note: "null for a session of another organisation" },
+    ],
+  },
+  {
+    id: "sessionFeedback.submitSessionFeedback",
+    ref: api.sessionFeedback.submitSessionFeedback,
+    kind: "mutation",
+    // `patient`'s session on `machine`, over a minute ago: open to feedback.
+    build: async (w) => ({
+      sessionId: await endedSession(w, w.machine, w.patient),
+      nauseaScore: FEEDBACK_NAUSEA,
+      dizzinessScore: 1,
+      comfort: "good",
+      freeText: FEEDBACK_SENTINEL,
+    }),
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const rows = await w.t.run((ctx) =>
+        ctx.db.query("session_feedback").collect(),
+      );
+      if (
+        rows.length !== 1 ||
+        rows[0].sessionId !== args.sessionId ||
+        rows[0].organizationId !== w.orgA ||
+        rows[0].nauseaScore !== FEEDBACK_NAUSEA ||
+        rows[0].submittedBy !== "rider"
+      )
+        throw new Error("Expected the rider's feedback, one row");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", scope: "self", expect: ok, note: "the session's rider" },
+      { actor: "otherPatient", scope: "other", expect: refuse(/session_not_found/), note: "another rider's session: not found" },
+      { actor: "stranger", scope: "other", expect: refuse(/session_not_found/), note: "an unrelated user: not found" },
+      { actor: "manager", scope: "own", expect: refuse(/feedback_rider_only/), note: "reads the session, but only its rider writes" },
+      { actor: "otherManager", scope: "other", expect: refuse(/session_not_found/), note: "an unrelated machine: not found" },
+      { actor: "orgAdmin", scope: "own", expect: refuse(/feedback_rider_only/), note: "reads the session, but only its rider writes" },
+      { actor: "admin", expect: refuse(/feedback_rider_only/), note: "reads every session, but only its rider writes" },
+      { actor: "orgBAdmin", scope: "foreign", expect: refuse(/session_not_found/), note: "a session of another organisation: not found" },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(/session_not_found/), note: "a session of another organisation: not found" },
+      { actor: "orgBPatient", scope: "foreign", expect: refuse(/session_not_found/), note: "a session of another organisation: not found" },
+    ],
+  },
+  {
+    id: "sessionFeedback.exportFeedback",
+    ref: api.sessionFeedback.exportFeedback,
+    kind: "query",
+    // A feedback in centre A (`patient`) and one in centre B (`orgBPatient`),
+    // each on a summarised session. "foreign" asks for the other centre.
+    build: async (w, actor, scope) => {
+      await addFeedback(w, await endedSession(w, w.machine, w.patient));
+      await addFeedback(w, await endedSession(w, w.orgBMachine, w.orgBPatient));
+      return {
+        paginationOpts: { cursor: null, numItems: 50 },
+        ...(scope === "foreign"
+          ? { organizationId: actor === "orgAdmin" ? w.orgB : w.orgA }
+          : {}),
+      };
+    },
+    onSuccess: (res, w) => expectFeedbackExport(res, [w.orgA, w.orgB]),
+    onFiltered: (res, w, actor) =>
+      expectFeedbackExport(res, [actor === "orgBAdmin" ? w.orgB : w.orgA]),
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "every organisation" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "centre A only" },
+      { actor: "orgAdmin", scope: "foreign", expect: empty, note: "no centre B rows" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "centre B only" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "no centre A rows" },
+      ...(["manager", "patient", "orgBManager", "orgBPatient"] as const).map((actor) => ({
+        actor,
+        scope: "foreign" as const,
+        expect: refuse(UNAUTHORIZED),
+        note: "organisation admin required",
+      })),
     ],
   },
 
@@ -3695,6 +3828,78 @@ async function addSummarizedSession(
     });
   });
   return sessionId;
+}
+
+/** The free text of every feedback of the matrix: never in an export. */
+const FEEDBACK_SENTINEL = "synthetic-private-feedback-text";
+const FEEDBACK_NAUSEA = 4;
+
+/** A summarised session of `riderId` on `machineId`, ended a minute ago. */
+async function endedSession(
+  w: World,
+  machineId: Id<"machines">,
+  riderId: Id<"users">,
+): Promise<Id<"sessions">> {
+  const sessionId = await addSummarizedSession(w, machineId, riderId);
+  await w.t.run((ctx) =>
+    ctx.db.patch(sessionId, { endedAt: Date.now() - 60_000 }),
+  );
+  return sessionId;
+}
+
+/** The rider's feedback on `sessionId`, as the site writes it. */
+async function addFeedback(
+  w: World,
+  sessionId: Id<"sessions">,
+): Promise<Id<"sessions">> {
+  await w.t.run(async (ctx) => {
+    const session = await ctx.db.get(sessionId);
+    await ctx.db.insert("session_feedback", {
+      organizationId: session?.organizationId,
+      sessionId,
+      nauseaScore: FEEDBACK_NAUSEA,
+      dizzinessScore: 3,
+      comfort: "acceptable",
+      freeText: FEEDBACK_SENTINEL,
+      submittedBy: "rider",
+      submittedAt: NOW,
+    });
+  });
+  return sessionId;
+}
+
+/**
+ * One row of the export per organisation in `organizations`, crossed with the
+ * summary of its session, and only identifiers: no name, no e-mail address,
+ * no free text.
+ */
+function expectFeedbackExport(
+  res: unknown,
+  organizations: Id<"organizations">[],
+) {
+  const rows = pageOf(res) as Record<string, unknown>[];
+  expectExactly(
+    rows.map((row) => String(row.organizationId)),
+    organizations,
+    "Organisations of the export",
+  );
+  for (const row of rows) {
+    expectExactly(
+      Object.keys(row),
+      [
+        "sessionId", "organizationId", "machineId", "userId", "startedAt",
+        "durationS", "legTipMaxG", "legTipMaxGRate", "nauseaScore",
+        "dizzinessScore", "comfort", "submittedBy", "submittedAt",
+      ],
+      "Columns of the export",
+    );
+    if (row.legTipMaxG !== 1.5 || row.legTipMaxGRate !== 0.025 || row.durationS !== 600)
+      throw new Error("Expected the figures of the session's summary");
+  }
+  const text = JSON.stringify(rows);
+  for (const secret of [FEEDBACK_SENTINEL, "Synthetic", "@example.invalid"])
+    if (text.includes(secret))
+      throw new Error("The export carries a name, an address or a free text");
 }
 
 /**

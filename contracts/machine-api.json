@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.6",
+  "contract_version": "1.7",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "heartbeat_response_fields": ["success", "serverTime", "server_contract_version"],
@@ -64,6 +64,11 @@
       "consent": "Depuis 1.6 : booléen, vrai si le consentement à la version courante du texte est actif dans l'organisation de la machine.",
       "fitnessQuestionnaireVersion": "Depuis 1.6 : chaîne, version du questionnaire de la saisie validée qui rend fit vrai ; null si fit est faux. Aucune réponse au questionnaire."
     }
+  },
+  "feedback_events": {
+    "route": "POST /api/machine/training/events",
+    "kind": "feedback",
+    "description": "Depuis 1.7, la console peut envoyer le retour du passager sur une séance terminée, saisi par l'opérateur : un événement de forme inchangée `{seq, t, kind: \"feedback\", detail, actor}`, dont `detail` porte le JSON strict `{nauseaScore, dizzinessScore, comfort, freeText?}` (clés fermées ; scores entiers de 0 à 10, `comfort` parmi `good`, `acceptable`, `bad`, `freeText` facultatif de 500 caractères au plus une fois rogné, l'échelle étant `contracts/feedback.json`). `seq`, `t` et `actor` sont validés comme pour tout événement mais ignorés. Convex détourne cet événement vers la table `session_feedback` (`submittedBy: \"operator\"`) et ne l'écrit jamais dans `training_events`. Une requête qui porte un retour ne porte que lui : un seul événement, sinon 400 `invalid_request`. Un `detail` illisible ou hors échelle est refusé en 400 `invalid_request`, sans citer de valeur. La séance doit être de cette machine (sinon `session_not_found`), avoir eu une personne à bord (séance automatique, ou manuelle notée `Occupancy: occupied` ; sinon `feedback_not_eligible`), être terminée avec une date de fin (sinon `feedback_session_not_ended`), et ne pas être finie depuis plus de 24 h sur l'horloge du serveur (sinon `feedback_window_closed`). Un seul retour par séance : le dernier envoyé dans la fenêtre remplace le précédent, qu'il vienne de la console ou du passager sur le site. Réponse 200 `{stored: 1, duplicates: 0, rejected: 0}`. Une console n'envoie un retour qu'à un serveur qui annonce 1.7 ou plus : un serveur antérieur le stockerait comme un événement ordinaire."
   },
   "error_codes": {
     "contract_unsupported": {
@@ -141,6 +146,18 @@
     "rider_busy": {
       "statuses": [409],
       "meaning": "Refus à l'armement : le passager a déjà une autre séance en attente, en cours ou interrompue sur une machine qui ne s'est pas manifestée depuis."
+    },
+    "feedback_not_eligible": {
+      "statuses": [400],
+      "meaning": "Depuis 1.7, retour refusé (voir `feedback_events`) : la séance n'a pas eu de personne à bord (séance d'atelier, ou de l'ancien mode d'enregistrement)."
+    },
+    "feedback_session_not_ended": {
+      "statuses": [400],
+      "meaning": "Depuis 1.7, retour refusé : la séance n'est pas terminée, ou n'a pas de date de fin."
+    },
+    "feedback_window_closed": {
+      "statuses": [400],
+      "meaning": "Depuis 1.7, retour refusé : la séance est finie depuis plus de 24 h, sur l'horloge du serveur. La même requête sera refusée de nouveau."
     }
   }
 }

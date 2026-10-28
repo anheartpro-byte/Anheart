@@ -38,8 +38,9 @@ import { RiderProgressChart } from "./RiderProgressChart";
 /**
  * The history and progression of a rider on their page (ANH-89): their
  * finished sessions the visitor may read, newest first, with the key figures
- * of each summary, and the time in zone session after session. The server
- * lists them under the rights of each session (`sessionReports.riderHistory`).
+ * of each summary, the nausea score of the rider's feedback (ANH-146), and
+ * the time in zone session after session. The server lists them under the
+ * rights of each session (`sessionReports.riderHistory`).
  */
 export function RiderHistoryCard({ userId }: { userId: Id<"users"> }) {
   const t = useTranslations("sessionReport");
@@ -88,6 +89,7 @@ export function RiderHistoryCard({ userId }: { userId: Id<"users"> }) {
                   <TableHead>{t("duration")}</TableHead>
                   <TableHead>{t("timeInZone")}</TableHead>
                   <TableHead>{t("meanHr")}</TableHead>
+                  <TableHead>{t("nausea")}</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -141,6 +143,7 @@ export function RiderHistoryCard({ userId }: { userId: Id<"users"> }) {
                           </TableCell>
                         </>
                       )}
+                      <TableCell>{row.nauseaScore ?? "-"}</TableCell>
                       <TableCell>
                         <Link
                           href={`/dashboard/sessions/${row.sessionId}/report`}
@@ -157,7 +160,6 @@ export function RiderHistoryCard({ userId }: { userId: Id<"users"> }) {
             </Table>
           </>
         )}
-        <p className="text-xs text-muted-foreground">{t("nausea")}</p>
       </CardContent>
     </Card>
   );

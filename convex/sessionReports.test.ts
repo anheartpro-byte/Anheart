@@ -827,4 +827,39 @@ describe("ANH-89 summary and history: who reads them", () => {
     expect(await seen("otherManager")).toEqual([elsewhere]);
     expect((await seen("orgAdmin")).sort()).toEqual([own, elsewhere].sort());
   });
+
+  it("ANH-146 M9 carries the nausea score of each session's feedback, null without one", async () => {
+    const w = await seedWorld(modules);
+    const rated = await activeSession(w);
+    await end(w, rated);
+    const unrated = await activeSession(w);
+    await end(w, unrated);
+    await w.t.run((ctx) =>
+      ctx.db.insert("session_feedback", {
+        organizationId: w.orgA,
+        sessionId: rated,
+        nauseaScore: 6,
+        dizzinessScore: 2,
+        comfort: "acceptable",
+        submittedBy: "rider",
+        submittedAt: NOW,
+      }),
+    );
+
+    for (const actor of ["patient", "manager", "orgAdmin", "admin"] as const) {
+      const history = await as(w.t, actor).query(
+        api.sessionReports.riderHistory,
+        { userId: w.patient },
+      );
+      expect(
+        Object.fromEntries(history.map((row) => [row.sessionId, row.nauseaScore])),
+      ).toEqual({ [rated]: 6, [unrated]: null });
+    }
+    for (const actor of ["otherManager", "orgBAdmin", "otherPatient"] as const)
+      expect(
+        await as(w.t, actor).query(api.sessionReports.riderHistory, {
+          userId: w.patient,
+        }),
+      ).toEqual([]);
+  });
 });

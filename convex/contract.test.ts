@@ -107,6 +107,38 @@ async function seedSession(
   );
 }
 
+/** A finished session of the first machine, ended a minute ago, for its feedback. */
+async function feedbackSession(
+  w: MachineWorld,
+  fields: { kind?: "auto" | "manual"; endedAt?: number } = {},
+) {
+  const sessionId = await seedSession(w, w.machine, "active");
+  await w.t.run((ctx) =>
+    ctx.db.patch(sessionId, {
+      status: "completed",
+      kind: fields.kind ?? "auto",
+      endedAt: fields.endedAt ?? Date.now() - 60_000,
+    }),
+  );
+  return sessionId;
+}
+
+/** The event of contract 1.7 that carries the rider's feedback. */
+function feedbackEvent(detail: Record<string, unknown> = {}) {
+  return {
+    seq: 0,
+    t: Date.now(),
+    kind: "feedback",
+    detail: JSON.stringify({
+      nauseaScore: 2,
+      dizzinessScore: 1,
+      comfort: "good",
+      ...detail,
+    }),
+    actor: "operator",
+  };
+}
+
 /** Confirm, as the first machine, the start of a launch the world changed after it was made. */
 async function startAfter(
   w: MachineWorld,
@@ -121,7 +153,7 @@ async function startAfter(
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
   it("serves the version, header and error codes of the shared file", () => {
     expect(CONTRACT_VERSION).toBe(shared.contract_version);
-    expect(CONTRACT_VERSION).toBe("1.6");
+    expect(CONTRACT_VERSION).toBe("1.7");
     expect(CONTRACT_HEADER).toBe(shared.header);
     expect(MACHINE_ERROR_CODES).toEqual(Object.keys(shared.error_codes));
     expect(MACHINE_ERROR_CODES.length).toBeGreaterThan(0);
@@ -677,6 +709,49 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
           events: [
             { seq: 0, t: NOW, kind: "phase", detail: "hold", actor: "system" },
           ],
+        }),
+    },
+    // Contract 1.7 (ANH-146): the rider's feedback, an event of its own.
+    {
+      name: "training/events: a feedback on a session with no one on board",
+      status: 400,
+      code: "feedback_not_eligible",
+      run: async (w) =>
+        post(w, "/api/machine/training/events", {
+          sessionId: await feedbackSession(w, { kind: "manual" }),
+          events: [feedbackEvent()],
+        }),
+    },
+    {
+      name: "training/events: a feedback on a session not over",
+      status: 400,
+      code: "feedback_session_not_ended",
+      run: async (w) =>
+        post(w, "/api/machine/training/events", {
+          sessionId: await seedSession(w, w.machine, "active"),
+          events: [feedbackEvent()],
+        }),
+    },
+    {
+      name: "training/events: a feedback more than 24 h after the end",
+      status: 400,
+      code: "feedback_window_closed",
+      run: async (w) =>
+        post(w, "/api/machine/training/events", {
+          sessionId: await feedbackSession(w, {
+            endedAt: Date.now() - 24 * 60 * 60 * 1000 - 1,
+          }),
+          events: [feedbackEvent()],
+        }),
+    },
+    {
+      name: "training/events: a feedback whose detail is not of the scale",
+      status: 400,
+      code: "invalid_request",
+      run: async (w) =>
+        post(w, "/api/machine/training/events", {
+          sessionId: await feedbackSession(w),
+          events: [feedbackEvent({ nauseaScore: 11 })],
         }),
     },
     {

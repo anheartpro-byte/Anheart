@@ -14,6 +14,7 @@ import {
   pagesOf,
   renderPage,
   signedInAs,
+  wasMounted,
 } from "@/test-support/pages";
 import ReportsPage from "./page";
 
@@ -25,6 +26,13 @@ vi.mock(
   "@/i18n/navigation",
   async () => (await import("@/test-support/pages")).navigation,
 );
+// The export reads the server on its own (`feedback-export.test.tsx`): the
+// page only decides who is offered it.
+vi.mock("@/components/training/FeedbackExportButton", async () => ({
+  FeedbackExportButton: (await import("@/test-support/pages")).standIn(
+    "FeedbackExportButton",
+  ),
+}));
 
 /**
  * The completed sessions the visitor may read, each leading to its detail.
@@ -366,5 +374,27 @@ describe.each([
     expect(
       screen.queryByRole("button", { name: messages.common.showMore }),
     ).toBeNull();
+  });
+});
+
+// ANH-146 S7: the export of the riders' feedback, offered to admins only.
+describe("ANH-146 S7 the feedback export on the reports page", () => {
+  it.each([
+    ["admin", true],
+    ["org_admin", true],
+    ["gestionnaire", false],
+    ["user", false],
+  ] as const)("is offered to a %s: %s", async (role, offered) => {
+    signedInAs(role);
+    serverLists(completed("training-auto"));
+    await renderPage(<ReportsPage />);
+    expect(wasMounted("FeedbackExportButton")).toBe(offered);
+  });
+
+  it("is not offered to an admin whose organisation the server does not grant", async () => {
+    signedInAs("org_admin", { organizationAccess: "no_organization" });
+    serverLists(completed("training-auto"));
+    await renderPage(<ReportsPage />);
+    expect(wasMounted("FeedbackExportButton")).toBe(false);
   });
 });

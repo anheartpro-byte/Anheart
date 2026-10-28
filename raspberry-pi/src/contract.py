@@ -39,6 +39,14 @@ active consent at arming: ``rider_not_fit``, ``fitness_expired`` and
 status, its expiry and questionnaire version, and consent, never answers or
 review notes.
 
+Since 1.7 the events route takes the rider's feedback after a session, entered
+by the operator: one event of kind ``feedback`` alone in its request, which the
+dashboard stores apart and never among the session's events, refused with
+``feedback_not_eligible``, ``feedback_session_not_ended`` or
+``feedback_window_closed`` when the session takes none. A console sends it
+only to a dashboard that announces 1.7 or later: an earlier one would keep it
+as an ordinary event.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -81,7 +89,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.6")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.7")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -128,6 +136,9 @@ STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
         RATE_LIMITED,
         PAYLOAD_TOO_LARGE,
         *ARMING_REFUSALS,
+        ErrorCode("feedback_not_eligible"),
+        ErrorCode("feedback_session_not_ended"),
+        ErrorCode("feedback_window_closed"),
     }
 )
 """Every stable code the dashboard refuses a request under. Pinned to the shared file.
@@ -136,6 +147,11 @@ A refusal that carries one of them is in the dashboard's own shape: it is the
 dashboard that answered. A refusal that carries none, or a word that is not
 one of these, could come from anything that listens at the address.
 """
+
+FEEDBACK_SINCE: Final[ContractVersion] = ContractVersion("1.7")
+"""The first minor of this major whose dashboard takes the rider's feedback
+(``feedback_events`` of the shared file): an earlier one would keep it as an
+ordinary event of the session, with the session's other events."""
 
 UNKNOWN_SOFTWARE_VERSION: Final[SoftwareVersion] = SoftwareVersion("pi-unknown")
 """Reported when ``VERSION`` is missing or unreadable: never a guess."""
@@ -221,6 +237,25 @@ def server_refusal(announced: object) -> str | None:
     if major_of(theirs) == major_of(CONTRACT_VERSION):
         return None
     return incompatible_server(theirs)
+
+
+def minor_of(version: ContractVersion) -> int:
+    """The minor of a contract version: what one side may add to a major."""
+    return int(version.partition(".")[2])
+
+
+def takes_feedback(announced: ContractVersion | None) -> bool:
+    """Whether a dashboard that announced ``announced`` may be sent the rider's feedback.
+
+    Only one of this console's major and of :data:`FEEDBACK_SINCE` or a later
+    minor. A version not known (no heartbeat answered yet, or an unreadable
+    one) is not one: the feedback waits rather than land among the events.
+    """
+    return (
+        announced is not None
+        and major_of(announced) == major_of(CONTRACT_VERSION)
+        and minor_of(announced) >= minor_of(FEEDBACK_SINCE)
+    )
 
 
 def unsupported_refusal(supported: Sequence[str]) -> str:

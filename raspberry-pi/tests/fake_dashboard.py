@@ -16,16 +16,30 @@ answers.
 It also plays the network: reachable or not, and an answer that is lost after
 the request was received. And it lists the machine's riders (``roster``), the
 synthetic rider of :mod:`tests.roster_support` unless a test sets others.
+
+Contract 1.7 (ANH-146): an event of kind ``feedback`` travels alone and is
+kept in ``feedback``, by session, never among the session's ``events``; not
+before the session's end has reached it (``feedback_session_not_ended``). A
+dashboard set to announce an older minor (``server_version``) keeps it as an
+ordinary event, as a real one of that minor would: what the console must never
+send it.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, cast
 
 from src.cloud_sync import CloudError, Document, Refused, Unreachable
-from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD, ErrorCode
+from src.contract import (
+    CONTRACT_VERSION,
+    SERVER_VERSION_FIELD,
+    ErrorCode,
+    takes_feedback,
+    version_of,
+)
 from src.result import Err, Ok, Result
 from src.roster import ROSTER_PATH
 from src.training.plan import JsonValue
@@ -114,18 +128,27 @@ class FakeDashboard:
     roster: Mapping[str, JsonValue] = field(default_factory=roster_document)
     """The answer to ``GET /api/machine/roster``: the riders of this machine."""
 
+    server_version: str = CONTRACT_VERSION
+    """The contract its answers announce (``server_contract_version``)."""
+
+    feedback: dict[str, object] = field(default_factory=dict[str, object])
+    """The rider's feedback of each session, its ``detail`` read back (contract 1.7)."""
+
+    refuse_feedback: Refused | None = None
+    """When set, what a feedback is answered instead of being kept."""
+
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
         if not self.online:
             return Err(Unreachable(f"GET {path}: no route to host"))
         self.paths.append(path)
         if path.endswith("/poll"):
-            return Ok({"session": None, SERVER_VERSION_FIELD: CONTRACT_VERSION})
+            return Ok({"session": None, SERVER_VERSION_FIELD: self.server_version})
         if path == ROSTER_PATH:
             return Ok(self.roster)
         session = self.sessions.get((params or {}).get("sessionId", ""))
         active = session is not None and session.status == "active"
         return Ok(
-            {"active": active, "stopRequested": False, SERVER_VERSION_FIELD: CONTRACT_VERSION}
+            {"active": active, "stopRequested": False, SERVER_VERSION_FIELD: self.server_version}
         )
 
     async def post(self, path: str, body: Body) -> Reply:
@@ -151,7 +174,7 @@ class FakeDashboard:
 
     def _handle(self, path: str, body: Body) -> Reply:
         if path == "/api/machine/heartbeat":
-            return Ok({"success": True, SERVER_VERSION_FIELD: CONTRACT_VERSION})
+            return Ok({"success": True, SERVER_VERSION_FIELD: self.server_version})
         if path == LOCAL:
             return Ok({"sessionId": self._declared(body).session_id})
         if path not in (TELEMETRY, EVENTS, END):
@@ -159,9 +182,16 @@ class FakeDashboard:
         session = self.sessions.get(str(body.get("sessionId")))
         if session is None:
             return Err(Refused(400, "Session not found", ErrorCode("session_not_found")))
+        return self._of_session(session, path, body)
+
+    def _of_session(self, session: ServerSession, path: str, body: Body) -> Reply:
         if path == END:
             self._ended(session, body)
             return Ok({"success": True})
+        if path == EVENTS and takes_feedback(version_of(self.server_version)):
+            events = _items(body, "events")
+            if any(event.get("kind") == "feedback" for event in events):
+                return self._feedback(session, events)
         store = self.telemetry if path == TELEMETRY else self.events
         key = "t" if path == TELEMETRY else "seq"
         return Ok(
@@ -169,6 +199,23 @@ class FakeDashboard:
                 session, _items(body, "points" if path == TELEMETRY else "events"), store, key
             )
         )
+
+    def _feedback(self, session: ServerSession, events: Sequence[Mapping[str, JsonValue]]) -> Reply:
+        if len(events) != 1:
+            return Err(Refused(400, "A feedback event travels alone", ErrorCode("invalid_request")))
+        if self.refuse_feedback is not None:
+            return Err(self.refuse_feedback)
+        if session.status == "active":
+            # As Convex: not before the session's end has reached it.
+            return Err(
+                Refused(
+                    400,
+                    "The session is not over: no feedback yet",
+                    ErrorCode("feedback_session_not_ended"),
+                )
+            )
+        self.feedback[session.session_id] = json.loads(str(events[0]["detail"]))
+        return Ok({"stored": 1, "duplicates": 0, "rejected": 0})
 
     def _declared(self, body: Body) -> ServerSession:
         reference = str(body["localRef"])

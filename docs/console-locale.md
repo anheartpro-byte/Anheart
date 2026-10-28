@@ -1381,6 +1381,68 @@ valeur manquante sur le site ; 422 pour un profil que la FC max de ce passager r
 La boucle refait la vérification quand elle arme : une liste reçue entre le clic et
 l'armement qui ne porte plus le passager fait refuser le départ.
 
+### Carte « Retour du passager » (ANH-146)
+
+**Quand elle s'ouvre.** Sur la page Seance, à la fin d'une séance avec une
+personne à bord : une séance manuelle déclarée `occupied`, ou toute séance
+programmée (la FC du passager la régule : il y a toujours quelqu'un à bord).
+**Jamais pour une séance de banc** : la console ne propose rien, et
+`POST /api/feedback` répond 409. Elle ne s'ouvre que sur une console reliée
+au tableau de bord : sans lien, le retour n'aurait nulle part où aller. La
+page la lit au démarrage, à l'événement `session_idle` et à chaque relecture
+du panneau ; la séance suivante qui démarre la ferme.
+
+**Ce que l'opérateur saisit.** Deux listes de 0 à 10, la **Nausée** et le
+**Malaise ou vertige**, chaque niveau avec son libellé (« 3 - Légère à
+modérée ») ; le **Ressenti** (Bon, Acceptable, Mauvais) ; un **Commentaire**
+facultatif de 500 caractères au plus, avec son compteur, rogné, absent s'il
+est vide. L'échelle et ses libellés sont ceux de
+[`contracts/feedback.json`](../contracts/feedback.json), recopiés dans
+`src/passenger_feedback.py` et épinglés au fichier par les tests du Pi (la
+console est déployée sans ce fichier). Ils sont provisoires, sans validité
+médicale, à valider avec ANH-98. **Envoyer** n'est actif qu'une fois les deux
+notes et le ressenti choisis ; une seconde saisie avant l'envoi remplace la
+première. Tant que rien n'est saisi, **Ignorer (non renseigné)** ferme la
+carte : rien n'est envoyé. Une fois le retour saisi, ce bouton disparaît :
+la carte garde le formulaire pour le modifier tant qu'il n'est pas parti, et
+**Fermer** la ferme **sans jeter le retour**, qui continue de partir en
+arrière-plan, comme quand la séance suivante démarre. L'opérateur n'est pas nommé : la
+saisie passe par l'accès de la console (son jeton), comme toute requête, et
+le tableau de bord la range sous `submittedBy: "operator"` en attendant
+l'authentification nommée (ANH-152).
+
+**Où le retour va, et où il ne va jamais.** C'est une donnée de santé. La
+console la garde **en mémoire seulement**, jusqu'à ce que le tableau de bord
+l'ait : jamais dans l'enregistrement de séance, jamais sur la carte SD, jamais
+dans un journal ni dans une réponse d'erreur (un refus nomme le champ, jamais
+sa valeur). **Une console qui redémarre avant l'envoi l'a perdu**, sans le
+dire : le passager peut encore le donner sur le site, dans les mêmes 24 h.
+Elle l'envoie à la route des événements comme le seul événement d'une requête,
+de kind `feedback` ([convex.md](convex.md#routes-utilisées-par-la-console-locale-raspberry-pisrccloud_syncpy)),
+et seulement à un serveur dont le dernier heartbeat a annoncé le contrat
+**1.7** ou une mineure plus récente de la même majeure : un serveur antérieur
+le rangerait avec les événements de la séance.
+
+**La ligne d'état** dit où en est l'envoi, relu à chaque tour du lien :
+
+| État | Ce que la console fait |
+|---|---|
+| (vide) | rien de saisi encore |
+| En attente du tableau de bord | lien coupé, version du serveur pas encore connue, ou refus qui peut être du moment (`request_failed`, refus sans code ou avec un autre code) : nouvel essai 15 s après un échec |
+| En attente de la séance sur le tableau de bord | une séance démarrée à la machine n'a son identifiant qu'une fois déclarée : envoi dès qu'elle l'est |
+| Serveur trop ancien (contrat 1.7 requis) : non envoyé | rien n'est envoyé ; envoi si le serveur annonce 1.7 plus tard |
+| En attente de la fin de séance sur le serveur : nouvel essai | le tableau de bord ne prend un retour qu'une fois la fin de la séance reçue (`feedback_session_not_ended`), et la console n'envoie cette fin qu'après l'acquittement de ses points : nouvel essai 15 s plus tard, ce refus n'est pas définitif |
+| Envoyé au tableau de bord | fait, une seule fois ; **Fermer** ferme la carte |
+| Refusé par le tableau de bord (code) | refus définitif, pour ces quatre codes stables seulement : `feedback_not_eligible`, `feedback_window_closed`, `session_not_found`, `invalid_request` ; la saisie est effacée, la ligne ne dit que le code, sans valeur |
+| Abandonné : plus de 24 h depuis la fin de la séance | la fenêtre du tableau de bord est fermée : la saisie est effacée |
+
+La console garde au plus huit retours en attente ; au-delà, le plus ancien est
+abandonné et la carte le compte (« retour(s) abandonné(s) : trop de retours en
+attente »). Limite connue : si une séance démarrée à la machine se termine sans
+avoir été déclarée (lien coupé pendant toute la séance), puis qu'une autre la
+suit avant le retour du lien, le retour de la première peut rester en attente
+de son identifiant jusqu'à l'abandon de 24 h.
+
 ### Le passager : la liste du tableau de bord (ANH-84)
 
 La console demande au tableau de bord la liste de ses passagers
@@ -2332,6 +2394,9 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
 | GET | `/api/remote-launch` | - | l'offre du dernier poll pour la carte Seance : `{session_id, profile_id, program, launched_by, passenger_name, passenger_reason, state, reason, can_confirm}` ; `passenger_name` vient du roster tenu par recherche `subject_id`, jamais de `subject_label`; `null` si aucune offre | 200 |
+| GET | `/api/feedback` | - | la carte « Retour du passager » (ANH-146) : `{current, given_up, scales, comfort, free_text_max}` ; `current` vaut `null` sans carte, sinon `{ended_at_ms, status, status_text, code, can_submit}` ; jamais les valeurs saisies | 200 |
+| POST | `/api/feedback` | `{"nausea_score", "dizziness_score", "comfort", "free_text"?}` | saisit le retour de la séance de la carte, ou remplace la saisie pas encore envoyée ; mémoire seulement | 202 (même corps que la lecture) ; 400 `malformed_body` ; 422 `invalid_feedback` (le champ nommé, jamais sa valeur) ; 409 `nothing_to_fill` |
+| POST | `/api/feedback/skip` | `{}` | ferme la carte : « non renseigné » si rien n'était saisi, rien n'est envoyé ; un retour saisi part quand même | 200 (même corps) ; 409 `nothing_to_fill` |
 | POST | `/api/remote-launch/confirm` | `{"session_id", "operator"}` | confirme localement l'offre et attribue l'action à l'opérateur; la route ne fait aucun appel réseau, CloudSync traite ensuite la demande | 202 `{session_id, state}` ; 400 (opérateur vide) ; 409 (`launch_not_pending`, `launch_in_progress`, `passenger_unavailable`, `launch_refused`) |
 | GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}]}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
 | POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_id"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi) ; 409 (dont : passager refusé, variateur en défaut) ; 412 |

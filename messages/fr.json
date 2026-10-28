@@ -91,7 +91,8 @@
         "stop_requested": "Arrêt demandé",
         "started": "Séance démarrée",
         "local_registered": "Séance locale enregistrée",
-        "ended": "Séance terminée"
+        "ended": "Séance terminée",
+        "feedback_submitted": "Retour du passager enregistré"
       },
       "machine_key": {
         "created": "Clé de machine créée",
@@ -295,6 +296,11 @@
     "invalid_duration": "La durée doit être un nombre positif.",
     "session_not_found": "Séance introuvable. Elle a peut-être été supprimée.",
     "session_not_managed": "Vous ne pouvez pas arrêter cette séance.",
+    "feedback_rider_only": "Seul le passager de la séance peut donner son retour.",
+    "feedback_not_eligible": "Cette séance n'avait personne à bord : elle ne prend pas de retour.",
+    "feedback_session_not_ended": "La séance n'est pas terminée : le retour s'ouvre à sa fin.",
+    "feedback_window_closed": "Le retour ne peut plus être donné ni modifié : plus de 24 h ont passé depuis la fin de la séance.",
+    "feedback_invalid": "Le retour n'est pas valide : notes entières de 0 à 10, un ressenti de la liste, 500 caractères de texte au plus.",
     "invalid_release_version": "Version invalide : attendu « composant-X.Y.Z », par exemple pi-1.2.0.",
     "validation_level_required": "Une version du Pi doit porter un niveau de validation.",
     "validation_level_pi_only": "Seule une version du Pi porte un niveau de validation.",
@@ -909,7 +915,12 @@
     "noReports": "Aucun rapport disponible pour le moment",
     "nothingYet": "Aucun rapport à afficher pour l'instant : d'autres séances restent à lire. « Afficher plus » poursuit la lecture.",
     "view": "Voir",
-    "durationMinutes": "{minutes, number} min"
+    "durationMinutes": "{minutes, number} min",
+    "exportFeedback": "Exporter les retours (CSV)",
+    "exportingFeedback": "Export en cours…",
+    "exportFeedbackHint": "Retours des passagers croisés avec la durée et les pics de g à la pointe du pied : identifiants seulement, sans nom ni commentaire.",
+    "exportFeedbackTruncated": "L'export s'arrête à 10 000 retours : les plus anciens n'y sont pas.",
+    "exportFeedbackError": "L'export des retours a échoué. Réessayez."
   },
   "privacy": {
     "title": "Politique de Confidentialité",
@@ -1226,6 +1237,26 @@
     "description": "Inviter, retirer et changer le rôle des membres de l'organisation active. Ces changements se font dans Clerk et parviennent au serveur par son webhook.",
     "accessDenied": "Accès refusé. Réservé aux administrateurs de l'organisation."
   },
+  "sessionFeedback": {
+    "title": "Retour du passager",
+    "description": "Ce que le passager a ressenti après la séance : nausée, malaise ou vertige, ressenti général. Le passager le donne ou le modifie pendant les 24 h qui suivent la fin de la séance.",
+    "notProvided": "Non renseigné",
+    "notEligible": "Le retour ne concerne que les séances avec une personne à bord.",
+    "comfort": "Ressenti",
+    "freeText": "Commentaire",
+    "submittedBy": "Saisi par",
+    "submittedAt": "Le",
+    "by": {
+      "rider": "Le passager",
+      "operator": "L'opérateur, à la machine"
+    },
+    "editableUntil": "Vous pouvez donner ou modifier votre retour jusqu'au {date}.",
+    "windowClosed": "Le retour ne peut plus être donné ni modifié : plus de 24 h ont passé depuis la fin de la séance.",
+    "choose": "Choisir",
+    "characters": "{count, number} / {max, number} caractères",
+    "save": "Enregistrer le retour",
+    "saved": "Retour enregistré"
+  },
   "sessionReport": {
     "summaryTitle": "Résumé de la séance",
     "provisional": "Provisoire",
@@ -1289,7 +1320,7 @@
     "endRule": "Règle",
     "notAvailableTitle": "Pas encore dans le rapport",
     "preflight": "Résultat du pré-vol : pas encore enregistré par la machine (ANH-142).",
-    "feedback": "Retour du passager : pas encore recueilli (ANH-146).",
+    "feedback": "Retour du passager",
     "computedAt": "Calculé le {date}",
     "telemetry": "Télémétrie (1 Hz)",
     "endReasons": {
@@ -1318,7 +1349,7 @@
     "meanHr": "FC moyenne",
     "notComputed": "Pas encore calculé",
     "report": "Rapport",
-    "nausea": "Nausée et ressenti : pas encore recueillis (ANH-146)."
+    "nausea": "Nausée"
   },
   "notifications": {
     "title": "Alertes",

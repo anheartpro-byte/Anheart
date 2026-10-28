@@ -35,6 +35,7 @@ import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { isTrainingKind, SESSION_SILENCE_MS } from "@/lib/training";
 import { TrainingDetailsCard } from "@/components/training/TrainingDetailsCard";
 import { SessionRecordCard } from "@/components/training/SessionRecordCard";
+import { SessionFeedbackCard } from "@/components/training/SessionFeedbackCard";
 import { SessionSummaryCard } from "@/components/training/SessionSummaryCard";
 import {
   SessionKindBadge,
@@ -222,6 +223,11 @@ export default function SessionDetailPage({
       {/* Training parameters, end reason and telemetry (auto / manual) */}
       {isTraining && <TrainingDetailsCard sessionId={sessionId} />}
       {isTraining && <SessionRecordCard key={sessionId} sessionId={sessionId} />}
+      {/* The rider's feedback after the session (ANH-146) */}
+      {isTraining &&
+        (session.status === "completed" || session.status === "failed") && (
+          <SessionFeedbackCard sessionId={sessionId} />
+        )}
 
       {/* Former ECG recording mode: read-only history */}
       {!isTraining && (

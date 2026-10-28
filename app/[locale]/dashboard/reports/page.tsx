@@ -17,6 +17,8 @@ import {
   Eye,
 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
+import { isOrganizationAdmin } from "@/lib/organizationAccess";
+import { FeedbackExportButton } from "@/components/training/FeedbackExportButton";
 
 /** Reports asked for at once: the first page, then each "Show more". */
 const PAGE_SIZE = 50;
@@ -40,6 +42,9 @@ export default function ReportsPage() {
   if (user === undefined || status === "LoadingFirstPage") {
     return <ReportsPageSkeleton />;
   }
+  // The riders' feedback export (ANH-146): the gate of the audit page.
+  const exportAllowed =
+    isOrganizationAdmin(user?.role) && user?.organizationAccess === "granted";
 
   return (
     <div className="space-y-6">
@@ -50,6 +55,8 @@ export default function ReportsPage() {
           {t("failedSessionsHint")}
         </p>
       </div>
+
+      {exportAllowed && <FeedbackExportButton />}
 
       {sessions.length > 0 ? (
         <div className="grid gap-4">

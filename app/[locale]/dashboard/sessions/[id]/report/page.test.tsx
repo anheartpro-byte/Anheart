@@ -66,6 +66,9 @@ type Session = NonNullable<FunctionReturnType<typeof api.sessions.getSession>>;
 type Training = NonNullable<
   FunctionReturnType<typeof api.training.getTrainingSession>
 >;
+type FeedbackRead = FunctionReturnType<
+  typeof api.sessionFeedback.getSessionFeedback
+>;
 type Summary = Exclude<
   NonNullable<FunctionReturnType<typeof api.sessionReports.getSummary>>,
   { absent: string }
@@ -168,8 +171,13 @@ function serve(
     session?: Session | null;
     training?: Training | null;
     summary?: FunctionReturnType<typeof api.sessionReports.getSummary>;
+    feedback?: FeedbackRead;
   } = {},
 ) {
+  answer(
+    api.sessionFeedback.getSessionFeedback,
+    over.feedback === undefined ? feedbackRead() : over.feedback,
+  );
   answer(
     api.sessions.getSession,
     over.session === undefined ? session() : over.session,
@@ -182,6 +190,20 @@ function serve(
     api.sessionReports.getSummary,
     over.summary === undefined ? summary() : over.summary,
   );
+}
+
+/** What the server says of the rider's feedback: none yet, by default. */
+function feedbackRead(
+  feedback: NonNullable<FeedbackRead>["feedback"] = null,
+  eligible = true,
+): FeedbackRead {
+  return {
+    eligible,
+    feedback,
+    endedAt: STARTED + 1_800_000,
+    editableUntil: eligible ? STARTED + 1_800_000 + 86_400_000 : null,
+    canEdit: true,
+  };
 }
 
 function open(locale: "fr" | "en" = "fr") {
@@ -419,12 +441,63 @@ describe("the report of a session", () => {
     ).toBeTruthy();
   });
 
-  it("says what is not in the report yet: the preflight and the rider's feedback", async () => {
+  it("says what is not in the report yet: the preflight only", async () => {
     serve();
     await open();
 
     expect(screen.getByText(r.preflight)).toBeTruthy();
+    expect(screen.queryByText(/ANH-146/)).toBeNull();
+  });
+
+  // ANH-146 S5: the rider's feedback, read only, in place of the old mention.
+  it("ANH-146 S5 prints the rider's feedback with the labels of the scale, and no form", async () => {
+    serve({
+      feedback: feedbackRead({
+        nauseaScore: 3,
+        dizzinessScore: 10,
+        comfort: "acceptable",
+        freeText: "Un peu barbouillé à la fin",
+        submittedBy: "operator",
+        submittedAt: STARTED + 2_000_000,
+      }),
+    });
+    await open();
+
     expect(screen.getByText(r.feedback)).toBeTruthy();
+    expect(screen.getByText("3 - Légère à modérée")).toBeTruthy();
+    expect(screen.getByText("10 - Maximal imaginable")).toBeTruthy();
+    expect(screen.getByText("Acceptable")).toBeTruthy();
+    expect(screen.getByText("Un peu barbouillé à la fin")).toBeTruthy();
+    expect(screen.getByText(fr.sessionFeedback.by.operator)).toBeTruthy();
+    expect(
+      screen.getByText(
+        format(STARTED + 2_000_000, "PPp", { locale: frLocale }),
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: fr.sessionFeedback.save }),
+    ).toBeNull();
+    expect(screen.queryByText(/ANH-146/)).toBeNull();
+  });
+
+  it("ANH-146 S5 says Non renseigné without feedback, and why a bench session has none", async () => {
+    serve();
+    const view = await open();
+    expect(screen.getByText(fr.sessionFeedback.notProvided)).toBeTruthy();
+
+    answer(api.sessionFeedback.getSessionFeedback, feedbackRead(null, false));
+    await view.refresh();
+    expect(screen.getByText(fr.sessionFeedback.notEligible)).toBeTruthy();
+    expect(screen.queryByText(fr.sessionFeedback.notProvided)).toBeNull();
+  });
+
+  it("ANH-146 S5 waits for the feedback before showing the report", async () => {
+    serve();
+    answer(api.sessionFeedback.getSessionFeedback, undefined);
+    await open();
+    expect(screen.queryByText(r.reportTitle)).toBeNull();
   });
 
   it("says the summary is not computed yet, and still lets the report be printed", async () => {
