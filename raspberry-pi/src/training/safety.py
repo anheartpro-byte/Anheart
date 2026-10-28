@@ -926,12 +926,23 @@ class SafetyObservation:
     """
 
     resting_bpm: Bpm | None = None
-    """The resting rate measured at standstill in BASELINE, or ``None``.
+    """The resting rate measured at standstill, or ``None``.
 
-    What a heart rate recovering from a removed load falls TOWARDS, and the
-    reference ``hr_drop`` measures a collapse during that recovery against.
-    ``None`` (no BASELINE, as in a manual session) keeps the unconditional
-    fall threshold: nothing is inferred from a rate nobody measured.
+    Measured in BASELINE in a programme, and before the arm first moves in a
+    manual session with a person on board. What a heart rate recovering from
+    a removed load falls TOWARDS, and the reference ``hr_drop`` measures a
+    collapse during that recovery against. ``None`` (nothing measured) keeps
+    the unconditional fall threshold: nothing is inferred from a rate nobody
+    measured.
+    """
+
+    manual_session: bool = False
+    """Whether this is a manual session rather than a programme. A fact, like the others.
+
+    ``hr_drop`` then keeps whichever of its two thresholds is the stricter
+    when a resting rate is known (:meth:`SafetySupervisor._rule_hr_drop`).
+    Defaults to ``False``: an observation that does not say is judged as a
+    programme always was.
     """
 
     setpoint_echo_rpm: MotorRpm | None = None
@@ -2211,6 +2222,15 @@ class SafetySupervisor:
         highest-risk window - it fires at 15 bpm below the resting rate, which
         normal recovery does not reach and a collapse does.
 
+        **A manual session keeps the stricter of the two.** With a resting
+        rate known and :attr:`SafetyObservation.manual_session` stated, the
+        threshold is the higher of ``E - M`` and ``peak - hr_drop_bpm``: the
+        rule fires whenever a programme would on the same evidence, and
+        whenever it fired before a manual session had a resting rate. During a
+        speed reduction that can still end a session on a normal recovery, as
+        it always could in a manual session. Without a resting rate a manual
+        session keeps ``peak - hr_drop_bpm`` alone, as before.
+
         Latched, so a rate that recovers does not resume the session. Presyncope
         that resolves because the load came off is not evidence that more load
         would be safe. No hysteresis band either, for the same reason: a
@@ -2233,14 +2253,18 @@ class SafetySupervisor:
         level = float(median(rates[-limits.hr_drop_confirm_samples :]))
         phi = self._load_still_applied(observation.now, points[-1])
         rest = observation.resting_bpm
-        if rest is None:
-            threshold = peak - limits.hr_drop_bpm
-        else:
+        unconditional = peak - limits.hr_drop_bpm
+        threshold = unconditional
+        if rest is not None:
             margin = (
                 limits.hr_drop_rest_margin_bpm
                 + (limits.hr_drop_bpm - limits.hr_drop_rest_margin_bpm) * phi
             )
             threshold = rest + (peak - rest) * phi - margin
+        explained = threshold
+        keeps_the_fall = observation.manual_session and unconditional > explained
+        if keeps_the_fall:
+            threshold = unconditional
         fall = peak - level
         below = level <= threshold and fall >= limits.hr_drop_rest_margin_bpm
         latest = points[-1].at
@@ -2256,14 +2280,21 @@ class SafetySupervisor:
         )
         if firing is None:
             return None
+        basis = (
+            f"the {explained:.0f} bpm the remaining load ({phi:.0%} of the recent peak) explains"
+        )
+        if keeps_the_fall:
+            basis = (
+                f"the {threshold:.0f} bpm of a {limits.hr_drop_bpm} bpm fall from the peak, "
+                f"kept in a manual session as stricter than {basis}"
+            )
         return SafetyVerdict(
             action=SafetyAction.RAMP_DOWN,
             rule=RULE_HR_DROP,
             detail=(
                 f"heart rate fell {fall:.0f} bpm (from {peak:.0f} to {level:.0f}, confirmed "
                 f"over {limits.hr_drop_confirm_samples} fresh readings) within "
-                f"{limits.hr_drop_window:.0f} s, below the {threshold:.0f} bpm the "
-                f"remaining load ({phi:.0%} of the recent peak) explains: a falling rate "
+                f"{limits.hr_drop_window:.0f} s, below {basis}: a falling rate "
                 "under load is presyncope, and the control law would answer it by "
                 "accelerating"
             ),

@@ -1317,7 +1317,7 @@ signé, `hr_hard_max_bpm` / `hr_critical_bpm` (148 / 158 dans le fichier livré,
 | `operator_estop` | E-STOP de la page (ou autre appel à `latch_estop`) | aucun délai | QUICK_STOP | oui ; l'acquittement exige « champignon relâché » |
 | `drive_fault` | l'état CiA402 lu est FAULT | aucun délai | RAMP_DOWN (le variateur a déjà appliqué sa propre réaction) | oui ; se redéclenche tant que le défaut est affiché |
 | `comms_lost` | échanges ratés d'affilée ≥ seuil | 3 échanges | GO_SILENT | oui, définitif |
-| `hr_drop` | chute confirmée de FC que la baisse de charge n'explique pas (détail ci-dessous) | fenêtre 30 s ; 25 bpm ; médianes de 5 (niveau) et 9 (pic) ; 4 lectures consécutives ; marge repos 15 bpm ; fenêtre de charge 120 s | RAMP_DOWN | oui |
+| `hr_drop` | chute confirmée de FC que la baisse de charge n'explique pas ; en séance manuelle occupée avec FC de repos, aussi toute chute de 25 bpm depuis le pic (détail ci-dessous) | fenêtre 30 s ; 25 bpm ; médianes de 5 (niveau) et 9 (pic) ; 4 lectures consécutives ; marge repos 15 bpm ; fenêtre de charge 120 s | RAMP_DOWN | oui |
 | `hr_hard_max` | FC > palier dur pendant 5 s continues (bande de relâche 5 bpm). La FC jugée est la dernière FC utilisable : une lecture sans FC ne relance pas le délai (détail ci-dessous) | 148 bpm, 5 s ; dernière FC utilisable jugée jusqu'à 10 s d'âge | RAMP_DOWN | oui |
 | `hr_critical` | FC ≥ palier critique, sur la même FC jugée que `hr_hard_max` | 158 bpm, aucun délai ; dernière FC utilisable jugée jusqu'à 10 s d'âge | QUICK_STOP | oui |
 | `hr_rate` | pente (moindres carrés) des médianes glissantes de 5 lectures sur 60 s, étendue ≥ 20 s, > limite | 25 bpm/min ; relâche sous 15 bpm/min | REDUCE | non |
@@ -1530,13 +1530,25 @@ numéro de séquence a avancé et dont la qualité est `good` comptent.
   de 9 dans la fenêtre de 30 s (moins de 9 lectures : pas de jugement) ;
 * φ = g commandé maintenant / g le plus haut des 120 dernières secondes, borné à
   [0, 1] (φ = 1 si inconnu) ;
-* sans FC de repos connue (séance manuelle) : seuil = pic − 25 bpm ;
-* avec FC de repos : seuil = repos + (pic − repos) × φ − (15 + 10 × φ) ;
+* FC de repos : en programme, mesurée en BASELINE ; en séance manuelle avec une
+  personne à bord, dernière lecture utilisable avant le premier mouvement du
+  bras, figée dès ce mouvement, jamais remesurée après un arrêt en cours de
+  séance, oubliée au départ suivant ; aucune en BENCH (règles `hr_*` éteintes) ;
+* sans FC de repos connue : seuil = pic − 25 bpm ;
+* programme avec FC de repos : seuil = repos + (pic − repos) × φ − (15 + 10 × φ) ;
+* séance manuelle occupée avec FC de repos : le plus haut des deux seuils
+  précédents. La règle se déclenche chaque fois qu'un programme se
+  déclencherait sur les mêmes lectures, et chaque fois que la chute de 25 bpm
+  se déclenchait avant (ANH-101) ;
 * la règle se déclenche si niveau ≤ seuil **et** pic − niveau ≥ 15 bpm, et que
   cela tient sur 4 lectures fraîches consécutives.
 
 Sans baisse de charge (HOLD, φ = 1) c'est la règle des 25 bpm en 30 s ; charge
-retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos.
+retirée (RECOVERY, φ = 0) elle se déclenche 15 bpm sous la FC de repos. En
+séance manuelle occupée, une chute de 25 bpm depuis le pic pendant une baisse
+de vitesse termine encore la séance, même sur un retour au calme normal, comme
+avant : c'est l'écart assumé. Le verdict dit alors lequel des deux seuils a été
+retenu.
 
 ### 5.3 Les 6 règles ajoutées par le runtime
 

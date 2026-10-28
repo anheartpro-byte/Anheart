@@ -105,6 +105,7 @@ instants de lecture identiques a ceux de la tache de sondage reelle.
 | M17 | FAULT RESET while running / while turning / after standstill + acknowledge | refused, refused, accepted (and nothing moves) | sim `operator_fault_reset_*` |
 | M18 | Restart after a finished session | a new session armed from scratch, nothing resumed | sim `operator_restart_after_finish` |
 | M19 | Manual with a person on board, heart rate critical | QUICK_STOP | sim `hr_critical_manual_occupied` |
+| M20 | Manual with a person on board, collapse in RECOVERY after STOP: 17 bpm under the resting rate measured before the first movement, 23 bpm from the peak | hr_drop on the programmes' threshold (the unconditional 25 bpm fall alone would not fire) | sim `vasovagal_manual_occupied_recovery` |
 
 ## 3. REMOTE (dashboard launch and stop)
 

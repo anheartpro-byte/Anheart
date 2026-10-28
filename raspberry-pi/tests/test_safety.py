@@ -54,6 +54,7 @@ import math
 import re
 import threading
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from pathlib import Path
 from typing import Final, assert_never, final
@@ -226,7 +227,9 @@ class Rig:
         self.load_known: bool = True
         """Whether the observation states the load ``commanded`` puts on the occupant."""
         self.resting: Bpm | None = None
-        """The resting rate BASELINE measured, or ``None`` (a manual session)."""
+        """The resting rate measured at standstill, or ``None`` (none was)."""
+        self.manual: bool = False
+        """Whether the observation states a manual session rather than a programme."""
         self.echo: MotorRpm | None = None
         """LFRD read back this tick, or ``None`` when no read followed the write."""
         self.envelope: SpeedEnvelope | None = None
@@ -267,6 +270,7 @@ class Rig:
             attendant_last_seen=now if self.attendant_present else self.attendant_last_seen,
             commanded_g=GEOMETRY.view(self.commanded).g_load if self.load_known else None,
             resting_bpm=self.resting,
+            manual_session=self.manual,
             setpoint_echo_rpm=self.echo,
             envelope=self.envelope,
         )
@@ -1085,6 +1089,281 @@ def test_with_no_load_recorded_the_fall_is_judged_unconditionally() -> None:
         rig.bpm = Bpm(105)
         rig.run(Seconds(2.0))
         assert rig.action_for(RULE_HR_DROP) is SafetyAction.RAMP_DOWN, known
+
+
+# -------------------------------------------------------------------------
+# hr_drop in a manual session: the stricter of the two thresholds
+# -------------------------------------------------------------------------
+
+
+def _unloaded_after_a_peak(manual: bool, resting: Bpm | None) -> Rig:
+    """140 bpm for 40 s at 1000 rpm, then the load taken off entirely (phi = 0).
+
+    Resting rate 80: the remaining load explains 80 - 15 = 65 bpm, while the
+    unconditional fall from the 140 bpm peak is at 115.
+    """
+    rig = Rig()
+    rig.manual = manual
+    rig.resting = resting
+    rig.commanded = MotorRpm(1000)
+    rig.measured = rig.commanded
+    rig.bpm = Bpm(140)
+    rig.run(Seconds(40.0))
+    rig.commanded = MotorRpm(0)
+    rig.measured = rig.commanded
+    return rig
+
+
+def _recovering_near_rest(manual: bool, resting: Bpm | None) -> Rig:
+    """RECOVERY at 85 bpm, the 800 rpm load removed, the resting rate 80 (the programme case)."""
+    rig = Rig()
+    rig.phase = Phase.RECOVERY
+    rig.manual = manual
+    rig.resting = resting
+    rig.commanded = MotorRpm(800)
+    rig.bpm = Bpm(85)
+    rig.run(Seconds(10.0))
+    rig.commanded = MotorRpm(0)
+    rig.run(Seconds(20.0))
+    return rig
+
+
+def test_a_manual_session_catches_a_collapse_near_rest_as_a_programme_does() -> None:
+    """RECOVERY after the load came off: 15 bpm under the resting rate ends a manual session too.
+
+    85 to 65 bpm is a 20 bpm fall, short of the unconditional 25: the rule a
+    manual session had before it measured a resting rate stays quiet. With
+    the resting rate measured, the manual session ends exactly as the
+    programme does, on the programme's threshold and in the programme's words.
+    """
+    programme = _recovering_near_rest(False, Bpm(80))
+    manual = _recovering_near_rest(True, Bpm(80))
+    before = _recovering_near_rest(True, None)
+    for rig in (programme, manual, before):
+        assert rig.verdict_for(RULE_HR_DROP) is None
+        rig.bpm = Bpm(65)
+        for _ in range(CONFIRMING):
+            rig.tick()
+    assert before.verdict_for(RULE_HR_DROP) is None
+    fired = programme.verdict_for(RULE_HR_DROP)
+    assert fired is not None
+    assert manual.verdict_for(RULE_HR_DROP) == fired
+    assert "below the 65 bpm the remaining load (0% of the recent peak) explains" in fired.detail
+
+
+def test_a_manual_session_keeps_its_unconditional_fall_while_the_load_comes_off() -> None:
+    """The accepted difference: a 25 bpm fall from the peak still ends a manual session.
+
+    The load has come off, so a programme judges 115 bpm against the 65 bpm
+    the remaining load explains and goes on: that is a normal recovery as
+    often as it is a collapse. A manual session ends there, as it did before
+    it measured a resting rate, and says which threshold it kept.
+    """
+    programme = _unloaded_after_a_peak(False, Bpm(80))
+    manual = _unloaded_after_a_peak(True, Bpm(80))
+    before = _unloaded_after_a_peak(True, None)
+    for rig in (programme, manual, before):
+        rig.bpm = Bpm(115)
+        for _ in range(CONFIRMING):
+            rig.tick()
+    assert programme.verdict_for(RULE_HR_DROP) is None
+    kept = manual.verdict_for(RULE_HR_DROP)
+    assert kept is not None
+    assert kept.action is SafetyAction.RAMP_DOWN
+    assert kept.latched is True
+    assert (
+        "below the 115 bpm of a 25 bpm fall from the peak, kept in a manual session as "
+        "stricter than the 65 bpm the remaining load (0% of the recent peak) explains: "
+    ) in kept.detail
+    unchanged = before.verdict_for(RULE_HR_DROP)
+    assert unchanged is not None
+    assert unchanged.since == kept.since
+    assert "below the 115 bpm the remaining load (0% of the recent peak) explains" in (
+        unchanged.detail
+    )
+
+
+@pytest.mark.parametrize(
+    ("build", "fallen_to", "expected"),
+    [
+        pytest.param(
+            _recovering_near_rest,
+            Bpm(65),
+            "heart rate fell 20 bpm (from 85 to 65, confirmed over 5 fresh readings) within "
+            "30 s, below the 65 bpm the remaining load (0% of the recent peak) explains: a "
+            "falling rate under load is presyncope, and the control law would answer it by "
+            "accelerating",
+            id="recovery",
+        ),
+        pytest.param(
+            _unloaded_after_a_peak,
+            Bpm(60),
+            "heart rate fell 80 bpm (from 140 to 60, confirmed over 5 fresh readings) within "
+            "30 s, below the 65 bpm the remaining load (0% of the recent peak) explains: a "
+            "falling rate under load is presyncope, and the control law would answer it by "
+            "accelerating",
+            id="unloaded",
+        ),
+    ],
+)
+def test_a_programme_verdict_is_word_for_word_what_it_was(
+    build: Callable[[bool, Bpm | None], Rig], fallen_to: Bpm, expected: str
+) -> None:
+    """A programme's hr_drop, word for word as before, and the default that keeps callers there.
+
+    The texts were read off the rule as it was before manual sessions
+    measured a resting rate, on the same evidence.
+    """
+    rig = build(False, Bpm(80))
+    rig.bpm = fallen_to
+    for _ in range(CONFIRMING - 1):
+        rig.tick()
+    assert rig.verdict_for(RULE_HR_DROP) is None
+    rig.tick()
+    fired = rig.verdict_for(RULE_HR_DROP)
+    assert fired is not None
+    assert fired.detail == expected
+    defaults = {field.name: field.default for field in fields(SafetyObservation)}
+    assert defaults["manual_session"] is False
+
+
+_DROP_LOADS: Final[tuple[int, ...]] = (0, 350, 700, 1000, 1380)
+"""Commanded motor rpm the property draws from: none, a little, about half, most, all."""
+
+_DROP_READINGS: Final[tuple[SignalQuality | None, ...]] = (SignalQuality.GOOD,) * 8 + (
+    SignalQuality.NOISY,
+    SignalQuality.NO_SIGNAL,
+    SignalQuality.MAINS_DOMINATED,
+    None,
+)
+"""What a tick's ECG gives: a rate two times in three, else a grade with no rate, or nothing."""
+
+_DROP_PHASES: Final[tuple[Phase, ...]] = (Phase.HOLD, Phase.COOLDOWN, Phase.RECOVERY)
+"""The supervised phases of a manual session, which a programme goes through too."""
+
+
+@dataclass(frozen=True, slots=True)
+class _DropStep:
+    """One tick of the hr_drop properties. The defaults are a fresh usable reading in HOLD."""
+
+    change: int
+    """Bpm the heart rate moves by before this tick, whether or not the ECG shows it."""
+    rpm: int
+    """The commanded motor rpm."""
+    tenths: int
+    """Tenths of a second since the previous tick."""
+    fresh: bool = True
+    """A new sequence number; ``False`` re-emits the previous metrics, as the pipeline does."""
+    reading: SignalQuality | None = SignalQuality.GOOD
+    """The reading's grade, ``None`` for no reading. Only a GOOD one carries a rate."""
+    load_known: bool = True
+    """Whether the observation states the load (``commanded_g``) or leaves it unknown."""
+    phase: Phase = Phase.HOLD
+    """The phase the observation states."""
+
+
+def _first_hr_drops(
+    resting: Bpm, start: int, steps: Sequence[_DropStep]
+) -> tuple[int | None, int | None, int | None]:
+    """The tick hr_drop first fires on, for a programme, a manual session, and the old manual rule.
+
+    Three supervisors fed the same readings at the same instants, loads and
+    phases. The programme and the manual session know the resting rate; the
+    third is a manual session without one, which is the rule every manual
+    session had before.
+    """
+    programme, manual, before = Rig(), Rig(), Rig()
+    programme.resting = resting
+    manual.resting = resting
+    manual.manual = True
+    before.manual = True
+    rigs = (programme, manual, before)
+    first: list[int | None] = [None, None, None]
+    bpm = start
+    for index, step in enumerate(steps):
+        bpm = min(220, max(30, bpm + step.change))
+        for position, rig in enumerate(rigs):
+            rig.fresh = step.fresh
+            rig.heart_rate_present = step.reading is not None
+            if step.reading is not None:
+                rig.quality = step.reading
+            rig.bpm = Bpm(bpm) if step.reading is SignalQuality.GOOD else None
+            rig.commanded = MotorRpm(step.rpm)
+            rig.measured = rig.commanded
+            rig.load_known = step.load_known
+            rig.phase = step.phase
+            rig.tick(Seconds(step.tenths / 10))
+            if first[position] is None and rig.verdict_for(RULE_HR_DROP) is not None:
+                first[position] = index
+    return first[0], first[1], first[2]
+
+
+_USUALLY = st.sampled_from((True,) * 7 + (False,))
+"""True seven times in eight, so most ticks stay usual and a fall can still be confirmed."""
+
+_DROP_STEPS = st.lists(
+    st.builds(
+        _DropStep,
+        change=st.integers(min_value=-14, max_value=8),
+        rpm=st.sampled_from(_DROP_LOADS),
+        tenths=st.integers(min_value=2, max_value=20),
+        fresh=_USUALLY,
+        reading=st.sampled_from(_DROP_READINGS),
+        load_known=_USUALLY,
+        phase=st.sampled_from(_DROP_PHASES),
+    ),
+    min_size=40,
+    max_size=150,
+)
+"""Long enough that a fall is still confirmed through the readings lost on the way."""
+
+
+@settings(max_examples=300, deadline=None)
+@given(
+    resting=st.integers(min_value=40, max_value=120),
+    start=st.integers(min_value=60, max_value=180),
+    steps=_DROP_STEPS,
+)
+def test_a_manual_session_ends_whenever_a_programme_or_the_old_rule_would(
+    resting: int, start: int, steps: list[_DropStep]
+) -> None:
+    """PROPERTY: manual includes programme, and manual includes the rule manual sessions had.
+
+    For any sequence of readings (fresh or re-emitted; with a usable rate, a
+    grade that carries none, or none at all), any loads, known or not, any
+    instants, HOLD, COOLDOWN or RECOVERY, and any resting rate: if the
+    programme's hr_drop fires on tick k, the manual session's has fired on
+    tick k or before; and the same against a manual session with no resting
+    rate. Never later than either, so never laxer.
+    """
+    programme, manual, before = _first_hr_drops(Bpm(resting), start, steps)
+    if programme is not None:
+        assert manual is not None
+        assert manual <= programme
+    if before is not None:
+        assert manual is not None
+        assert manual <= before
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    resting=st.integers(min_value=40, max_value=120),
+    start=st.integers(min_value=60, max_value=180),
+    rpm=st.sampled_from(_DROP_LOADS),
+    steps=st.lists(
+        st.tuples(st.integers(min_value=-14, max_value=8), st.integers(min_value=2, max_value=20)),
+        min_size=10,
+        max_size=80,
+    ),
+)
+def test_with_no_load_coming_off_the_three_rules_fire_on_the_same_tick(
+    resting: int, start: int, rpm: int, steps: list[tuple[int, int]]
+) -> None:
+    """PROPERTY: a load held steady (phi = 1) makes the three thresholds one: same tick, or none."""
+    programme, manual, before = _first_hr_drops(
+        Bpm(resting), start, [_DropStep(change, rpm, tenths) for change, tenths in steps]
+    )
+    assert programme == manual == before
 
 
 @settings(max_examples=200, deadline=None)

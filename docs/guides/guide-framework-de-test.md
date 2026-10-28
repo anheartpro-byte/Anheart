@@ -1098,8 +1098,8 @@ termine la séance (message opérateur à t = 701 s). Plus rien ne monte après
 la première chute mesurée. Avant ce verrou, le régulateur accélérait pendant
 tout l'effondrement.
 
-Le texte du défaut (dans `battery.py`) cite d'autres chiffres (825 → 837
-tr/min, FC 123 bpm, `hr_drop` à 698 s) : ils datent d'une version antérieure.
+Le texte du défaut (dans `battery.py`) cite les mêmes chiffres (887 → 895
+tr/min moteur, décision à t = 679,2 s, FC 132 bpm, `hr_drop` à 701 s).
 Fiez-vous à la sortie de l'exécution.
 
 Pour le voir :

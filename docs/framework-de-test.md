@@ -1009,16 +1009,24 @@ Vérifié en cherchant `xfail(strict=True)` et `known_defect` dans le code :
 S07 : femme de 48 ans, sujette au malaise vagal (effondrement scripté à
 t = 679 s). Le verrou « vasovagal » du runtime interdit à la consigne de
 **monter** tant que la pente des cinq dernières lectures de FC est sous
--20 bpm/min (ou inconnue). Mais une montée **décidée au tick même où
-l'effondrement commence**, avant que le capteur ne voie la moindre chute, est
+-20 bpm/min (ou inconnue). Mais une montée **décidée au tick qui suit le début
+de l'effondrement**, avant que le capteur ne voie la moindre chute, est
 encore exécutée jusqu'au bout.
 
-Chiffres enregistrés dans le code : 825 → 837 tr/min moteur (+0,24 tr/min de
-sortie) sur t = 679,0-679,8 s, décidé à t = 679,0 s, FC vraie encore 123 bpm,
-lecture 122 ; la première chute visible est à t = 681 s (118 bpm), plus rien ne
-monte ensuite, et `hr_drop` termine la séance à t = 698 s. L'invariant violé
-est `vasovagal_no_accel`. `simulation.quick S07` le montre bien en `XFAIL`
-(4 violations).
+Chiffres mesurés (la consigne, les instants et la FC sont aussi écrits dans
+`KNOWN_VASOVAGAL_ONSET`) : 887 → 895 tr/min moteur (+0,16 tr/min
+de sortie, +0,016 g au bout des pieds, +0,010 g au rayon de référence) sur
+t = 679,0-679,8 s, décidé à t = 679,2 s, FC vraie et lue 132 bpm, 13 bpm sous
+la zone 145-155 ; la première chute visible est à t = 681 s (128 bpm), plus
+rien ne monte ensuite, et `hr_drop` termine la séance à t = 701 s, 22 s après
+le début de l'effondrement. L'invariant violé est `vasovagal_no_accel`.
+`simulation.quick S07` le montre bien en `XFAIL` (4 violations).
+
+Décision du 27 octobre 2026, prise par l'utilisateur (chef de projet) : S07
+reste un résiduel connu, documenté par ce xfail strict, sans valeur nouvelle
+ni limitation des pas. Elle est à revoir avec le médecin avant toute personne
+à bord (ANH-98) ; les mesures et les options écartées sont dans
+[securite.md](securite.md#5-le-résiduel-connu).
 
 Avant ce verrou, le contrôleur continuait d'accélérer pendant tout
 l'effondrement, jusqu'à `hr_drop` (constat n° 1 de `simulation/README.md`).

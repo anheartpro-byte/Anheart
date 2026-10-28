@@ -443,7 +443,9 @@ class Subject:
     measures none, the WARMUP ramp has no origin and the machine stays at
     standstill, which is the correct outcome: a substituted resting rate is an
     invented vital sign, and the control law would then ramp a real person
-    against a number nobody measured.
+    against a number nobody measured. A manual session with a person on board
+    measures its own before the arm first moves, and keeps ``hr_drop``'s
+    unconditional fall when it measured none (:meth:`TrainingRuntime._latch_resting_rate`).
     """
 
     subject_id: str
@@ -1262,6 +1264,7 @@ class TrainingRuntime:
         "_fault_reset_at",
         "_follower",
         "_geometry",
+        "_has_moved",
         "_idle_link",
         "_idle_next_at",
         "_idle_status",
@@ -1406,6 +1409,9 @@ class TrainingRuntime:
         self._initialise_session_statements()
         self._warmup_satisfied: bool = False
         self._resting_bpm: Bpm | None = None
+        # Whether a non-zero setpoint has been acknowledged since the last
+        # start: a manual session stops measuring its resting rate from then on.
+        self._has_moved: bool = False
         # A manual session instead of a programme; at most one of the two.
         self._manual: ManualSession | None = None
         # What the operator asked for. Zeroed by every ending, and by anything
@@ -1702,7 +1708,11 @@ class TrainingRuntime:
 
     @property
     def resting_bpm(self) -> Bpm | None:
-        """The resting rate measured during BASELINE, or ``None`` if none was."""
+        """The resting rate measured at standstill, or ``None`` if none was.
+
+        Measured during BASELINE in a programme, and before the arm first
+        moved in a manual session with a person on board (:meth:`_latch_resting_rate`).
+        """
         return self._resting_bpm
 
     @property
@@ -2270,6 +2280,7 @@ class TrainingRuntime:
         self._ending_descent = None
         self._warmup_satisfied = False
         self._resting_bpm = None
+        self._has_moved = False
         self._decision = None
         self._descent_from = None
         self._disable_failures = 0
@@ -3117,16 +3128,30 @@ class TrainingRuntime:
         return Phase.DONE
 
     def _latch_resting_rate(self, now: Monotonic) -> None:
-        """Keep the resting rate up to date for as long as BASELINE lasts.
+        """Keep the resting rate up to date for as long as the arm is at rest before moving.
 
-        Updated on every BASELINE tick that has a fresh, trustworthy rate, so the
-        value standing when BASELINE ends is the last one actually measured at
+        In a programme that is BASELINE. In a manual session with a person on
+        board it is every tick before the first non-zero setpoint is
+        acknowledged (:attr:`_has_moved`), with no phase of its own: the phase
+        stays HOLD. This runs in :meth:`_advance_phase`, before the tick's
+        command, so the tick that first moves the arm still measures at rest
+        and the next one freezes the value. A stop later in the session never
+        measures again: a heart recovering from a load is not at rest. Nobody
+        on board (BENCH): nothing is measured.
+
+        Updated on every such tick that has a fresh, trustworthy rate, so the
+        value standing at the end is the last one actually measured at
         standstill - the settled rate, rather than an average that includes the
-        first agitated minute. Never invented: if BASELINE measured nothing this
-        stays ``None``, the WARMUP ramp has no origin, and the machine stays at
-        standstill.
+        first agitated minute. Never invented: if nothing was measured this
+        stays ``None``. In a programme the WARMUP ramp then has no origin and
+        the machine stays at standstill; in a manual session ``hr_drop`` keeps
+        its unconditional fall.
         """
-        if self._phase is not Phase.BASELINE:
+        manual = self._manual
+        before_moving = (
+            manual is not None and manual.occupancy is Occupancy.OCCUPIED and not self._has_moved
+        )
+        if self._phase is not Phase.BASELINE and not before_moving:
             return
         measured = self._tracker.usable(now)
         if measured is not None:
@@ -3194,6 +3219,7 @@ class TrainingRuntime:
             attendant_last_seen=self._attendant_last_seen,
             commanded_g=self._geometry.view(self._applied_rpm).g_load,
             resting_bpm=self._resting_bpm,
+            manual_session=self._manual is not None,
             setpoint_echo_rpm=echo,
             envelope=envelope,
             heart_rate_supervised=self._occupied(),
@@ -4440,6 +4466,8 @@ class TrainingRuntime:
         if rpm != self._applied_rpm:
             self._applied_rpm = rpm
             self._setpoint_changed_at = now
+            if rpm != 0:
+                self._has_moved = True
         return None
 
     async def _exchange_command(self, word: ControlWord) -> DriveFailure | None:

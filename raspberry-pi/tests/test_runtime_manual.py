@@ -22,7 +22,7 @@ What is pinned here, in the plan's words:
 from __future__ import annotations
 
 import math
-from collections.abc import Generator
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from itertools import pairwise
@@ -43,6 +43,7 @@ from src.motor.drive import (
 from src.result import Err, Ok, is_ok
 from src.training import motion as motion_module
 from src.training import runtime as runtime_module
+from src.training.hr_control import TrackerLimits
 from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, Ramp, motor_rate_limit
 from src.training.runtime import (
     RULE_DRIVE_PRECOMMANDED,
@@ -64,8 +65,22 @@ from src.training.runtime import (
     TrainingRuntime,
     status_fault_report,
 )
-from src.training.safety import RULE_DRIVE_FAULT, RULE_HR_STALE, RULE_SESSION_STANDSTILL
-from src.training.types import Occupancy, Phase, RunMode, SafetyAction, TelemetrySnapshot
+from src.training.safety import (
+    RULE_DRIVE_FAULT,
+    RULE_HR_DROP,
+    RULE_HR_STALE,
+    RULE_SESSION_STANDSTILL,
+    SafetyObservation,
+    SafetySupervisor,
+)
+from src.training.types import (
+    Occupancy,
+    Phase,
+    RunMode,
+    SafetyAction,
+    SafetyVerdict,
+    TelemetrySnapshot,
+)
 from src.units import (
     Amperes,
     Bpm,
@@ -88,7 +103,10 @@ from tests.test_runtime import (
     TICK,
     FakeState,
     Rig,
-    _program,  # pyright: ignore[reportPrivateUsage]  # the shared rig builders
+    _profile,  # pyright: ignore[reportPrivateUsage]  # the shared rig builders
+    _program,  # pyright: ignore[reportPrivateUsage]
+    _running_rig,  # pyright: ignore[reportPrivateUsage]
+    _safety_for,  # pyright: ignore[reportPrivateUsage]
 )
 from tests.test_runtime import (
     _rig as _programme_rig,  # pyright: ignore[reportPrivateUsage]
@@ -747,6 +765,177 @@ async def test_occupied_keeps_its_recovery_after_a_stop() -> None:
     assert rig.runtime.phase is Phase.RECOVERY
     await rig.run(60.0)
     assert rig.runtime.state is RuntimeState.FINISHED
+
+
+# =========================================================================
+# The resting rate of an occupied session, and hr_drop
+# =========================================================================
+
+_EVALUATE: Final = SafetySupervisor.evaluate
+"""The supervisor's own evaluation, kept before any test wraps it."""
+
+
+def _record_observations(monkeypatch: pytest.MonkeyPatch) -> list[SafetyObservation]:
+    """Keep every observation a runtime hands its supervisor, exactly as it hands it."""
+    recorded: list[SafetyObservation] = []
+
+    def recording(self: SafetySupervisor, observation: SafetyObservation) -> SafetyVerdict | None:
+        recorded.append(observation)
+        return _EVALUATE(self, observation)
+
+    monkeypatch.setattr(SafetySupervisor, "evaluate", recording)
+    return recorded
+
+
+def _first_hr_drop(rig: Rig, observations: Sequence[SafetyObservation]) -> int | None:
+    """The observation on which a fresh supervisor, given these, first finds hr_drop."""
+    supervisor = SafetySupervisor(clock=rig.clock, limits=_safety_for(_profile()))
+    for index, observation in enumerate(observations):
+        _EVALUATE(supervisor, observation)
+        if any(verdict.rule == RULE_HR_DROP for verdict in supervisor.live):
+            return index
+    return None
+
+
+async def _until(rig: Rig, done: Callable[[], bool], *, within: float) -> None:
+    """Tick a second at a time until ``done``, failing the test after ``within`` seconds."""
+    for _ in range(round(within)):
+        if done():
+            return
+        await rig.run(1.0)
+    assert done(), f"not reached within {within} s"
+
+
+def _resting(rig: Rig) -> Bpm | None:
+    """The resting rate, read through a call so mypy does not narrow one assertion into the next."""
+    return rig.runtime.resting_bpm
+
+
+def _floor(rig: Rig) -> SafetyVerdict | None:
+    """The latched floor, read through a call for the same reason as :func:`_resting`."""
+    return rig.runtime.floor
+
+
+async def test_an_occupied_session_measures_its_resting_rate_until_the_arm_first_moves() -> None:
+    """The last usable reading before the first movement, frozen there, forgotten at the next start.
+
+    A lower reading later, with the arm brought back to rest inside the same
+    session, is a heart recovering from a load: it is not a resting rate.
+    """
+    rig = await _occupied()
+    assert _resting(rig) == 80
+    rig.fed_bpm = Bpm(76)
+    await rig.run(6.0)
+    assert _resting(rig) == 76
+    _target(rig, 300)
+    await _until(rig, lambda: rig.runtime.applied_rpm > 0, within=5.0)
+    rig.fed_bpm = Bpm(70)
+    await rig.run(10.0)
+    assert _resting(rig) == 76
+    _target(rig, 0)
+    await _until(rig, lambda: rig.runtime.applied_rpm == 0, within=60.0)
+    await rig.run(10.0)
+    assert rig.runtime.phase is Phase.HOLD
+    assert _resting(rig) == 76
+    rig.runtime.request_stop("stop")
+    await _until(rig, lambda: rig.runtime.state is RuntimeState.FINISHED, within=120.0)
+    assert _resting(rig) == 76
+    await _manual(rig, occupancy=Occupancy.OCCUPIED, attest=False)
+    assert _resting(rig) is None
+    await rig.run(2.0)
+    assert _resting(rig) == 70
+
+
+async def test_an_occupied_session_with_no_usable_rate_before_moving_measures_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing usable at rest: no resting rate, so hr_drop keeps the fall it always had.
+
+    The supervisor is told a manual session with no resting rate, which it
+    judges on ``peak - hr_drop_bpm`` alone (``tests/test_safety.py``).
+    """
+    recorded = _record_observations(monkeypatch)
+    rig = _rig(tracker_limits=TrackerLimits(stale_after=Seconds(0.1)))
+    rig.fed_bpm = Bpm(80)
+    rig.feed(Bpm(80))
+    await _manual(rig, occupancy=Occupancy.OCCUPIED)
+    await rig.run(3.0, feed=False)
+    assert _resting(rig) is None
+    assert recorded
+    assert all(seen.manual_session and seen.resting_bpm is None for seen in recorded)
+
+
+async def test_a_bench_session_measures_no_resting_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nobody on board: the heart-rate rules are off, and nothing new is measured."""
+    recorded = _record_observations(monkeypatch)
+    rig = _rig()
+    rig.fed_bpm = Bpm(80)
+    await _manual(rig)
+    _target(rig, 200)
+    await rig.run(10.0)
+    assert _resting(rig) is None
+    assert recorded
+    assert all(
+        seen.manual_session and seen.resting_bpm is None and not seen.heart_rate_supervised
+        for seen in recorded
+    )
+
+
+async def test_a_programme_still_measures_its_resting_rate_in_baseline_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A programme is not a manual session, and a stop after BASELINE measures nothing again."""
+    recorded = _record_observations(monkeypatch)
+    rig = await _running_rig()
+    assert _resting(rig) == 82
+    rig.runtime.request_stop("stop")
+    rig.fed_bpm = Bpm(60)
+    await rig.run(20.0)
+    assert _resting(rig) == 82
+    assert recorded
+    assert not any(seen.manual_session for seen in recorded)
+
+
+async def test_a_collapse_after_an_operator_stop_ends_an_occupied_session_as_a_programme_would(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RECOVERY after STOP: 15 bpm under the resting rate measured before moving ends the session.
+
+    The heart had come back to 85 bpm; the fall to 65 is 20 bpm, short of the
+    unconditional 25, and a manual session with no resting rate goes on.
+    Replayed through a fresh supervisor, the very observations this session
+    produced end a programme on the same tick, and never a manual session
+    without a resting rate.
+    """
+    recorded = _record_observations(monkeypatch)
+    rig = await _occupied()
+    assert _resting(rig) == 80
+    _target(rig, 300)
+    for bpm in range(81, 91):
+        rig.fed_bpm = Bpm(bpm)
+        await rig.run(4.0)
+    assert rig.runtime.applied_rpm > 0
+    rig.runtime.request_stop("stop")
+    for bpm in range(89, 84, -1):
+        rig.fed_bpm = Bpm(bpm)
+        await rig.run(4.0)
+    await _until(rig, lambda: rig.runtime.phase is Phase.RECOVERY, within=60.0)
+    await rig.run(35.0)
+    assert _floor(rig) is None
+    rig.fed_bpm = Bpm(65)
+    await rig.run(15.0)
+    floor = _floor(rig)
+    assert floor is not None
+    assert floor.rule == RULE_HR_DROP
+    assert "below the 65 bpm the remaining load (0% of the recent peak) explains" in floor.detail
+    observations = tuple(recorded)
+    manual = _first_hr_drop(rig, observations)
+    assert manual is not None
+    assert observations[manual].now == floor.since
+    programme = tuple(replace(seen, manual_session=False) for seen in observations)
+    assert _first_hr_drop(rig, programme) == manual
+    before = tuple(replace(seen, resting_bpm=None) for seen in observations)
+    assert _first_hr_drop(rig, before) is None
 
 
 # =========================================================================
