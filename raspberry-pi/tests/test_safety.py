@@ -1230,14 +1230,45 @@ def test_a_programme_verdict_is_word_for_word_what_it_was(
 _DROP_LOADS: Final[tuple[int, ...]] = (0, 350, 700, 1000, 1380)
 """Commanded motor rpm the property draws from: none, a little, about half, most, all."""
 
+_DROP_READINGS: Final[tuple[SignalQuality | None, ...]] = (SignalQuality.GOOD,) * 8 + (
+    SignalQuality.NOISY,
+    SignalQuality.NO_SIGNAL,
+    SignalQuality.MAINS_DOMINATED,
+    None,
+)
+"""What a tick's ECG gives: a rate two times in three, else a grade with no rate, or nothing."""
+
+_DROP_PHASES: Final[tuple[Phase, ...]] = (Phase.HOLD, Phase.COOLDOWN, Phase.RECOVERY)
+"""The supervised phases of a manual session, which a programme goes through too."""
+
+
+@dataclass(frozen=True, slots=True)
+class _DropStep:
+    """One tick of the hr_drop properties. The defaults are a fresh usable reading in HOLD."""
+
+    change: int
+    """Bpm the heart rate moves by before this tick, whether or not the ECG shows it."""
+    rpm: int
+    """The commanded motor rpm."""
+    tenths: int
+    """Tenths of a second since the previous tick."""
+    fresh: bool = True
+    """A new sequence number; ``False`` re-emits the previous metrics, as the pipeline does."""
+    reading: SignalQuality | None = SignalQuality.GOOD
+    """The reading's grade, ``None`` for no reading. Only a GOOD one carries a rate."""
+    load_known: bool = True
+    """Whether the observation states the load (``commanded_g``) or leaves it unknown."""
+    phase: Phase = Phase.HOLD
+    """The phase the observation states."""
+
 
 def _first_hr_drops(
-    resting: Bpm, start: int, steps: Sequence[tuple[int, int, int]]
+    resting: Bpm, start: int, steps: Sequence[_DropStep]
 ) -> tuple[int | None, int | None, int | None]:
     """The tick hr_drop first fires on, for a programme, a manual session, and the old manual rule.
 
-    Three supervisors fed the same fresh readings at the same instants and
-    loads. The programme and the manual session know the resting rate; the
+    Three supervisors fed the same readings at the same instants, loads and
+    phases. The programme and the manual session know the resting rate; the
     third is a manual session without one, which is the rule every manual
     session had before.
     """
@@ -1249,27 +1280,42 @@ def _first_hr_drops(
     rigs = (programme, manual, before)
     first: list[int | None] = [None, None, None]
     bpm = start
-    for index, (change, rpm, tenths) in enumerate(steps):
-        bpm = min(220, max(30, bpm + change))
+    for index, step in enumerate(steps):
+        bpm = min(220, max(30, bpm + step.change))
         for position, rig in enumerate(rigs):
-            rig.bpm = Bpm(bpm)
-            rig.commanded = MotorRpm(rpm)
+            rig.fresh = step.fresh
+            rig.heart_rate_present = step.reading is not None
+            if step.reading is not None:
+                rig.quality = step.reading
+            rig.bpm = Bpm(bpm) if step.reading is SignalQuality.GOOD else None
+            rig.commanded = MotorRpm(step.rpm)
             rig.measured = rig.commanded
-            rig.tick(Seconds(tenths / 10))
+            rig.load_known = step.load_known
+            rig.phase = step.phase
+            rig.tick(Seconds(step.tenths / 10))
             if first[position] is None and rig.verdict_for(RULE_HR_DROP) is not None:
                 first[position] = index
     return first[0], first[1], first[2]
 
 
+_USUALLY = st.sampled_from((True,) * 7 + (False,))
+"""True seven times in eight, so most ticks stay usual and a fall can still be confirmed."""
+
 _DROP_STEPS = st.lists(
-    st.tuples(
-        st.integers(min_value=-14, max_value=8),
-        st.sampled_from(_DROP_LOADS),
-        st.integers(min_value=2, max_value=20),
+    st.builds(
+        _DropStep,
+        change=st.integers(min_value=-14, max_value=8),
+        rpm=st.sampled_from(_DROP_LOADS),
+        tenths=st.integers(min_value=2, max_value=20),
+        fresh=_USUALLY,
+        reading=st.sampled_from(_DROP_READINGS),
+        load_known=_USUALLY,
+        phase=st.sampled_from(_DROP_PHASES),
     ),
-    min_size=10,
-    max_size=80,
+    min_size=40,
+    max_size=150,
 )
+"""Long enough that a fall is still confirmed through the readings lost on the way."""
 
 
 @settings(max_examples=300, deadline=None)
@@ -1279,14 +1325,16 @@ _DROP_STEPS = st.lists(
     steps=_DROP_STEPS,
 )
 def test_a_manual_session_ends_whenever_a_programme_or_the_old_rule_would(
-    resting: int, start: int, steps: list[tuple[int, int, int]]
+    resting: int, start: int, steps: list[_DropStep]
 ) -> None:
     """PROPERTY: manual includes programme, and manual includes the rule manual sessions had.
 
-    For any sequence of fresh readings, loads and instants, and any resting
-    rate: if the programme's hr_drop fires on tick k, the manual session's
-    has fired on tick k or before; and the same against a manual session
-    with no resting rate. Never later than either, so never laxer.
+    For any sequence of readings (fresh or re-emitted; with a usable rate, a
+    grade that carries none, or none at all), any loads, known or not, any
+    instants, HOLD, COOLDOWN or RECOVERY, and any resting rate: if the
+    programme's hr_drop fires on tick k, the manual session's has fired on
+    tick k or before; and the same against a manual session with no resting
+    rate. Never later than either, so never laxer.
     """
     programme, manual, before = _first_hr_drops(Bpm(resting), start, steps)
     if programme is not None:
@@ -1313,7 +1361,7 @@ def test_with_no_load_coming_off_the_three_rules_fire_on_the_same_tick(
 ) -> None:
     """PROPERTY: a load held steady (phi = 1) makes the three thresholds one: same tick, or none."""
     programme, manual, before = _first_hr_drops(
-        Bpm(resting), start, [(change, rpm, tenths) for change, tenths in steps]
+        Bpm(resting), start, [_DropStep(change, rpm, tenths) for change, tenths in steps]
     )
     assert programme == manual == before
 
