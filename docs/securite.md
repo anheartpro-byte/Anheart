@@ -229,9 +229,10 @@ que mesure la batterie aujourd'hui.
   pendant une baisse de vitesse, un retour au calme normal peut encore
   terminer la séance, comme avant. Sans lecture utilisable avant le premier
   mouvement, la règle reste la chute de 25 bpm. En simulation
-  (`vasovagal_manual_occupied_recovery`) : FC tombée à 53 bpm pendant la
-  récupération, 17 sous la FC de repos de 70 et 22 sous le pic ; `hr_drop`
-  termine la séance à 163,2 s, ce que la chute de 25 bpm seule ne faisait pas.
+  (`vasovagal_manual_occupied_recovery`) : FC confirmée à 53 bpm (lecture la
+  plus basse 52) pendant la récupération, 17 sous la FC de repos de 70 et 23
+  sous le pic de 76 ; `hr_drop` termine la séance à 163,2 s, ce que la chute
+  de 25 bpm seule ne faisait pas.
 - **Personne à bord en manuel** : la FC monte assez pour déclencher `hr_rate`
   (REDUCE) avant 19 tr/min, à la rampe anti-nausée (`manual_occupied_ceiling`).
   C'est un comportement voulu, mais il limite l'usage manuel avec passager.

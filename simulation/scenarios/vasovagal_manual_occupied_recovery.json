@@ -1,6 +1,6 @@
 {
   "name": "vasovagal_manual_occupied_recovery",
-  "description": "Person on board, manual at 6 rpm, operator STOP: in RECOVERY the heart rate collapses to 53 bpm, 17 below the 70 bpm measured before the arm first moved. A fall of 22 bpm from the peak, short of the unconditional 25: hr_drop ends the session on the programmes' threshold.",
+  "description": "Person on board, manual at 6 rpm, operator STOP: in RECOVERY the heart rate is confirmed at 53 bpm (lowest reading 52), 17 below the 70 bpm measured before the arm first moved. A fall of 23 bpm from the peak of 76, short of the unconditional 25: hr_drop ends the session on the programmes' threshold.",
   "tags": [
     "manual",
     "cardiac",
