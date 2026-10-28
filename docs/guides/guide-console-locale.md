@@ -876,8 +876,10 @@ démarrage. Un refus du tableau de bord ou un refus local avant ou après le 2xx
 définitif : ce lancement ne peut plus être confirmé. Les refus du tableau de bord et
 les demandes sans réponse n'envoient pas `training/end`; un refus local envoie une fin
 échouée. Après une absence de réponse ou un empêchement temporaire (passager absent,
-séance déjà en cours au traitement), un nouvel essai exige un nouveau clic après
-récupération, si le poll propose encore l'offre. Elle ne réessaie jamais toute seule.
+séance déjà en cours au traitement), un nouveau clic est possible tant que le poll
+propose l'offre. Après une absence de réponse, l'offre reste aussi confirmable 60 s au
+plus après le clic quand le poll ne la propose plus. La console ne réessaie jamais
+toute seule.
 
 Le bouton constitue la confirmation opérateur prévue par ANH-144. Il n'applique pas
 le geste physique ni le délai qu'ANH-85 doit apporter. La console utilise le nom
@@ -886,9 +888,11 @@ reste à faire. Le nom du passager ne va que de la réponse JSON vers la page, j
 un enregistrement ou un journal.
 
 Si le serveur a reçu `training/start` mais que le 2xx s'est perdu, une nouvelle
-confirmation peut recevoir `session_not_pending` (400). La console reste non armée et
-la machine peut garder cette séance jusqu'à son interruption. C'est le suivi
-d'idempotence ANH-240.
+confirmation dans les 60 s qui suivent le clic reçoit 200 si la machine n'a rien envoyé
+de la séance et que l'arrêt n'a pas été demandé, dans les 90 s qui suivent le départ
+daté par le serveur à la première confirmation : la console arme une seule fois
+(contrat 1.7). Après un refus du serveur, l'offre n'est plus confirmable; sans nouveau
+clic dans les 60 s, la machine peut garder cette séance jusqu'à son interruption.
 
 Constat sur ce profil : son plafond (276 tr/min moteur = 5,54 tr/min = 0,052 g) est
 très bas. En simulation, la fréquence cardiaque reste sous la zone visée (compteur

@@ -2269,10 +2269,12 @@ Règles :
   plus après le clic de la première confirmation restée sans réponse
   (`LAUNCH_TIMEOUT`, contrat 1.7). Convex tient alors la séance active, son 2xx
   perdu, et répond 200 à la confirmation répétée tant que la machine n'a rien
-  envoyé de la séance. Au-delà, plus aucune demande n'est envoyée pour ce
-  lancement et il disparaît ; jamais pour une autre séance, et il n'est plus
-  confirmable dès que le serveur refuse. Un refus local avant la demande
-  ou après le 2xx envoie une fin échouée et est définitif. Aucun essai n'est
+  envoyé de la séance et que l'arrêt n'a pas été demandé, dans les 90 s qui
+  suivent le départ daté par le serveur à la première confirmation. Passé les
+  60 s, plus aucune demande n'est envoyée pour ce lancement et il disparaît ;
+  jamais pour une autre séance, et il n'est plus confirmable dès que le
+  serveur refuse. Un refus local avant la demande ou après le 2xx envoie une
+  fin échouée et est définitif. Aucun essai n'est
   automatique. Convex retire l'offre 45 s avant son échéance;
   la console n'ajoute pas de délai de confirmation à une offre que le poll
   propose. Le libellé visible est
@@ -2451,8 +2453,10 @@ dit `route training/start inconnue`. Les refus 409 avec un code
 une offre que le poll propose. Si Convex a pris le départ mais que son 2xx se
 perd, la console reste non armée et garde l'offre que le poll ne propose plus.
 Une nouvelle confirmation dans les 60 s envoie de nouveau `training/start`, qui
-reçoit 200 tant que la machine n'a rien envoyé de la séance (contrat 1.7,
-ANH-240) : la console arme une seule fois. Sans nouveau clic dans ce délai,
+reçoit 200 tant que la machine n'a rien envoyé de la séance et que l'arrêt n'a
+pas été demandé, dans les 90 s qui suivent le départ daté par le serveur à la
+première confirmation (contrat 1.7, ANH-240) : la console arme une seule fois.
+Sans nouveau clic dans les 60 s,
 Convex peut garder la séance active jusqu'à son interruption. ANH-85 doit
 encore apporter le geste physique et son délai; le bouton ne les réalise pas.
 ANH-152 doit encore apporter l'authentification nommée; le parcours reprend le
@@ -3439,10 +3443,12 @@ Ce que fait la console :
   `training/start` se perd, Convex tient la séance active et le poll ne la
   propose plus ; la console garde l'offre restée sans réponse, pour cette
   séance seulement et 60 s au plus après le clic. Une nouvelle confirmation
-  reçoit 200 tant que la machine n'a rien envoyé de la séance, et la console
-  arme une seule fois ; un refus du serveur la rend non confirmable. Face à un
-  serveur `1.6`, la répétition reçoit 400 `session_not_pending` : la console
-  n'arme pas, et l'offre est retirée au poll suivant.
+  reçoit 200 tant que la machine n'a rien envoyé de la séance et que l'arrêt
+  n'a pas été demandé, dans les 90 s qui suivent le départ daté par le serveur
+  à la première confirmation, et la console arme une seule fois ; un refus du
+  serveur la rend non confirmable. Face à un serveur `1.6`, la répétition
+  reçoit 400 `session_not_pending` : la console n'arme pas, et l'offre est
+  retirée au poll suivant.
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les

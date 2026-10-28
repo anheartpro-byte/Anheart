@@ -190,8 +190,63 @@ async def test_two_lost_answers_then_a_200_within_the_minute_arm_once(tmp_path: 
 
 
 # =========================================================================
+# A repeat goes through every local gate again
+# =========================================================================
+
+
+async def test_a_repeat_for_a_rider_no_longer_listed_is_refused_as_a_first_click_is(
+    tmp_path: Path,
+) -> None:
+    """As for a first confirmation: refused ``passenger_unavailable`` at the click, nothing
+    sent nor ended, the offer back to waiting. No longer offered, it goes at the next poll."""
+    r = rig(tmp_path)
+    await held(r, (DOWN, ok()))
+    r.panel.roster.adopt((), r.clock.monotonic())
+
+    assert refused_code(r) is ConfirmationCode.PASSENGER_UNAVAILABLE
+    assert stage(r) is LaunchStage.WAITING_CONFIRMATION
+    await r.step(POLL_PERIOD)
+
+    assert r.sync.current_remote_launch() is None
+    assert len(r.dashboard.to(START)) == 1
+    assert r.panel.surface.pending is None
+    assert r.dashboard.to(END) == []
+
+
+async def test_a_repeat_the_surface_refuses_is_not_sent_and_ends_the_launch_failed(
+    tmp_path: Path,
+) -> None:
+    """As for a first confirmation: no request, a failed end with the surface's words,
+    which frees the session held active on the dashboard, and the launch refused for good."""
+    r = rig(tmp_path)
+    await held(r, (DOWN, ok()))
+    r.panel.runtime.supervisor.latch_estop("test verdict")
+
+    r.confirm_offer()
+    await r.step()
+
+    assert len(r.dashboard.to(START)) == 1
+    assert pending_start(r.panel.surface) is None
+    assert r.panel.surface.pending is None
+    assert stage(r) is LaunchStage.REFUSED
+    assert refused_code(r) is ConfirmationCode.REFUSED
+    ends = r.dashboard.to(END)
+    assert [(end["sessionId"], end["failed"]) for end in ends] == [("remote-1", True)]
+    reason = ends[0]["reason"]
+    assert isinstance(reason, str)
+    assert reason.startswith("refusee par la machine : ")
+    assert "verdict de securite" in reason
+
+
+# =========================================================================
 # Never later than LAUNCH_TIMEOUT after the click
 # =========================================================================
+
+
+def test_the_hold_is_one_minute() -> None:
+    """The shared contract and the docs promise 60 s after the click; the constant also
+    bounds the loop's start, so changing it for that must not lengthen the hold unseen."""
+    assert Seconds(60.0) == LAUNCH_TIMEOUT
 
 
 async def test_a_minute_after_the_click_the_offer_is_gone_and_a_click_is_refused(

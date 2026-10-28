@@ -1335,17 +1335,20 @@ cours au traitement), un nouveau clic est possible tant que le poll propose l'of
 Après une absence de réponse, l'offre reste aussi affichée `non confirme faute de
 reponse` quand le tableau de bord ne la propose plus, 60 s au plus après le clic de la
 première confirmation restée sans réponse : un nouveau clic dans ce délai redemande le
-départ, que le tableau de bord accepte s'il l'avait déjà pris et que la machine n'en a
-encore rien envoyé, et la machine démarre une seule fois. Passé ce délai, l'offre
-disparaît ; dès que le tableau de bord refuse, elle n'est plus confirmable
-(`refuse : <raison>`) et disparaît au poll suivant. Aucun essai n'est automatique.
+départ, que le tableau de bord accepte s'il l'avait déjà pris, que la machine n'en a
+encore rien envoyé et que l'arrêt n'a pas été demandé, dans les 90 s qui suivent le
+départ daté par le serveur à la première confirmation ; la machine démarre alors une
+seule fois. Passé les 60 s, l'offre disparaît ; dès que le tableau de bord refuse, elle
+n'est plus confirmable (`refuse : <raison>`) et disparaît au poll suivant. Aucun essai
+n'est automatique.
 
 Cette confirmation Pi est le bouton qui sera garanti par le geste physique d'ANH-85;
 elle ne réalise pas ce geste et n'ajoute pas son délai. L'opérateur est le nom que la
 console connaît aujourd'hui; ANH-152 reste hors de ce parcours. Si Convex a pris le
 départ mais que sa réponse 2xx se perd, une nouvelle confirmation dans ces 60 s reçoit
-200 et la machine démarre (contrat 1.7) ; sans nouveau clic dans ce délai, la machine
-peut rester tenue jusqu'à l'interruption.
+200 aux conditions ci-dessus, dans les 90 s qui suivent le départ daté par le serveur
+à la première confirmation, et la machine démarre (contrat 1.7) ; sans nouveau clic
+dans ces 60 s, la machine peut rester tenue jusqu'à l'interruption.
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
 attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.

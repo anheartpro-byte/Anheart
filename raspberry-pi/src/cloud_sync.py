@@ -31,7 +31,8 @@ Down, from the dashboard to this machine, exactly three things:
   operator: while the poll offers the launch, as before, and also once it no
   longer does, for the dashboard may hold it active with its answer lost, and
   answers a repeated confirmation 200 while this machine has sent nothing of
-  it. Then for :data:`LAUNCH_TIMEOUT` at most after the click of the first
+  it, within 90 s of the start it dated at the first confirmation. Then for
+  :data:`LAUNCH_TIMEOUT` at most after the click of the first
   confirmation left unanswered since the poll last offered the launch, even
   with the polls failing meanwhile, and never for another launch: the offer
   then goes. Nor once the dashboard has answered: refused, it is no longer
@@ -1082,10 +1083,18 @@ class CloudSync:
 
     def _unanswered_offer(self) -> _Awaiting | None:
         """The click of the offered launch's first confirmation left unanswered, while its
-        last confirmation still is: unanswered, or asked for again and not yet answered."""
+        last confirmation still is: unanswered, or asked for again and not yet answered.
+        Never without an offer, nor for another session than the offered one."""
         unanswered = self._unanswered
-        if unanswered is not None and isinstance(
-            self._offer_state, (OfferUnconfirmed, OfferConfirmationQueued, OfferRequestInFlight)
+        offered = self._offered_launch
+        if (
+            unanswered is not None
+            and offered is not None
+            and unanswered.cloud_session_id == offered.session_id
+            and isinstance(
+                self._offer_state,
+                (OfferUnconfirmed, OfferConfirmationQueued, OfferRequestInFlight),
+            )
         ):
             return unanswered
         return None

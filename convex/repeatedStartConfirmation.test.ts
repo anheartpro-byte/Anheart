@@ -9,13 +9,15 @@
  *   nothing since (no point, no event, no heartbeat naming it, no end): a
  *   repeated confirmation is answered `{armed: true}`, 200 on the route, and
  *   nothing is written: not its dates, not the machine's state, no audit row,
- *   nothing scheduled;
+ *   nothing scheduled. For `REPEATED_START_WINDOW_MS` (90 s) after the
+ *   session's first news, and no longer;
  * - EX-2: every other session is refused as before, with the same code and
  *   the same status, and nothing is written: another machine's
  *   (`session_not_found`), one the machine has sent a point, an event or a
  *   heartbeat naming it of, one asked to stop, ended, failed by the machine,
- *   cancelled, interrupted, started at the machine (`session_not_pending`);
- *   and a launch refused at arming gets the same 409 again;
+ *   cancelled, interrupted, started at the machine, or whose first news is
+ *   more than 90 s old (`session_not_pending`); and a launch refused at
+ *   arming gets the same 409 again;
  * - EX-3 (Convex half): these cases, by the internal mutation and by the
  *   real route with a real machine key.
  *
@@ -25,9 +27,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { LIVE_FRESH_MS, SESSION_SILENCE_MS } from "../lib/training";
+import { SESSION_SILENCE_MS } from "../lib/training";
 import { machineHeaders } from "./machineAuth.fixtures";
-import { ARMING_REFUSALS } from "./training";
+import { ARMING_REFUSALS, REPEATED_START_WINDOW_MS } from "./training";
 import {
   as,
   configureAnheartOrganization,
@@ -133,6 +135,13 @@ const rowOf = <Table extends "sessions" | "machines">(
   id: Id<Table>,
 ) => w.t.run((ctx) => ctx.db.get(id));
 
+/** The first news of a launch, read from its row as `firstNewsOf` reads it. */
+async function firstNewsOf(w: Backend, sessionId: Id<"sessions">) {
+  const session = await rowOf(w, sessionId);
+  expect(session?.origin).toBe("remote");
+  return Math.max(session?._creationTime ?? NaN, session?.startedAt ?? NaN);
+}
+
 /** The refusal the route answers for a session that is no longer pending. */
 const notPending = (status: string) => ({
   status: 400,
@@ -203,17 +212,17 @@ describe("ANH-240 EX-1 a repeated confirmation of a start the machine has sent n
 
       // Later, with another start and another age: either one, read, would
       // date the session differently.
-      vi.setSystemTime(NOW + 3 * MINUTE);
+      vi.setSystemTime(NOW + MINUTE);
       expect(
         await confirm(w, {
           sessionId,
           startedAt: 2_000_000,
-          sessionAgeMs: 90 * SECOND,
+          sessionAgeMs: 30 * SECOND,
         }),
       ).toEqual({ status: 200, body: { success: true } });
       expect(await everything(w)).toEqual(confirmed);
 
-      vi.setSystemTime(NOW + 4 * MINUTE);
+      vi.setSystemTime(NOW + 80 * SECOND);
       expect(await confirm(w, { sessionId })).toEqual({
         status: 200,
         body: { success: true },
@@ -239,7 +248,7 @@ describe("ANH-240 EX-1 a repeated confirmation of a start the machine has sent n
     expect(await arm(1_000_000, 500)).toEqual({ armed: true });
     const confirmed = await everything(w);
 
-    vi.setSystemTime(NOW + 2 * MINUTE);
+    vi.setSystemTime(NOW + MINUTE);
     expect(await arm(3_000_000, 60 * SECOND)).toEqual({ armed: true });
     expect(await arm()).toEqual({ armed: true });
     expect(await everything(w)).toEqual(confirmed);
@@ -272,12 +281,13 @@ describe("ANH-240 EX-1 a repeated confirmation of a start the machine has sent n
     const w = await machineWorld();
     const sessionId = await started(w);
 
-    vi.setSystemTime(NOW + LIVE_FRESH_MS + MINUTE);
+    // It has sent no heartbeat yet: the offline check marks it at once.
+    vi.setSystemTime(NOW + 30 * SECOND);
     await w.t.mutation(internal.machines.checkOfflineMachines, {});
     expect((await rowOf(w, w.machine))?.status).toBe("offline");
     const before = await everything(w);
 
-    vi.setSystemTime(NOW + LIVE_FRESH_MS + 2 * MINUTE);
+    vi.setSystemTime(NOW + MINUTE);
     expect(await confirm(w, { sessionId })).toEqual({
       status: 200,
       body: { success: true },
@@ -409,6 +419,20 @@ describe("ANH-240 EX-2 every other session is refused as before, without a write
     },
   );
 
+  it("refuses it once a heartbeat naming it came at the millisecond of its first news", async () => {
+    const w = await machineWorld();
+    const sessionId = await started(w);
+    const first = await firstNewsOf(w, sessionId);
+    expect(Date.now()).toBe(first);
+    await accepted(w, "/api/machine/heartbeat", { activeSessionId: sessionId });
+    const before = await everything(w);
+    expect(before.heartbeats.map((beat) => beat.timestamp)).toEqual([first]);
+
+    vi.setSystemTime(first + 30 * SECOND);
+    expect(await confirm(w, { sessionId })).toEqual(notPending("active"));
+    expect(await everything(w)).toEqual(before);
+  });
+
   it("refuses a launch cancelled before its start, as before", async () => {
     const w = await machineWorld();
     const sessionId = await launch(w);
@@ -497,6 +521,61 @@ describe("ANH-240 EX-2 every other session is refused as before, without a write
 
     vi.setSystemTime(NOW + MINUTE);
     expect(await confirm(w, { sessionId })).toEqual(refused);
+    expect(await everything(w)).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The server's window: 90 s after the session's first news
+// ---------------------------------------------------------------------------
+
+describe("ANH-240 a repeated confirmation is answered 200 for 90 s after the session's first news, not later", () => {
+  it("answers 200 at 89 s and at 90 s, and 400 session_not_pending at 91 s, without a write", async () => {
+    const w = await machineWorld();
+    const sessionId = await started(w);
+    const first = await firstNewsOf(w, sessionId);
+    expect(first).toBe(NOW + 2 * SECOND);
+    const before = await everything(w);
+
+    for (const after of [89 * SECOND, 90 * SECOND]) {
+      vi.setSystemTime(first + after);
+      expect(await confirm(w, { sessionId })).toEqual({
+        status: 200,
+        body: { success: true },
+      });
+      expect(await everything(w)).toEqual(before);
+    }
+
+    vi.setSystemTime(first + 91 * SECOND);
+    expect(await confirm(w, { sessionId })).toEqual(notPending("active"));
+    expect(await everything(w)).toEqual(before);
+  });
+
+  it("counts them from the start the machine dated before its confirmation", async () => {
+    const w = await machineWorld();
+    const sessionId = await launch(w);
+    vi.setSystemTime(NOW + 20 * SECOND);
+    expect(
+      await confirm(w, {
+        sessionId,
+        startedAt: 1_000_000,
+        sessionAgeMs: 15 * SECOND,
+      }),
+    ).toEqual({ status: 200, body: { success: true } });
+    const first = await firstNewsOf(w, sessionId);
+    expect(first).toBe(NOW + 5 * SECOND);
+    const before = await everything(w);
+
+    vi.setSystemTime(first + REPEATED_START_WINDOW_MS);
+    expect(await confirm(w, { sessionId })).toEqual({
+      status: 200,
+      body: { success: true },
+    });
+    expect(await everything(w)).toEqual(before);
+
+    // 75 s after the confirmation, but more than 90 s after the start.
+    vi.setSystemTime(first + REPEATED_START_WINDOW_MS + 1);
+    expect(await confirm(w, { sessionId })).toEqual(notPending("active"));
     expect(await everything(w)).toEqual(before);
   });
 });
