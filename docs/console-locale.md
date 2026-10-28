@@ -1331,15 +1331,24 @@ local avant la demande ou un refus local après le 2xx est définitif pour ce la
 il ne peut plus être confirmé. Les refus du tableau de bord et les demandes sans
 réponse n'envoient pas `training/end`; un refus local envoie une fin échouée. Après
 une absence de réponse ou un empêchement temporaire (passager absent, séance déjà en
-cours au traitement), un nouveau clic est possible seulement après récupération et
-tant que le poll propose l'offre. Aucun essai n'est automatique.
+cours au traitement), un nouveau clic est possible tant que le poll propose l'offre.
+Après une absence de réponse, l'offre reste aussi affichée `non confirme faute de
+reponse` quand le tableau de bord ne la propose plus, 60 s au plus après le clic de la
+première confirmation restée sans réponse : un nouveau clic dans ce délai redemande le
+départ, que le tableau de bord accepte s'il l'avait déjà pris, que la machine n'en a
+encore rien envoyé et que l'arrêt n'a pas été demandé, dans les 90 s qui suivent le
+départ daté par le serveur à la première confirmation ; la machine démarre alors une
+seule fois. Passé les 60 s, l'offre disparaît ; dès que le tableau de bord refuse, elle
+n'est plus confirmable (`refuse : <raison>`) et disparaît au poll suivant. Aucun essai
+n'est automatique.
 
 Cette confirmation Pi est le bouton qui sera garanti par le geste physique d'ANH-85;
 elle ne réalise pas ce geste et n'ajoute pas son délai. L'opérateur est le nom que la
 console connaît aujourd'hui; ANH-152 reste hors de ce parcours. Si Convex a pris le
-départ mais que sa réponse 2xx se perd, une nouvelle confirmation reçoit
-`session_not_pending` (400) : la console n'arme pas et la machine peut rester tenue
-jusqu'à l'interruption. Ce suivi d'idempotence relève d'ANH-240.
+départ mais que sa réponse 2xx se perd, une nouvelle confirmation dans ces 60 s reçoit
+200 aux conditions ci-dessus, dans les 90 s qui suivent le départ daté par le serveur
+à la première confirmation, et la machine démarre (contrat 1.8) ; sans nouveau clic
+dans ces 60 s, la machine peut rester tenue jusqu'à l'interruption.
 
 Le bouton **Demarrer la seance** est désactivé tant que : l'arrêt d'urgence n'est pas
 attesté, la machine n'est pas `idle`, ou les séances programmées sont désactivées.
@@ -2284,8 +2293,9 @@ Un refus du tableau de bord ou une demande sans réponse ne
 soumet pas le démarrage à la machine et n'envoie pas `training/end`. Un refus local
 avant la demande ou après le 2xx envoie une fin échouée; ce lancement est alors
 définitif et le bouton reste désactivé. Après une absence de réponse ou un empêchement
-temporaire, un nouvel essai exige une nouvelle confirmation explicite après
-récupération, tant que le poll propose encore cette offre.
+temporaire, un nouvel essai exige une nouvelle confirmation explicite, tant que le poll
+propose encore cette offre ou, après une absence de réponse, 60 s au plus après le clic
+quand il ne la propose plus (carte « Depart distant » ci-dessus).
 
 | Message | Sens |
 |---|---|

@@ -448,8 +448,14 @@ http.route({
  * 409 `{error: <arming refusal>, message}` when the launch is checked again
  * and refused (ANH-144, contract 1.5, `arming_refusals`): the session is
  * failed with that code and the machine must not run it. Never rate limited:
- * only writes for a pending launch, already bounded by launchAutoSession;
- * a 429 would stop an armed console from before 1.5.
+ * only writes for a pending launch, already bounded by launchAutoSession, and
+ * a repeated confirmation reads at most two first documents and 90 s of
+ * heartbeats; a 429 would stop an armed console from before 1.5.
+ *
+ * 200 again, and nothing changed, for a start already confirmed of which the
+ * machine has sent nothing yet, and no stop asked for, within 90 s of the
+ * start the server dated at the first confirmation (ANH-240, contract 1.8):
+ * `markTrainingStarted`.
  */
 http.route({
   path: "/api/machine/training/start",

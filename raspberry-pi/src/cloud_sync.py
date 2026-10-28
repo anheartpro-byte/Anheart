@@ -27,8 +27,17 @@ Down, from the dashboard to this machine, exactly three things:
   after a 2xx before the runtime is asked to arm. A local refusal goes back as a failed session with
   its reason. A refusal by the dashboard is shown on the console and is not
   ended again; a missing route or an unavailable link leaves the machine
-  unarmed. If the poll still offers the launch, a later operator confirmation
-  may try again;
+  unarmed. A start left without an answer may be confirmed again by the
+  operator: while the poll offers the launch, as before, and also once it no
+  longer does, for the dashboard may hold it active with its answer lost, and
+  answers a repeated confirmation 200 while this machine has sent nothing of
+  it and no stop was asked for, within 90 s of the start it dated at the
+  first confirmation. Then for
+  :data:`LAUNCH_TIMEOUT` at most after the click of the first
+  confirmation left unanswered since the poll last offered the launch, even
+  with the polls failing meanwhile, and never for another launch: the offer
+  then goes. Nor once the dashboard has answered: refused, it is no longer
+  confirmable, and goes with the next poll that does not offer it;
 * the list of the riders this machine may offer (:mod:`src.roster`), asked
   for at the start and every :data:`~src.roster.ROSTER_PERIOD` while no
   session runs, kept in memory only. It is asked for by
@@ -205,7 +214,10 @@ RETRY_PERIOD: Final[Seconds] = Seconds(15.0)
 """After a failure, how long before a preset push is retried."""
 
 LAUNCH_TIMEOUT: Final[Seconds] = Seconds(60.0)
-"""A launch the loop has neither started nor refused by now is reported as failed."""
+"""A launch the loop has neither started nor refused by now is reported as failed.
+
+Also how long a launch the poll no longer offers may be confirmed again after the
+click of its first confirmation left unanswered (see the module docstring)."""
 
 INCOMPATIBLE_REPEAT: Final[Seconds] = Seconds(60.0)
 """How often a dashboard of another contract is said again on the console while it lasts.
@@ -842,6 +854,7 @@ class CloudSync:
 
     __slots__ = (
         "_awaiting",
+        "_clicked_at",
         "_clock",
         "_confirmed_launch",
         "_confirmed_launch_id",
@@ -876,6 +889,7 @@ class CloudSync:
         "_surface",
         "_tiers",
         "_transport",
+        "_unanswered",
         "_uplink",
     )
 
@@ -952,6 +966,13 @@ class CloudSync:
         self._offered_launch: Launch | None = None
         self._offer_generation: int = 0
         self._offer_state: LaunchOfferState = OfferWaiting()
+        # When the operator last asked for a launch to be confirmed, and the click of
+        # the offered launch's first confirmation the dashboard left unanswered since
+        # the poll last offered it: forgotten at every poll that offers a launch
+        # (`_offer_launch`), and read only while that offer's last confirmation is
+        # unanswered (`_unanswered_offer`), never once it has gone.
+        self._clicked_at: Monotonic = clock.monotonic()
+        self._unanswered: _Awaiting | None = None
         self._pushed_rev: int | None = None
         self._next_profiles: Monotonic | None = None
         self._last_heartbeat: Monotonic | None = None
@@ -993,8 +1014,9 @@ class CloudSync:
         return self._uplink.session_id_reader()
 
     def current_remote_launch(self) -> RemoteLaunchView | None:
+        """The launch offered for confirmation; ``None`` once its hold is over (`_hold_over`)."""
         launch = self._offered_launch
-        if launch is None:
+        if launch is None or self._hold_over(self._clock.monotonic()):
             return None
         found = self._rider_for_launch(launch)
         if isinstance(found, Ok):
@@ -1019,8 +1041,13 @@ class CloudSync:
     def confirm_remote_launch(
         self, session_id: str, operator: str
     ) -> Result[None, ConfirmationRefusal]:
+        """Queue the operator's confirmation of the offered launch, dated by this click.
+
+        Refused as no longer offered once the hold of a launch left unanswered is over.
+        """
         launch = self._offered_launch
-        if launch is None or launch.session_id != session_id:
+        now = self._clock.monotonic()
+        if launch is None or launch.session_id != session_id or self._hold_over(now):
             return Err(
                 ConfirmationRefusal(
                     ConfirmationCode.NOT_PENDING,
@@ -1051,8 +1078,33 @@ class CloudSync:
             detail = describe_passenger_refusal(found.error)
             self._offer_state = OfferWaiting()
             return Err(ConfirmationRefusal(ConfirmationCode.PASSENGER_UNAVAILABLE, detail))
+        self._clicked_at = now
         self._offer_state = OfferConfirmationQueued(operator, self._offer_generation)
         return Ok(None)
+
+    def _unanswered_offer(self) -> _Awaiting | None:
+        """The click of the offered launch's first confirmation left unanswered, while its
+        last confirmation still is: unanswered, or asked for again and not yet answered.
+        Never without an offer, nor for another session than the offered one."""
+        unanswered = self._unanswered
+        offered = self._offered_launch
+        if (
+            unanswered is not None
+            and offered is not None
+            and unanswered.cloud_session_id == offered.session_id
+            and isinstance(
+                self._offer_state,
+                (OfferUnconfirmed, OfferConfirmationQueued, OfferRequestInFlight),
+            )
+        ):
+            return unanswered
+        return None
+
+    def _hold_over(self, now: Monotonic) -> bool:
+        """Whether the offer is a launch left unanswered whose click was
+        :data:`LAUNCH_TIMEOUT` ago or more: nothing is sent for it any more."""
+        unanswered = self._unanswered_offer()
+        return unanswered is not None and elapsed(unanswered.since, now) >= LAUNCH_TIMEOUT
 
     def _rider_for_launch(self, launch: Launch) -> Result[Rider, PassengerRefusal]:
         roster = self._roster
@@ -1329,7 +1381,10 @@ class CloudSync:
             else None
         )
         if launch is None:
-            self._clear_offer()
+            # Left unanswered, its start may be held active by the dashboard: kept for a
+            # repeated confirmation, until its hold is over (`_process_confirmation`).
+            if self._unanswered_offer() is None:
+                self._clear_offer()
             return
         awaiting = self._awaiting
         if awaiting is not None and launch.session_id != awaiting.cloud_session_id:
@@ -1338,6 +1393,9 @@ class CloudSync:
         self._offer_launch(launch)
 
     def _offer_launch(self, launch: Launch) -> None:
+        # Offered by the poll, it is not held by the dashboard: no hold runs for it, and
+        # a later confirmation left unanswered starts one from its own click.
+        self._unanswered = None
         previous = self._offered_launch
         if previous is not None and previous.session_id == launch.session_id:
             if previous != launch:
@@ -1366,6 +1424,10 @@ class CloudSync:
         self._offer_state = state
 
     async def _process_confirmation(self, now: Monotonic) -> None:
+        # Here, run at every step with an offer whatever the polls answer, and the only
+        # way to training/start: an offer whose hold is over goes before anything is sent.
+        if self._hold_over(self._clock.monotonic()):
+            self._clear_offer()
         state = self._offer_state
         launch = self._offered_launch
         if not isinstance(state, OfferConfirmationQueued) or launch is None:
@@ -1413,12 +1475,16 @@ class CloudSync:
                 "sessionAgeMs": 0,
             },
         )
+        # Answered once its hold is over: obsolete, as if the offer had gone meanwhile.
+        if self._hold_over(self._clock.monotonic()):
+            self._clear_offer()
         if generation != self._offer_generation:
             if isinstance(answer, Acked):
                 self._abandon_obsolete_confirmation(launch)
             return
         match answer:
             case Acked():
+                self._unanswered = None
                 self._submit_confirmed_launch(launch, operator, now)
             case Refusal():
                 sentence = _remote_start_refusal(answer)
@@ -1427,11 +1493,16 @@ class CloudSync:
                 self._surface.note_remote_refusal(sentence)
                 _logger.warning("dashboard launch %s refused: %s", launch.session_id, sentence)
             case Held():
+                # Dated by the click of the first one left unanswered: a later one never
+                # extends the hold.
+                if self._unanswered is None:
+                    self._unanswered = _Awaiting(launch.session_id, self._clicked_at)
                 sentence = "depart distant non confirme : confirmation indisponible"
                 self._invalidate_offer_state(OfferUnconfirmed(sentence))
                 self._surface.note_remote_refusal(sentence)
                 _logger.warning("dashboard launch %s held", launch.session_id)
             case RouteMissing():
+                self._unanswered = None
                 sentence = "route training/start inconnue"
                 self._invalidate_offer_state(OfferUnconfirmed(sentence))
                 self._surface.note_remote_refusal(sentence)
