@@ -14,7 +14,7 @@ import path from "node:path";
 import { redact } from "./secrets";
 
 /** Every run works in its own folder under this one, removed at its end. */
-export const RUNS_ROOT = path.join(os.tmpdir(), "anheart-e2e");
+export const RUNS_ROOT = path.join(os.tmpdir(), "anheart-e2e", "executions");
 
 export function newRunDir(runId: string): string {
   const dir = path.join(RUNS_ROOT, runId);

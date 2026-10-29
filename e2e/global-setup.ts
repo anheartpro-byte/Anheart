@@ -1,6 +1,6 @@
 import { chromium } from "@playwright/test";
 import { randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
+import { rmdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { clerkApi } from "./harness/clerk";
 import {
@@ -17,6 +17,7 @@ import {
   killRunProcessesNow,
   newRunDir,
   portIsFree,
+  RUNS_ROOT,
   runToEnd,
   startProcess,
   stopRunProcesses,
@@ -94,6 +95,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     const busy = [];
     for (const port of ports) if (!(await portIsFree(port))) busy.push(port);
     rmSync(runDir, { recursive: true, force: true });
+    try {
+      rmdirSync(RUNS_ROOT);
+    } catch {
+      // not empty, or already gone
+    }
     process.removeListener("exit", lastResort);
     say(
       `démontage en ${seconds(since)} : ports ${busy.length === 0 ? "libres" : `encore pris ${busy.join(", ")}`} (${ports.length}), ` +

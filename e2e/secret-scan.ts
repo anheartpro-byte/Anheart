@@ -91,7 +91,7 @@ function occurrences(haystack: Buffer, needle: Buffer): number {
  * Prints counts only; any occurrence fails the run.
  */
 export default class SecretScan implements Reporter {
-  constructor(private readonly options: { folders: string[] }) {}
+  constructor(private readonly options: { output: string; folders: string[] }) {}
 
   printsToStdio(): boolean {
     return true;
@@ -125,10 +125,9 @@ export default class SecretScan implements Reporter {
       }
     }
     console.log(
-      `[e2e] recherche des secrets : ${values.length} valeurs de l'exécution, ${scanned} fichiers (${this.options.folders
-        .map((folder) => path.relative(process.cwd(), folder))
-        .join(", ")}), ${found} occurrence(s), ${tokens} jeton(s) signé(s)`,
+      `[e2e] recherche des secrets : ${values.length} valeurs de l'exécution, ${scanned} fichiers, ${found} occurrence(s), ${tokens} jeton(s) signé(s)`,
     );
+    console.log(`[e2e] rapport, traces et captures : ${this.options.output}`);
     if (found > 0 || tokens > 0) return { status: "failed" };
   }
 }

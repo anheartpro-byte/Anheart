@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import os from "node:os";
 import path from "node:path";
 
 /**
@@ -9,9 +10,14 @@ import path from "node:path";
  * test accounts of the development instance (keys from the file named by
  * E2E_ENV_FILE), the site built and served locally. The simulated Pi console
  * is a fixture of the tests (`fixtures.ts`). One run at a time.
+ *
+ * Nothing is written in the repository: the report, traces and captures go to
+ * E2E_OUTPUT_DIR, by default one folder of the system's temporary folder,
+ * replaced on each run.
  */
-const results = path.join(__dirname, "test-results");
-const report = path.join(__dirname, "playwright-report");
+const output = process.env.E2E_OUTPUT_DIR ?? path.join(os.tmpdir(), "anheart-e2e", "sorties");
+const results = path.join(output, "test-results");
+const report = path.join(output, "rapport");
 
 export default defineConfig({
   testDir: "./tests",
@@ -26,7 +32,7 @@ export default defineConfig({
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: report }],
-    ["./secret-scan.ts", { folders: [results, report, path.join(__dirname, "..", ".next")] }],
+    ["./secret-scan.ts", { output, folders: [results, report, path.join(__dirname, "..", ".next")] }],
   ],
   use: {
     ...devices["Desktop Chrome"],
