@@ -207,6 +207,7 @@ from src.motor.atv320 import (
 from src.motor.drive import DriveBackend, LogicInput, RegisterMap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.motor.sto import (
+    BridgedDeclaredStoSource,
     DriveInputStoSource,
     SimulatedStoChain,
     SimulatedStoSource,
@@ -280,7 +281,12 @@ from src.training.plan import (
     ResolveError,
     UnknownProfile,
 )
-from src.training.preflight import StoNotReady, describe_sto_refusal
+from src.training.preflight import (
+    BRIDGED_BENCH_ONLY,
+    StoBridgedOnBoard,
+    StoNotReady,
+    describe_sto_refusal,
+)
 from src.training.runtime import (
     AlreadyStarted,
     DriveInFault,
@@ -315,6 +321,8 @@ from src.training.runtime import (
     WithdrawnTarget,
 )
 from src.training.safety import (
+    BENCH_BRIDGED_ATTESTATION,
+    ESTOP_ATTESTATION,
     SELF_CLEARING,
     AcknowledgeRefusal,
     SafetyAcknowledgement,
@@ -1981,6 +1989,8 @@ def build_sto(
     second master on the cable. The ATV320 driver's reads go through
     :class:`~src.motor.atv320.AuxiliaryRegisterReads`: same lock and link
     health, outside the exchange log that feeds the session record.
+    ``bridged_declared`` reads nothing, so no polling task is ever started
+    for it (:meth:`LocalPanel.run`).
     """
     match config.sto_source:
         case StoSourceKind.NONE:
@@ -2009,6 +2019,10 @@ def build_sto(
                 input_=config.sto_drive_input,
                 read_budget=budget,
             )
+        case StoSourceKind.BRIDGED_DECLARED:
+            if config.motor_backend is MotorBackend.SIM:
+                raise ValueError("bridged_declared is a declaration about a real drive")
+            return BridgedDeclaredStoSource()
     raise assert_never(config.sto_source)
 
 
@@ -2225,6 +2239,12 @@ def build_panel(
         motion=motion,
         limit_radius=config.leg_tip_radius,
         arming_gate=None if journal is None else storage_gate(journal, clock),
+        # Every other source attests the wired mushroom, ANH-92's statement.
+        attestation=(
+            BENCH_BRIDGED_ATTESTATION
+            if config.sto_source is StoSourceKind.BRIDGED_DECLARED
+            else ESTOP_ATTESTATION
+        ),
     )
     hub = TelemetryHub(clock=clock)
     ecg_side = build_ecg_client(config, clock)
@@ -2549,6 +2569,8 @@ def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one
             return describe_record_storage(refusal)
         case StoNotReady():
             return describe_sto_refusal(refusal)
+        case StoBridgedOnBoard():
+            return BRIDGED_BENCH_ONLY
     raise assert_never(refusal)
 
 

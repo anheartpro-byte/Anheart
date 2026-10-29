@@ -203,6 +203,7 @@ from src.motor.sto import (
     StoSource,
     StoState,
     UnconfiguredStoSource,
+    sto_bridged,
 )
 from src.result import Err, Ok, Result
 from src.task_completion import complete_owned
@@ -234,8 +235,14 @@ from src.training.plan import (
     MIN_RECOVERY_S,
     Program,
 )
-from src.training.preflight import StoNotReady, check_sto_ready
+from src.training.preflight import (
+    StoBridgedOnBoard,
+    StoNotReady,
+    check_sto_for_start,
+    check_sto_ready,
+)
 from src.training.safety import (
+    ESTOP_ATTESTATION,
     RULE_COMMS_LOST,
     RULE_DRIVE_FAULT,
     AcknowledgeRefusal,
@@ -729,6 +736,7 @@ type StartRefusal = (
     | DriveInFault
     | RecordStorageLow
     | StoNotReady
+    | StoBridgedOnBoard
 )
 """Every way :meth:`TrainingRuntime.start` can refuse. Closed; match it nested."""
 
@@ -886,13 +894,15 @@ def status_fault_report(status: DriveStatus) -> FaultReport | None:
 
 
 def _supervisor_for(
-    clock: Clock, safety: SafetyLimits, shared: SafetySupervisor | None
+    clock: Clock, safety: SafetyLimits, shared: SafetySupervisor | None, attestation: str
 ) -> SafetySupervisor:
     """The runtime's supervisor: the shared one, checked, or a new one. Raises on a mismatch."""
     if shared is None:
-        return SafetySupervisor(clock=clock, limits=safety)
+        return SafetySupervisor(clock=clock, limits=safety, attestation=attestation)
     if shared.limits != safety:
         raise ValueError("the shared supervisor was built with different SafetyLimits")
+    if shared.attestation_statement != attestation:
+        raise ValueError("the shared supervisor attests another mode's statement")
     return shared
 
 
@@ -1328,6 +1338,7 @@ class TrainingRuntime:
         limit_radius: Metres | None = None,
         arming_gate: ArmingGate | None = None,
         sto: StoSource | None = None,
+        attestation: str = ESTOP_ATTESTATION,
     ) -> None:
         """Build an idle runtime. Raises ``ValueError`` on a mismatched supervisor.
 
@@ -1366,6 +1377,10 @@ class TrainingRuntime:
 
         ``sto`` supplies memory-only observations. Omitted means NOT_CONFIGURED,
         which refuses every arming and acknowledgement until a ready source exists.
+
+        ``attestation`` is the statement of the console's mode, which the
+        supervisor records (:data:`~src.training.safety.BENCH_BRIDGED_ATTESTATION`
+        under a declared bridge only); a shared supervisor must attest the same one.
         """
         self._clock: Clock = clock
         self._sto: StoSource = UnconfiguredStoSource() if sto is None else sto
@@ -1374,7 +1389,7 @@ class TrainingRuntime:
         self._geometry: MachineGeometry = geometry
         self._limits: RuntimeLimits = limits
         self._safety_limits: SafetyLimits = safety
-        self._supervisor: SafetySupervisor = _supervisor_for(clock, safety, supervisor)
+        self._supervisor: SafetySupervisor = _supervisor_for(clock, safety, supervisor, attestation)
         self._tracker: HeartRateTracker = HeartRateTracker(tracker_limits)
         # Fixed at construction: neither rise path may outlast this tracker's
         # freshness, even when it is stricter than the runtime's own budget.
@@ -1958,7 +1973,7 @@ class TrainingRuntime:
         inspected = await self._open_and_inspect(now)
         if isinstance(inspected, Err):
             return Err(inspected.error)
-        armed = await self._arm(now, inspected.value)
+        armed = await self._arm(now, inspected.value, Occupancy.OCCUPIED)
         if armed is not None:
             return Err(armed)
         self._program = program
@@ -1997,7 +2012,9 @@ class TrainingRuntime:
         occupancy (``LocalConfig.ceiling_for``) and is refused above the HSP
         this runtime arms against.
         """
-        refusal = self._refuse_arming() or self._refuse_manual(occupancy, operator, ceiling)
+        refusal = self._refuse_arming(occupancy) or self._refuse_manual(
+            occupancy, operator, ceiling
+        )
         if refusal is not None:
             return Err(refusal)
         now = self._clock.monotonic()
@@ -2005,7 +2022,7 @@ class TrainingRuntime:
         inspected = await self._open_and_inspect(now)
         if isinstance(inspected, Err):
             return Err(inspected.error)
-        armed = await self._arm(now, inspected.value)
+        armed = await self._arm(now, inspected.value, occupancy)
         if armed is not None:
             return Err(armed)
         descent = ramp_duration(ceiling, MotorRpm(0), self._motion, self._motion_geometry)
@@ -2227,13 +2244,16 @@ class TrainingRuntime:
                 describe_drive_error(written.error).detail,
             )
 
-    def _refuse_arming(self) -> StartRefusal | None:
+    def _refuse_arming(self, occupancy: Occupancy) -> StartRefusal | None:
         """What refuses ANY start, programme or manual, before the drive is touched.
 
         A runtime that has FINISHED may be armed again - that is what puts the
         console back to REPOS after a stop - but never one that is still
         running or ending, one that has shut down (its link is released), or
         one that went silent (it never sends another frame).
+
+        ``occupancy`` is who the start puts on board, ``OCCUPIED`` for a
+        programme: under a declared STO bridge only the bench arms.
         """
         state = self.state
         if self._shutdown is not None or self._silent:
@@ -2244,7 +2264,7 @@ class TrainingRuntime:
         standing = self.standing
         if standing is not None:
             return SafetyStanding(standing)
-        sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+        sto = check_sto_for_start(self._sto.latest(self._clock.monotonic()), occupancy)
         if sto is not None:
             return sto
         if state not in (RuntimeState.IDLE, RuntimeState.FINISHED):
@@ -2290,7 +2310,8 @@ class TrainingRuntime:
 
     def _refuse_start(self, program: Program) -> StartRefusal | None:
         """Every precondition that can be judged without touching the drive."""
-        arming = self._refuse_arming()
+        # The heart rate drives the speed: a person is on board by definition.
+        arming = self._refuse_arming(Occupancy.OCCUPIED)
         if arming is not None:
             return arming
         mismatch = self._limits_mismatch(program)
@@ -2416,7 +2437,9 @@ class TrainingRuntime:
         self._last_status_at = now
         return Ok(status.status)
 
-    async def _arm(self, now: Monotonic, status: DriveStatus) -> StartRefusal | None:
+    async def _arm(
+        self, now: Monotonic, status: DriveStatus, occupancy: Occupancy
+    ) -> StartRefusal | None:
         """Judge what was read, then energise the output stage with a zero reference."""
         if status.state is DriveState.OPERATION_ENABLED:
             return await self._refuse_precommanded(now, status)
@@ -2428,7 +2451,7 @@ class TrainingRuntime:
         if refused is not None:
             return refused
         # Inspection awaited transport I/O: revalidate the contact before enabling.
-        sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+        sto = check_sto_for_start(self._sto.latest(self._clock.monotonic()), occupancy)
         if sto is not None:
             return sto
         try:
@@ -2658,6 +2681,10 @@ class TrainingRuntime:
         A pause or a stop with an unresolved read can therefore raise
         sto_unreadable too. Communication-loss rules still dominate if the link
         itself stops answering. No extra duration or I/O is introduced.
+
+        Under a declared bridge nothing is read, so sto_unreadable has no
+        object, as without a source; the status word's opening still latches
+        sto_open (:meth:`_deduce_sto_open`).
         """
         if not self.drive_reads_permitted:
             return
@@ -2715,6 +2742,8 @@ class TrainingRuntime:
         ):
             return
         self._deduce_sto_open(now, status)
+        if sto_bridged(reading):
+            return  # nothing is read under a declared bridge: no reading to lose
         if last is None or elapsed(last, now) - self._sto_loop_delay > STO_STALE_AFTER:
             self._latch(
                 now,
@@ -3441,7 +3470,9 @@ class TrainingRuntime:
         READY from a read taken since: a reading from before the stop says
         nothing of the chain during it, however recent. An ``sto_open`` of this
         runtime's, read or deduced, likewise needs READY from a read taken
-        since it latched.
+        since it latched. Under a declared bridge no reading exists: the
+        declaration still being the source's answer takes the place of READY,
+        and every other condition stands.
         """
         if not operator.strip():
             return Err(
@@ -3454,11 +3485,10 @@ class TrainingRuntime:
         if mine is not None and mine.action is SafetyAction.GO_SILENT:
             return Err(GoSilentIsTerminal(mine.rule))
         reading = self._sto.latest(self._clock.monotonic())
-        sto = check_sto_ready(reading)
-        if sto is None:
-            sto = self._sto_reading_too_old(reading)
-        if sto is not None:
-            return Err(sto)
+        if not sto_bridged(reading):
+            sto = check_sto_ready(reading) or self._sto_reading_too_old(reading)
+            if sto is not None:
+                return Err(sto)
         outcome = self._supervisor.acknowledge(operator, estop_released=estop_released)
         if isinstance(outcome, Ok):
             self._latched = None

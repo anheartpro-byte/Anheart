@@ -412,7 +412,10 @@ def test_provisional_default_is_isolated(backend: MotorBackend, expected: StoSou
     assert config_for(SIM_ENV if backend is MotorBackend.SIM else BENCH_ENV).sto_source is expected
 
 
-@pytest.mark.parametrize("source", list(StoSourceKind))
+# bridged_declared is refused with MOTOR_BACKEND=sim (tests/test_sto_bridged.py).
+@pytest.mark.parametrize(
+    "source", [source for source in StoSourceKind if source is not StoSourceKind.BRIDGED_DECLARED]
+)
 @pytest.mark.parametrize("input_", list(LogicInput))
 async def test_config_and_panel_build_each_source_with_shared_simulated_chain(
     tmp_path: Path, source: StoSourceKind, input_: LogicInput

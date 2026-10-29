@@ -81,7 +81,7 @@ from src.training.hr_control import (
 )
 from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, motor_rate_limit
 from src.training.plan import INITIAL_REV, Channel, Program, TrainingProfile
-from src.training.preflight import StoNotReady
+from src.training.preflight import StoBridgedOnBoard, StoNotReady
 from src.training.runtime import (
     IDLE_POLL_PERIOD,
     RULE_DISABLE_REFUSED,
@@ -1396,6 +1396,7 @@ def test_every_start_refusal_is_handled_somewhere() -> None:
         DriveInFault(report=None, state=DriveState.FAULT),
         RecordStorageLow(free_bytes=None, required_bytes=1, where="data/records"),
         StoNotReady(state=StoState.OPEN, detail="relay open"),
+        StoBridgedOnBoard(),
     )
     assert len({_classify_refusal(case) for case in cases}) == len(cases)
 
@@ -1425,6 +1426,8 @@ def _classify_refusal(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one ret
             return "record_storage_low"
         case StoNotReady():
             return "sto_not_ready"
+        case StoBridgedOnBoard():
+            return "sto_bridged_on_board"
     raise assert_never(refusal)
 
 
