@@ -1,7 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -13,13 +16,42 @@ import os from "node:os";
 import path from "node:path";
 import { redact } from "./secrets";
 
-/** Every run works in its own folder under this one, removed at its end. */
-export const RUNS_ROOT = path.join(os.tmpdir(), "anheart-e2e", "executions");
+/**
+ * A folder of the harness, private to this user: created 0700, refused when
+ * it is a symbolic link, not a folder, or someone else's.
+ */
+export function privateDir(dir: string): string {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${dir} : pas un dossier (ou un lien symbolique), refusé`);
+  if (stat.uid !== process.getuid?.()) throw new Error(`${dir} : n'appartient pas à cet utilisateur, refusé`);
+  if ((stat.mode & 0o077) !== 0) chmodSync(dir, 0o700);
+  return dir;
+}
 
+/**
+ * The harness's own folder, `$XDG_CACHE_HOME/anheart-e2e`, else
+ * `~/.cache/anheart-e2e`: its runs, and its outputs unless E2E_OUTPUT_DIR
+ * says otherwise. Never the system's shared temporary folder.
+ */
+export function harnessRoot(): string {
+  const cache = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+  return privateDir(path.join(cache, "anheart-e2e"));
+}
+
+/** Every run works in its own folder under this one, removed at its end. */
+export const runsRoot = () => privateDir(path.join(harnessRoot(), "executions"));
+
+/** A file of the run folder, created by this run alone (it must not exist yet), 0600. */
+export function writeNewFile(file: string, content: string | Buffer): void {
+  writeFileSync(file, content, { flag: "wx", mode: 0o600 });
+}
+
+/** The run's folder, of a name nobody can guess (`<runId>-<random>`), 0700. */
 export function newRunDir(runId: string): string {
-  const dir = path.join(RUNS_ROOT, runId);
-  mkdirSync(path.join(dir, "pids"), { recursive: true, mode: 0o700 });
-  writeFileSync(path.join(dir, "owner"), String(process.pid));
+  const dir = mkdtempSync(path.join(runsRoot(), `${runId}-`));
+  mkdirSync(path.join(dir, "pids"), { mode: 0o700 });
+  writeNewFile(path.join(dir, "owner"), String(process.pid));
   return dir;
 }
 
@@ -81,7 +113,7 @@ export function startProcess(
     stdio: ["ignore", log, log],
   });
   if (child.pid === undefined) throw new Error(`${name} : démarrage impossible`);
-  writeFileSync(path.join(runDir, "pids", String(child.pid)), name);
+  writeNewFile(path.join(runDir, "pids", String(child.pid)), name);
   return child;
 }
 
@@ -159,10 +191,10 @@ export function killRunProcessesNow(runDir: string): void {
  * recording each process's start time if that ever matters.
  */
 export async function cleanLeftoverRuns(): Promise<number> {
-  if (!existsSync(RUNS_ROOT)) return 0;
+  const root = runsRoot();
   let cleaned = 0;
-  for (const entry of readdirSync(RUNS_ROOT)) {
-    const runDir = path.join(RUNS_ROOT, entry);
+  for (const entry of readdirSync(root)) {
+    const runDir = path.join(root, entry);
     const ownerFile = path.join(runDir, "owner");
     const owner = existsSync(ownerFile) ? Number(readFileSync(ownerFile, "utf8")) : 0;
     if (owner > 0 && owner !== process.pid && alive(owner)) {

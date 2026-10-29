@@ -18,7 +18,6 @@ import {
   killRunProcessesNow,
   newRunDir,
   portIsFree,
-  RUNS_ROOT,
   runToEnd,
   startProcess,
   stopRunProcesses,
@@ -42,6 +41,7 @@ import {
   redact,
   refuseCloudConvex,
   remember,
+  startTestSecrets,
 } from "./harness/secrets";
 import { signIn } from "./harness/signin";
 
@@ -75,6 +75,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   const runId = randomBytes(4).toString("hex");
   const runDir = newRunDir(runId);
+  startTestSecrets(runDir);
   process.env.E2E_RUN_DIR = runDir;
   const lastResort = () => killRunProcessesNow(runDir);
   process.once("exit", lastResort);
@@ -101,7 +102,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     knownSecrets(); // values the tests learned, kept in memory for the final count
     rmSync(runDir, { recursive: true, force: true });
     try {
-      rmdirSync(RUNS_ROOT);
+      rmdirSync(path.dirname(runDir));
     } catch {
       // not empty, or already gone
     }

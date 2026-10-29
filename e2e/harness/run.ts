@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { callAs, type ActingIdentity, type Backend } from "./convex";
+import { writeNewFile } from "./processes";
 
 /** Test organisations of a run. */
 export const ORGANIZATIONS = {
@@ -53,7 +54,7 @@ export type RunInfo = {
 };
 
 export function writeRunInfo(info: RunInfo): void {
-  writeFileSync(path.join(info.runDir, "run.json"), JSON.stringify(info), { mode: 0o600 });
+  writeNewFile(path.join(info.runDir, "run.json"), JSON.stringify(info));
 }
 
 export function readRunInfo(): RunInfo {

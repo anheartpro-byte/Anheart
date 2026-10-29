@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -24,13 +24,19 @@ function testSecretsFile(): string | null {
 
 /**
  * A value a test learns, added to the run's list through a 0600 file of the
- * run folder (removed with it), so that the runner masks and counts it too.
+ * run folder (created empty with it by `startTestSecrets`, removed with it),
+ * so that the runner masks and counts it too.
  */
 export function rememberFromTest(value: string): string {
   const file = testSecretsFile();
   if (!file) throw new Error("E2E_RUN_DIR absent : lancer par npm run test:e2e.");
-  appendFileSync(file, `${value}\n`, { mode: 0o600 });
+  appendFileSync(file, `${value}\n`, { flag: "a", mode: 0o600 });
   return remember(value);
+}
+
+/** The run's list of values its tests learn: created by this run alone, empty, 0600. */
+export function startTestSecrets(runDir: string): void {
+  writeFileSync(path.join(runDir, "test-secrets"), "", { flag: "wx", mode: 0o600 });
 }
 
 export function knownSecrets(): string[] {
