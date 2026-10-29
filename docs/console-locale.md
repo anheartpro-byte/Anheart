@@ -264,7 +264,7 @@ hors ligne (`src/web/static/index.html`, `app.js`, `app.css`). Elle comporte :
 
 | Zone | Contenu |
 |---|---|
-| Bandeaux en haut | Huit rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4) ; `VARIATEUR EN DEFAUT`, tant que le variateur signale un défaut (section 6) ; `CHAINE STO NON PRETE`, avec la raison et l'action pour rétablir une chaîne prête (section 11) ; `PARAMETRES MEDICAUX NON SIGNES`, tant que la console tourne en mode banc parce que la signature de son fichier médical ne s'est pas vérifiée au démarrage, suivi de la raison ([raspberry-pi.md, 12.6](raspberry-pi.md#126-les-paramètres-médicaux-signés-anh-139)) ; il ne part qu'avec un fichier signé de nouveau et un redémarrage. Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
+| Bandeaux en haut | Neuf rouges : `NO LIVE DATA`, visible dès que les données ne sont plus fraîches ; `ARRET D'URGENCE NON CONFIRME`, quand une demande E-STOP de cet écran reste sans réponse ou a échoué ; `STOP NON CONFIRME`, de même pour une demande STOP ; `ARRET D'URGENCE VERROUILLE`, tant que la page sait un arrêt d'urgence verrouillé (section 5) ; `CONSOLE HORS SERVICE`, tant que la console se dit hors service (section 4) ; `VARIATEUR EN DEFAUT`, tant que le variateur signale un défaut (section 6) ; `CHAINE STO NON PRETE`, avec la raison et l'action pour rétablir une chaîne prête (section 11) ; `STO PONTE : aucun arret d'urgence materiel`, tant que la console dit `STO_SOURCE=bridged_declared`, à la place du précédent (section 11) ; `PARAMETRES MEDICAUX NON SIGNES`, tant que la console tourne en mode banc parce que la signature de son fichier médical ne s'est pas vérifiée au démarrage, suivi de la raison ([raspberry-pi.md, 12.6](raspberry-pi.md#126-les-paramètres-médicaux-signés-anh-139)) ; il ne part qu'avec un fichier signé de nouveau et un redémarrage. Un orange : `REPRISE AUTOMATIQUE POSSIBLE`, tant qu'un avertissement non verrouillé tient ou baisse une vitesse qui peut remonter seule (section 11). Ils s'empilent ; la barre latérale et la barre mobile commencent sous eux |
 | Barre latérale (à gauche) | la marque, dix pastilles (sept sur l'état de la machine, puis **Serveur**, **Version** et **Service** sur la console elle-même), la navigation |
 | Zone centrale | une seule page à la fois : Tableau de bord, Capteurs, un capteur, Seance, Configuration, Securite |
 | Pied de page fixe | la version des paramètres médicaux (`parametres medicaux 0.1.0`, en rouge avec `NON SIGNES` en mode banc), l'état de la liaison, **STOP** et **E-STOP**, présents sur toutes les pages. La page et la barre latérale s'arrêtent au-dessus de lui : sa hauteur est mesurée par la page (`--footer-h`), plus déclarée dans la feuille de style |
@@ -282,7 +282,7 @@ seconde) et par des interrogations périodiques :
 | `/api/panel` | 1 s | liaisons variateur et BITalino, mode console, retenue de la fréquence cardiaque en séance manuelle, version du logiciel, état du lien avec le tableau de bord, console en service ou hors service |
 | `/api/sensors` | 1 s | pages Capteurs |
 | `/api/camera` | 1 s | carte caméra de la page Securite |
-| `/api/status` | 5 s | état, verdicts (quel qu'en soit l'auteur), état du variateur, attestation, système |
+| `/api/status` | 5 s | état, verdicts (quel qu'en soit l'auteur), état du variateur, attestation (dont la phrase, les cases et les mots de la case d'acquittement du mode de la console), système |
 | `/api/presence` (POST) | 5 s | signal « l'accompagnant est là » |
 
 Si le WebSocket tombe, la page réessaie toutes les 1,5 s.
@@ -344,7 +344,7 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 ### Pastilles d'état
 
 La pastille **Chaine STO** reste visible dans la barre latérale sur chaque page :
-`prete`, `ouverte`, `inconnue` ou `non configuree`. La carte du même nom dans Sécurité
+`prete`, `ouverte`, `inconnue`, `non configuree` ou `pontee (declaree)`. La carte du même nom dans Sécurité
 donne aussi la source et l'âge de la dernière lecture réussie. Ces états ne disent
 pas que le bras est arrêté : seule la vitesse mesurée renseigne sur son mouvement.
 
@@ -852,7 +852,7 @@ Si l'avertissement se lève avant l'arrêt, la consigne remonte vers la cible (b
 
 | Élément | Rôle |
 |---|---|
-| case `BANC - personne a bord : NON (moteur decouple, ou bras couple avec la capsule VIDE)` | déclaration obligatoire avant tout démarrage ; la page refuse de démarrer si elle n'est pas cochée |
+| case `BANC - personne a bord : NON (moteur decouple, ou bras couple avec la capsule VIDE ou LESTEE)` | déclaration obligatoire avant tout démarrage ; la page refuse de démarrer si elle n'est pas cochée |
 | champ `Operateur` | nom de la personne qui pilote ; obligatoire (400 sinon) |
 | bouton `Demarrer MANUEL` | `POST /api/manual/start` avec `occupancy: "bench"` ; la cible initiale est 0 |
 
@@ -1319,6 +1319,13 @@ revérifie encore au moment d'armer. L'absence avant la demande garde l'offre
 récupérable, sans `training/start` ni `training/end`; après le retour du passager,
 un nouveau clic est nécessaire. L'absence après un 2xx refuse l'armement et envoie
 une fin échouée. L'âge et la FC max restent ceux du lancement reçu.
+
+Sous `STO_SOURCE=bridged_declared`, tout lancement depuis le site est refusé avant
+`training/start` : un lancement distant est toujours un programme, donc une personne à
+bord. La console le dit, et le renvoie au tableau de bord comme raison de l'échec, avec
+sa propre phrase,
+`STO ponte : lancement depuis le site refuse, seances de banc a la console seulement`.
+Les séances de banc se lancent à la console seulement.
 
 L'opérateur renseigne le champ **Operateur** déjà présent dans la carte Programme,
 puis fait un seul geste sur **Cette personne est a bord et prete**. Le bouton envoie
@@ -1844,11 +1851,14 @@ reste sous le bouton et dans l'alerte en cas de refus (HTTP 409). Relâcher le
 champignon, vérifier le relais de sécurité et rétablir une lecture fiable ; pour
 `non configuree`, configurer `STO_SOURCE`. Ensuite acquitter par son nom, puis
 demander un nouveau départ. La refermeture de la chaîne ne relance aucune séance.
+Sous `STO_SOURCE=bridged_declared`, aucune lecture n'existe : l'acquittement se fait
+par son nom, toutes ses autres conditions inchangées, et un nouveau départ reste
+nécessaire.
 
 | Élément | Rôle |
 |---|---|
 | champ `votre nom` | obligatoire |
-| case `le coup de poing a ete deverrouille (tire)` | déclaration séparée : la lecture STO ne remplace pas la confirmation humaine du déverrouillage. Par défaut non cochée, pour échouer du côté sûr |
+| case de déclaration séparée | ses mots sont ceux du mode de la console (`estop_released_label` de `/api/status`) : `le coup de poing a ete deverrouille (tire)` sous les autres sources, `aucun coup de poing n'est cable : la cause de l'arret d'urgence de l'ecran est ecartee et personne n'est dans le rayon du bras` sous `bridged_declared`. La page ne propose jamais la phrase de l'autre mode, ni aucune case avant d'avoir lu ces mots ; des mots nouveaux décochent la case. Même champ `estop_released`, même règle du Pi. La lecture STO ne remplace pas cette confirmation humaine. Par défaut non cochée, pour échouer du côté sûr |
 | bouton `Acquitter` | `POST /api/safety/acknowledge` : efface les verdicts verrouillés. **Rien d'autre ne le fait**, jamais automatiquement |
 
 Résultats possibles (vérifiés en simulation) :
@@ -1958,6 +1968,19 @@ Sans attestation, tout démarrage (manuel ou programmé) répond 412 :
 > normalement fermé du champignon sur P24 -> STO. L'attestation reste une déclaration
 > humaine obligatoire, avec ses deux cases distinctes. Voir [securite.md](securite.md).
 
+**Sous `STO_SOURCE=bridged_declared` : la déclaration de banc, et elle seule.** Les deux
+cases seraient fausses : la carte, titrée `Declaration de banc : STO ponte`, ne les
+propose pas et la page ne les envoie pas. Elle montre la phrase exacte lue dans
+`/api/status`, une seule case `J'atteste ce texte tel qu'il est ecrit ci-dessus.` et
+le nom ; le corps envoyé est `{"operator", "bench_bridged_declared": true}`. La phrase
+enregistrée et écrite mot pour mot dans le journal est
+`le STO est ponte, aucun arret d'urgence materiel ; l'arret d'urgence est la coupure de la prise secteur ; capsule vide ou lestee, aucune personne a bord ; personne dans le rayon du bras pendant la rotation`.
+Le Pi refuse (400, rien d'enregistré) les deux cases d'ANH-92 sous ce mode, et la
+confirmation de banc sous toutes les autres sources ; le nom est exigé dans les deux
+cas. Comme l'autre, elle vit dans le processus : à refaire à chaque redémarrage. Les
+confirmations à proposer sont celles que nomme `attestation_fields` de `/api/status` :
+la page n'en propose aucune avant de l'avoir lu.
+
 ### Carte « Chaine STO »
 
 | État affiché | Sens et action |
@@ -1966,9 +1989,11 @@ Sans attestation, tout démarrage (manuel ou programmé) répond 412 :
 | `ouverte` | relâcher le champignon et vérifier le relais ; au repos après un appui, c'est un état normal |
 | `inconnue` | lecture absente, en échec ou trop ancienne ; rétablir une lecture fiable |
 | `non configuree` | `STO_SOURCE=none` ; configurer la source, ce n'est pas une panne |
+| `pontee (declaree)` | `STO_SOURCE=bridged_declared` : pont STO en place, déclaré par une personne ; rien n'est lu, aucun arrêt d'urgence matériel. Seule une séance manuelle de banc peut démarrer |
 
-La source figure entre parenthèses : `none`, `sim_ready`, `sim_open`, `drive_input`.
-`Derniere lecture reussie` donne l'âge en secondes, ou `aucune`.
+La source figure entre parenthèses : `none`, `sim_ready`, `sim_open`, `drive_input`,
+`bridged_declared`. `Derniere lecture reussie` donne l'âge en secondes, ou `aucune` ;
+sous `bridged_declared`, la carte dit `Aucune lecture : chaine declaree pontee`.
 
 **Sur le banc réel, aucun départ avant le câblage, et c'est voulu.** Avec
 `MOTOR_BACKEND=serial`, `STO_SOURCE` vaut `none` par défaut et `sim_*` est refusé
@@ -1976,9 +2001,10 @@ au démarrage : la console démarre, la carte affiche `non configuree (none)`, e
 tout départ comme tout acquittement de verdict est refusé avec la raison STO tant
 qu'une source réelle n'est pas câblée, configurée et prête. Le banc actuel, dont le
 pont STO est en place, ne peut donc plus armer ni acquitter un verdict. C'est la
-décision du responsable du projet du 22 octobre 2026 : il n'existe aucune
-exemption banc, parce que la lecture de la chaîne de sécurité est la condition de
-l'armement et de l'acquittement. Le banc redevient utilisable une fois la chaîne
+décision du responsable du projet du 22 octobre 2026 : aucune exemption banc par
+défaut, parce que la lecture de la chaîne de sécurité est la condition de
+l'armement et de l'acquittement. Depuis le 29 octobre 2026, une exception déclarée
+existe : voir « Banc déclaré ponté » plus bas. Le banc redevient utilisable une fois la chaîne
 câblée, le pont retiré et `STO_SOURCE=drive_input` configuré avec son entrée
 ([raspberry-pi.md, 2.2](raspberry-pi.md#22-le-variateur-srcmotor)). Une lecture ancienne
 ne reste jamais `prete` : l'état devient `unknown` au-delà de 2 s ; la source reste
@@ -1996,6 +2022,23 @@ Le bouton manuel conserve sa règle de disponibilité du mouvement, complétée
 par le seul contrôle STO. L'attestation et la disponibilité de la machine sont
 toujours vérifiées par le Pi au clic ; leurs refus restent visibles. Le départ
 programmé conserve aussi ses conditions d'attestation et d'état `idle` dans la page.
+
+**Banc déclaré ponté (`STO_SOURCE=bridged_declared`).** Le bandeau rouge
+**STO PONTE : aucun arret d'urgence materiel** est sur toutes les pages, à la place de
+**CHAINE STO NON PRETE**, tant que la dernière réponse de la console nomme cette source :
+une liaison coupée, un statut en retard ou une demande échouée ne le font pas tomber,
+seule une réponse qui nomme une autre source. La carte dit `pontee (declaree)`. Le
+bouton manuel (séance de banc) reste disponible si le reste le permet ; **Demarrer la
+seance** est grisé avec la phrase du Pi,
+`chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`,
+et le Pi refuse tout départ avec personne à bord avec cette phrase (412, code
+`sto_bridged_bench_only`). Un lancement depuis le tableau de bord est refusé avant
+`training/start`, avec sa propre phrase (carte « Depart distant », section 9). Couper
+la prise secteur coupe le variateur : le bras part en roue libre, sans frein (144,6 s
+depuis 1380 tr/min moteur selon le modèle du variateur simulé, jamais mesuré sur la
+machine) ; rester hors du rayon du bras jusqu'à l'arbre immobile, constaté.
+Configuration et procédure de banc :
+[raspberry-pi.md, 2.2](raspberry-pi.md#banc-déclaré-ponté--bridged_declared-anh-92).
 
 Si la chaîne s'ouvre alors qu'un mouvement est possible, le verdict existant
 `sto_open / quick_stop` apparaît dans **Verdict en cours**, avec son détail et
@@ -2176,8 +2219,14 @@ l'une des phrases communes suivantes, également affichées à côté des bouton
 - `etat STO inconnu : retablir une lecture fiable de la chaine de securite` ;
 - `lecture STO non configuree : configurer la source de la chaine de securite`.
 
+Sous `STO_SOURCE=bridged_declared`, un départ avec personne à bord (programme, ou
+séance manuelle `occupied` par l'API) répond `412`, code `sto_bridged_bench_only`,
+avec la phrase
+`chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`.
+
 L'acquittement répond `409` avec la même phrase tant que la chaîne n'est pas prête,
-même si le verdict à libérer porte sur une autre cause.
+même si le verdict à libérer porte sur une autre cause (pas sous
+`bridged_declared`, où il n'y a pas de lecture à attendre).
 
 | Message | Code | Sens |
 |---|---|---|
@@ -2464,7 +2513,7 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/safety/attest` | `{"operator", "sto_jumper_removed", "mushroom_wired_nc"}` | attestation du câblage, pour ce démarrage | 200 ; 400 (une case manque, nom vide) |
+| POST | `/api/safety/attest` | `{"operator", "sto_jumper_removed", "mushroom_wired_nc"}` ; sous `bridged_declared`, `{"operator", "bench_bridged_declared"}` (les champs que nomme `attestation_fields` de `/api/status`) | attestation du câblage, ou de banc, pour ce démarrage | 200 ; 400 (une case manque, case de l'autre mode, nom vide) |
 | POST | `/api/safety/acknowledge` | `{"operator", "estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
 | POST | `/api/presence` | `{"operator"?}` | signal de présence de l'accompagnant (règle `attendant_absent`) | 200 `{"at": …}` |
 | POST | `/api/service/restore` | `{"operator"}` | remet en service une console hors service ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 400 (nom vide) ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |

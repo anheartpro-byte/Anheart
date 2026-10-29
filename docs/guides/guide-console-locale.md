@@ -156,7 +156,10 @@ dans un navigateur. Elle fonctionne sans internet.
   rapide est une rampe, pas une coupure.
 * elle lit le retour de la chaîne STO configurée, mais ne vérifie ni le retrait du
   pont ni le câblage NF du champignon sur P24 -> STO : l'attestation reste une
-  **déclaration humaine**, obligatoire avec ses deux cases ;
+  **déclaration humaine**, obligatoire avec ses deux cases. Sous
+  `STO_SOURCE=bridged_declared` (pont STO déclaré, §11), il n'y a ni lecture ni
+  coup de poing : l'attestation est la déclaration de banc, l'arrêt d'urgence est la
+  coupure de la prise secteur, et seule une séance de banc sans personne à bord démarre ;
 * elle ne voit pas réellement la capsule : **il n'existe aujourd'hui qu'une caméra
   simulée**, qui ne regarde jamais la vraie machine ;
 * elle ne permet pas, depuis la page, de déclarer une personne à bord en séance
@@ -259,7 +262,7 @@ l'emporte sur `.env`.**
 | `UI_TLS_CERT`, `UI_TLS_KEY` | obligatoires si `UI_HOST` n'est pas `127.0.0.1` | deux chemins : le certificat de la console et sa clé privée | hors boucle locale, la page n'est servie qu'en TLS (`https://`) |
 | `UI_TLS_NAMES` | non | adresses et noms séparés par des virgules | les adresses auxquelles une tablette ouvre la console, celles du certificat |
 | `SENSORS` | non (défaut `ECG`) | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` | capteurs affichés ; `ECG` toujours présent |
-| `STO_SOURCE` | non (défaut `sim_ready` avec `sim`, `none` avec `serial`) | `none`, `sim_ready`, `sim_open`, `drive_input` | lecture de la chaîne STO. `sim_*` est refusé avec `serial`. Avec `none`, tout départ et tout acquittement sont refusés |
+| `STO_SOURCE` | non (défaut `sim_ready` avec `sim`, `none` avec `serial`) | `none`, `sim_ready`, `sim_open`, `drive_input`, `bridged_declared` | lecture de la chaîne STO. `sim_*` est refusé avec `serial`, `bridged_declared` avec `sim`. Avec `none`, tout départ et tout acquittement sont refusés. `bridged_declared` déclare le pont STO en place : rien n'est lu, seules les séances manuelles de banc sans personne à bord démarrent (§11) |
 | `STO_DRIVE_INPUT` | avec `drive_input` seulement, sans défaut | `LI1` à `LI6` | entrée du variateur qui reçoit le retour du relais de sécurité |
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
 | `PROGRAMS_ENABLED` | non (défaut `false`) | `true` / `false` | autorise les séances programmées (jalon M5) |
@@ -314,9 +317,12 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
 
    Sans `STO_SOURCE`, la console d'un variateur réel démarre avec la chaîne STO
    `non configuree (none)` et refuse tout départ et tout acquittement : c'est voulu,
-   aucune exemption banc n'existe. Il faut d'abord câbler la chaîne de sécurité,
+   aucune exemption banc n'existe par défaut. Il faut d'abord câbler la chaîne de sécurité,
    retirer le pont STO, puis régler `STO_SOURCE=drive_input` et `STO_DRIVE_INPUT`
    avec l'entrée câblée ([console-locale.md, carte « Chaine STO »](../console-locale.md#carte--chaine-sto-)).
+   Pour des séances de banc sans personne à bord avec le pont en place, et seulement
+   pour elles : `STO_SOURCE=bridged_declared`, avec sa procédure
+   ([raspberry-pi.md, 2.2](../raspberry-pi.md#banc-déclaré-ponté--bridged_declared-anh-92)).
 
 3. Redémarrer la console, **au repos** : `sudo systemctl restart anheart`.
 4. Lire la ligne de résumé, `journalctl -u anheart -n 20` : elle doit dire
@@ -543,7 +549,7 @@ Repères de la capture au repos (zone centrale) :
 
 1. Carte **Mode MANUEL**, pastille `inactif`.
 2. Case **BANC - personne a bord : NON (moteur decouple, ou bras couple avec la
-   capsule VIDE)**.
+   capsule VIDE ou LESTEE)**.
 3. Champ **Operateur** (« qui pilote »).
 4. Bouton vert **Demarrer MANUEL**.
 5. Carte **Frequence cardiaque (regulation)**, pastille de qualité `good`, grand
@@ -866,6 +872,12 @@ recherché par l'identifiant du passager; le libellé reçu avec le lancement n'
 affiché. Si ce passager ne figure pas dans la liste tenue, la carte donne la raison et
 désactive le bouton.
 
+Sous `STO_SOURCE=bridged_declared`, la console refuse tout départ proposé par le tableau
+de bord, avant d'en confirmer aucun, avec la raison
+`STO ponte : lancement depuis le site refuse, seances de banc a la console seulement` :
+un tel départ est toujours un programme, avec une personne à bord. Les séances de banc
+se lancent à la console (§13.2).
+
 Saisissez votre nom dans le champ **Operateur** habituel puis cliquez une fois sur
 **Cette personne est a bord et prete**. Le bouton local **Demarrer la seance** est
 masqué tant qu'une offre est affichée. La carte indique `en attente de confirmation`,
@@ -1037,6 +1049,23 @@ couple indépendamment du Pi. Le logiciel affiche `ouverte` et le verdict
 peut rester non nulle pendant la roue libre. Si c'est la lecture qui devient
 indisponible trop longtemps pendant un mouvement possible, le verdict verrouillé
 est `sto_unreadable / ramp_down`.
+
+**Sous `STO_SOURCE=bridged_declared` (pont STO déclaré).** La carte et la pastille
+disent `pontee (declaree)`, sans date de lecture : rien n'est lu. En haut de toutes les
+pages, le bandeau rouge **STO PONTE : aucun arret d'urgence materiel** remplace
+**CHAINE STO NON PRETE** ; il reste affiché même si la liaison tombe ou si le statut
+tarde, jusqu'à ce que la console nomme une autre source. Il n'y a pas de coup de poing :
+l'arrêt d'urgence est la **coupure de la prise secteur**. Elle coupe le variateur, et le
+bras part en roue libre, sans frein : environ 145 s depuis la vitesse maximale selon le
+modèle du variateur simulé (144,6 s, jamais mesuré sur la machine). Restez hors du rayon
+du bras jusqu'à l'arrêt complet, arbre immobile constaté de vos yeux. Seul le départ
+**MANUEL** de banc reste possible ; **Demarrer la seance** est grisé avec la raison
+`chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`.
+Un départ proposé par le tableau de bord est refusé (§9). La carte d'attestation ne
+propose que la déclaration de banc (§13.1), et la case de l'acquittement dit
+`aucun coup de poing n'est cable : la cause de l'arret d'urgence de l'ecran est ecartee et personne n'est dans le rayon du bras`
+au lieu de la case du coup de poing. L'acquittement se fait par son nom, sans lecture à
+attendre, puis un nouveau départ reste nécessaire.
 
 Après vérification, relâcher le champignon et vérifier le relais. Attendre `prete`,
 puis **Acquitter** par son nom et demander un **nouveau départ**. Refermer seul ne
@@ -1334,10 +1363,20 @@ Si une seule case est cochée, rien n'est enregistré et la note affiche
 > Le logiciel ne peut pas le savoir : c'est à vous de ne pas attester ce qui n'est pas
 > vrai.
 
+**Sous `STO_SOURCE=bridged_declared` (pont STO déclaré).** La carte s'appelle
+**Declaration de banc : STO ponte** et ne propose pas les deux cases. Lisez la phrase
+affichée, `le STO est ponte, aucun arret d'urgence materiel ; l'arret d'urgence est la coupure de la prise secteur ; capsule vide ou lestee, aucune personne a bord ; personne dans le rayon du bras pendant la rotation`,
+et cochez la seule case **J'atteste ce texte tel qu'il est ecrit ci-dessus.**, avec votre
+nom, **seulement** si chacun de ces points est vrai : capsule vide ou lestée, personne à
+bord, une personne à la prise secteur, personne dans le rayon du bras. Elle est
+enregistrée mot pour mot et vaut jusqu'au prochain redémarrage de la console. La
+procédure complète (qui, avant, pendant, après) est dans
+[raspberry-pi.md, 2.2](../raspberry-pi.md#procédure-de-banc-sous-bridged_declared).
+
 ### 13.2 Séance manuelle de banc à 27 tr/min
 
 Condition préalable : **personne dans la capsule**. Soit le moteur est découplé, soit
-le bras est couplé avec la capsule **vide**.
+le bras est couplé avec la capsule **vide**, ou lestée sans personne.
 
 Réglage nécessaire : 27 tr/min au bras = environ 1345 tr/min moteur. Avec le plafond
 par défaut (`MOTOR_MAX_RPM=300`, environ 6 tr/min), c'est impossible. Il faut
@@ -2094,7 +2133,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 
 | Message | Ce que ça veut dire | Quoi faire |
 |---|---|---|
-| ✔ `cochez la declaration BANC (personne a bord : NON) avant de demarrer` | case BANC non cochée | vérifier que la capsule est vide, cocher |
+| ✔ `cochez la declaration BANC (personne a bord : NON) avant de demarrer` | case BANC non cochée | vérifier que personne n'est dans la capsule (vide ou lestée), cocher |
 | ✔ `an operator name is required: an unattributable session record is not one` | nom vide | taper votre nom (champ Operateur, ou votre nom en Securite) |
 | ✔ `nobody has attested the emergency stop this boot: ...` | attestation pas faite depuis le démarrage | §13.1 |
 | ✔ `both confirmations are required, separately: ...` | une seule case cochée | cocher les deux, seulement si les deux sont vraies |
