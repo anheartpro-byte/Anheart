@@ -102,6 +102,8 @@ function occurrences(haystack: Buffer, needle: Buffer): number {
 
 /** Written in the output folder when nothing of the run may be sent anywhere. */
 export const DO_NOT_SEND = "ne-pas-envoyer";
+/** Written in the output folder only at the end of a complete count that found nothing. */
+export const MAY_SEND = "envoi-permis";
 
 /**
  * Last reporter of the run. As soon as a test ends, before the HTML report
@@ -110,11 +112,13 @@ export const DO_NOT_SEND = "ne-pas-envoyer";
  * counts the run's secret values (held in the runner's memory, never written)
  * and the signed tokens in test-results, the HTML report and the built site;
  * the screenshots are masked and read by a person, not counted. Prints counts
- * only. Any occurrence, or a count it could not make, fails the run closed:
- * test-results and the HTML report are deleted (Playwright then writes back
- * test-results/.last-run.json alone: the status and the ids of failed tests),
- * and the marker DO_NOT_SEND is written in the output folder for the steps
- * that would upload them.
+ * only. Any occurrence, a count it could not make or one interrupted by an
+ * error, fails the run closed: test-results and the HTML report are deleted
+ * (Playwright then writes back test-results/.last-run.json alone: the status
+ * and the ids of failed tests), and the marker DO_NOT_SEND is written in the
+ * output folder. A complete count that found nothing writes MAY_SEND instead,
+ * which the steps that would upload the outputs require: a run that dies
+ * before its end leaves neither.
  */
 export default class SecretScan implements Reporter {
   constructor(private readonly options: { output: string; folders: string[]; withheld: string[] }) {}
@@ -124,7 +128,7 @@ export default class SecretScan implements Reporter {
   }
 
   onBegin(): void {
-    rmSync(path.join(this.options.output, DO_NOT_SEND), { force: true });
+    for (const marker of [DO_NOT_SEND, MAY_SEND]) rmSync(path.join(this.options.output, marker), { force: true });
   }
 
   onTestEnd(_test: TestCase, result: TestResult): void {
@@ -148,7 +152,7 @@ export default class SecretScan implements Reporter {
   private failClosed(reason: string): { status: FullResult["status"] } {
     for (const folder of this.options.withheld) rmSync(folder, { recursive: true, force: true });
     const marker = path.join(this.options.output, DO_NOT_SEND);
-    writeFileSync(marker, `${reason}\n`);
+    writeFileSync(marker, `${reason}\n`, { mode: 0o600 });
     console.log(`[e2e] ${reason} : test-results et rapport supprimés, marqueur ${marker}`);
     return { status: "failed" };
   }
@@ -162,20 +166,26 @@ export default class SecretScan implements Reporter {
     let scanned = 0;
     let found = 0;
     let tokens = 0;
-    for (const folder of this.options.folders) {
-      for (const file of files(folder)) {
-        scanned += 1;
-        for (const buffer of contents(file)) {
-          for (const value of values) found += occurrences(buffer, value);
-          const text = buffer.toString("latin1");
-          tokens += (text.match(JWT)?.length ?? 0) + (text.match(DEV_BROWSER)?.length ?? 0);
+    try {
+      for (const folder of this.options.folders) {
+        for (const file of files(folder)) {
+          scanned += 1;
+          for (const buffer of contents(file)) {
+            for (const value of values) found += occurrences(buffer, value);
+            const text = buffer.toString("latin1");
+            tokens += (text.match(JWT)?.length ?? 0) + (text.match(DEV_BROWSER)?.length ?? 0);
+          }
         }
       }
+    } catch (error) {
+      console.log(`[e2e] recherche des secrets interrompue au fichier ${scanned} (${(error as Error).name})`);
+      return this.failClosed("recherche des secrets interrompue");
     }
     console.log(
       `[e2e] recherche des secrets : ${values.length} valeurs de l'exécution, ${scanned} fichiers, ${found} occurrence(s), ${tokens} jeton(s) signé(s)`,
     );
     if (found > 0 || tokens > 0) return this.failClosed("secret ou jeton signé trouvé");
+    writeFileSync(path.join(this.options.output, MAY_SEND), `${scanned} fichiers, 0 occurrence\n`, { mode: 0o600 });
     console.log(`[e2e] rapport, traces et captures : ${this.options.output}`);
   }
 }
