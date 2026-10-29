@@ -66,6 +66,7 @@ var state = {
   reconnectTimer: null,
   motionEnabled: true,   // from /api/panel; false on the read-only console
   programsEnabled: true, // from /api/panel; false until milestone M5
+  stoSource: null,       // the STO source the console last named: kept when an answer is missing or late
   panel: null,           // the last /api/panel answer
   panelAt: 0,            // performance.now() when it came
   remoteLaunch: null,
@@ -965,17 +966,35 @@ function renderDriveFault() {
   showBanner(el("drive-fault-banner"), faulted, reworded);
 }
 
-var STO_LABELS = { ready: "prete", open: "ouverte", unknown: "inconnue", not_configured: "non configuree" };
+var STO_LABELS = {
+  ready: "prete",
+  open: "ouverte",
+  unknown: "inconnue",
+  not_configured: "non configuree",
+  bridged: "pontee (declaree)",
+};
 var STO_ACTIONS = {
+  bridged: "Aucun arret d'urgence materiel : l'arret d'urgence est la coupure de la prise secteur. Le bras part alors en roue libre, sans frein : rester hors de son rayon jusqu'a l'arret complet de l'arbre, constate.",
   ready: "La lecture permet le depart. L'attestation humaine du cablage reste obligatoire.",
   open: "Relacher le champignon et verifier le relais de securite, puis acquitter le verdict par votre nom et demander un nouveau depart. Au repos, une chaine ouverte apres un appui est normale.",
   unknown: "Verifier le relais et la liaison de lecture STO, puis attendre une lecture fiable avant d'acquitter ou de demarrer.",
   not_configured: "Configurer STO_SOURCE pour lire la chaine de securite. Cette lecture non configuree n'est pas une panne.",
 };
 
+/*
+  STO_SOURCE=bridged_declared: nothing is read, a person declared the chain
+  bridged. The console says "bridged" and the reason a person on board is
+  refused; only a manual bench session may start, and the console judges it.
+  Its banner follows the source the console last named, so that a page whose
+  link dropped or whose answers are late keeps saying it.
+*/
 function renderSto() {
   var report = statusLeads() ? state.status : state.snapshot;
   var row = report && report.sto;
+  if (row) {
+    state.stoSource = row.source;
+  }
+  var bridgedSource = state.stoSource === "bridged_declared";
   var received = report === state.status ? state.statusAt : state.snapshotAt;
   var age = row && row.age_s !== null ? row.age_s + (performance.now() - received) / 1000 : null;
   var kind = row ? row.state : "unknown";
@@ -983,25 +1002,83 @@ function renderSto() {
     kind = "unknown";
   }
   var ready = kind === "ready";
+  // The declaration only from the source that declares it, as the console judges it.
+  var bridged = kind === "bridged" && bridgedSource;
   var reason = kind === "unknown" && row && row.state !== "unknown"
     ? row.unknown_refusal
     : row && row.refusal ? row.refusal : ready ? "" : "etat STO inconnu : lecture en attente";
   var action = STO_ACTIONS[kind] || STO_ACTIONS.unknown;
   pill(el("sto-pill"), (STO_LABELS[kind] || STO_LABELS.unknown) + (row ? " (" + row.source + ")" : ""), ready ? "good" : "warn");
   pill(el("side-sto"), STO_LABELS[kind] || STO_LABELS.unknown, ready ? "good" : "warn");
-  text(el("sto-age"), "Derniere lecture reussie : " + (age !== null ? num(age, 1) + " s" : "aucune"));
+  text(
+    el("sto-age"),
+    bridged ? "Aucune lecture : chaine declaree pontee" : "Derniere lecture reussie : " + (age !== null ? num(age, 1) + " s" : "aucune")
+  );
   text(el("sto-note"), (reason ? reason + ". " : "") + action);
   var detail = reason + ". Depart et acquittement refuses. " + action;
   var banner = el("sto-banner-detail");
   var reworded = banner.textContent !== detail;
   text(banner, detail);
-  showBanner(el("sto-banner"), !ready, reworded);
+  showBanner(el("sto-banner"), !ready && !bridgedSource, reworded);
+  showBanner(el("bridged-banner"), bridgedSource, false);
   text(el("start-sto-note"), reason);
   text(el("manual-sto-note"), reason);
-  text(el("ack-sto-note"), ready ? "" : "Acquittement refuse : " + reason + ". " + action);
+  // Under the declaration an acknowledgement is taken by name: no reading is waited for.
+  text(el("ack-sto-note"), ready || bridged ? "" : "Acquittement refuse : " + reason + ". " + action);
   var status = state.status;
   el("start").disabled = !ready || !status || !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
-  el("manual-start").disabled = !ready || !state.motionEnabled;
+  // The manual card starts a bench session only: the one start the declaration admits.
+  el("manual-start").disabled = !(ready || bridged) || !state.motionEnabled;
+}
+
+/*
+  The confirmations of the console's mode, and none other: the console names
+  the fields its attestation takes (attestation_fields) and the words of the
+  acknowledgement's estop_released (estop_released_label). Under
+  STO_SOURCE=bridged_declared that is the bench declaration and "no mushroom
+  is wired"; elsewhere ANH-92's two boxes and "the mushroom was pulled". Before
+  the console has said which, none is offered.
+*/
+var ATTEST_BOXES = {
+  sto_jumper_removed: "attest-jumper",
+  mushroom_wired_nc: "attest-mushroom",
+  bench_bridged_declared: "attest-bench",
+};
+
+function attestFields() {
+  var status = state.status;
+  return (status && status.attestation_fields) || [];
+}
+
+function renderAttestForm(status) {
+  var fields = status.attestation_fields || [];
+  Object.keys(ATTEST_BOXES).forEach(function (field) {
+    show(el(ATTEST_BOXES[field] + "-row"), fields.indexOf(field) !== -1);
+  });
+  var bench = fields.indexOf("bench_bridged_declared") !== -1;
+  text(el("attest-title"), bench ? "Declaration de banc : STO ponte" : "Cablage de l'arret d'urgence");
+  show(el("attest-important"), fields.indexOf("sto_jumper_removed") !== -1);
+  show(el("attest-bench-important"), bench);
+  var label = status.estop_released_label || "";
+  var words = el("ack-released-label");
+  if (words.textContent !== label) {
+    // New words are a new question: a box ticked under the old ones is not an answer to it.
+    el("ack-released").checked = false;
+    text(words, label);
+  }
+  show(el("ack-released-row"), Boolean(label));
+}
+
+/** What /api/safety/attest is sent: the name, and each confirmation of the console's mode. */
+function attestBody() {
+  var body = { operator: el("attest-operator").value };
+  attestFields().forEach(function (field) {
+    var box = ATTEST_BOXES[field];
+    if (box) {
+      body[field] = el(box).checked;
+    }
+  });
+  return body;
 }
 
 /*
@@ -3290,6 +3367,7 @@ function loadStatus() {
       status.attested ? "good" : "bad"
     );
     text(el("attest-statement"), status.attestation_statement);
+    renderAttestForm(status);
     if (status.attestation) {
       ok(
         el("attest-note"),
@@ -3851,11 +3929,7 @@ function settleAcknowledgement(report) {
 function doAttest() {
   api("/api/safety/attest", {
     method: "POST",
-    body: {
-      operator: el("attest-operator").value,
-      sto_jumper_removed: el("attest-jumper").checked,
-      mushroom_wired_nc: el("attest-mushroom").checked,
-    },
+    body: attestBody(),
   })
     .then(function () {
       loadStatus();
