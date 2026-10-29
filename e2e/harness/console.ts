@@ -162,7 +162,8 @@ export class PiConsole {
   async stop(): Promise<number | null> {
     clearInterval(this.presenceTimer);
     this.presenceTimer = undefined;
-    if (this.child.exitCode !== null) return this.child.exitCode;
+    // Already gone, by itself or by a signal (an earlier stop's SIGKILL): its exit was emitted.
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return this.child.exitCode;
     const exited = new Promise<number | null>((resolve) => this.child.once("exit", resolve));
     await stopGroup(this.child.pid as number, "SIGINT");
     const code = await exited;
