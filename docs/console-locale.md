@@ -252,7 +252,8 @@ une tablette**. Pour le cas où il faut une connexion nouvelle, la console
 n'impose pas au navigateur de refuser définitivement (pas d'en-tête HSTS) : le
 navigateur garde son moyen de passer l'avertissement d'un certificat expiré, à
 n'employer que pour arrêter une machine. L'arrêt câblé, lui, ne dépend ni de
-la tablette ni du certificat. Ce qui est prouvé et ce qui ne l'est pas est en
+la tablette ni du certificat (sous `STO_SOURCE=bridged_declared`, aucun n'est
+câblé : c'est la coupure de la prise secteur, section 11). Ce qui est prouvé et ce qui ne l'est pas est en
 [securite.md, section 11](securite.md#11-la-console-en-tls-hors-de-la-boucle-locale-anh-151).
 
 ---
@@ -643,6 +644,10 @@ s'arrête au mode : `liaison ouverte · repos`.
   Jusqu'au 10 octobre 2026 l'alerte disait `STOP refuse : Failed to fetch` et rien ne
   restait à l'écran. La page ne renvoie pas la demande ; le bandeau reste jusqu'à l'une
   des preuves ci-dessus.
+- Quand la dernière source nommée par la console est `bridged_declared`, le bandeau et
+  l'alerte finissent par `rien ne dit que la seance s'arrete : E-STOP, ou la coupure de la prise secteur`
+  au lieu de `... E-STOP, ou l'arret cable` (section 11). Sous toute autre source, et
+  tant que la console n'a pas nommé la sienne, les mots ci-dessus.
   Rejoué dans un navigateur : console suspendue en séance manuelle, bandeau affiché
   2,0 s après le clic et baissé à la reprise de la console ; requête coupée, bandeau
   affiché tout de suite, baissé 0,2 s après un STOP donné depuis un autre écran.
@@ -784,7 +789,9 @@ s'arrête au mode : `liaison ouverte · repos`.
 - Ce que l'E-STOP web **n'est pas** : un arrêt de sécurité. Il dépend du navigateur,
   du réseau, du serveur web et du processus. Le STO est ponté sur cette machine : même
   l'arrêt d'urgence le plus rapide est une rampe (voir [securite.md](securite.md)).
-  L'arrêt de sécurité est le coup de poing câblé.
+  L'arrêt de sécurité est le coup de poing câblé ; sous `STO_SOURCE=bridged_declared`
+  il n'y en a pas, et l'arrêt qui ne dépend pas du logiciel est la coupure de la prise
+  secteur (section 11).
 - **Une demande restée sans réponse est dite.** Si la console est bloquée ou le réseau
   muet, la requête reste en attente. Deux secondes après le premier clic resté sans
   réponse, un bandeau rouge propre à ce cas s'affiche :
@@ -808,6 +815,10 @@ s'arrête au mode : `liaison ouverte · repos`.
   un rechargement de la page. Un nouveau clic resté sans réponse change tout de suite
   le texte en
   `nouvelle demande sans reponse depuis N s, la precedente a echoue : … - UTILISEZ L'ARRET CABLE`.
+- Quand la dernière source nommée par la console est `bridged_declared`, chacun de ces
+  textes, bandeau et alerte, finit par `COUPEZ LA PRISE SECTEUR` au lieu de
+  `UTILISEZ L'ARRET CABLE`. Sous toute autre source, et tant que la console n'a pas
+  nommé la sienne, les mots ci-dessus.
 - Un E-STOP reste verrouillé jusqu'à un **acquittement nommé** (page Securite), avec la
   case « coup de poing déverrouillé » cochée.
 
@@ -2208,9 +2219,11 @@ Rejoué en simulation, dans cet ordre :
 4. Surveiller **Vitesse mesuree** (pas la consigne).
 5. `STOP` (rampe contrôlée). Attendre `a l'arret` et le mode `REPOS`. STOP fait
    descendre la consigne même si la pastille **Securite** dit `freeze` à ce moment
-   (section 5). Pour un arrêt immédiat : coup de poing câblé et E-STOP.
+   (section 5). Pour un arrêt immédiat : coup de poing câblé et E-STOP (sous
+   `bridged_declared` : coupure de la prise secteur et E-STOP, section 11).
 6. En cas d'urgence : `E-STOP`, puis, une fois la machine arrêtée et le coup de poing
-   réarmé, **Securite** → nom, case `coup de poing deverrouille`, `Acquitter`.
+   réarmé, **Securite** → nom, case `coup de poing deverrouille`, `Acquitter` (sous
+   `bridged_declared`, sans coup de poing, la case de banc de la section 11).
 
 ---
 

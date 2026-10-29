@@ -824,15 +824,36 @@ function renderDoubt(asked, limit, banner, detail, use) {
 }
 
 /*
+  The stop that does not depend on software, as every doubt names it: the
+  wired one, or the mains plug under STO_SOURCE=bridged_declared, where none
+  is wired. Read from the source the console last named; before it has named
+  one, ANH-92's words.
+*/
+function mainsPlugIsTheStop() {
+  return state.stoSource === "bridged_declared";
+}
+
+function estopDoubtUse() {
+  return mainsPlugIsTheStop() ? "COUPEZ LA PRISE SECTEUR" : "UTILISEZ L'ARRET CABLE";
+}
+
+function stopDoubtUse() {
+  return mainsPlugIsTheStop()
+    ? "rien ne dit que la seance s'arrete : E-STOP, ou la coupure de la prise secteur"
+    : "rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable";
+}
+
+/*
   The E-STOP in doubt. Its receipt takes the notice down, and so does a frame,
   or a status asked after the click, that shows a stop latched: the machine
   has it, whichever way it came. A frame under go_silent shows nothing either
-  way and leaves the notice up. The notice names the wired stop.
+  way and leaves the notice up. The notice names the stop that does not
+  depend on software (estopDoubtUse).
 */
 function renderEstopUnanswered() {
   renderDoubt(
     state.estopAsked, ESTOP_ANSWER_MS, el("estop-unanswered"), el("estop-unanswered-detail"),
-    "UTILISEZ L'ARRET CABLE"
+    estopDoubtUse()
   );
 }
 
@@ -850,14 +871,12 @@ function estopSeenLatched(opinion) {
   So does a frame showing the session ending, or a status asked after the
   click showing no session running: the stop is under way, whichever way it
   came. A frame at rest is not that proof: a start may be waiting behind it.
-  The notice names the two stops that remain.
+  The notice names the two stops that remain (stopDoubtUse).
 */
-var STOP_DOUBT_USE = "rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable";
-
 function renderStopUnanswered() {
   renderDoubt(
     state.stopAsked, STOP_ANSWER_MS, el("stop-unanswered"), el("stop-unanswered-detail"),
-    STOP_DOUBT_USE
+    stopDoubtUse()
   );
 }
 
@@ -3689,7 +3708,7 @@ function doStop() {
       window.alert(
         refused
           ? "STOP refuse : " + error.message
-          : "la demande d'arret (STOP) a echoue : " + error.message + " - " + STOP_DOUBT_USE
+          : "la demande d'arret (STOP) a echoue : " + error.message + " - " + stopDoubtUse()
       );
     }
   );
@@ -3703,7 +3722,9 @@ function doStop() {
   It is a CONVENIENCE stop all the same - it depends on this browser, the
   network, the web server and the session process, any one of which can be the
   thing that has failed - and it is never safety-rated. The safety-rated stop
-  is the wired mushroom, and while STO is jumpered even that one is a ramp.
+  is the wired mushroom, and while STO is jumpered even that one is a ramp;
+  under STO_SOURCE=bridged_declared none is wired and the stop that does not
+  depend on software is the mains plug (estopDoubtUse).
 
   For the same reason the page does not wait in silence for the answer: see
   renderEstopUnanswered().
@@ -3738,7 +3759,7 @@ function doEstop() {
         failDoubt(asked, clicked, error.message);
       }
       renderEstopUnanswered();
-      window.alert("la demande d'arret d'urgence a echoue : " + error.message + " - UTILISEZ L'ARRET CABLE");
+      window.alert("la demande d'arret d'urgence a echoue : " + error.message + " - " + estopDoubtUse());
     }
   );
 }

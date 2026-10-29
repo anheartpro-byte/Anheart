@@ -520,3 +520,112 @@ test("a launch from the dashboard refused under the bridge shows the console's o
   assert.equal(page.node("remote-launch-status").textContent, `refuse : ${REMOTE_REFUSED}`);
   assert.equal(page.node("remote-launch-confirm").disabled, true);
 });
+
+/* ===== EX-B3 / EX-B5: the stop that does not depend on software, in the words of the mode ===== */
+
+// ANH-92's words, unchanged under every other source and before the console has named one.
+const WIRED_ESTOP_USE = "UTILISEZ L'ARRET CABLE";
+const WIRED_STOP_USE = "rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable";
+// Under the declared bridge no stop is wired: the mains plug is the one that needs no software.
+const MAINS_ESTOP_USE = "COUPEZ LA PRISE SECTEUR";
+const MAINS_STOP_USE = "rien ne dit que la seance s'arrete : E-STOP, ou la coupure de la prise secteur";
+
+const MODES = [
+  { name: "a frame naming the declared bridge", tell: async (page) => page.frame(snapshot()), estop: MAINS_ESTOP_USE, stop: MAINS_STOP_USE },
+  {
+    name: "a status naming the declared bridge, with no live frame",
+    tell: async (page) => {
+      page.context.state.connected = false;
+      page.context.api = () => Promise.resolve(status(BENCH_MODE));
+      await page.context.loadStatus();
+    },
+    estop: MAINS_ESTOP_USE,
+    stop: MAINS_STOP_USE,
+  },
+  {
+    name: "sim_ready",
+    tell: async (page) => page.frame(snapshot({ sto: readRow("ready", "sim_ready") })),
+    estop: WIRED_ESTOP_USE,
+    stop: WIRED_STOP_USE,
+  },
+  {
+    name: "drive_input",
+    tell: async (page) => page.frame(snapshot({ sto: readRow("ready", "drive_input") })),
+    estop: WIRED_ESTOP_USE,
+    stop: WIRED_STOP_USE,
+  },
+  { name: "no source named yet", tell: async () => undefined, estop: WIRED_ESTOP_USE, stop: WIRED_STOP_USE },
+];
+
+// A page told its mode, whose requests then go out and never come back, or fail at once.
+async function told(mode, { failing = false } = {}) {
+  const page = panel();
+  await mode.tell(page);
+  const alerts = [];
+  page.context.window.alert = (message) => alerts.push(message);
+  page.context.api = failing ? () => Promise.reject(new Error("Failed to fetch")) : () => new Promise(() => undefined);
+  return { page, alerts };
+}
+
+const afterTwoSeconds = (page) => {
+  page.clock.now += 2000;
+  page.context.refreshLiveness();
+};
+
+for (const mode of MODES) {
+  test(`an unanswered E-STOP names the stop that needs no software: ${mode.name}`, async () => {
+    const { page } = await told(mode);
+    page.context.doEstop();
+    afterTwoSeconds(page);
+    assert.equal(page.announced("ARRET D'URGENCE NON CONFIRME"), true);
+    assert.equal(page.announced(`aucune reponse de la console depuis 2 s - ${mode.estop}`), true);
+    // Never the other mode's stop.
+    const other = mode.estop === MAINS_ESTOP_USE ? WIRED_ESTOP_USE : MAINS_ESTOP_USE;
+    assert.equal(page.announced(other), false);
+  });
+
+  test(`a failed E-STOP says it in its alert and its banner: ${mode.name}`, async () => {
+    const { page, alerts } = await told(mode, { failing: true });
+    page.context.doEstop();
+    await settle();
+    assert.deepEqual(alerts, [`la demande d'arret d'urgence a echoue : Failed to fetch - ${mode.estop}`]);
+    assert.equal(
+      page.announced(`la demande a echoue il y a 0 s et n'est plus en attente : Failed to fetch - ${mode.estop}`),
+      true,
+    );
+  });
+
+  test(`an unanswered STOP names the two stops that remain: ${mode.name}`, async () => {
+    const { page } = await told(mode);
+    page.context.doStop();
+    afterTwoSeconds(page);
+    assert.equal(page.announced("STOP NON CONFIRME"), true);
+    assert.equal(page.announced(`aucune reponse de la console depuis 2 s - ${mode.stop}`), true);
+  });
+
+  test(`a failed STOP says it in its alert: ${mode.name}`, async () => {
+    const { page, alerts } = await told(mode, { failing: true });
+    page.context.doStop();
+    await settle();
+    assert.deepEqual(alerts, [`la demande d'arret (STOP) a echoue : Failed to fetch - ${mode.stop}`]);
+    assert.equal(page.announced(`Failed to fetch - ${mode.stop}`), true);
+  });
+}
+
+test("an E-STOP in doubt before the mode is known names the plug once the console names the bridge", async () => {
+  const { page } = await told(MODES.at(-1));
+  page.context.doEstop();
+  afterTwoSeconds(page);
+  assert.equal(page.announced(`depuis 2 s - ${WIRED_ESTOP_USE}`), true);
+  page.frame(snapshot());
+  assert.equal(page.announced(`- ${MAINS_ESTOP_USE}`), true);
+  assert.equal(page.announced(WIRED_ESTOP_USE), false);
+});
+
+test("the page's own defaults, shown before any script runs, are ANH-92's words", () => {
+  assert.match(html, /<span id="estop-unanswered-detail">aucune reponse de la console - UTILISEZ L'ARRET CABLE<\/span>/);
+  assert.match(
+    html,
+    /<span id="stop-unanswered-detail">aucune reponse de la console - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable<\/span>/,
+  );
+});
