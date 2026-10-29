@@ -89,8 +89,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     await stopRunProcesses(runDir).catch((error: unknown) => problems.push(`processus : ${String(error)}`));
     let left = { users: -1, organizations: -1 };
     try {
-      await clerk.deleteTestResources();
-      left = await clerk.countTestResources();
+      // Only this run's: another run on the same instance keeps its accounts.
+      // The start of a run deletes the leftovers of every run.
+      await clerk.deleteTestResources(runId);
+      left = await clerk.countTestResources(runId);
     } catch (error) {
       problems.push(`Clerk : ${String(error)}`);
     }
@@ -106,7 +108,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     process.removeListener("exit", lastResort);
     say(
       `démontage en ${seconds(since)} : ports ${busy.length === 0 ? "libres" : `encore pris ${busy.join(", ")}`} (${ports.length}), ` +
-        `Clerk au préfixe e2e- : ${left.users} compte(s), ${left.organizations} organisation(s), dossier de l'exécution supprimé`,
+        `Clerk de l'exécution (e2e-${runId}) : ${left.users} compte(s), ${left.organizations} organisation(s), dossier de l'exécution supprimé`,
     );
     if (left.users !== 0 || left.organizations !== 0 || busy.length > 0) {
       problems.push("le démontage a laissé des restes");

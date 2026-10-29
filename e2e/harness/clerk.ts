@@ -64,6 +64,16 @@ export function clerkApi(keys: ClerkKeys) {
     return organizations.filter((organization) => TEST_ORGANIZATION.test(organization.name));
   }
 
+  async function testResources(runId?: string) {
+    const users = (await testUsers()).filter(
+      (user) => runId === undefined || user.email_addresses.every((email) => email.email_address.startsWith(`e2e-${runId}-`)),
+    );
+    const organizations = (await testOrganizations()).filter(
+      (organization) => runId === undefined || organization.name.startsWith(`e2e-${runId} `),
+    );
+    return { users, organizations };
+  }
+
   return {
     request,
 
@@ -133,22 +143,22 @@ export function clerkApi(keys: ClerkKeys) {
     testingToken: async () =>
       remember((await request<{ token: string }>("POST", "/testing_tokens")).token),
 
-    /** Users and organisations of any run (`e2e-` prefix), deleted. */
-    async deleteTestResources(): Promise<{ users: number; organizations: number }> {
-      const organizations = await testOrganizations();
+    /**
+     * Users and organisations of the run `runId` (`e2e-<runId>-` addresses,
+     * `e2e-<runId> ` names) deleted; without it, those of any run (`e2e-`).
+     */
+    async deleteTestResources(runId?: string): Promise<{ users: number; organizations: number }> {
+      const { users, organizations } = await testResources(runId);
       for (const organization of organizations) {
         await request("DELETE", `/organizations/${organization.id}`);
       }
-      const users = await testUsers();
       for (const user of users) await request("DELETE", `/users/${user.id}`);
       return { users: users.length, organizations: organizations.length };
     },
 
-    async countTestResources(): Promise<{ users: number; organizations: number }> {
-      return {
-        users: (await testUsers()).length,
-        organizations: (await testOrganizations()).length,
-      };
+    async countTestResources(runId?: string): Promise<{ users: number; organizations: number }> {
+      const { users, organizations } = await testResources(runId);
+      return { users: users.length, organizations: organizations.length };
     },
   };
 }
