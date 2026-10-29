@@ -7,6 +7,7 @@ import { consoleTreeDigest, startConsole, type PiConsole } from "../harness/cons
 import { callAs } from "../harness/convex";
 import { logTail, portIsFree } from "../harness/processes";
 import { convexUserId, identityOf, type AccountKey, type RunInfo } from "../harness/run";
+import { medicalOf, PROFILE_NAME, shortProfile } from "../harness/profiles";
 import { rememberFromTest } from "../harness/secrets";
 import { card, choose, escape } from "../ui";
 
@@ -23,57 +24,6 @@ import { card, choose, escape } from "../ui";
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off", video: "off", screenshot: "off" });
 
-type Medical = {
-  hr_hard_max_bpm: number;
-  hr_critical_bpm: number;
-  min_rider_age: number;
-  motion_limits: { min_run_motor_rpm: number };
-  recovery_min_s: number;
-  cooldown_min_s: number;
-};
-
-/** The signed medical file the console reads (Convex holds the same version). */
-function medicalOf(run: RunInfo): Medical {
-  const file = path.join(run.repoRoot, "raspberry-pi", "config", "medical_parameters.json");
-  return (JSON.parse(readFileSync(file, "utf8")) as { parameters: Medical }).parameters;
-}
-
-/**
- * A programme short enough to watch to its end: the console's shipped
- * `standard_30_min` (its zone, reference subject and ceilings), with the tiers
- * and limits of the medical file. Only the durations are a test choice.
- */
-function shortProfile(standard: Record<string, unknown>, medical: Medical) {
-  // Test choice: 10 s at rest, up to 60 s of warm-up, 30 s of hold, 20 s of
-  // cool-down, and the shortest recovery the medical file allows.
-  const baseline_s = 10;
-  const warmup_max_s = 60;
-  const hold_min_s = 30;
-  const cooldown_s = Math.max(20, medical.cooldown_min_s);
-  const recovery_s = medical.recovery_min_s;
-  return {
-    profile_id: "e2e_court",
-    name: "E2E court",
-    total_duration_s: baseline_s + warmup_max_s + hold_min_s + cooldown_s + recovery_s,
-    baseline_s,
-    warmup_max_s,
-    hold_min_s,
-    cooldown_s,
-    recovery_s,
-    zone_low_bpm: standard.zone_low_bpm,
-    zone_high_bpm: standard.zone_high_bpm,
-    hard_max_bpm: medical.hr_hard_max_bpm,
-    critical_bpm: medical.hr_critical_bpm,
-    subject_hr_max: standard.subject_hr_max,
-    min_run_rpm: medical.motion_limits.min_run_motor_rpm,
-    max_rpm: standard.max_rpm,
-    warmup_rpm_ceiling_fraction: standard.warmup_rpm_ceiling_fraction,
-    channels: standard.channels,
-    allow_above_nameplate: standard.allow_above_nameplate,
-  };
-}
-
-const PROFILE_NAME = "E2E court";
 
 /** The value of a live readout takes at least two values (never printed: one is a heart rate). */
 async function expectChanging(page: Page, testId: string, timeout: number): Promise<void> {

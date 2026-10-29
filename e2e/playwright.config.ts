@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import os from "node:os";
 import path from "node:path";
+import { outputRoot } from "./harness/output";
 
 /**
  * End-to-end tests of the dashboard, `npm run test:e2e`.
@@ -19,7 +19,7 @@ import path from "node:path";
 // what the page showed (a passenger's health data, a key shown once).
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 
-const output = process.env.E2E_OUTPUT_DIR ?? path.join(os.tmpdir(), "anheart-e2e", "sorties");
+const output = outputRoot();
 const results = path.join(output, "test-results");
 const report = path.join(output, "rapport");
 
