@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "../fixtures";
@@ -17,7 +17,8 @@ import { card, choose, escape, say, type Lang } from "../ui";
  *
  * One passenger of client A, the minor of the run, goes through them in
  * order: no fitness nor consent, then no max heart rate, then too young, then
- * an adult whose launch expires, then whose right is withdrawn. These pages
+ * an adult whose launch expires, then whose right is withdrawn. The manual
+ * session of scenario 4 runs on a machine of its own. These pages
  * show health data and the setup holds machine keys: no trace, video or
  * capture is kept, even on failure. No message carries a health value.
  */
@@ -209,10 +210,22 @@ test("1. un passager mineur ne peut pas lancer, la raison est affichée", async 
   expect(await sessionsOn(run, machine.id), "aucune séance créée").toHaveLength(0);
 });
 
-test("4. une séance manuelle se lance à la console seulement : visible, jamais proposée par le site", async ({
+/** The launch dialog offers the console's automatic programmes, and nothing manual. */
+async function expectOnlyShippedOffered(page: Page, dialog: Locator, pi: PiConsole) {
+  await dialog.getByRole("combobox").first().click();
+  const offered = await page.getByRole("option").allTextContents();
+  await page.keyboard.press("Escape");
+  const shipped = (await pi.profiles()).body.profiles.map((p) => String(p.name));
+  expect(offered.length).toBe(shipped.length);
+  expect(offered.every((option) => shipped.some((name) => option.startsWith(`${name} ·`)))).toBe(true);
+  expect(offered.some((option) => /manu/i.test(option))).toBe(false);
+}
+
+test("4. une séance manuelle se lance à la console seulement : visible sur le site, jamais proposée par le site", async ({
   pageAs,
   run,
 }) => {
+  test.setTimeout(300_000);
   const machine = required(state.machineA, "machine");
   const rider = await pageAs("passagerMineurA");
   const manual = say("en", "training.manualOnlyAtMachine");
@@ -221,14 +234,66 @@ test("4. une séance manuelle se lance à la console seulement : visible, jamais
   await expect(card(rider, machine.name).getByText(manual)).toBeVisible();
   const dialog = await openLaunch(rider, "en", machine.name);
   await expect(dialog.getByText(manual)).toBeVisible();
-  // The programmes offered are the console's automatic ones, none manual.
-  await dialog.getByRole("combobox").first().click();
-  const offered = await rider.getByRole("option").allTextContents();
-  await rider.keyboard.press("Escape");
-  const shipped = (await required(state.console, "console").profiles()).body.profiles.map((p) => String(p.name));
-  expect(offered.length).toBe(shipped.length);
-  expect(offered.every((option) => shipped.some((name) => option.startsWith(`${name} ·`)))).toBe(true);
-  expect(offered.some((option) => /manu/i.test(option))).toBe(false);
+  await expectOnlyShippedOffered(rider, dialog, required(state.console, "console"));
+
+  // A manual session, on a machine of its own (the next scenarios count the
+  // sessions of machine A): started at its console, on the bench, target 0,
+  // as docs/console-locale.md section 12 plays it.
+  const bench = await createMachine(run, "Client A", `Machine manuelle A ${run.runId}`, [
+    await convexUserId(run, "gestionnaireA"),
+  ]);
+  const pi = await startOnline(run, bench);
+  try {
+    expect((await pi.attest()).status).toBe(200);
+    pi.keepPresent();
+    expect((await pi.manualStart()).status).toBe(202);
+    await expect
+      .poll(async () => (await pi.status()).body.run_state, { message: "la console tourne en manuel", timeout: 30_000 })
+      .toBe("running");
+    let sessionId = "";
+    await expect
+      .poll(
+        async () => {
+          const sessions = await sessionsOn(run, bench.id);
+          sessionId = sessions[0]?._id ?? "";
+          return sessions.map((s) => s.status);
+        },
+        { message: "le serveur enregistre la séance déclarée par la console", timeout: 60_000 },
+      )
+      .toEqual(["active"]);
+
+    // The manager sees it in the list, manual and from the machine, then on its own page.
+    const manager = await pageAs("gestionnaireA");
+    await manager.goto("/fr/dashboard/sessions");
+    const row = manager.getByRole("row").filter({ hasText: bench.name });
+    await expect(row).toHaveCount(1, { timeout: 30_000 });
+    await expect(row.getByText(say("fr", "training.kind.manual"), { exact: true })).toBeVisible();
+    await expect(row.getByText(say("fr", "training.origin.local"), { exact: true })).toBeVisible();
+    await manager.goto(`/fr/dashboard/sessions/${sessionId}/live`);
+    await expect(manager.getByText(say("fr", "training.manualOnlyAtMachine"))).toBeVisible();
+
+    // Stopped at the console: back at rest, the arm still, the session over.
+    expect((await pi.stopSession()).status).toBe(202);
+    await expect
+      .poll(async () => (await pi.status()).body.run_state, { message: "la console au repos", timeout: 60_000 })
+      .toBe("idle");
+    expect((await pi.snapshot()).body?.measured.output_rpm ?? 0).toBe(0);
+    await expect
+      .poll(async () => (await sessionsOn(run, bench.id)).map((s) => s.status), {
+        message: "la fin de la séance arrive au serveur",
+        timeout: 60_000,
+      })
+      .toEqual(["completed"]);
+    await manager.goto(`/en/dashboard/sessions/${sessionId}`);
+    await expect(manager.getByText(manual)).toBeVisible();
+
+    // On the machine that has just run one, still nothing manual to launch.
+    const forBench = await openLaunch(manager, "en", bench.name);
+    await expect(forBench.getByText(manual)).toBeVisible();
+    await expectOnlyShippedOffered(manager, forBench, pi);
+  } finally {
+    expect(await pi.stop()).toBe(0);
+  }
 
   expect(await sessionsOn(run, machine.id), "aucune séance créée").toHaveLength(0);
 });

@@ -139,6 +139,8 @@ export class PiConsole {
     this.post("/api/safety/attest", { operator: OPERATOR, sto_jumper_removed: true, mushroom_wired_nc: true });
   confirmLaunch = (sessionId: string) =>
     this.post("/api/remote-launch/confirm", { session_id: sessionId, operator: OPERATOR });
+  /** "Demarrer MANUEL" on the bench, nobody on board, target 0 (`simulation/endurance.py`, `start_manual`). */
+  manualStart = () => this.post("/api/manual/start", { occupancy: "bench", operator: OPERATOR });
   stopSession = (reason = "arret E2E") => this.post("/api/session/stop", { operator: OPERATOR, reason });
   presence = () => this.post("/api/presence", { operator: OPERATOR });
   /** The "Retour du passager" card: `{current: {status, can_submit, ...} | null}`, never the values. */
