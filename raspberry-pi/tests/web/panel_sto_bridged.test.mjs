@@ -78,6 +78,7 @@ const ESTOP_STATEMENT =
 const BENCH_LABEL =
   "aucun coup de poing n'est cable : la cause de l'arret d'urgence de l'ecran est ecartee et personne n'est dans le rayon du bras";
 const MUSHROOM_LABEL = "le coup de poing a ete deverrouille (tire)";
+const REMOTE_REFUSED = "STO ponte : lancement depuis le site refuse, seances de banc a la console seulement";
 
 function panel() {
   const nodes = new Map(marked.map(([id, classes, text]) => [id, new Element(classes, text)]));
@@ -258,6 +259,25 @@ test("under the declared bridge the banner is up, the not-ready one is not, and 
   assert.ok(page.node("sto-note").textContent.startsWith(BENCH_ONLY));
   assert.ok(page.node("sto-note").textContent.includes("prise secteur"));
   assert.ok(page.node("sto-note").textContent.includes("roue libre, sans frein"));
+});
+
+test("a page that has heard nothing does not know the mode: it fails closed until the first answer", () => {
+  const page = panel();
+  page.context.state.connected = false;
+  page.context.refreshLiveness();
+  assert.ok(page.announced("NO LIVE DATA"));
+  // Neither known ready nor known bridged: ANH-92's banner, waiting for a word of the console.
+  assert.ok(page.announced(NOT_READY));
+  assert.ok(page.announced("lecture en attente"));
+  assert.equal(page.announced(BANNER), false);
+  assert.equal(page.node("start").disabled, true);
+  assert.equal(page.node("manual-start").disabled, true);
+  // The first frame names the source: the bridge's banner takes the place of the other.
+  page.context.state.connected = true;
+  page.frame(snapshot());
+  assert.ok(page.announced(BANNER));
+  assert.equal(page.announced(NOT_READY), false);
+  assert.equal(page.node("manual-start").disabled, false);
 });
 
 test("frames alone raise it too, before any status answer", () => {
@@ -478,4 +498,25 @@ test("the bench start sends a bench session, and a refusal of the console is sai
   assert.equal(sent[0][0], "/api/manual/start");
   assert.equal(sent[0][1].occupancy, "bench");
   assert.equal(page.node("manual-note").textContent, BENCH_ONLY);
+});
+
+test("a launch from the dashboard refused under the bridge shows the console's own words and cannot be confirmed", async () => {
+  const page = await answered(status(BENCH_MODE));
+  page.context.api = () =>
+    Promise.resolve({
+      session_id: "s1",
+      profile_id: "p1",
+      program: "Programme",
+      launched_by: "Medecin",
+      passenger_name: "Passager",
+      passenger_reason: null,
+      state: "refused",
+      reason: REMOTE_REFUSED,
+      can_confirm: false,
+    });
+  await page.context.loadRemoteLaunch();
+  assert.equal(page.shown("remote-launch-card"), true);
+  assert.equal(page.node("remote-launch-state").textContent, "refuse");
+  assert.equal(page.node("remote-launch-status").textContent, `refuse : ${REMOTE_REFUSED}`);
+  assert.equal(page.node("remote-launch-confirm").disabled, true);
 });

@@ -872,11 +872,13 @@ recherché par l'identifiant du passager; le libellé reçu avec le lancement n'
 affiché. Si ce passager ne figure pas dans la liste tenue, la carte donne la raison et
 désactive le bouton.
 
-Sous `STO_SOURCE=bridged_declared`, la console refuse tout départ proposé par le tableau
-de bord, avant d'en confirmer aucun, avec la raison
+Sous `STO_SOURCE=bridged_declared`, la carte de l'offre s'affiche, mais au clic sur
+**Cette personne est a bord et prete** la console refuse le départ, avant tout envoi de
+`training/start`, avec la raison
 `STO ponte : lancement depuis le site refuse, seances de banc a la console seulement` :
-un tel départ est toujours un programme, avec une personne à bord. Les séances de banc
-se lancent à la console (§13.2).
+la carte passe à `refuse` avec cette phrase, et le tableau de bord reçoit l'échec avec la
+même raison. Un tel départ est toujours un programme, avec une personne à bord. Les
+séances de banc se lancent à la console (§13.2).
 
 Saisissez votre nom dans le champ **Operateur** habituel puis cliquez une fois sur
 **Cette personne est a bord et prete**. Le bouton local **Demarrer la seance** est
@@ -1367,8 +1369,8 @@ Si une seule case est cochée, rien n'est enregistré et la note affiche
 **Declaration de banc : STO ponte** et ne propose pas les deux cases. Lisez la phrase
 affichée, `le STO est ponte, aucun arret d'urgence materiel ; l'arret d'urgence est la coupure de la prise secteur ; capsule vide ou lestee, aucune personne a bord ; personne dans le rayon du bras pendant la rotation`,
 et cochez la seule case **J'atteste ce texte tel qu'il est ecrit ci-dessus.**, avec votre
-nom, **seulement** si chacun de ces points est vrai : capsule vide ou lestée, personne à
-bord, une personne à la prise secteur, personne dans le rayon du bras. Elle est
+nom, **seulement** si chacun de ces points est vrai : capsule vide ou lestée, aucune
+personne à bord, une personne à la prise secteur, personne dans le rayon du bras. Elle est
 enregistrée mot pour mot et vaut jusqu'au prochain redémarrage de la console. La
 procédure complète (qui, avant, pendant, après) est dans
 [raspberry-pi.md, 2.2](../raspberry-pi.md#procédure-de-banc-sous-bridged_declared).

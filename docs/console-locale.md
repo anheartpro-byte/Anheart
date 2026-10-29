@@ -1321,9 +1321,9 @@ un nouveau clic est nécessaire. L'absence après un 2xx refuse l'armement et en
 une fin échouée. L'âge et la FC max restent ceux du lancement reçu.
 
 Sous `STO_SOURCE=bridged_declared`, tout lancement depuis le site est refusé avant
-`training/start` : un lancement distant est toujours un programme, donc une personne à
-bord. La console le dit, et le renvoie au tableau de bord comme raison de l'échec, avec
-sa propre phrase,
+`training/start`, au geste de confirmation : un lancement distant est toujours un
+programme, donc une personne à bord. La console le dit (carte « Depart distant » à
+`refuse`), et le renvoie au tableau de bord comme raison de l'échec, avec sa propre phrase,
 `STO ponte : lancement depuis le site refuse, seances de banc a la console seulement`.
 Les séances de banc se lancent à la console seulement.
 
