@@ -498,7 +498,8 @@ test("8. l'enregistrement complet est déposé, vérifié et téléchargé", asy
     throw new Error(`${(error as Error).message}\njournal de la console (dépôt) :\n${journal}`);
   }
   // The deposit's pace, for a trial against the real backend: files over the
-  // time since the console came to rest, and the console's own answers by route.
+  // time since the console came to rest, and the console's own answers by route
+  // (a 429 or a 500 makes it wait 4 s, then twice as long after each failed batch).
   const answers = new Map<string, number>();
   const journal = logTail(run.runDir, `console-${pi.port}`, Number.MAX_SAFE_INTEGER);
   for (const [, route, status] of journal.matchAll(
@@ -506,21 +507,11 @@ test("8. l'enregistrement complet est déposé, vérifié et téléchargé", asy
   )) {
     answers.set(`${route} ${status}`, (answers.get(`${route} ${status}`) ?? 0) + 1);
   }
-  // A 429 or a 500 there makes the console wait 4 s, then twice as long after
-  // each failed batch: what the local backend logged of those, numbers masked.
-  const failures = new Map<string, number>();
-  for (const line of logTail(run.runDir, "convex-backend", Number.MAX_SAFE_INTEGER).split("\n")) {
-    if (!/record/i.test(line) || !/error|fail|conflict/i.test(line)) continue;
-    const kind = line.replace(/[0-9a-f]{8,}|\d+/gi, "#").slice(0, 200);
-    failures.set(kind, (failures.get(kind) ?? 0) + 1);
-  }
   const files = await recordFiles(run, "gestionnaireA", sessionId);
   const seconds = (Date.now() - required(journey.idleAt, "fin de la séance")) / 1000;
   const pace = `${files.length} fichiers en ${Math.round(seconds)} s depuis la fin de la séance, ${(files.length / seconds).toFixed(2)} fichier(s)/s`;
-  const counted = (map: Map<string, number>) => [...map].map(([key, count]) => `${key} x${count}`).join(" | ") || "aucune";
   console.log(`[parcours] dépôt : ${pace} ; attente de l'étape ${Math.round((Date.now() - started) / 1000)} s`);
-  console.log(`[parcours] réponses vues par la console : ${counted(answers)}`);
-  console.log(`[parcours] erreurs du backend local sur les enregistrements : ${counted(failures)}`);
+  console.log(`[parcours] réponses vues par la console : ${[...answers].map(([key, count]) => `${key} x${count}`).join(" | ")}`);
   test.info().annotations.push({ type: "dépôt", description: pace });
   const manager = await pageAs("gestionnaireA");
   await manager.goto(`/fr/dashboard/sessions/${sessionId}`);
