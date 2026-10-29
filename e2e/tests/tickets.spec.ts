@@ -267,11 +267,16 @@ test("ANH-159 les compteurs du tableau de bord suivent l'organisation, la consol
       ?.status,
   ).toBe("online");
 
-  state.sessions.a2 = await launchAs(run, "passagerMineurA", m2);
+  const waiting = await launchAs(run, "passagerMineurA", m2);
   const pendingAfter = await settled("les compteurs avec une séance en attente");
   expect(pendingAfter.pending, "une séance en attente de plus").toBe(connectedAfter.pending + 1);
   expect(pendingAfter.active, "aucune séance active de plus").toBe(connectedAfter.active);
   expect(pendingAfter.total).toBe(before.total);
+  // Cancelled by the passenger (one launch at a time): ANH-158 makes its own
+  // right before it reads them, nothing of this test's duration in between.
+  await callAs(run.backend, as(run, "passagerMineurA"), "mutation", "training:requestStop", { sessionId: waiting });
+  const cancelled = await settled("les compteurs après l'annulation");
+  expect(cancelled.pending, "la séance annulée n'est plus en attente").toBe(pendingAfter.pending - 1);
 });
 
 test("ANH-158 chaque rôle voit ses séances : passager, gestionnaire, admin d'organisation, admin Anheart, onglet En attente", async ({
@@ -282,13 +287,16 @@ test("ANH-158 chaque rôle voit ses séances : passager, gestionnaire, admin d'o
   const m1 = required(state.m1, "M1");
   const m2 = required(state.m2, "M2");
   const m3 = required(state.m3, "M3");
-  state.sessions.a1 = await launchAs(run, "passagerA", m1);
   await online(run, m3);
   try {
     state.sessions.b = await launchAs(run, "passagerB", m3);
   } finally {
     await offline(m3);
   }
+  // Client A's two launches last, right before the "Pending" tab reads them: a
+  // launch waits 90 s at most (PENDING_SESSION_TTL_S), nothing slow in between.
+  state.sessions.a1 = await launchAs(run, "passagerA", m1);
+  state.sessions.a2 = await launchAs(run, "passagerMineurA", m2);
 
   // The "Pending" tab first, while both launches of client A still wait.
   const admin = await pageAs("orgAdminA");
@@ -299,7 +307,13 @@ test("ANH-158 chaque rôle voit ses séances : passager, gestionnaire, admin d'o
   const pendingTab = admin.getByRole("row").filter({ hasText: /Terminée|Échouée|Active|Interrompue/ });
   await expect(pendingTab).toHaveCount(0);
 
-  // Each role, its sessions and not the others'.
+  // Each role, its sessions and not the others': a1 on M1, the launch ANH-159
+  // cancelled and a2 on M2, b on M3.
+  const rows = new Map([
+    [m1.id, 1],
+    [m2.id, 2],
+    [m3.id, 1],
+  ]);
   const views: { account: AccountKey; sees: Machine[]; not: Machine[] }[] = [
     { account: "passagerA", sees: [m1], not: [m2, m3] },
     { account: "gestionnaireA", sees: [m1], not: [m2, m3] },
@@ -309,7 +323,9 @@ test("ANH-158 chaque rôle voit ses séances : passager, gestionnaire, admin d'o
   for (const view of views) {
     const page = await pageAs(view.account);
     await page.goto("/fr/dashboard/sessions");
-    for (const machine of view.sees) await expect(sessionRows(page, machine), `${view.account} voit ${machine.name}`).toHaveCount(1);
+    for (const machine of view.sees) {
+      await expect(sessionRows(page, machine), `${view.account} voit ${machine.name}`).toHaveCount(rows.get(machine.id) as number);
+    }
     for (const machine of view.not) await expect(sessionRows(page, machine), `${view.account} ne voit pas ${machine.name}`).toHaveCount(0);
   }
   // Nothing was armed by these launches.
