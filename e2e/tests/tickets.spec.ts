@@ -16,8 +16,10 @@ import { card, choose, escape, say } from "../ui";
  * Audit page of ANH-167, in the browser, with the real simulated console:
  * each shows its visible effect and that nothing unwanted came of it.
  *
- * Runs after the other files (it changes riders and assignments they expect
- * fresh). What is not under test is prepared by the harness through the
+ * Runs after parcours.spec.ts and refus.spec.ts (it changes riders and
+ * assignments they expect fresh): Playwright runs the files without traces
+ * together, by name. connexion.spec.ts and console.spec.ts, which keep
+ * traces, run after it and read none of that. What is not under test is prepared by the harness through the
  * Convex functions the site calls: machines, a second manager of client A,
  * riders ready to launch. These pages show health data and the setup holds
  * machine keys: no trace, video or capture is kept, even on failure, and the

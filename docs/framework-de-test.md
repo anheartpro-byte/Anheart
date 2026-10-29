@@ -3951,12 +3951,17 @@ Un fichier seul : `npx playwright test --config e2e/playwright.config.ts parcour
 (même variable). Durée mesurée de la suite complète : 18 min 31 s le 29 octobre 2026 (33 tests, dont un ignoré, sur un poste de développement), dont environ 3 min 45 s pour les captures.
 
 **Les scénarios, par exigence.** Un seul processus joue les fichiers l'un
-après l'autre, dans l'ordre de leurs noms, et l'ordre compte :
-`captures.spec.ts` joue en premier (il ne touche que le client B, que les
-fichiers suivants préparent de nouveau) et `tickets.spec.ts` en dernier (il
-change des passagers et des affectations que les autres attendent neufs, et
-prépare lui-même ce qu'il lui faut). Renommer un fichier, `--shard` ou
-`fullyParallel` changerait cet ordre sans prévenir. Chaque test affirme ce que
+après l'autre. Playwright les range d'abord par réglages du navigateur (ceux
+de `test.use`), dans l'ordre où ces réglages apparaissent parmi les fichiers
+triés par nom, puis par nom : les fichiers sans trace (`captures`,
+`parcours`, `refus`, `tickets`), puis ceux qui gardent leur trace en cas
+d'échec (`connexion`, `console`). L'ordre compte : `captures.spec.ts` joue en
+premier (il ne touche que le client B, que les fichiers suivants préparent de
+nouveau), et `tickets.spec.ts` après `parcours.spec.ts` et `refus.spec.ts`
+(il change des passagers et des affectations qu'ils attendent neufs, et
+prépare lui-même ce qu'il lui faut) ; `connexion` et `console`, joués après
+lui, ne lisent rien de ce qu'il change. Renommer un fichier, changer ses
+réglages, `--shard` ou `fullyParallel` changerait cet ordre sans prévenir. Chaque test affirme ce que
 l'écran montre, et l'absence d'effet indésirable quand il s'agit d'un refus.
 
 | Exigence | Tests |

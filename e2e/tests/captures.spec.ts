@@ -20,8 +20,9 @@ import { card, choose, escape, say, type Lang } from "../ui";
  * Test data only: client B of the run, its fictitious manager and passenger,
  * two machines of stable names, the simulated console (simulated heart rate,
  * no real person). The prefixes of the machine keys are masked. This file
- * runs first (the files run in the order of their names) and touches only
- * client B, which the files after it prepare again as they need it.
+ * runs first (Playwright runs the files without traces together, by name,
+ * then the others, and this is the first of them) and touches only client
+ * B, which the files after it prepare again as they need it.
  */
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off", video: "off", screenshot: "off" });
