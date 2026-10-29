@@ -245,6 +245,9 @@ test("4. une séance manuelle se lance à la console seulement : visible sur le 
     await convexUserId(run, "gestionnaireA"),
   ]);
   const pi = await startOnline(run, bench);
+  // Stopped whatever happens; its exit code is checked once the scenario has
+  // passed, so that a failure above is the one reported.
+  let exited: number | null = null;
   try {
     expect((await pi.attest()).status).toBe(200);
     pi.keepPresent();
@@ -296,8 +299,9 @@ test("4. une séance manuelle se lance à la console seulement : visible sur le 
     await expect(forBench.getByText(manual)).toBeVisible();
     await expectOnlyShippedOffered(manager, forBench, pi);
   } finally {
-    expect(await pi.stop()).toBe(0);
+    exited = await pi.stop();
   }
+  expect(exited, "la console s'arrête proprement").toBe(0);
 
   expect(await sessionsOn(run, machine.id), "aucune séance créée").toHaveLength(0);
 });
@@ -421,14 +425,16 @@ test("7. deux organisations ne se voient pas ; l'admin Anheart voit les deux", a
   });
   const piB = await startOnline(run, machineB);
   let sessionB: string;
+  let exitedB: number | null = null;
   try {
     sessionB = await callAs<string>(run.backend, as(run, "passagerB"), "mutation", "training:launchAutoSession", {
       machineId: machineB.id,
       profileId: programme.id,
     });
   } finally {
-    expect(await piB.stop()).toBe(0);
+    exitedB = await piB.stop();
   }
+  expect(exitedB, "la console de B s'arrête proprement").toBe(0);
 
   // One organisation's manager and passenger, against the other's machine,
   // passengers and sessions: absent from the lists (next to their own, shown),
