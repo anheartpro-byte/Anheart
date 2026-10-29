@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { callAs } from "../harness/convex";
 import { logTail, portIsFree } from "../harness/processes";
 import { convexUserId, identityOf, type AccountKey, type RunInfo } from "../harness/run";
 import { rememberFromTest } from "../harness/secrets";
+import { card, choose, escape } from "../ui";
 
 /*
  * The main journey, in the browser, with the real simulated console: machine
@@ -73,27 +74,6 @@ function shortProfile(standard: Record<string, unknown>, medical: Medical) {
 }
 
 const PROFILE_NAME = "E2E court";
-
-/** A card of the dashboard, by its title. */
-function card(page: Page, title: string | RegExp) {
-  return page
-    .locator('[data-slot="card"]')
-    .filter({ has: page.locator('[data-slot="card-title"]', { hasText: title }) });
-}
-
-/**
- * Picks an option of a select: opened by its trigger, chosen with the
- * keyboard, so that it works wherever the list opens (it can open past the
- * bottom of the window, where a click never lands).
- */
-async function choose(page: Page, trigger: Locator, option: string | RegExp): Promise<void> {
-  await trigger.click();
-  await page.getByRole("option", { name: option }).focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("listbox")).toBeHidden();
-}
-
-const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** The value of a live readout takes at least two values (never printed: one is a heart rate). */
 async function expectChanging(page: Page, testId: string, timeout: number): Promise<void> {
