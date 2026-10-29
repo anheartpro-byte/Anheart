@@ -78,3 +78,7 @@ Session_data.txt
 
 # Local runtime data is not source code.
 /data/
+
+# End-to-end test outputs (npm run test:e2e)
+/e2e/test-results/
+/e2e/playwright-report/
