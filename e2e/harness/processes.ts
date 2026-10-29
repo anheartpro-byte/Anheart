@@ -178,10 +178,9 @@ export async function cleanLeftoverRuns(): Promise<number> {
 }
 
 /**
- * Polls `url` until the server answers (below 500, redirects not followed),
- * asked as a browser asks for a page: the site sends such a visitor without
- * cookies through Clerk at once, while a bare request without cookies is left
- * hanging. Fails early when `child` exits.
+ * Polls `url` until the server answers (below 500; redirects not followed, as
+ * Clerk sends a visitor without cookies through its handshake). Fails early
+ * when `child` exits.
  */
 export async function waitForHttp(
   url: string,
@@ -196,11 +195,7 @@ export async function waitForHttp(
   while (Date.now() < deadline) {
     if (exited !== undefined) break;
     try {
-      const response = await fetch(url, {
-        headers: { accept: "text/html", "sec-fetch-dest": "document" },
-        redirect: "manual",
-        signal: AbortSignal.timeout(5_000),
-      });
+      const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(5_000) });
       if (response.status < 500) return;
       last = `HTTP ${response.status}`;
     } catch (error) {
