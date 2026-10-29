@@ -43,7 +43,8 @@ async def status_of(drive: SimulatedDrive) -> DriveStatus:
 async def at_nameplate_speed(clock: ManualClock) -> SimulatedDrive:
     """The drive enabled and turning at 1380 motor rpm, reached on its own ramp."""
     drive = SimulatedDrive(clock)
-    assert isinstance(await drive.open(), Ok)
+    opened = await drive.open()
+    assert isinstance(opened, Ok), opened
     for word in (ControlWord.SHUTDOWN, ControlWord.SWITCH_ON, ControlWord.ENABLE_OPERATION):
         assert isinstance(await drive.write_command(word), Ok)
     assert isinstance(await drive.write_speed(DEFAULT_SIM_CONFIG.max_rpm), Ok)

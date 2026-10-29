@@ -1579,7 +1579,7 @@ démarre comme la première, sans redémarrer la console (§11).
 | fin normale, changement d'avis, passager qui veut descendre sans urgence | **STOP** |
 | la pastille **Securite** dit `freeze` et vous voulez terminer la séance sans urgence | **STOP** : la vitesse commandée baisse tout de suite, sur la rampe douce. Surveillez **Vitesse mesuree** |
 | danger immédiat, comportement anormal, doute sérieux | **coup de poing câblé**, et **E-STOP** en plus. Sous `bridged_declared` : **E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les seuls cas du §11, laisse le bras en roue libre sans frein et remplace toute descente en cours |
-| la page ne répond plus (bandeau NO LIVE DATA) | **coup de poing câblé** (sous `bridged_declared` : coupure de la prise secteur, §11) |
+| la page ne répond plus (bandeau NO LIVE DATA) | **coup de poing câblé**. Sous `bridged_declared`, NO LIVE DATA dit que cette page ne voit plus la console, pas qu'elle ne répond plus : **E-STOP**, qui part par sa propre requête, puis la coupure de la prise secteur (§11) si **ARRET D'URGENCE NON CONFIRME** s'affiche ou si le bras ne ralentit pas, jamais pendant une descente qui fonctionne |
 
 STOP, pas à pas :
 
@@ -2025,8 +2025,11 @@ La capture a été prise sur une console saine, au repos : elle n'en montre aucu
 Que faire :
 
 1. **Considérez que la machine tourne sans doute encore.** Regardez le bras.
-2. S'il tourne et que la console ne revient pas : **coup de poing** (sous `bridged_declared` :
-   coupez la prise secteur, §11).
+2. S'il tourne et que la console ne revient pas : **coup de poing**. Sous `bridged_declared`,
+   ce bandeau dit que cette page ne voit plus la console, pas qu'elle ne répond plus :
+   cliquez **E-STOP**, qui part par sa propre requête, puis coupez la prise secteur (§11)
+   si **ARRET D'URGENCE NON CONFIRME** s'affiche ou si le bras ne ralentit pas, jamais
+   pendant une descente qui fonctionne.
 3. La page réessaie seule toutes les 1,5 s ; si la console revient, le bandeau
    disparaît.
 

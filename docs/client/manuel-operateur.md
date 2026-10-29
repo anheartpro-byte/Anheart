@@ -1059,12 +1059,15 @@ valeurs reçues, pas les valeurs actuelles. Le bandeau le dit lui-même : « la
 machine tourne peut-etre encore ».
 
 1. Regardez le bras, pas l'écran.
-2. S'il tourne et que vous devez l'arrêter, cliquez **E-STOP** : la demande
-   peut passer même quand l'affichage est figé. Puis regardez le bras. S'il ne
-   ralentit pas dans les secondes qui suivent le clic, n'attendez aucun
+2. S'il tourne et que vous devez l'arrêter, cliquez **E-STOP** : ce bandeau
+   dit que l'écran ne voit plus la console, pas qu'elle ne répond plus, et
+   l'E-STOP part par sa propre requête : il peut passer. Puis regardez le bras.
+   S'il ne ralentit pas dans les secondes qui suivent le clic, n'attendez aucun
    message : il ne reste que l'arrêt d'urgence câblé de votre machine (sur un
-   banc avec STO ponté : la coupure de la prise secteur, qui laisse le bras en
-   roue libre sans frein et remplace toute descente en cours). Une fenêtre
+   banc avec STO ponté : la coupure de la prise secteur, aussi si le bandeau
+   « ARRET D'URGENCE NON CONFIRME » s'affiche, jamais pendant une descente qui
+   fonctionne ; elle laisse le bras en roue libre sans frein et remplace toute
+   descente en cours). Une fenêtre
    qui se termine par « UTILISEZ L'ARRET CABLE » (sur un banc avec STO ponté :
    « COUPEZ LA PRISE SECTEUR ») peut annoncer que la
    demande a échoué, mais elle peut aussi ne pas s'ouvrir. Si un second
