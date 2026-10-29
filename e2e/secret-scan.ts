@@ -31,16 +31,33 @@ function inTemporaryFolder<T>(work: (folder: string) => T): T {
 }
 
 /**
- * Rewrites a kept trace without what signs anyone in: the run's secret values,
- * signed tokens, development browser ids, the Authorization, Cookie,
- * Set-Cookie and Clerk headers, the Clerk cookies (in the requests and in the
- * browser state the trace records) and the `__clerk_*` URL parameters. Text is read byte for byte (latin1), so
- * that images and other binaries come back unchanged.
+ * Rewrites a kept trace without the copy of the failure's error context it
+ * keeps (`attachments/<sha1>`, named `error-context` in its `.trace` events,
+ * removed with that reference), and without what signs anyone in: the run's
+ * secret values, signed tokens, development browser ids, the Authorization,
+ * Cookie, Set-Cookie and Clerk headers, the Clerk cookies (in the requests and
+ * in the browser state the trace records) and the `__clerk_*` URL parameters.
+ * Text is read byte for byte (latin1), so that images and other binaries come
+ * back unchanged.
  */
 function redactTrace(zip: string): void {
   inTemporaryFolder((folder) => {
     const tree = path.join(folder, "trace");
     execFileSync("unzip", ["-q", zip, "-d", tree]);
+    for (const events of [...files(tree)].filter((file) => file.endsWith(".trace"))) {
+      const lines = readFileSync(events, "utf8").split("\n");
+      const kept = lines.map((line) => {
+        if (!line.includes('"error-context"')) return line;
+        const event = JSON.parse(line) as { attachments?: { name: string; file?: string }[] };
+        event.attachments = event.attachments?.filter((attachment) => {
+          if (attachment.name !== "error-context") return true;
+          if (attachment.file) rmSync(path.join(tree, attachment.file), { force: true });
+          return false;
+        });
+        return JSON.stringify(event);
+      });
+      writeFileSync(events, kept.join("\n"));
+    }
     for (const file of files(tree)) {
       const before = readFileSync(file, "latin1");
       let after = before
