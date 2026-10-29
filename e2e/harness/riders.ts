@@ -51,6 +51,14 @@ export async function prepareRider(
     hrMax: rider.hrMax,
     birthYear: rider.birthYear,
   });
+  // Ready means no launch of their own still waiting either (one session at a
+  // time): one left by an earlier file is cancelled, as the rider would.
+  const waiting = await callAs<{ _id: string }[]>(run.backend, as(rider.account), "query", "sessions:listSessions", {
+    status: "pending",
+  });
+  for (const session of waiting) {
+    await callAs(run.backend, as(rider.account), "mutation", "training:requestStop", { sessionId: session._id });
+  }
   for (const machineId of rider.machineIds) {
     await callAs(run.backend, as(rider.granter ?? rider.manager), "mutation", "training:grantLaunchRight", { machineId, userId: riderId });
   }
