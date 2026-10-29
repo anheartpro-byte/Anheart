@@ -272,6 +272,7 @@ test("4. une séance manuelle se lance à la console seulement : visible sur le 
     await expect(row.getByText(say("fr", "training.kind.manual"), { exact: true })).toBeVisible();
     await expect(row.getByText(say("fr", "training.origin.local"), { exact: true })).toBeVisible();
     await manager.goto(`/fr/dashboard/sessions/${sessionId}/live`);
+    await expect(manager.getByText(say("fr", "training.kind.manual"), { exact: true }).first()).toBeVisible();
     await expect(manager.getByText(say("fr", "training.manualOnlyAtMachine"))).toBeVisible();
 
     // Stopped at the console: back at rest, the arm still, the session over.
@@ -287,6 +288,7 @@ test("4. une séance manuelle se lance à la console seulement : visible sur le 
       })
       .toEqual(["completed"]);
     await manager.goto(`/en/dashboard/sessions/${sessionId}`);
+    await expect(manager.getByText(say("en", "training.kind.manual"), { exact: true }).first()).toBeVisible();
     await expect(manager.getByText(manual)).toBeVisible();
 
     // On the machine that has just run one, still nothing manual to launch.
