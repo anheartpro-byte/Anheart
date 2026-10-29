@@ -43,7 +43,10 @@ export type RunInfo = {
   backend: Backend;
   organizations: Record<OrganizationKey, string>;
   accounts: Record<AccountKey, Account>;
-  /** A machine of client A and its key, made by the harness for the console. */
+  /**
+   * A machine and its key, made by the harness for the console: created by the
+   * Anheart admin without an organisation, so it belongs to Anheart's.
+   */
   machine: { id: string; apiKey: string };
   /** The run's Clerk webhook secret, for an account a test adds (`harness/members.ts`). */
   webhookSecret: string;
