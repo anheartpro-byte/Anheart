@@ -295,6 +295,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
           <BigReadout
             icon={<Heart className={`h-5 w-5 ${zoneColor}`} />}
             label={t("training.live.heartRate")}
+            testId="live-heart-rate"
             value={bpm !== undefined ? String(Math.round(bpm)) : "-"}
             unit={t("training.units.bpm")}
             valueClass={zoneColor}
@@ -315,6 +316,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
           <BigReadout
             icon={<RotateCw className="h-5 w-5 text-blue-500" />}
             label={t("training.live.outputRpm")}
+            testId="live-arm-speed"
             value={lastFresh && last ? last.outputRpm.toFixed(1) : "-"}
             unit={t("training.units.rpm")}
             sub={
@@ -326,6 +328,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
           <BigReadout
             icon={<Gauge className="h-5 w-5 text-purple-500" />}
             label={t("training.live.gLoad")}
+            testId="live-load"
             value={lastFresh && last ? last.gLoad.toFixed(2) : "-"}
             unit={t("training.units.g")}
           />
@@ -338,6 +341,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
               )
             }
             label={t("training.live.phase")}
+            testId="live-phase"
             value={last ? label("phase", last.phase) : "-"}
             sub={
               last && last.safetyAction !== "none"
@@ -348,6 +352,7 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
           <BigReadout
             icon={<Timer className="h-5 w-5 text-blue-500" />}
             label={t("training.session.elapsed")}
+            testId="live-elapsed"
             value={formatClock(elapsedS)}
             sub={
               remainingS !== undefined
@@ -415,6 +420,7 @@ function BigReadout({
   unit,
   sub,
   valueClass,
+  testId,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -422,12 +428,17 @@ function BigReadout({
   unit?: string;
   sub?: string;
   valueClass?: string;
+  /** For the end-to-end tests: the value has no role or accessible name. */
+  testId?: string;
 }) {
   return (
     <div className="rounded-lg border p-4">
       <div className="flex items-center gap-2">
         {icon}
-        <span className={`text-3xl font-bold tabular-nums ${valueClass ?? ""}`}>
+        <span
+          data-testid={testId}
+          className={`text-3xl font-bold tabular-nums ${valueClass ?? ""}`}
+        >
           {value}
         </span>
         {unit && <span className="text-sm text-muted-foreground">{unit}</span>}
