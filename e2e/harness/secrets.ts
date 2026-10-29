@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 
 /**
  * The secret values of a run: the Clerk keys, and what the harness makes
@@ -15,13 +16,34 @@ export function remember(value: string): string {
   return value;
 }
 
+/** Values a test learns in its worker (a machine key the site shows once). */
+function testSecretsFile(): string | null {
+  const runDir = process.env.E2E_RUN_DIR;
+  return runDir ? path.join(runDir, "test-secrets") : null;
+}
+
+/**
+ * A value a test learns, added to the run's list through a 0600 file of the
+ * run folder (removed with it), so that the runner masks and counts it too.
+ */
+export function rememberFromTest(value: string): string {
+  const file = testSecretsFile();
+  if (!file) throw new Error("E2E_RUN_DIR absent : lancer par npm run test:e2e.");
+  appendFileSync(file, `${value}\n`, { mode: 0o600 });
+  return remember(value);
+}
+
 export function knownSecrets(): string[] {
+  const file = testSecretsFile();
+  if (file && existsSync(file)) {
+    for (const line of readFileSync(file, "utf8").split("\n")) if (line) remember(line);
+  }
   return [...store];
 }
 
 export function redact(text: string): string {
   let out = text;
-  for (const value of store) out = out.split(value).join("[masqué]");
+  for (const value of knownSecrets()) out = out.split(value).join("[masqué]");
   return out;
 }
 

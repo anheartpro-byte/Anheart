@@ -1,4 +1,4 @@
-import { test as base } from "@playwright/test";
+import { test as base, type BrowserContext, type Page } from "@playwright/test";
 import { startConsole, type PiConsole } from "./harness/console";
 import { readRunInfo, type AccountKey, type RunInfo } from "./harness/run";
 
@@ -9,6 +9,8 @@ type TestFixtures = {
   account: AccountKey | undefined;
   /** Starts the real Pi console with this machine key; stopped after the test. */
   startPiConsole: (machineApiKey: string) => Promise<PiConsole>;
+  /** A page signed in as this account, in a browser context of its own closed after the test. */
+  pageAs: (account: AccountKey) => Promise<Page>;
 };
 
 export const test = base.extend<TestFixtures, { run: RunInfo }>({
@@ -23,12 +25,24 @@ export const test = base.extend<TestFixtures, { run: RunInfo }>({
       const piConsole = await startConsole({
         runDir: run.runDir,
         repoRoot: run.repoRoot,
-        convexSiteUrl: run.backend.siteUrl,
+        backendUrl: run.backend.url,
         machineApiKey,
       });
       started.push(piConsole);
       return piConsole;
     });
     for (const piConsole of started) await piConsole.stop();
+  },
+  pageAs: async ({ browser, run }, provide) => {
+    const contexts: BrowserContext[] = [];
+    await provide(async (account) => {
+      const context = await browser.newContext({
+        baseURL: run.baseURL,
+        storageState: run.accounts[account].storageState,
+      });
+      contexts.push(context);
+      return await context.newPage();
+    });
+    for (const context of contexts) await context.close();
   },
 });

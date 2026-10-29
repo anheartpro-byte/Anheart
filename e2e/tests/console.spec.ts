@@ -1,3 +1,5 @@
+import path from "node:path";
+import { consoleTreeDigest } from "../harness/console";
 import { portIsFree } from "../harness/processes";
 import { expect, test } from "../fixtures";
 
@@ -10,6 +12,9 @@ test.describe("la console Pi simulée", () => {
     startPiConsole,
   }) => {
     const piConsole = await startPiConsole(run.machine.apiKey);
+    // It runs from a copy made in the run folder, identical to the tree.
+    expect(piConsole.root.startsWith(run.runDir)).toBe(true);
+    expect(consoleTreeDigest(piConsole.root)).toBe(consoleTreeDigest(path.join(run.repoRoot, "raspberry-pi")));
 
     const status = await piConsole.status();
     expect(status.status).toBe(200);

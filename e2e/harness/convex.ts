@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -197,19 +197,22 @@ export type ActingIdentity = {
   email_verified: boolean;
 };
 
-/** A public function, called as that account, with the admin key. */
+/**
+ * A function called with the admin key: as that account, or as the deployment's
+ * operator (`null`, as the CLI runs an internal function).
+ */
 export async function callAs<T>(
   backend: Backend,
-  identity: ActingIdentity,
+  identity: ActingIdentity | null,
   kind: "query" | "mutation" | "action",
   functionPath: string,
   args: Record<string, unknown>,
 ): Promise<T> {
-  const acting = Buffer.from(JSON.stringify(identity)).toString("base64");
+  const acting = identity ? `:${Buffer.from(JSON.stringify(identity)).toString("base64")}` : "";
   const response = await fetch(`${backend.url}/api/${kind}`, {
     method: "POST",
     headers: {
-      authorization: `Convex ${backend.adminKey}:${acting}`,
+      authorization: `Convex ${backend.adminKey}${acting}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({ path: functionPath, format: "convex_encoded_json", args: [args] }),
@@ -221,4 +224,17 @@ export async function callAs<T>(
     throw new Error(`${functionPath} : ${redact(result.errorMessage)}`);
   }
   return result.value;
+}
+
+/**
+ * The signed medical file the console carries, registered as a deployment is
+ * bootstrapped (docs/convex.md, `medicalParameters:registerVersion`): without
+ * it the site refuses every launch.
+ */
+export async function registerMedicalParameters(backend: Backend, repoRoot: string): Promise<string> {
+  const config = path.join(repoRoot, "raspberry-pi", "config");
+  return await callAs<string>(backend, null, "action", "medicalParameters:registerVersion", {
+    content: readFileSync(path.join(config, "medical_parameters.json"), "utf8"),
+    signatureBase64: readFileSync(path.join(config, "medical_parameters.sig")).toString("base64"),
+  });
 }

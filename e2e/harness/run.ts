@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { ActingIdentity, Backend } from "./convex";
+import { callAs, type ActingIdentity, type Backend } from "./convex";
 
 /** Test organisations of a run. */
 export const ORGANIZATIONS = {
@@ -67,4 +67,17 @@ export function identityOf(info: RunInfo, key: AccountKey): ActingIdentity {
     email: account.email,
     email_verified: true,
   };
+}
+
+/** The Convex user row of an account (`users._id`), as the site's URLs name it. */
+export async function convexUserId(info: RunInfo, key: AccountKey): Promise<string> {
+  const me = await callAs<{ _id: string } | null>(
+    info.backend,
+    identityOf(info, key),
+    "query",
+    "users:getCurrentUser",
+    {},
+  );
+  if (!me) throw new Error(`${key} : aucun compte Convex`);
+  return me._id;
 }

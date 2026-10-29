@@ -15,6 +15,10 @@ import path from "node:path";
  * E2E_OUTPUT_DIR, by default one folder of the system's temporary folder,
  * replaced on each run.
  */
+// No text snapshot of the page in a failure's error context: it would carry
+// what the page showed (a passenger's health data, a key shown once).
+process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
+
 const output = process.env.E2E_OUTPUT_DIR ?? path.join(os.tmpdir(), "anheart-e2e", "sorties");
 const results = path.join(output, "test-results");
 const report = path.join(output, "rapport");

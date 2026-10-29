@@ -7,6 +7,7 @@ import {
   callAs,
   newWebhookSecret,
   pushFunctions,
+  registerMedicalParameters,
   replayClerkEvent,
   setDeploymentEnv,
   startBackend,
@@ -36,6 +37,7 @@ import {
 import {
   assertLocal,
   childEnv,
+  knownSecrets,
   loadClerkKeys,
   redact,
   refuseCloudConvex,
@@ -94,6 +96,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     }
     const busy = [];
     for (const port of ports) if (!(await portIsFree(port))) busy.push(port);
+    knownSecrets(); // values the tests learned, kept in memory for the final count
     rmSync(runDir, { recursive: true, force: true });
     try {
       rmdirSync(RUNS_ROOT);
@@ -156,7 +159,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       PENDING_SESSION_TTL_S: "90",
     });
     await pushFunctions(runDir, repoRoot, backend);
-    say(`fonctions Convex poussées en ${seconds(step)}`);
+    const medical = await registerMedicalParameters(backend, repoRoot);
+    say(`fonctions Convex poussées, paramètres médicaux ${medical} inscrits, en ${seconds(step)}`);
 
     step = Date.now();
     for (const organization of Object.values(organizations)) {
