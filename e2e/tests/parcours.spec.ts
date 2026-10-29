@@ -1,11 +1,11 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "../fixtures";
 import { consoleTreeDigest, startConsole, type PiConsole } from "../harness/console";
 import { callAs } from "../harness/convex";
-import { portIsFree } from "../harness/processes";
+import { logTail, portIsFree } from "../harness/processes";
 import { convexUserId, identityOf, type AccountKey, type RunInfo } from "../harness/run";
 import { rememberFromTest } from "../harness/secrets";
 
@@ -81,6 +81,18 @@ function card(page: Page, title: string | RegExp) {
     .filter({ has: page.locator('[data-slot="card-title"]', { hasText: title }) });
 }
 
+/**
+ * Picks an option of a select: opened by its trigger, chosen with the
+ * keyboard, so that it works wherever the list opens (it can open past the
+ * bottom of the window, where a click never lands).
+ */
+async function choose(page: Page, trigger: Locator, option: string | RegExp): Promise<void> {
+  await trigger.click();
+  await page.getByRole("option", { name: option }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("listbox")).toBeHidden();
+}
+
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** The value of a live readout takes at least two values (never printed: one is a heart rate). */
@@ -137,6 +149,8 @@ const journey: {
   machineKey?: string;
   console?: PiConsole;
   sessionId?: string;
+  /** When the console was back at rest after session 1: its deposit starts then. */
+  idleAt?: number;
 } = {};
 
 function required<T>(value: T | undefined, what: string): T {
@@ -152,8 +166,7 @@ async function launchFromMyMachines(rider: Page, machineName: string): Promise<s
   await expect(launch).toBeEnabled({ timeout: 30_000 });
   await launch.click();
   const dialog = rider.getByRole("dialog");
-  await dialog.getByRole("combobox").first().click();
-  await rider.getByRole("option", { name: new RegExp(`^${escape(PROFILE_NAME)} ·`) }).click();
+  await choose(rider, dialog.getByRole("combobox").first(), new RegExp(`^${escape(PROFILE_NAME)} ·`));
   await dialog.getByRole("button", { name: "Lancer", exact: true }).click();
   await expect(rider).toHaveURL(/\/fr\/dashboard\/sessions\/[^/]+\/live$/);
   await expect(rider.getByText("En attente que la machine arme la séance…")).toBeVisible();
@@ -202,8 +215,7 @@ test("1. l'admin Anheart crée la machine du client A sur le site, puis sa clé"
   await page.getByRole("button", { name: "Nouvelle machine" }).first().click();
   const form = page.getByRole("dialog");
   await form.getByLabel("Nom de la machine").fill(name);
-  await form.getByRole("combobox", { name: "Organisation" }).click();
-  await page.getByRole("option", { name: `e2e-${run.runId} Client A` }).click();
+  await choose(page, form.getByRole("combobox", { name: "Organisation" }), `e2e-${run.runId} Client A`);
   await form.getByRole("checkbox", { name: new RegExp(escape(manager.email)) }).check();
   await form.getByRole("button", { name: "Créer" }).click();
   // The first key, shown once at creation, is left unread: the card makes the one used.
@@ -222,8 +234,11 @@ test("1. l'admin Anheart crée la machine du client A sur le site, puis sa clé"
   await keys.getByRole("button", { name: "Nouvelle clé" }).click();
   const create = page.getByRole("dialog");
   await expect(create.getByText("Nouvelle clé pour cette machine")).toBeVisible();
-  await create.getByRole("combobox", { name: "Chevauchement avec les clés actuelles" }).click();
-  await page.getByRole("option", { name: "Aucun : révoquer les clés actuelles tout de suite" }).click();
+  await choose(
+    page,
+    create.getByRole("combobox", { name: "Chevauchement avec les clés actuelles" }),
+    "Aucun : révoquer les clés actuelles tout de suite",
+  );
   await create.getByRole("button", { name: "Créer la clé" }).click();
   const shown = page.getByRole("dialog");
   await expect(shown.getByText("Cette clé ne sera affichée qu'une seule fois!")).toBeVisible();
@@ -321,8 +336,7 @@ test("3. le gestionnaire rend le passager prêt et lui donne le droit de lanceme
   // Then gives the launch right on the machine.
   await manager.goto(`/fr/dashboard/machines/${required(journey.machineId, "machine")}`);
   const rights = card(manager, "Droits de lancement");
-  await rights.getByRole("combobox").click();
-  await manager.getByRole("option", { name: new RegExp(escape(rider.email)) }).click();
+  await choose(manager, rights.getByRole("combobox"), new RegExp(escape(rider.email)));
   await rights.getByRole("button", { name: "Accorder" }).click();
   await expect(manager.getByText("Droit de lancement accordé.")).toBeVisible();
   await expect(rights.getByText(riderName).first()).toBeVisible();
@@ -420,6 +434,7 @@ test("6. l'arrêt depuis le site ramène le bras à 0 et termine la séance", as
   await expect
     .poll(async () => (await pi.status()).body.run_state, { message: "la console au repos", timeout: 30_000 })
     .toBe("idle");
+  journey.idleAt = Date.now();
 });
 
 test("7. le rapport de la séance", async ({ pageAs, run }) => {
@@ -447,20 +462,66 @@ test("7. le rapport de la séance", async ({ pageAs, run }) => {
 });
 
 test("8. l'enregistrement complet est déposé, vérifié et téléchargé", async ({ pageAs, run }) => {
-  test.setTimeout(240_000);
+  // Session 1 records some 600 files (an ECG block every 200 ms); the console
+  // deposits 2 to 10 of them a second against the local backend, slower after
+  // a refused batch: up to 600 s is waited for, on the deposit's progress.
+  test.setTimeout(780_000);
   const sessionId = required(journey.sessionId, "séance");
-  // The deposit runs once the console is at rest; its state on the server first.
-  await expect
-    .poll(
-      async () =>
-        (
-          await callAs<{ record: string } | null>(run.backend, identityOf(run, "gestionnaireA"), "query", "recordStorage:list", {
-            sessionId,
-          })
-        )?.record,
-      { message: "état de l'enregistrement sur le serveur", timeout: 180_000, intervals: [2_000] },
-    )
-    .toBe("complete");
+  // The deposit runs once the console is at rest; its state on the server
+  // first, with its progress, and on failure what the console's journal says
+  // of it (a journal without heart rate or passenger, masked by the harness).
+  const pi = required(journey.console, "console");
+  const started = Date.now();
+  try {
+    await expect
+      .poll(
+        async () => {
+          const state = await callAs<{ record: string; verifiedCount: number; expectedCount: number } | null>(
+            run.backend,
+            identityOf(run, "gestionnaireA"),
+            "query",
+            "recordStorage:list",
+            { sessionId },
+          );
+          return state ? `${state.record} ${state.verifiedCount}/${state.expectedCount}` : "aucun";
+        },
+        { message: "état de l'enregistrement sur le serveur", timeout: 600_000, intervals: [2_000] },
+      )
+      .toMatch(/^complete /);
+  } catch (error) {
+    const journal = logTail(run.runDir, `console-${pi.port}`, 400)
+      .split("\n")
+      .filter((line) => /deposit|record|upload|storage|commit/i.test(line))
+      .slice(-15)
+      .map((line) => line.replace(/([?&][a-z_]*(?:token|key)=)[^&"\s\\]+/gi, "$1[masqué]"))
+      .join("\n");
+    throw new Error(`${(error as Error).message}\njournal de la console (dépôt) :\n${journal}`);
+  }
+  // The deposit's pace, for a trial against the real backend: files over the
+  // time since the console came to rest, and the console's own answers by route.
+  const answers = new Map<string, number>();
+  const journal = logTail(run.runDir, `console-${pi.port}`, Number.MAX_SAFE_INTEGER);
+  for (const [, route, status] of journal.matchAll(
+    /HTTP Request: (?:GET|POST) \S*?(\/api\/machine\/records\/[a-z-]+|\/api\/storage\/upload)\S* \\"HTTP\/1\.1 (\d{3})/g,
+  )) {
+    answers.set(`${route} ${status}`, (answers.get(`${route} ${status}`) ?? 0) + 1);
+  }
+  // A 429 or a 500 there makes the console wait 4 s, then twice as long after
+  // each failed batch: what the local backend logged of those, numbers masked.
+  const failures = new Map<string, number>();
+  for (const line of logTail(run.runDir, "convex-backend", Number.MAX_SAFE_INTEGER).split("\n")) {
+    if (!/record/i.test(line) || !/error|fail|conflict/i.test(line)) continue;
+    const kind = line.replace(/[0-9a-f]{8,}|\d+/gi, "#").slice(0, 200);
+    failures.set(kind, (failures.get(kind) ?? 0) + 1);
+  }
+  const files = await recordFiles(run, "gestionnaireA", sessionId);
+  const seconds = (Date.now() - required(journey.idleAt, "fin de la séance")) / 1000;
+  const pace = `${files.length} fichiers en ${Math.round(seconds)} s depuis la fin de la séance, ${(files.length / seconds).toFixed(2)} fichier(s)/s`;
+  const counted = (map: Map<string, number>) => [...map].map(([key, count]) => `${key} x${count}`).join(" | ") || "aucune";
+  console.log(`[parcours] dépôt : ${pace} ; attente de l'étape ${Math.round((Date.now() - started) / 1000)} s`);
+  console.log(`[parcours] réponses vues par la console : ${counted(answers)}`);
+  console.log(`[parcours] erreurs du backend local sur les enregistrements : ${counted(failures)}`);
+  test.info().annotations.push({ type: "dépôt", description: pace });
   const manager = await pageAs("gestionnaireA");
   await manager.goto(`/fr/dashboard/sessions/${sessionId}`);
   const record = card(manager, "Enregistrement complet");
@@ -471,7 +532,6 @@ test("8. l'enregistrement complet est déposé, vérifié et téléchargé", asy
   // The browser's own download needs a Convex URL in .convex.cloud
   // (lib/session-record.ts, fetchRecordFile): each file is fetched by the site's
   // route instead, with the manager's own token.
-  const files = await recordFiles(run, "gestionnaireA", sessionId);
   expect(files.length).toBeGreaterThan(2);
   const token = await convexToken(manager);
   let manifest: { files: string[]; session_id?: string | null } | null = null;
@@ -573,12 +633,9 @@ test("6b. une seconde séance va jusqu'à sa fin normale, le passager donne son 
 
   await rider.goto(`/fr/dashboard/sessions/${sessionId}`);
   const feedback = card(rider, "Retour du passager");
-  await feedback.getByRole("combobox", { name: "Nausée" }).click();
-  await rider.getByRole("option", { name: /^0 - / }).click();
-  await feedback.getByRole("combobox", { name: "Malaise ou vertige" }).click();
-  await rider.getByRole("option", { name: /^0 - / }).click();
-  await feedback.getByRole("combobox", { name: "Ressenti" }).click();
-  await rider.getByRole("option", { name: "Bon" }).click();
+  await choose(rider, feedback.getByRole("combobox", { name: "Nausée" }), /^0 - /);
+  await choose(rider, feedback.getByRole("combobox", { name: "Malaise ou vertige" }), /^0 - /);
+  await choose(rider, feedback.getByRole("combobox", { name: "Ressenti" }), /^Bon$/);
   await feedback.getByRole("button", { name: "Enregistrer le retour" }).click();
   await expect(rider.getByText("Retour enregistré")).toBeVisible();
   await expect(feedback.getByText("Le passager", { exact: true })).toBeVisible();
