@@ -131,14 +131,20 @@ secteur. Cette valeur le déclare, honnêtement, et ne permet que cela.
   lu, le budget du lien est inchangé. `BRIDGED` n'est jamais `READY`.
 * **Banc seulement.** Seule une séance manuelle de banc arme. Tout programme,
   toute séance manuelle avec personne à bord, et tout contrôle qui ne dit pas qui
-  est à bord, sont refusés avec la raison nommée
+  est à bord, sont refusés. Quand les contrôles précédents passent, le refus porte
+  la raison nommée
   `chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`
-  (code `sto_bridged_bench_only` sur la console), sur chaque chemin : la surface,
-  les portes du runtime et sa nouvelle vérification après la lecture du
+  (code `sto_bridged_bench_only` sur la console) ; un contrôle antérieur peut
+  refuser d'abord avec son propre code (par exemple 403 quand la configuration
+  désactive les programmes ou la personne à bord, 412 `estop_unattested` sans
+  déclaration de banc, 409 `verdict_latched` sous un verdict verrouillé) : le
+  départ est refusé dans tous les cas. Ce refus vaut sur chaque chemin : la
+  surface, les portes du runtime et sa nouvelle vérification après la lecture du
   variateur ; y compris avec des paramètres médicaux signés, `PROGRAMS_ENABLED`
   et `OCCUPANCY_OCCUPIED_ENABLED`. Un lancement depuis le tableau de bord est
   toujours un programme : il est refusé avant tout envoi à `training/start`, avec
-  sa propre raison,
+  sa propre raison, donnée avant les contrôles de départ de la console
+  (attestation, verdict verrouillé, demande en attente), qui ne la lèveraient pas :
   `STO ponte : lancement depuis le site refuse, seances de banc a la console seulement`.
   Les séances de banc se lancent à la console.
 * **Attestation de banc.** À chaque démarrage de la console, une personne nommée
@@ -147,11 +153,18 @@ secteur. Cette valeur le déclare, honnêtement, et ne permet que cela.
   Le texte est enregistré et écrit mot pour mot dans le journal. La route
   d'attestation refuse les deux cases d'ANH-92 sous cette valeur, et la
   confirmation de banc sous toutes les autres ([console-locale.md, section 11](console-locale.md#11-page--securite-)).
+  Tant qu'elle n'est pas faite, un départ est refusé avec des mots qui ne parlent
+  d'aucun arrêt d'urgence câblé : 412 `estop_unattested`,
+  `nobody has attested the bench declaration this boot: …` ; dans les événements,
+  `demarrage refuse : declaration de banc non attestee depuis le demarrage de la console`.
 * **Règles.** Toutes restent actives : verdicts, FREEZE, RAMP_DOWN, E-STOP de
-  l'écran, chien de garde, `drive_precommanded`, et `sto_open` déduit du mot
-  d'état (`SWITCH_ON_DISABLED` pendant que la console tient l'ordre de marche :
-  ici, par exemple, une prise coupée puis rebranchée). Seule `sto_unreadable`
-  n'a pas d'objet : aucune lecture n'est attendue. L'acquittement se fait par
+  l'écran, chien de garde, `drive_precommanded`, `comms_lost` et `sto_open` déduit
+  du mot d'état (`SWITCH_ON_DISABLED` pendant que la console tient l'ordre de
+  marche). Une prise coupée puis rebranchée laisse, selon ce que la console a vu
+  pendant la coupure, `sto_open`, un défaut du variateur, ou `comms_lost` /
+  `go_silent`, qui ne s'acquitte pas
+  ([procédure de banc, étape 9](#procédure-de-banc-sous-bridged_declared)). Seule
+  `sto_unreadable` n'a pas d'objet : aucune lecture n'est attendue. L'acquittement se fait par
   son nom, ses autres conditions inchangées ; la condition « lecture `READY`
   postérieure » y est remplacée par « la valeur déclarée est toujours active ».
   Après un verrou, un nouveau départ reste nécessaire. Le heartbeat et le contrat
@@ -602,23 +615,46 @@ près de la machine.
 6. Démarrer une séance manuelle de banc à la console (case BANC), monter par
    paliers. Un départ proposé par le tableau de bord est refusé : les séances de
    banc se lancent à la console seulement. Personne n'entre dans le rayon du bras.
-7. Arrêt normal : STOP (rampe) ou cible 0. Tant que la console répond, STOP et
-   E-STOP de l'écran arrêtent le bras sur la rampe du variateur, en quelques
-   secondes. La coupure de la prise secteur est l'arrêt qui ne dépend pas du
-   logiciel : à faire si la console ne répond pas, si la vitesse mesurée ne
-   baisse pas, ou devant tout danger. Elle laisse le bras en roue libre, sans
-   frein : environ 145 s depuis la vitesse maximale selon le modèle simulé (la
-   vraie durée n'est pas mesurée) ; coupée pendant une rampe, elle remplace la
-   rampe par cette roue libre.
+7. Arrêt normal : STOP ou cible 0. En séance manuelle, STOP fait descendre la
+   consigne aux limites de mouvement de la séance, pas sur la rampe du
+   variateur : environ 107 s depuis 1380 tr/min moteur avec les limites livrées
+   (sur le variateur simulé, consigne à zéro en 106,8 s et arbre lu à 0 après
+   107,2 s :
+   `test_a_stop_at_nameplate_speed_walks_the_arm_down_for_about_107_s`,
+   `tests/test_sto_bridged.py` ; c'est la descente que compte aussi
+   [console-locale.md, section 11](console-locale.md#11-page--securite-), 108 s
+   depuis 1344 tr/min moteur avec la rampe de 4 s du variateur).
+   Une vitesse qui baisse lentement après STOP est donc la descente prévue, pas
+   une panne. L'arrêt rapide, tant que la console répond, est l'E-STOP de
+   l'écran : QUICK_STOP, consigne à zéro d'un coup, le variateur freine sur sa
+   rampe réglée, en quelques secondes (rampe de 3 à 4 s,
+   [securite.md](securite.md)). La coupure de la prise secteur est l'arrêt qui
+   ne dépend pas du logiciel : à faire si la console ne répond pas, si la
+   vitesse mesurée ne baisse pas du tout, ou devant tout danger. Elle laisse le
+   bras en roue libre, sans frein : environ 145 s depuis la vitesse maximale
+   selon le modèle simulé (la vraie durée n'est pas mesurée) ; coupée pendant
+   une descente, elle remplace cette descente par la roue libre.
 
 **Après.**
 
 8. Attendre l'arrêt complet, arbre immobile constaté de visu, avant d'entrer
    dans le rayon ; ni la consigne à zéro ni l'écran éteint ne le prouvent.
-9. Prise rebranchée : la console a pu verrouiller `sto_open` (variateur trouvé
-   sans étage de sortie pendant la marche). Acquitter par son nom, la cause
-   écartée et personne dans le rayon ; rien ne redémarre seul, un nouveau
-   départ reste nécessaire.
+9. Prise rebranchée : lire le verdict en cours (page Securite). Selon ce que la
+   console a vu pendant la coupure, c'est l'un de ceux-ci, ou plusieurs à la
+   suite (voir aussi l'essai 2 de la [section 6.4](#64-vérification-au-banc-de-trois-défauts-réels-procédure-prête-non-réalisée)) :
+   * `sto_open` (variateur trouvé sans étage de sortie alors que la console
+     tenait l'ordre de marche) : acquitter par son nom, la cause écartée et
+     personne dans le rayon ;
+   * un défaut du variateur (`drive_fault`) : traiter le défaut (carte
+     Variateur), puis acquitter par son nom ;
+   * `comms_lost` / `go_silent` (le variateur ne répondait plus) : ce verdict
+     ne s'acquitte pas. Arbre immobile constaté, relancer la console
+     (`sudo systemctl restart anheart`), refaire la déclaration de banc (elle
+     ne vaut que pour un démarrage de la console), puis demander un nouveau
+     départ.
+
+   Dans tous les cas rien ne redémarre seul : un nouveau départ reste
+   nécessaire.
 10. Consigner date, opérateurs, version, vitesse maximale atteinte et, si la
     prise a été coupée en rotation, le temps jusqu'à l'arrêt mesuré au
     chronomètre : c'est la seule mesure de roue libre que ce banc peut donner.

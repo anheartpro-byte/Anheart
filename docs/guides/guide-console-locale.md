@@ -877,8 +877,10 @@ Sous `STO_SOURCE=bridged_declared`, la carte de l'offre s'affiche, mais au clic 
 `training/start`, avec la raison
 `STO ponte : lancement depuis le site refuse, seances de banc a la console seulement` :
 la carte passe à `refuse` avec cette phrase, et le tableau de bord reçoit l'échec avec la
-même raison. Un tel départ est toujours un programme, avec une personne à bord. Les
-séances de banc se lancent à la console (§13.2).
+même raison, même si l'attestation n'est pas faite ou si un verdict attend : sous cette
+valeur, ce refus passe avant les contrôles de départ de la console. Un tel départ est
+toujours un programme, avec une personne à bord. Les séances de banc se lancent à la
+console (§13.2).
 
 Saisissez votre nom dans le champ **Operateur** habituel puis cliquez une fois sur
 **Cette personne est a bord et prete**. Le bouton local **Demarrer la seance** est
@@ -1067,7 +1069,11 @@ Un départ proposé par le tableau de bord est refusé (§9). La carte d'attesta
 propose que la déclaration de banc (§13.1), et la case de l'acquittement dit
 `aucun coup de poing n'est cable : la cause de l'arret d'urgence de l'ecran est ecartee et personne n'est dans le rayon du bras`
 au lieu de la case du coup de poing. L'acquittement se fait par son nom, sans lecture à
-attendre, puis un nouveau départ reste nécessaire.
+attendre, puis un nouveau départ reste nécessaire. Après une coupure de la prise, selon ce
+que la console a vu pendant la coupure, le verdict est `sto_open` (à acquitter par son
+nom), un défaut du variateur (à traiter puis acquitter, §13.9), ou `comms_lost` /
+`go_silent`, qui ne s'acquitte pas : arbre immobile constaté, relancez la console (§3),
+refaites la déclaration de banc (§13.1), puis demandez un nouveau départ.
 
 Après vérification, relâcher le champignon et vérifier le relais. Attendre `prete`,
 puis **Acquitter** par son nom et demander un **nouveau départ**. Refermer seul ne
@@ -1371,7 +1377,10 @@ affichée, `le STO est ponte, aucun arret d'urgence materiel ; l'arret d'urgence
 et cochez la seule case **J'atteste ce texte tel qu'il est ecrit ci-dessus.**, avec votre
 nom, **seulement** si chacun de ces points est vrai : capsule vide ou lestée, aucune
 personne à bord, une personne à la prise secteur, personne dans le rayon du bras. Elle est
-enregistrée mot pour mot et vaut jusqu'au prochain redémarrage de la console. La
+enregistrée mot pour mot et vaut jusqu'au prochain redémarrage de la console. Tant
+qu'elle n'est pas faite, un départ est refusé avec
+`nobody has attested the bench declaration this boot: ...` (ou, dans **Evenements**,
+`demarrage refuse : declaration de banc non attestee depuis le demarrage de la console`). La
 procédure complète (qui, avant, pendant, après) est dans
 [raspberry-pi.md, 2.2](../raspberry-pi.md#procédure-de-banc-sous-bridged_declared).
 
@@ -2015,8 +2024,10 @@ processus ne prouve alors l'arrêt de l'arbre ; aucune séance ne reprend seule.
 **Coupure secteur du variateur** : au retour, le variateur peut afficher `USF`
 (sous tension, réarmable) ; suivez §13.9. D'après le manuel de l'ATV320, ce défaut
 s'efface de lui-même quand la tension revient. Rien ne repart seul pour autant : un
-verdict de la console reste en place (`drive_fault`, ou `go_silent` si la liaison est
-tombée avec le variateur). Non vérifié sur la machine.
+verdict de la console reste en place, selon ce qu'elle a vu (`drive_fault`, `sto_open`,
+ou `go_silent` si la liaison est tombée avec le variateur). Non vérifié sur la machine. `go_silent` ne s'acquitte pas : arbre immobile constaté,
+relancez la console (§3), refaites l'attestation, ou la déclaration de banc sous
+`bridged_declared` (§13.1), puis demandez un nouveau départ.
 
 ### 13.11 La cible manuelle est refusée, ou revient à 0
 
@@ -2138,6 +2149,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ `cochez la declaration BANC (personne a bord : NON) avant de demarrer` | case BANC non cochée | vérifier que personne n'est dans la capsule (vide ou lestée), cocher |
 | ✔ `an operator name is required: an unattributable session record is not one` | nom vide | taper votre nom (champ Operateur, ou votre nom en Securite) |
 | ✔ `nobody has attested the emergency stop this boot: ...` | attestation pas faite depuis le démarrage | §13.1 |
+| `nobody has attested the bench declaration this boot: ...` | sous `STO_SOURCE=bridged_declared` : déclaration de banc pas faite depuis le démarrage | §13.1 |
 | ✔ `both confirmations are required, separately: ...` | une seule case cochée | cocher les deux, seulement si les deux sont vraies |
 | ✔ `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | un verdict attend | lire la règle, traiter la cause, §13.6 |
 | ✔ `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` (rouge) | un démarrage est déjà demandé, par cet écran (double clic) ou par un autre, et la machine ne l'a pas encore pris : ce clic n'a pas été transmis. Jusqu'au 11 octobre 2026, deux démarrages demandés presque en même temps pouvaient être acceptés tous les deux | attendre la note du premier démarrage, ou regarder **Mode** |
@@ -2196,6 +2208,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `cible de <n> tr/min moteur remise a 0 : ...` (sans nom d'opérateur) | la machine a repris une cible qu'elle avait acceptée, avant le premier mouvement : règle de sécurité, fréquence cardiaque, ou variateur qui n'a pas confirmé | §13.11 |
 | `demarrage refuse : la machine est deja <état>` | une séance existe déjà | STOP d'abord (§13.5) |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante | §13.1 |
+| `demarrage refuse : declaration de banc non attestee depuis le demarrage de la console` | sous `STO_SOURCE=bridged_declared` : déclaration de banc manquante | §13.1 |
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente | §13.6 |
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | les paliers cardiaques du profil ne sont pas ceux du fichier médical signé | corriger le profil ; changer les paliers du fichier est une décision médicale |
 | `parametres medicaux non signes (<raison>) : console en mode banc seulement, aucune seance programmee ni personne a bord` (aussi dans le bandeau rouge `PARAMETRES MEDICAUX NON SIGNES`) | la signature du fichier médical ne s'est pas vérifiée au démarrage | séances de banc seulement ; prévenir la personne qui administre le Pi : le fichier doit être signé de nouveau, puis la console redémarrée |

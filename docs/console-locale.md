@@ -1325,6 +1325,8 @@ Sous `STO_SOURCE=bridged_declared`, tout lancement depuis le site est refusé av
 programme, donc une personne à bord. La console le dit (carte « Depart distant » à
 `refuse`), et le renvoie au tableau de bord comme raison de l'échec, avec sa propre phrase,
 `STO ponte : lancement depuis le site refuse, seances de banc a la console seulement`.
+Cette raison passe avant les contrôles de départ de la console (attestation, verdict
+verrouillé, demande en attente) : sous cette valeur, aucun d'eux ne lèverait ce refus.
 Les séances de banc se lancent à la console seulement.
 
 L'opérateur renseigne le champ **Operateur** déjà présent dans la carte Programme,
@@ -1961,7 +1963,8 @@ garanti le câblage. La pastille passe de `non atteste` à `atteste`, avec
 `atteste par <nom> a <heure> (valable jusqu'au prochain redemarrage du Pi)`.
 
 Sans attestation, tout démarrage (manuel ou programmé) répond 412 :
-`nobody has attested the emergency stop this boot: …`.
+`nobody has attested the emergency stop this boot: …` ; sous `STO_SOURCE=bridged_declared`,
+`nobody has attested the bench declaration this boot: …` (même code `estop_unattested`).
 
 > **Important.** Le logiciel lit le retour de la chaîne STO configurée (simulé avec
 > `sim_*`). Cette lecture ne vérifie ni le retrait du pont STO ni le câblage
@@ -1979,7 +1982,10 @@ Le Pi refuse (400, rien d'enregistré) les deux cases d'ANH-92 sous ce mode, et 
 confirmation de banc sous toutes les autres sources ; le nom est exigé dans les deux
 cas. Comme l'autre, elle vit dans le processus : à refaire à chaque redémarrage. Les
 confirmations à proposer sont celles que nomme `attestation_fields` de `/api/status` :
-la page n'en propose aucune avant de l'avoir lu.
+la page n'en propose aucune avant de l'avoir lu. Tant qu'elle n'est pas faite, un départ
+répond 412, `nobody has attested the bench declaration this boot: …`, et un refus de la
+boucle dit `demarrage refuse : declaration de banc non attestee depuis le demarrage de la console` :
+aucun de ces refus ne parle d'un arrêt d'urgence câblé.
 
 ### Carte « Chaine STO »
 
@@ -2031,12 +2037,18 @@ seule une réponse qui nomme une autre source. La carte dit `pontee (declaree)`.
 bouton manuel (séance de banc) reste disponible si le reste le permet ; **Demarrer la
 seance** est grisé avec la phrase du Pi,
 `chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`,
-et le Pi refuse tout départ avec personne à bord avec cette phrase (412, code
-`sto_bridged_bench_only`). Un lancement depuis le tableau de bord est refusé avant
-`training/start`, avec sa propre phrase (carte « Depart distant », section 9). Couper
-la prise secteur coupe le variateur : le bras part en roue libre, sans frein (144,6 s
-depuis 1380 tr/min moteur selon le modèle du variateur simulé, jamais mesuré sur la
-machine) ; rester hors du rayon du bras jusqu'à l'arbre immobile, constaté.
+et le Pi refuse tout départ avec personne à bord ; quand les contrôles précédents
+passent, avec cette phrase (412, code `sto_bridged_bench_only`), sinon avec le code du
+contrôle qui refuse d'abord (section 13). Un lancement depuis le tableau de bord est
+refusé avant `training/start`, avec sa propre phrase (carte « Depart distant », section
+9). Couper la prise secteur coupe le variateur : le bras part en roue libre, sans frein
+(144,6 s depuis 1380 tr/min moteur selon le modèle du variateur simulé, jamais mesuré
+sur la machine) ; rester hors du rayon du bras jusqu'à l'arbre immobile, constaté. Au
+retour de la prise, selon ce que la console a vu pendant la coupure : `sto_open`, à
+acquitter par son nom ; un défaut du variateur, à traiter puis acquitter ; ou
+`comms_lost` / `go_silent`, qui ne s'acquitte pas : arbre immobile constaté, relancer la
+console, refaire la déclaration de banc, puis un nouveau départ
+([raspberry-pi.md, procédure de banc](raspberry-pi.md#procédure-de-banc-sous-bridged_declared)).
 Configuration et procédure de banc :
 [raspberry-pi.md, 2.2](raspberry-pi.md#banc-déclaré-ponté--bridged_declared-anh-92).
 
@@ -2220,9 +2232,13 @@ l'une des phrases communes suivantes, également affichées à côté des bouton
 - `lecture STO non configuree : configurer la source de la chaine de securite`.
 
 Sous `STO_SOURCE=bridged_declared`, un départ avec personne à bord (programme, ou
-séance manuelle `occupied` par l'API) répond `412`, code `sto_bridged_bench_only`,
-avec la phrase
-`chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`.
+séance manuelle `occupied` par l'API) est toujours refusé. Quand les contrôles
+précédents passent, il répond `412`, code `sto_bridged_bench_only`, avec la phrase
+`chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer` ;
+sinon le contrôle qui refuse d'abord répond avec son propre code (par exemple `403`
+quand la configuration désactive les programmes ou la personne à bord, `412`
+`estop_unattested` sans déclaration de banc, `409` `verdict_latched` sous un verdict
+verrouillé).
 
 L'acquittement répond `409` avec la même phrase tant que la chaîne n'est pas prête,
 même si le verdict à libérer porte sur une autre cause (pas sous
@@ -2232,6 +2248,7 @@ même si le verdict à libérer porte sur une autre cause (pas sous
 |---|---|---|
 | `an operator name is required: an unattributable session record is not one` | 400 | nom d'opérateur vide (démarrage, cible, fin, reset, acquittement) |
 | `nobody has attested the emergency stop this boot: …` | 412 | attestation du câblage non faite depuis le démarrage du Pi |
+| `nobody has attested the bench declaration this boot: …` | 412 | sous `STO_SOURCE=bridged_declared` : déclaration de banc non faite depuis le démarrage du Pi (même code `estop_unattested`) |
 | `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | 409 | `verdict_latched` : un verdict verrouillé attend un acquittement, quel qu'en soit l'auteur : le superviseur, ou la console elle-même (`sto_open`, `drive_precommanded`, `enable_unconfirmed`, son propre `comms_lost`...). Sous un verdict de la console elle-même, la règle nommée est celle de la ligne `plancher verrouille` de la page Securite. La console répond au clic, sans rien déposer dans la boîte aux lettres. Jusqu'au 25 octobre 2026, un verdict verrouillé par la console elle-même n'était pas lu ici : le démarrage était accepté (202) puis refusé un cycle plus tard par la boucle |
 | `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` | 409 | `start_pending` : un démarrage ou un reset pendant qu'un démarrage accepté attend ou est armé (double clic, ou un autre écran). Jusqu'au 11 octobre 2026 : `the machine is starting, not idle (pending: …)`, avec la demande en attente imprimée |
 | `demande refusee par la console : une autre demande attend encore la machine (une demande a la fois), rien n'a ete envoye. Reessayer dans un instant.` | 409 | `request_waiting` : la boîte aux lettres (une seule place) tient une autre demande jusqu'au prochain cycle |
@@ -2268,6 +2285,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 |---|---|
 | `demarrage refuse : la machine est deja <état>` | une séance existe déjà |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante |
+| `demarrage refuse : declaration de banc non attestee depuis le demarrage de la console` | sous `STO_SOURCE=bridged_declared` : déclaration de banc manquante |
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente. Depuis le 25 octobre 2026 un démarrage demandé depuis la page sous un verdict verrouillé est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un verdict non verrouillé, pour un verrou posé entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord sous un verdict verrouillé par la console elle-même (section 15) |
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | paliers cardiaques du profil ≠ ceux du fichier médical (`hr_hard_max_bpm` / `hr_critical_bpm`) |
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
@@ -2402,7 +2420,7 @@ servi ; `/docs` et `/redoc` sont désactivés.
 | 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
 | 404 | profil inconnu, fichier statique absent, enregistrement inconnu |
 | 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance). Un refus de la boîte aux lettres pour un démarrage, un arrêt, une cible ou un reset porte `{"detail", "code", "waiting_request_id"}` (voir plus bas). Le refus préalable d'un démarrage pour défaut variateur porte seulement `{"detail"}` |
-| 412 | arrêt d'urgence non attesté depuis ce démarrage (même corps, `code` `estop_unattested`) |
+| 412 | arrêt d'urgence non attesté depuis ce démarrage, ou déclaration de banc sous `bridged_declared` (même corps, `code` `estop_unattested`) |
 | 422 | valeur inutilisable (profil rejeté, cible négative, occupation inconnue) ou corps JSON invalide (validation FastAPI) |
 | 500 | stock de profils non inscriptible, lecture ou archive d'enregistrement impossible |
 | 503 | lecture des enregistrements déjà en cours (deux au plus à la fois) |
