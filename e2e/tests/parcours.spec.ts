@@ -486,14 +486,16 @@ test("8. l'enregistrement complet est déposé, vérifié et téléchargé", asy
   expect(manifest.files.every((entry) => listed.has(entry)), "le manifeste ne nomme que des fichiers déposés").toBe(true);
   expect(manifest.session_id ?? sessionId).toBe(sessionId);
 
-  // A manager of another organisation is refused the same file.
+  // A manager of another organisation, signed in, is refused the same file:
+  // 404, as for a file that does not exist (401 would only say "no identity",
+  // convex/recordHttp.ts).
   const other = await pageAs("gestionnaireB");
   await other.goto("/fr/dashboard");
   const refused = await fetch(
     `${run.backend.siteUrl}/api/records/download?fileId=${encodeURIComponent(files[0].id)}`,
     { headers: { authorization: `Bearer ${await convexToken(other)}` } },
   );
-  expect([401, 403, 404]).toContain(refused.status);
+  expect(refused.status).toBe(404);
 });
 
 test("9. le retour du passager saisi à la console apparaît sur la séance", async ({ pageAs, run }) => {
