@@ -93,6 +93,9 @@ export async function startBackend(runDir: string, runId: string): Promise<Backe
   const port = await freePort();
   const sitePort = await freePort();
   const instanceName = `anheart-e2e-${runId}`;
+  // On the command line, the only way this binary takes it (no environment
+  // variable): visible to the users of this computer while the run lasts, for
+  // a backend on the loopback whose database is thrown away at the end.
   const instanceSecret = remember(randomBytes(32).toString("hex"));
   const { stdout } = await promisify(execFile)(binary, [
     "keygen",

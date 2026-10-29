@@ -3916,17 +3916,20 @@ même en cas d'échec ou de Ctrl-C. Tout est sous `e2e/` ; la configuration est
 | Pièce | Ce que c'est |
 |---|---|
 | Navigateur | Playwright 1.64.1 (`@playwright/test`, version exacte), Chromium seul en mode sans écran |
-| Backend | un backend Convex **local** sur `127.0.0.1` (binaire officiel `convex-local-backend`, version écrite dans `e2e/harness/convex.ts`, téléchargé une fois dans `~/.cache/convex/binaries/`), base jetée à la fin ; le code de `convex/` y est poussé, le fichier médical signé y est inscrit, ses variables posées par le harnais (dont un secret de webhook tiré pour l'exécution et `PENDING_SESSION_TTL_S=90`) |
-| Comptes | une instance Clerk **de développement** : 3 organisations `e2e-<exécution> …` et 7 comptes `e2e-<exécution>-<rôle>+clerk_test@example.com` (admin Anheart, admin et gestionnaire et deux passagers du client A, gestionnaire et passager du client B), créés par l'API de Clerk, reflétés dans Convex par le webhook rejoué et signé, connectés sans mot de passe ; supprimés à la fin, et au début de l'exécution suivante si l'une s'est arrêtée en route. Une exécution à la fois par instance Clerk |
+| Backend | un backend Convex **local** sur `127.0.0.1` (binaire officiel `convex-local-backend`, version écrite dans `e2e/harness/convex.ts`, téléchargé une fois dans `~/.cache/convex/binaries/`, son empreinte sha256 épinglée par plateforme, `darwin-arm64` et `linux-x64`, vérifiée sur l'archive puis sur le binaire au téléchargement, et sur le binaire à chaque usage depuis le cache ; une autre plateforme est refusée), base jetée à la fin ; le code de `convex/` y est poussé, le fichier médical signé y est inscrit, ses variables posées par le harnais (dont un secret de webhook tiré pour l'exécution et `PENDING_SESSION_TTL_S=90`) |
+| Comptes | une instance Clerk **de développement** : 3 organisations `e2e-<exécution> …` et 7 comptes `e2e-<exécution>-<rôle>+clerk_test@example.com` (admin Anheart, admin et gestionnaire et deux passagers du client A, gestionnaire et passager du client B), créés par l'API de Clerk, reflétés dans Convex par le webhook rejoué et signé, connectés sans mot de passe. Le démontage ne supprime que les comptes et organisations de **son** exécution (`e2e-<exécution>`) ; le démarrage supprime les restes de toutes (`e2e-`), d'une exécution arrêtée en route. Une exécution à la fois par instance Clerk. En local, avec l'instance de développement partagée, son propre webhook reflète aussi ces comptes, et leur suppression, dans le déploiement Convex de développement : le harnais, lui, ne contacte jamais ce déploiement |
 | Site | `next build` puis `next start` sur `localhost`, pointé sur le backend local |
 | Console | la vraie console du Pi (`python -m src.local_panel`) en simulation complète, lancée depuis une copie de `raspberry-pi/src`, `config/` et `VERSION` dans le dossier de l'exécution, pilotée par son API comme l'opérateur |
-| Secrets | aucune valeur affichée : le harnais lit lui-même ses trois clés, masque ce qu'il imprime et ce que gardent les traces, et compte à la fin les valeurs secrètes de l'exécution dans tout ce qu'elle laisse (une occurrence fait échouer l'exécution) |
+| Secrets | aucune valeur affichée : le harnais lit lui-même ses trois clés, masque ce qu'il imprime et ce que gardent les traces, et compte à la fin les valeurs secrètes de l'exécution et les jetons signés dans `test-results/`, `rapport/` et le site construit (`.next`). Les captures ne sont pas comptées (une recherche d'octets dans un PNG ne prouve rien) : les clés y sont masquées et le jeu versé est relu par une personne. Une occurrence, ou un comptage impossible, fait échouer l'exécution **fermée** : `test-results/` et `rapport/` sont supprimés (Playwright réécrit ensuite le seul `test-results/.last-run.json` : le statut et les identifiants des tests en échec), et le marqueur `ne-pas-envoyer` est écrit dans `E2E_OUTPUT_DIR` pour les étapes qui les enverraient |
 
 Ce qu'une exécution laisse va dans `E2E_OUTPUT_DIR` (par défaut un dossier du
 répertoire temporaire du système), jamais dans le dépôt : `rapport/` (le
 rapport HTML de Playwright), `test-results/` (traces et vidéos des seuls
 échecs, masquées ; aucune pour les fichiers qui montrent des données de santé)
-et `captures/` (les captures d'écran, ci-dessous).
+et `captures/` (les captures d'écran, ci-dessous). Le contexte d'erreur d'un
+échec (`error-context.md`, joint au rapport), qui garde le texte de la page,
+est supprimé pour tous les tests, fichier et pièce jointe, dès la fin du test :
+seuls le message d'erreur et sa pile restent.
 
 **Lancer en local.**
 
@@ -3940,7 +3943,7 @@ Le harnais ne lit dans ce fichier que `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`,
 sont pas d'une instance de développement ; sans `E2E_ENV_FILE`, il les lit
 dans l'environnement, sous les mêmes noms. Il refuse aussi toute adresse
 Convex en `.convex.cloud` ou `.convex.site`. Il faut le venv de la console
-(`raspberry-pi/.venv`), `unzip`, et une instance Clerk de développement qui a
+(`raspberry-pi/.venv`), `unzip` et `zip`, et une instance Clerk de développement qui a
 les organisations, les rôles `org:admin`, `org:gestionnaire` et `org:patient`
 et le gabarit de jeton `convex` (`org_id`, `org_role`, `email`,
 `email_verified`) : le harnais le vérifie avant de créer quoi que ce soit.
@@ -3948,9 +3951,12 @@ Un fichier seul : `npx playwright test --config e2e/playwright.config.ts parcour
 (même variable). Durée mesurée de la suite complète : 18 min 31 s le 29 octobre 2026 (33 tests, dont un ignoré, sur un poste de développement), dont environ 3 min 45 s pour les captures.
 
 **Les scénarios, par exigence.** Un seul processus joue les fichiers l'un
-après l'autre ; `tickets.spec.ts` joue après `parcours.spec.ts` et
-`refus.spec.ts` (il change des passagers et des affectations qu'ils attendent
-neufs) et prépare lui-même ce qu'il lui faut. Chaque test affirme ce que
+après l'autre, dans l'ordre de leurs noms, et l'ordre compte :
+`captures.spec.ts` joue en premier (il ne touche que le client B, que les
+fichiers suivants préparent de nouveau) et `tickets.spec.ts` en dernier (il
+change des passagers et des affectations que les autres attendent neufs, et
+prépare lui-même ce qu'il lui faut). Renommer un fichier, `--shard` ou
+`fullyParallel` changerait cet ordre sans prévenir. Chaque test affirme ce que
 l'écran montre, et l'absence d'effet indésirable quand il s'agit d'un refus.
 
 | Exigence | Tests |
@@ -3960,7 +3966,7 @@ l'écran montre, et l'absence d'effet indésirable quand il s'agit d'un refus.
 | Le parcours principal : machine et clé, console en ligne, droit, lancement distant confirmé, séance en direct, arrêt jusqu'à 0, rapport, listes, alerte hors ligne (AF-2) | `parcours.spec.ts`, étapes 1 à 11 et 6b |
 | L'enregistrement complet téléchargeable (ANH-130) | `parcours.spec.ts` « 8. l'enregistrement complet est déposé, vérifié et téléchargé » |
 | Le retour du passager (ANH-146) | `parcours.spec.ts` étapes 9 (à la console) et 6b (sur le site) |
-| Refus : mineur, FC max, séance manuelle (AF-2) | `refus.spec.ts` scénarios 1, 2 et 4 |
+| Refus : mineur, FC max, séance manuelle (AF-2) | `refus.spec.ts` scénarios 1, 2 et 4 (une séance manuelle de banc lancée à la console d'une machine à part, puis sur le site : la liste avec le badge « Manuel », la page de la séance, et aucun programme manuel à la fenêtre de lancement ; arrêtée à la console, revenue au repos) |
 | Aptitude et consentement (ANH-143) | `refus.spec.ts` scénario 3 |
 | Séance en attente expirée, droit retiré avant le départ (ANH-144) | `refus.spec.ts` scénarios 5 et 6 |
 | Incident bloquant (ANH-145) | `refus.spec.ts` scénario 8, `test.skip` : bloqué par ANH-145 |
@@ -4022,6 +4028,11 @@ Clerk de développement réservée à ces tests (jamais l'instance de production
 * Un backend Convex local, jeté à chaque exécution, au lieu du déploiement de
   prévisualisation que demandait EX-A : aucune donnée partagée, rien à nettoyer
   ailleurs, aucune clé de déploiement dans la CI.
+* Le secret d'instance de ce backend, tiré pour l'exécution, lui est passé en
+  argument de processus : le binaire ne le prend que là (son aide ne donne
+  aucune variable d'environnement pour `--instance-secret`). Il est donc
+  visible des utilisateurs du poste le temps de l'exécution, pour un backend
+  qui n'écoute que sur la boucle locale et dont la base est jetée à la fin.
 * Les captures sont refaites à chaque exécution, dans le dossier des sorties
   (en artefact quand le job de CI existera) ; un premier jeu est versé dans
   `docs/guides/captures/`, sans commit automatique.
@@ -4029,8 +4040,10 @@ Clerk de développement réservée à ces tests (jamais l'instance de production
   pas : un `test.skip` nommé le rappelle.
 * Le bouton « Télécharger l'archive » de l'enregistrement complet n'est pas
   cliqué : il exige une adresse Convex en `.convex.cloud`. La carte est vérifiée
-  dans le navigateur, puis chaque fichier est téléchargé par la route du site
-  et comparé (taille, empreinte, manifeste).
+  dans le navigateur, puis chaque fichier est téléchargé par la route HTTP de
+  Convex `/api/records/download`, celle qu'appelle le bouton, et comparé
+  (taille, empreinte, manifeste) ; un gestionnaire d'une autre organisation y
+  reçoit 404.
 * L'invitation d'un patient est jouée dans le client B : l'instance Clerk de
   développement limite chaque organisation à 5 membres, et le client A en a
   déjà 5 pendant la suite.
