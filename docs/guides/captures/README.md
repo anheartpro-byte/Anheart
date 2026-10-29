@@ -9,9 +9,8 @@ en simulation (fréquence cardiaque simulée, aucune personne réelle). Les
 préfixes des clés de machine sont masqués.
 
 Ce premier jeu a été versé le 29 octobre 2026. Chaque exécution de la suite en
-refait un, sous les mêmes noms, dans `<E2E_OUTPUT_DIR>/captures/`, et la CI le
-garde dans l'artefact `e2e-captures` ; il n'est pas recopié ici
-automatiquement. Ce qui change d'une exécution à l'autre : l'identifiant de
+refait un, sous les mêmes noms, dans `<E2E_OUTPUT_DIR>/captures/` ; il n'est
+pas recopié ici automatiquement. Ce qui change d'une exécution à l'autre : l'identifiant de
 l'exécution dans les noms d'organisation et les adresses, les dates, les
 courbes. Pour les refaire : [Tests de bout en bout dans un navigateur](../../framework-de-test.md#tests-de-bout-en-bout-dans-un-navigateur-anh-83).
 

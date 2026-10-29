@@ -3904,10 +3904,143 @@ scénario n'exerce pas n'est pas comparée. Le disque est celui du poste : la
 lenteur d'une carte SD est simulée par une lecture qui ne revient pas, pas
 mesurée. Aucun déploiement Convex réel et aucun Pi n'ont été utilisés.
 
+### Tests de bout en bout dans un navigateur (ANH-83)
+
+Le tableau de bord est joué dans un vrai navigateur, comme un utilisateur le
+ferait, contre un environnement monté pour l'occasion et démonté à la fin,
+même en cas d'échec ou de Ctrl-C. Tout est sous `e2e/` ; la configuration est
+`e2e/playwright.config.ts`.
+
+**Ce qui tourne.**
+
+| Pièce | Ce que c'est |
+|---|---|
+| Navigateur | Playwright 1.64.1 (`@playwright/test`, version exacte), Chromium seul en mode sans écran |
+| Backend | un backend Convex **local** sur `127.0.0.1` (binaire officiel `convex-local-backend`, version écrite dans `e2e/harness/convex.ts`, téléchargé une fois dans `~/.cache/convex/binaries/`), base jetée à la fin ; le code de `convex/` y est poussé, le fichier médical signé y est inscrit, ses variables posées par le harnais (dont un secret de webhook tiré pour l'exécution et `PENDING_SESSION_TTL_S=90`) |
+| Comptes | une instance Clerk **de développement** : 3 organisations `e2e-<exécution> …` et 7 comptes `e2e-<exécution>-<rôle>+clerk_test@example.com` (admin Anheart, admin et gestionnaire et deux passagers du client A, gestionnaire et passager du client B), créés par l'API de Clerk, reflétés dans Convex par le webhook rejoué et signé, connectés sans mot de passe ; supprimés à la fin, et au début de l'exécution suivante si l'une s'est arrêtée en route. Une exécution à la fois par instance Clerk |
+| Site | `next build` puis `next start` sur `localhost`, pointé sur le backend local |
+| Console | la vraie console du Pi (`python -m src.local_panel`) en simulation complète, lancée depuis une copie de `raspberry-pi/src`, `config/` et `VERSION` dans le dossier de l'exécution, pilotée par son API comme l'opérateur |
+| Secrets | aucune valeur affichée : le harnais lit lui-même ses trois clés, masque ce qu'il imprime et ce que gardent les traces, et compte à la fin les valeurs secrètes de l'exécution dans tout ce qu'elle laisse (une occurrence fait échouer l'exécution) |
+
+Ce qu'une exécution laisse va dans `E2E_OUTPUT_DIR` (par défaut un dossier du
+répertoire temporaire du système), jamais dans le dépôt : `rapport/` (le
+rapport HTML de Playwright), `test-results/` (traces et vidéos des seuls
+échecs, masquées ; aucune pour les fichiers qui montrent des données de santé)
+et `captures/` (les captures d'écran, ci-dessous).
+
+**Lancer en local.**
+
+```bash
+npm run e2e:browser            # une fois : le Chromium de Playwright
+E2E_ENV_FILE=/chemin/vers/.env.local npm run test:e2e
+```
+
+Le harnais ne lit dans ce fichier que `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`,
+`CLERK_SECRET_KEY` et `CLERK_JWT_ISSUER_DOMAIN`, et refuse des clés qui ne
+sont pas d'une instance de développement ; sans `E2E_ENV_FILE`, il les lit
+dans l'environnement, sous les mêmes noms. Il refuse aussi toute adresse
+Convex en `.convex.cloud` ou `.convex.site`. Il faut le venv de la console
+(`raspberry-pi/.venv`), `unzip`, et une instance Clerk de développement qui a
+les organisations, les rôles `org:admin`, `org:gestionnaire` et `org:patient`
+et le gabarit de jeton `convex` (`org_id`, `org_role`, `email`,
+`email_verified`) : le harnais le vérifie avant de créer quoi que ce soit.
+Un fichier seul : `npx playwright test --config e2e/playwright.config.ts parcours`
+(même variable). Durée mesurée de la suite complète : 18 min 31 s le 29 octobre 2026 (33 tests, dont un ignoré, sur un poste de développement), dont environ 3 min 45 s pour les captures.
+
+**Les scénarios, par exigence.** Un seul processus joue les fichiers l'un
+après l'autre ; `tickets.spec.ts` joue après `parcours.spec.ts` et
+`refus.spec.ts` (il change des passagers et des affectations qu'ils attendent
+neufs) et prépare lui-même ce qu'il lui faut. Chaque test affirme ce que
+l'écran montre, et l'absence d'effet indésirable quand il s'agit d'un refus.
+
+| Exigence | Tests |
+|---|---|
+| Le harnais : backend, comptes, console (ANH-83, EX-A) | `connexion.spec.ts`, `console.spec.ts` |
+| Les deux langues (AF-3) | `connexion.spec.ts` (le tableau de bord en français puis en anglais) ; `parcours.spec.ts` « 5. la séance en direct avance, en français puis en anglais » ; `refus.spec.ts` (refus en français et en anglais) ; `tickets.spec.ts` « ANH-167 … » (admin d'organisation en anglais) ; `captures.spec.ts` |
+| Le parcours principal : machine et clé, console en ligne, droit, lancement distant confirmé, séance en direct, arrêt jusqu'à 0, rapport, listes, alerte hors ligne (AF-2) | `parcours.spec.ts`, étapes 1 à 11 et 6b |
+| L'enregistrement complet téléchargeable (ANH-130) | `parcours.spec.ts` « 8. l'enregistrement complet est déposé, vérifié et téléchargé » |
+| Le retour du passager (ANH-146) | `parcours.spec.ts` étapes 9 (à la console) et 6b (sur le site) |
+| Refus : mineur, FC max, séance manuelle (AF-2) | `refus.spec.ts` scénarios 1, 2 et 4 |
+| Aptitude et consentement (ANH-143) | `refus.spec.ts` scénario 3 |
+| Séance en attente expirée, droit retiré avant le départ (ANH-144) | `refus.spec.ts` scénarios 5 et 6 |
+| Incident bloquant (ANH-145) | `refus.spec.ts` scénario 8, `test.skip` : bloqué par ANH-145 |
+| Isolation entre organisations (EX-B) | `refus.spec.ts` scénario 7 ; `parcours.spec.ts` étape 10 ; `tickets.spec.ts` « ANH-158 … » |
+| Les sous-tickets d'ANH-122 (ANH-154 à ANH-160) | `tickets.spec.ts`, un test par clé (« ANH-154 … » à « ANH-160 … ») |
+| La page Audit (ANH-167) | `tickets.spec.ts` « ANH-167 … » |
+| Les captures des pages principales (EX-C) | `captures.spec.ts` |
+
+Ce que le navigateur ne peut pas prouver est laissé aux tests de Convex et des
+pages : la règle d'un second compte au même e-mail côté Convex
+(`convex/patientInvitations.test.ts`, « cannot create a second profile during
+first-login synchronization », « refuses linking when this Clerk account
+already has a different profile »), le premier admin créé par Clerk seul
+(`convex/organizations.test.ts`, « makes an admin of the Anheart organisation
+the admin of every organisation ») et la pagination des séances par 50
+(`app/[locale]/dashboard/sessions/page.test.tsx`, « shows the first 50
+sessions, says there are more, and adds the next ones at 'Show more' »).
+
+**Les captures.** `captures.spec.ts` photographie à chaque exécution neuf
+pages, en français et en anglais, en thème clair et en thème sombre (le site
+suit le thème du système : le navigateur le choisit), avec les données de
+test du client B : tableau de bord, Mes machines, fiche machine avec l'état en
+direct et les clés (préfixes masqués), page Patient avec l'aptitude et le
+consentement, fenêtre de lancement, séance en direct avec ses courbes, Audit,
+rapport de séance, Alertes. Noms stables, `<nn>-<page>-<fr|en>-<clair|sombre>.png`,
+dans `<E2E_OUTPUT_DIR>/captures/`. Un premier jeu est versé dans
+[docs/guides/captures/](guides/captures/README.md) ; il n'est pas recopié
+automatiquement (le job de CI, quand il existera, les gardera en artefact). Ce qui change d'une exécution à l'autre : l'identifiant de
+l'exécution dans les noms d'organisation et les adresses, les dates, et les
+courbes de la fréquence cardiaque simulée.
+
+**Dans la CI : pas encore de job.** La suite tourne en local. Le job `e2e`
+de `ci.yml` attend une décision : la garde de ce workflow
+(`scripts/ci/ci-workflow.test.mjs`, lancée par le job `docs`) fixe la liste
+des jobs et n'y permet la lecture d'aucun secret, et l'inventaire des secrets
+([secrets.md](secrets.md#2-linventaire)) n'a pas encore de ligne pour celui de
+la suite. Le job prévu ne serait pas une gate (aucune protection de branche ne
+l'exigerait, le rapport de qualité ne l'attendrait pas) et **sauterait**
+(conclusion « skipped », jamais « failed ») tant que la variable du dépôt
+`E2E_CLERK_PUBLISHABLE_KEY` n'existe pas : la condition d'un job peut lire
+`vars` (une variable absente vaut une chaîne vide), mais ni `secrets` ni les
+variables d'un environnement, qui n'arrivent sur le runner qu'une fois le job
+démarré. Durée prévue du job : la suite (18 min 31 s) plus l'installation et la
+construction (environ 2 min 45 s), une fois et demie : 32 minutes.
+
+Ce que l'utilisateur devra créer, le jour où le job existera, pour une instance
+Clerk de développement réservée à ces tests (jamais l'instance de production) :
+
+| Nom | Sorte | Où | Contenu |
+|---|---|---|---|
+| l'instance | instance Clerk de développement | Clerk | les organisations, les rôles `org:admin`, `org:gestionnaire` et `org:patient`, le gabarit de jeton `convex` décrits plus haut |
+| `e2e` | environnement GitHub | le dépôt | il porte le secret ci-dessous et doit accepter les branches des PR |
+| `E2E_CLERK_SECRET_KEY` | secret | de l'environnement `e2e` | la clé secrète de l'instance |
+| `E2E_CLERK_PUBLISHABLE_KEY` | variable | du **dépôt** (la condition du job la lirait) | la clé publiable de l'instance |
+| `E2E_CLERK_JWT_ISSUER_DOMAIN` | variable | du dépôt, ou de l'environnement `e2e` | l'émetteur des jetons de l'instance |
+
+**Écarts décidés.**
+
+* Un backend Convex local, jeté à chaque exécution, au lieu du déploiement de
+  prévisualisation que demandait EX-A : aucune donnée partagée, rien à nettoyer
+  ailleurs, aucune clé de déploiement dans la CI.
+* Les captures sont refaites à chaque exécution, dans le dossier des sorties
+  (en artefact quand le job de CI existera) ; un premier jeu est versé dans
+  `docs/guides/captures/`, sans commit automatique.
+* L'incident bloquant (ANH-145) n'a pas de scénario tant qu'ANH-145 n'existe
+  pas : un `test.skip` nommé le rappelle.
+* Le bouton « Télécharger l'archive » de l'enregistrement complet n'est pas
+  cliqué : il exige une adresse Convex en `.convex.cloud`. La carte est vérifiée
+  dans le navigateur, puis chaque fichier est téléchargé par la route du site
+  et comparé (taille, empreinte, manifeste).
+* L'invitation d'un patient est jouée dans le client B : l'instance Clerk de
+  développement limite chaque organisation à 5 membres, et le client A en a
+  déjà 5 pendant la suite.
+
 ### Infrastructure encore dépendante d'autres tickets
 
-Le job navigateur du tableau de bord arrive avec ANH-83 ; les tests du panneau
-local ne le remplacent pas. La matrice Convex par rôle et le contrat machine
+La suite navigateur du tableau de bord est livrée par ANH-83 et tourne en local
+(voir [Tests de bout en bout dans un navigateur](#tests-de-bout-en-bout-dans-un-navigateur-anh-83)) ;
+son job de CI attend une décision sur la garde de `ci.yml` et sur l'inventaire
+des secrets, et les tests du panneau local ne la remplacent pas. La matrice Convex par rôle et le contrat machine
 sont livrés par ANH-132, et sa dimension organisation par ANH-114 (voir
 [convex.md](convex.md#10-tests-automatisés)). L'endurance 24 h de la console entière,
 acquisition et synchronisation comprises, est l'étape nocturne de
