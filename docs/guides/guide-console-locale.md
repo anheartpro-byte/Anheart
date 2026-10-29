@@ -117,8 +117,8 @@ Cette personne :
 * démarre et arrête la machine ;
 * surveille la vitesse, la fréquence cardiaque et les alertes ;
 * a le coup de poing d'arrêt d'urgence câblé à portée de main (sous
-  `STO_SOURCE=bridged_declared`, il n'y en a pas : l'arrêt d'urgence est la coupure de la
-  prise secteur, tenue par une seconde personne, §11).
+  `STO_SOURCE=bridged_declared`, il n'y en a pas : l'arrêt qui ne dépend pas du logiciel
+  est la coupure de la prise secteur, tenue par une seconde personne, dans les cas du §11).
 
 Il n'est pas nécessaire de savoir programmer. Il faut savoir ouvrir un terminal et
 copier une commande.
@@ -161,8 +161,9 @@ dans un navigateur. Elle fonctionne sans internet.
   pont ni le câblage NF du champignon sur P24 -> STO : l'attestation reste une
   **déclaration humaine**, obligatoire avec ses deux cases. Sous
   `STO_SOURCE=bridged_declared` (pont STO déclaré, §11), il n'y a ni lecture ni
-  coup de poing : l'attestation est la déclaration de banc, l'arrêt d'urgence est la
-  coupure de la prise secteur, et seule une séance de banc sans personne à bord démarre ;
+  coup de poing : l'attestation est la déclaration de banc, l'arrêt qui ne dépend pas du
+  logiciel est la coupure de la prise secteur, et seule une séance de banc sans personne
+  à bord démarre ;
 * elle ne voit pas réellement la capsule : **il n'existe aujourd'hui qu'une caméra
   simulée**, qui ne regarde jamais la vraie machine ;
 * elle ne permet pas, depuis la page, de déclarer une personne à bord en séance
@@ -497,8 +498,10 @@ console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
 * **STOP agit aussi pendant un gel.** Quand la pastille **Securite** dit `freeze`,
   STOP est enregistré (le mode passe à `ARRET`) et la vitesse commandée commence à
   baisser tout de suite, sur la même rampe douce que sans gel. Pour un arrêt
-  immédiat : le coup de poing câblé (sous `bridged_declared` : coupez la prise secteur, §11), et
-  **E-STOP** (§13.5).
+  immédiat : le coup de poing câblé, et **E-STOP** (§13.5). Sous `bridged_declared`,
+  c'est **E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les
+  seuls cas du §11, laisse le bras en roue libre sans frein et remplace toute descente
+  en cours.
 * S'il n'y a rien à arrêter, ou si un arrêt est déjà en cours, une fenêtre d'alerte
   s'ouvre : `STOP refuse : ...` (voir §14).
 * Si la console ne répond pas (console bloquée, réseau muet), la demande reste en
@@ -549,7 +552,9 @@ console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
 
 > Rappel : le vrai arrêt de sécurité est le coup de poing câblé. Utilisez-le dès que la
 > situation l'exige ; l'E-STOP de la page est une commodité. Sous `bridged_declared`, il
-> n'y en a pas : c'est la coupure de la prise secteur (§11).
+> n'y en a pas : tant que la console répond, l'arrêt d'urgence est **E-STOP** ; la
+> coupure de la prise secteur, dans les seuls cas du §11, laisse le bras en roue libre
+> sans frein et remplace toute descente en cours.
 
 ## 6. Visite guidée : page Tableau de bord
 
@@ -1070,11 +1075,21 @@ est `sto_unreadable / ramp_down`.
 disent `pontee (declaree)`, sans date de lecture : rien n'est lu. En haut de toutes les
 pages, le bandeau rouge **STO PONTE : aucun arret d'urgence materiel** remplace
 **CHAINE STO NON PRETE** ; il reste affiché même si la liaison tombe ou si le statut
-tarde, jusqu'à ce que la console nomme une autre source. Il n'y a pas de coup de poing :
-l'arrêt d'urgence est la **coupure de la prise secteur**. Elle coupe le variateur, et le
-bras part en roue libre, sans frein : environ 145 s depuis la vitesse maximale selon le
-modèle du variateur simulé (144,6 s, jamais mesuré sur la machine). Restez hors du rayon
-du bras jusqu'à l'arrêt complet, arbre immobile constaté de vos yeux. Seul le départ
+tarde, jusqu'à ce que la console nomme une autre source. Il n'y a pas de coup de poing.
+Tant que la console répond, l'arrêt d'urgence est **E-STOP** : `QUICK_STOP`, le
+variateur s'arrête sur sa rampe, en quelques secondes (rampe de 3 à 4 s,
+[securite.md](../securite.md)). La **coupure de la prise secteur** est l'arrêt qui ne
+dépend pas du logiciel : coupez-la si la console ne répond pas, si l'E-STOP n'est pas
+confirmé (bandeau **ARRET D'URGENCE NON CONFIRME**), si **Vitesse mesuree** ne baisse
+pas, ou si le logiciel se comporte anormalement (la vitesse monte ou ne suit pas la
+consigne). Elle coupe le variateur : le bras part en roue libre, sans frein, environ
+145 s depuis la vitesse maximale selon le modèle du variateur simulé (144,6 s, jamais
+mesuré sur la machine), et elle remplace toute descente en cours, E-STOP compris : ne
+coupez pas pendant une descente qui fonctionne. **STOP** reste la descente commandée,
+environ 107 s depuis la même vitesse, pour une fin normale, pas pour une urgence
+([procédure de banc, étape 7](../raspberry-pi.md#procédure-de-banc-sous-bridged_declared)).
+Dans tous les cas, restez hors du rayon du bras jusqu'à l'arrêt complet, arbre immobile
+constaté de vos yeux. Seul le départ
 **MANUEL** de banc reste possible ; **Demarrer la seance** est grisé avec la raison
 `chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`.
 Un départ proposé par le tableau de bord est refusé (§9). La carte d'attestation ne
@@ -1563,7 +1578,7 @@ démarre comme la première, sans redémarrer la console (§11).
 |---|---|
 | fin normale, changement d'avis, passager qui veut descendre sans urgence | **STOP** |
 | la pastille **Securite** dit `freeze` et vous voulez terminer la séance sans urgence | **STOP** : la vitesse commandée baisse tout de suite, sur la rampe douce. Surveillez **Vitesse mesuree** |
-| danger immédiat, comportement anormal, doute sérieux | **coup de poing câblé** (sous `bridged_declared` : coupure de la prise secteur, §11), et **E-STOP** en plus |
+| danger immédiat, comportement anormal, doute sérieux | **coup de poing câblé**, et **E-STOP** en plus. Sous `bridged_declared` : **E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les seuls cas du §11, laisse le bras en roue libre sans frein et remplace toute descente en cours |
 | la page ne répond plus (bandeau NO LIVE DATA) | **coup de poing câblé** (sous `bridged_declared` : coupure de la prise secteur, §11) |
 
 STOP, pas à pas :
@@ -1586,8 +1601,9 @@ simulation, séance programmée : STOP 12 s après la perte de l'ECG, la vitesse
 baisse au cycle suivant et arrive à 0 avant que la règle ne passe à `reduce`.
 Jusqu'au 7 octobre 2026, elle restait inchangée pendant environ 17 s. Après la fin de
 la séance, un gel qui était verrouillé reste à acquitter (§13.6). Pour arrêter tout de
-suite : le **coup de poing câblé** (sous `bridged_declared` : coupez la prise secteur, §11), et
-**E-STOP**.
+suite : le **coup de poing câblé**, et **E-STOP**. Sous `bridged_declared`, c'est
+**E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les seuls
+cas du §11, laisse le bras en roue libre sans frein et remplace toute descente en cours.
 
 ![STOP : rampe d'arrêt depuis 27 tr/min](img/console-11-stop-rampe-arret.png)
 
@@ -1604,8 +1620,8 @@ Repères :
 
 E-STOP, pas à pas :
 
-1. En cas de danger : **coup de poing câblé** (sous `bridged_declared` : coupez la prise
-   secteur, §11).
+1. En cas de danger : **coup de poing câblé** (sous `bridged_declared`, il n'y en a pas :
+   passez à l'étape 2 ; tant que la console répond, l'arrêt d'urgence est **E-STOP**, §11).
 2. Cliquez **E-STOP** (aucune question ne sera posée).
 3. La pastille **Securite** passe à `quick_stop` (rouge) et **Etat** à `stopping` en
    rouge. Un bandeau rouge **ARRET D'URGENCE VERROUILLE** apparaît en haut de la page.
@@ -1615,7 +1631,11 @@ E-STOP, pas à pas :
    secteur).
 4. Surveillez **Vitesse mesuree** : la machine décélère, elle n'est pas arrêtée tout
    de suite (constaté : de 25,8 à 12,5 tr/min en environ 4 s, puis arrêt complet
-   quelques secondes plus tard, en simulation).
+   quelques secondes plus tard, en simulation). Sous `bridged_declared`, si elle ne
+   baisse pas ou si elle monte, coupez la prise secteur (§11). Après une coupure, plus
+   aucune décélération n'est commandée : le bras part en roue libre sans frein, toute
+   descente en cours est remplacée, et la vitesse affichée peut ne plus être lue.
+   Attendez l'arbre immobile, constaté de vos yeux.
 5. Une fois arrêtée, la machine reste **verrouillée** : acquittez (§13.6).
 
 ![E-STOP pendant la rampe d'arrêt](img/console-12-estop-verrouille.png)
@@ -1799,8 +1819,10 @@ Repères :
 
 Que faire :
 
-1. **Coup de poing** si la personne est encore près du bras (sous `bridged_declared` : coupez la
-   prise secteur, §11).
+1. **Coup de poing** si la personne est encore près du bras (sous `bridged_declared`, il
+   n'y en a pas : la console a déjà lancé l'arrêt d'urgence, `quick_stop` ; la coupure de
+   la prise secteur, dans les seuls cas du §11, laisse le bras en roue libre sans frein et
+   remplace toute descente en cours).
 2. Faites sortir la personne de la zone, vérifiez qu'il n'y a pas de blessé.
 3. Attendez l'arrêt complet (Rotation `a l'arret`).
 4. Acquittez (§13.6) **en cochant la case du coup de poing** : l'intrusion est traitée
@@ -1851,8 +1873,10 @@ Que faire :
    ne repart pas. Si la fréquence ne revient pas rapidement, n'attendez pas : **STOP
    termine la séance et fait baisser la vitesse tout de suite, que la pastille
    Securite dise `freeze` ou `reduce`** (§13.5). Pour arrêter plus vite que la rampe
-   douce, utilisez le **coup de poing câblé** (sous `bridged_declared` : la coupure de la prise
-   secteur, §11) et **E-STOP**. Après l'arrêt (Rotation
+   douce, utilisez le **coup de poing câblé** et **E-STOP**. Sous `bridged_declared`,
+   c'est **E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les
+   seuls cas du §11, laisse le bras en roue libre sans frein et remplace toute descente
+   en cours. Après l'arrêt (Rotation
    `a l'arret`) et le retour du mode à `REPOS`, acquittez s'il reste un verdict
    verrouillé (§13.6) et redémarrez une séance. Ce cas n'a pas été rejoué dans
    la page pour ce guide : il est vérifié par les tests automatiques sur la console en
@@ -2341,7 +2365,9 @@ de s'approcher du bras ou de la capsule* du
 [manuel de l'opérateur](../client/manuel-operateur.md#2-les-huit-règles-à-retenir).
 **STOP** termine la séance et fait baisser la vitesse, que la pastille Securite dise
 `freeze` ou `reduce` ; pour arrêter plus vite, utilisez le **coup de poing câblé**
-(sous `bridged_declared` : la coupure de la prise secteur, §11) et **E-STOP** (§13.5).
+et **E-STOP** (§13.5). Sous `bridged_declared`, c'est **E-STOP** tant que la console
+répond ; la coupure de la prise secteur, dans les seuls cas du §11, laisse le bras en
+roue libre sans frein et remplace toute descente en cours.
 Continuez de regarder **Vitesse mesuree**.
 
 **Je ne peux pas dépasser 6 tr/min.**

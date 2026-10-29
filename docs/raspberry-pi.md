@@ -587,8 +587,9 @@ validation matérielle ; consigner les mesures dans le tableau avant de conclure
 #### Procédure de banc sous `bridged_declared`
 
 Pour les séances de banc avec le pont STO en place. Aucune personne à bord, à
-aucun moment ; l'arrêt d'urgence est la coupure de la prise secteur. Aucun essai
-matériel de cette procédure n'est consigné ici.
+aucun moment ; aucun arrêt d'urgence matériel : l'arrêt qui ne dépend pas du
+logiciel est la coupure de la prise secteur, dans les cas de l'étape 7. Aucun
+essai matériel de cette procédure n'est consigné ici.
 
 **Qui.** Un opérateur nommé à la console, qui atteste et pilote ; une seconde
 personne nommée à la prise secteur du variateur, la main dessus pendant toute
@@ -625,15 +626,20 @@ près de la machine.
    [console-locale.md, section 11](console-locale.md#11-page--securite-), 108 s
    depuis 1344 tr/min moteur avec la rampe de 4 s du variateur).
    Une vitesse qui baisse lentement après STOP est donc la descente prévue, pas
-   une panne. L'arrêt rapide, tant que la console répond, est l'E-STOP de
-   l'écran : QUICK_STOP, consigne à zéro d'un coup, le variateur freine sur sa
-   rampe réglée, en quelques secondes (rampe de 3 à 4 s,
+   une panne. STOP sert à une fin normale, pas à une urgence.
+   Arrêt d'urgence : tant que la console répond, c'est l'E-STOP de l'écran :
+   QUICK_STOP, consigne à zéro d'un coup, le variateur s'arrête sur sa rampe
+   réglée, en quelques secondes (rampe de 3 à 4 s,
    [securite.md](securite.md)). La coupure de la prise secteur est l'arrêt qui
-   ne dépend pas du logiciel : à faire si la console ne répond pas, si la
-   vitesse mesurée ne baisse pas du tout, ou devant tout danger. Elle laisse le
-   bras en roue libre, sans frein : environ 145 s depuis la vitesse maximale
-   selon le modèle simulé (la vraie durée n'est pas mesurée) ; coupée pendant
-   une descente, elle remplace cette descente par la roue libre.
+   ne dépend pas du logiciel : la faire si la console ne répond pas, si
+   l'E-STOP n'est pas confirmé (bandeau `ARRET D'URGENCE NON CONFIRME`), si la
+   vitesse mesurée ne baisse pas, ou si le logiciel se comporte anormalement
+   (la vitesse monte ou ne suit pas la consigne). Elle laisse le bras en roue
+   libre, sans frein : environ 145 s depuis la vitesse maximale selon le modèle
+   simulé (la vraie durée n'est pas mesurée). Elle remplace toute descente en
+   cours, E-STOP compris : ne pas couper pendant une descente qui fonctionne.
+   Dans tous les cas, personne dans le rayon du bras jusqu'à l'arrêt complet,
+   arbre immobile constaté (étape 8).
 
 **Après.**
 

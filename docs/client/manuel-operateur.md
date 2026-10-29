@@ -95,7 +95,8 @@ est gardé pour cet onglet seulement.
    baisse pas après un STOP, l'arrêt logiciel qui reste est **E-STOP**. Si
    elle ne baisse pas après un E-STOP, il ne reste que l'arrêt d'urgence câblé
    de votre machine (sur un banc avec STO ponté : la coupure de la prise
-   secteur).
+   secteur, qui laisse le bras en roue libre sans frein et remplace toute
+   descente en cours).
 5. **Pendant une séance, le bras peut partir sans prévenir.** Au début d'une
    séance programmée, le bras est à l'arrêt, puis la console le met en
    rotation d'elle-même. En séance manuelle, il part dès qu'une cible est
@@ -145,7 +146,8 @@ est gardé pour cet onglet seulement.
 > de votre machine : où il se trouve, comment le déclencher et le réarmer, ce
 > qu'il fait exactement au moteur, et dans quel ordre l'utiliser avec le bouton
 > **E-STOP** de l'écran. Tant que ce point n'est pas complété, ce manuel ne
-> fixe aucun ordre entre les deux.
+> fixe aucun ordre entre les deux. Sur un banc avec STO ponté, l'ordre entre
+> E-STOP et la coupure de la prise secteur est dans l'encadré suivant.
 
 > **Banc avec STO ponté déclaré (`STO_SOURCE=bridged_declared`).** Sur une
 > console réglée ainsi, le bandeau rouge « STO PONTE : aucun arret d'urgence
@@ -154,23 +156,26 @@ est gardé pour cet onglet seulement.
 > - **Séance de banc seulement** : capsule vide ou lestée, aucune personne à
 >   bord. Un départ proposé par le site est refusé : les séances de banc se
 >   lancent à la console seulement.
-> - **L'arrêt d'urgence est la coupure de la prise secteur du variateur.** Il
->   n'y a ni coup de poing ni arrêt câblé : un texte de l'écran qui demande
->   l'arrêt câblé veut dire ici « coupez la prise ». Coupez-la si la console ne
->   répond pas, si la vitesse mesurée ne baisse pas du tout, ou devant tout
->   danger. Le bras part alors en roue libre, sans frein, même s'il était en
->   train de ralentir : environ 145 secondes depuis la vitesse maximale du
+> - **Il n'y a ni coup de poing ni arrêt câblé.** Tant que la console répond,
+>   l'arrêt d'urgence est l'**E-STOP** de l'écran : le variateur s'arrête sur
+>   sa rampe, en quelques secondes.
+> - **La coupure de la prise secteur du variateur est l'arrêt qui ne dépend
+>   pas du logiciel.** Un texte de l'écran qui demande l'arrêt câblé veut dire
+>   ici « coupez la prise ». Coupez-la si la console ne répond pas, si l'E-STOP
+>   n'est pas confirmé (bandeau « ARRET D'URGENCE NON CONFIRME »), si la
+>   vitesse mesurée ne baisse pas, ou si le logiciel se comporte anormalement
+>   (la vitesse monte ou ne suit pas la consigne). Le bras part alors en roue
+>   libre, sans frein : environ 145 secondes depuis la vitesse maximale du
 >   moteur (1380 tr/min moteur), selon le modèle du variateur simulé. La durée
->   réelle n'a jamais été mesurée.
-> - **STOP** fait descendre la vitesse progressivement : environ 107 secondes
->   depuis la même vitesse avec les réglages livrés, durée mesurée par les
->   tests sur le variateur simulé. Une vitesse qui baisse lentement après STOP
->   est la descente prévue, pas une panne.
-> - **E-STOP** de l'écran arrête le bras sur la rampe du variateur, en quelques
->   secondes, tant que la console répond.
-> - Personne n'entre dans le rayon du bras avant l'arrêt complet, arbre
->   immobile constaté de vos yeux. Ni une cible à zéro ni un variateur éteint
->   ne le prouvent.
+>   réelle n'a jamais été mesurée. La coupure remplace toute descente en
+>   cours, E-STOP compris : ne coupez pas pendant une descente qui fonctionne.
+> - **STOP** est la descente commandée, pour une fin normale, pas pour une
+>   urgence : environ 107 secondes depuis la même vitesse avec les réglages
+>   livrés, durée mesurée par les tests sur le variateur simulé. Une vitesse
+>   qui baisse lentement après STOP est la descente prévue, pas une panne.
+> - Dans tous les cas, personne n'entre dans le rayon du bras avant l'arrêt
+>   complet, arbre immobile constaté de vos yeux. Ni une cible à zéro ni un
+>   variateur éteint ne le prouvent.
 > - Après une coupure de la prise secteur, la console a pu verrouiller un arrêt
 >   qui ne s'acquitte pas (**Securite** « go_silent »). Bras immobile, relancez
 >   la console, puis refaites la déclaration de banc avant tout nouveau départ.
@@ -698,7 +703,7 @@ Ce que cela change pour vous :
 |---|---|
 | Fin normale, changement d'avis, le passager demande à s'arrêter sans urgence | **STOP**, puis surveillez la vitesse mesurée. |
 | Vous voulez arrêter le bras alors que **Securite** affiche « freeze » | **STOP** agit aussi pendant « freeze » : la vitesse commandée se met à baisser. Surveillez la vitesse mesurée. |
-| Danger immédiat, comportement anormal de la machine, doute sérieux | **E-STOP**, et l'arrêt d'urgence câblé de votre machine (sur un banc avec STO ponté : la coupure de la prise secteur). L'ordre entre les deux reste à préciser par Anheart ([section 2](#2-les-huit-règles-à-retenir)). |
+| Danger immédiat, comportement anormal de la machine, doute sérieux | **E-STOP**, et l'arrêt d'urgence câblé de votre machine. L'ordre entre les deux reste à préciser par Anheart ([section 2](#2-les-huit-règles-à-retenir)). Sur un banc avec STO ponté : **E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les seuls cas de l'encadré *Banc avec STO ponté déclaré* ([section 2](#2-les-huit-règles-à-retenir)), laisse le bras en roue libre sans frein et remplace toute descente en cours. |
 | L'écran ne répond plus, bandeau rouge « NO LIVE DATA » | Regardez le bras, puis suivez la [section 9.3](#93-bandeau-rouge-no-live-data). |
 
 ### STOP, l'arrêt normal
@@ -767,7 +772,8 @@ dater d'une version antérieure de l'écran.*
    normal, la machine décélère : elle n'est pas arrêtée tout de suite. Si le
    bras ne ralentit pas dans les secondes qui suivent le clic, n'attendez
    aucun message : il ne reste que l'arrêt d'urgence câblé de votre machine
-   (sur un banc avec STO ponté : la coupure de la prise secteur).
+   (sur un banc avec STO ponté : la coupure de la prise secteur, qui laisse le
+   bras en roue libre sans frein et remplace toute descente en cours).
 3. En fonctionnement normal, un bandeau rouge « ARRET D'URGENCE VERROUILLE »
    apparaît en haut de l'écran, **Securite** passe à « quick_stop » et
    **Etat** à « stopping » en rouge. Le bandeau dit que l'arrêt est
@@ -777,10 +783,13 @@ dater d'une version antérieure de l'écran.*
    ([section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé)).
 
 E-STOP est un arrêt logiciel. En cas de danger, utilisez aussi l'arrêt
-d'urgence câblé de votre machine (sur un banc avec STO ponté : la coupure de
-la prise secteur). L'ordre entre les deux dépend de ce que
+d'urgence câblé de votre machine. L'ordre entre les deux dépend de ce que
 l'arrêt câblé fait au moteur : il reste à préciser par Anheart
-([section 2](#2-les-huit-règles-à-retenir)).
+([section 2](#2-les-huit-règles-à-retenir)). Sur un banc avec STO ponté,
+E-STOP est l'arrêt d'urgence tant que la console répond : la coupure de la
+prise secteur laisse le bras en roue libre sans frein et remplace toute
+descente en cours, E-STOP compris. Ne la faites que dans les cas de
+l'encadré *Banc avec STO ponté déclaré*.
 
 ![Après E-STOP, la machine décélère](../guides/img/console-12-estop-verrouille.png)
 
@@ -792,7 +801,8 @@ Si une fenêtre annonce que « la demande d'arret d'urgence a echoue » et se
 termine par « UTILISEZ L'ARRET CABLE », la demande n'a pas abouti. Il ne
 reste que l'arrêt d'urgence câblé de votre machine. Sur un banc avec STO
 ponté, la fenêtre se termine par « COUPEZ LA PRISE SECTEUR » : coupez la
-prise.
+prise, qui laisse le bras en roue libre sans frein et remplace toute descente
+en cours.
 
 L'absence de cette fenêtre ne prouve rien. Si la console ne répond pas, la
 fenêtre peut ne pas s'ouvrir, ou s'ouvrir trop tard. Si le bandeau
@@ -909,7 +919,7 @@ la pastille **Securite** change.
 | « reduce » | Elle baisse la vitesse commandée. Si elle la ramène à zéro, elle termine la séance, même si le bras tourne encore à cet instant : **Securite** passe à « ramp_down », avec la règle « session_standstill ». | Cherchez la cause. Pour terminer la séance vous-même : **STOP**, puis surveillez la vitesse mesurée. |
 | « ramp_down » | Elle termine la séance : elle ramène progressivement la vitesse commandée à zéro. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
 | « quick_stop » | Arrêt d'urgence logiciel : elle met tout de suite la vitesse commandée à zéro, et la machine décélère. L'arrêt est verrouillé. | Surveillez la vitesse mesurée. Attendez la fin complète, puis [section 9.1](#91-un-arrêt-de-sécurité-est-verrouillé). |
-| « go_silent » | Elle n'envoie plus rien au variateur : ni **STOP** ni **E-STOP** n'agissent plus sur le moteur. Cet état ne s'acquitte pas : il faut redémarrer la console. **Mode** peut rester sur « ARRET ». | Regardez le bras. S'il ne ralentit pas, il ne reste que l'arrêt d'urgence câblé de votre machine (sur un banc avec STO ponté : la coupure de la prise secteur). Appelez le support. |
+| « go_silent » | Elle n'envoie plus rien au variateur : ni **STOP** ni **E-STOP** n'agissent plus sur le moteur. Cet état ne s'acquitte pas : il faut redémarrer la console. **Mode** peut rester sur « ARRET ». | Regardez le bras. S'il ne ralentit pas, il ne reste que l'arrêt d'urgence câblé de votre machine (sur un banc avec STO ponté : la coupure de la prise secteur, qui laisse le bras en roue libre sans frein et remplace toute descente en cours). Appelez le support. |
 
 > **Avec « freeze » et « reduce », un bras qui tourne encore peut réaccélérer
 > seul.** Quand ces actions ne sont pas verrouillées et que leur cause
@@ -1053,8 +1063,9 @@ machine tourne peut-etre encore ».
    peut passer même quand l'affichage est figé. Puis regardez le bras. S'il ne
    ralentit pas dans les secondes qui suivent le clic, n'attendez aucun
    message : il ne reste que l'arrêt d'urgence câblé de votre machine (sur un
-   banc avec STO ponté : la coupure de la prise secteur). Une fenêtre qui se
-   termine par « UTILISEZ L'ARRET CABLE » (sur un banc avec STO ponté :
+   banc avec STO ponté : la coupure de la prise secteur, qui laisse le bras en
+   roue libre sans frein et remplace toute descente en cours). Une fenêtre
+   qui se termine par « UTILISEZ L'ARRET CABLE » (sur un banc avec STO ponté :
    « COUPEZ LA PRISE SECTEUR ») peut annoncer que la
    demande a échoué, mais elle peut aussi ne pas s'ouvrir. Si un second
    bandeau rouge, « ARRET D'URGENCE VERROUILLE », apparaît, la console a
@@ -1276,9 +1287,11 @@ zone du bras ni la capsule : c'est à vous de le faire. À la date de ce
 brouillon, le logiciel ne prend en charge aucune caméra réelle.
 
 Si quelqu'un s'approche du bras pendant la rotation, arrêtez la machine sans
-attendre : **E-STOP**, et l'arrêt d'urgence câblé de votre machine (sur un
-banc avec STO ponté : la coupure de la prise secteur)
-([section 8](#8-arrêter-la-machine)).
+attendre : **E-STOP**, et l'arrêt d'urgence câblé de votre machine
+([section 8](#8-arrêter-la-machine)). Sur un banc avec STO ponté : **E-STOP**
+tant que la console répond ; la coupure de la prise secteur, dans les seuls
+cas de l'encadré *Banc avec STO ponté déclaré*, laisse le bras en roue libre
+sans frein et remplace toute descente en cours.
 
 Un bras à l'arrêt n'est pas une zone sûre : lisez les règles 5 et 6 et
 l'avertissement *Avant de s'approcher du bras ou de la capsule*

@@ -644,13 +644,13 @@ s'arrête au mode : `liaison ouverte · repos`.
   Jusqu'au 10 octobre 2026 l'alerte disait `STOP refuse : Failed to fetch` et rien ne
   restait à l'écran. La page ne renvoie pas la demande ; le bandeau reste jusqu'à l'une
   des preuves ci-dessus.
+  Rejoué dans un navigateur : console suspendue en séance manuelle, bandeau affiché
+  2,0 s après le clic et baissé à la reprise de la console ; requête coupée, bandeau
+  affiché tout de suite, baissé 0,2 s après un STOP donné depuis un autre écran.
 - Quand la dernière source nommée par la console est `bridged_declared`, le bandeau et
   l'alerte finissent par `rien ne dit que la seance s'arrete : E-STOP, ou la coupure de la prise secteur`
   au lieu de `... E-STOP, ou l'arret cable` (section 11). Sous toute autre source, et
   tant que la console n'a pas nommé la sienne, les mots ci-dessus.
-  Rejoué dans un navigateur : console suspendue en séance manuelle, bandeau affiché
-  2,0 s après le clic et baissé à la reprise de la console ; requête coupée, bandeau
-  affiché tout de suite, baissé 0,2 s après un STOP donné depuis un autre écran.
 
 ### E-STOP : « verrouille immediatement »
 
@@ -2219,8 +2219,11 @@ Rejoué en simulation, dans cet ordre :
 4. Surveiller **Vitesse mesuree** (pas la consigne).
 5. `STOP` (rampe contrôlée). Attendre `a l'arret` et le mode `REPOS`. STOP fait
    descendre la consigne même si la pastille **Securite** dit `freeze` à ce moment
-   (section 5). Pour un arrêt immédiat : coup de poing câblé et E-STOP (sous
-   `bridged_declared` : coupure de la prise secteur et E-STOP, section 11).
+   (section 5). Pour un arrêt immédiat : coup de poing câblé et E-STOP. Sous
+   `bridged_declared`, c'est E-STOP tant que la console répond ; la coupure de la prise
+   secteur, dans les seuls cas de l'étape 7 de la
+   [procédure de banc](raspberry-pi.md#procédure-de-banc-sous-bridged_declared), laisse
+   le bras en roue libre sans frein et remplace toute descente en cours.
 6. En cas d'urgence : `E-STOP`, puis, une fois la machine arrêtée et le coup de poing
    réarmé, **Securite** → nom, case `coup de poing deverrouille`, `Acquitter` (sous
    `bridged_declared`, sans coup de poing, la case de banc de la section 11).
