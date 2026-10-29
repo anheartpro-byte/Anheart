@@ -15,8 +15,10 @@ import { outputRoot } from "./harness/output";
  * E2E_OUTPUT_DIR, by default one folder of the system's temporary folder,
  * replaced on each run.
  */
-// No text snapshot of the page in a failure's error context: it would carry
-// what the page showed (a passenger's health data, a key shown once).
+// No fallback snapshot of the page in a failure's error context. That only
+// spares the page snapshot taken when the browser closes: a failing `expect`
+// still writes its own into error-context.md, which secret-scan.ts deletes,
+// file and attachment, as soon as the test ends.
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 
 const output = outputRoot();
@@ -36,7 +38,10 @@ export default defineConfig({
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: report }],
-    ["./secret-scan.ts", { output, folders: [results, report, path.join(__dirname, "..", ".next")] }],
+    [
+      "./secret-scan.ts",
+      { output, folders: [results, report, path.join(__dirname, "..", ".next")], withheld: [results, report] },
+    ],
   ],
   use: {
     ...devices["Desktop Chrome"],

@@ -18,8 +18,9 @@ import { card, choose, escape } from "../ui";
  * report, full recording, rider feedback, lists, offline alert.
  *
  * These pages show a passenger's health data, and the site shows a machine key
- * once: no trace, video or capture is kept, even on failure. No assertion
- * message carries a health value.
+ * once: no trace, video or capture is kept, even on failure, and the error
+ * context of a failure is deleted (secret-scan.ts): only the error message and
+ * its stack stay. No assertion message carries a health value.
  */
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off", video: "off", screenshot: "off" });

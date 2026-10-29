@@ -20,7 +20,9 @@ import { card, choose, escape, say, type Lang } from "../ui";
  * an adult whose launch expires, then whose right is withdrawn. The manual
  * session of scenario 4 runs on a machine of its own. These pages
  * show health data and the setup holds machine keys: no trace, video or
- * capture is kept, even on failure. No message carries a health value.
+ * capture is kept, even on failure, and the error context of a failure is
+ * deleted (secret-scan.ts): only the error message and its stack stay. No
+ * message carries a health value.
  */
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off", video: "off", screenshot: "off" });

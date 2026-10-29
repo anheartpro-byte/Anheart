@@ -83,21 +83,43 @@ function occurrences(haystack: Buffer, needle: Buffer): number {
   return count;
 }
 
+/** Written in the output folder when nothing of the run may be sent anywhere. */
+export const DO_NOT_SEND = "ne-pas-envoyer";
+
 /**
- * Last reporter of the run. Each kept trace is masked as soon as its test
- * ends, before the HTML report copies it. At the end, counts the run's secret
- * values (held in the runner's memory, never written) and the signed tokens
- * in what the run leaves: traces, captures, the HTML report, the built site.
- * Prints counts only; any occurrence fails the run.
+ * Last reporter of the run. As soon as a test ends, before the HTML report
+ * copies its attachments (at the end of the run): its error context is
+ * deleted, file and attachment, and each kept trace is masked. At the end,
+ * counts the run's secret values (held in the runner's memory, never written)
+ * and the signed tokens in test-results, the HTML report and the built site;
+ * the screenshots are masked and read by a person, not counted. Prints counts
+ * only. Any occurrence, or a count it could not make, fails the run closed:
+ * test-results and the HTML report are deleted (Playwright then writes back
+ * test-results/.last-run.json alone: the status and the ids of failed tests),
+ * and the marker DO_NOT_SEND is written in the output folder for the steps
+ * that would upload them.
  */
 export default class SecretScan implements Reporter {
-  constructor(private readonly options: { output: string; folders: string[] }) {}
+  constructor(private readonly options: { output: string; folders: string[]; withheld: string[] }) {}
 
   printsToStdio(): boolean {
     return true;
   }
 
+  onBegin(): void {
+    rmSync(path.join(this.options.output, DO_NOT_SEND), { force: true });
+  }
+
   onTestEnd(_test: TestCase, result: TestResult): void {
+    // The error context of a failure (error-context.md) holds the page's
+    // accessibility snapshot, that is the text the page showed: a health value,
+    // a key shown once. The error message and its stack stay in the report.
+    for (let index = result.attachments.length - 1; index >= 0; index -= 1) {
+      const attachment = result.attachments[index];
+      if (attachment.name !== "error-context") continue;
+      if (attachment.path) rmSync(attachment.path, { force: true });
+      result.attachments.splice(index, 1);
+    }
     for (const attachment of result.attachments) {
       if (attachment.name === "trace" && attachment.path && existsSync(attachment.path)) {
         redactTrace(attachment.path);
@@ -105,11 +127,20 @@ export default class SecretScan implements Reporter {
     }
   }
 
+  /** Nothing of the run leaves: what was counted is deleted, the marker written. */
+  private failClosed(reason: string): { status: FullResult["status"] } {
+    for (const folder of this.options.withheld) rmSync(folder, { recursive: true, force: true });
+    const marker = path.join(this.options.output, DO_NOT_SEND);
+    writeFileSync(marker, `${reason}\n`);
+    console.log(`[e2e] ${reason} : test-results et rapport supprimés, marqueur ${marker}`);
+    return { status: "failed" };
+  }
+
   async onEnd(): Promise<{ status?: FullResult["status"] } | void> {
     const values = knownSecrets().map((value) => Buffer.from(value));
     if (values.length === 0) {
       console.log("[e2e] recherche des secrets : aucune valeur connue de l'exécution, recherche impossible");
-      return { status: "failed" };
+      return this.failClosed("recherche des secrets impossible");
     }
     let scanned = 0;
     let found = 0;
@@ -127,7 +158,7 @@ export default class SecretScan implements Reporter {
     console.log(
       `[e2e] recherche des secrets : ${values.length} valeurs de l'exécution, ${scanned} fichiers, ${found} occurrence(s), ${tokens} jeton(s) signé(s)`,
     );
+    if (found > 0 || tokens > 0) return this.failClosed("secret ou jeton signé trouvé");
     console.log(`[e2e] rapport, traces et captures : ${this.options.output}`);
-    if (found > 0 || tokens > 0) return { status: "failed" };
   }
 }

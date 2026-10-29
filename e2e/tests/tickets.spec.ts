@@ -20,7 +20,9 @@ import { card, choose, escape, say } from "../ui";
  * fresh). What is not under test is prepared by the harness through the
  * Convex functions the site calls: machines, a second manager of client A,
  * riders ready to launch. These pages show health data and the setup holds
- * machine keys: no trace, video or capture is kept, even on failure.
+ * machine keys: no trace, video or capture is kept, even on failure, and the
+ * error context of a failure is deleted (secret-scan.ts): only the error
+ * message and its stack stay.
  */
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off", video: "off", screenshot: "off" });
