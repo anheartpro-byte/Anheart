@@ -3920,16 +3920,28 @@ même en cas d'échec ou de Ctrl-C. Tout est sous `e2e/` ; la configuration est
 | Comptes | une instance Clerk **de développement** : 3 organisations `e2e-<exécution> …` et 7 comptes `e2e-<exécution>-<rôle>+clerk_test@example.com` (admin Anheart, admin et gestionnaire et deux passagers du client A, gestionnaire et passager du client B), créés par l'API de Clerk, reflétés dans Convex par le webhook rejoué et signé, connectés sans mot de passe. Le démontage ne supprime que les comptes et organisations de **son** exécution (`e2e-<exécution>`) ; le démarrage supprime les restes de toutes (`e2e-`), d'une exécution arrêtée en route. Une exécution à la fois par instance Clerk. En local, avec l'instance de développement partagée, son propre webhook reflète aussi ces comptes, et leur suppression, dans le déploiement Convex de développement : le harnais, lui, ne contacte jamais ce déploiement |
 | Site | `next build` puis `next start` sur `localhost`, pointé sur le backend local |
 | Console | la vraie console du Pi (`python -m src.local_panel`) en simulation complète, lancée depuis une copie de `raspberry-pi/src`, `config/` et `VERSION` dans le dossier de l'exécution, pilotée par son API comme l'opérateur |
-| Secrets | aucune valeur affichée : le harnais lit lui-même ses trois clés, masque ce qu'il imprime et ce que gardent les traces, et compte à la fin les valeurs secrètes de l'exécution et les jetons signés dans `test-results/`, `rapport/` et le site construit (`.next`). Les captures ne sont pas comptées (une recherche d'octets dans un PNG ne prouve rien) : les clés y sont masquées et le jeu versé est relu par une personne. Une occurrence, ou un comptage impossible, fait échouer l'exécution **fermée** : `test-results/` et `rapport/` sont supprimés (Playwright réécrit ensuite le seul `test-results/.last-run.json` : le statut et les identifiants des tests en échec), et le marqueur `ne-pas-envoyer` est écrit dans `E2E_OUTPUT_DIR` pour les étapes qui les enverraient |
+| Secrets | aucune valeur affichée : le harnais lit lui-même ses trois clés, masque ce qu'il imprime et ce que gardent les traces, et compte à la fin les valeurs secrètes de l'exécution et les jetons signés dans `test-results/`, `rapport/` et le site construit (`.next`). Les captures ne sont pas comptées (une recherche d'octets dans un PNG ne prouve rien) : les clés y sont masquées et le jeu versé est relu par une personne. Une occurrence, un comptage impossible ou interrompu par une erreur fait échouer l'exécution **fermée** : `test-results/` et `rapport/` sont supprimés (Playwright réécrit ensuite le seul `test-results/.last-run.json` : le statut et les identifiants des tests en échec), et le marqueur `ne-pas-envoyer` est écrit dans `E2E_OUTPUT_DIR`. Un comptage complet qui ne trouve rien écrit à la place `envoi-permis`, que doivent exiger les étapes qui enverraient les sorties : une exécution morte avant sa fin ne laisse ni l'un ni l'autre |
 
-Ce qu'une exécution laisse va dans `E2E_OUTPUT_DIR` (par défaut un dossier du
-répertoire temporaire du système), jamais dans le dépôt : `rapport/` (le
-rapport HTML de Playwright), `test-results/` (traces et vidéos des seuls
-échecs, masquées ; aucune pour les fichiers qui montrent des données de santé)
-et `captures/` (les captures d'écran, ci-dessous). Le contexte d'erreur d'un
-échec (`error-context.md`, joint au rapport), qui garde le texte de la page,
-est supprimé pour tous les tests, fichier et pièce jointe, dès la fin du test :
-seuls le message d'erreur et sa pile restent.
+Le harnais travaille dans son propre dossier, `$XDG_CACHE_HOME/anheart-e2e`,
+sinon `~/.cache/anheart-e2e`, jamais dans le dossier temporaire partagé du
+système : créé en 0700, il est refusé s'il est un lien symbolique ou
+appartient à un autre utilisateur. Chaque exécution y a un dossier
+`executions/<exécution>-<aléa>` au nom imprévisible (0700), et ses fichiers
+(pids, journaux, `run.json`, valeurs apprises par les tests, `convex.env`) y
+sont créés en 0600, ceux qui ne s'écrivent qu'une fois en création exclusive.
+Le démarrage d'une exécution y retrouve le dossier d'une exécution arrêtée en
+route (Ctrl-C mal passé, processus tué), arrête ses processus et le supprime,
+puis supprime tous les comptes et organisations Clerk de test restants (`e2e-`).
+
+Ce qu'une exécution laisse va dans `E2E_OUTPUT_DIR` (par défaut `sorties/`
+de ce dossier), jamais dans le dépôt : `rapport/` (le rapport HTML de
+Playwright), `test-results/` (traces et vidéos des seuls échecs, masquées ;
+aucune pour les fichiers qui montrent des données de santé) et `captures/`
+(les captures d'écran, ci-dessous). Le contexte d'erreur d'un échec
+(`error-context.md`, joint au rapport), qui garde le texte de la page, est
+supprimé pour tous les tests dès la fin du test : le fichier, la pièce jointe,
+et la copie que gardent les traces de `connexion` et `console` (avec sa
+mention dans leurs événements). Seuls le message d'erreur et sa pile restent.
 
 **Lancer en local.**
 
@@ -3948,7 +3960,7 @@ les organisations, les rôles `org:admin`, `org:gestionnaire` et `org:patient`
 et le gabarit de jeton `convex` (`org_id`, `org_role`, `email`,
 `email_verified`) : le harnais le vérifie avant de créer quoi que ce soit.
 Un fichier seul : `npx playwright test --config e2e/playwright.config.ts parcours`
-(même variable). Durée mesurée de la suite complète : 18 min 31 s le 29 octobre 2026 (33 tests, dont un ignoré, sur un poste de développement), dont environ 3 min 45 s pour les captures.
+(même variable). Durée mesurée de la suite complète : 19 min 30 s le 29 octobre 2026 (33 tests, dont un ignoré, sur un poste de développement), dont environ 3 min 45 s pour les captures.
 
 **Les scénarios, par exigence.** Un seul processus joue les fichiers l'un
 après l'autre. Playwright les range d'abord par réglages du navigateur (ceux
@@ -4014,8 +4026,9 @@ l'exigerait, le rapport de qualité ne l'attendrait pas) et **sauterait**
 `E2E_CLERK_PUBLISHABLE_KEY` n'existe pas : la condition d'un job peut lire
 `vars` (une variable absente vaut une chaîne vide), mais ni `secrets` ni les
 variables d'un environnement, qui n'arrivent sur le runner qu'une fois le job
-démarré. Durée prévue du job : la suite (18 min 31 s) plus l'installation et la
-construction (environ 2 min 45 s), une fois et demie : 32 minutes.
+démarré. Durée prévue du job : la suite (19 min 30 s) plus l'installation et la
+construction (environ 2 min 45 s), une fois et demie, arrondi à la minute
+au-dessus : 34 minutes.
 
 Ce que l'utilisateur devra créer, le jour où le job existera, pour une instance
 Clerk de développement réservée à ces tests (jamais l'instance de production) :
