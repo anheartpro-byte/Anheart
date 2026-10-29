@@ -197,6 +197,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       ) as Record<OrganizationKey, string>,
       accounts,
       machine: { id: "", apiKey: "" },
+      webhookSecret,
     };
     const machine = await callAs<{ machineId: string; apiKey: string }>(
       backend,

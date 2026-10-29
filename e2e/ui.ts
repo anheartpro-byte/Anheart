@@ -1,4 +1,6 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 /** What the scenarios read the dashboard's pages with. */
 
@@ -23,3 +25,16 @@ export async function choose(page: Page, trigger: Locator, option: string | RegE
 
 /** `text` as a literal inside a regular expression. */
 export const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export type Lang = "fr" | "en";
+const catalogs: Record<Lang, Record<string, unknown>> = {
+  fr: JSON.parse(readFileSync(path.join(__dirname, "..", "messages", "fr.json"), "utf8")),
+  en: JSON.parse(readFileSync(path.join(__dirname, "..", "messages", "en.json"), "utf8")),
+};
+
+/** The site's own sentence for `key` (messages/fr.json, messages/en.json), its `{placeholders}` filled. */
+export function say(lang: Lang, key: string, values: Record<string, string | number> = {}): string {
+  const text = key.split(".").reduce<unknown>((node, part) => (node as Record<string, unknown>)[part], catalogs[lang]);
+  if (typeof text !== "string") throw new Error(`message absent : ${key}`);
+  return text.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name]));
+}

@@ -45,6 +45,8 @@ export type RunInfo = {
   accounts: Record<AccountKey, Account>;
   /** A machine of client A and its key, made by the harness for the console. */
   machine: { id: string; apiKey: string };
+  /** The run's Clerk webhook secret, for an account a test adds (`harness/members.ts`). */
+  webhookSecret: string;
 };
 
 export function writeRunInfo(info: RunInfo): void {

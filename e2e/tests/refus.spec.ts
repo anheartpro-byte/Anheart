@@ -1,14 +1,13 @@
 import type { Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { CONSENT_TEXT_VERSION } from "../../lib/consentText";
-import { CURRENT_QUESTIONNAIRE } from "../../lib/fitnessQuestionnaire";
 import { expect, test } from "../fixtures";
-import { startConsole, type PiConsole } from "../harness/console";
+import type { PiConsole } from "../harness/console";
 import { callAs } from "../harness/convex";
+import { createMachine, sessionsOn, startOnline, type Machine } from "../harness/machines";
 import { convexUserId, identityOf, type AccountKey, type RunInfo } from "../harness/run";
-import { rememberFromTest } from "../harness/secrets";
-import { card, choose, escape } from "../ui";
+import { prepareRider } from "../harness/riders";
+import { card, choose, escape, say, type Lang } from "../ui";
 
 /*
  * Launch refusals and rules, in the browser: each scenario shows the refusal
@@ -24,21 +23,6 @@ import { card, choose, escape } from "../ui";
  */
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off", video: "off", screenshot: "off" });
-
-type Lang = "fr" | "en";
-const catalogs: Record<Lang, Record<string, unknown>> = {
-  fr: JSON.parse(readFileSync(path.join(__dirname, "..", "..", "messages", "fr.json"), "utf8")),
-  en: JSON.parse(readFileSync(path.join(__dirname, "..", "..", "messages", "en.json"), "utf8")),
-};
-
-/** The site's own sentence for `key`, its `{placeholders}` filled. */
-function say(lang: Lang, key: string, values: Record<string, string | number> = {}): string {
-  const text = key.split(".").reduce<unknown>((node, part) => (node as Record<string, unknown>)[part], catalogs[lang]);
-  if (typeof text !== "string") throw new Error(`message absent : ${key}`);
-  return text.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name]));
-}
-
-type Machine = { id: string; name: string; key: string };
 
 /** What the scenarios carry from one to the next. */
 const state: {
@@ -58,41 +42,6 @@ function required<T>(value: T | undefined, what: string): T {
 }
 
 const as = (run: RunInfo, account: AccountKey) => identityOf(run, account);
-
-/** Every session of a machine, as the Anheart admin lists them. */
-async function sessionsOn(run: RunInfo, machineId: string) {
-  return await callAs<{ _id: string; status: string }[]>(run.backend, as(run, "admin"), "query", "sessions:listSessions", {
-    machineId,
-  });
-}
-
-/** A machine of this organisation, made by the harness, its manager assigned; its key kept masked. */
-async function createMachine(run: RunInfo, organization: "Client A" | "Client B", manager: AccountKey): Promise<Machine> {
-  const organizations = await callAs<{ _id: string; name: string }[]>(
-    run.backend,
-    as(run, "admin"),
-    "query",
-    "organizations:listOrganizations",
-    {},
-  );
-  const organizationId = organizations.find((o) => o.name === `e2e-${run.runId} ${organization}`)?._id;
-  if (!organizationId) throw new Error(`organisation ${organization} absente`);
-  const name = `Machine refus ${organization.slice(-1)} ${run.runId}`;
-  const made = await callAs<{ machineId: string; apiKey: string }>(run.backend, as(run, "admin"), "mutation", "machines:createMachine", {
-    name,
-    organizationId,
-    gestionnaireIds: [await convexUserId(run, manager)],
-  });
-  return { id: made.machineId, name, key: rememberFromTest(made.apiKey) };
-}
-
-async function startOnline(run: RunInfo, machine: Machine): Promise<PiConsole> {
-  const pi = await startConsole({ runDir: run.runDir, repoRoot: run.repoRoot, backendUrl: run.backend.url, machineApiKey: machine.key });
-  await expect
-    .poll(async () => (await pi.panel()).body.dashboard?.state, { message: "le lien de la console", timeout: 30_000 })
-    .toBe("reachable");
-  return pi;
-}
 
 /** Opens the launch dialog of a machine of "My machines". */
 async function openLaunch(page: Page, lang: Lang, machineName: string) {
@@ -127,7 +76,7 @@ async function launch(rider: Page, machineName: string, programme: string): Prom
 
 test.beforeAll(async ({ run }) => {
   test.setTimeout(120_000);
-  const machine = await createMachine(run, "Client A", "gestionnaireA");
+  const machine = await createMachine(run, "Client A", `Machine refus A ${run.runId}`, [await convexUserId(run, "gestionnaireA")]);
   state.machineA = machine;
   state.riderId = await convexUserId(run, "passagerMineurA");
   const managerId = await convexUserId(run, "gestionnaireA");
@@ -392,53 +341,18 @@ test("7. deux organisations ne se voient pas ; l'admin Anheart voit les deux", a
 
   // Client B: a machine, its manager, a ready passenger and a launch waiting
   // there, made by the harness (not under test here).
-  const machineB = await createMachine(run, "Client B", "gestionnaireB");
-  const riderBId = await convexUserId(run, "passagerB");
-  const managerBId = await convexUserId(run, "gestionnaireB");
-  await callAs(run.backend, as(run, "admin"), "mutation", "users:assignGestionnaireToUser", {
-    userId: riderBId,
-    gestionnaireId: managerBId,
-  });
-  const answers = Object.fromEntries(CURRENT_QUESTIONNAIRE.questions.map((q) => [q.id, q.outcomes.yes === "fit"]));
-  const { assessmentId } = await callAs<{ assessmentId: string }>(run.backend, as(run, "passagerB"), "mutation", "fitness:submitFitnessAnswers", {
-    questionnaireVersion: CURRENT_QUESTIONNAIRE.version,
-    answers,
-  });
-  await callAs(run.backend, as(run, "gestionnaireB"), "mutation", "fitness:validateFitnessAssessment", {
-    assessmentId,
-    validUntil: Date.now() + 30 * 24 * 3600 * 1000,
-  });
-  await callAs(run.backend, as(run, "passagerB"), "mutation", "fitness:signConsent", { textVersion: CONSENT_TEXT_VERSION });
-  await callAs(run.backend, as(run, "gestionnaireB"), "mutation", "training:setUserPhysiology", {
-    userId: riderBId,
+  const machineB = await createMachine(run, "Client B", `Machine refus B ${run.runId}`, [await convexUserId(run, "gestionnaireB")]);
+  const riderBId = await prepareRider(run, {
+    account: "passagerB",
+    manager: "gestionnaireB",
+    assigner: "admin",
+    machineIds: [machineB.id],
     hrMax: programme.hrMax,
     birthYear: new Date().getUTCFullYear() - required(state.minAge, "âge minimum") - 20,
-  });
-  await callAs(run.backend, as(run, "gestionnaireB"), "mutation", "training:grantLaunchRight", {
-    machineId: machineB.id,
-    userId: riderBId,
   });
   const piB = await startOnline(run, machineB);
   let sessionB: string;
   try {
-    await expect
-      .poll(
-        async () =>
-          (await callAs<{ status: string } | null>(run.backend, as(run, "admin"), "query", "machines:getMachine", {
-            machineId: machineB.id,
-          }))?.status,
-        { message: "la machine B en ligne", timeout: 30_000 },
-      )
-      .toBe("online");
-    await expect
-      .poll(
-        async () =>
-          (await callAs<{ profileId: string }[]>(run.backend, as(run, "admin"), "query", "training:listMachineProfiles", {
-            machineId: machineB.id,
-          })).length,
-        { message: "les programmes de la machine B", timeout: 30_000 },
-      )
-      .toBeGreaterThan(0);
     sessionB = await callAs<string>(run.backend, as(run, "passagerB"), "mutation", "training:launchAutoSession", {
       machineId: machineB.id,
       profileId: programme.id,
