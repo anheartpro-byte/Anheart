@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,12 +10,28 @@ import { assertLocal, childEnv, redact, remember } from "./secrets";
 /** Official local backend, pinned: the same build on every run. */
 export const BACKEND_VERSION = "precompiled-2026-10-10-72ce13c";
 
-const TARGETS: Record<string, string> = {
-  "darwin-arm64": "aarch64-apple-darwin",
-  "darwin-x64": "x86_64-apple-darwin",
-  "linux-arm64": "aarch64-unknown-linux-gnu",
-  "linux-x64": "x86_64-unknown-linux-gnu",
+/**
+ * The release's archive and the binary inside it, sha256, per platform. The
+ * archive digests are those GitHub gives for the assets of the release
+ * (`gh api repos/get-convex/convex-backend/releases/tags/<version>`, field
+ * `digest`), found again on the downloaded archives; the binary digests were
+ * measured on the binaries extracted from them, on 29 October 2026. Another
+ * platform, or another version, needs its own measured here first.
+ */
+const TARGETS: Record<string, { name: string; archive: string; binary: string }> = {
+  "darwin-arm64": {
+    name: "aarch64-apple-darwin",
+    archive: "fbaf2dcff35c57a16f1f6a804fd505ba562fcc7f6898c170b4e0f7f0c46c0881",
+    binary: "ddcb97720542fde286a629a4a498c528c5fa9dfa47c5642dfe1d7dc19bd20db6",
+  },
+  "linux-x64": {
+    name: "x86_64-unknown-linux-gnu",
+    archive: "fcc51faa1168011819eec9aba85bf6959a6a7ce3929381cdc21c7da29f4bf3d5",
+    binary: "5584895149cd6af74624ccbc038b2ada14ec771b6374e4ce252080a115ba5255",
+  },
 };
+
+const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
 export type Backend = {
   /** Client API of the deployment (what the site's NEXT_PUBLIC_CONVEX_URL is). */
@@ -27,26 +43,44 @@ export type Backend = {
 
 /**
  * The binary in the cache the Convex CLI uses itself
- * (`~/.cache/convex/binaries/<version>/`), downloaded once.
+ * (`~/.cache/convex/binaries/<version>/`), downloaded once. Its digest is
+ * checked each time it is used, from the cache too; the archive's before
+ * anything is extracted from it.
  */
 async function backendBinary(): Promise<string> {
-  const target = TARGETS[`${process.platform}-${process.arch}`];
-  if (!target) throw new Error(`Plateforme sans backend Convex local : ${process.platform}-${process.arch}`);
+  const platform = `${process.platform}-${process.arch}`;
+  const target = TARGETS[platform];
+  if (!target) {
+    throw new Error(
+      `Backend Convex local sans empreinte pour ${platform} : seules ${Object.keys(TARGETS).join(", ")} sont vérifiables (e2e/harness/convex.ts, TARGETS)`,
+    );
+  }
   const dir = path.join(os.homedir(), ".cache", "convex", "binaries", BACKEND_VERSION);
   const binary = path.join(dir, "convex-local-backend");
-  if (existsSync(binary)) return binary;
-  const url = `https://github.com/get-convex/convex-backend/releases/download/${BACKEND_VERSION}/convex-local-backend-${target}.zip`;
+  if (existsSync(binary)) {
+    if (sha256(readFileSync(binary)) !== target.binary) {
+      throw new Error(`Backend Convex local du cache : empreinte sha256 inattendue, supprimer ${binary} pour le retélécharger`);
+    }
+    return binary;
+  }
+  const url = `https://github.com/get-convex/convex-backend/releases/download/${BACKEND_VERSION}/convex-local-backend-${target.name}.zip`;
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Téléchargement du backend Convex : HTTP ${response.status} (${url})`);
+  const archive = Buffer.from(await response.arrayBuffer());
+  if (sha256(archive) !== target.archive) throw new Error(`Archive du backend Convex : empreinte sha256 inattendue (${url})`);
   const staging = `${dir}.part-${process.pid}`;
   mkdirSync(staging, { recursive: true });
   try {
     const zip = path.join(staging, "backend.zip");
-    writeFileSync(zip, Buffer.from(await response.arrayBuffer()));
+    writeFileSync(zip, archive);
     await promisify(execFile)("unzip", ["-o", "-q", zip, "-d", staging]);
-    chmodSync(path.join(staging, "convex-local-backend"), 0o755);
+    const extracted = path.join(staging, "convex-local-backend");
+    if (sha256(readFileSync(extracted)) !== target.binary) {
+      throw new Error(`Backend Convex local extrait : empreinte sha256 inattendue (${url})`);
+    }
+    chmodSync(extracted, 0o755);
     mkdirSync(dir, { recursive: true });
-    renameSync(path.join(staging, "convex-local-backend"), binary);
+    renameSync(extracted, binary);
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
