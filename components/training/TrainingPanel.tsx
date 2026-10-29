@@ -328,7 +328,6 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
           <BigReadout
             icon={<Gauge className="h-5 w-5 text-purple-500" />}
             label={t("training.live.gLoad")}
-            testId="live-load"
             value={lastFresh && last ? last.gLoad.toFixed(2) : "-"}
             unit={t("training.units.g")}
           />
@@ -341,7 +340,6 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
               )
             }
             label={t("training.live.phase")}
-            testId="live-phase"
             value={last ? label("phase", last.phase) : "-"}
             sub={
               last && last.safetyAction !== "none"
