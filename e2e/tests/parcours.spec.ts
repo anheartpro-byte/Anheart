@@ -382,7 +382,8 @@ test("4. le passager lance une séance programmée, l'opérateur la confirme à 
 });
 
 test("5. la séance en direct avance, en français puis en anglais", async ({ pageAs }) => {
-  test.setTimeout(150_000);
+  test.setTimeout(240_000);
+  const pi = required(journey.console, "console");
   const sessionId = required(journey.sessionId, "séance");
   const rider = await pageAs("passagerA");
 
@@ -391,6 +392,18 @@ test("5. la séance en direct avance, en français puis en anglais", async ({ pa
   await expect.poll(() => rider.getByText("Vitesse du bras", { exact: true }).count()).toBeGreaterThanOrEqual(2);
   await expect.poll(() => rider.getByText(/^Fréquence cardiaque/).count()).toBeGreaterThanOrEqual(2);
   await expect(rider.getByText("Écoulé")).toBeVisible();
+  // The arm moves once the warm-up's target has pulled ahead of the heart
+  // rate: some 25 s into the warm-up, later on a loaded computer. Until then,
+  // the console's phase says where it stands.
+  await expect
+    .poll(
+      async () => {
+        const snapshot = (await pi.snapshot()).body;
+        return snapshot && snapshot.measured.output_rpm > 0 ? "en mouvement" : `phase ${snapshot?.phase ?? "inconnue"}`;
+      },
+      { message: "le bras tourne à la console", timeout: 120_000, intervals: [1_000] },
+    )
+    .toBe("en mouvement");
   await expectChanging(rider, "live-arm-speed", 60_000);
   await expect
     .poll(async () => /^\d+$/.test(((await rider.getByTestId("live-heart-rate").textContent()) ?? "").trim()), {
