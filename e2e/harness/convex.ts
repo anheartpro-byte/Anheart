@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { freePort, runToEnd, startProcess, waitForHttp } from "./processes";
+import { freePort, runToEnd, startProcess, waitForHttp, writeNewFile } from "./processes";
 import { assertLocal, childEnv, redact, remember } from "./secrets";
 
 /** Official local backend, pinned: the same build on every run. */
@@ -32,6 +32,15 @@ const TARGETS: Record<string, { name: string; archive: string; binary: string }>
 };
 
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+/** The bytes at `url`, only when their sha256 is `digest`; nothing is written. */
+async function pinnedDownload(url: string, digest: string): Promise<Buffer> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Téléchargement de ${url} : HTTP ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (sha256(bytes) !== digest) throw new Error(`Téléchargement de ${url} : empreinte sha256 inattendue, rien n'est écrit`);
+  return bytes;
+}
 
 export type Backend = {
   /** Client API of the deployment (what the site's NEXT_PUBLIC_CONVEX_URL is). */
@@ -63,20 +72,22 @@ async function backendBinary(): Promise<string> {
     }
     return binary;
   }
-  const url = `https://github.com/get-convex/convex-backend/releases/download/${BACKEND_VERSION}/convex-local-backend-${target.name}.zip`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Téléchargement du backend Convex : HTTP ${response.status} (${url})`);
-  const archive = Buffer.from(await response.arrayBuffer());
-  if (sha256(archive) !== target.archive) throw new Error(`Archive du backend Convex : empreinte sha256 inattendue (${url})`);
-  const staging = `${dir}.part-${process.pid}`;
-  mkdirSync(staging, { recursive: true });
+  // Checked in memory against the pinned digest before anything of it is
+  // written: a download that differs never reaches the disk.
+  const archive = await pinnedDownload(
+    `https://github.com/get-convex/convex-backend/releases/download/${BACKEND_VERSION}/convex-local-backend-${target.name}.zip`,
+    target.archive,
+  );
+  // A folder of an unguessable name, 0700, next to the cache of the Convex CLI.
+  mkdirSync(path.dirname(dir), { recursive: true });
+  const staging = mkdtempSync(path.join(path.dirname(dir), `${BACKEND_VERSION}.part-`));
   try {
     const zip = path.join(staging, "backend.zip");
-    writeFileSync(zip, archive);
+    writeNewFile(zip, archive);
     await promisify(execFile)("unzip", ["-o", "-q", zip, "-d", staging]);
     const extracted = path.join(staging, "convex-local-backend");
     if (sha256(readFileSync(extracted)) !== target.binary) {
-      throw new Error(`Backend Convex local extrait : empreinte sha256 inattendue (${url})`);
+      throw new Error(`Backend Convex local extrait de ${zip} : empreinte sha256 inattendue`);
     }
     chmodSync(extracted, 0o755);
     mkdirSync(dir, { recursive: true });
@@ -172,11 +183,7 @@ export async function pushFunctions(
   backend: Backend,
 ): Promise<void> {
   const envFile = path.join(runDir, "convex.env");
-  writeFileSync(
-    envFile,
-    `CONVEX_SELF_HOSTED_URL=${backend.url}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${backend.adminKey}\n`,
-    { mode: 0o600 },
-  );
+  writeNewFile(envFile, `CONVEX_SELF_HOSTED_URL=${backend.url}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${backend.adminKey}\n`);
   try {
     await runToEnd(
       runDir,
