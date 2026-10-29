@@ -58,10 +58,22 @@ from typing import Final, Protocol, final, runtime_checkable
 
 from bitalino import BITalino
 
+from src.acquisition_provenance import (
+    ActualSpan,
+    Origin,
+    Provenance,
+    ProvenanceBudget,
+    SampleIndex,
+    SegmentId,
+    append_span,
+    joined,
+)
+from src.acquisition_provenance import LinkStats as AcquisitionLinkStats
 from src.clock import Clock, RealClock
-from src.units import UnixMillis
+from src.units import Hertz, Monotonic, UnixMillis
 
 logger = logging.getLogger(__name__)
+LinkStats = AcquisitionLinkStats
 
 
 # =========================================================================
@@ -123,25 +135,7 @@ class SampleBatch:
 
     timestamp: UnixMillis
     channels: Sequence[ChannelData]
-
-
-@dataclass(frozen=True, slots=True)
-class LinkStats:
-    """Cumulative link health since acquisition started. All counts in samples
-    or bytes, never reset by a reconnect."""
-
-    frames: int = 0
-    """Frames that passed CRC and were decoded."""
-    skipped_bytes: int = 0
-    """Bytes discarded while hunting for a valid frame boundary."""
-    sync_losses: int = 0
-    """Times a frame failed CRC while the stream was aligned."""
-    filled_samples: int = 0
-    """Samples synthesised (held value) to cover frames the device dropped."""
-    dropped_backlog_samples: int = 0
-    """Samples discarded because nobody consumed them in time."""
-    reconnects: int = 0
-    """Successful re-opens of the link after it was lost."""
+    provenance: Provenance | None = None
 
 
 # =========================================================================
@@ -226,10 +220,18 @@ class FrameDecoder:
         self.skipped_bytes: int = 0
         self.sync_losses: int = 0
         self.filled_samples: int = 0
+        self._spans: list[ActualSpan] = []
+        self._spans_complete: bool = True
+
+    @property
+    def actual_spans(self) -> tuple[ActualSpan, ...] | None:
+        return tuple(self._spans) if self._spans_complete else None
 
     def feed(self, data: bytes) -> list[Row]:
         """Append ``data`` and return every row it completes, gaps filled."""
         self._buffer.extend(data)
+        self._spans.clear()
+        self._spans_complete = True
         buffer = self._buffer
         size = self._size
         rows: list[Row] = []
@@ -268,6 +270,8 @@ class FrameDecoder:
             missing = (seq - last_seq - 1) % SEQUENCE_MODULUS
             rows.extend([last_row] * missing)
             self.filled_samples += missing
+        if self._spans_complete:
+            self._spans_complete = append_span(self._spans, ActualSpan(len(rows), 1))
         rows.append(row)
         self._last = (seq, row)
         self.frames += 1
@@ -444,6 +448,7 @@ class _Chunk:
     segment: int
     first_ts: UnixMillis
     rows: Sequence[Row]
+    provenance: Provenance | None = None
 
 
 class BITalinoClient:
@@ -514,12 +519,17 @@ class BITalinoClient:
         self._chunks: deque[_Chunk] = deque()
         self._queued_rows: int = 0
         self._stats: LinkStats = LinkStats()
+        self._provenance_budget = ProvenanceBudget()
 
         # Owned by the acquisition thread alone.
         self._decoder: FrameDecoder = FrameDecoder(len(wire))
         self._segment: int = 0
         self._segment_anchor: UnixMillis | None = None
         self._segment_rows: int = 0
+        self._source_index: int = 0
+        self._source_segment: int = 0
+        self._source_anchor: Monotonic = Monotonic(0)
+        self._source_floor: Monotonic | None = None
         self._next_ts_floor: int = 0
         self._banked: LinkStats = LinkStats()
         """Counters from decoders of earlier segments, so stats survive reconnects."""
@@ -599,8 +609,10 @@ class BITalinoClient:
             self._chunks.clear()
             self._queued_rows = 0
             self._stats = LinkStats()
+            self._provenance_budget = ProvenanceBudget()
         self._decoder = FrameDecoder(len(self.channels))
         self._segment = 0
+        self._source_segment += 1
         self._segment_anchor = None
         self._segment_rows = 0
         self._next_ts_floor = 0
@@ -689,6 +701,7 @@ class BITalinoClient:
         self._banked = self._decoder_totals()
         self._decoder = FrameDecoder(len(self.channels))
         self._segment += 1
+        self._source_segment += 1
         self._segment_anchor = None
         self._segment_rows = 0
 
@@ -735,18 +748,45 @@ class BITalinoClient:
             now = self._clock.unix_millis()
             anchor = now - _millis(len(rows), self.sample_rate)
             self._segment_anchor = UnixMillis(max(anchor, self._next_ts_floor))
+            source_anchor = self._clock.monotonic() - len(rows) / self.sample_rate
+            self._source_anchor = Monotonic(
+                source_anchor
+                if self._source_floor is None
+                else max(source_anchor, self._source_floor)
+            )
         first_ts = UnixMillis(self._segment_anchor + _millis(self._segment_rows, self.sample_rate))
+        first_at = Monotonic(self._source_anchor + self._segment_rows / self.sample_rate)
         self._segment_rows += len(rows)
+        self._source_floor = Monotonic(self._source_anchor + self._segment_rows / self.sample_rate)
         self._next_ts_floor = (
             self._segment_anchor + _millis(self._segment_rows - 1, self.sample_rate) + 1
         )
-        chunk = _Chunk(segment=self._segment, first_ts=first_ts, rows=rows)
         with self._lock:
+            spans = self._decoder.actual_spans
+            provenance = (
+                None
+                if spans is None
+                else Provenance(
+                    Origin.SOFTWARE_NOMINAL,
+                    SegmentId(self._source_segment),
+                    SampleIndex(self._source_index),
+                    first_at,
+                    Hertz(self.sample_rate),
+                    len(rows),
+                    spans,
+                    _merge(self._stats, totals),
+                )
+            )
+            chunk = _Chunk(
+                self._segment, first_ts, rows, self._provenance_budget.retain(provenance)
+            )
+            self._source_index += len(rows)
             self._chunks.append(chunk)
             self._queued_rows += len(rows)
             dropped = 0
             while self._queued_rows > self._max_backlog and len(self._chunks) > 1:
                 oldest = self._chunks.popleft()
+                self._provenance_budget.release(oldest.provenance)
                 self._queued_rows -= len(oldest.rows)
                 dropped += len(oldest.rows)
             self._stats = _merge(self._stats, totals, dropped)
@@ -778,6 +818,8 @@ class BITalinoClient:
             if available < count and not segment_closed:
                 return None
             taken = [self._chunks.popleft() for _ in range(run)]
+            for consumed in taken:
+                self._provenance_budget.release(consumed.provenance)
             self._queued_rows -= available
             stats = self._stats
 
@@ -791,7 +833,11 @@ class BITalinoClient:
         ]
         self._report(stats)
         self._check_signal_integrity(channels)
-        return SampleBatch(timestamp=taken[0].first_ts, channels=channels)
+        return SampleBatch(
+            timestamp=taken[0].first_ts,
+            channels=channels,
+            provenance=joined((chunk.provenance for chunk in taken), stats.dropped_backlog_samples),
+        )
 
     def _report(self, stats: LinkStats) -> None:
         """Log link trouble since the previous batch, once per batch at most."""

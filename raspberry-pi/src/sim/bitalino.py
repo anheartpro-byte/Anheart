@@ -41,12 +41,20 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final, final
 
+from src.acquisition_provenance import (
+    ActualSpan,
+    LinkStats,
+    Origin,
+    Provenance,
+    SampleIndex,
+    SegmentId,
+)
 from src.bitalino_client import CHANNEL_NAMES, ChannelData, SampleBatch
 from src.clock import Clock
 from src.sim.ecg import DEFAULT_ECG_CONFIG, EcgSynthesizer
 from src.sim.physiology import Physiology
 from src.sim.signals.base import SignalContext, SignalGenerator
-from src.units import AdcCount, Monotonic, MotorRpm, UnixMillis, elapsed
+from src.units import AdcCount, Hertz, Monotonic, MotorRpm, UnixMillis, elapsed
 
 ECG_CHANNEL: Final[str] = "ECG"
 """The channel name this simulator actually models. Compared against
@@ -102,6 +110,8 @@ class SimulatedBitalinoClient:
         "_on_disconnect",
         "_physiology",
         "_refuse_connect",
+        "_source_index",
+        "_source_segment",
         "_started_at",
         "channels",
         "is_acquiring",
@@ -167,6 +177,8 @@ class SimulatedBitalinoClient:
         self._on_disconnect: Callable[[], Awaitable[None]] | None = None
         self._started_at: Monotonic = clock.monotonic()
         self._generated: int = 0
+        self._source_index: int = 0
+        self._source_segment: int = 0
         self._refuse_connect: bool = False
 
     # -- observation -------------------------------------------------------
@@ -264,6 +276,7 @@ class SimulatedBitalinoClient:
             return True
         self._started_at = self._clock.monotonic()
         self._generated = 0
+        self._source_segment += 1
         self.is_acquiring = True
         return True
 
@@ -313,8 +326,21 @@ class SimulatedBitalinoClient:
         # The FIRST sample's wall-clock time, as SampleBatch.timestamp is
         # defined: "now" on the wall clock, minus how long ago that sample was.
         behind = round(elapsed(first_at, now) * MILLIS_PER_SECOND)
+        provenance = Provenance(
+            Origin.SYNTHETIC,
+            SegmentId(self._source_segment),
+            SampleIndex(self._source_index),
+            first_at,
+            Hertz(self.sample_rate),
+            count,
+            (ActualSpan(0, count),),
+            LinkStats(frames=self._generated),
+        )
+        self._source_index += count
         return SampleBatch(
-            timestamp=UnixMillis(self._clock.unix_millis() - behind), channels=channels
+            timestamp=UnixMillis(self._clock.unix_millis() - behind),
+            channels=channels,
+            provenance=provenance,
         )
 
     # -- internals ---------------------------------------------------------
