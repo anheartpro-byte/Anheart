@@ -99,7 +99,7 @@ from enum import Enum, unique
 from typing import Final, Protocol, assert_never, final, runtime_checkable
 
 from src.clock import Clock
-from src.motor.sto import StoSource
+from src.motor.sto import StoSource, sto_bridged
 from src.result import Err, Ok, Result
 from src.training.preflight import (
     StoBridgedOnBoard,
@@ -890,15 +890,17 @@ class ControlSurface:
     def check_remote_launch(self) -> Result[None, LaunchRefusal]:
         """The start gates of a launch from the dashboard, a programme, without submitting it.
 
-        Those of :meth:`check_start` for a person on board; under a declared
-        STO bridge the launch is refused in its own words
-        (:class:`~src.training.preflight.StoBridgedRemoteLaunch`), not the
-        console's: bench sessions start at the console only.
+        Those of :meth:`check_start` for a person on board. Under a declared
+        STO bridge the launch is refused first, in its own words
+        (:class:`~src.training.preflight.StoBridgedRemoteLaunch`), before the
+        attestation, a verdict or a busy console are looked at: no
+        attestation, acknowledgement or rest lifts it under that mode, and
+        bench sessions start at the console only.
         """
-        checked = self.check_start(Occupancy.OCCUPIED)
-        if isinstance(checked, Err) and isinstance(checked.error, StoBridgedOnBoard):
+        sto = self._sto
+        if sto is not None and sto_bridged(sto.latest(self._clock.monotonic())):
             return Err(StoBridgedRemoteLaunch())
-        return checked
+        return self.check_start(Occupancy.OCCUPIED)
 
     def submit_start_manual(
         self, *, occupancy: Occupancy, operator: str, subject_id: str = ""

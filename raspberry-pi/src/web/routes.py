@@ -68,7 +68,7 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
-from src.motor.sto import StoState, UnconfiguredStoSource
+from src.motor.sto import StoState, UnconfiguredStoSource, sto_bridged
 from src.passenger_feedback import FeedbackView, PassengerFeedback, parse_feedback
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
@@ -909,7 +909,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         )
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
-        raise _start_failure(submitted.error)
+        raise _start_failure(submitted.error, services)
 
     @app.post(
         "/api/session/stop",
@@ -992,7 +992,7 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         )
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
-        raise _start_failure(submitted.error)
+        raise _start_failure(submitted.error, services)
 
     @app.post(
         "/api/manual/target",
@@ -1131,8 +1131,12 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
 # status code yet - which is the whole reason they are closed unions.
 
 
-def _start_failure(refusal: StartRefusal) -> Refusal:
-    """Map a start refusal. See :data:`~src.control_surface.StartRefusal`."""
+def _start_failure(refusal: StartRefusal, services: Services) -> Refusal:
+    """Map a start refusal. See :data:`~src.control_surface.StartRefusal`.
+
+    ``services`` says the console's mode: under a declared STO bridge a missing
+    attestation is the bench one, and its detail names no emergency stop.
+    """
     match refusal:
         case SurfaceBusy():
             return _busy_start(refusal)
@@ -1146,10 +1150,15 @@ def _start_failure(refusal: StartRefusal) -> Refusal:
                 ),
             )
         case EstopUnattested():
+            unattested = (
+                "nobody has attested the bench declaration this boot"
+                if _sto_bridged(services)
+                else "nobody has attested the emergency stop this boot"
+            )
             return Refusal(
                 HTTPStatus.PRECONDITION_FAILED,
                 code=ESTOP_UNATTESTED,
-                detail=f"nobody has attested the emergency stop this boot: {refusal.statement}",
+                detail=f"{unattested}: {refusal.statement}",
             )
         case StoNotReady():
             return Refusal(
@@ -1466,7 +1475,13 @@ def _require_nothing_latched(services: Services, occupancy: Occupancy) -> None:
         return
     floor = _verdicts(services).floor
     if floor is not None:
-        raise _start_failure(SafetyHolding(floor))
+        raise _start_failure(SafetyHolding(floor), services)
+
+
+def _sto_bridged(services: Services) -> bool:
+    """Whether this console's STO source is the declared bridge, by the arming rule's own test."""
+    sto = services.sto
+    return sto is not None and sto_bridged(sto.latest(services.clock.monotonic()))
 
 
 def _bench_declared(services: Services) -> bool:

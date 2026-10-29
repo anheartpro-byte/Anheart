@@ -25,7 +25,7 @@ import pytest
 
 from src.clock import ManualClock
 from src.cloud_sync import describe_surface_refusal, live_row
-from src.control_surface import RunState
+from src.control_surface import EventKind, RunState, SafetyHolding
 from src.local_config import (
     ConfigProblem,
     MotorBackend,
@@ -33,6 +33,7 @@ from src.local_config import (
     load_local_config,
 )
 from src.local_panel import (
+    BENCH_UNATTESTED,
     EXIT_CONFIG,
     EXIT_OK,
     DriveSide,
@@ -57,6 +58,7 @@ from src.motor.sto import (
     sto_ready,
 )
 from src.result import Err, Ok, Result
+from src.training.motion import ramp_duration
 from src.training.preflight import (
     BRIDGED_BENCH_ONLY,
     BRIDGED_REMOTE_LAUNCH,
@@ -73,8 +75,10 @@ from src.training.runtime import (
     STO_OPEN_DEDUCED,
     NotAttested,
     RuntimeState,
+    StartRefusal,
     Subject,
     TrainingRuntime,
+    motion_geometry,
 )
 from src.training.safety import (
     BENCH_BRIDGED_ATTESTATION,
@@ -86,13 +90,22 @@ from src.training.safety import (
     SafetySupervisor,
     Unattributed,
 )
-from src.training.types import Occupancy, SafetyAction, SafetyVerdict
-from src.units import Bpm, Monotonic, MotorRpm, RawRegister, RegisterAddress, Seconds
+from src.training.types import Occupancy, SafetyAction, SafetyVerdict, TelemetrySnapshot
+from src.units import (
+    Bpm,
+    Monotonic,
+    MotorRpm,
+    RawRegister,
+    RegisterAddress,
+    Seconds,
+    motor_to_output_rpm,
+)
 from src.web.app import create_app
 from src.web.routes import (
     BENCH_ATTESTATION_FIELDS,
     BENCH_ESTOP_RELEASED_LABEL,
     ESTOP_RELEASED_LABEL,
+    ESTOP_UNATTESTED,
     ESTOP_WIRING_FIELDS,
     STO_BRIDGED_BENCH_ONLY,
 )
@@ -453,11 +466,12 @@ async def test_a_bench_start_under_a_latch_of_the_runtime_is_refused_with_the_cl
 # --- the dashboard's launch: a programme, refused before training/start, in its words ---
 
 
+@pytest.mark.parametrize("attested", [True, False], ids=["attested", "unattested"])
 async def test_a_launch_from_the_dashboard_is_refused_in_its_own_words_and_never_confirmed(
-    tmp_path: Path,
+    tmp_path: Path, attested: bool
 ) -> None:
     """Signed parameters, programmes and a person on board enabled: the bridge refuses first,
-    with the reason of a launch from the site, not the console's."""
+    with the reason of a launch from the site, not the console's, attested or not."""
     clock = ManualClock(Monotonic(10.0))
     dashboard = dashboard_tests.Dashboard()
     config = dashboard_tests.config_of(signed(), **SERIAL, STO_SOURCE="bridged_declared")
@@ -474,7 +488,8 @@ async def test_a_launch_from_the_dashboard_is_refused_in_its_own_words_and_never
     )
     linked = dashboard_tests.Linked(clock=clock, panel=panel, dashboard=dashboard)
     try:
-        assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+        if attested:
+            assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
         subscriber = panel.hub.subscribe()
         dashboard.answer(
             "/api/machine/training/poll",
@@ -495,6 +510,29 @@ async def test_a_launch_from_the_dashboard_is_refused_in_its_own_words_and_never
                 said.append(payload.event.detail)
     finally:
         await panel.close()
+
+
+async def test_under_the_bridge_the_dashboard_s_launch_answers_before_every_other_gate(
+    tmp_path: Path,
+) -> None:
+    """Unattested, then under a latched verdict: the console's own gates would answer first,
+    and neither an attestation nor an acknowledgement lifts this refusal, so it is the one said."""
+    rig, _ = make_rig(tmp_path, env=BRIDGED_PROGRAMME_ENV)
+    surface = rig.panel.surface
+    try:
+        assert surface.check_start(Occupancy.OCCUPIED) == Err(
+            EstopUnattested(BENCH_BRIDGED_ATTESTATION)
+        )
+        assert surface.check_remote_launch() == Err(StoBridgedRemoteLaunch())
+        async with rig.http() as client:
+            assert (await attest_bench(client)).status_code == HTTPStatus.OK
+        surface.submit_estop(operator=OPERATOR, reason="test: a latched verdict")
+        held = surface.check_start(Occupancy.OCCUPIED)
+        assert isinstance(held, Err)
+        assert isinstance(held.error, SafetyHolding)
+        assert surface.check_remote_launch() == Err(StoBridgedRemoteLaunch())
+    finally:
+        await rig.panel.close()
 
 
 # =========================================================================
@@ -641,6 +679,13 @@ async def test_under_every_other_source_the_bench_confirmation_is_refused_and_an
 ) -> None:
     rig, _ = make_rig(tmp_path, env=env)
     try:
+        # Unattested, the dashboard's launch is refused as before, in ANH-92's words.
+        unattested = rig.panel.surface.check_remote_launch()
+        assert unattested == rig.panel.surface.check_start(Occupancy.OCCUPIED)
+        assert unattested == Err(EstopUnattested(ESTOP_ATTESTATION))
+        assert describe_surface_refusal(EstopUnattested(ESTOP_ATTESTATION)) == (
+            "cablage de l'arret d'urgence non atteste depuis le demarrage de la console"
+        )
         async with rig.http() as client:
             status = parse(StatusRow, await client.get("/api/status"))
             assert status.attestation_statement == ESTOP_ATTESTATION
@@ -676,6 +721,100 @@ async def test_under_every_other_source_the_bench_confirmation_is_refused_and_an
         assert (remote == Ok(None)) is ready  # READY alone passes, as in ANH-92
     finally:
         await rig.panel.close()
+
+
+ANH92_UNATTESTED: Final[str] = (
+    f"nobody has attested the emergency stop this boot: {ESTOP_ATTESTATION}"
+)
+"""ANH-92's detail, quoted by the operator's guides: unchanged outside the bridge."""
+
+
+@pytest.mark.parametrize(
+    ("env", "detail"),
+    [
+        (
+            BRIDGED_ENV,
+            f"nobody has attested the bench declaration this boot: {BENCH_BRIDGED_ATTESTATION}",
+        ),
+        (BENCH_ENV, ANH92_UNATTESTED),
+        ({**BENCH_ENV, "STO_SOURCE": "sim_open"}, ANH92_UNATTESTED),
+        ({**BENCH_ENV, **SERIAL}, ANH92_UNATTESTED),
+        (
+            {**BENCH_ENV, **SERIAL, "STO_SOURCE": "drive_input", "STO_DRIVE_INPUT": "LI1"},
+            ANH92_UNATTESTED,
+        ),
+    ],
+    ids=["bridged_declared", "sim_ready", "sim_open", "none", "drive_input"],
+)
+async def test_an_unattested_start_names_the_attestation_of_the_console_s_mode(
+    tmp_path: Path, env: Mapping[str, str], detail: str
+) -> None:
+    rig, _ = make_rig(tmp_path, env=env)
+    try:
+        async with rig.http() as client:
+            refused = await client.post(
+                "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
+            )
+    finally:
+        await rig.panel.close()
+    assert refused.status_code == HTTPStatus.PRECONDITION_FAILED
+    assert refused.json()["code"] == ESTOP_UNATTESTED
+    assert refused.json()["detail"] == detail
+
+
+def test_the_console_says_which_attestation_it_lacks() -> None:
+    bench = describe_start_refusal(NotAttested(BENCH_BRIDGED_ATTESTATION), bridged=True)
+    assert bench == (
+        "demarrage refuse : declaration de banc non attestee depuis le demarrage de la console"
+    )
+    assert bench == f"demarrage refuse : {BENCH_UNATTESTED}"
+    assert "arret d'urgence" not in bench
+    # ANH-92's words, unchanged, under every other source.
+    for said in (
+        describe_start_refusal(NotAttested(ESTOP_ATTESTATION)),
+        describe_start_refusal(NotAttested(ESTOP_ATTESTATION), bridged=False),
+    ):
+        assert said == "demarrage refuse : cablage de l'arret d'urgence non atteste"
+    # Only the missing attestation is said differently.
+    assert describe_start_refusal(StoBridgedOnBoard(), bridged=True) == (
+        describe_start_refusal(StoBridgedOnBoard())
+    )
+
+
+@pytest.mark.parametrize(
+    ("env", "said"),
+    [(BRIDGED_ENV, BENCH_UNATTESTED), (BENCH_ENV, "cablage de l'arret d'urgence non atteste")],
+    ids=["bridged_declared", "sim_ready"],
+)
+async def test_the_loop_says_an_unattested_arming_in_the_console_s_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env: Mapping[str, str], said: str
+) -> None:
+    """The runtime refuses the arming as unattested after the surface took the start: the
+    console's event list says it in the words of its STO source."""
+
+    async def unattested(
+        self: TrainingRuntime, occupancy: Occupancy, operator: str, ceiling: MotorRpm
+    ) -> Result[TelemetrySnapshot, StartRefusal]:
+        del occupancy, operator, ceiling
+        return Err(NotAttested(self.supervisor.attestation_statement))
+
+    monkeypatch.setattr(TrainingRuntime, "start_manual", unattested)
+    rig, _ = make_rig(tmp_path, env=env)
+    try:
+        async with rig.http() as client:
+            if env is BRIDGED_ENV:
+                assert (await attest_bench(client)).status_code == HTTPStatus.OK
+            else:
+                await attest(client)
+            started = await client.post(
+                "/api/manual/start", json={"occupancy": "bench", "operator": OPERATOR}
+            )
+            assert started.status_code == HTTPStatus.ACCEPTED, started.text
+            await rig.tick(1.0)
+    finally:
+        await rig.panel.close()
+    refused = [event.detail for event in rig.events if event.kind is EventKind.REFUSED]
+    assert refused == [f"demarrage refuse : {said}"]
 
 
 # =========================================================================
@@ -796,6 +935,53 @@ async def test_the_screen_estop_latches_a_bench_session_and_wants_a_named_releas
             assert runtime_state(rig) is RuntimeState.RUNNING
     finally:
         await rig.panel.close()
+
+
+NAMEPLATE: Final[MotorRpm] = MotorRpm(1380)
+"""The bench ceiling of ``BENCH_ENV`` (``MOTOR_MAX_RPM``), the motor's nameplate."""
+
+
+async def test_a_stop_at_nameplate_speed_walks_the_arm_down_for_about_107_s(
+    tmp_path: Path,
+) -> None:
+    """The figure the bench procedure quotes for STOP (docs/raspberry-pi.md, step 7).
+
+    In a manual session STOP walks the setpoint down at the session's motion limits,
+    not on the drive's ramp: measured here, on the simulated drive, from the click at
+    1380 motor rpm to a shaft read at 0, against the walk the shipped limits give.
+    """
+    rig, _ = make_rig(tmp_path, env=BRIDGED_ENV)
+    config = rig.config
+    try:
+        async with rig.http() as client:
+            assert config.ceiling_for(Occupancy.BENCH) == Ok(NAMEPLATE)
+            top = motor_to_output_rpm(NAMEPLATE, config.geometry.ratio)
+            await start_bench(rig, client, float(top))
+            for _ in range(1500):
+                if (await rig.tick(0.2)).measured.motor_rpm == NAMEPLATE:
+                    break
+            else:
+                raise AssertionError("the arm never reached the nameplate")
+            clicked = rig.clock.monotonic()
+            pressed = await client.post("/api/session/stop", json={"operator": OPERATOR})
+            assert pressed.status_code == HTTPStatus.ACCEPTED, pressed.text
+            for _ in range(1500):
+                if (await rig.tick(0.2)).measured.motor_rpm == 0:
+                    break
+            else:
+                raise AssertionError("the arm never came down")
+            took = float(rig.clock.monotonic() - clicked)
+    finally:
+        await rig.panel.close()
+    walk = ramp_duration(
+        NAMEPLATE,
+        MotorRpm(0),
+        config.motion,
+        motion_geometry(config.geometry, config.leg_tip_radius),
+    )
+    assert walk is not None
+    assert 106.0 < float(walk) < 108.0
+    assert float(walk) <= took < float(walk) + 1.0
 
 
 async def test_an_opening_shown_by_the_drive_s_word_latches_sto_open_and_no_reading_is_lost(

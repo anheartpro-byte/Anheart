@@ -215,6 +215,7 @@ from src.motor.sto import (
     StoSource,
     StoSourceKind,
     UnconfiguredStoSource,
+    sto_bridged,
 )
 from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
@@ -1426,7 +1427,7 @@ class LocalPanel:
         if isinstance(started, Err):
             if self._recorder is not None:
                 self._recorder.discard_preroll()
-            self._surface.note_refused(command, describe_start_refusal(started.error))
+            self._surface.note_refused(command, self._start_refused(started.error))
             return
         self._surface.note_taken(command)
         subject = LOCAL_SUBJECT if rider is None else rider.user_id
@@ -1551,7 +1552,7 @@ class LocalPanel:
         if isinstance(started, Err):
             if self._recorder is not None:
                 self._recorder.discard_preroll()
-            self._refuse_programme(command, describe_start_refusal(started.error))
+            self._refuse_programme(command, self._start_refused(started.error))
             return
         self._surface.note_taken(command)
         self._begin_record(
@@ -1704,6 +1705,11 @@ class LocalPanel:
         service = self._service
         refusal = None if service is None else service.refusal()
         return None if refusal is None else f"demarrage refuse : {refusal}"
+
+    def _start_refused(self, refusal: StartRefusal) -> str:
+        """:func:`describe_start_refusal` in this console's mode, which its STO source says."""
+        bridged = sto_bridged(self._sto.latest(self._clock.monotonic()))
+        return describe_start_refusal(refusal, bridged=bridged)
 
     def _refuse_programme(self, command: StartSession, detail: str) -> None:
         self._surface.note_refused(command, detail)
@@ -2533,24 +2539,35 @@ def open_journal(config: LocalConfig, clock: Clock) -> Journal:
 # =========================================================================
 
 
-def describe_start_refusal(refusal: StartRefusal) -> str:
+BENCH_UNATTESTED: Final[str] = "declaration de banc non attestee depuis le demarrage de la console"
+"""Why a start is refused under ``STO_SOURCE=bridged_declared`` while nobody has attested
+the bench statement this boot: ANH-92's wording names a wired emergency stop that a
+bridged bench does not have."""
+
+
+def describe_start_refusal(refusal: StartRefusal, *, bridged: bool = False) -> str:
     """One line for a refused start. Exhaustive over the runtime's closed union.
 
     A standing verdict is quoted without the sentence an unlatched one carries
     on the live screen (:data:`~src.training.safety.SELF_CLEARING`): that
     sentence is about a session that is running, and next to "start refused"
     it only blurs why.
+
+    ``bridged``: the console's STO source is the declared bridge, so a missing
+    attestation is the bench one (:data:`BENCH_UNATTESTED`).
     """
-    return f"demarrage refuse : {_start_refusal_reason(refusal)}"
+    return f"demarrage refuse : {_start_refusal_reason(refusal, bridged=bridged)}"
 
 
-def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one return per refusal
+def _start_refusal_reason(  # noqa: PLR0911  # one return per refusal
+    refusal: StartRefusal, *, bridged: bool
+) -> str:
     """Why the start was refused, without the words that say it was."""
     match refusal:
         case AlreadyStarted():
             return f"la machine est deja {refusal.state.value}"
         case NotAttested():
-            return "cablage de l'arret d'urgence non atteste"
+            return BENCH_UNATTESTED if bridged else "cablage de l'arret d'urgence non atteste"
         case SafetyStanding(verdict=verdict):
             said = verdict.detail.removesuffix(SELF_CLEARING)
             return f"verdict {verdict.rule} a acquitter ({said})"
