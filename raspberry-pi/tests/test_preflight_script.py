@@ -321,6 +321,40 @@ def test_a_simulated_chain_in_front_of_a_real_drive_fails_the_preflight(
     assert verdict.exit_code == 1
 
 
+@pytest.mark.parametrize("source", ["bridged_declared", "Bridged_DECLARED"])
+def test_a_declared_bridge_on_the_real_drive_is_an_explicit_warning(
+    tmp_path: Path, source: str
+) -> None:
+    """ANH-92 D8: the console starts (bench only), and the installer is told what it means."""
+    verdict = preflight(
+        tmp_path, code="000", body="", env_file=SERIAL_ENV + f"STO_SOURCE={source}\n"
+    )
+    assert len(verdict.sto()) == 1
+    line = verdict.sto()[0]
+    assert line.startswith("WARN")
+    for words in (
+        "STO_SOURCE=bridged_declared",
+        "the STO is BRIDGED",
+        "NO hardware emergency stop",
+        "bench sessions only, with nobody on board (capsule empty or ballasted)",
+        "the emergency stop is unplugging the mains",
+    ):
+        assert words in line
+    assert not any(line.startswith("FAIL") for line in verdict.drive)
+    assert verdict.exit_code == 0
+
+
+def test_a_declared_bridge_in_front_of_the_simulator_fails_the_preflight(tmp_path: Path) -> None:
+    """The console refuses it with MOTOR_BACKEND=sim: so does the preflight."""
+    verdict = preflight(
+        tmp_path, code="000", body="", env_file=ENV_FILE + "STO_SOURCE=bridged_declared\n"
+    )
+    assert len(verdict.sto()) == 1
+    assert verdict.sto()[0].startswith("FAIL")
+    assert "refused with MOTOR_BACKEND=sim" in verdict.sto()[0]
+    assert verdict.exit_code == 1
+
+
 @pytest.mark.parametrize(
     ("env_file", "source"),
     [

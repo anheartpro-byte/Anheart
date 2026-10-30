@@ -355,11 +355,16 @@ class AttestBody:
     machine and an operator who is only sure of one of them must not be able to
     tick "yes" once and pass both. Both must be ``True``; the route refuses
     otherwise, without recording anything.
+
+    Under ``STO_SOURCE=bridged_declared`` both are false by definition: only
+    ``bench_bridged_declared`` is accepted there (the bench statement), and it
+    is refused under every other source.
     """
 
     operator: str
     sto_jumper_removed: bool = False
     mushroom_wired_nc: bool = False
+    bench_bridged_declared: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1654,6 +1659,14 @@ class StatusRow:
     attested: bool
     attestation: AttestationRow | None
     attestation_statement: str
+    """The exact statement this console's mode attests (the bench one under a declared bridge)."""
+
+    attestation_fields: tuple[str, ...]
+    """The boolean fields ``/api/safety/attest`` requires, and accepts, in this mode."""
+
+    estop_released_label: str
+    """What the acknowledgement's ``estop_released`` confirms in this mode, in the page's words."""
+
     standing: SafetyRow | None
     """The verdict in force, WHOEVER latched it: the supervisor, or the runtime itself.
 

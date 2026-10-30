@@ -2736,6 +2736,7 @@ test("the STOP notice is in the stack every page shows, as an alarm, under that 
     "estop-banner",
     "service-banner",
     "drive-fault-banner",
+    "bridged-banner",
     "sto-banner",
     "medical-banner",
     "resume-banner",

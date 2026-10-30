@@ -722,8 +722,9 @@ def default_sto_source(backend: MotorBackend) -> StoSourceKind:
 
     With MOTOR_BACKEND=serial nothing attests the safety chain until a real
     source is wired, configured and ready, so arming and acknowledgement are
-    refused until then. There is no bench exemption: reading the chain is the
-    condition for arming and for acknowledging a verdict.
+    refused until then. No default is a bench exemption: only an explicit
+    ``STO_SOURCE=bridged_declared`` declares the chain bridged, and then only
+    a bench session, with nobody on board, arms.
     """
     match backend:
         case MotorBackend.SIM:
@@ -759,6 +760,10 @@ def _sto(
         StoSourceKind.SIM_OPEN,
     ):
         problems.append(ConfigProblem(KEY_STO_SOURCE, "sim_* interdit avec MOTOR_BACKEND=serial"))
+    if backend is MotorBackend.SIM and source is StoSourceKind.BRIDGED_DECLARED:
+        problems.append(
+            ConfigProblem(KEY_STO_SOURCE, "bridged_declared interdit avec MOTOR_BACKEND=sim")
+        )
     if problems or source is None:
         return Err(tuple(problems))
     return Ok((source, input_))

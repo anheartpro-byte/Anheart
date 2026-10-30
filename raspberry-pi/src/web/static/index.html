@@ -102,6 +102,17 @@
     <strong>VARIATEUR EN DEFAUT</strong>
     <span id="drive-fault-banner-detail">aucun demarrage n'est accepte tant que le variateur signale un defaut</span>
   </div>
+  <!--
+    STO_SOURCE=bridged_declared: a person declared the STO input bridged. No
+    hardware emergency stop exists; the emergency stop is unplugging the mains,
+    and the arm then coasts with no brake. Said on every page for as long as
+    the console's last word on its STO source says so: an answer that is
+    missing or late never takes it away, only an answer naming another source.
+    It replaces the "not ready" banner under that source.
+  -->
+  <div id="bridged-banner" class="banner hidden" role="alert" aria-live="assertive">
+    <strong>STO PONTE : aucun arret d'urgence materiel</strong>
+  </div>
   <div id="sto-banner" class="banner hidden" role="alert" aria-live="assertive">
     <strong>CHAINE STO NON PRETE</strong>
     <span id="sto-banner-detail">depart et acquittement refuses : lecture en attente</span>
@@ -225,7 +236,7 @@
       <div id="manual-idle">
         <label class="check">
           <input id="manual-bench" type="checkbox" />
-          BANC - personne a bord : NON (moteur decouple, ou bras couple avec la capsule VIDE)
+          BANC - personne a bord : NON (moteur decouple, ou bras couple avec la capsule VIDE ou LESTEE)
         </label>
         <label>Operateur
           <input id="manual-operator" type="text" autocomplete="off" placeholder="qui pilote" />
@@ -567,12 +578,15 @@
         <!--
           The acknowledgement: by name, never automatic, and the mushroom
           release remains a separate operator statement alongside the STO reading.
+          Its words are the console's mode's (/api/status estop_released_label):
+          with no mushroom wired (STO_SOURCE=bridged_declared) they say so. Not
+          offered before the console has said which words are true.
         -->
         <div class="ackrow">
           <input id="ack-operator" type="text" autocomplete="off" placeholder="votre nom" />
-          <label class="check">
+          <label id="ack-released-row" class="check hidden">
             <input id="ack-released" type="checkbox" />
-            le coup de poing a ete deverrouille (tire)
+            <span id="ack-released-label"></span>
           </label>
           <button id="ack" class="btn" type="button">Acquitter</button>
         </div>
@@ -603,17 +617,26 @@
         facts about the machine, and an operator who is sure of only one of them
         must not be able to pass both with a single click. The server refuses a
         half-attestation without recording anything.
+
+        Under STO_SOURCE=bridged_declared both are false: the bench declaration
+        alone is offered there, and the two boxes nowhere. Which confirmations
+        are true is the console's word (/api/status attestation_fields): none
+        is offered before it has said so.
       -->
       <div class="card" id="card-attest">
-        <h2>Cablage de l'arret d'urgence <span id="attest-state" class="pill pill-bad">non atteste</span></h2>
+        <h2><span id="attest-title">Cablage de l'arret d'urgence</span> <span id="attest-state" class="pill pill-bad">non atteste</span></h2>
         <p class="note" id="attest-statement">&mdash;</p>
-        <label class="check">
+        <label id="attest-jumper-row" class="check hidden">
           <input id="attest-jumper" type="checkbox" />
           Le pont STO a ete retire du variateur.
         </label>
-        <label class="check">
+        <label id="attest-mushroom-row" class="check hidden">
           <input id="attest-mushroom" type="checkbox" />
           Un arret d'urgence a accrochage est cable normalement ferme sur P24 &rarr; STO.
+        </label>
+        <label id="attest-bench-row" class="check hidden">
+          <input id="attest-bench" type="checkbox" />
+          J'atteste ce texte tel qu'il est ecrit ci-dessus.
         </label>
         <label>Votre nom
           <input id="attest-operator" type="text" autocomplete="off" placeholder="qui atteste" />
@@ -623,10 +646,14 @@
           Enregistree par demarrage, pas par installation : un Pi qui a redemarre
           est un Pi dont personne n'a garanti le cablage depuis.
         </p>
-        <p class="note"><strong>Important.</strong> Le logiciel lit le retour de la chaine STO
+        <p id="attest-important" class="note hidden"><strong>Important.</strong> Le logiciel lit le retour de la chaine STO
           configuree (simule en mode sim_*). Il ne peut pas verifier que le pont STO est retire
           ni que le champignon est cable normalement ferme sur P24 -&gt; STO.
           La lecture ne remplace pas ces deux confirmations humaines.</p>
+        <p id="attest-bench-important" class="note hidden"><strong>Important.</strong> Aucune lecture de la
+          chaine STO : elle est declaree pontee, et aucun arret d'urgence materiel n'existe. L'arret
+          d'urgence est la coupure de la prise secteur : le variateur s'eteint et le bras part en roue
+          libre, sans frein. Rester hors du rayon du bras jusqu'a l'arret complet de l'arbre, constate.</p>
       </div>
     </div>
 
@@ -669,7 +696,8 @@
   that asks "are you sure?" is not an emergency stop. It is also, and the page
   says so, a CONVENIENCE stop - it depends on this browser, a network, a web
   server and the session process, any one of which can be the thing that has
-  failed. The stop that does not depend on software is the wired mushroom.
+  failed. The stop that does not depend on software is the wired mushroom;
+  under STO_SOURCE=bridged_declared, where none is wired, the mains plug.
 -->
 <footer id="footer" class="footer">
   <span id="footer-medical" class="footer-medical">parametres medicaux -</span>

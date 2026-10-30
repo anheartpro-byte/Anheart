@@ -91,10 +91,12 @@ branches (liste `[tool.coverage.report] include` de `raspberry-pi/pyproject.toml
 sans accès au fil. `STO_SOURCE=none` donne `NOT_CONFIGURED`, `sim_ready` et
 `sim_open` lisent une chaîne simulée initialement fermée ou ouverte, et
 `drive_input` lit le retour du relais sur l'entrée `STO_DRIVE_INPUT=LI1..LI6`.
-Les quatre états sont `READY` (contact fermé, couple permis), `OPEN` (contact
-ouvert, couple coupé), `UNKNOWN` (jamais lu, lecture échouée ou trop ancienne)
-et `NOT_CONFIGURED` (aucune source configurée). Seul `READY` atteste la
-disponibilité de la chaîne ; aucun état ne prouve l'immobilité de l'arbre.
+Les états sont `READY` (contact fermé, couple permis), `OPEN` (contact
+ouvert, couple coupé), `UNKNOWN` (jamais lu, lecture échouée ou trop ancienne),
+`NOT_CONFIGURED` (aucune source configurée) et `BRIDGED` (chaîne déclarée
+pontée par une personne, `STO_SOURCE=bridged_declared`, voir plus bas : aucune
+lecture). Seul `READY` atteste la disponibilité de la chaîne ; aucun état ne
+prouve l'immobilité de l'arbre.
 
 **Le banc réel ne peut plus armer avant le câblage, et c'est voulu.** Avec
 `MOTOR_BACKEND=serial`, `STO_SOURCE` vaut `none` par défaut et les valeurs
@@ -107,7 +109,82 @@ la décision du responsable du projet du 22 octobre 2026 : aucune exemption banc
 parce que la lecture de la chaîne de sécurité est la condition de l'armement et
 de l'acquittement. Une exemption laisserait commander un variateur réel sans
 chaîne observée. Le banc redevient utilisable une fois la chaîne câblée, le pont
-retiré et `STO_SOURCE=drive_input` configuré avec son entrée.
+retiré et `STO_SOURCE=drive_input` configuré avec son entrée. Depuis le 29 octobre
+2026, une exception déclarée, jamais par défaut, permet des séances de banc sans
+personne à bord avec le pont en place : `STO_SOURCE=bridged_declared`, ci-dessous.
+
+#### Banc déclaré ponté : `bridged_declared` (ANH-92)
+
+Décision du responsable du projet du 29 octobre 2026 : les premières séances
+réelles se font capsule vide ou lestée, l'équipe à côté de la machine, sans arrêt
+d'urgence câblé sur l'entrée STO ; l'arrêt d'urgence est la coupure de la prise
+secteur. Cette valeur le déclare, honnêtement, et ne permet que cela.
+
+* **Configuration.** `STO_SOURCE=bridged_declared`, jamais par défaut (le défaut
+  reste `none` avec `serial` et `sim_ready` avec `sim`). Acceptée seulement avec
+  `MOTOR_BACKEND=serial` ; refusée au démarrage avec `sim`
+  (`bridged_declared interdit avec MOTOR_BACKEND=sim`), comme `sim_*` l'est avec
+  `serial`. `STO_DRIVE_INPUT` est refusée avec elle. Le contrôle d'installation
+  (`scripts/pi/preflight.sh`) l'avertit avec `serial` et échoue avec `sim`.
+* **Aucune lecture.** La source (`BridgedDeclaredStoSource`) rend toujours
+  `BRIDGED`, sans instant de lecture : aucune tâche de sondage, aucun registre
+  lu, le budget du lien est inchangé. `BRIDGED` n'est jamais `READY`.
+* **Banc seulement.** Seule une séance manuelle de banc arme. Tout programme,
+  toute séance manuelle avec personne à bord, et tout contrôle qui ne dit pas qui
+  est à bord, sont refusés. Quand les contrôles précédents passent, le refus porte
+  la raison nommée
+  `chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`
+  (code `sto_bridged_bench_only` sur la console) ; un contrôle antérieur peut
+  refuser d'abord avec son propre code (par exemple 403 quand la configuration
+  désactive les programmes ou la personne à bord, 412 `estop_unattested` sans
+  déclaration de banc, 409 `verdict_latched` sous un verdict verrouillé) : le
+  départ est refusé dans tous les cas. Ce refus vaut sur chaque chemin : la
+  surface, les portes du runtime et sa nouvelle vérification après la lecture du
+  variateur ; y compris avec des paramètres médicaux signés, `PROGRAMS_ENABLED`
+  et `OCCUPANCY_OCCUPIED_ENABLED`. Un lancement depuis le tableau de bord est
+  toujours un programme : il est refusé avant tout envoi à `training/start`, avec
+  sa propre raison, donnée avant les contrôles de départ de la console
+  (attestation, verdict verrouillé, demande en attente), qui ne la lèveraient pas :
+  `STO ponte : lancement depuis le site refuse, seances de banc a la console seulement`.
+  Les séances de banc se lancent à la console.
+* **Attestation de banc.** À chaque démarrage de la console, une personne nommée
+  atteste, à la place des deux cases d'ANH-92 qui seraient fausses ici :
+  `le STO est ponte, aucun arret d'urgence materiel ; l'arret d'urgence est la coupure de la prise secteur ; capsule vide ou lestee, aucune personne a bord ; personne dans le rayon du bras pendant la rotation`.
+  Le texte est enregistré et écrit mot pour mot dans le journal. La route
+  d'attestation refuse les deux cases d'ANH-92 sous cette valeur, et la
+  confirmation de banc sous toutes les autres ([console-locale.md, section 11](console-locale.md#11-page--securite-)).
+  Tant qu'elle n'est pas faite, un départ est refusé avec des mots qui ne parlent
+  d'aucun arrêt d'urgence câblé : 412 `estop_unattested`,
+  `nobody has attested the bench declaration this boot: …` ; dans les événements,
+  `demarrage refuse : declaration de banc non attestee depuis le demarrage de la console`.
+* **Règles.** Toutes restent actives : verdicts, FREEZE, RAMP_DOWN, E-STOP de
+  l'écran, chien de garde, `drive_precommanded`, `comms_lost` et `sto_open` déduit
+  du mot d'état (`SWITCH_ON_DISABLED` pendant que la console tient l'ordre de
+  marche). Une prise coupée puis rebranchée laisse, selon ce que la console a vu
+  pendant la coupure, `sto_open`, un défaut du variateur, ou `comms_lost` /
+  `go_silent`, qui ne s'acquitte pas
+  ([procédure de banc, étape 9](#procédure-de-banc-sous-bridged_declared)). Seule
+  `sto_unreadable` n'a pas d'objet : aucune lecture n'est attendue. L'acquittement se fait par
+  son nom, ses autres conditions inchangées ; la condition « lecture `READY`
+  postérieure » y est remplacée par « la valeur déclarée est toujours active ».
+  Après un verrou, un nouveau départ reste nécessaire. Le heartbeat et le contrat
+  avec le tableau de bord ne changent pas : l'état est dans l'instantané local
+  (`state` `bridged`, `source` `bridged_declared`).
+* **Réalité physique.** Couper la prise secteur coupe le variateur : le couple
+  disparaît d'un coup et le bras part en roue libre, sans frein. Le modèle du
+  variateur simulé donne **144,6 s** depuis 1380 tr/min moteur jusqu'à moins de
+  1 tr/min moteur, et encore 69 tr/min moteur une minute après la coupure
+  (`tests/test_bridged_coast.py`). Source : la constante `tau_coast` = 20 s de
+  `motor/simulated.py`, loi `exp(-t / 20 s)`, soit 20 × ln(1380) = 144,6 s ; c'est
+  une valeur de modèle provisoire : la roue libre réelle de la machine n'a jamais
+  été mesurée et peut être plus longue. Rester hors du rayon du bras jusqu'à
+  l'arrêt complet, arbre immobile constaté de visu : une consigne à zéro ou un
+  variateur éteint ne disent pas que le bras s'est arrêté.
+
+Tests : `tests/test_sto_bridged.py` (configuration, aucune lecture, refus sur
+chaque chemin, attestation, instantané, règles et acquittement),
+`tests/test_preflight_script.py`, `tests/test_bridged_coast.py`,
+`tests/web/panel_sto_bridged.test.mjs` (page).
 
 Prérequis matériels : retirer le pont STO et câbler la chaîne de sécurité
 indépendante du Pi ; câbler un contact de retour du relais de sécurité sur
@@ -507,6 +584,87 @@ validation matérielle ; consigner les mesures dans le tableau avant de conclure
 | Lectures et ttO, contrôle suspendu, SLF | à remplir | à remplir | non fait |
 | Fenêtre de lecture après le tic, aucune lecture pendant un STOP, champignon pendant un STOP | à remplir | à remplir | non fait |
 
+#### Procédure de banc sous `bridged_declared`
+
+Pour les séances de banc avec le pont STO en place. Aucune personne à bord, à
+aucun moment ; aucun arrêt d'urgence matériel : l'arrêt qui ne dépend pas du
+logiciel est la coupure de la prise secteur, dans les cas de l'étape 7. Aucun
+essai matériel de cette procédure n'est consigné ici.
+
+**Qui.** Un opérateur nommé à la console, qui atteste et pilote ; une seconde
+personne nommée à la prise secteur du variateur, la main dessus pendant toute
+rotation, qui ne quitte pas la prise des yeux ni la machine. Personne d'autre
+près de la machine.
+
+**Avant.**
+
+1. Capsule vide, ou lestée sans personne (lest arrimé), bras et capsule
+   vérifiés. Délimiter le rayon du bras ; personne dedans.
+2. `.env` : `MOTOR_BACKEND=serial` et `STO_SOURCE=bridged_declared`, sans
+   `STO_DRIVE_INPUT`. `sudo bash scripts/pi/preflight.sh` doit afficher
+   l'avertissement `STO_SOURCE=bridged_declared: the STO is BRIDGED, ...` et
+   aucun échec.
+3. Démarrer la console. Sur toutes les pages, le bandeau rouge
+   `STO PONTE : aucun arret d'urgence materiel` ; la carte « Chaine STO »
+   affiche `pontee (declaree)`.
+4. Page Securite : cocher la seule confirmation de banc, écrire son nom,
+   enregistrer. À refaire à chaque redémarrage de la console.
+5. Vérifier que la personne à la prise l'atteint sans entrer dans le rayon.
+
+**Pendant.**
+
+6. Démarrer une séance manuelle de banc à la console (case BANC), monter par
+   paliers. Un départ proposé par le tableau de bord est refusé : les séances de
+   banc se lancent à la console seulement. Personne n'entre dans le rayon du bras.
+7. Arrêt normal : STOP ou cible 0. En séance manuelle, STOP fait descendre la
+   consigne aux limites de mouvement de la séance, pas sur la rampe du
+   variateur : environ 107 s depuis 1380 tr/min moteur avec les limites livrées
+   (sur le variateur simulé, consigne à zéro en 106,8 s et arbre lu à 0 après
+   107,2 s :
+   `test_a_stop_at_nameplate_speed_walks_the_arm_down_for_about_107_s`,
+   `tests/test_sto_bridged.py` ; c'est la descente que compte aussi
+   [console-locale.md, section 11](console-locale.md#11-page--securite-), 108 s
+   depuis 1344 tr/min moteur avec la rampe de 4 s du variateur).
+   Une vitesse qui baisse lentement après STOP est donc la descente prévue, pas
+   une panne. STOP sert à une fin normale, pas à une urgence.
+   Arrêt d'urgence : tant que la console répond, c'est l'E-STOP de l'écran :
+   QUICK_STOP, consigne à zéro d'un coup, le variateur s'arrête sur sa rampe
+   réglée, en quelques secondes (rampe de 3 à 4 s,
+   [securite.md](securite.md)). La coupure de la prise secteur est l'arrêt qui
+   ne dépend pas du logiciel : la faire si la console ne répond pas, si
+   l'E-STOP n'est pas confirmé (bandeau `ARRET D'URGENCE NON CONFIRME`), si la
+   vitesse mesurée ne baisse pas, ou si le logiciel se comporte anormalement
+   (la vitesse monte ou ne suit pas la consigne). Elle laisse le bras en roue
+   libre, sans frein : environ 145 s depuis la vitesse maximale selon le modèle
+   simulé (la vraie durée n'est pas mesurée). Elle remplace toute descente en
+   cours, E-STOP compris : ne pas couper pendant une descente qui fonctionne.
+   Dans tous les cas, personne dans le rayon du bras jusqu'à l'arrêt complet,
+   arbre immobile constaté (étape 8).
+
+**Après.**
+
+8. Attendre l'arrêt complet, arbre immobile constaté de visu, avant d'entrer
+   dans le rayon ; ni la consigne à zéro ni l'écran éteint ne le prouvent.
+9. Prise rebranchée : lire le verdict en cours (page Securite). Selon ce que la
+   console a vu pendant la coupure, c'est l'un de ceux-ci, ou plusieurs à la
+   suite (voir aussi l'essai 2 de la [section 6.4](#64-vérification-au-banc-de-trois-défauts-réels-procédure-prête-non-réalisée)) :
+   * `sto_open` (variateur trouvé sans étage de sortie alors que la console
+     tenait l'ordre de marche) : acquitter par son nom, la cause écartée et
+     personne dans le rayon ;
+   * un défaut du variateur (`drive_fault`) : traiter le défaut (carte
+     Variateur), puis acquitter par son nom ;
+   * `comms_lost` / `go_silent` (le variateur ne répondait plus) : ce verdict
+     ne s'acquitte pas. Arbre immobile constaté, relancer la console
+     (`sudo systemctl restart anheart`), refaire la déclaration de banc (elle
+     ne vaut que pour un démarrage de la console), puis demander un nouveau
+     départ.
+
+   Dans tous les cas rien ne redémarre seul : un nouveau départ reste
+   nécessaire.
+10. Consigner date, opérateurs, version, vitesse maximale atteinte et, si la
+    prise a été coupée en rotation, le temps jusqu'à l'arrêt mesuré au
+    chronomètre : c'est la seule mesure de roue libre que ce banc peut donner.
+
 ### 2.3 Le BITalino et l'ECG
 
 | Module | Rôle | Garanties |
@@ -885,7 +1043,7 @@ Avant tout mouvement, l'opérateur déclare l'occupation, figée pour la séance
 
 | Occupation | Sens | Plafond (`LocalConfig.ceiling_for`) | Règles de FC |
 |---|---|---|---|
-| `bench` (banc) | personne à bord : moteur désaccouplé, ou bras accouplé capsule vide | `MOTOR_MAX_RPM` (300 par défaut, jamais plus de 1380) | désactivées (la FC n'est pas celle d'un passager) ; toutes les autres règles actives |
+| `bench` (banc) | personne à bord : moteur désaccouplé, ou bras accouplé capsule vide ou lestée, sans personne | `MOTOR_MAX_RPM` (300 par défaut, jamais plus de 1380) | désactivées (la FC n'est pas celle d'un passager) ; toutes les autres règles actives |
 | `occupied` (personne à bord) | un passager, choisi dans la liste du tableau de bord ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) | **refusé** tant que les paramètres médicaux ne sont pas signés ([12.6](#126-les-paramètres-médicaux-signés-anh-139)) ou que `OCCUPANCY_OCCUPIED_ENABLED=false` ; sinon le plus bas de `MOTOR_MAX_RPM` et du plafond avec personne à bord du fichier médical (`occupied_ceiling_g`, 1,2 g résultant dans le fichier livré, environ 990 tr/min moteur au rayon de référence de 1,5 m) | toutes actives ; une FC fraîche et fiable est exigée pour démarrer |
 
 Une séance de banc ne nomme aucun passager : un départ `bench` qui en nomme un
@@ -906,14 +1064,18 @@ Dans l'ordre, rien ne touche le variateur avant les six premières :
 1. Le runtime n'est ni arrêté (`shutdown`) ni silencieux.
 2. **Attestation E-STOP** faite depuis ce démarrage du processus (texte exact :
    « a latching mushroom emergency stop is wired normally-closed into P24 -> STO
-   and the STO jumper has been removed »), par un opérateur nommé.
+   and the STO jumper has been removed »), par un opérateur nommé. Sous
+   `STO_SOURCE=bridged_declared`, l'attestation de banc à sa place
+   ([2.2](#banc-déclaré-ponté--bridged_declared-anh-92)).
 3. Aucun verdict en vigueur (sinon il faut acquitter).
 4. Contrôle de pré-vol **STO pret** : seule une lecture `READY` permet
    l'armement. `OPEN`, `UNKNOWN` (échec, lecture ancienne ou jamais reçue) et
    `NOT_CONFIGURED` donnent le refus nommé `StoNotReady`, avec l'état et son
    détail. Une source absente signifie non configurée, jamais prête. Le tic
    et cette porte lisent uniquement la valeur en mémoire ; la tâche STO fait
-   les lectures Modbus. Ce seul contrôle est ajouté ici ; les autres contrôles
+   les lectures Modbus. Sous `STO_SOURCE=bridged_declared`, `BRIDGED` arme une
+   séance manuelle de banc seulement ; tout départ avec personne à bord est
+   refusé (`StoBridgedOnBoard`). Ce seul contrôle est ajouté ici ; les autres contrôles
    automatiques du pré-vol restent à ANH-142.
 5. Runtime au repos (`IDLE` ou `FINISHED`).
 6. Sur la console : au moins 500 Mo et 36 016 inodes libres sous le dossier
@@ -934,7 +1096,8 @@ Dans l'ordre, rien ne touche le variateur avant les six premières :
    HSP > 50,0 Hz. ttO et SLL ne sont **pas** relus (adresses Modbus non
    vérifiées) : chaque armement écrit un avertissement dans le journal demandant
    de les vérifier au clavier.
-9. Nouvelle vérification STO après ces lectures, puis mise sous tension de
+9. Nouvelle vérification STO après ces lectures (même règle, banc seulement sous
+   `bridged_declared`), puis mise sous tension de
    l'étage de sortie : LFRD = 0, puis `SHUTDOWN` →
    `SWITCH_ON` → `ENABLE_OPERATION`. Si le mot d'activation échoue sans réponse,
    la sortie est supposée active : verrou `enable_unconfirmed` (QUICK_STOP).
@@ -2953,7 +3116,7 @@ sort avec le code 2.
 | Clé | Défaut | Rôle | Contrainte |
 |---|---|---|---|
 | `MOTOR_BACKEND` | **aucun (obligatoire)** | `sim` (variateur simulé) ou `serial` (ATV320 réel) | autre valeur refusée |
-| `STO_SOURCE` | `sim_ready` si `sim`, `none` si `serial` (le banc réel ne peut donc pas armer avant le câblage, voir [2.2](#22-le-variateur-srcmotor)) | source du retour STO : `none`, `sim_ready`, `sim_open`, `drive_input` | `sim_*` refusé avec `serial` ; valeur inconnue refusée |
+| `STO_SOURCE` | `sim_ready` si `sim`, `none` si `serial` (le banc réel ne peut donc pas armer avant le câblage, voir [2.2](#22-le-variateur-srcmotor)) | source du retour STO : `none`, `sim_ready`, `sim_open`, `drive_input`, ou `bridged_declared` (pont STO déclaré, aucune lecture, séances manuelles de banc seulement, [2.2](#banc-déclaré-ponté--bridged_declared-anh-92)) | `sim_*` refusé avec `serial`, `bridged_declared` refusé avec `sim` ; valeur inconnue refusée |
 | `STO_DRIVE_INPUT` | aucun | entrée du retour du relais de sécurité, actif haut | `LI1` à `LI6`, obligatoire pour `drive_input`, refusée avec toute autre source |
 | `MOTOR_PORT` | `ftdi://schneider:rs485/1` | port du variateur : périphérique série (`/dev/ttyUSB0`, `COM3`, `/dev/cu.usbserial-…`) ou URL pyftdi | lu seulement si `serial` ; non vide |
 | `MOTOR_SLAVE_ID` | `248` | adresse Modbus (248 = adresse point à point Schneider, mesurée au banc) | 1..247 ou 248 ; 0 (diffusion) refusé |

@@ -207,6 +207,7 @@ from src.motor.atv320 import (
 from src.motor.drive import DriveBackend, LogicInput, RegisterMap
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.motor.sto import (
+    BridgedDeclaredStoSource,
     DriveInputStoSource,
     SimulatedStoChain,
     SimulatedStoSource,
@@ -214,6 +215,7 @@ from src.motor.sto import (
     StoSource,
     StoSourceKind,
     UnconfiguredStoSource,
+    sto_bridged,
 )
 from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
@@ -280,7 +282,12 @@ from src.training.plan import (
     ResolveError,
     UnknownProfile,
 )
-from src.training.preflight import StoNotReady, describe_sto_refusal
+from src.training.preflight import (
+    BRIDGED_BENCH_ONLY,
+    StoBridgedOnBoard,
+    StoNotReady,
+    describe_sto_refusal,
+)
 from src.training.runtime import (
     AlreadyStarted,
     DriveInFault,
@@ -315,6 +322,8 @@ from src.training.runtime import (
     WithdrawnTarget,
 )
 from src.training.safety import (
+    BENCH_BRIDGED_ATTESTATION,
+    ESTOP_ATTESTATION,
     SELF_CLEARING,
     AcknowledgeRefusal,
     SafetyAcknowledgement,
@@ -1418,7 +1427,7 @@ class LocalPanel:
         if isinstance(started, Err):
             if self._recorder is not None:
                 self._recorder.discard_preroll()
-            self._surface.note_refused(command, describe_start_refusal(started.error))
+            self._surface.note_refused(command, self._start_refused(started.error))
             return
         self._surface.note_taken(command)
         subject = LOCAL_SUBJECT if rider is None else rider.user_id
@@ -1543,7 +1552,7 @@ class LocalPanel:
         if isinstance(started, Err):
             if self._recorder is not None:
                 self._recorder.discard_preroll()
-            self._refuse_programme(command, describe_start_refusal(started.error))
+            self._refuse_programme(command, self._start_refused(started.error))
             return
         self._surface.note_taken(command)
         self._begin_record(
@@ -1696,6 +1705,11 @@ class LocalPanel:
         service = self._service
         refusal = None if service is None else service.refusal()
         return None if refusal is None else f"demarrage refuse : {refusal}"
+
+    def _start_refused(self, refusal: StartRefusal) -> str:
+        """:func:`describe_start_refusal` in this console's mode, which its STO source says."""
+        bridged = sto_bridged(self._sto.latest(self._clock.monotonic()))
+        return describe_start_refusal(refusal, bridged=bridged)
 
     def _refuse_programme(self, command: StartSession, detail: str) -> None:
         self._surface.note_refused(command, detail)
@@ -1981,6 +1995,8 @@ def build_sto(
     second master on the cable. The ATV320 driver's reads go through
     :class:`~src.motor.atv320.AuxiliaryRegisterReads`: same lock and link
     health, outside the exchange log that feeds the session record.
+    ``bridged_declared`` reads nothing, so no polling task is ever started
+    for it (:meth:`LocalPanel.run`).
     """
     match config.sto_source:
         case StoSourceKind.NONE:
@@ -2009,6 +2025,10 @@ def build_sto(
                 input_=config.sto_drive_input,
                 read_budget=budget,
             )
+        case StoSourceKind.BRIDGED_DECLARED:
+            if config.motor_backend is MotorBackend.SIM:
+                raise ValueError("bridged_declared is a declaration about a real drive")
+            return BridgedDeclaredStoSource()
     raise assert_never(config.sto_source)
 
 
@@ -2225,6 +2245,12 @@ def build_panel(
         motion=motion,
         limit_radius=config.leg_tip_radius,
         arming_gate=None if journal is None else storage_gate(journal, clock),
+        # Every other source attests the wired mushroom, ANH-92's statement.
+        attestation=(
+            BENCH_BRIDGED_ATTESTATION
+            if config.sto_source is StoSourceKind.BRIDGED_DECLARED
+            else ESTOP_ATTESTATION
+        ),
     )
     hub = TelemetryHub(clock=clock)
     ecg_side = build_ecg_client(config, clock)
@@ -2513,24 +2539,35 @@ def open_journal(config: LocalConfig, clock: Clock) -> Journal:
 # =========================================================================
 
 
-def describe_start_refusal(refusal: StartRefusal) -> str:
+BENCH_UNATTESTED: Final[str] = "declaration de banc non attestee depuis le demarrage de la console"
+"""Why a start is refused under ``STO_SOURCE=bridged_declared`` while nobody has attested
+the bench statement this boot: ANH-92's wording names a wired emergency stop that a
+bridged bench does not have."""
+
+
+def describe_start_refusal(refusal: StartRefusal, *, bridged: bool = False) -> str:
     """One line for a refused start. Exhaustive over the runtime's closed union.
 
     A standing verdict is quoted without the sentence an unlatched one carries
     on the live screen (:data:`~src.training.safety.SELF_CLEARING`): that
     sentence is about a session that is running, and next to "start refused"
     it only blurs why.
+
+    ``bridged``: the console's STO source is the declared bridge, so a missing
+    attestation is the bench one (:data:`BENCH_UNATTESTED`).
     """
-    return f"demarrage refuse : {_start_refusal_reason(refusal)}"
+    return f"demarrage refuse : {_start_refusal_reason(refusal, bridged=bridged)}"
 
 
-def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one return per refusal
+def _start_refusal_reason(  # noqa: PLR0911  # one return per refusal
+    refusal: StartRefusal, *, bridged: bool
+) -> str:
     """Why the start was refused, without the words that say it was."""
     match refusal:
         case AlreadyStarted():
             return f"la machine est deja {refusal.state.value}"
         case NotAttested():
-            return "cablage de l'arret d'urgence non atteste"
+            return BENCH_UNATTESTED if bridged else "cablage de l'arret d'urgence non atteste"
         case SafetyStanding(verdict=verdict):
             said = verdict.detail.removesuffix(SELF_CLEARING)
             return f"verdict {verdict.rule} a acquitter ({said})"
@@ -2549,6 +2586,8 @@ def _start_refusal_reason(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one
             return describe_record_storage(refusal)
         case StoNotReady():
             return describe_sto_refusal(refusal)
+        case StoBridgedOnBoard():
+            return BRIDGED_BENCH_ONLY
     raise assert_never(refusal)
 
 

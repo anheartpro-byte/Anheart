@@ -267,6 +267,17 @@ Stored verbatim in :class:`EstopAttestation` and in the log line, because an
 attestation whose wording nobody recorded is not evidence of anything.
 """
 
+BENCH_BRIDGED_ATTESTATION: Final[str] = (
+    "le STO est ponte, aucun arret d'urgence materiel ; l'arret d'urgence est la coupure "
+    "de la prise secteur ; capsule vide ou lestee, aucune personne a bord ; personne dans le "
+    "rayon du bras pendant la rotation"
+)
+"""The exact statement attested, per boot, under ``STO_SOURCE=bridged_declared``.
+
+In place of :data:`ESTOP_ATTESTATION`, which is false on a bridged STO, and
+stored and logged verbatim like it.
+"""
+
 
 # =========================================================================
 # Limits
@@ -1472,15 +1483,20 @@ class SafetySupervisor:
         "_limits",
         "_live",
         "_silenced",
+        "_statement",
         "_thread_trips",
         "_tick_gap",
         "_trackers",
         "_tracking_echo",
     )
 
-    def __init__(self, *, clock: Clock, limits: SafetyLimits) -> None:
+    def __init__(
+        self, *, clock: Clock, limits: SafetyLimits, attestation: str = ESTOP_ATTESTATION
+    ) -> None:
+        """``attestation``: :data:`BENCH_BRIDGED_ATTESTATION` under a declared bridge only."""
         self._clock: Clock = clock
         self._limits: SafetyLimits = limits
+        self._statement: str = attestation
         self._attestation: EstopAttestation | None = None
         self._estop: SafetyVerdict | None = None
         self._floor: SafetyVerdict | None = None
@@ -1515,6 +1531,11 @@ class SafetySupervisor:
         """
         return self._limits
 
+    @property
+    def attestation_statement(self) -> str:
+        """The exact statement this console's mode attests, fixed at construction."""
+        return self._statement
+
     # =====================================================================
     # The startup gate
     # =====================================================================
@@ -1529,6 +1550,8 @@ class SafetySupervisor:
 
         Logged with both clocks, because the whole point of the gate is to
         leave a name and a time against the claim that the jumper is gone.
+        The statement is this console's mode's, verbatim: under a declared
+        bridge, :data:`BENCH_BRIDGED_ATTESTATION`.
         """
         if not operator.strip():
             return Err(
@@ -1539,13 +1562,13 @@ class SafetySupervisor:
             )
         attestation = EstopAttestation(
             operator=operator,
-            statement=ESTOP_ATTESTATION,
+            statement=self._statement,
             at=self._clock.monotonic(),
             wall_clock=self._clock.unix_millis(),
         )
         self._attestation = attestation
         _logger.info(
-            "emergency-stop wiring attested by %r at unix_millis=%d (monotonic=%.3f): %s",
+            "safety attestation recorded by %r at unix_millis=%d (monotonic=%.3f): %s",
             operator,
             attestation.wall_clock,
             attestation.at,
@@ -1572,11 +1595,14 @@ class SafetySupervisor:
         safety-rated. :meth:`latch_estop` serves that button. This gate is
         about the one stop that does not depend on software at all.
 
+        Under ``STO_SOURCE=bridged_declared`` that stop does not exist: the
+        refusal names the bench statement instead, which says so.
+
         Pure and silent, so a UI may poll it.
         """
         attestation = self._attestation
         if attestation is None:
-            return Err(EstopUnattested(ESTOP_ATTESTATION))
+            return Err(EstopUnattested(self._statement))
         return Ok(attestation)
 
     # =====================================================================

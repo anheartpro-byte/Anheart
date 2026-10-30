@@ -42,22 +42,35 @@ observation cannot attest the relay's current state. Not a medical limit."""
 
 @unique
 class StoSourceKind(Enum):
-    """The configured observation source (STO_SOURCE)."""
+    """The configured observation source (STO_SOURCE).
+
+    ``BRIDGED_DECLARED`` reads nothing: a person declares the STO input
+    bridged (no hardware emergency stop), for a bench session with nobody on board.
+    Never a default (:func:`~src.local_config.default_sto_source`).
+    """
 
     NONE = "none"
     SIM_READY = "sim_ready"
     SIM_OPEN = "sim_open"
     DRIVE_INPUT = "drive_input"
+    BRIDGED_DECLARED = "bridged_declared"
 
 
 @unique
 class StoState(Enum):
-    """What is known about the safety chain, independently of shaft motion."""
+    """What is known about the safety chain, independently of shaft motion.
+
+    ``BRIDGED``: the chain is bridged, as a person declared; no reading, no
+    hardware emergency stop. Not ``READY``: every path that does not admit it
+    explicitly refuses it, and only the bench rule of
+    :func:`~src.training.preflight.check_sto_for_start` admits it.
+    """
 
     READY = "ready"
     OPEN = "open"
     UNKNOWN = "unknown"
     NOT_CONFIGURED = "not_configured"
+    BRIDGED = "bridged"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -78,6 +91,11 @@ class StoReading:
 def sto_ready(reading: StoReading) -> bool:
     """Only a positive ready observation attests readiness."""
     return reading.state is StoState.READY
+
+
+def sto_bridged(reading: StoReading) -> bool:
+    """Whether ``reading`` is the declared bridge, from the source that declares it."""
+    return reading.state is StoState.BRIDGED and reading.source is StoSourceKind.BRIDGED_DECLARED
 
 
 def rest_of_poll_period(began: Monotonic, now: Monotonic) -> Seconds:
@@ -110,6 +128,24 @@ class UnconfiguredStoSource:
             source=StoSourceKind.NONE,
             last_success_at=None,
             detail="not configured",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BridgedDeclaredStoSource:
+    """``STO_SOURCE=bridged_declared``: the declaration, never a reading.
+
+    No register, no polling task, no link time: nothing is read, so no
+    instant of a last success is invented either.
+    """
+
+    def latest(self, now: Monotonic) -> StoReading:
+        del now
+        return StoReading(
+            state=StoState.BRIDGED,
+            source=StoSourceKind.BRIDGED_DECLARED,
+            last_success_at=None,
+            detail="bridged, declared by a person",
         )
 
 

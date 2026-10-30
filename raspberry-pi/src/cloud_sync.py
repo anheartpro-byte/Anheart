@@ -147,8 +147,8 @@ from src.contract import (
 from src.control_surface import (
     LOCAL_SUBJECT,
     ControlSurface,
+    LaunchRefusal,
     SafetyHolding,
-    StartRefusal,
     SurfaceBusy,
 )
 from src.health import HealthContext, HealthWatch
@@ -191,7 +191,14 @@ from src.roster import (
     describe_passenger_refusal,
 )
 from src.training.plan import JsonValue, ProfileStore, TrainingProfile
-from src.training.preflight import StoNotReady, describe_sto_refusal
+from src.training.preflight import (
+    BRIDGED_BENCH_ONLY,
+    BRIDGED_REMOTE_LAUNCH,
+    StoBridgedOnBoard,
+    StoBridgedRemoteLaunch,
+    StoNotReady,
+    describe_sto_refusal,
+)
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import EstopUnattested
 from src.training.types import Occupancy, TelemetrySnapshot
@@ -753,7 +760,7 @@ def live_row(snapshot: TelemetrySnapshot, session_id: str | None) -> Mapping[str
     return row
 
 
-def describe_surface_refusal(refusal: StartRefusal) -> str:
+def describe_surface_refusal(refusal: LaunchRefusal) -> str:
     """One line for a launch the console's surface refused. Exhaustive."""
     match refusal:
         case EstopUnattested():
@@ -764,6 +771,10 @@ def describe_surface_refusal(refusal: StartRefusal) -> str:
             return f"console occupee ({state.value})"
         case StoNotReady():
             return describe_sto_refusal(refusal)
+        case StoBridgedOnBoard():
+            return BRIDGED_BENCH_ONLY
+        case StoBridgedRemoteLaunch():
+            return BRIDGED_REMOTE_LAUNCH
     raise assert_never(refusal)
 
 
@@ -1455,7 +1466,7 @@ class CloudSync:
         await self._confirm_remote_start(launch, state.operator, now, state.generation)
 
     def _preflight_remote_start(self, launch: Launch) -> Result[None, str]:
-        surface_check = self._surface.check_start()
+        surface_check = self._surface.check_remote_launch()
         if isinstance(surface_check, Err):
             return Err(describe_surface_refusal(surface_check.error))
         preflight = self._preflight_start

@@ -99,9 +99,14 @@ from enum import Enum, unique
 from typing import Final, Protocol, assert_never, final, runtime_checkable
 
 from src.clock import Clock
-from src.motor.sto import StoSource
+from src.motor.sto import StoSource, sto_bridged
 from src.result import Err, Ok, Result
-from src.training.preflight import StoNotReady, check_sto_ready
+from src.training.preflight import (
+    StoBridgedOnBoard,
+    StoBridgedRemoteLaunch,
+    StoNotReady,
+    check_sto_for_start,
+)
 from src.training.safety import (
     AcknowledgeRefusal,
     AttestationRefusal,
@@ -492,7 +497,7 @@ class NothingRunning:
     state: RunState
 
 
-type StartRefusal = SurfaceBusy | SafetyHolding | EstopUnattested | StoNotReady
+type StartRefusal = SurfaceBusy | SafetyHolding | EstopUnattested | StoNotReady | StoBridgedOnBoard
 """Every way a start can be refused. Closed.
 
 :class:`~src.training.safety.EstopUnattested` is reused from the safety module
@@ -500,6 +505,9 @@ rather than restated, because it is the same refusal: nobody has confirmed,
 this boot, that a real emergency stop is wired in. A second type meaning the
 same thing is a second place for the wording to drift.
 """
+
+type LaunchRefusal = StartRefusal | StoBridgedRemoteLaunch
+"""Every way a launch from the dashboard can be refused before it is confirmed. Closed."""
 
 type EndRefusal = NothingRunning | SurfaceBusy
 """Every way an end can be refused. Closed."""
@@ -824,8 +832,10 @@ class ControlSurface:
         1. the emergency-stop wiring must be attested this boot
            (:meth:`~src.training.safety.SafetySupervisor.require_estop_confirmed`);
         2. no latched safety verdict may stand;
-        3. the configured STO source must report READY, when wired here; the
-           runtime independently requires its source at the actual arming;
+        3. the configured STO source must report READY, when wired here, or
+           be a declared bridge, which no programme passes
+           (:func:`~src.training.preflight.check_sto_for_start`); the runtime
+           independently requires its source at the actual arming;
         4. the surface must be IDLE **and its mailbox empty**. A start never
            takes the place of a request that waits: while another start waits
            or is being armed this one is refused at once, and so is one that
@@ -837,7 +847,7 @@ class ControlSurface:
         re-resolves it; a start for an unknown profile ends the session
         immediately with a refusal in the log rather than commanding motion.
         """
-        checked = self.check_start()
+        checked = self.check_start(Occupancy.OCCUPIED)
         if isinstance(checked, Err):
             return self._refuse_start(checked.error)
 
@@ -856,8 +866,12 @@ class ControlSurface:
         self._accept_start(command)
         return Ok(command)
 
-    def check_start(self) -> Result[None, StartRefusal]:
-        """Check the start gates without recording or submitting a request."""
+    def check_start(self, occupancy: Occupancy | None = None) -> Result[None, StartRefusal]:
+        """Check the start gates without recording or submitting a request.
+
+        ``occupancy`` is who the start puts on board, ``OCCUPIED`` for a
+        programme; ``None`` (not said) is refused under a declared STO bridge.
+        """
         attested = self._supervisor.require_estop_confirmed()
         if isinstance(attested, Err):
             return Err(attested.error)
@@ -865,13 +879,28 @@ class ControlSurface:
         if standing is not None and standing.latched:
             return Err(SafetyHolding(standing))
         if self._sto is not None:
-            sto = check_sto_ready(self._sto.latest(self._clock.monotonic()))
+            sto = check_sto_for_start(self._sto.latest(self._clock.monotonic()), occupancy)
             if sto is not None:
                 return Err(sto)
         busy = self._in_the_way_of_a_start()
         if busy is not None:
             return Err(busy)
         return Ok(None)
+
+    def check_remote_launch(self) -> Result[None, LaunchRefusal]:
+        """The start gates of a launch from the dashboard, a programme, without submitting it.
+
+        Those of :meth:`check_start` for a person on board. Under a declared
+        STO bridge the launch is refused first, in its own words
+        (:class:`~src.training.preflight.StoBridgedRemoteLaunch`), before the
+        attestation, a verdict or a busy console are looked at: no
+        attestation, acknowledgement or rest lifts it under that mode, and
+        bench sessions start at the console only.
+        """
+        sto = self._sto
+        if sto is not None and sto_bridged(sto.latest(self._clock.monotonic())):
+            return Err(StoBridgedRemoteLaunch())
+        return self.check_start(Occupancy.OCCUPIED)
 
     def submit_start_manual(
         self, *, occupancy: Occupancy, operator: str, subject_id: str = ""
@@ -881,7 +910,7 @@ class ControlSurface:
         ``subject_id`` names the rider with a person on board; the loop checks
         it against the riders' list when it arms, as it checks the occupancy.
         """
-        checked = self.check_start()
+        checked = self.check_start(occupancy)
         if isinstance(checked, Err):
             return self._refuse_start(checked.error)
         command = StartManual(

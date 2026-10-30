@@ -105,6 +105,12 @@ case "$sto" in
         else
             ok "STO_SOURCE=$sto"
         fi ;;
+    bridged_declared)
+        if [ "$backend" = "serial" ]; then
+            warn "STO_SOURCE=bridged_declared: the STO is BRIDGED, there is NO hardware emergency stop; bench sessions only, with nobody on board (capsule empty or ballasted), the emergency stop is unplugging the mains, and the arm then coasts with no brake"
+        else
+            fail "STO_SOURCE=bridged_declared declares a real drive's bridged STO, refused with MOTOR_BACKEND=sim: the console will not start"
+        fi ;;
     *) ok "STO_SOURCE=$sto" ;;
 esac
 

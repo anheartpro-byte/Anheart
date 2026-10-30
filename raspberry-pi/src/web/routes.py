@@ -68,7 +68,7 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveState, FaultReport
-from src.motor.sto import StoState, UnconfiguredStoSource
+from src.motor.sto import StoState, UnconfiguredStoSource, sto_bridged
 from src.passenger_feedback import FeedbackView, PassengerFeedback, parse_feedback
 from src.record.export import BUSY, TIMEOUT, UNKNOWN_RECORD, discard
 from src.record.schema import RecordError
@@ -103,9 +103,14 @@ from src.training.plan import (
     is_profile_id,
     parse_profile,
 )
-from src.training.preflight import StoNotReady, describe_sto_refusal
+from src.training.preflight import (
+    BRIDGED_BENCH_ONLY,
+    StoBridgedOnBoard,
+    StoNotReady,
+    describe_sto_refusal,
+)
 from src.training.safety import (
-    ESTOP_ATTESTATION,
+    BENCH_BRIDGED_ATTESTATION,
     AcknowledgeRefusal,
     AttestationRefusal,
     EmergencyStopStillLatched,
@@ -241,6 +246,22 @@ NO_MANUAL_SESSION: Final[str] = "no_manual_session"
 VERDICT_LATCHED: Final[str] = "verdict_latched"
 ESTOP_UNATTESTED: Final[str] = "estop_unattested"
 STO_NOT_READY: Final[str] = "sto_not_ready"
+STO_BRIDGED_BENCH_ONLY: Final[str] = "sto_bridged_bench_only"
+
+ESTOP_WIRING_FIELDS: Final[tuple[str, ...]] = ("sto_jumper_removed", "mushroom_wired_nc")
+"""The confirmations ``/api/safety/attest`` requires under every source but a declared bridge."""
+
+BENCH_ATTESTATION_FIELDS: Final[tuple[str, ...]] = ("bench_bridged_declared",)
+"""The one confirmation it requires under ``STO_SOURCE=bridged_declared``, and accepts alone."""
+
+ESTOP_RELEASED_LABEL: Final[str] = "le coup de poing a ete deverrouille (tire)"
+"""What ``estop_released`` confirms when a mushroom is wired."""
+
+BENCH_ESTOP_RELEASED_LABEL: Final[str] = (
+    "aucun coup de poing n'est cable : la cause de l'arret d'urgence de l'ecran est ecartee "
+    "et personne n'est dans le rayon du bras"
+)
+"""What ``estop_released`` confirms under a declared bridge, where no mushroom exists."""
 
 START_PENDING_DETAIL: Final[str] = (
     "demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas "
@@ -519,13 +540,15 @@ def _register_reads(
         pending = surface.pending
         drive_state, drive_fault = _drive_seen(surface.latest, now)
         latest = surface.latest
+        bench = _bench_declared(services)
         if latest is not None:
             sto = latest.sto
         elif services.sto is None:
             sto = UnconfiguredStoSource().latest(now)
         else:
             sto = services.sto.latest(now)
-            if sto.state is not StoState.NOT_CONFIGURED:
+            # A declaration, like no source at all, is no reading a tick could refresh.
+            if sto.state not in (StoState.NOT_CONFIGURED, StoState.BRIDGED):
                 sto = replace(
                     sto, state=StoState.UNKNOWN, last_success_at=None, detail="control tick pending"
                 )
@@ -538,7 +561,9 @@ def _register_reads(
             supervisor_estop=SafetyRow.of(supervisor.estop, now),
             attested=isinstance(attested, Ok),
             attestation=AttestationRow.of(attested.value) if isinstance(attested, Ok) else None,
-            attestation_statement=ESTOP_ATTESTATION,
+            attestation_statement=supervisor.attestation_statement,
+            attestation_fields=BENCH_ATTESTATION_FIELDS if bench else ESTOP_WIRING_FIELDS,
+            estop_released_label=BENCH_ESTOP_RELEASED_LABEL if bench else ESTOP_RELEASED_LABEL,
             standing=SafetyRow.of(verdicts.standing, now),
             floor=SafetyRow.of(verdicts.floor, now),
             silenced=SafetyRow.of(verdicts.silenced, now),
@@ -875,7 +900,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
             services, body.profile_id, body.total_duration_s, hr_max=passenger.hr_max
         )
         _require_drive_not_faulted(services)
-        _require_nothing_latched(services)
+        _require_nothing_latched(services, Occupancy.OCCUPIED)
         submitted = surface.submit_start(
             profile_id=body.profile_id,
             operator=operator,
@@ -884,7 +909,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         )
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
-        raise _start_failure(submitted.error)
+        raise _start_failure(submitted.error, services)
 
     @app.post(
         "/api/session/stop",
@@ -961,13 +986,13 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         _require_occupancy_allowed(services, occupancy)
         subject = _require_rider_for(services, occupancy, body.subject_id)
         _require_drive_not_faulted(services)
-        _require_nothing_latched(services)
+        _require_nothing_latched(services, occupancy)
         submitted = surface.submit_start_manual(
             occupancy=occupancy, operator=operator, subject_id=subject
         )
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
-        raise _start_failure(submitted.error)
+        raise _start_failure(submitted.error, services)
 
     @app.post(
         "/api/manual/target",
@@ -1033,8 +1058,28 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
         Per boot, not per install: the record lives in this process and dies
         with it, so a Pi that has rebooted is a Pi whose wiring nobody has
         vouched for since.
+
+        Under ``STO_SOURCE=bridged_declared`` both boxes are false: only the
+        bench confirmation is accepted there, and nowhere else, so that no
+        false attestation can be recorded (``attestation_fields`` in
+        ``/api/status`` names the confirmations of the console's mode).
         """
-        if not (body.sto_jumper_removed and body.mushroom_wired_nc):
+        if _bench_declared(services):
+            if body.sto_jumper_removed or body.mushroom_wired_nc or not body.bench_bridged_declared:
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail=(
+                        "STO_SOURCE=bridged_declared: only the bench confirmation is accepted "
+                        "(bench_bridged_declared), never the STO-jumper-removed or the "
+                        "emergency-stop-wired boxes, which are false on a bridged STO"
+                    ),
+                )
+        elif body.bench_bridged_declared:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="the bench confirmation is accepted only under STO_SOURCE=bridged_declared",
+            )
+        elif not (body.sto_jumper_removed and body.mushroom_wired_nc):
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
                 detail=(
@@ -1086,8 +1131,12 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
 # status code yet - which is the whole reason they are closed unions.
 
 
-def _start_failure(refusal: StartRefusal) -> Refusal:
-    """Map a start refusal. See :data:`~src.control_surface.StartRefusal`."""
+def _start_failure(refusal: StartRefusal, services: Services) -> Refusal:
+    """Map a start refusal. See :data:`~src.control_surface.StartRefusal`.
+
+    ``services`` says the console's mode: under a declared STO bridge a missing
+    attestation is the bench one, and its detail names no emergency stop.
+    """
     match refusal:
         case SurfaceBusy():
             return _busy_start(refusal)
@@ -1101,16 +1150,27 @@ def _start_failure(refusal: StartRefusal) -> Refusal:
                 ),
             )
         case EstopUnattested():
+            unattested = (
+                "nobody has attested the bench declaration this boot"
+                if _sto_bridged(services)
+                else "nobody has attested the emergency stop this boot"
+            )
             return Refusal(
                 HTTPStatus.PRECONDITION_FAILED,
                 code=ESTOP_UNATTESTED,
-                detail=f"nobody has attested the emergency stop this boot: {refusal.statement}",
+                detail=f"{unattested}: {refusal.statement}",
             )
         case StoNotReady():
             return Refusal(
                 HTTPStatus.PRECONDITION_FAILED,
                 code=STO_NOT_READY,
                 detail=describe_sto_refusal(refusal),
+            )
+        case StoBridgedOnBoard():
+            return Refusal(
+                HTTPStatus.PRECONDITION_FAILED,
+                code=STO_BRIDGED_BENCH_ONLY,
+                detail=BRIDGED_BENCH_ONLY,
             )
     raise assert_never(refusal)
 
@@ -1395,7 +1455,7 @@ def _verdicts(services: Services) -> VerdictSource:
     return services.supervisor if services.verdicts is None else services.verdicts
 
 
-def _require_nothing_latched(services: Services) -> None:
+def _require_nothing_latched(services: Services, occupancy: Occupancy) -> None:
     """Refuse a start with a 409 while a latched verdict stands, whoever latched it.
 
     The surface's gate reads the supervisor's verdicts alone. The runtime
@@ -1411,11 +1471,22 @@ def _require_nothing_latched(services: Services) -> None:
     is given as before, in its words and counted by it: only a start it would
     have accepted is refused here. The loop keeps its own refusal.
     """
-    if isinstance(services.surface.check_start(), Err):
+    if isinstance(services.surface.check_start(occupancy), Err):
         return
     floor = _verdicts(services).floor
     if floor is not None:
-        raise _start_failure(SafetyHolding(floor))
+        raise _start_failure(SafetyHolding(floor), services)
+
+
+def _sto_bridged(services: Services) -> bool:
+    """Whether this console's STO source is the declared bridge, by the arming rule's own test."""
+    sto = services.sto
+    return sto is not None and sto_bridged(sto.latest(services.clock.monotonic()))
+
+
+def _bench_declared(services: Services) -> bool:
+    """Whether this console attests the declared bench bridge: its supervisor's mode decides."""
+    return services.supervisor.attestation_statement == BENCH_BRIDGED_ATTESTATION
 
 
 def _require_occupancy(value: str) -> Occupancy:

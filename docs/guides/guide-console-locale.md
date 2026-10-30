@@ -116,7 +116,9 @@ Cette personne :
 
 * démarre et arrête la machine ;
 * surveille la vitesse, la fréquence cardiaque et les alertes ;
-* a le coup de poing d'arrêt d'urgence câblé à portée de main.
+* a le coup de poing d'arrêt d'urgence câblé à portée de main (sous
+  `STO_SOURCE=bridged_declared`, il n'y en a pas : l'arrêt qui ne dépend pas du logiciel
+  est la coupure de la prise secteur, tenue par une seconde personne, dans les cas du §11).
 
 Il n'est pas nécessaire de savoir programmer. Il faut savoir ouvrir un terminal et
 copier une commande.
@@ -151,12 +153,17 @@ dans un navigateur. Elle fonctionne sans internet.
 
 * **ce n'est pas un arrêt de sécurité certifié.** Le bouton E-STOP de la page dépend
   du navigateur, du réseau, du serveur web et du programme. Le seul vrai arrêt de
-  sécurité est le **coup de poing câblé**. Sur cette machine, l'entrée STO du variateur
+  sécurité est le **coup de poing câblé** (aucun sous `bridged_declared` : voir plus
+  bas). Sur cette machine, l'entrée STO du variateur
   est pontée (voir [securite.md](../securite.md)) : même l'arrêt d'urgence le plus
   rapide est une rampe, pas une coupure.
 * elle lit le retour de la chaîne STO configurée, mais ne vérifie ni le retrait du
   pont ni le câblage NF du champignon sur P24 -> STO : l'attestation reste une
-  **déclaration humaine**, obligatoire avec ses deux cases ;
+  **déclaration humaine**, obligatoire avec ses deux cases. Sous
+  `STO_SOURCE=bridged_declared` (pont STO déclaré, §11), il n'y a ni lecture ni
+  coup de poing : l'attestation est la déclaration de banc, l'arrêt qui ne dépend pas du
+  logiciel est la coupure de la prise secteur, et seule une séance de banc sans personne
+  à bord démarre ;
 * elle ne voit pas réellement la capsule : **il n'existe aujourd'hui qu'une caméra
   simulée**, qui ne regarde jamais la vraie machine ;
 * elle ne permet pas, depuis la page, de déclarer une personne à bord en séance
@@ -259,7 +266,7 @@ l'emporte sur `.env`.**
 | `UI_TLS_CERT`, `UI_TLS_KEY` | obligatoires si `UI_HOST` n'est pas `127.0.0.1` | deux chemins : le certificat de la console et sa clé privée | hors boucle locale, la page n'est servie qu'en TLS (`https://`) |
 | `UI_TLS_NAMES` | non | adresses et noms séparés par des virgules | les adresses auxquelles une tablette ouvre la console, celles du certificat |
 | `SENSORS` | non (défaut `ECG`) | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` | capteurs affichés ; `ECG` toujours présent |
-| `STO_SOURCE` | non (défaut `sim_ready` avec `sim`, `none` avec `serial`) | `none`, `sim_ready`, `sim_open`, `drive_input` | lecture de la chaîne STO. `sim_*` est refusé avec `serial`. Avec `none`, tout départ et tout acquittement sont refusés |
+| `STO_SOURCE` | non (défaut `sim_ready` avec `sim`, `none` avec `serial`) | `none`, `sim_ready`, `sim_open`, `drive_input`, `bridged_declared` | lecture de la chaîne STO. `sim_*` est refusé avec `serial`, `bridged_declared` avec `sim`. Avec `none`, tout départ et tout acquittement sont refusés. `bridged_declared` déclare le pont STO en place : rien n'est lu, seules les séances manuelles de banc sans personne à bord démarrent (§11) |
 | `STO_DRIVE_INPUT` | avec `drive_input` seulement, sans défaut | `LI1` à `LI6` | entrée du variateur qui reçoit le retour du relais de sécurité |
 | `PRESENCE_SOURCE` | non (défaut `none`) | `none`, `sim_empty`, `sim_occupied` | caméra : aucune, ou **simulée** (capsule vide / passager attaché) |
 | `PROGRAMS_ENABLED` | non (défaut `false`) | `true` / `false` | autorise les séances programmées (jalon M5) |
@@ -314,9 +321,12 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
 
    Sans `STO_SOURCE`, la console d'un variateur réel démarre avec la chaîne STO
    `non configuree (none)` et refuse tout départ et tout acquittement : c'est voulu,
-   aucune exemption banc n'existe. Il faut d'abord câbler la chaîne de sécurité,
+   aucune exemption banc n'existe par défaut. Il faut d'abord câbler la chaîne de sécurité,
    retirer le pont STO, puis régler `STO_SOURCE=drive_input` et `STO_DRIVE_INPUT`
    avec l'entrée câblée ([console-locale.md, carte « Chaine STO »](../console-locale.md#carte--chaine-sto-)).
+   Pour des séances de banc sans personne à bord avec le pont en place, et seulement
+   pour elles : `STO_SOURCE=bridged_declared`, avec sa procédure
+   ([raspberry-pi.md, 2.2](../raspberry-pi.md#banc-déclaré-ponté--bridged_declared-anh-92)).
 
 3. Redémarrer la console, **au repos** : `sudo systemctl restart anheart`.
 4. Lire la ligne de résumé, `journalctl -u anheart -n 20` : elle doit dire
@@ -488,7 +498,10 @@ console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
 * **STOP agit aussi pendant un gel.** Quand la pastille **Securite** dit `freeze`,
   STOP est enregistré (le mode passe à `ARRET`) et la vitesse commandée commence à
   baisser tout de suite, sur la même rampe douce que sans gel. Pour un arrêt
-  immédiat : le coup de poing câblé, et **E-STOP** (§13.5).
+  immédiat : le coup de poing câblé, et **E-STOP** (§13.5). Sous `bridged_declared`,
+  c'est **E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les
+  seuls cas du §11, laisse le bras en roue libre sans frein et remplace toute descente
+  en cours.
 * S'il n'y a rien à arrêter, ou si un arrêt est déjà en cours, une fenêtre d'alerte
   s'ouvre : `STOP refuse : ...` (voir §14).
 * Si la console ne répond pas (console bloquée, réseau muet), la demande reste en
@@ -505,6 +518,9 @@ console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
   n'est pas renvoyée par la page : recliquer **STOP** en envoie une nouvelle.
 * **Tant que ce bandeau est affiché, rien ne dit que la séance s'arrête.** Regardez
   **Mode**, **Vitesse mesuree** et le bras ; pour arrêter sans attendre, voir §13.5.
+* Sous `STO_SOURCE=bridged_declared` (dernière source nommée par la console), le bandeau
+  et l'alerte finissent par `E-STOP, ou la coupure de la prise secteur` au lieu de
+  `E-STOP, ou l'arret cable` (§11).
 
 ### E-STOP : l'arrêt d'urgence logiciel
 
@@ -529,9 +545,16 @@ console elle-même qui ne répond plus à la page : ne la croyez plus (§13.10).
   rechargement de la page. Si vous recliquez **E-STOP** et que la console ne répond
   toujours pas, il dit
   `nouvelle demande sans reponse depuis N s, la precedente a echoue : ... - UTILISEZ L'ARRET CABLE`.
+* Sous `STO_SOURCE=bridged_declared` (dernière source nommée par la console), aucun coup
+  de poing n'est câblé : chacun de ces textes finit par `COUPEZ LA PRISE SECTEUR` au lieu
+  de `UTILISEZ L'ARRET CABLE`, et c'est ce qu'il faut faire à la place de frapper le coup
+  de poing (§11).
 
 > Rappel : le vrai arrêt de sécurité est le coup de poing câblé. Utilisez-le dès que la
-> situation l'exige ; l'E-STOP de la page est une commodité.
+> situation l'exige ; l'E-STOP de la page est une commodité. Sous `bridged_declared`, il
+> n'y en a pas : tant que la console répond, l'arrêt d'urgence est **E-STOP** ; la
+> coupure de la prise secteur, dans les seuls cas du §11, laisse le bras en roue libre
+> sans frein et remplace toute descente en cours.
 
 ## 6. Visite guidée : page Tableau de bord
 
@@ -543,7 +566,7 @@ Repères de la capture au repos (zone centrale) :
 
 1. Carte **Mode MANUEL**, pastille `inactif`.
 2. Case **BANC - personne a bord : NON (moteur decouple, ou bras couple avec la
-   capsule VIDE)**.
+   capsule VIDE ou LESTEE)**.
 3. Champ **Operateur** (« qui pilote »).
 4. Bouton vert **Demarrer MANUEL**.
 5. Carte **Frequence cardiaque (regulation)**, pastille de qualité `good`, grand
@@ -866,6 +889,16 @@ recherché par l'identifiant du passager; le libellé reçu avec le lancement n'
 affiché. Si ce passager ne figure pas dans la liste tenue, la carte donne la raison et
 désactive le bouton.
 
+Sous `STO_SOURCE=bridged_declared`, la carte de l'offre s'affiche, mais au clic sur
+**Cette personne est a bord et prete** la console refuse le départ, avant tout envoi de
+`training/start`, avec la raison
+`STO ponte : lancement depuis le site refuse, seances de banc a la console seulement` :
+la carte passe à `refuse` avec cette phrase, et le tableau de bord reçoit l'échec avec la
+même raison, même si l'attestation n'est pas faite ou si un verdict attend : sous cette
+valeur, ce refus passe avant les contrôles de départ de la console. Un tel départ est
+toujours un programme, avec une personne à bord. Les séances de banc se lancent à la
+console (§13.2).
+
 Saisissez votre nom dans le champ **Operateur** habituel puis cliquez une fois sur
 **Cette personne est a bord et prete**. Le bouton local **Demarrer la seance** est
 masqué tant qu'une offre est affichée. La carte indique `en attente de confirmation`,
@@ -1037,6 +1070,37 @@ couple indépendamment du Pi. Le logiciel affiche `ouverte` et le verdict
 peut rester non nulle pendant la roue libre. Si c'est la lecture qui devient
 indisponible trop longtemps pendant un mouvement possible, le verdict verrouillé
 est `sto_unreadable / ramp_down`.
+
+**Sous `STO_SOURCE=bridged_declared` (pont STO déclaré).** La carte et la pastille
+disent `pontee (declaree)`, sans date de lecture : rien n'est lu. En haut de toutes les
+pages, le bandeau rouge **STO PONTE : aucun arret d'urgence materiel** remplace
+**CHAINE STO NON PRETE** ; il reste affiché même si la liaison tombe ou si le statut
+tarde, jusqu'à ce que la console nomme une autre source. Il n'y a pas de coup de poing.
+Tant que la console répond, l'arrêt d'urgence est **E-STOP** : `QUICK_STOP`, le
+variateur s'arrête sur sa rampe, en quelques secondes (rampe de 3 à 4 s,
+[securite.md](../securite.md)). La **coupure de la prise secteur** est l'arrêt qui ne
+dépend pas du logiciel : coupez-la si la console ne répond pas, si l'E-STOP n'est pas
+confirmé (bandeau **ARRET D'URGENCE NON CONFIRME**), si **Vitesse mesuree** ne baisse
+pas, ou si le logiciel se comporte anormalement (la vitesse monte ou ne suit pas la
+consigne). Elle coupe le variateur : le bras part en roue libre, sans frein, environ
+145 s depuis la vitesse maximale selon le modèle du variateur simulé (144,6 s, jamais
+mesuré sur la machine), et elle remplace toute descente en cours, E-STOP compris : ne
+coupez pas pendant une descente qui fonctionne. **STOP** reste la descente commandée,
+environ 107 s depuis la même vitesse, pour une fin normale, pas pour une urgence
+([procédure de banc, étape 7](../raspberry-pi.md#procédure-de-banc-sous-bridged_declared)).
+Dans tous les cas, restez hors du rayon du bras jusqu'à l'arrêt complet, arbre immobile
+constaté de vos yeux. Seul le départ
+**MANUEL** de banc reste possible ; **Demarrer la seance** est grisé avec la raison
+`chaine STO pontee (declaree), aucun arret d'urgence materiel : seule une seance manuelle de banc, capsule vide ou lestee, aucune personne a bord, peut demarrer`.
+Un départ proposé par le tableau de bord est refusé (§9). La carte d'attestation ne
+propose que la déclaration de banc (§13.1), et la case de l'acquittement dit
+`aucun coup de poing n'est cable : la cause de l'arret d'urgence de l'ecran est ecartee et personne n'est dans le rayon du bras`
+au lieu de la case du coup de poing. L'acquittement se fait par son nom, sans lecture à
+attendre, puis un nouveau départ reste nécessaire. Après une coupure de la prise, selon ce
+que la console a vu pendant la coupure, le verdict est `sto_open` (à acquitter par son
+nom), un défaut du variateur (à traiter puis acquitter, §13.9), ou `comms_lost` /
+`go_silent`, qui ne s'acquitte pas : arbre immobile constaté, relancez la console (§3),
+refaites la déclaration de banc (§13.1), puis demandez un nouveau départ.
 
 Après vérification, relâcher le champignon et vérifier le relais. Attendre `prete`,
 puis **Acquitter** par son nom et demander un **nouveau départ**. Refermer seul ne
@@ -1334,10 +1398,23 @@ Si une seule case est cochée, rien n'est enregistré et la note affiche
 > Le logiciel ne peut pas le savoir : c'est à vous de ne pas attester ce qui n'est pas
 > vrai.
 
+**Sous `STO_SOURCE=bridged_declared` (pont STO déclaré).** La carte s'appelle
+**Declaration de banc : STO ponte** et ne propose pas les deux cases. Lisez la phrase
+affichée, `le STO est ponte, aucun arret d'urgence materiel ; l'arret d'urgence est la coupure de la prise secteur ; capsule vide ou lestee, aucune personne a bord ; personne dans le rayon du bras pendant la rotation`,
+et cochez la seule case **J'atteste ce texte tel qu'il est ecrit ci-dessus.**, avec votre
+nom, **seulement** si chacun de ces points est vrai : capsule vide ou lestée, aucune
+personne à bord, une personne à la prise secteur, personne dans le rayon du bras. Elle est
+enregistrée mot pour mot et vaut jusqu'au prochain redémarrage de la console. Tant
+qu'elle n'est pas faite, un départ est refusé avec
+`nobody has attested the bench declaration this boot: ...` (ou, dans **Evenements**,
+`demarrage refuse : declaration de banc non attestee depuis le demarrage de la console`). La
+procédure complète (qui, avant, pendant, après) est dans
+[raspberry-pi.md, 2.2](../raspberry-pi.md#procédure-de-banc-sous-bridged_declared).
+
 ### 13.2 Séance manuelle de banc à 27 tr/min
 
 Condition préalable : **personne dans la capsule**. Soit le moteur est découplé, soit
-le bras est couplé avec la capsule **vide**.
+le bras est couplé avec la capsule **vide**, ou lestée sans personne.
 
 Réglage nécessaire : 27 tr/min au bras = environ 1345 tr/min moteur. Avec le plafond
 par défaut (`MOTOR_MAX_RPM=300`, environ 6 tr/min), c'est impossible. Il faut
@@ -1501,8 +1578,8 @@ démarre comme la première, sans redémarrer la console (§11).
 |---|---|
 | fin normale, changement d'avis, passager qui veut descendre sans urgence | **STOP** |
 | la pastille **Securite** dit `freeze` et vous voulez terminer la séance sans urgence | **STOP** : la vitesse commandée baisse tout de suite, sur la rampe douce. Surveillez **Vitesse mesuree** |
-| danger immédiat, comportement anormal, doute sérieux | **coup de poing câblé**, et **E-STOP** en plus |
-| la page ne répond plus (bandeau NO LIVE DATA) | **coup de poing câblé** |
+| danger immédiat, comportement anormal, doute sérieux | **coup de poing câblé**, et **E-STOP** en plus. Sous `bridged_declared` : **E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les seuls cas du §11, laisse le bras en roue libre sans frein et remplace toute descente en cours |
+| la page ne répond plus (bandeau NO LIVE DATA) | **coup de poing câblé**. Sous `bridged_declared`, NO LIVE DATA dit que cette page ne voit plus la console, pas qu'elle ne répond plus : **E-STOP**, qui part par sa propre requête, puis la coupure de la prise secteur (§11) si **ARRET D'URGENCE NON CONFIRME** s'affiche ou si le bras ne ralentit pas, jamais pendant une descente qui fonctionne |
 
 STOP, pas à pas :
 
@@ -1524,7 +1601,9 @@ simulation, séance programmée : STOP 12 s après la perte de l'ECG, la vitesse
 baisse au cycle suivant et arrive à 0 avant que la règle ne passe à `reduce`.
 Jusqu'au 7 octobre 2026, elle restait inchangée pendant environ 17 s. Après la fin de
 la séance, un gel qui était verrouillé reste à acquitter (§13.6). Pour arrêter tout de
-suite : le **coup de poing câblé**, et **E-STOP**.
+suite : le **coup de poing câblé**, et **E-STOP**. Sous `bridged_declared`, c'est
+**E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les seuls
+cas du §11, laisse le bras en roue libre sans frein et remplace toute descente en cours.
 
 ![STOP : rampe d'arrêt depuis 27 tr/min](img/console-11-stop-rampe-arret.png)
 
@@ -1541,16 +1620,22 @@ Repères :
 
 E-STOP, pas à pas :
 
-1. En cas de danger : **coup de poing câblé**.
+1. En cas de danger : **coup de poing câblé** (sous `bridged_declared`, il n'y en a pas :
+   passez à l'étape 2 ; tant que la console répond, l'arrêt d'urgence est **E-STOP**, §11).
 2. Cliquez **E-STOP** (aucune question ne sera posée).
 3. La pastille **Securite** passe à `quick_stop` (rouge) et **Etat** à `stopping` en
    rouge. Un bandeau rouge **ARRET D'URGENCE VERROUILLE** apparaît en haut de la page.
    Si c'est **ARRET D'URGENCE NON CONFIRME** qui apparaît à sa place, la console n'a
    pas répondu depuis 2 s ou la demande a échoué : **coup de poing câblé**, sans
-   attendre.
+   attendre (sous `bridged_declared`, le bandeau dit `COUPEZ LA PRISE SECTEUR` : coupez la prise
+   secteur).
 4. Surveillez **Vitesse mesuree** : la machine décélère, elle n'est pas arrêtée tout
    de suite (constaté : de 25,8 à 12,5 tr/min en environ 4 s, puis arrêt complet
-   quelques secondes plus tard, en simulation).
+   quelques secondes plus tard, en simulation). Sous `bridged_declared`, si elle ne
+   baisse pas ou si elle monte, coupez la prise secteur (§11). Après une coupure, plus
+   aucune décélération n'est commandée : le bras part en roue libre sans frein, toute
+   descente en cours est remplacée, et la vitesse affichée peut ne plus être lue.
+   Attendez l'arbre immobile, constaté de vos yeux.
 5. Une fois arrêtée, la machine reste **verrouillée** : acquittez (§13.6).
 
 ![E-STOP pendant la rampe d'arrêt](img/console-12-estop-verrouille.png)
@@ -1734,7 +1819,10 @@ Repères :
 
 Que faire :
 
-1. **Coup de poing** si la personne est encore près du bras.
+1. **Coup de poing** si la personne est encore près du bras (sous `bridged_declared`, il
+   n'y en a pas : la console a déjà lancé l'arrêt d'urgence, `quick_stop` ; la coupure de
+   la prise secteur, dans les seuls cas du §11, laisse le bras en roue libre sans frein et
+   remplace toute descente en cours).
 2. Faites sortir la personne de la zone, vérifiez qu'il n'y a pas de blessé.
 3. Attendez l'arrêt complet (Rotation `a l'arret`).
 4. Acquittez (§13.6) **en cochant la case du coup de poing** : l'intrusion est traitée
@@ -1785,7 +1873,10 @@ Que faire :
    ne repart pas. Si la fréquence ne revient pas rapidement, n'attendez pas : **STOP
    termine la séance et fait baisser la vitesse tout de suite, que la pastille
    Securite dise `freeze` ou `reduce`** (§13.5). Pour arrêter plus vite que la rampe
-   douce, utilisez le **coup de poing câblé** et **E-STOP**. Après l'arrêt (Rotation
+   douce, utilisez le **coup de poing câblé** et **E-STOP**. Sous `bridged_declared`,
+   c'est **E-STOP** tant que la console répond ; la coupure de la prise secteur, dans les
+   seuls cas du §11, laisse le bras en roue libre sans frein et remplace toute descente
+   en cours. Après l'arrêt (Rotation
    `a l'arret`) et le retour du mode à `REPOS`, acquittez s'il reste un verdict
    verrouillé (§13.6) et redémarrez une séance. Ce cas n'a pas été rejoué dans
    la page pour ce guide : il est vérifié par les tests automatiques sur la console en
@@ -1934,7 +2025,11 @@ La capture a été prise sur une console saine, au repos : elle n'en montre aucu
 Que faire :
 
 1. **Considérez que la machine tourne sans doute encore.** Regardez le bras.
-2. S'il tourne et que la console ne revient pas : **coup de poing**.
+2. S'il tourne et que la console ne revient pas : **coup de poing**. Sous `bridged_declared`,
+   ce bandeau dit que cette page ne voit plus la console, pas qu'elle ne répond plus :
+   cliquez **E-STOP**, qui part par sa propre requête, puis coupez la prise secteur (§11)
+   si **ARRET D'URGENCE NON CONFIRME** s'affiche ou si le bras ne ralentit pas, jamais
+   pendant une descente qui fonctionne.
 3. La page réessaie seule toutes les 1,5 s ; si la console revient, le bandeau
    disparaît.
 
@@ -1974,8 +2069,10 @@ processus ne prouve alors l'arrêt de l'arbre ; aucune séance ne reprend seule.
 **Coupure secteur du variateur** : au retour, le variateur peut afficher `USF`
 (sous tension, réarmable) ; suivez §13.9. D'après le manuel de l'ATV320, ce défaut
 s'efface de lui-même quand la tension revient. Rien ne repart seul pour autant : un
-verdict de la console reste en place (`drive_fault`, ou `go_silent` si la liaison est
-tombée avec le variateur). Non vérifié sur la machine.
+verdict de la console reste en place, selon ce qu'elle a vu (`drive_fault`, `sto_open`,
+ou `go_silent` si la liaison est tombée avec le variateur). Non vérifié sur la machine. `go_silent` ne s'acquitte pas : arbre immobile constaté,
+relancez la console (§3), refaites l'attestation, ou la déclaration de banc sous
+`bridged_declared` (§13.1), puis demandez un nouveau départ.
 
 ### 13.11 La cible manuelle est refusée, ou revient à 0
 
@@ -2094,9 +2191,10 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 
 | Message | Ce que ça veut dire | Quoi faire |
 |---|---|---|
-| ✔ `cochez la declaration BANC (personne a bord : NON) avant de demarrer` | case BANC non cochée | vérifier que la capsule est vide, cocher |
+| ✔ `cochez la declaration BANC (personne a bord : NON) avant de demarrer` | case BANC non cochée | vérifier que personne n'est dans la capsule (vide ou lestée), cocher |
 | ✔ `an operator name is required: an unattributable session record is not one` | nom vide | taper votre nom (champ Operateur, ou votre nom en Securite) |
 | ✔ `nobody has attested the emergency stop this boot: ...` | attestation pas faite depuis le démarrage | §13.1 |
+| `nobody has attested the bench declaration this boot: ...` | sous `STO_SOURCE=bridged_declared` : déclaration de banc pas faite depuis le démarrage | §13.1 |
 | ✔ `both confirmations are required, separately: ...` | une seule case cochée | cocher les deux, seulement si les deux sont vraies |
 | ✔ `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | un verdict attend | lire la règle, traiter la cause, §13.6 |
 | ✔ `demande refusee par la console : un demarrage est deja demande, et la machine ne l'a pas encore pris ou est en train de l'armer. Rien n'a ete envoye.` (rouge) | un démarrage est déjà demandé, par cet écran (double clic) ou par un autre, et la machine ne l'a pas encore pris : ce clic n'a pas été transmis. Jusqu'au 11 octobre 2026, deux démarrages demandés presque en même temps pouvaient être acceptés tous les deux | attendre la note du premier démarrage, ou regarder **Mode** |
@@ -2123,6 +2221,9 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | ✔ bandeau `STOP NON CONFIRME`, `aucune reponse de la console depuis N s - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable` | la demande STOP de cet écran est partie et rien n'est revenu depuis 2 s ou plus ; elle reste en attente et peut encore passer | regarder **Mode**, **Vitesse mesuree** et le bras ; pour arrêter sans attendre, §13.5 |
 | ✔ bandeau `STOP NON CONFIRME`, `la demande a echoue il y a N s et n'est plus en attente : ... - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable` | la demande STOP a échoué (console injoignable, ou erreur de la console) ; elle est terminée. Le bandeau reste jusqu'à une réponse à un nouveau STOP, ou jusqu'à ce que la séance soit vue en train de s'arrêter | recliquer **STOP** si la console répond de nouveau ; pour arrêter sans attendre, §13.5 |
 | ✔ `la demande d'arret (STOP) a echoue : ... - rien ne dit que la seance s'arrete : E-STOP, ou l'arret cable` | fenêtre d'alerte du cas précédent (jusqu'au 10 octobre 2026 : `STOP refuse : Failed to fetch`) | la fermer, lire le bandeau |
+| `la demande d'arret d'urgence a echoue : ... - COUPEZ LA PRISE SECTEUR` | sous `STO_SOURCE=bridged_declared` : l'E-STOP n'a pas atteint la console | **coupez la prise secteur** (§11) |
+| bandeau `ARRET D'URGENCE NON CONFIRME`, texte finissant par `COUPEZ LA PRISE SECTEUR` (`aucune reponse de la console depuis N s - ...`, `la demande a echoue il y a N s et n'est plus en attente : ... - ...`, `nouvelle demande sans reponse depuis N s, la precedente a echoue : ... - ...`) | sous `bridged_declared` : les trois cas des lignes `UTILISEZ L'ARRET CABLE` ci-dessus | **coupez la prise secteur** (§11) ; une demande encore en attente peut passer |
+| bandeau `STOP NON CONFIRME` et alerte `la demande d'arret (STOP) a echoue : ...`, texte finissant par `rien ne dit que la seance s'arrete : E-STOP, ou la coupure de la prise secteur` | sous `bridged_declared` : les cas des trois lignes STOP ci-dessus | comme ces lignes ; pour arrêter sans attendre, §13.5 |
 | ✔ `cible envoyee : ... - pas encore prise par la machine` | la console a reçu la cible ; la machine ne l'a pas encore jugée | attendre la suite de la note, une fraction de seconde |
 | ✔ `cible prise par la machine : ... (suivie aux limites de mouvement)` | la machine tient cette cible, et la vitesse va vers elle à cet instant | surveiller **Vitesse mesuree** |
 | `cible prise par la machine : ...` (sans `(suivie aux limites de mouvement)`) | la machine tient cette cible mais la vitesse n'y va pas à cet instant : une alerte la tient ou la baisse (`freeze` avec une cible autre que 0, `reduce`), ou la fréquence cardiaque retient une montée | lire **Securite** et l'encadré orange ; la ligne `rampe` dit `consigne maintenue, cible non atteinte` sous un gel. La vitesse ira vers la cible sans nouveau clic quand plus rien ne la retiendra (§11) |
@@ -2155,6 +2256,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | `cible de <n> tr/min moteur remise a 0 : ...` (sans nom d'opérateur) | la machine a repris une cible qu'elle avait acceptée, avant le premier mouvement : règle de sécurité, fréquence cardiaque, ou variateur qui n'a pas confirmé | §13.11 |
 | `demarrage refuse : la machine est deja <état>` | une séance existe déjà | STOP d'abord (§13.5) |
 | `demarrage refuse : cablage de l'arret d'urgence non atteste` | attestation manquante | §13.1 |
+| `demarrage refuse : declaration de banc non attestee depuis le demarrage de la console` | sous `STO_SOURCE=bridged_declared` : déclaration de banc manquante | §13.1 |
 | `demarrage refuse : verdict <règle> a acquitter (<détail>)` | verdict en attente | §13.6 |
 | `demarrage refuse : seuil <nom> different de celui du superviseur` | les paliers cardiaques du profil ne sont pas ceux du fichier médical signé | corriger le profil ; changer les paliers du fichier est une décision médicale |
 | `parametres medicaux non signes (<raison>) : console en mode banc seulement, aucune seance programmee ni personne a bord` (aussi dans le bandeau rouge `PARAMETRES MEDICAUX NON SIGNES`) | la signature du fichier médical ne s'est pas vérifiée au démarrage | séances de banc seulement ; prévenir la personne qui administre le Pi : le fichier doit être signé de nouveau, puis la console redémarrée |
@@ -2265,8 +2367,11 @@ capsule : cette règle reste à fixer par Anheart, comme le dit l'avertissement 
 de s'approcher du bras ou de la capsule* du
 [manuel de l'opérateur](../client/manuel-operateur.md#2-les-huit-règles-à-retenir).
 **STOP** termine la séance et fait baisser la vitesse, que la pastille Securite dise
-`freeze` ou `reduce` ; pour arrêter plus vite, utilisez le **coup de poing câblé** et
-**E-STOP** (§13.5). Continuez de regarder **Vitesse mesuree**.
+`freeze` ou `reduce` ; pour arrêter plus vite, utilisez le **coup de poing câblé**
+et **E-STOP** (§13.5). Sous `bridged_declared`, c'est **E-STOP** tant que la console
+répond ; la coupure de la prise secteur, dans les seuls cas du §11, laisse le bras en
+roue libre sans frein et remplace toute descente en cours.
+Continuez de regarder **Vitesse mesuree**.
 
 **Je ne peux pas dépasser 6 tr/min.**
 Le plafond par défaut est `MOTOR_MAX_RPM=300` (tr/min moteur). Relevez-le par paliers
