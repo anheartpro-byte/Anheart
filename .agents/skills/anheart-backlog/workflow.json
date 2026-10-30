@@ -63,7 +63,7 @@
     "date": "2026-10-23",
     "claude_evidence": "Orca Claude terminal /model and /status: Opus 5.5, opus[1m] (claude-opus-5-5[1m]), Claude Code 2.1.296",
     "codex_evidence": "2026-10-22 12:39Z : Codex connecte par un compte ChatGPT refuse gpt-6.1-sol (400) ; gpt-6-luna repondait encore",
-    "worker_choice": "Decision de l'utilisateur du 23 octobre 2026 : tout en Claude Opus 5.5 (developpeurs, tests, R1, R2 en sessions distinctes) ; aucun worker Codex sans son accord. Limite de 3 tickets actifs (decision du 15 octobre).",
+    "worker_choice": "Decision de l'utilisateur du 23 octobre 2026 : tout en Claude Opus 5.5 (developpeurs, tests, R1, R2 en sessions distinctes) ; aucun worker Codex sans son accord. Limite de 3 tickets actifs (decision de l'utilisateur au lancement de la campagne, la configuration initiale du 15 octobre portait 2).",
     "effective_model_check_required_each_launch": true,
     "orca_nested_worker_depth": 2
   }

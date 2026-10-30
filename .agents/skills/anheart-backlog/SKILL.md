@@ -76,7 +76,7 @@ Un Run ne planifie rien automatiquement : tu conduis la boucle.
 
 - Cree une Task Orca par ticket parent eligible, avec les dependances entre
   Tasks connues. Une dependance externe exige une preuve de cloture effective.
-- Lance la vague prete jusqu'a `max_active_tickets` (2 par defaut). Des tickets
+- Lance la vague prete jusqu'a `max_active_tickets` (3 depuis la decision de l'utilisateur au lancement de la campagne d'octobre 2026). Des tickets
   independants peuvent progresser en parallele ; un successeur attend le merge
   et la CI apres merge de ses predecesseurs. Priorise ensuite la priorite Linear
   (0 signifie non definie), puis l'anciennete.

@@ -1,4 +1,4 @@
-# Passation du projet Anheart (29 octobre 2026)
+# Passation du projet Anheart (30 octobre 2026)
 
 Ce document est le point de départ de tout agent ou de toute personne qui reprend le développement d'Anheart. Il remplace la mémoire de la machine de campagne, qui a été effacée. Lis-le en entier avant d'agir, puis `AGENTS.md`, `docs/roadmap.md`, `docs/deploiement.md` et `docs/release.md`.
 
@@ -26,8 +26,8 @@ Fin de la campagne Orca du 15 au 30 octobre 2026 (pilote et coordinateurs Claude
 ### Matériel et sécurité (décisions de l'utilisateur)
 
 - Périmètre matériel de la V1 : moteur et variateur ATV320, BITalino avec ECG. Tout le reste est en V2 : frein (ANH-93), bouton d'arrêt de la capsule (ANH-94), harnais et porte (ANH-95), caméra réelle (ANH-96), survitesse indépendante (ANH-97). Ces tickets sont en Backlog avec un commentaire « V2 » et des notes de reprise ; la branche `feature/anh-94-bouton-darret-dans-la-capsule-pour-le-passager` garde un premier commit utile au frein.
-- STO (Safe Torque Off) : ANH-92 a rendu la console stricte : le moteur réel n'arme que si une source STO réelle est câblée et prête. L'utilisateur n'aura pas d'arrêt d'urgence câblé au départ ; il coupera la prise secteur. La seconde PR d'ANH-92 ajoute pour cela `STO_SOURCE=bridged_declared` : armement permis seulement pour une séance de banc, attestation honnête, bandeau permanent, personne à bord toujours refusée. Sans frein, couper le secteur laisse le bras en roue libre (environ 2 min 30 depuis la vitesse maximale selon le modèle) : personne dans le rayon du bras jusqu'à l'arrêt complet.
-- Règle d'urgence sans arrêt d'urgence câblé (décision de l'utilisateur du 30 octobre) : tant que la console répond, l'arrêt d'urgence est l'E-STOP de l'écran (arrêt en 3 à 4 s) ; couper la prise seulement si la console ne répond pas, si l'E-STOP n'est pas confirmé, si la vitesse ne baisse pas ou si le logiciel se comporte anormalement, jamais pendant une descente qui fonctionne. Un STOP normal en séance manuelle dure environ 107 s. Après une coupure secteur, relancer la console et refaire la déclaration.
+- STO (Safe Torque Off) : ANH-92 a rendu la console stricte : le moteur réel n'arme que si une source STO réelle est câblée et prête. L'utilisateur n'aura pas d'arrêt d'urgence câblé au départ ; il coupera la prise secteur. La seconde PR d'ANH-92 ajoute pour cela `STO_SOURCE=bridged_declared` : armement permis seulement pour une séance de banc, attestation honnête, bandeau permanent, personne à bord toujours refusée. Sans frein, couper le secteur laisse le bras en roue libre (environ 145 s depuis la vitesse maximale selon le modèle de simulation, jamais mesuré) : personne dans le rayon du bras jusqu'à l'arrêt complet.
+- Règle d'urgence sans arrêt d'urgence câblé (décision de l'utilisateur du 30 octobre) : tant que la console répond, l'arrêt d'urgence est l'E-STOP de l'écran (arrêt en 3 à 4 s) ; couper la prise seulement si la console ne répond pas, si l'E-STOP n'est pas confirmé, si la vitesse ne baisse pas ou si le logiciel se comporte anormalement, jamais pendant une descente qui fonctionne. Un STOP normal en séance manuelle dure environ 107 s. Après une coupure secteur : attendre l'arrêt complet constaté, puis suivre `docs/raspberry-pi.md` (procédure de banc sous le pont, étapes 8 et 9) : `sto_open` et `drive_fault` s'acquittent par leur nom ; `comms_lost` et `go_silent` exigent de relancer la console et de refaire la déclaration.
 - Premiers essais réels : capsule vide, puis lestée d'un sac de sable d'environ 80 kg, vitesse pilotée à la console, aucune personne à bord. Lancer une séance de banc lestée depuis le site est le ticket ANH-250 (à faire en premier, section 3).
 - Aucune personne à bord tant que ANH-98 (valeurs médicales signées), ANH-103, ANH-104, ANH-105 et ANH-107 ne sont pas faits. Ne retire jamais ce verrou sans ces décisions écrites.
 
@@ -38,7 +38,7 @@ Fin de la campagne Orca du 15 au 30 octobre 2026 (pilote et coordinateurs Claude
 3. Convex production : poser `CLERK_SECRET_KEY` de l'instance Clerk de production (manquante au déploiement ; sans elle, l'invitation d'un patient échoue).
 4. Vérifier le site en production connecté (liste dans ANH-82, commentaire du 29 octobre).
 5. Seconde fenêtre multi-organisation (section 4).
-6. Tests de bout en bout dans la CI : créer une instance Clerk de développement dédiée aux tests, sans webhook, puis le secret `E2E_CLERK_SECRET_KEY` et les variables `E2E_CLERK_PUBLISHABLE_KEY`, `E2E_CLERK_JWT_ISSUER_DOMAIN` dans GitHub ; tant qu'ils manquent, le job `e2e` saute.
+6. Tests de bout en bout dans la CI : créer une instance Clerk de développement dédiée aux tests, sans webhook, puis le secret `E2E_CLERK_SECRET_KEY` et les variables `E2E_CLERK_PUBLISHABLE_KEY`, `E2E_CLERK_JWT_ISSUER_DOMAIN` dans GitHub, puis reprendre en PR le job `e2e` sauvegardé sur la branche `backup/anh-83-job-e2e` (il n'est pas encore sur `develop` ; une fois fusionné, il saute tant que ces secrets manquent).
 7. Décisions humaines ouvertes : ANH-98 (valeurs médicales et clé), ANH-172 (données de santé), ANH-233 (séance interrompue sans retour), ANH-105 (statut réglementaire), ANH-87 (hébergement des données de santé).
 8. Essais au banc (jalons B et D) : plan dans ANH-76 à ANH-81, ANH-151, ANH-162 à ANH-164 ; essais moteur seulement avec le mode `bridged_declared` ou un arrêt d'urgence câblé.
 
@@ -87,7 +87,7 @@ Source : `docs/tableau-de-bord.md` (« Amorçage d'un déploiement ») et `docs/
 ### Qualité et fusion
 
 - `develop` exige : `pi-gate`, `simulation-gate`, `convex-tests`, `web`, `audit`, `docs` et le statut `agent-review/R1`, branche à jour, historique linéaire, conversations résolues. Aucun workflow ne pose `agent-review/R1` : le coordinateur le publie (`gh api repos/anheartpro-byte/Anheart/statuses/<sha>`) après avoir lu le rapport du relecteur indépendant sur le SHA exact.
-- Couverture : 80 % de lignes et de branches sur le site et Convex ; 100 % des branches sur la chaîne de sécurité du Pi (`src/training/*`, `src/motor/*`, `src/presence/*`, `src/record/*`, `src/training/preflight.py`) et Convex (`convex/training.ts`, `convex/lib/auth.ts`, `convex/http.ts`). Sur la chaîne de sécurité : 1 développeur et 2 relecteurs qui écrivent les invariants vérifiés.
+- Couverture : 80 % de lignes et de branches sur le site et sur Convex (seuil appliqué fichier par fichier, `scripts/ci/coverage-thresholds.mjs`) ; 100 % des branches sur la chaîne de sécurité du Pi, dont la liste fait foi dans `raspberry-pi/pyproject.toml` (`[tool.anheart] safety_chain`). Sur la chaîne de sécurité (Pi, et côté Convex `convex/training.ts`, `convex/lib/auth.ts`, `convex/http.ts`) : 1 développeur et 2 relecteurs qui écrivent les invariants vérifiés.
 - CodeQL seul (pas de Sonar) : une alerte ouverte sur une PR bloque la fusion. La seule alerte ouverte sur `develop` est la 407 (`raspberry-pi/src/web/ws.py`), antérieure.
 - gitleaks parcourt toutes les branches distantes : un littéral de test au format d'une clé sur n'importe quelle branche bloque l'audit de toutes les PR ; construire ces valeurs à l'exécution.
 - Protocole de fusion : vérifier tête, base à jour, checks, `agent-review/R1`, zéro fil, zéro alerte, aucune trace d'IA et périmètre ; `gh pr merge <n> --squash --match-head-commit <sha> --subject "ANH-x: ... (#n)" --body ''` ; puis vérifier la CI du push (CI, Pi install, CodeQL) sur le SHA fusionné avant la fusion suivante.
@@ -101,7 +101,7 @@ Source : `docs/tableau-de-bord.md` (« Amorçage d'un déploiement ») et `docs/
 - `npx convex logs` ne s'arrête jamais : le borner.
 - Après un redémarrage, git HTTPS peut ne plus avoir d'identifiants : `git -c credential.helper='!gh auth git-credential' push ...`.
 
-## 6. Déployer la production (chemin manuel utilisé le 29 octobre)
+## 6. Déployer la production (chemin manuel, dit « chemin B », utilisé le 29 et le 30 octobre)
 
 Sur une nouvelle machine, recréer d'abord (aucune valeur n'est dans le dépôt) : clés de déploiement Convex (tableau de bord Convex, réglages du projet : une pour dev, une pour prod), connexion Vercel (`npx vercel login`), `gh auth login`, connexion Linear dans Orca, clés Clerk de développement pour le site en local.
 
@@ -120,7 +120,7 @@ La pipeline officielle (`.github/workflows/release.yml`) exige l'environnement G
 
 ## 7. Installer la console sur le Raspberry Pi de la machine
 
-`docs/pi-image.md` (section 6) et `docs/raspberry-pi.md`. Sur le site de production : créer la machine, puis « Nouvelle clé » (affichée une seule fois). Sur le Pi : `CONVEX_URL` de production, la clé, `MOTOR_BACKEND=serial`, et pour les essais sans arrêt d'urgence câblé `STO_SOURCE=bridged_declared` (une fois la seconde PR d'ANH-92 fusionnée). Retirer `MIN_RIDER_AGE` et toute autre clé médicale de l'ancien `.env` (sinon la console sort en code 2). L'image doit porter le contrat de `develop` (1.8 au 29 octobre).
+`docs/pi-image.md` (section 6) et `docs/raspberry-pi.md`. Sur le site de production : créer la machine, puis « Nouvelle clé » (affichée une seule fois). Sur le Pi : `CONVEX_URL` de production, la clé, `MOTOR_BACKEND=serial`, et pour les essais sans arrêt d'urgence câblé `STO_SOURCE=bridged_declared` (fusionné le 30 octobre, PR #134). Retirer `MIN_RIDER_AGE` et toute autre clé médicale de l'ancien `.env` (sinon la console sort en code 2). L'image doit porter le contrat de `develop` (1.8 au 29 octobre).
 
 ## 8. Branches de sauvegarde
 
