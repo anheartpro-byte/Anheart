@@ -28,6 +28,7 @@ Il existe deux sortes de séance :
 | Document | Pour qui | Contenu |
 |---|---|---|
 | [demarrage-rapide.md](demarrage-rapide.md) | tout le monde | installer, lancer la console en simulation, le site, la simulation 2D ; pièges connus |
+| [handoff.md](handoff.md) | agents, reprise du projet | passation de la campagne d'octobre 2026 : état de la production, décisions de l'utilisateur, suite du backlog, règles de travail, déploiement manuel |
 | [console-locale.md](console-locale.md) | opérateur | chaque page de la console du Pi, chaque bouton, chaque message ; routes HTTP |
 | [tableau-de-bord.md](tableau-de-bord.md) | admin, gestionnaire, user | chaque page du site, rôles, droits de lancement, séance AUTO à distance |
 | [convex.md](convex.md) | développeur | schéma, fonctions publiques, routes HTTP machine, déploiement |

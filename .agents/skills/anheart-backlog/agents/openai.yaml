@@ -1,0 +1,4 @@
+interface:
+  display_name: "Anheart - Pilote backlog"
+  short_description: "Orchestration Orca des tickets et dependances"
+  default_prompt: "Utilise $anheart-backlog pour preparer la campagne Anheart et verifier les modeles avant tout lancement."
