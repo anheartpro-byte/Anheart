@@ -135,9 +135,26 @@ const GATED = new Map([
   ["convex-tests", condition("node")],
   ["web", condition("node")],
 ]);
+/**
+ * The browser suite (ANH-83): no gate, and the one job that reads a secret.
+ * It starts only in this workflow's own runs (never when the release calls
+ * it) and once the repository variable of its Clerk instance is set; on a
+ * pull request, only from this repository (not a fork), and the path rule
+ * skips it when the pull request changes neither the site nor the Python of
+ * the console it runs.
+ */
+const E2E = "e2e";
+const E2E_CONDITION =
+  "${{ !cancelled() && github.workflow == 'CI' && vars.E2E_CLERK_PUBLISHABLE_KEY != '' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && (needs.changes.outputs.node != 'false' || needs.changes.outputs.python != 'false'))) }}";
+/** The suite's two markers (e2e/secret-scan.ts): nothing may be sent, or all of it may. */
+const E2E_REPORTER = readFileSync(new URL("../../e2e/secret-scan.ts", import.meta.url), "utf8");
+const E2E_DO_NOT_SEND = /export const DO_NOT_SEND = "([a-z-]+)";/.exec(E2E_REPORTER)?.[1];
+const E2E_MAY_SEND = /export const MAY_SEND = "([a-z-]+)";/.exec(E2E_REPORTER)?.[1];
+/** The one secret of this workflow, as the step of the browser suite reads it. */
+const E2E_SECRET = "          CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}\n";
 
 test("the jobs are the ones this file knows about", () => {
-  assert.deepEqual([...jobs.keys()].sort(), [...ALWAYS, ...GATED.keys(), REPORT].sort());
+  assert.deepEqual([...jobs.keys()].sort(), [...ALWAYS, ...GATED.keys(), REPORT, E2E].sort());
 });
 
 test("every required check is the name of one plain job", () => {
@@ -158,8 +175,10 @@ test("a gate can only be skipped on a pull request, and only by an explicit answ
     assert.match(own(id, "needs") ?? "", /^(changes|\[changes(, [a-z-]+)*\])$/, id);
   }
   // The rule is read nowhere else: no step, no other expression can skip a gate.
-  const reads = workflow.split("needs.changes.outputs").length - 1;
+  // The browser suite, which is no gate, reads it in its own condition only.
+  const reads = workflow.replace(jobs.get(E2E) ?? "", "").split("needs.changes.outputs").length - 1;
   assert.equal(reads, GATED.size);
+  assert.equal((jobs.get(E2E) ?? "").split("needs.changes.outputs").length - 1, 2);
 });
 
 test("documentation, audit and the rule itself run on every event", () => {
@@ -982,7 +1001,9 @@ test("the test that reads every file of the repository runs in `docs`, whatever 
 test("the workflow gives no token more than read access, and each action is pinned to one full commit", () => {
   assert.match(workflow, /^permissions:\n {2}contents: read\n\n/m);
   assert.equal(workflow.split(/^ *permissions:/m).length - 1, 1, "a job asks for permissions of its own");
-  assert.doesNotMatch(workflow, /pull_request_target|workflow_run|\bsecrets\.|: write\b|write-all/);
+  // One secret, read by the browser suite alone (see its own test below).
+  assert.equal(workflow.split(E2E_SECRET).length - 1, 1);
+  assert.doesNotMatch(workflow.replace(E2E_SECRET, ""), /pull_request_target|workflow_run|\bsecrets\.|: write\b|write-all/);
   // Values of the event are handed to a script through its environment, never written into it.
   for (const [id] of jobs) {
     for (const step of stepsOf(id)) {
@@ -1009,6 +1030,65 @@ test("the workflow gives no token more than read access, and each action is pinn
     );
     pins.set(action, `${commit} ${version}`);
   }
+});
+
+test("the browser suite is no gate, is skipped without its variable, and alone reads the one secret", () => {
+  assert.ok(!REQUIRED.includes(E2E));
+  assert.equal(own(E2E, "name"), undefined);
+  assert.equal(own(E2E, "strategy"), undefined);
+  assert.equal(own(E2E, "needs"), "changes");
+  // `vars` is the one context of the job's own condition that can tell the
+  // suite has its instance: `secrets` cannot be read there, nor the
+  // variables of an environment, and an unset variable reads as ''.
+  assert.equal(own(E2E, "if"), E2E_CONDITION);
+  assert.equal(own(E2E, "environment"), "e2e");
+  // The secret reaches the suite through the environment of its step, the step that runs it.
+  const suite = stepsOf(E2E).find((step) => step.startsWith("name: Build the site, then run the end-to-end suite\n")) ?? "";
+  assert.ok(suite.includes(E2E_SECRET), "the secret is read by the step that runs the suite");
+  assert.match(suite, /^ {8}run: npm run test:e2e$/m);
+  for (const [id] of jobs) if (id !== E2E) assert.doesNotMatch(jobs.get(id) ?? "", /\bsecrets\./, id);
+  // What it leaves, whatever the outcome of its tests, unless the suite found
+  // a secret in it: then its marker is there, and nothing is sent.
+  // The positive marker is required: a suite that died before its count
+  // wrote neither, and sends nothing.
+  assert.ok(E2E_DO_NOT_SEND && E2E_MAY_SEND, "e2e/secret-scan.ts names its two markers");
+  const check = "Check that the suite allows its outputs to be sent";
+  assert.equal(stepCondition(E2E, check), "${{ !cancelled() }}");
+  assert.equal(
+    script(E2E, check),
+    `if [ -e "$OUTPUT/${E2E_MAY_SEND}" ] && [ ! -e "$OUTPUT/${E2E_DO_NOT_SEND}" ]; then\n` +
+      '  echo "send=true" >> "$GITHUB_OUTPUT"\n' +
+      "else\n" +
+      '  echo "::warning title=Sorties de la suite retenues::la recherche des secrets n\'a pas fini sans rien trouver (occurrence, comptage impossible ou suite interrompue) : rien n\'est envoyé."\n' +
+      "fi\n",
+  );
+  const kept = stepsOf(E2E).filter((step) => step.includes("actions/upload-artifact@"));
+  assert.deepEqual(
+    kept.map((step) => /^ {10}name: (.+)$/m.exec(step)?.[1]),
+    ["e2e-rapport", "e2e-traces", "e2e-captures"],
+  );
+  const steps = stepsOf(E2E);
+  for (const step of kept) {
+    assert.match(step, /^ {8}if: \$\{\{ !cancelled\(\) && steps\.outputs\.outputs\.send == 'true' \}\}$/m);
+    assert.ok(steps.indexOf(step) > steps.findIndex((s) => s.startsWith(`name: ${check}\n`)), "the check comes first");
+  }
+  assert.match(steps.find((s) => s.startsWith(`name: ${check}\n`)) ?? "", /^ {8}id: outputs$/m);
+});
+
+test("the browser suite is no gate of a release, and one run at a time holds its Clerk instance", () => {
+  // The release calls this workflow as its gates; a called workflow sees its
+  // caller's name in `github.workflow`, so the suite is skipped there.
+  assert.match(releaseWorkflow, /^ {4}uses: \.\/\.github\/workflows\/ci\.yml$/m);
+  assert.notEqual(workflowName(releaseWorkflow), workflowName(workflow));
+  assert.ok(E2E_CONDITION.includes(`github.workflow == '${workflowName(workflow)}'`));
+  // A fork gets neither the secret nor the environment: skipped, not failed.
+  assert.ok(E2E_CONDITION.includes("github.event.pull_request.head.repo.full_name == github.repository"));
+  // Every start deletes what other runs left on the instance: one group for
+  // the whole repository, a run waits and never cancels another.
+  assert.ok(
+    (jobs.get(E2E) ?? "").includes("    concurrency:\n      group: e2e-instance-clerk\n      cancel-in-progress: false\n"),
+    "the suite's own concurrency group",
+  );
 });
 
 // --- The dependency audit (ANH-153) ---

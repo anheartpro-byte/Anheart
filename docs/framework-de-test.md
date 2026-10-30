@@ -1125,6 +1125,7 @@ par un commit de fusion
 | `simulation-gate` | la vérification obligatoire : exige la réussite des cinq jobs précédents, puis prouve que chaque test de la batterie a tourné une fois et une seule, fusionne les mesures et applique le seuil de 100 % de branches (voir [Gate de simulation répartie](#gate-de-simulation-répartie-anh-184)) ; puis les tests du moteur de simulation hébergé, `deploy/simulation-vercel/tests` (depuis ANH-218 : aucun job ne les lançait) ; `coverage.xml`, `report.json` et `report.html` |
 | `convex-tests` | `convex/_generated/api.d.ts`, versionné, comparé à ce que les fichiers de `convex/` impliquent (`node scripts/ci/convex-generated-api.mjs`, sans déploiement ni réseau : voir [convex.md](convex.md#convex_generatedapidts--tenu-par-un-script)) ; types des fonctions Convex (`tsc -p convex/tsconfig.json --noEmit`), puis vrais handlers Convex exécutés par `convex-test` : droits d'accès aux mesures live, séances et télémétrie ; aucune connexion au déploiement de production. Puis la couverture de ces tests, avec son seuil : 80 % de lignes et de branches sur `convex/` et sur chacun de ses trois fichiers de la chaîne de sécurité (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
 | `web` | TypeScript, ESLint hors environnements Python, tests du panneau manuel, tests unitaires du site (`lib/`, puis `hooks/`, `components/` et les pages de `app/`), build Next.js avec configuration publique de test. Puis la couverture des tests du site, avec son seuil : 80 % de lignes et de branches (voir [Seuils de couverture de Convex et du site](#seuils-de-couverture-de-convex-et-du-site-anh-203)) |
+| `e2e` | n'est pas une gate et n'est exigé par aucune protection de branche : le tableau de bord dans un vrai navigateur, de bout en bout (`npm run test:e2e`, voir [Tests de bout en bout dans un navigateur](#tests-de-bout-en-bout-dans-un-navigateur-anh-83)) ; **sauté** tant que la variable du dépôt `E2E_CLERK_PUBLISHABLE_KEY` n'existe pas, quand la pipeline de release appelle ce workflow, sur une PR venue d'un fork, et par la règle des chemins sur une PR qui ne change ni le site ni le Python de la console ; une exécution à la fois (groupe `e2e-instance-clerk`, sans annulation) ; artefacts `e2e-rapport`, `e2e-traces` et `e2e-captures` (14 jours), seulement si la suite a écrit `envoi-permis` (comptage complet sans rien trouver) et pas `ne-pas-envoyer` |
 | `audit` | `npm audit` (avis hauts et critiques), `pip-audit` sur chaque environnement Python installé, `gitleaks` sur l'historique Git ; seules les exceptions datées de `.github/audit-exceptions.md` sont sautées ; artefact `sbom`, la nomenclature CycloneDX de ce qui s'installe depuis un verrou (voir [Dépendances](#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153)) ; aucun secret de production requis |
 | `docs` | liens locaux et ancres Markdown ; les tests de ce qui décide les gates (règle de chemins, ce workflow, workflow CodeQL, les deux workflows de déploiement, la pipeline de release, rapport de qualité, script qui tient `convex/_generated/api.d.ts`) ; résolution des identifiants `MEN-nn` dès que `docs/menaces.md` existe ; les tests de l'outillage de release (le fichier de `npm run test:release`), dans des dépôts jetables et avec un double de `gh` : rien n'atteint GitHub ([release.md](release.md#7-tests)) ; puis, après `npm ci`, le test qui lit tous les fichiers du dépôt (`lib/legacyModeReferences.test.ts`). Tous sont ici parce que ce job tourne à chaque exécution, quels que soient les fichiers changés : voir [Ce que le job docs lance à chaque exécution](#ce-que-le-job-docs-lance-à-chaque-exécution-anh-183) |
 | `quality-report` | n'est pas une gate, et aucune de ses étapes ne peut le faire échouer : attend les six gates, puis écrit sur la page de l'exécution le tableau des tests, de la couverture, du lint et des types de chaque projet (voir [Rapport de qualité](#rapport-de-qualité-anh-199)) ; artefact `quality-report` |
@@ -4011,35 +4012,66 @@ consentement, fenêtre de lancement, séance en direct avec ses courbes, Audit,
 rapport de séance, Alertes. Noms stables, `<nn>-<page>-<fr|en>-<clair|sombre>.png`,
 dans `<E2E_OUTPUT_DIR>/captures/`. Un premier jeu est versé dans
 [docs/guides/captures/](guides/captures/README.md) ; il n'est pas recopié
-automatiquement (le job de CI, quand il existera, les gardera en artefact). Ce qui change d'une exécution à l'autre : l'identifiant de
+automatiquement. Ce qui change d'une exécution à l'autre : l'identifiant de
 l'exécution dans les noms d'organisation et les adresses, les dates, et les
 courbes de la fréquence cardiaque simulée.
 
-**Dans la CI : pas encore de job.** La suite tourne en local. Le job `e2e`
-de `ci.yml` attend une décision : la garde de ce workflow
-(`scripts/ci/ci-workflow.test.mjs`, lancée par le job `docs`) fixe la liste
-des jobs et n'y permet la lecture d'aucun secret, et l'inventaire des secrets
-([secrets.md](secrets.md#2-linventaire)) n'a pas encore de ligne pour celui de
-la suite. Le job prévu ne serait pas une gate (aucune protection de branche ne
-l'exigerait, le rapport de qualité ne l'attendrait pas) et **sauterait**
-(conclusion « skipped », jamais « failed ») tant que la variable du dépôt
-`E2E_CLERK_PUBLISHABLE_KEY` n'existe pas : la condition d'un job peut lire
-`vars` (une variable absente vaut une chaîne vide), mais ni `secrets` ni les
-variables d'un environnement, qui n'arrivent sur le runner qu'une fois le job
-démarré. Durée prévue du job : la suite (19 min 30 s) plus l'installation et la
-construction (environ 2 min 45 s), une fois et demie, arrondi à la minute
-au-dessus : 34 minutes.
+**Dans la CI : le job `e2e`.** Il installe ce que la suite demande (`npm ci`
+avec son cache ; le Chromium de Playwright avec ses bibliothèques système,
+dans un cache dont la clé est la version de Playwright ; le venv de la console
+depuis les mêmes verrous à hachages que les gates Python, cache de `uv` ; le
+backend Convex local dans un cache dont la clé suit `e2e/harness/convex.ts`,
+son empreinte vérifiée à chaque usage), puis lance `npm run test:e2e`, qui
+construit le site, et garde trois artefacts quel que soit le résultat des
+tests : `e2e-rapport`, `e2e-traces` et `e2e-captures`, mais seulement quand
+la suite a écrit `envoi-permis`, à la fin d'un comptage complet qui n'a rien
+trouvé, et pas `ne-pas-envoyer` : une étape les cherche d'abord, et les trois
+envois attendent sa réponse. Une suite morte avant sa fin n'écrit ni l'un ni
+l'autre : rien ne part. Délai : 34 minutes : l'installation et la construction
+(environ 2 min 45 s) plus la suite (19 min 30 s), une fois et demie, arrondi à
+la minute au-dessus. Ce n'est pas une gate : aucune protection de branche ne
+l'exige, le rapport de qualité ne l'attend pas.
 
-Ce que l'utilisateur devra créer, le jour où le job existera, pour une instance
-Clerk de développement réservée à ces tests (jamais l'instance de production) :
+Il **saute** (conclusion « skipped », jamais « failed ») :
+
+* tant que la variable du dépôt `E2E_CLERK_PUBLISHABLE_KEY` n'existe pas : la
+  condition d'un job peut lire `vars` (une variable absente vaut une chaîne
+  vide), mais ni `secrets` ni les variables d'un environnement, qui n'arrivent
+  sur le runner qu'une fois le job démarré ;
+* quand `ci.yml` est appelé par la pipeline de release (`release.yml`, son
+  étape des gates) : un workflow appelé voit le nom de son appelant dans
+  `github.workflow` (« A called workflow uses the name of its caller workflow
+  in ${{ github.workflow }} », documentation de GitHub, « Reusing workflow
+  configurations »), et la condition exige `CI`. La suite ne devient donc
+  pas une gate de chaque release ;
+* sur une PR venue d'un fork, qui ne reçoit ni le secret ni l'environnement ;
+* par la règle des chemins, sur une PR qui ne change ni le site (`node`) ni
+  le Python de la console (`python`).
+
+Une exécution à la fois sur l'instance Clerk, quels que soient l'événement, la
+branche ou la PR : le démarrage d'une exécution supprime ce que les autres y
+ont laissé. Le job a son propre groupe de concurrence, `e2e-instance-clerk`,
+sans annulation : une exécution attend la fin de celle en cours, et GitHub ne
+garde qu'une attente par groupe, la plus récente. C'est le seul job de
+`ci.yml` qui lit un secret, et `scripts/ci/ci-workflow.test.mjs` vérifie ces
+règles.
+
+À créer par l'administrateur du dépôt, pour une instance Clerk de
+développement réservée à ces tests (jamais l'instance de production) :
 
 | Nom | Sorte | Où | Contenu |
 |---|---|---|---|
-| l'instance | instance Clerk de développement | Clerk | les organisations, les rôles `org:admin`, `org:gestionnaire` et `org:patient`, le gabarit de jeton `convex` décrits plus haut |
-| `e2e` | environnement GitHub | le dépôt | il porte le secret ci-dessous et doit accepter les branches des PR |
-| `E2E_CLERK_SECRET_KEY` | secret | de l'environnement `e2e` | la clé secrète de l'instance |
-| `E2E_CLERK_PUBLISHABLE_KEY` | variable | du **dépôt** (la condition du job la lirait) | la clé publiable de l'instance |
+| `E2E_CLERK_PUBLISHABLE_KEY` | variable | du **dépôt** (la condition du job la lit) | la clé publiable de l'instance (`pk_test_…`) |
 | `E2E_CLERK_JWT_ISSUER_DOMAIN` | variable | du dépôt, ou de l'environnement `e2e` | l'émetteur des jetons de l'instance |
+| `E2E_CLERK_SECRET_KEY` | secret | de l'environnement GitHub **`e2e`** | la clé secrète de l'instance (`sk_test_…`) |
+
+L'environnement `e2e` doit accepter les PR (aucune règle de branche, ou une
+règle qui couvre leurs branches) : réservé à une branche, il ferait échouer le
+job sur une PR au lieu de le laisser tourner. L'instance doit avoir les
+réglages décrits plus haut, et l'inventaire des secrets les tient
+([secrets.md](secrets.md#2-linventaire)). Une instance réservée à la CI n'a pas
+de webhook vers un déploiement Convex : seul le harnais y reflète les comptes,
+dans son backend local.
 
 **Écarts décidés.**
 
@@ -4051,9 +4083,8 @@ Clerk de développement réservée à ces tests (jamais l'instance de production
   aucune variable d'environnement pour `--instance-secret`). Il est donc
   visible des utilisateurs du poste le temps de l'exécution, pour un backend
   qui n'écoute que sur la boucle locale et dont la base est jetée à la fin.
-* Les captures sont refaites à chaque exécution, dans le dossier des sorties
-  (en artefact quand le job de CI existera) ; un premier jeu est versé dans
-  `docs/guides/captures/`, sans commit automatique.
+* Les captures sont un artefact de chaque exécution ; un premier jeu est versé
+  dans `docs/guides/captures/`, sans commit automatique.
 * L'incident bloquant (ANH-145) n'a pas de scénario tant qu'ANH-145 n'existe
   pas : un `test.skip` nommé le rappelle.
 * Le bouton « Télécharger l'archive » de l'enregistrement complet n'est pas
@@ -4068,10 +4099,10 @@ Clerk de développement réservée à ces tests (jamais l'instance de production
 
 ### Infrastructure encore dépendante d'autres tickets
 
-La suite navigateur du tableau de bord est livrée par ANH-83 et tourne en local
-(voir [Tests de bout en bout dans un navigateur](#tests-de-bout-en-bout-dans-un-navigateur-anh-83)) ;
-son job de CI attend une décision sur la garde de `ci.yml` et sur l'inventaire
-des secrets, et les tests du panneau local ne la remplacent pas. La matrice Convex par rôle et le contrat machine
+Le job navigateur du tableau de bord, `e2e`, est livré par ANH-83 (voir
+[Tests de bout en bout dans un navigateur](#tests-de-bout-en-bout-dans-un-navigateur-anh-83)) ;
+il saute tant que ses secrets et variables n'existent pas, et les tests du
+panneau local ne le remplacent pas. La matrice Convex par rôle et le contrat machine
 sont livrés par ANH-132, et sa dimension organisation par ANH-114 (voir
 [convex.md](convex.md#10-tests-automatisés)). L'endurance 24 h de la console entière,
 acquisition et synchronisation comprises, est l'étape nocturne de

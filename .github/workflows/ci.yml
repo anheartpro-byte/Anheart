@@ -703,6 +703,141 @@ jobs:
           overwrite: true
           path: ${{ runner.temp }}/quality
 
+  # The dashboard in a real browser, end to end (ANH-83; docs/framework-de-test.md,
+  # "Tests de bout en bout dans un navigateur (ANH-83)"): the site built and
+  # served by the suite, a local Convex backend thrown away at the end, test
+  # accounts of a Clerk development instance kept for these tests, the real
+  # console of the Pi in simulation. Not a gate: no branch protection requires
+  # it, and the quality report does not wait for it.
+  #
+  # Skipped, never failed, while the repository variable
+  # E2E_CLERK_PUBLISHABLE_KEY is unset: the `if` of a job may read `vars`
+  # (an unset variable reads as '') but not `secrets`, nor the variables of an
+  # environment, which only reach the runner once the job has started. The
+  # secret key is the only secret this workflow reads: a secret of the `e2e`
+  # environment, handed to the suite through `env`. The path rule skips the
+  # job on a pull request that changes neither the site nor the Python of
+  # the console.
+  #
+  # Skipped too when this workflow is called by another one: the release
+  # pipeline calls it as its stage of gates, and the suite must not become a
+  # gate of each release. A called workflow carries its caller's name: "A
+  # called workflow uses the name of its caller workflow in
+  # github.workflow" (GitHub, "Reusing workflow configurations"). And on a
+  # pull request from a fork, which gets neither the secret nor the
+  # environment: skipped there rather than failed.
+  e2e:
+    needs: changes
+    if: ${{ !cancelled() && github.workflow == 'CI' && vars.E2E_CLERK_PUBLISHABLE_KEY != '' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && (needs.changes.outputs.node != 'false' || needs.changes.outputs.python != 'false'))) }}
+    # One run at a time on the Clerk instance, whatever the event, the branch
+    # or the pull request: the start of a run deletes what other runs left
+    # there. A run waits and never cancels the one in progress; GitHub keeps
+    # one waiting run per group, the newest.
+    concurrency:
+      group: e2e-instance-clerk
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # The whole suite took 19 min 30 s on 29 October 2026, its last measure;
+    # installing and building, about 2 min 45 s more. One and a half times
+    # that, rounded up to the minute.
+    timeout-minutes: 34
+    environment: e2e
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Read the version of Playwright
+        id: playwright
+        run: echo "version=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+      - name: Keep the browser of Playwright between runs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - name: Install the browser and the system libraries it needs
+        run: npx playwright install --with-deps --only-shell chromium
+      # The binary the suite downloads once (its version is written in
+      # e2e/harness/convex.ts).
+      - name: Keep the local Convex backend between runs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/convex/binaries
+          key: convex-local-backend-${{ runner.os }}-${{ hashFiles('e2e/harness/convex.ts') }}
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: '0.8.22'
+          python-version: '3.12'
+          enable-cache: true
+          cache-suffix: e2e
+      # The same hashed locks as the Python gates: the suite runs the console
+      # from raspberry-pi/.venv.
+      - name: Install the Python environment of the console
+        run: |
+          uv venv raspberry-pi/.venv
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes -r raspberry-pi/requirements-dev-lock.txt
+          uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps -r raspberry-pi/requirements-dev-nodeps-lock.txt
+      # The suite builds the site (`next build`), serves it, mounts the rest,
+      # plays every scenario, then tears everything down, even on failure.
+      - name: Build the site, then run the end-to-end suite
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.E2E_CLERK_PUBLISHABLE_KEY }}
+          CLERK_JWT_ISSUER_DOMAIN: ${{ vars.E2E_CLERK_JWT_ISSUER_DOMAIN }}
+          CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+          E2E_OUTPUT_DIR: ${{ runner.temp }}/e2e
+        run: npm run test:e2e
+      # Something is sent only when the suite has written envoi-permis, at the
+      # end of a complete count that found no secret value and no signed token
+      # in what it leaves, and not ne-pas-envoyer (e2e/secret-scan.ts). A suite
+      # that found one, could not count, or died before its end, writes no
+      # envoi-permis: nothing is sent. The three uploads wait for this answer.
+      - name: Check that the suite allows its outputs to be sent
+        id: outputs
+        if: ${{ !cancelled() }}
+        env:
+          OUTPUT: ${{ runner.temp }}/e2e
+        run: |
+          if [ -e "$OUTPUT/envoi-permis" ] && [ ! -e "$OUTPUT/ne-pas-envoyer" ]; then
+            echo "send=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=Sorties de la suite retenues::la recherche des secrets n'a pas fini sans rien trouver (occurrence, comptage impossible ou suite interrompue) : rien n'est envoyé."
+          fi
+      # Kept whatever the outcome of the tests: the report, the traces of the
+      # failures (masked by the suite before they are written), the screenshots.
+      - name: Keep the report of the suite
+        if: ${{ !cancelled() && steps.outputs.outputs.send == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: e2e-rapport
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/e2e/rapport
+      - name: Keep the traces of the failures
+        if: ${{ !cancelled() && steps.outputs.outputs.send == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: e2e-traces
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/e2e/test-results
+      - name: Keep the screenshots of the pages
+        if: ${{ !cancelled() && steps.outputs.outputs.send == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: e2e-captures
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+          path: ${{ runner.temp }}/e2e/captures
+
   # The dependencies and the history of the repository (docs/framework-de-test.md,
   # "Dépendances : un gestionnaire, des versions figées, un audit"). Each audit
   # fails this required check on what it finds: npm on a high or critical
