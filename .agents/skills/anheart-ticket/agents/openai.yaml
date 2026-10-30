@@ -1,0 +1,4 @@
+interface:
+  display_name: "Anheart - Coordinateur ticket"
+  short_description: "Tasks Orca, checklist, preuves, revue et merge"
+  default_prompt: "Utilise $anheart-ticket pour coordonner le ticket transmis par le pilote Orca en conservant ses exigences originales."
