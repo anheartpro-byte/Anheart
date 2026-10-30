@@ -254,6 +254,10 @@ la gestion du compte Clerk (adresse, mot de passe).
 Le bouton **soleil / lune** à côté du globe bascule entre thème clair et thème
 sombre. Au départ, le site suit le réglage de votre système.
 
+Les pages principales, en français et en anglais, dans les deux thèmes :
+[captures des pages principales](captures/README.md) (prises par la suite de
+bout en bout, avec des données de test).
+
 ### 3.4 Naviguer : la barre latérale
 
 La barre latérale (à gauche) change selon votre rôle.

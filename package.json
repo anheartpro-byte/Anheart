@@ -13,6 +13,8 @@
     "test:convex": "vitest run --config vitest.convex.config.mts",
     "test:lib": "vitest run --config vitest.lib.config.mts",
     "test:site": "vitest run --config vitest.site.config.mts",
+    "test:e2e": "playwright test --config e2e/playwright.config.ts",
+    "e2e:browser": "playwright install --only-shell chromium",
     "coverage:convex": "vitest run --config vitest.convex.config.mts --coverage",
     "coverage:site": "vitest run --config vitest.site-coverage.config.mts --coverage",
     "test:dependency-security": "node --test scripts/ci/braces-depth-guard.test.mjs",
@@ -61,6 +63,7 @@
   "devDependencies": {
     "@convex-dev/eslint-plugin": "^1.1.1",
     "@edge-runtime/vm": "^5.0.0",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/postcss": "^4.1.17",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
