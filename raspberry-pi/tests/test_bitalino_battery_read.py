@@ -156,8 +156,7 @@ class SlowDevice:
         self._say("version<")
         return "BITalino_v5.2"
 
-    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
-        del sample_rate, channels
+    def start(self, _sample_rate: int, _channels: Sequence[int], /) -> None:
         self._say("start>")
         time.sleep(0.1)
         self._say("start<")
@@ -189,7 +188,7 @@ async def test_the_battery_is_never_read_while_the_connection_is_being_opened() 
     opening = asyncio.create_task(link.step())
     await _until(lambda: _connected(client))
     battery = await link.read_battery()
-    await opening
+    await asyncio.wait_for(opening, 3.0)
     assert battery == pytest.approx(50.0, abs=0.5)
     log = device.log
     assert log.index("state>") > log.index("start<"), log
@@ -335,8 +334,8 @@ class HangingStop:
     def version(self) -> str:
         return "BITalino_v5.2"
 
-    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
-        del sample_rate, channels
+    def start(self, _sample_rate: int, _channels: Sequence[int], /) -> None:
+        """Starts at once."""
 
     def read_chunk(self, max_bytes: int, /) -> bytes:
         del max_bytes
@@ -386,7 +385,7 @@ async def test_the_wait_for_the_port_is_bounded_too() -> None:
     opening = asyncio.create_task(link.step())
     await _until(lambda: _connected(client))
     assert await link.read_battery() is None
-    await opening
+    await asyncio.wait_for(opening, 3.0)
     assert link.streaming
     assert "state>" not in device.log
     await client.disconnect()
@@ -405,8 +404,7 @@ class StoppedWhileStarting:
     def version(self) -> str:
         return "BITalino_v5.2"
 
-    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
-        del sample_rate, channels
+    def start(self, _sample_rate: int, _channels: Sequence[int], /) -> None:
         self.starting.set()
         self.go_on.wait(3.0)
 
@@ -436,7 +434,7 @@ async def test_a_device_opened_for_a_stopped_acquisition_is_closed_not_adopted(
     stopping = asyncio.create_task(client.stop_acquisition())
     await asyncio.sleep(0.05)
     late.go_on.set()
-    await stopping
+    await asyncio.wait_for(stopping, 3.0)
     assert late.closed.is_set()
     assert not _connected(client)
     assert not client.reads_battery
@@ -467,8 +465,8 @@ class LateRead:
     def version(self) -> str:
         return "BITalino_v5.2"
 
-    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
-        del sample_rate, channels
+    def start(self, _sample_rate: int, _channels: Sequence[int], /) -> None:
+        """Starts at once."""
 
     def read_chunk(self, max_bytes: int, /) -> bytes:
         del max_bytes
@@ -522,8 +520,8 @@ class DropsThenHangs:
     def version(self) -> str:
         return "BITalino_v5.2"
 
-    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
-        del sample_rate, channels
+    def start(self, _sample_rate: int, _channels: Sequence[int], /) -> None:
+        """Starts at once."""
 
     def read_chunk(self, max_bytes: int, /) -> bytes:
         del max_bytes

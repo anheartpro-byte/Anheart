@@ -895,8 +895,8 @@ class ChargedDevice:
     def version(self) -> str:
         return "BITalino_v5.2"
 
-    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
-        del sample_rate, channels
+    def start(self, _sample_rate: int, _channels: Sequence[int], /) -> None:
+        """Starts at once."""
 
     def read_chunk(self, max_bytes: int, /) -> bytes:
         del max_bytes

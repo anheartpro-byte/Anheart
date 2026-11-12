@@ -896,8 +896,8 @@ class Session:
                 software_version="simulation",
             )
 
-        def ignored(report: PreflightReport) -> None:
-            del report
+        def ignored(_report: PreflightReport) -> None:
+            """The simulation keeps no pre-flight log: its verdicts are judged as they come."""
 
         scenario = self._scenario
         on_board = (

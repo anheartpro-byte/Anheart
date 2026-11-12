@@ -657,7 +657,7 @@ async def test_a_battery_read_due_or_under_way_refuses_a_person_on_board() -> No
     assert monitor.refusal(Occupancy.OCCUPIED) == under_way
     assert monitor.refusal(Occupancy.BENCH) is None
     console.hold.set()
-    await reading
+    await asyncio.wait_for(reading, 3.0)
 
 
 async def test_a_battery_read_breaks_the_ecg_window_until_samples_of_after_it() -> None:
@@ -674,7 +674,7 @@ async def test_a_battery_read_breaks_the_ecg_window_until_samples_of_after_it() 
     console.clock.advance(Seconds(2.0))
     assert console.hold is not None
     console.hold.set()
-    await reading
+    await asyncio.wait_for(reading, 3.0)
     monitor.observe(_good(before))  # taken before the read ended: nothing
     assert monitor.inputs().ecg_good_since is None
     _tick(console.clock, monitor, 0.2)
