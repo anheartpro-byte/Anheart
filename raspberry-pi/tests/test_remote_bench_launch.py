@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import math
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from http import HTTPStatus
@@ -84,6 +85,7 @@ from tests.test_cloud_sync import (
     state_of,
     status_answer,
 )
+from tests.test_contract import shared
 from tests.test_out_of_service_console import console as out_of_service_console
 
 END: Final[str] = "/api/machine/training/end"
@@ -635,3 +637,67 @@ async def test_out_of_service_a_bench_launch_is_refused_before_it_is_confirmed(
     assert isinstance(launch, BenchLaunch)
     assert rig_.panel.preflight_remote_start(launch) == Err(f"demarrage refuse : {OUT_OF_SERVICE}")
     await rig_.panel.close()
+
+
+# =========================================================================
+# Under a real STO source, a bench launch arms only on a READY chain
+# =========================================================================
+
+
+@pytest.mark.parametrize("chain", ["open", "ready"])
+async def test_under_a_real_sto_source_a_bench_launch_is_refused_unless_the_chain_is_ready(
+    tmp_path: Path, chain: str
+) -> None:
+    """The bridge exception never reaches a real source: an open chain refuses the bench
+    launch before ``training/start``, and the dashboard is told so as a failed start."""
+    r = rig(tmp_path, sto_source="sim_ready")
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(BENCH)))
+    await r.step(0.2)
+    assert isinstance(r.sync.confirm_remote_launch("remote-bench", OPERATOR, True), Ok)
+    simulator = r.panel.drive.simulator
+    assert simulator is not None
+    assert simulator.sto_chain is not None
+    if chain == "open":
+        simulator.sto_chain.open(r.clock.monotonic())
+    await r.step()
+    if chain == "ready":
+        assert [body["sessionId"] for body in r.dashboard.to(START)] == ["remote-bench"]
+        assert isinstance(r.panel.surface.pending, StartManual)
+    else:
+        assert r.dashboard.to(START) == []
+        assert r.panel.surface.pending is None
+        (end,) = r.dashboard.to(END)
+        assert end["sessionId"] == "remote-bench"
+        assert end["failed"] is True
+        assert end["reason"] == (
+            "refusee par la machine : chaine STO ouverte : retablir la chaine de securite"
+        )
+    await r.panel.close()
+
+
+# =========================================================================
+# The console's words and bounds are the shared contract's
+# =========================================================================
+
+
+def _unaccented(text: str) -> str:
+    """``text`` as the console writes it: the same letters, without their accents."""
+    return "".join(
+        letter
+        for letter in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(letter)
+    )
+
+
+def test_the_attestation_and_the_bounds_are_the_shared_contract_s() -> None:
+    bench_launch = shared()["bench_launch"]
+    assert isinstance(bench_launch, dict)
+    section = cast("Mapping[str, object]", bench_launch)
+    attestation = section["attestation"]
+    assert isinstance(attestation, str)
+    assert _unaccented(attestation) == BENCH_LAUNCH_ATTESTATION
+    assert BENCH_LAUNCH_ATTESTATION.isascii()
+    assert section["max_ballast_kg"] == MAX_BALLAST_KG
+    assert section["max_notes_chars"] == MAX_LAUNCH_NOTES
+    assert section["since"] == "1.9"

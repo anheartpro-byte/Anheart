@@ -73,11 +73,13 @@
       "sessionId": "Identifiant de la séance (chaîne).",
       "mode": "`bench`.",
       "occupancy": "`ballast` : capsule lestée, aucune personne à bord. La console arme l'occupation `bench`.",
-      "ballastKg": "Masse déclarée sur le site en kg, nombre fini supérieur à 0 et au plus 200, ou null si elle n'a pas été donnée. Jamais mesurée par la machine ; rien ne la lit pour décider.",
-      "notes": "Note du lanceur, 500 caractères au plus, ou null.",
+      "ballastKg": "Masse déclarée sur le site en kg, nombre fini supérieur à 0 et au plus `max_ballast_kg`, ou null si elle n'a pas été donnée. Jamais mesurée par la machine ; rien ne la lit pour décider.",
+      "notes": "Note du lanceur, `max_notes_chars` caractères au plus, ou null.",
       "operatorName": "Nom de celui qui a lancé la séance sur le site."
     },
-    "attestation": "capsule lestée, aucune personne à bord, personne dans le rayon du bras"
+    "attestation": "capsule lestée, aucune personne à bord, personne dans le rayon du bras",
+    "max_ballast_kg": 200,
+    "max_notes_chars": 500
   },
   "feedback_events": {
     "route": "POST /api/machine/training/events",

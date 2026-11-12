@@ -5,6 +5,7 @@ import { mutation, mutationCalls, resetConvex } from "@/test-support/convex";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dismissFeedback, getFeedbackToasts } from "@/lib/feedback";
 import { MAX_BALLAST_KG, MAX_LAUNCH_NOTES } from "@/lib/training";
+import machineApi from "@/contracts/machine-api.json";
 import { LaunchBenchModal, parseBallastKg } from "./LaunchBenchModal";
 
 /**
@@ -62,6 +63,10 @@ describe("ANH-250 bench window: what it says", () => {
     expect(text).toContain(`« ${t.attestation} »`);
     expect(text).toContain("145 s");
     expect(text).toContain(t.description);
+  });
+
+  it("names the attestation of the shared contract, the one the console asks for", () => {
+    expect(t.attestation).toBe(machineApi.bench_launch.attestation);
   });
 
   it("is said in English too", () => {

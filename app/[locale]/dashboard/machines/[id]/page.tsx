@@ -46,7 +46,9 @@ import {
   LastSignal,
   MachineStatusBadge,
   MachineStatusText,
+  useShownMachineStatus,
   VersionsSeen,
+  type MachineSignal,
 } from "@/components/machines/MachineSignal";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
 import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
@@ -184,10 +186,10 @@ export default function MachineDetailPage({
           )}
           {/* A ballasted bench session, nobody on board (ANH-250): staff only. */}
           {canManage && !machine.isDeleted && (
-            <Button variant="outline" onClick={() => setShowBenchModal(true)}>
-              <Weight className="h-4 w-4 mr-2" />
-              {t("training.bench.button")}
-            </Button>
+            <BenchLaunchButton
+              machine={machine}
+              onClick={() => setShowBenchModal(true)}
+            />
           )}
           <MachineStatusBadge
             machine={machine}
@@ -449,6 +451,28 @@ export default function MachineDetailPage({
         machine={machine}
       />
     </div>
+  );
+}
+
+/**
+ * "Séance de banc lestée", greyed unless the machine is shown online, on the
+ * verdict of its badge, as on "My machines": nobody on board, so neither
+ * programmes nor medical parameters matter.
+ */
+function BenchLaunchButton({
+  machine,
+  onClick,
+}: {
+  machine: MachineSignal;
+  onClick: () => void;
+}) {
+  const t = useTranslations();
+  const status = useShownMachineStatus(machine);
+  return (
+    <Button variant="outline" onClick={onClick} disabled={status !== "online"}>
+      <Weight className="h-4 w-4 mr-2" />
+      {t("training.bench.button")}
+    </Button>
   );
 }
 

@@ -488,6 +488,21 @@ describe("ANH-250 machine page: a ballasted bench session", () => {
     },
   );
 
+  it.each([
+    ["offline", machine({ status: "offline", lastHeartbeat: 0 })],
+    ["silent for 90 s", machine({ lastHeartbeat: NOW - 90_000 })],
+    ["in a session", machine({ status: "in_session" })],
+  ] as const)(
+    "is greyed on a machine %s, as on « Mes machines »",
+    async (_case, shown) => {
+      const { user } = await open("admin", shown);
+      const button = screen.getByRole("button", benchButton);
+      expect(button.hasAttribute("disabled")).toBe(true);
+      await user.click(button);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    },
+  );
+
   it("is never offered to a patient", async () => {
     await open("user");
     expect(screen.queryByRole("button", benchButton)).toBeNull();

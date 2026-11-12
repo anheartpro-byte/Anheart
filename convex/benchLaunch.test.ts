@@ -13,6 +13,7 @@
  *   bench session never takes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import shared from "../contracts/machine-api.json";
 import { ConvexError } from "convex/values";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -589,6 +590,13 @@ describe("ANH-250 the site follows, stops and reports a bench session", () => {
         sessionId,
       }),
     ).toMatchObject({ eligible: false });
+  });
+
+  it("bounds the mass and the note as the shared contract states them", () => {
+    expect([MAX_BALLAST_KG, MAX_LAUNCH_NOTES]).toEqual([
+      shared.bench_launch.max_ballast_kg,
+      shared.bench_launch.max_notes_chars,
+    ]);
   });
 
   it("bounds the mass and the note as the site's form does", () => {
