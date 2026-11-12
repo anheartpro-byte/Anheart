@@ -172,3 +172,115 @@ test("passenger data is rendered as text and never parsed as markup", () => {
   context.renderRemoteLaunch(offer({ passenger_name: "<img src=x>" }));
   assert.equal(node("remote-launch-facts").children[1].textContent, "<img src=x>");
 });
+
+/* ===== ANH-250: a ballasted bench session launched from the site ===== */
+
+const ATTESTATION = "capsule lestee, aucune personne a bord, personne dans le rayon du bras";
+
+const bench = (changes = {}) => offer({
+  mode: "bench",
+  profile_id: null,
+  program: null,
+  passenger_name: null,
+  passenger_reason: null,
+  ballast_kg: 80,
+  notes: "sac de sable sangle",
+  attestation: ATTESTATION,
+  ...changes,
+});
+
+test("a bench launch shows the ballast, the note and the attestation, nobody on board", () => {
+  const { context, node } = page();
+  context.renderRemoteLaunch(bench());
+  const facts = node("remote-launch-facts").children.map((child) => child.textContent);
+  assert.deepEqual(facts, [
+    "seance",
+    "BANC LESTE - personne a bord : NON",
+    "lest declare",
+    "80 kg",
+    "note",
+    "sac de sable sangle",
+    "lance par",
+    "Dr Manager",
+  ]);
+  assert.equal(node("remote-launch-attest-row").classList.contains("hidden"), false);
+  assert.equal(node("remote-launch-attest-text").textContent, `J'atteste : ${ATTESTATION}`);
+  assert.equal(node("remote-launch-confirm").textContent, "Confirmer le depart du banc leste");
+});
+
+test("a bench launch cannot be confirmed before the attestation is ticked", () => {
+  const { context, node } = page();
+  context.renderRemoteLaunch(bench());
+  assert.equal(node("remote-launch-confirm").disabled, true);
+  node("remote-launch-attest").checked = true;
+  context.renderRemoteLaunch(bench());
+  assert.equal(node("remote-launch-confirm").disabled, false);
+});
+
+test("the tick belongs to the offer it was given for: another launch, or a changed one, clears it", () => {
+  const { context, node } = page();
+  context.renderRemoteLaunch(bench());
+  node("remote-launch-attest").checked = true;
+  context.renderRemoteLaunch(bench({ ballast_kg: 90 }));
+  assert.equal(node("remote-launch-attest").checked, false);
+  assert.equal(node("remote-launch-confirm").disabled, true);
+  node("remote-launch-attest").checked = true;
+  context.renderRemoteLaunch(bench({ session_id: "another" }));
+  assert.equal(node("remote-launch-attest").checked, false);
+  node("remote-launch-attest").checked = true;
+  context.renderRemoteLaunch(null);
+  assert.equal(node("remote-launch-attest").checked, false);
+  assert.equal(node("remote-launch-attest-row").classList.contains("hidden"), true);
+});
+
+test("a mass not declared and an empty note are said as such", () => {
+  const { context, node } = page();
+  context.renderRemoteLaunch(bench({ ballast_kg: null, notes: null }));
+  const facts = node("remote-launch-facts").children.map((child) => child.textContent);
+  assert.equal(facts[3], "masse non declaree");
+  assert.equal(facts[5], "-");
+});
+
+test("the note of a bench launch is rendered as text and never parsed as markup", () => {
+  const { context, node } = page();
+  context.renderRemoteLaunch(bench({ notes: "<script>x</script>" }));
+  assert.equal(node("remote-launch-facts").children[5].textContent, "<script>x</script>");
+});
+
+test("a programme keeps its own wording and needs no attestation", () => {
+  const { context, node } = page();
+  context.renderRemoteLaunch(bench());
+  context.renderRemoteLaunch(offer());
+  assert.equal(node("remote-launch-attest-row").classList.contains("hidden"), true);
+  assert.equal(node("remote-launch-confirm").textContent, "Cette personne est a bord et prete");
+  assert.equal(node("remote-launch-confirm").disabled, false);
+});
+
+test("the confirmation of a bench launch says the attestation was ticked; a programme's never does", async () => {
+  const { context, node } = page();
+  const sent = [];
+  context.api = (path, options) => {
+    sent.push([path, options]);
+    return Promise.resolve(null);
+  };
+  node("operator").value = "Operateur";
+  context.renderRemoteLaunch(bench());
+  node("remote-launch-attest").checked = true;
+  context.doConfirmRemoteLaunch();
+  await new Promise((resolve) => setImmediate(resolve));
+  // Built in the page's own realm: compared by value, as JSON.
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), [
+    "/api/remote-launch/confirm",
+    {
+      method: "POST",
+      body: { session_id: "remote-session", operator: "Operateur", bench_attested: true },
+    },
+  ]);
+  context.renderRemoteLaunch(offer({ session_id: "programme" }));
+  node("remote-launch-attest").checked = true;
+  context.doConfirmRemoteLaunch();
+  await new Promise((resolve) => setImmediate(resolve));
+  const confirmations = sent.filter(([path]) => path === "/api/remote-launch/confirm");
+  assert.equal(confirmations.length, 2);
+  assert.equal(confirmations[1][1].body.bench_attested, false);
+});

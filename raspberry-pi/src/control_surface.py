@@ -115,7 +115,7 @@ from src.training.safety import (
     SafetyAcknowledgement,
     SafetySupervisor,
 )
-from src.training.types import Occupancy, SafetyVerdict, TelemetrySnapshot
+from src.training.types import Ballast, Occupancy, SafetyVerdict, TelemetrySnapshot
 from src.units import Bpm, Monotonic, OutputRpm, Seconds, UnixMillis
 
 _logger: logging.Logger = logging.getLogger(__name__)
@@ -374,6 +374,16 @@ class StartManual:
     subject_id: str = LOCAL_SUBJECT
     """Who rides: a rider of the list with a person on board; :data:`LOCAL_SUBJECT`
     on the bench, where nobody does."""
+
+    cloud_session_id: str | None = None
+    """The dashboard's bench launch this start answers (contract 1.9, ANH-250), or
+    ``None`` for a start typed at the console."""
+
+    confirmed_by: str | None = None
+    """Who confirmed that launch at the console, attesting the bench."""
+
+    ballast: Ballast | None = None
+    """The load that launch declares; ``None`` for a start at the console."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -887,28 +897,46 @@ class ControlSurface:
             return Err(busy)
         return Ok(None)
 
-    def check_remote_launch(self) -> Result[None, LaunchRefusal]:
-        """The start gates of a launch from the dashboard, a programme, without submitting it.
+    def check_remote_launch(
+        self, occupancy: Occupancy = Occupancy.OCCUPIED
+    ) -> Result[None, LaunchRefusal]:
+        """The start gates of a launch from the dashboard, without submitting it.
 
-        Those of :meth:`check_start` for a person on board. Under a declared
-        STO bridge the launch is refused first, in its own words
+        Those of :meth:`check_start` for ``occupancy``: a person on board for a
+        programme, the default. Under a declared STO bridge a programme is
+        refused first, in its own words
         (:class:`~src.training.preflight.StoBridgedRemoteLaunch`), before the
         attestation, a verdict or a busy console are looked at: no
-        attestation, acknowledgement or rest lifts it under that mode, and
-        bench sessions start at the console only.
+        attestation, acknowledgement or rest lifts it under that mode. A
+        ballasted bench launch (``Occupancy.BENCH``, contract 1.9) has nobody
+        on board: it passes the gates of a bench start at the console, under a
+        bridge as under a real STO source.
         """
         sto = self._sto
-        if sto is not None and sto_bridged(sto.latest(self._clock.monotonic())):
+        if (
+            occupancy is not Occupancy.BENCH
+            and sto is not None
+            and sto_bridged(sto.latest(self._clock.monotonic()))
+        ):
             return Err(StoBridgedRemoteLaunch())
-        return self.check_start(Occupancy.OCCUPIED)
+        return self.check_start(occupancy)
 
     def submit_start_manual(
-        self, *, occupancy: Occupancy, operator: str, subject_id: str = ""
+        self,
+        *,
+        occupancy: Occupancy,
+        operator: str,
+        subject_id: str = "",
+        cloud_session_id: str | None = None,
+        confirmed_by: str | None = None,
+        ballast: Ballast | None = None,
     ) -> Result[StartManual, StartRefusal]:
         """Ask for a manual session to start. The same gates as :meth:`submit_start`.
 
         ``subject_id`` names the rider with a person on board; the loop checks
         it against the riders' list when it arms, as it checks the occupancy.
+        ``cloud_session_id``, ``confirmed_by`` and ``ballast`` carry a bench
+        launch from the dashboard the operator confirmed here (ANH-250).
         """
         checked = self.check_start(occupancy)
         if isinstance(checked, Err):
@@ -919,6 +947,9 @@ class ControlSurface:
             at=self._clock.monotonic(),
             request_id=self._next_request(),
             subject_id=subject_id or LOCAL_SUBJECT,
+            cloud_session_id=cloud_session_id,
+            confirmed_by=confirmed_by,
+            ballast=ballast,
         )
         self._accept_start(command)
         return Ok(command)

@@ -368,10 +368,19 @@
   <section id="view-run" class="view hidden">
     <h1 class="page-title">Seance</h1>
 
+    <!--
+      A launch from the dashboard: a programme for the rider named, or since contract 1.9
+      a ballasted bench session with nobody on board (ANH-250), whose confirmation needs the
+      attestation below ticked. The note is the launcher's, shown as text.
+    -->
     <div class="card remote-launch hidden" id="remote-launch-card">
       <h2>Depart distant <span id="remote-launch-state" class="pill pill-warn">-</span></h2>
       <dl class="grid" id="remote-launch-facts"></dl>
       <p id="remote-launch-passenger-note" class="note"></p>
+      <label id="remote-launch-attest-row" class="check hidden">
+        <input id="remote-launch-attest" type="checkbox" />
+        <span id="remote-launch-attest-text"></span>
+      </label>
       <p id="remote-launch-status" class="note" role="status"></p>
       <button id="remote-launch-confirm" class="btn btn-go" type="button" disabled>
         Cette personne est a bord et prete

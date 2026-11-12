@@ -153,7 +153,7 @@ async function startAfter(
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
   it("serves the version, header and error codes of the shared file", () => {
     expect(CONTRACT_VERSION).toBe(shared.contract_version);
-    expect(CONTRACT_VERSION).toBe("1.8");
+    expect(CONTRACT_VERSION).toBe("1.9");
     expect(CONTRACT_HEADER).toBe(shared.header);
     expect(MACHINE_ERROR_CODES).toEqual(Object.keys(shared.error_codes));
     expect(MACHINE_ERROR_CODES.length).toBeGreaterThan(0);
@@ -602,6 +602,28 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
       code: "rider_busy",
       run: (w) =>
         startAfter(w, () => seedSession(w, w.otherMachine, "active")),
+    },
+    {
+      name: "training/start: a bench launch whose machine another session holds",
+      status: 409,
+      code: "machine_busy",
+      run: async (w) => {
+        const sessionId = await w.t.run((ctx) =>
+          ctx.db.insert("sessions", {
+            organizationId: w.organizationId,
+            machineId: w.machine,
+            startedById: w.adminId,
+            status: "pending",
+            startedAt: Date.now(),
+            channels: ["ECG"],
+            kind: "manual",
+            origin: "remote",
+            ballast: { massKg: 80 },
+          }),
+        );
+        await seedSession(w, w.machine, "active");
+        return post(w, "/api/machine/training/start", { sessionId });
+      },
     },
     {
       name: "training/start: an identifier that is not one",

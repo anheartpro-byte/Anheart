@@ -53,7 +53,7 @@ personnes). Pas sur la vraie machine avec une personne à bord.
 | **Les 60 défauts du variateur** (plus un code inconnu) mènent tous à un arrêt contrôlé, avec le code affiché. Le réarmement est refusé pour les 38 défauts non réarmables et pour un code inconnu ; il n'est jamais plus permissif que le manuel du constructeur. La table suit les documents de l'ATV320 lui-même ([raspberry-pi.md, section 6](raspberry-pi.md#6-les-défauts-du-variateur-table-lft)). | `motor/drive.py`, table LFT |
 | **Jamais d'arrêt plus rapide que la rampe.** QUICK_STOP met la consigne à 0 mais garde l'ordre de marche : le variateur freine sur sa rampe réglée, ce qui évite ObF et la roue libre. | `motor/atv320.py` |
 | **Limites anti-nausée** (0,25 tr/min/s au bras, 0,03 g/s) appliquées à toute variation non urgente, manuelle comme programmée, avec la variation de g jugée au bout des pieds (`LEG_TIP_RADIUS_M`). | `training/motion.py` |
-| **Le tableau de bord ne peut ni arrêter la machine en tombant en panne, ni lancer une séance manuelle.** Il ne peut envoyer que deux choses : un lancement AUTO (qui repasse par toutes les portes de la console) et une demande d'arrêt (exécutée sur la rampe normale). | `cloud_sync.py` |
+| **Le tableau de bord ne peut ni arrêter la machine en tombant en panne, ni lancer une séance manuelle avec une personne à bord, ni régler une vitesse.** Il ne peut envoyer que deux choses : un lancement (AUTO, ou depuis le contrat 1.9 une séance de banc lestée, sans personne à bord, qui ne démarre qu'après la confirmation physique et l'attestation de l'opérateur à la console ; l'un comme l'autre repasse par toutes les portes de la console) et une demande d'arrêt (exécutée sur la rampe normale). | `cloud_sync.py` |
 | **Un tableau de bord d'un autre contrat n'arme rien.** Un lancement venu d'une réponse dont la majeure de contrat n'est pas celle de la console, ou qui n'annonce aucune version, n'atteint jamais la boîte aux lettres : la console l'affiche et le renvoie comme séance échouée. Dans l'autre sens, Convex refuse (426) toute requête d'une machine dont il ne sert pas la majeure, sauf celle qui porte la demande d'arrêt : un arrêt demandé au tableau de bord, ou une séance que le serveur ne tient plus pour active, arrête la séance en cours quelle que soit la version des deux côtés. C'est tout ce que la console retient d'une réponse d'une autre majeure : le pire qu'une telle réponse puisse faire est un arrêt ordinaire. | `contract.py`, `cloud_sync.py`, `convex/lib/contract.ts` |
 | **Les clients sont séparés dans Convex.** Chaque fonction publique répond dans l'organisation de l'appelant, lue dans le jeton vérifié et jamais dans un argument ; une machine, un patient, une séance ou une mesure d'une autre organisation est refusé comme s'il n'existait pas, y compris par identifiant direct. Ce qu'une machine écrit hérite de son organisation. Seul l'admin de l'organisation Anheart lit toutes les organisations. Vérifié en mémoire seulement (voir la limite en §3). | `convex/lib/auth.ts`, `convex/authorization.matrix.ts`, `convex/organizationIsolation.test.ts` |
 | **Chaque mutation sensible listée ajoute sa ligne d'audit dans la transaction de son effet.** Les fonctions du déploiement ne modifient ni ne suppriment ces lignes ; aucune purge n'existe. Portée et limites au [§14](#14-journal-daudit-anh-167). | [`convex/lib/audit.ts`](../convex/lib/audit.ts), [`convex/auditCompleteness.test.ts`](../convex/auditCompleteness.test.ts), [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) |
@@ -1972,7 +1972,7 @@ en **mode banc seulement**.
   la machine est en mode banc uniquement. » et bloque le départ ; la fenêtre
   aussi si la machine est accessible, en ligne et libre. Sans version serveur,
   la carte dit « Aucune version des paramètres médicaux n'est enregistrée
-  sur le serveur : aucun lancement à distance n'est possible. » et bloque
+  sur le serveur : aucune séance auto ne peut être lancée à distance. » et bloque
   le départ ; la fenêtre aussi, aux mêmes conditions. La carte peut aussi
   montrer un refus d'aptitude ou de consentement ; la fenêtre les contrôle
   après le motif médical.
@@ -1987,8 +1987,8 @@ en **mode banc seulement**.
   présentée comme en mode banc. Une annonce absente ou mal formée donne
   `unknown`, sans libellé sur la fiche ; programmes désactivés et version
   serveur inscrite, le refus est `programs_disabled` : « Programmes auto
-  désactivés sur cette machine : seules les séances manuelles, depuis la
-  console de la machine, sont possibles. ». Au contrôle médical local en mode
+  désactivés sur cette machine : aucune séance auto ne peut y être lancée. ».
+  Au contrôle médical local en mode
   banc, la console refuse : « refusee par la machine : parametres medicaux non
   signes (raison) : console en mode banc seulement, aucune seance programmee
   ni personne a bord ». Ses messages sont sans accents.

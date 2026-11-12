@@ -589,7 +589,11 @@ class Services:
     names one of. ``None``: this interface has none, and refuses such a start."""
 
     remote_launch_current: Callable[[], RemoteLaunchView | None] | None = None
-    remote_launch_confirm: Callable[[str, str], Result[None, ConfirmationRefusal]] | None = None
+    remote_launch_confirm: Callable[[str, str, bool], Result[None, ConfirmationRefusal]] | None = (
+        None
+    )
+    """Confirm the offered launch: its session, the operator, and whether the operator
+    ticked the bench attestation (read for a bench launch only, ANH-250)."""
 
     feedback: PassengerFeedback | None = None
     """The rider's feedback after a session with somebody on board (``/api/feedback``,

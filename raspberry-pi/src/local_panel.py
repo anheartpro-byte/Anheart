@@ -152,6 +152,8 @@ from src.bitalino_client import BITalinoClient, LinkStats, SampleBatch
 from src.bitalino_rfcomm_macos import device_factory_for
 from src.clock import Clock, RealClock
 from src.cloud_sync import (
+    AutoLaunch,
+    BenchLaunch,
     CloudSync,
     CloudTransport,
     DepositTask,
@@ -1391,32 +1393,37 @@ class LocalPanel:
         holds now, at least the medical file's ``min_rider_age``
         (:meth:`_on_board_refusal`), and
         the bench names nobody (:meth:`_manual_rider`).
+
+        A bench launch from the dashboard the operator confirmed here
+        (``cloud_session_id``, ANH-250) goes through every one of these gates,
+        and each refusal is also sent back to the dashboard as a failed
+        session (:meth:`_refuse_start`).
         """
         occupancy = command.occupancy
         operator = command.operator
         out = self._service_refusal()
         if out is not None:
-            self._surface.note_refused(command, out)
+            self._refuse_start(command, out)
             return
         ceiling = self._config.ceiling_for(occupancy)
         if isinstance(ceiling, Err):
-            self._surface.note_refused(command, ceiling.error.detail)
+            self._refuse_start(command, ceiling.error.detail)
             return
         named = self._manual_rider(command)
         if isinstance(named, Err):
-            self._surface.note_refused(command, describe_passenger_refusal(named.error))
+            self._refuse_start(command, describe_passenger_refusal(named.error))
             return
         rider = named.value
         fitness_version = None
         if rider is not None:
             on_board = self._on_board_refusal(rider)
             if isinstance(on_board, Err):
-                self._surface.note_refused(command, on_board.error)
+                self._refuse_start(command, on_board.error)
                 return
             fitness_version = on_board.value
         blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
         if blocked is not None:
-            self._surface.note_refused(command, blocked)
+            self._refuse_start(command, blocked)
             return
         # Read before the drive is touched: the record's frames start with the arming,
         # and so does the count of those it loses.
@@ -1427,7 +1434,7 @@ class LocalPanel:
         if isinstance(started, Err):
             if self._recorder is not None:
                 self._recorder.discard_preroll()
-            self._surface.note_refused(command, self._start_refused(started.error))
+            self._refuse_start(command, self._start_refused(started.error))
             return
         self._surface.note_taken(command)
         subject = LOCAL_SUBJECT if rider is None else rider.user_id
@@ -1436,9 +1443,12 @@ class LocalPanel:
                 occupancy=occupancy,
                 operator=operator,
                 subject_id=subject,
+                cloud_session_id=command.cloud_session_id,
                 arming_began=asked,
                 fitness_questionnaire_version=fitness_version,
                 arming_refused=refused,
+                confirmed_by=command.confirmed_by,
+                ballast=command.ballast,
             )
         )
         untrusted = self._untrusted_clock()
@@ -1454,7 +1464,7 @@ class LocalPanel:
                     operator=operator,
                     started_at=self._clock.unix_millis(),
                     subject_id=subject,
-                    cloud_session_id=None,
+                    cloud_session_id=command.cloud_session_id,
                     occupancy=occupancy,
                     subject_label=None if rider is None else rider.name,
                 )
@@ -1538,7 +1548,7 @@ class LocalPanel:
         self._withhold_programme_words(command.profile_id, rider)
         prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
-            self._refuse_programme(command, prepared.error)
+            self._refuse_start(command, prepared.error)
             return
         program = prepared.value.program
         label = prepared.value.rider.label
@@ -1552,7 +1562,7 @@ class LocalPanel:
         if isinstance(started, Err):
             if self._recorder is not None:
                 self._recorder.discard_preroll()
-            self._refuse_programme(command, self._start_refused(started.error))
+            self._refuse_start(command, self._start_refused(started.error))
             return
         self._surface.note_taken(command)
         self._begin_record(
@@ -1610,6 +1620,31 @@ class LocalPanel:
 
     def preflight_remote_start(self, launch: Launch) -> Result[None, str]:
         """Run the panel's start gates without submitting a command or arming."""
+        match launch:
+            case AutoLaunch():
+                return self._preflight_programme(launch)
+            case BenchLaunch():
+                refused = self._bench_launch_refusal()
+                return Ok(None) if refused is None else Err(refused)
+        raise assert_never(launch)
+
+    def _bench_launch_refusal(self) -> str | None:
+        """Why a bench launch from the dashboard would be refused now; ``None`` when not.
+
+        The gates :meth:`_start_manual` runs for a bench start, nobody named,
+        that can refuse one: the console in service, and the camera. The bench
+        ceiling is ``MOTOR_MAX_RPM``, always set, and the wall clock refuses
+        only a person on board; :meth:`_start_manual` asks both again when it
+        arms. Nothing of a rider, a programme or the medical parameters:
+        nobody is on board (ANH-250).
+        """
+        out = self._service_refusal()
+        if out is not None:
+            return out
+        return self._presence_refusal(Occupancy.BENCH)
+
+    def _preflight_programme(self, launch: AutoLaunch) -> Result[None, str]:
+        """The gates of a programmed start, for an automatic launch from the dashboard."""
         command = StartSession(
             profile_id=launch.profile_id,
             operator=launch.operator,
@@ -1711,7 +1746,8 @@ class LocalPanel:
         bridged = sto_bridged(self._sto.latest(self._clock.monotonic()))
         return describe_start_refusal(refusal, bridged=bridged)
 
-    def _refuse_programme(self, command: StartSession, detail: str) -> None:
+    def _refuse_start(self, command: StartSession | StartManual, detail: str) -> None:
+        """Say why a start is refused; a launch from the dashboard is told so too."""
         self._surface.note_refused(command, detail)
         remote = command.cloud_session_id
         if remote is not None and self._listener is not None:

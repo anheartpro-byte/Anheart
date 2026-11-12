@@ -14,6 +14,7 @@ vi.mock("../contracts/machine-api.json", () => ({
     contract_version: "7.3",
     header: "X-Substituted-Contract",
     error_codes: { contract_unsupported: {}, substituted_code: {} },
+    bench_launch: { since: "7.5" },
   },
 }));
 
@@ -27,6 +28,14 @@ describe("ANH-133 EX-1 the contract is read from contracts/machine-api.json", ()
       "contract_unsupported",
       "substituted_code",
     ]);
+    // ANH-250: the first minor that reads a bench launch is the file's too.
+    expect(contract.BENCH_LAUNCH_SINCE).toBe("7.5");
+    expect(contract.contractAtLeast("7.5", contract.BENCH_LAUNCH_SINCE)).toBe(
+      true,
+    );
+    expect(contract.contractAtLeast("7.4", contract.BENCH_LAUNCH_SINCE)).toBe(
+      false,
+    );
   });
 
   it("checks requests against the file's header and major", async () => {

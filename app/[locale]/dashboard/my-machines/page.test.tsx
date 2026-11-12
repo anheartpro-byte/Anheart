@@ -446,6 +446,41 @@ describe("my machines: launching a session", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("ANH-250 a manager sends a ballasted bench session to the machine whose button was pressed", async () => {
+    twoMachines("gestionnaire");
+    mutation(api.training.launchBenchSession).mockResolvedValue(newSession);
+    const { user } = await renderPage(<MyMachinesPage />);
+
+    await user.click(
+      cardOf("Lyon").getByRole("button", { name: fr.training.bench.button }),
+    );
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText(fr.training.bench.warningTitle)).toBeTruthy();
+    await user.type(dialog.getByLabelText(fr.training.bench.mass), "80");
+    await user.click(
+      dialog.getByRole("button", { name: fr.training.bench.submit }),
+    );
+
+    expect(mutationsSent()).toEqual([
+      {
+        name: "training:launchBenchSession",
+        args: { machineId: lyon, ballastKg: 80, notes: undefined },
+      },
+    ]);
+    expect(router.push.mock.calls).toEqual([
+      [`/dashboard/sessions/${newSession}/live`],
+    ]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("ANH-250 a patient is offered no bench session", async () => {
+    twoMachines("user");
+    await renderPage(<MyMachinesPage />);
+    expect(
+      screen.queryByRole("button", { name: fr.training.bench.button }),
+    ).toBeNull();
+  });
+
   it("offers only the programmes of the machine whose button was pressed", async () => {
     twoMachines("user");
     const { user } = await renderPage(<MyMachinesPage />);

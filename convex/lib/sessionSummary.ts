@@ -217,6 +217,13 @@ export const summaryFiguresValidator = v.object({
    * their time did not strictly increase).
    */
   warnings: v.array(v.string()),
+  /**
+   * A ballasted bench session launched from the site (ANH-250): the mass its
+   * launcher declared, in kg, or null. From the record's manifest for a final
+   * summary, from the session for a provisional one. Absent on every other
+   * session, and from a summary computed before it was kept.
+   */
+  ballast: v.optional(v.object({ massKg: nullableNumber })),
 });
 export type SummaryFigures = Infer<typeof summaryFiguresValidator>;
 
@@ -236,6 +243,8 @@ export type ManifestContext = {
   referenceRadiusM: number | null;
   legTipRadiusM: number | null;
   legTipMeasured: boolean | null;
+  /** The ballast of a bench session launched from the site; null on any other. */
+  ballast: { massKg: number | null } | null;
 };
 
 /** Why a record could not be summarised: a code, never its content. */
@@ -305,6 +314,10 @@ const manifestShape = z.object({
     })
     .nullish()
     .catch(null),
+  ballast: z
+    .object({ mass_kg: z.number().nullable() })
+    .nullish()
+    .catch(null),
 });
 
 /**
@@ -317,7 +330,8 @@ const manifestShape = z.object({
 export function manifestContext(value: unknown): ManifestContext | null {
   const parsed = manifestShape.safeParse(value);
   if (!parsed.success) return null;
-  const { end_reason, profile, geometry, end_observation } = parsed.data;
+  const { end_reason, profile, geometry, end_observation, ballast } =
+    parsed.data;
   return {
     zone: profile
       ? { lowBpm: profile.zone_low_bpm, highBpm: profile.zone_high_bpm }
@@ -334,6 +348,7 @@ export function manifestContext(value: unknown): ManifestContext | null {
     referenceRadiusM: geometry?.reference_radius_m ?? null,
     legTipRadiusM: geometry?.leg_tip_radius_m ?? null,
     legTipMeasured: geometry?.leg_tip_measured ?? null,
+    ballast: ballast ? { massKg: ballast.mass_kg } : null,
   };
 }
 
@@ -858,6 +873,7 @@ export async function summarizeRecordFiles(files: {
     figures: {
       ...figures,
       zone: finalZone(figures.zone, context.zoneCounters),
+      ...(context.ballast === null ? {} : { ballast: context.ballast }),
     },
   };
 }

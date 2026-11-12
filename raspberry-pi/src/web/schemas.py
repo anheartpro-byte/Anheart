@@ -70,7 +70,7 @@ from src.presence.monitor import (
     RampDown,
     StartBlocked,
 )
-from src.remote_launch import LaunchStage, RemoteLaunchView
+from src.remote_launch import LaunchMode, LaunchStage, RemoteLaunchView
 from src.result import Ok
 from src.roster import (
     Rider,
@@ -165,6 +165,9 @@ class StartBody:
 class RemoteLaunchConfirmBody:
     session_id: str
     operator: str
+    bench_attested: bool = False
+    """The operator ticked the bench attestation: a bench launch (ANH-250) is refused
+    without it, ``bench_unattested``. An automatic launch does not read it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,30 +178,47 @@ class RemoteLaunchAcceptedRow:
 
 @dataclass(frozen=True, slots=True)
 class RemoteLaunchRow:
+    """The offered launch, for the card of the Seance page.
+
+    ``mode`` says which (ANH-250): ``auto``, a programme for the rider named,
+    or ``bench``, a ballasted bench session with nobody on board, whose
+    programme and passenger are ``None``, whose mass and note are shown, and
+    whose confirmation needs the operator to tick ``attestation``.
+    """
+
     session_id: str
-    profile_id: str
-    program: str
+    mode: str
+    profile_id: str | None
+    program: str | None
     launched_by: str
     passenger_name: str | None
     passenger_reason: str | None
+    ballast_kg: float | None
+    notes: str | None
+    attestation: str | None
     state: str
     reason: str | None
     can_confirm: bool
 
     @classmethod
     def of(cls, view: RemoteLaunchView) -> RemoteLaunchRow:
+        # A programme needs its rider in the list; a bench launch names nobody.
+        ready = view.mode is LaunchMode.BENCH or view.passenger_name is not None
         return cls(
             session_id=view.session_id,
+            mode=view.mode.value,
             profile_id=view.profile_id,
             program=view.program_name,
             launched_by=view.launched_by,
             passenger_name=view.passenger_name,
             passenger_reason=view.passenger_reason,
+            ballast_kg=view.ballast_kg,
+            notes=view.notes,
+            attestation=view.attestation,
             state=view.stage.value,
             reason=view.reason,
             can_confirm=(
-                view.passenger_name is not None
-                and view.stage in (LaunchStage.WAITING_CONFIRMATION, LaunchStage.UNCONFIRMED)
+                ready and view.stage in (LaunchStage.WAITING_CONFIRMATION, LaunchStage.UNCONFIRMED)
             ),
         )
 

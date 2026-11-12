@@ -687,11 +687,11 @@ async def test_a_refused_key_empties_the_list(tmp_path: Path, status: int) -> No
 
 
 async def test_the_list_s_answer_says_the_dashboard_is_there(tmp_path: Path) -> None:
-    # Given a link whose every other request of this step goes unanswered
-    # (programmes off: no launch is asked for).
+    # Given a link whose every other request of this step goes unanswered.
     r, _roster = roster_rig(tmp_path, programs=False)
     r.dashboard.answer("/api/machine/heartbeat", DOWN)
     r.dashboard.answer("/api/machine/profiles", DOWN)
+    r.dashboard.answer(POLL_PATH, DOWN)
     await r.sync.step()
     after_the_step = r.sync.online
     # When the list is answered, the link is heard online.
@@ -2121,10 +2121,19 @@ async def test_a_blank_operator_and_odd_duration_are_tolerated(tmp_path: Path) -
     assert pending.operator.startswith(DASHBOARD_OPERATOR)
 
 
-async def test_no_poll_without_programmes(tmp_path: Path) -> None:
+async def test_without_programmes_an_automatic_launch_is_left_as_if_it_were_not_there(
+    tmp_path: Path,
+) -> None:
+    """Asked for all the same (a bench launch runs no programme, ANH-250), but a programme
+    a console with programmes off and signed parameters does not take is never offered,
+    never refused, and owes the dashboard nothing: as when such a console did not poll."""
     r = rig(tmp_path, programs=False, medical=signed())
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
     await r.step()
-    assert r.dashboard.to("/api/machine/training/poll") == []
+    assert len(r.dashboard.to("/api/machine/training/poll")) == 1
+    assert r.sync.current_remote_launch() is None
+    assert r.dashboard.to("/api/machine/training/end") == []
+    assert r.sync.owed == 0
 
 
 async def test_in_bench_mode_a_launch_is_still_asked_for_so_that_it_is_refused(

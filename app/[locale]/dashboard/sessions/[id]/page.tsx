@@ -38,6 +38,7 @@ import { SessionRecordCard } from "@/components/training/SessionRecordCard";
 import { SessionFeedbackCard } from "@/components/training/SessionFeedbackCard";
 import { SessionSummaryCard } from "@/components/training/SessionSummaryCard";
 import {
+  BallastBadge,
   SessionKindBadge,
   SessionOriginBadge,
   useEndReason,
@@ -114,6 +115,7 @@ export default function SessionDetailPage({
             <SessionStatusBadge status={session.status} />
             <SessionKindBadge kind={session.kind} />
             <SessionOriginBadge origin={training?.origin} />
+            <BallastBadge ballast={training?.ballast} />
           </div>
           <p className="text-muted-foreground">
             {session.machine.name} •{" "}

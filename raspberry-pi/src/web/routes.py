@@ -770,7 +770,7 @@ def _register_remote_launch(
                 code=ConfirmationCode.NOT_PENDING.value,
                 detail="ce lancement n'est plus propose par le tableau de bord",
             )
-        accepted = confirm(body.session_id, operator)
+        accepted = confirm(body.session_id, operator, body.bench_attested)
         if isinstance(accepted, Err):
             raise Refusal(
                 HTTPStatus.CONFLICT,

@@ -78,7 +78,8 @@ const ESTOP_STATEMENT =
 const BENCH_LABEL =
   "aucun coup de poing n'est cable : la cause de l'arret d'urgence de l'ecran est ecartee et personne n'est dans le rayon du bras";
 const MUSHROOM_LABEL = "le coup de poing a ete deverrouille (tire)";
-const REMOTE_REFUSED = "STO ponte : lancement depuis le site refuse, seances de banc a la console seulement";
+const REMOTE_REFUSED =
+  "STO ponte : programme lance depuis le site refuse, seule une seance de banc lestee peut etre lancee du site";
 
 function panel() {
   const nodes = new Map(marked.map(([id, classes, text]) => [id, new Element(classes, text)]));

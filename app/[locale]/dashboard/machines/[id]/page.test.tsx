@@ -473,6 +473,47 @@ describe("machine page: what each role may do", () => {
   );
 });
 
+describe("ANH-250 machine page: a ballasted bench session", () => {
+  const benchButton = { name: fr.training.bench.button };
+
+  it.each(["admin", "org_admin", "gestionnaire"] as const)(
+    "is offered to the %s, and its window opens on this machine",
+    async (role) => {
+      const { user } = await open(role);
+      await user.click(screen.getByRole("button", benchButton));
+      const dialog = within(screen.getByRole("dialog"));
+      expect(dialog.getByText(fr.training.bench.title)).toBeTruthy();
+      expect(dialog.getByText(fr.training.bench.warningTitle)).toBeTruthy();
+      expect(mutationsSent()).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["offline", machine({ status: "offline", lastHeartbeat: 0 })],
+    ["silent for 90 s", machine({ lastHeartbeat: NOW - 90_000 })],
+    ["in a session", machine({ status: "in_session" })],
+  ] as const)(
+    "is greyed on a machine %s, as on « Mes machines »",
+    async (_case, shown) => {
+      const { user } = await open("admin", shown);
+      const button = screen.getByRole("button", benchButton);
+      expect(button.hasAttribute("disabled")).toBe(true);
+      await user.click(button);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    },
+  );
+
+  it("is never offered to a patient", async () => {
+    await open("user");
+    expect(screen.queryByRole("button", benchButton)).toBeNull();
+  });
+
+  it("is never offered on a deleted machine", async () => {
+    await open("admin", deleted());
+    expect(screen.queryByRole("button", benchButton)).toBeNull();
+  });
+});
+
 describe("machine page: a deleted machine", () => {
   it("says when it was deleted and offers restoration and key revocation alone to the Anheart admin", async () => {
     await open("admin", deleted());

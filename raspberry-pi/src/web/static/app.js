@@ -1646,23 +1646,57 @@ function loadPanel() {
   });
 }
 
+/*
+  A bench launch (contract 1.9, ANH-250): nobody on board, the mass and the note the launcher
+  gave on the site, and an attestation the operator ticks before the confirmation is possible.
+  The tick is for the offer it was given for: another launch, or this one changed, clears it.
+*/
+var REMOTE_BENCH_CONFIRM = "Confirmer le depart du banc leste";
+var REMOTE_PASSENGER_CONFIRM = "Cette personne est a bord et prete";
+
+function sameRemoteOffer(offer, previous) {
+  return Boolean(offer && previous) && offer.session_id === previous.session_id &&
+    offer.mode === previous.mode && offer.ballast_kg === previous.ballast_kg &&
+    offer.notes === previous.notes;
+}
+
+function remoteLaunchFacts(offer) {
+  if (offer.mode === "bench") {
+    return [
+      ["seance", "BANC LESTE - personne a bord : NON"],
+      ["lest declare", offer.ballast_kg === null ? "masse non declaree" : offer.ballast_kg + " kg"],
+      ["note", offer.notes || "-"],
+      ["lance par", offer.launched_by],
+    ];
+  }
+  return [
+    ["passager prevu", offer.passenger_name || "indisponible"],
+    ["programme", offer.program],
+    ["lance par", offer.launched_by],
+  ];
+}
+
 function renderRemoteLaunch(offer) {
   var card = el("remote-launch-card");
   var confirm = el("remote-launch-confirm");
+  var attest = el("remote-launch-attest");
+  if (!sameRemoteOffer(offer, state.remoteLaunch)) {
+    attest.checked = false;
+  }
   state.remoteLaunch = offer;
   show(card, Boolean(offer));
   show(el("start"), !offer);
+  var bench = Boolean(offer) && offer.mode === "bench";
+  show(el("remote-launch-attest-row"), bench);
+  text(el("remote-launch-attest-text"), bench ? "J'atteste : " + offer.attestation : "");
+  text(confirm, bench ? REMOTE_BENCH_CONFIRM : REMOTE_PASSENGER_CONFIRM);
   if (!offer) {
     text(el("remote-launch-status"), "");
     text(el("remote-launch-passenger-note"), "");
     state.remoteLaunchMessage = null;
     return;
   }
-  grid(el("remote-launch-facts"), [
-    ["passager prevu", offer.passenger_name || "indisponible"],
-    ["programme", offer.program],
-    ["lance par", offer.launched_by],
-  ]);
+  grid(el("remote-launch-facts"), remoteLaunchFacts(offer));
   text(el("remote-launch-passenger-note"), offer.passenger_reason || "");
   var stage = state.remoteLaunchSubmitting ? "request_in_progress" : offer.state;
   var labels = {
@@ -1686,7 +1720,7 @@ function renderRemoteLaunch(offer) {
     status = labels[stage] || "etat inconnu";
   }
   text(el("remote-launch-status"), status);
-  confirm.disabled = !offer.can_confirm || state.remoteLaunchSubmitting;
+  confirm.disabled = !offer.can_confirm || state.remoteLaunchSubmitting || (bench && !attest.checked);
 }
 
 function loadRemoteLaunch() {
@@ -1711,7 +1745,11 @@ function doConfirmRemoteLaunch() {
   renderRemoteLaunch(offer);
   api("/api/remote-launch/confirm", {
     method: "POST",
-    body: { session_id: offer.session_id, operator: rememberOperator(el("operator").value) },
+    body: {
+      session_id: offer.session_id,
+      operator: rememberOperator(el("operator").value),
+      bench_attested: offer.mode === "bench" && Boolean(el("remote-launch-attest").checked),
+    },
   }).then(function () {
     state.remoteLaunchSubmitting = false;
     loadRemoteLaunch();
@@ -4029,6 +4067,9 @@ function start() {
   el("preview").onclick = doPreview;
   el("start").onclick = doStart;
   el("remote-launch-confirm").onclick = doConfirmRemoteLaunch;
+  el("remote-launch-attest").onchange = function () {
+    renderRemoteLaunch(state.remoteLaunch);
+  };
   el("feedback-send").onclick = doSendFeedback;
   el("feedback-skip").onclick = doSkipFeedback;
   el("feedback-close").onclick = doSkipFeedback;

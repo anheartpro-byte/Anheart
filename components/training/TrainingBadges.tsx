@@ -2,8 +2,9 @@
 
 import { useMessages, useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
-import { Gauge, Hand, Activity, Monitor, Cpu } from "lucide-react";
+import { Gauge, Hand, Activity, Monitor, Cpu, Weight } from "lucide-react";
 import { hasOwnMessage } from "@/components/dashboard/statusLabels";
+import type { Ballast } from "@/lib/training";
 
 /** Translate an enumerated wire value (phase, run mode, safety action, drive state), falling back to the raw value. */
 export function useTrainingLabel() {
@@ -77,6 +78,30 @@ export function SessionOriginBadge({ origin }: { origin: string | undefined }) {
         <Cpu className="h-3 w-3" />
       )}
       {t(origin)}
+    </Badge>
+  );
+}
+
+/** The words of a ballasted bench session (ANH-250), with its declared mass when given. */
+export function useBallastLabel() {
+  const t = useTranslations("training.ballast");
+  return (ballast: Ballast) =>
+    ballast.massKg === null
+      ? t("badge")
+      : t("badgeMass", { mass: ballast.massKg });
+}
+
+/** "Banc lesté", for a bench session launched from the site; nothing otherwise. */
+export function BallastBadge({ ballast }: { ballast: Ballast | undefined }) {
+  const label = useBallastLabel();
+  if (ballast === undefined) return null;
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1 border-sky-500/60 text-sky-700 dark:text-sky-400"
+    >
+      <Weight className="h-3 w-3" />
+      {label(ballast)}
     </Badge>
   );
 }

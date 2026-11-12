@@ -3,7 +3,8 @@
  *
  * Nothing in this module creates, starts or ends a session. A session is
  * created by `training.launchAutoSession` (an auto session launched from the
- * dashboard) or registered by the machine (`training.registerLocalSession`),
+ * dashboard) or `training.launchBenchSession` (a ballasted bench session,
+ * ANH-250), or registered by the machine (`training.registerLocalSession`),
  * and it ends through the training routes.
  *
  * A session with no `kind` belongs to the retired ECG recording mode. It is
@@ -63,6 +64,8 @@ const listedSessionValidator = v.object({
   machineName: v.string(),
   kind: v.string(), // "recording" | "auto" | "manual"
   origin: v.optional(v.string()), // "remote" | "local"
+  // A ballasted bench session launched from the site (ANH-250).
+  ballast: v.optional(v.object({ massKg: v.union(v.number(), v.null()) })),
 });
 
 /** The rider's name (or the label given at the machine) and the machine's. */
@@ -94,6 +97,7 @@ async function listedRows(
       ...(await namesOf(ctx, session)),
       kind: session.kind ?? "recording",
       origin: session.origin,
+      ballast: session.ballast,
     });
   }
   return rows;

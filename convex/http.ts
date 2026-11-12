@@ -15,6 +15,7 @@ import {
   CONTRACT_VERSION,
   machineErrorResponse,
   refusalOf,
+  servedContract,
   softwareVersionOf,
   type MachineErrorCode,
 } from "./lib/contract";
@@ -171,10 +172,11 @@ http.route({
 // Training: the local panel's side of the sync.
 //
 // The Pi is the authority on the machine. These routes let it (a) publish its
-// presets and live state, (b) pick up AUTO sessions launched from the
-// dashboard, (c) register sessions started at the machine (manual, or auto
-// from the panel), (d) stream telemetry, and (e) learn that a stop was asked
-// for. Manual sessions never travel from here to the Pi.
+// presets and live state, (b) pick up the sessions launched from the
+// dashboard (AUTO, and since contract 1.9 a ballasted bench session, ANH-250),
+// (c) register sessions started at the machine (manual, or auto from the
+// panel), (d) stream telemetry, and (e) learn that a stop was asked for. No
+// speed ever travels from here to the Pi.
 // ===========================================================================
 
 function json(status: number, body: unknown): Response {
@@ -336,15 +338,17 @@ function sessionIdOf(
 /**
  * GET /api/machine/training/poll
  * -> {session: PendingTraining | null, server_contract_version}
- * The console arms nothing from an answer whose major is not its own.
+ * The console arms nothing from an answer whose major is not its own. A bench
+ * launch (contract 1.9, ANH-250) is offered only to a poll whose
+ * `X-Anheart-Contract` is 1.9 or later (`training.getPendingTrainingSession`).
  */
 http.route({
   path: "/api/machine/training/poll",
   method: "GET",
-  handler: limitedRoute("machinePoll", async (ctx, _req, machineId) => {
+  handler: limitedRoute("machinePoll", async (ctx, req, machineId) => {
     const session = await ctx.runQuery(
       internal.training.getPendingTrainingSession,
-      { machineId },
+      { machineId, contract: servedContract(req) ?? undefined },
     );
     return json(200, { session, server_contract_version: CONTRACT_VERSION });
   }),

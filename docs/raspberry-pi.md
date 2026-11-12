@@ -141,12 +141,16 @@ secteur. Cette valeur le déclare, honnêtement, et ne permet que cela.
   départ est refusé dans tous les cas. Ce refus vaut sur chaque chemin : la
   surface, les portes du runtime et sa nouvelle vérification après la lecture du
   variateur ; y compris avec des paramètres médicaux signés, `PROGRAMS_ENABLED`
-  et `OCCUPANCY_OCCUPIED_ENABLED`. Un lancement depuis le tableau de bord est
-  toujours un programme : il est refusé avant tout envoi à `training/start`, avec
-  sa propre raison, donnée avant les contrôles de départ de la console
-  (attestation, verdict verrouillé, demande en attente), qui ne la lèveraient pas :
-  `STO ponte : lancement depuis le site refuse, seances de banc a la console seulement`.
-  Les séances de banc se lancent à la console.
+  et `OCCUPANCY_OCCUPIED_ENABLED`. Un programme lancé depuis le tableau de bord
+  est refusé avant tout envoi à `training/start`, avec sa propre raison, donnée
+  avant les contrôles de départ de la console (attestation, verdict verrouillé,
+  demande en attente), qui ne la lèveraient pas :
+  `STO ponte : programme lance depuis le site refuse, seule une seance de banc lestee peut etre lancee du site`.
+  Une séance de banc lestée lancée du site (contrat 1.9, ANH-250) n'a personne
+  à bord : elle passe les contrôles d'un départ de banc à la console, sous le
+  pont comme sous une source STO réelle, après la confirmation physique de
+  l'opérateur et son attestation
+  ([procédure ci-dessous](#séance-de-banc-lestée-lancée-du-site-anh-250)).
 * **Attestation de banc.** À chaque démarrage de la console, une personne nommée
   atteste, à la place des deux cases d'ANH-92 qui seraient fausses ici :
   `le STO est ponte, aucun arret d'urgence materiel ; l'arret d'urgence est la coupure de la prise secteur ; capsule vide ou lestee, aucune personne a bord ; personne dans le rayon du bras pendant la rotation`.
@@ -613,9 +617,11 @@ près de la machine.
 
 **Pendant.**
 
-6. Démarrer une séance manuelle de banc à la console (case BANC), monter par
-   paliers. Un départ proposé par le tableau de bord est refusé : les séances de
-   banc se lancent à la console seulement. Personne n'entre dans le rayon du bras.
+6. Démarrer une séance manuelle de banc à la console (case BANC), ou
+   confirmer à la console une séance de banc lestée lancée du site
+   ([ci-dessous](#séance-de-banc-lestée-lancée-du-site-anh-250)), puis monter
+   par paliers. Un programme proposé par le tableau de bord est refusé.
+   Personne n'entre dans le rayon du bras.
 7. Arrêt normal : STOP ou cible 0. En séance manuelle, STOP fait descendre la
    consigne aux limites de mouvement de la séance, pas sur la rampe du
    variateur : environ 107 s depuis 1380 tr/min moteur avec les limites livrées
@@ -665,6 +671,51 @@ près de la machine.
     prise a été coupée en rotation, le temps jusqu'à l'arrêt mesuré au
     chronomètre : c'est la seule mesure de roue libre que ce banc peut donner.
 
+#### Séance de banc lestée lancée du site (ANH-250)
+
+Pour les premiers essais réels : capsule lestée d'un sac de sable d'environ
+80 kg, aucune personne à bord, vitesse pilotée à la console. Le site prépare
+la séance ; la machine ne tourne qu'après une confirmation physique à la
+console. Rien de ce qui précède ne change : qui, avant, pendant, après, et
+les deux arrêts (E-STOP de l'écran tant que la console répond, coupure de la
+prise sinon). Aucun essai matériel de cette procédure n'est consigné ici.
+
+1. **Lest.** Le sac est arrimé dans la capsule, sans jeu ; bras et capsule
+   vérifiés. Personne dans le rayon du bras, et personne n'y entre jusqu'à
+   l'arrêt complet, arbre immobile constaté. Sans frein, couper le secteur
+   laisse le bras en roue libre : environ 145 s depuis la vitesse maximale
+   selon le modèle de simulation, jamais mesuré.
+2. **Console.** Image du Pi au contrat 1.9 ou plus (Convex est déployé avant
+   elle). La console a envoyé au moins un heartbeat : le site refuse le
+   lancement à une machine qui n'a pas annoncé 1.9 (`machine_contract_too_old`).
+   Déclaration de banc (sous le pont) ou attestation de l'arrêt d'urgence
+   câblé (sous une source STO réelle) faite à ce démarrage.
+3. **Site.** Un admin ou un gestionnaire de la machine ouvre « Séance de banc
+   lestée » sur la page de la machine ou dans « Mes machines », donne la masse
+   (facultative, au plus 200 kg) et une note, et envoie. Un patient ne voit pas
+   cette action ([tableau-de-bord.md](tableau-de-bord.md#56-séance-de-banc-lestée-anh-250)).
+4. **Console, carte « Depart distant ».** Elle dit `BANC LESTE - personne a bord : NON`,
+   la masse déclarée, la note et qui a lancé. L'opérateur vérifie de visu le
+   lest et le rayon du bras, coche
+   `J'atteste : capsule lestee, aucune personne a bord, personne dans le rayon du bras`,
+   puis appuie sur `Confirmer le depart du banc leste`. Sans la case, le bouton
+   reste grisé et la console refuse (`bench_unattested`) : rien n'est envoyé.
+5. **Départ.** La console demande `training/start`, puis arme une séance
+   manuelle de banc, cible 0. L'enregistrement porte la masse (`ballast`) et
+   l'événement `console: bench_attested: ...` sous l'alias de l'opérateur.
+6. **Pendant.** Cible réglée à la console, par paliers ; règles et limites de
+   mouvement actives, aucune règle cardiaque. Le site suit la séance en direct
+   et peut demander l'arrêt : la consigne descend aux limites de mouvement
+   (environ 107 s depuis 1380 tr/min moteur).
+7. **Après.** Étapes 8 à 10 ci-dessus. Le site montre la séance « Banc lesté »
+   avec sa masse dans l'historique et le rapport.
+
+Un lancement de banc refusé à la console (verdict à acquitter, console hors
+service, caméra, attestation absente au démarrage) n'arme rien et revient au
+site comme séance échouée avec sa raison ; Convex le refuse aussi à l'armement
+si son lanceur n'atteint plus la machine (`right_revoked_before_start`) ou si
+une autre séance la tient (`machine_busy`).
+
 ### 2.3 Le BITalino et l'ECG
 
 | Module | Rôle | Garanties |
@@ -694,7 +745,7 @@ près de la machine.
 |---|---|---|
 | `src/local_panel.py` | La racine de composition : construit et relie runtime, variateur, BITalino, capteurs, caméra, page web et lien Convex sur **une** boucle asyncio. | À la sortie, `needs_stop_before_release` distingue le repos confirmé ou la liaison non acquise (libération sans écriture) d'une inspection acquise mais non confirmée ou d'un runtime sorti de IDLE (passage par `shutdown()`). Porte 100 %. |
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. Chaque ordre accepté reçoit un identifiant, et son sort (pris, refusé, annulé par un STOP) est publié une fois, sous cet identifiant. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite ; aucun ordre n'en remplace un autre en silence : un départ n'entre que dans une boîte vide au repos, et seul un STOP prend la place de ce qui attend, en le disant ; l'état ne redevient pas `idle` tant qu'un départ ou un arrêt accepté attend ; l'identifiant n'entre dans aucune décision. Table et courses dans [console-locale.md](console-locale.md#la-boîte-aux-lettres--une-demande-un-sort-et-la-console-le-dit), tenues par `tests/test_request_fates.py`. |
-| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut pas lancer de séance manuelle ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; demande la liste des passagers par une autre tâche à part, que ni le battement de cœur ni l'interrogation des lancements n'attendent ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
+| `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut lancer aucune séance manuelle avec une personne à bord ni régler une vitesse, seulement soumettre, après la confirmation et l'attestation de l'opérateur, le départ manuel de banc d'une séance de banc lestée lancée du site (contrat 1.9) ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; demande la liste des passagers par une autre tâche à part, que ni le battement de cœur ni l'interrogation des lancements n'attendent ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
 | `src/roster.py` | La liste des passagers que le tableau de bord donne à la machine : lecture de la réponse, liste tenue en mémoire, âge d'un passager à bord et FC max pour une séance programmée ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)). | Une réponse remplace la liste en entier ; sans réponse, la liste n'est plus proposée 15 min après sa réception ; une clé refusée la vide ; une valeur absente du site reste inconnue, jamais remplacée ; le nom n'est jamais écrit ni journalisé. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
 | `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure`. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; `joignable` seulement sur une réponse du tableau de bord, dans sa propre forme, qui prend ce que la console envoie, et jamais au-delà de 25 s sans une telle réponse ; jamais changé par une seule requête perdue, ni par les réponses à la question d'arrêt (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
@@ -1124,8 +1175,12 @@ aucun.
 
 ### 4.3 Séance manuelle
 
-* Démarrée **uniquement depuis la console** (`/api/manual/start`). Rien dans le
-  lien Convex ne sait en construire une.
+* Démarrée depuis la console (`/api/manual/start`), ou, pour une seule sorte,
+  par un lancement du site confirmé à la console : une séance de banc lestée
+  (contrat 1.9, ANH-250). Le lien Convex ne construit alors qu'un départ
+  manuel de banc (`Occupancy.BENCH`), après la confirmation physique et
+  l'attestation de l'opérateur ; jamais un départ avec une personne à bord,
+  jamais une vitesse : la cible se règle à la console.
 * Refusée si l'opérateur n'est pas nommé, si le plafond est hors de
   `[min_run, HSP]`, ou (personne à bord) sans FC fiable, sans passager de la
   liste du tableau de bord, sans année de naissance réglée sur le site, ou pour
@@ -2391,7 +2446,7 @@ exactement pareil, sans tableau de bord.
 | Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 3 s quand elle a du retard |
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, rangés après filtrage des pings `attendant_ping` et événements `t < 0` | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
-| Convex → Pi | le lancement AUTO proposé au dernier poll : profil, identifiant de passager, FC max, âge (déduit de l'année de naissance), libellé reçu pour la retenue locale, avec la version du contrat du serveur | `GET /api/machine/training/poll` | toutes les 3 s au repos, y compris tant qu'une offre attend une décision et qu'aucune séance ne tourne |
+| Convex → Pi | le lancement proposé au dernier poll, avec la version du contrat du serveur. AUTO : profil, identifiant de passager, FC max, âge (déduit de l'année de naissance), libellé reçu pour la retenue locale. BANC LESTÉ (contrat 1.9, ANH-250) : masse déclarée, note, lanceur, aucun passager | `GET /api/machine/training/poll` | toutes les 3 s au repos, quels que soient les programmes, y compris tant qu'une offre attend une décision et qu'aucune séance ne tourne |
 | Convex → Pi | la liste des passagers de la machine : identifiant, nom, FC max, année de naissance ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)), gardée en mémoire seulement | `GET /api/machine/roster` | au démarrage, puis toutes les 60 s au repos, par une tâche à elle |
 | Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | dès que le tableau de bord tient la séance pour démarrée, puis toutes les 3 s tant qu'elle n'est pas finie, par une **tâche à part** (`cloud_stop_step`) : la question ne passe derrière aucun envoi ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)) |
 
@@ -2405,9 +2460,19 @@ Règles :
   et est signalée. La télémétrie garde le point à `t = 0`, dernier tic de repos
   avant la commande de départ pour la console ; les points négatifs sont omis.
 
-* **Rien d'autre ne descend.** Une séance **manuelle ne peut jamais être lancée
-  à distance** : le lien ne sait pas en construire une. La liste des passagers
-  ne lance rien : elle dit qui un départ tapé à la console peut nommer.
+* **Rien d'autre ne descend.** Aucune vitesse ne descend jamais du site. La
+  seule séance manuelle qu'un lancement du site peut amener est une séance de
+  banc lestée (contrat 1.9, ANH-250, `BenchLaunch`), aucune personne à bord,
+  qu'un opérateur confirme à la console en attestant
+  `capsule lestee, aucune personne a bord, personne dans le rayon du bras`, puis
+  pilote à la console ; une séance avec personne à bord ne peut jamais être
+  lancée à distance. Un lancement d'un mode inconnu, ou de banc hors de sa
+  forme (occupation, masse hors de 0 à 200 kg, note de plus de 500 caractères),
+  est ignoré avec un avertissement, jamais armé. Avec les programmes désactivés
+  et des paramètres médicaux signés, un lancement AUTO reçu est laissé comme
+  s'il n'était pas là, comme quand une telle console ne demandait rien. La
+  liste des passagers ne lance rien : elle dit qui un départ tapé à la console
+  peut nommer.
 * Le poll offre au plus un lancement distant à la fois. Un nouveau résultat
   remplace l'offre précédente; un résultat réussi sans lancement la retire.
   Tant qu'elle est offerte, la page Seance montre le nom obtenu par
@@ -3563,14 +3628,14 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.8`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.9`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.8`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.9`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`
@@ -3624,6 +3689,15 @@ Ce que fait la console :
   serveur la rend non confirmable. Face à un serveur `1.7`, la répétition
   reçoit 400 `session_not_pending` : la console n'arme pas, et l'offre est
   retirée au poll suivant.
+* **Une séance de banc lestée lancée du site** (contrat 1.9, ANH-250) : le
+  poll la porte avec `mode: "bench"`, sans passager ni programme ; Convex ne
+  l'offre qu'à une console qui annonce 1.9 ou plus, et l'analyseur d'une
+  console 1.8 l'écarterait sans rien armer. Un lancement sans `mode` (serveur
+  1.8) est un lancement AUTO. La console exige la confirmation physique et
+  l'attestation de banc, puis arme une séance manuelle de banc ; son départ
+  peut être refusé `machine_busy` (une autre séance tient la machine). Son
+  manifeste porte `ballast` : l'ordre de déploiement est Convex d'abord, puis
+  l'image du Pi.
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les

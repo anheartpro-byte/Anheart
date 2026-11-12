@@ -182,7 +182,7 @@ network only makes the dashboard's picture stale.
 | machine → dashboard | heartbeat with live state (mode, phase, bpm, rpm, g, safety), the software version (`VERSION`) and the contract version | every 10 s |
 | machine → dashboard | training presets whose cardiac tiers match this machine | when the profile store changes |
 | machine → dashboard | every session run here, AUTO or MANUAL, with telemetry at 1 Hz and its end | while it runs |
-| dashboard → machine | an AUTO launch (preset, rider, rider's max heart rate) | polled every 3 s when idle |
+| dashboard → machine | an AUTO launch (preset, rider, rider's max heart rate), or since contract 1.9 a ballasted bench launch (declared mass, note, no rider) that arms only after the operator confirms it and ticks the bench attestation | polled every 3 s when idle |
 | dashboard → machine | a stop request forwarded to the ordinary STOP path: the setpoint walks down at the motion limits, under a FREEZE too | checked every 3 s |
 
 Both sides check one versioned contract (`contracts/machine-api.json` at the
@@ -238,8 +238,11 @@ policy.
   ceiling, and the preset re-validated against **this rider's** maximum heart
   rate. Any refusal comes back to the dashboard as a failed session with the
   console's reason.
-* **MANUAL**: the operator sets the speed. Only ever started at the console.
-  Nothing on the dashboard can start one; it only shows it.
+* **MANUAL**: the operator sets the speed, at the console, always. A manual
+  session with a person on board is only ever started at the console, and no
+  speed ever comes from the dashboard. The one exception, with nobody on
+  board: the dashboard may propose a ballasted bench session (contract 1.9),
+  which the operator confirms, attests and drives at the console.
 
 **Cardiac tiers.** The supervisor's tiers, `hr_hard_max_bpm` /
 `hr_critical_bpm` of the signed medical file `config/medical_parameters.json`
@@ -400,8 +403,11 @@ node.
 
 1. Check `MACHINE_API_KEY`, the `.convex.site` URL and the console logs.
 2. Verify that the machine appears online in the dashboard.
-3. The console reports local MANUAL and AUTO sessions; only AUTO can start
-   remotely.
+3. The console reports local MANUAL and AUTO sessions. Nothing with a person on
+   board, and no speed, ever starts from the dashboard except an AUTO
+   programme; the one manual session it can propose is a ballasted bench
+   session with nobody on board (contract 1.9), which the operator confirms,
+   attests and drives at the console.
 
 ### Signal quality is "Poor"
 

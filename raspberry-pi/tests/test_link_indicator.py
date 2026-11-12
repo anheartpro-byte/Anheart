@@ -156,8 +156,11 @@ async def test_a_dashboard_never_reached_reads_waiting_then_unreachable_with_the
 async def test_one_lost_heartbeat_changes_nothing_and_two_in_a_row_read_unreachable(
     tmp_path: Path,
 ) -> None:
-    """The slowest cadence of the link: no programme, so no poll, one heartbeat per 10 s."""
+    """The slowest cadence of the link: one heartbeat per 10 s and nothing else. A launch
+    is asked for whatever the programmes (a bench launch runs none, ANH-250), and never
+    while a session runs: here one the link follows no stop of."""
     r = rig(tmp_path, programs=False)
+    r.runtime.state = RuntimeState.RUNNING
     lost: list[int] = [2]  # the second heartbeat is lost, and only it
     beats = 0
 

@@ -63,6 +63,9 @@ Hertz = NewType("Hertz", float)
 # --- Mechanics -----------------------------------------------------------
 Metres = NewType("Metres", float)
 
+Kilograms = NewType("Kilograms", float)
+"""A mass as a person declared it (the ballast of a bench session). Never measured here."""
+
 GLoad = NewType("GLoad", float)
 """CENTRIPETAL acceleration in multiples of standard gravity (Gc).
 

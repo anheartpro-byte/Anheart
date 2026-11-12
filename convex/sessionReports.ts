@@ -146,6 +146,7 @@ export const telemetryInput = internalQuery({
     v.object({
       zone: v.union(zoneValidator, v.null()),
       endReason: v.union(v.string(), v.null()),
+      ballast: v.optional(v.object({ massKg: v.union(v.number(), v.null()) })),
     }),
   ),
   handler: async (ctx, { sessionId }) => {
@@ -161,6 +162,7 @@ export const telemetryInput = internalQuery({
           : null,
       endReason:
         session.endReason === undefined ? null : bounded(session.endReason),
+      ballast: session.ballast,
     };
   },
 });
@@ -292,16 +294,20 @@ export const summarizeTelemetry = internalAction({
       cursor = page.cursor;
     } while (cursor !== null && pages < MAX_EVENT_PAGES);
     if (cursor !== null) warnings.push("events_truncated");
+    const figures = builder.figures({
+      endReason: input.endReason,
+      referenceRadiusM: null,
+      legTipRadiusM: null,
+      legTipMeasured: null,
+      warnings,
+    });
     await ctx.runMutation(internal.sessionReports.storeSummary, {
       sessionId,
       source: "telemetry",
-      figures: builder.figures({
-        endReason: input.endReason,
-        referenceRadiusM: null,
-        legTipRadiusM: null,
-        legTipMeasured: null,
-        warnings,
-      }),
+      figures:
+        input.ballast === undefined
+          ? figures
+          : { ...figures, ballast: input.ballast },
     });
     return null;
   },

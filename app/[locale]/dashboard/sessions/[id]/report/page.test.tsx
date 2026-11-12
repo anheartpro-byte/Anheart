@@ -114,6 +114,7 @@ function training(overrides: Partial<Training> = {}): Training {
     status: "completed",
     kind: "auto",
     origin: "remote",
+    ballast: undefined,
     profileId: "p-endurance",
     profileName: "Endurance",
     zoneLowBpm: 130,
@@ -406,6 +407,31 @@ describe("the report of a session", () => {
     // Nothing the report does not need: no address, no operator.
     expect(screen.queryByText("paul@example.test")).toBeNull();
     expect(screen.queryByText("Gaston Gestion")).toBeNull();
+  });
+
+  it("ANH-250 says « Banc lesté » and the declared mass of a bench session launched from the site", async () => {
+    serve({
+      session: session({ kind: "manual", patient: null, userId: undefined }),
+      training: training({
+        kind: "manual",
+        ballast: { massKg: 80 },
+        profileId: undefined,
+        profileName: undefined,
+        zoneLowBpm: undefined,
+        zoneHighBpm: undefined,
+      }),
+    });
+    await open();
+    expect(valueUnder(r.kind)).toBe(fr.training.kind.manual);
+    expect(valueUnder(r.ballast)).toBe(
+      fr.training.ballast.badgeMass.replace("{mass}", "80"),
+    );
+  });
+
+  it("ANH-250 says nothing of a ballast for any other session", async () => {
+    serve();
+    await open();
+    expect(screen.queryByText(r.ballast)).toBeNull();
   });
 
   it("gives the figures of the final summary, and when it was computed", async () => {

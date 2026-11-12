@@ -19,6 +19,7 @@ import {
 import { SessionSummaryFigures } from "@/components/training/SessionSummaryFigures";
 import { FeedbackReadout } from "@/components/training/SessionFeedbackCard";
 import { TelemetryCharts } from "@/components/training/TelemetryCharts";
+import { useBallastLabel } from "@/components/training/TrainingBadges";
 
 /** The languages a report is written in. */
 const LANGUAGES = [
@@ -46,6 +47,7 @@ export default function SessionReportPage({
   const tFeedback = useTranslations("sessionFeedback");
   const kind = useCatalogLabel("training.kind");
   const status = useSessionStatusLabel();
+  const ballastLabel = useBallastLabel();
   const locale = useLocale();
   const router = useRouter();
   const session = useQuery(api.sessions.getSession, { sessionId });
@@ -155,6 +157,9 @@ export default function SessionReportPage({
               {format(session.startedAt, "PPPp", { locale: dateLocale })}
             </Item>
             <Item label={t("kind")}>{kind(training.kind)}</Item>
+            {training.ballast !== undefined && (
+              <Item label={t("ballast")}>{ballastLabel(training.ballast)}</Item>
+            )}
             <Item label={t("program")}>
               {training.profileName ?? training.profileId ?? "-"}
             </Item>

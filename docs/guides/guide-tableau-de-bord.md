@@ -79,7 +79,7 @@ ordinateur ou une tablette, n'importe où, il permet de :
 
 | Le site ne peut pas | Pourquoi, et où le faire |
 |---|---|
-| Démarrer une séance **manuelle** (vitesse choisie par l'opérateur). | Volontaire : le manuel se démarre **uniquement à la console de la machine**, par quelqu'un qui se tient à côté. Le site l'affiche partout : « Manuel : uniquement depuis la console de la machine ». |
+| Démarrer une séance **manuelle** (vitesse choisie par l'opérateur), ou en régler la vitesse. | Volontaire : le manuel se démarre **uniquement à la console de la machine**, par quelqu'un qui se tient à côté. Le site l'affiche partout : « Manuel : uniquement depuis la console de la machine ». Seule exception, sans personne à bord : un admin ou un gestionnaire peut proposer une **séance de banc lestée**, que la console ne démarre qu'après la confirmation et l'attestation de son opérateur ([tableau-de-bord.md, 5.6](../tableau-de-bord.md#56-séance-de-banc-lestée-anh-250)). |
 | Arrêter la machine **instantanément**. | Le bouton du site est une **demande** : la machine la lit toutes les 3 s environ, puis décélère sur sa rampe de sécurité. L'arrêt d'urgence est **sur la machine**. |
 | Créer ou modifier un **programme**. | Les programmes sont écrits à la console de la machine, puis recopiés sur le site en lecture seule. |
 | Forcer un départ. | La machine revérifie tout et peut refuser. |
@@ -89,8 +89,8 @@ ordinateur ou une tablette, n'importe où, il permet de :
 
 | Mot | Sens |
 |---|---|
-| **Séance auto** | Séance sur un **programme** enregistré. La machine ajuste seule la vitesse pour garder la fréquence cardiaque du pratiquant dans la **zone cible** du programme. C'est la seule séance lançable depuis le site. |
-| **Séance manuelle** | L'opérateur choisit la vitesse à la console. Jamais lancée depuis le site ; visible sur le site une fois démarrée. |
+| **Séance auto** | Séance sur un **programme** enregistré. La machine ajuste seule la vitesse pour garder la fréquence cardiaque du pratiquant dans la **zone cible** du programme. C'est la seule séance avec une personne à bord lançable depuis le site. |
+| **Séance manuelle** | L'opérateur choisit la vitesse à la console. Jamais lancée depuis le site avec une personne à bord ; une séance de banc lestée, sans personne à bord, peut y être proposée, puis confirmée à la console. Visible sur le site une fois démarrée. |
 | **Séance d'enregistrement** | Ancien mode, enregistrement ECG seul, sans entraînement. **Retiré** : le site ne permet plus d'en créer. Les anciennes séances restent visibles en lecture seule, avec le badge « Enregistrement ». |
 | **Pratiquant** | La personne à bord. C'est en général un patient. |
 | **FC max** | Fréquence cardiaque maximale du pratiquant. Mesurée, ou à défaut estimée par l'âge (formule de Tanaka : 208 moins 0,7 fois l'âge). Sert à vérifier qu'un programme n'est pas trop intense. |
@@ -1026,7 +1026,7 @@ S'ouvre depuis **Mes machines** ou le détail d'une machine.
 | « Vous ne pouvez pas lancer de séance sur cette machine. » | La machine n'est pas dans vos machines lançables. | Demander le droit de lancement (patient) ou l'attribution de la machine (gestionnaire). |
 | « La machine est hors ligne. » | Pas de signal depuis plus de 90 s. | Vérifier que la machine est allumée, connectée à Internet, et que sa console tourne. |
 | « La machine est déjà en séance. » | Une séance tourne. | Attendre la fin, ou l'arrêter. |
-| « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | La machine refuse les séances auto (réglage de la machine). | Voir [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
+| « Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée. » | La machine refuse les séances auto (réglage de la machine). | Voir [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « Aucun programme n'a été synchronisé depuis la machine. » | Aucun programme reçu. | Créer un programme à la console de la machine. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Ni FC max ni année de naissance. Aussi quand la FC max enregistrée n'est pas un nombre entier : elle compte comme non renseignée. | [Procédure P7](#p7-renseigner-la-fc-max-et-lannée-de-naissance). |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | FC max saisie mais pas l'année de naissance. L'année est **toujours** obligatoire (contrôle de l'âge). Aussi quand l'année enregistrée n'est pas un nombre entier. | Idem. |
@@ -2486,7 +2486,7 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « Vous ne pouvez pas lancer de séance sur cette machine. » | Fenêtre de lancement | Machine hors de vos machines lançables. | P6 ou P8. |
 | « La machine est hors ligne. » | Fenêtre de lancement, Mes machines | Pas de signal. | [§6.3](#63-si-la-machine-est-hors-ligne). |
 | « La machine est déjà en séance. » | Idem | Séance en cours. | Attendre ou arrêter. |
-| « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | Fenêtre de lancement | Voir plus haut. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
+| « Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée. » | Fenêtre de lancement | Voir plus haut. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « Aucun programme n'a été synchronisé depuis la machine. » | Fenêtre de lancement | Idem. | P9. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Physiologie absente, ou FC max enregistrée qui n'est pas un nombre entier. | P7. |
 | « L'année de naissance du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Année absente (obligatoire), ou année enregistrée qui n'est pas un nombre entier. | P7. |
@@ -2538,7 +2538,7 @@ aucun refus du serveur n'arrive en anglais.
 | « La machine est hors ligne : elle ne peut pas recevoir de séance pour l'instant. » | La machine est hors ligne au moment du lancement. | [§6.3](#63-si-la-machine-est-hors-ligne). |
 | « Cette machine a déjà une séance en attente ou en cours : une seule à la fois. » | Séance en cours sur la machine, ou une séance **en attente** existe déjà (la vôtre, celle d'un collègue, ou un enregistrement ECG oublié). |
 | « Pratiquant déjà dans une autre séance, en attente ou en cours : une seule à la fois. » | Le pratiquant a déjà une séance en attente ou en cours, sur cette machine ou une autre. | Attendre sa fin, ou l'annuler (P12). | Dans **Sessions** onglet **En attente**, trouver la séance et l'annuler (P12). Si c'est un « Enregistrement » de l'ancien mode, voir [§4.10](#410-fenêtre-nouvelle-session-enregistrement-ecg). |
-| « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
+| « Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée. » | Séances auto désactivées sur la machine. | [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « Ce programme n'est plus sur la machine. Rechargez la page et choisissez-en un autre. » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Année de naissance absente, ou enregistrée sans être un nombre entier. | P7. |
@@ -2615,8 +2615,12 @@ Aucun courriel n'est envoyé : la fonction n'existe pas encore. Voir P3.
 
 **Pourquoi ne puis je pas lancer une séance manuelle depuis le site ?**
 Par sécurité : en manuel, c'est l'opérateur qui décide de la vitesse, et il doit
-être à côté de la machine. Le site ne lance que des séances auto, où la machine
-se règle seule sur la fréquence cardiaque et applique ses protections.
+être à côté de la machine. Aucune séance avec une personne à bord en manuel, et
+aucune vitesse, ne vient jamais du site : avec quelqu'un à bord, le site ne lance
+que des séances auto, où la machine se règle seule sur la fréquence cardiaque et
+applique ses protections. Seule exception, sans personne à bord : un admin ou un
+gestionnaire peut y proposer une séance de banc lestée, que l'opérateur confirme,
+atteste et pilote ensuite à la console.
 
 **Le bouton « Arrêter la séance » arrête t'il la machine tout de suite ?**
 Non. C'est une demande, prise en compte en 3 s environ, puis la machine

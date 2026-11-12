@@ -38,6 +38,30 @@ export const SUPPORTED_MAJORS: readonly string[] = [
   CONTRACT_VERSION.split(".")[0],
 ];
 
+/**
+ * The first minor whose console reads a bench launch (ANH-250, `bench_launch`
+ * of the shared file): an older one must never be offered one.
+ */
+export const BENCH_LAUNCH_SINCE: string = machineApi.bench_launch.since;
+
+/**
+ * Whether `version` is of the same major as `since` and of its minor or a
+ * later one. An absent or unreadable version is not.
+ */
+export function contractAtLeast(
+  version: string | null | undefined,
+  since: string,
+): boolean {
+  const announced = VERSION.exec(version ?? "");
+  const wanted = VERSION.exec(since);
+  return (
+    announced !== null &&
+    wanted !== null &&
+    announced[1] === wanted[1] &&
+    Number(announced[2]) >= Number(wanted[2])
+  );
+}
+
 /** The body of every refusal of a machine route: a stable code, then words. */
 export function machineErrorResponse(
   status: number,

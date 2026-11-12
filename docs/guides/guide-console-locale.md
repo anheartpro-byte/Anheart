@@ -889,15 +889,23 @@ recherché par l'identifiant du passager; le libellé reçu avec le lancement n'
 affiché. Si ce passager ne figure pas dans la liste tenue, la carte donne la raison et
 désactive le bouton.
 
-Sous `STO_SOURCE=bridged_declared`, la carte de l'offre s'affiche, mais au clic sur
-**Cette personne est a bord et prete** la console refuse le départ, avant tout envoi de
-`training/start`, avec la raison
-`STO ponte : lancement depuis le site refuse, seances de banc a la console seulement` :
+Sous `STO_SOURCE=bridged_declared`, la carte d'un programme proposé s'affiche, mais au
+clic sur **Cette personne est a bord et prete** la console refuse le départ, avant tout
+envoi de `training/start`, avec la raison
+`STO ponte : programme lance depuis le site refuse, seule une seance de banc lestee peut etre lancee du site` :
 la carte passe à `refuse` avec cette phrase, et le tableau de bord reçoit l'échec avec la
 même raison, même si l'attestation n'est pas faite ou si un verdict attend : sous cette
-valeur, ce refus passe avant les contrôles de départ de la console. Un tel départ est
-toujours un programme, avec une personne à bord. Les séances de banc se lancent à la
-console (§13.2).
+valeur, ce refus passe avant les contrôles de départ de la console. Un programme a
+toujours une personne à bord. Les séances de banc se lancent à la console (§13.2), ou
+depuis le site pour une séance de banc lestée.
+
+Une **séance de banc lestée** lancée du site (contrat 1.9) affiche `BANC LESTE -
+personne a bord : NON`, la masse déclarée, la note et qui l'a lancée. Vérifiez de visu
+le lest arrimé et que personne n'est dans le rayon du bras, cochez
+`J'atteste : capsule lestee, aucune personne a bord, personne dans le rayon du bras`,
+puis appuyez sur **Confirmer le depart du banc leste** : sans la case, le bouton reste
+grisé. La séance qui démarre est une séance manuelle de banc, cible 0 : la vitesse se
+règle à la carte MANUEL, comme pour une séance de banc démarrée ici.
 
 Saisissez votre nom dans le champ **Operateur** habituel puis cliquez une fois sur
 **Cette personne est a bord et prete**. Le bouton local **Demarrer la seance** est

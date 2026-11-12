@@ -164,10 +164,15 @@ export function versionStatus({
   return reported === expected ? "up_to_date" : "outdated";
 }
 
-/** Recognises auto sessions or the exact occupancy segment written by the Pi. */
+/**
+ * Recognises auto sessions or the exact occupancy segment written by the Pi.
+ * A ballasted bench session launched from the site (ANH-250) never had anyone
+ * on board, whatever its launcher's notes say.
+ */
 export function personOnBoard(
-  session: Pick<Doc<"sessions">, "kind" | "notes">,
+  session: Pick<Doc<"sessions">, "kind" | "notes" | "ballast">,
 ): boolean {
+  if (session.ballast !== undefined) return false;
   return (
     session.kind === "auto" ||
     (session.notes?.split("; ").includes("Occupancy: occupied") ?? false)

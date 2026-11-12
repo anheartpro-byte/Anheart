@@ -101,7 +101,10 @@ export function TrainingDetailsCard({
         {training.kind === "manual" && (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <Hand className="h-3.5 w-3.5" />
-            {t("manualOnlyAtMachine")}
+            {/* A ballasted bench session is proposed from the site (ANH-250). */}
+            {training.ballast !== undefined
+              ? t("ballast.remote")
+              : t("manualOnlyAtMachine")}
           </p>
         )}
         <Separator />

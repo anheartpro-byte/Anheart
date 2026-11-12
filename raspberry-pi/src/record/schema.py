@@ -31,6 +31,7 @@ from src.motor.observation import (
     WrongFunction,
 )
 from src.record.rows import JsonValue
+from src.training.types import MAX_BALLAST_KG
 from src.units import Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
 
 CONFIG = ConfigDict(allow_inf_nan=False, extra="forbid", ser_json_inf_nan="constants")
@@ -137,6 +138,22 @@ class EndObservation:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)
+class RecordedBallast:
+    """The load a bench session launched from the dashboard declared (ANH-250).
+
+    Nobody was on board: the manifest's ``occupancy`` is ``bench``. ``mass_kg``
+    is what the launcher typed on the site, in kg, ``None`` when they gave
+    none; nothing measured it.
+    """
+
+    mass_kg: Annotated[float, Field(gt=0, le=MAX_BALLAST_KG)] | None
+
+
+def _absent(value: object) -> bool:
+    return value is None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)
 class Manifest:
     schema_version: Literal[2]
     record_id: str
@@ -163,6 +180,9 @@ class Manifest:
     files: tuple[str, ...] | None = None
     subject_fit: Literal[True] | None = None
     fitness_questionnaire_version: str | None = None
+    ballast: RecordedBallast | None = Field(default=None, exclude_if=_absent)
+    """A ballasted bench session launched from the dashboard; absent from every other
+    record, and from every record written before contract 1.9, which stays readable."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, config=CONFIG)
@@ -204,10 +224,6 @@ def _state_name(value: DriveState) -> str:
 
 def _fault_name(value: DriveFault) -> str:
     return value.name
-
-
-def _absent(value: object) -> bool:
-    return value is None
 
 
 FAILURE_CONFIG = ConfigDict(allow_inf_nan=False, extra="forbid", strict=True)

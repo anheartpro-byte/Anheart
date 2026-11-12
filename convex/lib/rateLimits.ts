@@ -20,8 +20,10 @@
  * GET records/status and GET roster (read only; an invalid key, which cannot
  * be rate limited, already costs as much).
  *
- * Per account (the subject of its token): `launchAutoSession`, and every
- * public mutation that writes, together. Over the limit, the call throws a
+ * Per account (the subject of its token): `launchAutoSession`, the bucket of
+ * every remote launch (`training.launchAutoSession` and, ANH-250,
+ * `training.launchBenchSession`), and every public mutation that writes,
+ * together. Over the limit, the call throws a
  * `ConvexError` `{code: "rate_limited", message, retryAfterMs}`. A stop
  * (`training.requestStop`) is never limited: refusing a stop is never the
  * safe side.
@@ -66,7 +68,7 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   machineLocalSession: bucket("POST /api/machine/training/local"),
   machineProfiles: bucket("POST /api/machine/profiles"),
   machineRecordCommit: bucket("POST /api/machine/records/commit"),
-  /** Remote launches by one account: five a minute. */
+  /** Remote launches by one account, auto and bench together: five a minute. */
   launchAutoSession: {
     kind: "token bucket",
     rate: 5,

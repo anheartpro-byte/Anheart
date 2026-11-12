@@ -171,8 +171,11 @@ Le code du dernier défaut du variateur. La table complète (60 codes) est dans
 [raspberry-pi.md](raspberry-pi.md). « nOF » signifie « pas de défaut ».
 
 **MANUEL (séance manuelle)**\
-Séance où l'opérateur fixe la vitesse cible en tr/min. Elle ne se lance
-**que** depuis la console de la machine, jamais depuis le site.\
+Séance où l'opérateur fixe la vitesse cible en tr/min, à la console. Une
+séance manuelle avec une personne à bord, comme toute vitesse, ne vient
+**jamais** du site. Seule exception, sans personne à bord : une séance de banc
+lestée peut être lancée depuis le site, puis elle est confirmée et pilotée à
+la console (ANH-250).\
 
 **[MED]**\
 Marque, dans le code et la configuration, d'une valeur qui relève d'une

@@ -582,7 +582,8 @@ export default defineSchema({
     organizationId, // Always the machine's organisation
     machineId: v.id("machines"),
     // The rider. Optional only for sessions started at the machine with no
-    // rider chosen from the synced roster; every remote launch sets it.
+    // rider chosen from the synced roster, and for a bench session launched
+    // from the dashboard (`ballast`), which has none; every auto launch sets it.
     userId: v.optional(v.id("users")),
     startedById: v.optional(v.id("users")), // Who started the session
     status: v.union(
@@ -633,6 +634,11 @@ export default defineSchema({
     // When the server marked the session "interrupted" (server's clock).
     // Present exactly while the status is "interrupted".
     interruptedAt: v.optional(v.number()),
+    // A bench session launched from the dashboard (ANH-250): kind "manual",
+    // origin "remote", no rider, capsule ballasted and nobody on board. The
+    // mass the launcher declared, in kg, or null when none was given; never
+    // measured, and nothing decides on it. Absent on every other session.
+    ballast: v.optional(v.object({ massKg: v.union(v.number(), v.null()) })),
   })
     .index("by_user", ["userId"])
     // The open sessions of one rider (pending, active, interrupted): a rider

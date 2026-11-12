@@ -80,7 +80,7 @@ Le site vous permet de :
 
 | Le site ne peut pas | Ce qu'il faut savoir |
 |---|---|
-| Démarrer une séance manuelle | Elle se démarre seulement à la console de la machine. Le site le rappelle : « Manuel : uniquement depuis la console de la machine ». |
+| Démarrer une séance manuelle | Elle se démarre seulement à la console de la machine. Le site le rappelle : « Manuel : uniquement depuis la console de la machine ». Seule exception : une séance de banc lestée, sans personne à bord, que vous pouvez proposer depuis la page de la machine ; l'opérateur la confirme à la console. |
 | Arrêter la machine tout de suite | Le bouton d'arrêt du site envoie une demande. La machine la lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite progressivement, y compris quand elle gardait sa vitesse pour une raison de sécurité (action « Vitesse figée »). L'arrêt d'urgence se fait à la machine, par l'opérateur. |
 | Voir la machine | Le site ne voit ni la capsule, ni la salle, ni l'opérateur. Il affiche ce que la machine lui envoie, avec quelques secondes de retard. |
 | Forcer un départ | La machine refait tous les contrôles et peut refuser. |
@@ -311,7 +311,7 @@ Un encadré orange dit pourquoi.
 | « Vous ne pouvez pas lancer de séance sur cette machine. » | La machine ne vous est pas attribuée. Voyez avec votre administrateur. |
 | « La machine est hors ligne. » | Vérifiez avec l'opérateur que la machine est allumée, reliée à Internet, et que sa console est démarrée. |
 | « La machine est déjà en séance. » | Attendez la fin de la séance en cours. |
-| « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | C'est un réglage de la machine. Il ne se change pas depuis le site. Appelez le support. |
+| « Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée. » | C'est un réglage de la machine. Il ne se change pas depuis le site. Appelez le support. |
 | « Aucun programme n'a été synchronisé depuis la machine. » | La machine n'a envoyé aucun programme. Appelez le support. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | [Section 4.2](#42-renseigner-la-physiologie). |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | [Section 4.2](#42-renseigner-la-physiologie). |
@@ -619,5 +619,5 @@ propres séances. Un administrateur voit tout.
 | Pratiquant | La personne à bord pendant une séance. La console l'appelle « passager ». |
 | Programme | Une séance type enregistrée sur la machine : zone cible, durée, vitesse maximale. |
 | Séance auto | Séance sur un programme. La machine règle seule sa vitesse d'après la fréquence cardiaque. |
-| Séance manuelle | Séance où l'opérateur choisit la vitesse, à la console. Jamais lancée depuis le site. |
+| Séance manuelle | Séance où l'opérateur choisit la vitesse, à la console. Jamais lancée depuis le site avec une personne à bord ; une séance de banc lestée, sans personne à bord, peut y être proposée, puis confirmée à la console. |
 | Zone cible | La plage de fréquence cardiaque que le programme cherche à tenir. |

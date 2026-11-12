@@ -1317,8 +1317,8 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 
 ### Carte « Depart distant »
 
-Quand un poll propose un lancement AUTO, la carte **Depart distant** apparaît sur
-Seance. Le poll ne démarre rien : la carte montre le programme, la personne qui l'a
+Quand un poll propose un lancement AUTO (ou, depuis le contrat 1.9, une séance de
+banc lestée, voir plus bas), la carte **Depart distant** apparaît sur Seance. Le poll ne démarre rien : la carte montre le programme, la personne qui l'a
 lancé et le nom associé au `subject_id` dans la liste de passagers que la console
 tient alors. `subject_label` envoyé par le tableau de bord ne sert pas à l'affichage.
 Le nom passe uniquement dans la réponse JSON de `GET /api/remote-launch` vers la page;
@@ -1331,14 +1331,43 @@ récupérable, sans `training/start` ni `training/end`; après le retour du pass
 un nouveau clic est nécessaire. L'absence après un 2xx refuse l'armement et envoie
 une fin échouée. L'âge et la FC max restent ceux du lancement reçu.
 
-Sous `STO_SOURCE=bridged_declared`, tout lancement depuis le site est refusé avant
-`training/start`, au geste de confirmation : un lancement distant est toujours un
-programme, donc une personne à bord. La console le dit (carte « Depart distant » à
-`refuse`), et le renvoie au tableau de bord comme raison de l'échec, avec sa propre phrase,
-`STO ponte : lancement depuis le site refuse, seances de banc a la console seulement`.
+Sous `STO_SOURCE=bridged_declared`, un programme lancé depuis le site est refusé
+avant `training/start`, au geste de confirmation : un programme a toujours une
+personne à bord. La console le dit (carte « Depart distant » à `refuse`), et le
+renvoie au tableau de bord comme raison de l'échec, avec sa propre phrase,
+`STO ponte : programme lance depuis le site refuse, seule une seance de banc lestee peut etre lancee du site`.
 Cette raison passe avant les contrôles de départ de la console (attestation, verdict
 verrouillé, demande en attente) : sous cette valeur, aucun d'eux ne lèverait ce refus.
-Les séances de banc se lancent à la console seulement.
+Une séance de banc lestée lancée du site (ci-dessous) n'a personne à bord : elle
+passe, sous cette valeur comme sous une source STO réelle, les contrôles d'un départ
+de banc à la console.
+
+**Séance de banc lestée lancée du site** (contrat 1.9, ANH-250). Un admin ou un
+gestionnaire de la machine peut lancer depuis le site une séance manuelle de banc,
+capsule lestée, aucune personne à bord. La carte dit alors, à la place du passager
+et du programme : `seance` `BANC LESTE - personne a bord : NON`, `lest declare`
+(la masse donnée sur le site, ou `masse non declaree`), `note` (celle du lanceur,
+affichée comme texte, gardée en mémoire seulement) et `lance par`. Elle montre une
+case à cocher :
+`J'atteste : capsule lestee, aucune personne a bord, personne dans le rayon du bras`.
+Le bouton s'appelle **Confirmer le depart du banc leste** et reste désactivé tant que
+la case n'est pas cochée ; une case cochée vaut pour cette offre seulement (une autre
+offre, ou celle-ci modifiée, la décoche). La route `POST /api/remote-launch/confirm`
+reçoit `bench_attested: true` ; sans lui, elle répond 409 `bench_unattested`
+(`attestation requise : capsule lestee, ...`) et rien n'est envoyé. Aucun passager
+n'est cherché dans la liste. Le départ suit ensuite le même chemin que celui d'un
+programme (contrôles locaux, `training/start`, puis la boîte de la machine après un
+2xx), mais arme une **séance manuelle de banc**, cible 0, avec le plafond
+`MOTOR_MAX_RPM` : la vitesse se règle à la carte MANUEL de cette console (section
+12), jamais depuis le site ; règles de sécurité et limites de mouvement actives,
+aucune règle cardiaque. Tout refus local (console hors service, verdict à acquitter,
+caméra, attestation de démarrage absente) revient au tableau de bord comme séance
+échouée. L'enregistrement de la séance porte la masse (`ballast` du manifeste) et
+l'événement `console: bench_attested: capsule lestee, aucune personne a bord,
+personne dans le rayon du bras` sous l'alias du confirmateur, à côté de
+`console: launch_confirmed`. L'arrêt demandé sur le site l'arrête comme toute séance
+distante. La procédure complète au banc est dans
+[raspberry-pi.md](raspberry-pi.md#séance-de-banc-lestée-lancée-du-site-anh-250).
 
 L'opérateur renseigne le champ **Operateur** déjà présent dans la carte Programme,
 puis fait un seul geste sur **Cette personne est a bord et prete**. Le bouton envoie
@@ -2390,6 +2419,8 @@ quand il ne la propose plus (carte « Depart distant » ci-dessus).
 | `age du pratiquant refuse avant le depart (age_refused_before_start)` | l'âge du pratiquant ne permet plus le départ |
 | `FC max du pratiquant modifiee avant le depart (hr_max_changed_before_start)` | la FC max a changé depuis la création du lancement |
 | `pratiquant deja dans une autre seance en attente ou en cours : une seule a la fois (rider_busy)` | le pratiquant est déjà tenu par une autre séance |
+| `machine deja tenue par une autre seance en attente ou en cours : une seule a la fois (machine_busy)` | séance de banc lestée lancée du site (contrat 1.9) : une autre séance tient encore la machine |
+| `attestation requise : capsule lestee, aucune personne a bord, personne dans le rayon du bras` | confirmation d'une séance de banc lestée sans la case d'attestation cochée (409 `bench_unattested`) ; rien n'est envoyé |
 | `depart distant refuse (HTTP <n>, <code>)` (ou `depart distant refuse (HTTP <n>)` sans code) | autre refus de `training/start`; le texte reçu du tableau de bord n'est pas repris |
 | `depart distant non confirme : confirmation indisponible` | lien retenu, par exemple réseau, clé, délai, 429 ou 5xx ; aucun départ n'est armé |
 | `route training/start inconnue` | le serveur ne connaît pas la route ; aucun départ n'est armé |

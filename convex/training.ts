@@ -10,11 +10,15 @@
  *   session may be launched from this dashboard, by an admin, by a
  *   gestionnaire of the machine, or by a user a gestionnaire has granted the
  *   launch right to.
- * - **manual**: the operator sets the speed directly. It can ONLY be started
- *   at the machine, on the local panel, by someone standing next to it. There
- *   is deliberately no mutation here that creates one; the Pi registers a
- *   manual session it has already started (`registerLocalSession`) so the
- *   dashboard can show it.
+ * - **manual**: the operator sets the speed directly, at the console. The Pi
+ *   registers a manual session it started at the machine
+ *   (`registerLocalSession`) so the dashboard can show it. One kind of manual
+ *   session is launched from here (ANH-250, `launchBenchSession`): a bench
+ *   session, capsule ballasted and nobody on board, by an admin or a
+ *   gestionnaire of the machine. It names no rider, carries the declared
+ *   ballast, and reaches only a console of contract 1.9 or later, which arms
+ *   it after the operator's physical confirmation and a named attestation at
+ *   the machine; the speed is still set there, never from here.
  *
  * The Pi remains the authority on safety: it checks rights, zone against the
  * rider's max heart rate and machine state, and can still refuse the start
@@ -67,7 +71,12 @@ import {
 import { riderFitness, riderLaunchRefusal } from "./lib/fitness";
 import { liveStateValidator, machineProfileFields } from "./schema";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
-import { machineError, type MachineErrorCode } from "./lib/contract";
+import {
+  BENCH_LAUNCH_SINCE,
+  contractAtLeast,
+  machineError,
+  type MachineErrorCode,
+} from "./lib/contract";
 // The stable codes of the refusals the site words (ANH-90, ANH-144).
 import { refusal, type DashboardErrorCode } from "./lib/errors";
 import {
@@ -239,6 +248,38 @@ async function launcherRefusal(
   return (await canAccessUser(ctx, riderId, launcher))
     ? null
     : "user_not_managed";
+}
+
+/**
+ * Why `launcher` may not launch a bench session on this machine (ANH-250), as
+ * the stable code the launch is refused with, or null when they may: an admin
+ * or a gestionnaire who reaches the machine. A patient launches only a session
+ * of their own, and a bench session has no rider. The rule of
+ * `launchBenchSession`, checked again when the machine arms it.
+ */
+async function benchLauncherRefusal(
+  ctx: QueryCtx | MutationCtx,
+  launcher: CurrentUser,
+  machineId: Id<"machines">,
+): Promise<DashboardErrorCode | null> {
+  if (launcher.role === "user") return "bench_launch_staff_only";
+  return (await canAccessMachine(ctx, machineId, launcher))
+    ? null
+    : "machine_not_managed";
+}
+
+/** A bench session launched from the dashboard (ANH-250): manual, remote, no rider. */
+export function isBenchLaunch(
+  session: Pick<Doc<"sessions">, "kind" | "origin">,
+): boolean {
+  return session.kind === "manual" && session.origin === "remote";
+}
+
+/** A launch from the dashboard: an auto session, or a bench session (ANH-250). */
+function isRemoteLaunch(
+  session: Pick<Doc<"sessions">, "kind" | "origin">,
+): boolean {
+  return session.kind === "auto" || isBenchLaunch(session);
 }
 
 function fullName(user: Pick<Doc<"users">, "firstName" | "lastName">) {
@@ -668,6 +709,9 @@ export const ARMING_REFUSALS = {
     "the rider's max heart rate changed before the machine armed the launch",
   rider_busy:
     "the rider was already in another session when the machine armed the launch",
+  // Bench launches only (ANH-250): they have no rider to hold.
+  machine_busy:
+    "another open session held the machine when it armed the bench launch",
 } as const satisfies Partial<
   Record<Extract<MachineErrorCode, DashboardErrorCode>, string>
 >;
@@ -754,15 +798,16 @@ async function riderHeld(
 }
 
 /**
- * Whether the machine has a session that may hold it (`mayHold`). A pending
- * session of the retired recording mode holds its machine too, as any pending
- * session always did, until it is cancelled or the migration of ANH-135
- * fails it.
+ * Whether the machine has a session, other than `except`, that may hold it
+ * (`mayHold`). A pending session of the retired recording mode holds its
+ * machine too, as any pending session always did, until it is cancelled or
+ * the migration of ANH-135 fails it.
  */
 async function machineHeld(
   ctx: QueryCtx | MutationCtx,
   machineId: Id<"machines">,
   now: number,
+  except?: Id<"sessions">,
 ): Promise<boolean> {
   for (const status of OPEN_STATUSES) {
     const sessions = await ctx.db
@@ -772,6 +817,7 @@ async function machineHeld(
       )
       .collect();
     for (const session of sessions) {
+      if (session._id === except) continue;
       const legacyWaiting =
         session.kind === undefined && session.status === "pending";
       if (legacyWaiting || (await mayHold(ctx, session, now))) return true;
@@ -808,6 +854,25 @@ async function riderStillAllowed(
 }
 
 /**
+ * Whether whoever made this bench launch could still make it now, in the
+ * machine's organisation (`rolesHeldNow`, `benchLauncherRefusal`).
+ */
+async function benchLauncherStillAllowed(
+  ctx: QueryCtx | MutationCtx,
+  session: Doc<"sessions">,
+  machine: Doc<"machines">,
+): Promise<boolean> {
+  const { startedById } = session;
+  const organizationId = machine.organizationId;
+  if (startedById === undefined || organizationId === undefined) return false;
+  for (const launcher of await rolesHeldNow(ctx, startedById, organizationId)) {
+    if ((await benchLauncherRefusal(ctx, launcher, machine._id)) === null)
+      return true;
+  }
+  return false;
+}
+
+/**
  * Why a pending launch must not be armed now, or null when it may be. Checked
  * when the machine polls (an offer it would refuse is not made), when it
  * confirms the start (`markTrainingStarted`), and every minute for every
@@ -825,6 +890,11 @@ async function riderStillAllowed(
  *    which the machine fits the programme to: a changed value is refused,
  *    not re-checked, so the machine never runs on the old one;
  * 8. the rider is in no other session that may still hold them (`mayHold`).
+ *
+ * A bench launch (ANH-250) has no rider: after 3, whoever made it could still
+ * make it (`benchLauncherRefusal`, else `right_revoked_before_start`), and no
+ * other session may still hold its machine (`machine_busy`). Nothing of a
+ * rider, a fitness, an age, a heart rate or the medical parameters is read.
  */
 async function armingRefusal(
   ctx: QueryCtx | MutationCtx,
@@ -839,6 +909,13 @@ async function armingRefusal(
     return refusalFor("organization_changed_before_start");
   if (session.organizationId === undefined)
     return refusalFor("right_revoked_before_start");
+  if (isBenchLaunch(session)) {
+    if (!(await benchLauncherStillAllowed(ctx, session, machine)))
+      return refusalFor("right_revoked_before_start");
+    if (await machineHeld(ctx, machine._id, now, session._id))
+      return refusalFor("machine_busy");
+    return null;
+  }
   const rider = await riderStillAllowed(ctx, session, machine);
   if (rider === null) return refusalFor("right_revoked_before_start");
   const fitnessRefusal = await riderLaunchRefusal(
@@ -895,7 +972,8 @@ async function failBeforeStart(
  * against a version other than the one used when it was created: expired
  * launches become terminal in the same transaction, and the caller gets the
  * count of still-waiting launches and must refuse registration if it is not 0.
- * `kind` covers pending launches written before `origin` was added.
+ * `kind` covers pending launches written before `origin` was added. A bench
+ * launch (ANH-250) is left to the sweep: nothing of it depends on a version.
  */
 export async function settlePendingLaunchesForRegistration(
   ctx: MutationCtx,
@@ -926,9 +1004,10 @@ export async function settlePendingLaunchesForRegistration(
  * Fail every launch from the dashboard that is still pending and that its
  * machine must no longer arm (`armingRefusal`): one that waited longer than
  * `PENDING_SESSION_TTL_S` (`endReason` "expired before the machine armed
- * it"), and one whose rights, rider or machine changed while it waited. Run
- * every minute (`convex/crons.ts`). Returns how many it failed. Sessions of
- * the retired recording mode (no `kind`) are left as they are.
+ * it"), and one whose rights, rider or machine changed while it waited, a
+ * bench launch (ANH-250) included. Run every minute (`convex/crons.ts`).
+ * Returns how many it failed. Sessions of the retired recording mode (no
+ * `kind`) are left as they are.
  */
 export const sweepPendingSessions = internalMutation({
   args: {},
@@ -941,7 +1020,7 @@ export const sweepPendingSessions = internalMutation({
       .collect();
     let failed = 0;
     for (const session of pending) {
-      if (session.kind !== "auto") continue;
+      if (!isRemoteLaunch(session)) continue;
       const refused = await armingRefusal(ctx, session, now);
       if (refused === null) continue;
       await failBeforeStart(ctx, session, refused, now);
@@ -952,23 +1031,25 @@ export const sweepPendingSessions = internalMutation({
 });
 
 /**
- * Fail, as the sweep would, the launches of this rider and of this machine
- * that have waited too long: they hold neither, and would otherwise wait
- * beside the new one until the sweep's next run.
+ * Fail, as the sweep would, the launches of this rider (none for a bench
+ * launch) and of this machine that have waited too long: they hold neither,
+ * and would otherwise wait beside the new one until the sweep's next run.
  */
 async function expireWaitingLaunches(
   ctx: MutationCtx,
-  riderId: Id<"users">,
+  riderId: Id<"users"> | null,
   machineId: Id<"machines">,
   now: number,
 ): Promise<void> {
   const waiting = [
-    ...(await ctx.db
-      .query("sessions")
-      .withIndex("by_user_and_status", (q) =>
-        q.eq("userId", riderId).eq("status", "pending"),
-      )
-      .collect()),
+    ...(riderId === null
+      ? []
+      : await ctx.db
+          .query("sessions")
+          .withIndex("by_user_and_status", (q) =>
+            q.eq("userId", riderId).eq("status", "pending"),
+          )
+          .collect()),
     ...(await ctx.db
       .query("sessions")
       .withIndex("by_machine_and_status", (q) =>
@@ -977,7 +1058,7 @@ async function expireWaitingLaunches(
       .collect()),
   ];
   for (const session of waiting) {
-    if (session.kind === "auto" && expired(session, now)) {
+    if (isRemoteLaunch(session) && expired(session, now)) {
       await failBeforeStart(
         ctx,
         session,
@@ -989,7 +1070,8 @@ async function expireWaitingLaunches(
 }
 
 /**
- * Queue an AUTO session for the machine to pick up. The only remote launch.
+ * Queue an AUTO session for the machine to pick up. The only remote launch
+ * with a rider (a bench session has none, `launchBenchSession`).
  *
  * A user launches for themselves only; an admin or a gestionnaire launches
  * for a rider they manage (or for themselves).
@@ -1125,6 +1207,100 @@ export const launchAutoSession = mutation({
       action: "session.launched",
       targetId: sessionId,
       details: { machineId: args.machineId, userId: riderId },
+    });
+    return sessionId;
+  },
+});
+
+/**
+ * The heaviest ballast a bench launch may declare, in kg (ANH-250). A bound on
+ * what is typed, not a rated load of the arm: the first trials carry a sandbag
+ * of about 80 kg, and 200 refuses a slipped digit (800 for 80). Nothing on the
+ * machine reads the mass: it is kept with the session and its record.
+ */
+export const MAX_BALLAST_KG = 200;
+
+/** The longest note a bench launch carries, in characters (ANH-250). */
+export const MAX_LAUNCH_NOTES = 500;
+
+/**
+ * Queue a bench session for the machine to pick up (ANH-250): manual, capsule
+ * ballasted, nobody on board, no rider. The speed is set at the console, never
+ * from here; the console arms it only after its operator's physical
+ * confirmation and the attestation "capsule lestée, aucune personne à bord,
+ * personne dans le rayon du bras" (`contracts/machine-api.json`,
+ * `bench_launch`).
+ *
+ * An admin or a gestionnaire who reaches the machine launches it
+ * (`benchLauncherRefusal`); a patient is refused `bench_launch_staff_only`.
+ * Refused too: a machine deleted or of no organisation (`machine_not_found`),
+ * a mass that is not a number of kg in (0, `MAX_BALLAST_KG`]
+ * (`invalid_ballast_mass`), notes over `MAX_LAUNCH_NOTES` (`notes_too_long`),
+ * a machine offline (`machine_offline`), one whose last heartbeat announced
+ * no contract of 1.9 or later (`machine_contract_too_old`: an older console
+ * must never be offered it), and a machine that a session may still hold
+ * (`machine_busy`). Neither the medical parameters nor the programmes are
+ * read: nothing of them applies to nobody on board. Checked again when the
+ * machine arms it (`armingRefusal`).
+ */
+export const launchBenchSession = mutation({
+  args: {
+    machineId: v.id("machines"),
+    ballastKg: v.optional(v.number()),
+    notes: v.optional(v.string()),
+  },
+  returns: v.id("sessions"),
+  handler: async (ctx, args) => {
+    // The bucket of every remote launch of the account, then its writes.
+    await limitUser(ctx, "launchAutoSession");
+    await limitUser(ctx);
+    const me = await getCurrentUserOrThrow(ctx);
+    const unauthorized = await benchLauncherRefusal(ctx, me, args.machineId);
+    if (unauthorized !== null) throw refusal(unauthorized);
+    const machine = await ctx.db.get(args.machineId);
+    if (!machine || machine.isDeleted || machine.organizationId === undefined)
+      throw refusal("machine_not_found");
+    const massKg = args.ballastKg ?? null;
+    if (
+      massKg !== null &&
+      !(Number.isFinite(massKg) && massKg > 0 && massKg <= MAX_BALLAST_KG)
+    ) {
+      throw refusal("invalid_ballast_mass");
+    }
+    const notes = args.notes?.trim() || undefined;
+    if (notes !== undefined && notes.length > MAX_LAUNCH_NOTES)
+      throw refusal("notes_too_long");
+    if (machine.status === "offline") throw refusal("machine_offline");
+    if (!contractAtLeast(machine.contractVersion, BENCH_LAUNCH_SINCE))
+      throw refusal("machine_contract_too_old");
+    const now = Date.now();
+    await expireWaitingLaunches(ctx, null, args.machineId, now);
+    if (
+      machine.status === "in_session" ||
+      (await machineHeld(ctx, args.machineId, now))
+    ) {
+      throw refusal("machine_busy");
+    }
+    const sessionId = await ctx.db.insert("sessions", {
+      organizationId: machine.organizationId,
+      machineId: args.machineId,
+      startedById: me._id,
+      status: "pending",
+      startedAt: now,
+      channels: ["ECG"],
+      notes,
+      kind: "manual",
+      origin: "remote",
+      operatorName: fullName(me),
+      ballast: { massKg },
+    });
+    await audit(ctx, {
+      actor: userActor(me),
+      source: "site",
+      organizationId: machine.organizationId,
+      action: "session.bench_launched",
+      targetId: sessionId,
+      details: { machineId: args.machineId },
     });
     return sessionId;
   },
@@ -1470,6 +1646,8 @@ export const getTrainingSession = query({
       endCode: v.optional(v.string()),
       // When the server marked it interrupted (end unknown): only while it is.
       interruptedAt: v.optional(v.number()),
+      // A bench session launched from the dashboard (ANH-250): the declared mass.
+      ballast: v.optional(v.object({ massKg: v.union(v.number(), v.null()) })),
       canStop: v.boolean(),
     }),
     v.null(),
@@ -1505,6 +1683,7 @@ export const getTrainingSession = query({
       endReason: s.endReason,
       endCode: s.endCode,
       interruptedAt: s.interruptedAt,
+      ballast: s.ballast,
       canStop: s.status === "pending" || startedNotEnded(s.status),
     };
   },
@@ -1662,17 +1841,42 @@ export const getRoster = internalQuery({
   },
 });
 
+/**
+ * The launch a machine is offered when it polls, in the shape its console
+ * reads, or null. The first pending launch the arming check would accept
+ * (`armingRefusal`): never one expired or refused, even before the sweep has
+ * run, nor one that expires within `POLL_MARGIN_S`.
+ *
+ * Two shapes, told apart by `mode` (contract 1.9, `bench_launch`):
+ *
+ * - `auto`: the programme, the rider and their maximum heart rate, the keys a
+ *   console has always read, plus `mode`;
+ * - `bench` (ANH-250): no programme, no rider, no heart rate, the declared
+ *   ballast and the launcher's note. Offered only to a poll that announces
+ *   `BENCH_LAUNCH_SINCE` or later (`contract`, its `X-Anheart-Contract`):
+ *   an older console never sees it, and its parser, which requires
+ *   `profileId`, `subjectId` and `subjectHrMax`, would drop it unarmed.
+ */
 export const getPendingTrainingSession = internalQuery({
-  args: { machineId: v.id("machines") },
+  args: { machineId: v.id("machines"), contract: v.optional(v.string()) },
   returns: v.union(
     v.object({
       sessionId: v.id("sessions"),
+      mode: v.literal("auto"),
       profileId: v.string(),
       totalDurationS: v.union(v.number(), v.null()),
       subjectId: v.string(),
       subjectLabel: v.string(),
       subjectHrMax: v.number(),
       subjectAge: v.union(v.number(), v.null()),
+      operatorName: v.string(),
+    }),
+    v.object({
+      sessionId: v.id("sessions"),
+      mode: v.literal("bench"),
+      occupancy: v.literal("ballast"),
+      ballastKg: v.union(v.number(), v.null()),
+      notes: v.union(v.string(), v.null()),
       operatorName: v.string(),
     }),
     v.null(),
@@ -1688,10 +1892,23 @@ export const getPendingTrainingSession = internalQuery({
     // a right withdrawn, the rider's physiology changed...): the sweep fails
     // it within the minute. Nor one that expires within `POLL_MARGIN_S`.
     const now = Date.now();
+    const readsBench = contractAtLeast(args.contract, BENCH_LAUNCH_SINCE);
     for (const s of pending) {
+      if (expiresSoon(s, now)) continue;
+      if (isBenchLaunch(s)) {
+        if (!readsBench || (await armingRefusal(ctx, s, now)) !== null)
+          continue;
+        return {
+          sessionId: s._id,
+          mode: "bench" as const,
+          occupancy: "ballast" as const,
+          ballastKg: s.ballast?.massKg ?? null,
+          notes: s.notes ?? null,
+          operatorName: s.operatorName ?? "dashboard",
+        };
+      }
       if (
         s.kind !== "auto" ||
-        expiresSoon(s, now) ||
         s.profileId === undefined ||
         s.subjectHrMax === undefined ||
         s.userId === undefined ||
@@ -1701,6 +1918,7 @@ export const getPendingTrainingSession = internalQuery({
       }
       return {
         sessionId: s._id,
+        mode: "auto" as const,
         profileId: s.profileId,
         totalDurationS: s.totalDurationS ?? null,
         subjectId: s.userId,
