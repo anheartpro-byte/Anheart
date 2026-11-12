@@ -2210,9 +2210,9 @@ cardiaque), une horloge non fiable, un BITalino absent ou une batterie basse
 ne créent aucun danger pour une personne : ils sont affichés et écrits, ils ne
 bloquent pas. La qualité ECG et les paramètres médicaux sont sans objet au
 banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
-jugée est celle du départ : une séance de banc lancée depuis le site sera
-jugée avec les règles du banc une fois ANH-250 fusionné (le lancement de
-banc depuis le site n'existe pas encore).
+jugée est celle du départ : une séance de banc lestée lancée depuis le site
+(ANH-250) est jugée avec les règles du banc, au pré-vol du lancement comme à
+l'armement ; un programme lancé du site, avec celles d'une personne à bord.
 
 ### 15.3 Ce que le pré-vol ne couvre pas
 

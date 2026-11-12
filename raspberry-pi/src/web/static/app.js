@@ -1117,6 +1117,9 @@ function renderPreflight(row) {
     rows.appendChild(line);
   });
   renderSto();
+  if (state.remoteLaunch) {
+    renderRemoteLaunch(state.remoteLaunch);
+  }
 }
 
 function loadPreflight() {
@@ -1776,6 +1779,9 @@ function renderRemoteLaunch(offer) {
   show(el("remote-launch-attest-row"), bench);
   text(el("remote-launch-attest-text"), bench ? "J'atteste : " + offer.attestation : "");
   text(confirm, bench ? REMOTE_BENCH_CONFIRM : REMOTE_PASSENGER_CONFIRM);
+  // Held while the pre-flight has a red blocking control for this kind of launch (ANH-142).
+  var held = offer ? preflightBlock(bench ? "bench" : "occupied") : "";
+  text(el("remote-launch-preflight-note"), held ? "Confirmation retenue par le pre-vol : " + held : "");
   if (!offer) {
     text(el("remote-launch-status"), "");
     text(el("remote-launch-passenger-note"), "");
@@ -1806,7 +1812,7 @@ function renderRemoteLaunch(offer) {
     status = labels[stage] || "etat inconnu";
   }
   text(el("remote-launch-status"), status);
-  confirm.disabled = !offer.can_confirm || state.remoteLaunchSubmitting || (bench && !attest.checked);
+  confirm.disabled = !offer.can_confirm || state.remoteLaunchSubmitting || (bench && !attest.checked) || Boolean(held);
 }
 
 function loadRemoteLaunch() {

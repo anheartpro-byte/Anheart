@@ -1268,8 +1268,13 @@ le serveur le refuse (`bench_launch_staff_only`).
 4. **Envoyer à la machine** : la séance est créée « en attente » et la vue en
    direct s'ouvre. Ni programme, ni passager, ni paramètres médicaux ne sont
    demandés.
-5. À la console, l'opérateur confirme et atteste (carte « Depart distant »,
-   [console-locale.md](console-locale.md#carte--depart-distant-)), puis règle
+5. À la console, l'opérateur vérifie d'abord la page **Pre-vol** : aucun
+   contrôle rouge dans la colonne Banc (sinon le bouton de confirmation reste
+   grisé et la console refuserait le départ, revenu au site comme séance
+   échouée avec la raison du pré-vol,
+   [console-locale.md](console-locale.md#17-page--pre-vol--anh-142)). Puis il
+   confirme et atteste (carte « Depart distant »,
+   [console-locale.md](console-locale.md#carte--depart-distant-)), et règle
    la vitesse. Le site suit la séance en direct et peut l'arrêter (§5.4) ou
    l'annuler tant qu'elle attend.
 

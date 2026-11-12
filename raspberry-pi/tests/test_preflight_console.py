@@ -22,6 +22,7 @@ import pytest
 
 from src import local_panel
 from src.clock import ManualClock
+from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
 from src.health import HealthWatch
 from src.health_system import Celsius, SystemHealth
 from src.local_panel import LocalPanel, build_panel, describe_start_refusal, record_preflight
@@ -46,10 +47,14 @@ from tests.test_cloud_sync import (
     Dashboard,
     config_of,
     launch_answer,
+    linked,
+    ok,
     rig,
 )
 from tests.test_local_panel import BASE_ENV, SERIAL_ENV, FakeEcgClient, config_from, ecg_link
 from tests.test_preflight import _green  # pyright: ignore[reportPrivateUsage]  # one fixture
+from tests.test_remote_bench_launch import BENCH
+from tests.wall_clock_support import ScriptedClock
 
 TICK: Final[Seconds] = Seconds(0.2)
 END: Final[str] = "/api/machine/training/end"
@@ -412,3 +417,68 @@ async def test_a_console_without_a_preflight_serves_none_and_refuses_a_run() -> 
             assert refused.status_code == HTTPStatus.CONFLICT
     finally:
         await panel.close()
+
+
+# =========================================================================
+# A bench session launched from the site (ANH-250): the bench's rules
+# =========================================================================
+
+
+async def test_a_bench_launch_is_refused_before_its_start_when_a_bench_control_is_red(
+    tmp_path: Path,
+) -> None:
+    """An open serious incident announced by the server blocks the bench too."""
+    rig_ = linked(tmp_path, preflight=True)
+    announced = ok(
+        {"session": dict(BENCH), SERVER_VERSION_FIELD: CONTRACT_VERSION, "incidents_open_high": 1}
+    )
+    rig_.dashboard.answer(POLL_PATH, announced)
+    await rig_.run(13.0)  # the poll offers the launch; the next heartbeat carries the count
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    refused = monitor.refusal(Occupancy.BENCH)
+    assert refused is not None
+    assert refused.control == "incidents"
+    cloud = rig_.panel.cloud
+    assert cloud is not None
+    assert isinstance(cloud.confirm_remote_launch("remote-bench", OPERATOR, True), Ok)
+    await rig_.run(2.0)
+    assert rig_.panel.runtime.manual is None
+    assert rig_.dashboard.to(START) == []  # refused before training/start
+    (end,) = rig_.dashboard.to(END)
+    assert end["sessionId"] == "remote-bench"
+    assert end["failed"] is True
+    assert end["reason"] == (
+        "refusee par la machine : pre-vol : 1 incident(s) grave(s) ouvert(s) sur cette machine"
+    )
+    await rig_.panel.close()
+
+
+async def test_a_bench_launch_arms_when_only_a_person_on_board_would_be_refused(
+    tmp_path: Path,
+) -> None:
+    """No BITalino and a clock nobody keeps: red with a person on board, warnings at the bench."""
+    rig_ = linked(tmp_path, preflight=True, wall_clock=ScriptedClock())
+    simulator = rig_.panel.ecg.client
+    assert isinstance(simulator, SimulatedBitalinoClient)
+    simulator.inject_connect_failure()
+    rig_.dashboard.answer(POLL_PATH, launch_answer(dict(BENCH)))
+    await rig_.run(1.0)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    on_board = monitor.refusal(Occupancy.OCCUPIED)
+    assert on_board is not None
+    assert monitor.refusal(Occupancy.BENCH) is None
+    bench = {r.id: r.state for r in judge(CONTROLS, monitor.inputs(), Occupancy.BENCH).results}
+    assert bench["bitalino"] is ControlState.WARN
+    assert bench["clock"] is ControlState.WARN
+    cloud = rig_.panel.cloud
+    assert cloud is not None
+    assert isinstance(cloud.confirm_remote_launch("remote-bench", OPERATOR, True), Ok)
+    await rig_.run(1.8)
+    assert [body["sessionId"] for body in rig_.dashboard.to(START)] == ["remote-bench"]
+    manual = rig_.panel.runtime.manual
+    assert manual is not None
+    assert manual.occupancy is Occupancy.BENCH
+    assert rig_.dashboard.to(END) == []
+    await rig_.panel.close()

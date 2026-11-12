@@ -710,8 +710,14 @@ prise sinon). Aucun essai matériel de cette procédure n'est consigné ici.
 7. **Après.** Étapes 8 à 10 ci-dessus. Le site montre la séance « Banc lesté »
    avec sa masse dans l'historique et le rapport.
 
+Avant l'étape 4, la page « Pre-vol » de la console
+([4.2](#le-pré-vol-anh-142)) doit être sans rouge dans la colonne Banc : un
+contrôle bloquant rouge (disque, variateur, attestation, verdict, contrat,
+incident grave annoncé) grise le bouton de confirmation et refuserait le départ.
+
 Un lancement de banc refusé à la console (verdict à acquitter, console hors
-service, caméra, attestation absente au démarrage) n'arme rien et revient au
+service, caméra, attestation absente au démarrage, contrôle bloquant du
+pré-vol au banc) n'arme rien et revient au
 site comme séance échouée avec sa raison ; Convex le refuse aussi à l'armement
 si son lanceur n'atteint plus la machine (`right_revoked_before_start`) ou si
 une autre séance la tient (`machine_busy`).
@@ -1243,10 +1249,14 @@ deux occupations.
 **La porte n'attend jamais.** À l'armement, la liste est jugée sur ce que la
 console sait à cet instant : un contrôle encore « en cours » dans la passe
 refuse le départ s'il est bloquant pour cette occupation. Le pré-vol d'un
-lancement venu du tableau de bord (`LocalPanel.preflight_remote_start`, une
-personne à bord) refuse avec la même raison, avant toute confirmation au
+lancement venu du tableau de bord (`LocalPanel.preflight_remote_start`) le
+juge pour son occupation : un programme avec une personne à bord, une séance
+de banc lestée (ANH-250) au banc, où une batterie, un ECG ou une horloge ne
+font qu'avertir. Il refuse avec la même raison, avant toute confirmation au
 serveur ; le tableau de bord reçoit la séance en échec avec
-`refusee par la machine : pre-vol : <raison>`.
+`refusee par la machine : pre-vol : <raison>`. À la console, le bouton de
+confirmation de la carte « Depart distant » reste grisé tant qu'un contrôle
+bloquant est rouge pour ce type de lancement.
 
 **La lecture de la batterie.** Le BITalino ne répond à `state` qu'au repos :
 l'acquisition est arrêtée le temps de la lecture, puis reprend au pas suivant

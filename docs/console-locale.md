@@ -1362,8 +1362,11 @@ programme (contrôles locaux, `training/start`, puis la boîte de la machine apr
 `MOTOR_MAX_RPM` : la vitesse se règle à la carte MANUEL de cette console (section
 12), jamais depuis le site ; règles de sécurité et limites de mouvement actives,
 aucune règle cardiaque. Tout refus local (console hors service, verdict à acquitter,
-caméra, attestation de démarrage absente) revient au tableau de bord comme séance
-échouée. L'enregistrement de la séance porte la masse (`ballast` du manifeste) et
+caméra, attestation de démarrage absente, contrôle bloquant du pré-vol au banc,
+[section 17](#17-page--pre-vol--anh-142)) revient au tableau de bord comme séance
+échouée. Tant qu'un contrôle bloquant est rouge pour ce type de lancement (la colonne
+Banc pour un banc lesté, Personne a bord pour un programme), le bouton de confirmation
+reste grisé et la carte dit `Confirmation retenue par le pre-vol : <raison>`. L'enregistrement de la séance porte la masse (`ballast` du manifeste) et
 l'événement `console: bench_attested: capsule lestee, aucune personne a bord,
 personne dans le rayon du bras` sous l'alias du confirmateur, à côté de
 `console: launch_confirmed`. L'arrêt demandé sur le site l'arrête comme toute séance
@@ -2854,6 +2857,10 @@ De même pour `Demarrer MANUEL` (une séance de banc) avec la liste du banc. Une
 batterie basse, un BITalino absent ou une horloge non fiable ne retiennent pas
 un départ de banc : ce sont des avertissements au banc (décision du pilote du
 29 octobre 2026).
+
+Le bouton de confirmation de la carte « Depart distant » suit la même règle :
+pour une séance de banc lestée lancée du site, la colonne Banc ; pour un programme,
+la colonne Personne a bord.
 
 Si un départ est quand même demandé (une autre page, un lancement depuis le
 site), la console le refuse elle-même et le dit dans les événements :

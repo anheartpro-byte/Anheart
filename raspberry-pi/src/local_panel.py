@@ -1748,16 +1748,18 @@ class LocalPanel:
         """Why a bench launch from the dashboard would be refused now; ``None`` when not.
 
         The gates :meth:`_start_manual` runs for a bench start, nobody named,
-        that can refuse one: the console in service, and the camera. The bench
-        ceiling is ``MOTOR_MAX_RPM``, always set, and the wall clock refuses
-        only a person on board; :meth:`_start_manual` asks both again when it
-        arms. Nothing of a rider, a programme or the medical parameters:
-        nobody is on board (ANH-250).
+        that can refuse one: the console in service, the camera, and the
+        pre-flight judged for the bench (ANH-142: a battery, an ECG or a clock
+        only warn there). The bench ceiling is ``MOTOR_MAX_RPM``, always set,
+        and the wall clock refuses only a person on board; :meth:`_start_manual`
+        asks both again when it arms. Nothing of a rider, a programme or the
+        medical parameters: nobody is on board (ANH-250).
         """
         out = self._service_refusal()
         if out is not None:
             return out
-        return self._presence_refusal(Occupancy.BENCH)
+        bench = Occupancy.BENCH
+        return self._presence_refusal(bench) or self._preflight_refusal(bench)
 
     def _preflight_programme(self, launch: AutoLaunch) -> Result[None, str]:
         """The gates of a programmed start, for an automatic launch from the dashboard."""
