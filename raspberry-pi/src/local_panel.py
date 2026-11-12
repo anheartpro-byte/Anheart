@@ -397,6 +397,10 @@ WALL_CLOCK_PERIOD: Final[Seconds] = Seconds(10.0)
 """How often the console asks what the wall clock is worth: a state that changes when
 a network comes back or goes, not within a second. See :meth:`LocalPanel.clock_step`."""
 
+BATTERY_READ_BOUND: Final[Seconds] = Seconds(15.0)
+"""The whole of a battery read, the stop of the acquisition included (:meth:`EcgLink.read_battery`):
+the reader's join (a link timeout), the drain of the port, the ``state`` exchange."""
+
 PREFLIGHT_PERIOD: Final[Seconds] = Seconds(1.0)
 """How often the pre-flight looks whether its run has a battery to read or is over
 (:meth:`LocalPanel.preflight_step`). The controls themselves are judged on demand."""
@@ -480,6 +484,16 @@ class EcgClient(Protocol):
     is_connected: bool
     is_acquiring: bool
 
+    @property
+    @abstractmethod
+    def reconnecting(self) -> bool:
+        """Whether the reader is re-opening a lost link. Memory only."""
+
+    @property
+    @abstractmethod
+    def reads_battery(self) -> bool:
+        """Whether the open device can report its battery at all. Memory only."""
+
     @abstractmethod
     async def connect(self, timeout: float = ...) -> bool:  # noqa: ASYNC109  # the clients' own signature
         """Open the device. Returns whether it opened."""
@@ -517,12 +531,13 @@ class EcgLink:
     __slots__ = (
         "_address",
         "_attempts",
+        "_battery_bound",
         "_bridge",
         "_client",
         "_clock",
         "_last_error",
         "_link_stats",
-        "_reading",
+        "_owner",
         "_retry_at",
         "_source",
     )
@@ -536,6 +551,7 @@ class EcgLink:
         client: EcgClient,
         bridge: EcgBridge,
         link_stats: Callable[[], LinkStats] | None,
+        battery_bound: Seconds = BATTERY_READ_BOUND,
     ) -> None:
         self._clock: Clock = clock
         self._source: EcgSource = source
@@ -546,8 +562,9 @@ class EcgLink:
         self._attempts: int = 0
         self._last_error: str | None = None
         self._retry_at: Monotonic | None = None
-        # Set while the battery is read: the acquisition stays stopped meanwhile.
-        self._reading: bool = False
+        # The one owner of the port: held to connect and start, and for a battery read.
+        self._owner: asyncio.Lock = asyncio.Lock()
+        self._battery_bound: Seconds = battery_bound
 
     @property
     def client(self) -> EcgClient:
@@ -555,9 +572,13 @@ class EcgLink:
         return self._client
 
     async def step(self) -> None:
-        """Connect and start when needed (rate-limited), otherwise pump the bridge."""
+        """Connect and start when needed (rate-limited), otherwise pump the bridge.
+
+        Nothing while a battery read owns the port: the acquisition is stopped
+        on purpose then, and starts again at the step after it.
+        """
         client = self._client
-        if self._reading:
+        if self._owner.locked():
             return
         if client.is_acquiring:
             await self._bridge.pump()
@@ -568,6 +589,12 @@ class EcgLink:
             return
         self._retry_at = Monotonic(now + ECG_RETRY)
         self._attempts += 1
+        async with self._owner:
+            await self._open()
+
+    async def _open(self) -> None:
+        """Connect when needed, then start. The caller owns the port."""
+        client = self._client
         if not client.is_connected and not await client.connect(ECG_CONNECT_TIMEOUT_S):
             self._last_error = f"connexion au BITalino impossible ({self._address or 'sim'})"
             _logger.warning("%s", self._last_error)
@@ -579,17 +606,43 @@ class EcgLink:
         self._last_error = None
         _logger.info("BITalino acquiring (%s)", self._source.value)
 
+    @property
+    def streaming(self) -> bool:
+        """Whether the BITalino is acquiring normally: connected, streaming, not reconnecting."""
+        client = self._client
+        return client.is_connected and client.is_acquiring and not client.reconnecting
+
     async def read_battery(self) -> Percent | None:
-        """The BITalino's battery, read at rest: the acquisition is stopped for the read
-        and started again at the next step. The ECG is lost meanwhile, so its quality is
-        judged again from the restart (the pre-flight reads it before its ECG window)."""
-        self._reading = True
-        try:
-            await self._client.stop_acquisition()
-            return await self._client.read_battery()
-        finally:
-            self._reading = False
-            self._retry_at = None
+        """The BITalino's battery, read at rest; ``None`` when it cannot be read now.
+
+        Only from an acquisition that runs normally (never while the reader
+        re-opens a lost link, never while a connection is being opened: one
+        lock owns the port for both), and only on a device that can report it
+        at all (not the macOS RFCOMM transport: its acquisition is left
+        alone). The acquisition is stopped for the read and starts again at
+        the next step, so the ECG is lost meanwhile.
+
+        All of it within ``battery_bound``, the stop included. Past it the
+        link is closed, so that whatever still waits on the port ends, and
+        the next step opens it afresh.
+        """
+        async with self._owner:
+            client = self._client
+            if not self.streaming or not client.reads_battery:
+                return None
+            try:
+                async with asyncio.timeout(self._battery_bound):
+                    await client.stop_acquisition()
+                    return await client.read_battery()
+            except TimeoutError:
+                _logger.warning(
+                    "BITalino battery read took longer than %.0f s: link closed and reopened",
+                    self._battery_bound,
+                )
+                await client.disconnect()
+                return None
+            finally:
+                self._retry_at = None
 
     def status(self) -> EcgLinkStatus:
         """The link as the panel shows it."""

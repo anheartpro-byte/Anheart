@@ -109,6 +109,7 @@ class SimulatedBitalinoClient:
         "is_acquiring",
         "is_connected",
         "mac_address",
+        "reconnecting",
         "sample_rate",
     )
 
@@ -156,6 +157,8 @@ class SimulatedBitalinoClient:
         self.sample_rate: int = sample_rate
         self.is_connected: bool = False
         self.is_acquiring: bool = False
+        self.reconnecting: bool = False
+        """The real client's reader re-opening a lost link; this one never does."""
         self.battery: Percent | None = FULL_BATTERY
         """What :meth:`read_battery` says; ``None`` stands for a device that cannot say it."""
 
@@ -276,6 +279,11 @@ class SimulatedBitalinoClient:
         if not self.is_acquiring:
             return
         self.is_acquiring = False
+
+    @property
+    def reads_battery(self) -> bool:
+        """Whether a read can say the battery: ``False`` for a :attr:`battery` of ``None``."""
+        return self.battery is not None
 
     async def read_battery(self) -> Percent | None:
         """:attr:`battery`, at rest only: ``None`` while acquiring or disconnected, as the

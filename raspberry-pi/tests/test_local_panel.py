@@ -255,6 +255,8 @@ class FakeEcgClient:
         self.reads: int = 0
         self.disconnects: int = 0
         self.battery: Percent | None = None
+        self.reads_battery: bool = True
+        self.reconnecting: bool = False
         self.charge_read: asyncio.Event = asyncio.Event()
         self.charge_read.set()
 

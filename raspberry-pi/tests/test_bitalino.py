@@ -887,6 +887,8 @@ def test_a_bluetooth_socket_uses_the_vendor_receive(monkeypatch: pytest.MonkeyPa
 class ChargedDevice:
     """A device at rest that says its battery, as the BITalino 2 ``state`` does: or fails to."""
 
+    battery_readable: bool = True
+
     def __init__(self, battery: int | Exception) -> None:
         self._battery = battery
 

@@ -362,17 +362,54 @@ class VendorDevice:
     def close(self) -> None:
         self._device.close()
 
+    @property
+    def battery_readable(self) -> bool:
+        """On a serial port only (``/dev/rfcomm0`` on the Pi): its input can be drained."""
+        return self._port is not None
+
     def battery_raw(self) -> int:
+        """The ABAT channel, once what the stream left in the port is drained.
+
+        The stop byte goes out 0.1 s after the call and the reader thread
+        leaves on its next chunk, so frames sent before the stop are still in
+        the port's input: read as the 17-byte ``state`` answer they would fail
+        its 4-bit CRC 15 times in 16, and give a false battery the 16th. They
+        are read away until the port has been quiet for :data:`DRAIN_QUIET_S`,
+        at most :data:`DRAIN_READS` times: a stream that does not stop is no
+        battery reading.
+        """
+        port = self._port
+        if port is None:
+            raise LinkLostError("the battery is read on a serial port only")
+        port.timeout = DRAIN_QUIET_S
+        try:
+            for _ in range(DRAIN_READS):
+                if not port.read(DRAIN_CHUNK):
+                    break
+            else:
+                raise LinkLostError("the BITalino did not stop streaming")
+        finally:
+            port.timeout = self._link_timeout
         return self._device.state()["battery"]
+
+
+DRAIN_QUIET_S: Final[float] = 0.25
+DRAIN_READS: Final[int] = 20
+DRAIN_CHUNK: Final[int] = 4096
 
 
 @runtime_checkable
 class BatteryDevice(Protocol):
     """A device that says its battery level between two acquisitions.
 
-    The vendor adapter does, through the BITalino 2 ``state`` command. The
-    macOS RFCOMM transport does not: its battery reads as unknown.
+    The vendor adapter does on a serial port, through the BITalino 2 ``state``
+    command. The macOS RFCOMM transport does not: its battery reads as unknown.
     """
+
+    @property
+    @abstractmethod
+    def battery_readable(self) -> bool:
+        """Whether this transport can report the battery at all. Memory only."""
 
     @abstractmethod
     def battery_raw(self) -> int:
@@ -560,6 +597,8 @@ class BITalinoClient:
         self.auto_pair: bool = auto_pair
         self.is_connected: bool = False
         self.is_acquiring: bool = False
+        self.reconnecting: bool = False
+        """Set by the reader thread while it re-opens a lost link: no battery read then."""
 
         self._clock: Clock = clock if clock is not None else RealClock()
         self._factory: DeviceFactory = device_factory
@@ -706,6 +745,13 @@ class BITalinoClient:
         self.is_acquiring = False
         logger.info("Stopped acquisition; link %s", self.link_stats())
 
+    @property
+    def reads_battery(self) -> bool:
+        """Whether the open device can report its battery (a serial port). Memory only."""
+        # Asked of its shape: a Device may also be a BatteryDevice, which no annotation says.
+        device: object = self._device
+        return isinstance(device, BatteryDevice) and device.battery_readable
+
     async def read_battery(self) -> Percent | None:
         """The battery's charge, read at rest; ``None`` when it cannot be read now.
 
@@ -714,8 +760,8 @@ class BITalinoClient:
         within :data:`BATTERY_READ_TIMEOUT_S`. A reading outside the 10-bit
         range is no reading.
         """
-        device = self._device
-        if device is None or self.is_acquiring or not isinstance(device, BatteryDevice):
+        device: object = self._device  # asked of its shape, as in reads_battery
+        if self.is_acquiring or not isinstance(device, BatteryDevice):
             return None
         loop = asyncio.get_running_loop()
         try:
@@ -749,11 +795,22 @@ class BITalinoClient:
                 continue
             self._ingest(data)
         if device is None:
+            # The lost link was closed, and nothing replaced it, whoever won (a
+            # stop during the backoff, or the last attempt): never a client that
+            # says it is connected with no device, or nothing connects it again.
             self._device = None
+            self.is_connected = False
             self._give_up()
 
     def _reconnect(self, lost: Device) -> Device | None:
         """Re-open the link with backoff. Returns the new device, or None."""
+        self.reconnecting = True
+        try:
+            return self._reopen(lost)
+        finally:
+            self.reconnecting = False
+
+    def _reopen(self, lost: Device) -> Device | None:
         try:
             lost.close()
         except Exception as error:
