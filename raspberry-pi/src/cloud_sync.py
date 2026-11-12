@@ -292,6 +292,9 @@ ARMING_REFUSAL_WORDS: Final[Mapping[ErrorCode, str]] = MappingProxyType(
         ErrorCode("rider_busy"): (
             "pratiquant deja dans une autre seance en attente ou en cours : une seule a la fois"
         ),
+        ErrorCode("machine_busy"): (
+            "machine deja tenue par une autre seance en attente ou en cours : une seule a la fois"
+        ),
     }
 )
 

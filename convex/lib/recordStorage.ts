@@ -120,6 +120,13 @@ export const depositManifest = z
     geometry: recordGeometry.nullable().optional(),
     end_observation: endObservation.nullable().optional(),
     subject_fit: z.literal(true).nullable().optional(),
+    // A ballasted bench session launched from the site (ANH-250): the mass
+    // the launcher declared, in kg, or null. Absent from every other record,
+    // and from every record written before contract 1.9.
+    ballast: z
+      .strictObject({ mass_kg: z.number().nullable() })
+      .nullable()
+      .optional(),
     fitness_questionnaire_version: z
       .string()
       .regex(/^[0-9A-Za-z.+-]{1,32}$/)

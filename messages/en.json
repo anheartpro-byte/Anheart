@@ -87,6 +87,7 @@
       },
       "session": {
         "launched": "Session requested",
+        "bench_launched": "Ballasted bench session requested",
         "cancelled": "Session cancelled",
         "stop_requested": "Stop requested",
         "started": "Session started",
@@ -350,6 +351,10 @@
     "last_gestionnaire": "You are the only manager of this machine: delete it rather than leaving it.",
     "rider_busy": "Rider already in another session, waiting or running: one at a time.",
     "machine_busy": "This machine already has a session waiting or running: one at a time.",
+    "bench_launch_staff_only": "A bench session names no rider: only an administrator or a manager of the machine launches one.",
+    "machine_contract_too_old": "This machine's console is too old to receive a bench session launched from the site: update its software (contract 1.9 or later).",
+    "invalid_ballast_mass": "The ballast mass is a number of kg greater than 0 and at most 200.",
+    "notes_too_long": "The note is longer than 500 characters.",
     "expired_before_start": "Expired: start not confirmed in time",
     "machine_deleted_before_start": "Machine deleted before the start",
     "organization_changed_before_start": "Machine moved to another organisation before the start",

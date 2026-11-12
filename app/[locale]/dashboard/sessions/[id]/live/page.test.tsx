@@ -94,6 +94,7 @@ function training(overrides: Partial<Training> = {}): Training {
     status: "active",
     kind: "auto",
     origin: "remote",
+    ballast: undefined,
     profileId: "p-endurance",
     profileName: "Endurance",
     zoneLowBpm: 110,

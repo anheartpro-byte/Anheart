@@ -102,7 +102,16 @@ export const DASHBOARD_ERRORS = {
   rider_busy:
     "The rider already has a session waiting, running, or interrupted on a machine silent since, on any machine: one at a time. Also an arming refusal (below).",
   machine_busy:
-    "The machine already has a session waiting, running, or interrupted while it is silent: one at a time.",
+    "The machine already has a session waiting, running, or interrupted while it is silent: one at a time. Also the arming refusal of a bench launch (ANH-250).",
+
+  // A bench session launched from the dashboard (`training.launchBenchSession`, ANH-250).
+  bench_launch_staff_only:
+    "A bench session names no rider: only an admin or a gestionnaire of the machine launches one.",
+  machine_contract_too_old:
+    "The machine's console has not announced contract 1.9 or later: it cannot read a bench launch.",
+  invalid_ballast_mass:
+    "A ballast mass is a number of kg greater than 0 and at most MAX_BALLAST_KG (200).",
+  notes_too_long: "The notes are longer than MAX_LAUNCH_NOTES (500) characters.",
 
   // Launches refused when their machine arms them (ANH-144): the codes of
   // `ARMING_REFUSALS` (convex/training.ts), `rider_busy` above among them.

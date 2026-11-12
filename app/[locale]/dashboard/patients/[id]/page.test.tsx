@@ -80,6 +80,7 @@ function listed(name: string, overrides: Partial<Listed> = {}): Listed {
     machineName: `Machine ${name}`,
     kind: "auto",
     origin: "remote",
+    ballast: undefined,
     ...overrides,
   };
 }

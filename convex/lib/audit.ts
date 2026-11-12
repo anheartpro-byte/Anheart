@@ -75,6 +75,7 @@ export const AUDIT_ACTIONS = [
   "consent.signed", // User signs consent; target: consent.
   "consent.withdrawn", // User withdraws consent; target: consent.
   "session.launched", // Authorised user requests launch; target: session.
+  "session.bench_launched", // Admin or manager requests a ballasted bench session (ANH-250); target: session.
   "session.cancelled", // Authorised user cancels a pending launch; target: session.
   "session.stop_requested", // Authorised user requests a stop; target: session.
   "session.started", // Machine confirms start; target: session.
@@ -126,6 +127,7 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "consent.signed": "consent",
   "consent.withdrawn": "consent",
   "session.launched": "session",
+  "session.bench_launched": "session",
   "session.cancelled": "session",
   "session.stop_requested": "session",
   "session.started": "session",
@@ -260,6 +262,7 @@ export const SENSITIVE_MUTATIONS: Readonly<
   "training.revokeLaunchRight": ["launch_right.revoked"],
   "training.setUserPhysiology": ["physiology.updated"],
   "training.launchAutoSession": ["session.launched"],
+  "training.launchBenchSession": ["session.bench_launched"],
   "training.requestStop": ["session.cancelled", "session.stop_requested"],
   "training.markTrainingStarted": ["session.started"],
   "training.registerLocalSession": ["session.local_registered"],

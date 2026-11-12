@@ -34,6 +34,7 @@ function substitute(
       contract_version: "1.4",
       header: "X-Anheart-Contract",
       error_codes: { rate_limited: {}, payload_too_large: {} },
+      bench_launch: { since: "1.9" },
       rate_limits: {
         routes: Object.fromEntries(
           routes.map((route, index) => [

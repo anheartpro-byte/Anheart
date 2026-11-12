@@ -138,13 +138,13 @@ describe("ANH-135 no function belongs to the recording mode any more", () => {
     expect(writers.map(([path]) => path)).toEqual([]);
   });
 
-  it("creates a session in two places only: a dashboard launch and a machine registration", () => {
+  it("creates a session in three places only: a dashboard launch (auto, or bench since ANH-250) and a machine registration", () => {
     const inserting = Object.entries(sources)
       .filter(([, text]) => /\.insert\(\s*"sessions"/.test(text))
       .map(([path]) => path);
     expect(inserting).toEqual(["./training.ts"]);
     const count = sources["./training.ts"].match(/\.insert\(\s*"sessions"/g);
-    expect(count).toHaveLength(2);
+    expect(count).toHaveLength(3);
   });
 
   it("names the recording mode nowhere but in the migration and the history readers", () => {

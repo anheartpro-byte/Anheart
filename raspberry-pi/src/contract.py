@@ -59,6 +59,18 @@ refuses, and goes at the next poll that does not offer it
 (:mod:`src.cloud_sync`). Every other start that is no longer pending is refused
 as before.
 
+Since 1.9 the dashboard may launch a ballasted bench session (ANH-250,
+``bench_launch`` of the shared file): the poll answer's launch carries
+``mode: "bench"``, ``occupancy: "ballast"``, the declared ``ballastKg`` and the
+launcher's ``notes``, and no programme, rider or heart rate. An automatic
+launch carries ``mode: "auto"``, and one with no ``mode`` (a 1.8 dashboard) is
+read as automatic. The dashboard offers a bench launch only to a console that
+announces 1.9 or later, and a console of 1.8 would drop it as malformed: it
+never arms one. This console arms it as a manual bench session only after the
+operator's physical confirmation and the bench attestation
+(:mod:`src.cloud_sync`); its start may be refused ``machine_busy`` (another
+open session holds the machine).
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -101,7 +113,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.8")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.9")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -131,10 +143,12 @@ ARMING_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("age_refused_before_start"),
         ErrorCode("hr_max_changed_before_start"),
         ErrorCode("rider_busy"),
+        ErrorCode("machine_busy"),
     }
 )
-"""The codes of the 409 a server answers a start it refuses (contract 1.6,
-``arming_refusals`` of the shared file). Pinned to the shared file."""
+"""The codes of the 409 a server answers a start it refuses (contract 1.6, and
+``machine_busy`` since 1.9 for a bench launch; ``arming_refusals`` of the shared
+file). Pinned to the shared file."""
 
 STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
     {

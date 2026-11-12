@@ -451,6 +451,7 @@ describe("a launch is refused when the rider's physiology does not allow the pro
     });
     expect(await offeredTo(w, w.machine)).toEqual({
       sessionId,
+      mode: "auto",
       profileId: "p1",
       totalDurationS: 600,
       subjectId: w.patient,
@@ -1620,6 +1621,7 @@ describe("what a machine reports through its routes", () => {
     expect(await response.json()).toEqual({
       session: {
         sessionId,
+        mode: "auto",
         profileId: "p1",
         totalDurationS: null,
         subjectId: w.patient,

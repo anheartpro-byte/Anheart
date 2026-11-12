@@ -1060,6 +1060,21 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         }),
       ];
     }),
+  "training.launchBenchSession": async (w) => {
+    // A console of contract 1.9 or later reads a bench launch (ANH-250).
+    await w.t.run((ctx) => ctx.db.patch(w.machine, { contractVersion: "1.9" }));
+    return observe(w, async () => {
+      const sessionId = await as(w.t, "manager").mutation(
+        api.training.launchBenchSession,
+        { machineId: w.machine, ballastKg: 80 },
+      );
+      return [
+        site(w, "session.bench_launched", sessionId, "session", "manager", w.orgA, {
+          machineId: w.machine,
+        }),
+      ];
+    });
+  },
   "training.requestStop": async (w) => {
     const pending = await addSession(w, {
       machineId: w.machine,

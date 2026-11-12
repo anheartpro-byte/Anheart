@@ -87,6 +87,7 @@
       },
       "session": {
         "launched": "Séance demandée",
+        "bench_launched": "Séance de banc lestée demandée",
         "cancelled": "Séance annulée",
         "stop_requested": "Arrêt demandé",
         "started": "Séance démarrée",
@@ -350,6 +351,10 @@
     "last_gestionnaire": "Vous êtes le seul gestionnaire de cette machine : supprimez-la plutôt que de vous en retirer.",
     "rider_busy": "Pratiquant déjà dans une autre séance, en attente ou en cours : une seule à la fois.",
     "machine_busy": "Cette machine a déjà une séance en attente ou en cours : une seule à la fois.",
+    "bench_launch_staff_only": "Une séance de banc ne nomme aucun passager : seul un administrateur ou un gestionnaire de la machine la lance.",
+    "machine_contract_too_old": "La console de cette machine est trop ancienne pour recevoir une séance de banc lancée depuis le site : mettez à jour son logiciel (contrat 1.9 ou plus).",
+    "invalid_ballast_mass": "La masse du lest est un nombre de kg supérieur à 0 et d'au plus 200.",
+    "notes_too_long": "La note dépasse 500 caractères.",
     "expired_before_start": "Expirée : départ non confirmé à temps",
     "machine_deleted_before_start": "Machine supprimée avant le départ",
     "organization_changed_before_start": "Machine passée dans une autre organisation avant le départ",

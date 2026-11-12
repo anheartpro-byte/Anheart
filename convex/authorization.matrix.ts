@@ -2265,6 +2265,78 @@ export const MATRIX: Entry[] = [
     ],
   },
   {
+    // ANH-250: a ballasted bench session, nobody on board, no rider. Staff who
+    // reach the machine launch it; a patient never does, even with the launch
+    // right (a patient launches only a session of their own).
+    id: "training.launchBenchSession",
+    ref: api.training.launchBenchSession,
+    kind: "mutation",
+    build: async (w) => {
+      // Every cell aims at centre A's machine, whose console reads a bench launch.
+      await w.t.run((ctx) => ctx.db.patch(w.machine, { contractVersion: "1.9" }));
+      return { machineId: w.machine, ballastKg: 80, notes: "sac de sable" };
+    },
+    onSuccess: async (res, w, actor) => {
+      const s = await w.t.run((ctx) => ctx.db.get(res as Id<"sessions">));
+      if (
+        s?.kind !== "manual" ||
+        s.origin !== "remote" ||
+        s.status !== "pending" ||
+        s.userId !== undefined ||
+        s.startedById !== userId(w, actor) ||
+        s.ballast?.massKg !== 80
+      )
+        throw new Error("Bench session not queued as launched");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      {
+        actor: "patient",
+        scope: "own",
+        expect: refuse(/bench_launch_staff_only/),
+        note: "a patient holding the launch right still launches no bench session",
+      },
+      {
+        actor: "stranger",
+        scope: "other",
+        expect: refuse(/bench_launch_staff_only/),
+        note: "a patient without any right",
+      },
+      { actor: "manager", scope: "own", expect: ok, note: "gestionnaire of the machine" },
+      {
+        actor: "otherManager",
+        scope: "other",
+        expect: refuse(/machine_not_managed/),
+        note: "gestionnaire of another machine of the organisation",
+      },
+      { actor: "admin", expect: ok, note: "Anheart admin" },
+      {
+        actor: "orgAdmin",
+        scope: "own",
+        expect: ok,
+        note: "admin of the machine's organisation",
+      },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_not_managed/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/machine_not_managed/),
+        note: "a machine of another organisation, by identifier",
+      },
+      {
+        actor: "orgBPatient",
+        scope: "foreign",
+        expect: refuse(/bench_launch_staff_only/),
+        note: "a patient of another organisation",
+      },
+    ],
+  },
+  {
     id: "training.requestStop",
     ref: api.training.requestStop,
     kind: "mutation",

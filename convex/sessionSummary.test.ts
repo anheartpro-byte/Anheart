@@ -877,6 +877,7 @@ describe("summary helpers", () => {
       referenceRadiusM: null,
       legTipRadiusM: null,
       legTipMeasured: null,
+      ballast: null,
     });
     expect(
       manifestContext({

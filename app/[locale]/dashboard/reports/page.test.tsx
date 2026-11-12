@@ -55,6 +55,7 @@ function completed(id: string, overrides: Partial<Completed> = {}): Completed {
     machineName: "Centri Paris",
     kind: "auto",
     origin: "remote",
+    ballast: undefined,
     ...overrides,
   };
 }
