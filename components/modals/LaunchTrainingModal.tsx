@@ -50,8 +50,9 @@ interface LaunchTrainingModalProps {
 const SELF = "self";
 
 /**
- * Launch an AUTO session: the only kind the dashboard can start. Manual
- * sessions are started at the machine's console, never from here.
+ * Launch an AUTO session. The only other launch from the dashboard is a
+ * ballasted bench session with nobody on board (`LaunchBenchModal`, ANH-250);
+ * a manual session's speed is set at the machine's console, never from here.
  */
 export function LaunchTrainingModal({
   open,

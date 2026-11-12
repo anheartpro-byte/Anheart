@@ -13,7 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Cpu, MapPin, Play, Eye } from "lucide-react";
+import { Cpu, MapPin, Play, Eye, Weight } from "lucide-react";
 import { useFreshnessJudge } from "@/hooks/use-freshness";
 import { shownMachineStatus } from "@/lib/training";
 import { ShownStatusBadge } from "@/components/machines/MachineSignal";
@@ -35,10 +35,13 @@ export function LaunchableMachineCard({
   machine: m,
   isUser,
   onLaunch,
+  onLaunchBench,
 }: {
   machine: LaunchableMachine;
   isUser: boolean;
   onLaunch: () => void;
+  /** Offered to the staff only: a ballasted bench session (ANH-250). */
+  onLaunchBench?: () => void;
 }) {
   const t = useTranslations();
   const judge = useFreshnessJudge();
@@ -126,6 +129,17 @@ export function LaunchableMachineCard({
             <Play className="h-4 w-4 mr-2" />
             {t("training.launch.button")}
           </Button>
+          {onLaunchBench && (
+            // Nobody on board: neither programmes nor medical parameters apply.
+            <Button
+              variant="outline"
+              onClick={onLaunchBench}
+              disabled={status !== "online"}
+            >
+              <Weight className="h-4 w-4 mr-2" />
+              {t("training.bench.button")}
+            </Button>
+          )}
           {!isUser && (
             <Link href={`/dashboard/machines/${m._id}`}>
               <Button variant="outline">

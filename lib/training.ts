@@ -218,6 +218,28 @@ export function readOptionalNumber(
   return typeof value === "number" ? value : undefined;
 }
 
+/**
+ * The heaviest ballast and the longest note a bench launch may carry (ANH-250),
+ * as `convex/training.ts` bounds them (`MAX_BALLAST_KG`, `MAX_LAUNCH_NOTES`).
+ */
+export const MAX_BALLAST_KG = 200;
+export const MAX_LAUNCH_NOTES = 500;
+
+/** A ballasted bench session's declared load: its mass in kg, or null when none was given. */
+export type Ballast = { massKg: number | null };
+
+/**
+ * The ballast a row carries (a bench session launched from the site), or
+ * undefined: absent, or not of its shape.
+ */
+export function readBallast(obj: object): Ballast | undefined {
+  if (!("ballast" in obj)) return undefined;
+  const value = (obj as Record<string, unknown>).ballast;
+  if (typeof value !== "object" || value === null) return undefined;
+  const mass = (value as Record<string, unknown>).massKg;
+  return { massKg: typeof mass === "number" ? mass : null };
+}
+
 export function readOptionalString(
   obj: object,
   key: string,

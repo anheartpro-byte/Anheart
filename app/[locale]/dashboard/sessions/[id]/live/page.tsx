@@ -14,6 +14,7 @@ import { fr, enUS } from "date-fns/locale";
 import { isTrainingKind } from "@/lib/training";
 import { TrainingPanel } from "@/components/training/TrainingPanel";
 import {
+  BallastBadge,
   SessionKindBadge,
   SessionOriginBadge,
 } from "@/components/training/TrainingBadges";
@@ -99,6 +100,7 @@ export default function LiveSessionPage({
             </span>
             <SessionKindBadge kind={session.kind} />
             <SessionOriginBadge origin={training?.origin} />
+            <BallastBadge ballast={training?.ballast} />
           </p>
         </div>
         {isOver && (

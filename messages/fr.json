@@ -983,6 +983,10 @@
       "remote": "Tableau de bord",
       "local": "Machine"
     },
+    "ballast": {
+      "badge": "Banc lesté",
+      "badgeMass": "Banc lesté · {mass} kg"
+    },
     "manualOnlyAtMachine": "Manuel : uniquement depuis la console de la machine",
     "runMode": {
       "repos": "Repos",
@@ -1104,6 +1108,23 @@
       "readinessUnavailable": "Impossible de vérifier l'aptitude et le consentement du pratiquant.",
       "birthYearMissing": "L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
       "tooYoung": "Séance auto réservée aux pratiquants d'au moins {min} ans."
+    },
+    "bench": {
+      "button": "Séance de banc lestée",
+      "title": "Lancer une séance de banc lestée",
+      "description": "Séance manuelle de banc, capsule lestée, aucune personne à bord. La vitesse est pilotée à la console de la machine, jamais depuis le site.",
+      "warningTitle": "Aucune personne à bord, personne dans le rayon du bras",
+      "warning": "La console exigera une confirmation physique de l'opérateur et l'attestation « {attestation} » avant tout départ. Le lest doit être arrimé. Personne dans le rayon du bras jusqu'à l'arrêt complet constaté : sans frein, couper le secteur laisse le bras en roue libre (environ 145 s depuis la vitesse maximale selon le modèle de simulation, jamais mesuré).",
+      "attestation": "capsule lestée, aucune personne à bord, personne dans le rayon du bras",
+      "mass": "Masse du lest (kg)",
+      "massHint": "Facultative : plus de 0 et au plus {max} kg. Déclarée, jamais mesurée par la machine.",
+      "massInvalid": "La masse est un nombre de kg supérieur à 0 et d'au plus {max}.",
+      "notes": "Note",
+      "notesPlaceholder": "Par exemple : sac de sable sanglé dans la capsule",
+      "notesTooLong": "La note dépasse {max} caractères.",
+      "submit": "Envoyer à la machine",
+      "pendingNote": "La séance reste « en attente » jusqu'à la confirmation à la console, qui peut encore la refuser (sécurité, variateur, logiciel trop ancien…).",
+      "launched": "Séance de banc lestée envoyée à la machine"
     },
     "myMachines": {
       "title": "Mes machines",
@@ -1285,6 +1306,7 @@
     "machine": "Machine",
     "date": "Début",
     "kind": "Type",
+    "ballast": "Lest",
     "program": "Programme",
     "zone": "Zone cible",
     "status": "Statut",

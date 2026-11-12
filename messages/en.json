@@ -983,6 +983,10 @@
       "remote": "Dashboard",
       "local": "Machine"
     },
+    "ballast": {
+      "badge": "Ballasted bench",
+      "badgeMass": "Ballasted bench · {mass} kg"
+    },
     "manualOnlyAtMachine": "Manual: only from the machine's console",
     "runMode": {
       "repos": "Idle",
@@ -1104,6 +1108,23 @@
       "readinessUnavailable": "The rider's fitness and consent could not be checked.",
       "birthYearMissing": "The rider's birth year is not set: a manager must enter it before any auto session.",
       "tooYoung": "Auto sessions are for riders aged {min} or over."
+    },
+    "bench": {
+      "button": "Ballasted bench session",
+      "title": "Launch a ballasted bench session",
+      "description": "Manual bench session, capsule ballasted, nobody on board. The speed is set at the machine's console, never from the site.",
+      "warningTitle": "Nobody on board, nobody within the arm's radius",
+      "warning": "The console will require the operator's physical confirmation and the attestation “{attestation}” before any start. The ballast must be secured. Nobody within the arm's radius until it is seen fully stopped: with no brake, cutting mains power leaves the arm freewheeling (about 145 s from maximum speed according to the simulation model, never measured).",
+      "attestation": "capsule ballasted, nobody on board, nobody within the arm's radius",
+      "mass": "Ballast mass (kg)",
+      "massHint": "Optional: more than 0 and at most {max} kg. Declared, never measured by the machine.",
+      "massInvalid": "The mass is a number of kg greater than 0 and at most {max}.",
+      "notes": "Note",
+      "notesPlaceholder": "For example: sandbag strapped in the capsule",
+      "notesTooLong": "The note is longer than {max} characters.",
+      "submit": "Send to the machine",
+      "pendingNote": "The session stays “pending” until it is confirmed at the console, which can still refuse it (safety, drive, software too old…).",
+      "launched": "Ballasted bench session sent to the machine"
     },
     "myMachines": {
       "title": "My machines",
@@ -1285,6 +1306,7 @@
     "machine": "Machine",
     "date": "Start",
     "kind": "Type",
+    "ballast": "Ballast",
     "program": "Programme",
     "zone": "Target zone",
     "status": "Status",

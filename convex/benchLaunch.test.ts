@@ -20,6 +20,10 @@ import { CONTRACT_HEADER, contractAtLeast } from "./lib/contract";
 import { manifestContext } from "./lib/sessionSummary";
 import { personOnBoard } from "./lib/machineRegistry";
 import {
+  MAX_BALLAST_KG as SITE_MAX_BALLAST_KG,
+  MAX_LAUNCH_NOTES as SITE_MAX_LAUNCH_NOTES,
+} from "../lib/training";
+import {
   ARMING_REFUSALS,
   DEFAULT_PENDING_SESSION_TTL_S,
   MAX_BALLAST_KG,
@@ -585,6 +589,13 @@ describe("ANH-250 the site follows, stops and reports a bench session", () => {
         sessionId,
       }),
     ).toMatchObject({ eligible: false });
+  });
+
+  it("bounds the mass and the note as the site's form does", () => {
+    expect([SITE_MAX_BALLAST_KG, SITE_MAX_LAUNCH_NOTES]).toEqual([
+      MAX_BALLAST_KG,
+      MAX_LAUNCH_NOTES,
+    ]);
   });
 
   it("reads a version against the first minor that takes a bench launch", () => {

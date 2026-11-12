@@ -11,6 +11,7 @@ import { LiveReadouts, MachineLiveCard } from "./MachineLiveCard";
 import { MachineProgramsCard, ProfileList } from "./ProfileList";
 import { SessionKindCell } from "./SessionKindCell";
 import {
+  BallastBadge,
   LiveFreshBadge,
   SessionKindBadge,
   SessionOriginBadge,
@@ -314,6 +315,43 @@ describe("ANH-203 kind and origin of a session", () => {
     expect(screen.text()).toBe(`${t.kind.auto} ${t.origin.remote}`);
   });
 
+  it("ANH-250: a bench session launched from the site reads « Banc lesté », with its mass when declared", () => {
+    const declared = render(<BallastBadge ballast={{ massKg: 80 }} />);
+    expect(declared.text()).toBe(t.ballast.badgeMass.replace("{mass}", "80"));
+    declared.unmount();
+    const undeclared = render(<BallastBadge ballast={{ massKg: null }} />);
+    expect(undeclared.text()).toBe(t.ballast.badge);
+    undeclared.unmount();
+    expect(
+      render(<BallastBadge ballast={undefined} />).container.childNodes,
+    ).toEqual([]);
+  });
+
+  it("ANH-250: a list row of a ballasted bench session shows it, from the row or from the session", () => {
+    const row = {
+      _id: sessionId,
+      kind: "manual",
+      origin: "remote",
+      ballast: { massKg: 80 },
+    };
+    const listed = render(<SessionKindCell row={row} />);
+    expect(listed.text()).toBe(
+      `${t.kind.manual} ${t.origin.remote} ${t.ballast.badgeMass.replace("{mass}", "80")}`,
+    );
+    listed.unmount();
+
+    const asked = render(<SessionKindCell row={{ _id: sessionId }} />);
+    answer("training:getTrainingSession", {
+      kind: "manual",
+      origin: "remote",
+      ballast: { massKg: null },
+    });
+    asked.rerender(<SessionKindCell row={{ _id: sessionId }} />);
+    expect(asked.text()).toBe(
+      `${t.kind.manual} ${t.origin.remote} ${t.ballast.badge}`,
+    );
+  });
+
   it("a row whose kind is not text is not trusted: the session is asked for", () => {
     render(
       <SessionKindCell
@@ -598,6 +636,44 @@ describe("ANH-203 a machine of « My machines »: the launch button", () => {
       expect(onLaunch).not.toHaveBeenCalled();
     },
   );
+
+  it("ANH-250: the staff are offered a ballasted bench session on an online machine, programmes or not", async () => {
+    const onLaunchBench = vi.fn();
+    const screen = render(
+      <LaunchableMachineCard
+        machine={machine({
+          programsEnabled: false,
+          medicalParametersStatus: "unsigned",
+          profiles: [],
+        })}
+        isUser={false}
+        onLaunch={vi.fn()}
+        onLaunchBench={onLaunchBench}
+      />,
+    );
+    const bench = screen.button(t.bench.button);
+    expect(bench.hasAttribute("disabled")).toBe(false);
+    await click(bench);
+    expect(onLaunchBench).toHaveBeenCalledTimes(1);
+    screen.unmount();
+
+    const offline = render(
+      <LaunchableMachineCard
+        machine={machine({ status: "offline" })}
+        isUser={false}
+        onLaunch={vi.fn()}
+        onLaunchBench={vi.fn()}
+      />,
+    );
+    expect(offline.button(t.bench.button).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("ANH-250: a patient is never offered a bench session", () => {
+    const screen = render(
+      <LaunchableMachineCard machine={machine()} isUser onLaunch={vi.fn()} />,
+    );
+    expect(screen.hasButton(t.bench.button)).toBe(false);
+  });
 
   it("capitalizes unsigned medical parameter launch reasons in both locales", () => {
     expect(Object.keys(messages.fr.training.launch).sort()).toEqual(

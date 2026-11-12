@@ -4,6 +4,9 @@ import {
   FUTURE_TOLERANCE_MS,
   isFresh,
   LIVE_FRESH_MS,
+  MAX_BALLAST_KG,
+  MAX_LAUNCH_NOTES,
+  readBallast,
   shownMachineStatus,
   TELEMETRY_FRESH_MS,
 } from "./training";
@@ -90,4 +93,27 @@ describe("shownMachineStatus", () => {
       expect(shownMachineStatus(status, false)).toBe("offline");
     },
   );
+});
+
+describe("readBallast (ANH-250)", () => {
+  it("reads the declared mass of a ballasted bench session, null when none was given", () => {
+    expect(readBallast({ ballast: { massKg: 80 } })).toEqual({ massKg: 80 });
+    expect(readBallast({ ballast: { massKg: null } })).toEqual({
+      massKg: null,
+    });
+    expect(readBallast({ ballast: { massKg: "80" } })).toEqual({
+      massKg: null,
+    });
+  });
+
+  it("reads nothing from a row that carries no ballast, or one not of its shape", () => {
+    expect(readBallast({})).toBeUndefined();
+    expect(readBallast({ ballast: undefined })).toBeUndefined();
+    expect(readBallast({ ballast: null })).toBeUndefined();
+    expect(readBallast({ ballast: 80 })).toBeUndefined();
+  });
+
+  it("bounds what the site sends as the server does", () => {
+    expect([MAX_BALLAST_KG, MAX_LAUNCH_NOTES]).toEqual([200, 500]);
+  });
 });

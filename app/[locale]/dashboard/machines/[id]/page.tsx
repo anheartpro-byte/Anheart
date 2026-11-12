@@ -32,7 +32,14 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, Trash2, Pencil, RotateCcw, Play } from "lucide-react";
+import {
+  AlertTriangle,
+  Trash2,
+  Pencil,
+  RotateCcw,
+  Play,
+  Weight,
+} from "lucide-react";
 import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import {
@@ -43,6 +50,7 @@ import {
 } from "@/components/machines/MachineSignal";
 import { MachineFormModal } from "@/components/modals/MachineFormModal";
 import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
+import { LaunchBenchModal } from "@/components/modals/LaunchBenchModal";
 import { MachineLiveCard } from "@/components/training/MachineLiveCard";
 import { MachineHealthCard } from "@/components/machines/MachineHealthCard";
 import { MachineKeysCard } from "@/components/machines/MachineKeysCard";
@@ -69,6 +77,7 @@ export default function MachineDetailPage({
   const [showRestoreDialog, setShowRestoreDialog] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [showLaunchModal, setShowLaunchModal] = useState(false);
+  const [showBenchModal, setShowBenchModal] = useState(false);
 
   const deleteMachine = useMutationWithFeedback(api.machines.deleteMachine);
   const restoreMachine = useMutationWithFeedback(api.machines.restoreMachine);
@@ -171,6 +180,13 @@ export default function MachineDetailPage({
             <Button onClick={() => setShowLaunchModal(true)}>
               <Play className="h-4 w-4 mr-2" />
               {t("training.launch.button")}
+            </Button>
+          )}
+          {/* A ballasted bench session, nobody on board (ANH-250): staff only. */}
+          {canManage && !machine.isDeleted && (
+            <Button variant="outline" onClick={() => setShowBenchModal(true)}>
+              <Weight className="h-4 w-4 mr-2" />
+              {t("training.bench.button")}
             </Button>
           )}
           <MachineStatusBadge
@@ -417,6 +433,12 @@ export default function MachineDetailPage({
       <LaunchTrainingModal
         open={showLaunchModal}
         onOpenChange={setShowLaunchModal}
+        machineId={machineId}
+      />
+
+      <LaunchBenchModal
+        open={showBenchModal}
+        onOpenChange={setShowBenchModal}
         machineId={machineId}
       />
 

@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Cpu, HeartPulse, KeyRound } from "lucide-react";
 import { LaunchTrainingModal } from "@/components/modals/LaunchTrainingModal";
+import { LaunchBenchModal } from "@/components/modals/LaunchBenchModal";
+import { isStaff } from "@/lib/organizationAccess";
 import { ConsentCard } from "@/components/training/ConsentCard";
 import { FitnessCard } from "@/components/training/FitnessCard";
 import { LaunchableMachineCard } from "@/components/training/LaunchableMachineCard";
@@ -19,6 +21,7 @@ export default function MyMachinesPage() {
   const machines = useQuery(api.training.listLaunchableMachines, {});
   const user = useQuery(api.users.getCurrentUser);
   const [launchFor, setLaunchFor] = useState<Id<"machines"> | null>(null);
+  const [benchFor, setBenchFor] = useState<Id<"machines"> | null>(null);
 
   if (machines === undefined || user === undefined) {
     return <MyMachinesSkeleton />;
@@ -89,6 +92,10 @@ export default function MyMachinesPage() {
               machine={m}
               isUser={isUser}
               onLaunch={() => setLaunchFor(m._id)}
+              // A ballasted bench session, nobody on board (ANH-250): staff only.
+              onLaunchBench={
+                isStaff(user?.role) ? () => setBenchFor(m._id) : undefined
+              }
             />
           ))}
         </div>
@@ -111,6 +118,13 @@ export default function MyMachinesPage() {
           open
           onOpenChange={(open) => !open && setLaunchFor(null)}
           machineId={launchFor}
+        />
+      )}
+      {benchFor && (
+        <LaunchBenchModal
+          open
+          onOpenChange={(open) => !open && setBenchFor(null)}
+          machineId={benchFor}
         />
       )}
     </div>
