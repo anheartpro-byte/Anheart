@@ -89,14 +89,23 @@ from src.record.journal import (
 )
 from src.record.logbook import note
 from src.record.rows import JsonValue, Row
-from src.record.schema import Clocks, EndObservation, Event, EventKind, Manifest, Profile
+from src.record.schema import (
+    Clocks,
+    EndObservation,
+    Event,
+    EventKind,
+    Manifest,
+    Profile,
+    RecordedBallast,
+)
+from src.remote_launch import BENCH_LAUNCH_ATTESTATION
 from src.result import Err
 from src.sensors.base import SensorReading
 from src.training.motion import MotionLimits
 from src.training.plan import Program
 from src.training.runtime import RecordStorageLow, RuntimeLimits, TrainingRuntime
 from src.training.safety import SafetyLimits
-from src.training.types import Occupancy, Phase, TelemetrySnapshot
+from src.training.types import Ballast, Occupancy, Phase, TelemetrySnapshot
 from src.units import Metres, Monotonic, OutputRpm, elapsed, output_rpm_to_g
 from src.wall_clock import WallClockState, is_trusted
 
@@ -340,6 +349,10 @@ class SessionRequest:
     fitness_questionnaire_version: str | None = None
     """Proof of admission at the start; ``None`` for a bench session."""
 
+    ballast: Ballast | None = None
+    """The load of a bench session launched from the dashboard (ANH-250); ``None``
+    for every other session."""
+
 
 def manifest_for(
     stamp: Stamp,
@@ -396,7 +409,15 @@ def manifest_for(
         ended_at=None,
         end_reason=None,
         preflight=None,
+        ballast=None
+        if request.ballast is None
+        else RecordedBallast(mass_kg=request.ballast.mass_kg),
     )
+
+
+BENCH_ATTESTED: Final[str] = f"console: bench_attested: {BENCH_LAUNCH_ATTESTATION}"
+"""The event a record opens with for a bench launch from the dashboard (ANH-250): what
+the operator who confirmed it attested at the console, under their alias."""
 
 
 # =========================================================================
@@ -784,6 +805,15 @@ class SessionRecorder:
                 live.origin,
                 EventKind.WARNING,
                 "console: launch_confirmed",
+                operator_alias(request.confirmed_by),
+            )
+        if request.ballast is not None and request.confirmed_by is not None:
+            # Only a bench launch the operator attested is ever started with a ballast.
+            self._event(
+                live,
+                live.origin,
+                EventKind.WARNING,
+                BENCH_ATTESTED,
                 operator_alias(request.confirmed_by),
             )
         warning = self._stamp.medical_warning

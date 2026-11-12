@@ -20,7 +20,8 @@ Up, from this machine to the dashboard:
 
 Down, from the dashboard to this machine, exactly three things:
 
-* an AUTO launch: a preset id, a rider and the rider's maximum heart rate. It
+* a launch, of one of two modes (``mode`` of the poll, contract 1.9). An AUTO
+  launch: a preset id, a rider and the rider's maximum heart rate. It
   first passes the same surface and panel checks as a local start, including a
   fresh roster check, without submitting or arming. Only then does this task
   send ``training/start``; ``submit_start`` and the panel re-run every gate
@@ -37,7 +38,15 @@ Down, from the dashboard to this machine, exactly three things:
   confirmation left unanswered since the poll last offered the launch, even
   with the polls failing meanwhile, and never for another launch: the offer
   then goes. Nor once the dashboard has answered: refused, it is no longer
-  confirmable, and goes with the next poll that does not offer it;
+  confirmable, and goes with the next poll that does not offer it.
+  A BENCH launch (ANH-250): a ballasted bench session, nobody on board, no
+  rider, the declared mass and the launcher's note. Polled whatever the
+  programmes, it follows the same path, with no rider to look for, and one
+  gate more: the operator confirms it only by attesting
+  :data:`~src.remote_launch.BENCH_LAUNCH_ATTESTATION` at the console. It then
+  starts a MANUAL bench session (:class:`~src.training.types.Occupancy`
+  ``BENCH``), with the gates, the ceiling and the rules of one started here,
+  under a declared STO bridge too; the speed is set at the console;
 * the list of the riders this machine may offer (:mod:`src.roster`), asked
   for at the start and every :data:`~src.roster.ROSTER_PERIOD` while no
   session runs, kept in memory only. It is asked for by
@@ -51,9 +60,11 @@ Down, from the dashboard to this machine, exactly three things:
   by an older console or before this handshake is still stopped at once when
   its start is refused or no longer active on the dashboard.
 
-**Nothing else.** In particular a MANUAL session can never be started from
-the dashboard: nothing here can build one. Manual control needs somebody at
-the machine.
+**Nothing else.** In particular nothing from the dashboard ever sets a speed,
+and the only manual session it can lead to is a bench session that somebody at
+the machine confirmed and attested, then drives from the console. A manual
+session with a person on board can never be started from the dashboard:
+nothing here can build one.
 
 Why the link can never stop the machine by failing
 --------------------------------------------------
@@ -149,6 +160,7 @@ from src.control_surface import (
     ControlSurface,
     LaunchRefusal,
     SafetyHolding,
+    StartRefusal,
     SurfaceBusy,
 )
 from src.health import HealthContext, HealthWatch
@@ -170,8 +182,10 @@ from src.record_uplink import (
     RuntimeEnd,
 )
 from src.remote_launch import (
+    BENCH_LAUNCH_ATTESTATION,
     ConfirmationCode,
     ConfirmationRefusal,
+    LaunchMode,
     LaunchOfferState,
     OfferConfirmationQueued,
     OfferRefused,
@@ -201,8 +215,8 @@ from src.training.preflight import (
 )
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import EstopUnattested
-from src.training.types import Occupancy, TelemetrySnapshot
-from src.units import Bpm, Monotonic, Seconds, UnixMillis, elapsed
+from src.training.types import Ballast, Occupancy, TelemetrySnapshot
+from src.units import Bpm, Kilograms, Monotonic, Seconds, UnixMillis, elapsed
 
 _logger: logging.Logger = logging.getLogger(__name__)
 
@@ -1032,6 +1046,28 @@ class CloudSync:
         launch = self._offered_launch
         if launch is None or self._hold_over(self._clock.monotonic()):
             return None
+        match launch:
+            case AutoLaunch():
+                return self._auto_view(launch)
+            case BenchLaunch():
+                return RemoteLaunchView(
+                    session_id=launch.session_id,
+                    mode=LaunchMode.BENCH,
+                    profile_id=None,
+                    program_name=None,
+                    launched_by=launch.operator,
+                    passenger_name=None,
+                    passenger_reason=None,
+                    stage=self._offer_state.stage,
+                    reason=self._offer_state.reason,
+                    ballast_kg=launch.ballast.mass_kg,
+                    notes=launch.notes,
+                    attestation=BENCH_LAUNCH_ATTESTATION,
+                )
+        raise assert_never(launch)
+
+    def _auto_view(self, launch: AutoLaunch) -> RemoteLaunchView:
+        """An offered programme: the rider as the list holds them now, and the programme's name."""
         found = self._rider_for_launch(launch)
         if isinstance(found, Ok):
             passenger_name = found.value.name
@@ -1043,6 +1079,7 @@ class CloudSync:
         program_name = profile.value.name if isinstance(profile, Ok) else launch.profile_id
         return RemoteLaunchView(
             session_id=launch.session_id,
+            mode=LaunchMode.AUTO,
             profile_id=launch.profile_id,
             program_name=program_name,
             launched_by=launch.operator,
@@ -1053,11 +1090,14 @@ class CloudSync:
         )
 
     def confirm_remote_launch(
-        self, session_id: str, operator: str
+        self, session_id: str, operator: str, bench_attested: bool = False
     ) -> Result[None, ConfirmationRefusal]:
         """Queue the operator's confirmation of the offered launch, dated by this click.
 
         Refused as no longer offered once the hold of a launch left unanswered is over.
+        A bench launch is refused unless ``bench_attested``: the operator ticked
+        :data:`~src.remote_launch.BENCH_LAUNCH_ATTESTATION` at the console. An
+        automatic launch does not read it.
         """
         launch = self._offered_launch
         now = self._clock.monotonic()
@@ -1087,14 +1127,43 @@ class CloudSync:
                     "une demande de depart est deja en cours",
                 )
             )
-        found = self._rider_for_launch(launch)
-        if isinstance(found, Err):
-            detail = describe_passenger_refusal(found.error)
-            self._offer_state = OfferWaiting()
-            return Err(ConfirmationRefusal(ConfirmationCode.PASSENGER_UNAVAILABLE, detail))
+        refused = self._confirmation_refusal(launch, bench_attested)
+        if refused is not None:
+            return Err(refused)
         self._clicked_at = now
         self._offer_state = OfferConfirmationQueued(operator, self._offer_generation)
         return Ok(None)
+
+    def _confirmation_refusal(
+        self, launch: Launch, bench_attested: bool
+    ) -> ConfirmationRefusal | None:
+        """Why this launch cannot be confirmed now, by what it needs; ``None`` when it can.
+
+        A programme needs its rider in the list held now. A bench launch needs
+        the operator's attestation, and nothing of a rider: nobody is on board.
+        """
+        match launch:
+            case AutoLaunch():
+                found = self._rider_for_launch(launch)
+                if isinstance(found, Ok):
+                    return None
+                self._offer_state = OfferWaiting()
+                return ConfirmationRefusal(
+                    ConfirmationCode.PASSENGER_UNAVAILABLE,
+                    describe_passenger_refusal(found.error),
+                )
+            case BenchLaunch():
+                if not bench_attested:
+                    return ConfirmationRefusal(
+                        ConfirmationCode.BENCH_UNATTESTED,
+                        f"attestation requise : {BENCH_LAUNCH_ATTESTATION}",
+                    )
+                _logger.info(
+                    "dashboard bench launch %s: the bench attestation was given at the console",
+                    launch.session_id,
+                )
+                return None
+        raise assert_never(launch)
 
     def _unanswered_offer(self) -> _Awaiting | None:
         """The click of the offered launch's first confirmation left unanswered, while its
@@ -1120,7 +1189,7 @@ class CloudSync:
         unanswered = self._unanswered_offer()
         return unanswered is not None and elapsed(unanswered.since, now) >= LAUNCH_TIMEOUT
 
-    def _rider_for_launch(self, launch: Launch) -> Result[Rider, PassengerRefusal]:
+    def _rider_for_launch(self, launch: AutoLaunch) -> Result[Rider, PassengerRefusal]:
         roster = self._roster
         if roster is None:
             return Err(NoList(RosterState.UNLINKED, None))
@@ -1365,14 +1434,8 @@ class CloudSync:
     # --- launches from the dashboard ---------------------------------------
 
     async def _poll(self, now: Monotonic) -> None:
-        # In the bench mode programmes are off, and a launch is still asked for:
-        # the panel refuses it, saying the medical parameters are not signed.
-        bench_mode = self._medical is not None and not self._medical.signed
-        if (not self._programs_enabled and not bench_mode) or self._runtime.state in (
-            RuntimeState.RUNNING,
-            RuntimeState.ENDING,
-        ):
-            return
+        # Asked whatever the programmes, a bench launch (contract 1.9) running none,
+        # and never while a session runs (`step` asks only then).
         if not _due(self._last_poll, now, POLL_PERIOD):
             return
         self._last_poll = now
@@ -1380,7 +1443,7 @@ class CloudSync:
         self._note(polled)
         if isinstance(polled, Err):
             return
-        launch = _launch_of(polled.value)
+        launch = self._receivable(_launch_of(polled.value))
         refusal = server_refusal(polled.value.get(SERVER_VERSION_FIELD))
         self._link.announced(refusal)
         if refusal is not None:
@@ -1405,6 +1468,20 @@ class CloudSync:
             self._clear_offer()
             return
         self._offer_launch(launch)
+
+    def _receivable(self, launch: Launch | None) -> Launch | None:
+        """The launch polled, unless it is a programme this console does not take at all.
+
+        With programmes disabled and signed medical parameters an automatic
+        launch is left as if it were not there, as it always was when such a
+        console did not poll. In the bench mode (parameters unsigned) it is
+        offered, and the panel refuses it, saying the parameters are not
+        signed. A bench launch is always taken.
+        """
+        bench_mode = self._medical is not None and not self._medical.signed
+        if isinstance(launch, AutoLaunch) and not self._programs_enabled and not bench_mode:
+            return None
+        return launch
 
     def _offer_launch(self, launch: Launch) -> None:
         # Offered by the poll, it is not held by the dashboard: no hold runs for it, and
@@ -1455,7 +1532,7 @@ class CloudSync:
             self._invalidate_offer_state(OfferWaiting(detail))
             self._surface.note_remote_refusal(detail)
             return
-        found = self._rider_for_launch(launch)
+        found = None if isinstance(launch, BenchLaunch) else self._rider_for_launch(launch)
         if isinstance(found, Err):
             detail = describe_passenger_refusal(found.error)
             self._invalidate_offer_state(OfferWaiting())
@@ -1469,7 +1546,9 @@ class CloudSync:
         await self._confirm_remote_start(launch, state.operator, now, state.generation)
 
     def _preflight_remote_start(self, launch: Launch) -> Result[None, str]:
-        surface_check = self._surface.check_remote_launch()
+        # A bench launch has nobody on board: the gates of a bench start at the console.
+        occupancy = Occupancy.BENCH if isinstance(launch, BenchLaunch) else Occupancy.OCCUPIED
+        surface_check = self._surface.check_remote_launch(occupancy)
         if isinstance(surface_check, Err):
             return Err(describe_surface_refusal(surface_check.error))
         preflight = self._preflight_start
@@ -1536,23 +1615,45 @@ class CloudSync:
         self._owe_refusal(launch.session_id, reason)
 
     def _submit_confirmed_launch(self, launch: Launch, operator: str, now: Monotonic) -> None:
-        submitted = self._surface.submit_start(
-            profile_id=launch.profile_id,
-            operator=f"{launch.operator} ({DASHBOARD_OPERATOR})",
-            total_duration_s=launch.total_duration_s,
-            subject_id=launch.subject_id,
-            subject_hr_max=launch.subject_hr_max,
-            subject_age=launch.subject_age,
-            cloud_session_id=launch.session_id,
-            confirmed_by=operator,
-        )
-        if isinstance(submitted, Err):
-            self._refuse_local_launch(launch, describe_surface_refusal(submitted.error))
+        refused = self._submitted(launch, operator)
+        if refused is not None:
+            self._refuse_local_launch(launch, describe_surface_refusal(refused))
             return
         self._confirmed_launch_id = launch.session_id
         self._confirmed_launch = launch
         _logger.info("dashboard launch %s submitted", launch.session_id)
         self._awaiting = _Awaiting(launch.session_id, now)
+
+    def _submitted(self, launch: Launch, operator: str) -> StartRefusal | None:
+        """Hand the confirmed launch to the console's mailbox; why not, when it refuses.
+
+        A programme is a programmed start; a bench launch, a manual bench start
+        that carries its ballast and who confirmed it.
+        """
+        launched_by = f"{launch.operator} ({DASHBOARD_OPERATOR})"
+        match launch:
+            case AutoLaunch():
+                programme = self._surface.submit_start(
+                    profile_id=launch.profile_id,
+                    operator=launched_by,
+                    total_duration_s=launch.total_duration_s,
+                    subject_id=launch.subject_id,
+                    subject_hr_max=launch.subject_hr_max,
+                    subject_age=launch.subject_age,
+                    cloud_session_id=launch.session_id,
+                    confirmed_by=operator,
+                )
+                return programme.error if isinstance(programme, Err) else None
+            case BenchLaunch():
+                bench = self._surface.submit_start_manual(
+                    occupancy=Occupancy.BENCH,
+                    operator=launched_by,
+                    cloud_session_id=launch.session_id,
+                    confirmed_by=operator,
+                    ballast=launch.ballast,
+                )
+                return bench.error if isinstance(bench, Err) else None
+        raise assert_never(launch)
 
     def _refuse_local_launch(self, launch: Launch, detail: str) -> None:
         self._surface.note_remote_refusal(detail)
@@ -1749,8 +1850,19 @@ class CloudSync:
 # =========================================================================
 
 
+MAX_BALLAST_KG: Final[Kilograms] = Kilograms(200.0)
+"""The heaviest ballast a bench launch may declare (``bench_launch`` of the shared file).
+
+A bound on what was typed on the site, not a rated load of the arm: a launch
+that declares more, or a mass that is not a positive number, is malformed and
+never offered."""
+
+MAX_LAUNCH_NOTES: Final[int] = 500
+"""The longest note a bench launch carries, in characters (the dashboard's own bound)."""
+
+
 @dataclass(frozen=True, slots=True)
-class Launch:
+class AutoLaunch:
     """An AUTO session waiting on the dashboard for this machine."""
 
     session_id: str
@@ -1764,12 +1876,87 @@ class Launch:
     subject_label: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class BenchLaunch:
+    """A ballasted bench session waiting on the dashboard for this machine (contract 1.9).
+
+    Nobody on board: no rider, no programme, no heart rate. The note is the
+    launcher's, shown at the console and kept nowhere else.
+    """
+
+    session_id: str
+    operator: str
+    ballast: Ballast
+    notes: str | None
+
+
+type Launch = AutoLaunch | BenchLaunch
+"""A launch from the dashboard, of either mode. Closed; match it with :func:`assert_never`."""
+
+
 def _launch_of(document: Document) -> Launch | None:
-    """The launch in a ``/api/machine/training/poll`` answer; ``None`` if absent or malformed."""
+    """The launch in a ``/api/machine/training/poll`` answer; ``None`` if absent or malformed.
+
+    Its ``mode`` says which (contract 1.9): absent, from a dashboard of an
+    earlier minor, it is an automatic launch. A mode this console does not
+    know is never guessed at: the launch is ignored, and never armed.
+    """
     raw = document.get("session")
     if not isinstance(raw, dict):
         return None
     session = cast("Document", raw)
+    mode = session.get("mode", LaunchMode.AUTO.value)
+    if mode == LaunchMode.AUTO.value:
+        return _auto_launch_of(session)
+    if mode == LaunchMode.BENCH.value:
+        return _bench_launch_of(session)
+    _logger.warning("dashboard: launch of an unknown mode ignored")
+    return None
+
+
+def _bench_launch_of(session: Document) -> BenchLaunch | None:
+    """A bench launch, every field of its shape checked; ``None`` and a warning otherwise."""
+    session_id = session.get("sessionId")
+    operator = session.get("operatorName")
+    ballast = _ballast_of(session.get("ballastKg"))
+    notes = session.get("notes")
+    if (
+        not isinstance(session_id, str)
+        or not isinstance(operator, str)
+        or session.get("occupancy") != "ballast"
+        or ballast is None
+        or not (notes is None or (isinstance(notes, str) and len(notes) <= MAX_LAUNCH_NOTES))
+    ):
+        _logger.warning("dashboard: malformed bench launch ignored")
+        return None
+    return BenchLaunch(
+        session_id=session_id,
+        operator=operator or DASHBOARD_OPERATOR,
+        ballast=ballast,
+        notes=notes,
+    )
+
+
+def _ballast_of(value: object) -> Ballast | None:
+    """The ballast a bench launch declares; ``None`` when ``ballastKg`` is no mass it may carry.
+
+    ``null`` is a ballast whose mass was not given. Anything else must be a
+    finite number of kg, above 0 and at most :data:`MAX_BALLAST_KG`.
+    """
+    if value is None:
+        return Ballast(mass_kg=None)
+    if (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0 < value <= MAX_BALLAST_KG
+    ):
+        return Ballast(mass_kg=Kilograms(float(value)))
+    return None
+
+
+def _auto_launch_of(session: Document) -> AutoLaunch | None:
+    """An automatic launch: the keys every console of this major has read."""
     session_id = session.get("sessionId")
     profile_id = session.get("profileId")
     subject_id = session.get("subjectId")
@@ -1793,7 +1980,7 @@ def _launch_of(document: Document) -> Launch | None:
         if isinstance(total, int | float) and not isinstance(total, bool)
         else None
     )
-    return Launch(
+    return AutoLaunch(
         session_id=session_id,
         profile_id=profile_id,
         total_duration_s=duration,
@@ -1806,7 +1993,8 @@ def _launch_of(document: Document) -> Launch | None:
 
 
 def _safe_launch_refusal(detail: str, launch: Launch | None) -> str:
-    if launch is None:
+    # Only a programme's words name a programme or an age: a bench launch has neither.
+    if not isinstance(launch, AutoLaunch):
         return detail
     safe = detail.replace(repr(launch.profile_id), "[retire]")
     if launch.subject_age is not None:

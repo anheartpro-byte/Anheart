@@ -54,6 +54,7 @@ from src.units import (
     GearRatio,
     GLoad,
     Hertz,
+    Kilograms,
     Metres,
     Monotonic,
     MotorRpm,
@@ -134,7 +135,8 @@ class Occupancy(Enum):
     """
 
     BENCH = "bench"
-    """Nobody on board. Motor uncoupled, OR arm coupled with the capsule empty.
+    """Nobody on board. Motor uncoupled, OR arm coupled with the capsule empty or
+    ballasted (a declared load, :class:`Ballast`, never a person).
 
     The motor-rpm ceiling is the configured ``MOTOR_MAX_RPM`` (default 300,
     never above the 1380 rpm nameplate), and the heart-rate rules are advisory
@@ -160,6 +162,20 @@ class OccupancyRefused:
 
     occupancy: Occupancy
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class Ballast:
+    """The load a bench session launched from the dashboard declares (ANH-250).
+
+    Not an occupancy: the session is :attr:`Occupancy.BENCH`, nobody on board,
+    and every rule, ceiling and gate reads it as such. ``mass_kg`` is what the
+    launcher typed on the site, ``None`` when they gave none. Nothing here
+    measures it and nothing decides on it: it is kept for the record and the
+    dashboard.
+    """
+
+    mass_kg: Kilograms | None
 
 
 _OCCUPANCY_LABELS: Final[Mapping[Occupancy, str]] = MappingProxyType(

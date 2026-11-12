@@ -56,7 +56,13 @@ from src.control_surface import (
 )
 from src.geometry import MachineGeometry
 from src.motor.drive import DriveFault, DriveState, FaultReport
-from src.remote_launch import ConfirmationCode, ConfirmationRefusal, LaunchStage, RemoteLaunchView
+from src.remote_launch import (
+    ConfirmationCode,
+    ConfirmationRefusal,
+    LaunchMode,
+    LaunchStage,
+    RemoteLaunchView,
+)
 from src.result import Err, Ok, Result
 from src.telemetry import (
     CLIENT_QUEUE_LIMIT,
@@ -474,9 +480,10 @@ async def test_every_command_endpoint_is_behind_the_token(client: httpx.AsyncCli
 async def test_remote_launch_reads_and_confirmation_use_the_authenticated_operator(
     rig: Rig,
 ) -> None:
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, bool]] = []
     offer = RemoteLaunchView(
         session_id="remote-session",
+        mode=LaunchMode.AUTO,
         profile_id=PROFILE_ID,
         program_name="30 min",
         launched_by="Dr Manager",
@@ -486,8 +493,10 @@ async def test_remote_launch_reads_and_confirmation_use_the_authenticated_operat
         reason=None,
     )
 
-    def confirm(session_id: str, operator: str) -> Result[None, ConfirmationRefusal]:
-        calls.append((session_id, operator))
+    def confirm(
+        session_id: str, operator: str, bench_attested: bool
+    ) -> Result[None, ConfirmationRefusal]:
+        calls.append((session_id, operator, bench_attested))
         if session_id != "remote-session":
             return Err(
                 ConfirmationRefusal(
@@ -538,7 +547,7 @@ async def test_remote_launch_reads_and_confirmation_use_the_authenticated_operat
         )
         assert stale.status_code == HTTPStatus.CONFLICT
         assert stale.json()["code"] == ConfirmationCode.NOT_PENDING.value
-        assert calls == [("stale", "Confirming Operator")]
+        assert calls == [("stale", "Confirming Operator", False)]
         accepted = await session.post(
             "/api/remote-launch/confirm",
             headers=auth(),
@@ -546,7 +555,7 @@ async def test_remote_launch_reads_and_confirmation_use_the_authenticated_operat
         )
         assert accepted.status_code == HTTPStatus.ACCEPTED
         assert parse(RemoteLaunchAcceptedRow, accepted).state == "request_in_progress"
-    assert calls[-1] == ("remote-session", "Confirming Operator")
+    assert calls[-1] == ("remote-session", "Confirming Operator", False)
     assert rig.surface.pending is None
     payload = await subscriber.next_payload()
     assert payload.event is not None
@@ -559,6 +568,7 @@ def test_remote_launch_confirmation_follows_typed_offer_stages() -> None:
     def can_confirm(stage: LaunchStage) -> bool:
         view = RemoteLaunchView(
             session_id="remote-session",
+            mode=LaunchMode.AUTO,
             profile_id=PROFILE_ID,
             program_name="30 min",
             launched_by="Dr Manager",

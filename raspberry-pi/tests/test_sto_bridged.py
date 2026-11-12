@@ -327,7 +327,8 @@ def test_the_bench_rule_has_one_sentence_everywhere() -> None:
     # The dashboard's launch has its own reason, apart from the console's.
     assert describe_surface_refusal(StoBridgedRemoteLaunch()) == BRIDGED_REMOTE_LAUNCH
     assert BRIDGED_REMOTE_LAUNCH == (
-        "STO ponte : lancement depuis le site refuse, seances de banc a la console seulement"
+        "STO ponte : programme lance depuis le site refuse, seule une seance de banc lestee "
+        "peut etre lancee du site"
     )
     assert BRIDGED_REMOTE_LAUNCH != BRIDGED_BENCH_ONLY
 

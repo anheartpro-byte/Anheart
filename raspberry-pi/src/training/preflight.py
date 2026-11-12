@@ -40,15 +40,18 @@ and the dashboard."""
 
 @dataclass(frozen=True, slots=True)
 class StoBridgedRemoteLaunch:
-    """Under a declared STO bridge no launch from the dashboard arms.
+    """Under a declared STO bridge no programme launched from the dashboard arms.
 
-    Its own refusal, apart from :class:`StoBridgedOnBoard`: a dashboard launch
-    is a programme today, and bench sessions start at the console only.
+    Its own refusal, apart from :class:`StoBridgedOnBoard`: a programme puts a
+    person on board by definition. A ballasted bench session launched from the
+    dashboard (contract 1.9, ANH-250) is not one: nobody is on board, and it
+    passes the gates of a bench start at the console.
     """
 
 
 BRIDGED_REMOTE_LAUNCH: Final[str] = (
-    "STO ponte : lancement depuis le site refuse, seances de banc a la console seulement"
+    "STO ponte : programme lance depuis le site refuse, seule une seance de banc lestee "
+    "peut etre lancee du site"
 )
 """The words of :class:`StoBridgedRemoteLaunch`, for the console and the dashboard."""
 
