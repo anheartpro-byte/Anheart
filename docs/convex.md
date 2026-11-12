@@ -773,8 +773,9 @@ La variation de g est calculée sur les colonnes g écrites à quatre décimales
 la simulation sur la vitesse moteur (écart au quatrième chiffre). Les maxima
 de vitesse et de g, les règles et la règle de fin y sont identiques.
 
-**Pas encore dans le résumé** : le résultat du pré-vol (ANH-142), que rien
-n'enregistre aujourd'hui. Il sera un champ de `figures` calculé par
+**Pas encore dans le résumé** : le résultat du pré-vol (ANH-142), que
+l'enregistrement de séance ne porte pas (il est écrit au journal de la console
+et son verdict part dans le battement de cœur, `preflight_last`). Il sera un champ de `figures` calculé par
 `convex/lib/sessionSummary.ts` ; le rapport dit déjà qu'il manque. Le retour
 du passager (ANH-146) n'est pas un chiffre du résumé : il a sa propre table,
 [`session_feedback`](#session_feedback--retour-du-passager-après-une-séance-anh-146),

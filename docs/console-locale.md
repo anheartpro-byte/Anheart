@@ -133,6 +133,7 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 14. [Référence des routes HTTP et WebSocket](#14-référence-des-routes-http-et-websocket)
 15. [Écarts connus entre le code, la page et les README](#15-écarts-connus-entre-le-code-la-page-et-les-readme)
 16. [L'enregistrement de séance (boîte noire locale)](#16-lenregistrement-de-séance-boîte-noire-locale)
+17. [Page « Pre-vol » (ANH-142)](#17-page--pre-vol--anh-142)
 
 ---
 
@@ -563,7 +564,7 @@ navigateur, ni sur un Pi.
 
 `Tableau de bord`, `Capteurs` (avec, en dessous, une entrée par capteur acquis : nom,
 canal `A1`…`A6` et une pastille de couleur selon la qualité), `Seance`, `Configuration`,
-`Securite`. Changer de page ne recharge rien : aucune navigation ne peut figer un nombre.
+`Securite`, `Pre-vol` ([section 17](#17-page--pre-vol--anh-142)). Changer de page ne recharge rien : aucune navigation ne peut figer un nombre.
 Le titre de l'onglet suit la page affichée : `Tableau de bord - AnHeart`,
 `Securite - AnHeart`, et le titre de la page pour celle d'un capteur
 (`RESP · Respiration - AnHeart` ; jusqu'au 10 octobre 2026, le type seul :
@@ -2581,6 +2582,8 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 | POST | `/api/safety/attest` | `{"operator", "sto_jumper_removed", "mushroom_wired_nc"}` ; sous `bridged_declared`, `{"operator", "bench_bridged_declared"}` (les champs que nomme `attestation_fields` de `/api/status`) | attestation du câblage, ou de banc, pour ce démarrage | 200 ; 400 (une case manque, case de l'autre mode, nom vide) |
 | POST | `/api/safety/acknowledge` | `{"operator", "estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
 | POST | `/api/presence` | `{"operator"?}` | signal de présence de l'accompagnant (règle `attendant_absent`) | 200 `{"at": …}` |
+| GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied}` ; `null` sur une console sans pré-vol |
+| POST | `/api/preflight/run` | - | « Relancer » : une nouvelle passe, la batterie du BITalino relue au repos ; ne lance et ne refuse rien | 202, le même objet ; 409 sur une console sans pré-vol |
 | POST | `/api/service/restore` | `{"operator"}` | remet en service une console hors service ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 400 (nom vide) ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
@@ -2812,3 +2815,68 @@ Il n'est pas chiffré. Une archive exportée ne l'est pas non plus :
 elle contient l'ECG brut de la séance et doit être traitée comme une donnée de
 santé. Le nom de l'opérateur n'y figure pas (un alias le remplace), mais un
 motif tapé à la main y est recopié : ne pas y écrire le nom d'un passager.
+
+---
+
+## 17. Page « Pre-vol » (ANH-142)
+
+La liste des contrôles faits avant chaque séance, telle que la console la juge
+maintenant. La page ne décide rien : chaque départ est jugé de nouveau par la
+console, avec la même liste ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).
+
+### Ce que la page montre
+
+- Une pastille : `vert`, `avertissement`, `BLOQUANT`, ou `en cours` pendant une
+  passe.
+- Une ligne : le verdict du dernier pré-vol terminé (celui que le tableau de
+  bord reçoit dans le battement de cœur, `preflight_last`) et la batterie du
+  BITalino lue par la dernière passe.
+- Un tableau, une ligne par contrôle, dans l'ordre de la liste : son libellé,
+  son état **au banc** (personne à bord : non) et **avec une personne à bord**,
+  et la raison. Un contrôle « sans objet au banc » (la qualité ECG, les
+  paramètres médicaux) y est vert.
+
+États d'un contrôle :
+
+| État | Ce qu'il veut dire |
+|---|---|
+| `vert` | satisfait |
+| `en cours` | pas encore satisfait, attendu jusqu'à la fin de son délai (une passe en cours) |
+| `avertissement` | pas satisfait, ou impossible à juger faute de référence du serveur ; le départ reste possible, l'opérateur le sait, le journal l'écrit |
+| `BLOQUANT` | pas satisfait : le départ de ce type est refusé avec cette raison |
+
+### Les départs que la page retient
+
+Tant qu'un contrôle bloquant est rouge pour une personne à bord, le bouton
+`Demarrer la seance` (un programme : une personne à bord) reste désactivé, et
+la carte dit pourquoi : `Depart refuse, pre-vol : batterie BITalino 20 % < 30 %`.
+De même pour `Demarrer MANUEL` (une séance de banc) avec la liste du banc. Une
+batterie basse, un BITalino absent ou une horloge non fiable ne retiennent pas
+un départ de banc : ce sont des avertissements au banc (décision du pilote du
+29 octobre 2026).
+
+Si un départ est quand même demandé (une autre page, un lancement depuis le
+site), la console le refuse elle-même et le dit dans les événements :
+`demarrage refuse : pre-vol : <raison>`. Un lancement depuis le site revient au
+tableau de bord en échec : `refusee par la machine : pre-vol : <raison>`.
+
+### Relancer
+
+Le bouton `Relancer` commence une nouvelle passe : la batterie du BITalino est
+relue au repos (l'acquisition s'arrête une ou deux secondes), puis chaque
+contrôle est attendu de nouveau. La console en commence une d'elle-même au
+démarrage et chaque fois qu'elle revient au repos après une séance. Une passe
+nominale dure moins de 45 s : la qualité ECG doit rester good 30 s sans
+interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
+30 min ne compte plus : le contrôle demande de relancer.
+
+### Ce que la page ne juge pas encore
+
+- La version logicielle et la version attendue des paramètres médicaux : le
+  serveur ne donne aucune référence. La version logicielle reste orange « non
+  jugee » ; la signature des paramètres médicaux, elle, est exigée.
+- Les incidents graves ouverts : orange « non annonces » tant que le serveur
+  n'en annonce pas le compte (ANH-145) ; rouge dès qu'il en annonce un.
+- La batterie : la conversion de la lecture brute en pourcentage est une
+  hypothèse à vérifier au banc sur le vrai BITalino
+  ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).
