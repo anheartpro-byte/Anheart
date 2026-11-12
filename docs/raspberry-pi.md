@@ -1257,13 +1257,18 @@ ni sur un transport qui ne sait pas dire sa batterie (RFCOMM du Mac : son
 acquisition n'est pas arrêtée pour rien). Avant `state`, ce que le flux avait
 envoyé avant l'octet d'arrêt est vidé du port (lu jusqu'à 0,25 s de silence,
 20 fois au plus) : lu comme la réponse, il passerait la somme de contrôle une
-fois sur seize et donnerait une fausse batterie. Toute la lecture, arrêt
-compris, tient en 15 s ; au-delà, la liaison est fermée puis rouverte au pas
-suivant. Une liaison perdue dont la reconnexion est interrompue n'est plus
-dite connectée : la console la rouvre. Tant qu'une lecture est attendue ou en
-cours, le contrôle `bitalino` est rouge avec une personne à bord (l'ECG est
-suspendu), et la fenêtre ECG repart de zéro : seuls comptent les échantillons
-pris après la lecture.
+fois sur seize et donnerait une fausse batterie. L'attente du port et toute la
+lecture, arrêt compris, tiennent en 15 s ; au-delà la lecture est abandonnée,
+et si elle avait commencé la liaison est fermée : le client revient au repos
+(ni connecté, ni en acquisition, sans appareil), même coupé au milieu d'un
+arrêt qui ne répond pas, et la console le rouvre au pas suivant. Un lecteur
+laissé derrière par une telle coupure garde son propre ordre d'arrêt : il ne
+reprend jamais la liaison. Une liaison perdue dont la reconnexion est
+interrompue n'est plus dite connectée : la console la rouvre. Tant qu'une
+lecture est attendue ou en cours, le contrôle `bitalino` est rouge avec une
+personne à bord (attendue : « a relire » ; en cours : l'ECG est suspendu), et
+la fenêtre ECG repart de zéro : seuls comptent les échantillons pris après la
+lecture.
 
 **La batterie du BITalino est une calibration à prouver.** La conversion de la
 lecture brute en pourcentage (`battery_percent` dans `src/bitalino_client.py`)

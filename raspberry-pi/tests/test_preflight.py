@@ -641,12 +641,23 @@ async def test_a_battery_read_due_or_under_way_refuses_a_person_on_board() -> No
     _tick(console.clock, monitor, 31.0)
     await monitor.step()
     assert monitor.refusal(Occupancy.OCCUPIED) is None
+    console.hold = asyncio.Event()
     monitor.rerun()
+    # Due, not under way yet: no read runs, and the words do not say one does.
     due = PreflightRefused(
-        "bitalino", "batterie BITalino en cours de lecture : l'ECG est suspendu pendant ce temps"
+        "bitalino", "batterie BITalino a relire : des que le BITalino acquiert normalement"
     )
     assert monitor.refusal(Occupancy.OCCUPIED) == due
     assert monitor.refusal(Occupancy.BENCH) is None  # the bench is not held for it
+    reading = asyncio.create_task(monitor.step())
+    await asyncio.sleep(0)
+    under_way = PreflightRefused(
+        "bitalino", "batterie BITalino en cours de lecture : l'ECG est suspendu pendant ce temps"
+    )
+    assert monitor.refusal(Occupancy.OCCUPIED) == under_way
+    assert monitor.refusal(Occupancy.BENCH) is None
+    console.hold.set()
+    await reading
 
 
 async def test_a_battery_read_breaks_the_ecg_window_until_samples_of_after_it() -> None:

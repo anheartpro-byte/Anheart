@@ -309,3 +309,123 @@ async def test_a_transport_that_cannot_report_the_battery_is_never_stopped_for_i
     await link.step()
     assert await link.read_battery() is None
     assert _acquiring(client)
+
+
+@final
+class HangingStop:
+    """Streams nothing, and hangs in ``stop`` until closed: a BITalino gone mid-read, its
+    stop byte a write the link never takes."""
+
+    battery_readable: bool = True
+
+    def __init__(self) -> None:
+        self.released = threading.Event()
+
+    def version(self) -> str:
+        return "BITalino_v5.2"
+
+    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
+        del sample_rate, channels
+
+    def read_chunk(self, max_bytes: int, /) -> bytes:
+        del max_bytes
+        if self.released.wait(0.02):
+            raise LinkLostError("closed")
+        return b""
+
+    def stop(self) -> None:
+        self.released.wait(10.0)
+
+    def close(self) -> None:
+        self.released.set()
+
+    def battery_raw(self) -> int:
+        return 589
+
+
+async def test_a_read_cut_inside_a_stop_that_hangs_leaves_the_real_client_idle() -> None:
+    """Reproduction 3: the bound fired inside ``stop_acquisition``, the client stayed
+    "acquiring" with no device, and the console pumped it for ever without reconnecting."""
+    hanging = HangingStop()
+    after = FakeDevice()
+    factory = Factory(hanging, after, FakeDevice())
+    client = make_client(factory)
+    link = _link(client, bound=Seconds(0.3))
+    await link.step()
+    assert link.streaming
+    assert await asyncio.wait_for(link.read_battery(), 5.0) is None
+    assert not _acquiring(client)
+    assert not _connected(client)
+    assert not client.reads_battery  # no device left
+    assert hanging.released.is_set()  # closed: the stop that hung on it ends
+    await link.step()
+    assert link.streaming
+    assert after.started_with is not None
+    # The reader the cut stop left behind never takes the client back.
+    await asyncio.sleep(0.1)
+    assert len(factory.calls) == 2
+    await client.disconnect()
+
+
+async def test_the_wait_for_the_port_is_bounded_too() -> None:
+    """A connection being opened holds the port: the read gives up, and leaves it alone."""
+    device = SlowDevice()
+    client = make_client(Factory(device), address=ADDRESS)
+    link = _link(client, bound=Seconds(0.05))
+    opening = asyncio.create_task(link.step())
+    await _until(lambda: _connected(client))
+    assert await link.read_battery() is None
+    await opening
+    assert link.streaming
+    assert "state>" not in device.log
+    await client.disconnect()
+
+
+@final
+class StoppedWhileStarting:
+    """A reconnection that is still starting when the acquisition is stopped."""
+
+    def __init__(self, *, close_error: Exception | None = None) -> None:
+        self.starting = threading.Event()
+        self.go_on = threading.Event()
+        self.closed = threading.Event()
+        self._close_error = close_error
+
+    def version(self) -> str:
+        return "BITalino_v5.2"
+
+    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
+        del sample_rate, channels
+        self.starting.set()
+        self.go_on.wait(3.0)
+
+    def read_chunk(self, max_bytes: int, /) -> bytes:
+        del max_bytes
+        return b""
+
+    def stop(self) -> None:
+        return
+
+    def close(self) -> None:
+        self.closed.set()
+        if self._close_error is not None:
+            raise self._close_error
+
+
+@pytest.mark.parametrize("close_error", [None, OSError("port gone")], ids=["closes", "fails"])
+async def test_a_device_opened_for_a_stopped_acquisition_is_closed_not_adopted(
+    close_error: Exception | None,
+) -> None:
+    lost = FakeDevice([LinkLostError("Bluetooth dropped")])
+    late = StoppedWhileStarting(close_error=close_error)
+    client = make_client(Factory(lost, late), reconnect_delays=(0.0,))
+    assert await client.connect(1.0)
+    assert await client.start_acquisition()
+    assert await asyncio.to_thread(late.starting.wait, 3.0)
+    stopping = asyncio.create_task(client.stop_acquisition())
+    await asyncio.sleep(0.05)
+    late.go_on.set()
+    await stopping
+    assert late.closed.is_set()
+    assert not _connected(client)
+    assert not client.reads_battery

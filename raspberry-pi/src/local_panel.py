@@ -627,23 +627,37 @@ class EcgLink:
         link is closed, so that whatever still waits on the port ends, and
         the next step opens it afresh.
         """
-        async with self._owner:
-            client = self._client
-            if not self.streaming or not client.reads_battery:
-                return None
-            try:
-                async with asyncio.timeout(self._battery_bound):
-                    await client.stop_acquisition()
-                    return await client.read_battery()
-            except TimeoutError:
-                _logger.warning(
-                    "BITalino battery read took longer than %.0f s: link closed and reopened",
-                    self._battery_bound,
-                )
-                await client.disconnect()
-                return None
-            finally:
-                self._retry_at = None
+        # One deadline for the wait for the port (a connection being opened holds it)
+        # and for the read itself.
+        deadline = asyncio.get_running_loop().time() + self._battery_bound
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self._owner.acquire()
+        except TimeoutError:
+            _logger.warning("BITalino battery not read: the port stayed busy")
+            return None
+        try:
+            return await self._read_owned(deadline)
+        finally:
+            self._owner.release()
+            self._retry_at = None
+
+    async def _read_owned(self, deadline: float) -> Percent | None:
+        """The read itself, the port owned. A cut read leaves the client closed and idle."""
+        client = self._client
+        if not self.streaming or not client.reads_battery:
+            return None
+        try:
+            async with asyncio.timeout_at(deadline):
+                await client.stop_acquisition()
+                return await client.read_battery()
+        except TimeoutError:
+            _logger.warning(
+                "BITalino battery read took longer than %.0f s: link closed and reopened",
+                self._battery_bound,
+            )
+            await client.disconnect()
+            return None
 
     def status(self) -> EcgLinkStatus:
         """The link as the panel shows it."""

@@ -143,7 +143,10 @@ class PreflightInputs:
     """``None``: not read yet. Filled in by :class:`PreflightMonitor`."""
 
     battery_due: bool = False
-    """A battery read is due or under way, the ECG suspended for it. Filled in by
+    """A battery read is due or under way. Filled in by :class:`PreflightMonitor`."""
+
+    battery_reading: bool = False
+    """The battery read is under way, the ECG suspended for it. Filled in by
     :class:`PreflightMonitor`."""
 
     ecg_good_since: Monotonic | None = None
@@ -302,10 +305,12 @@ def _incidents(inputs: PreflightInputs) -> Result[str, Finding]:
 def _bitalino(inputs: PreflightInputs) -> Result[str, Finding]:
     if not inputs.bitalino_connected:
         return Err(Failed("BITalino injoignable : l'allumer, le rapprocher, verifier l'appairage"))
-    if inputs.battery_due:
+    if inputs.battery_reading:
         return Err(
             Failed("batterie BITalino en cours de lecture : l'ECG est suspendu pendant ce temps")
         )
+    if inputs.battery_due:
+        return Err(Failed("batterie BITalino a relire : des que le BITalino acquiert normalement"))
     reading = inputs.battery
     if reading is None:
         return Err(Failed("batterie BITalino pas encore lue"))
@@ -831,6 +836,7 @@ class PreflightMonitor:
             facts,
             battery=self._battery,
             battery_due=self._due,
+            battery_reading=self._reading,
             ecg_good_since=self._ecg_since,
             cpu_temp_c=facts.cpu_temp_c if self._read_temperature is None else self._temperature,
         )
