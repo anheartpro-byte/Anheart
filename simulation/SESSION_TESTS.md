@@ -121,6 +121,7 @@ instants de lecture identiques a ceux de la tache de sondage reelle.
 | R7 | Remote launch below the minimum age (18, `min_rider_age` of the signed medical file), or without age | refused before anything turns; subjectAge travels with the launch | panel test_a_launch_for_a_child_is_refused and test_a_launch_without_the_rider_s_age_is_refused PASS |
 | R8 | Remote stop while the drive link is dead | the stop is still honoured by ttO; the dashboard learns the real end reason | proposed |
 | R9 | Launch lost in transit (no confirmation) | the machine does not start a session nobody confirmed; timeout reported | panel `test_a_launch_nobody_answers_times_out` |
+| R10 | Ballasted bench session launched from the site (ANH-250, contract 1.9) | offered with no passenger, confirmed only with the bench attestation, armed as a MANUAL bench session (target set at the console), stopped by the site on the ramp; the record carries the ballast and the attestation; a programme stays refused under a declared STO bridge | sim `tests/test_remote_bench_launch.py`; panel `tests/test_remote_bench_launch.py` |
 
 ## 4. How to run them
 
