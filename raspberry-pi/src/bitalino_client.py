@@ -54,7 +54,7 @@ import threading
 from abc import abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Final, Protocol, final, runtime_checkable
 
 from bitalino import BITalino
@@ -550,15 +550,44 @@ class _Chunk:
     rows: Sequence[Row]
 
 
+@dataclass(slots=True)
+class _Acquisition:
+    """What one acquisition owns, and its reader keeps: never the next acquisition's.
+
+    A reader that a cut stop left behind still holds its own, stopped: it can
+    neither be woken up by the next start nor say that the next one reconnects.
+    Mutable: ``stop`` is set by the event loop under the client's lock,
+    ``reconnecting`` is written by this reader alone (one bool store).
+    """
+
+    stop: threading.Event = field(default_factory=threading.Event)
+    reconnecting: bool = False
+
+
 class BITalinoClient:
     """Bluetooth Classic client for BITalino / psychoBIT devices.
 
     The public surface (``connect``/``start_acquisition``/``read_samples``/
-    ``stop_acquisition``/``disconnect``, ``is_connected``/``is_acquiring``) is
-    what ``src/local_panel.py`` and the simulator in ``src/sim`` share.
-    ``is_connected``/``is_acquiring`` are plain attributes written by both the
-    event loop and, on give-up, the acquisition thread; single bool stores are
-    atomic under the GIL and only ever move towards ``False`` from the thread.
+    ``stop_acquisition``/``disconnect``, ``is_connected``/``is_acquiring``,
+    ``reconnecting``) is what ``src/local_panel.py`` and the simulator in
+    ``src/sim`` share.
+
+    Who writes what (single attribute stores, atomic under the GIL):
+
+    * the event loop writes ``is_acquiring`` (start, stop), and ``_device`` and
+      ``is_connected`` when it connects and disconnects; it sets the current
+      acquisition's stop, and replaces the current acquisition, under ``_lock``;
+    * the reader thread of an acquisition writes ``_device`` and
+      ``is_connected`` under ``_lock``, each time after checking under that
+      lock that its acquisition is not stopped: it drops a link it lost, and
+      adopts a re-opened one. On give-up, unstopped, it moves ``is_acquiring``
+      and ``is_connected`` to ``False``. It also writes its own acquisition's
+      ``reconnecting``, the chunk queue and the counters (under ``_lock``), and
+      the decoder and the timeline, which only the current reader uses;
+    * a reader that has seen its acquisition stopped writes nothing more: no
+      device, no flag, no chunk. One a cut stop left behind (a read or a stop
+      that hangs) may outlive the next acquisition's start, and must never
+      reach into it.
     """
 
     def __init__(
@@ -597,8 +626,6 @@ class BITalinoClient:
         self.auto_pair: bool = auto_pair
         self.is_connected: bool = False
         self.is_acquiring: bool = False
-        self.reconnecting: bool = False
-        """Set by the reader thread while it re-opens a lost link: no battery read then."""
 
         self._clock: Clock = clock if clock is not None else RealClock()
         self._factory: DeviceFactory = device_factory
@@ -612,7 +639,7 @@ class BITalinoClient:
         self._on_disconnect: Callable[[], Awaitable[None]] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        self._stop: threading.Event = threading.Event()
+        self._acquisition: _Acquisition = _Acquisition()
 
         # Shared between the acquisition thread (producer) and the event loop
         # (consumer); every access holds _lock.
@@ -714,14 +741,15 @@ class BITalinoClient:
         self._integrity_checked = False
         self._reported = LinkStats()
         self._loop = loop
-        # A stop of its own for every acquisition: a reader a cut stop left behind keeps
-        # the one it was stopped with, and is never woken up by the next start.
-        stop = threading.Event()
+        acquisition = _Acquisition()
         with self._lock:
-            self._stop = stop
+            self._acquisition = acquisition
 
         self._thread = threading.Thread(
-            target=self._acquisition_loop, args=(stop,), name="bitalino-reader", daemon=True
+            target=self._acquisition_loop,
+            args=(acquisition,),
+            name="bitalino-reader",
+            daemon=True,
         )
         self.is_acquiring = True
         self._thread.start()
@@ -742,7 +770,7 @@ class BITalinoClient:
             return
         self._thread = None
         with self._lock:
-            self._stop.set()
+            self._acquisition.stop.set()
         loop = asyncio.get_running_loop()
         try:
             device = self._device
@@ -756,6 +784,11 @@ class BITalinoClient:
         finally:
             self.is_acquiring = False
         logger.info("Stopped acquisition; link %s", self.link_stats())
+
+    @property
+    def reconnecting(self) -> bool:
+        """Whether the current acquisition's reader re-opens a lost link: no battery read then."""
+        return self._acquisition.reconnecting
 
     @property
     def reads_battery(self) -> bool:
@@ -793,37 +826,46 @@ class BITalinoClient:
         with self._lock:
             return self._stats
 
-    def _acquisition_loop(self, stop: threading.Event) -> None:
+    def _acquisition_loop(self, acquisition: _Acquisition) -> None:
         """Reader thread: bytes -> rows -> timestamped chunks; reconnects on loss."""
+        stop = acquisition.stop
         device = self._device
-        while device is not None and not stop.is_set():
+        while device is not None:
             try:
                 data = device.read_chunk(self._chunk_bytes)
             except Exception as error:  # vendor, serial and socket errors alike
                 if stop.is_set():
                     return
                 logger.warning("BITalino link lost: %s", error)
-                device = self._reconnect(device, stop)
+                device = self._reconnect(device, acquisition)
                 continue
+            if stop.is_set():
+                # Stopped: the reader ends here, and a read that returned late (after
+                # the next acquisition started) never feeds that one's decoder or queue.
+                return
             self._ingest(data)
-        if device is None:
-            self._give_up(stop)
+        self._give_up(stop)
 
-    def _reconnect(self, lost: Device, stop: threading.Event) -> Device | None:
+    def _reconnect(self, lost: Device, acquisition: _Acquisition) -> Device | None:
         """Re-open the link with backoff. Returns the new device, or None.
 
         The lost device is the client's no more from the first instant: never a
         client that says it is connected with no device, whoever ends the
-        backoff (a stop, the last attempt), or nothing connects it again.
+        backoff (a stop, the last attempt), or nothing connects it again. A
+        reader whose acquisition was stopped meanwhile touches nothing, as in
+        ``_adopt``: the stop's caller closes the link, and the client may
+        already be the next acquisition's, on another device.
         """
-        self.reconnecting = True
         with self._lock:
+            if acquisition.stop.is_set():
+                return None
             self._device = None
             self.is_connected = False
+            acquisition.reconnecting = True
         try:
-            return self._reopen(lost, stop)
+            return self._reopen(lost, acquisition.stop)
         finally:
-            self.reconnecting = False
+            acquisition.reconnecting = False
 
     def _reopen(self, lost: Device, stop: threading.Event) -> Device | None:
         try:
@@ -835,9 +877,15 @@ class BITalinoClient:
                 return None
             try:
                 device = self._factory(self.mac_address, self._link_timeout)
+            except Exception as error:
+                logger.warning("Reconnect attempt %d failed to open: %s", attempt, error)
+                continue
+            try:
                 device.start(self.sample_rate, self.channels)
             except Exception as error:
-                logger.warning("Reconnect attempt %d failed: %s", attempt, error)
+                # Opened, so closed: a link left open makes every later open fail "busy".
+                logger.warning("Reconnect attempt %d failed to start: %s", attempt, error)
+                _close_quietly(device)
                 continue
             if not self._adopt(device, stop):
                 return None
@@ -1032,7 +1080,7 @@ def _close_quietly(device: Device) -> None:
     try:
         device.close()
     except Exception as error:
-        logger.warning("Could not close a BITalino opened for a stopped acquisition: %s", error)
+        logger.warning("Could not close a BITalino link: %s", error)
 
 
 def _close_if_opened(opening: asyncio.Future[Device]) -> None:

@@ -656,8 +656,18 @@ class EcgLink:
                 "BITalino battery read took longer than %.0f s: link closed and reopened",
                 self._battery_bound,
             )
-            await client.disconnect()
+            await self._close_cut(client)
             return None
+
+    async def _close_cut(self, client: EcgClient) -> None:
+        """Close the link of a cut read, within the same bound: a tty close that hangs
+        must not hold the port. The client drops the device before it waits for its
+        close, so the next step opens a new one."""
+        try:
+            async with asyncio.timeout(self._battery_bound):
+                await client.disconnect()
+        except TimeoutError:
+            _logger.warning("BITalino link close still under way: left to end on its own")
 
     def status(self) -> EcgLinkStatus:
         """The link as the panel shows it."""

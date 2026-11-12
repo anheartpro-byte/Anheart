@@ -9,19 +9,24 @@ Four ways the read used to go wrong, each found by a review and reproduced here:
 * what the stream had sent before the stop byte was read as the state reply,
   so a false battery could pass the CRC;
 * a read with no bound, and on a transport that cannot report the battery at all.
+
+And the reader a cut read leaves behind (its read or its stop hangs) must never
+reach into the next acquisition: its device, its data, its "reconnecting".
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
-from typing import Final, final
+from typing import Final, final, override
 
 import pytest
 
-from src.bitalino_client import BITalinoClient, LinkLostError, VendorDevice
+from src.bitalino_client import BITalinoClient, Device, LinkLostError, VendorDevice
 from src.clock import ManualClock
 from src.ecg_pipeline import EcgBridge
 from src.local_config import EcgSource
@@ -33,6 +38,7 @@ from tests.test_bitalino import (
     FakeDevice,
     _vendor,  # pyright: ignore[reportPrivateUsage]  # the vendor fake's one builder
     make_client,
+    stream,
 )
 from tests.test_ecg_pipeline import FakeTreatment
 from tests.test_local_panel import FakeEcgClient, NullRing, NullRuntime
@@ -77,6 +83,11 @@ def _acquiring(client: BITalinoClient | FakeEcgClient) -> bool:
 def _connected(client: BITalinoClient) -> bool:
     """Read through a call, for the reason :func:`_acquiring` gives."""
     return client.is_connected
+
+
+def _reconnecting(client: BITalinoClient) -> bool:
+    """Read through a call, for the reason :func:`_acquiring` gives."""
+    return client.reconnecting
 
 
 # =========================================================================
@@ -429,3 +440,226 @@ async def test_a_device_opened_for_a_stopped_acquisition_is_closed_not_adopted(
     assert late.closed.is_set()
     assert not _connected(client)
     assert not client.reads_battery
+
+
+# =========================================================================
+# 5. A reader a cut stop left behind never reaches into the next acquisition
+# =========================================================================
+
+
+def _readers() -> int:
+    return sum(thread.name == "bitalino-reader" for thread in threading.enumerate())
+
+
+@final
+class LateRead:
+    """Streams once, then a read that returns only when released, with other data: a
+    tty read that a close does not wake. Its stop hangs until released too."""
+
+    battery_readable: bool = True
+
+    def __init__(self) -> None:
+        self.first = True
+        self.late = threading.Event()
+        self.released = threading.Event()
+        self.closed = threading.Event()
+
+    def version(self) -> str:
+        return "BITalino_v5.2"
+
+    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
+        del sample_rate, channels
+
+    def read_chunk(self, max_bytes: int, /) -> bytes:
+        del max_bytes
+        if self.first:
+            self.first = False
+            return stream([100] * 50)
+        self.late.wait(5.0)
+        return stream([999] * 200)
+
+    def stop(self) -> None:
+        self.released.wait(5.0)
+
+    def close(self) -> None:
+        self.closed.set()
+
+    def battery_raw(self) -> int:
+        return 589
+
+
+async def test_a_late_read_of_an_abandoned_reader_never_feeds_the_next_acquisition() -> None:
+    late = LateRead()
+    back = FakeDevice([stream([500] * 50)])
+    client = make_client(Factory(late, back))
+    link = _link(client, bound=Seconds(0.3))
+    await link.step()
+    await _until(lambda: client.link_stats().frames >= 50)
+    assert await link.read_battery() is None  # cut inside the stop that hangs
+    assert late.closed.is_set()
+    await link.step()
+    assert link.streaming
+    late.late.set()  # the abandoned reader's read returns now, into the next acquisition
+    await _until(lambda: _readers() == 1)
+    seen: set[float] = set()
+    while (batch := await client.read_samples(1)) is not None:
+        seen.update(batch.channels[0].values)
+    assert seen == {500.0}
+    late.released.set()
+    await client.disconnect()
+
+
+@final
+class DropsThenHangs:
+    """Streams once, then loses the link; its stop hangs until released."""
+
+    battery_readable: bool = True
+
+    def __init__(self) -> None:
+        self.reads = 0
+        self.released = threading.Event()
+
+    def version(self) -> str:
+        return "BITalino_v5.2"
+
+    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
+        del sample_rate, channels
+
+    def read_chunk(self, max_bytes: int, /) -> bytes:
+        del max_bytes
+        self.reads += 1
+        if self.reads == 1:
+            return stream([100] * 50)
+        raise LinkLostError("Bluetooth dropped")
+
+    def stop(self) -> None:
+        self.released.wait(5.0)
+
+    def close(self) -> None:
+        return
+
+    def battery_raw(self) -> int:
+        return 589
+
+
+@final
+class HoldsTheReaderInItsLog(logging.Handler):
+    """Holds the reader in its "link lost" line: past its stop check, before its
+    reconnect, the window in which a stop can fall."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.entered = threading.Event()
+        self.go_on = threading.Event()
+
+    @override
+    def emit(self, record: logging.LogRecord) -> None:
+        reader = threading.current_thread().name == "bitalino-reader"
+        if reader and "link lost" in record.getMessage():
+            self.entered.set()
+            self.go_on.wait(5.0)
+
+
+async def test_an_abandoned_reader_never_drops_the_device_of_the_next_acquisition() -> None:
+    dropping = DropsThenHangs()
+    back = FakeDevice()
+    factory = Factory(dropping, back, FakeDevice())
+    client = make_client(factory)
+    link = _link(client, bound=Seconds(0.3))
+    holder = HoldsTheReaderInItsLog()
+    logger = logging.getLogger("src.bitalino_client")
+    logger.addHandler(holder)
+    try:
+        await link.step()
+        assert await asyncio.to_thread(holder.entered.wait, 3.0)
+        assert link.streaming  # it does not reconnect yet
+        assert await link.read_battery() is None  # cut inside the stop that hangs
+        await link.step()
+        assert link.streaming
+        holder.go_on.set()  # the abandoned reader goes on to its reconnect
+        await _until(lambda: _readers() == 1)
+    finally:
+        logger.removeHandler(holder)
+        holder.go_on.set()
+        dropping.released.set()
+    assert _connected(client)
+    assert link.streaming
+    assert len(factory.calls) == 2  # nothing re-opened for the abandoned reader
+    await client.disconnect()
+    assert back.closed.is_set()
+
+
+@final
+class SecondOpenHangs:
+    """Opens ``first``, then an open that hangs until released (``late``), then ``then``."""
+
+    def __init__(self, first: Device, late: Device, then: Device) -> None:
+        self._devices: tuple[Device, Device, Device] = (first, late, then)
+        self.calls = 0
+        self.opening = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, address: str, timeout: float) -> Device:
+        del address, timeout
+        self.calls += 1
+        device = self._devices[min(self.calls, 3) - 1]
+        if device is self._devices[1]:
+            self.opening.set()
+            self.release.wait(5.0)
+        return device
+
+
+async def test_an_abandoned_reader_that_reconnects_says_so_of_its_own_acquisition_only() -> None:
+    late = FakeDevice()
+    back = FakeDevice()
+    factory = SecondOpenHangs(FakeDevice([LinkLostError("Bluetooth dropped")]), late, back)
+    client = make_client(factory)
+    assert await client.connect(1.0)
+    assert await client.start_acquisition()
+    assert await asyncio.to_thread(factory.opening.wait, 3.0)
+    assert _reconnecting(client)
+    with contextlib.suppress(TimeoutError):  # its reader never joins: a stop cut short
+        await asyncio.wait_for(client.stop_acquisition(), 0.2)
+    assert await client.connect(1.0)
+    assert await client.start_acquisition()
+    assert not _reconnecting(client)  # the abandoned reader still opens, for itself
+    factory.release.set()
+    assert await asyncio.to_thread(late.closed.wait, 3.0)  # opened for nobody: closed
+    await _until(lambda: _readers() == 1)
+    assert _connected(client)
+    assert _acquiring(client)
+    await client.disconnect()
+    assert back.closed.is_set()
+
+
+async def test_a_reconnection_that_opens_but_does_not_start_is_closed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    refusing = FakeDevice(start_error=OSError("nak"))
+    back = FakeDevice()
+    lost = FakeDevice([LinkLostError("Bluetooth dropped")])
+    client = make_client(
+        Factory(lost, OSError("no port"), refusing, back), reconnect_delays=(0.0, 0.0, 0.0)
+    )
+    assert await client.connect(1.0)
+    assert await client.start_acquisition()
+    await _until(lambda: back.started_with is not None)
+    assert refusing.closed.is_set()  # left open, every later open would find it busy
+    messages = [record.getMessage() for record in caplog.records]
+    assert "Reconnect attempt 1 failed to open: no port" in messages
+    assert "Reconnect attempt 2 failed to start: nak" in messages
+    await _until(lambda: _connected(client))
+    await client.disconnect()
+
+
+async def test_a_close_that_hangs_after_a_cut_read_does_not_hold_the_port() -> None:
+    client = FakeEcgClient()
+    client.battery = Percent(64.0)
+    link = _link(client, bound=Seconds(0.05))
+    await link.step()
+    client.charge_read.clear()  # the device never answers
+    client.closed.clear()  # nor does its close
+    assert await asyncio.wait_for(link.read_battery(), 2.0) is None
+    assert client.disconnects == 1
+    await asyncio.wait_for(link.step(), 2.0)  # the port is free: the link opens again
+    assert _acquiring(client)

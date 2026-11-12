@@ -1271,9 +1271,13 @@ fois sur seize et donnerait une fausse batterie. L'attente du port et toute la
 lecture, arrêt compris, tiennent en 15 s ; au-delà la lecture est abandonnée,
 et si elle avait commencé la liaison est fermée : le client revient au repos
 (ni connecté, ni en acquisition, sans appareil), même coupé au milieu d'un
-arrêt qui ne répond pas, et la console le rouvre au pas suivant. Un lecteur
-laissé derrière par une telle coupure garde son propre ordre d'arrêt : il ne
-reprend jamais la liaison. Une liaison perdue dont la reconnexion est
+arrêt qui ne répond pas, et la console le rouvre au pas suivant. Cette
+fermeture a la même borne de 15 s : une fermeture de port qui ne finit pas
+libère le port quand même. Un lecteur laissé derrière par une telle coupure
+garde son propre ordre d'arrêt et son propre état de reconnexion : il ne
+reprend jamais la liaison, ne retire jamais l'appareil de l'acquisition
+suivante et ne lui donne aucune donnée lue en retard. Un appareil ouvert à
+la reconnexion mais qui refuse de démarrer est refermé. Une liaison perdue dont la reconnexion est
 interrompue n'est plus dite connectée : la console la rouvre. Tant qu'une
 lecture est attendue ou en cours, le contrôle `bitalino` est rouge avec une
 personne à bord (attendue : « a relire » ; en cours : l'ECG est suspendu), et

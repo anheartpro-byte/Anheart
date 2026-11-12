@@ -259,6 +259,8 @@ class FakeEcgClient:
         self.reconnecting: bool = False
         self.charge_read: asyncio.Event = asyncio.Event()
         self.charge_read.set()
+        self.closed: asyncio.Event = asyncio.Event()
+        self.closed.set()
 
     async def connect(self, timeout: float = 30.0) -> bool:  # noqa: ASYNC109
         del timeout
@@ -284,9 +286,11 @@ class FakeEcgClient:
         return None
 
     async def disconnect(self) -> None:
+        """Idle at once; returns once :attr:`closed` lets the close end (ANH-142)."""
         self.disconnects += 1
         self.is_connected = False
         self.is_acquiring = False
+        await self.closed.wait()
 
 
 class NullRuntime:
