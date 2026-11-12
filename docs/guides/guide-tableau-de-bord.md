@@ -90,7 +90,7 @@ ordinateur ou une tablette, n'importe où, il permet de :
 | Mot | Sens |
 |---|---|
 | **Séance auto** | Séance sur un **programme** enregistré. La machine ajuste seule la vitesse pour garder la fréquence cardiaque du pratiquant dans la **zone cible** du programme. C'est la seule séance lançable depuis le site. |
-| **Séance manuelle** | L'opérateur choisit la vitesse à la console. Jamais lancée depuis le site ; visible sur le site une fois démarrée. |
+| **Séance manuelle** | L'opérateur choisit la vitesse à la console. Jamais lancée depuis le site avec une personne à bord ; une séance de banc lestée, sans personne à bord, peut y être proposée, puis confirmée à la console. Visible sur le site une fois démarrée. |
 | **Séance d'enregistrement** | Ancien mode, enregistrement ECG seul, sans entraînement. **Retiré** : le site ne permet plus d'en créer. Les anciennes séances restent visibles en lecture seule, avec le badge « Enregistrement ». |
 | **Pratiquant** | La personne à bord. C'est en général un patient. |
 | **FC max** | Fréquence cardiaque maximale du pratiquant. Mesurée, ou à défaut estimée par l'âge (formule de Tanaka : 208 moins 0,7 fois l'âge). Sert à vérifier qu'un programme n'est pas trop intense. |

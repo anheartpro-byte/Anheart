@@ -619,5 +619,5 @@ propres séances. Un administrateur voit tout.
 | Pratiquant | La personne à bord pendant une séance. La console l'appelle « passager ». |
 | Programme | Une séance type enregistrée sur la machine : zone cible, durée, vitesse maximale. |
 | Séance auto | Séance sur un programme. La machine règle seule sa vitesse d'après la fréquence cardiaque. |
-| Séance manuelle | Séance où l'opérateur choisit la vitesse, à la console. Jamais lancée depuis le site. |
+| Séance manuelle | Séance où l'opérateur choisit la vitesse, à la console. Jamais lancée depuis le site avec une personne à bord ; une séance de banc lestée, sans personne à bord, peut y être proposée, puis confirmée à la console. |
 | Zone cible | La plage de fréquence cardiaque que le programme cherche à tenir. |

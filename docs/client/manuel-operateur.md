@@ -154,8 +154,10 @@ est gardé pour cet onglet seulement.
 > materiel » est affiché sur toutes les pages. Sous ce mode :
 >
 > - **Séance de banc seulement** : capsule vide ou lestée, aucune personne à
->   bord. Un départ proposé par le site est refusé : les séances de banc se
->   lancent à la console seulement.
+>   bord. Un programme proposé par le site est refusé. Une séance de banc se
+>   lance à la console, ou depuis le site pour une séance de banc lestée :
+>   la console ne la démarre qu'après votre confirmation et l'attestation de
+>   banc cochée, et vous en réglez la vitesse à la console.
 > - **Il n'y a ni coup de poing ni arrêt câblé.** Tant que la console répond,
 >   l'arrêt d'urgence est l'**E-STOP** de l'écran : le variateur s'arrête sur
 >   sa rampe, en quelques secondes.

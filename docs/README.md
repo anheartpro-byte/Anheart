@@ -97,7 +97,7 @@ flowchart LR
 |---|---|---|
 | Faire tourner, accélérer, ralentir, arrêter | **le Pi**, seul | superviseur de sécurité puis régulateur, à chaque cycle |
 | Réagir à une perte de communication | **le variateur** | le simulateur suppose un arrêt sur rampe après ttO. Sur le matériel, la réaction dépend de ttO et SLL, non relus par le logiciel : un mauvais réglage peut laisser le moteur commandé ou en roue libre. Voir [l'arrêt physique](raspberry-pi.md#7-ce-qui-se-passe-physiquement-à-larrêt). |
-| Lancer une séance MANUELLE | **l'opérateur, à la console** | aucun chemin ne le permet depuis le site |
+| Lancer une séance MANUELLE | **l'opérateur, à la console** | aucun chemin ne le permet depuis le site avec une personne à bord ; une séance de banc lestée, sans personne à bord, peut être proposée par le site, puis confirmée et pilotée à la console (ANH-250) |
 | Lancer une séance AUTO | l'opérateur à la console, **ou** un utilisateur autorisé sur le site | Convex vérifie les droits, la FC max et l'âge ; le Pi **revérifie tout** et peut refuser |
 | Qui a le droit de lancer | admin et gestionnaire, sur le site | voir [tableau-de-bord.md](tableau-de-bord.md) |
 | Afficher l'état, l'historique, les courbes | Convex et le site | à partir de ce que le Pi envoie |
@@ -112,14 +112,18 @@ MANUELLE), la télémétrie échantillonnée à 1 Hz et envoyée par lots toutes
 De Convex vers le Pi, **exactement deux choses**, que le Pi va chercher lui-même
 toutes les 3 s :
 
-1. un lancement AUTO (programme, passager, FC max, âge), qui repasse par toutes
-   les portes de la console ;
+1. un lancement : AUTO (programme, passager, FC max, âge), ou, depuis le
+   contrat 1.9, une séance de banc lestée (masse déclarée, note, aucun
+   passager), qui ne démarre qu'après la confirmation et l'attestation de
+   l'opérateur à la console ; l'un comme l'autre repasse par toutes les portes
+   de la console ;
 2. une demande d'arrêt, exécutée comme un arrêt ordinaire sur la rampe.
 
 **Ce qui ne voyage jamais :**
 
-- une séance **manuelle** n'est **jamais** lancée à distance : rien dans le code
-  ne peut en construire une depuis le lien distant ;
+- une séance **manuelle avec une personne à bord** n'est **jamais** lancée à
+  distance : le lien distant ne construit qu'un départ manuel de banc, pour
+  une séance de banc lestée confirmée et attestée à la console ;
 - aucune consigne de vitesse, aucun acquittement, aucun réarmement de défaut ne
   vient du site ;
 - le site ne parle jamais directement au Pi ;
