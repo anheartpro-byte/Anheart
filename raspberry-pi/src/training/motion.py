@@ -260,10 +260,14 @@ def carry_after(
     The caller restarts its accrual that far in the past rather than at "now",
     so the fraction of an rpm a tick could not pay for is not thrown away (at
     12.4 rpm/s and 5 Hz, flooring every tick would silently run at 10 rpm/s).
-    Capped at the time one rpm costs, so what is carried can never add more
-    than ONE rpm to the next step: over any window the setpoint moves at most
-    ``rate * window + 1`` rpm. The 0 <-> ``min_run`` passage spends all of
-    ``dt``, and so does a step that did not move.
+    Capped at the time one rpm costs at ``moved``, the fastest rate the next
+    step can use (it starts there, and the limit is non-increasing in speed),
+    so what is carried can never add more than ONE rpm to the next step: over
+    any window the setpoint moves at most ``rate * window + 1`` rpm. The cost
+    at the faster end of a descent would be too long: carried into a climb
+    from its floor, it paid for slightly more than one rpm. The 0 <->
+    ``min_run`` passage spends all of ``dt``, and so does a step that did not
+    move.
     """
     here = max(0, int(current))
     there = max(0, int(moved))
@@ -272,7 +276,8 @@ def carry_after(
     interval = min(float(dt), float(limits.max_interval))
     rate = motor_rate_limit(MotorRpm(max(here, there)), limits, geometry)
     spent = abs(there - here) / rate
-    return Seconds(min(max(0.0, interval - spent), 1.0 / rate))
+    next_rate = motor_rate_limit(MotorRpm(there), limits, geometry)
+    return Seconds(min(max(0.0, interval - spent), 1.0 / next_rate))
 
 
 def ramp_duration(
