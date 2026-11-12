@@ -20,6 +20,7 @@ from typing import Final, cast
 import httpx
 import pytest
 
+from src import local_panel
 from src.clock import ManualClock
 from src.health import HealthWatch
 from src.health_system import Celsius, SystemHealth
@@ -260,7 +261,38 @@ def test_a_run_on_a_console_that_records_nothing_is_only_logged(
     assert "pre-vol warn (banc)" in caplog.text
 
 
-async def test_the_heartbeat_carries_the_last_run_and_the_battery(tmp_path: Path) -> None:
+def _hot_pi(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The kernel's thermal zone says 42 °C (there is none on the machine running the tests)."""
+
+    def measured(root: Path = Path("/")) -> Celsius | None:
+        del root
+        return Celsius(42.0)
+
+    monkeypatch.setattr(local_panel, "cpu_temperature", measured)
+
+
+async def test_a_console_with_no_dashboard_measures_its_pi_all_the_same(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _hot_pi(monkeypatch)
+    panel = _console(tmp_path, ManualClock())
+    try:
+        assert panel.cloud is None
+        monitor = panel.preflight
+        assert monitor is not None
+        await panel.preflight_step()
+        temperature = next(
+            r for r in monitor.report(Occupancy.BENCH).results if r.id == "temperature"
+        )
+        assert temperature.detail == "Pi a 42 °C"
+    finally:
+        await panel.close()
+
+
+async def test_the_heartbeat_carries_the_last_run_and_the_battery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _hot_pi(monkeypatch)
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
     dashboard = Dashboard()
     panel = build_panel(
@@ -282,7 +314,7 @@ async def test_the_heartbeat_carries_the_last_run_and_the_battery(tmp_path: Path
         assert first["preflight_last"] is None  # the run is still waiting
         monitor = panel.preflight
         assert monitor is not None
-        # The temperature the heartbeat measured reaches the list.
+        # The temperature the pre-flight measured itself.
         temperature = next(
             r for r in monitor.report(Occupancy.BENCH).results if r.id == "temperature"
         )

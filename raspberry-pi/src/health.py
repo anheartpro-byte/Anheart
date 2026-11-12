@@ -36,7 +36,6 @@ class HealthContext:
 class Sampled:
     """What the last heartbeat measured and was told, for the pre-flight; unknown before."""
 
-    cpu_temp_c: float | None = None
     records_pending: int | None = None
     incidents_open_high: int | None = None
 
@@ -138,7 +137,7 @@ class HealthWatch:
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
-        self._last = Sampled(system.cpu_temp_c, pending, incidents_open_high)
+        self._last = Sampled(pending, incidents_open_high)
         drive_link: str | None = None
         if snapshot.drive_status_age is not None:
             drive_link = "down" if snapshot.drive_status_is_stale else "up"

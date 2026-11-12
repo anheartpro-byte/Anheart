@@ -32,6 +32,7 @@ from types import MappingProxyType
 from typing import Final, assert_never, final
 
 from src.clock import Clock
+from src.health_system import Celsius
 from src.link_state import LinkState, LinkStatus
 from src.link_state import label_of as link_label
 from src.motor.drive import DriveState
@@ -113,7 +114,7 @@ class PreflightInputs:
 
     bitalino_connected: bool
     wall_clock: WallClockState | None
-    """``None``: the system cannot be asked (anything but the Pi)."""
+    """``None``: the system cannot be asked (anything but the Pi): its error is unknown."""
 
     record_storage: str | None
     """Why the session record has nowhere to go, in its words; ``None``: it has room."""
@@ -127,11 +128,19 @@ class PreflightInputs:
     incidents_open_high: int | None = None
     """As the dashboard last announced it; ``None``: not announced."""
 
-    cpu_temp_c: float | None = None
+    cpu_temp_c: Celsius | None = None
     records_pending: int | None = None
     min_battery: Percent = DEFAULT_MIN_BATTERY
+    bitalino_streaming: bool = False
+    """Whether the BITalino acquires normally (connected, streaming, not reconnecting):
+    only then may its battery be read."""
+
     battery: BatteryReading | None = None
     """``None``: not read yet. Filled in by :class:`PreflightMonitor`."""
+
+    battery_due: bool = False
+    """A battery read is due or under way, the ECG suspended for it. Filled in by
+    :class:`PreflightMonitor`."""
 
     ecg_good_since: Monotonic | None = None
     """Since when every heart-rate sample seen was fresh and ``good``. Filled in by
@@ -176,7 +185,7 @@ BATTERY_MAX_AGE: Final[Seconds] = Seconds(30 * 60.0)
 BATTERY_WAIT: Final[Seconds] = Seconds(15.0)
 """How long a run waits for the BITalino to be connected before it reads its battery."""
 
-PI_HOT_C: Final[float] = 70.0
+PI_HOT_C: Final[Celsius] = Celsius(70.0)
 
 
 def _drive_link(inputs: PreflightInputs) -> Result[str, Finding]:
@@ -230,7 +239,7 @@ def _disk(inputs: PreflightInputs) -> Result[str, Finding]:
 def _clock(inputs: PreflightInputs) -> Result[str, Finding]:
     state = inputs.wall_clock
     if state is None:
-        return Err(Unjudged("horloge non jugee : ce systeme ne peut pas etre interroge"))
+        return Err(Failed("horloge non verifiable sur ce systeme : son erreur est inconnue"))
     if not isinstance(state, Synchronised):
         return Err(Failed(f"horloge {clock_label(state)} : {detail_of(state)}"))
     if state.max_error >= CLOCK_MAX_ERROR:
@@ -285,9 +294,17 @@ def _incidents(inputs: PreflightInputs) -> Result[str, Finding]:
 def _bitalino(inputs: PreflightInputs) -> Result[str, Finding]:
     if not inputs.bitalino_connected:
         return Err(Failed("BITalino injoignable : l'allumer, le rapprocher, verifier l'appairage"))
+    if inputs.battery_due:
+        return Err(
+            Failed("batterie BITalino en cours de lecture : l'ECG est suspendu pendant ce temps")
+        )
     reading = inputs.battery
     if reading is None:
         return Err(Failed("batterie BITalino pas encore lue"))
+    return _battery_level(reading, inputs)
+
+
+def _battery_level(reading: BatteryReading, inputs: PreflightInputs) -> Result[str, Finding]:
     percent = reading.percent
     if percent is None:
         return Err(Failed("batterie BITalino illisible : relancer le pre-vol"))
@@ -602,14 +619,23 @@ def refusal_of(report: PreflightReport) -> PreflightRefused | None:
     return None if first is None else PreflightRefused(first.id, first.detail)
 
 
-def ecg_window(since: Monotonic | None, snapshot: TelemetrySnapshot) -> Monotonic | None:
+def ecg_window(
+    since: Monotonic | None, snapshot: TelemetrySnapshot, after: Monotonic | None = None
+) -> Monotonic | None:
     """Since when the heart rate has been fresh and ``good``, after ``snapshot``; ``None``: not now.
 
     Judged on every tick's snapshot: a sample that is not usable, or none
-    fresh, breaks the window, and the next good one starts it again.
+    fresh, breaks the window, and the next good one starts it again. A sample
+    taken before ``after`` (the end of the last battery read, which stopped the
+    acquisition) counts for nothing.
     """
     sample = snapshot.heart_rate
-    if sample is None or snapshot.heart_rate_is_stale or sample.usable_bpm is None:
+    if (
+        sample is None
+        or snapshot.heart_rate_is_stale
+        or sample.usable_bpm is None
+        or (after is not None and sample.at < after)
+    ):
         return None
     return snapshot.at if since is None else since
 
@@ -639,6 +665,9 @@ def describe_run(report: PreflightReport) -> str:
 type BatteryRead = Callable[[], Awaitable[Percent | None]]
 """Reads the BITalino's battery at rest. Pauses the acquisition for as long as it takes."""
 
+type TemperatureRead = Callable[[], Awaitable[Celsius | None]]
+"""Measures the Pi's temperature, off the loop; ``None`` where it cannot be measured."""
+
 
 @final
 class PreflightMonitor:
@@ -646,11 +675,17 @@ class PreflightMonitor:
 
     A run starts with the console, whenever the console comes back to rest
     after a session (so before each session) and when the operator asks for
-    one (:meth:`rerun`). It first reads the BITalino's battery, at rest, once
-    the BITalino is connected (or after :data:`BATTERY_WAIT` without it); its
-    controls are waited for from that read on, and the run ends when none is
-    pending any more: it is then written down and kept as the last
-    (:attr:`last`).
+    one (:meth:`rerun`). It reads the BITalino's battery, at rest, once the
+    BITalino acquires normally (or gives up on it after :data:`BATTERY_WAIT`).
+    Every control is waited for from the start of the run, the read included,
+    so no run lasts longer than the longest wait of its list (44 s). It ends
+    when none is pending any more: it is then written down and kept as the
+    last (:attr:`last`).
+
+    While the read is due or under way, the battery control is red with a
+    person on board (the ECG is suspended for the read and the arming gate
+    must not start on a reading of before it); when a read starts the ECG
+    window is broken, and only samples taken after it count again.
 
     Mutable, owned by the event loop: :meth:`observe` is called by every
     control tick, :meth:`step` by a task of its own, the reads by the page and
@@ -663,13 +698,17 @@ class PreflightMonitor:
         "_clock",
         "_controls",
         "_due",
+        "_ecg_after",
         "_ecg_since",
         "_facts",
         "_last",
         "_read_battery",
+        "_read_temperature",
+        "_reading",
         "_record",
         "_resting",
         "_summary",
+        "_temperature",
     )
 
     def __init__(
@@ -680,17 +719,26 @@ class PreflightMonitor:
         read_battery: BatteryRead,
         summary: Occupancy,
         record: Callable[[PreflightReport], None],
+        read_temperature: TemperatureRead | None = None,
         controls: tuple[Control, ...] = CONTROLS,
     ) -> None:
         """``facts``: what the console holds now, battery and ECG window aside (memory
         only). ``summary``: the occupancy a run is written down and announced for, the
-        most demanding start this console can make. ``record``: writes a completed run."""
+        most demanding start this console can make. ``record``: writes a completed run.
+        ``read_temperature``: measures the Pi at every step, linked or not; ``None``:
+        the temperature is the one ``facts`` gives."""
         self._clock: Clock = clock
         self._facts: Callable[[], PreflightInputs] = facts
         self._read_battery: BatteryRead = read_battery
         self._summary: Occupancy = summary
         self._record: Callable[[PreflightReport], None] = record
         self._controls: tuple[Control, ...] = controls
+        self._read_temperature: TemperatureRead | None = read_temperature
+        self._temperature: Celsius | None = None
+        # Set while the battery is read: the acquisition is stopped, the ECG window held.
+        self._reading: bool = False
+        # The end of the last battery read: samples taken before it count for nothing.
+        self._ecg_after: Monotonic | None = None
         # The run under way, from its start; None between two runs.
         self._began: Monotonic | None = clock.monotonic()
         # Whether that run has still to read the battery.
@@ -723,29 +771,33 @@ class PreflightMonitor:
 
     def observe(self, snapshot: TelemetrySnapshot) -> None:
         """One tick: the ECG window, and a new run when the console has come back to rest."""
-        self._ecg_since = ecg_window(self._ecg_since, snapshot)
+        self._ecg_since = (
+            None if self._reading else ecg_window(self._ecg_since, snapshot, self._ecg_after)
+        )
         resting = snapshot.mode is RunMode.REPOS
         if resting and not self._resting:
             self.rerun()
         self._resting = resting
 
     async def step(self) -> None:
-        """Read the battery when the run under way asks for it, then close the run once settled."""
+        """Measure the Pi, read the battery when the run under way asks for it, then close
+        the run once settled."""
+        measure = self._read_temperature
+        if measure is not None:
+            self._temperature = await measure()
         began = self._began
         if began is None:
             return
         if self._due:
             if not self._resting:
                 return
-            connected = self._facts().bitalino_connected
-            if not connected and elapsed(began, self._clock.monotonic()) < BATTERY_WAIT:
+            streaming = self._facts().bitalino_streaming
+            if not streaming and elapsed(began, self._clock.monotonic()) < BATTERY_WAIT:
                 return
-            percent = await self._read_battery() if connected else None
-            now = self._clock.monotonic()
-            self._battery = BatteryReading(percent, now)
+            self._battery = BatteryReading(
+                await self._read_paused() if streaming else None, self._clock.monotonic()
+            )
             self._due = False
-            # The controls are waited for from here: the ECG starts again after the read.
-            self._began = now
             return
         report = self.report(self._summary)
         if not report.settled:
@@ -754,9 +806,26 @@ class PreflightMonitor:
         self._last = report
         self._record(report)
 
+    async def _read_paused(self) -> Percent | None:
+        """The battery, the ECG window broken for the read and held broken until it ends."""
+        self._reading = True
+        self._ecg_since = None
+        try:
+            return await self._read_battery()
+        finally:
+            self._reading = False
+            self._ecg_after = self._clock.monotonic()
+
     def inputs(self) -> PreflightInputs:
         """What the controls read now."""
-        return replace(self._facts(), battery=self._battery, ecg_good_since=self._ecg_since)
+        facts = self._facts()
+        return replace(
+            facts,
+            battery=self._battery,
+            battery_due=self._due,
+            ecg_good_since=self._ecg_since,
+            cpu_temp_c=facts.cpu_temp_c if self._read_temperature is None else self._temperature,
+        )
 
     def report(self, occupancy: Occupancy) -> PreflightReport:
         """The list now, for the page: a run under way shows what it still waits for."""

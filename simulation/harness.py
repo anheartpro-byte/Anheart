@@ -874,15 +874,18 @@ class Session:
             bitalino = self._bitalino
             free = round(spec.disk_free_mb * 1_000_000)
             room = None if free >= MIN_FREE_BYTES else RecordStorageLow(free, MIN_FREE_BYTES, "sim")
+            # The sensor model stands for a BITalino that streams whenever it is connected.
+            streaming = (
+                sensor.connected
+                if sensor is not None
+                else bitalino is not None and bitalino.is_connected and bitalino.is_acquiring
+            )
             return PreflightInputs(
                 at=clock.monotonic(),
                 snapshot=runtime.snapshot(),
                 attested=isinstance(runtime.require_estop_confirmed(), Ok),
-                bitalino_connected=(
-                    sensor.connected
-                    if sensor is not None
-                    else bitalino is not None and bitalino.is_connected
-                ),
+                bitalino_connected=streaming,
+                bitalino_streaming=streaming,
                 wall_clock=Synchronised(
                     estimated_error=spec.clock_error, max_error=spec.clock_error
                 ),

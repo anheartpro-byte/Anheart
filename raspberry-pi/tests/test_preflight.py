@@ -9,6 +9,7 @@ is recorded once.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Final, cast
@@ -16,6 +17,7 @@ from typing import Final, cast
 import pytest
 
 from src.clock import ManualClock
+from src.health_system import Celsius
 from src.link_state import NOT_CONFIGURED, LinkState, LinkStatus
 from src.motor.drive import DriveState, describe_fault
 from src.result import Err, Ok, Result, is_ok
@@ -100,6 +102,7 @@ def _green(**changes: object) -> PreflightInputs:
         snapshot=BASE,
         attested=True,
         bitalino_connected=True,
+        bitalino_streaming=True,
         wall_clock=Synchronised(estimated_error=Seconds(0.01), max_error=Seconds(0.2)),
         record_storage=None,
         link=REACHABLE,
@@ -107,7 +110,7 @@ def _green(**changes: object) -> PreflightInputs:
         medical_version="med-1",
         software_version="pi-1.0.0",
         incidents_open_high=0,
-        cpu_temp_c=48.0,
+        cpu_temp_c=Celsius(48.0),
         records_pending=0,
         battery=BatteryReading(Percent(80.0), Monotonic(NOW - 60.0)),
         ecg_good_since=Monotonic(NOW - 31.0),
@@ -314,15 +317,23 @@ def test_what_the_server_cannot_judge_is_orange_never_red() -> None:
         incidents_open_high=None,
         cpu_temp_c=None,
         records_pending=None,
-        wall_clock=None,
         link=LinkStatus(LinkState.WAITING, "", None),
     )
     for occupancy in Occupancy:
         report = judge(CONTROLS, unannounced, occupancy)
         states = {r.id: r.state for r in report.results}
-        for control in ("incidents", "temperature", "records", "clock", "contract", "software"):
+        for control in ("incidents", "temperature", "records", "contract", "software"):
             assert states[control] is ControlState.WARN, control
         assert report.first_block is None
+
+
+def test_a_clock_that_cannot_be_asked_refuses_a_person_on_board_and_warns_at_the_bench() -> None:
+    """EX-2: an error known and under 5 s with a person on board; unknown is not known."""
+    unknown = _green(wall_clock=None)
+    on_board = _result(unknown, "clock")
+    assert on_board.state is ControlState.BLOCK
+    assert on_board.detail == "horloge non verifiable sur ce systeme : son erreur est inconnue"
+    assert _result(unknown, "clock", Occupancy.BENCH).state is ControlState.WARN
 
 
 def test_a_console_without_a_dashboard_has_nothing_to_send_and_no_contract_to_keep() -> None:
@@ -490,21 +501,31 @@ class Console:
     battery: Percent | None = CHARGED
     reads: int = 0
     recorded: list[PreflightReport] = field(default_factory=list[PreflightReport])
+    hold: asyncio.Event | None = None
+    """When set, a battery read waits for it: the read under way, as a test holds it."""
 
     async def read_battery(self) -> Percent | None:
         self.reads += 1
+        if self.hold is not None:
+            await self.hold.wait()
         return self.battery
 
     def inputs(self) -> PreflightInputs:
         return replace(self.facts, at=self.clock.monotonic())
 
-    def monitor(self, summary: Occupancy = Occupancy.OCCUPIED) -> PreflightMonitor:
+    def monitor(
+        self, summary: Occupancy = Occupancy.OCCUPIED, temperature: Celsius | None = None
+    ) -> PreflightMonitor:
+        async def measure() -> Celsius | None:
+            return temperature
+
         return PreflightMonitor(
             clock=self.clock,
             facts=self.inputs,
             read_battery=self.read_battery,
             summary=summary,
             record=self.recorded.append,
+            read_temperature=None if temperature is None else measure,
         )
 
 
@@ -523,11 +544,17 @@ def _last(monitor: PreflightMonitor) -> PreflightReport | None:
     return monitor.last
 
 
+def _good(at: Monotonic) -> TelemetrySnapshot:
+    """A tick at rest at ``at``, with a good heart-rate sample taken then."""
+    sample = HeartRateSample(bpm=Bpm(72), quality=SignalQuality.GOOD, seq=4, at=at)
+    return replace(BASE, at=at, heart_rate=sample)
+
+
 def _tick(clock: ManualClock, monitor: PreflightMonitor, seconds: float) -> None:
     """``seconds`` of control ticks at rest, a good ECG in each."""
     for _ in range(round(seconds / 0.2)):
         clock.advance(Seconds(0.2))
-        monitor.observe(replace(BASE, at=clock.monotonic()))
+        monitor.observe(_good(clock.monotonic()))
 
 
 async def test_a_run_reads_the_battery_waits_for_the_ecg_and_is_recorded_once() -> None:
@@ -559,7 +586,7 @@ async def test_a_run_reads_the_battery_waits_for_the_ecg_and_is_recorded_once() 
 
 
 async def test_a_run_waits_for_the_bitalino_then_reads_without_it() -> None:
-    console = Console(facts=_green(bitalino_connected=False))
+    console = Console(facts=_green(bitalino_connected=False, bitalino_streaming=False))
     monitor = console.monitor(Occupancy.BENCH)
     await monitor.step()
     assert console.reads == 0
@@ -574,6 +601,70 @@ async def test_a_run_waits_for_the_bitalino_then_reads_without_it() -> None:
     assert last is not None
     bitalino = next(r for r in last.results if r.id == "bitalino")
     assert bitalino.state is ControlState.WARN  # the bench
+
+
+@pytest.mark.parametrize("streaming", [True, False], ids=["nominal", "bitalino-absent"])
+async def test_no_run_lasts_45_s(streaming: bool) -> None:
+    """EX-6: the battery's wait and the ECG's run side by side, from the start of the run.
+
+    Before, an absent BITalino was waited for 15 s, and the ECG 44 s after that.
+    """
+    facts = _green(bitalino_connected=streaming, bitalino_streaming=streaming)
+    console = Console(facts=facts)
+    monitor = console.monitor()
+    for _ in range(44):
+        console.clock.advance(Seconds(1.0))
+        await monitor.step()
+        if streaming:
+            monitor.observe(_good(console.clock.monotonic()))
+    assert not _running(monitor)
+    assert console.clock.monotonic() - NOW < 45.0
+
+
+async def test_a_battery_read_due_or_under_way_refuses_a_person_on_board() -> None:
+    """The read stops the ECG: the gate must not arm on a reading and a window of before it."""
+    console = Console()
+    monitor = console.monitor()
+    await monitor.step()
+    _tick(console.clock, monitor, 31.0)
+    await monitor.step()
+    assert monitor.refusal(Occupancy.OCCUPIED) is None
+    monitor.rerun()
+    due = PreflightRefused(
+        "bitalino", "batterie BITalino en cours de lecture : l'ECG est suspendu pendant ce temps"
+    )
+    assert monitor.refusal(Occupancy.OCCUPIED) == due
+    assert monitor.refusal(Occupancy.BENCH) is None  # the bench is not held for it
+
+
+async def test_a_battery_read_breaks_the_ecg_window_until_samples_of_after_it() -> None:
+    console = Console(hold=asyncio.Event())
+    monitor = console.monitor()
+    _tick(console.clock, monitor, 1.0)
+    assert monitor.inputs().ecg_good_since is not None
+    reading = asyncio.create_task(monitor.step())
+    await asyncio.sleep(0)
+    assert monitor.inputs().ecg_good_since is None
+    _tick(console.clock, monitor, 1.0)  # samples go on for a moment, the read holds the window
+    assert monitor.inputs().ecg_good_since is None
+    before = console.clock.monotonic()
+    console.clock.advance(Seconds(2.0))
+    assert console.hold is not None
+    console.hold.set()
+    await reading
+    monitor.observe(_good(before))  # taken before the read ended: nothing
+    assert monitor.inputs().ecg_good_since is None
+    _tick(console.clock, monitor, 0.2)
+    assert monitor.inputs().ecg_good_since == console.clock.monotonic()
+
+
+async def test_the_pi_is_measured_by_the_preflight_itself() -> None:
+    console = Console(facts=_green(cpu_temp_c=None))
+    monitor = console.monitor(temperature=Celsius(72.4))
+    assert _result(monitor.inputs(), "temperature").state is ControlState.WARN
+    await monitor.step()
+    measured = _result(monitor.inputs(), "temperature")
+    assert measured.detail == "Pi a 72 °C, au-dessus de 70 °C : l'aerer"
 
 
 async def test_the_battery_is_not_read_while_a_session_runs() -> None:

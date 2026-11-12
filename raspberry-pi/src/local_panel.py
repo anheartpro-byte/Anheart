@@ -185,6 +185,7 @@ from src.ecg_pipeline import (
     treat_off_loop,
 )
 from src.health import HealthContext, HealthWatch
+from src.health_system import cpu_temperature
 from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
     KEY_UI_TLS_CERT,
@@ -2410,6 +2411,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             snapshot=runtime.snapshot(),
             attested=isinstance(runtime.require_estop_confirmed(), Ok),
             bitalino_connected=ecg.client.is_connected,
+            bitalino_streaming=ecg.streaming,
             wall_clock=None if watch is None else watch.current(),
             record_storage=None if room is None else describe_record_storage(room),
             link=NOT_CONFIGURED if link_health is None else link_health.status(now),
@@ -2417,7 +2419,6 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             medical_version=config.medical.version,
             software_version=version,
             incidents_open_high=None if sampled is None else sampled.incidents_open_high,
-            cpu_temp_c=None if sampled is None else sampled.cpu_temp_c,
             records_pending=None if sampled is None else sampled.records_pending,
             min_battery=config.bitalino_min_battery,
         )
@@ -2434,6 +2435,8 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
                 else Occupancy.BENCH
             ),
             record=lambda report: record_preflight(report, recorder, clock),
+            # Measured here, linked to a dashboard or not: one file of the kernel, off the loop.
+            read_temperature=functools.partial(asyncio.to_thread, cpu_temperature),
         )
         if preflight
         else None
@@ -3113,8 +3116,8 @@ async def run_console(
     if probe is None:
         _logger.warning(
             "wall clock: not judged on this system (no way to ask what it is worth): "
-            "nothing is refused on its account (the pre-flight shows it unjudged), and the records "
-            "say nothing of it"
+            "its error is unknown, so the pre-flight refuses a start with a person on board and "
+            "warns at the bench, and the records say nothing of it"
         )
     journal = open_journal(config, clock)
     service = open_service(journal, clock)
