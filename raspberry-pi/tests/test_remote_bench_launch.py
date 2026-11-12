@@ -37,7 +37,6 @@ from src.cloud_sync import (
     MAX_LAUNCH_NOTES,
     AutoLaunch,
     BenchLaunch,
-    Launch,
     _auto_launch_of,  # pyright: ignore[reportPrivateUsage]  # the parser of a 1.8 console
     _launch_of,  # pyright: ignore[reportPrivateUsage]  # the poll's one parser
     _safe_launch_refusal,  # pyright: ignore[reportPrivateUsage]  # what is said of a refusal
@@ -616,7 +615,7 @@ class _Unknown:
 
 async def test_a_launch_of_no_known_mode_hits_every_guard(tmp_path: Path) -> None:
     r = rig(tmp_path)
-    bogus = cast("Launch", _Unknown())
+    bogus = cast("AutoLaunch", _Unknown())
     r.sync._offered_launch = bogus  # pyright: ignore[reportPrivateUsage]  # only a bug sets it
     with pytest.raises(AssertionError):
         r.sync.current_remote_launch()
