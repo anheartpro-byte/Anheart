@@ -2191,8 +2191,10 @@ désactivés pendant l'export CSV.
   `BITALINO_MIN_BATTERY_PCT` (30 %) ; une qualité ECG good sans interruption
   depuis 30 s ; une horloge synchronisée dont l'erreur garantie reste sous 5 s
   (une horloge temps réel seule ne suffit pas) ; des paramètres médicaux
-  signés ; aucun incident grave ouvert annoncé par le serveur ; un contrat
-  servi par le tableau de bord.
+  signés ; aucun incident grave ouvert annoncé par le serveur ; aucun refus
+  de contrat par le tableau de bord (un tableau de bord muet laisse ce contrôle
+  orange, il ne bloque pas) ; aucune lecture de la batterie attendue ou en
+  cours (elle suspend l'ECG).
 - La porte n'attend jamais : un contrôle encore attendu par une passe refuse le
   départ s'il est bloquant pour cette occupation.
 - Un lancement depuis le site est refusé avant toute confirmation au serveur,
@@ -2209,7 +2211,8 @@ ne créent aucun danger pour une personne : ils sont affichés et écrits, ils n
 bloquent pas. La qualité ECG et les paramètres médicaux sont sans objet au
 banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
 jugée est celle du départ : une séance de banc lancée depuis le site sera
-jugée avec les règles du banc.
+jugée avec les règles du banc une fois ANH-250 fusionné (le lancement de
+banc depuis le site n'existe pas encore).
 
 ### 15.3 Ce que le pré-vol ne couvre pas
 
@@ -2220,4 +2223,4 @@ jugée avec les règles du banc.
 | Le serveur n'annonce ni le compte d'incidents graves (ANH-145), ni une version logicielle de référence, ni la version attendue des paramètres médicaux | Ces trois contrôles restent orange, « non annonces » ou « non jugee » ; la signature des paramètres médicaux est exigée |
 | La qualité ECG est jugée sur l'image de chaque tic (5 Hz) | Deux mesures arrivées entre deux tics ne sont vues que par la dernière ; la porte du runtime exige de plus une fréquence cardiaque fraîche et sûre pour une personne à bord |
 | Une batterie est lue une fois par passe, et vaut 30 min | Au-delà, le contrôle demande de relancer le pré-vol ; aucune relecture automatique pendant une longue attente au repos |
-| Le Mac du banc ne peut pas interroger son horloge, ni lire la batterie par RFCOMM | L'horloge y est orange « non jugee » et la batterie illisible : rouge avec une personne à bord, orange au banc |
+| Le Mac du banc ne peut pas interroger son horloge, ni lire la batterie par RFCOMM | L'erreur de l'horloge y est inconnue et la batterie illisible : rouge avec une personne à bord, orange au banc |

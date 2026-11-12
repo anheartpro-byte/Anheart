@@ -1113,7 +1113,7 @@ en attente de validation médicale (ANH-98) et d'ingénierie (jalon M6). Aucun
 
 ### 4.2 Portes communes à tout départ (`_refuse_arming`, `_arm`)
 
-Dans l'ordre, rien ne touche le variateur avant les six premières :
+Dans l'ordre, rien ne touche le variateur avant les sept premières :
 
 1. Le runtime n'est ni arrêté (`shutdown`) ni silencieux.
 2. **Attestation E-STOP** faite depuis ce démarrage du processus (texte exact :
@@ -1206,13 +1206,13 @@ suivent sans changement.
 | 3 | `estop` | bloquant | bloquant | l'attestation du démarrage de la console (porte 2) |
 | 4 | `verdict` | bloquant | bloquant | aucun verdict en vigueur (porte 3) |
 | 5 | `disk` | bloquant | bloquant | la porte 6 (500 Mo libres), dans ses mots |
-| 6 | `clock` | bloquant | avertissement | horloge synchronisée, erreur garantie (`maxerror` du noyau) sous 5 s. Une horloge temps réel seule ne suffit pas. Sur un système qui ne peut pas être interrogé (le Mac du banc), « non jugée » : orange |
+| 6 | `clock` | bloquant | avertissement | horloge synchronisée, erreur garantie (`maxerror` du noyau) sous 5 s. Une horloge temps réel seule ne suffit pas. Sur un système qui ne peut pas être interrogé (le Mac du banc), l'erreur est inconnue : rouge avec une personne à bord, orange au banc |
 | 7 | `contract` | bloquant | bloquant | aucun refus de contrat du tableau de bord ; console non reliée : sans objet ; tableau de bord muet : orange, non vérifié |
 | 8 | `medical` | bloquant | sans objet | paramètres médicaux signés. La version attendue n'est pas jugée (aucune référence du serveur) |
 | 9 | `incidents` | bloquant | bloquant | aucun incident grave ouvert annoncé. Tant que le serveur n'en annonce aucun compte (ANH-145), orange « non annonces » |
-| 10 | `bitalino` | bloquant | avertissement | BITalino connecté, batterie lue à cette passe au moins `BITALINO_MIN_BATTERY_PCT` (30 % par défaut), lue il y a moins de 30 min |
+| 10 | `bitalino` | bloquant | avertissement | BITalino connecté, aucune lecture de sa batterie attendue ni en cours, batterie lue à cette passe au moins `BITALINO_MIN_BATTERY_PCT` (30 % par défaut), lue il y a moins de 30 min |
 | 11 | `ecg` | bloquant | sans objet | qualité ECG `good` sans interruption depuis 30 s |
-| 12 | `temperature` | avertissement | avertissement | Pi sous 70 °C (mesure du dernier battement de cœur ; non mesurée : orange) |
+| 12 | `temperature` | avertissement | avertissement | Pi sous 70 °C, mesuré par le pré-vol à chaque pas (zone thermique du noyau), console reliée ou non ; non mesurée (hors Linux) : orange |
 | 13 | `cloud` | avertissement | avertissement | tableau de bord joignable ; sinon la séance reste possible, et l'opérateur est prévenu |
 | 14 | `records` | avertissement | avertissement | aucun enregistrement de séance en attente d'envoi |
 | 15 | `software` | avertissement | avertissement | toujours orange, « non jugee » : le serveur ne donne aucune version de référence |
@@ -1226,15 +1226,14 @@ bloquent pas. Tous les autres contrôles bloquants bloquent aussi le banc.
 
 **Les passes.** Une passe commence avec la console, chaque fois que la
 console revient au repos après une séance (donc avant chaque séance), et quand
-l'opérateur la demande (« Relancer »). Elle lit d'abord la batterie du
-BITalino au repos : l'acquisition est suspendue le temps de la lecture
-(commande `state` du BITalino 2, refusée pendant l'acquisition), puis reprend
-au pas suivant. Si le BITalino n'est pas connecté, la passe l'attend 15 s,
-puis continue sans lecture. Ensuite chaque contrôle qui n'est pas vert est
-« en cours » jusqu'à son attente maximale, puis rouge ou orange. L'attente la
-plus longue est celle de l'ECG, 44 s après la lecture de la batterie (8 s de
-fenêtre du traitement, puis 30 s de signal good) : une passe nominale finit en
-moins de 45 s. Les contrôles courts se jugent pendant ce temps. La passe
+l'opérateur la demande (« Relancer »). Elle lit la batterie du BITalino au
+repos, dès qu'il acquiert normalement (connecté, en acquisition, sans
+reconnexion en cours), ou y renonce après 15 s. Chaque contrôle qui n'est pas
+vert est « en cours » jusqu'à son attente maximale, comptée depuis le début de
+la passe, puis rouge ou orange : la lecture et les contrôles courent ensemble,
+et aucune passe ne dure plus que l'attente la plus longue, celle de l'ECG
+(44 s : la lecture, 8 s de fenêtre du traitement, puis 30 s de signal good).
+Une passe nominale comme une passe sans BITalino finit en moins de 45 s. La passe
 terminée est écrite une fois au journal, et son verdict est celui du
 battement de cœur suivant. Elle est jugée pour le départ le plus exigeant que
 la console peut faire : avec une personne à bord si les programmes ou
@@ -1248,6 +1247,23 @@ lancement venu du tableau de bord (`LocalPanel.preflight_remote_start`, une
 personne à bord) refuse avec la même raison, avant toute confirmation au
 serveur ; le tableau de bord reçoit la séance en échec avec
 `refusee par la machine : pre-vol : <raison>`.
+
+**La lecture de la batterie.** Le BITalino ne répond à `state` qu'au repos :
+l'acquisition est arrêtée le temps de la lecture, puis reprend au pas suivant
+(`EcgLink.read_battery`). Un seul verrou possède le port, pour la connexion et
+le démarrage comme pour la lecture : jamais de `state` pendant l'ouverture
+d'une liaison. Rien n'est lu pendant que le lecteur rouvre une liaison perdue,
+ni sur un transport qui ne sait pas dire sa batterie (RFCOMM du Mac : son
+acquisition n'est pas arrêtée pour rien). Avant `state`, ce que le flux avait
+envoyé avant l'octet d'arrêt est vidé du port (lu jusqu'à 0,25 s de silence,
+20 fois au plus) : lu comme la réponse, il passerait la somme de contrôle une
+fois sur seize et donnerait une fausse batterie. Toute la lecture, arrêt
+compris, tient en 15 s ; au-delà, la liaison est fermée puis rouverte au pas
+suivant. Une liaison perdue dont la reconnexion est interrompue n'est plus
+dite connectée : la console la rouvre. Tant qu'une lecture est attendue ou en
+cours, le contrôle `bitalino` est rouge avec une personne à bord (l'ECG est
+suspendu), et la fenêtre ECG repart de zéro : seuls comptent les échantillons
+pris après la lecture.
 
 **La batterie du BITalino est une calibration à prouver.** La conversion de la
 lecture brute en pourcentage (`battery_percent` dans `src/bitalino_client.py`)
@@ -3374,16 +3390,18 @@ mémoire.
 | `synchronised` | un service de temps tient l'horloge | `horloge synchronisee · erreur estimee 0.4 ms, erreur au plus 45.0 ms` | `true` | accepté | accepté |
 | `unsynchronised` | aucune source de temps jointe depuis l'allumage du Pi, ou plus depuis longtemps | `horloge NON FIABLE · aucune source de temps jointe : ...`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
 | `unreadable` | sur un Pi, l'état n'a pas pu être lu (appel refusé par le système, sonde en panne) | `horloge NON VERIFIEE · etat de l'horloge illisible (...)`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
-| (pas d'état) | la console ne tourne pas sous Linux : le Mac du banc et des développeurs. Aucun moyen de poser la question | ligne vide | `null` | accepté, sans avertissement | accepté |
+| (pas d'état) | la console ne tourne pas sous Linux : le Mac du banc et des développeurs. Aucun moyen de poser la question | ligne vide | `null` | accepté ; le pré-vol l'avertit (ANH-142) | **refusé par le pré-vol** (ANH-142) : erreur inconnue |
 
 **Hors Linux, la console ne juge pas son horloge.** L'appel qu'elle fait
 n'existe que sous Linux (`system_probe`, `src/wall_clock.py`). Sur un Mac elle
 l'écrit une fois dans son journal au démarrage (`wall clock: not judged on this
-system`), n'affiche pas la ligne, ne prévient ni ne refuse rien à ce titre, et
-ses manifestes portent `wall_trusted: null` : « non jugée », jamais « fiable ».
-Sans cela, toute séance avec une personne à bord y serait refusée, simulation
-comprise, faute d'une question que ce système ne permet pas de poser. Le Pi,
-où une personne sera à bord, juge toujours : un état illisible y refuse.
+system`), n'affiche pas la ligne, et ses manifestes portent
+`wall_trusted: null` : « non jugée », jamais « fiable ». Depuis ANH-142, le
+pré-vol ([4.2](#le-pré-vol-anh-142)) tient cette erreur inconnue pour rouge
+avec une personne à bord et orange au banc : EX-2 exige une erreur connue et
+sous 5 s, et la rigueur l'emporte sur la commodité d'un poste de
+développement. Le Pi, où une personne sera à bord, juge toujours : un état
+illisible y refuse.
 
 Ce que l'opérateur lit, mot pour mot :
 
