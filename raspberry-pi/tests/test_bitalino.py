@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final, final
 
 import pytest
@@ -32,6 +32,7 @@ from src.bitalino_client import (
     LinkLostError,
     SampleBatch,
     VendorDevice,
+    battery_percent,
     crc_ok,
     decode_analog,
     ensure_paired,
@@ -41,7 +42,7 @@ from src.bitalino_client import (
     sequence_number,
 )
 from src.clock import ManualClock
-from src.units import Monotonic, UnixMillis
+from src.units import AdcCount, Monotonic, UnixMillis
 
 EPOCH: Final[UnixMillis] = UnixMillis(1_000_000)
 MAC: Final[str] = "AA:BB:CC:DD:EE:FF"
@@ -308,8 +309,8 @@ class FakeDevice:
 class Factory:
     """Hands out the given devices (or raises the given errors) in order."""
 
-    def __init__(self, *outcomes: FakeDevice | Exception) -> None:
-        self._outcomes: deque[FakeDevice | Exception] = deque(outcomes)
+    def __init__(self, *outcomes: Device | Exception) -> None:
+        self._outcomes: deque[Device | Exception] = deque(outcomes)
         self.calls: list[tuple[str, float]] = []
 
     def __call__(self, address: str, timeout: float) -> Device:
@@ -844,6 +845,9 @@ class _FakeVendor:
     def close(self) -> None:
         self.calls.append("close")
 
+    def state(self) -> Mapping[str, int]:
+        return {"battery": 600, "batteryThreshold": 0}
+
 
 def _vendor(monkeypatch: pytest.MonkeyPatch, address: str) -> tuple[VendorDevice, _FakeVendor]:
     monkeypatch.setattr(bitalino_client, "BITalino", _FakeVendor)
@@ -872,3 +876,73 @@ def test_a_serial_port_is_read_in_bulk_with_a_real_timeout(
 def test_a_bluetooth_socket_uses_the_vendor_receive(monkeypatch: pytest.MonkeyPatch) -> None:
     device, _ = _vendor(monkeypatch, MAC)
     assert device.read_chunk(3) == b"\x09\x09\x09"
+
+
+# =========================================================================
+# The battery (ANH-142)
+# =========================================================================
+
+
+@final
+class ChargedDevice:
+    """A device at rest that says its battery, as the BITalino 2 ``state`` does: or fails to."""
+
+    def __init__(self, battery: int | Exception) -> None:
+        self._battery = battery
+
+    def version(self) -> str:
+        return "BITalino_v5.2"
+
+    def start(self, sample_rate: int, channels: Sequence[int], /) -> None:
+        del sample_rate, channels
+
+    def read_chunk(self, max_bytes: int, /) -> bytes:
+        del max_bytes
+        raise LinkLostError("at rest")
+
+    def stop(self) -> None:
+        return
+
+    def close(self) -> None:
+        return
+
+    def battery_raw(self) -> int:
+        if isinstance(self._battery, Exception):
+            raise self._battery
+        return self._battery
+
+
+def test_the_battery_reading_is_the_stated_assumption() -> None:
+    """3.3 V reference, half the cell's voltage, 3.4 V empty, 4.2 V full: to prove at the bench."""
+    assert battery_percent(AdcCount(0)) == 0.0
+    assert battery_percent(AdcCount(527)) == pytest.approx(0.0, abs=0.5)
+    assert battery_percent(AdcCount(589)) == pytest.approx(50.0, abs=0.5)
+    assert battery_percent(AdcCount(651)) == pytest.approx(100.0, abs=0.5)
+    assert battery_percent(AdcCount(1023)) == 100.0
+
+
+async def test_the_battery_is_read_at_rest_only() -> None:
+    client = make_client(Factory(ChargedDevice(589)))
+    assert await client.read_battery() is None  # not connected
+    assert await client.connect()
+    assert await client.read_battery() == pytest.approx(50.0, abs=0.5)
+    client.is_acquiring = True  # the device refuses ``state`` while it streams
+    assert await client.read_battery() is None
+
+
+@pytest.mark.parametrize(
+    "device",
+    [FakeDevice(), ChargedDevice(OSError("no answer")), ChargedDevice(2000), ChargedDevice(-1)],
+    ids=["cannot-say", "fails", "above-10-bit", "negative"],
+)
+async def test_a_battery_that_cannot_be_read_reads_as_unknown(device: Device) -> None:
+    client = make_client(Factory(device))
+    assert await client.connect()
+    assert await client.read_battery() is None
+
+
+def test_the_vendor_adapter_reads_the_battery_of_the_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    device, _ = _vendor(monkeypatch, "COM4")
+    assert device.battery_raw() == 600

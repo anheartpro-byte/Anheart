@@ -46,7 +46,7 @@ from src.clock import Clock
 from src.sim.ecg import DEFAULT_ECG_CONFIG, EcgSynthesizer
 from src.sim.physiology import Physiology
 from src.sim.signals.base import SignalContext, SignalGenerator
-from src.units import AdcCount, Monotonic, MotorRpm, UnixMillis, elapsed
+from src.units import AdcCount, Monotonic, MotorRpm, Percent, UnixMillis, elapsed
 
 ECG_CHANNEL: Final[str] = "ECG"
 """The channel name this simulator actually models. Compared against
@@ -63,6 +63,8 @@ MAX_ANALOG_CHANNEL: Final[int] = 5
 """A1..A6 as the BITalino numbers them."""
 
 MILLIS_PER_SECOND: Final[int] = 1000
+
+FULL_BATTERY: Final[Percent] = Percent(100.0)
 
 
 # =========================================================================
@@ -102,6 +104,7 @@ class SimulatedBitalinoClient:
         "_physiology",
         "_refuse_connect",
         "_started_at",
+        "battery",
         "channels",
         "is_acquiring",
         "is_connected",
@@ -153,6 +156,8 @@ class SimulatedBitalinoClient:
         self.sample_rate: int = sample_rate
         self.is_connected: bool = False
         self.is_acquiring: bool = False
+        self.battery: Percent | None = FULL_BATTERY
+        """What :meth:`read_battery` says; ``None`` stands for a device that cannot say it."""
 
         self._clock: Clock = clock
         self._physiology: Physiology = physiology
@@ -271,6 +276,13 @@ class SimulatedBitalinoClient:
         if not self.is_acquiring:
             return
         self.is_acquiring = False
+
+    async def read_battery(self) -> Percent | None:
+        """:attr:`battery`, at rest only: ``None`` while acquiring or disconnected, as the
+        real client answers (it reads the device's ``state``, refused while streaming)."""
+        if not self.is_connected or self.is_acquiring:
+            return None
+        return self.battery
 
     async def read_samples(self, count: int = 1000) -> SampleBatch | None:
         """The next ``count`` samples per channel, or ``None`` if not ready yet.

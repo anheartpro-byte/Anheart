@@ -104,6 +104,9 @@ AdcCount = NewType("AdcCount", int)
 
 Amperes = NewType("Amperes", float)
 
+Percent = NewType("Percent", float)
+"""A share of a whole, 0..100: a battery's charge, a memory's use."""
+
 # --- Modbus --------------------------------------------------------------
 RegisterAddress = NewType("RegisterAddress", int)
 

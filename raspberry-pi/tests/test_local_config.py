@@ -511,6 +511,14 @@ def test_the_leg_tip_radius_is_optional_and_never_inside_the_arm() -> None:
     }
 
 
+def test_the_bitalino_battery_floor_is_a_percentage_30_by_default() -> None:
+    """ANH-142: below it the pre-flight refuses a person on board and warns at the bench."""
+    assert _load(SIM_ENV).bitalino_min_battery == pytest.approx(30.0)
+    assert _load(_with(SIM_ENV, BITALINO_MIN_BATTERY_PCT="45")).bitalino_min_battery == 45.0
+    for wrong in ("101", "-1", "trente", "nan"):
+        assert _keys(_with(SIM_ENV, BITALINO_MIN_BATTERY_PCT=wrong)) == {"BITALINO_MIN_BATTERY_PCT"}
+
+
 # =========================================================================
 # Exhaustiveness guards
 # =========================================================================

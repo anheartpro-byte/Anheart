@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, NewType
 
-from src.units import Seconds
+from src.units import Percent, Seconds
 
 Celsius = NewType("Celsius", float)
-Percent = NewType("Percent", float)
 Mebibytes = NewType("Mebibytes", float)
 CpuLoad = NewType("CpuLoad", float)
 MEBIBYTE: Final[int] = 1024 * 1024

@@ -81,7 +81,7 @@ from src.training.hr_control import (
 )
 from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, motor_rate_limit
 from src.training.plan import INITIAL_REV, Channel, Program, TrainingProfile
-from src.training.preflight import StoBridgedOnBoard, StoNotReady
+from src.training.preflight import PreflightRefused, StoBridgedOnBoard, StoNotReady
 from src.training.runtime import (
     IDLE_POLL_PERIOD,
     RULE_DISABLE_REFUSED,
@@ -1397,11 +1397,12 @@ def test_every_start_refusal_is_handled_somewhere() -> None:
         RecordStorageLow(free_bytes=None, required_bytes=1, where="data/records"),
         StoNotReady(state=StoState.OPEN, detail="relay open"),
         StoBridgedOnBoard(),
+        PreflightRefused("bitalino", "batterie BITalino 20 % < 30 %"),
     )
     assert len({_classify_refusal(case) for case in cases}) == len(cases)
 
 
-def _classify_refusal(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one return per refusal
+def _classify_refusal(refusal: StartRefusal) -> str:  # noqa: PLR0911, PLR0912  # one arm per refusal
     """One exhaustive match over ``StartRefusal``. Adding a variant breaks the build."""
     match refusal:
         case AlreadyStarted():
@@ -1428,6 +1429,8 @@ def _classify_refusal(refusal: StartRefusal) -> str:  # noqa: PLR0911  # one ret
             return "sto_not_ready"
         case StoBridgedOnBoard():
             return "sto_bridged_on_board"
+        case PreflightRefused():
+            return "preflight_refused"
     raise assert_never(refusal)
 
 

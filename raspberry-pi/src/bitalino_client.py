@@ -60,7 +60,7 @@ from typing import Final, Protocol, final, runtime_checkable
 from bitalino import BITalino
 
 from src.clock import Clock, RealClock
-from src.units import UnixMillis
+from src.units import AdcCount, Percent, UnixMillis
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +362,54 @@ class VendorDevice:
     def close(self) -> None:
         self._device.close()
 
+    def battery_raw(self) -> int:
+        return self._device.state()["battery"]
+
+
+@runtime_checkable
+class BatteryDevice(Protocol):
+    """A device that says its battery level between two acquisitions.
+
+    The vendor adapter does, through the BITalino 2 ``state`` command. The
+    macOS RFCOMM transport does not: its battery reads as unknown.
+    """
+
+    @abstractmethod
+    def battery_raw(self) -> int:
+        """The ABAT channel as the device sends it. Blocking; raises while acquiring."""
+
+
+# =========================================================================
+# The battery
+# =========================================================================
+
+ADC_MAX: Final[int] = 1023
+"""A BITalino analog channel is 10-bit."""
+
+BATTERY_REFERENCE_V: Final[float] = 3.3
+BATTERY_DIVIDER: Final[float] = 2.0
+BATTERY_EMPTY_V: Final[float] = 3.4
+BATTERY_FULL_V: Final[float] = 4.2
+
+BATTERY_READ_TIMEOUT_S: Final[float] = 10.0
+"""Longer than the vendor's own wait for an answer (the link timeout, 3 s at
+1000 Hz): the read normally ends on its own before this does."""
+
+
+def battery_percent(raw: AdcCount) -> Percent:
+    """The charge of the BITalino's battery, from its ABAT reading. A calibration to prove.
+
+    ASSUMED, NOT MEASURED (ANH-142): ABAT is the 10-bit reading, against a
+    3.3 V reference, of half the voltage of the board's single LiPo cell; the
+    cell is empty at 3.4 V and full at 4.2 V, linear in between; clamped to
+    0..100. To be checked at the bench on the real BITalino, against a
+    voltmeter on the cell, before the 30 % floor is trusted with a person on
+    board. Every figure of the assumption is a named constant above.
+    """
+    volts = raw / ADC_MAX * BATTERY_REFERENCE_V * BATTERY_DIVIDER
+    share = (volts - BATTERY_EMPTY_V) / (BATTERY_FULL_V - BATTERY_EMPTY_V)
+    return Percent(100.0 * min(1.0, max(0.0, share)))
+
 
 # =========================================================================
 # Pairing (Linux / BlueZ only; a no-op for COM and /dev paths)
@@ -657,6 +705,30 @@ class BITalinoClient:
         await loop.run_in_executor(None, thread.join, self._link_timeout + 1.0)
         self.is_acquiring = False
         logger.info("Stopped acquisition; link %s", self.link_stats())
+
+    async def read_battery(self) -> Percent | None:
+        """The battery's charge, read at rest; ``None`` when it cannot be read now.
+
+        Only between two acquisitions (the device refuses ``state`` while it
+        streams), of a device that can say it (:class:`BatteryDevice`), and
+        within :data:`BATTERY_READ_TIMEOUT_S`. A reading outside the 10-bit
+        range is no reading.
+        """
+        device = self._device
+        if device is None or self.is_acquiring or not isinstance(device, BatteryDevice):
+            return None
+        loop = asyncio.get_running_loop()
+        try:
+            raw = await asyncio.wait_for(
+                loop.run_in_executor(None, device.battery_raw), BATTERY_READ_TIMEOUT_S
+            )
+        except Exception as error:  # the vendor raises bare Exception; the wait, TimeoutError
+            logger.warning("BITalino battery unreadable: %r", error)
+            return None
+        if not 0 <= raw <= ADC_MAX:
+            logger.warning("BITalino battery reading %d is outside the 10-bit range", raw)
+            return None
+        return battery_percent(AdcCount(raw))
 
     def link_stats(self) -> LinkStats:
         """A snapshot of the link counters for this acquisition."""
