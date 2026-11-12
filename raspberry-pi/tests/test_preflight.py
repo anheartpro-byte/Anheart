@@ -336,6 +336,18 @@ def test_a_clock_that_cannot_be_asked_refuses_a_person_on_board_and_warns_at_the
     assert _result(unknown, "clock", Occupancy.BENCH).state is ControlState.WARN
 
 
+def test_with_the_simulated_drive_a_clock_that_cannot_be_asked_only_warns() -> None:
+    """No real motor, nobody in a simulated capsule: the demo and the browser tests on a Mac."""
+    simulated = _green(wall_clock=None, simulated_drive=True)
+    for occupancy in Occupancy:
+        result = _result(simulated, "clock", occupancy)
+        assert result.state is ControlState.WARN
+        assert result.detail.endswith("admise avec le variateur simule")
+    # Only a clock that cannot be asked: one that a time service no longer keeps still blocks.
+    unkept = _result(_green(wall_clock=Unsynchronised(), simulated_drive=True), "clock")
+    assert unkept.state is ControlState.BLOCK
+
+
 def test_a_console_without_a_dashboard_has_nothing_to_send_and_no_contract_to_keep() -> None:
     report = judge(CONTROLS, _green(link=NOT_CONFIGURED, records_pending=None), Occupancy.BENCH)
     states = {r.id: r.state for r in report.results}

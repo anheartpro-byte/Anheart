@@ -2412,6 +2412,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             attested=isinstance(runtime.require_estop_confirmed(), Ok),
             bitalino_connected=ecg.client.is_connected,
             bitalino_streaming=ecg.streaming,
+            simulated_drive=drive.simulator is not None,
             wall_clock=None if watch is None else watch.current(),
             record_storage=None if room is None else describe_record_storage(room),
             link=NOT_CONFIGURED if link_health is None else link_health.status(now),
@@ -3116,8 +3117,9 @@ async def run_console(
     if probe is None:
         _logger.warning(
             "wall clock: not judged on this system (no way to ask what it is worth): "
-            "its error is unknown, so the pre-flight refuses a start with a person on board and "
-            "warns at the bench, and the records say nothing of it"
+            "its error is unknown, so the pre-flight refuses a start with a person on board on a "
+            "real drive (it only warns at the bench, or with the simulated drive), and the records "
+            "say nothing of it"
         )
     journal = open_journal(config, clock)
     service = open_service(journal, clock)

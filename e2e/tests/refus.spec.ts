@@ -341,7 +341,8 @@ test("6. droit retiré avant le départ : la console n'arme pas, le site dit pou
   pageAs,
   run,
 }) => {
-  test.setTimeout(240_000);
+  // Up to 90 s more for the console's pre-flight (ANH-142).
+  test.setTimeout(330_000);
   const machine = required(state.machineA, "machine");
   const pi = required(state.console, "console");
   const expiredId = required(state.expiredId, "séance expirée");
@@ -364,6 +365,9 @@ test("6. droit retiré avant le départ : la console n'arme pas, le site dit pou
     )
     .toBe(true);
   expect(offered.has(expiredId), "la séance expirée n'est jamais proposée").toBe(false);
+  // The console was started just before: its pre-flight (ANH-142) would refuse the start
+  // itself, and the server's refusal is the one this scenario is about.
+  await pi.untilReadyOnBoard();
 
   // The manager withdraws the right; the operator confirms right after.
   const manager = await pageAs("gestionnaireA");

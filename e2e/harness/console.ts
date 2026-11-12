@@ -139,6 +139,30 @@ export class PiConsole {
     this.post("/api/safety/attest", { operator: OPERATOR, sto_jumper_removed: true, mushroom_wired_nc: true });
   confirmLaunch = (sessionId: string) =>
     this.post("/api/remote-launch/confirm", { session_id: sessionId, operator: OPERATOR });
+  /** The console's pre-flight (ANH-142), as its "Pre-vol" page reads it; `null` without one. */
+  preflight = () =>
+    this.get<{ running: boolean; occupied: { first_block: string | null } } | null>("/api/preflight");
+
+  /**
+   * Until the console's pre-flight lets a start with a person on board (ANH-142): its run
+   * over, no blocking control red. A run reads the BITalino's battery (the acquisition
+   * paused) when the console starts and after each session, then wants 30 s of good ECG:
+   * some 40 s after a start, at once on a console that has been at rest a while. A
+   * programme confirmed sooner is refused by the console (`refusee par la machine : pre-vol
+   * : ...`). Call it after the attestation, which is one of the controls.
+   */
+  async untilReadyOnBoard(timeoutMs = 90_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let said = "aucune réponse";
+    while (Date.now() < deadline) {
+      const preflight = (await this.preflight()).body;
+      if (preflight === null) return;
+      if (!preflight.running && preflight.occupied.first_block === null) return;
+      said = preflight.running ? "pré-vol en cours" : (preflight.occupied.first_block ?? "");
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    throw new Error(`le pré-vol refuse encore une personne à bord : ${said}`);
+  }
   /** "Demarrer MANUEL" on the bench, nobody on board, target 0 (`simulation/endurance.py`, `start_manual`). */
   manualStart = () => this.post("/api/manual/start", { occupancy: "bench", operator: OPERATOR });
   stopSession = (reason = "arret E2E") => this.post("/api/session/stop", { operator: OPERATOR, reason });

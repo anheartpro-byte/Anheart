@@ -546,7 +546,7 @@ redémarre à l'heure de son dernier arrêt, jusqu'au retour du réseau.
 | `horloge synchronisee · erreur estimee 0.4 ms, erreur au plus 45.0 ms` | celle du texte | un service de temps tient l'horloge ; les deux nombres sont l'erreur qu'il estime et celle qu'il garantit | rien |
 | `horloge NON FIABLE · aucune source de temps jointe : l'heure peut etre fausse de la duree pendant laquelle le Pi etait eteint` | orange | la machine n'a joint aucune source de temps depuis son allumage, ou plus depuis longtemps | vérifier le réseau du Pi, puis attendre : la ligne change d'elle-même, en dix secondes au plus après la synchronisation |
 | `horloge NON VERIFIEE · etat de l'horloge illisible (...)` | orange | sur un Pi, la console n'a pas pu lire l'état de l'horloge | lire le journal de la console |
-| (ligne vide) | | la console ne tourne pas sous Linux (le Mac du banc et des développeurs) : elle ne lit pas l'état de son horloge, et la ligne ne dit rien. Depuis ANH-142, le pré-vol tient cette erreur inconnue pour rouge avec une personne à bord, orange au banc ([section 17](#17-page--pre-vol--anh-142)) | rien au banc |
+| (ligne vide) | | la console ne tourne pas sous Linux (le Mac du banc et des développeurs) : elle ne lit pas l'état de son horloge, et la ligne ne dit rien. Depuis ANH-142, le pré-vol tient cette erreur inconnue pour rouge avec une personne à bord, orange au banc, orange partout avec le variateur simulé (`MOTOR_BACKEND=sim`) ([section 17](#17-page--pre-vol--anh-142)) | rien au banc ni en simulation |
 
 Tant que la ligne est orange : une séance de **banc** démarre, avec un événement
 `horloge murale non fiable (...)` dans la liste, et le manifeste de son enregistrement

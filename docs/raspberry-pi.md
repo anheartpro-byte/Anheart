@@ -1206,7 +1206,7 @@ suivent sans changement.
 | 3 | `estop` | bloquant | bloquant | l'attestation du démarrage de la console (porte 2) |
 | 4 | `verdict` | bloquant | bloquant | aucun verdict en vigueur (porte 3) |
 | 5 | `disk` | bloquant | bloquant | la porte 6 (500 Mo libres), dans ses mots |
-| 6 | `clock` | bloquant | avertissement | horloge synchronisée, erreur garantie (`maxerror` du noyau) sous 5 s. Une horloge temps réel seule ne suffit pas. Sur un système qui ne peut pas être interrogé (le Mac du banc), l'erreur est inconnue : rouge avec une personne à bord, orange au banc |
+| 6 | `clock` | bloquant | avertissement | horloge synchronisée, erreur garantie (`maxerror` du noyau) sous 5 s. Une horloge temps réel seule ne suffit pas. Sur un système qui ne peut pas être interrogé (le Mac du banc), l'erreur est inconnue : rouge avec une personne à bord, orange au banc. Avec le variateur simulé (`MOTOR_BACKEND=sim` : aucun moteur réel, personne dans une capsule simulée), cette erreur inconnue est orange même avec une personne à bord ; une horloge que personne ne tient y reste rouge |
 | 7 | `contract` | bloquant | bloquant | aucun refus de contrat du tableau de bord ; console non reliée : sans objet ; tableau de bord muet : orange, non vérifié |
 | 8 | `medical` | bloquant | sans objet | paramètres médicaux signés. La version attendue n'est pas jugée (aucune référence du serveur) |
 | 9 | `incidents` | bloquant | bloquant | aucun incident grave ouvert annoncé. Tant que le serveur n'en annonce aucun compte (ANH-145), orange « non annonces » |
@@ -3390,7 +3390,7 @@ mémoire.
 | `synchronised` | un service de temps tient l'horloge | `horloge synchronisee · erreur estimee 0.4 ms, erreur au plus 45.0 ms` | `true` | accepté | accepté |
 | `unsynchronised` | aucune source de temps jointe depuis l'allumage du Pi, ou plus depuis longtemps | `horloge NON FIABLE · aucune source de temps jointe : ...`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
 | `unreadable` | sur un Pi, l'état n'a pas pu être lu (appel refusé par le système, sonde en panne) | `horloge NON VERIFIEE · etat de l'horloge illisible (...)`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
-| (pas d'état) | la console ne tourne pas sous Linux : le Mac du banc et des développeurs. Aucun moyen de poser la question | ligne vide | `null` | accepté ; le pré-vol l'avertit (ANH-142) | **refusé par le pré-vol** (ANH-142) : erreur inconnue |
+| (pas d'état) | la console ne tourne pas sous Linux : le Mac du banc et des développeurs. Aucun moyen de poser la question | ligne vide | `null` | accepté ; le pré-vol l'avertit (ANH-142) | **refusé par le pré-vol** (ANH-142) : erreur inconnue ; averti seulement avec `MOTOR_BACKEND=sim` |
 
 **Hors Linux, la console ne juge pas son horloge.** L'appel qu'elle fait
 n'existe que sous Linux (`system_probe`, `src/wall_clock.py`). Sur un Mac elle

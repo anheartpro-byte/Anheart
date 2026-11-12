@@ -360,6 +360,7 @@ test("ANH-156 la suppression d'une machine en séance active est refusée, la ma
       return offer?.session_id === sessionId && offer.can_confirm;
     }, { message: "la console propose ce départ, confirmable", timeout: 60_000 })
     .toBe(true);
+  await pi.untilReadyOnBoard();
   expect((await pi.confirmLaunch(sessionId)).status).toBe(202);
   await expect
     .poll(async () => (await pi.status()).body.run_state, { message: "la console tourne", timeout: 30_000 })

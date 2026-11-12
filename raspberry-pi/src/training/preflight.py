@@ -135,6 +135,10 @@ class PreflightInputs:
     """Whether the BITalino acquires normally (connected, streaming, not reconnecting):
     only then may its battery be read."""
 
+    simulated_drive: bool = False
+    """The drive is the simulator (``MOTOR_BACKEND=sim``): no real motor turns, nobody is in
+    a simulated capsule. Only a wall clock that cannot be asked is then a warning."""
+
     battery: BatteryReading | None = None
     """``None``: not read yet. Filled in by :class:`PreflightMonitor`."""
 
@@ -239,7 +243,11 @@ def _disk(inputs: PreflightInputs) -> Result[str, Finding]:
 def _clock(inputs: PreflightInputs) -> Result[str, Finding]:
     state = inputs.wall_clock
     if state is None:
-        return Err(Failed("horloge non verifiable sur ce systeme : son erreur est inconnue"))
+        unknown = "horloge non verifiable sur ce systeme : son erreur est inconnue"
+        if inputs.simulated_drive:
+            # As a declared STO bridge is refused with the simulator: no motor, nobody on board.
+            return Err(Unjudged(f"{unknown}, admise avec le variateur simule"))
+        return Err(Failed(unknown))
     if not isinstance(state, Synchronised):
         return Err(Failed(f"horloge {clock_label(state)} : {detail_of(state)}"))
     if state.max_error >= CLOCK_MAX_ERROR:

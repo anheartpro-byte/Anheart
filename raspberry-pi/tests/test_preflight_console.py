@@ -30,6 +30,7 @@ from src.sim.bitalino import SimulatedBitalinoClient
 from src.training.preflight import (
     BATTERY_WAIT,
     CONTROLS,
+    ControlState,
     PreflightMonitor,
     PreflightRefused,
     judge,
@@ -47,7 +48,7 @@ from tests.test_cloud_sync import (
     launch_answer,
     rig,
 )
-from tests.test_local_panel import BASE_ENV, FakeEcgClient, config_from, ecg_link
+from tests.test_local_panel import BASE_ENV, SERIAL_ENV, FakeEcgClient, config_from, ecg_link
 from tests.test_preflight import _green  # pyright: ignore[reportPrivateUsage]  # one fixture
 
 TICK: Final[Seconds] = Seconds(0.2)
@@ -126,6 +127,35 @@ async def test_the_battery_is_read_with_the_acquisition_paused_then_restarted() 
 # =========================================================================
 # Every start is judged by the same list
 # =========================================================================
+
+
+def _clock_on_board(panel: LocalPanel) -> ControlState:
+    monitor = panel.preflight
+    assert monitor is not None
+    # As the arming gate judges it: nothing waited for.
+    report = judge(CONTROLS, monitor.inputs(), Occupancy.OCCUPIED)
+    return next(r for r in report.results if r.id == "clock").state
+
+
+async def test_an_unknown_clock_only_warns_a_console_on_the_simulated_drive(tmp_path: Path) -> None:
+    panel = _console(tmp_path, ManualClock())  # no probe: a system that cannot be asked
+    try:
+        assert panel.wall_clock is None
+        assert _clock_on_board(panel) is ControlState.WARN
+    finally:
+        await panel.close()
+
+
+def test_an_unknown_clock_refuses_a_person_on_board_with_a_real_drive(tmp_path: Path) -> None:
+    """The ATV320 over Modbus: on the Pi the clock is always asked; elsewhere it is red."""
+    panel = build_panel(
+        config_from(SERIAL_ENV),
+        clock=ManualClock(),
+        profiles_path=tmp_path / "p.json",
+        preflight=True,
+    )
+    assert panel.drive.simulator is None
+    assert _clock_on_board(panel) is ControlState.BLOCK
 
 
 async def test_a_console_without_a_preflight_judges_none() -> None:

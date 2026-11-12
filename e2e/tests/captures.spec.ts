@@ -238,6 +238,7 @@ test("captures d'une séance : en direct avec ses courbes, l'audit, puis son rap
       return offer?.session_id === sessionId && offer.can_confirm;
     }, { message: "la console propose ce départ, confirmable", timeout: 60_000 })
     .toBe(true);
+  await pi.untilReadyOnBoard();
   expect((await pi.confirmLaunch(sessionId)).status).toBe(202);
   // Curves worth looking at: the whole warm-up, until the programme holds (70 s in).
   await expect
