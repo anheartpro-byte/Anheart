@@ -56,7 +56,8 @@ Sommaire :
 
 | Le site peut | Le site ne peut pas |
 |---|---|
-| Lancer une séance **auto** (programme piloté par la fréquence cardiaque). | Lancer une séance **manuelle** : il n'existe aucun bouton ni aucune fonction pour cela. Le manuel se démarre **uniquement** à la console de la machine ([console-locale.md](console-locale.md)). |
+| Lancer une séance **auto** (programme piloté par la fréquence cardiaque). | Lancer une séance **manuelle avec une personne à bord**, ou régler une vitesse : il n'existe aucun bouton ni aucune fonction pour cela. La vitesse d'une séance manuelle se règle **uniquement** à la console de la machine ([console-locale.md](console-locale.md)). |
+| Lancer une **séance de banc lestée** (admin ou gestionnaire, ANH-250) : capsule lestée, aucune personne à bord, la machine ne tourne qu'après une confirmation physique et une attestation à la console ([§5.6](#56-séance-de-banc-lestée-anh-250)). | La démarrer sans personne à la machine : la console exige le geste et l'attestation de son opérateur. |
 | Demander l'arrêt d'une séance (auto ou manuelle). La machine décélère sur sa rampe de sécurité. | Arrêter la machine instantanément. Ce n'est pas un arrêt d'urgence : le Pi reçoit la demande par interrogation toutes les 3 s environ. |
 | Annuler une séance encore « en attente ». | Forcer un départ : le Pi revérifie tout et peut refuser. |
 | Afficher l'état en direct et la télémétrie à 1 Hz. | Afficher une valeur périmée comme actuelle : un état de plus de 90 s est marqué « Données périmées », 90 s après le dernier signal (§6). |
@@ -537,7 +538,9 @@ patient = celles où il a le droit.
   ou « Aucune machine disponible. ».
 - Par machine : nom, lieu, statut, état en direct avec son badge
   « En direct » / « Données périmées » (§6), nombre de programmes, bouton
-  **Lancer une séance auto**, lien **Détails**. 90 s après le dernier
+  **Lancer une séance auto**, pour un admin ou un gestionnaire le bouton
+  **Séance de banc lestée** (§5.6 ; grisé si la machine n'est pas en ligne,
+  quels que soient ses programmes), lien **Détails**. 90 s après le dernier
   signal, la carte affiche « Hors ligne » et grise le bouton (§6). Elle le grise
   aussi si la machine annonce des paramètres médicaux non signés ou si aucune
   version de référence n'est enregistrée, avec la raison affichée.
@@ -1210,7 +1213,9 @@ admin / gestionnaire de la machine.
   bandeau de décélération ne s'affiche pas : on ne sait rien de la machine.
 
 Une séance **manuelle** peut aussi être arrêtée ainsi : le Pi l'arrête sur sa
-rampe. En revanche elle ne peut pas être démarrée depuis le site.
+rampe, une séance de banc lestée lancée du site comprise (§5.6). Le site ne
+démarre aucune séance manuelle avec personne à bord, et ne règle jamais une
+vitesse.
 
 **Ce bouton n'est pas un arrêt d'urgence.** L'arrêt d'urgence est à la machine.
 
@@ -1242,6 +1247,41 @@ ne permettent pas d'accueillir une personne à bord ; voir
 [securite.md, section 6](securite.md#6-avant-la-première-personne-à-bord) et
 [consentement.md](consentement.md).
 
+### 5.6 Séance de banc lestée (ANH-250)
+
+Pour les essais au banc : capsule lestée (environ 80 kg de sable aux premiers
+essais), **aucune personne à bord**, vitesse pilotée à la console. Réservé à un
+admin et aux gestionnaires de la machine ; un patient ne voit pas le bouton, et
+le serveur le refuse (`bench_launch_staff_only`).
+
+1. Page **Détail d'une machine** (bouton **Séance de banc lestée**, à côté de
+   **Lancer une séance auto**) ou **Mes machines**.
+2. La fenêtre rappelle : aucune personne à bord, personne dans le rayon du bras
+   jusqu'à l'arrêt complet constaté ; la console exigera une confirmation
+   physique et l'attestation « capsule lestée, aucune personne à bord,
+   personne dans le rayon du bras » ; le lest doit être arrimé ; sans frein,
+   couper le secteur laisse le bras en roue libre (environ 145 s depuis la
+   vitesse maximale selon le modèle de simulation, jamais mesuré).
+3. **Masse du lest (kg)**, facultative : plus de 0 et au plus 200, déclarée,
+   jamais mesurée. **Note**, facultative, 500 caractères au plus. Une masse ou
+   une note hors bornes grise **Envoyer à la machine**.
+4. **Envoyer à la machine** : la séance est créée « en attente » et la vue en
+   direct s'ouvre. Ni programme, ni passager, ni paramètres médicaux ne sont
+   demandés.
+5. À la console, l'opérateur confirme et atteste (carte « Depart distant »,
+   [console-locale.md](console-locale.md#carte--depart-distant-)), puis règle
+   la vitesse. Le site suit la séance en direct et peut l'arrêter (§5.4) ou
+   l'annuler tant qu'elle attend.
+
+Refus traduits : `machine_offline`, `machine_busy`, `machine_contract_too_old`
+(console d'un contrat antérieur à 1.9 : mettre son logiciel à jour),
+`invalid_ballast_mass`, `notes_too_long`, `machine_not_managed`,
+`bench_launch_staff_only`. Comme une séance auto, elle attend la console au plus
+5 minutes, et le serveur la revérifie à l'armement : droit retiré
+(`right_revoked_before_start`) ou machine tenue par une autre séance
+(`machine_busy`) la passent « échouée ». L'historique et le rapport la marquent
+**Banc lesté** avec sa masse ; elle ne prend jamais de retour du passager.
+
 ---
 
 ## 6. Badges, indicateurs et courbes
@@ -1254,6 +1294,7 @@ ne permettent pas d'accueillir une personne à bord ; voir
 | **Manuel** (icône main, ambre) | Séance à vitesse fixée par l'opérateur, démarrée à la machine. |
 | **Enregistrement** | Ancienne séance ECG seule. |
 | **Tableau de bord** / **Machine** | Origine : lancée depuis le site, ou démarrée à la console. |
+| **Banc lesté** · *n* kg (icône poids, bleu) | Séance de banc lestée lancée du site (ANH-250), avec la masse déclarée si elle a été donnée. Listes de séances, détail, vue en direct ; le rapport l'écrit sous « Lest ». |
 | **En direct** (point vert) / **Données périmées** (gris) | État de la machine reçu par le serveur il y a moins de 90 s / 90 s ou plus. Périmé : les valeurs sont grisées et « Aucun signal récent de la machine : les valeurs affichées peuvent être dépassées. » Détail d'une machine et Mes machines. Voir « Fraîcheur » ci-dessous. |
 | **En ligne** / **En session** / **Hors ligne** | Statut d'une machine. « Hors ligne » dès que son dernier signal a 90 s, à la même seconde que « Données périmées », quel que soit le statut encore écrit dans Convex. Liste des machines, détail d'une machine, Mes machines, fiche d'un gestionnaire. Voir « Fraîcheur » ci-dessous. |
 | Statut de séance | En attente, Active, Interrompue, fin inconnue, Terminée, Échouée (les onglets de la liste gardent le pluriel). Un statut inconnu s'affiche tel quel. |

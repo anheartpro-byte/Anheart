@@ -79,7 +79,7 @@ ordinateur ou une tablette, n'importe où, il permet de :
 
 | Le site ne peut pas | Pourquoi, et où le faire |
 |---|---|
-| Démarrer une séance **manuelle** (vitesse choisie par l'opérateur). | Volontaire : le manuel se démarre **uniquement à la console de la machine**, par quelqu'un qui se tient à côté. Le site l'affiche partout : « Manuel : uniquement depuis la console de la machine ». |
+| Démarrer une séance **manuelle** (vitesse choisie par l'opérateur), ou en régler la vitesse. | Volontaire : le manuel se démarre **uniquement à la console de la machine**, par quelqu'un qui se tient à côté. Le site l'affiche partout : « Manuel : uniquement depuis la console de la machine ». Seule exception, sans personne à bord : un admin ou un gestionnaire peut proposer une **séance de banc lestée**, que la console ne démarre qu'après la confirmation et l'attestation de son opérateur ([tableau-de-bord.md, 5.6](../tableau-de-bord.md#56-séance-de-banc-lestée-anh-250)). |
 | Arrêter la machine **instantanément**. | Le bouton du site est une **demande** : la machine la lit toutes les 3 s environ, puis décélère sur sa rampe de sécurité. L'arrêt d'urgence est **sur la machine**. |
 | Créer ou modifier un **programme**. | Les programmes sont écrits à la console de la machine, puis recopiés sur le site en lecture seule. |
 | Forcer un départ. | La machine revérifie tout et peut refuser. |

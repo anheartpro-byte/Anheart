@@ -563,7 +563,7 @@ par le sélecteur, puis l'empreinte est vérifiée.
 | Champ | Rôle |
 |---|---|
 | `machineId` | Machine. |
-| `userId` | Pratiquant. Toujours présent pour un lancement distant. Pour une séance démarrée à la machine, le passager que la console a pris dans le roster (ANH-84) ; **absent** pour une séance de banc, qui ne nomme personne, et quand le passager nommé n'a plus le droit sur la machine à la déclaration de la séance (voir plus bas). |
+| `userId` | Pratiquant. Toujours présent pour un lancement auto distant ; **absent** pour une séance de banc lestée lancée du site (ANH-250), qui ne nomme personne. Pour une séance démarrée à la machine, le passager que la console a pris dans le roster (ANH-84) ; **absent** pour une séance de banc, qui ne nomme personne, et quand le passager nommé n'a plus le droit sur la machine à la déclaration de la séance (voir plus bas). |
 | `startedById` | Qui a lancé (site). |
 | `status` | `pending` → `active` → `completed` ou `failed`. Une séance `active` dont Convex n'a plus de nouvelles depuis 10 min passe `interrupted` (fin inconnue) ; elle redevient `active` au premier heartbeat de sa machine qui la nomme, et passe `completed` ou `failed` quand la machine envoie sa fin ([Tâche planifiée](#7-tâche-planifiée)). Un lancement `pending` que Convex refuse avant que la machine l'arme (attente de plus de 5 min, droit retiré...) passe directement `failed`, avec `endCode` ([Revérification à l'armement](#revérification-à-larmement-anh-144)). |
 | `startedAt`, `endedAt` | ms Unix. Le site les lit comme des dates du serveur. Pour une séance dont la machine dit l'âge, ce que fait la console de ce dépôt pour toute séance en cours, les deux sont placées sur l'horloge du serveur ([Deux horloges](#deux-horloges)). Avec une console antérieure, qui ne le dit pas : `startedAt` en est une pour une séance lancée du site (la réception de la confirmation de la machine), et c'est la date écrite par la machine pour une séance démarrée à la machine ; `endedAt` est la date écrite par la machine quand elle en envoie une, sinon la réception. |
@@ -579,6 +579,7 @@ par le sélecteur, puis l'empreinte est vérifiée.
 | `endReason` | Raison de fin donnée par le Pi (ou « Cancelled before start by … », ou la phrase d'un refus à l'armement, par exemple « expired before the machine armed it »). |
 | `endCode` | Code stable d'un lancement refusé avant que sa machine l'arme (ANH-144) : `expired_before_start`, `right_revoked_before_start`... ([Revérification à l'armement](#revérification-à-larmement-anh-144)). Le site le traduit. Absent sur toute autre séance. |
 | `interruptedAt` | Quand la tâche planifiée a marqué la séance `interrupted` (horloge du serveur). Présent exactement tant que la séance l'est. |
+| `ballast` | `{massKg}` : une séance de banc lestée lancée du site (ANH-250, `launchBenchSession`), `kind: manual`, `origin: remote`, capsule lestée et aucune personne à bord. `massKg` est la masse déclarée par le lanceur, en kg, ou `null` s'il n'en a pas donné ; jamais mesurée, rien ne décide sur elle. Absent sur toute autre séance. Une telle séance ne prend jamais de retour du passager (`personOnBoard` est faux, quelle que soit sa note). |
 
 Index : `by_user`, `by_user_and_status` (les séances ouvertes d'un
 pratiquant : une à la fois, ANH-144), `by_machine`, `by_machine_and_status`,
@@ -1126,6 +1127,7 @@ Règles propres aux séances d'entraînement (`convex/training.ts`) :
 | Lire ses mesures live | admin, gestionnaire de la machine, ou pratiquant de la séance live sur cette même machine. Un droit de lancement seul ne donne pas accès aux mesures d'un autre pratiquant. |
 | **Accorder / retirer un droit de lancement** | admin, ou gestionnaire de la machine. Pour accorder, le gestionnaire doit **aussi** gérer le patient (`canAccessUser`). Seul un `user` **de l'organisation de la machine** peut recevoir le droit : admins et gestionnaires l'ont déjà. |
 | **Lancer une séance auto** | un `user` pour **lui-même seulement**, s'il a le droit sur la machine ; un admin ou un gestionnaire de la machine, pour lui-même ou pour un patient qu'il gère. Le pratiquant doit être membre actif de l'organisation de la machine, et un droit de lancement ne vaut que dans cette organisation. |
+| **Lancer une séance de banc lestée** (ANH-250) | un admin, ou un gestionnaire de la machine (`canAccessMachine`), dans l'organisation de la machine. Jamais un `user`, même avec un droit de lancement : la séance ne nomme aucun passager. |
 | **Arrêter / annuler** | le pratiquant de la séance, ou un admin / gestionnaire de la machine. |
 | Régler FC max et année de naissance | admin, ou gestionnaire du patient. **Jamais le patient lui-même.** |
 | Lire la télémétrie et le détail d'une séance | le pratiquant, ou admin / gestionnaire de la machine. |
@@ -1308,10 +1310,11 @@ n'est pas un nombre, d'un côté ou de l'autre, donne donc un refus.
 | `listMachineProfiles` | query | `machineId` | voir la machine (règle entraînement) | Programmes triés par nom. |
 | `listLaunchableMachines` | query | - | connecté | Machines où l'on peut lancer : admin Anheart = toutes ; dans l'organisation de l'appelant seulement : son admin = toutes, gestionnaire = les siennes, user = celles où il a le droit. Machines supprimées ou sans organisation exclues, même pour l'admin Anheart. Pour chacune : `status`, `lastHeartbeat`, `serverNow`, `programsEnabled`, `live`, `profiles`, `myHrMax`, `myFitnessValidUntil`, `myLaunchRefusal`, `medicalParametersVersion`, `medicalParametersStatus` et `medicalParametersReferenceVersion` (voir §2, `machines`). `myLaunchRefusal` donne `rider_not_fit`, `fitness_expired`, `consent_missing` ou `null` pour l'appelant dans l'organisation de cette machine. `myFitnessValidUntil` donne l'échéance de son aptitude valide ou `null` ; le site la rejuge avec l'heure serveur qui avance depuis `serverNow`. |
 | `launchAutoSession` | mutation | `machineId`, `profileId`, `userId?`, `totalDurationS?`, `notes?` | voir §3 | Crée une séance `pending` (`kind: auto`, `origin: remote`). Retourne son id. Contrôles et codes de refus ci-dessous. |
+| `launchBenchSession` | mutation | `machineId`, `ballastKg?`, `notes?` | admin, ou gestionnaire qui atteint la machine (`canAccessMachine`) ; un patient est refusé | Crée une séance de banc lestée `pending` (`kind: manual`, `origin: remote`, sans `userId`, avec `ballast`), aucune personne à bord (ANH-250). Retourne son id. Contrôles et codes de refus ci-dessous. |
 | `requestStop` | mutation | `sessionId` | pratiquant ou admin / gestionnaire de la machine (sinon `session_not_found` pour une séance d'une autre organisation, `session_not_managed` pour une de la sienne) | `pending` → `failed` avec « Cancelled before start by … » (aucune alerte : c'est une annulation). `active` ou `interrupted` → pose `stopRequestedAt` (une seule fois) ; une séance `interrupted` reste ce qu'elle est, et le Pi lit la demande s'il revient avec la séance encore en cours. Autres statuts : rien. |
 | `getMachineLive` | query | `machineId` | voir la machine | `{status, programsEnabled, live, stale, serverNow, medicalParametersVersion, medicalParametersStatus, medicalParametersReferenceVersion}` ou `null`. `stale` = pas d'état ou plus vieux que 90 s **au moment où la query s'exécute**. `serverNow` = l'heure du serveur dans cette réponse. Les champs médicaux sont calculés comme en §2 (`machines`). |
 | `getSessionTelemetry` | query | `sessionId`, `sinceT?`, `limit?` | pratiquant ou admin / gestionnaire | Points du plus ancien au plus récent. `limit` par défaut 3600, borné à 1..7200 (les **derniers** points). Pour une séance dont la machine dit l'âge, le `t` servi et `sinceT` sont sur l'horloge du serveur ; sinon ce sont les dates écrites par la machine ([Deux horloges](#deux-horloges)). |
-| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, `interruptedAt` pour une séance `interrupted`, `endCode` pour un lancement refusé avant que sa machine l'arme, et `canStop` (statut `pending`, `active` ou `interrupted`, et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), placée sur l'horloge du serveur quand la machine dit l'âge de sa séance ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
+| `getTrainingSession` | query | `sessionId` | pratiquant ou admin / gestionnaire | Champs d'entraînement de la séance, nom de la machine, `interruptedAt` pour une séance `interrupted`, `endCode` pour un lancement refusé avant que sa machine l'arme, `ballast` pour une séance de banc lestée lancée du site (ANH-250), et `canStop` (statut `pending`, `active` ou `interrupted`, et droit d'arrêt). Pour une séance **active**, deux dates du point de plus grand `t`, celui que le site affiche (`null` toutes les deux sinon). `lastSignalAt` = sa réception par le serveur (`_creationTime` de sa ligne, pas son `t`), ou, sans point, le début daté par le serveur (`startedAt` d'une séance lancée du site, `_creationTime` d'une séance enregistrée par la machine). `lastMeasuredAt` = sa mesure selon la machine (son `t`), placée sur l'horloge du serveur quand la machine dit l'âge de sa séance ([Deux horloges](#deux-horloges)), `null` sans point : un point reçu à l'instant peut avoir été mesuré une heure plus tôt (renvoi après une coupure). `serverNow` comme pour `getMachineLive`. Le site n'affiche une valeur comme actuelle que si les deux dates ont moins de 20 s sur `serverNow` ([tableau-de-bord.md §6](tableau-de-bord.md#panneau-dentraînement-vue-en-direct)). La query se relance à chaque paquet de points. |
 
 **Contrôles de `launchAutoSession`, dans l'ordre** (code de refus, traduit par
 le site) :
@@ -1361,6 +1364,35 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 `subjectHrMax`, `subjectAge`, `subjectLabel` (nom du pratiquant) et
 `operatorName` (nom du lanceur).
 
+**Contrôles de `launchBenchSession` (ANH-250), dans l'ordre.** Une séance de
+banc lestée ne nomme aucun pratiquant : ni aptitude, ni consentement, ni âge,
+ni FC max, ni paramètres médicaux, ni programmes ne sont lus. Elle partage la
+limite de débit des lancements distants (`launchAutoSession`, cinq par minute
+et par compte).
+
+1. Droits (`benchLauncherRefusal`, la règle revérifiée à l'armement) :
+   `bench_launch_staff_only` (un patient, même avec un droit de lancement : il
+   ne lance qu'une séance à lui, et celle-ci n'a pas de passager),
+   `machine_not_managed` (admin ou gestionnaire qui n'atteint pas la machine).
+2. Machine : `machine_not_found` (absente, supprimée ou sans organisation).
+3. Lest : `invalid_ballast_mass` si `ballastKg` est donné et n'est pas un
+   nombre fini, supérieur à 0 et au plus `MAX_BALLAST_KG` (200 kg). Une borne
+   sur ce qui est tapé (un chiffre de trop, 800 pour 80), pas une charge
+   admissible du bras : rien sur la machine ne lit la masse.
+4. Note : rognée, vide = aucune ; `notes_too_long` au delà de
+   `MAX_LAUNCH_NOTES` (500 caractères).
+5. Machine : `machine_offline` (statut écrit `offline`), puis
+   `machine_contract_too_old` si le dernier heartbeat n'a pas annoncé un
+   contrat de même majeure et de mineure 1.9 ou plus (`contractVersion`) :
+   une console plus ancienne ne doit jamais recevoir ce lancement.
+6. Une séance à la fois : les lancements expirés de la machine sont d'abord
+   passés `failed` ; puis `machine_busy` si la machine se dit en séance ou a
+   une séance qui peut la tenir.
+
+La séance créée porte `startedById` et `operatorName` (le lanceur), `notes`,
+`ballast: {massKg}` (`null` sans masse) et `channels: ["ECG"]`, dans
+l'organisation de la machine. Action d'audit `session.bench_launched`.
+
 ### Fonctions internes (appelées par les routes HTTP)
 
 | Fonction | Rôle |
@@ -1368,9 +1400,9 @@ La séance créée copie le programme (zone, durée, ou la durée demandée),
 | `updateLive` | Écrit `machines.live` (et `programsEnabled` s'il est fourni). Si l'état dit le variateur en défaut et que le précédent ne le disait pas, planifie l'alerte `drive_fault` (ANH-90). Refuse une machine dont la ligne a disparu (`machine_not_found`). |
 | `syncProfiles` | Supprime tous les programmes de la machine, insère la nouvelle liste (dans l'organisation de la machine), met à jour `programsEnabled`. Retourne `{count}`. |
 | `getRoster` | Patients détenant le droit sur la machine **et membres actifs de son organisation** : `{userId, name, hrMax, birthYear, fit, fitnessValidUntil, consent, fitnessQuestionnaireVersion}` ([`roster` du contrat 1.6](../contracts/machine-api.json)). `hrMax` est celle que `launchAutoSession` utiliserait (mesurée, sinon estimée depuis l'année de naissance ; `null` si aucune n'est utilisable) ; `birthYear` est un entier ou `null`. `fit`, `fitnessValidUntil` et `consent` décrivent l'aptitude et le consentement dans l'organisation de la machine ; `fitnessQuestionnaireVersion` donne la version de la saisie validée qui rend `fit` vrai, sinon `null`. Aucune réponse au questionnaire ni note de validation n'est envoyée. La console 1.5 ignore ces champs ; la console 1.6 les vérifie avec `cleared_to_board` avant tout départ avec personne à bord ([console-locale.md](console-locale.md)). |
-| `getPendingTrainingSession` | Première séance `pending` de `kind: auto` de la machine que la revérification à l'armement accepterait, au format attendu par le Pi. Jamais un lancement expiré ni refusé, même avant le passage de la tâche planifiée, ni un lancement qui expire dans moins de `POLL_MARGIN_S` (45 s). |
+| `getPendingTrainingSession` | Premier lancement `pending` de la machine que la revérification à l'armement accepterait, au format attendu par le Pi, ou `null`. Deux formes, distinguées par `mode` (contrat 1.9) : `auto`, les champs de toujours (`profileId`, `subjectId`, `subjectHrMax`...) plus `mode` ; `bench` (ANH-250), `{sessionId, mode, occupancy: "ballast", ballastKg, notes, operatorName}`, sans programme, sans pratiquant, sans FC max. Un lancement de banc n'est offert qu'à un poll dont `X-Anheart-Contract` (argument `contract`, lu par la route) annonce 1.9 ou plus : une console plus ancienne ne le voit jamais, et son analyseur, qui exige `profileId`, `subjectId` et `subjectHrMax`, l'écarterait sans rien armer. Jamais un lancement expiré ni refusé, même avant le passage de la tâche planifiée, ni un lancement qui expire dans moins de `POLL_MARGIN_S` (45 s). |
 | `markTrainingStarted` | Revérifie d'abord le lancement ([ci-dessous](#revérification-à-larmement-anh-144)). Refusé : la séance passe `failed` avec `endCode`, la machine reste comme elle était, et la fonction rend `{armed: false, code, message}`, que la route répond **409**. Une confirmation répétée d'un lancement déjà refusé ainsi reçoit la même réponse. Accepté : `pending` → `active`, `startedAt` = maintenant, machine `in_session`, et `{armed: true}`. Si la machine envoie sa date de début **et** l'âge de la séance : `startedAt` = cet âge avant maintenant (jamais avant le lancement, sinon l'âge n'est pas lu) et `machineStartedAt` = sa date. Une confirmation répétée d'un départ déjà confirmé (séance distante `active`), dont la machine n'a encore rien envoyé (ni point, ni événement, ni heartbeat qui nomme la séance, ni fin) et dont l'arrêt n'a pas été demandé, rend `{armed: true}` sans rien écrire dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (`startConfirmedWithoutNews`, `REPEATED_START_WINDOW_MS`, contrat 1.8). Refuse une séance d'une autre machine (`session_not_found`) ou qui n'attend plus son départ pour une autre raison (`session_not_pending` : annulée sur le site, déjà démarrée hors du cas précédent, terminée). |
-| `sweepPendingSessions` | Tâche planifiée toutes les minutes : passe `failed`, avec `endCode`, tout lancement `pending` (`kind: auto`) que la revérification refuse, expirés compris, et planifie pour chacun l'alerte `session_failed` (ANH-90). Rend `{failed}`. Les séances de l'ancien mode ne sont pas touchées. |
+| `sweepPendingSessions` | Tâche planifiée toutes les minutes : passe `failed`, avec `endCode`, tout lancement `pending` (`kind: auto`, ou séance de banc lestée lancée du site) que la revérification refuse, expirés compris, et planifie pour chacun l'alerte `session_failed` (ANH-90). Rend `{failed}`. Les séances de l'ancien mode ne sont pas touchées. |
 | `interruptSilentSessions` | Tâche planifiée toutes les minutes (`interrupt-silent-sessions`), à part de `check-offline-machines` : passe `interrupted`, avec `interruptedAt`, toute séance `active` (`kind` renseigné) dont Convex n'a eu aucune nouvelle depuis `SESSION_SILENCE_MS`, jamais `completed` ni `failed`. Lit `INTERRUPT_BATCH` (50) séances au plus par transaction et planifie aussitôt la page suivante. Rend `{marked, done}` ([§7](#7-tâche-planifiée)). |
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
 | `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Planifie le résumé provisoire de la séance (`sessionReports.summarizeTelemetry`, ANH-89) et, pour une séance `failed`, l'alerte `session_failed` (ANH-90). |
@@ -1409,6 +1441,16 @@ stable du refus (`ARMING_REFUSALS`, `convex/training.ts`, et
 
 La zone cible n'est pas revérifiée à l'armement : aucune version ne peut être
 inscrite pendant qu'un lancement auto attend.
+
+**Séance de banc lestée (ANH-250, contrat 1.9).** Après les contrôles 1 à 3,
+un lancement de banc ne passe par aucun contrôle de pratiquant (4 à 8) : celui
+qui l'a lancé pourrait encore le lancer, c'est-à-dire qu'il est admin ou
+gestionnaire et atteint la machine, son rôle relu dans ses adhésions actives
+(`rolesHeldNow`, `benchLauncherRefusal`), sinon `right_revoked_before_start` ;
+puis aucune autre séance ne peut tenir la machine, sinon `machine_busy`
+(nouveau refus à l'armement en 1.9, seulement pour un lancement de banc). Un
+lancement de banc ne bloque pas l'inscription d'une version des paramètres
+médicaux (`settlePendingLaunchesForRegistration`) : rien de lui n'en dépend.
 
 Les lancements auto déjà expirés sont échoués au moment de l'inscription.
 
@@ -1458,7 +1500,8 @@ quand elle est :
 
 `completed`, `failed` et les séances démarrées de l'ancien mode ne tiennent
 rien. `launchAutoSession` refuse `machine_busy` et `rider_busy` sur cette
-règle ; la revérification à l'armement refuse `rider_busy`. Deux lancements
+règle, `launchBenchSession` `machine_busy` ; la revérification à l'armement
+refuse `rider_busy`, et `machine_busy` pour un lancement de banc. Deux lancements
 simultanés ne passent pas tous les deux : une mutation Convex est
 transactionnelle, la seconde relit ce que la première a écrit. Le refus
 `rider_busy` ne dit ni quelle machine ni quelle organisation tient le
@@ -2534,7 +2577,7 @@ changer. La liste des codes est dans `contracts/machine-api.json` :
 | `rate_limited` | 429 | La machine a dépassé la limite de débit de la route ; la réponse porte `retryAfterMs` et l'en-tête `Retry-After` (contrat 1.4, [ci-dessous](#limitation-de-débit-et-taille-des-corps-anh-166)). |
 | `payload_too_large` | 413 | Corps au-delà de la taille de la route, ou lot de plus de 600 points ou 200 événements, refusé avant d'être parcouru (contrat 1.4). |
 | `feedback_not_eligible`, `feedback_session_not_ended`, `feedback_window_closed` | 400 | `training/events` seulement, depuis le contrat 1.7 : le retour du passager porté par un événement `feedback` est refusé (séance sans personne à bord, pas terminée, ou finie depuis plus de 24 h), [ci-dessous](#routes-utilisées-par-la-console-locale-raspberry-pisrccloud_syncpy). |
-| `expired_before_start`, `machine_deleted_before_start`, `organization_changed_before_start`, `right_revoked_before_start`, `age_refused_before_start`, `hr_max_changed_before_start`, `rider_busy` ; depuis 1.6 : `rider_not_fit`, `fitness_expired`, `consent_missing` | 409 | `training/start` seulement (depuis le contrat 1.5) : le lancement, revérifié au moment où la machine l'arme, est refusé ; la séance est `failed` avec ce code, et la machine ne doit pas la faire tourner ([Revérification à l'armement](#revérification-à-larmement-anh-144)). |
+| `expired_before_start`, `machine_deleted_before_start`, `organization_changed_before_start`, `right_revoked_before_start`, `age_refused_before_start`, `hr_max_changed_before_start`, `rider_busy` ; depuis 1.6 : `rider_not_fit`, `fitness_expired`, `consent_missing` ; depuis 1.9, pour un lancement de banc seulement : `machine_busy` | 409 | `training/start` seulement (depuis le contrat 1.5) : le lancement, revérifié au moment où la machine l'arme, est refusé ; la séance est `failed` avec ce code, et la machine ne doit pas la faire tourner ([Revérification à l'armement](#revérification-à-larmement-anh-144)). |
 
 Côté Pi, une absence de réponse devient `Unreachable`, toute réponse ≥ 400
 devient `Refused`, et son code est journalisé. Pour ce que la console envoie
@@ -2706,7 +2749,7 @@ déploiement.
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) ; 16 Kio max | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s ; limite 1 toutes les 10 s, réserve 5 |
 | `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent, fitnessQuestionnaireVersion\|null}]}` (`getRoster`, [`roster` du contrat 1.6](../contracts/machine-api.json)) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
-| `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` | toutes les 3 s, seulement si `PROGRAMS_ENABLED`, sans séance en cours ni lancement en attente |
+| `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, mode: "auto", profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` ou, depuis 1.9 et seulement à une console qui l'annonce, `{session: {sessionId, mode: "bench", occupancy: "ballast", ballastKg\|null, notes\|null, operatorName}, server_contract_version}` | toutes les 3 s, sans séance en cours ni lancement en attente, quels que soient les programmes depuis 1.9 (un lancement auto que la console ne prend pas est laissé comme s'il n'était pas là) |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}`, aussi pour une confirmation répétée d'un départ déjà confirmé dont la machine n'a encore rien envoyé et sans arrêt demandé, dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (contrat 1.8) ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local ; limite 1 par minute, réserve 20 |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
@@ -3901,6 +3944,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.9` | Le lancement d'une séance de banc lestée depuis le site (ANH-250, [entrée `bench_launch`](../contracts/machine-api.json)) : le poll porte `mode` (`auto` pour un lancement auto, à côté de ses champs de toujours ; `bench` pour `{sessionId, mode, occupancy: "ballast", ballastKg, notes, operatorName}`). Un lancement de banc n'est offert qu'à un poll qui annonce 1.9 ou plus, et n'est créé que pour une machine dont le dernier heartbeat l'a annoncé (`machine_contract_too_old` sinon). Un refus à l'armement de plus en **409**, `machine_busy`, pour un lancement de banc seulement. Le manifeste d'enregistrement peut porter `ballast: {mass_kg}` ; le dépôt l'accepte, un manifeste sans lui reste valide. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.8` | Une confirmation répétée de `POST /api/machine/training/start` pour un départ déjà confirmé, dont la machine n'a encore rien envoyé (ni point, ni événement, ni heartbeat qui nomme la séance, ni fin) et dont l'arrêt n'a pas été demandé, répond **200** sans rien changer dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (ANH-240) ; tout autre cas reste refusé comme avant. La console garde l'offre restée sans réponse que le poll ne propose plus, pour cette séance seulement et 60 s au plus après le clic ; l'offre n'est plus confirmable dès que le serveur refuse, et disparaît au poll suivant qui ne la propose plus. Aucun champ ni code nouveau. |
 | `1.7` | Le retour du passager après une séance (ANH-146) : un événement `kind: "feedback"`, seul dans sa requête, sur `POST /api/machine/training/events`, stocké dans `session_feedback` et jamais dans `training_events` ([entrée `feedback_events`](../contracts/machine-api.json), [§6](#routes-utilisées-par-la-console-locale-raspberry-pisrccloud_syncpy)). Trois codes en **400** : `feedback_not_eligible`, `feedback_session_not_ended`, `feedback_window_closed`. Rien ne change pour les autres événements ni les autres routes. |
 | `1.6` | Trois refus à l'armement en **409** : `rider_not_fit`, `fitness_expired`, `consent_missing`. Le poll et la tâche de chaque minute appliquent le même contrôle. Le roster ajoute `fit` (booléen), `fitnessValidUntil` (ms Unix ou `null`), `consent` (booléen) et `fitnessQuestionnaireVersion` (chaîne de la saisie validée qui rend `fit` vrai, sinon `null`), sans réponses ni notes. Leur définition est dans [`contracts/machine-api.json`, entrée `roster`](../contracts/machine-api.json) ; une console qui ne reçoit pas ces champs considère le passager non apte et sans consentement. La porte locale `cleared_to_board` applique ce contrôle avant tout départ avec personne à bord. |
@@ -3935,7 +3979,17 @@ heartbeat : pendant un intervalle de heartbeat, elle croirait encore parler à
 un serveur `1.7`, et un retour envoyé à ce moment finirait dans
 `training_events`.
 
-La console de ce dépôt est en `1.8`. Elle connaît les codes de refus à
+**Séance de banc lestée (1.9).** Une console `1.8` face à un serveur `1.9`
+ne reçoit jamais de lancement de banc : le poll ne l'offre qu'à une
+console qui annonce 1.9, et le site le refuse à une machine dont le
+heartbeat ne l'a pas annoncé ; si elle en recevait un, son analyseur
+l'écarterait comme mal formé, sans rien armer. Ses lancements auto portent
+`mode: "auto"`, qu'elle ignore. Une console `1.9` face à un serveur `1.8`
+lit un lancement sans `mode` comme un lancement auto, comme avant. Le
+manifeste d'une séance de banc lestée porte `ballast` : déposé à un Convex
+`1.8`, il serait refusé (`.strict()`) ; d'où l'ordre, Convex d'abord.
+
+La console de ce dépôt est en `1.9`. Elle connaît les codes de refus à
 l'armement et demande le départ après confirmation de son opérateur, avant
 d'armer ; elle n'arme que sur un 2xx de `training/start` et n'envoie pas de
 fin sur un 409. Une console antérieure, qui arme avant de confirmer, s'arrête

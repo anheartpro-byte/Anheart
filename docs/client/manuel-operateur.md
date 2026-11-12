@@ -679,7 +679,10 @@ Ce que cela change pour vous :
   sécurité verrouillé à acquitter, et si **Etat** affiche « idle ». À
   « REPOS », si l'attestation manque ou si un arrêt verrouillé attend, le
   site reçoit un refus, avec la raison.
-- Une séance manuelle ne peut jamais être lancée depuis le site.
+- Une séance manuelle avec une personne à bord ne peut jamais être lancée
+  depuis le site. Le site peut seulement proposer une séance de banc lestée,
+  sans personne à bord, que vous confirmez à la console en cochant
+  l'attestation de banc.
 - Vous restez l'opérateur. Vous devez être à côté de la machine, passager
   installé, avant que la demande soit envoyée. Le site ne voit pas la machine.
 - Tapez votre nom dans le champ **Operateur** de la page **Seance** : sans
