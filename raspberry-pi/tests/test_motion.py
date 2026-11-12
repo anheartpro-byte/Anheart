@@ -14,7 +14,7 @@ from dataclasses import FrozenInstanceError, replace
 from typing import Final, Protocol, cast
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from src.geometry import MachineGeometry
@@ -281,16 +281,15 @@ def test_the_carry_keeps_the_fraction_a_tick_could_not_pay_for() -> None:
     assert long == pytest.approx(1.0 / rate)
 
 
-@pytest.mark.parametrize(
-    ("current", "moved", "dt"),
-    [(0, 55, 0.2), (55, 0, 0.2), (300, 300, 0.2), (300, 302, math.nan), (300, 302, 0.0)],
-)
-def test_nothing_is_carried_across_the_passage_or_a_non_step(
-    current: int, moved: int, dt: float
-) -> None:
-    assert carry_after(MotorRpm(current), MotorRpm(moved), LIMITS, ARM, Seconds(dt)) == 0.0
+def test_a_descent_carries_no_more_than_one_rpm_at_its_floor() -> None:
+    """59 -> 55 stops on the floor with time to spare: carried into the climb from 55,
+    it must be worth one rpm at 55's rate, not at 59's (the case Hypothesis found)."""
+    carry = carry_after(MotorRpm(59), MotorRpm(55), GENTLE, LONG_ARM, Seconds(0.585))
+    assert carry == pytest.approx(1 / motor_rate_limit(MotorRpm(55), GENTLE, LONG_ARM))
+    assert carry < 1 / motor_rate_limit(MotorRpm(59), GENTLE, LONG_ARM)
 
 
+@example(targets=[(59, 10), (0, 1), (57, 1)], tick=0.1, gentle=True)
 @settings(max_examples=150)
 @given(
     targets=st.lists(st.tuples(any_target, st.integers(1, 40)), min_size=1, max_size=12),
@@ -320,6 +319,16 @@ def test_over_any_run_each_change_is_bounded_by_the_time_since_the_last_one_plus
                 last_change = now
                 here = moved
             assert here == 0 or here >= limits.min_run
+
+
+@pytest.mark.parametrize(
+    ("current", "moved", "dt"),
+    [(0, 55, 0.2), (55, 0, 0.2), (300, 300, 0.2), (300, 302, math.nan), (300, 302, 0.0)],
+)
+def test_nothing_is_carried_across_the_passage_or_a_non_step(
+    current: int, moved: int, dt: float
+) -> None:
+    assert carry_after(MotorRpm(current), MotorRpm(moved), LIMITS, ARM, Seconds(dt)) == 0.0
 
 
 # =========================================================================
