@@ -178,6 +178,15 @@ class Ballast:
     mass_kg: Kilograms | None
 
 
+MAX_BALLAST_KG: Final[Kilograms] = Kilograms(200.0)
+"""The heaviest ballast a bench launch may declare (``max_ballast_kg`` of ``bench_launch``
+in the shared contract), for the dashboard link and the session record alike.
+
+A bound on what was typed on the site, not a rated load of the arm: a launch
+that declares more, or a mass that is not a positive number, is malformed and
+never offered."""
+
+
 _OCCUPANCY_LABELS: Final[Mapping[Occupancy, str]] = MappingProxyType(
     {
         Occupancy.BENCH: "BANC - personne a bord : NON",

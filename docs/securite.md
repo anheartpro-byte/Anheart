@@ -1972,7 +1972,7 @@ en **mode banc seulement**.
   la machine est en mode banc uniquement. » et bloque le départ ; la fenêtre
   aussi si la machine est accessible, en ligne et libre. Sans version serveur,
   la carte dit « Aucune version des paramètres médicaux n'est enregistrée
-  sur le serveur : aucun lancement à distance n'est possible. » et bloque
+  sur le serveur : aucune séance auto ne peut être lancée à distance. » et bloque
   le départ ; la fenêtre aussi, aux mêmes conditions. La carte peut aussi
   montrer un refus d'aptitude ou de consentement ; la fenêtre les contrôle
   après le motif médical.
@@ -1987,8 +1987,8 @@ en **mode banc seulement**.
   présentée comme en mode banc. Une annonce absente ou mal formée donne
   `unknown`, sans libellé sur la fiche ; programmes désactivés et version
   serveur inscrite, le refus est `programs_disabled` : « Programmes auto
-  désactivés sur cette machine : seules les séances manuelles, depuis la
-  console de la machine, sont possibles. ». Au contrôle médical local en mode
+  désactivés sur cette machine : aucune séance auto ne peut y être lancée. ».
+  Au contrôle médical local en mode
   banc, la console refuse : « refusee par la machine : parametres medicaux non
   signes (raison) : console en mode banc seulement, aucune seance programmee
   ni personne a bord ». Ses messages sont sans accents.

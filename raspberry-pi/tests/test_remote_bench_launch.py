@@ -34,7 +34,6 @@ import pytest
 from src.clock import ManualClock
 from src.cloud_sync import (
     DASHBOARD_OPERATOR,
-    MAX_BALLAST_KG,
     MAX_LAUNCH_NOTES,
     AutoLaunch,
     BenchLaunch,
@@ -63,7 +62,7 @@ from src.service_state import THRESHOLD
 from src.training.plan import JsonValue
 from src.training.preflight import BRIDGED_REMOTE_LAUNCH, StoBridgedRemoteLaunch
 from src.training.runtime import RuntimeState
-from src.training.types import Ballast, Occupancy
+from src.training.types import MAX_BALLAST_KG, Ballast, Occupancy
 from src.units import Kilograms, OutputRpm
 from src.web.app import create_app
 from src.web.schemas import RemoteLaunchRow
@@ -582,12 +581,18 @@ def test_a_ballast_is_written_and_read_back(mass: float | None) -> None:
     assert read_back.ballast == RecordedBallast(mass_kg=mass)
 
 
-@pytest.mark.parametrize("mass", [0, -1, 200.5])
+@pytest.mark.parametrize("mass", [0, -1, math.nextafter(MAX_BALLAST_KG, math.inf)])
 def test_a_record_s_ballast_out_of_its_bounds_is_refused(mass: float) -> None:
     written = MANIFEST.dump_json(replace(manifest(), ballast=RecordedBallast(mass_kg=80.0)))
     altered = written.replace(b'"mass_kg":80.0', f'"mass_kg":{mass}'.encode())
     with pytest.raises(ValueError, match="mass_kg"):
         MANIFEST.validate_json(altered)
+
+
+def test_a_record_s_ballast_at_its_bound_is_kept() -> None:
+    at_bound = replace(manifest(), ballast=RecordedBallast(mass_kg=MAX_BALLAST_KG))
+    read_back = MANIFEST.validate_json(MANIFEST.dump_json(at_bound))
+    assert read_back.ballast == RecordedBallast(mass_kg=MAX_BALLAST_KG)
 
 
 def test_the_launch_never_reaches_a_record_but_as_its_ballast() -> None:

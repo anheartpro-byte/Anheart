@@ -226,6 +226,16 @@ describe("ANH-203 session detail card", () => {
     expect(screen.text()).toContain(`${t.session.origin} ${t.origin.local}`);
   });
 
+  it("ANH-250 says a ballasted bench session was proposed from the site, then confirmed and driven at the console", () => {
+    session({ kind: "manual", origin: "remote", ballast: { massKg: 80 } });
+    answer("training:getSessionTelemetry", []);
+
+    const screen = render(<TrainingDetailsCard sessionId={sessionId} />);
+
+    expect(screen.text()).toContain(t.ballast.remote);
+    expect(screen.text()).not.toContain(t.manualOnlyAtMachine);
+  });
+
   it("hands the charts the recorded points and the zone, after a placeholder while they load", () => {
     session();
     const screen = render(<TrainingDetailsCard sessionId={sessionId} />);

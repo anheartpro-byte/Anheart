@@ -284,10 +284,10 @@
     "launch_for_self_only": "You can only launch a session for yourself.",
     "launch_right_missing": "You have not been given the right to launch sessions on this machine.",
     "machine_offline": "The machine is offline: it cannot take a session right now.",
-    "medical_parameters_unavailable": "No medical parameters version is registered on the server, so remote launches are not possible.",
+    "medical_parameters_unavailable": "No medical parameters version is registered on the server, so no auto session can be launched remotely.",
     "medical_parameters_unsigned": "Medical parameters are unsigned: the machine is in bench mode only, with no programmed session or person on board.",
     "rider_not_allowed": "This rider is not an active member of this machine's organization.",
-    "programs_disabled": "Auto programmes are disabled on this machine: only manual sessions, from the machine's console, are possible.",
+    "programs_disabled": "Auto programmes are disabled on this machine: no auto session can be launched on it.",
     "programme_not_on_machine": "This programme is no longer on the machine. Reload the page and choose another one.",
     "rider_hr_max_missing": "The rider's max heart rate (or birth year) is not set: a manager must enter it before any auto session.",
     "zone_above_ceiling": "The programme's zone exceeds the current medical ceiling for the rider's max HR. Choose another programme.",
@@ -985,7 +985,8 @@
     },
     "ballast": {
       "badge": "Ballasted bench",
-      "badgeMass": "Ballasted bench · {mass} kg"
+      "badgeMass": "Ballasted bench · {mass} kg",
+      "remote": "Ballasted bench: proposed from the site, confirmed and driven at the machine's console"
     },
     "manualOnlyAtMachine": "Manual: only from the machine's console",
     "runMode": {
@@ -1098,8 +1099,8 @@
       "notLaunchable": "You cannot launch a session on this machine.",
       "offline": "The machine is offline.",
       "inSession": "The machine is already in a session.",
-      "programsDisabled": "Auto programmes are disabled on this machine: only manual sessions, from the machine's console, are possible.",
-      "medicalParametersUnavailable": "No medical parameters version is registered on the server, so remote launches are not possible.",
+      "programsDisabled": "Auto programmes are disabled on this machine: no auto session can be launched on it.",
+      "medicalParametersUnavailable": "No medical parameters version is registered on the server, so no auto session can be launched remotely.",
       "medicalParametersUnsigned": "Unsigned medical parameters: the machine is in bench mode only.",
       "zoneTooHighWithFraction": "The zone goes up to {zoneHigh} bpm, above {fraction}% of the rider's max HR ({hrMax} bpm → ceiling {ceiling} bpm). The server will refuse this launch.",
       "noPrograms": "No programme has been synced from the machine.",

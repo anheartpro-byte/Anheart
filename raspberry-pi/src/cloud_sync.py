@@ -215,7 +215,7 @@ from src.training.preflight import (
 )
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import EstopUnattested
-from src.training.types import Ballast, Occupancy, TelemetrySnapshot
+from src.training.types import MAX_BALLAST_KG, Ballast, Occupancy, TelemetrySnapshot
 from src.units import Bpm, Kilograms, Monotonic, Seconds, UnixMillis, elapsed
 
 _logger: logging.Logger = logging.getLogger(__name__)
@@ -1850,13 +1850,6 @@ class CloudSync:
 # =========================================================================
 
 
-MAX_BALLAST_KG: Final[Kilograms] = Kilograms(200.0)
-"""The heaviest ballast a bench launch may declare (``bench_launch`` of the shared file).
-
-A bound on what was typed on the site, not a rated load of the arm: a launch
-that declares more, or a mass that is not a positive number, is malformed and
-never offered."""
-
 MAX_LAUNCH_NOTES: Final[int] = 500
 """The longest note a bench launch carries, in characters (the dashboard's own bound)."""
 
@@ -1941,7 +1934,7 @@ def _ballast_of(value: object) -> Ballast | None:
     """The ballast a bench launch declares; ``None`` when ``ballastKg`` is no mass it may carry.
 
     ``null`` is a ballast whose mass was not given. Anything else must be a
-    finite number of kg, above 0 and at most :data:`MAX_BALLAST_KG`.
+    finite number of kg, above 0 and at most :data:`~src.training.types.MAX_BALLAST_KG`.
     """
     if value is None:
         return Ballast(mass_kg=None)

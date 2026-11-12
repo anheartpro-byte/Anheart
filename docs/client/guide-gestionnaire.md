@@ -311,7 +311,7 @@ Un encadré orange dit pourquoi.
 | « Vous ne pouvez pas lancer de séance sur cette machine. » | La machine ne vous est pas attribuée. Voyez avec votre administrateur. |
 | « La machine est hors ligne. » | Vérifiez avec l'opérateur que la machine est allumée, reliée à Internet, et que sa console est démarrée. |
 | « La machine est déjà en séance. » | Attendez la fin de la séance en cours. |
-| « Programmes auto désactivés sur cette machine : seules les séances manuelles, depuis la console de la machine, sont possibles. » | C'est un réglage de la machine. Il ne se change pas depuis le site. Appelez le support. |
+| « Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée. » | C'est un réglage de la machine. Il ne se change pas depuis le site. Appelez le support. |
 | « Aucun programme n'a été synchronisé depuis la machine. » | La machine n'a envoyé aucun programme. Appelez le support. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | [Section 4.2](#42-renseigner-la-physiologie). |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | [Section 4.2](#42-renseigner-la-physiologie). |

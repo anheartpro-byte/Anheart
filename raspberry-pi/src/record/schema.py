@@ -31,6 +31,7 @@ from src.motor.observation import (
     WrongFunction,
 )
 from src.record.rows import JsonValue
+from src.training.types import MAX_BALLAST_KG
 from src.units import Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
 
 CONFIG = ConfigDict(allow_inf_nan=False, extra="forbid", ser_json_inf_nan="constants")
@@ -145,7 +146,7 @@ class RecordedBallast:
     none; nothing measured it.
     """
 
-    mass_kg: Annotated[float, Field(gt=0, le=200)] | None
+    mass_kg: Annotated[float, Field(gt=0, le=MAX_BALLAST_KG)] | None
 
 
 def _absent(value: object) -> bool:

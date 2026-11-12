@@ -65,6 +65,7 @@ type Session = {
   interruptedAt?: number;
   lastSignalAt?: number | null;
   lastMeasuredAt?: number | null;
+  ballast?: { massKg: number | null };
 };
 
 /** The session as `training.getTrainingSession` answers it, heard from a moment ago. */
@@ -354,6 +355,22 @@ describe("ANH-203 training panel: what it says of a session", () => {
     expect(screen.text()).toContain(`${t.panelTitle} · Endurance`);
     expect(screen.text()).toContain("Cible 110-140 bpm");
     expect(screen.text()).toContain(`· ${t.operator} Ada Lovelace`);
+  });
+
+  it("ANH-250 says a ballasted bench session was proposed from the site, then confirmed and driven at the console", () => {
+    session({
+      kind: "manual",
+      zoneLowBpm: undefined,
+      zoneHighBpm: undefined,
+      totalDurationS: undefined,
+      ballast: { massKg: 80 },
+    });
+    telemetry([point()]);
+
+    const screen = panel();
+
+    expect(screen.text()).toContain(fr.training.ballast.remote);
+    expect(screen.text()).not.toContain(fr.training.manualOnlyAtMachine);
   });
 
   it("a manual session has no zone, no operator line, and says where it is driven from", () => {

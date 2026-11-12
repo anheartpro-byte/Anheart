@@ -1128,7 +1128,7 @@ la FC max ou l'année de naissance manque (ou la valeur enregistrée n'est pas
 un entier, pour un patient comme pour « Moi-même »), ou le pratiquant est plus
 jeune que l'âge minimum de la version médicale courante. L'absence de version
 de référence affiche « Aucune version des paramètres médicaux n'est enregistrée
-sur le serveur : aucun lancement à distance n'est possible. » Le mode banc
+sur le serveur : aucune séance auto ne peut être lancée à distance. » Le mode banc
 affiche « Paramètres médicaux non signés : la machine est en mode banc
 uniquement. » Elle **avertit** si la zone dépasse la fraction de FC max fixée
 par la version courante ou si la FC limite du programme dépasse la FC max

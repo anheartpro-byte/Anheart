@@ -162,9 +162,9 @@ export const DASHBOARD_ERRORS = {
   rider_not_allowed:
     "The rider is not an active member of the machine's organisation.",
   programs_disabled:
-    "The machine takes manual sessions only, started at the machine.",
+    "The machine's auto programmes are disabled: no auto session can be launched on it.",
   medical_parameters_unavailable:
-    "No signed medical parameters version is registered on the server, so remote launches are refused.",
+    "No signed medical parameters version is registered on the server, so auto launches are refused.",
   medical_parameters_unsigned:
     "The machine's medical parameters are unsigned: it is in bench mode only, with no programmed session or person on board.",
   programme_not_on_machine:

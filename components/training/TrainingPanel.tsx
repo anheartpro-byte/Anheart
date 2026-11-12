@@ -284,7 +284,10 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
         {training.kind === "manual" && (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <Hand className="h-3.5 w-3.5" />
-            {t("training.manualOnlyAtMachine")}
+            {/* A ballasted bench session is proposed from the site (ANH-250). */}
+            {training.ballast !== undefined
+              ? t("training.ballast.remote")
+              : t("training.manualOnlyAtMachine")}
           </p>
         )}
 
