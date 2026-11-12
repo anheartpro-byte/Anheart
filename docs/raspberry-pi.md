@@ -1277,7 +1277,10 @@ libère le port quand même. Un lecteur laissé derrière par une telle coupure
 garde son propre ordre d'arrêt et son propre état de reconnexion : il ne
 reprend jamais la liaison, ne retire jamais l'appareil de l'acquisition
 suivante et ne lui donne aucune donnée lue en retard. Un appareil ouvert à
-la reconnexion mais qui refuse de démarrer est refermé. Une liaison perdue dont la reconnexion est
+la reconnexion mais qui refuse de démarrer est refermé, et une liaison connectée
+dont l'acquisition ne redémarre pas (Bluetooth perdu pendant la lecture, que le
+client au repos ne voit pas) est fermée : la tentative suivante l'ouvre à
+nouveau au lieu de la redémarrer sans fin. Une liaison perdue dont la reconnexion est
 interrompue n'est plus dite connectée : la console la rouvre. Tant qu'une
 lecture est attendue ou en cours, le contrôle `bitalino` est rouge avec une
 personne à bord (attendue : « a relire » ; en cours : l'ECG est suspendu), et

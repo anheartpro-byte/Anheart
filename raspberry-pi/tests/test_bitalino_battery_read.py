@@ -30,7 +30,7 @@ from src.bitalino_client import BITalinoClient, Device, LinkLostError, VendorDev
 from src.clock import ManualClock
 from src.ecg_pipeline import EcgBridge
 from src.local_config import EcgSource
-from src.local_panel import EcgClient, EcgLink
+from src.local_panel import ECG_RETRY, EcgClient, EcgLink
 from src.units import Percent, Seconds
 from tests.test_bitalino import (
     MAC,
@@ -46,9 +46,11 @@ from tests.test_local_panel import FakeEcgClient, NullRing, NullRuntime
 ADDRESS: Final[str] = "/dev/rfcomm0"
 
 
-def _link(client: EcgClient, *, bound: Seconds = Seconds(15.0)) -> EcgLink:
+def _link(
+    client: EcgClient, *, bound: Seconds = Seconds(15.0), clock: ManualClock | None = None
+) -> EcgLink:
     """The console's ECG side around ``client``, its bridge fed to nothing."""
-    clock = ManualClock()
+    clock = ManualClock() if clock is None else clock
     bridge = EcgBridge(
         clock=clock,
         source=client,
@@ -661,3 +663,60 @@ async def test_a_close_that_hangs_after_a_cut_read_does_not_hold_the_port() -> N
     assert client.disconnects == 1
     await asyncio.wait_for(link.step(), 2.0)  # the port is free: the link opens again
     assert _acquiring(client)
+
+
+@final
+class GoneDuringTheRead:
+    """Streams, stops, then is gone: Bluetooth lost while the acquisition was stopped
+    for the read. Its state is never answered and it never starts again."""
+
+    battery_readable: bool = True
+
+    def __init__(self) -> None:
+        self.starts = 0
+        self.closed = threading.Event()
+
+    def version(self) -> str:
+        return "BITalino_v5.2"
+
+    def start(self, _sample_rate: int, _channels: Sequence[int], /) -> None:
+        self.starts += 1
+        if self.starts > 1:
+            raise OSError("Bluetooth gone")
+
+    def read_chunk(self, max_bytes: int, /) -> bytes:
+        del max_bytes
+        if self.closed.wait(0.01):
+            raise LinkLostError("closed")
+        return b""
+
+    def stop(self) -> None:
+        return
+
+    def close(self) -> None:
+        self.closed.set()
+
+    def battery_raw(self) -> int:
+        raise OSError("Bluetooth gone")
+
+
+async def test_a_link_lost_during_the_read_is_opened_afresh_not_started_for_ever() -> None:
+    """R1: the stopped client still said it was connected, with a dead device, and the
+    console asked it to start every 5 s without ever reconnecting."""
+    gone = GoneDuringTheRead()
+    back = FakeDevice()
+    clock = ManualClock()
+    client = make_client(Factory(gone, back))
+    link = _link(client, clock=clock)
+    await link.step()
+    assert link.streaming
+    assert await link.read_battery() is None
+    assert _connected(client)  # what the client knows: the loss is not seen at rest
+    await link.step()  # its start fails: the link is closed
+    assert gone.closed.is_set()
+    assert not _connected(client)
+    clock.advance(ECG_RETRY)
+    await link.step()
+    assert link.streaming
+    assert back.started_with is not None
+    await client.disconnect()

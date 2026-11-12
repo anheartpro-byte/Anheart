@@ -346,16 +346,18 @@ async def test_a_connected_client_that_will_not_start_is_reported() -> None:
     link = ecg_link(client, clock, stats=LinkStats(frames=3))
     await link.step()
     status = link.status()
-    assert status.connected
     assert not status.acquiring
     assert status.last_error is not None
     assert "acquisition" in status.last_error
     assert status.link == LinkStats(frames=3)
-    # Already connected: the next attempt goes straight to starting.
+    # Closed (ANH-142): a link that will not start may be dead while it says it is
+    # connected, so the next attempt opens it afresh rather than starting it again.
+    assert client.disconnects == 1
+    assert not status.connected
     client.start_ok = True
     clock.advance(ECG_RETRY)
     await link.step()
-    assert client.connects == 1
+    assert client.connects == 2
     assert link.status().acquiring
     assert link.status().last_error is None
 

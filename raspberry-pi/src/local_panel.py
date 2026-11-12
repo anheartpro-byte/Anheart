@@ -603,6 +603,9 @@ class EcgLink:
         if not await client.start_acquisition():
             self._last_error = "le BITalino est connecte mais l'acquisition n'a pas demarre"
             _logger.warning("%s", self._last_error)
+            # A link lost while it was stopped (a battery read) says it is connected:
+            # started again it fails for ever. Closed, the next attempt opens a new one.
+            await self._close_link(client)
             return
         self._last_error = None
         _logger.info("BITalino acquiring (%s)", self._source.value)
@@ -656,13 +659,13 @@ class EcgLink:
                 "BITalino battery read took longer than %.0f s: link closed and reopened",
                 self._battery_bound,
             )
-            await self._close_cut(client)
+            await self._close_link(client)
             return None
 
-    async def _close_cut(self, client: EcgClient) -> None:
-        """Close the link of a cut read, within the same bound: a tty close that hangs
-        must not hold the port. The client drops the device before it waits for its
-        close, so the next step opens a new one."""
+    async def _close_link(self, client: EcgClient) -> None:
+        """Close the link within the read's bound: a tty close that hangs must not hold
+        the port. The client drops the device before it waits for its close, so the
+        next step opens a new one."""
         try:
             async with asyncio.timeout(self._battery_bound):
                 await client.disconnect()
