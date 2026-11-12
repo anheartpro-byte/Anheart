@@ -60,6 +60,7 @@ from src.sensors.base import SensorKind, SensorReading
 from src.service_state import NotOutOfService, ServiceStatus
 from src.telemetry import TelemetryHub
 from src.training.plan import ProfileStore
+from src.training.preflight import PreflightMonitor
 from src.training.safety import SafetySupervisor
 from src.training.types import Occupancy, OccupancyRefused, SafetyVerdict
 from src.units import MotorRpm
@@ -598,6 +599,9 @@ class Services:
     feedback: PassengerFeedback | None = None
     """The rider's feedback after a session with somebody on board (``/api/feedback``,
     ANH-146); ``None``: this console has no dashboard to send it to, and offers none."""
+
+    preflight: PreflightMonitor | None = None
+    """The pre-flight (``/api/preflight``, ANH-142); ``None``: this console judges none."""
 
     instance: str = field(default_factory=new_instance)
     """What this run of the console calls itself (:func:`new_instance`).

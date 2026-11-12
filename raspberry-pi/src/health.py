@@ -12,8 +12,9 @@ from src.record.export import RecordIo
 from src.record.retention import confirmed_deposit, records
 from src.record.rows import JsonValue
 from src.result import Err, Ok
+from src.training.preflight import ControlState
 from src.training.types import TelemetrySnapshot
-from src.units import Seconds
+from src.units import Percent, Seconds
 
 HEALTH_TIMEOUT: Final[Seconds] = Seconds(1)
 MILLISECONDS: Final[int] = 1000
@@ -25,6 +26,19 @@ class HealthContext:
     clock_offset_s: Seconds | None = None
     record_degraded: bool | None = None
     restart_loop: bool | None = None
+    preflight_last: ControlState | None = None
+    """The verdict of the last completed pre-flight: never ``pending``."""
+
+    bitalino_battery_pct: Percent | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Sampled:
+    """What the last heartbeat measured and was told, for the pre-flight; unknown before."""
+
+    cpu_temp_c: float | None = None
+    records_pending: int | None = None
+    incidents_open_high: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +103,12 @@ class HealthWatch:
         self._probe: Callable[[], SystemHealth] = (
             functools.partial(system_health, root) if probe is None else probe
         )
+        self._last: Sampled = Sampled()
+
+    @property
+    def last(self) -> Sampled:
+        """What the last :meth:`sample` measured and was told. Memory only."""
+        return self._last
 
     def started(self) -> None:
         self._counters.started()
@@ -118,6 +138,7 @@ class HealthWatch:
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
+        self._last = Sampled(system.cpu_temp_c, pending, incidents_open_high)
         drive_link: str | None = None
         if snapshot.drive_status_age is not None:
             drive_link = "down" if snapshot.drive_status_is_stale else "up"
@@ -129,7 +150,11 @@ class HealthWatch:
             "uptime_s": system.uptime_s,
             "clock_offset_s": context.clock_offset_s,
             "link_rtt_ms": None if rtt is None else rtt * MILLISECONDS,
-            "bitalino_battery_pct": None,
+            "bitalino_battery_pct": (
+                None
+                if context.bitalino_battery_pct is None
+                else round(context.bitalino_battery_pct, 1)
+            ),
             "bitalino_link": None
             if context.bitalino_connected is None
             else "up"
@@ -140,7 +165,9 @@ class HealthWatch:
             "records_pending": pending,
             "record_degraded": context.record_degraded,
             "restart_loop": context.restart_loop,
-            "preflight_last": None,
+            "preflight_last": (
+                None if context.preflight_last is None else context.preflight_last.value
+            ),
             "incidents_open_high": incidents_open_high,
             "counters": dict(counter_wire(reported_counters)),
         }

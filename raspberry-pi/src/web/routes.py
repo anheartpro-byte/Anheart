@@ -122,6 +122,7 @@ from src.training.safety import (
 from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, OutputRpm, Seconds, elapsed
 from src.web.deps import TOKEN_HEADER, Services, VerdictSource, WebConfig
+from src.web.preflight_routes import register_preflight
 from src.web.profile_writer import ProfileWriter
 from src.web.schemas import (
     AckBody,
@@ -386,6 +387,7 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     _register_safety(app, services=services, auth=auth)
     _register_records(app, services=services, auth=auth)
     _register_service(app, services=services, auth=auth)
+    register_preflight(app, services=services, auth=auth)
 
 
 def _register_service(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:

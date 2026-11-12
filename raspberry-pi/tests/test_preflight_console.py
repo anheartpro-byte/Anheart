@@ -1,0 +1,352 @@
+"""ANH-142 on the console: the battery read at rest, the gate of every start, the page,
+the heartbeat, the logbook and a launch from the dashboard.
+
+What is judged lives in ``tests/test_preflight.py``; here, that the console wires it:
+the same list reaches the runtime's arming gate, the remote preflight, the page,
+the heartbeat and the logbook.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from collections.abc import Mapping
+from dataclasses import replace
+from http import HTTPStatus
+from pathlib import Path
+from typing import Final, cast
+
+import httpx
+import pytest
+
+from src.clock import ManualClock
+from src.health import HealthWatch
+from src.health_system import Celsius, SystemHealth
+from src.local_panel import LocalPanel, build_panel, describe_start_refusal, record_preflight
+from src.result import Ok
+from src.sim.bitalino import SimulatedBitalinoClient
+from src.training.preflight import (
+    BATTERY_WAIT,
+    CONTROLS,
+    PreflightMonitor,
+    PreflightRefused,
+    judge,
+)
+from src.training.types import Occupancy
+from src.units import Monotonic, Percent, Seconds, UnixMillis
+from src.web.app import create_app
+from tests.test_cloud_sync import (
+    LAUNCH,
+    OPERATOR,
+    POLL_PATH,
+    START,
+    Dashboard,
+    config_of,
+    launch_answer,
+    rig,
+)
+from tests.test_local_panel import BASE_ENV, FakeEcgClient, config_from, ecg_link
+from tests.test_preflight import _green  # pyright: ignore[reportPrivateUsage]  # one fixture
+
+TICK: Final[Seconds] = Seconds(0.2)
+END: Final[str] = "/api/machine/training/end"
+
+
+def _console(tmp_path: Path, clock: ManualClock) -> LocalPanel:
+    return build_panel(
+        config_from(BASE_ENV), clock=clock, profiles_path=tmp_path / "p.json", preflight=True
+    )
+
+
+async def _settle(panel: LocalPanel, clock: ManualClock, seconds: float) -> None:
+    """``seconds`` of the console's own tasks: the tick, the ECG and the pre-flight."""
+    for _ in range(round(seconds / TICK)):
+        clock.advance(TICK)
+        await panel.control_step()
+        await panel.ecg_step()
+        await panel.preflight_step()
+
+
+async def _run_out(panel: LocalPanel, clock: ManualClock) -> None:
+    """Long enough for a run to wait for an absent BITalino, then for its longest control."""
+    for _ in range(80):
+        clock.advance(Seconds(1.0))
+        await panel.preflight_step()
+
+
+def _acquiring(client: FakeEcgClient) -> bool:
+    """Read through a call, so mypy does not narrow one assertion into the next."""
+    return client.is_acquiring
+
+
+def _running(monitor: PreflightMonitor) -> bool:
+    """Read through a call, for the reason :func:`_acquiring` gives."""
+    return monitor.running
+
+
+def _battery(monitor: PreflightMonitor) -> Percent | None:
+    """Read through a call, for the reason :func:`_acquiring` gives."""
+    return monitor.battery
+
+
+def _object(value: object) -> Mapping[str, object]:
+    """A JSON object as the console sent it, its values checked one by one."""
+    assert isinstance(value, Mapping)
+    return cast("Mapping[str, object]", value)
+
+
+# =========================================================================
+# The battery, read at rest
+# =========================================================================
+
+
+async def test_the_battery_is_read_with_the_acquisition_paused_then_restarted() -> None:
+    clock = ManualClock()
+    client = FakeEcgClient()
+    client.battery = Percent(64.0)
+    link = ecg_link(client, clock)
+    await link.step()
+    assert _acquiring(client)
+    client.charge_read.clear()
+    reading = asyncio.create_task(link.read_battery())
+    await asyncio.sleep(0)
+    assert not _acquiring(client)
+    connects = client.connects
+    await link.step()  # nothing is restarted while the device is asked
+    assert not _acquiring(client)
+    assert client.connects == connects
+    client.charge_read.set()
+    assert await reading == Percent(64.0)
+    await link.step()  # and the acquisition comes back at once, without the retry wait
+    assert _acquiring(client)
+
+
+# =========================================================================
+# Every start is judged by the same list
+# =========================================================================
+
+
+async def test_a_console_without_a_preflight_judges_none() -> None:
+    panel = build_panel(config_from(BASE_ENV), clock=ManualClock())
+    try:
+        assert panel.preflight is None
+        assert panel.services.preflight is None
+        await panel.preflight_step()
+    finally:
+        await panel.close()
+
+
+async def test_a_low_battery_warns_at_the_bench_and_the_bench_start_goes_through(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
+    panel = _console(tmp_path, clock)
+    try:
+        monitor = panel.preflight
+        assert monitor is not None
+        assert panel.services.preflight is monitor
+        simulator = panel.ecg.client
+        assert isinstance(simulator, SimulatedBitalinoClient)
+        simulator.battery = Percent(20.0)
+        await _settle(panel, clock, 2.0)
+        assert _battery(monitor) == Percent(20.0)
+        assert simulator.is_acquiring  # the read paused it, the next step started it again
+        refused = monitor.refusal(Occupancy.BENCH)
+        assert refused is not None
+        assert refused.control == "estop"  # red at the bench too
+        assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
+        bench = monitor.report(Occupancy.BENCH)
+        battery = next(r for r in bench.results if r.id == "bitalino")
+        assert battery.detail == "batterie BITalino 20 % < 30 %"
+        assert monitor.refusal(Occupancy.BENCH) is None  # only a warning at the bench
+        assert monitor.refusal(Occupancy.OCCUPIED) is not None
+        submitted = panel.surface.submit_start_manual(occupancy=Occupancy.BENCH, operator=OPERATOR)
+        assert isinstance(submitted, Ok)
+        await _settle(panel, clock, 0.4)
+        assert panel.runtime.manual is not None  # it armed
+    finally:
+        await panel.close()
+
+
+def test_the_refusal_of_a_start_says_pre_vol_and_the_reason() -> None:
+    refused = PreflightRefused("bitalino", "batterie BITalino 20 % < 30 %")
+    assert describe_start_refusal(refused) == (
+        "demarrage refuse : pre-vol : batterie BITalino 20 % < 30 %"
+    )
+
+
+async def test_a_failing_preflight_step_never_stops_the_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def broken(self: SimulatedBitalinoClient) -> Percent | None:
+        del self
+        raise RuntimeError("battery read failed")
+
+    monkeypatch.setattr(SimulatedBitalinoClient, "read_battery", broken)
+    clock = ManualClock()
+    panel = _console(tmp_path, clock)
+    try:
+        await panel.ecg_step()
+        await panel.preflight_step()
+        assert "pre-flight step failed" in caplog.text
+        assert panel.preflight is not None
+        assert panel.preflight.running
+    finally:
+        await panel.close()
+
+
+# =========================================================================
+# A launch from the dashboard
+# =========================================================================
+
+
+async def test_a_launch_on_a_red_preflight_comes_back_failed_with_its_reason(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path, preflight=True)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.confirm_offer()
+    await r.step()
+    # Nothing was confirmed to the dashboard: the machine refused before.
+    assert r.dashboard.to(START) == []
+    (end,) = r.dashboard.to(END)
+    assert end["failed"] is True
+    reason = end["reason"]
+    assert isinstance(reason, str)
+    # The panel's drive was never read in this rig: the first red control.
+    assert reason == (
+        "refusee par la machine : pre-vol : variateur injoignable : aucune lecture recente "
+        "de son etat"
+    )
+    await r.panel.close()
+
+
+# =========================================================================
+# What is written down and announced
+# =========================================================================
+
+
+async def test_a_completed_run_is_written_to_the_logbook(tmp_path: Path) -> None:
+    r = rig(tmp_path, record_root=tmp_path / "records", preflight=True)
+    journal = r.journal
+    assert journal is not None
+    monitor = r.panel.preflight
+    assert monitor is not None
+    await _run_out(r.panel, r.clock)
+    assert not _running(monitor)
+    last = monitor.last
+    assert last is not None
+    assert last.occupancy is Occupancy.OCCUPIED  # programmes are enabled on this console
+    journal.drain()
+    text = (journal.root / "logbook" / "events.jsonl").read_text("utf-8")
+    lines = [cast("Mapping[str, object]", json.loads(line)) for line in text.splitlines()]
+    (written,) = [line for line in lines if line["kind"] == "preflight"]
+    detail = written["detail"]
+    assert isinstance(detail, str)
+    assert detail.startswith("pre-vol block (personne a bord) : drive_link block")
+    assert written["actor"] == "system"
+    await r.panel.close()
+
+
+def test_a_run_on_a_console_that_records_nothing_is_only_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="src.local_panel")
+    report = judge(CONTROLS, _green(), Occupancy.BENCH)
+    record_preflight(report, None, ManualClock())
+    assert "pre-vol warn (banc)" in caplog.text
+
+
+async def test_the_heartbeat_carries_the_last_run_and_the_battery(tmp_path: Path) -> None:
+    clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
+    dashboard = Dashboard()
+    panel = build_panel(
+        config_of(),
+        clock=clock,
+        profiles_path=tmp_path / "p.json",
+        transport=lambda _config: dashboard,
+        health=HealthWatch(None, probe=lambda: SystemHealth(cpu_temp_c=Celsius(42))),
+        preflight=True,
+    )
+    try:
+        await panel.control_step()
+        await panel.ecg_step()
+        await panel.preflight_step()
+        await panel.cloud_step()
+        first = dashboard.to("/api/machine/heartbeat")[0]["health"]
+        assert isinstance(first, Mapping)
+        assert first["bitalino_battery_pct"] == 100.0
+        assert first["preflight_last"] is None  # the run is still waiting
+        monitor = panel.preflight
+        assert monitor is not None
+        # The temperature the heartbeat measured reaches the list.
+        temperature = next(
+            r for r in monitor.report(Occupancy.BENCH).results if r.id == "temperature"
+        )
+        assert temperature.detail == "Pi a 42 °C"
+        clock.advance(BATTERY_WAIT)
+        await _run_out(panel, clock)
+        assert monitor.last is not None
+        clock.advance(Seconds(11.0))
+        await panel.cloud_step()
+        last = dashboard.to("/api/machine/heartbeat")[-1]["health"]
+        assert isinstance(last, Mapping)
+        assert last["preflight_last"] == monitor.last.verdict.value
+        assert last["preflight_last"] in ("ok", "warn", "block")
+    finally:
+        await panel.close()
+
+
+# =========================================================================
+# The page
+# =========================================================================
+
+
+async def test_the_page_reads_the_list_and_asks_for_a_new_run(tmp_path: Path) -> None:
+    clock = ManualClock()
+    panel = _console(tmp_path, clock)
+    app = create_app(services=panel.services, config=config_from(BASE_ENV).web)
+    try:
+        await _run_out(panel, clock)
+        monitor = panel.preflight
+        assert monitor is not None
+        assert not _running(monitor)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as session:
+            read = await session.get("/api/preflight")
+            assert read.status_code == HTTPStatus.OK
+            row = cast("Mapping[str, object]", read.json())
+            assert row["running"] is False
+            assert row["last"] in ("warn", "block")
+            bench = _object(row["bench"])
+            assert bench["occupancy"] == "bench"
+            controls = bench["controls"]
+            assert isinstance(controls, list)
+            ids = [_object(entry)["id"] for entry in cast("list[object]", controls)]
+            assert ids == [control.id for control in CONTROLS]
+            assert _object(row["occupied"])["first_block"] is not None
+            rerun = await session.post("/api/preflight/run")
+            assert rerun.status_code == HTTPStatus.ACCEPTED
+            assert cast("Mapping[str, object]", rerun.json())["running"] is True
+        assert _running(monitor)
+    finally:
+        await panel.close()
+
+
+async def test_a_console_without_a_preflight_serves_none_and_refuses_a_run() -> None:
+    panel = build_panel(config_from(BASE_ENV), clock=ManualClock())
+    services = replace(panel.services, preflight=None)
+    app = create_app(services=services, config=config_from(BASE_ENV).web)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as session:
+            assert (await session.get("/api/preflight")).json() is None
+            refused = await session.post("/api/preflight/run")
+            assert refused.status_code == HTTPStatus.CONFLICT
+    finally:
+        await panel.close()

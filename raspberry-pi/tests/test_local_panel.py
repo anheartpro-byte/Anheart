@@ -87,7 +87,7 @@ from src.training.runtime import (
     TrainingRuntime,
 )
 from src.training.types import Occupancy, Phase, SafetyAction, SafetyVerdict, TelemetrySnapshot
-from src.units import Bpm, Hertz, Monotonic, MotorRpm, OutputRpm, RawRegister, Seconds
+from src.units import Bpm, Hertz, Monotonic, MotorRpm, OutputRpm, Percent, RawRegister, Seconds
 from src.wall_clock import WallClockProbe
 from src.web.deps import Services
 from tests.medical_support import signed, unsigned
@@ -254,6 +254,9 @@ class FakeEcgClient:
         self.connects: int = 0
         self.reads: int = 0
         self.disconnects: int = 0
+        self.battery: Percent | None = None
+        self.charge_read: asyncio.Event = asyncio.Event()
+        self.charge_read.set()
 
     async def connect(self, timeout: float = 30.0) -> bool:  # noqa: ASYNC109
         del timeout
@@ -264,6 +267,14 @@ class FakeEcgClient:
     async def start_acquisition(self) -> bool:
         self.is_acquiring = self.start_ok
         return self.start_ok
+
+    async def stop_acquisition(self) -> None:
+        self.is_acquiring = False
+
+    async def read_battery(self) -> Percent | None:
+        """The battery, once :attr:`charge_read` lets the read finish (ANH-142)."""
+        await self.charge_read.wait()
+        return self.battery
 
     async def read_samples(self, count: int = 1000) -> SampleBatch | None:
         del count
@@ -524,6 +535,7 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
         wall_clock: WallClockProbe | None,
         notify_socket: str | None,
         service: ServiceDesk,
+        preflight: bool,
     ) -> LocalPanel:
         panel = real(
             config,
@@ -533,6 +545,7 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
             profiles_path=tmp_path / "p.json",
             notify_socket=notify_socket,
             service=service,
+            preflight=preflight,
         )
         built.append(panel)
         return panel
@@ -549,6 +562,8 @@ async def test_the_production_console_records_its_sessions_and_stops_its_journal
     assert [t.name for t in threading.enumerate() if t.name == "record-journal"] == []
     # ANH-163: and it judges its wall clock where the system can be asked (Linux, so the Pi).
     assert (built[0].wall_clock is not None) == (sys.platform == "linux")
+    # ANH-142: and it judges its pre-flight at every start.
+    assert built[0].preflight is not None
 
 
 async def test_the_stop_signals_are_routed_to_the_event_and_removed() -> None:

@@ -303,6 +303,7 @@ def rig(
     record_root: Path | None = None,
     with_roster: bool = True,
     sto_source: str = "sim_ready",
+    preflight: bool = False,
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
@@ -319,6 +320,7 @@ def rig(
         profiles_path=tmp_path / "p.json",
         transport=lambda _c: dashboard,
         journal=journal,
+        preflight=preflight,
     )
     runtime = StubRuntime(source=panel.runtime.snapshot)
     sync = CloudSync(

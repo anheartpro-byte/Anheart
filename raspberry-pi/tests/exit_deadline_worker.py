@@ -56,6 +56,7 @@ def main(root: Path, port: str, mode: str) -> int:
         wall_clock: WallClockProbe | None,
         notify_socket: str | None,
         service: ServiceDesk,
+        preflight: bool,
     ) -> LocalPanel:
         # The console's own profile store stays out of the repository's ``data/``.
         return build_panel(
@@ -66,6 +67,7 @@ def main(root: Path, port: str, mode: str) -> int:
             profiles_path=root.parent / "profiles.json",
             notify_socket=notify_socket,
             service=service,
+            preflight=preflight,
         )
 
     with contextlib.ExitStack() as patched:

@@ -286,8 +286,13 @@ from src.training.plan import (
 )
 from src.training.preflight import (
     BRIDGED_BENCH_ONLY,
+    PreflightInputs,
+    PreflightMonitor,
+    PreflightRefused,
+    PreflightReport,
     StoBridgedOnBoard,
     StoNotReady,
+    describe_run,
     describe_sto_refusal,
 )
 from src.training.runtime import (
@@ -338,7 +343,7 @@ from src.training.types import (
     SignalQuality,
     TelemetrySnapshot,
 )
-from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
+from src.units import Bpm, Metres, Monotonic, MotorRpm, Percent, RpmPerSecond, Seconds, elapsed
 from src.wall_clock import (
     WallClockProbe,
     WallClockState,
@@ -391,6 +396,10 @@ and a look that finds nothing due reads a clock and returns."""
 WALL_CLOCK_PERIOD: Final[Seconds] = Seconds(10.0)
 """How often the console asks what the wall clock is worth: a state that changes when
 a network comes back or goes, not within a second. See :meth:`LocalPanel.clock_step`."""
+
+PREFLIGHT_PERIOD: Final[Seconds] = Seconds(1.0)
+"""How often the pre-flight looks whether its run has a battery to read or is over
+(:meth:`LocalPanel.preflight_step`). The controls themselves are judged on demand."""
 
 STOP_POLL: Final[Seconds] = Seconds(0.05)
 STOP_POLLS: Final[int] = round(STOP_TIMEOUT / STOP_POLL)
@@ -480,6 +489,14 @@ class EcgClient(Protocol):
         """Start streaming. Returns whether it started."""
 
     @abstractmethod
+    async def stop_acquisition(self) -> None:
+        """Stop streaming. A no-op when not acquiring."""
+
+    @abstractmethod
+    async def read_battery(self) -> Percent | None:
+        """The battery's charge, at rest only; ``None`` when it cannot be said now."""
+
+    @abstractmethod
     async def read_samples(self, count: int = ...) -> SampleBatch | None:
         """The queued samples once at least ``count`` per channel are, else ``None``."""
 
@@ -505,6 +522,7 @@ class EcgLink:
         "_clock",
         "_last_error",
         "_link_stats",
+        "_reading",
         "_retry_at",
         "_source",
     )
@@ -528,6 +546,8 @@ class EcgLink:
         self._attempts: int = 0
         self._last_error: str | None = None
         self._retry_at: Monotonic | None = None
+        # Set while the battery is read: the acquisition stays stopped meanwhile.
+        self._reading: bool = False
 
     @property
     def client(self) -> EcgClient:
@@ -537,6 +557,8 @@ class EcgLink:
     async def step(self) -> None:
         """Connect and start when needed (rate-limited), otherwise pump the bridge."""
         client = self._client
+        if self._reading:
+            return
         if client.is_acquiring:
             await self._bridge.pump()
             return
@@ -556,6 +578,18 @@ class EcgLink:
             return
         self._last_error = None
         _logger.info("BITalino acquiring (%s)", self._source.value)
+
+    async def read_battery(self) -> Percent | None:
+        """The BITalino's battery, read at rest: the acquisition is stopped for the read
+        and started again at the next step. The ECG is lost meanwhile, so its quality is
+        judged again from the restart (the pre-flight reads it before its ECG window)."""
+        self._reading = True
+        try:
+            await self._client.stop_acquisition()
+            return await self._client.read_battery()
+        finally:
+            self._reading = False
+            self._retry_at = None
 
     def status(self) -> EcgLinkStatus:
         """The link as the panel shows it."""
@@ -1024,6 +1058,7 @@ class LocalPanel:
         "_last_measured",
         "_listener",
         "_on_board",
+        "_preflight",
         "_presence",
         "_recorded_presence",
         "_recorder",
@@ -1071,8 +1106,10 @@ class LocalPanel:
         health: HealthWatch | None = None,
         roster: Roster | None = None,
         sto: StoSource,
+        preflight: PreflightMonitor | None = None,
     ) -> None:
         self._clock: Clock = clock
+        self._preflight: PreflightMonitor | None = preflight
         self._sto: StoSource = sto
         self._sto_gate: StoReadGate = StoReadGate(
             clock=clock,
@@ -1193,6 +1230,11 @@ class LocalPanel:
         )
 
     @property
+    def preflight(self) -> PreflightMonitor | None:
+        """The pre-flight (ANH-142), or ``None`` when this console judges none."""
+        return self._preflight
+
+    @property
     def roster(self) -> Roster:
         """The riders' list a start with a person on board names one of."""
         return self._roster
@@ -1296,6 +1338,7 @@ class LocalPanel:
             # Nobody's command: the machine took back a target it had accepted.
             self._surface.note_withdrawn(describe_withdrawn_target(withdrawn))
         self._record(now, snapshot)
+        self._observe_preflight(snapshot)
         self._surface.publish(snapshot)
         self._watch_end()
         match self._runtime.state:
@@ -1482,6 +1525,11 @@ class LocalPanel:
         cloud = self._cloud
         self._on_board = cloud.session_id_reader() if on_board and cloud is not None else None
 
+    def _observe_preflight(self, snapshot: TelemetrySnapshot) -> None:
+        """The tick, for the pre-flight: its ECG window, and a run once back at rest."""
+        if self._preflight is not None:
+            self._preflight.observe(snapshot)
+
     def _watch_end(self) -> None:
         """The session followed for its feedback has finished: its card opens."""
         reader = self._on_board
@@ -1661,7 +1709,15 @@ class LocalPanel:
         prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
             return Err(prepared.error)
-        return Ok(None)
+        # A launch from the dashboard is a programme: somebody is on board.
+        blocked = self._preflight_refusal(Occupancy.OCCUPIED)
+        return Ok(None) if blocked is None else Err(blocked)
+
+    def _preflight_refusal(self, occupancy: Occupancy) -> str | None:
+        """The pre-flight's first red blocking control for ``occupancy``, in its words."""
+        monitor = self._preflight
+        refused = None if monitor is None else monitor.refusal(occupancy)
+        return None if refused is None else refused.detail
 
     def _withhold_programme_words(
         self,
@@ -1858,6 +1914,21 @@ class LocalPanel:
         except Exception:  # as cloud_step: an observer must not stop the machine
             _logger.exception("dashboard stop watch failed; the session is unaffected")
 
+    async def preflight_step(self) -> None:
+        """Read the BITalino's battery when a run asks for it, and close a run once it is over.
+
+        A task of its own: the read stops the acquisition and waits for the
+        device. The same fence as :meth:`cloud_step`: the pre-flight is an
+        observer, and the arming gate judges its list again at every start.
+        """
+        monitor = self._preflight
+        if monitor is None:
+            return
+        try:
+            await monitor.step()
+        except Exception:  # as cloud_step: an observer must not stop the machine
+            _logger.exception("pre-flight step failed; the arming gate still judges every start")
+
     async def roster_step(self) -> None:
         """Ask the dashboard for the riders' list when it is due. No-op without a link.
 
@@ -1903,6 +1974,7 @@ class LocalPanel:
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.roster_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
+            asyncio.create_task(self._every(PREFLIGHT_PERIOD, self.preflight_step, stop)),
         )
         if isinstance(self._sto, DriveInputStoSource):
             observers += (asyncio.create_task(self._sto.run(), name="sto-poll"),)
@@ -2192,7 +2264,7 @@ def build_ecg_client(config: LocalConfig, clock: Clock) -> EcgSide:
     raise assert_never(config.ecg_source)
 
 
-def build_panel(
+def build_panel(  # noqa: PLR0915  # one statement per wired part
     config: LocalConfig,
     *,
     clock: Clock,
@@ -2208,6 +2280,7 @@ def build_panel(
     health: HealthWatch | None = None,
     deposit: DepositTask | None = None,
     roster: Roster | None = None,
+    preflight: bool = False,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -2250,6 +2323,11 @@ def build_panel(
     ``roster`` is the riders' list (:mod:`src.roster`); ``None``: an empty one,
     which the dashboard link fills when there is one. A test or a simulation
     gives one it has filled itself.
+
+    ``preflight``: the console judges its pre-flight (ANH-142) at every start,
+    serves it to the page and announces it; :func:`run_console` asks for it.
+    ``False``: no list judges a start, which is what a test that is not about
+    the pre-flight wants.
     """
     version = read_software_version()
     riders = Roster(linked=config.cloud is not None) if roster is None else roster
@@ -2267,6 +2345,46 @@ def build_panel(
     # goes silent on is not a clean one: the same figure, read in one place.
     watchdog = ServiceWatchdog(notify_socket, overdue=safety.loop_stall_silent_gap)
     backend = drive.backend
+    storage = None if journal is None else storage_gate(journal, clock)
+
+    def preflight_facts() -> PreflightInputs:
+        """What the pre-flight reads of this console, now. Called only once it is built."""
+        now = clock.monotonic()
+        room = None if storage is None else storage()
+        sampled = None if health is None else health.last
+        return PreflightInputs(
+            at=now,
+            snapshot=runtime.snapshot(),
+            attested=isinstance(runtime.require_estop_confirmed(), Ok),
+            bitalino_connected=ecg.client.is_connected,
+            wall_clock=None if watch is None else watch.current(),
+            record_storage=None if room is None else describe_record_storage(room),
+            link=NOT_CONFIGURED if link_health is None else link_health.status(now),
+            medical_refusal=config.medical.warning,
+            medical_version=config.medical.version,
+            software_version=version,
+            incidents_open_high=None if sampled is None else sampled.incidents_open_high,
+            cpu_temp_c=None if sampled is None else sampled.cpu_temp_c,
+            records_pending=None if sampled is None else sampled.records_pending,
+            min_battery=config.bitalino_min_battery,
+        )
+
+    monitor = (
+        PreflightMonitor(
+            clock=clock,
+            facts=preflight_facts,
+            read_battery=lambda: ecg.read_battery(),  # noqa: PLW0108  # ecg is built below
+            # What this console is for: a person on board once it may take one.
+            summary=(
+                Occupancy.OCCUPIED
+                if config.programs_enabled or config.occupied_enabled
+                else Occupancy.BENCH
+            ),
+            record=lambda report: record_preflight(report, recorder, clock),
+        )
+        if preflight
+        else None
+    )
     if journal is not None:
         tapped = tap_drive(backend, clock, sdk_frames=config.record.drive_sdk_frames)
         backend = tapped.backend
@@ -2280,7 +2398,8 @@ def build_panel(
         safety=safety,
         motion=motion,
         limit_radius=config.leg_tip_radius,
-        arming_gate=None if journal is None else storage_gate(journal, clock),
+        arming_gate=storage,
+        preflight=None if monitor is None else monitor.refusal,
         # Every other source attests the wired mushroom, ANH-92's statement.
         attestation=(
             BENCH_BRIDGED_ATTESTATION
@@ -2378,6 +2497,7 @@ def build_panel(
         # holds the ones it latched itself, which the supervisor never sees.
         verdicts=runtime,
         roster=riders,
+        preflight=monitor,
     )
     panel = LocalPanel(
         clock=clock,
@@ -2403,6 +2523,7 @@ def build_panel(
         service=service,
         roster=riders,
         sto=sto,
+        preflight=monitor,
     )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
@@ -2416,6 +2537,10 @@ def build_panel(
                 clock_offset_s=None if watch is None else clock_offset_s(watch.current()),
                 record_degraded=None if recorder is None else recorder.is_degraded(),
                 restart_loop=None if service is None else service.status().out_of_service,
+                preflight_last=(
+                    None if monitor is None or monitor.last is None else monitor.last.verdict
+                ),
+                bitalino_battery_pct=None if monitor is None else monitor.battery,
             )
 
         if transport is None:
@@ -2456,6 +2581,24 @@ def build_panel(
     if cloud is not None:
         panel.attach_cloud(cloud=cloud, transport=owned, health=health)
     return panel
+
+
+def record_preflight(
+    report: PreflightReport, recorder: SessionRecorder | None, clock: Clock
+) -> None:
+    """A completed pre-flight run: one line in the console's log, one in the logbook."""
+    words = describe_run(report)
+    _logger.info("%s", words)
+    if recorder is not None:
+        recorder.journal.log(
+            note(
+                wall_clock=clock.unix_millis(),
+                at=clock.monotonic(),
+                kind=EventKind.PREFLIGHT,
+                detail=words,
+                actor=SYSTEM,
+            )
+        )
 
 
 def open_service(journal: Journal, clock: Clock) -> ServiceDesk:
@@ -2624,6 +2767,8 @@ def _start_refusal_reason(  # noqa: PLR0911  # one return per refusal
             return describe_sto_refusal(refusal)
         case StoBridgedOnBoard():
             return BRIDGED_BENCH_ONLY
+        case PreflightRefused():
+            return refusal.detail
     raise assert_never(refusal)
 
 
@@ -2915,7 +3060,8 @@ async def run_console(
     if probe is None:
         _logger.warning(
             "wall clock: not judged on this system (no way to ask what it is worth): "
-            "nothing is warned or refused on its account, and the records say nothing of it"
+            "nothing is refused on its account (the pre-flight shows it unjudged), and the records "
+            "say nothing of it"
         )
     journal = open_journal(config, clock)
     service = open_service(journal, clock)
@@ -2926,6 +3072,7 @@ async def run_console(
         wall_clock=probe,
         notify_socket=notify_socket,
         service=service,
+        preflight=True,
     )
     undo = install_stop_signals(event)
     code = EXIT_FAILED

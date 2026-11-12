@@ -68,6 +68,7 @@ var state = {
   programsEnabled: true, // from /api/panel; false until milestone M5
   stoSource: null,       // the STO source the console last named: kept when an answer is missing or late
   panel: null,           // the last /api/panel answer
+  preflight: null,       // the last /api/preflight answer (ANH-142); null: no pre-flight
   panelAt: 0,            // performance.now() when it came
   remoteLaunch: null,
   remoteLaunchMessage: null,
@@ -310,7 +311,7 @@ function ok(node, message) {
 
 /* ------------------------------------------------------------------ views */
 
-var VIEWS = ["console", "sensors", "sensor", "run", "setup", "safety"];
+var VIEWS = ["console", "sensors", "sensor", "run", "setup", "safety", "preflight"];
 
 /*
   One page at a time. `kind` names the sensor for the "sensor" page. The
@@ -334,6 +335,7 @@ function showView(name, kind) {
   el("nav-run").classList.toggle("nav-active", name === "run");
   el("nav-setup").classList.toggle("nav-active", name === "setup");
   el("nav-safety").classList.toggle("nav-active", name === "safety");
+  el("nav-preflight").classList.toggle("nav-active", name === "preflight");
   state.sensorOrder.forEach(function (sensorKind) {
     var entry = state.sensors[sensorKind];
     entry.nav.classList.toggle("nav-active", name === "sensor" && sensorKind === state.sensorKind);
@@ -1048,6 +1050,90 @@ function renderSto() {
   el("start").disabled = !ready || !status || !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
   // The manual card starts a bench session only: the one start the declaration admits.
   el("manual-start").disabled = !(ready || bridged) || !state.motionEnabled;
+  // And neither while the pre-flight has a red blocking control for its kind of start.
+  var occupied = preflightBlock("occupied");
+  var bench = preflightBlock("bench");
+  el("start").disabled = el("start").disabled || Boolean(occupied);
+  el("manual-start").disabled = el("manual-start").disabled || Boolean(bench);
+  text(el("start-preflight-note"), occupied ? "Depart refuse, " + occupied : "");
+  text(el("manual-preflight-note"), bench ? "Depart refuse, " + bench : "");
+}
+
+/* ------------------------------------------------------------------ pre-flight */
+
+/*
+  The console's pre-flight (ANH-142), from /api/preflight: every control for
+  a bench start and for a start with a person on board, as the console judges
+  it now. The page writes the console's words and decides nothing; a start is
+  judged again by the console whatever this page shows.
+*/
+var PREFLIGHT_WORDS = { ok: "vert", pending: "en cours", warn: "avertissement", block: "BLOQUANT" };
+var PREFLIGHT_KINDS = { ok: "good", pending: "", warn: "warn", block: "bad" };
+
+/** Why a start of this occupancy is refused now, or "" when the pre-flight lets it. */
+function preflightBlock(occupancy) {
+  var row = state.preflight;
+  var report = row ? row[occupancy] : null;
+  return report && report.first_block ? report.first_block : "";
+}
+
+function preflightCell(control) {
+  var cell = make("td");
+  var badge = make("span");
+  pill(badge, PREFLIGHT_WORDS[control.state] || control.state, PREFLIGHT_KINDS[control.state]);
+  cell.appendChild(badge);
+  return cell;
+}
+
+function renderPreflight(row) {
+  state.preflight = row;
+  var rows = el("preflight-rows");
+  rows.textContent = "";
+  el("preflight-run").disabled = !row;
+  if (!row) {
+    pill(el("preflight-state"), "aucun", "");
+    text(el("preflight-summary"), "cette console ne juge aucun pre-vol");
+    renderSto();
+    return;
+  }
+  var verdict = row.running ? "pending" : row.occupied.verdict === "block" || row.bench.verdict === "block" ? "block" : row.occupied.verdict;
+  pill(el("preflight-state"), row.running ? "en cours" : PREFLIGHT_WORDS[verdict] || verdict, PREFLIGHT_KINDS[verdict] || "");
+  text(
+    el("preflight-summary"),
+    (row.running ? "Pre-vol en cours. " : "") +
+      "Dernier pre-vol termine : " +
+      (row.last ? PREFLIGHT_WORDS[row.last] || row.last : "aucun") +
+      ". Batterie BITalino : " +
+      (row.battery_pct === null ? "non lue" : Math.floor(row.battery_pct) + " %") +
+      "."
+  );
+  row.occupied.controls.forEach(function (onBoard, index) {
+    var atBench = row.bench.controls[index];
+    var line = make("tr");
+    line.appendChild(make("td", "", onBoard.label));
+    line.appendChild(preflightCell(atBench));
+    line.appendChild(preflightCell(onBoard));
+    line.appendChild(make("td", "", onBoard.state !== "ok" ? onBoard.detail : atBench.detail));
+    rows.appendChild(line);
+  });
+  renderSto();
+}
+
+function loadPreflight() {
+  return api("/api/preflight").then(renderPreflight).catch(function () {
+    /* the banner and the token note already say the API is unreachable */
+  });
+}
+
+function doRunPreflight() {
+  api("/api/preflight/run", { method: "POST" })
+    .then(function (row) {
+      ok(el("preflight-note"), "pre-vol relance : la batterie du BITalino est relue, puis chaque controle est attendu");
+      renderPreflight(row);
+    })
+    .catch(function (error) {
+      problem(el("preflight-note"), error);
+    });
 }
 
 /*
@@ -4052,6 +4138,10 @@ function start() {
   el("nav-safety").onclick = function () {
     showView("safety");
   };
+  el("nav-preflight").onclick = function () {
+    showView("preflight");
+  };
+  el("preflight-run").onclick = doRunPreflight;
   el("run-goto-safety").onclick = function () {
     showView("safety");
   };
@@ -4116,6 +4206,7 @@ function start() {
 
   window.setInterval(refreshLiveness, 500);
   window.setInterval(loadPanel, PANEL_MS);
+  window.setInterval(loadPreflight, PANEL_MS);
   window.setInterval(loadRemoteLaunch, PANEL_MS);
   window.setInterval(loadFeedback, PANEL_MS);
   window.setInterval(loadSensors, SENSORS_MS);
@@ -4133,6 +4224,7 @@ function start() {
 
 function boot() {
   loadPanel();
+  loadPreflight();
   loadRemoteLaunch();
   loadFeedback();
   loadSensors();
