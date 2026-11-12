@@ -1,0 +1,15 @@
+{
+  "name": "preflight_clock_off_occupied",
+  "description": "ANH-142: the wall clock may be 60 s off, more than the 5 s a start with a person on board accepts. The pre-flight refuses it with that reason, and nothing turns.",
+  "tags": ["manual", "preflight", "occupied"],
+  "kind": "manual",
+  "duration_s": 20,
+  "preroll_s": 5,
+  "manual": {"occupancy": "occupied"},
+  "preflight": {"clock_error_s": 60},
+  "expect": {
+    "start": "refused",
+    "refusal": "pre-vol : horloge : erreur jusqu'a 60.0 s, 5 s au plus avec une personne a bord",
+    "max_output_rpm": 0.0
+  }
+}

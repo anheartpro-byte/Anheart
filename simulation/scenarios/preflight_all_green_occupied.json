@@ -1,0 +1,19 @@
+{
+  "name": "preflight_all_green_occupied",
+  "description": "ANH-142: every blocking control green, the ECG good for 30 s within a 40 s pre-roll: a session with a person on board starts in under 45 s, and runs to the operator's stop.",
+  "tags": ["manual", "preflight", "occupied", "nominal"],
+  "kind": "manual",
+  "duration_s": 150,
+  "preroll_s": 40,
+  "manual": {"occupancy": "occupied"},
+  "preflight": {},
+  "actions": [
+    {"at_s": 2, "do": "manual_target", "output_rpm": 10.0, "expect": "accepted"},
+    {"at_s": 90, "do": "operator_stop"}
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "reaches_output_rpm": 10.0,
+    "max_output_rpm": 10.05
+  }
+}

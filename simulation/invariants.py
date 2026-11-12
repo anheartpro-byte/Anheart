@@ -396,6 +396,11 @@ def check_expectations(result: RunResult) -> tuple[Violation, ...]:  # noqa: PLR
         found.append(Violation("expect_start", 0.0, f"start refused: {result.start_refusal}"))
     if expect.start is Expectation.REFUSED and started:
         found.append(Violation("expect_start", 0.0, "start was accepted"))
+    said = [message.text for message in result.messages if message.source == "refusal"]
+    if expect.refusal is not None and not any(expect.refusal in text for text in said):
+        found.append(
+            Violation("expect_refusal", 0.0, f"no refusal says {expect.refusal!r}: {said}")
+        )
     if expect.end_reason is not None and final.end_reason != expect.end_reason.value:
         found.append(
             Violation(

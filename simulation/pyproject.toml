@@ -113,7 +113,7 @@ known-first-party = ["simulation", "src"]
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = [
     "src.units.Bpm", "src.units.GLoad", "src.units.Hertz", "src.units.Metres",
-    "src.units.Monotonic", "src.units.MotorRpm", "src.units.OutputRpm",
+    "src.units.Monotonic", "src.units.MotorRpm", "src.units.OutputRpm", "src.units.Percent",
     "src.units.RpmPerSecond", "src.units.Seconds", "src.units.UnixMillis",
 ]
 

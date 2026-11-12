@@ -1,0 +1,15 @@
+{
+  "name": "preflight_disk_full_bench",
+  "description": "ANH-142: 100 MB free under the records, under the 500 MB a session needs. The pre-flight refuses even a bench start: the session could not be recorded.",
+  "tags": ["manual", "preflight", "bench"],
+  "kind": "manual",
+  "duration_s": 20,
+  "preroll_s": 5,
+  "manual": {"occupancy": "bench", "ceiling_motor_rpm": 300},
+  "preflight": {"disk_free_mb": 100},
+  "expect": {
+    "start": "refused",
+    "refusal": "pre-vol : espace disque insuffisant pour l'enregistrement de seance : 100 Mo libres",
+    "max_output_rpm": 0.0
+  }
+}

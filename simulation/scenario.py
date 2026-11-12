@@ -66,7 +66,7 @@ from src.training.plan import (
 )
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, SignalQuality
-from src.units import Bpm, Metres, MotorRpm, OutputRpm, Seconds
+from src.units import Bpm, Metres, MotorRpm, OutputRpm, Percent, Seconds
 
 SCENARIO_DIR: Final[Path] = Path(__file__).resolve().parent / "scenarios"
 
@@ -465,8 +465,23 @@ class ManualSpec:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PreflightSpec:
+    """The console's pre-flight (ANH-142), judged before the start, on what the simulation
+    cannot measure, said here: the BITalino's battery, the wall clock, the free disk."""
+
+    battery: Percent = Percent(100.0)
+    clock_error: Seconds = Seconds(0.05)
+    """The error a time service answers for, estimated and guaranteed alike."""
+
+    disk_free_mb: float = 10_000.0
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Expect:
     start: Expectation = Expectation.ACCEPTED
+    refusal: str | None = None
+    """Words the refusal of the start says, when it is expected refused."""
+
     end_reason: EndReason | None = None
     final_state: RuntimeState | None = None
     rules: tuple[str, ...] = ()
@@ -500,6 +515,9 @@ class Scenario:
     sto: StoVariant = StoVariant.SIM_READY
     actions: tuple[Action, ...] = ()
     expect: Expect = field(default_factory=Expect)
+    preflight: PreflightSpec | None = None
+    """The console's pre-flight, judged at the start; ``None``: no list judges it."""
+
     known_defect: str | None = None
     """Set when the expectations describe CORRECT behaviour that ``raspberry-pi/src``
     does not deliver today: the battery marks the scenario xfail(strict), so it
@@ -537,6 +555,7 @@ _TOP_KEYS: Final[frozenset[str]] = frozenset(
         "sto_source",
         "actions",
         "expect",
+        "preflight",
         "known_defect",
     }
 )
@@ -779,6 +798,7 @@ def _expect(reader: Reader) -> Expect:
         frozenset(
             {
                 "start",
+                "refusal",
                 "end_reason",
                 "final_state",
                 "rules",
@@ -793,6 +813,7 @@ def _expect(reader: Reader) -> Expect:
     ceiling = sub.optional_number("max_output_rpm")
     expect = Expect(
         start=_enum(sub, "start", Expectation, Expectation.ACCEPTED) or Expectation.ACCEPTED,
+        refusal=sub.text("refusal") if sub.has("refusal") else None,
         end_reason=_enum(sub, "end_reason", EndReason, None) if sub.has("end_reason") else None,
         final_state=(
             _enum(sub, "final_state", RuntimeState, None) if sub.has("final_state") else None
@@ -907,6 +928,25 @@ def _drive(reader: Reader) -> DriveSpec:
     return spec
 
 
+def _preflight(reader: Reader) -> PreflightSpec | None:
+    if not reader.has("preflight"):
+        return None
+    sub = Reader(reader.mapping("preflight"), "preflight")
+    sub.unknown_keys(frozenset({"bitalino_battery_pct", "clock_error_s", "disk_free_mb"}))
+    spec = PreflightSpec(
+        battery=Percent(sub.number("bitalino_battery_pct", 100.0)),
+        clock_error=Seconds(sub.number("clock_error_s", 0.05)),
+        disk_free_mb=sub.number("disk_free_mb", 10_000.0),
+    )
+    if not 0.0 <= spec.battery <= 100.0:  # noqa: PLR2004  # a percentage
+        sub.note("'bitalino_battery_pct' must be in [0, 100]")
+    if min(spec.clock_error, spec.disk_free_mb) < 0.0:
+        sub.note("'clock_error_s' and 'disk_free_mb' must not be negative")
+    for problem in sub.problems:
+        reader.note(problem)
+    return spec
+
+
 def _manual(reader: Reader) -> ManualSpec:
     sub = Reader(reader.mapping("manual"), "manual")
     sub.unknown_keys(frozenset({"occupancy", "ceiling_motor_rpm"}))
@@ -959,6 +999,7 @@ def parse_scenario(raw: str, *, where: str = "scenario") -> Result[Scenario, Sce
         sto=_enum(reader, "sto_source", StoVariant, StoVariant.SIM_READY) or StoVariant.SIM_READY,
         actions=_actions(reader),
         expect=_expect(reader),
+        preflight=_preflight(reader),
         known_defect=reader.text("known_defect") if reader.has("known_defect") else None,
     )
     if reader.problems:
