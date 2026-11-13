@@ -267,7 +267,7 @@ describe("ANH-238 EX-8 only a row of machine_api_keys opens the machine routes",
     "a revoked key",
     "an expired key",
   ] as const)(
-    "refuses %s with 401 on all 13 routes and both queries, and opens them to a valid key",
+    "refuses %s with 401 on all 14 routes and both queries, and opens them to a valid key",
     async (kind) => {
       // Given the machine's first key, then a second valid key of the same machine.
       const f = await machineFixture(modules);
@@ -295,7 +295,7 @@ describe("ANH-238 EX-8 only a row of machine_api_keys opens the machine routes",
           ctx.db.patch(first._id, { expiresAt: Date.now() - 1 }),
         );
       // Then every route refuses it before its own code, and both queries find nothing.
-      expect(machineRoutes).toHaveLength(13);
+      expect(machineRoutes).toHaveLength(14);
       for (const [method, path] of machineRoutes) {
         const response = await f.t.fetch(path, {
           method,

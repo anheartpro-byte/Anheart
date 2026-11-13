@@ -70,6 +70,10 @@ import {
 } from "./lib/auth";
 import { riderFitness, riderLaunchRefusal } from "./lib/fitness";
 import { liveStateValidator, machineProfileFields } from "./schema";
+import {
+  machineCatalogReportValidator,
+  machineCatalogValidator,
+} from "./lib/programmes";
 import { authorizedMachineLive } from "./lib/trainingPrivacy";
 import {
   BENCH_LAUNCH_SINCE,
@@ -1441,6 +1445,9 @@ export const getMachineLive = query({
         v.literal("ahead"),
       ),
       medicalParametersReferenceVersion: v.union(v.string(), v.null()),
+      // What the machine made of the signed catalogue (ANH-138); absent
+      // before a console of contract 1.11 said it.
+      programmeCatalog: v.optional(machineCatalogValidator),
       live: v.union(liveStateValidator, v.null()),
       stale: v.boolean(),
       // The server's clock in this answer (see listLaunchableMachines).
@@ -1459,6 +1466,7 @@ export const getMachineLive = query({
     return {
       status: machine.status,
       programsEnabled: machine.programsEnabled ?? false,
+      programmeCatalog: machine.programmeCatalog,
       medicalParametersVersion: machine.medicalParametersVersion,
       medicalParametersStatus: medicalParametersStatus(
         machine.medicalParametersVersion,
@@ -1804,6 +1812,8 @@ export const syncProfiles = internalMutation({
     storeRev: v.number(),
     programsEnabled: v.boolean(),
     profiles: v.array(profileValidator),
+    // Contract 1.11 (ANH-138); absent from an older console, which clears it.
+    catalog: v.optional(machineCatalogReportValidator),
   },
   returns: v.object({ count: v.number() }),
   handler: async (ctx, args) => {
@@ -1827,6 +1837,8 @@ export const syncProfiles = internalMutation({
     }
     await ctx.db.patch(args.machineId, {
       programsEnabled: args.programsEnabled,
+      programmeCatalog:
+        args.catalog === undefined ? undefined : { ...args.catalog, reportedAt: now },
     });
     return { count: args.profiles.length };
   },

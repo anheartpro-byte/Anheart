@@ -10,7 +10,7 @@ import {
   feedbackComfortValidator,
   feedbackSubmitterValidator,
 } from "./lib/feedback";
-import { programmeFields } from "./lib/programmes";
+import { machineCatalogValidator, programmeFields } from "./lib/programmes";
 import { recordState } from "./lib/recordStorage";
 import {
   summaryFiguresValidator,
@@ -486,7 +486,8 @@ export default defineSchema({
     .index("by_organization", ["organizationId"]),
 
   // The programme catalogue (ANH-137), written by the Anheart admin only
-  // (convex/programmes.ts). Not yet sent to the machines (ANH-138).
+  // (convex/programmes.ts). What is published is sent to the machines,
+  // signed (`GET /api/machine/programmes`, ANH-138).
   programmes: defineTable(programmeFields)
     .index("by_status", ["status"])
     .index("by_profile_id", ["profileId"]),
@@ -517,6 +518,10 @@ export default defineSchema({
     deletedBy: v.optional(v.id("users")), // Who deleted it
     // Reported by the Pi: whether this build accepts programmed (auto) sessions.
     programsEnabled: v.optional(v.boolean()),
+    // Reported by the Pi with its programmes (contract 1.11, ANH-138): the
+    // catalogue revision it accepted, null on its fallback programmes, and the
+    // programmes it refused with why. Absent: a console that says nothing of it.
+    programmeCatalog: v.optional(machineCatalogValidator),
     live: v.optional(liveStateValidator),
     // Announced by the Pi with each heartbeat (contracts/machine-api.json):
     // its software version (a git tag, e.g. "pi-0.4.2"; absent when it sent

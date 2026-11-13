@@ -13,8 +13,10 @@
  * two sides cannot disagree; a programme records the version of that file as
  * `medicalParametersVersion`.
  */
-import { v, type ObjectType } from "convex/values";
+import { v, type Infer, type ObjectType } from "convex/values";
+import machineApi from "../../contracts/machine-api.json";
 import shippedMedical from "../../raspberry-pi/config/medical_parameters.json";
+import { decodeBase64 } from "./medicalParameters";
 
 /** `NAMEPLATE_MOTOR_RPM`: `max_rpm` above it needs `allow_above_nameplate`. */
 export const NAMEPLATE_MOTOR_RPM = 1380;
@@ -238,5 +240,146 @@ export function programmeRefusal(p: ProgrammeProfile): ProgrammeRefusal | null {
     verdict: "rejected",
     violations,
     detail: `training profile refused: ${violations.join(", ")}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The signed catalogue the machines fetch (ANH-138, `programme_catalog` of
+// contracts/machine-api.json, contract 1.11)
+// ---------------------------------------------------------------------------
+
+/** The Convex environment variable that holds the catalogue's Ed25519 private key. */
+export const CATALOG_SIGNING_KEY_ENV = machineApi.programme_catalog.signing_key_env;
+const MAX_REPORT_ENTRIES = machineApi.programme_catalog.max_report_entries;
+const MAX_REASON_CHARS = machineApi.programme_catalog.max_reason_chars;
+
+/** What the catalogue is made of: a programme's profile, state and medical version. */
+export type CatalogRow = ProgrammeProfile & {
+  status: Infer<typeof programmeStatusValidator>;
+  revision: number;
+  medicalParametersVersion: string;
+};
+
+/**
+ * The global revision of the catalogue: one more at each publication and at
+ * each retirement, the only two moves that change what is published (a
+ * programme never leaves `retired`, nor goes back to `draft`).
+ */
+export function catalogRevision(rows: readonly CatalogRow[]): number {
+  return rows.reduce(
+    (sum, row) => sum + row.revision + (row.status === "retired" ? 1 : 0),
+    0,
+  );
+}
+
+/** A published programme as the console reads a profile (`profile_to_document`). */
+function programmeDocument(row: CatalogRow) {
+  return {
+    profile_id: row.profileId,
+    name: row.name,
+    total_duration_s: row.totalDurationS,
+    baseline_s: row.baselineS,
+    warmup_max_s: row.warmupMaxS,
+    hold_min_s: row.holdMinS,
+    cooldown_s: row.cooldownS,
+    recovery_s: row.recoveryS,
+    zone_low_bpm: row.zoneLowBpm,
+    zone_high_bpm: row.zoneHighBpm,
+    hard_max_bpm: row.hardMaxBpm,
+    critical_bpm: row.criticalBpm,
+    subject_hr_max: row.subjectHrMax,
+    min_run_rpm: row.minRunRpm,
+    max_rpm: row.maxRpm,
+    warmup_rpm_ceiling_fraction: row.warmupRpmCeilingFraction,
+    channels: row.channels,
+    allow_above_nameplate: row.allowAboveNameplate,
+    medical_parameters_version: row.medicalParametersVersion,
+  };
+}
+
+/**
+ * The text the machines are sent signed: the revision, and every published
+ * programme unless `since` is that revision already. Its bytes are what is
+ * signed, so it travels as text and is never serialised again.
+ */
+export function catalogPayload(rows: readonly CatalogRow[], since: number | null): string {
+  const revision = catalogRevision(rows);
+  const unchanged = since === revision;
+  const programmes = unchanged
+    ? []
+    : rows
+        .filter((row) => row.status === "published")
+        .sort((a, b) => (a.profileId < b.profileId ? -1 : 1))
+        .map(programmeDocument);
+  return JSON.stringify({ catalogRevision: revision, unchanged, programmes });
+}
+
+/**
+ * The Ed25519 signature of `payload`'s UTF-8 bytes, in base64, by `key` (PKCS #8,
+ * in PEM or in bare base64); null when the key is not one.
+ */
+export async function signCatalog(payload: string, key: string): Promise<string | null> {
+  const der = decodeBase64(key.replace(/-----(BEGIN|END) PRIVATE KEY-----|\s/g, ""));
+  if (der === null) return null;
+  try {
+    const signer = await crypto.subtle.importKey("pkcs8", der, { name: "Ed25519" }, false, [
+      "sign",
+    ]);
+    const signature = await crypto.subtle.sign(
+      { name: "Ed25519" },
+      signer,
+      new TextEncoder().encode(payload),
+    );
+    return btoa(String.fromCharCode(...new Uint8Array(signature)));
+  } catch {
+    return null;
+  }
+}
+
+const machineCatalogReportFields = {
+  revision: v.union(v.number(), v.null()), // null: its fallback programmes
+  rejected: v.array(v.object({ profileId: v.string(), reason: v.string() })),
+};
+/** What a machine says of the catalogue with its programmes. */
+export const machineCatalogReportValidator = v.object(machineCatalogReportFields);
+export type MachineCatalogReport = Infer<typeof machineCatalogReportValidator>;
+/** The same, as `machines.programmeCatalog` keeps it, with when it was said. */
+export const machineCatalogValidator = v.object({
+  ...machineCatalogReportFields,
+  reportedAt: v.number(),
+});
+
+const shortText = (value: unknown, max: number): value is string =>
+  typeof value === "string" && value.length <= max;
+
+/**
+ * The catalogue report of a `POST /api/machine/profiles` body: undefined for a
+ * console before 1.11, which sends none; null when it is malformed.
+ */
+export function catalogReportOf(
+  body: Record<string, unknown>,
+): MachineCatalogReport | undefined | null {
+  if (!("catalogRevision" in body)) return undefined;
+  const { catalogRevision: revision, accepted, rejected } = body;
+  if (
+    !(revision === null || (Number.isSafeInteger(revision) && (revision as number) >= 0)) ||
+    !Array.isArray(accepted) ||
+    !Array.isArray(rejected) ||
+    accepted.length + rejected.length > MAX_REPORT_ENTRIES ||
+    !accepted.every((id) => shortText(id, 64))
+  )
+    return null;
+  const refused = rejected.map((entry: unknown) => {
+    const { profileId, reason } = (
+      typeof entry === "object" && entry !== null ? entry : {}
+    ) as Record<string, unknown>;
+    return shortText(profileId, 64) && shortText(reason, MAX_REASON_CHARS)
+      ? { profileId, reason }
+      : null;
+  });
+  if (refused.some((entry) => entry === null)) return null;
+  return {
+    revision: revision as number | null,
+    rejected: refused as MachineCatalogReport["rejected"],
   };
 }

@@ -4,11 +4,17 @@
  *
  * draft -> validated (by an admin who did not write it) -> published ->
  * retired. Every write runs the Pi's validation (`convex/lib/programmes.ts`)
- * and is audited. Publishing to the machines is ANH-138.
+ * and is audited. The machines fetch what is published, signed
+ * (`publishedCatalog`, `GET /api/machine/programmes`, ANH-138).
  */
 import type { WithoutSystemFields } from "convex/server";
 import { ConvexError, v } from "convex/values";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import {
+  internalQuery,
+  mutation,
+  query,
+  type MutationCtx,
+} from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { getCurrentUserOrThrow, requireRole } from "./lib/auth";
@@ -16,6 +22,7 @@ import { audit, userActor, type AuditAction } from "./lib/audit";
 import { refusal } from "./lib/errors";
 import { currentMedicalParameters } from "./lib/medicalParameters";
 import {
+  catalogPayload,
   PROGRAMME_MEDICAL_VERSION,
   PROGRAMME_SCHEMA_VERSION,
   programmeProfileFields,
@@ -57,6 +64,23 @@ export const list = query({
             ? null
             : await ctx.storage.getUrl(programme.simulationReport),
       })),
+    );
+  },
+});
+
+/**
+ * The text of the catalogue the machines are sent (`catalogPayload`): the
+ * Anheart catalogue, its revision counting its retired programmes too.
+ */
+export const publishedCatalog = internalQuery({
+  args: { since: v.union(v.number(), v.null()) },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    // shortcut: whole catalogue in one read, as `list`; paginate past a few thousand.
+    const rows = await ctx.db.query("programmes").collect();
+    return catalogPayload(
+      rows.filter((row) => row.organizationId === null),
+      args.since,
     );
   },
 });
