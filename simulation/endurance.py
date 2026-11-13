@@ -109,7 +109,7 @@ from src.result import Err
 from src.telemetry import TelemetryClient
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import RULE_LOOP_STALL
-from src.training.types import TelemetrySnapshot
+from src.training.types import SafetyVerdict, TelemetrySnapshot
 from src.units import Monotonic, Seconds, UnixMillis
 from src.web.app import create_app
 from src.web.schemas import ProfileListRow
@@ -946,6 +946,17 @@ class Day:
 # =========================================================================
 
 
+def stall_among(held: Sequence[SafetyVerdict | None]) -> str | None:
+    """The console's own ``loop_stall`` verdict among those its supervisor holds, in its words.
+
+    ``held``: its latched floor, and what ``GO_SILENT`` replaced there (``silenced``).
+    """
+    for verdict in held:
+        if verdict is not None and verdict.rule == RULE_LOOP_STALL:
+            return verdict.detail
+    return None
+
+
 def free_port() -> int:
     """A loopback port the system says is free."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -1035,7 +1046,8 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         sync = day.sync()
     finally:
         # What the supervisor latched over the run, read before the console's exit acts.
-        floor = panel.runtime.supervisor.floor
+        supervisor = panel.runtime.supervisor
+        floor, silenced = supervisor.floor, supervisor.silenced
         # The console's own exit: it stops the drive, closes the record, ends its tasks.
         stop.set()
         code = await served
@@ -1049,11 +1061,19 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         exact=world.periods.summary(),
         merged=world.merged.summary(),
         seen=world.seen,
-        verdict=None if floor is None or floor.rule != RULE_LOOP_STALL else floor.detail,
+        verdict=stall_among((floor, silenced)),
     )
     left = None if code == 0 else f"the console left with exit code {code}"
     blind = (
         "the tick meter stopped before the console did: its page was evicted" if unwatched else None
+    )
+    # A run in good health ends with nothing latched; a verdict more severe than a stall
+    # would also hide that stall from tick_gap.
+    held = (
+        None
+        if floor is None
+        else f"the console ends the run with a latched safety verdict ({floor.rule}): "
+        f"{floor.detail}"
     )
     return Run(
         mode=Mode.REAL_TIME,
@@ -1067,7 +1087,7 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         sessions=tuple(day.sessions),
         sync=sync,
         data=data,
-        anomaly=anomaly or left or blind,
+        anomaly="; ".join(cause for cause in (anomaly, left, blind, held) if cause) or None,
         notes=(*NOTES, NOTE_REAL_TICK),
     )
 

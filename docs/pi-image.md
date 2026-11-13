@@ -1313,23 +1313,34 @@ du tableau de bord sont copiés à part.
      trois périodes de 200 ms, lu dans le superviseur et non recopié) et le
      verdict reste levé jusqu'à un acquittement que l'essai ne fait jamais. En
      contrôle indépendant, aucun écart entre deux instantanés consécutifs reçus
-     par l'abonné du hub n'atteint ce seuil. Le hub fond parfois deux
-     instantanés en un (il ne sert une page qu'une fois toutes les 0,15 s) :
-     l'écart lu par-dessus additionne alors deux écarts réels, il est compté à
-     part et n'est pas jugé comme un gel, le verdict de la console faisant foi
-     pour lui. Enfin les tics reçus couvrent au moins 90 % de l'essai : une
-     page évincée en cours de route fait échouer `tick_gap` et `sessions`. Un
-     `FAIL` nomme sa cause : verdict de la console, écart consécutif, ou
-     relevé incomplet ;
+     par l'abonné du hub n'atteint ce seuil. La règle de la console ne se lève
+     qu'une fois le seuil dépassé, ce contrôle échoue dès qu'il est atteint,
+     comme demandé ; les deux ne diffèrent que pour un écart d'exactement
+     600 ms. Le hub fond parfois deux instantanés en un (il ne sert une page
+     qu'une fois toutes les 0,15 s) : l'écart lu par-dessus additionne alors
+     deux écarts réels, il est compté à part et n'est pas jugé comme un gel, le
+     verdict de la console faisant foi pour lui. Enfin les tics reçus couvrent
+     au moins 90 % de l'essai. Une page évincée en cours de route est une
+     anomalie qui fait échouer `sessions`, et `tick_gap` aussi quand elle l'a
+     été avant les derniers 10 % de l'essai. Un `FAIL` nomme sa cause :
+     verdict de la console, écart consécutif, aucun écart relevé, ou relevé
+     incomplet. Le superviseur ne garde que le plus sévère de ses verdicts
+     levés (et, derrière un `GO_SILENT`, celui qu'il a remplacé, lu aussi) :
+     un verdict plus sévère levé après un gel, ou aussi sévère levé avant lui,
+     cache le gel au verdict lu par `tick_gap` (l'écart lu le voit encore
+     s'il est consécutif), mais **tout verdict encore levé à la fin de
+     l'essai** est une anomalie qui fait échouer `sessions`, et l'essai ;
    * `tick` : 99e centile de la durée du tic sous 150 ms ;
    * `rss` : mémoire à 10 % près de son premier relevé après la première heure ;
    * `descriptors` : aucune fuite qui commence avant le dernier quart d'heure.
      Le relevé le plus bas des quinze dernières minutes (le dernier quart de
-     l'heure jugée) ne dépasse pas le deuxième relevé le plus bas de ce qui
-     précède, depuis la fin de la première heure. Un descripteur qui fuit
-     n'est jamais refermé et relève tous les relevés suivants. Un descripteur
-     ouvert un instant (un bloc en cours d'écriture, une requête) ou refermé un
-     instant ne déplace qu'un relevé, et ne fait pas échouer l'essai ;
+     l'heure jugée) ne dépasse pas le bas de ce qui précède, depuis la fin de
+     la première heure : le relevé qui suit son dixième le plus bas. Un
+     descripteur qui fuit n'est jamais refermé et relève tous les relevés
+     suivants. Des relevés pris avec un descripteur ouvert un instant (un bloc
+     en cours d'écriture, une requête) ne font pas échouer l'essai, tant qu'un
+     relevé de la fin est propre ; avant la fin, un dixième des relevés peut
+     avoir été pris avec un descripteur refermé un instant ;
    * `data`, `rotation`, `sessions` : dossier de données borné, enregistrements
      confirmés, chaque séance finie comme prévu et livrée, heartbeats avec
      santé ;
@@ -1342,7 +1353,12 @@ du tableau de bord sont copiés à part.
    * une fuite de descripteurs qui ne commence que dans les **quinze dernières
      minutes** n'est pas vue ; une fuite qui commence et cesse pendant la
      première heure non plus (elle n'est pas jugée), ni un seul descripteur
-     gardé une fois pour toutes juste après elle ;
+     gardé une fois pour toutes dans le premier dixième de ce qui suit ;
+   * un seul relevé des quinze dernières minutes pris avec un descripteur
+     refermé un instant cache une fuite d'un descripteur. C'est le prix du
+     relevé le plus bas de la fin, qui tolère tous les relevés pris avec un
+     descripteur de plus, le seul bruit vu jusqu'ici (les comptes sont restés
+     plats dans tous les essais) ;
    * une boucle qui cesse de tourner **moins de 3 s** avant l'arrêt de l'essai
      et ne tourne plus ensuite : aucun tic ne vient alors mesurer l'écart, ni
      pour la règle de la console ni pour l'abonné. Passé 3 s, la sortie de la
@@ -1446,8 +1462,10 @@ fait de l'extérieur, en lecture seule, depuis une seconde session SSH.
    l'essai simulé (mémoire stable à 10 % près après la première heure, aucun
    descripteur qui fuit : le relevé le plus bas de la fin de la journée, son
    dernier quart après la première heure et une heure au plus, ne dépasse pas
-   le deuxième relevé le plus bas de ce qui précède ; une fuite qui ne commence
-   que dans cette fin n'est pas vue) :
+   le bas de ce qui précède, le relevé qui suit son dixième le plus bas ; une
+   fuite qui ne commence que dans cette fin n'est pas vue, ni une fuite d'un
+   descripteur si un relevé de la fin a été pris avec un descripteur refermé
+   un instant) :
 
    ```sh
    scp <utilisateur>@<pi>:endurance-banc.csv .
