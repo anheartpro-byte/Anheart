@@ -14,7 +14,7 @@ import {
 } from "./lib/auth";
 import { normalizedEmail } from "./lib/patientInvitation";
 import { audit, SYSTEM_ACTOR } from "./lib/audit";
-import { OPERATOR_ROLES, releaseOperator } from "./lib/consoleAccess";
+import { insertMembership, updateMembership } from "./lib/memberships";
 import {
   clerkEventValidator,
   parseClerkEvent,
@@ -86,8 +86,7 @@ export const applyEvent = internalMutation({
           .withIndex("by_user", (q) => q.eq("userId", user._id))
           .collect();
         for (const row of memberships) {
-          await ctx.db.patch(row._id, { active: false });
-          await releaseOperator(ctx, user._id, row.organizationId, event.occurredAt);
+          await updateMembership(ctx, row, { active: false }, event.occurredAt);
           if (row.active) {
             await audit(ctx, {
               actor: SYSTEM_ACTOR,
@@ -134,10 +133,8 @@ export const applyEvent = internalMutation({
               q.eq("organizationId", organization._id),
             )
             .collect();
-          for (const row of memberships) {
-            await ctx.db.patch(row._id, { active: false });
-            await releaseOperator(ctx, row.userId, organization._id, event.occurredAt);
-          }
+          for (const row of memberships)
+            await updateMembership(ctx, row, { active: false }, event.occurredAt);
           await audit(ctx, {
             actor: SYSTEM_ACTOR,
             source: "webhook",
@@ -245,11 +242,11 @@ export const applyEvent = internalMutation({
         clerkEventAt: event.occurredAt,
       };
       if (!row) {
-        await ctx.db.insert("memberships", {
-          userId: user._id,
-          organizationId: organization._id,
-          ...values,
-        });
+        await insertMembership(
+          ctx,
+          { userId: user._id, organizationId: organization._id, ...values },
+          event.occurredAt,
+        );
         if (values.active)
           await audit(ctx, {
             actor: SYSTEM_ACTOR,
@@ -265,9 +262,7 @@ export const applyEvent = internalMutation({
           row.clerkMembershipId !== event.membershipId ||
           event.deleted)
       ) {
-        await ctx.db.patch(row._id, values);
-        if (!values.active || !OPERATOR_ROLES.includes(values.role))
-          await releaseOperator(ctx, user._id, row.organizationId, event.occurredAt);
+        await updateMembership(ctx, row, values, event.occurredAt);
         if (!row.active && values.active) {
           await audit(ctx, {
             actor: SYSTEM_ACTOR,

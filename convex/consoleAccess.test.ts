@@ -17,12 +17,22 @@ import { CATALOG_SIGNING_KEY_ENV } from "./lib/programmes";
 import {
   isAcceptableCode,
   MAX_DEVICES,
+  MAX_NAME_CHARS,
   MAX_OPERATORS,
   OPERATOR_CODE,
   operatorListPayload,
+  releaseOperator,
+  shownName,
   tokenSha256,
 } from "./lib/consoleAccess";
-import { as, modules, NOW, ORG_A_CLERK_ORG, seedWorld, type World } from "./test.setup";
+import {
+  as,
+  modules,
+  NOW,
+  ORG_A_CLERK_ORG,
+  seedWorld,
+  type World,
+} from "./test.setup";
 import machineApi from "../contracts/machine-api.json";
 
 afterEach(() => {
@@ -371,11 +381,123 @@ describe("ANH-152 an operator who leaves the operator roles", () => {
     expect(gone.operatorCode).toBeUndefined();
   });
 
+  it("is released when the sign-in token's mirror gives them a role that is not an operator's", async () => {
+    const w = await seedWorld(modules);
+    const listed = await operatorOnTheList(w);
+    // The token names centre A with a patient's role: the mirror takes it.
+    await w.t
+      .withIdentity({ subject: "manager", org_id: ORG_A_CLERK_ORG, org_role: "org:patient" })
+      .mutation(api.users.getOrCreateUser, {});
+    expect(await listed()).toEqual([]);
+    const [mirrored] = await rowsOf(w, w.manager);
+    expect(mirrored.disabledAt).toBeDefined();
+    expect(mirrored.operatorCode).toBeUndefined();
+    // A gestionnaire again by the same mirror: still not on the list.
+    await w.t
+      .withIdentity({ subject: "manager", org_id: ORG_A_CLERK_ORG, org_role: "org:gestionnaire" })
+      .mutation(api.users.getOrCreateUser, {});
+    expect(await listed()).toEqual([]);
+  });
+
+  it("is released when Clerk deletes the organisation", async () => {
+    const w = await seedWorld(modules);
+    const listed = await operatorOnTheList(w);
+    await w.t.mutation(internal.clerkWebhook.applyEvent, {
+      eventId: "evt_organization_deleted",
+      event: {
+        kind: "organization",
+        deleted: true,
+        organization: {
+          id: ORG_A_CLERK_ORG,
+          name: "Centre A",
+          slug: "centre-a",
+          createdAt: NOW,
+          updatedAt: NOW + 1,
+        },
+        occurredAt: NOW + 1,
+        updatedAt: NOW + 1,
+      },
+    });
+    expect(await listed()).toEqual([]);
+    expect((await rowsOf(w, w.manager))[0].operatorCode).toBeUndefined();
+  });
+
   it("goes with the account an admin deletes, the hash of their code too", async () => {
     const w = await seedWorld(modules);
     await operatorOnTheList(w);
     await as(w.t, "orgAdmin").mutation(api.users.deleteUser, { userId: w.manager });
     expect(await rowsOf(w, w.manager)).toEqual([]);
+  });
+});
+
+describe("ANH-152 the rules of the list, one by one", () => {
+  const code = {
+    algorithm: "scrypt" as const,
+    n: OPERATOR_CODE.n,
+    r: OPERATOR_CODE.r,
+    p: OPERATOR_CODE.p,
+    salt: "c2VsLWRlLXRlc3QtMTIzNA==",
+    hash: "aGFjaGUtZGUtdGVzdC0zMi1vY3RldHMtYWJjZGVmZ2g=",
+  };
+
+  it("sorts operators and tablets by id, whatever order they come in", () => {
+    const payload = JSON.parse(
+      operatorListPayload({
+        machineId: "m",
+        issuedAt: 1,
+        operators: [
+          { userId: "c", name: "C", code },
+          { userId: "a", name: "A", code },
+          { userId: "b", name: "B", code },
+          { userId: "a", name: "A again", code },
+        ],
+        devices: [
+          { deviceId: "t2", name: "T2", tokenSha256: "2".repeat(64) },
+          { deviceId: "t1", name: "T1", tokenSha256: "1".repeat(64) },
+          { deviceId: "t3", name: "T3", tokenSha256: "3".repeat(64) },
+        ],
+      }),
+    ) as Payload;
+    expect(payload.operators.map((o) => o.userId)).toEqual(["a", "a", "b", "c"]);
+    expect(payload.devices.map((d) => d.deviceId)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  it("shows a name bounded, and the fallback for a blank one", () => {
+    expect(shownName("  ", "user-id")).toBe("user-id");
+    expect(shownName(" Jeanne ", "user-id")).toBe("Jeanne");
+    expect(Array.from(shownName("é".repeat(MAX_NAME_CHARS + 5), "x"))).toHaveLength(MAX_NAME_CHARS);
+  });
+
+  it("releases an operator in one organisation only, and once", async () => {
+    const w = await seedWorld(modules);
+    const [inA, inB] = await w.t.run(async (ctx) => {
+      const row = (machineId: Id<"machines">, organizationId: Id<"organizations">) =>
+        ctx.db.insert("machine_operators", {
+          organizationId,
+          machineId,
+          userId: w.manager,
+          operatorCode: code,
+          codeSetAt: NOW,
+          enabledAt: NOW,
+          enabledBy: w.orgAdmin,
+        });
+      return [await row(w.machine, w.orgA), await row(w.orgBMachine, w.orgB)];
+    });
+    const release = () => w.t.run((ctx) => releaseOperator(ctx, w.manager, w.orgA, NOW + 1));
+    expect(await release()).toBe(1);
+    // Already released: nothing left to change.
+    expect(await release()).toBe(0);
+    const [a, b] = await w.t.run(async (ctx) => [await ctx.db.get(inA), await ctx.db.get(inB)]);
+    expect(a).toMatchObject({ disabledAt: NOW + 1 });
+    expect(a?.operatorCode).toBeUndefined();
+    expect(b?.disabledAt).toBeUndefined();
+    expect(b?.operatorCode).toEqual(code);
+    // Disabled by an admin before, its code still held: the code goes, the date stays.
+    await w.t.run((ctx) => ctx.db.patch(inB, { disabledAt: NOW - 5 }));
+    expect(await w.t.run((ctx) => releaseOperator(ctx, w.manager, w.orgB, NOW + 2))).toBe(1);
+    const released = await w.t.run((ctx) => ctx.db.get(inB));
+    expect(released?.disabledAt).toBe(NOW - 5);
+    expect(released?.operatorCode).toBeUndefined();
   });
 });
 

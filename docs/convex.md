@@ -3479,11 +3479,17 @@ de [`contracts/machine-api.json`](../contracts/machine-api.json).
   au plus, 200 000 octets au plus) et entière à chaque réponse : la console
   compare ce qu'elle reçoit à ce qu'elle tient et n'écrit que ce qui change.
   Le départ d'un membre de l'organisation (fin de son appartenance, compte ou
-  organisation supprimés dans Clerk, rôle qui n'est plus admin ni
-  gestionnaire) désactive ses lignes `machine_operators` de cette
-  organisation et efface son code (`releaseOperator`, sans auteur dans
-  `disabledBy`) : revenu, il lui faut une nouvelle activation par un admin
-  et un nouveau code, jamais les anciens. La liste suivante ne le tient plus.
+  organisation supprimés, rôle qui n'est plus admin ni gestionnaire, par
+  Clerk, par un admin ou par le jeton de connexion) désactive ses lignes
+  `machine_operators` de cette organisation et efface son code
+  (`releaseOperator`, sans auteur dans `disabledBy`) : revenu, il lui faut
+  une nouvelle activation par un admin et un nouveau code, jamais les
+  anciens. La liste suivante ne le tient plus. Toute écriture d'une
+  appartenance passe par `convex/lib/memberships.ts` (webhook Clerk,
+  `updateUserRole`, le reflet du jeton dans `getOrCreateUser`, les
+  invitations, `deleteUser`, les migrations), qui fait ce retrait ; un test
+  (`convex/memberships.test.ts`) refuse tout autre module qui écrirait la
+  table.
 - **Ce qu'un tiers qui tient la liste peut faire.** Le texte n'est pas
   secret au sens d'une clé, mais il ne sort que vers la machine authentifiée
   par sa clé. Qui le tient (la clé de la machine volée, le disque du Pi lu)
