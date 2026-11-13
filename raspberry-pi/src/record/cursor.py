@@ -70,6 +70,13 @@ TEMP_SUFFIX: Final[str] = ".tmp"
 BASELINE_NAME: Final[str] = ".sync-baseline.json"
 """Next to the records: which of them were there before the synchronisation first looked."""
 
+LOST_STOPS_NAME: Final[str] = ".sync-lost-stops.json"
+"""Next to the records: the sessions ended on a stop, or of unknown end, that the sending gave
+up on and the operator has not acknowledged yet (ANH-145). Written as a cursor is."""
+
+LOST_STOPS_UNREADABLE: Final[str] = "registre des seances perdues illisible"
+"""What :func:`load_lost_stops` gives for a register it cannot read: a loss, to the safe side."""
+
 BOOT_ID_PATH: Final[Path] = Path("/proc/sys/kernel/random/boot_id")
 """Linux names each start of the system here. Absent elsewhere."""
 
@@ -167,6 +174,21 @@ class Baseline:
 _BASELINE: Final[TypeAdapter[Baseline]] = TypeAdapter(Baseline)
 
 
+@validated(frozen=True, slots=True, kw_only=True, config=ConfigDict(extra="forbid"))
+class LostStops:
+    """What the dashboard will never be sent of sessions that may have ended on a stop.
+
+    One line each, in the order they were lost: why, and which session. Kept
+    until the operator acknowledges them by name, across restarts.
+    """
+
+    schema_version: Literal[1] = 1
+    lost: tuple[str, ...] = ()
+
+
+_LOST_STOPS: Final[TypeAdapter[LostStops]] = TypeAdapter(LostStops)
+
+
 @dataclass(frozen=True, slots=True)
 class NoCursor:
     """The record has no cursor: the synchronisation never opened it."""
@@ -224,6 +246,26 @@ def load_baseline(root: Path) -> Baseline | None:
 def store_baseline(root: Path, baseline: Baseline) -> Result[None, CursorError]:
     """Write the baseline of ``root``, as a cursor is written. Blocking; never raises."""
     return _write(root / BASELINE_NAME, _BASELINE.dump_json(baseline))
+
+
+def load_lost_stops(root: Path) -> tuple[str, ...]:
+    """The losses ``root`` holds; none when there is no register. A register that cannot be
+    read is one loss (:data:`LOST_STOPS_UNREADABLE`): it may have held some. Never raises."""
+    try:
+        raw = (root / LOST_STOPS_NAME).read_bytes()
+    except FileNotFoundError:
+        return ()
+    except OSError:
+        return (LOST_STOPS_UNREADABLE,)
+    try:
+        return _LOST_STOPS.validate_json(raw).lost
+    except ValueError:
+        return (LOST_STOPS_UNREADABLE,)
+
+
+def store_lost_stops(root: Path, lost: tuple[str, ...]) -> Result[None, CursorError]:
+    """Write the losses of ``root``, as a cursor is written. Blocking; never raises."""
+    return _write(root / LOST_STOPS_NAME, _LOST_STOPS.dump_json(LostStops(lost=lost)))
 
 
 def _write(target: Path, document: bytes) -> Result[None, CursorError]:

@@ -1,8 +1,11 @@
-"""The pre-flight page's routes: ``GET /api/preflight`` and ``POST /api/preflight/run`` (ANH-142).
+"""The pre-flight page's routes: ``GET /api/preflight``, ``POST /api/preflight/run`` (ANH-142)
+and ``POST /api/preflight/acknowledge`` (ANH-145).
 
 The page shows the list as the console judges it now, for the bench and for a
 person on board, and asks for a new run ("Relancer"). It decides nothing: the
-arming gate judges the same list again at every start.
+arming gate judges the same list again at every start. The acknowledgement is
+the operator's, by name: the stops the dashboard may not count are no longer a
+reason to hold a person on board.
 """
 
 from __future__ import annotations
@@ -14,9 +17,12 @@ from typing import Final
 
 from fastapi import FastAPI, HTTPException, params
 
+from src.record_uplink import LOST_STOP, NOT_LINKED
+from src.result import Err
 from src.training.preflight import PreflightMonitor, PreflightReport
 from src.training.types import Occupancy
 from src.web.deps import Services
+from src.web.schemas import StopsAcknowledgeBody
 
 NO_PREFLIGHT: Final[str] = "aucun pre-vol sur cette console"
 
@@ -55,6 +61,9 @@ class PreflightReportRow:
         )
 
 
+_LOST_PREFIX: Final[str] = LOST_STOP.split("{why}", maxsplit=1)[0]
+
+
 @dataclass(frozen=True, slots=True)
 class PreflightRow:
     """``GET /api/preflight``: the list for both occupancies, and the last completed run."""
@@ -66,13 +75,23 @@ class PreflightRow:
     battery_pct: float | None
     bench: PreflightReportRow
     occupied: PreflightReportRow
+    unreported_stop: str | None = None
+    """Why a person on board is held for a stop the dashboard may not count (ANH-145);
+    null when none is."""
+    acknowledgeable: bool = False
+    """Whether that hold is a session lost for good, the only one the operator may
+    acknowledge (``POST /api/preflight/acknowledge``); a hold that clears by itself is not."""
 
     @classmethod
     def of(cls, monitor: PreflightMonitor) -> PreflightRow:
         last = monitor.last
+        held = monitor.inputs().unreported_stop
         return cls(
             running=monitor.running,
             last=None if last is None else last.verdict.value,
+            unreported_stop=held,
+            # The uplink names a loss first, in these words (pinned by its tests).
+            acknowledgeable=held is not None and held.startswith(_LOST_PREFIX),
             battery_pct=monitor.battery,
             bench=PreflightReportRow.of(monitor.report(Occupancy.BENCH)),
             occupied=PreflightReportRow.of(monitor.report(Occupancy.OCCUPIED)),
@@ -101,4 +120,24 @@ def register_preflight(app: FastAPI, *, services: Services, auth: Sequence[param
         if monitor is None:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=NO_PREFLIGHT)
         monitor.rerun()
+        return PreflightRow.of(monitor)
+
+    @app.post("/api/preflight/acknowledge", dependencies=auth, tags=["safety"])
+    async def acknowledge_stops(body: StopsAcknowledgeBody) -> PreflightRow:
+        """Release, by name, the sessions the dashboard will never have (refused for
+        good, unreadable, given up) that hold a person on board. Nothing else: a hold that
+        clears once the dashboard has a session stays. Starts nothing. **400** without a
+        name; **409** while a session runs, or when nothing of that kind is held."""
+        if not body.operator.strip():
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail="an operator name is required: the acknowledgement is by name",
+            )
+        monitor = services.preflight
+        acknowledge = services.stop_acknowledge
+        if monitor is None or acknowledge is None:
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=NOT_LINKED)
+        released = await acknowledge(body.operator)
+        if isinstance(released, Err):
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=released.error)
         return PreflightRow.of(monitor)

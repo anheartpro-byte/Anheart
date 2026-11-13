@@ -2209,7 +2209,10 @@ Sans personne à bord (capsule vide ou lestée, vitesse pilotée, aucune règle
 cardiaque), une horloge non fiable, un BITalino absent ou une batterie basse
 ne créent aucun danger pour une personne : ils sont affichés et écrits, ils ne
 bloquent pas. La qualité ECG et les paramètres médicaux sont sans objet au
-banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
+banc. Un incident grave ouvert est lui aussi un avertissement au banc
+([section 16](#16-le-registre-des-incidents-anh-145)) : la règle d'ANH-145,
+plus récente, remplace pour ce contrôle la décision du 29 octobre, qui le
+bloquait au banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
 jugée est celle du départ : une séance de banc lestée lancée depuis le site
 (ANH-250) est jugée avec les règles du banc, au pré-vol du lancement comme à
 l'armement ; un programme lancé du site, avec celles d'une personne à bord.
@@ -2246,8 +2249,9 @@ de lancer une séance programmée sur cette machine (« incident ouvert »,
 l'armement (409 `incident_open`, contrat 1.10). Le poll annonce le compte à la
 console (`incidents_open_high`), dont le pré-vol refuse tout départ avec une
 personne à bord tant qu'il n'est pas nul ([section 15](#15-le-pré-vol-avant-chaque-séance-anh-142)).
-Le serveur laisse possible la seule séance manuelle de banc, aucune personne
-à bord : c'est elle qui permet de chercher la cause. Seul un admin Anheart clôt un incident,
+Seule la séance manuelle de banc, aucune personne à bord, reste possible, au
+serveur comme à la console (où le contrôle n'est qu'un avertissement au banc) :
+c'est elle qui permet de chercher la cause. Seul un admin Anheart clôt un incident,
 et seulement avec sa cause et l'action menée : c'est cette clôture qui rouvre
 la machine aux séances programmées. Une analyse seule ne la rouvre pas.
 
@@ -2270,5 +2274,5 @@ sont coupées en production).
 | Une console qui n'a jamais reçu de poll (tableau de bord injoignable) ne connaît pas le compte | Le contrôle reste orange, « non annonce » : il ne bloque pas. Un incident grave ouvert ne la retient donc pas hors ligne |
 | Un défaut du variateur annoncé par le seul heartbeat, hors de tout événement de séance, n'ouvre pas d'incident | L'alerte `drive_fault` reste ; le pré-vol refuse de toute façon un départ sur un variateur en défaut |
 | Un refus de pré-vol d'un départ décidé à la console n'est pas envoyé au serveur | Seuls les refus de lancements venus du site comptent pour les trois refus de suite ; toute autre séance de la machine remet le compte à zéro |
-| Une séance mal terminée pendant que le lien était coupé n'est connue du serveur qu'à l'arrivée de ses événements et de sa fin | Jusque-là le compte annoncé reste celui d'avant : un nouveau lancement est possible côté serveur ; voir le pré-vol de la console pour ce qui le retient |
+| Une séance mal terminée pendant que le lien était coupé n'est connue du serveur qu'à l'arrivée de ses événements et de sa fin | Jusque-là le compte annoncé reste celui d'avant, et le serveur accepterait un nouveau lancement. Le pré-vol de la console le retient : avec une personne à bord, il refuse tout départ tant qu'une séance de cette exécution terminée sur `emergency_stop`, `safety_verdict` ou `tick_exception`, ou un enregistrement d'une exécution précédente (fin inconnue), n'a pas sa fin acquittée, puis jusqu'au premier poll qui rend un compte lisible demandé après cet acquittement ; au banc, un avertissement. Une séance que l'envoi abandonne (déclaration ou fin refusée pour de bon, fin d'une séance sans enregistrement abandonnée pour la suivante) est écrite à côté des enregistrements et retient une personne à bord, redémarrage compris, jusqu'à l'acquittement nommé de l'opérateur, page Pré-vol, noté au journal de bord ; un enregistrement illisible, toujours dû sur le disque, retient de même, et un acquittement ne vaut que jusqu'au démarrage suivant, qui le liste de nouveau ; le curseur qui clôt une séance perdue n'est écrit qu'après elle ; seule la perte d'une séance sans enregistrement, avant la première liste des enregistrements ou jusqu'au pas suivant une fin abandonnée, n'est qu'en mémoire et un redémarrage à cet instant l'oublie ; pas jusqu'à une annonce du serveur, qui ne connaîtra jamais cet incident. Une fin que le lien n'a pas vue compte comme une fin inconnue, due jusqu'à son envoi. L'acquittement ne lève que ces séances perdues : jamais une retenue qui se lèvera d'elle-même quand le lien aura livré la séance, jamais pendant une séance. Restent : un enregistrement mis de côté sans curseur à la première liste (antérieur à la synchronisation, jamais envoyé) ne retient rien, et un départ de banc n'est jamais retenu |
 | Aucune déclaration d'incident à la main n'existe encore (`manual` est réservé) | Un événement que le logiciel ne voit pas ne bloque pas la machine |

@@ -128,6 +128,11 @@ class PreflightInputs:
     incidents_open_high: int | None = None
     """As the dashboard last announced it; ``None``: not announced."""
 
+    unreported_stop: str | None = None
+    """Why the dashboard may not count yet a session that ended on a stop (its end and
+    events not acknowledged, :attr:`~src.record_uplink.RecordUplink.unreported_stop`);
+    ``None``: it has them all, or the console is not linked."""
+
     cpu_temp_c: Celsius | None = None
     records_pending: int | None = None
     min_battery: Percent = DEFAULT_MIN_BATTERY
@@ -295,10 +300,19 @@ def _medical(inputs: PreflightInputs) -> Result[str, Finding]:
 
 def _incidents(inputs: PreflightInputs) -> Result[str, Finding]:
     count = inputs.incidents_open_high
+    unreported = inputs.unreported_stop
+    if unreported is not None and not count:
+        # The count may be stale: the incident of that session is not on the server yet.
+        return Err(Failed(f"{unreported} : son incident n'est pas encore compte"))
     if count is None:
         return Err(Unjudged("incidents graves ouverts : non annonces par le tableau de bord"))
     if count > 0:
-        return Err(Failed(f"{count} incident(s) grave(s) ouvert(s) sur cette machine"))
+        return Err(
+            Failed(
+                f"{count} incident(s) grave(s) ouvert(s) sur cette machine : aucune personne "
+                "a bord avant leur cloture par un admin Anheart"
+            )
+        )
     return Ok("aucun incident grave ouvert")
 
 
@@ -460,7 +474,9 @@ CONTROLS: Final[tuple[Control, ...]] = (
         id="incidents",
         label="Aucun incident grave ouvert",
         on_board=BLOCK,
-        bench=BLOCK,
+        # ANH-145 EX-4: an open serious incident closes programmed sessions, not the
+        # manual bench session that looks for its cause.
+        bench=WARN,
         max_duration=Seconds(30.0),
         check=_incidents,
     ),

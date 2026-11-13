@@ -247,7 +247,7 @@ from src.record.session import (
     stamp_for,
     storage_gate,
 )
-from src.record_uplink import RecordSource
+from src.record_uplink import NOT_LINKED, RecordSource
 from src.result import Err, Ok, Result
 from src.roster import (
     OnBench,
@@ -1307,9 +1307,35 @@ class LocalPanel:
             self._services,
             remote_launch_current=cloud.current_remote_launch,
             remote_launch_confirm=cloud.confirm_remote_launch,
+            stop_acknowledge=self.acknowledge_lost_stops,
             # Only a linked console offers it: the feedback has nowhere else to go.
             feedback=self._feedback,
         )
+
+    async def acknowledge_lost_stops(self, operator: str) -> Result[tuple[str, ...], str]:
+        """The operator, named, releases the sessions the dashboard will never have that
+        held a person on board (ANH-145). Written to the logbook with the operator's alias
+        and what was released, and to the log; refused while a session runs."""
+        cloud = self._cloud
+        if cloud is None:
+            return Err(NOT_LINKED)
+        released = await cloud.acknowledge_lost_stops()
+        if isinstance(released, Err):
+            return released
+        detail = "lost_stops_acknowledged: " + " ; ".join(released.value)
+        _logger.warning("%s, by %r", detail, operator)
+        recorder = self._recorder
+        if recorder is not None:
+            recorder.journal.log(
+                note(
+                    wall_clock=self._clock.unix_millis(),
+                    at=self._clock.monotonic(),
+                    kind=EventKind.OPERATOR_ACTION,
+                    detail=detail,
+                    actor=operator_alias(operator),
+                )
+            )
+        return released
 
     @property
     def preflight(self) -> PreflightMonitor | None:
@@ -2434,6 +2460,8 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     watchdog = ServiceWatchdog(notify_socket, overdue=safety.loop_stall_silent_gap)
     backend = drive.backend
     storage = None if journal is None else storage_gate(journal, clock)
+    # The dashboard link, built below: the pre-flight reads it once the panel runs.
+    cloud: CloudSync | None = None
 
     def preflight_facts() -> PreflightInputs:
         """What the pre-flight reads of this console, now. Called only once it is built."""
@@ -2453,7 +2481,9 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             medical_refusal=config.medical.warning,
             medical_version=config.medical.version,
             software_version=version,
-            incidents_open_high=None if sampled is None else sampled.incidents_open_high,
+            # Read from the link itself: the poll every few seconds, not the heartbeat.
+            incidents_open_high=None if cloud is None else cloud.incidents_open_high,
+            unreported_stop=None if cloud is None else cloud.unreported_stop,
             records_pending=None if sampled is None else sampled.records_pending,
             min_battery=config.bitalino_min_battery,
         )
@@ -2616,7 +2646,6 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         sto=sto,
         preflight=monitor,
     )
-    cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
     if config.cloud is not None:
         if health is None:

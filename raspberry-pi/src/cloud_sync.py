@@ -169,6 +169,7 @@ from src.local_config import CardiacTiers, CloudConfig
 from src.medical import MedicalStatus
 from src.record_uplink import (
     EVENTS_PATH,
+    SESSION_RUNS,
     START_PATH,
     Acked,
     Answer,
@@ -284,6 +285,13 @@ FINAL_CODES: Final[frozenset[str]] = frozenset(
 """Stable codes that say the same request will always be refused
 (``contracts/machine-api.json``). ``request_failed`` is not one: it also covers a
 failure of the moment."""
+
+STOP_NOT_COUNTED: Final[str] = (
+    "fin d'une seance terminee sur un arret recue par le tableau de bord, compte des "
+    "incidents pas encore relu"
+)
+"""Why :attr:`CloudSync.unreported_stop` holds between a stop's end acknowledged and the
+next poll."""
 
 DASHBOARD_OPERATOR: Final[str] = "tableau de bord"
 """Who a stop from the dashboard is attributed to in the console's event list."""
@@ -890,6 +898,7 @@ class CloudSync:
         "_clock",
         "_confirmed_launch",
         "_confirmed_launch_id",
+        "_counted_at",
         "_deposit",
         "_health",
         "_health_context",
@@ -963,6 +972,9 @@ class CloudSync:
         self._health_context: Callable[[], HealthContext] = health_context
         self._last_rtt: Seconds | None = None
         self._incidents_open_high: int | None = None
+        # When the poll whose count is held was asked (ANH-145): a count asked before the
+        # dashboard acknowledged a stop's end may not hold its incident.
+        self._counted_at: Monotonic | None = None
         self._link: LinkHealth = LinkHealth(clock.monotonic()) if link is None else link
         self._record_degraded: Callable[[], bool] | None = record_degraded
         self._transport: CloudTransport = transport
@@ -1033,6 +1045,34 @@ class CloudSync:
     def owed(self) -> int:
         """Sessions the dashboard has not acknowledged whole, as far as this run knows."""
         return self._uplink.owed
+
+    @property
+    def unreported_stop(self) -> str | None:
+        """Why the count of serious incidents held may not count yet a session that ended
+        on a stop (ANH-145): the dashboard has not acknowledged its end, or no poll was
+        asked since it did. ``None``: the count held is one asked after every such end."""
+        unsent = self._uplink.unreported_stop
+        if unsent is not None:
+            return unsent
+        told = self._uplink.stop_told_at
+        if told is not None and (self._counted_at is None or self._counted_at <= told):
+            return STOP_NOT_COUNTED
+        return None
+
+    async def acknowledge_lost_stops(self) -> Result[tuple[str, ...], str]:
+        """Release the sessions the sending gave up on, which the dashboard will never
+        have (:attr:`~src.record_uplink.RecordUplink.lost_stops`), and nothing else: a hold
+        that clears once the dashboard has a session is not lifted. Refused while a
+        session runs. What was released, or why not, in the operator's words."""
+        if self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING):
+            return Err(SESSION_RUNS)
+        return await self._uplink.acknowledge()
+
+    @property
+    def incidents_open_high(self) -> int | None:
+        """The serious incidents of this machine open or analysed, as the last compatible
+        poll announced them (contract 1.10); ``None``: not announced."""
+        return self._incidents_open_high
 
     @property
     def server_contract(self) -> ContractVersion | None:
@@ -1456,11 +1496,12 @@ class CloudSync:
             return
         self._incompatible = None
         incidents = polled.value.get("incidents_open_high")
-        self._incidents_open_high = (
-            incidents
-            if isinstance(incidents, int) and not isinstance(incidents, bool) and incidents >= 0
-            else None
-        )
+        if isinstance(incidents, int) and not isinstance(incidents, bool) and incidents >= 0:
+            self._incidents_open_high = incidents
+            # Only a count read is one asked after a stop's end: an unreadable one is none.
+            self._counted_at = now
+        else:
+            self._incidents_open_high = None
         if launch is None:
             # Left unanswered, its start may be held active by the dashboard: kept for a
             # repeated confirmation, until its hold is over (`_process_confirmation`).

@@ -589,6 +589,11 @@ class Services:
     """The riders' list (``GET /api/roster``), which a start with a person on board
     names one of. ``None``: this interface has none, and refuses such a start."""
 
+    stop_acknowledge: Callable[[str], Awaitable[Result[tuple[str, ...], str]]] | None = None
+    """Release, by name, the sessions the dashboard will never have that hold a person on
+    board (``POST /api/preflight/acknowledge``, ANH-145): what was released, or why not.
+    ``None``: the console is not linked to a dashboard."""
+
     remote_launch_current: Callable[[], RemoteLaunchView | None] | None = None
     remote_launch_confirm: Callable[[str, str, bool], Result[None, ConfirmationRefusal]] | None = (
         None

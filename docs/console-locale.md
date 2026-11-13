@@ -2587,8 +2587,9 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 | POST | `/api/safety/attest` | `{"operator", "sto_jumper_removed", "mushroom_wired_nc"}` ; sous `bridged_declared`, `{"operator", "bench_bridged_declared"}` (les champs que nomme `attestation_fields` de `/api/status`) | attestation du câblage, ou de banc, pour ce démarrage | 200 ; 400 (une case manque, case de l'autre mode, nom vide) |
 | POST | `/api/safety/acknowledge` | `{"operator", "estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
 | POST | `/api/presence` | `{"operator"?}` | signal de présence de l'accompagnant (règle `attendant_absent`) | 200 `{"at": …}` |
-| GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied}` ; `null` sur une console sans pré-vol |
+| GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied, unreported_stop, acknowledgeable}` (`unreported_stop` : pourquoi une personne à bord est retenue pour une séance que le tableau de bord ne compte pas, ou `null` ; `acknowledgeable` : cette retenue est une séance perdue, la seule que l'opérateur peut acquitter, ANH-145) ; `null` sur une console sans pré-vol |
 | POST | `/api/preflight/run` | - | « Relancer » : une nouvelle passe, la batterie du BITalino relue au repos ; ne lance et ne refuse rien | 202, le même objet ; 409 sur une console sans pré-vol |
+| POST | `/api/preflight/acknowledge` | `{operator}` | « Acquitter une seance perdue » (ANH-145) : l'opérateur, nommé, lève les seules séances perdues (refusées pour de bon, illisibles, abandonnées), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 400 sans nom ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
 | POST | `/api/service/restore` | `{"operator"}` | remet en service une console hors service ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 400 (nom vide) ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
@@ -2858,7 +2859,8 @@ la carte dit pourquoi : `Depart refuse, pre-vol : batterie BITalino 20 % < 30 %`
 De même pour `Demarrer MANUEL` (une séance de banc) avec la liste du banc. Une
 batterie basse, un BITalino absent ou une horloge non fiable ne retiennent pas
 un départ de banc : ce sont des avertissements au banc (décision du pilote du
-29 octobre 2026).
+29 octobre 2026). Un incident grave ouvert non plus (ANH-145) : il retient
+tout départ avec une personne à bord, et n'est qu'un avertissement au banc.
 
 Le bouton de confirmation de la carte « Depart distant » suit la même règle :
 pour une séance de banc lestée lancée du site, la colonne Banc ; pour un programme,
@@ -2868,6 +2870,60 @@ Si un départ est quand même demandé (une autre page, un lancement depuis le
 site), la console le refuse elle-même et le dit dans les événements :
 `demarrage refuse : pre-vol : <raison>`. Un lancement depuis le site revient au
 tableau de bord en échec : `refusee par la machine : pre-vol : <raison>`.
+
+### Acquitter une séance perdue (ANH-145)
+
+Tant qu'une personne à bord est retenue pour une séance mal terminée que le
+tableau de bord ne compte pas encore, la carte le dit sous `Relancer`
+(`Personne a bord retenue : <raison>`) ; pour une séance perdue seulement,
+elle propose `Acquitter une seance perdue` (`POST /api/preflight/acknowledge`,
+au nom de l'opérateur).
+
+**Ce que l'acquittement couvre : les seules séances perdues**, celles que le
+tableau de bord ne recevra jamais et qui ont pu finir sur un arrêt (ou dont la
+fin est inconnue) : une déclaration ou une fin qu'il a refusée pour de bon, un
+enregistrement illisible, la fin d'une séance sans enregistrement abandonnée
+pour la suivante (`seance mal terminee ou de fin inconnue que le tableau de
+bord ne recevra pas (...) : a acquitter a la console, page Pre-vol`). Les
+refus et la fin abandonnée, qu'aucun démarrage ne renverra, sont écrits à côté
+des enregistrements (`.sync-lost-stops.json`, comme un curseur) et
+**retiennent encore après un redémarrage de la console**, jusqu'à
+l'acquittement ; le curseur qui clôt une telle séance n'est écrit qu'une
+fois elle écrite au registre (sinon le démarrage suivant la renvoie, et elle
+est perdue de nouveau, une seule fois). Une console qui n'enregistre rien les
+garde en mémoire seulement. Reste en mémoire seulement, et oubliée par un
+redémarrage à cet instant, la perte d'une séance sans enregistrement, qui n'a
+pas de curseur à retenir : avant la première liste des enregistrements d'une
+exécution précédente (le registre de celle-ci n'est pas écrit avant d'être
+lu, pour ne pas l'écraser), et, pour une fin abandonnée, jusqu'au pas suivant
+(une seconde environ). Un enregistrement illisible reste dû sur le disque : l'acquittement
+le lève pour cette exécution seulement, en mémoire, et le démarrage suivant le
+liste et le retient de nouveau, jusqu'à ce qu'il soit lu et envoyé ou
+acquitté encore. L'acquittement efface ces séances, celles affichées quand il
+est demandé et elles seules : une séance perdue pendant qu'il s'écrit retient
+encore. Une ligne `lost_stops_acknowledged`
+est écrite au journal de bord (`logbook/events.jsonl`), avec l'alias de
+l'opérateur et ce qui a été levé ; le nom va aussi au journal du système.
+
+**Ce qu'il ne couvre pas**, refusé en 409 avec la raison : une retenue qui se
+lèvera d'elle-même quand le lien aura livré la séance (une fin pas encore
+reçue, un compte d'incidents pas encore relu, des enregistrements d'une
+exécution précédente en cours d'envoi ou pas encore listés) ; tout
+acquittement **pendant une séance** ; et rien quand aucune séance n'est
+perdue. Aucun acquittement ne lève une séance encore due : elle retient
+jusqu'à ce que le tableau de bord l'ait, et après un redémarrage la liste des
+séances dues la retient de nouveau. Une séance terminée sur un arrêt après un
+acquittement retient de nouveau.
+
+**Clé révoquée ou machine supprimée du site** : les envois ne sont plus
+acquittés, et la retenue ne se lève pas seule. Poser une clé valide (nouvelle
+clé de la machine, ou machine recréée et sa clé) : les séances dues partent ;
+celles qu'un autre serveur ou une autre machine refuse pour de bon
+(`session_not_found`) deviennent des séances perdues, à acquitter ici.
+
+Avant d'acquitter, s'assurer que l'événement est noté ailleurs (incident
+signalé à l'admin Anheart, carnet de la machine). Rien d'autre ne lève ces
+retenues : ni `Relancer`, ni un poll, ni le banc, ni un redémarrage.
 
 ### Relancer
 
@@ -2886,7 +2942,22 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
   serveur ne donne aucune référence. La version logicielle reste orange « non
   jugee » ; la signature des paramètres médicaux, elle, est exigée.
 - Les incidents graves ouverts : orange « non annonces » tant que le serveur
-  n'en annonce pas le compte (ANH-145) ; rouge dès qu'il en annonce un.
+  n'en annonce pas le compte (serveur antérieur au contrat 1.10, ou aucun
+  poll reçu) ; dès qu'il en annonce un, rouge avec une personne à bord et
+  orange au banc (ANH-145), avec la raison : `1 incident(s) grave(s)
+  ouvert(s) sur cette machine : aucune personne a bord avant leur cloture par
+  un admin Anheart`. Il redevient vert au poll qui suit la clôture du dernier.
+  Il est rouge de même avec une personne à bord, orange au banc, tant que le
+  compte ne tient pas encore une séance mal terminée : `seance terminee sur
+  emergency_stop pas encore recue par le tableau de bord : son incident n'est
+  pas encore compte` (aussi `safety_verdict`, `tick_exception`), un
+  enregistrement d'une exécution précédente dont la fin n'est pas encore reçue,
+  ou une fin reçue sans poll depuis (`fin d'une seance terminee sur un arret
+  recue par le tableau de bord, compte des incidents pas encore relu`). Hors
+  ligne, il le reste jusqu'au retour du lien. Une séance que le tableau de
+  bord ne recevra jamais le retient, même après un redémarrage, jusqu'à
+  l'acquittement de l'opérateur
+  (ci-dessus).
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino
   ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).
