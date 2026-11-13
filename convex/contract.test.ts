@@ -153,7 +153,7 @@ async function startAfter(
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
   it("serves the version, header and error codes of the shared file", () => {
     expect(CONTRACT_VERSION).toBe(shared.contract_version);
-    expect(CONTRACT_VERSION).toBe("1.11");
+    expect(CONTRACT_VERSION).toBe("1.12");
     expect(CONTRACT_HEADER).toBe(shared.header);
     expect(MACHINE_ERROR_CODES).toEqual(Object.keys(shared.error_codes));
     expect(MACHINE_ERROR_CODES.length).toBeGreaterThan(0);
@@ -647,6 +647,19 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
             }),
           ),
         ),
+    },
+    {
+      name: "training/start: an auto launch made from another programme list",
+      status: 409,
+      code: "programme_changed",
+      run: async (w) => {
+        const sessionId = await seedSession(w, w.machine, "pending");
+        await w.t.run((ctx) => ctx.db.patch(sessionId, { profilesDigest: "a".repeat(64) }));
+        return post(w, "/api/machine/training/start", {
+          sessionId,
+          profilesDigest: "b".repeat(64),
+        });
+      },
     },
     {
       name: "training/start: an identifier that is not one",

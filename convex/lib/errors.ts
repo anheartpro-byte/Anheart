@@ -130,6 +130,8 @@ export const DASHBOARD_ERRORS = {
     "End code: the rider's birth year is no longer known, or gives less than the minimum age.",
   hr_max_changed_before_start:
     "End code: the rider's max heart rate is no longer the one the launch gave the machine.",
+  programme_changed:
+    "End code (contract 1.12): the programmes the machine held when it armed the launch were no longer those it was made from, or could not be checked against them. Launch it again.",
 
   // Machine keys (ANH-165).
   machine_key_not_found:

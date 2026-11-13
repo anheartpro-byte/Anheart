@@ -6,7 +6,7 @@
  */
 import { ConvexError } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import cases from "../contracts/programme-validation-cases.json";
+import casesText from "../contracts/programme-validation-cases.json?raw";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
@@ -23,6 +23,19 @@ import {
   SIGNOFF,
 } from "./programmes.fixtures";
 import { as, modules, NOW, seedWorld, type World } from "./test.setup";
+
+/** A case of the shared file: a change to its base document, and the Pi's verdict on it. */
+type SharedCase = {
+  name: string;
+  changes: Record<string, unknown>;
+  expected:
+    | { verdict: "accepted" }
+    | { verdict: "rejected" | "malformed"; violations?: string[]; detail: string };
+};
+
+// Read as text: the bundler's JSON reader refuses an escaped surrogate left
+// unpaired, which a case holds on purpose (ANH-138), and `JSON.parse` keeps it.
+const cases = JSON.parse(casesText) as { base: Record<string, unknown>; cases: SharedCase[] };
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -74,6 +87,24 @@ describe("ANH-137 EX-2 the Pi's verdict on every shared case", () => {
       violations: "violations" in expected ? expected.violations : [],
     });
     expect(await w.t.run((ctx) => ctx.db.query("programmes").collect())).toEqual([]);
+  });
+
+  it("refuses a name with a surrogate left unpaired, which no JSON a machine writes holds", async () => {
+    const w = await seedWorld(modules);
+    for (const name of ["\uD800", "jog \uDC00", "\uDE00\uD83D"]) {
+      const error = await failure(
+        as(w.t, "admin").mutation(api.programmes.create, { ...JOG, name }),
+      );
+      expect((error as ConvexError<{ message: string }>).data).toEqual({
+        code: "programme_refused",
+        message: "training profile refused: name_lone_surrogate",
+        violations: ["name_lone_surrogate"],
+      });
+    }
+    // A pair is one character: accepted.
+    expect(
+      await failure(as(w.t, "admin").mutation(api.programmes.create, { ...JOG, name: "jog 😀" })),
+    ).toBeNull();
   });
 
   it("refuses at saving a zone above 0.9 x subject_hr_max with the Pi's message", async () => {

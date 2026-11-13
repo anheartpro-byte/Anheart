@@ -390,6 +390,7 @@
     "right_revoked_before_start": "Droit retiré avant le départ",
     "age_refused_before_start": "Âge du pratiquant refusé avant le départ",
     "hr_max_changed_before_start": "FC max du pratiquant modifiée avant le départ",
+    "programme_changed": "Programmes de la machine changés depuis le lancement : relancez la séance",
     "machine_key_not_found": "Cette clé n'existe pas, ou appartient à une machine que vous n'administrez pas.",
     "invalid_key_overlap": "Le chevauchement doit être un nombre entier de minutes, entre 0 et 10 080 (7 jours).",
     "invalid_key_expiry": "La durée de vie d'une nouvelle clé doit être un nombre entier de minutes, entre une heure et dix ans."

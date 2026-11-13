@@ -19,6 +19,15 @@ import shippedMedical from "../../raspberry-pi/config/medical_parameters.json";
 import shippedDefaults from "../../raspberry-pi/config/profiles.default.json";
 import { decodeBase64 } from "./medicalParameters";
 
+/**
+ * The digest of a machine's programme list (contract 1.12,
+ * `launch_programme_list`): SHA-256 of the whole content of its programmes,
+ * in lowercase hexadecimal.
+ */
+export const PROFILES_DIGEST = new RegExp(
+  machineApi.launch_programme_list.digest_pattern,
+);
+
 /** `NAMEPLATE_MOTOR_RPM`: `max_rpm` above it needs `allow_above_nameplate`. */
 export const NAMEPLATE_MOTOR_RPM = 1380;
 /** `COMMISSIONED_DECEL_S`: the drive's measured ramp, a floor under the cool-down. */
@@ -40,6 +49,11 @@ const PYTHON_WHITESPACE = new Set([
 ]);
 const blank = (text: string) =>
   Array.from(text).every((character) => PYTHON_WHITESPACE.has(character.charCodeAt(0)));
+/**
+ * A surrogate not paired: no UTF-8 for it, so no JSON a machine could write
+ * back. With the `u` flag a pair is one code point, outside this range.
+ */
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 
 /** Version of the shape of a programme row. */
 export const PROGRAMME_SCHEMA_VERSION = 1;
@@ -112,6 +126,7 @@ export const programmeFields = {
 export type ProgrammeViolation =
   | "bad_profile_id"
   | "empty_name"
+  | "name_lone_surrogate"
   | "non_positive_duration"
   | "cooldown_faster_than_drive_ramp"
   | "cooldown_too_short"
@@ -157,6 +172,7 @@ const CHECKS: ReadonlyArray<
 > = [
   ["bad_profile_id", (p) => PROFILE_ID_PATTERN.test(p.profileId)],
   ["empty_name", (p) => !blank(p.name)],
+  ["name_lone_surrogate", (p) => !LONE_SURROGATE.test(p.name)],
   [
     "non_positive_duration",
     (p) =>

@@ -328,6 +328,10 @@ ARMING_REFUSAL_WORDS: Final[Mapping[ErrorCode, str]] = MappingProxyType(
             "incident grave ouvert sur cette machine : seances programmees fermees jusqu'a "
             "sa cloture"
         ),
+        ErrorCode("programme_changed"): (
+            "programmes de la machine changes depuis le lancement : le relancer depuis le "
+            "tableau de bord"
+        ),
     }
 )
 

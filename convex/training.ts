@@ -727,6 +727,10 @@ export const ARMING_REFUSALS = {
   // organisation: a bench launch puts nobody on board.
   incident_open:
     "a high-severity incident of the machine was open when it armed the launch",
+  // Auto launches only (contract 1.12), checked last and by the start alone:
+  // the machine says what it holds when it confirms (`programmeChanged`).
+  programme_changed:
+    "the machine's programmes were no longer those the launch was made from, or could not be checked",
 } as const satisfies Partial<
   Record<Extract<MachineErrorCode, DashboardErrorCode>, string>
 >;
@@ -749,6 +753,24 @@ type ArmingRefusal = { code: ArmingRefusalCode; message: string };
 
 function refusalFor(code: ArmingRefusalCode): ArmingRefusal {
   return { code, message: ARMING_REFUSALS[code] };
+}
+
+/**
+ * Whether an auto launch must not be armed on the programmes its machine
+ * holds now (contract 1.12): `held` is the digest the machine sends with its
+ * start, the launch's the one of the list it was made from. Refused: another
+ * list; a launch made while the machine sent no digest, confirmed by one that
+ * sends one (its programme cannot be checked); a launch made from a list,
+ * confirmed by a console that sends none. A launch and a start that both have
+ * none are an older console's, armed as before. A bench launch carries no
+ * programme.
+ */
+export function programmeChanged(
+  launch: Doc<"sessions">,
+  held: string | undefined,
+): boolean {
+  if (isBenchLaunch(launch)) return false;
+  return launch.profilesDigest !== held;
 }
 
 /** A launch the machine has not armed `pendingSessionTtlMs` after it was made. */
@@ -1261,6 +1283,9 @@ export const launchAutoSession = mutation({
       subjectAge: age,
       subjectLabel: fullName(rider),
       operatorName: fullName(me),
+      // The list this programme was read from (contract 1.12): the machine
+      // refuses to arm the launch on another one (`programme_changed`).
+      profilesDigest: machine.profilesDigest,
     });
     await audit(ctx, {
       actor: userActor(me),
@@ -1814,6 +1839,9 @@ export const syncProfiles = internalMutation({
     profiles: v.array(profileValidator),
     // Contract 1.11 (ANH-138); absent from an older console, which clears it.
     catalog: v.optional(machineCatalogReportValidator),
+    // Contract 1.12: the digest of the list; absent from an older console,
+    // which clears it.
+    profilesDigest: v.optional(v.string()),
   },
   returns: v.object({ count: v.number() }),
   handler: async (ctx, args) => {
@@ -1839,6 +1867,7 @@ export const syncProfiles = internalMutation({
       programsEnabled: args.programsEnabled,
       programmeCatalog:
         args.catalog === undefined ? undefined : { ...args.catalog, reportedAt: now },
+      profilesDigest: args.profilesDigest,
     });
     return { count: args.profiles.length };
   },
@@ -1940,6 +1969,9 @@ export const getPendingTrainingSession = internalQuery({
       subjectHrMax: v.number(),
       subjectAge: v.union(v.number(), v.null()),
       operatorName: v.string(),
+      // Contract 1.12: the digest of the list the launch was made from; null
+      // for a launch made while the machine sent none.
+      profilesDigest: v.union(v.string(), v.null()),
     }),
     v.object({
       sessionId: v.id("sessions"),
@@ -1996,6 +2028,7 @@ export const getPendingTrainingSession = internalQuery({
         subjectHrMax: s.subjectHrMax,
         subjectAge: s.subjectAge ?? null,
         operatorName: s.operatorName ?? "dashboard",
+        profilesDigest: s.profilesDigest ?? null,
       };
     }
     return null;
@@ -2079,6 +2112,8 @@ export const markTrainingStarted = internalMutation({
     sessionId: v.id("sessions"),
     machineStartedAt: v.optional(v.number()),
     sessionAgeMs: v.optional(v.number()),
+    // Contract 1.12: the digest of the programme list the machine holds now.
+    profilesDigest: v.optional(v.string()),
   },
   returns: v.union(
     v.object({ armed: v.literal(true) }),
@@ -2104,7 +2139,9 @@ export const markTrainingStarted = internalMutation({
         `Session is not pending (status: ${s.status})`,
       );
     const now = Date.now();
-    const refused = await armingRefusal(ctx, s, now);
+    const refused =
+      (await armingRefusal(ctx, s, now)) ??
+      (programmeChanged(s, args.profilesDigest) ? refusalFor("programme_changed") : null);
     if (refused !== null) {
       await failBeforeStart(ctx, s, refused, now);
       return { armed: false as const, ...refused };
