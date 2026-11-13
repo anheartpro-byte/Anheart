@@ -178,7 +178,8 @@ console_url() {
 console_get() {
     local token
     local trust=()
-    token="$(env_value UI_TOKEN)"
+    token="$(env_value DEVICE_TOKEN)"
+    [ -n "$token" ] || token="$(env_value UI_TOKEN)"
     if [ -n "$(env_value UI_TLS_CERT)" ]; then
         trust=(--cacert "$STATE_DIR/tls/authority.crt")
     fi

@@ -52,8 +52,9 @@ else
     done
     host="$(value UI_HOST)"
     if [ -n "$host" ] && [ "$host" != "127.0.0.1" ] && [ "$host" != "localhost" ]; then
-        token="$(value UI_TOKEN)"
-        if [ "${#token}" -lt 16 ]; then fail "UI_HOST=$host needs a UI_TOKEN of at least 16 characters"; fi
+        token="$(value DEVICE_TOKEN)"
+        [ -n "$token" ] || token="$(value UI_TOKEN)"
+        if [ "${#token}" -lt 16 ]; then fail "UI_HOST=$host needs a DEVICE_TOKEN of at least 16 characters"; fi
         # Off loopback the console serves TLS or does not start. Only that the
         # two keys are set is judged here: their paths are the console's own.
         if [ -z "$(value UI_TLS_CERT)" ] || [ -z "$(value UI_TLS_KEY)" ]; then

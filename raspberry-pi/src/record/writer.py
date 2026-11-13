@@ -13,7 +13,7 @@ from typing import Final, Literal
 from pydantic import TypeAdapter
 
 from src.clock import Clock
-from src.record.codec import IDENTIFIER, Privacy, document, encode, validate_manifest
+from src.record.codec import ACTOR, Privacy, document, encode, validate_manifest
 from src.record.ecg import RawBlock, encode_block
 from src.record.rows import JsonScalar, Row, finite
 from src.record.schema import DriveFrame, EndObservation, Event, Manifest, RecordError
@@ -223,10 +223,7 @@ class Writer:
         return self._append("ticks.csv", line)
 
     def event(self, event: Event) -> Result[None, RecordError]:
-        if (
-            IDENTIFIER.fullmatch(event.actor) is None
-            or self.privacy.text(event.actor) != event.actor
-        ):
+        if ACTOR.fullmatch(event.actor) is None or self.privacy.text(event.actor) != event.actor:
             return Err(RecordError("event", "invalid_actor"))
         return self._append("events.jsonl", encode(document(EVENT, event), self.privacy) + "\n")
 

@@ -154,8 +154,10 @@ ignore = [
 [tool.ruff.lint.flake8-bugbear]
 # NewType constructors are identity functions erased at runtime, so using one
 # in a default argument is free. B008 exists for expensive or mutable defaults;
-# `Monotonic(0.0)` is neither.
+# `Monotonic(0.0)` is neither. FastAPI's `Depends` is how a route declares what
+# it depends on (ANH-152: the device, the signed-in operator): a marker, built once.
 extend-immutable-calls = [
+    "fastapi.Depends",
     "src.units.AdcCount",
     "src.units.Amperes",
     "src.units.Bpm",
@@ -260,6 +262,10 @@ include = [
     # The signed programme catalogue: the gate through which a cardiac
     # setpoint reaches the machine, its signature and its revalidation.
     "src/programme_catalog.py",
+    # Who may act at the console (ANH-152): the signed operator list, the
+    # sign-in, the lockout and the sessions, and the link that brings the list.
+    "src/console_access.py",
+    "src/operator_sync.py",
     # What that link has last heard of itself, as the state the operator reads
     # on the console: it must never say reachable of a dashboard that is not.
     "src/link_state.py",
@@ -336,6 +342,8 @@ safety_chain = [
     "src/cloud_sync.py",
     "src/remote_launch.py",
     "src/programme_catalog.py",
+    "src/console_access.py",
+    "src/operator_sync.py",
     "src/link_state.py",
     "src/record_uplink.py",
     "src/contract.py",

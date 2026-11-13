@@ -13,6 +13,11 @@ every request this fake received in the acceptance scenario
 (``contracts/fixtures/journal-sync-trace.json``) and requires the same
 answers.
 
+Each event is checked as Convex checks it (``eventOf`` of ``convex/http.ts``):
+a kind, a rank, a whole date, an actor of ``EVENT_ACTOR``, a detail of at most
+:data:`MAX_EVENT_DETAIL_UNITS` UTF-16 code units. One that is not refuses the
+whole batch with a 400, as there.
+
 It also plays the network: reachable or not, and an answer that is lost after
 the request was received. And it lists the machine's riders (``roster``), the
 synthetic rider of :mod:`tests.roster_support` unless a test sets others.
@@ -28,6 +33,7 @@ send it.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, cast
@@ -53,6 +59,31 @@ TELEMETRY: Final[str] = "/api/machine/training/telemetry"
 EVENTS: Final[str] = "/api/machine/training/events"
 END: Final[str] = "/api/machine/training/end"
 SESSION_ROUTES: Final[frozenset[str]] = frozenset({LOCAL, TELEMETRY, EVENTS, END})
+
+MAX_EVENT_DETAIL_UNITS: Final[int] = 2000
+_EVENT_KIND: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_EVENT_ACTOR: Final[re.Pattern[str]] = re.compile(r"(?:device:)?[A-Za-z0-9_-]{1,64}")
+_MAX_EVENT_SEQ: Final[int] = 999_999
+
+
+def convex_takes(event: Mapping[str, JsonValue]) -> bool:
+    """Whether Convex takes this event (``eventOf``); the length is JavaScript's."""
+    seq, t = event.get("seq"), event.get("t")
+    kind, detail, actor = event.get("kind"), event.get("detail"), event.get("actor")
+    return (
+        isinstance(seq, int)
+        and not isinstance(seq, bool)
+        and 0 <= seq <= _MAX_EVENT_SEQ
+        and isinstance(t, int)
+        and not isinstance(t, bool)
+        and isinstance(kind, str)
+        and _EVENT_KIND.fullmatch(kind) is not None
+        and isinstance(detail, str)
+        and len(detail.encode("utf-16-le", "surrogatepass")) // 2 <= MAX_EVENT_DETAIL_UNITS
+        and isinstance(actor, str)
+        and _EVENT_ACTOR.fullmatch(actor) is not None
+    )
+
 
 type Reply = Result[Document, CloudError]
 type Body = Mapping[str, JsonValue]
@@ -188,6 +219,8 @@ class FakeDashboard:
         if path == END:
             self._ended(session, body)
             return Ok({"success": True})
+        if path == EVENTS and not all(convex_takes(event) for event in _items(body, "events")):
+            return Err(Refused(400, "Malformed event", ErrorCode("invalid_request")))
         if path == EVENTS and takes_feedback(version_of(self.server_version)):
             events = _items(body, "events")
             if any(event.get("kind") == "feedback" for event in events):

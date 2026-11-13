@@ -13,6 +13,9 @@ from src.record.schema import Manifest
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 EMAIL: Final = re.compile(r"[^\s\"<>@]+@[^\s\"<>@]+\.[^\s\"<>@]+")
 IDENTIFIER: Final = re.compile(r"[A-Za-z0-9_-]+")
+ACTOR: Final = re.compile(r"(?:device:)?[A-Za-z0-9_-]+")
+"""Who an event names: an opaque identifier, or since ANH-152 a tablet that acted with
+nobody signed in (``device:<id>``, :func:`src.console_access.device_actor`)."""
 SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
 

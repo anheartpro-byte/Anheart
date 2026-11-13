@@ -283,7 +283,7 @@ console, qui n'est plus root et doit pouvoir le lire.
 
 **Les secrets.** `/etc/anheart/anheart.env` porte la clé de la machine
 (`MACHINE_API_KEY`) et, si la page est ouverte au réseau, son jeton
-(`UI_TOKEN`). **Le fichier appartient à root, mode 600, et non au compte
+(`DEVICE_TOKEN`, ancien nom `UI_TOKEN`). **Le fichier appartient à root, mode 600, et non au compte
 `anheart`** : c'est le client Docker du service, sous root, qui le lit pour
 la console. Le compte sous lequel tourne la console ne peut ni le lire sur la
 machine, ni surtout le réécrire : ce fichier porte aussi les limites que la
@@ -888,7 +888,7 @@ installée.
 
 Elle ne détient, pour TLS, que le certificat
 public de l'autorité : rien à révoquer de ce côté. Elle connaît en revanche ce
-qu'on lui a saisi : changer le jeton de la console (`UI_TOKEN`) et, le jour où
+qu'on lui a saisi : changer le jeton de la console (`DEVICE_TOKEN`), révoquer la tablette sur la fiche de la machine du site (ANH-152) et, le jour où
 il existera, le mot de passe du point d'accès. **Un Pi ou une carte SD perdus**
 emportent la clé privée de la console : faire un certificat neuf sur la
 machine de remplacement et **retirer l'ancienne autorité de chaque tablette**.

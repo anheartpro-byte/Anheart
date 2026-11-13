@@ -46,6 +46,7 @@ from src.training.types import Occupancy
 from src.units import Monotonic, Percent, Seconds, UnixMillis
 from src.web.app import create_app
 from src.web.preflight_routes import PreflightRow
+from tests.access_support import OPERATOR_ID, signed_http
 from tests.test_cloud_sync import (
     LAUNCH,
     OPERATOR,
@@ -394,9 +395,7 @@ async def test_the_page_reads_the_list_and_asks_for_a_new_run(tmp_path: Path) ->
         monitor = panel.preflight
         assert monitor is not None
         assert not _running(monitor)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-        ) as session:
+        async with signed_http(app, panel.services) as session:
             read = await session.get("/api/preflight")
             assert read.status_code == HTTPStatus.OK
             row = cast("Mapping[str, object]", read.json())
@@ -422,9 +421,7 @@ async def test_a_console_without_a_preflight_serves_none_and_refuses_a_run() -> 
     services = replace(panel.services, preflight=None)
     app = create_app(services=services, config=config_from(BASE_ENV).web)
     try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-        ) as session:
+        async with signed_http(app, services) as session:
             assert (await session.get("/api/preflight")).json() is None
             refused = await session.post("/api/preflight/run")
             assert refused.status_code == HTTPStatus.CONFLICT
@@ -554,27 +551,22 @@ async def test_the_page_acknowledges_a_lost_stop_by_name(tmp_path: Path) -> None
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-        ) as session:
-            row = cast("Mapping[str, object]", (await session.get("/api/preflight")).json())
+        ) as anonymous:
+            row = cast("Mapping[str, object]", (await anonymous.get("/api/preflight")).json())
             assert row["unreported_stop"] is None
-            blank = await session.post("/api/preflight/acknowledge", json={"operator": " "})
-            assert blank.status_code == HTTPStatus.BAD_REQUEST
-            done = await session.post("/api/preflight/acknowledge", json={"operator": OPERATOR})
+            unsigned = await anonymous.post("/api/preflight/acknowledge")
+            assert unsigned.status_code == HTTPStatus.UNAUTHORIZED
+        async with signed_http(app, services) as session:
+            done = await session.post("/api/preflight/acknowledge")
             assert done.status_code == HTTPStatus.OK
-            again = await session.post("/api/preflight/acknowledge", json={"operator": OPERATOR})
+            again = await session.post("/api/preflight/acknowledge")
             assert again.status_code == HTTPStatus.CONFLICT
             assert cast("Mapping[str, object]", again.json())["detail"] == NOTHING_LOST
-            assert told == [OPERATOR, OPERATOR]
-            unlinked = create_app(
-                services=replace(services, stop_acknowledge=None),
-                config=config_from(BASE_ENV).web,
-            )
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=unlinked), base_url="http://testserver"
-            ) as other:
-                refused = await other.post(
-                    "/api/preflight/acknowledge", json={"operator": OPERATOR}
-                )
+            assert told == [OPERATOR_ID, OPERATOR_ID]
+            unlinked_services = replace(services, stop_acknowledge=None)
+            unlinked = create_app(services=unlinked_services, config=config_from(BASE_ENV).web)
+            async with signed_http(unlinked, unlinked_services) as other:
+                refused = await other.post("/api/preflight/acknowledge")
                 assert refused.status_code == HTTPStatus.CONFLICT
                 assert cast("Mapping[str, object]", refused.json())["detail"] == NOT_LINKED
     finally:

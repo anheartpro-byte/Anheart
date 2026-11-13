@@ -30,7 +30,7 @@ adaptateur Wi-Fi. L'adresse du réseau console est `10.42.0.1/24` : vérifier
 qu'elle ne recouvre pas le réseau Internet avant la mise en service.
 
 Dans `/etc/anheart/anheart.env`, choisir `UI_PORT` entre 1024 et 65535, sauf
-8123, et un `UI_TOKEN` aléatoire d'au moins 16 caractères. Préparer depuis le
+8123, et un `DEVICE_TOKEN` (ancien nom `UI_TOKEN`) aléatoire d'au moins 16 caractères. Préparer depuis le
 terminal local du Pi :
 
 ```sh

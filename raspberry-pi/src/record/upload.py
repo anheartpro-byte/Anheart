@@ -50,7 +50,6 @@ from pathlib import Path
 from typing import Final, Literal, cast
 
 from src.record import commands
-from src.record.codec import IDENTIFIER
 from src.record.commands import INPUT_KINDS
 from src.record.cursor import (
     Baseline,
@@ -99,7 +98,9 @@ _NAMED: Final[re.Pattern[str]] = re.compile(r"\d{4}-\d{2}-\d{2}T\d{6}Z_([A-Za-z0
 """A record directory as the writer names it: the stamp of its start, then its identifier."""
 
 _EVENT_KIND: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,63}")
-_ACTOR_MAX: Final[int] = 64
+_ACTOR: Final[re.Pattern[str]] = re.compile(r"(?:device:)?[A-Za-z0-9_-]{1,64}")
+"""An actor as the dashboard takes it (``EVENT_ACTOR``, contract 1.13): an identifier,
+or a tablet's ``device:<id>`` for an E-STOP or a STOP with nobody signed in."""
 
 _T: Final[int] = TICK_COLUMNS.index("t")
 _PHASE: Final[int] = TICK_COLUMNS.index("phase")
@@ -459,6 +460,25 @@ class _Omitted(Enum):
     LOCAL = "local"
 
 
+_LAST_OF_ONE_UNIT: Final[int] = 0xFFFF
+"""The last code point UTF-16 writes in one unit; any above takes a pair."""
+
+
+def within_utf16(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` UTF-16 code units, never inside a pair.
+
+    What Convex counts (``detail.length`` of a JavaScript string): an emoji is
+    two. A detail cut at ``limit`` code points could be refused, and with it
+    the whole batch, an emergency stop included.
+    """
+    units = 0
+    for index, char in enumerate(text):
+        units += 2 if ord(char) > _LAST_OF_ONE_UNIT else 1
+        if units > limit:
+            return text[:index]
+    return text
+
+
 def _event(raw: bytes, seq: int, start_ms: int) -> Wire | _Omitted | None:
     """One wire event, a local omission, or ``None`` for an unreadable line."""
     try:
@@ -480,8 +500,7 @@ def _event(raw: bytes, seq: int, start_ms: int) -> Wire | _Omitted | None:
         or _EVENT_KIND.fullmatch(kind) is None
         or not isinstance(detail, str)
         or not isinstance(actor, str)
-        or IDENTIFIER.fullmatch(actor) is None
-        or len(actor) > _ACTOR_MAX
+        or _ACTOR.fullmatch(actor) is None
     ):
         return None
     if t < 0 or (kind in INPUT_KINDS and detail == commands.encode(commands.AttendantPing())):
@@ -490,7 +509,7 @@ def _event(raw: bytes, seq: int, start_ms: int) -> Wire | _Omitted | None:
         "seq": seq,
         "t": start_ms + round(t * 1000),
         "kind": kind,
-        "detail": detail[:MAX_EVENT_DETAIL],
+        "detail": within_utf16(detail, MAX_EVENT_DETAIL),
         "actor": actor,
     }
 

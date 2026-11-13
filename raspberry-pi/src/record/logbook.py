@@ -40,7 +40,7 @@ from typing import Final
 from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
 
-from src.record.codec import IDENTIFIER, Privacy, document, encode
+from src.record.codec import ACTOR, Privacy, document, encode
 from src.record.schema import CONFIG, EventKind, RecordError
 from src.record.writer import (
     DIRECTORY_SYNC,
@@ -117,7 +117,7 @@ class Logbook:
         A line the disk refuses half-way is taken back out, so that the next
         one never lands behind half a line.
         """
-        if IDENTIFIER.fullmatch(entry.actor) is None:
+        if ACTOR.fullmatch(entry.actor) is None:
             return Err(RecordError("event", "invalid_actor"))
         active = self._directory / ACTIVE
         # A note is validated when it is built: it always has a line.

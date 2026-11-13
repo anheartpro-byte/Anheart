@@ -51,6 +51,7 @@ from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, MotorRpm, Seconds, UnixMillis
 from src.wall_clock import WallClockProbe
 from src.web.app import create_app
+from tests.access_support import signed_http
 from tests.roster_support import RIDER_ID, listed
 from tests.test_web_api import shown_digest
 
@@ -252,10 +253,9 @@ class Rig:
     presence: bool = True
 
     def http(self) -> httpx.AsyncClient:
+        """The operator's screen, signed in at its first request (ANH-152)."""
         app = create_app(services=self.panel.services, config=self.config.web)
-        return httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-        )
+        return signed_http(app, self.panel.services)
 
     async def drain(self) -> None:
         """Read every event the operator's screen would have received so far."""

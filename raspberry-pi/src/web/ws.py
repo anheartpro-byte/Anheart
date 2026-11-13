@@ -15,7 +15,13 @@ So the handshake is refused, **before** ``accept``, unless:
 * the ``Origin`` header is absent or in the configured allowlist (see
   :meth:`~src.web.deps.WebConfig.origin_allowed` for why absent is allowed),
   and
-* the shared token matches, when one is configured.
+* the token is a device token of this console, when one is configured: its
+  own ``DEVICE_TOKEN`` or a tablet of the signed list (ANH-152). Reading the
+  telemetry takes no operator signed in.
+
+The token is judged again before every frame: a tablet the site revoked is no
+longer in the list the console adopts, and its socket is closed before the next
+frame, ECG included. The check is a digest and a comparison, in memory.
 
 Refusing before ``accept`` matters: a socket that is accepted and then closed
 has already been upgraded, and the page's script has already been told it
@@ -47,14 +53,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from typing import Final
 
 from fastapi import FastAPI, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
-from src.clock import Clock
 from src.telemetry import PayloadKind, TelemetryClient, TelemetryHub
-from src.web.deps import TOKEN_QUERY_PARAM, Services, WebConfig
+from src.web.deps import TOKEN_QUERY_PARAM, Services, WebConfig, identify_device
 from src.web.schemas import WsEnvelope, encode_envelope, payload_is_terminal
 
 _logger: logging.Logger = logging.getLogger(__name__)
@@ -77,6 +83,8 @@ _BAD_ORIGIN: Final[str] = (
 _BAD_TOKEN: Final[str] = "a valid token is required"  # noqa: S105  # a message, not a secret
 
 _FELL_BEHIND: Final[str] = "this screen fell behind and was disconnected; reload to resync"
+
+_REVOKED: Final[str] = "this device is no longer one of this console's"
 
 LOGGED_HEADER_LIMIT: Final[int] = 120
 """Most characters a refused header value takes in the log, quotes and escapes included.
@@ -125,7 +133,8 @@ async def serve_telemetry(websocket: WebSocket, *, services: Services, config: W
         _logger.warning("refused telemetry socket from origin %s", logged_header(origin))
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=_BAD_ORIGIN)
         return
-    if not config.token_matches(websocket.query_params.get(TOKEN_QUERY_PARAM)):
+    presented = websocket.query_params.get(TOKEN_QUERY_PARAM)
+    if identify_device(config, services.access, presented) is None:
         _logger.warning("refused telemetry socket: bad or missing token")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=_BAD_TOKEN)
         return
@@ -134,8 +143,12 @@ async def serve_telemetry(websocket: WebSocket, *, services: Services, config: W
     hub = services.hub
     client = hub.subscribe()
     reader = asyncio.create_task(_watch_for_disconnect(websocket, client))
+
+    def still_allowed() -> bool:
+        return identify_device(config, services.access, presented) is not None
+
     try:
-        await _stream(websocket, hub, client, services.instance, services.clock)
+        await _stream(websocket, hub, client, services, still_allowed)
     finally:
         # Release first: the hub must stop publishing to a client whose socket
         # is going away before anything else is attempted, because that is the
@@ -147,19 +160,28 @@ async def serve_telemetry(websocket: WebSocket, *, services: Services, config: W
 
 
 async def _stream(
-    websocket: WebSocket, hub: TelemetryHub, client: TelemetryClient, instance: str, clock: Clock
+    websocket: WebSocket,
+    hub: TelemetryHub,
+    client: TelemetryClient,
+    services: Services,
+    still_allowed: Callable[[], bool],
 ) -> None:
-    """Write payloads until the client is evicted or the socket fails.
+    """Write payloads until the client is evicted, its device revoked, or the socket fails.
 
-    Every snapshot leaves with ``instance``, the run of the console that
-    serves this socket: the frames of one socket all carry the same one.
+    Every snapshot leaves with the console's ``instance``, the run of the console
+    that serves this socket: the frames of one socket all carry the same one.
     """
     cursor = await _send_ecg(websocket, hub, after=None)
     try:
         while True:
             payload = await client.next_payload()
+            if not still_allowed():
+                _logger.warning("telemetry socket closed: its device was revoked")
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=_REVOKED)
+                return
+            now = services.clock.monotonic()
             await websocket.send_text(
-                encode_envelope(WsEnvelope.of(payload, instance, now=clock.monotonic()))
+                encode_envelope(WsEnvelope.of(payload, services.instance, now=now))
             )
             if payload_is_terminal(payload.kind):
                 await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER, reason=_FELL_BEHIND)

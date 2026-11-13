@@ -78,6 +78,7 @@ from src.web.routes import (
     answer_refusal,
 )
 from src.web.schemas import CommandRow, StatusRow, WsEnvelope, encode_envelope
+from tests.access_support import OPERATOR_ID, signed_http
 from tests.roster_support import RIDER, RIDER_ID
 from tests.test_failure_rig import (
     OPERATOR,
@@ -720,9 +721,7 @@ def web(tmp_path: Path) -> WebRig:
 
 @pytest.fixture
 async def screen(web: WebRig) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=web.app), base_url="http://testserver", headers=auth()
-    )
+    return signed_http(web.app, web.services, headers=auth())
 
 
 def start_body(operator: str) -> Body:
@@ -747,11 +746,11 @@ async def test_a_second_start_gets_a_code_a_fixed_sentence_and_nothing_of_the_fi
     )
     # Nothing of the request in the way: not who asked, not when, not the rider.
     body_without_opaque_id = second.text.replace(f'"{request_of(first)}"', '""')
-    for leaked in (ALICE, "alice", "StartSession", "subject_id", RIDER_ID, "at="):
+    for leaked in (OPERATOR_ID, "StartSession", "subject_id", RIDER_ID, "at="):
         assert leaked not in body_without_opaque_id, leaked
     waiting = web.surface.pending
     assert isinstance(waiting, StartSession)
-    assert waiting.operator == ALICE
+    assert waiting.operator == OPERATOR_ID
 
 
 async def test_a_start_that_finds_a_reset_waiting_is_refused_and_the_reset_keeps_its_place(
@@ -767,7 +766,7 @@ async def test_a_start_that_finds_a_reset_waiting_is_refused_and_the_reset_keeps
     assert refusal_of(start) == RefusedAtOnce(
         detail=REQUEST_WAITING_DETAIL, code=REQUEST_WAITING, waiting_request_id=request_of(reset)
     )
-    assert ALICE not in start.text
+    assert OPERATOR_ID not in start.text
     assert isinstance(web.surface.pending, FaultReset)
 
 
@@ -814,9 +813,7 @@ async def test_a_start_under_a_latched_verdict_or_before_the_attestation_has_its
     tmp_path: Path,
 ) -> None:
     rig = build_rig(tmp_path)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=rig.app), base_url="http://testserver", headers=auth()
-    ) as session:
+    async with signed_http(rig.app, rig.services, headers=auth()) as session:
         unattested = await session.post(
             "/api/session/start",
             json={**start_body(BOB), "profiles_digest": await shown_digest(session)},
@@ -1103,7 +1100,7 @@ async def test_two_starts_within_one_tick_the_second_is_refused_at_once(tmp_path
     assert snapshot.mode is RunMode.MANUEL
     manual = made.rig.panel.runtime.manual
     assert manual is not None
-    assert manual.operator == ALICE, "the session that runs is the one that was told taken"
+    assert manual.operator == OPERATOR_ID, "the session that runs is the one that was told taken"
     assert made.said(*SESSION_EVENTS) == [
         (EventKind.START_REQUESTED, mine),
         (EventKind.TAKEN, mine),

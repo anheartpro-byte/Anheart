@@ -142,6 +142,7 @@ async def test_ex8_a_session_started_at_the_machine_is_declared_before_anything_
             "kind": "manual",
             "startedAt": START,
             "operatorName": "dr. attending",
+            "operatorId": "dr. attending",
             "sessionAgeMs": 1000,
             "occupancy": "bench",
         }
@@ -1850,6 +1851,7 @@ async def test_ex4_a_record_declared_after_a_restart_is_described_by_its_manifes
             "kind": "manual",
             "startedAt": START,
             "operatorName": "op-5",
+            "operatorId": "op-5",
             # Same start of the system: its monotonic clock still dates the record.
             "sessionAgeMs": 301_000,
             "occupancy": "bench",

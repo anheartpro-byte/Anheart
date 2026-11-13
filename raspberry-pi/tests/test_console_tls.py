@@ -278,8 +278,8 @@ def test_ex3_off_loopback_without_a_certificate_the_configuration_is_refused() -
 def test_ex3_a_missing_token_and_a_missing_certificate_are_said_at_once() -> None:
     """An operator fixes a .env in one go, not one line per restart."""
     problems = _problems({**SIM_ENV, "UI_HOST": AP_ADDRESS, "UI_TLS_NAMES": "not a name"})
-    assert set(problems) == {"UI_HOST/UI_PORT/UI_TOKEN", TLS_PROBLEM, "UI_TLS_NAMES"}
-    assert "without a token" in problems["UI_HOST/UI_PORT/UI_TOKEN"]
+    assert set(problems) == {"UI_HOST/UI_PORT/DEVICE_TOKEN", TLS_PROBLEM, "UI_TLS_NAMES"}
+    assert "without a token" in problems["UI_HOST/UI_PORT/DEVICE_TOKEN"]
 
 
 @pytest.mark.parametrize(
@@ -319,8 +319,8 @@ def test_ex3_names_without_a_certificate_are_refused_rather_than_ignored() -> No
 
 def test_ex3_a_port_out_of_range_is_still_a_problem_of_the_bind() -> None:
     problems = _problems({**SIM_ENV, "UI_PORT": "70000"})
-    assert set(problems) == {"UI_HOST/UI_PORT/UI_TOKEN"}
-    assert "port must be" in problems["UI_HOST/UI_PORT/UI_TOKEN"]
+    assert set(problems) == {"UI_HOST/UI_PORT/DEVICE_TOKEN"}
+    assert "port must be" in problems["UI_HOST/UI_PORT/DEVICE_TOKEN"]
     # Each problem once: half a certificate is not also blamed on the names given with it.
     both = _problems(
         {**SIM_ENV, "UI_PORT": "http", "UI_TLS_CERT": "/etc/anheart/tls/c", "UI_TLS_NAMES": AP_NAME}

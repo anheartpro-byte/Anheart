@@ -14,6 +14,7 @@ from src.training.safety import RULE_COMMS_LOST
 from src.web.app import create_app
 from src.web.schemas import PanelRow, SnapshotRow, StatusRow
 from tests import test_atv320
+from tests.access_support import signed_http
 from tests.test_atv320 import (
     ETA_OPERATION_ENABLED,
     Behave,
@@ -45,9 +46,7 @@ async def client(panel: LocalPanel) -> AsyncIterator[httpx.AsyncClient]:
     services = replace(panel.services, ports=StubPorts(ports=()))
     app = create_app(services=services, config=config_of(BENCH_ENV).web)
     try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-        ) as session:
+        async with signed_http(app, services) as session:
             response = await session.post(
                 "/api/safety/attest",
                 json={

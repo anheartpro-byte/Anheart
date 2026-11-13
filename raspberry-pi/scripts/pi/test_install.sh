@@ -81,6 +81,15 @@
 # told to take /dev/null for a watchdog device, so that it never arms the one
 # of the machine this test runs on.
 #
+# Every action of the console takes an operator signed in from the signed list
+# of its operators (ANH-152), which a console with no dashboard never receives.
+# So this test makes an Ed25519 pair at each run, gives its public half to the
+# copy the console is built from, in place of the catalogue key, and places in
+# the console's data a list of one operator and one tablet signed by the
+# private half, as Convex signs it. Each action signs that operator in first
+# (a curl cookie jar). The private half and the code live in this run's
+# temporary folder only, removed at the end. Needs openssl and python3 here.
+#
 # ANHEART_TEST_KEEP=1 leaves the stand-in running for inspection
 # (docker exec -it anheart-install-test bash).
 set -euo pipefail
@@ -93,6 +102,16 @@ readonly COPY="/home/pi/anheart/raspberry-pi"
 readonly ENV_FILE="/etc/anheart/anheart.env"
 # Synthetic, for this test only: the token of the operator page.
 readonly TOKEN="install-test-token-0123456789abcdef"
+# Synthetic, for this test only (ANH-152): the operator of the signed list, their
+# code and the token of its tablet, drawn at each run; and where they are made.
+readonly OPERATOR_ID="install-test-operator"
+OPERATOR_CODE="$(python3 -c 'import secrets; print(100000 + secrets.randbelow(900000))')"
+readonly OPERATOR_CODE
+TABLET_TOKEN="$(openssl rand -hex 32)"
+readonly TABLET_TOKEN
+SIGNING="$(mktemp -d)"
+readonly SIGNING
+readonly COOKIES="/tmp/anheart-install-test.cookies"
 readonly NEXT_VERSION="pi-0.0.0-install-test"
 readonly THIRD_VERSION="pi-0.0.0-install-test-2"
 
@@ -125,6 +144,7 @@ fail() {
 }
 
 cleanup() {
+    rm -rf "$SIGNING"
     if [ "${ANHEART_TEST_KEEP:-}" = "1" ]; then
         printf '\nThe stand-in is left running: docker exec -it %s bash\n' "$MACHINE"
     else
@@ -167,10 +187,77 @@ console_clock() {
     esac
 }
 
+# The operator of the signed list signs in (ANH-152): the console's answer, the
+# session's cookie in the jar. Done before every action, since a console that
+# restarted holds no session.
+sign_in() {
+    in_machine curl --silent --fail --max-time 10 --request POST --cookie-jar "$COOKIES" \
+        --header "x-anheart-token: $TOKEN" --header 'content-type: application/json' \
+        --data "{\"user_id\":\"$OPERATOR_ID\",\"code\":\"$OPERATOR_CODE\"}" \
+        "http://127.0.0.1:$port/api/access/sign-in"
+}
+
 post() {
-    in_machine curl --silent --fail --max-time 5 --request POST \
+    sign_in > /dev/null || return 1
+    in_machine curl --silent --fail --max-time 5 --request POST --cookie "$COOKIES" \
         --header "x-anheart-token: $TOKEN" --header 'content-type: application/json' \
         --data "$2" "http://127.0.0.1:$port$1"
+}
+
+# The signed operator list of the console (ANH-152, src/console_access.py), as
+# convex/lib/consoleAccess.ts writes it and Convex signs it: one operator, its
+# code hashed with scrypt with the contract's parameters (the only ones the
+# console takes), one tablet. Written in $SIGNING with the public half of the pair:
+# anheart_catalog.pub and operators.json.
+make_operator_list() {
+    openssl genpkey -algorithm ed25519 -out "$SIGNING/catalog.key" \
+        || fail "openssl could not make an Ed25519 key"
+    openssl pkey -in "$SIGNING/catalog.key" -pubout -out "$SIGNING/anheart_catalog.pub" \
+        || fail "openssl could not write the public half of the key"
+    python3 - "$SIGNING" "$OPERATOR_ID" "$OPERATOR_CODE" "$TABLET_TOKEN" <<'PY' \
+        || fail "the operator list could not be written"
+import base64, hashlib, json, os, sys, time
+
+folder, user_id, code, token = sys.argv[1:5]
+salt = os.urandom(16)
+n, r, p = 32768, 8, 1
+digest = hashlib.scrypt(code.encode(), salt=salt, n=n, r=r, p=p, maxmem=64 * 2**20, dklen=32)
+payload = json.dumps({
+    "kind": "operator_list",
+    "machineId": "install-test",
+    "issuedAt": int(time.time() * 1000),
+    "operators": [{
+        "userId": user_id,
+        "name": "Operateur du test",
+        "code": {
+            "algorithm": "scrypt", "n": n, "r": r, "p": p,
+            "salt": base64.b64encode(salt).decode(),
+            "hash": base64.b64encode(digest).decode(),
+        },
+    }],
+    "devices": [{
+        "deviceId": "install-test-tablet",
+        "name": "Tablette du test",
+        "tokenSha256": hashlib.sha256(token.encode()).hexdigest(),
+    }],
+})
+with open(os.path.join(folder, "payload.txt"), "w", encoding="utf-8") as text:
+    text.write(payload)
+PY
+    openssl pkeyutl -sign -inkey "$SIGNING/catalog.key" -rawin \
+        -in "$SIGNING/payload.txt" -out "$SIGNING/payload.sig" \
+        || fail "openssl could not sign the operator list"
+    python3 - "$SIGNING" <<'PY' || fail "the signed operator list could not be written"
+import base64, json, os, sys
+
+folder = sys.argv[1]
+with open(os.path.join(folder, "payload.txt"), encoding="utf-8") as text:
+    payload = text.read()
+with open(os.path.join(folder, "payload.sig"), "rb") as raw:
+    signature = base64.b64encode(raw.read()).decode()
+with open(os.path.join(folder, "operators.json"), "w", encoding="utf-8") as stored:
+    stored.write(json.dumps({"schema_version": 1, "payload": payload, "signature": signature}) + "\n")
+PY
 }
 
 wait_for_console() {
@@ -216,9 +303,9 @@ restart_state() { in_machine cat /var/lib/anheart/records/service-state.json 2> 
 
 # A manual bench session at target 0 on the simulated drive.
 start_session() {
-    post /api/safety/attest '{"operator":"install-test","sto_jumper_removed":true,"mushroom_wired_nc":true}' > /dev/null \
+    post /api/safety/attest '{"sto_jumper_removed":true,"mushroom_wired_nc":true}' > /dev/null \
         || fail "the simulated console refused the attestation ($1)"
-    post /api/manual/start '{"occupancy":"bench","operator":"install-test"}' > /dev/null \
+    post /api/manual/start '{"occupancy":"bench"}' > /dev/null \
         || fail "the simulated console refused the manual bench start ($1)"
     wait_for_run_state running "$1"
 }
@@ -319,6 +406,10 @@ tar -C "$tree" --exclude=.env --exclude=.venv --exclude=__pycache__ \
     -cf - . | docker exec --interactive "$MACHINE" tar -C "$COPY" -xf -
 version="$(tr -d '[:space:]' < "$tree/VERSION")"
 ok "this directory is copied to $COPY (version $version)"
+make_operator_list
+docker cp "$SIGNING/anheart_catalog.pub" "$MACHINE:$COPY/config/anheart_catalog.pub" > /dev/null \
+    || fail "the run's catalogue key could not be given to the copy"
+ok "the copy's catalogue key is the public half of a pair made for this run (ANH-152)"
 
 # A system that updates its packages by itself, as the package
 # unattended-upgrades sets it: the install must turn that off.
@@ -545,11 +636,21 @@ expect_private "after the first start"
 
 step "2. Second install: nothing changes"
 # A secret in the configuration, and a console restarted to read it.
-in_machine sed -i "s/^# UI_TOKEN=.*/UI_TOKEN=$TOKEN/" "$ENV_FILE"
-expect_in "$(in_machine grep -c "^UI_TOKEN=$TOKEN$" "$ENV_FILE")" "1" "a secret is written in the configuration"
+in_machine sed -i "s/^# DEVICE_TOKEN=.*/DEVICE_TOKEN=$TOKEN/" "$ENV_FILE"
+expect_in "$(in_machine grep -c "^DEVICE_TOKEN=$TOKEN$" "$ENV_FILE")" "1" "a secret is written in the configuration"
+# The signed operator list (ANH-152), where the unit mounts the console's data,
+# the account's alone like everything there: read at the console's start.
+docker cp "$SIGNING/operators.json" "$MACHINE:/tmp/operators.json" > /dev/null \
+    || fail "the operator list could not be copied into the stand-in"
+in_machine install -o anheart -g anheart -m 600 /tmp/operators.json /var/lib/anheart/data/operators.json
+in_machine rm -f /tmp/operators.json
 in_machine systemctl restart anheart
 wait_for_console "after the restart with a token"
 expect_at_rest "after a restart by hand"
+expect_in "$(sign_in || true)" "\"user_id\":\"$OPERATOR_ID\"" "the operator of the signed list signs in at the console"
+expect_in "$(in_machine curl --silent --fail --max-time 3 --header "x-anheart-token: $TABLET_TOKEN" \
+    "http://127.0.0.1:$port/api/status" 2> /dev/null || true)" '"run_state":"idle"' \
+    "a tablet of the signed list reads the console with its own token"
 # How install.sh and preflight.sh hand a secret to curl: on its standard input,
 # never on its command line. Checked with the curl of this system.
 answer="$(printf 'x-anheart-token: %s\n' "$TOKEN" \
@@ -706,9 +807,18 @@ expect_in "$(in_machine docker image ls --format '{{.Repository}}:{{.Tag}}')" "a
 
 step "7. A console the service did not start: a container named anheart run by hand"
 in_machine systemctl stop anheart || fail "systemctl stop anheart failed"
-# The way an image is run without the unit: no --rm, Docker's own logging.
-in_machine docker run --detach --name anheart --network host --env-file "$ENV_FILE" \
+# The way an image is run without the unit: no --rm, Docker's own logging. And
+# no mount: the signed operator list (ANH-152) is put in the container itself,
+# readable by its account, before it starts.
+in_machine docker create --name anheart --network host --env-file "$ENV_FILE" \
     "anheart-console:$NEXT_VERSION" > /dev/null || fail "the console could not be started by hand"
+docker cp "$SIGNING/operators.json" "$MACHINE:/tmp/operators.json" > /dev/null \
+    || fail "the operator list could not be copied into the stand-in"
+in_machine chmod 644 /tmp/operators.json
+in_machine docker cp /tmp/operators.json anheart:/app/data/operators.json \
+    || fail "the operator list could not be put in the console started by hand"
+in_machine rm -f /tmp/operators.json
+in_machine docker start anheart > /dev/null || fail "the console could not be started by hand"
 wait_for_console "started by hand"
 foreign_id="$(container_id)"
 expect_in "$(in_console id -un)" "anheart" "started by hand, with no account named, the image does not run as root either"
@@ -725,7 +835,7 @@ expect_in "$output" "does not say it is at rest: nothing is restarted" "install.
 expect_in "$(status)" '"run_state":"running"' "its session still runs"
 [ "$(in_machine systemctl is-active anheart || true)" = "inactive" ] || fail "the service was started over a running session"
 ok "the service was not started"
-post /api/session/stop '{"operator":"install-test","reason":"install test"}' > /dev/null \
+post /api/session/stop '{"reason":"install test"}' > /dev/null \
     || fail "the simulated console refused to end the session"
 wait_for_run_state idle "after the session was ended at the console"
 install || fail "install.sh failed over a console at rest that the service did not start"
@@ -850,20 +960,20 @@ expect_in "$(panel)" '"unclean_starts":3,' "at its third start after an unclean 
 expect_in "$(healthz)" '"status":"ok"' "out of service, the console still runs and answers"
 expect_in "$(in_machine journalctl --unit anheart --no-pager --since "@$begin")" "out_of_service: console hors service" \
     "the journal says the console is out of service"
-post /api/safety/attest '{"operator":"install-test","sto_jumper_removed":true,"mushroom_wired_nc":true}' > /dev/null \
+post /api/safety/attest '{"sto_jumper_removed":true,"mushroom_wired_nc":true}' > /dev/null \
     || fail "the console out of service refused the attestation"
-post /api/manual/start '{"occupancy":"bench","operator":"install-test"}' > /dev/null \
+post /api/manual/start '{"occupancy":"bench"}' > /dev/null \
     || fail "the console out of service did not take the request to start"
 sleep 3
 expect_in "$(status)" '"run_state":"idle"' "out of service, a start that is asked for is not armed"
-answer="$(post /api/service/restore '{"operator":"install-test"}')" \
+answer="$(post /api/service/restore '{}')" \
     || fail "the console refused to be put back in service"
-expect_in "$answer" '"out_of_service":false' "a named operator puts the console back in service"
+expect_in "$answer" '"out_of_service":false' "the operator signed in puts the console back in service"
 expect_in "$answer" '"persisted":true' "and that is written on the machine"
 expect_in "$(status)" '"run_state":"idle"' "putting it back in service starts nothing"
 start_session "manual bench session on the console back in service"
 ok "back in service, a session starts when an operator starts one"
-post /api/session/stop '{"operator":"install-test","reason":"install test"}' > /dev/null \
+post /api/session/stop '{"reason":"install test"}' > /dev/null \
     || fail "the simulated console refused to end the session"
 wait_for_run_state idle "after the session was ended at the console"
 in_machine systemctl restart anheart || fail "systemctl restart anheart failed"

@@ -21,6 +21,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from src.training.runtime import EndReason, RuntimeState
+from src.web.app import create_app
 from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import (
     OPERATOR,
@@ -249,10 +250,13 @@ async def test_a_target_after_an_estop_is_refused_and_nothing_resumes(tmp_path: 
     assert await rig.left_stopped() == ""
 
 
-async def test_a_blank_operator_is_refused(tmp_path: Path) -> None:
+async def test_a_target_without_an_operator_signed_in_is_refused(tmp_path: Path) -> None:
+    """No name typed any more (ANH-152): an action takes an operator signed in."""
     rig = await cruising(tmp_path)
-    async with rig.http() as session:
-        target = await session.post("/api/manual/target", json={"output_rpm": 5.0, "operator": " "})
-    assert target.status_code in {httpx.codes.BAD_REQUEST, httpx.codes.UNPROCESSABLE_ENTITY}
+    app = create_app(services=rig.panel.services, config=rig.config.web)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as session:
+        target = await session.post("/api/manual/target", json={"output_rpm": 5.0})
+    assert target.status_code == httpx.codes.UNAUTHORIZED
     detail_of(target)
     await finish(rig)

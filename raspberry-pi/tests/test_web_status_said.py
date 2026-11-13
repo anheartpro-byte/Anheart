@@ -43,6 +43,7 @@ from src.units import Monotonic, RawRegister, Seconds, UnixMillis
 from src.web.deps import Services, new_instance
 from src.web.routes import DRIVE_FAULT_DETAIL
 from src.web.schemas import SnapshotRow, StatusRow, WsEnvelope
+from tests.access_support import signed_http
 from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import OPERATOR as CONSOLE_OPERATOR
 from tests.test_failure_rig import TICK, attest, make_rig, precommanded
@@ -76,9 +77,7 @@ def rig(tmp_path: Path) -> Rig:
 
 
 def _client(rig: Rig) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=rig.app), base_url="http://testserver"
-    )
+    return signed_http(rig.app, rig.services)
 
 
 async def _status(
@@ -429,12 +428,11 @@ async def test_what_cannot_be_started_anyway_is_still_told_its_own_reason_first(
         )
     )
     async with _client(rig) as session:
-        nameless = await session.post(
+        riderless = await session.post(
             "/api/session/start",
             headers=auth(),
             json={
                 "profile_id": PROFILE_ID,
-                "operator": " ",
                 "profiles_digest": await shown_digest(session, auth()),
             },
         )
@@ -448,7 +446,7 @@ async def test_what_cannot_be_started_anyway_is_still_told_its_own_reason_first(
                 "profiles_digest": await shown_digest(session, auth()),
             },
         )
-    assert nameless.status_code == HTTPStatus.BAD_REQUEST
+    assert riderless.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert unknown.status_code == HTTPStatus.NOT_FOUND
 
 

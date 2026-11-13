@@ -92,6 +92,13 @@ the launch's, and a launch made from another list, or from none, is refused
 ``programme_changed``; this console never arms one, whatever the dashboard
 answers (:mod:`src.cloud_sync`).
 
+Since 1.13 the machine's operators and tablets come down signed on the same
+channel (``GET /api/machine/operators``, ``operator_list`` of the shared
+file), at rest only (:mod:`src.operator_sync`); an event may name a tablet
+(``device:<id>``) and ``training/local`` carries ``operatorId``. A dashboard
+before 1.13 answers 404: the console keeps its list, or opens no action
+without one (:mod:`src.console_access`).
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer

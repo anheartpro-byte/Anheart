@@ -167,7 +167,7 @@ test("the chip and its line are in the sidebar, the banner above every page, the
   }
   const safety = pages.find((view) => view.startsWith('<section id="view-safety"')) ?? "";
   assert.match(safety, /<div id="service-restore" class="hidden">/);
-  assert.match(safety, /<input id="service-operator" type="text"/);
+  assert.equal(safety.includes('id="service-operator"'), false, "the name is the signed-in operator's");
   assert.match(safety, /<button id="service-restore-button" class="btn" type="button">Remettre en service<\/button>/);
 });
 
@@ -270,17 +270,16 @@ test("before the console has answered, the chip claims nothing and no banner is 
   assert.ok(node("service-restore").classes.has("hidden"));
 });
 
-test("putting the console back in service sends the name typed, and asks the console again", async () => {
+test("putting the console back in service sends no name, and asks the console again", async () => {
   const { context, node, asked } = page((path) =>
     Promise.resolve(path === "/api/service/restore" ? IN_SERVICE : panelRow()),
   );
   context.renderPanel(panelRow(OUT_OF_SERVICE));
-  node("service-operator").value = "Synthetic operator";
   context.doRestoreService();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(asked[0][0], "/api/service/restore");
   assert.equal(asked[0][1].method, "POST");
-  assert.deepEqual({ ...asked[0][1].body }, { operator: "Synthetic operator" });
+  assert.equal(asked[0][1].body, undefined);
   assert.equal(node("service-note").textContent, "console remise en service");
   // The chip is not flipped by the page: the console is asked, and its answer is what is shown.
   assert.equal(asked[1][0], "/api/panel");
@@ -314,7 +313,7 @@ test("a refusal of the console is shown, and the banner stays", async () => {
   assert.equal(node("service-state").textContent, "HORS SERVICE");
 });
 
-test("the name typed for the console is the one name of the page", () => {
-  assert.match(source, /var OPERATOR_INPUT_IDS = \[[^\]]*"service-operator"[^\]]*\];/);
+test("no name is typed on the page: the console names who is signed in (ANH-152)", () => {
+  assert.equal(source.includes("OPERATOR_INPUT_IDS"), false);
   assert.match(source, /el\("service-restore-button"\)\.onclick = doRestoreService;/);
 });

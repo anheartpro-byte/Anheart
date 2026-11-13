@@ -66,10 +66,12 @@ from src.record.upload import (
     read_last_tick_ms,
     read_points,
     reference_in,
+    within_utf16,
 )
 from src.record.writer import TICK_COLUMNS, Writer
 from src.result import Err, Ok, Result
 from src.units import Monotonic, UnixMillis
+from tests.fake_dashboard import convex_takes
 from tests.record_support import manifest, row, writer
 from tests.record_uplink_support import PROGRAMME, launched_programme
 
@@ -749,6 +751,9 @@ def test_a_line_that_is_not_an_event_keeps_its_rank_and_is_passed_over(tmp_path:
         json.dumps({**good, "actor": 7}).encode(),
         json.dumps({**good, "actor": "Dr Attending"}).encode(),
         json.dumps({**good, "actor": "a" * 65}).encode(),
+        json.dumps({**good, "actor": "device:"}).encode(),
+        json.dumps({**good, "actor": "device:" + "a" * 65}).encode(),
+        json.dumps({**good, "actor": "tablet:a"}).encode(),
     ]
     with (made.path / "events.jsonl").open("ab") as handle:
         for intruder in intruders:
@@ -762,6 +767,49 @@ def test_a_line_that_is_not_an_event_keeps_its_rank_and_is_passed_over(tmp_path:
     assert found.value.events[1]["t"] == START_MS + 5000
     assert found.value.skipped == len(intruders)
     assert found.value.last_seq == len(intruders) + 1
+
+
+def test_a_stop_in_the_name_of_a_device_is_sent_as_it_is(tmp_path: Path) -> None:
+    """ANH-152: an E-STOP or a STOP with nobody signed in, as the dashboard takes it."""
+    made = writer(tmp_path)
+    actors = ["device:local", "device:" + "t" * 64, "a" * 64]
+    lines = [
+        json.dumps({"t": 1.0, "kind": "operator_action", "detail": "estop", "actor": actor})
+        for actor in actors
+    ]
+    (made.path / "events.jsonl").write_text("".join(line + "\n" for line in lines))
+
+    found = read_events(made.path, start_ms=START_MS, offset=0, last_seq=-1)
+
+    assert isinstance(found, Ok)
+    assert [event["actor"] for event in found.value.events] == actors
+    assert found.value.skipped == 0
+
+
+def test_a_detail_is_cut_as_the_dashboard_counts_it_in_utf16_units(tmp_path: Path) -> None:
+    """An emoji is two UTF-16 units for Convex: a detail cut at 2000 code points of them
+    would be refused, and the whole batch with it, an emergency stop included."""
+    made = writer(tmp_path)
+    emoji = "\U0001f600"
+    details = [emoji * (MAX_EVENT_DETAIL + 10), "a" + emoji * MAX_EVENT_DETAIL, emoji * 10]
+    lines = [
+        json.dumps({"t": 1.0, "kind": "operator_action", "detail": d, "actor": "device:local"})
+        for d in details
+    ]
+    (made.path / "events.jsonl").write_text("".join(line + "\n" for line in lines))
+
+    found = read_events(made.path, start_ms=START_MS, offset=0, last_seq=-1)
+
+    assert isinstance(found, Ok)
+    sent = [str(event["detail"]) for event in found.value.events]
+    assert sent == [
+        emoji * (MAX_EVENT_DETAIL // 2),
+        "a" + emoji * (MAX_EVENT_DETAIL // 2 - 1),
+        emoji * 10,
+    ]
+    assert all(convex_takes(event) for event in found.value.events)
+    assert within_utf16("abc", 2) == "ab"
+    assert within_utf16("", 0) == ""
 
 
 def test_a_text_longer_than_the_dashboard_takes_is_cut(tmp_path: Path) -> None:

@@ -604,10 +604,17 @@ aucun moment ; aucun arrêt d'urgence matériel : l'arrêt qui ne dépend pas du
 logiciel est la coupure de la prise secteur, dans les cas de l'étape 7. Aucun
 essai matériel de cette procédure n'est consigné ici.
 
-**Qui.** Un opérateur nommé à la console, qui atteste et pilote ; une seconde
+**Qui.** Un opérateur connecté à la console, qui atteste et pilote ; une seconde
 personne nommée à la prise secteur du variateur, la main dessus pendant toute
 rotation, qui ne quitte pas la prise des yeux ni la machine. Personne d'autre
 près de la machine.
+
+**Connexion (ANH-152).** L'essai du 21 et 22 novembre 2026 se fait sur une image
+figée, antérieure à ANH-152 : on y écrit encore son nom dans les champs.
+À partir de la séance de banc suivante, sur une image qui porte ANH-152,
+chaque action de la console demande un opérateur connecté, et l'étape 3 bis
+ci-dessous s'ajoute. STOP et E-STOP n'en demandent jamais : ils marchent sans
+connexion, avec le seul jeton de l'appareil.
 
 **Avant.**
 
@@ -620,8 +627,23 @@ près de la machine.
 3. Démarrer la console. Sur toutes les pages, le bandeau rouge
    `STO PONTE : aucun arret d'urgence materiel` ; la carte « Chaine STO »
    affiche `pontee (declaree)`.
-4. Page Securite : cocher la seule confirmation de banc, écrire son nom,
-   enregistrer. À refaire à chaque redémarrage de la console.
+
+   3 bis. **Connexion.** La barre latérale doit dire `aucun operateur connecte`,
+   pas `aucune liste d'operateurs recue` : la console doit tenir la liste
+   signée de cette machine ([8.9](#89-la-liste-des-opérateurs-signée-anh-152) :
+   amorçage d'une console neuve). Choisir son nom, taper son code, « Se
+   connecter » ; la barre dit `connecte : <nom>`. Cinq codes faux de suite
+   verrouillent l'opérateur 15 min, dix depuis un même appareil verrouillent
+   cet appareil, vingt sur la console verrouillent toute connexion, redémarrage
+   compris. La connexion se ferme
+   après 30 min sans action : pendant un long palier, toucher
+   « Rester connecte » (la barre passe en rouge sous 5 min). Si elle se ferme
+   pendant une rotation, la présence de l'accompagnant n'est plus signalée :
+   la consigne se fige à 60 s puis descend à 120 s (règle
+   `attendant_absent`), ce qui est le côté sûr ; se reconnecter, puis acquitter.
+4. Page Securite : cocher la seule confirmation de banc, enregistrer
+   (l'attestation porte l'opérateur connecté). À refaire à chaque redémarrage
+   de la console.
 5. Vérifier que la personne à la prise l'atteint sans entrer dans le rayon.
 
 **Pendant.**
@@ -664,15 +686,16 @@ près de la machine.
    console a vu pendant la coupure, c'est l'un de ceux-ci, ou plusieurs à la
    suite (voir aussi l'essai 2 de la [section 6.4](#64-vérification-au-banc-de-trois-défauts-réels-procédure-prête-non-réalisée)) :
    * `sto_open` (variateur trouvé sans étage de sortie alors que la console
-     tenait l'ordre de marche) : acquitter par son nom, la cause écartée et
-     personne dans le rayon ;
+     tenait l'ordre de marche) : acquitter, connecté (l'acquittement porte
+     l'opérateur), la cause écartée et personne dans le rayon ;
    * un défaut du variateur (`drive_fault`) : traiter le défaut (carte
-     Variateur), puis acquitter par son nom ;
+     Variateur), puis acquitter, connecté ;
    * `comms_lost` / `go_silent` (le variateur ne répondait plus) : ce verdict
      ne s'acquitte pas. Arbre immobile constaté, relancer la console
-     (`sudo systemctl restart anheart`), refaire la déclaration de banc (elle
-     ne vaut que pour un démarrage de la console), puis demander un nouveau
-     départ.
+     (`sudo systemctl restart anheart`), se reconnecter (un redémarrage ferme
+     toutes les connexions, un verrouillage reste), refaire la déclaration de
+     banc (elle ne vaut que pour un démarrage de la console), puis demander un
+     nouveau départ.
 
    Dans tous les cas rien ne redémarre seul : un nouveau départ reste
    nécessaire.
@@ -704,14 +727,18 @@ prise sinon). Aucun essai matériel de cette procédure n'est consigné ici.
    (facultative, au plus 200 kg) et une note, et envoie. Un patient ne voit pas
    cette action ([tableau-de-bord.md](tableau-de-bord.md#56-séance-de-banc-lestée-anh-250)).
 4. **Console, carte « Depart distant ».** Elle dit `BANC LESTE - personne a bord : NON`,
-   la masse déclarée, la note et qui a lancé. L'opérateur vérifie de visu le
+   la masse déclarée, la note et qui a lancé. L'opérateur, connecté à la
+   console (étape 3 bis ci-dessus, sur une image qui porte ANH-152 ; sur
+   l'image figée du 21 et 22 novembre, il écrit son nom), vérifie de visu le
    lest et le rayon du bras, coche
    `J'atteste : capsule lestee, aucune personne a bord, personne dans le rayon du bras`,
    puis appuie sur `Confirmer le depart du banc leste`. Sans la case, le bouton
    reste grisé et la console refuse (`bench_unattested`) : rien n'est envoyé.
 5. **Départ.** La console demande `training/start`, puis arme une séance
    manuelle de banc, cible 0. L'enregistrement porte la masse (`ballast`) et
-   l'événement `console: bench_attested: ...` sous l'alias de l'opérateur.
+   l'événement `console: bench_attested: ...` sous l'identifiant du compte de
+   l'opérateur connecté (avant ANH-152, l'alias du nom tapé) ; le site en
+   montre le nom.
 6. **Pendant.** Cible réglée à la console, par paliers ; règles et limites de
    mouvement actives, aucune règle cardiaque. Le site suit la séance en direct
    et peut demander l'arrêt : la consigne descend aux limites de mouvement
@@ -3440,6 +3467,138 @@ mesuré contre le déploiement de développement.
 
 ---
 
+### 8.9 La liste des opérateurs signée (ANH-152)
+
+`src/console_access.py` (la liste, la connexion, les sessions, le
+verrouillage) et `src/operator_sync.py` (le lien), contrat 1.13 (entrée
+`operator_list` de [`contracts/machine-api.json`](../contracts/machine-api.json) ;
+côté Convex : [convex.md](convex.md#la-liste-des-opérateurs-signée-contrat-113-anh-152)).
+La console ne connaît ses opérateurs et ses tablettes que par cette liste,
+signée par Convex avec la clé du catalogue, et décide seule avec elle, hors
+ligne compris.
+
+1. **Au repos seulement**, comme le catalogue (`catalog_at_rest`), au
+   démarrage puis au plus une fois par minute, par une tâche à elle
+   (`operators_step`), clôturée comme les autres : une exception y est
+   journalisée et laisse la liste en vigueur.
+2. **La signature avant toute lecture**, avec la clé publique du catalogue
+   (`config/anheart_catalog.pub`) ; puis le texte doit dire
+   `kind: "operator_list"` (un catalogue signé par la même clé n'est jamais lu
+   comme une liste), être entier et bien formé (un seul opérateur ou appareil
+   mal formé et toute la liste est refusée), d'au plus 200 000 octets, chaque
+   code haché avec les paramètres du contrat et aucun autre (`n` 32768, `r` 8,
+   `p` 1, sel de 16 octets, empreinte de 32 : des paramètres choisis par la
+   liste tiendraient la connexion des heures), de cette machine si
+   `RECORD_MACHINE_ID` est posé, et plus récente (`issuedAt`) que la liste
+   tenue : une liste plus ancienne, ou du même instant mais différente, est
+   refusée, pour qu'une réponse ancienne rejouée ne réactive pas un opérateur
+   désactivé. Une liste qui ne change personne, ni code ni tablette, est
+   écrite aussi pour sa date, au plus une fois par heure (une liste qui change
+   quelqu'un l'est aussitôt) : le fichier est toujours la liste en vigueur, à
+   sa date près d'une heure au plus, ou une plus récente qu'une séance a tenue
+   à l'écart, que le démarrage suivant prend. Un refus est écrit au journal de bord, une fois par raison et
+   par signature, et la console garde sa liste.
+3. **En vigueur.** Une liste acceptée qui change quelque chose est écrite
+   telle que reçue, signature comprise, dans `data/operators.json` (à côté de
+   `profiles.local.json`, fichier privé, remplacé d'un coup), puis mise en
+   vigueur : une session dont l'opérateur ou la tablette n'y est plus, ou dont
+   l'opérateur y a un autre code, prend fin, et le journal de bord le dit. Le
+   WebSocket d'une tablette qui n'y est plus est fermé avant son image
+   suivante. Une séance commencée pendant l'écriture garde la liste en
+   vigueur : la nouvelle est prise au repos suivant (ou au démarrage, depuis
+   le fichier). Au démarrage suivant, ce fichier est vérifié
+   de nouveau (signature et forme) avant de servir ; refusé (autre clé
+   publique dans une nouvelle image, fichier altéré), la console n'ouvre
+   aucune action jusqu'à la liste suivante et le dit au journal de bord.
+4. **Fermée par défaut.** Une console qui n'a jamais accepté de liste
+   n'ouvre aucune action : seuls STOP, E-STOP et les lectures répondent, avec
+   un jeton d'appareil. Hors ligne, la dernière liste acceptée vaut tant
+   qu'aucune autre n'arrive, sans limite de durée : un opérateur désactivé
+   sur le site entre-temps peut encore s'y connecter jusqu'à la
+   synchronisation suivante.
+
+**La connexion.** Un opérateur de la liste et son code, vérifié hors ligne
+contre le haché scrypt de la liste (`hashlib.scrypt`, sur un fil à part :
+quelques dizaines à quelques centaines de millisecondes sur un Pi), une
+connexion à la fois. Trois comptes de codes faux, chacun verrouillant
+15 min : cinq de suite pour un opérateur (effacé par son bon code), dix
+depuis un même appareil quel que soit l'opérateur, vingt sur toute la
+console (ces deux derniers effacés après 15 min sans code faux). Les comptes
+sont écrits dans `data/operator_lockout.json`, effacements compris ; ce qui
+est trouvé verrouillé au démarrage l'est 15 min à compter de ce démarrage
+(l'horloge murale du Pi n'est pas sûre après un redémarrage : le compte est
+gardé, pas l'heure). La session est liée à l'appareil qui s'est
+connecté (cookie `anheart_operator`, `HttpOnly`, `SameSite=Strict`, `Secure`
+sur une console qui sert TLS), dure 8 h au plus et 30 min sans action
+(la présence de l'accompagnant n'est pas une action), se ferme par
+« Se deconnecter », et n'existe qu'en mémoire : un redémarrage ferme toutes
+les connexions. Le journal de bord note chaque connexion, déconnexion,
+expiration, code faux et verrouillage, sous l'identifiant de l'opérateur ou
+`device:<id>`, jamais un code ni un haché ni un jeton.
+
+**Les appareils.** Une requête porte un jeton d'appareil (`X-Anheart-Token`,
+`?token=` du WebSocket) : `DEVICE_TOKEN` du `.env`, l'appareil `local`, que
+la liste ne peut pas révoquer (la tablette du banc, le navigateur du Pi) ; ou
+le jeton d'une tablette de la liste, créé sur la fiche de la machine du site
+et révocable. Sans jeton configuré, sur la boucle locale seulement, tout
+appelant est l'appareil `loopback`. Un E-STOP ou un STOP fait sans connexion
+est attribué à l'appareil : `device:local`, `device:loopback` ou
+`device:<id de la tablette>`.
+
+**Amorçage d'une console neuve.** Dans cet ordre, avant de mettre une image
+qui porte ANH-152 sur une machine en service :
+
+1. Sur le déploiement Convex, la clé privée du catalogue posée
+   (`ANHEART_CATALOG_SIGNING_KEY`), et sa clé publique dans l'image
+   ([secrets.md, 3.4](secrets.md#34-clés-de-signature)). Sans elles aucune
+   console n'accepte de liste, et toutes n'ouvrent plus que STOP, E-STOP et
+   les lectures. **Aujourd'hui la clé n'est posée nulle part** : c'est une
+   action de l'utilisateur.
+2. Sur la fiche de la machine du site, un admin active au moins un opérateur
+   (carte « Accès à la console ») ; chaque opérateur choisit son code, page
+   « Mes machines ». Pour une tablette autre que celle du `.env`, l'admin
+   crée son jeton et le tape une fois sur la tablette (page Configuration,
+   carte « Acces »).
+3. La console, reliée au tableau de bord (`MACHINE_API_KEY`, `CONVEX_URL`),
+   reçoit la liste à son premier passage au repos, dans la minute qui suit son
+   démarrage : la barre latérale passe de `aucune liste d'operateurs recue` à
+   `aucun operateur connecte`. Le journal de bord dit
+   `liste des operateurs recue : N operateur(s), M tablette(s)`.
+4. Hors ligne au banc, une console qui a déjà reçu sa liste la garde. Une
+   console qui ne l'a jamais reçue n'ouvre que STOP, E-STOP et les lectures :
+   il faut la relier au réseau une fois. Il n'y a pas d'amorçage à la main.
+   Avec `RECORD_MACHINE_ID` posé à l'identifiant de la machine sur le tableau
+   de bord (celui de l'adresse de sa fiche), la console ne prend que la liste
+   de cette machine (`machineId`), au démarrage comme à la synchronisation, et
+   dit au journal de bord la liste d'une autre qu'elle refuse. Sans lui,
+   `machineId` n'est pas jugé : un `data/operators.json` copié d'une autre
+   console du même déploiement serait accepté ; écrire sur le disque du Pi
+   donne de toute façon bien plus (MEN-04). Une console dont
+   `RECORD_MACHINE_ID` porte autre chose que cet identifiant ne prend aucune
+   liste et n'ouvre que STOP, E-STOP et les lectures.
+
+**Migration d'une console déployée.** `UI_TOKEN` est l'ancien nom de
+`DEVICE_TOKEN` : il est lu tel quel quand `DEVICE_TOKEN` est absent, et la
+console le dit au démarrage. La tablette qui utilisait le jeton partagé
+continue donc de lire la page et d'arrêter la machine, sans rien changer.
+Les deux à la fois avec deux valeurs différentes : la console refuse de
+démarrer (`DEVICE_TOKEN/UI_TOKEN`). Renommer la clé dans
+`/etc/anheart/anheart.env` au prochain passage.
+
+Testé par `tests/test_console_access.py` (la liste, la signature, la
+connexion, le verrouillage redémarrage compris, les sessions, avec des clés
+et des codes créés pendant le test), `tests/test_operator_sync.py` (au repos,
+liste ancienne refusée, disque qui refuse), `tests/test_web_access.py`
+(chaque route qui agit refusée sans connexion, l'E-STOP et le STOP sans
+connexion, l'E-STOP pendant une connexion en cours de calcul, le cookie,
+`/healthz`, le WebSocket), `tests/test_access_console.py` (la console entière
+en simulation : rien d'ouvert avant la liste, un opérateur désactivé
+déconnecté à la synchronisation suivante, redémarrage) et
+`tests/web/panel_manual.test.mjs` (la page). Non vérifié : aucun déploiement
+Convex réel n'a signé de liste, aucune tablette ne s'est connectée, et le
+temps d'une vérification scrypt aux paramètres du contrat n'a pas été mesuré
+sur un Pi.
+
 ## 9. Les capteurs BITalino
 
 Choisis par `SENSORS` (défaut : `ECG` seul). La console acquiert à 1000 Hz
@@ -3552,9 +3711,9 @@ sort avec le code 2.
 | `ARM_RADIUS_M` | **aucun (obligatoire, sans défaut)** | rayon mesuré de l'axe à l'occupant ; tout g affiché en dépend | ]0, 5] m |
 | `LEG_TIP_RADIUS_M` | aucun | point du passager le plus éloigné ; la limite de dérivée de g y est jugée | [`ARM_RADIUS_M`, 5] m ; vide = jugée à `ARM_RADIUS_M` (sous-estime la charge aux pieds ; la CAO borne à 2,43 m) |
 | `GEAR_RATIO` | `49.79` | rapport du réducteur (confirmé au banc) | > 0 |
-| `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `UI_TOKEN` **et** le certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) obligatoires ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)) |
+| `UI_HOST` | `127.0.0.1` | adresse d'écoute de la page | hors boucle locale : `DEVICE_TOKEN` **et** le certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) obligatoires ([12.5](#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `UI_PORT` | **`8080`** | port de la page | ≠ 8123 (port de `scripts/bench_console.py`) ; `.env.example` utilise aussi 8080 |
-| `UI_TOKEN` | aucun | jeton d'accès | ≥ 16 caractères si exigé |
+| `DEVICE_TOKEN` | aucun | jeton de l'appareil `local` de la console (ANH-152), à côté des tablettes de la liste signée ([8.9](#89-la-liste-des-opérateurs-signée-anh-152)) | ≥ 16 caractères si exigé ; `UI_TOKEN`, son ancien nom, est lu quand il est absent ; les deux différents : refus de démarrer |
 | `UI_TLS_CERT` | aucun | chemin du certificat de la console (PEM), tel que la console le voit | va avec `UI_TLS_KEY` : les deux, ou aucun. Obligatoire hors boucle locale. Renseigné, la console sert en TLS partout où elle écoute, boucle locale comprise |
 | `UI_TLS_KEY` | aucun | chemin de sa clé privée (PEM, **sans phrase secrète**) | va avec `UI_TLS_CERT`. Un fichier absent, illisible, qui n'est pas la clé du certificat, ou protégé par une phrase secrète : la console refuse de démarrer et dit lequel (code 2) |
 | `UI_TLS_NAMES` | aucun | adresses IPv4 et noms sous lesquels une tablette ouvre la console, ceux que porte le certificat, séparés par des virgules (`10.42.0.1,anheart.internal`) | chacun donne une origine acceptée par la WebSocket, en `https`, au port de la page. Refusée sans certificat (elle serait sans effet), et si une valeur n'est ni une adresse IPv4 ni un nom d'hôte |
@@ -3566,7 +3725,7 @@ sort avec le code 2.
 | `CONVEX_URL` | vide | hôte `.convex.site` | exigée si la clé est présente : `https://…` ou `http://localhost` / `http://127.0.0.1` |
 | `RECORD_ROOT` | `data/records` | dossier des enregistrements de séance (relatif à `raspberry-pi/` s'il n'est pas absolu) | créé en mode 700 ; s'il est inutilisable, la console démarre et **refuse tout départ** ([15.4](#154-départ-refusé-sous-500-mo)) |
 | `RECORD_LOCAL_RETENTION_DAYS` | `30` | durée de garde d'un enregistrement déposé **et** confirmé ; un enregistrement non déposé n'est jamais purgé | entier 0..3650 |
-| `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom |
+| `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste ; posé, la console ne prend que la liste des opérateurs de cette machine ([8.9](#89-la-liste-des-opérateurs-signée-anh-152)) | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom ; l'identifiant de la machine sur le tableau de bord |
 | `RECORD_ORGANIZATION_ID` | `unassigned` | identifiant de l'organisation écrit dans le manifeste | même règle |
 | `HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM`, `MIN_RIDER_AGE`, `MOTION_LIMITS_PATH` | - | **ne sont plus lues** (ANH-139) : les valeurs médicales viennent du fichier signé ([12.6](#126-les-paramètres-médicaux-signés-anh-139)). Une valeur non vide encore réglée est une **erreur de configuration** : la console refuse de démarrer, dit laquelle (`configuration: MIN_RIDER_AGE: n'est plus lue : la valeur est parameters.min_rider_age de config/medical_parameters.json, signe ; retirer cette cle du .env`) et sort avec le code 2, sur lequel le service ne la relance pas. Deux sources pour une valeur médicale, c'est la non signée qui finit appliquée | à retirer du `.env` |
 | `ANHEART_SOFTWARE_VERSION` | - | **n'est plus lue.** La version écrite dans le manifeste (`software_version`) est le contenu de `raspberry-pi/VERSION` (`/app/VERSION` dans l'image), la même que celle de la page et du heartbeat ([section 14](#14-versions-et-compatibilité)). Une valeur encore réglée ne change rien et n'arrête plus le démarrage, même mal formée : la console l'écrit une fois dans son journal (`configuration: ANHEART_SOFTWARE_VERSION is set and no longer read`) | - |

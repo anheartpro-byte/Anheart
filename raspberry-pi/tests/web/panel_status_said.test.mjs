@@ -843,7 +843,6 @@ test("a start the console refuses for the fault shows the console's own sentence
   const { context, frame, node } = panel();
   frame(faulted(60));
   node("manual-bench").checked = true;
-  node("manual-operator").value = "op";
   const refusal =
     "demarrage refuse : variateur en defaut (ObF, LFT 18). Rien n'a ete envoye a la machine : " +
     "traiter le defaut (carte Variateur), puis redemander.";
