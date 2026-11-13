@@ -2587,9 +2587,9 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 | POST | `/api/safety/attest` | `{"operator", "sto_jumper_removed", "mushroom_wired_nc"}` ; sous `bridged_declared`, `{"operator", "bench_bridged_declared"}` (les champs que nomme `attestation_fields` de `/api/status`) | attestation du câblage, ou de banc, pour ce démarrage | 200 ; 400 (une case manque, case de l'autre mode, nom vide) |
 | POST | `/api/safety/acknowledge` | `{"operator", "estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
 | POST | `/api/presence` | `{"operator"?}` | signal de présence de l'accompagnant (règle `attendant_absent`) | 200 `{"at": …}` |
-| GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied, unreported_stop}` (`unreported_stop` : pourquoi une personne à bord est retenue pour une séance que le tableau de bord ne compte pas, ou `null`, ANH-145) ; `null` sur une console sans pré-vol |
+| GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied, unreported_stop, acknowledgeable}` (`unreported_stop` : pourquoi une personne à bord est retenue pour une séance que le tableau de bord ne compte pas, ou `null` ; `acknowledgeable` : cette retenue est une séance perdue, la seule que l'opérateur peut acquitter, ANH-145) ; `null` sur une console sans pré-vol |
 | POST | `/api/preflight/run` | - | « Relancer » : une nouvelle passe, la batterie du BITalino relue au repos ; ne lance et ne refuse rien | 202, le même objet ; 409 sur une console sans pré-vol |
-| POST | `/api/preflight/acknowledge` | `{operator}` | « Acquitter la seance non recue » (ANH-145) : l'opérateur, nommé, accepte que le tableau de bord ne compte pas les séances mal terminées retenues à cet instant ; ne lance rien | 200, l'objet du pré-vol ; 400 sans nom ; 409 quand rien n'est retenu ou que la console n'est pas reliée |
+| POST | `/api/preflight/acknowledge` | `{operator}` | « Acquitter une seance perdue » (ANH-145) : l'opérateur, nommé, lève les seules séances perdues (refusées pour de bon, illisibles, abandonnées), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 400 sans nom ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
 | POST | `/api/service/restore` | `{"operator"}` | remet en service une console hors service ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 400 (nom vide) ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
@@ -2871,23 +2871,50 @@ site), la console le refuse elle-même et le dit dans les événements :
 `demarrage refuse : pre-vol : <raison>`. Un lancement depuis le site revient au
 tableau de bord en échec : `refusee par la machine : pre-vol : <raison>`.
 
-### Acquitter une séance non reçue (ANH-145)
+### Acquitter une séance perdue (ANH-145)
 
 Tant qu'une personne à bord est retenue pour une séance mal terminée que le
 tableau de bord ne compte pas encore, la carte le dit sous `Relancer`
-(`Personne a bord retenue : <raison>`) et propose `Acquitter la seance non
-recue` (`POST /api/preflight/acknowledge`, au nom de l'opérateur, écrit dans
-le journal de la console). L'acquittement accepte que le tableau de bord ne
-compte pas les séances retenues à cet instant ; une séance terminée ensuite
-retient de nouveau. C'est le seul moyen de lever une retenue que le serveur
-ne lèvera jamais : une déclaration ou une fin qu'il a refusée pour de bon, un
-enregistrement illisible, une fin abandonnée (`seance mal terminee ou de fin
-inconnue que le tableau de bord ne recevra pas (...) : a acquitter a la
-console, page Pre-vol`), et aussi **une clé révoquée ou une machine supprimée
-du site** : ses envois ne seront plus jamais acquittés. Avant d'acquitter,
-s'assurer que l'événement est noté ailleurs (registre des incidents à la main
-avec l'admin Anheart, ou carnet de la machine). Rien d'autre ne lève ces
-retenues : ni `Relancer`, ni un poll, ni le banc.
+(`Personne a bord retenue : <raison>`) ; pour une séance perdue seulement,
+elle propose `Acquitter une seance perdue` (`POST /api/preflight/acknowledge`,
+au nom de l'opérateur).
+
+**Ce que l'acquittement couvre : les seules séances perdues**, celles que le
+tableau de bord ne recevra jamais et qui ont pu finir sur un arrêt (ou dont la
+fin est inconnue) : une déclaration ou une fin qu'il a refusée pour de bon, un
+enregistrement illisible, la fin d'une séance sans enregistrement abandonnée
+pour la suivante (`seance mal terminee ou de fin inconnue que le tableau de
+bord ne recevra pas (...) : a acquitter a la console, page Pre-vol`). Les
+refus et la fin abandonnée, qu'aucun démarrage ne renverra, sont écrits à côté
+des enregistrements (`.sync-lost-stops.json`, comme un curseur) et
+**retiennent encore après un redémarrage de la console**, jusqu'à
+l'acquittement ; une console qui n'enregistre rien les garde en mémoire
+seulement. Un enregistrement illisible reste dû sur le disque : l'acquittement
+le lève pour cette exécution seulement, en mémoire, et le démarrage suivant le
+liste et le retient de nouveau, jusqu'à ce qu'il soit lu et envoyé ou
+acquitté encore. L'acquittement efface ces séances, et une ligne `lost_stops_acknowledged`
+est écrite au journal de bord (`logbook/events.jsonl`), avec l'alias de
+l'opérateur et ce qui a été levé ; le nom va aussi au journal du système.
+
+**Ce qu'il ne couvre pas**, refusé en 409 avec la raison : une retenue qui se
+lèvera d'elle-même quand le lien aura livré la séance (une fin pas encore
+reçue, un compte d'incidents pas encore relu, des enregistrements d'une
+exécution précédente en cours d'envoi ou pas encore listés) ; tout
+acquittement **pendant une séance** ; et rien quand aucune séance n'est
+perdue. Aucun acquittement ne lève une séance encore due : elle retient
+jusqu'à ce que le tableau de bord l'ait, et après un redémarrage la liste des
+séances dues la retient de nouveau. Une séance terminée sur un arrêt après un
+acquittement retient de nouveau.
+
+**Clé révoquée ou machine supprimée du site** : les envois ne sont plus
+acquittés, et la retenue ne se lève pas seule. Poser une clé valide (nouvelle
+clé de la machine, ou machine recréée et sa clé) : les séances dues partent ;
+celles qu'un autre serveur ou une autre machine refuse pour de bon
+(`session_not_found`) deviennent des séances perdues, à acquitter ici.
+
+Avant d'acquitter, s'assurer que l'événement est noté ailleurs (incident
+signalé à l'admin Anheart, carnet de la machine). Rien d'autre ne lève ces
+retenues : ni `Relancer`, ni un poll, ni le banc, ni un redémarrage.
 
 ### Relancer
 
@@ -2919,7 +2946,8 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
   ou une fin reçue sans poll depuis (`fin d'une seance terminee sur un arret
   recue par le tableau de bord, compte des incidents pas encore relu`). Hors
   ligne, il le reste jusqu'au retour du lien. Une séance que le tableau de
-  bord ne recevra jamais le retient jusqu'à l'acquittement de l'opérateur
+  bord ne recevra jamais le retient, même après un redémarrage, jusqu'à
+  l'acquittement de l'opérateur
   (ci-dessus).
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino

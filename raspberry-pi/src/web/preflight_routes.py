@@ -17,13 +17,14 @@ from typing import Final
 
 from fastapi import FastAPI, HTTPException, params
 
+from src.record_uplink import LOST_STOP, NOT_LINKED
+from src.result import Err
 from src.training.preflight import PreflightMonitor, PreflightReport
 from src.training.types import Occupancy
 from src.web.deps import Services
 from src.web.schemas import StopsAcknowledgeBody
 
 NO_PREFLIGHT: Final[str] = "aucun pre-vol sur cette console"
-NOTHING_HELD: Final[str] = "aucune seance mal terminee n'est retenue : rien a acquitter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,9 @@ class PreflightReportRow:
         )
 
 
+_LOST_PREFIX: Final[str] = LOST_STOP.split("{why}", maxsplit=1)[0]
+
+
 @dataclass(frozen=True, slots=True)
 class PreflightRow:
     """``GET /api/preflight``: the list for both occupancies, and the last completed run."""
@@ -72,16 +76,22 @@ class PreflightRow:
     bench: PreflightReportRow
     occupied: PreflightReportRow
     unreported_stop: str | None = None
-    """Why a person on board is held for a stop the dashboard may not count (ANH-145),
-    which the operator may acknowledge; null when none is."""
+    """Why a person on board is held for a stop the dashboard may not count (ANH-145);
+    null when none is."""
+    acknowledgeable: bool = False
+    """Whether that hold is a session lost for good, the only one the operator may
+    acknowledge (``POST /api/preflight/acknowledge``); a hold that clears by itself is not."""
 
     @classmethod
     def of(cls, monitor: PreflightMonitor) -> PreflightRow:
         last = monitor.last
+        held = monitor.inputs().unreported_stop
         return cls(
             running=monitor.running,
             last=None if last is None else last.verdict.value,
-            unreported_stop=monitor.inputs().unreported_stop,
+            unreported_stop=held,
+            # The uplink names a loss first, in these words (pinned by its tests).
+            acknowledgeable=held is not None and held.startswith(_LOST_PREFIX),
             battery_pct=monitor.battery,
             bench=PreflightReportRow.of(monitor.report(Occupancy.BENCH)),
             occupied=PreflightReportRow.of(monitor.report(Occupancy.OCCUPIED)),
@@ -114,10 +124,10 @@ def register_preflight(app: FastAPI, *, services: Services, auth: Sequence[param
 
     @app.post("/api/preflight/acknowledge", dependencies=auth, tags=["safety"])
     async def acknowledge_stops(body: StopsAcknowledgeBody) -> PreflightRow:
-        """Accept, by name, that the dashboard may not count the stops held now: a
-        session that ended on a stop and that it refused, or never received, or whose
-        end it does not have yet. A person on board is no longer held for them. Starts
-        nothing. **400** without a name; **409** when nothing is held."""
+        """Release, by name, the sessions the dashboard will never have (refused for
+        good, unreadable, given up) that hold a person on board. Nothing else: a hold that
+        clears once the dashboard has a session stays. Starts nothing. **400** without a
+        name; **409** while a session runs, or when nothing of that kind is held."""
         if not body.operator.strip():
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
@@ -125,6 +135,9 @@ def register_preflight(app: FastAPI, *, services: Services, auth: Sequence[param
             )
         monitor = services.preflight
         acknowledge = services.stop_acknowledge
-        if monitor is None or acknowledge is None or acknowledge(body.operator) is None:
-            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=NOTHING_HELD)
+        if monitor is None or acknowledge is None:
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=NOT_LINKED)
+        released = await acknowledge(body.operator)
+        if isinstance(released, Err):
+            raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=released.error)
         return PreflightRow.of(monitor)

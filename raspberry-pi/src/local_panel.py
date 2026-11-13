@@ -247,7 +247,7 @@ from src.record.session import (
     stamp_for,
     storage_gate,
 )
-from src.record_uplink import RecordSource
+from src.record_uplink import NOT_LINKED, RecordSource
 from src.result import Err, Ok, Result
 from src.roster import (
     OnBench,
@@ -1307,10 +1307,35 @@ class LocalPanel:
             self._services,
             remote_launch_current=cloud.current_remote_launch,
             remote_launch_confirm=cloud.confirm_remote_launch,
-            stop_acknowledge=cloud.acknowledge_unreported_stop,
+            stop_acknowledge=self.acknowledge_lost_stops,
             # Only a linked console offers it: the feedback has nowhere else to go.
             feedback=self._feedback,
         )
+
+    async def acknowledge_lost_stops(self, operator: str) -> Result[tuple[str, ...], str]:
+        """The operator, named, releases the sessions the dashboard will never have that
+        held a person on board (ANH-145). Written to the logbook with the operator's alias
+        and what was released, and to the log; refused while a session runs."""
+        cloud = self._cloud
+        if cloud is None:
+            return Err(NOT_LINKED)
+        released = await cloud.acknowledge_lost_stops()
+        if isinstance(released, Err):
+            return released
+        detail = "lost_stops_acknowledged: " + " ; ".join(released.value)
+        _logger.warning("%s, by %r", detail, operator)
+        recorder = self._recorder
+        if recorder is not None:
+            recorder.journal.log(
+                note(
+                    wall_clock=self._clock.unix_millis(),
+                    at=self._clock.monotonic(),
+                    kind=EventKind.OPERATOR_ACTION,
+                    detail=detail,
+                    actor=operator_alias(operator),
+                )
+            )
+        return released
 
     @property
     def preflight(self) -> PreflightMonitor | None:

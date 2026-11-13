@@ -169,6 +169,7 @@ from src.local_config import CardiacTiers, CloudConfig
 from src.medical import MedicalStatus
 from src.record_uplink import (
     EVENTS_PATH,
+    SESSION_RUNS,
     START_PATH,
     Acked,
     Answer,
@@ -1058,16 +1059,14 @@ class CloudSync:
             return STOP_NOT_COUNTED
         return None
 
-    def acknowledge_unreported_stop(self, operator: str) -> str | None:
-        """The operator, named, accepts that the dashboard may not count the stops held
-        now (:attr:`unreported_stop`): a person on board is no longer held for them. What
-        was acknowledged; ``None`` when nothing was held. Logged by name."""
-        held = self.unreported_stop
-        if held is None:
-            return None
-        self._uplink.acknowledge()
-        _logger.warning("dashboard: %s acknowledged a stop it may not count: %s", operator, held)
-        return held
+    async def acknowledge_lost_stops(self) -> Result[tuple[str, ...], str]:
+        """Release the sessions the sending gave up on, which the dashboard will never
+        have (:attr:`~src.record_uplink.RecordUplink.lost_stops`), and nothing else: a hold
+        that clears once the dashboard has a session is not lifted. Refused while a
+        session runs. What was released, or why not, in the operator's words."""
+        if self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING):
+            return Err(SESSION_RUNS)
+        return await self._uplink.acknowledge()
 
     @property
     def incidents_open_high(self) -> int | None:

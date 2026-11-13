@@ -1092,7 +1092,8 @@ function renderPreflight(row) {
   el("preflight-run").disabled = !row;
   var held = row ? row.unreported_stop : null;
   el("preflight-held").hidden = !held;
-  el("preflight-ack").hidden = !held;
+  // Only a session lost for good is the operator's to acknowledge (ANH-145).
+  el("preflight-ack").hidden = !(row && row.acknowledgeable);
   text(el("preflight-held"), held ? "Personne a bord retenue : " + held : "");
   if (!row) {
     pill(el("preflight-state"), "aucun", "");
@@ -1139,7 +1140,7 @@ function loadPreflight() {
 function doAcknowledgeStops() {
   api("/api/preflight/acknowledge", { method: "POST", body: { operator: operatorName() } })
     .then(function (row) {
-      ok(el("preflight-note"), "seance non recue acquittee : elle ne retient plus une personne a bord");
+      ok(el("preflight-note"), "seance perdue acquittee : elle ne retient plus une personne a bord");
       renderPreflight(row);
     })
     .catch(function (error) {

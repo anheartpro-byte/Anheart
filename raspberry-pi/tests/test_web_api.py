@@ -465,6 +465,8 @@ async def test_every_command_endpoint_is_behind_the_token(client: httpx.AsyncCli
         "/api/remote-launch/confirm",
         "/api/feedback",
         "/api/feedback/skip",
+        "/api/preflight/run",
+        "/api/preflight/acknowledge",
     ):
         response = await client.post(path, json={})
         assert response.status_code == HTTPStatus.UNAUTHORIZED, path

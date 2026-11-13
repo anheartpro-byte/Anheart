@@ -166,13 +166,18 @@ test("a console without a pre-flight says so and offers no run", () => {
   assert.equal(node("start-preflight-note").textContent, "");
 });
 
-test("a stop the dashboard may not count is said, with its acknowledgement by name (ANH-145)", async () => {
+test("a stop the dashboard may not count is said, a lost one with its acknowledgement by name (ANH-145)", async () => {
   const { context, node } = page();
-  const held = "seance terminee sur emergency_stop pas encore recue par le tableau de bord";
+  const owed = "seance terminee sur emergency_stop pas encore recue par le tableau de bord";
+  const held = "seance mal terminee ou de fin inconnue que le tableau de bord ne recevra pas (fin refusee, k1) : a acquitter a la console, page Pre-vol";
   context.renderPreflight(preflightRow({ occupiedBlock: null }));
   assert.equal(node("preflight-ack").hidden, true);
   assert.equal(node("preflight-held").hidden, true);
-  context.renderPreflight({ ...preflightRow(), unreported_stop: held });
+  // A hold that clears by itself once the link delivers is said, not acknowledged.
+  context.renderPreflight({ ...preflightRow(), unreported_stop: owed, acknowledgeable: false });
+  assert.equal(node("preflight-held").hidden, false);
+  assert.equal(node("preflight-ack").hidden, true);
+  context.renderPreflight({ ...preflightRow(), unreported_stop: held, acknowledgeable: true });
   assert.equal(node("preflight-ack").hidden, false);
   assert.equal(node("preflight-held").textContent, `Personne a bord retenue : ${held}`);
   const sent = [];
@@ -192,8 +197,8 @@ test("a stop the dashboard may not count is said, with its acknowledgement by na
 
 test("a refused acknowledgement is said where the page says what it did", async () => {
   const { context, node } = page();
-  context.api = () => Promise.reject(new Error("aucune seance mal terminee n'est retenue"));
+  context.api = () => Promise.reject(new Error("aucune seance perdue a acquitter"));
   context.doAcknowledgeStops();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.match(node("preflight-note").textContent, /aucune seance mal terminee/);
+  assert.match(node("preflight-note").textContent, /aucune seance perdue/);
 });

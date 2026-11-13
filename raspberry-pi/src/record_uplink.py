@@ -87,7 +87,13 @@ from uuid import uuid4
 
 from src.clock import Clock
 from src.contract import ErrorCode
-from src.record.cursor import Cursor, UnreadableCursor, store
+from src.record.cursor import (
+    Cursor,
+    UnreadableCursor,
+    load_lost_stops,
+    store,
+    store_lost_stops,
+)
 from src.record.export import BUSY, TIMEOUT, RecordIo
 from src.record.rows import JsonValue
 from src.record.schema import RecordError
@@ -97,6 +103,7 @@ from src.record.upload import (
     Batch,
     Events,
     Head,
+    Listed,
     Opened,
     Points,
     open_record,
@@ -424,6 +431,20 @@ UNKNOWN_END: Final[str] = (
 )
 """Why :attr:`RecordUplink.unreported_stop` holds for a record whose end is not read yet."""
 
+SESSION_RUNS: Final[str] = (
+    "une seance est en cours : acquitter une fois la machine au repos et la seance finie"
+)
+NOT_LISTED: Final[str] = (
+    "enregistrements d'une execution precedente pas encore listes : reessayer dans un instant"
+)
+NOTHING_LOST: Final[str] = (
+    "aucune seance perdue a acquitter : une retenue en cours se levera d'elle-meme quand le "
+    "tableau de bord aura recu la seance et que son compte d'incidents aura ete relu"
+)
+LOST_UNWRITTEN: Final[str] = "acquittement non ecrit sur le disque : reessayer"
+NOT_LINKED: Final[str] = "console non reliee au tableau de bord : rien a acquitter"
+"""The refusals of :meth:`RecordUplink.acknowledge`, in the operator's words."""
+
 LOST_STOP: Final[str] = (
     "seance mal terminee ou de fin inconnue que le tableau de bord ne recevra pas ({why}) : "
     "a acquitter a la console, page Pre-vol"
@@ -457,6 +478,19 @@ def declaration_from(head: Head) -> Declaration:
 def _write(record: Path, cursor: Cursor) -> Result[None, RecordError]:
     wrote = store(record, cursor)
     return Ok(None) if isinstance(wrote, Ok) else Err(RecordError("sync", wrote.error.detail))
+
+
+def _write_lost(root: Path, lost: tuple[str, ...]) -> Result[None, RecordError]:
+    wrote = store_lost_stops(root, lost)
+    return Ok(None) if isinstance(wrote, Ok) else Err(RecordError("sync", wrote.error.detail))
+
+
+def _list_owed(
+    root: Path, current: str | None
+) -> Result[tuple[Listed, tuple[str, ...]], RecordError]:
+    """The records an earlier run left owed, and the sessions it gave up on (ANH-145)."""
+    listed = owed_records(root, current)
+    return listed if isinstance(listed, Err) else Ok((listed.value, load_lost_stops(root)))
 
 
 def _due(last: Monotonic | None, now: Monotonic, period: Seconds) -> bool:
@@ -556,6 +590,8 @@ class RecordUplink:
         "_last_batch",
         "_live",
         "_lost",
+        "_lost_here",
+        "_lost_unwritten",
         "_owed_queue",
         "_said",
         "_scan_at",
@@ -565,7 +601,6 @@ class RecordUplink:
         "_start_refused",
         "_stop_told",
         "_unwritten",
-        "_waived",
     )
 
     def __init__(
@@ -602,10 +637,13 @@ class RecordUplink:
         self._unwritten: bool = False
         # When the dashboard last acknowledged the end of a session ended on a stop.
         self._stop_told: Monotonic | None = None
-        # A stop the sending gave up on, until the operator acknowledges it (ANH-145).
-        self._lost: str | None = None
-        # The sessions the operator acknowledged the dashboard may not count.
-        self._waived: frozenset[str] = frozenset()
+        # The sessions the sending gave up on that may have ended on a stop, until the
+        # operator acknowledges them (ANH-145): those no later start would send again,
+        # kept next to the records, and the unreadable records, which the next start
+        # lists again and so holds for again.
+        self._lost: tuple[str, ...] = ()
+        self._lost_unwritten: bool = False
+        self._lost_here: tuple[str, ...] = ()
 
     # --- read access -----------------------------------------------------
 
@@ -682,23 +720,19 @@ class RecordUplink:
         whose end the dashboard has not acknowledged (its events go before it); or a
         session of an earlier run of the console, or the list of them not made yet: its
         end is known only once its record is read, so it counts as one until the
-        dashboard acknowledged its end. ``None`` once every such end was acknowledged.
-        Memory only (ANH-145, the pre-flight's ``incidents`` control).
+        dashboard acknowledged its end. ``None`` once every such end was acknowledged
+        (ANH-145, the pre-flight's ``incidents`` control); none of these is the
+        operator's to lift.
 
         And, before all, a session that ended so (or whose end is unknown) and that
         the sending gave up on, the dashboard refusing it for good or its record
-        unreadable (:data:`LOST_STOP`): it holds until the operator acknowledges it
-        (:meth:`acknowledge`), as do the sessions still owed when they did.
+        unreadable (:data:`LOST_STOP`, :attr:`lost_stops`): it holds, across restarts,
+        until the operator acknowledges it (:meth:`acknowledge`).
         """
-        if self._lost is not None:
-            return self._lost
+        if lost := self.lost_stops:
+            return LOST_STOP.format(why=lost[0])
         for owed in (self._catching, *self._owed_queue):
-            if (
-                owed is None
-                or owed.refused_launch
-                or owed.cursor.end == "sent"
-                or _identity(owed) in self._waived
-            ):
+            if owed is None or owed.refused_launch or owed.cursor.end == "sent":
                 continue
             reason = _reason_of(owed)
             if reason is None or reason == UNOBSERVED_END:
@@ -706,25 +740,45 @@ class RecordUplink:
             word = _end_word(reason)
             if word in STOP_ENDS:
                 return f"seance terminee sur {word} pas encore recue par le tableau de bord"
-        if any(name not in self._waived for name in self._backlog) or (
-            self._source is not None and not self._scanned
-        ):
+        if self._backlog or (self._source is not None and not self._scanned):
             return UNKNOWN_END
         return None
 
-    def acknowledge(self) -> None:
-        """The operator accepts that the dashboard may not count the stops held now: the
-        one given up on, those still owed, and a count not asked again since the last
-        end it acknowledged. A session ended after this holds again."""
-        held = {_identity(owed) for owed in (self._catching, *self._owed_queue) if owed}
-        self._waived = self._waived | held | set(self._backlog)
-        self._lost = None
-        self._stop_told = None
+    @property
+    def lost_stops(self) -> tuple[str, ...]:
+        """The sessions given up on that only the operator's acknowledgement releases."""
+        return (*self._lost, *self._lost_here)
 
-    def _lose(self, identity: str, why: str, reason: str | None) -> None:
+    async def acknowledge(self) -> Result[tuple[str, ...], str]:
+        """Release the sessions given up on (:attr:`lost_stops`), and only them: a hold
+        that clears by itself once the dashboard has the session is not the operator's to
+        lift. Refused while a session runs, before the records of an earlier run are
+        listed (they may hold more), and when there is none. What was released."""
+        if self._live is not None:
+            return Err(SESSION_RUNS)
+        if self._source is not None and not self._scanned:
+            return Err(NOT_LISTED)
+        lost = self.lost_stops
+        if not lost:
+            return Err(NOTHING_LOST)
+        source = self._source
+        if source is not None and self._lost:
+            wrote = await self._disk(functools.partial(_write_lost, source.root, ()), READ_TIMEOUT)
+            if isinstance(wrote, Err):
+                return Err(f"{LOST_UNWRITTEN} ({wrote.error.detail})")
+        self._lost = ()
+        self._lost_unwritten = False
+        self._lost_here = ()
+        return Ok(lost)
+
+    def _lose(self, identity: str, why: str, reason: str | None, *, kept: bool = True) -> None:
         """The sending gives up on a session: if it may have opened an incident, the
-        pre-flight holds a person on board until the operator acknowledges it."""
-        if not _stop_or_unknown(reason) or identity in self._waived or self._lost is not None:
+        pre-flight holds a person on board until the operator acknowledges it, across
+        restarts (written next to the records at once by an async caller, at the next
+        step otherwise, and never before the register kept by an earlier run is read:
+        :meth:`_keep_lost`). A console that records nothing keeps them in memory only.
+        Not ``kept``: a record the next start lists again, which holds for it again."""
+        if not _stop_or_unknown(reason):
             return
         _logger.warning(
             "dashboard: %s (%s), which may have ended on a stop: a person on board waits for "
@@ -732,7 +786,29 @@ class RecordUplink:
             why,
             identity,
         )
-        self._lost = LOST_STOP.format(why=why)
+        if not kept:
+            self._lost_here = (*self._lost_here, f"{why}, {identity}")
+            return
+        self._lost = (*self._lost, f"{why}, {identity}")
+        self._lost_unwritten = True
+
+    async def _keep_lost(self) -> None:
+        """Write the sessions given up on next to the records, when they changed."""
+        source = self._source
+        # Not before the register an earlier run kept is read: it would be written over.
+        if source is None or not self._lost_unwritten or not self._scanned:
+            return
+        wrote = await self._disk(
+            functools.partial(_write_lost, source.root, self._lost), READ_TIMEOUT
+        )
+        if isinstance(wrote, Ok):
+            self._lost_unwritten = False
+        else:
+            _logger.warning(
+                "dashboard: the sessions given up on could not be written (%s): written at "
+                "the next step; until then a restart forgets them",
+                wrote.error.detail,
+            )
 
     @property
     def stop_told_at(self) -> Monotonic | None:
@@ -878,6 +954,8 @@ class RecordUplink:
 
     async def step(self) -> None:
         """One pass: the running session first, then one step of catching up."""
+        # A session given up on between two steps (``finished``) is written first.
+        await self._keep_lost()
         now = self._clock.monotonic()
         live = self._live
         source = self._source
@@ -929,7 +1007,7 @@ class RecordUplink:
                     opened.error.detail,
                 )
                 self._forget(name)
-                self._lose(name, "enregistrement illisible", None)
+                self._lose(name, "enregistrement illisible", None, kept=False)
             return None  # a disk that is only slow: the same record at the next step
         self._forget(name)
         return self._resumed(opened.value, source)
@@ -941,29 +1019,32 @@ class RecordUplink:
         if self._scan_at is not None and now < self._scan_at:
             return False
         open_now = source.current()
-        listed = await self._disk(
-            functools.partial(
-                owed_records, source.root, None if open_now is None else open_now.name
-            ),
+        scanned = await self._disk(
+            functools.partial(_list_owed, source.root, None if open_now is None else open_now.name),
             SCAN_TIMEOUT,
         )
-        if isinstance(listed, Err):
+        if isinstance(scanned, Err):
             self._scan_at = Monotonic(now + RETRY_PERIOD)
             return False
+        listed, kept = scanned.value
+        # The sessions an earlier run gave up on, and kept: they still hold (ANH-145).
+        merged = (*kept, *(line for line in self._lost if line not in kept))
+        self._lost_unwritten = merged != kept
+        self._lost = merged
         self._scanned = True
-        if listed.value.set_aside:
+        if listed.set_aside:
             _logger.warning(
                 "dashboard: %d records without a cursor were set aside with the list of "
                 "older records, which had to be made at this start: they are not sent",
-                listed.value.set_aside,
+                listed.set_aside,
             )
-            self._said(LIST_LOST.format(count=listed.value.set_aside))
+            self._said(LIST_LOST.format(count=listed.set_aside))
         known = {
             owed.record.name
             for owed in (self._live, self._catching)
             if owed is not None and owed.record is not None
         }
-        self._queue(*(name for name in listed.value.names if name not in known))
+        self._queue(*(name for name in listed.names if name not in known))
         return True
 
     def _forget(self, name: str) -> None:
@@ -1179,6 +1260,7 @@ class RecordUplink:
             # It cannot be declared, so nothing of it can be sent: it is closed here.
             owed.cursor = replace(owed.cursor, state="complete", refused=owed.cursor.refused + 1)
             self._lose(_identity(owed), "declaration refusee", _reason_of(owed))
+            await self._keep_lost()
             return _Step.DONE
         found = answer.document.get("sessionId")
         if not isinstance(found, str):
@@ -1390,6 +1472,7 @@ class RecordUplink:
         )
         if isinstance(answer, Refusal):
             self._lose(_identity(owed), "fin refusee", end.reason)
+            await self._keep_lost()
         elif _end_word(end.reason) in STOP_ENDS:
             self._stop_told = self._clock.monotonic()
         return None
@@ -1472,7 +1555,7 @@ class RecordUplink:
             session_id,
             error.detail,
         )
-        self._lose(_identity(owed), "enregistrement illisible", None)
+        self._lose(_identity(owed), "enregistrement illisible", None, kept=False)
         return _Step.DROPPED
 
     # --- the two things every pass does -------------------------------------

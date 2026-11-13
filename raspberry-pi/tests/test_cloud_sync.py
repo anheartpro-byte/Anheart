@@ -80,6 +80,8 @@ from src.record.reader import read
 from src.record.session import operator_alias
 from src.record_uplink import (
     MAX_REFUSALS,
+    NOTHING_LOST,
+    SESSION_RUNS,
     SUCCESSFUL_ENDS,
     Acked,
     Answer,
@@ -2260,15 +2262,15 @@ async def test_a_session_ended_on_a_stop_holds_until_a_poll_asked_after_its_end(
     assert unreported(r.sync) is None
 
 
-async def test_an_unreadable_count_after_a_stop_holds_until_a_readable_one_or_the_operator(
+async def test_an_unreadable_count_after_a_stop_holds_until_a_readable_one(
     tmp_path: Path,
 ) -> None:
-    """ANH-145: only a count read is one asked after the stop's end; the operator may
-    accept, by name, that the dashboard does not count it."""
+    """ANH-145: only a count read is one asked after the stop's end; the operator's
+    acknowledgement does not lift a hold that clears by itself."""
     r = rig(tmp_path)
     r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-1"}))
     r.dashboard.answer("/api/machine/training/status", status_answer())
-    assert r.sync.acknowledge_unreported_stop(OPERATOR) is None, "nothing held"
+    assert await r.sync.acknowledge_lost_stops() == Err(NOTHING_LOST), "nothing lost"
     r.runtime.state = RuntimeState.RUNNING
     r.sync.session_started(manual(r.clock))
     for _ in range(3):
@@ -2285,8 +2287,11 @@ async def test_an_unreadable_count_after_a_stop_holds_until_a_readable_one_or_th
     await r.step(float(POLL_PERIOD))
     assert r.sync.incidents_open_high is None
     assert unreported(r.sync) == STOP_NOT_COUNTED
-    assert r.sync.acknowledge_unreported_stop(OPERATOR) == STOP_NOT_COUNTED
-    assert unreported(r.sync) is None
+    # It clears by itself with a count read: not the operator's to lift.
+    assert await r.sync.acknowledge_lost_stops() == Err(NOTHING_LOST)
+    assert unreported(r.sync) == STOP_NOT_COUNTED
+    r.runtime.state = RuntimeState.RUNNING
+    assert await r.sync.acknowledge_lost_stops() == Err(SESSION_RUNS)
 
 
 async def test_an_auto_session_registers_its_programme(tmp_path: Path) -> None:
