@@ -1320,16 +1320,18 @@ du tableau de bord sont copiés à part.
      qu'une fois toutes les 0,15 s) : l'écart lu par-dessus additionne alors
      deux écarts réels, il est compté à part et n'est pas jugé comme un gel, le
      verdict de la console faisant foi pour lui. Enfin les tics reçus couvrent
-     au moins 90 % de l'essai. Une page évincée en cours de route est une
-     anomalie qui fait échouer `sessions`, et `tick_gap` aussi quand elle l'a
-     été avant les derniers 10 % de l'essai. Un `FAIL` nomme sa cause :
+     au moins 90 % du temps où la console a tourné, du premier tic vu à son
+     dernier tic. Une page évincée en cours de route est une anomalie qui fait
+     échouer `sessions`, et `tick_gap` aussi quand elle l'a été avant les
+     derniers 10 % de ce temps. Un `FAIL` nomme sa cause :
      verdict de la console, écart consécutif, aucun écart relevé, ou relevé
      incomplet. Le superviseur ne garde que le plus sévère de ses verdicts
      levés (et, derrière un `GO_SILENT`, celui qu'il a remplacé, lu aussi) :
      un verdict plus sévère levé après un gel, ou aussi sévère levé avant lui,
      cache le gel au verdict lu par `tick_gap` (l'écart lu le voit encore
-     s'il est consécutif), mais **tout verdict encore levé à la fin de
-     l'essai** est une anomalie qui fait échouer `sessions`, et l'essai ;
+     s'il est consécutif), mais **tout verdict d'une autre règle encore levé
+     à la fin de l'essai** est une anomalie qui fait échouer `sessions`, et
+     l'essai (un `loop_stall` encore levé fait déjà échouer `tick_gap`) ;
    * `tick` : 99e centile de la durée du tic sous 150 ms ;
    * `rss` : mémoire à 10 % près de son premier relevé après la première heure ;
    * `descriptors` : aucune fuite qui commence avant le dernier quart d'heure.
@@ -1352,8 +1354,11 @@ du tableau de bord sont copiés à part.
 
    * une fuite de descripteurs qui ne commence que dans les **quinze dernières
      minutes** n'est pas vue ; une fuite qui commence et cesse pendant la
-     première heure non plus (elle n'est pas jugée), ni un seul descripteur
-     gardé une fois pour toutes dans le premier dixième de ce qui suit ;
+     première heure non plus (elle n'est pas jugée), ni un descripteur gardé
+     une seule fois pour toutes dans les **quatre minutes et demie** qui
+     suivent la première heure (il fixe alors lui-même le bas de référence).
+     Une fuite qui se répète, une par séance par exemple, est vue où qu'elle
+     commence avant le dernier quart d'heure ;
    * un seul relevé des quinze dernières minutes pris avec un descripteur
      refermé un instant cache une fuite d'un descripteur. C'est le prix du
      relevé le plus bas de la fin, qui tolère tous les relevés pris avec un
@@ -1465,7 +1470,9 @@ fait de l'extérieur, en lecture seule, depuis une seconde session SSH.
    le bas de ce qui précède, le relevé qui suit son dixième le plus bas ; une
    fuite qui ne commence que dans cette fin n'est pas vue, ni une fuite d'un
    descripteur si un relevé de la fin a été pris avec un descripteur refermé
-   un instant) :
+   un instant, ni un descripteur gardé une seule fois dans les 35 minutes qui
+   suivent la première heure d'une journée de 8 h ; une fuite qui se répète
+   est vue) :
 
    ```sh
    scp <utilisateur>@<pi>:endurance-banc.csv .

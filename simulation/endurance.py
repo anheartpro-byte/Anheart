@@ -1048,6 +1048,7 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         # What the supervisor latched over the run, read before the console's exit acts.
         supervisor = panel.runtime.supervisor
         floor, silenced = supervisor.floor, supervisor.silenced
+        last_tick = panel.runtime.snapshot().at
         # The console's own exit: it stops the drive, closes the record, ends its tasks.
         stop.set()
         code = await served
@@ -1061,17 +1062,19 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         exact=world.periods.summary(),
         merged=world.merged.summary(),
         seen=world.seen,
+        span=0.0 if world.first is None else last_tick - world.first,
         verdict=stall_among((floor, silenced)),
     )
     left = None if code == 0 else f"the console left with exit code {code}"
     blind = (
         "the tick meter stopped before the console did: its page was evicted" if unwatched else None
     )
-    # A run in good health ends with nothing latched; a verdict more severe than a stall
-    # would also hide that stall from tick_gap.
+    # A run in good health ends with nothing latched, and a verdict of another rule can
+    # hide a stall from tick_gap. A loop_stall left latched is tick_gap's own: it fails
+    # there, by name, once.
     held = (
         None
-        if floor is None
+        if floor is None or floor.rule == RULE_LOOP_STALL
         else f"the console ends the run with a latched safety verdict ({floor.rule}): "
         f"{floor.detail}"
     )

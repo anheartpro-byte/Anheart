@@ -57,6 +57,7 @@ from simulation.endurance_measures import (
     Status,
     check_tick_gap,
     judge,
+    passed,
 )
 from simulation.harness import PANEL_SAFETY
 from simulation.tests.conftest import document, num, obj, seq
@@ -210,9 +211,14 @@ def the_console_s_data_is_removed_once_measured(out: Path) -> None:
 
 
 def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_asked(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The real loop, the real web server, the real threads: six seconds asked, one session."""
+    """The real loop, the real web server, the real threads: six seconds asked, one session.
+
+    The console's freeze at two seconds: a loaded host that holds it 0.6 s, before its
+    start or after, latches no verdict that would refuse the start. This run is about the
+    console running and stopping; its stalls are the other tests'."""
+    freeze_at_two_seconds(monkeypatch)
     out = tmp_path / "out"
 
     rhythm = ["--manual", "3", "--rest", "2", "--sample-every", "2"]
@@ -233,8 +239,8 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     period = obj(report["tick_period_ms"])
     tick = obj(report["tick_ms"])
     assert 150.0 <= num(period["p50"]) <= 260.0
-    # Judged against the console's loop_stall figure, whatever this loaded host gave.
-    assert obj(report["tick_gaps"])["bound_ms"] == round(STALL_MS, 1)
+    # Judged against the console's own loop_stall figure, whatever this loaded host gave.
+    assert obj(report["tick_gaps"])["bound_ms"] == 2000.0
     assert num(tick["count"]) >= 25
     assert 0.0 < num(tick["p50"]) < 150.0
     assert len(seq(report["samples"])) >= 3
@@ -307,10 +313,10 @@ async def test_ex1_in_real_time_a_late_tick_fails_tick_gap_and_a_frozen_console_
     assert gap.measured.startswith("la console a levé loop_stall : the control loop took")
     assert f"un écart de {gaps.exact.highest:.1f} ms entre deux tics consécutifs" in gap.measured
     # Read from the console's own exit, which a console cancelled instead never reaches.
-    assert run.anomaly is not None
-    assert f"the console left with exit code {EXIT_FAILED}" in run.anomaly
-    assert "latched safety verdict (loop_stall)" in run.anomaly
+    # The loop_stall left latched is tick_gap's to fail on, not one more anomaly.
+    assert run.anomaly == f"the console left with exit code {EXIT_FAILED}"
     assert verdicts["sessions"].status is Status.FAIL
+    assert not passed(tuple(verdicts.values())), "a stall fails the run"
 
 
 async def test_ex1_in_real_time_tick_gap_follows_the_console_s_own_loop_stall_bound(
@@ -449,7 +455,7 @@ async def test_ex1_a_page_evicted_early_is_an_anomaly_and_a_later_stall_still_fa
     assert "the tick meter stopped before the console did: its page was evicted" in run.anomaly
     assert gap.status is Status.FAIL
     assert gap.measured.startswith("la console a levé loop_stall : the control loop took")
-    assert f"des {run.covered:.0f} s de l'essai" in gap.measured
+    assert "s où la console a tourné" in gap.measured
 
 
 def test_ex1_the_command_line_runs_a_simulated_day_with_the_dsp_on_all_along(
@@ -812,6 +818,7 @@ async def test_ex1_a_gap_over_snapshots_the_hub_merged_is_counted_apart_and_is_n
         exact=world.periods.summary(),
         merged=world.merged.summary(),
         seen=world.seen,
+        span=world.seen,
         verdict=stall_among((console.panel.runtime.supervisor.floor,)),
     )
     run = Run(mode=Mode.REAL_TIME, requested=1.2, covered=1.2, wall=1.2, samples=(), gaps=gaps)
