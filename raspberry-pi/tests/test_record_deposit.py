@@ -302,6 +302,36 @@ def test_file_disappearing_or_leaving_record_refuses_the_deposit(tmp_path: Path)
     assert isinstance(remember(current, "ticks.csv", "stored-one"), Err)
 
 
+async def test_after_an_exchange_error_the_whole_queue_waits_two_seconds_then_four(
+    tmp_path: Path,
+) -> None:
+    """The first wait of the queue is 2 s, as the documentation says, then it doubles: the
+    step is asked for at the pace of the link loop, and starts only once its wait is over."""
+    record = ready_record(tmp_path / "records")
+    server = DepositServer(offline=True)
+    clock = ManualClock()
+    deposit = RecordDeposit(record.parent, clock, server, server.upload)
+
+    async def asked_after(seconds: float) -> bool:
+        """Whether a step asked for ``seconds`` later reaches the server."""
+        before = server.calls
+        clock.advance(Seconds(seconds))
+        deposit.schedule()
+        for _ in range(100):
+            if server.calls > before:
+                break
+            await asyncio.sleep(0.01)
+        await deposit.close()
+        return server.calls > before
+
+    await deposit.step()
+    assert server.calls == 1
+    assert not await asked_after(1.9)
+    assert await asked_after(0.1)
+    assert not await asked_after(3.9)
+    assert await asked_after(0.1)
+
+
 async def test_an_outage_backs_off_without_upload_or_confirmation(tmp_path: Path) -> None:
     record = ready_record(tmp_path / "records")
     server = DepositServer(offline=True)
