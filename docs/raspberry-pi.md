@@ -3628,8 +3628,10 @@ horloge (`adjtimex`, sans rien y changer) : c'est là que le service de temps du
 Pi, `chrony`, publie s'il est synchronisé, l'erreur qu'il estime et l'erreur
 qu'il garantit. La règle est celle de `timedatectl` : l'horloge est tenue quand
 l'erreur garantie est sous 16 secondes, la valeur que le noyau garde pour une
-horloge dont personne ne répond. La lecture se fait une fois au démarrage, puis
-toutes les 10 secondes dans une tâche à elle (`clock_step`,
+horloge dont personne ne répond. L'appel est cherché une fois dans la
+bibliothèque C, à la première lecture ; une lecture prend quelques
+microsecondes, et un test en tient la médiane sous 5 ms. La lecture se fait
+une fois au démarrage, puis toutes les 10 secondes dans une tâche à elle (`clock_step`,
 [3.1](#31-les-tâches-de-la-console)) ; tout le reste lit la dernière réponse en
 mémoire.
 
@@ -3637,7 +3639,7 @@ mémoire.
 |---|---|---|---|---|---|
 | `synchronised` | un service de temps tient l'horloge | `horloge synchronisee · erreur estimee 0.4 ms, erreur au plus 45.0 ms` | `true` | accepté | accepté |
 | `unsynchronised` | aucune source de temps jointe depuis l'allumage du Pi, ou plus depuis longtemps | `horloge NON FIABLE · aucune source de temps jointe : ...`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
-| `unreadable` | sur un Pi, l'état n'a pas pu être lu (appel refusé par le système, sonde en panne) | `horloge NON VERIFIEE · etat de l'horloge illisible (...)`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
+| `unreadable` | sur un Pi, l'état n'a pas pu être lu (appel refusé par le système, sonde en panne, système dont le `long` du C n'a pas 8 octets : la structure du noyau n'y est pas lue) | `horloge NON VERIFIEE · etat de l'horloge illisible (...)`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
 | (pas d'état) | la console ne tourne pas sous Linux : le Mac du banc et des développeurs. Aucun moyen de poser la question | ligne vide | `null` | accepté ; le pré-vol l'avertit (ANH-142) | **refusé par le pré-vol** (ANH-142) : erreur inconnue ; averti seulement avec `MOTOR_BACKEND=sim` |
 
 **Hors Linux, la console ne juge pas son horloge.** L'appel qu'elle fait
