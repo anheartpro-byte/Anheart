@@ -2152,7 +2152,13 @@ D'autres écritures la relancent aussi :
   programmes ;
 - les appartenances : le webhook Clerk (`clerkWebhook.applyEvent`),
   `users.getOrCreateUser`, `updateUserRole`, `deleteUser`,
-  `patientInvitations.prepare`.
+  `patientInvitations.prepare` ;
+- l'inscription d'une version des paramètres médicaux
+  (`medicalParametersStore.insertVersion`), qui passe en échec les
+  lancements en attente déjà expirés ;
+- la vérification des fichiers d'un enregistrement (`recordStorage`), qui
+  écrit l'état de l'enregistrement sur la séance : seulement pour une séance
+  encore active ou en attente, la plupart arrivant après la fin.
 
 Une ligne de `machine_heartbeats`, de télémétrie ou d'événements ne la relance
 pas.
