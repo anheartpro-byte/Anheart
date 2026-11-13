@@ -42,7 +42,11 @@ export const list = query({
         .collect();
       return published
         .filter((programme) => programme.organizationId === null)
-        .map((programme) => ({ ...programme, simulationReportUrl: null }));
+        .map((programme) => ({
+          ...programme,
+          simulationReport: null,
+          simulationReportUrl: null,
+        }));
     }
     const programmes = await ctx.db.query("programmes").collect();
     return await Promise.all(

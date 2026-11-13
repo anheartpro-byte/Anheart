@@ -283,6 +283,7 @@ from src.training.plan import (
     Program,
     Rejected,
     ResolveError,
+    TrainingProfile,
     UnknownProfile,
 )
 from src.training.preflight import (
@@ -1870,34 +1871,13 @@ class LocalPanel:
             )
         occupied = Occupancy.OCCUPIED
         blocked = (
-            self._remote_total_refusal(command)
+            remote_total_refusal(command, self._store.get(command.profile_id))
             or self._presence_refusal(occupied)
             or self._clock_refusal(occupied)
         )
         if blocked is not None:
             return Err(blocked)
         return Ok(Armable(program=program, rider=admitted.value))
-
-    def _remote_total_refusal(self, command: StartSession) -> str | None:
-        """Why a launch from the dashboard asks for too long a session; ``None`` when it does not.
-
-        A programme validated in the catalogue (ANH-137) may be shortened from
-        the dashboard, never lengthened: HOLD would absorb any longer total, and
-        nothing else bounds it. A start at the console keeps its override as it
-        is. Asked once :meth:`ProfileStore.resolve` has found the programme and
-        taken the total.
-        """
-        total = command.total_duration_s
-        if command.cloud_session_id is None or total is None:
-            return None
-        stored = self._store.get(command.profile_id)
-        if isinstance(stored, Err) or total <= stored.value.total_duration_s:
-            return None
-        return (
-            "demarrage refuse : un lancement du tableau de bord ne peut que raccourcir "
-            f"le programme ({total:g} s demandees, {stored.value.total_duration_s:g} s "
-            "au programme)"
-        )
 
     def _service_refusal(self) -> str | None:
         """Why a console out of service refuses every start; ``None`` when it is in service."""
@@ -2968,6 +2948,32 @@ def rider_age_refusal(age: int | None, minimum: int) -> str | None:
 def rider_words(age: int) -> str:
     """How a refusal names the rider by their age: the words the logbook is not given."""
     return f"passager de {age} ans"
+
+
+def remote_total_refusal(
+    command: StartSession, stored: Result[TrainingProfile, UnknownProfile]
+) -> str | None:
+    """Why a launch from the dashboard asks for too long a session; ``None`` when it does not.
+
+    A programme validated in the catalogue (ANH-137) may be shortened from the
+    dashboard, never lengthened: HOLD would absorb any longer total, and nothing
+    else bounds it. A start at the console keeps its override as it is.
+    ``stored`` is the programme as this console holds it; one it cannot find
+    refuses the launch (fail closed), though the resolution before this asks
+    has already refused an unknown programme.
+    """
+    total = command.total_duration_s
+    if command.cloud_session_id is None or total is None:
+        return None
+    if isinstance(stored, Err):
+        return describe_resolve_error(stored.error)
+    if total <= stored.value.total_duration_s:
+        return None
+    return (
+        "demarrage refuse : un lancement du tableau de bord ne peut que raccourcir "
+        f"le programme ({total:g} s demandees, {stored.value.total_duration_s:g} s "
+        "au programme)"
+    )
 
 
 def describe_resolve_error(error: ResolveError) -> str:

@@ -2714,8 +2714,8 @@ export const MATRIX: Entry[] = [
         throw new Error("The Anheart admin reads every programme with its report");
     },
     onFiltered: (res) => {
-      const rows = res as Array<{ status: string; simulationReportUrl: string | null }>;
-      if (rows.length !== 1 || rows[0].status !== "published" || rows[0].simulationReportUrl !== null)
+      const rows = res as Array<{ status: string; simulationReport: string | null; simulationReportUrl: string | null }>;
+      if (rows.length !== 1 || rows[0].status !== "published" || rows[0].simulationReport !== null || rows[0].simulationReportUrl !== null)
         throw new Error("Anyone else reads the published catalogue only, without the report");
     },
     cases: [

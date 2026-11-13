@@ -2276,7 +2276,7 @@ d'une séance.
 
 | Fonction | Droits et effet |
 |---|---|
-| `list` (query) | Admin Anheart : tous les programmes, avec `simulationReportUrl`, l'URL du rapport joint. Tout autre compte : les programmes `published` du catalogue Anheart (`organizationId` nul), `simulationReportUrl` nul. Anonyme : `not_authenticated`. |
+| `list` (query) | Admin Anheart : tous les programmes, avec `simulationReportUrl`, l'URL du rapport joint. Tout autre compte : les programmes `published` du catalogue Anheart (`organizationId` nul), `simulationReport` et `simulationReportUrl` nuls. Anonyme : `not_authenticated`. |
 | `create` (mutation) | Admin Anheart. Les champs du profil ; validation du Pi, `profileId` libre ; écrit un brouillon `revision: 0`, `medicalParametersVersion` du fichier livré. Dupliquer un programme, c'est le créer depuis sa copie (le site préremplit le formulaire). |
 | `updateDraft` (mutation) | Admin Anheart, brouillon seulement. Mêmes contrôles ; efface `simulationReport` et `medicalSignoff`, qui portaient sur d'autres valeurs. |
 | `attachSimulationReport` (mutation) | Admin Anheart, brouillon seulement. Fichier PDF ou JSON d'au plus 10 Mio déposé depuis moins d'une heure (URL de dépôt de `machineRegistry.generateUploadUrl`). |

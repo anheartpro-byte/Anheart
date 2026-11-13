@@ -223,9 +223,11 @@ const CHECKS: ReadonlyArray<
 
 /** Why plan.py would not build this profile, or null when it would. */
 export function programmeRefusal(p: ProgrammeProfile): ProgrammeRefusal | null {
-  const problems = WHOLE_FIELDS.filter(([key]) => !Number.isInteger(p[key])).map(
-    ([, wire]) => `profile: '${wire}' must be a whole number, got float`,
-  );
+  // From 1e21 on, JSON.stringify writes a whole number as `1e+21`, which the
+  // Pi reads as a float: such a number is malformed here too.
+  const problems = WHOLE_FIELDS.filter(
+    ([key]) => !Number.isInteger(p[key]) || Math.abs(p[key]) >= 1e21,
+  ).map(([, wire]) => `profile: '${wire}' must be a whole number, got float`);
   if (problems.length > 0)
     return { verdict: "malformed", violations: [], detail: problems.join("; ") };
   const violations = CHECKS.filter(([, passes]) => !passes(p)).map(

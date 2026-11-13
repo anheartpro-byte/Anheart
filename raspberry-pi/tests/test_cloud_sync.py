@@ -70,7 +70,7 @@ from src.control_surface import (
     StartSession,
 )
 from src.local_config import CardiacTiers, CloudConfig, LocalConfig, load_local_config
-from src.local_panel import LocalPanel, build_panel, describe_resolve_error
+from src.local_panel import LocalPanel, build_panel, describe_resolve_error, remote_total_refusal
 from src.medical import SHIPPED_PARAMETERS, MedicalStatus
 from src.motor.drive import ControlWord, DriveError
 from src.motor.simulated import SimulatedDrive
@@ -101,7 +101,7 @@ from src.roster import (
     RosterState,
     describe_passenger_refusal,
 )
-from src.training.plan import JsonValue, ResolveError
+from src.training.plan import JsonValue, ResolveError, UnknownProfile
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, MotorRpm, Seconds, UnixMillis
@@ -3143,6 +3143,21 @@ async def test_a_launch_longer_than_its_preset_is_refused_before_training_start(
     assert reason == (
         "demarrage refuse : un lancement du tableau de bord ne peut que raccourcir "
         "le programme (1800.5 s demandees, 1800 s au programme)"
+    )
+
+
+def test_a_launch_whose_preset_cannot_be_found_is_refused_by_the_duration_check() -> None:
+    """Fail closed: no programme to measure the asked total against is no launch."""
+    command = StartSession(
+        profile_id="jog_150",
+        operator=OPERATOR,
+        total_duration_s=Seconds(900.0),
+        at=Monotonic(0.0),
+        request_id="duration",
+        cloud_session_id="remote-1",
+    )
+    assert remote_total_refusal(command, Err(UnknownProfile("jog_150", ()))) == (
+        "demarrage refuse : programme 'jog_150' inconnu sur cette machine"
     )
 
 

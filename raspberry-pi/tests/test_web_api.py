@@ -1410,6 +1410,19 @@ async def test_a_malformed_profile_document_is_refused(client: httpx.AsyncClient
     assert response.status_code == HTTPStatus.BAD_REQUEST
 
 
+async def test_an_integer_beyond_every_float_is_a_malformed_profile(
+    client: httpx.AsyncClient,
+) -> None:
+    """Refused as malformed, not a 500: ``float(10**400)`` raises (ANH-137)."""
+    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
+    document = {**profile_document("bench_huge"), "max_rpm": 10**400}
+    response = await client.put(
+        f"/api/profiles/bench_huge?rev={listing.rev}", headers=auth(), json=document
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert "a float can hold" in detail(response)
+
+
 async def test_a_profile_can_be_deleted(client: httpx.AsyncClient) -> None:
     """And the listing that comes back is the one after the deletion."""
     listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))

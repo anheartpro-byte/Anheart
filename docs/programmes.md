@@ -94,6 +94,18 @@ voie ECG présente et aucune voie en double. Un seuil ou une vitesse qui n'est
 pas un nombre entier est refusé avec le message du Pi pour un document mal
 formé.
 
+Deux bornes tiennent compte de la façon dont un nombre passe de Convex au Pi.
+À partir de 1e21, `JSON.stringify` écrit un nombre entier `1e+21`, que le Pi
+lit comme un flottant : Convex refuse donc un seuil ou une vitesse de 1e21 ou
+plus avec le message du Pi pour un flottant. Un zéro négatif est écrit `0` et
+refusé comme un zéro (`bpm_not_positive`). À l'inverse, `json.loads` lit un
+entier sans limite de taille : le Pi refuse comme mal formé un nombre qu'un
+flottant ne peut pas contenir (au-delà d'environ 1,8e308), au lieu de lever
+`OverflowError`. Ce dernier cas n'est pas dans le fichier partagé : un tel
+entier n'existe pas en JavaScript (`JSON.parse` le lit comme `Infinity`), et
+Convex ne le reçoit jamais ; des tests du Pi le couvrent (lecture d'un profil,
+magasin de profils écarté au démarrage, `PUT /api/profiles`).
+
 Les bornes que `plan.py` prend dans le fichier médical (plancher de
 récupération, plancher de cool-down, fraction de zone) sont lues dans le même
 fichier, `raspberry-pi/config/medical_parameters.json` : les deux côtés ne
@@ -102,7 +114,8 @@ peuvent pas diverger.
 Le fichier partagé `contracts/programme-validation-cases.json` porte les cas,
 bornes comprises (zone haute égale à 0,9 x FC max, `minRunRpm` 55 au plafond
 d'échauffement, plaque 1380, durées dont la somme vaut la durée totale,
-`allowAboveNameplate`, arrondi des flottants). Le test
+`allowAboveNameplate`, arrondi des flottants, fraction absurde, 1e21, zéro
+négatif). Le test
 `raspberry-pi/tests/test_programme_validation_parity.py` les passe à
 `parse_profile` et le test `convex/programmes.test.ts` à `programmes.create` :
 les deux exigent le verdict et le message du fichier.
@@ -116,6 +129,18 @@ les siens ; la publication vers les machines (ANH-138) devra les contrôler.
 `plan.py` n'impose pas non plus `minRunRpm >= 55` : 55 tr/min est la plus
 petite consigne du limiteur de mouvement (`min_run_motor_rpm` du fichier
 médical), pas une règle du profil.
+
+### Décisions à confirmer par l'utilisateur
+
+Deux choix de cette version, relevés en revue et laissés tels quels :
+
+- La double validation n'écarte que le créateur et le dernier à avoir écrit
+  les valeurs du brouillon (`createdBy`, `updatedBy`). Un admin qui a réécrit
+  le brouillon avant le dernier rédacteur, ou qui y a joint le rapport, peut le
+  valider.
+- La validation compare la version des paramètres médicaux par sa chaîne
+  (`medicalParametersVersion` égale à la version courante enregistrée), pas le
+  contenu du fichier médical.
 
 ### Rapport de simulation
 

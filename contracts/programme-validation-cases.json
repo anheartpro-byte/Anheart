@@ -628,6 +628,38 @@
       }
     },
     {
+      "name": "zone_low_bpm zéro négatif (-0, écrit 0 par JSON.stringify) est refusé comme zéro",
+      "changes": {
+        "zone_low_bpm": -0
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "bpm_not_positive"
+        ],
+        "detail": "training profile refused: bpm_not_positive"
+      }
+    },
+    {
+      "name": "critical_bpm 10^20, entier que JavaScript écrit en chiffres, est accepté",
+      "changes": {
+        "critical_bpm": 100000000000000000000
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "critical_bpm 1e21, que JavaScript écrit 1e+21, est un flottant mal formé",
+      "changes": {
+        "critical_bpm": 1e+21
+      },
+      "expected": {
+        "verdict": "malformed",
+        "detail": "profile: 'critical_bpm' must be a whole number, got float"
+      }
+    },
+    {
       "name": "zone_high_bpm non entier est mal formé",
       "changes": {
         "zone_high_bpm": 138.5
