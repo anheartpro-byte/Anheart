@@ -1034,7 +1034,7 @@ S'ouvre depuis **Mes machines** ou le détail d'une machine.
 **Avertissements** (encadré rouge, le bouton **Lancer** reste actif mais le
 serveur refusera) :
 
-- « La zone monte à {zone haute} bpm, au delà de {fraction} % de la FC max du
+- « La zone monte à {zone haute} bpm, au-delà de {fraction} % de la FC max du
   pratiquant ({FC max} bpm → plafond {plafond} bpm). Le serveur refusera ce
   lancement. »
 - « La FC limite du programme ({FC limite} bpm) dépasse la FC max du
@@ -2095,7 +2095,7 @@ inférieur). Avec celle de la version 0.1.0, 90 % :
 
 Pour un pratiquant de 60 ans sans FC max mesurée (estimée à 166 bpm), le
 plafond est 149 bpm : ce footing sera refusé avec le message « La zone monte à
-155 bpm, au delà de 90 % de la FC max du pratiquant (166 bpm → plafond 149
+155 bpm, au-delà de 90 % de la FC max du pratiquant (166 bpm → plafond 149
 bpm). Le serveur refusera ce lancement. »
 
 ### P10. Lancer une séance auto à distance
@@ -2508,7 +2508,7 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Physiologie absente, ou FC max enregistrée qui n'est pas un nombre entier. | P7. |
 | « L'année de naissance du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Année absente (obligatoire), ou année enregistrée qui n'est pas un nombre entier. | P7. |
 | « Séance auto réservée aux pratiquants d'au moins {âge minimum} ans. » | Fenêtre de lancement | Trop jeune pour l'âge minimum des paramètres médicaux signés. | Aucune séance auto. |
-| « La zone monte à ... bpm, au delà de {fraction} % de la FC max du pratiquant ... Le serveur refusera ce lancement. » | Fenêtre de lancement | Programme trop intense pour ce pratiquant. | Choisir un programme plus doux, ou mesurer la FC max réelle (P7). |
+| « La zone monte à ... bpm, au-delà de {fraction} % de la FC max du pratiquant ... Le serveur refusera ce lancement. » | Fenêtre de lancement | Programme trop intense pour ce pratiquant. | Choisir un programme plus doux, ou mesurer la FC max réelle (P7). |
 | « La FC limite du programme (...) dépasse la FC max du pratiquant (...). Le serveur refusera ce lancement. » | Fenêtre de lancement | Idem. | Idem. |
 | « La durée doit être un nombre positif » | Fenêtre de lancement | Durée invalide. | Corriger ou vider. |
 | « En attente que la machine arme la séance… » | Vue en direct, détail | La machine n'a pas encore pris la séance. | Attendre quelques secondes ; au delà d'une minute, [§6.3](#63-si-la-machine-est-hors-ligne). |

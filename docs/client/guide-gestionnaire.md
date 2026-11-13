@@ -188,7 +188,7 @@ Ce que le logiciel contrôle ensuite, à chaque lancement :
 
 - la FC max retenue et l'année de naissance sont renseignées ;
 - le pratiquant a l'âge minimum fixé par les paramètres médicaux signés
-  (18 ans dans la version en service aujourd'hui, 0.1.0). L'âge est calculé à
+  (18 ans dans la version livrée 0.1.0). L'âge est calculé à
   partir de la seule année de naissance, comme si l'anniversaire n'était pas
   encore passé : une personne peut donc être refusée pendant l'année où elle
   atteint cet âge ;
