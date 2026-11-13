@@ -1388,7 +1388,8 @@ comme alias, dans tous les environnements ; un `CVE-...`, alias possible
 d'avis de plusieurs paquets, est donc refusé pour pip. Seules comptent les
 lignes du tableau lui-même, celles que la page affichée montre. Sont refusés :
 une ligne en dehors du tableau ou un bloc de code dans la section, un second
-titre de section ou un titre écrit dans un bloc de code, et, n'importe où dans
+titre de section ou ce titre écrit entre deux lignes qui commencent par trois
+accents graves ou trois tildes, et, n'importe où dans
 le fichier, code compris, le signe `<` immédiatement suivi d'une lettre
 Unicode, de `/`, de `!` ou de `?` (balise ou bloc HTML, y compris un bloc
 `details` replié au milieu d'une ligne, commentaire, déclaration, section
