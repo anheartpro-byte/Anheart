@@ -8,7 +8,9 @@ from typing import override
 import httpx
 import pytest
 
+from src.clock import ManualClock
 from src.local_panel import EXIT_FAILED
+from src.motor.atv320 import SerialSettings, inspection_budget_for
 from src.motor.drive import (
     CommTimeout,
     ControlWord,
@@ -16,12 +18,12 @@ from src.motor.drive import (
     DriveStatus,
     EmergencyStopOutcome,
 )
-from src.motor.simulated import SimState, SimulatedDrive
+from src.motor.simulated import SimState, SimulatedDrive, SimulatedDriveConfig
 from src.result import Err, Ok, Result
 from src.training.runtime import IDLE_POLL_PERIOD
 from src.training.safety import RULE_COMMS_LOST
 from src.training.types import SafetyAction
-from src.units import MotorRpm, Seconds
+from src.units import Monotonic, MotorRpm, Seconds, UnixMillis
 from tests.test_arming_cancellation import HeldCommand
 from tests.test_failure_rig import attest, make_rig
 from tests.test_local_panel import FakeWeb
@@ -207,38 +209,88 @@ async def _precommand(drive: SimulatedDrive) -> None:
     assert isinstance(await drive.write_speed(MotorRpm(240)), Ok)
 
 
+class HeldBeforeReading(HeldInspection):
+    """The status read is held before the drive is read: its reply is the drive at release."""
+
+    @override
+    async def read_status(self) -> Result[DriveStatus, DriveError]:
+        self.reads += 1
+        if not self.hold_open and not self.accepted.is_set():
+            self.accepted.set()
+            await self.release.wait()
+        return await self.inner.read_status()
+
+
+class OverTheRealLink(HeldBeforeReading):
+    """As slow to answer as the real link may be: its inspection budget, about 5 s."""
+
+    @property
+    @override
+    def inspection_budget(self) -> Seconds:
+        return inspection_budget_for(SerialSettings(port="ftdi://ftdi:232r/1"))
+
+
+class Stubborn(HeldInspection):
+    """A held call that does not honour its first cancellation: a non-conforming drive."""
+
+    @override
+    async def open(self) -> Result[None, DriveError]:
+        try:
+            return await super().open()
+        except asyncio.CancelledError:
+            await self.release.wait()
+            return await self.inner.open()
+
+    @override
+    async def read_status(self) -> Result[DriveStatus, DriveError]:
+        try:
+            return await super().read_status()
+        except asyncio.CancelledError:
+            await self.release.wait()
+            return await self.inner.read_status()
+
+
+def _bound(rig_drive: HeldInspection, rig_gap: Seconds) -> Seconds:
+    """How long after the stop the console waits for an inspection's reply."""
+    return max(rig_drive.inspection_budget, rig_gap)
+
+
+@pytest.mark.parametrize("ticked", [True, False], ids=["after a tick", "at the first tick"])
 @pytest.mark.parametrize(
     ("requested_start", "hold_open"),
     [(False, False), (True, False), (True, True)],
     ids=["idle status read", "start status read", "start open"],
 )
-async def test_a_drive_call_that_never_returns_holds_the_stop_no_longer_than_the_silence_bound(
-    tmp_path: Path, requested_start: bool, hold_open: bool
+async def test_a_drive_call_that_never_returns_holds_the_stop_no_longer_than_its_budget(
+    tmp_path: Path, requested_start: bool, hold_open: bool, ticked: bool
 ) -> None:
-    """ANH-162: once the supervisor's silence bound has passed since the inspection began,
-    on the console's own clock, the stop stops waiting for the drive. Nothing more is sent
-    (the drive's ttO owns any stop), and the stop completes, as an unclean one."""
+    """ANH-162: once the drive has had, since the stop, the longest it can take to answer
+    an inspection, on the console's own clock, the stop stops waiting for it. Nothing more
+    is sent, not a read (the drive's ttO owns any stop), and the stop completes, unclean,
+    whether a tick had completed before or not."""
     rig, held = make_rig(tmp_path, wrap=HeldInspection)
     assert isinstance(held, HeldInspection)
     held.hold_open = hold_open
-    held.accepted.set()  # the first tick reads the drive and comes back
-    await rig.panel.control_cycle()
-    held.accepted.clear()  # the next inspection never returns
+    if ticked:
+        held.accepted.set()  # the first tick reads the drive and comes back
+        await rig.panel.control_cycle()
+        held.accepted.clear()  # the next inspection never returns
     stop = asyncio.Event()
     web = FakeWeb()
     async with rig.http() as client:
         if requested_start:
             await _start_bench(client)
-        else:
+        elif ticked:
             rig.clock.advance(IDLE_POLL_PERIOD)
         task = asyncio.create_task(rig.panel.run(stop, web))
         try:
             await asyncio.wait_for(held.accepted.wait(), 2)
-            writes = held.writes
+            reads, writes = held.reads, held.writes
             stop.set()  # systemd, or an operator, asks the console to stop
             await asyncio.wait_for(web.exit.wait(), 2)
-            gap = rig.panel.runtime.supervisor.limits.loop_stall_silent_gap
-            rig.clock.advance(Seconds(gap - 0.1))
+            await asyncio.sleep(0.1)  # the stop reaches the inspection's owner
+            bound = _bound(held, rig.panel.runtime.supervisor.limits.loop_stall_silent_gap)
+            rig.clock.advance(Seconds(bound - 0.1))
             await asyncio.sleep(0.2)
             assert not task.done(), "the bound has not passed on the console's clock"
             rig.clock.advance(Seconds(0.2))
@@ -248,15 +300,16 @@ async def test_a_drive_call_that_never_returns_holds_the_stop_no_longer_than_the
             assert task.result() == EXIT_FAILED
             runtime = rig.panel.runtime
             assert runtime.silent
+            assert runtime.gave_up_on_the_link
             standing = runtime.standing
             assert standing is not None
             assert standing.rule == RULE_COMMS_LOST
             assert standing.action is SafetyAction.GO_SILENT
             assert "did not answer an inspection" in standing.detail
-            assert held.writes == writes, "not a frame, the emergency zero included"
+            assert (held.reads, held.writes) == (reads, writes), "not a frame, not a read"
             held.release.set()  # the call returns at last: its answer is dropped
             await asyncio.sleep(0.05)
-            assert held.writes == writes
+            assert (held.reads, held.writes) == (reads, writes)
         finally:
             held.release.set()
             stop.set()
@@ -265,13 +318,62 @@ async def test_a_drive_call_that_never_returns_holds_the_stop_no_longer_than_the
             await rig.panel.close()
 
 
-async def test_a_reply_before_the_silence_bound_still_stops_a_drive_found_running(
+@pytest.mark.parametrize(
+    ("requested_start", "hold_open"),
+    [(False, False), (True, False), (True, True)],
+    ids=["idle status read", "start status read", "start open"],
+)
+async def test_a_drive_that_answers_late_but_within_its_budget_is_still_stopped(
+    tmp_path: Path, requested_start: bool, hold_open: bool
+) -> None:
+    """The stop waits for the reply as long as the drive may take to give it: a drive
+    found enabled then is zeroed and switched off, as it always was."""
+    rig, held = make_rig(tmp_path, wrap=HeldBeforeReading)
+    assert isinstance(held, HeldBeforeReading)
+    held.hold_open = hold_open
+    stop = asyncio.Event()
+    web = FakeWeb()
+    async with rig.http() as client:
+        if requested_start:
+            await _start_bench(client)
+        task = asyncio.create_task(rig.panel.run(stop, web))
+        try:
+            await asyncio.wait_for(held.accepted.wait(), 2)
+            stop.set()
+            await asyncio.wait_for(web.exit.wait(), 2)
+            await asyncio.sleep(0.1)
+            bound = _bound(held, rig.panel.runtime.supervisor.limits.loop_stall_silent_gap)
+            rig.clock.advance(Seconds(bound - 0.2))
+            await asyncio.sleep(0.2)
+            assert not task.done(), "it waits"
+            await _precommand(rig.simulator)  # what the reply will show
+            held.release.set()
+            await asyncio.wait((task,), timeout=2)
+            assert task.done()
+            assert not rig.panel.runtime.gave_up_on_the_link
+            assert rig.simulator.commanded_setpoint == 0
+            assert rig.simulator.sim_state is not SimState.OPERATION_ENABLED
+        finally:
+            held.release.set()
+            stop.set()
+            web.request_exit()
+            await asyncio.gather(task, return_exceptions=True)
+            await rig.panel.close()
+
+
+async def test_a_drive_that_answers_a_little_late_over_the_real_link_is_not_abandoned(
     tmp_path: Path,
 ) -> None:
-    """The bound takes nothing from the stop that was there: a reply that comes in time
-    is judged, and a drive found enabled is zeroed and switched off."""
-    rig, held = make_rig(tmp_path, wrap=HeldInspection)
-    assert isinstance(held, HeldInspection)
+    """The second reviewer's probe: a reply 3.1 s after the stop, past the supervisor's
+    silence bound but within what the real link may take, from a drive left enabled at
+    speed. It is zeroed and switched off, never left to its ttO."""
+    clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
+    # The drive's own ttO as it leaves the factory, 10 s: not what stops it here.
+    factory = SimulatedDriveConfig(reads_reset_watchdog=True, tto=Seconds(10.0))
+    rig, held = make_rig(
+        tmp_path, clock=clock, simulator=SimulatedDrive(clock, factory), wrap=OverTheRealLink
+    )
+    assert isinstance(held, OverTheRealLink)
     held.hold_open = True
     stop = asyncio.Event()
     web = FakeWeb()
@@ -282,17 +384,93 @@ async def test_a_reply_before_the_silence_bound_still_stops_a_drive_found_runnin
             await asyncio.wait_for(held.accepted.wait(), 2)
             stop.set()
             await asyncio.wait_for(web.exit.wait(), 2)
-            gap = rig.panel.runtime.supervisor.limits.loop_stall_silent_gap
-            rig.clock.advance(Seconds(gap - 0.2))
+            await asyncio.sleep(0.1)
+            rig.clock.advance(Seconds(3.1))
             await asyncio.sleep(0.2)
             assert not task.done()
-            await _precommand(rig.simulator)  # found enabled by the status read that follows
+            await _precommand(rig.simulator)
             held.release.set()
             await asyncio.wait((task,), timeout=2)
             assert task.done()
-            assert not rig.panel.runtime.silent
+            assert not rig.panel.runtime.gave_up_on_the_link
             assert rig.simulator.commanded_setpoint == 0
             assert rig.simulator.sim_state is not SimState.OPERATION_ENABLED
+        finally:
+            held.release.set()
+            stop.set()
+            web.request_exit()
+            await asyncio.gather(task, return_exceptions=True)
+            await rig.panel.close()
+
+
+async def test_the_wait_counts_from_the_stop_not_from_the_inspection_s_start(
+    tmp_path: Path,
+) -> None:
+    """An inspection already 10 s long when the stop comes is still given the drive's
+    whole budget from the stop: never less than its own worst case, whenever it began."""
+    rig, held = make_rig(tmp_path, wrap=HeldInspection)
+    assert isinstance(held, HeldInspection)
+    stop = asyncio.Event()
+    web = FakeWeb()
+    task = asyncio.create_task(rig.panel.run(stop, web))
+    try:
+        await asyncio.wait_for(held.accepted.wait(), 2)
+        rig.clock.advance(Seconds(10.0))  # the inspection has run this long
+        await asyncio.sleep(0.1)
+        stop.set()
+        await asyncio.wait_for(web.exit.wait(), 2)
+        await asyncio.sleep(0.1)
+        bound = _bound(held, rig.panel.runtime.supervisor.limits.loop_stall_silent_gap)
+        rig.clock.advance(Seconds(bound - 0.1))
+        await asyncio.sleep(0.2)
+        assert not task.done(), "the bound counts from the stop"
+        rig.clock.advance(Seconds(0.2))
+        await asyncio.wait((task,), timeout=2)
+        assert task.done()
+        assert rig.panel.runtime.silent
+    finally:
+        held.release.set()
+        stop.set()
+        web.request_exit()
+        await asyncio.gather(task, return_exceptions=True)
+        await rig.panel.close()
+
+
+@pytest.mark.parametrize(
+    ("requested_start", "hold_open"),
+    [(False, False), (False, True), (True, False), (True, True)],
+    ids=["idle status read", "idle open", "start status read", "start open"],
+)
+async def test_a_call_that_ignores_its_cancel_still_lets_the_stop_end_and_reads_nothing(
+    tmp_path: Path, requested_start: bool, hold_open: bool
+) -> None:
+    """The second reviewer's probe: a call that does not honour its cancellation comes
+    back after the console went silent. The stop has ended, and nothing more is read,
+    nor believed of the link."""
+    rig, held = make_rig(tmp_path, wrap=Stubborn)
+    assert isinstance(held, Stubborn)
+    held.hold_open = hold_open
+    stop = asyncio.Event()
+    web = FakeWeb()
+    async with rig.http() as client:
+        if requested_start:
+            await _start_bench(client)
+        task = asyncio.create_task(rig.panel.run(stop, web))
+        try:
+            await asyncio.wait_for(held.accepted.wait(), 2)
+            reads, writes = held.reads, held.writes
+            stop.set()
+            await asyncio.wait_for(web.exit.wait(), 2)
+            await asyncio.sleep(0.1)
+            bound = _bound(held, rig.panel.runtime.supervisor.limits.loop_stall_silent_gap)
+            rig.clock.advance(Seconds(bound + 0.1))
+            await asyncio.wait((task,), timeout=2)
+            assert task.done()
+            assert rig.panel.runtime.silent
+            held.release.set()  # the open comes back now, after the silence
+            await asyncio.sleep(0.1)
+            assert (held.reads, held.writes) == (reads, writes)
+            assert not rig.panel.runtime.drive_link_acquired or not hold_open
         finally:
             held.release.set()
             stop.set()

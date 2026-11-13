@@ -1633,19 +1633,30 @@ côté systemd en [pi-image.md](pi-image.md#le-chien-de-garde).
   ([pi-image.md](pi-image.md#le-chien-de-garde)).
 - **Un appel au variateur qui ne rend pas la main pendant une inspection**
   (lecture au repos, ou celle d'un départ) ne retient plus l'arrêt contrôlé
-  qu'un temps borné (ANH-162) : l'arrêt attend la réponse jusqu'à 3 s après le
-  début de l'inspection, sur l'horloge de la console (la borne de silence du
-  superviseur, celle de `loop_stall`). Une réponse venue à temps est jugée
-  comme avant : un variateur trouvé en marche est mis à zéro et coupé. Après,
-  l'inspection est abandonnée et la console se tait (verrou `comms_lost`,
-  `GO_SILENT`) sans aucune trame, pas même le zéro d'urgence, qui passerait
-  par la liaison qui ne répond pas : c'est le `ttO` du variateur qui arrête un
-  moteur en marche, comme pour une console figée. L'arrêt contrôlé va ensuite
-  au bout, et la console sort en erreur si elle avait déjà terminé un tic
-  (comme toute console figée, 9.4). Avant ce correctif elle restait
-  bloquée jusqu'à ce qu'on la tue (environ 60 s sous systemd). Le vrai pilote
-  borne chaque échange sauf l'ouverture du port (`open`), qui est le cas
-  réel.
+  qu'un temps borné (ANH-162). À compter de la demande d'arrêt, sur l'horloge
+  de la console, l'arrêt attend la réponse aussi longtemps que le variateur
+  peut mettre à répondre à une inspection, même en retard : le budget
+  d'inspection du pilote (`inspection_budget`, l'ouverture du port et six
+  échanges à leur pire, environ 5,1 s avec les réglages livrés), jamais moins
+  que la borne de silence du superviseur (3 s). Compté depuis l'arrêt plutôt
+  que depuis le début de l'inspection : jamais moins que le pire cas du
+  pilote, quoi qu'il ait attendu avant son premier échange (la lecture du STO
+  partage la liaison) et quand que soit venu l'arrêt ; le prix est au plus ce
+  délai de plus avant la sortie d'une console dont l'appel ne revient jamais,
+  loin des 60 s après lesquelles le service la tue. Une réponse venue dans ce
+  temps est jugée comme avant : un variateur trouvé en marche est mis à zéro
+  et coupé. Après, l'appel ne reviendra pas : l'inspection est abandonnée et
+  la console se tait (verrou `comms_lost`, `GO_SILENT`) sans aucune trame,
+  pas même le zéro d'urgence, qui passerait par une liaison peut-être pas
+  ouverte, par un appel sur la boucle qui pourrait ne jamais revenir. Un appel
+  qui revient malgré tout plus tard n'envoie plus rien, pas même une lecture,
+  et n'est pas cru. C'est alors le `ttO` du variateur qui arrête un moteur en
+  marche, comme pour une console figée, et le logiciel ne relit ni `ttO` ni
+  `SLL` (ANH-76). L'arrêt contrôlé va au bout, et la console sort en erreur
+  (code 1, arrêt non propre, compté comme tel au démarrage suivant), qu'elle
+  ait déjà terminé un tic ou non. Avant ce correctif elle restait bloquée
+  jusqu'à ce qu'on la tue (environ 60 s sous systemd). Le vrai pilote borne
+  chaque échange sauf l'ouverture du port (`open`), qui est le cas réel.
 
 ### 9.6 Essai au banc : procédure (non faite)
 

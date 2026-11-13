@@ -154,6 +154,7 @@ from src.motor.drive_process_lock import (
     retry_failed_drive_closes,
 )
 from src.motor.ftdi_link import (
+    SETTLE_BUDGET,
     USB_STALL_BOUND,
     BufferedFtdiPort,
     DeviceFactory,
@@ -454,6 +455,21 @@ def transaction_worst_case(settings: SerialSettings) -> Seconds:
         + (retries - 1) * PYMODBUS_BODY_RETRY_PAUSE
         + overshoot
         + USB_STALL_BOUND
+    )
+
+
+def inspection_budget_for(settings: SerialSettings) -> Seconds:
+    """The longest an inspection can take on this line while the drive answers, however late.
+
+    :meth:`ATV320Drive.open` settles the port (``SETTLE_BUDGET`` at most) and
+    reads ETA, then :meth:`ATV320Drive.read_status` reads ETA, LFRD, RFRD and
+    LCR, and LFT when faulted: six transactions, each at most
+    :func:`transaction_worst_case`, plus the headroom of the emergency budget.
+    ``connect()`` itself is the one call no timeout bounds: a hang there is
+    what this bound exists to stop waiting for.
+    """
+    return Seconds(
+        SETTLE_BUDGET + 6 * transaction_worst_case(settings) + EMERGENCY_SCHEDULING_MARGIN
     )
 
 
@@ -964,6 +980,11 @@ class ATV320Drive:
         serial timeouts would silently overrun.
         """
         return self._emergency_budget
+
+    @property
+    def inspection_budget(self) -> Seconds:
+        """:func:`inspection_budget_for` the :class:`SerialSettings` of this driver."""
+        return inspection_budget_for(self._settings)
 
     # =====================================================================
     # DriveBackend

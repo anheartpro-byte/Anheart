@@ -2269,6 +2269,13 @@ class LocalPanel:
                 "console stopped after its control loop went without a completed tick "
                 "for longer than its stall bound: not a clean stop"
             )
+        elif self._runtime.gave_up_on_the_link:
+            # Whether a tick ever completed or not (ANH-162).
+            self._stalled_at_stop = True
+            _logger.error(
+                "console stopped silent after giving up on the drive link, whose ttO "
+                "carries the stop: not a clean stop"
+            )
         self._watchdog.stopping()
         if not self._runtime.needs_stop_before_release:
             self._drive.release()

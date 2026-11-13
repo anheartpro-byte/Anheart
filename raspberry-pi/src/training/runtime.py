@@ -1020,6 +1020,10 @@ class ShutdownReport:
 SETTLE_POLL: Final[Seconds] = Seconds(0.05)
 """How often a stop that waits for an inspection looks at this runtime's clock again."""
 
+ANSWERED_AFTER_SILENCE: Final[str] = (
+    "the drive answered after this console stopped talking to it: nothing more is sent"
+)
+
 IDLE_POLL_PERIOD: Final[Seconds] = Seconds(0.5)
 """How often an idle runtime reads the drive: 2 Hz, reads only.
 
@@ -1652,6 +1656,13 @@ class TrainingRuntime:
     def silent(self) -> bool:
         """Whether this runtime has stopped writing to the drive. One-way."""
         return self._silent
+
+    @property
+    def gave_up_on_the_link(self) -> bool:
+        """Whether it went silent because the drive link was given up on (``comms_lost``):
+        the drive's ``ttO`` carries the stop, which is never a clean one (ANH-162)."""
+        latched = self._latched
+        return self._silent and latched is not None and latched.rule == RULE_COMMS_LOST
 
     @property
     def drive_reads_permitted(self) -> bool:
@@ -2421,24 +2432,31 @@ class TrainingRuntime:
     ) -> None:
         """Own the actual initial reply and stop observed motion before the caller exits.
 
-        Waited for until the supervisor's silence bound has passed since the
-        inspection began (``loop_stall_silent_gap``, on this runtime's clock),
-        and no longer (ANH-162). A tick that came back later would silence
-        the console under ``loop_stall`` anyway, and an inspection of the real
-        link takes a few tenths of a second, or fails at its first read that
-        gets no answer, under 1 s at the shipped serial settings. A drive call
-        that never returns would otherwise hold the console's controlled stop
-        until the process is killed. Past the bound the inspection is given up
-        and this runtime goes silent: no frame at all, the emergency zero
-        included, since it would go through the link that did not answer, on
-        the event loop. The drive's ``ttO`` owns any stop, as for a frozen
-        console, and the controlled stop goes on to its end.
+        Waited for, from the moment the stop came, for as long as the drive can
+        take to answer an inspection however late it answers
+        (:attr:`~src.motor.drive.DriveBackend.inspection_budget`, about 5 s on
+        the real link), and never less than the supervisor's silence bound
+        (ANH-162). From the stop rather than from the inspection's start: never
+        shorter than the drive's own worst case, whatever waited before its
+        first exchange (another task shares the link) and whenever the stop
+        came; it costs a console whose drive call never returns that much more
+        before it exits, far below what the service waits before killing it.
+        A reply in that time is judged as always: a drive found enabled is
+        zeroed and switched off.
+
+        Past it, the call is not coming back, and it would otherwise hold the
+        console's controlled stop until the process is killed: the inspection
+        is given up and this runtime goes silent, with no frame at all, the
+        emergency zero included, since it would go through a link that may not
+        even be open, as a call on the event loop that may never return. The
+        drive's ``ttO`` owns any stop, as for a frozen console, and the
+        controlled stop goes on to its end (:attr:`gave_up_on_the_link`).
         """
-        if not await self._settled(now, inspection):
+        if not await self._settled(self._clock.monotonic(), inspection):
             inspection.cancel()
             self._end_unknown_episode(
                 now,
-                "the drive did not answer an inspection within the supervisor's silence bound "
+                "the drive did not answer an inspection within the longest it can take "
                 "while the console was stopping; no further frames will be sent, its ttO "
                 "timeout carries any stop. Verify standstill before an operator restarts "
                 "this process; no session will resume automatically",
@@ -2461,16 +2479,25 @@ class TrainingRuntime:
                 address_proven=self._drive.acquisition_evidence.address_proven,
             )
 
-    async def _settled[T](self, began: Monotonic, task: Task[T]) -> bool:
-        """Whether ``task`` ended before the supervisor's silence bound after ``began``."""
-        bound = Monotonic(began + self._supervisor.limits.loop_stall_silent_gap)
+    async def _settled[T](self, since: Monotonic, task: Task[T]) -> bool:
+        """Whether ``task``, an inspection, ended in the time the drive may take to answer one
+        after ``since``, and never less than the supervisor's silence bound."""
+        budget = max(self._drive.inspection_budget, self._supervisor.limits.loop_stall_silent_gap)
+        bound = Monotonic(since + budget)
         while not task.done() and self._clock.monotonic() < bound:
             # The poll is the loop's; the bound is read on this runtime's clock.
             await wait((task,), timeout=SETTLE_POLL)
         return task.done()
 
+    def _went_silent(self) -> bool:
+        """Read through a call after an await: the silence may have come while it waited."""
+        return self._silent
+
     async def _inspect_for_start(self, now: Monotonic) -> Result[DriveStatus, StartRefusal]:
         opened = await begin_inspection(self._drive, reopen=True)
+        if self._went_silent():
+            # Answered after this runtime gave up on it: nothing more is read, nor believed.
+            return Err(DriveUnavailable(ANSWERED_AFTER_SILENCE))
         if isinstance(opened, OpenFailed):
             self._link_open = False
             failure = self._note_failure(Exchange.READ, opened.error)
@@ -2478,6 +2505,8 @@ class TrainingRuntime:
             return Err(DriveUnavailable(f"the drive link could not be opened: {failure.detail}"))
         self._link_open = True
         status = await opened.read_status()
+        if self._went_silent():
+            return Err(DriveUnavailable(ANSWERED_AFTER_SILENCE))
         if isinstance(status, StatusFailed):
             self._link_open = False
             failure = self._note_failure(Exchange.READ, status.error)
@@ -2985,12 +3014,17 @@ class TrainingRuntime:
 
     async def _read_idle(self, now: Monotonic) -> Result[DriveStatus, DriveError]:
         opened = await begin_inspection(self._drive, reopen=not self._idle_link.open)
+        if self._went_silent():
+            # Answered after this runtime gave up on it: nothing more is read, nor believed.
+            return Err(CommTimeout(after=elapsed(now, self._clock.monotonic())))
         if isinstance(opened, OpenFailed):
             self._idle_failed(opened.error)
             self._inspection_failed(now, opened)
             return Err(opened.error)
         self._idle_link = replace(self._idle_link, open=True)
         status = await opened.read_status(self._clock)
+        if self._went_silent():
+            return Err(CommTimeout(after=elapsed(now, self._clock.monotonic())))
         if isinstance(status, StatusFailed):
             self._idle_failed(status.error)
             self._inspection_failed(now, status)

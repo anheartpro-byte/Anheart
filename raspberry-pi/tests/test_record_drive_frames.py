@@ -261,6 +261,10 @@ class Scripted:
     def emergency_budget(self) -> Seconds:
         return Seconds(1.25)
 
+    @property
+    def inspection_budget(self) -> Seconds:
+        return Seconds(3.0)
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         self._answer(f"emergency {timeout}")
         return self.emergency
