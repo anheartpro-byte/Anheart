@@ -167,9 +167,12 @@ Le webhook du miroir se configure ensuite par environnement, avec son propre
 secret et une livraison signée vérifiée : [procédure Clerk](convex.md#webhook-clerk-vers-le-miroir).
 
 Depuis les clés multiples (ANH-165), une machine ne s'authentifie que par une
-ligne de la table `machine_api_keys` (ANH-238). La migration qui y a déplacé
-la clé unique de chaque machine a tourné sur les deux déploiements les 28 et
-29 octobre 2026, puis a quitté le code avec les anciens champs
+ligne de la table `machine_api_keys` (ANH-238). La migration qui y déplaçait
+la clé unique de chaque machine, et écartait les valeurs réversibles, a tourné
+sur les deux déploiements les 28 et 29 octobre 2026 ; en production, la seule
+machine portait une valeur réversible, écartée : elle a besoin d'une nouvelle
+clé ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)). La migration a
+ensuite quitté le code avec les anciens champs
 ([convex.md](convex.md#migration-des-clés-machine-anh-165)) : avant de
 pousser ce schéma, le contrôle de la
 [section 3.7](#37-contrôler-les-champs-retirés-des-machines).
@@ -549,8 +552,8 @@ existants ne respectent pas : le déploiement échouerait sans rien modifier, et
 le code en service resterait en place. Relancer d'abord sur ce déploiement la
 migration du champ en cause. Elle n'est plus dans ce code, mais dans celui
 qu'il sert encore (la production sert depuis le 29 octobre 2026 un code qui
-contient les deux ; le dernier commit de `develop` qui les contient est
-`72294f2`) :
+contient les deux, comme tout commit de `develop` d'avant la fusion de la
+PR #140) :
 
 ```bash
 npx convex run migrations/retireLegacyRecording:removeMachineConfig  # config
@@ -560,8 +563,8 @@ npx convex run migrations/machineApiKeys:moveMachineKeysToTable      # apiKey, a
 chacune précédée de la clé du déploiement visé, lue comme le dit
 [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg) (l'option
 `--prod` est ignorée dans ce dépôt). Puis relancer la requête. Un déploiement
-dont le code n'a pas ces fonctions reçoit d'abord `72294f2`, puis les
-migrations, puis ce code.
+dont le code n'a pas ces fonctions reçoit d'abord le dernier commit de
+`develop` d'avant la fusion de la PR #140, puis les migrations, puis ce code.
 
 Si `apiKey` ou `apiKeySelector` reste non nul après `moveMachineKeysToTable`,
 la migration a compté un conflit (`selectorConflicts`) : le sélecteur est déjà

@@ -8,22 +8,18 @@ machines, les séances et la télémétrie. Il sert deux clients :
 - le **Raspberry Pi** (voir [raspberry-pi.md](raspberry-pi.md)), par des
   **routes HTTP** authentifiées par la clé API de la machine.
 
-> **État réel.** Le code Convex compile (`npx tsc --noEmit -p convex` : 0 erreur).
-> Une **version précédente** de Convex est déjà déployée et sert le site en
-> production. Le code décrit ici (nouveau schéma, `convex/training.ts`, routes
-> machine) est déployé depuis le 1er octobre 2026 sur le déploiement de
-> **développement** (`standing-jay-887`), où il a été testé de bout en bout avec
-> une console de Pi en simulation : voir
+> **État réel.** Le code Convex compile (`npx tsc --noEmit -p convex` : 0 erreur)
+> et ses tests s'exécutent en mémoire (`npm run test:convex`). Le code décrit ici
+> (nouveau schéma, `convex/training.ts`, routes machine) tourne depuis le
+> 1er octobre 2026 sur le déploiement de **développement** (`standing-jay-887`),
+> où il a été testé de bout en bout avec une console de Pi en simulation : voir
 > [deploiement.md](deploiement.md#4-essai-de-bout-en-bout-du-1er-octobre-2026).
-> Il n'est **pas** en production (ticket ANH-82), et n'a jamais été appelé par
-> un vrai Pi. Le retrait de l'ancien mode d'enregistrement ECG décrit ici
-> (routes, mutations, migration) a été déployé avec ANH-82 fin octobre 2026 ;
-> le champ `config` des machines, vidé par la migration, a ensuite quitté le
-> schéma (ANH-211).
-> Cet état de déploiement est historique ; les tests locaux Convex
-> sont désormais exécutables avec `npm run test:convex`. Les fichiers `convex/training.ts`, `lib/training.ts`,
-> `components/training/` et la page `my-machines` ne sont pas encore commités
-> (état `git status` au moment de la rédaction).
+> La **production** (`clean-giraffe-153`) le sert depuis le 29 octobre 2026
+> (ANH-82, code de `develop` `f0bccf7`), retrait de l'ancien mode
+> d'enregistrement ECG compris (routes, mutations, migration). Ce qui est
+> fusionné dans `develop` après ce commit n'y arrive qu'au déploiement suivant
+> ([passation](handoff.md), section 6), dont le retrait du schéma de
+> `machines.config` (ANH-211) et des anciens champs de clé (ANH-238).
 
 Sommaire :
 
@@ -504,7 +500,7 @@ purge supplémentaire n'est livré ici.
 | `lastVersionSeenAt` | ms Unix du dernier heartbeat qui a actualisé les versions rapportées. |
 | `medicalParametersVersion` | Version médicale annoncée par `medical_parameters_version` dans le heartbeat. Une chaîne est la version que le Pi annonce après sa vérification locale du fichier signé ; `null` est classé non signé ; l'absence signifie qu'aucune version bien formée n'a été retenue. |
 
-Index : `by_status`, `by_is_deleted`. Une machine ne porte aucune clé : ses clés sont dans [`machine_api_keys`](#machine_api_keys--les-clés-des-machines-anh-165), seul endroit où une requête machine est authentifiée (ANH-238). Les anciens champs `apiKey` et `apiKeySelector`, et leurs index `by_api_key` et `by_apiKeySelector`, ont quitté le schéma une fois la migration passée sur les deux déploiements ([§8](#migration-des-clés-machine-anh-165)).
+Index : `by_status`, `by_is_deleted`, `by_organization`. Une machine ne porte aucune clé : ses clés sont dans [`machine_api_keys`](#machine_api_keys--les-clés-des-machines-anh-165), seul endroit où une requête machine est authentifiée (ANH-238). Les anciens champs `apiKey` et `apiKeySelector`, et leurs index `by_api_key` et `by_apiKeySelector`, ont quitté le schéma une fois la migration passée sur les deux déploiements ([§8](#migration-des-clés-machine-anh-165)).
 
 Les réponses de `machines.getMachine`, `training.listLaunchableMachines` et
 `training.getMachineLive` calculent aussi `medicalParametersStatus` et
