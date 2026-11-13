@@ -179,6 +179,8 @@ export const DASHBOARD_ERRORS = {
   rider_too_young:
     "The rider is younger than the minimum age in the current medical parameters version.",
   invalid_duration: "A duration is a positive number of seconds.",
+  duration_above_programme:
+    "A launch may shorten the programme's total duration, never lengthen it.",
 
   // Sessions.
   session_not_found:

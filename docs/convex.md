@@ -1390,7 +1390,9 @@ le site) :
    `rider_hr_max_missing` pour la FC max, ou pour l'année de naissance sans FC
    max mesurée, et par `rider_birth_year_missing` pour l'année de naissance à
    côté d'une FC max mesurée. Rien n'est mis en file.
-10. Durée : `invalid_duration` (un nombre fini, strictement positif).
+10. Durée : `invalid_duration` (un nombre fini, strictement positif), puis
+    `duration_above_programme` (plus longue que celle du programme : un
+    lancement ne fait que raccourcir un programme, ANH-137).
 
 La séance créée copie le programme (zone, durée, ou la durée demandée),
 `subjectHrMax`, `subjectAge`, `subjectLabel` (nom du pratiquant) et

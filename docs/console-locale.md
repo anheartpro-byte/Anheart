@@ -2361,6 +2361,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) |
 | `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil rejeté pour la FC max du passager (zone au-dessus de 90 % de la FC max, etc.) |
 | `demarrage refuse : programme a <n> tr/min moteur, au-dessus du plafond personne a bord (<m> tr/min)` | profil trop rapide pour une personne à bord |
+| `demarrage refuse : un lancement du tableau de bord ne peut que raccourcir le programme (<n> s demandees, <m> s au programme)` | lancement distant dont la durée dépasse celle du profil (ANH-137) ; une durée saisie à la console n'est pas bornée |
 | `demarrage refuse : <règle caméra …>` | la caméra bloque le démarrage |
 | `seances programmees desactivees (PROGRAMS_ENABLED=false, jalon M5) : utiliser MANUEL` | lancement distant d'une séance AUTO sur une console où elles sont désactivées |
 

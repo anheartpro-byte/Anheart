@@ -1869,10 +1869,35 @@ class LocalPanel:
                 f"au-dessus du plafond personne a bord ({ceiling.value} tr/min)"
             )
         occupied = Occupancy.OCCUPIED
-        blocked = self._presence_refusal(occupied) or self._clock_refusal(occupied)
+        blocked = (
+            self._remote_total_refusal(command)
+            or self._presence_refusal(occupied)
+            or self._clock_refusal(occupied)
+        )
         if blocked is not None:
             return Err(blocked)
         return Ok(Armable(program=program, rider=admitted.value))
+
+    def _remote_total_refusal(self, command: StartSession) -> str | None:
+        """Why a launch from the dashboard asks for too long a session; ``None`` when it does not.
+
+        A programme validated in the catalogue (ANH-137) may be shortened from
+        the dashboard, never lengthened: HOLD would absorb any longer total, and
+        nothing else bounds it. A start at the console keeps its override as it
+        is. Asked once :meth:`ProfileStore.resolve` has found the programme and
+        taken the total.
+        """
+        total = command.total_duration_s
+        if command.cloud_session_id is None or total is None:
+            return None
+        stored = self._store.get(command.profile_id)
+        if isinstance(stored, Err) or total <= stored.value.total_duration_s:
+            return None
+        return (
+            "demarrage refuse : un lancement du tableau de bord ne peut que raccourcir "
+            f"le programme ({total:g} s demandees, {stored.value.total_duration_s:g} s "
+            "au programme)"
+        )
 
     def _service_refusal(self) -> str | None:
         """Why a console out of service refuses every start; ``None`` when it is in service."""

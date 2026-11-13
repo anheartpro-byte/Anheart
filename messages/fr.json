@@ -312,6 +312,7 @@
     "hard_max_above_hr_max": "La FC limite du programme dépasse la FC max du pratiquant. Choisissez un autre programme.",
     "rider_birth_year_missing": "L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
     "rider_too_young": "Ce pratiquant n'a pas l'âge minimum requis pour une séance auto.",
+    "duration_above_programme": "La durée demandée dépasse celle du programme : un lancement peut seulement la raccourcir.",
     "invalid_duration": "La durée doit être un nombre positif.",
     "session_not_found": "Séance introuvable. Elle a peut-être été supprimée.",
     "session_not_managed": "Vous ne pouvez pas arrêter cette séance.",

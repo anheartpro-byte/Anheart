@@ -35,13 +35,16 @@ Chaque écriture et chaque changement d'état est dans le journal d'audit
 `programme.validated`, `programme.published`, `programme.retired`), en
 ligne globale lisible par l'admin Anheart.
 
-Au lancement, un patient ou un gestionnaire ne pourra changer que la durée
-totale, jamais la zone, les paliers ou la vitesse : c'est déjà la seule
-surcharge que prend `training.launchAutoSession`. Le lancement depuis le
-catalogue arrive avec ANH-138. Aujourd'hui `launchAutoSession` accepte toute
-durée positive, plus longue comprise, et le Pi la revérifie
-(`TrainingProfile.with_total_duration`) : « seulement raccourcir » reste à
-imposer à ce moment.
+Au lancement depuis le site, on ne change que la durée totale, jamais la
+zone, les paliers ou la vitesse : c'est la seule surcharge que prend
+`training.launchAutoSession`, et elle ne peut que **raccourcir** le
+programme. Le maintien absorberait toute durée plus longue, que rien d'autre
+ne borne : Convex refuse une durée plus longue que celle du programme
+(`duration_above_programme`), et la console refuse elle aussi un lancement du
+tableau de bord plus long que son programme, avant `training/start`, en le
+rendant comme une séance échouée avec sa raison. Une durée saisie à la
+console reste libre, comme avant. Le lancement depuis le catalogue arrive
+avec ANH-138.
 
 ### Cycle de vie
 
