@@ -3308,11 +3308,15 @@ lequel la même requête serait encore refusée.
   derrière elle en mémoire (ANH-144), et retient comme une fin pas encore
   reçue. Une telle fin qui a pu être un arrêt (ou de fin inconnue), déplacée
   ou non, est aussi écrite au registre (`.sync-lost-stops.json`, membre
-  `pending`, sous le nom de l'exécution de la console qui l'attend, `run`) au
-  pas d'envoi qui suit sa fin, avant que sa fin parte. Le démarrage suivant
-  la lit comme une séance perdue (`fin perdue au redemarrage`), à acquitter.
-  Une console arrêtée entre la fin et ce pas (une seconde environ) ne l'a pas
-  écrite, et rien ne la retient après le redémarrage. Elle en sort quand le
+  `pending`, sous le nom de l'exécution de la console qui l'attend, `run`)
+  dès que le pas du lien voit sa fin, avant tout échange avec le tableau de
+  bord (battement de cœur, programmes, poll, qui peuvent attendre chacun 3 s)
+  et avant que sa fin parte. Le démarrage suivant la lit comme une séance
+  perdue (`fin perdue au redemarrage`), à acquitter. Une console arrêtée entre
+  la fin et ce pas du lien (une seconde environ) ne l'a pas écrite, et rien ne
+  la retient après le redémarrage ; de même si le registre ne s'écrit pas
+  (disque plein ou en panne, dit une fois au journal du système) : la ligne
+  n'est alors qu'en mémoire. Elle en sort quand le
   tableau de bord a sa fin, quand il la refuse pour de bon (perte `fin
   refusee`) ou refuse pour de bon la déclaration de la séance (perte
   `declaration refusee`), ou quand la séance est liée à son enregistrement,
@@ -3326,6 +3330,11 @@ lequel la même requête serait encore refusée.
   l'image 1.9 du banc `d222a0d`, ne lit jamais `.sync-lost-stops.json` :
   **revenir à `d222a0d` supprime toute retenue pour une séance perdue**,
   aucune n'est plus retenue après le retour arrière.
+- L'annonce, au démarrage, de ce qu'un acquittement d'avant a levé
+  (`lost_stops_released_before_start`) passe par la file du journal : un fil
+  du journal mort ou une file pleine la perd du journal de bord, et seul le
+  journal du système la garde. Le registre est vidé de ces levées après
+  l'annonce, qu'elle ait atteint le journal de bord ou non.
 
 Vérifié par les tests automatiques, en simulation et en temps simulé
 (`tests/test_record_cursor.py`, `test_record_upload.py`,

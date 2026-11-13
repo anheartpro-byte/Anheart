@@ -2963,9 +2963,10 @@ tableau de bord ne recevra pas (...) : a acquitter a la console, page
 Pre-vol`). La fin d'une séance sans enregistrement n'est jamais abandonnée
 pour la suivante : elle attend derrière, en mémoire, et retient comme une fin
 pas encore reçue (ANH-144). Si elle a pu finir sur un arrêt (ou de fin
-inconnue), elle est aussi écrite au registre, au pas d'envoi qui suit sa fin
-(une seconde environ) et avant que sa fin parte : une console qui s'arrête
-après ce pas et avant de l'avoir envoyée la retrouve au démarrage suivant
+inconnue), elle est aussi écrite au registre dès que le pas du lien voit sa
+fin (une seconde environ), avant tout échange avec le tableau de bord et
+avant que sa fin parte : une console qui s'arrête après ce pas et avant de
+l'avoir envoyée la retrouve au démarrage suivant
 comme une séance perdue (`fin perdue au redemarrage`), à acquitter. Cette
 ligne disparaît quand le tableau de bord a sa fin, quand il la refuse pour de
 bon (elle devient la perte `fin refusee`), quand il refuse pour de bon la

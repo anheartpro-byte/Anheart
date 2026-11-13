@@ -886,6 +886,12 @@ class RecordUplink:
         self._lost = (*self._lost, line)
         self._lost_unwritten = True
 
+    async def keep(self) -> None:
+        """Write the register of the sessions given up on, and of the ends that wait in
+        memory, now if it changed: the disk only, bounded, never the link. For a caller
+        about to wait on the link, so that a stop then forgets nothing (ANH-144)."""
+        await self._keep_lost()
+
     async def _keep_lost(self) -> None:
         """Write the sessions given up on next to the records, when they changed."""
         source = self._source

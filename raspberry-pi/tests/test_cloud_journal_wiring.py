@@ -38,10 +38,10 @@ import pytest
 
 from src import cloud_sync, record_uplink
 from src.clock import ManualClock
-from src.cloud_sync import STATUS_PERIOD, CloudSync, Refused, Unreachable
+from src.cloud_sync import HEARTBEAT_PERIOD, STATUS_PERIOD, CloudSync, Refused, Unreachable
 from src.contract import ErrorCode
 from src.local_panel import CLOUD_PERIOD, STOP_WATCH_PERIOD, LocalPanel
-from src.record.cursor import BASELINE_NAME, Cursor, cursor_of, load
+from src.record.cursor import BASELINE_NAME, Cursor, cursor_of, load, load_lost_stops
 from src.record.export import RecordIo
 from src.record.journal import Journal
 from src.record.logbook import ACTIVE as LOGBOOK_ACTIVE
@@ -53,7 +53,7 @@ from src.record.upload import Head, Listed, owed_records, read_head
 from src.record_uplink import RETRY_PERIOD, TELEMETRY_PERIOD, RecordSource
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
-from src.training.runtime import RuntimeState
+from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy
 from src.units import OutputRpm, Seconds
 from tests.record_uplink_support import BOOT, Disk, Recorded, armed, bench, recording, tie
@@ -393,6 +393,39 @@ async def test_no_stop_is_asked_once_the_dashboard_holds_the_end_of_a_session_wi
 
     assert len(r.dashboard.to(STATUS)) == asked
     assert r.sync.current_session_id == "remote-1", "the runtime has not finished"
+    await r.panel.close()
+
+
+async def test_a_recordless_stop_end_is_in_the_register_before_the_link_is_asked_anything(
+    tmp_path: Path,
+) -> None:
+    """ANH-144, the second reviewer's probe: the heartbeat, the profiles and the poll may
+    each wait seconds on a link that hangs. The end of a session that got no record, which
+    may have been a stop, is in the register before the first of them: a console stopped
+    meanwhile holds it at its next start."""
+    root = tmp_path / "records"
+    root.mkdir()
+    source = RecordSource(
+        root=root, current=Disk(root).in_progress, io=RecordIo(1), boot_id=BOOT, logbook=print
+    )
+    r = rig(tmp_path, records=source)
+    r.dashboard.answer(STATUS, status_answer())
+    await r.step()  # the records of earlier runs are listed
+    r.runtime.state = RuntimeState.RUNNING
+    r.sync.session_started(manual(r.clock, remote="remote-1"))  # no record ever appears
+    await r.step()
+    seen: list[tuple[str, ...]] = []
+
+    def heartbeat(_body: Mapping[str, object]) -> Reply:
+        seen.append(load_lost_stops(root).pending)
+        return Err(Unreachable("no route to host"))
+
+    r.dashboard.handle("/api/machine/heartbeat", heartbeat)
+    r.runtime.state = RuntimeState.FINISHED
+    r.runtime.end_reason = EndReason.EMERGENCY_STOP
+    await r.step(float(HEARTBEAT_PERIOD))
+    assert seen, "the heartbeat was due"
+    assert seen[0] != (), "on disk before the link was asked"
     await r.panel.close()
 
 

@@ -1407,6 +1407,8 @@ class CloudSync:
         now = self._clock.monotonic()
         snapshot = self._runtime.snapshot()
         self._observe()
+        # An end without a record, in the register before the link can make this wait.
+        await self._uplink.keep()
         await self._heartbeat(now, snapshot)
         await self._push_profiles(now)
         if (
