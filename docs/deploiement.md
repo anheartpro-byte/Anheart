@@ -294,6 +294,13 @@ Avant de le lancer, par la pipeline ou à la main :
    de la [section 3.5](#35-vérifier-la-physiologie-déjà-enregistrée) : le
    schéma accepte tout nombre, `convex deploy` ne signale donc pas une FC max
    ou une année de naissance qui ne serait pas un entier.
+8. Les tables de l'ancien composant e-mail `resend` (monté par ANH-90, retiré
+   par ANH-237) : si le déploiement visé l'a monté, `convex deploy` le démonte
+   (« Unmounted component resend ») sans supprimer ses tables, et rien dans
+   le code ne les retire. Les supprimer est une étape de ce déploiement
+   (ANH-82), à la main dans le tableau de bord Convex, une fois le démontage
+   constaté. Elles n'ont jamais reçu d'e-mail ni de clé, aucune clé n'ayant
+   été posée ([convex.md](convex.md#envoi-de-mails-anh-90-anh-237)).
 
 ### 3.4 Ordre de mise à jour entre Convex et les consoles
 

@@ -3621,8 +3621,9 @@ qui suit la marge. Seul `email.updatedAt` change : la rétention de l'alerte
 reste fondée sur son propre `updatedAt`.
 
 Pour ANH-82 : le composant `resend` n'est plus monté et ses tables n'ont
-jamais reçu d'e-mail, aucune clé n'ayant été posée. Le sort de ses anciennes
-tables au prochain déploiement n'a pas été vérifié.
+jamais reçu d'e-mail, aucune clé n'ayant été posée. Leur retrait est une
+étape du déploiement ([deploiement.md](deploiement.md#33-vers-la-production),
+point 8), non vérifiée contre un déploiement.
 
 Le webhook de Resend (statuts de remise) n'est pas branché :
 le site ne dit pas si un e-mail est arrivé. Aucun compte, aucune clé et aucun
