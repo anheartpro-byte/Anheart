@@ -12,9 +12,9 @@ import pytest
 
 from simulation import import_record as importer
 from simulation import real_records
-from simulation.import_privacy import NEUTRAL_MILLIS, NEUTRAL_UTC, anonymous_manifest, identities
+from simulation.import_privacy import anonymous_manifest, identities
 from simulation.import_record import Acceptance, import_record
-from simulation.real_records import judge, pack, replay_path, unpack
+from simulation.real_records import NEUTRAL_MILLIS, NEUTRAL_UTC, judge, pack, replay_path, unpack
 from simulation.replay import ReplayError, replay
 from simulation.replay_config import sidecar
 from simulation.replay_report import ReplayReport
@@ -551,6 +551,24 @@ def test_publish_cleans_only_its_own_files_on_collision(
     assert isinstance(result, Err)
     assert not sidecar(collision).exists()
     assert collision.read_bytes() == b"theirs"
+
+
+def test_a_failed_publication_leaves_no_folder_the_import_made(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The library folder, and the folders above it, made for this import alone are taken
+    away again when its files cannot be written: nothing of the import is left."""
+    source, config = sources["programme"]
+    above = tmp_path / "new"
+    shelf = above / "library"
+
+    def refused(_files: tuple[tuple[Path, Path], ...]) -> None:
+        raise PermissionError(13, "not allowed here")
+
+    monkeypatch.setattr(importer, "_publish", refused)
+    result = import_record(source, "opaque", shelf, config=config)
+    assert result == Err("the import could not read or write its files")
+    assert not above.exists()
 
 
 def test_import_refuses_an_archive_above_the_shared_extraction_limit(

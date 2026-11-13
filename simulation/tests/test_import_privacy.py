@@ -7,9 +7,6 @@ import pytest
 from tests.record_support import manifest
 
 from simulation.import_privacy import (
-    NEUTRAL_FOLDER,
-    NEUTRAL_MILLIS,
-    NEUTRAL_UTC,
     anonymous_events,
     anonymous_manifest,
     identifying_content,
@@ -18,7 +15,13 @@ from simulation.import_privacy import (
     machine_detail,
     remaining_identity,
 )
-from simulation.real_records import ANONYMIZED, UNVERSIONED
+from simulation.real_records import (
+    ANONYMIZED,
+    NEUTRAL_FOLDER,
+    NEUTRAL_MILLIS,
+    NEUTRAL_UTC,
+    UNVERSIONED,
+)
 from src.record.reader import Recording
 from src.record.schema import DriveFrame, EndObservation, Event, EventKind
 from src.result import Err, Ok

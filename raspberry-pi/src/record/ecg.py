@@ -1,4 +1,5 @@
 import gzip
+import zlib
 from typing import Annotated, Final, Literal, Self
 
 from pydantic import Field, TypeAdapter, model_validator
@@ -12,6 +13,8 @@ SAMPLE_RATE: Final = 1000
 INT16_MIN: Final = -32768
 INT16_MAX: Final = 32767
 MAX_RAW_BLOCK_BYTES: Final[int] = 1024 * 1024
+MAX_BLOCK_HEADER_BYTES: Final[int] = 64 * 1024
+"""Room for a block's header line, which takes a few hundred bytes."""
 
 
 @dataclass(frozen=True, slots=True, config=CONFIG)
@@ -91,8 +94,29 @@ def encode_block(block: RawBlock) -> bytes:
     return gzip.compress(prefix + payload, mtime=0)
 
 
+def inflate(raw: bytes) -> bytes:
+    """A raw block's one gzip member, decompressed no further than a block can be.
+
+    A block is read from a file somebody else may have made (a record brought
+    in, an archive): it is never inflated past its own bound, however small it
+    is compressed. Raises ``EOFError`` for a member cut short, as ``gzip`` does,
+    ``ValueError`` for one too large or followed by anything, ``zlib.error``
+    for one that is not gzip.
+    """
+    largest = MAX_BLOCK_HEADER_BYTES + MAX_RAW_BLOCK_BYTES
+    decoder = zlib.decompressobj(wbits=31)
+    content = decoder.decompress(raw, largest + 1)
+    if len(content) > largest:
+        raise ValueError("ECG block larger than any block can be")
+    if not decoder.eof:
+        raise EOFError("ECG block cut short")
+    if decoder.unused_data:
+        raise ValueError("ECG block followed by data after its gzip member")
+    return content
+
+
 def decode_block(raw: bytes) -> RawBlock:
-    prefix, data = gzip.decompress(raw).split(b"\n", 1)
+    prefix, data = inflate(raw).split(b"\n", 1)
     header = HEADER.validate_json(prefix)
     expected = header.n_samples * len(header.channels) * 2
     if len(data) != expected:

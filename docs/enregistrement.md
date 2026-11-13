@@ -1053,9 +1053,14 @@ compteur borne les octets réellement lus du flux décompressé à 512 Mio plus
 au plus 511 octets de padding par membre, plus un bloc tar de 10 240 octets).
 Les extensions PAX et GNU longues, invisibles dans l'itérateur public,
 partagent ce plafond d'octets, sans compter comme membres. Aucune surcharge
-de `TarInfo` ou `TarFile` ne porte ces bornes. Les tailles négatives, tailles
-non nulles hors fichiers ordinaires, en-têtes invalides et erreurs de
-décompression donnent un refus nommé. Il retire ensuite sa copie
+de `TarInfo` ou `TarFile` ne porte ces bornes. Une sous-classe de `TarInfo`
+en ajoute une : une extension annoncée au-delà de 64 Kio
+(`MAX_EXTENSION_BYTES`) est refusée avant que son contenu soit lu, `tarfile`
+le gardant entier en mémoire. Une chaîne d'extensions trop longue pour être
+lue (`tarfile` les lit l'une après l'autre par récursion) et un fragment de
+moins de 512 octets après le dernier membre, sans bloc de fin, sont refusés
+aussi. Les tailles négatives, tailles non nulles hors fichiers ordinaires,
+en-têtes invalides et erreurs de décompression donnent un refus nommé. Il retire ensuite sa copie
 temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du
@@ -1141,7 +1146,10 @@ plus. Ces bornes permettent les nombreux petits blocs bruts sans dépasser la
 limite native des tableaux Convex. Un fichier hors limites reste sur le Pi.
 
 Les blocs bruts sont refusés avant allocation au-delà de 1 MiB décodé
-(`MAX_RAW_BLOCK_BYTES` dans `src/record/ecg.py`). La borne fichier de 16 MiB
+(`MAX_RAW_BLOCK_BYTES` dans `src/record/ecg.py`). Un bloc lu n'est jamais
+décompressé au-delà de ce qu'un bloc peut faire (1 MiB plus 64 Kio d'en-tête,
+`inflate`), si petit qu'il soit compressé : un bloc tronqué est lu comme tel,
+un bloc suivi d'autre chose est refusé. La borne fichier de 16 MiB
 reste inférieure aux 100 MiB de réponse HTTP et ménage la mémoire de l'action
 de vérification (64 MiB). Références consultées le 13 octobre 2026 :
 [limites Convex](https://docs.convex.dev/production/state/limits) et

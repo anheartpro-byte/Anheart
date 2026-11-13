@@ -2127,6 +2127,10 @@ class ATV320Drive:
                     detail=f"expected exactly 1 register from {address}, got {len(registers)}"
                 )
             )
+        # No function-code check here, unlike a write's (WRITE_SINGLE_REGISTER_CODE), and
+        # on purpose: a register block of exactly one value, in range, is what a read
+        # needs, and no other PDU shape carries one (a write echo fails above). A test of
+        # the code would only make one of these branches unreachable.
         # Contract rule 6: this is the boundary, so the range is checked HERE
         # and never again. An out-of-domain value means a framing or decode
         # problem, not a measurement.

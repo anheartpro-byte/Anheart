@@ -2,6 +2,7 @@ import dataclasses
 import gzip
 import hashlib
 import json
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,7 +14,15 @@ from pydantic import ValidationError
 from src.clock import ManualClock
 from src.motor.sto import StoSourceKind
 from src.record.codec import JSON, Privacy, encode, mapping
-from src.record.ecg import Header, RawBlock, decode_block, encode_block
+from src.record.ecg import (
+    MAX_BLOCK_HEADER_BYTES,
+    MAX_RAW_BLOCK_BYTES,
+    Header,
+    RawBlock,
+    decode_block,
+    encode_block,
+    inflate,
+)
 from src.record.reader import read
 from src.record.rows import JsonValue
 from src.record.schema import (
@@ -323,6 +332,29 @@ def test_anh131_reception_instant_is_optional_and_a_block_without_it_keeps_its_b
     assert decode_block(encode_block(received)) == received
     with pytest.raises(ValueError, match="finite"):
         Header(0, 0.0, 1, ("ECG",), 1000, float("nan"))
+
+
+def test_a_block_is_never_inflated_past_what_a_block_can_be() -> None:
+    """A small file that inflates to more than any block (a header line and its samples) is
+    refused before it is inflated whole: a block may come from a file somebody else made."""
+    largest = MAX_BLOCK_HEADER_BYTES + MAX_RAW_BLOCK_BYTES
+    bomb = gzip.compress(bytes(largest + 1), mtime=0)
+    assert len(bomb) < largest // 100
+    with pytest.raises(ValueError, match="larger than any block"):
+        decode_block(bomb)
+    assert inflate(gzip.compress(bytes(largest), mtime=0)) == bytes(largest)
+
+
+def test_a_block_cut_short_is_read_as_truncated_and_one_followed_by_anything_is_refused() -> None:
+    """Cut short: ``EOFError``, which the reader takes for a block being written
+    (``truncated``). Anything after its gzip member, or a file that is not gzip: refused."""
+    whole = encode_block(RawBlock(Header(0, 0.0, 1, ("ECG",)), ((7,),)))
+    with pytest.raises(EOFError, match="cut short"):
+        decode_block(whole[:-4])
+    with pytest.raises(ValueError, match="after its gzip member"):
+        decode_block(whole + whole)
+    with pytest.raises(zlib.error):
+        decode_block(b"not a gzip member")
 
 
 def test_ex7_configured_sensor_metrics_are_published_at_one_hz(tmp_path: Path) -> None:
