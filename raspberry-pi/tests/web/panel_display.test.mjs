@@ -4395,3 +4395,36 @@ for (const id of ["verdicts-grid", "system-grid"]) {
     assert.equal(rows(node(id))["verdict retenu"].textContent, "aucun");
   });
 }
+
+// ANH-142: a red blocking control of the bench's pre-flight holds back the bench start, with the
+// console's reason; the console judges the start again whatever the page shows.
+test("a red blocking control at the bench disables the bench start and says why", async () => {
+  const page = panel();
+  const { context } = page;
+  context.state.motionEnabled = true;
+  context.state.programsEnabled = true;
+  context.state.connected = false;
+  context.api = () => Promise.resolve(status({ sto: stoRow("ready") }));
+  await context.loadStatus();
+  assert.equal(page.node("manual-start").disabled, false);
+  const reason = "pre-vol : espace disque insuffisant pour l'enregistrement de seance : 100 Mo libres";
+  const report = (occupancy, firstBlock) => ({
+    occupancy,
+    verdict: firstBlock ? "block" : "ok",
+    first_block: firstBlock,
+    controls: [{ id: "disk", label: "Espace disque (500 Mo)", state: firstBlock ? "block" : "ok", detail: "d" }],
+  });
+  const preflight = (firstBlock) => ({
+    running: false,
+    last: firstBlock ? "block" : "ok",
+    battery_pct: 80,
+    bench: report("bench", firstBlock),
+    occupied: report("occupied", firstBlock),
+  });
+  context.renderPreflight(preflight(reason));
+  assert.equal(page.node("manual-start").disabled, true);
+  assert.equal(page.node("manual-preflight-note").textContent, `Depart refuse, ${reason}`);
+  context.renderPreflight(preflight(null));
+  assert.equal(page.node("manual-start").disabled, false);
+  assert.equal(page.node("manual-preflight-note").textContent, "");
+});

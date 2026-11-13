@@ -1,0 +1,15 @@
+{
+  "name": "preflight_ecg_window_occupied",
+  "description": "ANH-142: the ECG has been good for 20 s only when the start is asked, short of the 30 s without a break a person on board needs. The pre-flight refuses it, saying how long, and nothing turns.",
+  "tags": ["manual", "preflight", "occupied", "ecg"],
+  "kind": "manual",
+  "duration_s": 20,
+  "preroll_s": 20,
+  "manual": {"occupancy": "occupied"},
+  "preflight": {},
+  "expect": {
+    "start": "refused",
+    "refusal": "pre-vol : qualite ECG good depuis 20 s, 30 s continues requises",
+    "max_output_rpm": 0.0
+  }
+}

@@ -284,3 +284,33 @@ test("the confirmation of a bench launch says the attestation was ticked; a prog
   assert.equal(confirmations.length, 2);
   assert.equal(confirmations[1][1].body.bench_attested, false);
 });
+
+// ANH-142: a launch is held while the pre-flight of its kind of start has a red blocking
+// control, the bench's for a bench launch, a person on board's for a programme. The console
+// judges the confirmation again whatever the page shows.
+test("a remote launch is held while the pre-flight of its kind has a red blocking control", () => {
+  const { context, node } = page();
+  const preflight = (benchBlock, onBoardBlock) => ({
+    running: false,
+    bench: { first_block: benchBlock },
+    occupied: { first_block: onBoardBlock },
+  });
+  context.renderRemoteLaunch(bench());
+  node("remote-launch-attest").checked = true;
+  const disk = "espace disque insuffisant pour l'enregistrement de seance : 100 Mo libres";
+  context.state.preflight = preflight(disk, disk);
+  context.renderRemoteLaunch(bench());
+  assert.equal(node("remote-launch-confirm").disabled, true);
+  assert.equal(node("remote-launch-preflight-note").textContent, `Confirmation retenue par le pre-vol : ${disk}`);
+  // Red with a person on board only: the bench is not held for it.
+  context.state.preflight = preflight(null, "batterie BITalino 20 % < 30 %");
+  context.renderRemoteLaunch(bench());
+  assert.equal(node("remote-launch-confirm").disabled, false);
+  assert.equal(node("remote-launch-preflight-note").textContent, "");
+  // A programme is held by that same red control.
+  context.renderRemoteLaunch(offer());
+  assert.equal(node("remote-launch-confirm").disabled, true);
+  assert.equal(node("remote-launch-preflight-note").textContent, "Confirmation retenue par le pre-vol : batterie BITalino 20 % < 30 %");
+  context.renderRemoteLaunch(null);
+  assert.equal(node("remote-launch-preflight-note").textContent, "");
+});

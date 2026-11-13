@@ -115,6 +115,8 @@ async function confirmAtConsole(pi: PiConsole, sessionId: string): Promise<void>
       { message: "la console propose ce départ, confirmable", timeout: 30_000 },
     )
     .toBe(true);
+  // A person on board: the console's pre-flight first (ANH-142), green some 40 s after a start.
+  await pi.untilReadyOnBoard();
   expect((await pi.confirmLaunch(sessionId)).status).toBe(202);
   // Not running yet: the console's state and the last word on the offer,
   // numbers masked (a refusal can quote a passenger's value).
@@ -286,7 +288,8 @@ test("4. le passager lance une séance programmée, l'opérateur la confirme à 
   pageAs,
   run,
 }) => {
-  test.setTimeout(120_000);
+  // Up to 90 s more for the console's pre-flight (ANH-142).
+  test.setTimeout(210_000);
   const pi = required(journey.console, "console");
 
   // The short programme, through the console's own API and its validations.

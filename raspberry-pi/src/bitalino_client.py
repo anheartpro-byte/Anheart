@@ -54,13 +54,13 @@ import threading
 from abc import abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Final, Protocol, final, runtime_checkable
 
 from bitalino import BITalino
 
 from src.clock import Clock, RealClock
-from src.units import UnixMillis
+from src.units import AdcCount, Percent, UnixMillis
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +362,91 @@ class VendorDevice:
     def close(self) -> None:
         self._device.close()
 
+    @property
+    def battery_readable(self) -> bool:
+        """On a serial port only (``/dev/rfcomm0`` on the Pi): its input can be drained."""
+        return self._port is not None
+
+    def battery_raw(self) -> int:
+        """The ABAT channel, once what the stream left in the port is drained.
+
+        The stop byte goes out 0.1 s after the call and the reader thread
+        leaves on its next chunk, so frames sent before the stop are still in
+        the port's input: read as the 17-byte ``state`` answer they would fail
+        its 4-bit CRC 15 times in 16, and give a false battery the 16th. They
+        are read away until the port has been quiet for :data:`DRAIN_QUIET_S`,
+        at most :data:`DRAIN_READS` times: a stream that does not stop is no
+        battery reading.
+        """
+        port = self._port
+        if port is None:
+            raise LinkLostError("the battery is read on a serial port only")
+        port.timeout = DRAIN_QUIET_S
+        try:
+            for _ in range(DRAIN_READS):
+                if not port.read(DRAIN_CHUNK):
+                    break
+            else:
+                raise LinkLostError("the BITalino did not stop streaming")
+        finally:
+            port.timeout = self._link_timeout
+        return self._device.state()["battery"]
+
+
+DRAIN_QUIET_S: Final[float] = 0.25
+DRAIN_READS: Final[int] = 20
+DRAIN_CHUNK: Final[int] = 4096
+
+
+@runtime_checkable
+class BatteryDevice(Protocol):
+    """A device that says its battery level between two acquisitions.
+
+    The vendor adapter does on a serial port, through the BITalino 2 ``state``
+    command. The macOS RFCOMM transport does not: its battery reads as unknown.
+    """
+
+    @property
+    @abstractmethod
+    def battery_readable(self) -> bool:
+        """Whether this transport can report the battery at all. Memory only."""
+
+    @abstractmethod
+    def battery_raw(self) -> int:
+        """The ABAT channel as the device sends it. Blocking; raises while acquiring."""
+
+
+# =========================================================================
+# The battery
+# =========================================================================
+
+ADC_MAX: Final[int] = 1023
+"""A BITalino analog channel is 10-bit."""
+
+BATTERY_REFERENCE_V: Final[float] = 3.3
+BATTERY_DIVIDER: Final[float] = 2.0
+BATTERY_EMPTY_V: Final[float] = 3.4
+BATTERY_FULL_V: Final[float] = 4.2
+
+BATTERY_READ_TIMEOUT_S: Final[float] = 10.0
+"""Longer than the vendor's own wait for an answer (the link timeout, 3 s at
+1000 Hz): the read normally ends on its own before this does."""
+
+
+def battery_percent(raw: AdcCount) -> Percent:
+    """The charge of the BITalino's battery, from its ABAT reading. A calibration to prove.
+
+    ASSUMED, NOT MEASURED (ANH-142): ABAT is the 10-bit reading, against a
+    3.3 V reference, of half the voltage of the board's single LiPo cell; the
+    cell is empty at 3.4 V and full at 4.2 V, linear in between; clamped to
+    0..100. To be checked at the bench on the real BITalino, against a
+    voltmeter on the cell, before the 30 % floor is trusted with a person on
+    board. Every figure of the assumption is a named constant above.
+    """
+    volts = raw / ADC_MAX * BATTERY_REFERENCE_V * BATTERY_DIVIDER
+    share = (volts - BATTERY_EMPTY_V) / (BATTERY_FULL_V - BATTERY_EMPTY_V)
+    return Percent(100.0 * min(1.0, max(0.0, share)))
+
 
 # =========================================================================
 # Pairing (Linux / BlueZ only; a no-op for COM and /dev paths)
@@ -465,15 +550,44 @@ class _Chunk:
     rows: Sequence[Row]
 
 
+@dataclass(slots=True)
+class _Acquisition:
+    """What one acquisition owns, and its reader keeps: never the next acquisition's.
+
+    A reader that a cut stop left behind still holds its own, stopped: it can
+    neither be woken up by the next start nor say that the next one reconnects.
+    Mutable: ``stop`` is set by the event loop under the client's lock,
+    ``reconnecting`` is written by this reader alone (one bool store).
+    """
+
+    stop: threading.Event = field(default_factory=threading.Event)
+    reconnecting: bool = False
+
+
 class BITalinoClient:
     """Bluetooth Classic client for BITalino / psychoBIT devices.
 
     The public surface (``connect``/``start_acquisition``/``read_samples``/
-    ``stop_acquisition``/``disconnect``, ``is_connected``/``is_acquiring``) is
-    what ``src/local_panel.py`` and the simulator in ``src/sim`` share.
-    ``is_connected``/``is_acquiring`` are plain attributes written by both the
-    event loop and, on give-up, the acquisition thread; single bool stores are
-    atomic under the GIL and only ever move towards ``False`` from the thread.
+    ``stop_acquisition``/``disconnect``, ``is_connected``/``is_acquiring``,
+    ``reconnecting``) is what ``src/local_panel.py`` and the simulator in
+    ``src/sim`` share.
+
+    Who writes what (single attribute stores, atomic under the GIL):
+
+    * the event loop writes ``is_acquiring`` (start, stop), and ``_device`` and
+      ``is_connected`` when it connects and disconnects; it sets the current
+      acquisition's stop, and replaces the current acquisition, under ``_lock``;
+    * the reader thread of an acquisition writes ``_device`` and
+      ``is_connected`` under ``_lock``, each time after checking under that
+      lock that its acquisition is not stopped: it drops a link it lost, and
+      adopts a re-opened one. On give-up, unstopped, it moves ``is_acquiring``
+      and ``is_connected`` to ``False``. It also writes its own acquisition's
+      ``reconnecting``, the chunk queue and the counters (under ``_lock``), and
+      the decoder and the timeline, which only the current reader uses;
+    * a reader that has seen its acquisition stopped writes nothing more: no
+      device, no flag, no chunk. One a cut stop left behind (a read or a stop
+      that hangs) may outlive the next acquisition's start, and must never
+      reach into it.
     """
 
     def __init__(
@@ -525,7 +639,7 @@ class BITalinoClient:
         self._on_disconnect: Callable[[], Awaitable[None]] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        self._stop: threading.Event = threading.Event()
+        self._acquisition: _Acquisition = _Acquisition()
 
         # Shared between the acquisition thread (producer) and the event loop
         # (consumer); every access holds _lock.
@@ -627,10 +741,15 @@ class BITalinoClient:
         self._integrity_checked = False
         self._reported = LinkStats()
         self._loop = loop
-        self._stop.clear()
+        acquisition = _Acquisition()
+        with self._lock:
+            self._acquisition = acquisition
 
         self._thread = threading.Thread(
-            target=self._acquisition_loop, name="bitalino-reader", daemon=True
+            target=self._acquisition_loop,
+            args=(acquisition,),
+            name="bitalino-reader",
+            daemon=True,
         )
         self.is_acquiring = True
         self._thread.start()
@@ -640,68 +759,157 @@ class BITalinoClient:
         return True
 
     async def stop_acquisition(self) -> None:
-        """Stop the reader and the device stream. Safe to call when idle."""
+        """Stop the reader and the device stream. Safe to call when idle.
+
+        Idle at the end however it ends: a caller's bound may cut it inside a
+        stop the link never takes, and a client left "acquiring" is pumped
+        forever and never reconnected.
+        """
         thread = self._thread
         if thread is None:
             return
         self._thread = None
-        self._stop.set()
+        with self._lock:
+            self._acquisition.stop.set()
         loop = asyncio.get_running_loop()
-        device = self._device
-        if device is not None and self.is_acquiring:
-            try:
-                await loop.run_in_executor(None, device.stop)
-            except Exception as error:
-                logger.warning("Error while stopping the BITalino stream: %s", error)
-        # The reader wakes within one link timeout (its read times out).
-        await loop.run_in_executor(None, thread.join, self._link_timeout + 1.0)
-        self.is_acquiring = False
+        try:
+            device = self._device
+            if device is not None and self.is_acquiring:
+                try:
+                    await loop.run_in_executor(None, device.stop)
+                except Exception as error:
+                    logger.warning("Error while stopping the BITalino stream: %s", error)
+            # The reader wakes within one link timeout (its read times out).
+            await loop.run_in_executor(None, thread.join, self._link_timeout + 1.0)
+        finally:
+            self.is_acquiring = False
         logger.info("Stopped acquisition; link %s", self.link_stats())
+
+    @property
+    def reconnecting(self) -> bool:
+        """Whether the current acquisition's reader re-opens a lost link: no battery read then."""
+        return self._acquisition.reconnecting
+
+    @property
+    def reads_battery(self) -> bool:
+        """Whether the open device can report its battery (a serial port). Memory only."""
+        # Asked of its shape: a Device may also be a BatteryDevice, which no annotation says.
+        device: object = self._device
+        return isinstance(device, BatteryDevice) and device.battery_readable
+
+    async def read_battery(self) -> Percent | None:
+        """The battery's charge, read at rest; ``None`` when it cannot be read now.
+
+        Only between two acquisitions (the device refuses ``state`` while it
+        streams), of a device that can say it (:class:`BatteryDevice`), and
+        within :data:`BATTERY_READ_TIMEOUT_S`. A reading outside the 10-bit
+        range is no reading.
+        """
+        device: object = self._device  # asked of its shape, as in reads_battery
+        if self.is_acquiring or not isinstance(device, BatteryDevice):
+            return None
+        loop = asyncio.get_running_loop()
+        try:
+            raw = await asyncio.wait_for(
+                loop.run_in_executor(None, device.battery_raw), BATTERY_READ_TIMEOUT_S
+            )
+        except Exception as error:  # the vendor raises bare Exception; the wait, TimeoutError
+            logger.warning("BITalino battery unreadable: %r", error)
+            return None
+        if not 0 <= raw <= ADC_MAX:
+            logger.warning("BITalino battery reading %d is outside the 10-bit range", raw)
+            return None
+        return battery_percent(AdcCount(raw))
 
     def link_stats(self) -> LinkStats:
         """A snapshot of the link counters for this acquisition."""
         with self._lock:
             return self._stats
 
-    def _acquisition_loop(self) -> None:
+    def _acquisition_loop(self, acquisition: _Acquisition) -> None:
         """Reader thread: bytes -> rows -> timestamped chunks; reconnects on loss."""
+        stop = acquisition.stop
         device = self._device
-        while device is not None and not self._stop.is_set():
+        while device is not None:
             try:
                 data = device.read_chunk(self._chunk_bytes)
             except Exception as error:  # vendor, serial and socket errors alike
-                if self._stop.is_set():
+                if stop.is_set():
                     return
                 logger.warning("BITalino link lost: %s", error)
-                device = self._reconnect(device)
+                device = self._reconnect(device, acquisition)
                 continue
+            if stop.is_set():
+                # Stopped: the reader ends here, and a read that returned late (after
+                # the next acquisition started) never feeds that one's decoder or queue.
+                return
             self._ingest(data)
-        if device is None:
-            self._device = None
-            self._give_up()
+        self._give_up(stop)
 
-    def _reconnect(self, lost: Device) -> Device | None:
-        """Re-open the link with backoff. Returns the new device, or None."""
+    def _reconnect(self, lost: Device, acquisition: _Acquisition) -> Device | None:
+        """Re-open the link with backoff. Returns the new device, or None.
+
+        The lost device is the client's no more from the first instant: never a
+        client that says it is connected with no device, whoever ends the
+        backoff (a stop, the last attempt), or nothing connects it again. A
+        reader whose acquisition was stopped meanwhile touches nothing, as in
+        ``_adopt``: the stop's caller closes the link, and the client may
+        already be the next acquisition's, on another device.
+        """
+        with self._lock:
+            if acquisition.stop.is_set():
+                return None
+            self._device = None
+            self.is_connected = False
+            acquisition.reconnecting = True
+        try:
+            return self._reopen(lost, acquisition.stop)
+        finally:
+            acquisition.reconnecting = False
+
+    def _reopen(self, lost: Device, stop: threading.Event) -> Device | None:
         try:
             lost.close()
         except Exception as error:
             logger.debug("Closing the lost link failed: %s", error)
         for attempt, delay in enumerate(self._reconnect_delays, start=1):
-            if self._stop.wait(delay):
+            if stop.wait(delay):
                 return None
             try:
                 device = self._factory(self.mac_address, self._link_timeout)
+            except Exception as error:
+                logger.warning("Reconnect attempt %d failed to open: %s", attempt, error)
+                continue
+            try:
                 device.start(self.sample_rate, self.channels)
             except Exception as error:
-                logger.warning("Reconnect attempt %d failed: %s", attempt, error)
+                # Opened, so closed: a link left open makes every later open fail "busy".
+                logger.warning("Reconnect attempt %d failed to start: %s", attempt, error)
+                _close_quietly(device)
                 continue
-            self._device = device
+            if not self._adopt(device, stop):
+                return None
             self._new_segment()
             with self._lock:
                 self._stats = replace(self._stats, reconnects=self._stats.reconnects + 1)
             logger.warning("BITalino link re-established on attempt %d", attempt)
             return device
         return None
+
+    def _adopt(self, device: Device, stop: threading.Event) -> bool:
+        """Make ``device`` the client's, unless this acquisition was stopped meanwhile.
+
+        Under the lock the stop is set with: a device opened for a stopped
+        acquisition is closed, never left for a later one to find.
+        """
+        with self._lock:
+            adopted = not stop.is_set()
+            if adopted:
+                self._device = device
+                self.is_connected = True
+        if not adopted:
+            _close_quietly(device)
+        return adopted
 
     def _new_segment(self) -> None:
         """Start a fresh timeline after a reconnect, keeping the counters."""
@@ -721,9 +929,9 @@ class BITalinoClient:
             filled_samples=b.filled_samples + d.filled_samples,
         )
 
-    def _give_up(self) -> None:
+    def _give_up(self, stop: threading.Event) -> None:
         """The link could not be restored (or stop won the race)."""
-        if self._stop.is_set():
+        if stop.is_set():
             return
         logger.error("BITalino link could not be re-established; giving up")
         self.is_acquiring = False
@@ -865,6 +1073,14 @@ def _merge(stats: LinkStats, totals: LinkStats, dropped: int = 0) -> LinkStats:
         dropped_backlog_samples=stats.dropped_backlog_samples + dropped,
         reconnects=stats.reconnects,
     )
+
+
+def _close_quietly(device: Device) -> None:
+    """Close ``device``, a failure said in the log only."""
+    try:
+        device.close()
+    except Exception as error:
+        logger.warning("Could not close a BITalino link: %s", error)
 
 
 def _close_if_opened(opening: asyncio.Future[Device]) -> None:

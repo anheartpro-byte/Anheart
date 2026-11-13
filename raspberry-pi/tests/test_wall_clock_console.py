@@ -386,6 +386,7 @@ async def test_on_a_system_that_cannot_be_asked_the_production_console_says_so_o
         wall_clock: WallClockProbe | None,
         notify_socket: str | None,
         service: ServiceDesk,
+        preflight: bool,
     ) -> LocalPanel:
         panel = real(
             config,
@@ -394,6 +395,7 @@ async def test_on_a_system_that_cannot_be_asked_the_production_console_says_so_o
             wall_clock=wall_clock,
             notify_socket=notify_socket,
             service=service,
+            preflight=preflight,
         )
         built.append(panel)
         return panel

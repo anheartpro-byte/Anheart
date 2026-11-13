@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, NewType
 
-from src.units import Seconds
+from src.units import Percent, Seconds
 
 Celsius = NewType("Celsius", float)
-Percent = NewType("Percent", float)
 Mebibytes = NewType("Mebibytes", float)
 CpuLoad = NewType("CpuLoad", float)
 MEBIBYTE: Final[int] = 1024 * 1024
@@ -50,8 +49,13 @@ def memory_used(path: Path) -> Percent | None:
     return Percent(100 * (total - available) / total)
 
 
+def cpu_temperature(root: Path = Path("/")) -> Celsius | None:
+    """The Pi's SoC temperature, from the kernel's thermal zone; ``None`` where there is none."""
+    millidegrees = finite_file(root / "sys/class/thermal/thermal_zone0/temp")
+    return None if millidegrees is None else Celsius(millidegrees / 1000)
+
+
 def system_health(data: Path | None, root: Path = Path("/")) -> SystemHealth:
-    temperature = finite_file(root / "sys/class/thermal/thermal_zone0/temp")
     uptime = finite_file(root / "proc/uptime")
     load: CpuLoad | None = None
     try:
@@ -67,7 +71,7 @@ def system_health(data: Path | None, root: Path = Path("/")) -> SystemHealth:
         except OSError:
             free = None
     return SystemHealth(
-        cpu_temp_c=None if temperature is None else Celsius(temperature / 1000),
+        cpu_temp_c=cpu_temperature(root),
         cpu_load_1m=load,
         mem_used_pct=memory_used(root / "proc/meminfo"),
         disk_free_mb=free,

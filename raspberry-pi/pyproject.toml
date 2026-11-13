@@ -168,6 +168,7 @@ extend-immutable-calls = [
     "src.units.Monotonic",
     "src.units.MotorRpm",
     "src.units.OutputRpm",
+    "src.units.Percent",
     "src.units.RawRegister",
     "src.units.RegisterAddress",
     "src.units.ResultantG",

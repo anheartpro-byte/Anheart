@@ -15,7 +15,6 @@ from src.health import HealthContext, HealthWatch, pending_records
 from src.health_counters import Counters, HealthCounters, load_counters, save_counters
 from src.health_system import (
     Celsius,
-    Percent,
     SystemHealth,
     finite_file,
     memory_used,
@@ -24,7 +23,7 @@ from src.health_system import (
 from src.local_panel import build_panel
 from src.record.retention import confirm_deposit
 from src.result import Ok
-from src.units import Monotonic, MotorRpm, Seconds
+from src.units import Monotonic, MotorRpm, Percent, Seconds
 from tests.test_cloud_sync import POLL_PATH, Dashboard, config_of, ok, rig
 from tests.test_record_retention import CONFIRMED, closed_record
 

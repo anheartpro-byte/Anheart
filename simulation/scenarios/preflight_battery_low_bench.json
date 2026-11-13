@@ -1,0 +1,19 @@
+{
+  "name": "preflight_battery_low_bench",
+  "description": "ANH-142: the same 20 % battery at the bench, nobody on board: a warning, not a block (pilot decision of 29 October 2026). The bench session starts, reaches its target and stops.",
+  "tags": ["manual", "preflight", "bench"],
+  "kind": "manual",
+  "duration_s": 200,
+  "preroll_s": 5,
+  "manual": {"occupancy": "bench", "ceiling_motor_rpm": 300},
+  "preflight": {"bitalino_battery_pct": 20},
+  "actions": [
+    {"at_s": 2, "do": "manual_target", "output_rpm": 6.0, "expect": "accepted"},
+    {"at_s": 100, "do": "operator_stop"}
+  ],
+  "expect": {
+    "end_reason": "operator_stop",
+    "reaches_output_rpm": 6.0,
+    "max_output_rpm": 6.05
+  }
+}

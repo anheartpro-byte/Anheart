@@ -105,8 +105,9 @@ from src.training.plan import (
     SUBJECT_HR_MAX_MAX,
     SUBJECT_HR_MAX_MIN,
 )
+from src.training.preflight import DEFAULT_MIN_BATTERY
 from src.training.types import Occupancy, OccupancyRefused
-from src.units import Bpm, GearRatio, Metres, MotorRpm, Seconds
+from src.units import Bpm, GearRatio, Metres, MotorRpm, Percent, Seconds
 from src.web.deps import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -129,6 +130,7 @@ KEY_MOTOR_REG_OFFSET: Final[str] = "MOTOR_REG_OFFSET"
 KEY_MOTOR_MAX_RPM: Final[str] = "MOTOR_MAX_RPM"
 KEY_ECG_SOURCE: Final[str] = "ECG_SOURCE"
 KEY_BITALINO_ADDRESS: Final[str] = "BITALINO_ADDRESS"
+KEY_BITALINO_MIN_BATTERY_PCT: Final[str] = "BITALINO_MIN_BATTERY_PCT"
 KEY_ARM_RADIUS_M: Final[str] = "ARM_RADIUS_M"
 KEY_GEAR_RATIO: Final[str] = "GEAR_RATIO"
 KEY_UI_HOST: Final[str] = "UI_HOST"
@@ -361,6 +363,10 @@ class LocalConfig:
     record: RecordConfig = DEFAULT_RECORD_CONFIG
     """The local black box: where it writes and what it stamps."""
 
+    bitalino_min_battery: Percent = DEFAULT_MIN_BATTERY
+    """``BITALINO_MIN_BATTERY_PCT``: below it the pre-flight refuses a person on board
+    and warns at the bench (ANH-142)."""
+
     def __post_init__(self) -> None:
         """Refuse a configuration that would let unsigned medical parameters near a person.
 
@@ -450,6 +456,16 @@ class _LinkNumbers:
     baudrate: int
     timeout: Seconds
     offset: int
+
+
+def _min_battery(env: Mapping[str, str]) -> Result[Percent, ConfigProblem]:
+    text = _text(env, KEY_BITALINO_MIN_BATTERY_PCT, f"{DEFAULT_MIN_BATTERY:g}")
+    value = _finite_float(text, KEY_BITALINO_MIN_BATTERY_PCT)
+    if isinstance(value, Err):
+        return value
+    if not 0.0 <= value.value <= 100.0:  # noqa: PLR2004  # a percentage
+        return Err(ConfigProblem(KEY_BITALINO_MIN_BATTERY_PCT, f"{value.value} % hors de [0, 100]"))
+    return Ok(Percent(value.value))
 
 
 def _link_numbers(
@@ -974,6 +990,7 @@ def load_local_config(
     leg_tip = _leg_tip(env, radius.value if isinstance(radius, Ok) else None)
     record = _record(env)
     motion = _medical_values(status)
+    battery = _min_battery(env)
 
     problems = (
         tuple(
@@ -992,6 +1009,7 @@ def load_local_config(
                 sensors,
                 presence,
                 leg_tip,
+                battery,
             )
             if isinstance(result, Err)
         )
@@ -1020,6 +1038,7 @@ def load_local_config(
         or isinstance(presence, Err)
         or isinstance(leg_tip, Err)
         or isinstance(motion, Err)
+        or isinstance(battery, Err)
     ):
         return Err(problems)
     return Ok(
@@ -1043,5 +1062,6 @@ def load_local_config(
             sto_drive_input=sto.value[1],
             leg_tip_radius=leg_tip.value,
             record=record.value,
+            bitalino_min_battery=battery.value,
         )
     )

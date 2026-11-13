@@ -618,6 +618,7 @@ et `tags`.)
 | `drive` | non | objet (8.8) | - | le variateur simulé |
 | `actions` | non | liste (8.9) | `[]` | ce qui arrive, et quand |
 | `expect` | non | objet (8.10) | - | ce qui doit être vrai à la fin |
+| `preflight` | non | objet | absent | le pré-vol de la console (ANH-142) juge le START, avec ce que la simulation ne mesure pas : `bitalino_battery_pct` (0 à 100, défaut 100), `clock_error_s` (erreur garantie de l'horloge, défaut 0,05), `disk_free_mb` (défaut 10 000). Absent : aucune liste ne juge le START. Scénarios `preflight_*` |
 | `known_defect` | non | texte | absent | marque un défaut connu : le test devient un xfail strict (section 12) |
 
 **Profils disponibles** pour `profile` : ceux de
@@ -756,6 +757,7 @@ sont triées par instant. Clés autorisées dans une action : `at_s`, `do`,
 | Clé | Sens |
 |---|---|
 | `start` | `accepted` (défaut) / `refused` / `any` : le START doit-il être accepté ? |
+| `refusal` | mots que le refus du START doit dire à l'opérateur (ex. `pre-vol : batterie BITalino 20 % < 30 %`) |
 | `end_reason` | `programme_complete`, `operator_stop`, `emergency_stop`, `safety_verdict`, `tick_exception`, `shutdown` |
 | `final_state` | `idle`, `running`, `ending`, `finished` |
 | `rules` | règles de sécurité qui **doivent** s'être déclenchées (ex. `hr_drop`, `comms_lost`) |

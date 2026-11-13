@@ -316,6 +316,9 @@ préalables :
    verrous `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` y seront appliqués
    quand ANH-141 existera. Aucun verrou lié au registre n'est ajouté au
    lancement distant aujourd'hui (suivi ANH-102 et ANH-107).
+9. Mesurer au banc la batterie du vrai BITalino contre un voltmètre : le seuil
+   du pré-vol (30 %) repose sur une conversion supposée
+   ([section 15](#15-le-pré-vol-avant-chaque-séance-anh-142)).
 
 ## 7. Décisions des 5 et 6 octobre 2026 sur les reprises automatiques
 
@@ -2173,3 +2176,51 @@ désactivés pendant l'export CSV.
 | **La durée de rétention n'est pas décidée.** Les 5 ans restent à confirmer par ANH-87a | Aucune purge n'est implémentée : rien n'est supprimé avant ni après cinq ans tant que la décision n'est pas prise |
 | **La page n'a pas de preuve de bout en bout dans un navigateur** | ANH-83 (infrastructure E2E, bloquée par ANH-82) ; les tests de `app/[locale]/dashboard/audit/page.test.tsx` prouvent l'accès, les filtres et l'export dans un DOM simulé avec Convex remplacé |
 | **Le classement des données de santé reste à décider dans ANH-172** | L'exclusion actuelle des valeurs de santé et du texte libre ne tranche pas ce classement ; toute évolution des détails exige une relecture |
+
+## 15. Le pré-vol avant chaque séance (ANH-142)
+
+### 15.1 Ce que le logiciel garantit
+
+- Chaque départ, programme ou manuel, à la console ou depuis le site, passe
+  la même liste de contrôles, dans la porte d'armement du runtime
+  (`_refuse_arming`), après l'attestation, les verdicts, la chaîne STO et
+  l'espace d'enregistrement. Le premier contrôle bloquant qui n'est pas vert
+  refuse le départ avec sa raison, avant que le variateur soit touché.
+- Avec une personne à bord, sont bloquants en plus des portes existantes : un
+  BITalino joignable dont la batterie, lue au repos par la passe, atteint
+  `BITALINO_MIN_BATTERY_PCT` (30 %) ; une qualité ECG good sans interruption
+  depuis 30 s ; une horloge synchronisée dont l'erreur garantie reste sous 5 s
+  (une horloge temps réel seule ne suffit pas) ; des paramètres médicaux
+  signés ; aucun incident grave ouvert annoncé par le serveur ; aucun refus
+  de contrat par le tableau de bord (un tableau de bord muet laisse ce contrôle
+  orange, il ne bloque pas) ; aucune lecture de la batterie attendue ou en
+  cours (elle suspend l'ECG).
+- La porte n'attend jamais : un contrôle encore attendu par une passe refuse le
+  départ s'il est bloquant pour cette occupation.
+- Un lancement depuis le site est refusé avant toute confirmation au serveur,
+  et revient en échec avec `refusee par la machine : pre-vol : <raison>`.
+- Chaque passe terminée est écrite au journal de la console
+  (`logbook/events.jsonl`, `kind: preflight`) et son verdict part dans le
+  battement de cœur (`preflight_last`).
+
+### 15.2 Le banc : des avertissements, décision du pilote du 29 octobre 2026
+
+Sans personne à bord (capsule vide ou lestée, vitesse pilotée, aucune règle
+cardiaque), une horloge non fiable, un BITalino absent ou une batterie basse
+ne créent aucun danger pour une personne : ils sont affichés et écrits, ils ne
+bloquent pas. La qualité ECG et les paramètres médicaux sont sans objet au
+banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
+jugée est celle du départ : une séance de banc lestée lancée depuis le site
+(ANH-250) est jugée avec les règles du banc, au pré-vol du lancement comme à
+l'armement ; un programme lancé du site, avec celles d'une personne à bord.
+
+### 15.3 Ce que le pré-vol ne couvre pas
+
+| Limite | Conséquence |
+|---|---|
+| La conversion de la batterie du BITalino en pourcentage est supposée (3,3 V de référence, moitié de la tension de l'élément, 3,4 V vide, 4,2 V plein), jamais mesurée | Le seuil de 30 % n'a de sens qu'après une mesure au banc sur le vrai BITalino ([section 6](#6-avant-la-première-personne-à-bord), point 9) |
+| Les paramètres du variateur (tFr, HSP, LSP, ACC, dEC) ne sont pas relus par la liste | Ils restent relus et jugés à chaque armement ; la liste ne juge que la liaison et l'état du variateur |
+| Le serveur n'annonce ni le compte d'incidents graves (ANH-145), ni une version logicielle de référence, ni la version attendue des paramètres médicaux | Ces trois contrôles restent orange, « non annonces » ou « non jugee » ; la signature des paramètres médicaux est exigée |
+| La qualité ECG est jugée sur l'image de chaque tic (5 Hz) | Deux mesures arrivées entre deux tics ne sont vues que par la dernière ; la porte du runtime exige de plus une fréquence cardiaque fraîche et sûre pour une personne à bord |
+| Une batterie est lue une fois par passe, et vaut 30 min | Au-delà, le contrôle demande de relancer le pré-vol ; aucune relecture automatique pendant une longue attente au repos |
+| Le Mac du banc ne peut pas interroger son horloge, ni lire la batterie par RFCOMM | L'erreur de l'horloge y est inconnue et la batterie illisible : rouge avec une personne à bord, orange au banc. Avec le variateur simulé (`MOTOR_BACKEND=sim`), l'horloge inconnue est orange même avec une personne à bord : aucun moteur réel ne tourne |

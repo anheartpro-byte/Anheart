@@ -177,6 +177,12 @@ def test_an_inline_profile_document_is_accepted() -> None:
         ({**MINIMAL, "drive": {"tto_s": 0}}, "every drive number must be positive"),
         ({**MINIMAL, "drive": {"initial_fault": "SMOKE"}}, "is not a DriveFault"),
         ({**MINIMAL, "manual": {"occupancy": "crowd"}}, "not a valid Occupancy"),
+        ({**MINIMAL, "preflight": {"battery": 20}}, "unknown key 'battery'"),
+        (
+            {**MINIMAL, "preflight": {"bitalino_battery_pct": 120}},
+            "'bitalino_battery_pct' must be in [0, 100]",
+        ),
+        ({**MINIMAL, "preflight": {"disk_free_mb": -1}}, "must not be negative"),
         ({**MINIMAL, "actions": [{"at_s": 1, "do": "dance"}]}, "'do' = 'dance'"),
         ({**MINIMAL, "actions": [{"at_s": -1, "do": "estop"}]}, "'at_s' must not be negative"),
         ({**MINIMAL, "actions": [{"at_s": 1, "do": "estop", "speed": 3}]}, "unknown key 'speed'"),

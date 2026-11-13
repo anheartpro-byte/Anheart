@@ -185,6 +185,7 @@ from src.ecg_pipeline import (
     treat_off_loop,
 )
 from src.health import HealthContext, HealthWatch
+from src.health_system import cpu_temperature
 from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
     KEY_UI_TLS_CERT,
@@ -286,8 +287,13 @@ from src.training.plan import (
 )
 from src.training.preflight import (
     BRIDGED_BENCH_ONLY,
+    PreflightInputs,
+    PreflightMonitor,
+    PreflightRefused,
+    PreflightReport,
     StoBridgedOnBoard,
     StoNotReady,
+    describe_run,
     describe_sto_refusal,
 )
 from src.training.runtime import (
@@ -338,7 +344,7 @@ from src.training.types import (
     SignalQuality,
     TelemetrySnapshot,
 )
-from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, Seconds, elapsed
+from src.units import Bpm, Metres, Monotonic, MotorRpm, Percent, RpmPerSecond, Seconds, elapsed
 from src.wall_clock import (
     WallClockProbe,
     WallClockState,
@@ -391,6 +397,14 @@ and a look that finds nothing due reads a clock and returns."""
 WALL_CLOCK_PERIOD: Final[Seconds] = Seconds(10.0)
 """How often the console asks what the wall clock is worth: a state that changes when
 a network comes back or goes, not within a second. See :meth:`LocalPanel.clock_step`."""
+
+BATTERY_READ_BOUND: Final[Seconds] = Seconds(15.0)
+"""The whole of a battery read, the stop of the acquisition included (:meth:`EcgLink.read_battery`):
+the reader's join (a link timeout), the drain of the port, the ``state`` exchange."""
+
+PREFLIGHT_PERIOD: Final[Seconds] = Seconds(1.0)
+"""How often the pre-flight looks whether its run has a battery to read or is over
+(:meth:`LocalPanel.preflight_step`). The controls themselves are judged on demand."""
 
 STOP_POLL: Final[Seconds] = Seconds(0.05)
 STOP_POLLS: Final[int] = round(STOP_TIMEOUT / STOP_POLL)
@@ -471,6 +485,16 @@ class EcgClient(Protocol):
     is_connected: bool
     is_acquiring: bool
 
+    @property
+    @abstractmethod
+    def reconnecting(self) -> bool:
+        """Whether the reader is re-opening a lost link. Memory only."""
+
+    @property
+    @abstractmethod
+    def reads_battery(self) -> bool:
+        """Whether the open device can report its battery at all. Memory only."""
+
     @abstractmethod
     async def connect(self, timeout: float = ...) -> bool:  # noqa: ASYNC109  # the clients' own signature
         """Open the device. Returns whether it opened."""
@@ -478,6 +502,14 @@ class EcgClient(Protocol):
     @abstractmethod
     async def start_acquisition(self) -> bool:
         """Start streaming. Returns whether it started."""
+
+    @abstractmethod
+    async def stop_acquisition(self) -> None:
+        """Stop streaming. A no-op when not acquiring."""
+
+    @abstractmethod
+    async def read_battery(self) -> Percent | None:
+        """The battery's charge, at rest only; ``None`` when it cannot be said now."""
 
     @abstractmethod
     async def read_samples(self, count: int = ...) -> SampleBatch | None:
@@ -500,11 +532,13 @@ class EcgLink:
     __slots__ = (
         "_address",
         "_attempts",
+        "_battery_bound",
         "_bridge",
         "_client",
         "_clock",
         "_last_error",
         "_link_stats",
+        "_owner",
         "_retry_at",
         "_source",
     )
@@ -518,6 +552,7 @@ class EcgLink:
         client: EcgClient,
         bridge: EcgBridge,
         link_stats: Callable[[], LinkStats] | None,
+        battery_bound: Seconds = BATTERY_READ_BOUND,
     ) -> None:
         self._clock: Clock = clock
         self._source: EcgSource = source
@@ -528,6 +563,9 @@ class EcgLink:
         self._attempts: int = 0
         self._last_error: str | None = None
         self._retry_at: Monotonic | None = None
+        # The one owner of the port: held to connect and start, and for a battery read.
+        self._owner: asyncio.Lock = asyncio.Lock()
+        self._battery_bound: Seconds = battery_bound
 
     @property
     def client(self) -> EcgClient:
@@ -535,8 +573,14 @@ class EcgLink:
         return self._client
 
     async def step(self) -> None:
-        """Connect and start when needed (rate-limited), otherwise pump the bridge."""
+        """Connect and start when needed (rate-limited), otherwise pump the bridge.
+
+        Nothing while a battery read owns the port: the acquisition is stopped
+        on purpose then, and starts again at the step after it.
+        """
         client = self._client
+        if self._owner.locked():
+            return
         if client.is_acquiring:
             await self._bridge.pump()
             return
@@ -546,6 +590,12 @@ class EcgLink:
             return
         self._retry_at = Monotonic(now + ECG_RETRY)
         self._attempts += 1
+        async with self._owner:
+            await self._open()
+
+    async def _open(self) -> None:
+        """Connect when needed, then start. The caller owns the port."""
+        client = self._client
         if not client.is_connected and not await client.connect(ECG_CONNECT_TIMEOUT_S):
             self._last_error = f"connexion au BITalino impossible ({self._address or 'sim'})"
             _logger.warning("%s", self._last_error)
@@ -553,9 +603,74 @@ class EcgLink:
         if not await client.start_acquisition():
             self._last_error = "le BITalino est connecte mais l'acquisition n'a pas demarre"
             _logger.warning("%s", self._last_error)
+            # A link lost while it was stopped (a battery read) says it is connected:
+            # started again it fails for ever. Closed, the next attempt opens a new one.
+            await self._close_link(client)
             return
         self._last_error = None
         _logger.info("BITalino acquiring (%s)", self._source.value)
+
+    @property
+    def streaming(self) -> bool:
+        """Whether the BITalino is acquiring normally: connected, streaming, not reconnecting."""
+        client = self._client
+        return client.is_connected and client.is_acquiring and not client.reconnecting
+
+    async def read_battery(self) -> Percent | None:
+        """The BITalino's battery, read at rest; ``None`` when it cannot be read now.
+
+        Only from an acquisition that runs normally (never while the reader
+        re-opens a lost link, never while a connection is being opened: one
+        lock owns the port for both), and only on a device that can report it
+        at all (not the macOS RFCOMM transport: its acquisition is left
+        alone). The acquisition is stopped for the read and starts again at
+        the next step, so the ECG is lost meanwhile.
+
+        All of it within ``battery_bound``, the stop included. Past it the
+        link is closed, so that whatever still waits on the port ends, and
+        the next step opens it afresh.
+        """
+        # One deadline for the wait for the port (a connection being opened holds it)
+        # and for the read itself.
+        deadline = asyncio.get_running_loop().time() + self._battery_bound
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self._owner.acquire()
+        except TimeoutError:
+            _logger.warning("BITalino battery not read: the port stayed busy")
+            return None
+        try:
+            return await self._read_owned(deadline)
+        finally:
+            self._owner.release()
+            self._retry_at = None
+
+    async def _read_owned(self, deadline: float) -> Percent | None:
+        """The read itself, the port owned. A cut read leaves the client closed and idle."""
+        client = self._client
+        if not self.streaming or not client.reads_battery:
+            return None
+        try:
+            async with asyncio.timeout_at(deadline):
+                await client.stop_acquisition()
+                return await client.read_battery()
+        except TimeoutError:
+            _logger.warning(
+                "BITalino battery read took longer than %.0f s: link closed and reopened",
+                self._battery_bound,
+            )
+            await self._close_link(client)
+            return None
+
+    async def _close_link(self, client: EcgClient) -> None:
+        """Close the link within the read's bound: a tty close that hangs must not hold
+        the port. The client drops the device before it waits for its close, so the
+        next step opens a new one."""
+        try:
+            async with asyncio.timeout(self._battery_bound):
+                await client.disconnect()
+        except TimeoutError:
+            _logger.warning("BITalino link close still under way: left to end on its own")
 
     def status(self) -> EcgLinkStatus:
         """The link as the panel shows it."""
@@ -1024,6 +1139,7 @@ class LocalPanel:
         "_last_measured",
         "_listener",
         "_on_board",
+        "_preflight",
         "_presence",
         "_recorded_presence",
         "_recorder",
@@ -1071,8 +1187,10 @@ class LocalPanel:
         health: HealthWatch | None = None,
         roster: Roster | None = None,
         sto: StoSource,
+        preflight: PreflightMonitor | None = None,
     ) -> None:
         self._clock: Clock = clock
+        self._preflight: PreflightMonitor | None = preflight
         self._sto: StoSource = sto
         self._sto_gate: StoReadGate = StoReadGate(
             clock=clock,
@@ -1193,6 +1311,11 @@ class LocalPanel:
         )
 
     @property
+    def preflight(self) -> PreflightMonitor | None:
+        """The pre-flight (ANH-142), or ``None`` when this console judges none."""
+        return self._preflight
+
+    @property
     def roster(self) -> Roster:
         """The riders' list a start with a person on board names one of."""
         return self._roster
@@ -1296,6 +1419,7 @@ class LocalPanel:
             # Nobody's command: the machine took back a target it had accepted.
             self._surface.note_withdrawn(describe_withdrawn_target(withdrawn))
         self._record(now, snapshot)
+        self._observe_preflight(snapshot)
         self._surface.publish(snapshot)
         self._watch_end()
         match self._runtime.state:
@@ -1482,6 +1606,11 @@ class LocalPanel:
         cloud = self._cloud
         self._on_board = cloud.session_id_reader() if on_board and cloud is not None else None
 
+    def _observe_preflight(self, snapshot: TelemetrySnapshot) -> None:
+        """The tick, for the pre-flight: its ECG window, and a run once back at rest."""
+        if self._preflight is not None:
+            self._preflight.observe(snapshot)
+
     def _watch_end(self) -> None:
         """The session followed for its feedback has finished: its card opens."""
         reader = self._on_board
@@ -1632,16 +1761,18 @@ class LocalPanel:
         """Why a bench launch from the dashboard would be refused now; ``None`` when not.
 
         The gates :meth:`_start_manual` runs for a bench start, nobody named,
-        that can refuse one: the console in service, and the camera. The bench
-        ceiling is ``MOTOR_MAX_RPM``, always set, and the wall clock refuses
-        only a person on board; :meth:`_start_manual` asks both again when it
-        arms. Nothing of a rider, a programme or the medical parameters:
-        nobody is on board (ANH-250).
+        that can refuse one: the console in service, the camera, and the
+        pre-flight judged for the bench (ANH-142: a battery, an ECG or a clock
+        only warn there). The bench ceiling is ``MOTOR_MAX_RPM``, always set,
+        and the wall clock refuses only a person on board; :meth:`_start_manual`
+        asks both again when it arms. Nothing of a rider, a programme or the
+        medical parameters: nobody is on board (ANH-250).
         """
         out = self._service_refusal()
         if out is not None:
             return out
-        return self._presence_refusal(Occupancy.BENCH)
+        bench = Occupancy.BENCH
+        return self._presence_refusal(bench) or self._preflight_refusal(bench)
 
     def _preflight_programme(self, launch: AutoLaunch) -> Result[None, str]:
         """The gates of a programmed start, for an automatic launch from the dashboard."""
@@ -1661,7 +1792,15 @@ class LocalPanel:
         prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
             return Err(prepared.error)
-        return Ok(None)
+        # A launch from the dashboard is a programme: somebody is on board.
+        blocked = self._preflight_refusal(Occupancy.OCCUPIED)
+        return Ok(None) if blocked is None else Err(blocked)
+
+    def _preflight_refusal(self, occupancy: Occupancy) -> str | None:
+        """The pre-flight's first red blocking control for ``occupancy``, in its words."""
+        monitor = self._preflight
+        refused = None if monitor is None else monitor.refusal(occupancy)
+        return None if refused is None else refused.detail
 
     def _withhold_programme_words(
         self,
@@ -1858,6 +1997,21 @@ class LocalPanel:
         except Exception:  # as cloud_step: an observer must not stop the machine
             _logger.exception("dashboard stop watch failed; the session is unaffected")
 
+    async def preflight_step(self) -> None:
+        """Read the BITalino's battery when a run asks for it, and close a run once it is over.
+
+        A task of its own: the read stops the acquisition and waits for the
+        device. The same fence as :meth:`cloud_step`: the pre-flight is an
+        observer, and the arming gate judges its list again at every start.
+        """
+        monitor = self._preflight
+        if monitor is None:
+            return
+        try:
+            await monitor.step()
+        except Exception:  # as cloud_step: an observer must not stop the machine
+            _logger.exception("pre-flight step failed; the arming gate still judges every start")
+
     async def roster_step(self) -> None:
         """Ask the dashboard for the riders' list when it is due. No-op without a link.
 
@@ -1903,6 +2057,7 @@ class LocalPanel:
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.roster_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
+            asyncio.create_task(self._every(PREFLIGHT_PERIOD, self.preflight_step, stop)),
         )
         if isinstance(self._sto, DriveInputStoSource):
             observers += (asyncio.create_task(self._sto.run(), name="sto-poll"),)
@@ -2192,7 +2347,7 @@ def build_ecg_client(config: LocalConfig, clock: Clock) -> EcgSide:
     raise assert_never(config.ecg_source)
 
 
-def build_panel(
+def build_panel(  # noqa: PLR0915  # one statement per wired part
     config: LocalConfig,
     *,
     clock: Clock,
@@ -2208,6 +2363,7 @@ def build_panel(
     health: HealthWatch | None = None,
     deposit: DepositTask | None = None,
     roster: Roster | None = None,
+    preflight: bool = False,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -2250,6 +2406,11 @@ def build_panel(
     ``roster`` is the riders' list (:mod:`src.roster`); ``None``: an empty one,
     which the dashboard link fills when there is one. A test or a simulation
     gives one it has filled itself.
+
+    ``preflight``: the console judges its pre-flight (ANH-142) at every start,
+    serves it to the page and announces it; :func:`run_console` asks for it.
+    ``False``: no list judges a start, which is what a test that is not about
+    the pre-flight wants.
     """
     version = read_software_version()
     riders = Roster(linked=config.cloud is not None) if roster is None else roster
@@ -2267,6 +2428,49 @@ def build_panel(
     # goes silent on is not a clean one: the same figure, read in one place.
     watchdog = ServiceWatchdog(notify_socket, overdue=safety.loop_stall_silent_gap)
     backend = drive.backend
+    storage = None if journal is None else storage_gate(journal, clock)
+
+    def preflight_facts() -> PreflightInputs:
+        """What the pre-flight reads of this console, now. Called only once it is built."""
+        now = clock.monotonic()
+        room = None if storage is None else storage()
+        sampled = None if health is None else health.last
+        return PreflightInputs(
+            at=now,
+            snapshot=runtime.snapshot(),
+            attested=isinstance(runtime.require_estop_confirmed(), Ok),
+            bitalino_connected=ecg.client.is_connected,
+            bitalino_streaming=ecg.streaming,
+            simulated_drive=drive.simulator is not None,
+            wall_clock=None if watch is None else watch.current(),
+            record_storage=None if room is None else describe_record_storage(room),
+            link=NOT_CONFIGURED if link_health is None else link_health.status(now),
+            medical_refusal=config.medical.warning,
+            medical_version=config.medical.version,
+            software_version=version,
+            incidents_open_high=None if sampled is None else sampled.incidents_open_high,
+            records_pending=None if sampled is None else sampled.records_pending,
+            min_battery=config.bitalino_min_battery,
+        )
+
+    monitor = (
+        PreflightMonitor(
+            clock=clock,
+            facts=preflight_facts,
+            read_battery=lambda: ecg.read_battery(),  # noqa: PLW0108  # ecg is built below
+            # What this console is for: a person on board once it may take one.
+            summary=(
+                Occupancy.OCCUPIED
+                if config.programs_enabled or config.occupied_enabled
+                else Occupancy.BENCH
+            ),
+            record=lambda report: record_preflight(report, recorder, clock),
+            # Measured here, linked to a dashboard or not: one file of the kernel, off the loop.
+            read_temperature=functools.partial(asyncio.to_thread, cpu_temperature),
+        )
+        if preflight
+        else None
+    )
     if journal is not None:
         tapped = tap_drive(backend, clock, sdk_frames=config.record.drive_sdk_frames)
         backend = tapped.backend
@@ -2280,7 +2484,8 @@ def build_panel(
         safety=safety,
         motion=motion,
         limit_radius=config.leg_tip_radius,
-        arming_gate=None if journal is None else storage_gate(journal, clock),
+        arming_gate=storage,
+        preflight=None if monitor is None else monitor.refusal,
         # Every other source attests the wired mushroom, ANH-92's statement.
         attestation=(
             BENCH_BRIDGED_ATTESTATION
@@ -2378,6 +2583,7 @@ def build_panel(
         # holds the ones it latched itself, which the supervisor never sees.
         verdicts=runtime,
         roster=riders,
+        preflight=monitor,
     )
     panel = LocalPanel(
         clock=clock,
@@ -2403,6 +2609,7 @@ def build_panel(
         service=service,
         roster=riders,
         sto=sto,
+        preflight=monitor,
     )
     cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
@@ -2416,6 +2623,10 @@ def build_panel(
                 clock_offset_s=None if watch is None else clock_offset_s(watch.current()),
                 record_degraded=None if recorder is None else recorder.is_degraded(),
                 restart_loop=None if service is None else service.status().out_of_service,
+                preflight_last=(
+                    None if monitor is None or monitor.last is None else monitor.last.verdict
+                ),
+                bitalino_battery_pct=None if monitor is None else monitor.battery,
             )
 
         if transport is None:
@@ -2456,6 +2667,24 @@ def build_panel(
     if cloud is not None:
         panel.attach_cloud(cloud=cloud, transport=owned, health=health)
     return panel
+
+
+def record_preflight(
+    report: PreflightReport, recorder: SessionRecorder | None, clock: Clock
+) -> None:
+    """A completed pre-flight run: one line in the console's log, one in the logbook."""
+    words = describe_run(report)
+    _logger.info("%s", words)
+    if recorder is not None:
+        recorder.journal.log(
+            note(
+                wall_clock=clock.unix_millis(),
+                at=clock.monotonic(),
+                kind=EventKind.PREFLIGHT,
+                detail=words,
+                actor=SYSTEM,
+            )
+        )
 
 
 def open_service(journal: Journal, clock: Clock) -> ServiceDesk:
@@ -2624,6 +2853,8 @@ def _start_refusal_reason(  # noqa: PLR0911  # one return per refusal
             return describe_sto_refusal(refusal)
         case StoBridgedOnBoard():
             return BRIDGED_BENCH_ONLY
+        case PreflightRefused():
+            return refusal.detail
     raise assert_never(refusal)
 
 
@@ -2915,7 +3146,9 @@ async def run_console(
     if probe is None:
         _logger.warning(
             "wall clock: not judged on this system (no way to ask what it is worth): "
-            "nothing is warned or refused on its account, and the records say nothing of it"
+            "its error is unknown, so the pre-flight refuses a start with a person on board on a "
+            "real drive (it only warns at the bench, or with the simulated drive), and the records "
+            "say nothing of it"
         )
     journal = open_journal(config, clock)
     service = open_service(journal, clock)
@@ -2926,6 +3159,7 @@ async def run_console(
         wall_clock=probe,
         notify_socket=notify_socket,
         service=service,
+        preflight=True,
     )
     undo = install_stop_signals(event)
     code = EXIT_FAILED

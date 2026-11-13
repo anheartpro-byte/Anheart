@@ -211,6 +211,7 @@ def test_every_expectation_is_checked() -> None:
     assert "expect_reach" in _expecting(result, reaches_output_rpm=OutputRpm(30.0))
     assert "expect_max" in _expecting(result, max_output_rpm=OutputRpm(10.0))
     assert "expect_zone" in _expecting(result, min_in_zone_fraction=0.5)
+    assert "expect_refusal" in _expecting(result, refusal="pre-vol : batterie")
     assert not _expecting(result, start=Expectation.ANY)
     fired = run_file(SCENARIO_DIR / "estop_manual_27.json")
     assert "forbid_rule" in _expecting(fired, forbid_rules=("operator_estop",))

@@ -1,0 +1,15 @@
+{
+  "name": "preflight_battery_low_occupied",
+  "description": "ANH-142: the BITalino's battery reads 20 %, under the 30 % floor. With a person on board the pre-flight refuses the start with that reason, and nothing turns.",
+  "tags": ["manual", "preflight", "occupied"],
+  "kind": "manual",
+  "duration_s": 20,
+  "preroll_s": 5,
+  "manual": {"occupancy": "occupied"},
+  "preflight": {"bitalino_battery_pct": 20},
+  "expect": {
+    "start": "refused",
+    "refusal": "pre-vol : batterie BITalino 20 % < 30 %",
+    "max_output_rpm": 0.0
+  }
+}

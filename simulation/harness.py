@@ -65,6 +65,7 @@ from simulation.scenario import (
     ManualTarget,
     OperatorFaultReset,
     OperatorStop,
+    PreflightSpec,
     RegisterOffset,
     RemoteStop,
     Scenario,
@@ -82,8 +83,10 @@ from simulation.tracefile import Event, FinalState, Row, Trace, frame_to_json
 from src.bitalino_client import SampleBatch
 from src.clock import Clock, SimClock
 from src.ecg_pipeline import EcgBridge, EcgFrame, Treatment, load_treatment, treat_ecg
+from src.link_state import NOT_CONFIGURED
 from src.local_panel import (
     StoReadGate,
+    describe_record_storage,
     describe_reset_refusal,
     describe_start_refusal,
     describe_target_refusal,
@@ -102,6 +105,7 @@ from src.motor.sto import (
     rest_of_poll_period,
 )
 from src.record import commands
+from src.record.journal import MIN_FREE_BYTES
 from src.record.schema import EventKind, Manifest
 from src.result import Err, Ok, Result
 from src.sensors.base import SensorKind
@@ -110,8 +114,10 @@ from src.sim.physiology import Physiology, SubjectState
 from src.training.hr_control import HeartRateRejection, TrackerReading
 from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits
 from src.training.plan import INITIAL_REV, Program, TrainingProfile
+from src.training.preflight import PreflightInputs, PreflightMonitor, PreflightReport
 from src.training.runtime import (
     EndReason,
+    RecordStorageLow,
     RuntimeLimits,
     RuntimeState,
     StartRefusal,
@@ -127,6 +133,7 @@ from src.units import (
     Monotonic,
     MotorRpm,
     OutputRpm,
+    Percent,
     RawRegister,
     RegisterAddress,
     RpmPerSecond,
@@ -134,6 +141,7 @@ from src.units import (
     UnixMillis,
     elapsed,
 )
+from src.wall_clock import Synchronised
 
 MILLIS_PER_SECOND: Final[int] = 1000
 
@@ -709,6 +717,7 @@ class Session:
         "_observed_hr",
         "_pending",
         "_preamble",
+        "_preflight",
         "_preroll_final",
         "_preroll_peak",
         "_preroll_rules",
@@ -775,6 +784,10 @@ class Session:
         self._drive: RecordingDrive = RecordingDrive(self._faulty, clock)
         port = StoFeedbackPort(self._sim)
         sto = sto_source_for(scenario.sto, self._sto_chain, clock, port)
+        spec = scenario.preflight
+        self._preflight: PreflightMonitor | None = (
+            None if spec is None else self._preflight_of(spec, clock)
+        )
         self._runtime: TrainingRuntime = TrainingRuntime(
             sto=sto,
             clock=clock,
@@ -786,6 +799,7 @@ class Session:
             # The anti-nausea g-rate is judged at the rider's farthest point: the
             # feet, or the reference radius if a scenario puts the feet inside it.
             limit_radius=Metres(max(float(rig.leg_tip_radius), float(rig.machine.radius))),
+            preflight=None if self._preflight is None else self._preflight.refusal,
         )
         self._sto_poll: DriveInputPoll | None = (
             DriveInputPoll(clock=clock, runtime=self._runtime, source=sto, port=port)
@@ -840,6 +854,62 @@ class Session:
         self._last_rule: str | None = None
         self._last_verdict: str | None = None
         self._manifest: Manifest = manifest_for(scenario, clock, origin, self.meta())
+
+    def _preflight_of(self, spec: PreflightSpec, clock: Clock) -> PreflightMonitor:
+        """The console's pre-flight (ANH-142), on this run's machine and the scenario's figures.
+
+        What the simulation measures is read as the console reads it: the drive,
+        the verdicts, the attestation, the heart rate and the BITalino's link.
+        The battery, the wall clock and the free disk are the scenario's. No
+        dashboard: the console is unlinked. A run completed is not written to
+        the trace: the start it refuses is, in the console's words.
+        """
+
+        async def battery() -> Percent | None:
+            return spec.battery
+
+        def facts() -> PreflightInputs:
+            runtime = self._runtime
+            sensor = self._sensor
+            bitalino = self._bitalino
+            free = round(spec.disk_free_mb * 1_000_000)
+            room = None if free >= MIN_FREE_BYTES else RecordStorageLow(free, MIN_FREE_BYTES, "sim")
+            # The sensor model stands for a BITalino that streams whenever it is connected.
+            streaming = (
+                sensor.connected
+                if sensor is not None
+                else bitalino is not None and bitalino.is_connected and bitalino.is_acquiring
+            )
+            return PreflightInputs(
+                at=clock.monotonic(),
+                snapshot=runtime.snapshot(),
+                attested=isinstance(runtime.require_estop_confirmed(), Ok),
+                bitalino_connected=streaming,
+                bitalino_streaming=streaming,
+                wall_clock=Synchronised(
+                    estimated_error=spec.clock_error, max_error=spec.clock_error
+                ),
+                record_storage=None if room is None else describe_record_storage(room),
+                link=NOT_CONFIGURED,
+                medical_refusal=None,
+                medical_version="livre",
+                software_version="simulation",
+            )
+
+        def ignored(_report: PreflightReport) -> None:
+            """The simulation keeps no pre-flight log: its verdicts are judged as they come."""
+
+        scenario = self._scenario
+        on_board = (
+            scenario.kind is SessionKind.AUTO or scenario.manual.occupancy is Occupancy.OCCUPIED
+        )
+        return PreflightMonitor(
+            clock=clock,
+            facts=facts,
+            read_battery=battery,
+            summary=Occupancy.OCCUPIED if on_board else Occupancy.BENCH,
+            record=ignored,
+        )
 
     # -- the run ----------------------------------------------------------
 
@@ -962,6 +1032,10 @@ class Session:
             self._message(now, "shutdown", report.detail)
             return False
         reads = 0 if poll is None else await poll.tick_completed(now)
+        if self._preflight is not None:
+            # As the console's tick and its task of its own: the ECG window, then the run.
+            self._preflight.observe(snapshot)
+            await self._preflight.step()
         self._last_measured = snapshot.measured.motor_rpm
         self._counters = snapshot.counters
         self._note_messages(now, snapshot)

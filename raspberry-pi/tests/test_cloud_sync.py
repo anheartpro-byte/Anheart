@@ -105,6 +105,7 @@ from src.training.plan import JsonValue, ResolveError
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, MotorRpm, Seconds, UnixMillis
+from src.wall_clock import WallClockProbe
 from src.web.app import create_app
 from tests.medical_support import signed, unsigned
 from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, listed, roster_document
@@ -303,6 +304,7 @@ def rig(
     record_root: Path | None = None,
     with_roster: bool = True,
     sto_source: str = "sim_ready",
+    preflight: bool = False,
 ) -> Rig:
     """A real simulated panel's surface and store, with a stub runtime and a scripted link."""
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
@@ -319,6 +321,7 @@ def rig(
         profiles_path=tmp_path / "p.json",
         transport=lambda _c: dashboard,
         journal=journal,
+        preflight=preflight,
     )
     runtime = StubRuntime(source=panel.runtime.snapshot)
     sync = CloudSync(
@@ -2649,6 +2652,8 @@ def linked(
     *,
     record_root: Path | None = None,
     env: Mapping[str, str] | None = None,
+    preflight: bool = False,
+    wall_clock: WallClockProbe | None = None,
     **changes: str,
 ) -> Linked:
     clock = ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000))
@@ -2662,6 +2667,8 @@ def linked(
         profiles_path=tmp_path / "p.json",
         transport=lambda _c: dashboard,
         journal=journal,
+        preflight=preflight,
+        wall_clock=wall_clock,
     )
     assert isinstance(panel.surface.attest_estop_wiring(OPERATOR), Ok)
     return Linked(clock=clock, panel=panel, dashboard=dashboard)

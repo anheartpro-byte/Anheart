@@ -55,6 +55,7 @@ from src.clock import Clock, ManualClock
 from src.geometry import MachineGeometry
 from src.sim.bitalino import (
     ECG_CHANNEL,
+    FULL_BATTERY,
     LEGAL_SAMPLE_RATES,
     MAX_ANALOG_CHANNEL,
     MIN_ANALOG_CHANNEL,
@@ -101,6 +102,7 @@ from src.units import (
     Monotonic,
     MotorRpm,
     OutputRpm,
+    Percent,
     Seconds,
 )
 
@@ -1722,6 +1724,22 @@ def test_the_client_carries_the_whole_surface_the_console_calls() -> None:
     assert client.channels == (0,)
     assert client.sample_rate == 1000
     assert client.mac_address.startswith("/dev/")
+
+
+def test_the_simulated_battery_is_read_at_rest_as_the_real_one() -> None:
+    """ANH-142: full unless a scenario says otherwise, and never while streaming."""
+
+    async def scenario() -> None:
+        client = SimulatedBitalinoClient(ManualClock(), physiology=_resting(ManualClock()))
+        assert await client.read_battery() is None  # not connected
+        assert await client.connect()
+        assert await client.read_battery() == FULL_BATTERY
+        client.battery = Percent(20.0)
+        assert await client.read_battery() == Percent(20.0)
+        assert await client.start_acquisition()
+        assert await client.read_battery() is None
+
+    asyncio.run(scenario())
 
 
 def test_reading_before_acquiring_gives_nothing() -> None:

@@ -710,8 +710,14 @@ prise sinon). Aucun essai matériel de cette procédure n'est consigné ici.
 7. **Après.** Étapes 8 à 10 ci-dessus. Le site montre la séance « Banc lesté »
    avec sa masse dans l'historique et le rapport.
 
+Avant l'étape 4, la page « Pre-vol » de la console
+([4.2](#le-pré-vol-anh-142)) doit être sans rouge dans la colonne Banc : un
+contrôle bloquant rouge (disque, variateur, attestation, verdict, contrat,
+incident grave annoncé) grise le bouton de confirmation et refuserait le départ.
+
 Un lancement de banc refusé à la console (verdict à acquitter, console hors
-service, caméra, attestation absente au démarrage) n'arme rien et revient au
+service, caméra, attestation absente au démarrage, contrôle bloquant du
+pré-vol au banc) n'arme rien et revient au
 site comme séance échouée avec sa raison ; Convex le refuse aussi à l'armement
 si son lanceur n'atteint plus la machine (`right_revoked_before_start`) ou si
 une autre séance la tient (`machine_busy`).
@@ -787,6 +793,7 @@ une autre séance la tient (`machine_busy`).
 | `cloud_step` | 1 s | une étape d'envoi du lien Convex. Ce qu'elle envoie d'une séance est relu sur le disque par un fil `record-io` réservé : la tâche attend ce fil, la boucle non |
 | `cloud_stop_step` | 50 ms | dit la séance en cours au tableau de bord (déclaration ou confirmation du départ), puis pose la question de l'arrêt demandé (toutes les 3 s en séance). Une tâche à elle : elle n'attend ni l'envoi, ni une retenue de l'envoi, ni le disque, et ne lit aucun fichier |
 | `clock_step` | 10 s (`WALL_CLOCK_PERIOD`) | demande au noyau si un service de temps tient l'horloge murale ([12.4](#124-lhorloge-murale-et-le-journal-de-la-console)). Un appel système qui recopie quelques variables du noyau : ni fichier, ni réseau, ni attente. Les portes de départ, l'enregistrement et la page ne lisent que sa dernière réponse, en mémoire |
+| `preflight_step` | 1 s (`PREFLIGHT_PERIOD`) | fait avancer le pré-vol ([4.2](#le-pré-vol-anh-142)) : lit la batterie du BITalino au repos quand une passe la demande (l'acquisition est suspendue le temps de la lecture), puis clôt la passe quand plus aucun contrôle n'est attendu. Les contrôles eux-mêmes sont jugés à la demande, en mémoire |
 | serveur web | - | uvicorn, sur la même boucle |
 
 Quand une tâche se termine (signal SIGINT/SIGTERM, exception, serveur web qui
@@ -797,8 +804,10 @@ l'arrêt ou plus tôt), 2 (configuration refusée). Sur un Pi installé, systemd
 relance la console après un code 1
 ([3.6](#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
 
-`cloud_step` est la seule tâche qui avale ses exceptions : le tableau de bord
-est un observateur, un bogue de report ne doit pas arrêter une séance.
+`cloud_step` et `preflight_step` sont les seules tâches qui avalent leurs
+exceptions : le tableau de bord est un observateur, un bogue de report ne doit
+pas arrêter une séance ; le pré-vol en est un aussi, et la porte d'armement
+rejuge sa liste à chaque départ, dans la tâche de contrôle.
 `clock_step` n'en lève pas : une lecture de l'horloge qui échoue est rendue
 comme un état (« non vérifiée »), jamais comme une exception.
 
@@ -1110,7 +1119,7 @@ en attente de validation médicale (ANH-98) et d'ingénierie (jalon M6). Aucun
 
 ### 4.2 Portes communes à tout départ (`_refuse_arming`, `_arm`)
 
-Dans l'ordre, rien ne touche le variateur avant les six premières :
+Dans l'ordre, rien ne touche le variateur avant les sept premières :
 
 1. Le runtime n'est ni arrêté (`shutdown`) ni silencieux.
 2. **Attestation E-STOP** faite depuis ce démarrage du processus (texte exact :
@@ -1126,15 +1135,21 @@ Dans l'ordre, rien ne touche le variateur avant les six premières :
    et cette porte lisent uniquement la valeur en mémoire ; la tâche STO fait
    les lectures Modbus. Sous `STO_SOURCE=bridged_declared`, `BRIDGED` arme une
    séance manuelle de banc seulement ; tout départ avec personne à bord est
-   refusé (`StoBridgedOnBoard`). Ce seul contrôle est ajouté ici ; les autres contrôles
-   automatiques du pré-vol restent à ANH-142.
+   refusé (`StoBridgedOnBoard`). Ce contrôle garde ses propres refus ; les
+   autres contrôles du pré-vol forment la liste de la porte 7.
 5. Runtime au repos (`IDLE` ou `FINISHED`).
 6. Sur la console : au moins 500 Mo et 36 016 inodes libres sous le dossier
    d'enregistrement de séance, d'après la dernière mesure du fil du journal ;
    refus aussi si cet espace n'a pas pu être mesuré, ou si la mesure a plus de
    15 s (`RecordStorageLow`, [15.4](#154-départ-refusé-sous-500-mo)). Demandée en
    dernier, pour que l'opérateur entende d'abord ce que lui seul peut lever.
-7. Ouverture de la liaison et lecture du variateur. S'il est en
+7. Sur la console : **le pré-vol** (ANH-142, [ci-dessous](#le-pré-vol-anh-142)),
+   jugé pour l'occupation du départ. Le premier contrôle bloquant qui n'est
+   pas vert refuse le départ (`PreflightRefused`) avec sa raison :
+   `demarrage refuse : pre-vol : batterie BITalino 20 % < 30 %`. Un
+   avertissement ne refuse rien. Rien n'est attendu ici : la porte juge ce que
+   la console sait à cet instant.
+8. Ouverture de la liaison et lecture du variateur. S'il est en
    `OPERATION_ENABLED` : arrêt, verrou `drive_precommanded`, refus. S'il est en
    défaut : refus (`DriveInFault`), **sans réarmement automatique**. Depuis le
    11 octobre 2026, la console refuse ce départ plus tôt quand elle le peut :
@@ -1143,11 +1158,11 @@ Dans l'ordre, rien ne touche le variateur avant les six premières :
    ([console-locale.md, section 6](console-locale.md#6-page--tableau-de-bord-)).
    Cette porte-ci reste la seule qui compte : la route ne la remplace pas, et
    un lancement venu du tableau de bord distant ne passe que par elle.
-8. Relecture de tFr, HSP, LSP, ACC, dEC ; refus si LSP ≠ 0, HSP > tFr ou
+9. Relecture de tFr, HSP, LSP, ACC, dEC ; refus si LSP ≠ 0, HSP > tFr ou
    HSP > 50,0 Hz. ttO et SLL ne sont **pas** relus (adresses Modbus non
    vérifiées) : chaque armement écrit un avertissement dans le journal demandant
    de les vérifier au clavier.
-9. Nouvelle vérification STO après ces lectures (même règle, banc seulement sous
+10. Nouvelle vérification STO après ces lectures (même règle, banc seulement sous
    `bridged_declared`), puis mise sous tension de
    l'étage de sortie : LFRD = 0, puis `SHUTDOWN` →
    `SWITCH_ON` → `ENABLE_OPERATION`. Si le mot d'activation échoue sans réponse,
@@ -1171,7 +1186,122 @@ caméra : rien n'a touché le variateur. Il ne lit que la dernière réponse
 gardée en mémoire. Un départ de banc, lui, n'est jamais refusé pour cela : la
 séance démarre et l'opérateur est prévenu. `OCCUPANCY_OCCUPIED_ENABLED=false`
 refuse avant l'horloge : elle ajoute un refus à un mode ouvert, elle n'en ouvre
-aucun.
+aucun. Le pré-vol (porte 7) juge aussi l'horloge, plus strictement : avec une
+personne à bord, l'erreur que le service de temps garantit doit rester sous
+5 s.
+
+#### Le pré-vol (ANH-142)
+
+Une seule liste ordonnée, `CONTROLS` dans `src/training/preflight.py`, fait le
+pré-vol. Chaque contrôle a un identifiant, un libellé, une gravité avec une
+personne à bord et une au banc (ou « sans objet » au banc), une attente
+maximale, et une fonction pure qui rend `Ok(détail)` ou la raison du refus. La
+même liste sert partout : la porte d'armement ci-dessus (pour chaque départ,
+local ou distant), le pré-vol d'un lancement venu du tableau de bord, la page
+« Pre-vol » de la console ([console-locale.md, section 17](console-locale.md#17-page--pre-vol--anh-142)),
+le journal de la console (`logbook/events.jsonl`, une ligne `kind: preflight`
+par passe terminée) et le battement de cœur (`preflight_last`,
+`bitalino_battery_pct`). Un contrôle matériel à venir (porte fermée, harnais
+bouclé) est une entrée de plus : la page, le journal et le battement de cœur
+suivent sans changement.
+
+| Ordre | Contrôle | Personne à bord | Banc | Ce qui le met au vert |
+|---|---|---|---|---|
+| 1 | `drive_link` | bloquant | bloquant | une lecture de l'état du variateur de moins de 2 s. Les paramètres (tFr, HSP, LSP, ACC, dEC) restent relus et jugés à chaque armement (porte 9) : la liste le dit, elle ne les relit pas |
+| 2 | `drive_state` | bloquant | bloquant | variateur ni en défaut, ni en marche, aucune séance en cours |
+| 3 | `estop` | bloquant | bloquant | l'attestation du démarrage de la console (porte 2) |
+| 4 | `verdict` | bloquant | bloquant | aucun verdict en vigueur (porte 3) |
+| 5 | `disk` | bloquant | bloquant | la porte 6 (500 Mo libres), dans ses mots |
+| 6 | `clock` | bloquant | avertissement | horloge synchronisée, erreur garantie (`maxerror` du noyau) sous 5 s. Une horloge temps réel seule ne suffit pas. Sur un système qui ne peut pas être interrogé (le Mac du banc), l'erreur est inconnue : rouge avec une personne à bord, orange au banc. Avec le variateur simulé (`MOTOR_BACKEND=sim` : aucun moteur réel, personne dans une capsule simulée), cette erreur inconnue est orange même avec une personne à bord ; une horloge que personne ne tient y reste rouge |
+| 7 | `contract` | bloquant | bloquant | aucun refus de contrat du tableau de bord ; console non reliée : sans objet ; tableau de bord muet : orange, non vérifié |
+| 8 | `medical` | bloquant | sans objet | paramètres médicaux signés. La version attendue n'est pas jugée (aucune référence du serveur) |
+| 9 | `incidents` | bloquant | bloquant | aucun incident grave ouvert annoncé. Tant que le serveur n'en annonce aucun compte (ANH-145), orange « non annonces » |
+| 10 | `bitalino` | bloquant | avertissement | BITalino connecté, aucune lecture de sa batterie attendue ni en cours, batterie lue à cette passe au moins `BITALINO_MIN_BATTERY_PCT` (30 % par défaut), lue il y a moins de 30 min |
+| 11 | `ecg` | bloquant | sans objet | qualité ECG `good` sans interruption depuis 30 s |
+| 12 | `temperature` | avertissement | avertissement | Pi sous 70 °C, mesuré par le pré-vol à chaque pas (zone thermique du noyau), console reliée ou non ; non mesurée (hors Linux) : orange |
+| 13 | `cloud` | avertissement | avertissement | tableau de bord joignable ; sinon la séance reste possible, et l'opérateur est prévenu |
+| 14 | `records` | avertissement | avertissement | aucun enregistrement de séance en attente d'envoi |
+| 15 | `software` | avertissement | avertissement | toujours orange, « non jugee » : le serveur ne donne aucune version de référence |
+
+Les gravités du banc suivent la décision du pilote du 29 octobre 2026 : sans
+personne à bord (capsule vide ou lestée d'environ 80 kg, vitesse pilotée,
+aucune règle cardiaque), une horloge non fiable, un BITalino absent ou une
+batterie basse ne créent aucun danger pour une personne, et les premiers essais
+se font au banc, souvent sans Internet. Ils sont visibles et écrits, ils ne
+bloquent pas. Tous les autres contrôles bloquants bloquent aussi le banc.
+
+**Les passes.** Une passe commence avec la console, chaque fois que la
+console revient au repos après une séance (donc avant chaque séance), et quand
+l'opérateur la demande (« Relancer »). Elle lit la batterie du BITalino au
+repos, dès qu'il acquiert normalement (connecté, en acquisition, sans
+reconnexion en cours), ou y renonce après 15 s. Chaque contrôle qui n'est pas
+vert est « en cours » jusqu'à son attente maximale, comptée depuis le début de
+la passe, puis rouge ou orange : la lecture et les contrôles courent ensemble,
+et aucune passe ne dure plus que l'attente la plus longue, celle de l'ECG
+(44 s : la lecture, 8 s de fenêtre du traitement, puis 30 s de signal good).
+Une passe nominale comme une passe sans BITalino finit en moins de 45 s. La passe
+terminée est écrite une fois au journal, et son verdict est celui du
+battement de cœur suivant. Elle est jugée pour le départ le plus exigeant que
+la console peut faire : avec une personne à bord si les programmes ou
+`OCCUPANCY_OCCUPIED_ENABLED` sont ouverts, au banc sinon. La page montre les
+deux occupations.
+
+**La porte n'attend jamais.** À l'armement, la liste est jugée sur ce que la
+console sait à cet instant : un contrôle encore « en cours » dans la passe
+refuse le départ s'il est bloquant pour cette occupation. Le pré-vol d'un
+lancement venu du tableau de bord (`LocalPanel.preflight_remote_start`) le
+juge pour son occupation : un programme avec une personne à bord, une séance
+de banc lestée (ANH-250) au banc, où une batterie, un ECG ou une horloge ne
+font qu'avertir. Il refuse avec la même raison, avant toute confirmation au
+serveur ; le tableau de bord reçoit la séance en échec avec
+`refusee par la machine : pre-vol : <raison>`. À la console, le bouton de
+confirmation de la carte « Depart distant » reste grisé tant qu'un contrôle
+bloquant est rouge pour ce type de lancement.
+
+**La lecture de la batterie.** Le BITalino ne répond à `state` qu'au repos :
+l'acquisition est arrêtée le temps de la lecture, puis reprend au pas suivant
+(`EcgLink.read_battery`). Un seul verrou possède le port, pour la connexion et
+le démarrage comme pour la lecture : jamais de `state` pendant l'ouverture
+d'une liaison. Rien n'est lu pendant que le lecteur rouvre une liaison perdue,
+ni sur un transport qui ne sait pas dire sa batterie (RFCOMM du Mac : son
+acquisition n'est pas arrêtée pour rien). Avant `state`, ce que le flux avait
+envoyé avant l'octet d'arrêt est vidé du port (lu jusqu'à 0,25 s de silence,
+20 fois au plus) : lu comme la réponse, il passerait la somme de contrôle une
+fois sur seize et donnerait une fausse batterie. L'attente du port et toute la
+lecture, arrêt compris, tiennent en 15 s ; au-delà la lecture est abandonnée,
+et si elle avait commencé la liaison est fermée : le client revient au repos
+(ni connecté, ni en acquisition, sans appareil), même coupé au milieu d'un
+arrêt qui ne répond pas, et la console le rouvre au pas suivant. Cette
+fermeture a la même borne de 15 s : une fermeture de port qui ne finit pas
+libère le port quand même. Un lecteur laissé derrière par une telle coupure
+garde son propre ordre d'arrêt et son propre état de reconnexion : il ne
+reprend jamais la liaison, ne retire jamais l'appareil de l'acquisition
+suivante et ne lui donne aucune donnée lue en retard. Un appareil ouvert à
+la reconnexion mais qui refuse de démarrer est refermé, et une liaison connectée
+dont l'acquisition ne redémarre pas (Bluetooth perdu pendant la lecture, que le
+client au repos ne voit pas) est fermée : la tentative suivante l'ouvre à
+nouveau au lieu de la redémarrer sans fin. Une liaison perdue dont la reconnexion est
+interrompue n'est plus dite connectée : la console la rouvre. Tant qu'une
+lecture est attendue ou en cours, le contrôle `bitalino` est rouge avec une
+personne à bord (attendue : « a relire » ; en cours : l'ECG est suspendu), et
+la fenêtre ECG repart de zéro : seuls comptent les échantillons pris après la
+lecture.
+
+**La batterie du BITalino est une calibration à prouver.** La conversion de la
+lecture brute en pourcentage (`battery_percent` dans `src/bitalino_client.py`)
+suppose que le canal ABAT est la lecture sur 10 bits, contre une référence de
+3,3 V, de la moitié de la tension de l'unique élément LiPo, vide à 3,4 V et
+plein à 4,2 V, linéaire entre les deux. Rien de cela n'a été mesuré : à
+vérifier au banc sur le vrai BITalino, avec un voltmètre sur l'élément, avant
+de se fier au seuil de 30 % avec une personne à bord. Le transport RFCOMM du
+Mac ne sait pas lire la batterie : elle y est illisible (orange au banc).
+
+**Limites.** L'ECG est jugé sur l'image de chaque tic (5 Hz) : deux mesures
+arrivées entre deux tics ne sont vues que par la dernière. L'âge d'une lecture
+de batterie est borné à 30 min, sans relecture automatique : au-delà, le
+contrôle demande de relancer le pré-vol. Le manifeste de l'enregistrement
+(`preflight`) reste `null` : le résultat est dans le journal de la console, pas
+dans l'enregistrement de la séance.
 
 ### 4.3 Séance manuelle
 
@@ -3192,6 +3322,7 @@ sort avec le code 2.
 | `MOTOR_MAX_RPM` | `300` | plafond moteur en banc (≈ 6 tr/min de sortie) | 0..1380 (plaque) |
 | `ECG_SOURCE` | **aucun (obligatoire)** | `sim`, `serial` (`/dev/rfcomm0`, `COM4`, MAC) ou `rfcomm` (macOS) | autre valeur refusée |
 | `BITALINO_ADDRESS` | aucun | adresse du BITalino | `rfcomm` : `rfcomm:XX-XX-XX-XX-XX-XX` ; `serial` : port ou MAC, pas `rfcomm:` ; ignoré pour `sim` |
+| `BITALINO_MIN_BATTERY_PCT` | `30` | batterie du BITalino en dessous de laquelle le pré-vol refuse un départ avec une personne à bord, et avertit au banc ([4.2](#le-pré-vol-anh-142)) | nombre de 0 à 100 |
 | `ARM_RADIUS_M` | **aucun (obligatoire, sans défaut)** | rayon mesuré de l'axe à l'occupant ; tout g affiché en dépend | ]0, 5] m |
 | `LEG_TIP_RADIUS_M` | aucun | point du passager le plus éloigné ; la limite de dérivée de g y est jugée | [`ARM_RADIUS_M`, 5] m ; vide = jugée à `ARM_RADIUS_M` (sous-estime la charge aux pieds ; la CAO borne à 2,43 m) |
 | `GEAR_RATIO` | `49.79` | rapport du réducteur (confirmé au banc) | > 0 |
@@ -3281,16 +3412,18 @@ mémoire.
 | `synchronised` | un service de temps tient l'horloge | `horloge synchronisee · erreur estimee 0.4 ms, erreur au plus 45.0 ms` | `true` | accepté | accepté |
 | `unsynchronised` | aucune source de temps jointe depuis l'allumage du Pi, ou plus depuis longtemps | `horloge NON FIABLE · aucune source de temps jointe : ...`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
 | `unreadable` | sur un Pi, l'état n'a pas pu être lu (appel refusé par le système, sonde en panne) | `horloge NON VERIFIEE · etat de l'horloge illisible (...)`, en orange | `false` | accepté, et l'opérateur est prévenu | **refusé** |
-| (pas d'état) | la console ne tourne pas sous Linux : le Mac du banc et des développeurs. Aucun moyen de poser la question | ligne vide | `null` | accepté, sans avertissement | accepté |
+| (pas d'état) | la console ne tourne pas sous Linux : le Mac du banc et des développeurs. Aucun moyen de poser la question | ligne vide | `null` | accepté ; le pré-vol l'avertit (ANH-142) | **refusé par le pré-vol** (ANH-142) : erreur inconnue ; averti seulement avec `MOTOR_BACKEND=sim` |
 
 **Hors Linux, la console ne juge pas son horloge.** L'appel qu'elle fait
 n'existe que sous Linux (`system_probe`, `src/wall_clock.py`). Sur un Mac elle
 l'écrit une fois dans son journal au démarrage (`wall clock: not judged on this
-system`), n'affiche pas la ligne, ne prévient ni ne refuse rien à ce titre, et
-ses manifestes portent `wall_trusted: null` : « non jugée », jamais « fiable ».
-Sans cela, toute séance avec une personne à bord y serait refusée, simulation
-comprise, faute d'une question que ce système ne permet pas de poser. Le Pi,
-où une personne sera à bord, juge toujours : un état illisible y refuse.
+system`), n'affiche pas la ligne, et ses manifestes portent
+`wall_trusted: null` : « non jugée », jamais « fiable ». Depuis ANH-142, le
+pré-vol ([4.2](#le-pré-vol-anh-142)) tient cette erreur inconnue pour rouge
+avec une personne à bord et orange au banc : EX-2 exige une erreur connue et
+sous 5 s, et la rigueur l'emporte sur la commodité d'un poste de
+développement. Le Pi, où une personne sera à bord, juge toujours : un état
+illisible y refuse.
 
 Ce que l'opérateur lit, mot pour mot :
 
@@ -3319,11 +3452,11 @@ Ce que l'opérateur lit, mot pour mot :
 * **Une horloge temps réel ne suffit pas** : sans réseau, la console dit
   « NON FIABLE » même si le Pi en a une
   ([pi-image.md](pi-image.md#lheure)).
-* **Le tableau de bord n'en sait rien** : ni l'état de l'horloge ni son erreur
-  ne sont dans le battement de cœur (ANH-148), et le contrôle pré-vol qui
-  regroupera ce contrôle avec les autres n'existe pas (ANH-142).
-  `clock_offset_s()` et `is_trusted()` de `src/wall_clock.py` sont ce que ces
-  deux tickets auront à lire.
+* **Le tableau de bord n'en apprend que l'erreur estimée** (`clock_offset_s`
+  du battement de cœur, ANH-148) et le verdict du dernier pré-vol
+  (`preflight_last`). Le pré-vol (ANH-142, [4.2](#le-pré-vol-anh-142)) juge
+  l'horloge avec les autres contrôles : avec une personne à bord, l'erreur
+  garantie doit rester sous 5 s.
 
 **Le journal de la console.** Tout ce que la console journalise sort sur
 l'erreur standard, un objet JSON par ligne (`src/log_format.py`) :

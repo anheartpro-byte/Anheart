@@ -236,6 +236,7 @@ from src.training.plan import (
     Program,
 )
 from src.training.preflight import (
+    PreflightRefused,
     StoBridgedOnBoard,
     StoNotReady,
     check_sto_for_start,
@@ -737,6 +738,7 @@ type StartRefusal = (
     | RecordStorageLow
     | StoNotReady
     | StoBridgedOnBoard
+    | PreflightRefused
 )
 """Every way :meth:`TrainingRuntime.start` can refuse. Closed; match it nested."""
 
@@ -744,6 +746,11 @@ type ArmingGate = Callable[[], RecordStorageLow | None]
 """Asked at every arming, before the drive is touched. It reads memory and
 returns at once: the gate runs inside the control task, where nothing may wait
 (the free space is measured by the journal thread, never here)."""
+
+type PreflightGate = Callable[[Occupancy], PreflightRefused | None]
+"""The pre-flight's verdict on a start that puts this occupancy on board
+(:meth:`~src.training.preflight.PreflightMonitor.refusal`). Memory only, like
+:data:`ArmingGate`, and asked right after it."""
 
 
 # =========================================================================
@@ -1295,6 +1302,7 @@ class TrainingRuntime:
         "_motion_from",
         "_motion_geometry",
         "_phase",
+        "_preflight",
         "_previous_tick_at",
         "_program",
         "_recovery_from",
@@ -1337,6 +1345,7 @@ class TrainingRuntime:
         motion: MotionLimits = DEFAULT_MOTION_LIMITS,
         limit_radius: Metres | None = None,
         arming_gate: ArmingGate | None = None,
+        preflight: PreflightGate | None = None,
         sto: StoSource | None = None,
         attestation: str = ESTOP_ATTESTATION,
     ) -> None:
@@ -1375,6 +1384,10 @@ class TrainingRuntime:
         the console passes the session record's free-space check. ``None``:
         nothing records, nothing to ask.
 
+        ``preflight`` is asked right after it, with the occupancy of the start:
+        the console passes its pre-flight (ANH-142). ``None``: no list judges a
+        start, which is what a test that is not about the pre-flight wants.
+
         ``sto`` supplies memory-only observations. Omitted means NOT_CONFIGURED,
         which refuses every arming and acknowledgement until a ready source exists.
 
@@ -1385,6 +1398,7 @@ class TrainingRuntime:
         self._clock: Clock = clock
         self._sto: StoSource = UnconfiguredStoSource() if sto is None else sto
         self._arming_gate: ArmingGate | None = arming_gate
+        self._preflight: PreflightGate | None = preflight
         self._drive: DriveBackend = drive
         self._geometry: MachineGeometry = geometry
         self._limits: RuntimeLimits = limits
@@ -2253,7 +2267,8 @@ class TrainingRuntime:
         one that went silent (it never sends another frame).
 
         ``occupancy`` is who the start puts on board, ``OCCUPIED`` for a
-        programme: under a declared STO bridge only the bench arms.
+        programme: under a declared STO bridge only the bench arms, and the
+        pre-flight judges that start (the bench has its own rules there).
         """
         state = self.state
         if self._shutdown is not None or self._silent:
@@ -2270,7 +2285,9 @@ class TrainingRuntime:
         if state not in (RuntimeState.IDLE, RuntimeState.FINISHED):
             return AlreadyStarted(state)
         # Last, so the operator is first told what only they can clear.
-        return None if self._arming_gate is None else self._arming_gate()
+        storage = None if self._arming_gate is None else self._arming_gate()
+        preflight = self._preflight
+        return storage or (None if preflight is None else preflight(occupancy))
 
     def _reset_session(self) -> None:
         """Forget the previous session before arming a new one. Link and tracker survive.
