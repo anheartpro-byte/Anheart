@@ -2661,7 +2661,7 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 | POST | `/api/presence` | - | signal de présence de l'accompagnant connecté (règle `attendant_absent`) ; ne relance pas le délai sans action de la session ; la page ne l'envoie que connectée | 200 `{"at": …}` ; 401 `operator_required` |
 | GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied, unreported_stop, acknowledgeable}` (`unreported_stop` : pourquoi une personne à bord est retenue pour une séance que le tableau de bord ne compte pas, ou `null` ; `acknowledgeable` : cette retenue est une séance perdue, la seule que l'opérateur peut acquitter, ANH-145) ; `null` sur une console sans pré-vol |
 | POST | `/api/preflight/run` | - | « Relancer » : une nouvelle passe, la batterie du BITalino relue au repos ; ne lance et ne refuse rien | 202, le même objet ; 409 sur une console sans pré-vol |
-| POST | `/api/preflight/acknowledge` | - | « Acquitter une seance perdue » (ANH-145) : l'opérateur connecté lève les seules séances perdues (refusées pour de bon, illisibles, abandonnées), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 401 `operator_required` ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
+| POST | `/api/preflight/acknowledge` | - | « Acquitter une seance perdue » (ANH-145) : l'opérateur connecté lève les seules séances perdues (refusées pour de bon, illisibles), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 401 `operator_required` ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
 | POST | `/api/service/restore` | - | remet en service une console hors service, par l'opérateur connecté ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 401 `operator_required` ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
@@ -2958,10 +2958,12 @@ au nom de l'opérateur).
 **Ce que l'acquittement couvre : les seules séances perdues**, celles que le
 tableau de bord ne recevra jamais et qui ont pu finir sur un arrêt (ou dont la
 fin est inconnue) : une déclaration ou une fin qu'il a refusée pour de bon, un
-enregistrement illisible, la fin d'une séance sans enregistrement abandonnée
-pour la suivante (`seance mal terminee ou de fin inconnue que le tableau de
-bord ne recevra pas (...) : a acquitter a la console, page Pre-vol`). Les
-refus et la fin abandonnée, qu'aucun démarrage ne renverra, sont écrits à côté
+enregistrement illisible (`seance mal terminee ou de fin inconnue que le
+tableau de bord ne recevra pas (...) : a acquitter a la console, page
+Pre-vol`). La fin d'une séance sans enregistrement n'est jamais abandonnée
+pour la suivante : elle attend derrière, en mémoire, et retient comme une fin
+pas encore reçue (ANH-144). Les refus, qu'aucun démarrage ne renverra, sont
+écrits à côté
 des enregistrements (`.sync-lost-stops.json`, comme un curseur) et
 **retiennent encore après un redémarrage de la console**, jusqu'à
 l'acquittement ; le curseur qui clôt une telle séance n'est écrit qu'une
@@ -2972,8 +2974,7 @@ enregistrements d'une exécution précédente est ajoutée au registre de
 celle-ci, jamais écrite par-dessus. Reste en mémoire seulement jusqu'au pas
 suivant de l'envoi (une seconde environ), et oubliée par un redémarrage à cet
 instant, la perte d'une séance sans enregistrement, qui n'a pas de curseur à
-retenir : une fin abandonnée, ou la déclaration refusée de la séance en
-cours. Un enregistrement illisible reste dû sur le disque : l'acquittement
+retenir : la déclaration refusée de la séance en cours. Un enregistrement illisible reste dû sur le disque : l'acquittement
 le lève pour cette exécution seulement, en mémoire, et le démarrage suivant le
 liste et le retient de nouveau, jusqu'à ce qu'il soit lu et envoyé ou
 acquitté encore. L'acquittement efface ces séances, celles affichées quand il

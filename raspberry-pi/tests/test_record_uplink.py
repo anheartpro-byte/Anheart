@@ -1660,14 +1660,19 @@ async def test_a_session_the_dashboard_cannot_be_told_of_does_not_stop_launches_
     assert b.uplink.owed == 1
     assert not b.refusal_owed()
 
-    # A launch is then refused at the machine: its end takes the one place there is.
+    # A launch is then refused at the machine: its end goes first, the other waits.
     b.uplink.owe_refusal("k17pending", "refusee par la machine : verdict a acquitter")
     assert b.refusal_owed()
     await b.step()
 
     assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["k17pending"]
-    assert "could not be delivered and is given up" in caplog.text
+    assert "given up" not in caplog.text
     assert not b.refusal_owed()
+    assert b.uplink.owed == 1, "the session the dashboard has not named still waits"
+    b.link.answer(LOCAL_PATH, Acked({"sessionId": "cloud-9"}))
+    await b.run(int(RETRY_PERIOD))
+    assert [body["sessionId"] for body in b.link.to(END_PATH)] == ["k17pending", "cloud-9"]
+    assert b.uplink.owed == 0
 
 
 async def test_finishing_when_nothing_runs_does_nothing(tmp_path: Path) -> None:
@@ -3125,9 +3130,11 @@ async def test_a_refused_end_that_was_no_stop_holds_nothing(tmp_path: Path) -> N
     assert b.unreported_stop() is None
 
 
-async def test_a_recordless_stop_given_up_for_the_next_end_holds_across_a_restart(
-    tmp_path: Path,
+async def test_a_recordless_stop_moved_by_the_next_end_is_sent_after_it_never_given_up(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """ANH-144: the end of a session without a record waits in memory behind the end that
+    took its place, and holds as a stop not yet received until the dashboard has it."""
     b = await listed(tmp_path)
     b.link.answer(END_PATH, DOWN)
     b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
@@ -3137,10 +3144,44 @@ async def test_a_recordless_stop_given_up_for_the_next_end_holds_across_a_restar
     b.uplink.begin(armed(b.clock, remote="k2"))
     await b.step()
     b.uplink.finished(RuntimeEnd(failed=False, reason="operator_stop: fini"))
-    assert lost(b, "fin abandonnee")
-    await b.step()  # written at the next step
-    again = await restarted_and_listed(b)
-    assert lost(again, "fin abandonnee")
+    await b.step()
+    assert b.uplink.lost_stops == ()
+    assert b.uplink.owed == 2
+    held = "seance terminee sur emergency_stop pas encore recue par le tableau de bord"
+    assert b.unreported_stop() == held
+    sent = len(b.link.to(END_PATH))
+
+    del b.link.answers[END_PATH]
+    await b.run(int(RETRY_PERIOD) + 2)
+    ends = [(body["sessionId"], body["reason"]) for body in b.link.to(END_PATH)[sent:]]
+    assert ends == [("k2", "operator_stop: fini"), ("k1", "emergency_stop: ecran")]
+    assert b.uplink.owed == 0
+    assert b.unreported_stop() is None
+    assert "given up" not in caplog.text
+
+
+async def test_a_recordless_end_settled_while_the_next_takes_its_place_holds_nothing_back(
+    tmp_path: Path,
+) -> None:
+    """Its end was on its way when the next session ended: queued, then passed over, and
+    what follows it is sent."""
+    clock = ManualClock(Monotonic(100.0), UnixMillis(EPOCH_MS))
+    link = Link()
+    late = Late(link, END_PATH, Acked({}))
+    b = bench(tmp_path, clock=clock, link=link, recording=False, sender=late)
+    b.uplink.begin(armed(clock, remote="k1"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    stepping = asyncio.create_task(b.step())
+    await late.asked.wait()
+    b.uplink.begin(armed(clock, remote="k2"))
+    await asyncio.sleep(0)
+    b.uplink.finished(ENDED)
+    late.release.set()
+    await stepping
+    await b.run(3)
+    assert [body["sessionId"] for body in link.to(END_PATH)] == ["k1", "k2"]
+    assert b.uplink.owed == 0
 
 
 async def test_an_end_the_link_did_not_see_is_of_unknown_end(tmp_path: Path) -> None:

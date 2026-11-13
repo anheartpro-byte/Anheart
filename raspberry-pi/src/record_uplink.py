@@ -996,11 +996,8 @@ class RecordUplink:
                 self._owed_queue = (*self._owed_queue, owed)
                 return
             if waiting.record is None:
-                _logger.warning(
-                    "dashboard: the end of %s could not be delivered and is given up",
-                    waiting.cursor.session_id or waiting.local_ref,
-                )
-                self._lose(_identity(waiting), "fin abandonnee", _reason_of(waiting))
+                # No record to read it back from: it waits in memory, behind this one.
+                self._owed_queue = (*self._owed_queue, waiting)
             else:
                 self._queue(waiting.record.name)
         self._catching = owed
@@ -1184,7 +1181,8 @@ class RecordUplink:
     async def _serve(self, now: Monotonic, owed: _Owed, *, live: bool = True) -> _Step:
         if owed.cursor.state == "complete":
             await self._persist(owed)  # a cursor held back for its loss (ANH-145)
-            return _Step.IDLE
+            # One queued while its last request was on its way, which settled it.
+            return _Step.IDLE if live else _Step.DONE
         if owed.next_try is not None and now < owed.next_try:
             return _Step.BUSY
         outcome = await self._deliver(now, owed, live=live)
