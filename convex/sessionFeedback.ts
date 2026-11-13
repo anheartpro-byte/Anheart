@@ -186,6 +186,19 @@ export const getSessionFeedback = query({
 });
 
 /**
+ * What the site sends to `submitSessionFeedback`. The mutation takes its
+ * arguments loose and checks them itself; this type keeps the site's call
+ * checked by the compiler all the same.
+ */
+export type SessionFeedbackSubmission = {
+  sessionId: Id<"sessions">;
+  nauseaScore: number;
+  dizzinessScore: number;
+  comfort: string;
+  freeText?: string;
+};
+
+/**
  * The rider gives or changes the feedback of their session, from the site.
  * Refused with a stable code, never naming a value: `session_not_found` for
  * a session the caller may not read, `feedback_rider_only` for anyone but its
@@ -199,10 +212,8 @@ export const submitSessionFeedback = mutation({
   args: v.any(),
   returns: v.null(),
   handler: async (ctx, args) => {
-    const { sessionId: given, ...input } =
-      typeof args === "object" && args !== null
-        ? (args as Record<string, unknown>)
-        : {};
+    // An object whatever the validator: Convex hands every function one.
+    const { sessionId: given, ...input } = args as Record<string, unknown>;
     await limitUser(ctx);
     const caller = await getCurrentUserOrThrow(ctx);
     const sessionId =

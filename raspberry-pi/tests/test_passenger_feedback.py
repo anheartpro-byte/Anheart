@@ -507,9 +507,15 @@ async def test_p5_any_other_refusal_waits_and_is_tried_again_then_taken(
     await store.step(link)
     current = offered(store)
     assert (current.delivery, current.code, current.can_submit) == (
-        Delivery.WAITING_LINK,
-        None,
+        Delivery.REFUSED_FOR_NOW,
+        refusal.code,
         True,
+    )
+    # The card says what happens, and why: no word of a link that works.
+    said = describe_delivery(current.delivery, current.code)
+    assert said == (
+        "Refusé pour l'instant par le tableau de bord : nouvel essai dans 15 s "
+        f"({'sans code' if refusal.code is None else refusal.code})"
     )
     await store.step(link)
     assert len(link.sent) == 1, "nothing again before the retry period"

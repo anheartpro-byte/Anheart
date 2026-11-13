@@ -291,6 +291,9 @@ class Delivery(Enum):
     WAITING_LINK = "waiting_link"
     """Entered: waiting for the link, or for the dashboard to say which contract it speaks."""
 
+    REFUSED_FOR_NOW = "refused_for_now"
+    """Entered: the dashboard refused it in a way that may be of the moment; sent again."""
+
     WAITING_SESSION = "waiting_session"
     """Entered: waiting for the session's identifier on the dashboard."""
 
@@ -312,6 +315,7 @@ class Delivery(Enum):
 WAITING: Final[frozenset[Delivery]] = frozenset(
     {
         Delivery.WAITING_LINK,
+        Delivery.REFUSED_FOR_NOW,
         Delivery.WAITING_SESSION,
         Delivery.SERVER_TOO_OLD,
         Delivery.WAITING_END,
@@ -325,6 +329,10 @@ DELIVERY_WORDS: Final[Mapping[Delivery, str]] = MappingProxyType(
     {
         Delivery.TO_FILL: "",
         Delivery.WAITING_LINK: "En attente du tableau de bord : envoi à la reprise de la liaison",
+        Delivery.REFUSED_FOR_NOW: (
+            f"Refusé pour l'instant par le tableau de bord : nouvel essai dans "
+            f"{int(RETRY_PERIOD)} s"
+        ),
         Delivery.WAITING_SESSION: (
             "En attente de la séance sur le tableau de bord : envoi dès qu'elle y est"
         ),
@@ -342,7 +350,7 @@ DELIVERY_WORDS: Final[Mapping[Delivery, str]] = MappingProxyType(
 def describe_delivery(delivery: Delivery, code: ErrorCode | None) -> str:
     """The status line of the card; a refusal names the dashboard's code, never more."""
     words = DELIVERY_WORDS[delivery]
-    if delivery is not Delivery.REFUSED:
+    if delivery is not Delivery.REFUSED and delivery is not Delivery.REFUSED_FOR_NOW:
         return words
     return f"{words} ({'sans code' if code is None else code})"
 
@@ -542,7 +550,8 @@ class PassengerFeedback:
                     self._later(entry, current, Delivery.WAITING_END, now)
                     return
                 if not answer.final and answer.code not in FINAL_REFUSALS:
-                    self._later(entry, current, Delivery.WAITING_LINK, now)
+                    entry.code = answer.code  # the card says why it waits
+                    self._later(entry, current, Delivery.REFUSED_FOR_NOW, now)
                     return
                 entry.delivery = Delivery.REFUSED
                 entry.code = answer.code

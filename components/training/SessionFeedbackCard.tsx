@@ -9,6 +9,7 @@ import { enUS, fr } from "date-fns/locale";
 import { Loader2, MessageSquareHeart } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { SessionFeedbackSubmission } from "@/convex/sessionFeedback";
 import {
   FEEDBACK_CONTRACT,
   FREE_TEXT_MAX_LENGTH,
@@ -207,7 +208,7 @@ function FeedbackForm({
         dizzinessScore: Number(scores.dizziness),
         comfort,
         ...(text === "" ? {} : { freeText: text }),
-      },
+      } satisfies SessionFeedbackSubmission,
       { success: t("saved") },
     );
     // A refusal is shown by the hook; the form keeps what was entered.

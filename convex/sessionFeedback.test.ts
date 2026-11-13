@@ -396,6 +396,24 @@ describe("ANH-146 M4 the bounds of a feedback, from the site", () => {
     expect(await rowsOf(w)).toEqual([]);
   });
 
+  it.each([
+    ["missing", {}],
+    ["a number", { sessionId: 7654321 }],
+  ])("refuses a session identifier %s as session_not_found", async (_name, given) => {
+    const w = await seedWorld(modules);
+    await session(w);
+    const text = await refusalText(
+      as(w.t, "patient").mutation(api.sessionFeedback.submitSessionFeedback, {
+        ...given,
+        ...FEEDBACK,
+      }),
+    );
+    expect(text).toContain("session_not_found");
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain("7654321");
+    expect(await rowsOf(w)).toEqual([]);
+  });
+
   it("refuses an identifier that is no session as session_not_found, without quoting it", async () => {
     const w = await seedWorld(modules);
     await session(w);
