@@ -262,6 +262,9 @@ const scenarios = [
   { name: "R1b refuses a middle dot separator", files: { "menaces.md": open + "ANH·999\n" }, status: 1, message: spellingMessage },
   { name: "R1b refuses linked digits after a hyphen", files: { "menaces.md": open + "ANH-[999](x.md)\n" }, status: 1, message: spellingMessage },
   { name: "R1b refuses a linked hyphen before the digits", files: { "menaces.md": open + "ANH[-](x.md)999\n" }, status: 1, message: spellingMessage },
+  // ANH-229 C-12: a destination with no `.`, `/`, `#` or `:` no longer hides the name it splits.
+  { name: "C-12 refuses a linked separator whose destination is a bare word", files: { "menaces.md": open + "anh[-](x)180\n" }, status: 1, message: spellingMessage },
+  { name: "C-12 refuses linked letters whose destination is a bare word", files: { "menaces.md": open + "[ANH](x) 180\n" }, status: 1, message: spellingMessage },
   { name: "refuses an opening parenthesis separator", files: { "menaces.md": open + "ANH(999\n" }, status: 1, message: spellingMessage },
   { name: "refuses a closing parenthesis separator", files: { "menaces.md": open + "ANH)999\n" }, status: 1, message: spellingMessage },
 ];

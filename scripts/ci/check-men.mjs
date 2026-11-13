@@ -138,11 +138,11 @@ function checkTicketNames(text, markdownDestinations = false) {
   }
 }
 
-// Keep destination erasure for ticket names split by markup, then reread tokens
-// behind every ]( with only lowercase Markdown filenames and path fragments exempt.
+// Erase every destination for ticket names split by markup, even one without
+// `.`, `/`, `#` or `:`, then reread tokens behind every ]( with only lowercase
+// Markdown filenames and path fragments exempt.
 let ticketText = catalogue;
-for (const { url, start, end } of destinations) {
-  if (!/[./#:]/.test(url)) continue;
+for (const { start, end } of destinations) {
   ticketText = ticketText.slice(0, start) + " ".repeat(end - start) + ticketText.slice(end);
 }
 checkTicketNames(withoutAddresses(ticketText));

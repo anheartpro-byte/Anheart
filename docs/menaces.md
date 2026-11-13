@@ -526,14 +526,13 @@ entre les lettres `AN` et `H`, échappe au contrôle des noms de ticket, forme
 et registre.
 Un nom dont `ANH` et les chiffres sont séparés par un autre signe que ceux
 reconnus n'est pas lu, par exemple une virgule, un signe égal ou une flèche.
-Contournement connu non détecté : un lien dont la destination ne contient ni
-`.`, ni `/`, ni `#`, ni `:`, posé sur le séparateur ou sur les lettres d'un
-nom de ticket, n'est pas lu par le contrôle de forme. C'est le cas de
-`anh[-](x)180` et `[ANH](x) 180`, dont l'affichage réunit les morceaux du nom.
-La lecture des liens par le relecteur, à la ligne 4 de la check-list de
-release, reste donc nécessaire.
-La correction n'est pas faite. Elle est consignée comme point de suivi dans
-la PR qui introduit ces contrôles : [PR #117](https://github.com/anheartpro-byte/Anheart/pull/117).
+Un lien posé sur le séparateur ou sur les lettres d'un nom de ticket est lu
+par le contrôle de forme quelle que soit sa destination, même sans `.`, `/`,
+`#` ni `:`, par exemple un tiret seul mis en lien vers `x` entre les lettres
+et les chiffres : le nom ainsi coupé, que l'affichage réunit, est refusé. Ce
+contournement, consigné comme point de suivi dans la PR qui introduit ces
+contrôles ([PR #117](https://github.com/anheartpro-byte/Anheart/pull/117)),
+est fermé ; ses deux formes sont des cas de `scripts/ci/check-men.test.mjs`.
 L'effacement des adresses nues reconnaît `http://`, `https://` ou `www.` en
 toute casse et n'importe où, même sans domaine, plus largement que la
 comparaison des adresses Linear ; il ne s'arrête pas à l'astérisque.
