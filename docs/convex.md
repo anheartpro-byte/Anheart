@@ -1569,11 +1569,12 @@ auditée « clore comme abandonnée » ; la décision revient au chef de projet,
 avant la mise en production.
 
 **Point ouvert.** Un programme personnalisé dont la récupération
-(`recovery_s`) dépasse celle des programmes livrés, ou permis au-dessus de
-la vitesse nominale (`allow_above_nameplate`), n'est pas couvert par la
+(`recovery_s`) dépasse celle des programmes livrés n'est pas couvert par la
 marge : la console n'en plafonne pas la récupération, et le serveur ne la
 connaît pas (`machine_profiles` ne la porte pas). À trancher avec la
-décision ci-dessus.
+décision ci-dessus. Un programme au-dessus de la vitesse nominale n'en est
+pas un : la console refuse tout programme au-dessus du plafond avec
+personne à bord, lui-même au plus `MOTOR_MAX_RPM`, au plus 1380 tr/min.
 
 **Limites.** Une séance `interrupted` dont la machine ne revient jamais (et
 dont la fin n'arrive jamais) n'est close par aucune fonction : une séance

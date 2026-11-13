@@ -24,8 +24,12 @@ The worst case, in order:
   the widest radius a console accepts, where the g-rate limit is slowest;
 * then the profile's whole recovery again, motor stopped, the rider on board.
 
-A custom profile with a longer recovery, or allowed above the nameplate, is
-not covered: an open point (docs/convex.md).
+The gear ratio is the confirmed one (``MachineGeometry`` default): a lower
+``GEAR_RATIO`` would lengthen the walk, and lower the real top speed with it.
+The descent is assumed seen stopped within its expected time, which a drive
+on its commissioned ramp gives. A custom profile with a longer recovery is
+not covered: an open point (docs/convex.md). A profile above the nameplate is
+refused by the console, so it is not one.
 """
 
 from __future__ import annotations
@@ -74,9 +78,11 @@ def longest_late_ending() -> float:
     walk = ramp_duration(
         NAMEPLATE_MOTOR_RPM, MotorRpm(0), limits_of(SHIPPED_PARAMETERS.motion_limits), widest
     )
+    # The runtime counts a walk that never reaches zero as none; an upper bound
+    # cannot: motion limits that slow must fail here, not pass as no walk at all.
+    assert walk is not None, "motion limits too slow for the walk to reach zero"
     passage = max(profile.min_run_rpm for profile in profiles) / slew
-    # As the runtime counts it: a walk that never reaches zero counts as none.
-    walked = (0.0 if walk is None else float(walk)) + passage
+    walked = float(walk) + passage
     descent = max(walked, 2.0 * NAMEPLATE_MOTOR_RPM / slew) + COMMISSIONED_DECEL_S
     recovery = max(MIN_RECOVERY_S, *(profile.recovery_s for profile in profiles))
     return descent + recovery
