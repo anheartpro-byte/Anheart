@@ -14,6 +14,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import { CATALOG_SIGNING_KEY_ENV } from "./lib/programmes";
+import { SYSTEM_ACTOR } from "./lib/audit";
 import {
   isAcceptableCode,
   MAX_DEVICES,
@@ -483,10 +484,29 @@ describe("ANH-152 the rules of the list, one by one", () => {
         });
       return [await row(w.machine, w.orgA), await row(w.orgBMachine, w.orgB)];
     });
-    const release = () => w.t.run((ctx) => releaseOperator(ctx, w.manager, w.orgA, NOW + 1));
+    const byClerk = { actor: SYSTEM_ACTOR, source: "webhook" } as const;
+    const release = () =>
+      w.t.run((ctx) => releaseOperator(ctx, w.manager, w.orgA, NOW + 1, byClerk));
     expect(await release()).toBe(1);
-    // Already released: nothing left to change.
+    // Already released: nothing left to change, and nothing more in the audit log.
     expect(await release()).toBe(0);
+    const audited = await w.t.run((ctx) =>
+      ctx.db
+        .query("audit_log")
+        .filter((q) => q.eq(q.field("action"), "machine_operator.released"))
+        .collect(),
+    );
+    expect(audited).toHaveLength(1);
+    expect(audited[0]).toMatchObject({
+      organizationId: w.orgA,
+      actorRole: "system",
+      source: "webhook",
+      targetType: "user",
+      targetId: w.manager,
+      details: { count: 1 },
+    });
+    expect(JSON.stringify(audited[0])).not.toContain(code.hash);
+    expect(JSON.stringify(audited[0])).not.toContain(code.salt);
     const [a, b] = await w.t.run(async (ctx) => [await ctx.db.get(inA), await ctx.db.get(inB)]);
     expect(a).toMatchObject({ disabledAt: NOW + 1 });
     expect(a?.operatorCode).toBeUndefined();
@@ -494,7 +514,9 @@ describe("ANH-152 the rules of the list, one by one", () => {
     expect(b?.operatorCode).toEqual(code);
     // Disabled by an admin before, its code still held: the code goes, the date stays.
     await w.t.run((ctx) => ctx.db.patch(inB, { disabledAt: NOW - 5 }));
-    expect(await w.t.run((ctx) => releaseOperator(ctx, w.manager, w.orgB, NOW + 2))).toBe(1);
+    expect(
+      await w.t.run((ctx) => releaseOperator(ctx, w.manager, w.orgB, NOW + 2, byClerk)),
+    ).toBe(1);
     const released = await w.t.run((ctx) => ctx.db.get(inB));
     expect(released?.disabledAt).toBe(NOW - 5);
     expect(released?.operatorCode).toBeUndefined();

@@ -69,15 +69,19 @@ async function mirrorMembership(
     (!membership.active || membership.clerkEventAt !== undefined)
   )
     return;
+  // The account itself, signed in with that token, as the audit below names it.
+  const self = {
+    actor: { kind: "user", id: user._id, role: effectiveRole(organization, role) },
+    source: "site",
+  } as const;
   if (membership) {
-    await updateMembership(ctx, membership, { role, active: true });
+    await updateMembership(ctx, membership, { role, active: true }, self);
   } else {
-    await insertMembership(ctx, {
-      userId: user._id,
-      organizationId,
-      role,
-      active: true,
-    });
+    await insertMembership(
+      ctx,
+      { userId: user._id, organizationId, role, active: true },
+      self,
+    );
   }
   await ctx.db.patch(user._id, {
     role,
@@ -174,18 +178,23 @@ export const getOrCreateUser = mutation({
       createdAt: Date.now(),
     });
     if (home) {
-      await insertMembership(ctx, {
-        userId,
-        organizationId: home.organization._id,
-        role: home.role,
-        active: true,
-      });
-      await audit(ctx, {
-        actor: {
-          kind: "user",
-          id: userId,
-          role: effectiveRole(home.organization, home.role),
+      const actor = {
+        kind: "user",
+        id: userId,
+        role: effectiveRole(home.organization, home.role),
+      } as const;
+      await insertMembership(
+        ctx,
+        {
+          userId,
+          organizationId: home.organization._id,
+          role: home.role,
+          active: true,
         },
+        { actor, source: "site" },
+      );
+      await audit(ctx, {
+        actor,
         source: "site",
         organizationId: home.organization._id,
         action: "membership.created",
@@ -325,7 +334,12 @@ export const updateUserRole = mutation({
       throw refusal("user_not_found");
     }
 
-    await updateMembership(ctx, membership, { role: args.role });
+    await updateMembership(
+      ctx,
+      membership,
+      { role: args.role },
+      { actor: userActor(currentUser), source: "site" },
+    );
     await ctx.db.patch(args.userId, { role: args.role });
     if (membership.role !== args.role)
       await audit(ctx, {
@@ -744,7 +758,10 @@ export const deleteUser = mutation({
     const kept = memberships.filter((m) => !removable(m.organizationId));
     for (const membership of memberships) {
       if (removable(membership.organizationId)) {
-        await deleteMembership(ctx, membership);
+        await deleteMembership(ctx, membership, {
+          actor: userActor(currentUser),
+          source: "site",
+        });
         affectedOrganizations.add(membership.organizationId);
       }
     }

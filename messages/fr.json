@@ -103,7 +103,8 @@
       "machine_operator": {
         "enabled": "Opérateur de la console activé",
         "disabled": "Opérateur de la console désactivé",
-        "code_set": "Code de console défini"
+        "code_set": "Code de console défini",
+        "released": "Opérateur de la console retiré à son départ"
       },
       "machine_device": {
         "created": "Tablette de la console créée",

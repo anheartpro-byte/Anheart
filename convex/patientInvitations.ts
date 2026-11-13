@@ -87,12 +87,11 @@ export const prepare = internalMutation({
           createdAt: now,
         })));
     if (!held && userId)
-      await insertMembership(ctx, {
-        userId,
-        organizationId: me.organizationId,
-        role: "user",
-        active: false,
-      });
+      await insertMembership(
+        ctx,
+        { userId, organizationId: me.organizationId, role: "user", active: false },
+        { actor: userActor(me), source: "site" },
+      );
     const gestionnaireIds: Id<"users">[] = [];
     for (const id of me.role === "gestionnaire"
       ? [me._id]

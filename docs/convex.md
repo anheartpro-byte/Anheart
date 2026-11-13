@@ -3240,7 +3240,7 @@ déploiement.
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, operatorId? (1.13), profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local ; limite 1 par minute, réserve 20 |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
 | `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points et 300 Kio max) | `{stored, duplicates, rejected}` | lots de 300 points max : toutes les 5 s pour une séance à jour, toutes les 3 s pour ce qui est en retard |
-| `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements et 2,5 Mio max, 2000 caractères de texte par événement) ; depuis 1.7, ou un seul événement `kind: "feedback"` (retour du passager) | `{stored, duplicates, rejected}` ; `{stored: 1, duplicates: 0, rejected: 0}` pour un retour enregistré | avec la télémétrie, 200 événements max par envoi ; un retour à part, à un serveur qui annonce 1.7 ou plus |
+| `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements et 2,5 Mio max, 2000 unités UTF-16 de texte par événement) ; depuis 1.7, ou un seul événement `kind: "feedback"` (retour du passager) | `{stored, duplicates, rejected}` ; `{stored: 1, duplicates: 0, rejected: 0}` pour un retour enregistré | avec la télémétrie, 200 événements max par envoi ; un retour à part, à un serveur qui annonce 1.7 ou plus |
 | `POST /api/machine/training/end` | `{sessionId, failed, reason, endedAt?}` | `{success: true}` | quand l'enregistrement de la séance est fermé et sa télémétrie acquittée ; sans `endedAt` pour un lancement que la machine a refusé |
 
 Détails du contrat :
@@ -3331,7 +3331,8 @@ Détails du contrat :
 - **Événements** : `seq` entier de 0 à 999 999, `t` nombre entier (de
   millisecondes), `kind` de 64
   caractères au plus (minuscules, chiffres, `_`, une lettre d'abord), `detail`
-  de 2000 caractères au plus, `actor` de 1 à 64 caractères parmi lettres,
+  de 2000 unités UTF-16 au plus (`length` d'une chaîne JavaScript : un emoji en
+  compte deux ; la console coupe ses textes ainsi), `actor` de 1 à 64 caractères parmi lettres,
   chiffres, `_` et `-`. Un événement mal formé refuse tout le lot (400
   `invalid_request`, « Malformed event »), comme un point mal formé.
 - **Retour du passager** (contrat 1.7, ANH-146, entrée `feedback_events` de
@@ -3482,7 +3483,9 @@ de [`contracts/machine-api.json`](../contracts/machine-api.json).
   organisation supprimés, rôle qui n'est plus admin ni gestionnaire, par
   Clerk, par un admin ou par le jeton de connexion) désactive ses lignes
   `machine_operators` de cette organisation et efface son code
-  (`releaseOperator`, sans auteur dans `disabledBy`) : revenu, il lui faut
+  (`releaseOperator`, sans auteur dans `disabledBy` ; l'audit
+  `machine_operator.released` ne porte que le nombre de lignes, au nom de qui
+  a changé l'appartenance) : revenu, il lui faut
   une nouvelle activation par un admin et un nouveau code, jamais les
   anciens. La liste suivante ne le tient plus. Toute écriture d'une
   appartenance passe par `convex/lib/memberships.ts` (webhook Clerk,
