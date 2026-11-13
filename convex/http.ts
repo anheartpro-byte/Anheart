@@ -805,7 +805,7 @@ http.route({
 /** Events accepted in one request. */
 const MAX_EVENTS_PER_BATCH = 200;
 /**
- * The highest rank of an event: an event is one `(sessionId, seq)`, so this
+ * The highest number of an event: an event is one `(sessionId, seq)`, so this
  * is also the most events one session can hold.
  */
 const MAX_EVENT_SEQ = 999_999;
@@ -852,7 +852,8 @@ function eventOf(raw: unknown) {
  * -> {stored, duplicates, rejected}
  *
  * The events of the session's local record, each `{seq, t, kind, detail,
- * actor}`: `seq` is its rank in the record (999 999 at most), `t` a whole
+ * actor}`: `seq` is its number among the record's events (999 999 at most;
+ * the console sends some of them only, so the numbers sent leave gaps), `t` a whole
  * number of ms, and an event is one `(sessionId, seq)`, stored once however
  * many times it is sent. Sizes are bounded here: 2.5 MiB of body and 200
  * events per request, both refused (413) before an event is read; 2000
