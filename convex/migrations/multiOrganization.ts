@@ -39,13 +39,6 @@ import {
   findUnlinkedDefaultOrganization,
 } from "../lib/auth";
 
-/**
- * A release of a console operator these migrations cause (ANH-152) is the
- * system's, on the state Clerk's webhook gave the membership: the operator
- * source stays the three registered functions' (`auditCompleteness.test.ts`).
- */
-const BY_MIGRATION = { actor: SYSTEM_ACTOR, source: "webhook" } as const;
-
 /** Rows attached per run when the operator does not choose. */
 const DEFAULT_BATCH_SIZE = 500;
 const MAX_BATCH_SIZE = 1000;
@@ -176,6 +169,9 @@ export const attachExistingRowsToAnheart = internalMutation({
     done: v.boolean(),
   }),
   handler: async (ctx, args) => {
+    // Run from the command line with the deployment key: a release of a console
+    // operator it causes (ANH-152) is audited as the operator's, by the system.
+    const BY_MIGRATION = { actor: SYSTEM_ACTOR, source: "operator" } as const;
     const batchSize = Math.min(
       Math.max(Math.floor(args.batchSize ?? DEFAULT_BATCH_SIZE), 1),
       MAX_BATCH_SIZE,
@@ -404,6 +400,9 @@ export const repairDuplicatedAnheartOrganization = internalMutation({
     }),
   ),
   handler: async (ctx, args) => {
+    // Run from the command line with the deployment key: a release of a console
+    // operator it causes (ANH-152) is audited as the operator's, by the system.
+    const BY_MIGRATION = { actor: SYSTEM_ACTOR, source: "operator" } as const;
     const plan = await planRepair(ctx);
     if (plan === null) return { status: "nothing_to_repair" as const };
     const { clerkOrgId, duplicate, anheart } = plan;

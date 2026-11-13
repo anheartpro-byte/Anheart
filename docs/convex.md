@@ -188,8 +188,12 @@ La source **`operator` est une extension d'EX-1 décidée pendant le
 développement faute de valeur adaptée, à relire par le chef de projet**.
 Elle désigne les fonctions lancées en ligne de commande avec la clé de
 déploiement : `machineKeys.createKeyByOperator`,
-`machineKeys.revokeKeyByOperator` et `medicalParameters.registerVersion`
-(écriture par `medicalParametersStore.insertVersion`). Ces fonctions sont
+`machineKeys.revokeKeyByOperator`, `medicalParameters.registerVersion`
+(écriture par `medicalParametersStore.insertVersion`), et les deux migrations
+`migrations/multiOrganization.attachExistingRowsToAnheart` et
+`migrations/multiOrganization.repairDuplicatedAnheartOrganization` pour le
+retrait d'un opérateur de console qu'elles causeraient
+(`machine_operator.released`, ANH-152). Ces fonctions sont
 internes ; l'acteur est `system`, sans `actorId`. Le site et les routes
 machine ne peuvent pas emprunter ce chemin.
 La source est attribuée par le chemin de code, pas constatée à l'exécution :
