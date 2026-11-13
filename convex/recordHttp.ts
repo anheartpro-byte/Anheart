@@ -42,7 +42,11 @@ export const uploadUrl = httpAction(async (ctx, req) => {
     ? machineErrorResponse(400, "invalid_request", result.error)
     : json(result);
 });
-/** One commit per reservation; ten a second per machine, 64 in reserve (ANH-228). */
+/**
+ * Ties an uploaded file to its reservation, as often as it is sent: a stored
+ * file is acknowledged, a refused one replaced (`attachUpload`). Ten a second
+ * per machine, 64 in reserve (ANH-228).
+ */
 export const commit = httpAction(async (ctx, req) => {
   const auth = await validateMachineAuth(ctx, req);
   if ("error" in auth) return auth.error;

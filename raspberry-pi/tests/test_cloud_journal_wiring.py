@@ -244,6 +244,11 @@ async def test_on_the_console_the_records_directory_holds_a_logbook_that_is_neve
     assert list((root / "config").glob("*.json"))
 
 
+def record_io_threads() -> set[threading.Thread]:
+    """The threads alive that read or write the records (``RecordIo``), and no other."""
+    return {thread for thread in threading.enumerate() if thread.name == "record-io"}
+
+
 @pytest.fixture
 def stuck(monkeypatch: pytest.MonkeyPatch) -> Iterator[threading.Event]:
     """A records directory that does not answer: reading a manifest never returns.
@@ -266,6 +271,9 @@ async def test_a_disk_that_does_not_answer_holds_the_sending_and_no_step_piles_u
     tmp_path: Path, stuck: threading.Event, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(record_uplink, "READ_TIMEOUT", Seconds(0.2))
+    # Counted by name and against those already alive: the other threads of the
+    # process (another test's, the event loop's) are not this test's to count.
+    before = record_io_threads()
     b = bench(tmp_path)
     b.uplink.begin(armed(b.clock))
     record = recording(tmp_path, b.clock)
@@ -285,7 +293,7 @@ async def test_a_disk_that_does_not_answer_holds_the_sending_and_no_step_piles_u
     # that needs no file. Its measurements wait for the disk.
     assert b.link.paths() == ["local"]
     assert b.link.sent[0][1]["localRef"] == "ref-1"
-    assert threading.active_count() < 12, "one thread waits on the disk, not one per step"
+    assert len(record_io_threads() - before) == 1, "one thread waits on the disk, not one per step"
 
     stuck.set()
     for _ in range(100):
