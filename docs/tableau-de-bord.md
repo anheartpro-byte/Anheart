@@ -1130,7 +1130,8 @@ lit « Les incidents sont réservés aux gestionnaires et aux administrateurs. �
 Le serveur ouvre seul un incident à chaque événement de sécurité qui demande
 une revue (verdict `QUICK_STOP` ou `GO_SILENT`, défaut du variateur, arrêt
 d'urgence, exception de la boucle, trois refus de pré-vol de suite,
-enregistrement refusé) et calcule sa gravité
+enregistrement refusé), un seul par événement physique (le verdict et la fin
+d'un arrêt d'urgence, par exemple), et calcule sa gravité
 ([convex.md](convex.md#incidents--registre-des-incidents-anh-145)).
 
 **La liste** : les plus récents d'abord, 1000 au plus (la page le dit quand
@@ -1150,7 +1151,9 @@ ISO en UTC, aucune cellule lue comme une formule), pour l'analyse de risques
 gravité haute n'est pas clos, la raison du blocage : « Séances programmées
 fermées sur cette machine jusqu'à la clôture de cet incident par un admin
 Anheart. Une séance de banc reste possible. » ; la machine, l'heure
-d'ouverture, la règle, la personne à bord, qui l'a analysé et qui l'a clos ;
+d'ouverture, la règle, la personne à bord, qui l'a analysé (l'auteur de la
+cause et de l'action telles qu'elles sont : l'admin Anheart s'il les a
+réécrites en clôturant) et qui l'a clos ;
 **Voir la séance** ; les événements de la séance à 60 s au plus de l'instant
 de l'incident (écart en secondes, type, texte de la machine) ; la carte
 **Enregistrement de séance** (téléchargement et visualiseur, celle de la page
