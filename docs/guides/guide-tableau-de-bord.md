@@ -827,16 +827,11 @@ révoquées les plus récentes complètent jusqu'à 50 lignes. Chaque ligne mont
 | **Nouvelle clé** | Fenêtre « Nouvelle clé pour cette machine ». Choisir le **chevauchement avec les clés actuelles** : « 24 heures (recommandé) », « 1 heure », ou « Aucun : révoquer les clés actuelles tout de suite » ; et l'**expiration de la nouvelle clé** : « Jamais », « Dans 90 jours », « Dans un an ». **Créer la clé** : la clé s'affiche **une seule fois**, avec **Copier**. Pendant le chevauchement, l'ancienne et la nouvelle clé fonctionnent toutes les deux ; à la fin, l'ancienne est refusée. |
 | **Révoquer** (clé active ou remplacée) | Fenêtre « Révoquer la clé anh1.… ? » ; **Annuler** / **Révoquer**. La clé est refusée **dès la requête suivante**. Si c'est la seule clé valide, la fenêtre prévient que la machine restera coupée du site sans nouvelle clé. |
 
-Avant la migration, la clé historique apparaît en tête avec son préfixe,
-le badge **Active** et « Clé d'avant les clés multiples ». Elle ouvre les
-routes de la machine jusqu'à sa révocation ; remplacée par une nouvelle clé,
-elle reste valide jusqu'à la fin du chevauchement. Ni sa date de création ni
-sa dernière utilisation ne sont connues. **Révoquer** demande
-la même confirmation et coupe cette clé dès la requête suivante. Le message
-« Aucune clé n'est enregistrée pour cette machine. » n'apparaît que sans clé.
+Le message « Aucune clé n'est enregistrée pour cette machine. » n'apparaît
+que sans clé.
 
 Sur une machine supprimée, les clés n'ouvrent rien. L'admin Anheart peut les
-révoquer ici, y compris la clé historique, avant de restaurer ; celles
+révoquer ici avant de restaurer ; celles
 encore valides (ni révoquées ni expirées) ouvriront de nouveau les routes à
 la restauration. L'admin d'une organisation cliente n'a pas accès à cette
 carte sur une machine supprimée. Les droits restent les mêmes.
@@ -2293,7 +2288,7 @@ Restaurer (administrateur) :
 
 1. **Machines** → **Afficher les machines supprimées** → la machine.
 2. Dans **Clés de la machine**, révoquez d'abord les clés qui ne doivent plus
-   servir, y compris la clé historique si elle est présente.
+   servir.
 3. Bandeau **Supprimée** → **Restaurer** : la confirmation rappelle que les
    clés encore valides (ni révoquées ni expirées) ouvriront de nouveau les
    routes machine → **Restaurer**.

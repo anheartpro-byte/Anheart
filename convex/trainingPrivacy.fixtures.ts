@@ -58,7 +58,6 @@ export async function trainingFixture(
     }
     const machineFields = {
       name: "Synthetic machine",
-      apiKey: "synthetic-hash",
       status: "in_session",
       lastHeartbeat: now,
       createdAt: now,

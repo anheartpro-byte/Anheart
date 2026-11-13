@@ -481,16 +481,9 @@ refusée à la machine dès la fin du chevauchement.
 
 Toutes les clés non révoquées sont listées, même au-delà de 50, la plus
 récente en tête ; les clés révoquées les plus récentes complètent jusqu'à
-50 lignes au total. Avant la migration, la clé historique figure en tête,
-avec son préfixe, son badge « Active » et « Clé d'avant les clés multiples ».
-Elle ouvre les routes de la machine jusqu'à sa révocation ; remplacée par
-une nouvelle clé, elle reste valide jusqu'à la fin du chevauchement. Ni sa
-date de création ni sa dernière utilisation ne sont connues.
-**Révoquer** utilise la même confirmation que pour les autres clés et la
-déplace dans la table pour la révoquer aussitôt. Une valeur réversible ou un
-sélecteur déjà dans la table ne donne pas de ligne historique : la table
-décide seule. « Aucune clé n'est enregistrée pour cette machine. » indique
-donc une machine vraiment sans clé.
+50 lignes au total. Une clé n'existe que dans la table des clés : la machine
+elle-même n'en porte aucune (ANH-238). « Aucune clé n'est enregistrée pour
+cette machine. » indique donc une machine vraiment sans clé.
 
 - **Nouvelle clé** ouvre une fenêtre : le **chevauchement** avec les clés
   actuelles (« 24 heures (recommandé) », par défaut ; « 1 heure » ; « Aucun :
@@ -517,8 +510,8 @@ gestionnaire) n'existe plus ; une nouvelle clé avec le chevauchement « Aucun �
 fait la même chose.
 
 Sur une machine supprimée, seul l'admin Anheart voit cette carte, comme le
-permet déjà la lecture serveur : **Révoquer** reste offert, y compris pour
-la clé historique, mais **Nouvelle clé** disparaît. Ses clés n'ouvrent rien
+permet déjà la lecture serveur : **Révoquer** reste offert, mais
+**Nouvelle clé** disparaît. Ses clés n'ouvrent rien
 tant que la machine est supprimée ; celles encore valides (ni révoquées ni
 expirées) ouvriront de nouveau les routes à la restauration. La confirmation
 de restauration demande de révoquer d'abord ici celles qui ne doivent plus

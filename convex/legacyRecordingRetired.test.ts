@@ -9,10 +9,10 @@
  *   function creates, starts, feeds or ends a recording session;
  * - `ecg_data` and `session_summaries` are read-only history;
  * - ending a training session schedules nothing;
- * - a machine carries no recorder settings, and `kind: "recording"` is not a
- *   value the schema accepts;
- * - the data migration closes the recording sessions left open, strips the
- *   recorder settings from the machines, and touches nothing else.
+ * - a machine carries no recorder settings, and neither they nor
+ *   `kind: "recording"` are values the schema accepts (ANH-211);
+ * - the data migration closes the recording sessions left open and touches
+ *   nothing else.
  *
  * Everything runs in memory with `convex-test`: no deployment is involved.
  */
@@ -161,9 +161,7 @@ describe("ANH-135 no function belongs to the recording mode any more", () => {
   it("reads the recorder settings of a machine nowhere", () => {
     const reading = Object.entries(sources)
       .filter(
-        ([path, text]) =>
-          path !== MIGRATION &&
-          path !== "./schema.ts" &&
+        ([, text]) =>
           // `convex.config` is the app's components file (ANH-166), not a machine's settings.
           /(?<!convex)\.config\b|sampleRate:\s*machine|batchInterval/.test(text),
       )
@@ -492,86 +490,18 @@ describe("ANH-135 migration: recording sessions left open are marked failed", ()
   });
 });
 
-describe("ANH-135 migration: the recorder settings leave the machines", () => {
-  const CONFIG = { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 };
-  const migrate = (w: Awaited<ReturnType<typeof seedWorld>>) =>
-    w.t.mutation(
-      internal.migrations.retireLegacyRecording.removeMachineConfig,
-      {},
-    );
-
-  it("accepts a machine document that still carries them", async () => {
-    // What every deployment holds today: the schema must take it as it is.
+describe("ANH-211 the recorder settings are out of the schema", () => {
+  it("refuses a machine document that carries them", async () => {
     const w = await seedWorld(modules);
-    await w.t.run((ctx) => ctx.db.patch(w.machine, { config: CONFIG }));
-    expect((await w.t.run((ctx) => ctx.db.get(w.machine)))?.config).toEqual(
-      CONFIG,
+    const config = { sampleRate: 1000, channels: ["ECG"], batchInterval: 1000 };
+    await expect(
+      w.t.run((ctx) =>
+        // The cast is the point: the type no longer allows the field either.
+        ctx.db.patch(w.machine, { config } as unknown as { name: string }),
+      ),
+    ).rejects.toThrow(/config/);
+    expect(await w.t.run((ctx) => ctx.db.get(w.machine))).not.toHaveProperty(
+      "config",
     );
-  });
-
-  it("removes the field and nothing else, deleted machines included", async () => {
-    const w = await seedWorld(modules);
-    await w.t.run(async (ctx) => {
-      await ctx.db.patch(w.machine, { config: CONFIG });
-      await ctx.db.patch(w.otherMachine, {
-        config: { ...CONFIG, sampleRate: 100 },
-        isDeleted: true,
-        deletedAt: NOW,
-      });
-    });
-    const before = await w.t.run(async (ctx) => [
-      await ctx.db.get(w.machine),
-      await ctx.db.get(w.otherMachine),
-    ]);
-
-    const result = await migrate(w);
-
-    expect(result).toEqual({
-      machinesChecked: WORLD_MACHINE_COUNT,
-      machinesCleared: 2,
-    });
-    const after = await w.t.run(async (ctx) => [
-      await ctx.db.get(w.machine),
-      await ctx.db.get(w.otherMachine),
-    ]);
-    for (const [index, machine] of after.entries()) {
-      expect(machine).not.toHaveProperty("config");
-      const rest = Object.fromEntries(
-        Object.entries(before[index]!).filter(([field]) => field !== "config"),
-      );
-      expect(machine).toEqual(rest);
-    }
-  });
-
-  it("changes nothing on a second run, nor on a machine that never had them", async () => {
-    const w = await seedWorld(modules);
-    await w.t.run((ctx) => ctx.db.patch(w.machine, { config: CONFIG }));
-
-    expect(await migrate(w)).toEqual({
-      machinesChecked: WORLD_MACHINE_COUNT,
-      machinesCleared: 1,
-    });
-    const after = await w.t.run((ctx) => ctx.db.query("machines").collect());
-    expect(await migrate(w)).toEqual({
-      machinesChecked: WORLD_MACHINE_COUNT,
-      machinesCleared: 0,
-    });
-    expect(await w.t.run((ctx) => ctx.db.query("machines").collect())).toEqual(
-      after,
-    );
-  });
-
-  it("leaves the machine able to authenticate", async () => {
-    const w = await seedMachineWorld(modules);
-    await w.t.run((ctx) => ctx.db.patch(w.machine, { config: CONFIG }));
-    await w.t.mutation(
-      internal.migrations.retireLegacyRecording.removeMachineConfig,
-      {},
-    );
-    const response = await w.t.fetch("/api/machine/heartbeat", {
-      method: "POST",
-      headers: machineHeaders(w.machineKey),
-    });
-    expect(response.status).toBe(200);
   });
 });

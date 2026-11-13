@@ -47,7 +47,6 @@ import type * as machineRegistry from "../machineRegistry.js";
 import type * as machines from "../machines.js";
 import type * as medicalParameters from "../medicalParameters.js";
 import type * as medicalParametersStore from "../medicalParametersStore.js";
-import type * as migrations_machineApiKeys from "../migrations/machineApiKeys.js";
 import type * as migrations_multiOrganization from "../migrations/multiOrganization.js";
 import type * as migrations_retireLegacyRecording from "../migrations/retireLegacyRecording.js";
 import type * as notificationEmails from "../notificationEmails.js";
@@ -112,7 +111,6 @@ declare const fullApi: ApiFromModules<{
   machines: typeof machines;
   medicalParameters: typeof medicalParameters;
   medicalParametersStore: typeof medicalParametersStore;
-  "migrations/machineApiKeys": typeof migrations_machineApiKeys;
   "migrations/multiOrganization": typeof migrations_multiOrganization;
   "migrations/retireLegacyRecording": typeof migrations_retireLegacyRecording;
   notificationEmails: typeof notificationEmails;

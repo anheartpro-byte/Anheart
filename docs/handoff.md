@@ -49,7 +49,7 @@ Dans cet ordre de priorité :
 1. **ANH-250** (créé le 29 octobre à la demande de l'utilisateur) : lancer depuis le site une séance de banc lestée, confirmée à la console. À faire avant les essais réels avec le sac de sable. Contrat Pi-Convex : prochaine mineure (1.9).
 2. **ANH-142** (contrôles pré-vol, en Todo) : décisions du pilote et brief du développeur dans le commentaire Linear du 29 octobre ; aucun code n'existe. Décision clé : pour une séance de banc, horloge non fiable, BITalino absent ou batterie basse sont des avertissements ; avec une personne à bord, ils bloquent.
 3. **ANH-83, reste** : le job `e2e` de la CI (patch relu sauvegardé sur la branche `backup/anh-83-job-e2e`, à reprendre en PR après l'action 6 de la section 2) et le scénario d'incident (bloqué par ANH-145).
-4. **ANH-211** : retirer `machines.config` du schéma ; la migration a tourné sur dev et sur la prod le 28 et le 29 octobre (vérifier d'abord par la requête en lecture seule du ticket).
+4. **ANH-211** et **ANH-238 EX-8** : `machines.config`, puis `machines.apiKey`, `machines.apiKeySelector` et le repli d'authentification sur l'ancienne clé quittent le schéma, avec leurs migrations (qui ont tourné sur dev et sur la prod le 28 et le 29 octobre). Avant de déployer ce schéma : la requête en lecture seule de la section 6, étape 3. ANH-238 EX-9 (rotation périodique, gestionnaires privés des clés) attend la décision de l'utilisateur.
 5. Après la seconde fenêtre multi-organisation : ANH-188 (rendre `organizationId` obligatoire).
 6. Pipeline de release (ANH-220) : premier lancement à blanc sur `main`, puis release officielle qui réaligne `main` et pose les tags.
 7. Clôtures en attente d'une vérification en production : ANH-82, ANH-121 (clé neuve d'un Pi acceptée, ancienne refusée), ANH-146 (CA-1), ANH-226 (mesure sur un déploiement), ANH-234 (EX-2 avec ANH-82).
@@ -106,12 +106,12 @@ Source : `docs/tableau-de-bord.md` (« Amorçage d'un déploiement ») et `docs/
 Sur une nouvelle machine, recréer d'abord (aucune valeur n'est dans le dépôt) : clés de déploiement Convex (tableau de bord Convex, réglages du projet : une pour dev, une pour prod), connexion Vercel (`npx vercel login`), `gh auth login`, connexion Linear dans Orca, clés Clerk de développement pour le site en local.
 
 1. Worktree propre au commit visé, `npm ci --ignore-scripts`.
-2. Répétition sur dev : `CONVEX_DEPLOY_KEY=<clé dev> npx convex dev --once`, puis les migrations (ci-dessous).
-3. Sauvegarde de prod dans le tableau de bord Convex (« Backup Now »).
+2. Répétition sur dev : la requête de l'étape 3 sur dev, `CONVEX_DEPLOY_KEY=<clé dev> npx convex dev --once`, puis les migrations (ci-dessous).
+3. Sauvegarde de prod dans le tableau de bord Convex (« Backup Now »), puis, dans le même tableau de bord, la requête en lecture seule de `docs/deploiement.md` (section 3.7) : `config`, `apiKey` et `apiKeySelector` doivent valoir 0. Sinon, ne pas déployer : Convex refuserait le schéma et rien ne changerait ; relancer d'abord sur la prod la migration que la section 3.7 indique (elle est dans le code que la prod sert encore), puis la requête.
 4. Site construit sans domaines : `echo <sha> > public/commit.txt`, `npx vercel@62.1.0 link --project anheart`, supprimer tout `.env*` créé, `npx vercel@62.1.0 deploy --prod --skip-domain`.
 5. `CONVEX_DEPLOY_KEY=<clé prod> npx convex deploy` (point de non-retour du code : l'ancien code Convex ne doit pas être redéployé).
 6. Aussitôt : `migrations/multiOrganization:attachExistingRowsToAnheart`, puis `npx vercel@62.1.0 promote <url du déploiement> --yes` et vérifier `/commit.txt` sur les quatre domaines.
-7. Migrations, chacune relancée une seconde fois pour vérifier qu'elle ne change plus rien : `migrations/retireLegacyRecording:failOpenRecordingSessions`, `migrations/retireLegacyRecording:removeMachineConfig`, `migrations/machineApiKeys:moveMachineKeysToTable`, `sessionReportsBackfill:backfillSummaries '{}'` (une seule fois : il se relance seul).
+7. Migrations, chacune relancée une seconde fois pour vérifier qu'elle ne change plus rien : `migrations/retireLegacyRecording:failOpenRecordingSessions`, `sessionReportsBackfill:backfillSummaries '{}'` (une seule fois : il se relance seul). `removeMachineConfig` et `moveMachineKeysToTable` ont quitté le code avec leurs champs (ANH-211, ANH-238) : la requête de l'étape 3 les remplace.
 8. Contrôles : `softwareReleases:deployedCloudVersion`, `/api/machine/training/poll` répond 401 sans clé, aucune erreur répétée dans les journaux.
 
 Ordre quand le contrat Pi-Convex change : Convex d'abord, puis le site, puis l'image du Pi.

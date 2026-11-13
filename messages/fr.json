@@ -445,8 +445,6 @@
     "title": "Clés de la machine",
     "description": "La machine se présente au tableau de bord avec l'une de ces clés. Une nouvelle clé ne s'affiche qu'une fois ; les clés qu'elle remplace restent valides pendant le chevauchement choisi, puis elles sont révoquées.",
     "none": "Aucune clé n'est enregistrée pour cette machine.",
-    "legacy": "Clé d'avant les clés multiples",
-    "legacyDescription": "Elle ouvre les routes de la machine jusqu'à sa révocation ; remplacée par une nouvelle clé, elle reste valide jusqu'à la fin du chevauchement. Ni sa date de création ni sa dernière utilisation ne sont connues.",
     "deleted": "Cette machine est supprimée : ses clés n'ouvrent rien tant qu'elle l'est. Les clés encore valides (ni révoquées ni expirées) ouvriront de nouveau les routes à la restauration. Vous pouvez les révoquer ici ; la création de clés est indisponible.",
     "state": {
       "active": "Active",

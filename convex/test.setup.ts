@@ -316,7 +316,6 @@ export async function seedWorld(
       ctx.db.insert("machines", {
         organizationId,
         name: "Synthetic machine",
-        apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW,
         createdAt: NOW,
@@ -625,7 +624,6 @@ export async function seedLegacyWorld(
     await ctx.db.patch(patient, { hrMax: 180, birthYear: 1990 });
     const machine = await ctx.db.insert("machines", {
       name: "Legacy machine",
-      apiKey: "synthetic-hash",
       status: "online" as const,
       lastHeartbeat: NOW,
       createdAt: NOW,

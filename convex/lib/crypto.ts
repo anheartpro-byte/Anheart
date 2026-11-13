@@ -24,11 +24,6 @@ export function apiKeySelector(plain: string): string | null {
   return /^anh1\.([a-f0-9]{32})\.[a-f0-9]{64}$/.exec(plain)?.[1] ?? null;
 }
 
-/** Whether a stored value is a verifier this module can check (and not a legacy encoding). */
-export function isApiKeyVerifier(stored: string): boolean {
-  return VERIFIER.test(stored);
-}
-
 export async function hashApiKey(plain: string): Promise<string> {
   const salt = randomHex(16);
   const key = await crypto.subtle.importKey(

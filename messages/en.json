@@ -445,8 +445,6 @@
     "title": "Machine keys",
     "description": "The machine identifies itself to the dashboard with one of these keys. A new key is shown only once; the keys it replaces stay valid during the chosen overlap, then they are revoked.",
     "none": "No key is recorded for this machine.",
-    "legacy": "Key from before multiple keys",
-    "legacyDescription": "It opens the machine routes until it is revoked; when replaced by a new key, it remains valid until the end of the overlap. Neither its creation date nor its last use is known.",
     "deleted": "This machine is deleted: its keys open nothing while it is deleted. Keys that are still valid (neither revoked nor expired) will open the routes again upon restoration. You can revoke them here; creating keys is unavailable.",
     "state": {
       "active": "Active",

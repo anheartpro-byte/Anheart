@@ -32,7 +32,6 @@ describe("ANH-132 check-offline-machines cron", () => {
       const mk = (status: "online" | "in_session", lastHeartbeat: number) =>
         ctx.db.insert("machines", {
           name: `m-${status}-${lastHeartbeat}`,
-          apiKey: "synthetic-hash",
           status,
           lastHeartbeat,
           createdAt: NOW,
@@ -59,7 +58,6 @@ describe("ANH-132 check-offline-machines cron", () => {
     const id = await t.run((ctx) =>
       ctx.db.insert("machines", {
         name: "boundary",
-        apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW - 90_000, // cutoff is `< now - 90000`, so this is kept
         createdAt: NOW,
@@ -99,7 +97,6 @@ describe("ANH-231 the offline check and the marking of silent sessions are two j
     const sessionId = await t.run(async (ctx) => {
       const machineId = await ctx.db.insert("machines", {
         name: "silent",
-        apiKey: "synthetic-hash",
         status: "in_session" as const,
         lastHeartbeat: hourAgo,
         createdAt: hourAgo,

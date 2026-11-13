@@ -166,17 +166,16 @@ réglages Clerk : [convex.md](convex.md#activer-le-multi-organisation).
 Le webhook du miroir se configure ensuite par environnement, avec son propre
 secret et une livraison signée vérifiée : [procédure Clerk](convex.md#webhook-clerk-vers-le-miroir).
 
-Depuis les clés multiples (ANH-165), une seconde migration déplace la clé
-unique de chaque machine dans la table `machine_api_keys`. Elle ne coupe
-aucune machine, avant comme après son passage, et se lance une fois après le
-code :
-
-```sh
-npx convex run migrations/machineApiKeys:moveMachineKeysToTable
-```
-
-Elle n'a tourné sur aucun déploiement ; résultat attendu et vérification :
-[convex.md](convex.md#migration-des-clés-machine-anh-165).
+Depuis les clés multiples (ANH-165), une machine ne s'authentifie que par une
+ligne de la table `machine_api_keys` (ANH-238). La migration qui y déplaçait
+la clé unique de chaque machine, et écartait les valeurs réversibles, a tourné
+sur les deux déploiements les 28 et 29 octobre 2026 ; en production, la seule
+machine portait une valeur réversible, écartée : elle a besoin d'une nouvelle
+clé ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)). La migration a
+ensuite quitté le code avec les anciens champs
+([convex.md](convex.md#migration-des-clés-machine-anh-165)) : avant de
+pousser ce schéma, le contrôle de la
+[section 3.7](#37-contrôler-les-champs-retirés-des-machines).
 
 ### 3.2 Vérifier un déploiement sans navigateur
 
@@ -235,12 +234,12 @@ par la personne qui en répond (ANH-82) :
 
 Avant de le lancer, par la pipeline ou à la main :
 
-1. Le nouveau schéma n'ajoute que des tables et des champs facultatifs, et rend
-   `sessions.userId` et `machines.config` facultatifs. Dans sa version d'avant
-   le retrait de l'ancien mode ECG, il a été accepté tel quel par les données
-   de développement ; la version actuelle n'a été poussée sur aucun
-   déploiement. Les données de production peuvent différer : `convex deploy`
-   refusera le tout s'il trouve un document non conforme, sans rien modifier.
+1. Le nouveau schéma n'ajoute que des tables et des champs facultatifs, rend
+   `sessions.userId` facultatif et ne déclare plus `machines.config`
+   (ANH-211), ni `machines.apiKey` et `machines.apiKeySelector` (ANH-238).
+   `convex deploy` refuse le tout s'il trouve un document non
+   conforme, sans rien modifier : faire d'abord le contrôle en lecture seule
+   de la [section 3.7](#37-contrôler-les-champs-retirés-des-machines).
 2. Le site de production (branche `main`) appelle l'ancienne API, et **elle
    n'est plus entièrement là**. Le retrait de l'ancien mode d'enregistrement
    ECG a supprimé trois mutations du module `sessions` (création, fin et
@@ -272,7 +271,7 @@ Avant de le lancer, par la pipeline ou à la main :
    exception tant que `main` n'a pas reçu `vercel.json` : un push sur `main`
    qui n'apporte pas ce fichier déploie encore le site de production tout seul
    ([§5.1](#avant-et-après-larrivée-sur-main)).
-4. Exécuter les deux mutations de migration du retrait de l'ancien mode ECG
+4. Exécuter la mutation de migration du retrait de l'ancien mode ECG
    (voir [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
 5. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
 6. Déployer quand aucune séance n'est en cours, et lancer la migration
@@ -502,6 +501,77 @@ de projet du 14 octobre 2026 ; seul levier, manuel :
 
 **Avec le site.** `getSessionTelemetry` et `getTrainingSession` gardent leurs
 arguments et la forme de leurs réponses : le site n'a rien à changer.
+
+### 3.7 Contrôler les champs retirés des machines
+
+Le schéma ne déclare plus `machines.config`, les réglages de l'ancien
+enregistreur ECG (ANH-211), ni `machines.apiKey` et `machines.apiKeySelector`,
+la clé unique d'une machine d'avant ANH-165, avec leurs index `by_api_key` et
+`by_apiKeySelector` (ANH-238) : une machine ne s'authentifie plus que par une
+ligne de `machine_api_keys`. Les deux migrations qui vidaient ces champs,
+`migrations/retireLegacyRecording:removeMachineConfig` et
+`migrations/machineApiKeys:moveMachineKeysToTable`, ont tourné sur le
+développement et sur la production les 28 et 29 octobre 2026
+([passation](handoff.md), section 6), puis ont quitté le code avec les champs.
+
+**Quand.** Sur chaque déploiement, avant d'y pousser ce schéma pour la
+première fois (`npx convex dev --once` ou `npx convex deploy`). Le
+développement a été contrôlé le 13 novembre 2026 : 5 machines, aucune ne
+porte l'un des trois champs. La production reste à contrôler, au moment de son
+déploiement.
+
+**Comment.** La requête ne fait que lire : une query Convex n'a aucun moyen
+d'écrire. Dans le tableau de bord Convex du déploiement, page **Data**, menu
+`⋮`, **Custom query** (« Custom test query »), coller :
+
+```js
+import { query } from "convex:/_system/repl/wrappers.js";
+
+export default query({
+  handler: async (ctx) => {
+    const machines = await ctx.db.query("machines").collect();
+    const carrying = (field) =>
+      machines.filter((machine) => machine[field] !== undefined).length;
+    return {
+      machines: machines.length,
+      config: carrying("config"),
+      apiKey: carrying("apiKey"),
+      apiKeySelector: carrying("apiKeySelector"),
+    };
+  },
+});
+```
+
+Elle ne renvoie que des nombres, jamais une clé ni un vérificateur.
+
+**Résultat attendu** : `config`, `apiKey` et `apiKeySelector` valent `0` ;
+`machines` est le nombre de machines, supprimées comprises.
+
+**Sinon, ne pas déployer.** Convex refuse un schéma que des documents
+existants ne respectent pas : le déploiement échouerait sans rien modifier, et
+le code en service resterait en place. Relancer d'abord sur ce déploiement la
+migration du champ en cause. Elle n'est plus dans ce code, mais dans celui
+qu'il sert encore (la production sert depuis le 29 octobre 2026 un code qui
+contient les deux, comme tout commit de `develop` d'avant la fusion de la
+PR #140) :
+
+```bash
+npx convex run migrations/retireLegacyRecording:removeMachineConfig  # config
+npx convex run migrations/machineApiKeys:moveMachineKeysToTable      # apiKey, apiKeySelector
+```
+
+chacune précédée de la clé du déploiement visé, lue comme le dit
+[convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg) (l'option
+`--prod` est ignorée dans ce dépôt). Puis relancer la requête. Un déploiement
+dont le code n'a pas ces fonctions reçoit d'abord le dernier commit de
+`develop` d'avant la fusion de la PR #140, puis les migrations, puis ce code.
+
+Si `apiKey` ou `apiKeySelector` reste non nul après `moveMachineKeysToTable`,
+la migration a compté un conflit (`selectorConflicts`) : le sélecteur est déjà
+celui d'une ligne de `machine_api_keys` d'une autre machine, la table seule en
+décide, et la valeur restée sur la machine n'ouvre rien. Après la sauvegarde,
+effacer ces deux champs de ce document à la main (page **Data**, table
+`machines`), puis relancer la requête.
 
 ---
 

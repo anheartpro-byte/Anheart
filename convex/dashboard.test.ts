@@ -60,7 +60,6 @@ async function addMachine(
   return await w.t.run((ctx) =>
     ctx.db.insert("machines", {
       name: "Counted machine",
-      apiKey: "synthetic-hash",
       createdAt: NOW,
       ...fields,
     }),
