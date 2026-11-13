@@ -207,8 +207,10 @@ déploiement : ce n'est pas un contournement de l'authentification du site.
 
 ### 3.3 Vers la production
 
-**Pas encore fait.** La production est en service : le déploiement se décide,
-il ne se lance pas par habitude.
+**Pas encore fait par la pipeline.** La production a été déployée à la main
+depuis `develop` les 29 et 30 octobre 2026 (chemin « B »,
+[passation](handoff.md), section 6). La production est en service : le
+déploiement se décide, il ne se lance pas par habitude.
 
 **La voie normale est l'étape 4 de la pipeline de release**
 ([release.md](release.md#la-pipeline-de-release)). Elle lance la même commande,
@@ -634,7 +636,7 @@ ajouté trois comptes de démonstration et quatre séances.
 
 | Constat | Conséquence |
 |---|---|
-| **Séance orpheline après un arrêt de la console.** Si le processus de la console s'arrête pendant une séance (arrêt du conteneur, coupure de courant), il met bien la consigne à zéro, mais il n'envoie pas la fin de séance à Convex. Au redémarrage il ne la reprend pas non plus. | La séance reste `active` dans Convex indéfiniment. La machine repasse `online` au redémarrage, mais l'historique garde une séance « en cours » qui ne l'est plus. À corriger : soit la console envoie la fin avant de sortir, soit Convex clôt les séances d'une machine passée hors ligne. |
+| **Séance orpheline après un arrêt de la console.** Si le processus de la console s'arrête pendant une séance (arrêt du conteneur, coupure de courant), il met bien la consigne à zéro, mais il n'envoie pas la fin de séance à Convex. Au redémarrage il ne la reprend pas non plus. | Le 1er octobre, la séance restait `active` dans Convex indéfiniment : la machine repassait `online` au redémarrage, mais l'historique gardait une séance « en cours » qui ne l'était plus. Corrigé depuis des deux côtés : la console de ce dépôt envoie cette fin à son démarrage suivant (ANH-129), et Convex marque « interrompue, fin inconnue » une séance dont il n'a plus de nouvelles depuis 10 min (ANH-216, ANH-231), en production depuis le redéploiement du 29 octobre 2026. Pas encore rejoué avec une vraie console. |
 | Avec l'ECG **simulé** de la console, la FC devient par moments « non fiable » : le superviseur lève la règle `hr_stale` (« no fresh trustworthy heart rate »), gèle ou réduit la vitesse. En séance AUTO le moteur n'avait pas démarré après une minute d'échauffement ; en séance manuelle la vitesse a été réduite après le palier. | C'est le superviseur qui fait son travail face à un signal simulé bruité, pas un défaut de Convex ni du site. Mais une démonstration d'une séance AUTO complète n'est pas possible aujourd'hui avec la console en simulation : il faut d'abord comprendre pourquoi son ECG simulé perd la confirmation dès que le bras tourne. |
 | Les séances démarrées à la machine n'ont pas de pratiquant (`userId` absent). | Déjà connu (défaut n° 4 de convex.md) ; confirmé. |
 
@@ -1530,13 +1532,13 @@ propre revient hors service et n'arme plus rien jusqu'à ce qu'un opérateur
 nommé la remette en service depuis sa page
 ([raspberry-pi.md](raspberry-pi.md#36-sous-systemd--signe-de-vie-redémarrage-hors-service)).
 
-> Arrêter la console **pendant une séance** laisse la séance `active` dans
-> Convex (section 4). Terminer la séance à la console avant d'arrêter.
-> En attente du redéploiement ANH-82 : avec le code de ce dépôt, la console
-> envoie cette fin à son démarrage suivant (ANH-129), et Convex marque
-> « interrompue, fin inconnue » une séance dont il n'a plus de nouvelles
-> depuis 10 min (ANH-216, [convex.md](convex.md#7-tâche-planifiée)). Ni l'un
-> ni l'autre n'est en production.
+> Arrêter la console **pendant une séance** n'envoie pas sa fin sur le
+> moment (section 4). Terminer la séance à la console avant d'arrêter.
+> Sinon, la console de ce dépôt envoie cette fin à son démarrage suivant
+> (ANH-129), et Convex marque « interrompue, fin inconnue » une séance dont
+> il n'a plus de nouvelles depuis 10 min (ANH-216,
+> [convex.md](convex.md#7-tâche-planifiée)) ; ce marquage est en production
+> depuis le redéploiement du 29 octobre 2026.
 
 ### 7.7 Un seul chemin
 
@@ -1559,6 +1561,6 @@ est maintenu, l'image lancée par systemd. Les raisons et ce qui reste à faire
 | Rendre les boutons et la pipeline utilisables : environnements GitHub, secrets (dont `CONVEX_DEPLOY_KEY`), variables de serveur en type « Secret », fichiers sur `main` | Le chef de projet (section 5.5, étapes 1 à 3 et 5 ; l'étape 4, la protection de `main`, est faite depuis le 7 octobre 2026). |
 | Mettre les machines à jour à distance : l'étape 6 de la pipeline ne fait aujourd'hui que dire comment le faire à la main | ANH-116, ANH-168 à ANH-171. |
 | Donner aux préversions Vercel les valeurs de développement, puis retirer du bouton de préversion le champ d'accord | Un réglage dans Vercel, puis une PR (section 5.5, étape 6). |
-| Corriger la séance orpheline (section 4), puis mettre à jour cette section | Le redéploiement ANH-82 : le correctif est dans le code des deux côtés (ANH-129, fin envoyée au démarrage suivant ; ANH-216, séance marquée « interrompue, fin inconnue » après 10 min sans nouvelles), pas encore en production. |
+| Rejouer avec une vraie console l'arrêt pendant une séance (section 4) : fin envoyée au démarrage suivant, ou séance marquée « interrompue, fin inconnue » après 10 min | Une console en service avec une clé valide. Au redéploiement du 29 octobre 2026, la migration a écarté la valeur réversible de la seule machine de la production, qui n'avait donc plus de clé valide ([section 3.1](#31-vers-le-développement), [secrets.md, 3.1](secrets.md#31-clé-de-la-machine)). Le correctif est en production côté Convex depuis le 29 octobre 2026. |
 | Premier démarrage sur un vrai Pi, avec le variateur et le BITalino | Le matériel. La marche à suivre est dans [pi-image.md](pi-image.md#6-installer-un-vrai-raspberry-pi). |
 | Lancer une première fois chaque bouton, la préversion de la simulation d'abord | Les réglages de la section 5.5 : aucun des deux workflows n'a encore tourné. |

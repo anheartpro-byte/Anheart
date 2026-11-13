@@ -1425,7 +1425,8 @@ Pour qu'une séance programmée puisse partir, **toutes** ces conditions doivent
    du fichier médical signé ;
 4. `OCCUPANCY_OCCUPIED_ENABLED=true` (une séance programmée a toujours une personne à bord) ;
 5. le profil existe et se résout, ajusté à la FC max de ce passager : tous les contrôles
-   cardiaques sont refaits pour lui (zone haute ≤ 90 % de sa FC max, palier dur ≤ sa FC max) ;
+   cardiaques sont refaits pour lui (zone haute ≤ `zone_ceiling_fraction` du fichier médical
+   signé fois sa FC max, palier dur ≤ sa FC max) ;
 6. le plafond du profil (`max_rpm`) est sous le plafond « personne à bord » ;
 7. la caméra, si configurée, ne bloque pas le démarrage ;
 8. les contrôles du runtime : attestation, aucun verdict en attente, paliers cardiaques du
@@ -2361,7 +2362,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : passager de <n> ans, minimum <m> ans (min_rider_age des parametres medicaux)` | passager trop jeune (séance programmée, ou manuelle avec personne à bord) |
 | `parametres medicaux non signes (<raison>) : console en mode banc seulement, aucune seance programmee ni personne a bord` | la signature du fichier médical ne s'est pas vérifiée au démarrage : séance programmée et personne à bord refusées ([raspberry-pi.md, 12.6](raspberry-pi.md#126-les-paramètres-médicaux-signés-anh-139)) |
 | `demarrage refuse : programme '<id>' inconnu sur cette machine` | profil absent (lancement distant) |
-| `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil rejeté pour la FC max du passager (zone au-dessus de 90 % de la FC max, etc.) |
+| `demarrage refuse : programme inadapte a ce passager (<détail>)` | profil rejeté pour la FC max du passager (zone au-dessus de la fraction `zone_ceiling_fraction` du fichier médical signé, etc.) |
 | `demarrage refuse : programme a <n> tr/min moteur, au-dessus du plafond personne a bord (<m> tr/min)` | profil trop rapide pour une personne à bord |
 | `demarrage refuse : un lancement du tableau de bord ne peut que raccourcir le programme (<n> s demandees, <m> s au programme)` | lancement distant dont la durée dépasse celle du profil (ANH-137) ; une durée saisie à la console n'est pas bornée |
 | `demarrage refuse : <règle caméra …>` | la caméra bloque le démarrage |

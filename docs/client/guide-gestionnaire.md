@@ -187,11 +187,14 @@ des séances y sont encore écrits au pluriel.*
 Ce que le logiciel contrôle ensuite, à chaque lancement :
 
 - la FC max retenue et l'année de naissance sont renseignées ;
-- le pratiquant a au moins 18 ans. L'âge est calculé à partir de la seule
-  année de naissance, comme si l'anniversaire n'était pas encore passé : une
-  personne peut donc être refusée pendant l'année de ses 18 ans ;
-- le haut de la zone cible du programme ne dépasse pas 90 % de la FC max
-  retenue, et la FC limite du programme ne dépasse pas la FC max retenue.
+- le pratiquant a l'âge minimum fixé par les paramètres médicaux signés
+  (18 ans dans la version livrée 0.1.0). L'âge est calculé à
+  partir de la seule année de naissance, comme si l'anniversaire n'était pas
+  encore passé : une personne peut donc être refusée pendant l'année où elle
+  atteint cet âge ;
+- le haut de la zone cible du programme ne dépasse pas la part de la FC max
+  retenue fixée par les mêmes paramètres (90 % dans la version 0.1.0), et la
+  FC limite du programme ne dépasse pas la FC max retenue.
 
 Ce sont des contrôles du logiciel. Ils ne remplacent pas un avis médical : un
 pratiquant que le logiciel accepte n'est pas pour autant apte à monter dans la
@@ -315,7 +318,7 @@ Un encadré orange dit pourquoi.
 | « Aucun programme n'a été synchronisé depuis la machine. » | La machine n'a envoyé aucun programme. Appelez le support. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | [Section 4.2](#42-renseigner-la-physiologie). |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | [Section 4.2](#42-renseigner-la-physiologie). |
-| « Séance auto réservée aux pratiquants d'au moins 18 ans. » | Pas de séance auto pour ce pratiquant. |
+| « Séance auto réservée aux pratiquants d'au moins {âge minimum} ans. » (18 ans dans la version 0.1.0 des paramètres médicaux) | Pas de séance auto pour ce pratiquant. |
 
 Un encadré **rouge** qui se termine par « Le serveur refusera ce lancement. »
 veut dire que le programme est trop intense pour ce pratiquant, d'après les

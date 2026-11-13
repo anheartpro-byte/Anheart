@@ -142,8 +142,9 @@ Renouveler la clé sans couper la machine :
    écrite qu'une fois par minute au plus : elle peut retarder d'une minute, et
    une requête faite avec la clé juste avant le redémarrage l'a peut-être déjà
    posée. L'ancienne clé est « Remplacée, encore valide » jusqu'à la fin du
-   chevauchement, puis refusée (401) à cette fin ou peu après ; la tâche du
-   serveur la marque « Révoquée » dans les 5 minutes.
+   chevauchement, puis refusée (401) dès sa fin (`expiresAt`, la requête de
+   cette milliseconde comprise) ; la tâche du serveur la marque « Révoquée »
+   dans les 5 minutes.
 5. Pour couper l'ancienne avant la fin du chevauchement, une fois la nouvelle
    vue en usage : **Révoquer** sur sa ligne (`machineKeys.revokeMachineKey`).
    Elle est refusée dès la requête suivante.
