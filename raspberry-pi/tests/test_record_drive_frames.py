@@ -312,6 +312,7 @@ async def test_ex2_the_tap_hands_back_every_answer_unchanged_and_notes_the_call(
     assert zeroed is EmergencyStopOutcome.ACKNOWLEDGED
     assert closed is inner.written
     assert drive.emergency_budget == Seconds(1.25)
+    assert drive.inspection_budget == Seconds(3.0)
     assert drive.acquisition_evidence == AcquisitionEvidence(possible_frames=7, address_proven=True)
     assert inner.asked == [
         "open",
