@@ -6,7 +6,7 @@ import type { PiConsole } from "../harness/console";
 import { callAs } from "../harness/convex";
 import { createMachine, startOnline, type Machine } from "../harness/machines";
 import { outputRoot } from "../harness/output";
-import { medicalOf, shortProfile } from "../harness/profiles";
+import { medicalOf, shippedProfile, shortProfile } from "../harness/profiles";
 import { prepareRider } from "../harness/riders";
 import { convexUserId, identityOf, type AccountKey, type RunInfo } from "../harness/run";
 import { card, choose, escape, say, type Lang } from "../ui";
@@ -119,16 +119,14 @@ test.beforeAll(async ({ run }) => {
   // the other pages are photographed (90 s without a heartbeat, then the
   // server's task of every minute).
   expect(await (await startOnline(run, state.quiet)).stop()).toBe(0);
-  state.console = await startOnline(run, state.machine);
-  const standard = (await state.console.profiles()).body.profiles.find((p) => p.profile_id === PROGRAMME);
-  if (!standard) throw new Error(`profil livré ${PROGRAMME} absent de la console`);
+  const standard = shippedProfile(run, PROGRAMME);
   state.programmeName = String(standard.name);
   const medical = medicalOf(run);
   // The session photographed runs the short programme of the journey: the
-  // shipped one rests 3 minutes before the arm moves.
-  const listed = await state.console.profiles();
+  // shipped one rests 3 minutes before the arm moves. Held by the console
+  // from its start: no route of the console writes a profile (ANH-138).
   const short = shortProfile(standard, medical);
-  expect((await state.console.putProfile(short, listed.body.rev)).status).toBe(200);
+  state.console = await startOnline(run, state.machine, [short]);
   state.shortProfileId = short.profile_id;
   const machineId = state.machine.id;
   await expect

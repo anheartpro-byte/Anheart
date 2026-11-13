@@ -50,6 +50,7 @@ from tests.record_console_support import RecordedRig, recorded_rig
 from tests.roster_support import RIDER, RIDER_ID, roster_document
 from tests.test_failure_rig import OPERATOR, PROGRAMME_ENV, attest
 from tests.test_panel_rider import FITTING, start_body
+from tests.test_web_api import shown_digest
 
 LINKED_ENV: Final[Mapping[str, str]] = {
     **PROGRAMME_ENV,
@@ -214,7 +215,10 @@ async def test_p3_a_programmed_session_that_ends_offers_the_feedback(tmp_path: P
     async with console.recorded.rig.http() as session:
         await console.seconds(2)
         await attest(session)
-        started = await session.post("/api/session/start", json=start_body(FITTING.user_id))
+        started = await session.post(
+            "/api/session/start",
+            json={**start_body(FITTING.user_id), "profiles_digest": await shown_digest(session)},
+        )
         assert started.status_code == httpx.codes.ACCEPTED, started.text
         await console.seconds(5)
         assert console.recorded.state() is RuntimeState.RUNNING, console.recorded.rig.refusals()

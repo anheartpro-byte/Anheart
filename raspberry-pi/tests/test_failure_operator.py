@@ -31,6 +31,7 @@ from tests.test_failure_rig import (
     make_rig,
     start_manual,
 )
+from tests.test_web_api import shown_digest
 
 CRUISE: Final[float] = 10.0
 
@@ -90,6 +91,7 @@ async def test_a_programme_start_during_a_manual_session_is_refused(tmp_path: Pa
                 "operator": OPERATOR,
                 "total_duration_s": None,
                 "subject_id": RIDER_ID,
+                "profiles_digest": await shown_digest(session),
             },
         )
     assert started.status_code == httpx.codes.CONFLICT

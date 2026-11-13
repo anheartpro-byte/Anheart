@@ -1,8 +1,9 @@
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { freePort, startProcess, stopGroup, waitForHttp } from "./processes";
+import { shippedProfiles } from "./profiles";
 import { assertLocal } from "./secrets";
 
 const OPERATOR = "Operateur E2E";
@@ -40,6 +41,11 @@ export type ConsoleAnswer<T = unknown> = { status: number; body: T };
  * unchanged) made in the run folder at each start: what the console writes
  * next to its code (its profile store, `data/profiles.local.json`) stays
  * there, and no `raspberry-pi/.env` is read.
+ *
+ * `profiles`: programmes the console holds besides its shipped ones, written
+ * in that copy's store before it starts. No route of the console writes a
+ * profile since ANH-138, and the local backend signs no catalogue: this is
+ * how a test gives it one, as a store of no catalogue (its fallback).
  */
 export async function startConsole(options: {
   runDir: string;
@@ -47,6 +53,7 @@ export async function startConsole(options: {
   /** The local backend's own address (its client API, `Backend.url`). */
   backendUrl: string;
   machineApiKey: string;
+  profiles?: Record<string, unknown>[];
 }): Promise<PiConsole> {
   const port = await freePort();
   const name = `console-${port}`;
@@ -59,6 +66,11 @@ export async function startConsole(options: {
       recursive: true,
       filter: (source) => !skipped(source),
     });
+  }
+  if (options.profiles !== undefined) {
+    mkdirSync(path.join(root, "data"), { recursive: true });
+    const store = { version: 1, rev: 1, profiles: [...shippedProfiles(options.repoRoot), ...options.profiles] };
+    writeFileSync(path.join(root, "data", "profiles.local.json"), `${JSON.stringify(store, null, 2)}\n`);
   }
   const child = startProcess(options.runDir, name, path.join(piRoot, ".venv", "bin", "python"), ["-m", "src.local_panel"], {
     cwd: root,
@@ -110,7 +122,7 @@ export class PiConsole {
     return { status: response.status, body: (await response.json()) as T };
   }
 
-  async send<T>(method: "POST" | "PUT", route: string, body: Record<string, unknown>): Promise<ConsoleAnswer<T>> {
+  async send<T>(method: "POST", route: string, body: Record<string, unknown>): Promise<ConsoleAnswer<T>> {
     const response = await fetch(`${this.url}${route}`, {
       method,
       headers: { "content-type": "application/json" },
@@ -129,8 +141,6 @@ export class PiConsole {
   panel = () => this.get<{ dashboard: { state: string } | null }>("/api/panel");
   roster = () => this.get<{ state: string; riders: { user_id: string; name: string }[] }>("/api/roster");
   profiles = () => this.get<{ rev: number; profiles: Record<string, unknown>[] }>("/api/profiles");
-  putProfile = (document: Record<string, unknown> & { profile_id: string }, rev: number) =>
-    this.send("PUT", `/api/profiles/${document.profile_id}?rev=${rev}`, document);
   remoteLaunch = () =>
     this.get<{ session_id: string; state: string; reason: string | null; can_confirm: boolean } | null>(
       "/api/remote-launch",

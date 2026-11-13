@@ -183,7 +183,7 @@ la **chaîne de sécurité**, listée dans `[tool.coverage.report] include` de
 `training/*`, `sim/*`, `bitalino_client`, `signal_processing`, `geometry`,
 `ecg_pipeline`, `local_config`, `bitalino_rfcomm_macos`, `local_panel`,
 `panel_status`, `cloud_sync`, `dsp`, `sensors/*`, `presence/*`,
-`panel_lifecycle`, `task_completion` et `web/profile_writer`. Le reste du code
+`panel_lifecycle`, `task_completion`, `web/profile_writer` et `programme_catalog`. Le reste du code
 web est mesuré mais ne bloque pas.
 
 **Dette déclarée.** `src/signal_processing.py` fait partie de la chaîne de

@@ -32,7 +32,7 @@ Il existe deux sortes de séance :
 | [console-locale.md](console-locale.md) | opérateur | chaque page de la console du Pi, chaque bouton, chaque message ; routes HTTP |
 | [tableau-de-bord.md](tableau-de-bord.md) | admin, gestionnaire, user | chaque page du site, rôles, droits de lancement, séance AUTO à distance |
 | [convex.md](convex.md) | développeur | schéma, fonctions publiques, routes HTTP machine, déploiement |
-| [programmes.md](programmes.md) | développeur, équipe produit | programmes synchronisés depuis le Pi et contrôles médicaux d'un lancement distant |
+| [programmes.md](programmes.md) | développeur, équipe produit | catalogue de programmes, publication signée vers les machines, programmes synchronisés depuis le Pi et contrôles médicaux d'un lancement distant |
 | [raspberry-pi.md](raspberry-pi.md) | développeur | modules, boucle de contrôle, superviseur et ses règles, table des défauts variateur, capteurs, configuration, contrat de code |
 | [framework-de-test.md](framework-de-test.md) | développeur | tests, gates, simulation, scénarios, cohorte, matrice de pannes, visualiseur |
 | [deploiement.md](deploiement.md) | développeur, exploitant | environnements et clés, déployer Convex, le site, la simulation hébergée, le Raspberry Pi ; ce qui a été vérifié |
@@ -99,6 +99,7 @@ flowchart LR
 | Réagir à une perte de communication | **le variateur** | le simulateur suppose un arrêt sur rampe après ttO. Sur le matériel, la réaction dépend de ttO et SLL, non relus par le logiciel : un mauvais réglage peut laisser le moteur commandé ou en roue libre. Voir [l'arrêt physique](raspberry-pi.md#7-ce-qui-se-passe-physiquement-à-larrêt). |
 | Lancer une séance MANUELLE | **l'opérateur, à la console** | aucun chemin ne le permet depuis le site avec une personne à bord ; une séance de banc lestée, sans personne à bord, peut être proposée par le site, puis confirmée et pilotée à la console (ANH-250) |
 | Lancer une séance AUTO | l'opérateur à la console, **ou** un utilisateur autorisé sur le site | Convex vérifie les droits, la FC max et l'âge ; le Pi **revérifie tout** et peut refuser |
+| Accepter un programme du catalogue | **le Pi** | l'équipe Anheart publie sur le site ; le Pi vérifie la signature et revalide chaque programme avec ses propres règles, puis garde ou refuse ([programmes.md](programmes.md#publication-vers-les-machines-anh-138)) |
 | Qui a le droit de lancer | admin et gestionnaire, sur le site | voir [tableau-de-bord.md](tableau-de-bord.md) |
 | Afficher l'état, l'historique, les courbes | Convex et le site | à partir de ce que le Pi envoie |
 
@@ -109,15 +110,21 @@ Du Pi vers Convex (le Pi appelle, avec sa clé machine) : un heartbeat toutes le
 MANUELLE), la télémétrie échantillonnée à 1 Hz et envoyée par lots toutes les
 5 s, et la fin de chaque séance avec sa raison.
 
-De Convex vers le Pi, **exactement deux choses**, que le Pi va chercher lui-même
-toutes les 3 s :
+De Convex vers le Pi, **exactement quatre choses**, que le Pi va chercher
+lui-même :
 
-1. un lancement : AUTO (programme, passager, FC max, âge), ou, depuis le
-   contrat 1.9, une séance de banc lestée (masse déclarée, note, aucun
-   passager), qui ne démarre qu'après la confirmation et l'attestation de
+1. toutes les 3 s, un lancement : AUTO (programme, passager, FC max, âge), ou,
+   depuis le contrat 1.9, une séance de banc lestée (masse déclarée, note,
+   aucun passager), qui ne démarre qu'après la confirmation et l'attestation de
    l'opérateur à la console ; l'un comme l'autre repasse par toutes les portes
    de la console ;
-2. une demande d'arrêt, exécutée comme un arrêt ordinaire sur la rampe.
+2. toutes les 3 s, une demande d'arrêt, exécutée comme un arrêt ordinaire sur
+   la rampe ;
+3. au repos, la liste des passagers que la machine peut nommer ;
+4. au repos, depuis le contrat 1.11, le catalogue de programmes publié,
+   signé : le Pi vérifie la signature, revalide chaque programme avec ses
+   propres règles et ne garde que ceux qu'il accepte (ANH-138,
+   [programmes.md](programmes.md#publication-vers-les-machines-anh-138)).
 
 **Ce qui ne voyage jamais :**
 

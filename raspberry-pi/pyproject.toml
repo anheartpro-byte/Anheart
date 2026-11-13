@@ -256,6 +256,9 @@ include = [
     "src/cloud_sync.py",
     # The pending launch decision: a remote start cannot proceed without it.
     "src/remote_launch.py",
+    # The signed programme catalogue: the gate through which a cardiac
+    # setpoint reaches the machine, its signature and its revalidation.
+    "src/programme_catalog.py",
     # What that link has last heard of itself, as the state the operator reads
     # on the console: it must never say reachable of a dashboard that is not.
     "src/link_state.py",
@@ -330,6 +333,7 @@ safety_chain = [
     "src/service_state.py",
     "src/cloud_sync.py",
     "src/remote_launch.py",
+    "src/programme_catalog.py",
     "src/link_state.py",
     "src/record_uplink.py",
     "src/contract.py",

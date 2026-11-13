@@ -34,6 +34,7 @@ from tests.test_web_api import (
     build_rig,
     detail,
     parse,
+    shown_digest,
 )
 
 UNSET: Final[Rider] = Rider(
@@ -109,7 +110,12 @@ async def test_an_interface_without_a_list_offers_nobody(tmp_path: Path) -> None
         served = parse(RosterRow, await session.get("/api/roster"))
         programme = await session.post(
             "/api/session/start",
-            json={"profile_id": PROFILE_ID, "operator": OPERATOR, "subject_id": RIDER_ID},
+            json={
+                "profile_id": PROFILE_ID,
+                "operator": OPERATOR,
+                "subject_id": RIDER_ID,
+                "profiles_digest": await shown_digest(session),
+            },
         )
         occupied = await session.post(
             "/api/manual/start",
@@ -169,7 +175,12 @@ async def test_a_start_names_its_rider_and_nothing_else_of_them(tmp_path: Path) 
     async with client(rig, listed(rig.clock)) as session:
         started = await session.post(
             "/api/session/start",
-            json={"profile_id": PROFILE_ID, "operator": OPERATOR, "subject_id": RIDER_ID},
+            json={
+                "profile_id": PROFILE_ID,
+                "operator": OPERATOR,
+                "subject_id": RIDER_ID,
+                "profiles_digest": await shown_digest(session),
+            },
         )
     assert started.status_code == HTTPStatus.ACCEPTED, started.text
     pending = rig.surface.pending

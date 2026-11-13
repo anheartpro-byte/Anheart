@@ -38,10 +38,8 @@ from src.training.plan import ProfileStore
 from src.training.safety import SafetySupervisor
 from src.training.types import Occupancy, OccupancyRefused
 from src.units import Monotonic, MotorRpm
-from src.web import routes
 from src.web.app import create_app
 from src.web.deps import Services, WebConfig
-from src.web.profile_writer import ProfileWriter
 from src.web.schemas import CommandRow
 from src.web.ws import LOGGED_HEADER_LIMIT, logged_header
 from tests.roster_support import RIDER_ID, listed
@@ -49,13 +47,13 @@ from tests.test_web_api import (
     GEOMETRY,
     OPERATOR,
     PROFILE_ID,
+    SHIPPED_DIGEST,
     TOKEN,
     StubPorts,
     auth,
     build_limits,
     build_rig,
     probe_socket,
-    profile_document,
 )
 
 WS_LOGGER = "src.web.ws"
@@ -164,33 +162,6 @@ class _Handler:
 
 HANDLERS: Final[tuple[_Handler, ...]] = (
     _Handler(
-        "upsert_profile",
-        routes,
-        "parse_profile",
-        False,
-        "PUT",
-        "/api/profiles/bench_short?rev=0",
-        profile_document("bench_short"),
-    ),
-    _Handler(
-        "_commit_profile",
-        ProfileWriter,
-        "upsert",
-        True,
-        "PUT",
-        "/api/profiles/bench_short?rev=0",
-        profile_document("bench_short"),
-    ),
-    _Handler(
-        "delete_profile",
-        ProfileWriter,
-        "delete",
-        True,
-        "DELETE",
-        f"/api/profiles/{PROFILE_ID}?rev=0",
-        None,
-    ),
-    _Handler(
         "preview_plan",
         ProfileStore,
         "resolve",
@@ -206,7 +177,12 @@ HANDLERS: Final[tuple[_Handler, ...]] = (
         False,
         "POST",
         "/api/session/start",
-        {"profile_id": PROFILE_ID, "operator": OPERATOR, "subject_id": RIDER_ID},
+        {
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "subject_id": RIDER_ID,
+            "profiles_digest": SHIPPED_DIGEST,
+        },
     ),
     _Handler(
         "stop_session",

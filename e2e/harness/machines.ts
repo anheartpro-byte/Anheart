@@ -29,10 +29,21 @@ export async function createMachine(
 /**
  * The real simulated console of this machine, started, linked to the local
  * backend, the machine online on the server and its programmes there: what a
- * launch needs.
+ * launch needs. `profiles`: programmes it holds besides the shipped ones
+ * (`startConsole`).
  */
-export async function startOnline(run: RunInfo, machine: Machine): Promise<PiConsole> {
-  const pi = await startConsole({ runDir: run.runDir, repoRoot: run.repoRoot, backendUrl: run.backend.url, machineApiKey: machine.key });
+export async function startOnline(
+  run: RunInfo,
+  machine: Machine,
+  profiles?: Record<string, unknown>[],
+): Promise<PiConsole> {
+  const pi = await startConsole({
+    runDir: run.runDir,
+    repoRoot: run.repoRoot,
+    backendUrl: run.backend.url,
+    machineApiKey: machine.key,
+    profiles,
+  });
   await expect
     .poll(async () => (await pi.panel()).body.dashboard?.state, { message: "le lien de la console", timeout: 30_000 })
     .toBe("reachable");

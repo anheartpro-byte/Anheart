@@ -8,7 +8,9 @@ Up, from this machine to the dashboard:
   right now (run mode, phase, heart rate, speeds, g, safety action);
 * the training presets of the profile store, whenever its revision changes -
   only those whose cardiac tiers match this machine's supervisor, because a
-  preset the runtime would refuse must not be offered on a screen;
+  preset the runtime would refuse must not be offered on a screen; with them,
+  since contract 1.11, what the console made of the signed programme
+  catalogue (:mod:`src.programme_catalog`), whenever that changes;
 * every session this console runs, whoever started it: an AUTO session
   launched from the dashboard, and any session started here at the machine
   (MANUAL, or AUTO from the panel), declared under the reference its record
@@ -59,6 +61,11 @@ Down, from the dashboard to this machine, exactly three things:
   question keeps its cadence whatever the sending waits for. A session armed
   by an older console or before this handshake is still stopped at once when
   its start is refused or no longer active on the dashboard.
+
+The signed programme catalogue comes down too (contract 1.11), but not
+through this object: :mod:`src.programme_catalog` asks for it on the same
+transport, at rest only, verifies its signature and judges every programme
+with this console's rules before any becomes a preset. It starts nothing.
 
 **Nothing else.** In particular nothing from the dashboard ever sets a speed,
 and the only manual session it can lead to is a bench session that somebody at
@@ -365,6 +372,8 @@ type Document = Mapping[str, object]
 UPLOAD_CHUNK_BYTES: Final[int] = 16 * 1024
 UPLOAD_BYTES_PER_SECOND: Final[int] = 256 * 1024
 MAX_RESPONSE_BYTES: Final[int] = 1024 * 1024
+TOO_LARGE_ANSWER: Final[str] = "Response exceeds byte limit"
+"""The words of an answer refused for its size, which the catalogue says (ANH-138)."""
 
 
 class CloudTransport(Protocol):
@@ -489,12 +498,12 @@ async def _bounded_answer(response: httpx.Response) -> Result[Document, CloudErr
         return Err(Unreachable("Unsupported response encoding", response.status_code))
     if response.is_stream_consumed:
         if len(response.content) > MAX_RESPONSE_BYTES:
-            return Err(Unreachable("Response exceeds byte limit", response.status_code))
+            return Err(Unreachable(TOO_LARGE_ANSWER, response.status_code))
         return _answer(response)
     body = bytearray()
     async for chunk in response.aiter_raw(chunk_size=UPLOAD_CHUNK_BYTES):
         if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
-            return Err(Unreachable("Response exceeds byte limit", response.status_code))
+            return Err(Unreachable(TOO_LARGE_ANSWER, response.status_code))
         body.extend(chunk)
     return _answer(
         httpx.Response(response.status_code, content=bytes(body), headers=response.headers)
@@ -894,6 +903,7 @@ class CloudSync:
 
     __slots__ = (
         "_awaiting",
+        "_catalog_fields",
         "_clicked_at",
         "_clock",
         "_confirmed_launch",
@@ -918,6 +928,7 @@ class CloudSync:
         "_online",
         "_preflight_start",
         "_programs_enabled",
+        "_pushed_catalog",
         "_pushed_rev",
         "_record_degraded",
         "_refused_launch",
@@ -954,6 +965,7 @@ class CloudSync:
         health_context: Callable[[], HealthContext] = HealthContext,
         deposit: DepositTask | None = None,
         roster: Roster | None = None,
+        catalog_fields: Callable[[], Mapping[str, JsonValue]] | None = None,
     ) -> None:
         """``record_degraded``: whether the local session record is incomplete or cannot
         be written, read at every heartbeat; ``None`` when this console records nothing.
@@ -964,10 +976,13 @@ class CloudSync:
         own. ``roster``: the riders' list this link keeps up to date; ``None``: no list
         is asked for. ``medical``: the medical parameters and their verdict, whose
         version the heartbeat announces when signed; ``None``: the heartbeat says there
-        is none."""
+        is none. ``catalog_fields``: what the console says of the signed catalogue with
+        its programmes (contract 1.11, :mod:`src.programme_catalog`), sent again when it
+        changes; ``None``: nothing is said of one."""
         self._clock: Clock = clock
         self._deposit: DepositTask | None = deposit
         self._roster: Roster | None = roster
+        self._catalog_fields: Callable[[], Mapping[str, JsonValue]] | None = catalog_fields
         self._health: HealthWatch | None = health
         self._health_context: Callable[[], HealthContext] = health_context
         self._last_rtt: Seconds | None = None
@@ -1018,6 +1033,7 @@ class CloudSync:
         self._clicked_at: Monotonic = clock.monotonic()
         self._unanswered: _Awaiting | None = None
         self._pushed_rev: int | None = None
+        self._pushed_catalog: Mapping[str, JsonValue] | None = None
         self._next_profiles: Monotonic | None = None
         self._last_heartbeat: Monotonic | None = None
         self._last_poll: Monotonic | None = None
@@ -1025,6 +1041,21 @@ class CloudSync:
         self._online: bool = False
 
     # --- read access -----------------------------------------------------
+
+    @property
+    def launch_in_hand(self) -> bool:
+        """Whether a launch from the dashboard is offered, being confirmed or not yet armed.
+
+        The programmes must not change under it (:mod:`src.programme_catalog`).
+        The confirmed launch is read by its id, which its start, its refusal and
+        :data:`LAUNCH_TIMEOUT` all clear: the launch itself is kept after a
+        timeout, for the words of a later refusal only.
+        """
+        return (
+            self._offered_launch is not None
+            or self._awaiting is not None
+            or self._confirmed_launch_id is not None
+        )
 
     @property
     def online(self) -> bool:
@@ -1412,20 +1443,26 @@ class CloudSync:
 
     async def _push_profiles(self, now: Monotonic) -> None:
         rev = int(self._store.rev)
-        if rev == self._pushed_rev:
+        catalog = None if self._catalog_fields is None else self._catalog_fields()
+        if rev == self._pushed_rev and catalog == self._pushed_catalog:
             return
         if self._next_profiles is not None and now < self._next_profiles:
             return
         rows: list[JsonValue] = [
             profile_row(p) for p in runnable_profiles(self._store.list_profiles(), self._tiers)
         ]
-        sent = await self._transport.post(
-            "/api/machine/profiles",
-            {"storeRev": rev, "programsEnabled": self._programs_enabled, "profiles": rows},
-        )
+        body: dict[str, JsonValue] = {
+            "storeRev": rev,
+            "programsEnabled": self._programs_enabled,
+            "profiles": rows,
+        }
+        if catalog is not None:
+            body.update(catalog)
+        sent = await self._transport.post("/api/machine/profiles", body)
         self._note(sent)
         if isinstance(sent, Ok):
             self._pushed_rev = rev
+            self._pushed_catalog = catalog
             self._next_profiles = None
         else:
             self._next_profiles = Monotonic(now + RETRY_PERIOD)

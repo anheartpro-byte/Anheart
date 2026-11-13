@@ -160,6 +160,11 @@ class StartBody:
     """No longer read: present only so that a page that still sends an age is refused
     with a sentence that says why (422), rather than have its age silently ignored."""
 
+    profiles_digest: str | None = None
+    """The ``digest`` of the programme list the page showed (``GET /api/profiles``).
+    Required: absent, the start is refused (422) with a sentence that says why;
+    another than the list's now, refused 409 ``profiles_changed`` (ANH-138)."""
+
 
 @dataclass(frozen=True, slots=True)
 class RemoteLaunchConfirmBody:
@@ -1383,6 +1388,8 @@ class ProfileListRow:
 
     rev: int
     profiles: tuple[ProfileRow, ...]
+    digest: str
+    """The digest of these programmes' content (ANH-138), which a start sends back."""
 
 
 @dataclass(frozen=True, slots=True)

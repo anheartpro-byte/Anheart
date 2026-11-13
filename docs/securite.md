@@ -1935,8 +1935,9 @@ viennent et ce que la console fait quand rien ne prouve qu'elles sont signées.
   toute conversion des fins de ligne de ces fichiers à l'extraction du dépôt.
 * **La clé.** `config/medical.pub` est la clé publique avec laquelle la console
   vérifie, embarquée dans l'image avec le fichier. C'est la clé « médical » et
-  aucune autre : le catalogue de programmes (ANH-138) aura sa propre clé, et
-  une clé ne signe jamais pour l'autre. Sa moitié privée reste chez le
+  aucune autre : le catalogue de programmes (ANH-138) a sa propre clé,
+  `config/anheart_catalog.pub` ([raspberry-pi.md, 8.8](raspberry-pi.md#88-le-catalogue-de-programmes-signé-anh-138)),
+  et une clé ne signe jamais pour l'autre. Sa moitié privée reste chez le
   signataire : jamais sur une console ni dans le dépôt. Où elle vit, qui la
   tient et comment la changer :
   [secrets.md, 3.4](secrets.md#34-clés-de-signature).

@@ -37,6 +37,7 @@ from tests.record_journal_support import clock_at_start, count_fsync, session
 from tests.roster_support import CHILD, RIDER_ID
 from tests.test_failure_rig import OPERATOR, PROGRAMME_ENV, SHORT_PROFILE
 from tests.test_record_session import bare_recorder, surface_event
+from tests.test_web_api import shown_digest
 
 WALL: Final[UnixMillis] = UnixMillis(1_791_195_072_345)
 """2026-10-05T10:11:12.345Z."""
@@ -544,6 +545,7 @@ async def test_ex3_a_start_the_machine_refuses_is_in_the_logbook_with_its_reason
                 "operator": OPERATOR,
                 "total_duration_s": None,
                 "subject_id": CHILD.user_id,
+                "profiles_digest": await shown_digest(http),
             },
         )
         assert started.status_code == 202, started.text

@@ -87,21 +87,13 @@ from src.roster import (
 )
 from src.sensors.registry import SPECS
 from src.training.plan import (
-    DeleteError,
-    Malformed,
-    ProfileParseError,
     ProfileStore,
     Program,
     Rejected,
     ResolveError,
-    RevMismatch,
-    StoreRev,
-    StoreUnwritable,
-    TrainingProfile,
     UnknownProfile,
-    UpsertError,
     is_profile_id,
-    parse_profile,
+    profiles_digest,
 )
 from src.training.preflight import (
     BRIDGED_BENCH_ONLY,
@@ -123,7 +115,6 @@ from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySna
 from src.units import Bpm, Monotonic, OutputRpm, Seconds, elapsed
 from src.web.deps import TOKEN_HEADER, Services, VerdictSource, WebConfig
 from src.web.preflight_routes import register_preflight
-from src.web.profile_writer import ProfileWriter
 from src.web.schemas import (
     AckBody,
     AckRow,
@@ -248,6 +239,8 @@ VERDICT_LATCHED: Final[str] = "verdict_latched"
 ESTOP_UNATTESTED: Final[str] = "estop_unattested"
 STO_NOT_READY: Final[str] = "sto_not_ready"
 STO_BRIDGED_BENCH_ONLY: Final[str] = "sto_bridged_bench_only"
+PROFILES_CHANGED: Final[str] = "profiles_changed"
+"""The programmes are no longer those the page showed: chosen and previewed again first."""
 
 ESTOP_WIRING_FIELDS: Final[tuple[str, ...]] = ("sto_jumper_removed", "mushroom_wired_nc")
 """The confirmations ``/api/safety/attest`` requires under every source but a declared bridge."""
@@ -653,53 +646,18 @@ def _register_reads(
 
 
 def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
-    """Profile CRUD and the dry-run phase-plan preview."""
+    """The stored profiles, read only, and the dry-run phase-plan preview.
+
+    No route writes a profile (ANH-138): they come from the signed catalogue
+    (:mod:`src.programme_catalog`), or are the shipped fallback.
+    """
     store = services.store
     geometry = services.geometry
-    writer = ProfileWriter(store)
 
     @app.get("/api/profiles", dependencies=auth, tags=["profiles"])
     async def list_profiles() -> ProfileListRow:
         """Every stored profile, with the revision they were read at."""
         return _profile_list(store)
-
-    @app.put("/api/profiles/{profile_id}", dependencies=auth, tags=["profiles"])
-    async def upsert_profile(
-        profile_id: str, rev: int, document: Mapping[str, object]
-    ) -> ProfileRow:
-        """Create or replace one profile.
-
-        The document is untrusted JSON and goes through
-        :func:`~src.training.plan.parse_profile`, which is the only thing in
-        this system that decides whether a set of numbers is a usable training
-        programme - including the check that the zone sits below 90% of the
-        subject's maximum. A refusal comes back as 422 listing every violation,
-        because an operator fixing a profile needs all of them rather than the
-        first.
-
-        ``rev`` is optimistic concurrency. Two browsers editing the same
-        profile produce a 409 for the second one instead of a silent overwrite.
-        """
-        if profile_id != document.get("profile_id"):
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail=(
-                    f"the URL names {profile_id!r} and the document names "
-                    f"{document.get('profile_id')!r}: they must agree"
-                ),
-            )
-        parsed = parse_profile(document, where=f"profile {profile_id!r}")
-        if isinstance(parsed, Ok):
-            return await _commit_profile(writer, parsed.value, rev)
-        raise _parse_failure(parsed.error)
-
-    @app.delete("/api/profiles/{profile_id}", dependencies=auth, tags=["profiles"])
-    async def delete_profile(profile_id: str, rev: int) -> ProfileListRow:
-        """Delete one profile. Deleting the last one leaves an empty store."""
-        removed = await writer.delete(profile_id, StoreRev(rev))
-        if isinstance(removed, Ok):
-            return _profile_list(store)
-        raise _delete_failure(removed.error)
 
     @app.post("/api/plan/preview", dependencies=auth, tags=["profiles"])
     async def preview_plan(body: PreviewBody) -> PlanPreviewRow:
@@ -886,6 +844,13 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         by resolving it, before anything is submitted, so an operator gets a
         404 rather than a session that starts and immediately ends.
 
+        The programmes must be those the page showed: the ``digest`` of
+        ``GET /api/profiles`` comes back with the start, and one that is no
+        longer the list's is refused (409 ``profiles_changed``), so that a
+        programme whose content changed under its id is never started unseen.
+        Checked with no wait before the submission, and the catalogue changes
+        nothing while a start waits in the mailbox (ANH-138).
+
         The rider is named, by the list's identifier, and nothing else of them
         is taken: an age sent with the start is refused (422), since the age
         and the maximum heart rate are the site's. A rider the list does not
@@ -897,6 +862,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         _require_programs_enabled(services)
         operator = _require_operator(body.operator)
         _refuse_typed_age(body.subject_age)
+        _require_profiles_shown(services.store, body.profiles_digest)
         passenger = _require_passenger(services, body.subject_id)
         _require_known_profile(
             services, body.profile_id, body.total_duration_s, hr_max=passenger.hr_max
@@ -1296,23 +1262,6 @@ def _attestation_failure(refusal: AttestationRefusal) -> HTTPException:
     raise assert_never(refusal)
 
 
-def _parse_failure(error: ProfileParseError) -> HTTPException:
-    """Map a profile parse failure."""
-    match error:
-        case Malformed():
-            return HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail=f"{error.detail}: " + "; ".join(error.problems),
-            )
-        case Rejected():
-            return HTTPException(
-                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-                detail=f"{error.detail}: "
-                + ", ".join(violation.value for violation in error.violations),
-            )
-    raise assert_never(error)
-
-
 def _resolve_failure(error: ResolveError) -> HTTPException:
     """Map a profile resolution failure."""
     match error:
@@ -1327,37 +1276,6 @@ def _resolve_failure(error: ResolveError) -> HTTPException:
                 detail=f"{error.detail}: "
                 + ", ".join(violation.value for violation in error.violations),
             )
-    raise assert_never(error)
-
-
-def _upsert_failure(error: UpsertError) -> HTTPException:
-    """Map a profile write failure."""
-    match error:
-        case RevMismatch():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
-                detail=(
-                    f"the store moved on: you edited revision {error.expected}, it is now "
-                    f"{error.actual}. Reload before saving, or an edit is lost silently"
-                ),
-            )
-        case StoreUnwritable():
-            return HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"cannot write {error.path}: {error.detail}",
-            )
-    raise assert_never(error)
-
-
-def _delete_failure(error: DeleteError) -> HTTPException:
-    """Map a profile delete failure."""
-    match error:
-        case UnknownProfile():
-            return HTTPException(
-                status_code=HTTPStatus.NOT_FOUND, detail=f"no profile {error.profile_id!r}"
-            )
-        case RevMismatch() | StoreUnwritable():
-            return _upsert_failure(error)
     raise assert_never(error)
 
 
@@ -1558,6 +1476,26 @@ def _require_known_profile(
         raise _resolve_failure(resolved.error)
 
 
+PROFILES_DIGEST_MISSING_DETAIL: Final[str] = (
+    "demarrage sans l'empreinte de la liste des programmes (profiles_digest) : recharger la "
+    "page, choisir un programme et en faire l'apercu."
+)
+PROFILES_CHANGED_DETAIL: Final[str] = (
+    "les programmes de la console ont change depuis que cette page les a lus : rien n'a ete "
+    "demarre."
+)
+
+
+def _require_profiles_shown(store: ProfileStore, digest: str | None) -> None:
+    """Refuse a start sent from a programme list other than the console's now (ANH-138)."""
+    if digest is None:
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail=PROFILES_DIGEST_MISSING_DETAIL
+        )
+    if digest != profiles_digest(store.list_profiles()):
+        raise Refusal(HTTPStatus.CONFLICT, code=PROFILES_CHANGED, detail=PROFILES_CHANGED_DETAIL)
+
+
 TYPED_AGE_DETAIL: Final[str] = (
     "l'age du passager ne se saisit plus a la console : il vient du site, avec sa FC max, "
     "regles par un gestionnaire. Choisir le passager dans la liste (subject_id)."
@@ -1634,19 +1572,13 @@ def _optional_seconds(value: float | None) -> Seconds | None:
 
 
 def _profile_list(store: ProfileStore) -> ProfileListRow:
-    """Render the store's contents, with the revision an edit must send back."""
+    """Render the store's contents, with their revision and the digest a start sends back."""
+    profiles = store.list_profiles()
     return ProfileListRow(
         rev=int(store.rev),
-        profiles=tuple(ProfileRow.of(profile) for profile in store.list_profiles()),
+        profiles=tuple(ProfileRow.of(profile) for profile in profiles),
+        digest=profiles_digest(profiles),
     )
-
-
-async def _commit_profile(writer: ProfileWriter, profile: TrainingProfile, rev: int) -> ProfileRow:
-    """Write one validated profile, or raise the mapped failure."""
-    written = await writer.upsert(profile, StoreRev(rev))
-    if isinstance(written, Ok):
-        return ProfileRow.of(profile)
-    raise _upsert_failure(written.error)
 
 
 def _preview(program: Program, geometry: MachineGeometry) -> PlanPreviewRow:

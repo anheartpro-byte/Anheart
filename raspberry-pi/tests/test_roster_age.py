@@ -35,7 +35,7 @@ from tests.test_failure_rig import (
     make_rig,
 )
 from tests.test_panel_rider import FITTING, start_body
-from tests.test_web_api import detail, parse
+from tests.test_web_api import detail, parse, shown_digest
 
 TWO_HOURS_MS: Final[int] = 2 * 3600 * 1000
 
@@ -81,7 +81,10 @@ async def test_a_wall_clock_that_jumps_neither_ages_nor_rejuvenates_the_list(
             assert jumped.age_s == before.age_s == 600.0
             assert offered(jumped) == [FITTING.user_id]
         # Wall clock two hours ahead: the start naming the rider is not refused for the list.
-        started = await session.post("/api/session/start", json=start_body(FITTING.user_id))
+        started = await session.post(
+            "/api/session/start",
+            json={**start_body(FITTING.user_id), "profiles_digest": await shown_digest(session)},
+        )
         assert started.status_code == httpx.codes.ACCEPTED, started.text
         await rig.tick(1.0)
     assert rig.refusals() == []
@@ -101,7 +104,10 @@ async def test_the_monotonic_clock_alone_makes_the_list_stale(tmp_path: Path) ->
     async with rig.http() as session:
         await attest(session)
         roster = parse(RosterRow, await session.get("/api/roster"))
-        refused = await session.post("/api/session/start", json=start_body(FITTING.user_id))
+        refused = await session.post(
+            "/api/session/start",
+            json={**start_body(FITTING.user_id), "profiles_digest": await shown_digest(session)},
+        )
     assert (roster.state, roster.age_s, roster.detail) == ("stale", 901.0, STALE_AT_901)
     assert offered(roster) == []
     assert refused.status_code == httpx.codes.CONFLICT
@@ -138,7 +144,10 @@ async def test_up_to_fifteen_minutes_the_list_is_offered_with_no_word_of_stalene
     async with rig.http() as session:
         await attest(session)
         roster = parse(RosterRow, await session.get("/api/roster"))
-        started = await session.post("/api/session/start", json=start_body(FITTING.user_id))
+        started = await session.post(
+            "/api/session/start",
+            json={**start_body(FITTING.user_id), "profiles_digest": await shown_digest(session)},
+        )
     assert (roster.state, roster.detail, roster.age_s) == ("current", "", age)
     assert offered(roster) == [FITTING.user_id]
     assert started.status_code == httpx.codes.ACCEPTED, started.text
@@ -160,7 +169,10 @@ async def test_past_fifteen_minutes_the_list_offers_nobody_and_says_its_age_to_t
     async with rig.http() as session:
         await attest(session)
         roster = parse(RosterRow, await session.get("/api/roster"))
-        refused = await session.post("/api/session/start", json=start_body(FITTING.user_id))
+        refused = await session.post(
+            "/api/session/start",
+            json={**start_body(FITTING.user_id), "profiles_digest": await shown_digest(session)},
+        )
     said = (
         f"liste des passagers perimee : recue il y a {ago}, "
         "au-dela de 15 min personne n'est propose"

@@ -51,7 +51,7 @@ from tests.test_failure_rig import (
     no_dsp,
     precommanded,
 )
-from tests.test_web_api import TOKEN, auth, detail, parse
+from tests.test_web_api import TOKEN, auth, detail, parse, shown_digest
 
 BOOT: Final[str] = "2f1c7a0e-5b0d-4c58-9d39-000000000001"
 
@@ -213,6 +213,7 @@ async def test_ex2_out_of_service_a_programme_is_refused_before_any_other_gate(
                 "operator": OPERATOR,
                 "total_duration_s": None,
                 "subject_id": RIDER_ID,
+                "profiles_digest": await shown_digest(session),
             },
         )
         assert asked.status_code == HTTPStatus.ACCEPTED

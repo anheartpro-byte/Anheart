@@ -107,7 +107,7 @@ flottant ne peut pas contenir (au-delà d'environ 1,8e308), au lieu de lever
 `OverflowError`. Ce dernier cas n'est pas dans le fichier partagé : un tel
 entier n'existe pas en JavaScript (`JSON.parse` le lit comme `Infinity`), et
 Convex ne le reçoit jamais ; des tests du Pi le couvrent (lecture d'un profil,
-magasin de profils écarté au démarrage, `PUT /api/profiles`).
+magasin de profils écarté au démarrage, programme reçu du catalogue signé).
 
 Les bornes que `plan.py` prend dans le fichier médical (plancher de
 récupération, plancher de retour au calme, fraction de zone) sont lues dans le même
@@ -128,10 +128,12 @@ non du programme : l'égalité de `hardMaxBpm` et `criticalBpm` avec les paliers
 du superviseur, et `maxRpm` sous le plafond avec une personne à bord. Le Pi
 les vérifie au départ de chaque séance (`TrainingRuntime._limits_mismatch`,
 `LocalConfig.ceiling_for`) et n'envoie que les profils dont les paliers sont
-les siens ; la publication vers les machines (ANH-138) devra les contrôler.
+les siens ; depuis ANH-138, il les contrôle aussi à la réception de chaque
+programme du catalogue ([ci-dessous](#ce-que-la-machine-en-fait)).
 `plan.py` n'impose pas non plus `minRunRpm >= 55` : 55 tr/min est la plus
 petite consigne du limiteur de mouvement (`min_run_motor_rpm` du fichier
-médical), pas une règle du profil.
+médical), pas une règle du profil ; c'est une règle de la machine, que le Pi
+applique à un programme du catalogue.
 
 ### Décisions à confirmer par l'utilisateur
 
@@ -185,6 +187,63 @@ Un programme retiré n'est plus envoyé : la machine le perd à sa prochaine
 mise à jour, au repos. Une séance déjà lancée garde sa propre copie
 (`sessions`), et la console la sienne : rien ne l'interrompt.
 
+### Ce que la machine en fait
+
+Détail dans [raspberry-pi.md, 8.8](raspberry-pi.md#88-le-catalogue-de-programmes-signé-anh-138).
+La console demande le catalogue **au repos seulement** (aucune séance, aucun
+départ en attente, aucun lancement du site offert ou en confirmation), à son
+démarrage puis au plus une fois par minute. Elle vérifie la signature avant
+de lire quoi que ce soit ; une signature invalide est écrite comme
+avertissement dans son journal de bord et la réponse est ignorée : ses
+programmes restent ceux d'avant. Puis elle juge chaque programme avec ses
+propres règles, dans cet ordre :
+
+1. `medicalParametersVersion` égale à la version de son fichier médical
+   signé (aucun programme accepté en mode banc) ;
+2. la validation de `plan.py` (la section précédente), avec les bornes de
+   son propre fichier médical ;
+3. les paliers du programme égaux à ceux de son superviseur
+   (`HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM` du fichier signé) ;
+4. `minRunRpm` au moins la plus petite consigne de ses limites de mouvement
+   signées ;
+5. `maxRpm` au plus la plaque moteur (1380 tr/min), quoi que dise
+   `allowAboveNameplate` ;
+6. `maxRpm` sous son plafond avec une personne à bord, qui doit exister
+   (`OCCUPANCY_OCCUPIED_ENABLED=true` et paramètres signés).
+
+Les programmes acceptés remplacent son magasin (`data/profiles.local.json`)
+en une écriture atomique ; chaque refusé est dit au site avec sa raison. La
+mise à jour n'est appliquée que si la console est encore au repos quand la
+réponse arrive, puis encore quand l'écriture a abouti : un lancement du site
+offert pendant l'écriture garde les programmes qu'il a vus. Les profils
+livrés (`config/profiles.default.json`) ne sont plus que ses programmes de
+secours, tant qu'aucun catalogue signé n'a été accepté, et la console n'a
+plus de route pour écrire un profil. Un catalogue où rien n'a jamais été
+publié (révision 0) n'en est pas un : la console garde ses programmes de
+secours, et une console qui tenait le catalogue d'un autre déploiement
+signé par la même clé y revient (une ligne au journal de bord), sans plus
+annoncer la révision de l'autre.
+
+À chaque démarrage, qu'elle ait un tableau de bord ou non, la console juge
+de nouveau le catalogue qu'elle a gardé : accepté sous d'autres paramètres
+médicaux, il est écarté entier ; sinon chaque programme que sa configuration
+refuse maintenant (un plafond plus bas, la personne à bord désactivée) est
+écarté, jusqu'au prochain catalogue accepté.
+
+Deux conséquences à connaître :
+
+- **Une console où `OCCUPANCY_OCCUPIED_ENABLED=false`** (le réglage par
+  défaut), ou dont les paramètres médicaux ne sont pas signés, n'a pas de
+  plafond avec une personne à bord : elle refuse chaque programme du
+  catalogue avec cette raison, et son magasin n'en garde aucun. Un programme
+  a toujours quelqu'un à bord : il n'y partirait pas. Une séance de banc
+  lancée du site y part toujours, son départ ne lisant pas le magasin.
+- **Convex ne vérifie pas les paliers cardiaques**, ni le plafond, contre le
+  fichier médical et la configuration de chaque console : il ne les connaît
+  pas. Un programme dont les paliers ne sont pas ceux d'une machine est
+  refusé par elle, et sa fiche affiche « refusé par la machine : » suivi des
+  paliers en cause.
+
 ### Ce que la fiche machine montre
 
 La machine dit ce qu'elle a fait du catalogue avec ses programmes
@@ -235,8 +294,12 @@ parité de calcul ne remplace pas la vérification du fichier signé par le Pi.
 
 ## Reste à faire
 
-Le catalogue enregistre `medicalParametersVersion` et ne valide un programme
-que pour la version médicale courante du serveur. Le Pi devra interroger la
-route, vérifier la signature, refuser un programme validé pour une autre
-version médicale, revalider tout programme reçu et vérifier les paliers et le
-plafond de sa machine : c'est la couche Pi d'ANH-138.
+- La clé de signature du catalogue : la créer, poser sa partie privée dans
+  Convex et livrer sa partie publique dans l'image du Pi
+  ([secrets.md](secrets.md#34-clés-de-signature)), action de l'utilisateur.
+  D'ici là, aucune machine ne reçoit de catalogue et toutes gardent leurs
+  programmes.
+- Mesurer, contre le déploiement de développement et une console en
+  simulation, le délai entre une publication et un programme lançable sur le
+  site (critère d'acceptation d'ANH-138 : moins de 2 minutes ; au plus une
+  minute pour la demande, puis l'envoi des profils). Jamais mesuré.

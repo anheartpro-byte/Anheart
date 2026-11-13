@@ -197,9 +197,11 @@ Points à savoir :
   `console stopped: runtime never started: drive link released without a write`
   (rien n'a jamais été commandé) ou
   `console stopped: emergency zero ACKNOWLEDGED; the drive link closed cleanly`.
-- Le premier enregistrement d'un profil crée `raspberry-pi/data/profiles.local.json`.
-  Tant qu'on n'enregistre rien, la console charge les profils livrés
-  (`standard_30_min`, `standard_45_min`) sans écrire de fichier.
+- Le premier catalogue de programmes signé accepté crée
+  `raspberry-pi/data/profiles.local.json` (ANH-138, [raspberry-pi.md, 8.8](raspberry-pi.md#88-le-catalogue-de-programmes-signé-anh-138)).
+  Tant qu'il n'y en a pas, la console charge ses programmes de secours, les
+  profils livrés (`standard_30_min`, `standard_45_min`), sans écrire de
+  fichier. Aucune route de la console n'écrit un profil.
 
 Toutes les clés `.env` sont décrites dans [raspberry-pi.md](raspberry-pi.md).
 
@@ -2512,12 +2514,32 @@ heartbeat Convex ni dans son objet strict `live` ; leur contrat reste inchangé.
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| GET | `/api/profiles` | - | profils stockés et révision | 200 |
-| PUT | `/api/profiles/{profile_id}?rev=<n>` | document de profil JSON (son `profile_id` doit égaler l'URL) | crée ou remplace ; validé par `parse_profile` | 200 ; 400 (id incohérent, document mal formé) ; 422 (profil rejeté, toutes les violations listées) ; 409 (révision dépassée) ; 500 (écriture impossible) |
-| DELETE | `/api/profiles/{profile_id}?rev=<n>` | - | supprime un profil | 200 ; 404 ; 409 ; 500 |
+| GET | `/api/profiles` | - | profils stockés, révision et `digest`, l'empreinte de leur contenu que renvoie un démarrage | 200 |
 | POST | `/api/plan/preview` | `{"profile_id", "total_duration_s"?, "subject_id"?}` | résout sans rien démarrer, ajusté à la FC max du passager nommé : phases et vitesses exprimées en moteur, sortie, Hz, g | 200 ; 404 ; 422 ; 409 (passager refusé) |
 
-La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles que par l'API.
+Aucune route n'écrit un profil : `PUT` et `DELETE /api/profiles/{profile_id}`
+sont retirés (ANH-138, ils répondent 404). Les programmes viennent du
+catalogue signé, revalidé par la console, ou sont ses programmes de secours
+livrés ([raspberry-pi.md, 8.8](raspberry-pi.md#88-le-catalogue-de-programmes-signé-anh-138)).
+La page redemande la liste toutes les 10 s : un catalogue accepté y paraît
+sans recharger la page. Le programme choisi, et son aperçu, restent tant
+qu'il est offert tel quel. Retiré, aucun autre n'est choisi à sa place ;
+modifié sous le même identifiant, son aperçu ne vaut plus. Dans les deux cas
+la page le dit sous les boutons et **Démarrer** attend l'aperçu de ce que
+l'opérateur choisit alors : la page n'envoie jamais un programme que
+l'opérateur n'a ni choisi ni vu.
+
+La liste porte `digest`, l'empreinte (SHA-256) du contenu entier de ses
+programmes, et la page la renvoie avec **Démarrer** (`profiles_digest`). La
+console refuse un démarrage dont l'empreinte n'est plus celle de sa liste
+(409, code `profiles_changed`, rien n'est démarré) : un même identifiant peut
+désigner un autre contenu après un redémarrage (une mise à jour de l'image
+qui change un programme de secours, un autre déploiement signé par la même
+clé), et la page n'a pas encore redemandé la liste. Sur ce refus, la page
+dit la phrase de la console, ne garde aucun programme choisi, redemande la
+liste, et **Démarrer** attend un programme choisi et son aperçu. Un
+démarrage sans empreinte est refusé (422) : la page et la console sont
+livrées ensemble.
 
 ### Séance
 
@@ -2529,7 +2551,7 @@ La page n'a pas d'éditeur de profils : `PUT` et `DELETE` ne sont accessibles qu
 | POST | `/api/feedback/skip` | `{}` | ferme la carte : « non renseigné » si rien n'était saisi, rien n'est envoyé ; un retour saisi part quand même | 200 (même corps) ; 409 `nothing_to_fill` |
 | POST | `/api/remote-launch/confirm` | `{"session_id", "operator"}` | confirme localement l'offre et attribue l'action à l'opérateur; la route ne fait aucun appel réseau, CloudSync traite ensuite la demande | 202 `{session_id, state}` ; 400 (opérateur vide) ; 409 (`launch_not_pending`, `launch_in_progress`, `passenger_unavailable`, `launch_refused`) |
 | GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}]}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
-| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_id"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi) ; 409 (dont : passager refusé, variateur en défaut) ; 412 |
+| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_id", "profiles_digest"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé ; `profiles_digest` est le `digest` de la liste que la page a montrée | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi, sans `profiles_digest`) ; 409 (dont : passager refusé, variateur en défaut, `profiles_changed` : les programmes ne sont plus ceux de la liste montrée) ; 412 |
 | POST | `/api/session/stop` | `{"operator", "reason"?}` | fin sur la rampe mise en service | 202 `{kind, operator, detail, at, request_id}` ; 400 ; 409 |
 | POST | `/api/session/estop` | `{"operator"?, "reason"?}` | verrouille l'arrêt d'urgence, **jamais refusé** | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
 

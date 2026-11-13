@@ -1535,11 +1535,13 @@ Pas à pas :
    ```sh
    curl -s -X POST http://127.0.0.1:8731/api/session/start \
      -H 'Content-Type: application/json' \
-     -d '{"profile_id":"standard_30_min","operator":"Mohamed","subject_id":"<identifiant>"}'
+     -d '{"profile_id":"standard_30_min","operator":"Mohamed","subject_id":"<identifiant>","profiles_digest":"<empreinte>"}'
    ```
 
    (remplacez le port, le profil, le nom et l'identifiant du passager, lu dans
-   `GET /api/roster`). Un âge envoyé (`subject_age`) est refusé : il vient du site. La
+   `GET /api/roster`, et l'empreinte, le `digest` lu dans `GET /api/profiles` :
+   un démarrage sans elle, ou avec celle d'une liste qui a changé depuis, est
+   refusé). Un âge envoyé (`subject_age`) est refusé : il vient du site. La
    réponse `{"kind":"start",...}` veut dire « reçu », pas « démarré ».
 10. Regardez la liste **Evenements** : `start_requested`, puis `taken`, puis
     `session_running`. Un `refused` dit pourquoi la séance n'est pas partie (§14). Sur

@@ -48,6 +48,7 @@ from tests.test_failure_rig import (
     attest,
     make_rig,
 )
+from tests.test_web_api import shown_digest
 
 CONSOLE: Final[Path] = Path(__file__).resolve().parents[1]
 SOURCES: Final[Path] = CONSOLE / "src"
@@ -375,6 +376,7 @@ async def test_ex2_a_session_with_a_rider_leaves_no_health_data_in_the_log(
                     "operator": OPERATOR,
                     "total_duration_s": None,
                     "subject_id": CHILD.user_id,
+                    "profiles_digest": await shown_digest(session),
                 },
             )
             assert refused.status_code == httpx.codes.ACCEPTED, refused.text

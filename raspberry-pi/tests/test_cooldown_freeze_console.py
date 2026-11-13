@@ -45,6 +45,7 @@ from src.units import Seconds
 from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import MIN_RUN, OPERATOR, SHORT_PROFILE, TICK, Rig, start_programme
 from tests.test_standstill_console import Console, console
+from tests.test_web_api import shown_digest
 
 STALL_AT: Final[float] = 200.0
 """Seconds into ``failure_short`` at which the loop stalls: the middle of HOLD."""
@@ -189,7 +190,9 @@ async def test_at_the_console_a_programme_frozen_on_its_plateau_comes_down_and_e
         assert run.standing_rule() == RULE_LOOP_STALL
 
         # At rest the latched FREEZE is all that stands: it refuses a start, by name.
-        typed = await session.post("/api/session/start", json=START)
+        typed = await session.post(
+            "/api/session/start", json={**START, "profiles_digest": await shown_digest(session)}
+        )
         assert typed.status_code == httpx.codes.CONFLICT, typed.text
         assert RULE_LOOP_STALL in typed.json()["detail"]
         acknowledged = await session.post(
@@ -202,7 +205,9 @@ async def test_at_the_console_a_programme_frozen_on_its_plateau_comes_down_and_e
         assert all(snapshot.safety is None for snapshot in after)
         assert run.state() is RuntimeState.FINISHED
 
-        typed = await session.post("/api/session/start", json=START)
+        typed = await session.post(
+            "/api/session/start", json={**START, "profiles_digest": await shown_digest(session)}
+        )
         assert typed.status_code == httpx.codes.ACCEPTED, typed.text
         await run.run(3.0)
         assert run.state() is RuntimeState.RUNNING

@@ -228,6 +228,12 @@ from src.presence.adapter import RuntimePort as PresenceRuntimePort
 from src.presence.monitor import EmergencyStop, PresenceDecision, PresenceMonitor, RampDown
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
+from src.programme_catalog import (
+    ProgrammeCatalog,
+    read_public_key,
+    rules_of,
+    screen_stored,
+)
 from src.record import commands as record_commands
 from src.record.cursor import boot_identity
 from src.record.deposit import RecordDeposit
@@ -1129,6 +1135,7 @@ class LocalPanel:
     """The console, wired. Build it with :func:`build_panel`."""
 
     __slots__ = (
+        "_catalog",
         "_clock",
         "_cloud",
         "_config",
@@ -1228,6 +1235,8 @@ class LocalPanel:
         self._listener: SessionListener | None = listener
         self._cloud: CloudSync | None = cloud
         self._transport: HttpxTransport | None = transport
+        # The signed programme catalogue (ANH-138): only with a dashboard link.
+        self._catalog: ProgrammeCatalog | None = None
         self._last_measured: MotorRpm = MotorRpm(0)
         # The rider's feedback after a session with somebody on board (ANH-146),
         # memory only; and how to find, later, the dashboard's identifier of
@@ -1291,18 +1300,25 @@ class LocalPanel:
         """The dashboard link, or ``None`` when this console runs unlinked."""
         return self._cloud
 
+    @property
+    def catalog(self) -> ProgrammeCatalog | None:
+        """The signed programme catalogue, or ``None`` when this console runs unlinked."""
+        return self._catalog
+
     def attach_cloud(
         self,
         *,
         cloud: CloudSync,
         transport: HttpxTransport | None,
         health: HealthWatch | None,
+        catalog: ProgrammeCatalog | None = None,
     ) -> None:
         """Finish wiring the dashboard after construction, once its panel preflight exists."""
         self._listener = cloud
         self._cloud = cloud
         self._transport = transport
         self._health = health
+        self._catalog = catalog
         self._services = replace(
             self._services,
             remote_launch_current=cloud.current_remote_launch,
@@ -2028,6 +2044,36 @@ class LocalPanel:
         except Exception:  # as cloud_step: an observer must not stop the machine
             _logger.exception("dashboard stop watch failed; the session is unaffected")
 
+    async def catalog_step(self) -> None:
+        """Ask for the signed programme catalogue when it is due. No-op without a link.
+
+        A task of its own, apart from :meth:`cloud_step`: its request and its
+        write to the disk hold neither the heartbeat nor the poll. The same
+        fence, for the same reason: a bug in it must not bring the console
+        down, and leaves the programmes as they were.
+        """
+        catalog = self._catalog
+        if catalog is None:
+            return
+        try:
+            await catalog.step()
+        except Exception:  # as cloud_step: an observer must not stop the machine
+            _logger.exception("programme catalogue step failed; the programmes are unchanged")
+
+    def catalog_at_rest(self) -> bool:
+        """Whether the programmes may change now (ANH-138 EX-2, EX-5).
+
+        No session (the runtime idle or finished), no start waiting in the
+        mailbox, and no launch from the dashboard offered, being confirmed or
+        not yet armed. Read from memory only.
+        """
+        cloud = self._cloud
+        return (
+            self._runtime.state in (RuntimeState.IDLE, RuntimeState.FINISHED)
+            and self._surface.pending is None
+            and (cloud is None or not cloud.launch_in_hand)
+        )
+
     async def preflight_step(self) -> None:
         """Read the BITalino's battery when a run asks for it, and close a run once it is over.
 
@@ -2087,6 +2133,7 @@ class LocalPanel:
             asyncio.create_task(self._every(CLOUD_PERIOD, self.cloud_step, stop)),
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.roster_step, stop)),
+            asyncio.create_task(self._every(CLOUD_PERIOD, self.catalog_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
             asyncio.create_task(self._every(PREFLIGHT_PERIOD, self.preflight_step, stop)),
         )
@@ -2563,6 +2610,11 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             raise ValueError(f"the profile store cannot start: {error}")
         case _:
             pass
+    # Linked or not: a stored catalogue is judged by this start's rules before anything
+    # is offered (ANH-138).
+    rules = rules_of(config)
+    say = functools.partial(say_catalog, recorder, clock)
+    screened = screen_stored(store, rules, say)
 
     sensor_hub = SensorHub(clock=clock, kinds=config.sensors, fs=ECG_SAMPLE_RATE)
     bridge = EcgBridge(
@@ -2671,6 +2723,16 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         # One transport for the link and the deposit: a route the dashboard
         # asks to wait for is held for both (contract 1.4).
         link = PacedTransport(sent, clock)
+        catalog = ProgrammeCatalog(
+            clock=clock,
+            transport=link,
+            store=store,
+            rules=rules,
+            at_rest=panel.catalog_at_rest,
+            say=say,
+            public_key=read_public_key(),
+            report=screened,
+        )
         cloud = CloudSync(
             clock=clock,
             transport=link,
@@ -2697,10 +2759,25 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
                 )
             ),
             roster=riders,
+            catalog_fields=catalog.wire_fields,
         )
-    if cloud is not None:
-        panel.attach_cloud(cloud=cloud, transport=owned, health=health)
+        panel.attach_cloud(cloud=cloud, transport=owned, health=health, catalog=catalog)
     return panel
+
+
+def say_catalog(recorder: SessionRecorder | None, clock: Clock, words: str) -> None:
+    """What the programme catalogue warns of: in the console's log, and in the logbook."""
+    _logger.warning("%s", words)
+    if recorder is not None:
+        recorder.journal.log(
+            note(
+                wall_clock=clock.unix_millis(),
+                at=clock.monotonic(),
+                kind=EventKind.WARNING,
+                detail=words,
+                actor=SYSTEM,
+            )
+        )
 
 
 def record_preflight(
