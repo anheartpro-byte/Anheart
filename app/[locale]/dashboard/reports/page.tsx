@@ -60,21 +60,28 @@ export default function ReportsPage() {
 
       {exportAllowed && <FeedbackExportButton />}
 
-      {sessions.length > 0 ? (
+      {/* One live region, always mounted (ANH-227): a message put in it is
+          announced, which a region inserted with its text is not reliably.
+          Empty, it takes no room. */}
+      <div role="status" className="empty:mb-0">
+        {sessions.length === 0 && (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
+              <p className="text-muted-foreground text-center">
+                {status === "Exhausted" ? t("noReports") : t("nothingYet")}
+              </p>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {sessions.length > 0 && (
         <div className="grid gap-4">
           {sessions.map((session) => (
             <SessionReportCard key={session._id} session={session} />
           ))}
         </div>
-      ) : (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <p role="status" className="text-muted-foreground text-center">
-              {status === "Exhausted" ? t("noReports") : t("nothingYet")}
-            </p>
-          </CardContent>
-        </Card>
       )}
 
       {(status === "CanLoadMore" || status === "LoadingMore") && (

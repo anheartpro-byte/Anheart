@@ -177,6 +177,7 @@ export default function SessionsPage() {
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
+  const empty = table.getRowModel().rows.length === 0;
 
   return (
     <div className="space-y-6">
@@ -224,32 +225,39 @@ export default function SessionsPage() {
         </div>
       </div>
 
+      {/* One live region, always mounted (ANH-227): a message put in it is
+          announced, which a region inserted with its text is not reliably.
+          Empty, it takes no room. */}
+      <div role="status" className="empty:mb-0">
+        {!loading && empty && (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <Activity className="h-12 w-12 text-muted-foreground mb-4" />
+              <p className="text-muted-foreground text-center">
+                {canGrow
+                  ? searching
+                    ? t("sessions.searchNoMatchLoaded", {
+                        count: sessions.length,
+                      })
+                    : t("sessions.nothingYet")
+                  : searching
+                    ? t("sessions.searchNoMatch")
+                    : t("sessions.noSessions")}
+              </p>
+            </CardContent>
+          </Card>
+        )}
+        {!loading && !empty && canGrow && searching && (
+          <p className="text-sm text-muted-foreground">
+            {t("sessions.searchLoadedOnly", { count: sessions.length })}
+          </p>
+        )}
+      </div>
+
       {loading ? (
         <TableSkeleton />
-      ) : table.getRowModel().rows.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <Activity className="h-12 w-12 text-muted-foreground mb-4" />
-            <p role="status" className="text-muted-foreground text-center">
-              {canGrow
-                ? searching
-                  ? t("sessions.searchNoMatchLoaded", {
-                      count: sessions.length,
-                    })
-                  : t("sessions.nothingYet")
-                : searching
-                  ? t("sessions.searchNoMatch")
-                  : t("sessions.noSessions")}
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
+      ) : empty ? null : (
         <>
-          {canGrow && searching && (
-            <p role="status" className="text-sm text-muted-foreground">
-              {t("sessions.searchLoadedOnly", { count: sessions.length })}
-            </p>
-          )}
           <Card>
             <CardContent className="p-0">
               <Table>

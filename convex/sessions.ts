@@ -207,10 +207,15 @@ export const getSession = query({
   },
 });
 
+/** The most rows `listSessions` returns, and its default: the site asks for 10. */
+const LIST_SESSIONS_MAX = 50;
+
 /**
- * The `limit` (50 by default) most recent sessions the caller may read,
- * narrowed by the filters. For the short lists of the site (home page, a
- * patient's page); the Sessions page reads `listSessionsPaginated`.
+ * The `limit` most recent sessions the caller may read, narrowed by the
+ * filters: 50 by default and at most, 1 at least, as an unfiltered
+ * gestionnaire reads up to (managed machines + 1) * limit rows. For the
+ * short lists of the site (home page, a patient's page); the Sessions page
+ * reads `listSessionsPaginated`.
  */
 export const listSessions = query({
   args: {
@@ -224,7 +229,7 @@ export const listSessions = query({
       ctx,
       caller,
       filters,
-      limit ?? 50,
+      Math.min(Math.max(limit ?? LIST_SESSIONS_MAX, 1), LIST_SESSIONS_MAX),
     );
     return await listedRows(ctx, caller, sessions);
   },

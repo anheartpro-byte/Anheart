@@ -2258,7 +2258,7 @@ routes d'entraînement.
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `getSession` | pratiquant ou accès machine | Détail avec patient et machine. |
-| `listSessions` | connecté | Les `limit` (50 par défaut) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status` (`pending`, `active`, `interrupted`, `completed` ou `failed`), `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
+| `listSessions` | connecté | Les `limit` (50 par défaut et au plus, 1 au moins : une valeur hors de ces bornes y est ramenée) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status` (`pending`, `active`, `interrupted`, `completed` ou `failed`), `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
 | `listSessionsPaginated` | connecté | Les mêmes séances, avec les mêmes filtres, **page par page** (`paginationOpts`, pour `usePaginatedQuery`). Page Sessions (un statut par onglet) et page Rapports (`status: "completed"`). |
 | `getActiveSessionForMachine` | accès machine | Séance `active` (une séance `interrupted` n'en est pas une). |
 
@@ -2301,7 +2301,7 @@ une telle séance pour tout le monde, comme avant ce ticket.
 **Les listes courtes du gestionnaire (ANH-227).** Sans `machineId` ni `userId`,
 `listSessions` fusionne une source par
 machine gérée dans son organisation, plus une source pour les séances dont
-il est le pratiquant. Chaque source lit au plus `limit` séances (50 par défaut), du plus récent au
+il est le pratiquant. Chaque source lit au plus `limit` séances (50 par défaut et au plus), du plus récent au
 plus ancien. L'organisation et, si demandé, le statut sont dans l'index :
 
 | Source | Sans statut | Avec statut |

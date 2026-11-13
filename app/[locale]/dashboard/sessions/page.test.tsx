@@ -471,6 +471,30 @@ describe.each([
       ).toBeNull();
     });
 
+    it("keeps one live region mounted, empty while there is nothing to say, so that each message put in it is announced", async () => {
+      serverLists(...many);
+      const view = await renderPage(<SessionsPage />, { locale });
+      const region = screen.getByRole("status");
+      expect(region.textContent).toBe("");
+      const search = screen.getByPlaceholderText(messages.common.search);
+
+      await view.user.type(search, " P ");
+      expect(screen.getByRole("status")).toBe(region);
+      expect(region.textContent).toBe(
+        t("sessions.searchLoadedOnly", { count: 50 }),
+      );
+
+      await view.user.type(search, "Target");
+      expect(screen.getByRole("status")).toBe(region);
+      expect(region.textContent).toBe(
+        t("sessions.searchNoMatchLoaded", { count: 50 }),
+      );
+
+      await view.user.clear(search);
+      expect(screen.getByRole("status")).toBe(region);
+      expect(region.textContent).toBe("");
+    });
+
     it("T02-b shows the loaded-only search notice with matches until search is cleared or the list is done", async () => {
       serverLists(...many);
       const view = await renderPage(<SessionsPage />, { locale });

@@ -367,6 +367,17 @@ describe.each([
   ["fr", fr],
   ["en", en],
 ] as const)("reports: empty pages (%s, T02-f)", (locale, messages) => {
+  it("keeps one live region mounted, empty while reports are listed", async () => {
+    signedInAs("gestionnaire");
+    serverLists(completed("k57abcd1234efgh5678"));
+    await renderPage(<ReportsPage />, { locale });
+
+    expect(screen.getByRole("status").textContent).toBe("");
+    expect(
+      screen.getByText(`${messages.reports.sessionReport} - EFGH5678`),
+    ).toBeTruthy();
+  });
+
   it("T02-e explains an empty unfinished page and keeps the message while reading more, until the list is done", async () => {
     signedInAs("gestionnaire");
     answer(LIST, (args) =>

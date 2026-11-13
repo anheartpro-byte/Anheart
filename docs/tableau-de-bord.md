@@ -865,7 +865,10 @@ fin de la liste. Si aucun rapport n'est encore chargé, une carte indique
 « Aucun rapport à afficher pour l'instant : d'autres séances restent à lire »
 et explique qu'**Afficher plus** poursuit la lecture. Le message reste visible
 pendant le chargement suivant ; « Aucun rapport disponible pour le moment »
-ne s'affiche qu'une fois la liste finie et vide.
+ne s'affiche qu'une fois la liste finie et vide. Ces messages, comme ceux de
+la page Sessions (liste vide, recherche limitée aux séances chargées), sont
+écrits dans une région `role="status"` toujours présente, vide quand il n'y
+a rien à dire : un lecteur d'écran annonce chaque message qui y paraît.
 L'ancien rapport PDF, construit sur les données ECG, a été retiré avec le mode
 d'enregistrement ; le rapport d'une séance d'entraînement est la page
 [Rapport d'une séance](#rapport-dune-séance--frdashboardsessionsidreport). La
