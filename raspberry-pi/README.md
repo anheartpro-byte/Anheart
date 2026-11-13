@@ -76,7 +76,7 @@ console ») ; chaque probleme est signale d'un coup au demarrage :
 | `UI_PORT` | `8080` (défaut ; pas 8123 : `bench_console.py`) | `8080` |
 
 Optionnels : `GEAR_RATIO` (defaut 49.79, confirme au banc), `MOTOR_MAX_RPM`
-(defaut 300, 0..1380), `UI_HOST`/`UI_TOKEN` (hors loopback, jeton de 16
+(defaut 300, 0..1380), `UI_HOST`/`DEVICE_TOKEN` (ancien nom `UI_TOKEN` ; hors loopback, jeton de 16
 caracteres minimum), `OCCUPANCY_OCCUPIED_ENABLED` (reste `false` jusqu'au
 jalon M6).
 

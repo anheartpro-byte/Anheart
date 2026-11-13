@@ -3171,7 +3171,6 @@ function accepted(context, command, words) {
 async function startManual({ context, node }, at) {
   const id = newRequest();
   node("manual-bench").checked = true;
-  node("manual-operator").value = "op";
   context.api = (path) =>
     path === "/api/manual/start"
       ? accepted(context, { kind: "manual_start", operator: "op", detail: "bench", at, request_id: id }, "manuel bench")
@@ -3186,7 +3185,6 @@ async function startProgramme({ context, node }, at, detail = "standard_30_min")
   const id = newRequest();
   context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
   node("profile").value = "standard_30_min";
-  node("operator").value = "op";
   context.api = (path) =>
     path === "/api/session/start"
       ? accepted(context, { kind: "start", operator: "op", detail, at, request_id: id }, "start standard_30_min")
@@ -3575,7 +3573,6 @@ const STARTS = [
       "cet ecran ne sait pas si la seance en cours est encore celle-la.",
     press: ({ context, node }) => {
       node("manual-bench").checked = true;
-      node("manual-operator").value = "op";
       context.doManualStart();
     },
     path: "/api/manual/start",
@@ -3593,7 +3590,6 @@ const STARTS = [
     press: ({ context, node }) => {
       context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
       node("profile").value = "standard_30_min";
-      node("operator").value = "op";
       context.doStart();
     },
     path: "/api/session/start",

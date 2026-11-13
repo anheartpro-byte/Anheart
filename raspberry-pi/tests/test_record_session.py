@@ -74,6 +74,7 @@ from src.training.runtime import EndReason, RecordStorageLow, RuntimeLimits, Run
 from src.training.safety import SafetyLimits
 from src.training.types import Occupancy, Phase, SafetyAction, ZoneCounters
 from src.units import Bpm, Metres, Monotonic, MotorRpm, RpmPerSecond, Seconds, UnixMillis
+from tests.access_support import OPERATOR_ID
 from tests.medical_support import unsigned
 from tests.record_console_support import (
     recorded_rig,
@@ -142,7 +143,7 @@ async def test_ex1_a_manual_session_is_recorded_from_arming_to_its_end(tmp_path:
     assert (manifest.kind, manifest.occupancy) == ("manual", "bench")
     assert manifest.end_reason == "operator_stop"
     assert manifest.ended_at is not None
-    assert manifest.operator == ALIAS
+    assert manifest.operator == OPERATOR_ID, "the account signed in, as it is (ANH-152)"
     assert manifest.subject_id is None
     assert manifest.profile is None
     assert (manifest.machine_id, manifest.organization_id) == ("unassigned", "unassigned")
@@ -173,14 +174,14 @@ async def test_ex1_a_manual_session_is_recorded_from_arming_to_its_end(tmp_path:
     assert all(row.drive_status_word is not None for row in rows if row.measured_fresh)
 
     kinds = [(event.kind, event.detail, event.actor) for event in recording.events]
-    assert (EventKind.OPERATOR_ACTION, "start_manual ceiling_motor_rpm=1380", ALIAS) in kinds
+    assert (EventKind.OPERATOR_ACTION, "start_manual ceiling_motor_rpm=1380", OPERATOR_ID) in kinds
     assert all(
         isinstance(commands.parse(event.detail), Ok)
         for event in recording.events
         if event.kind in commands.INPUT_KINDS
     )
     assert (EventKind.PHASE, "hold", "system") in kinds
-    assert (EventKind.OPERATOR_ACTION, "stop", ALIAS) in kinds
+    assert (EventKind.OPERATOR_ACTION, "stop", OPERATOR_ID) in kinds
     assert kinds[-1] == (EventKind.END, "operator_stop", "system")
     start = next(
         event
@@ -233,7 +234,7 @@ async def test_ex1_a_programmed_session_freezes_its_programme_numbers_only(
     assert any(
         event.kind is EventKind.OPERATOR_ACTION
         and event.detail == "start_programme"
-        and event.actor == ALIAS
+        and event.actor == OPERATOR_ID
         for event in events
     )
     assert (EventKind.PHASE, "baseline") in {(e.kind, e.detail) for e in events}
@@ -366,7 +367,7 @@ async def test_ex1_no_operator_name_and_no_address_reaches_the_disk(tmp_path: Pa
         assert name.encode() not in on_disk, f"{name!r} was written to the record"
     assert b"[redacted]" in on_disk
     actors = {event.actor for event in recording.events}
-    assert {ALIAS, operator_alias("Second Person"), "system"} <= actors
+    assert {OPERATOR_ID, "system"} <= actors
     verdicts = [e.detail for e in recording.events if e.kind is EventKind.VERDICT]
     assert any(detail.startswith("operator_estop (QUICK_STOP)") for detail in verdicts)
     assert recording.manifest.end_reason == "emergency_stop"

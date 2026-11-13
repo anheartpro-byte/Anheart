@@ -32,6 +32,7 @@ from src.result import Err, Ok
 from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
 from src.units import Monotonic, Seconds, UnixMillis
+from tests.access_support import OPERATOR_ID
 from tests.record_console_support import RecordedRig, recorded_rig, set_target, start_bench, stop
 from tests.record_journal_support import clock_at_start, count_fsync, session
 from tests.roster_support import CHILD, RIDER_ID
@@ -515,7 +516,7 @@ async def test_ex3_acceptance_what_is_asked_after_the_record_closed_is_in_the_lo
         kind == "warning" and detail.startswith("console: fault_reset_requested:")
         for kind, detail in kinds
     )
-    assert all(entry["actor"] in (ALIAS, "system") for entry in after)
+    assert all(entry["actor"] in (OPERATOR_ID, "system") for entry in after)
     assert again.status_code in (202, 409)
     # The closed record did not change by one byte, and still reads without a warning.
     assert recorded.everything_under(record) == closed
@@ -559,13 +560,15 @@ async def test_ex3_a_start_the_machine_refuses_is_in_the_logbook_with_its_reason
     # The logbook keeps the reason and not the rider's age.
     kept = refusals[0].replace("passager de 9 ans", "[redacted]")
     assert kept.startswith("demarrage refuse : [redacted], minimum ")
-    assert written[1:] == [
-        ("warning", "console: start_requested", ALIAS),
-        ("refusal", f"refused: {kept}", ALIAS),
+    # The operator's sign-in comes first (ANH-152), then what they did, by account.
+    assert written[0] == ("operator_action", "console: connexion", OPERATOR_ID)
+    assert written[2:] == [
+        ("warning", "console: start_requested", OPERATOR_ID),
+        ("refusal", f"refused: {kept}", OPERATOR_ID),
     ]
     assert b"9 ans" not in recorded.everything_on_disk()
-    assert written[0][0] == "warning"
-    assert str(written[0][1]).startswith("console: attested: ")
+    assert written[1][0] == "warning"
+    assert str(written[1][1]).startswith("console: attested: ")
     on_disk = recorded.everything_on_disk()
     assert SHORT_PROFILE.encode() not in on_disk, "the programme's identifier is not written"
     assert OPERATOR.encode() not in on_disk

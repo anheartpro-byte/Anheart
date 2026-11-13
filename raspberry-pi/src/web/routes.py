@@ -31,6 +31,10 @@ Status codes that mean something
   sentence (:class:`Refusal`), and when another request is in its way, with
   that request's identifier and nothing else of it: never its content, which
   may be another operator's.
+* **401** without a device token of this console (code-less), and, for every
+  action but the STOP and the emergency stop, without an operator signed in on
+  that device (``code`` :data:`OPERATOR_REQUIRED`, ANH-152): the page then
+  shows its sign-in screen.
 * **403** for any request for motion while motion is disabled in this build
   (:attr:`~src.web.deps.Services.motion_enabled`, the local console's read-only
   milestone). Checked before anything else, so a disabled console never even
@@ -52,10 +56,19 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Final, assert_never
 
-from fastapi import Depends, FastAPI, HTTPException, Request, params
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, params
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
+from src.console_access import (
+    Locked,
+    NoList,
+    SignedIn,
+    UnknownOperator,
+    WrongCode,
+    describe_refusal,
+    device_actor,
+)
 from src.control_surface import (
     LOCAL_SUBJECT,
     CommandRefusal,
@@ -113,9 +126,18 @@ from src.training.safety import (
 )
 from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, OutputRpm, Seconds, elapsed
-from src.web.deps import TOKEN_HEADER, Services, VerdictSource, WebConfig
+from src.web.deps import (
+    SESSION_COOKIE,
+    TOKEN_HEADER,
+    Services,
+    VerdictSource,
+    WebConfig,
+    identify_device,
+    is_loopback_host,
+)
 from src.web.preflight_routes import register_preflight
 from src.web.schemas import (
+    AccessRow,
     AckBody,
     AckRow,
     AttestationRow,
@@ -127,7 +149,6 @@ from src.web.schemas import (
     EndBody,
     EstopBody,
     EstopRow,
-    FaultResetBody,
     FaultRow,
     FeedbackRow,
     HealthRow,
@@ -136,7 +157,6 @@ from src.web.schemas import (
     PanelRow,
     PlanPreviewRow,
     PortRow,
-    PresenceBody,
     PresenceRow,
     PreviewBody,
     ProfileListRow,
@@ -147,12 +167,12 @@ from src.web.schemas import (
     RemoteLaunchConfirmBody,
     RemoteLaunchRow,
     RequestRow,
-    RestoreBody,
     RosterRow,
     SafetyRow,
     SensorRow,
     SensorsRow,
     ServiceRow,
+    SignInBody,
     SnapshotRow,
     StartBody,
     StatusRow,
@@ -278,8 +298,20 @@ REQUEST_WAITING_DETAIL: Final[str] = (
 # =========================================================================
 
 
-def token_guard(config: WebConfig) -> Callable[[Request], Awaitable[None]]:
-    """Build the dependency that refuses a request without the shared token.
+OPERATOR_REQUIRED: Final[str] = "operator_required"
+"""The ``code`` of a 401 for an action with no operator signed in on this device."""
+
+OPERATOR_REQUIRED_DETAIL: Final[str] = (
+    "connexion d'un operateur requise : seuls le STOP, l'E-STOP et les lectures sont ouverts "
+    "sans connexion"
+)
+
+type DeviceGuard = Callable[[Request], Awaitable[str]]
+type OperatorGuard = Callable[[Request], Awaitable[SignedIn]]
+
+
+def device_guard(config: WebConfig, services: Services) -> DeviceGuard:
+    """Build the dependency that names the device of a request, or refuses it (401).
 
     A closure over the configuration rather than a lookup through
     ``request.app.state``: Starlette's ``State`` resolves attributes
@@ -287,20 +319,49 @@ def token_guard(config: WebConfig) -> Callable[[Request], Awaitable[None]]:
     site, and this is the layer where a missed type is an unauthenticated motor
     control.
 
-    Constant-time comparison, and a deliberately uninformative message: an
-    unauthenticated caller learns that a token is required and nothing else -
-    not whether a session is running, not who the operator is.
+    Memory only and no wait (:func:`~src.web.deps.identify_device`): the
+    emergency stop depends on nothing else. A deliberately uninformative
+    message: an unauthenticated caller learns that a token is required and
+    nothing else - not whether a session is running, not who the operator is.
     """
 
-    async def guard(request: Request) -> None:
-        if config.token_matches(request.headers.get(TOKEN_HEADER)):
-            return
+    async def guard(request: Request) -> str:
+        device = identify_device(config, services.access, request.headers.get(TOKEN_HEADER))
+        if device is not None:
+            return device
         _logger.warning(
             "rejected %s %s: bad or missing %s", request.method, request.url.path, TOKEN_HEADER
         )
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
             detail=f"a valid {TOKEN_HEADER} header is required",
+        )
+
+    return guard
+
+
+def signed_in(services: Services, request: Request, device: str, *, touch: bool) -> SignedIn | None:
+    """The operator signed in on ``device`` by this request's cookie, or ``None``."""
+    access = services.access
+    if access is None:
+        return None
+    return access.session(request.cookies.get(SESSION_COOKIE), device, touch=touch)
+
+
+def operator_guard(services: Services, device: DeviceGuard, *, touch: bool) -> OperatorGuard:
+    """Build the dependency that refuses an action with no operator signed in (401).
+
+    ``touch``: the request is an action, which restarts the session's idle
+    period; the attendant's presence ping is not, or an open page would keep a
+    session alive forever.
+    """
+
+    async def guard(request: Request) -> SignedIn:
+        session = signed_in(services, request, await device(request), touch=touch)
+        if session is not None:
+            return session
+        raise Refusal(
+            HTTPStatus.UNAUTHORIZED, code=OPERATOR_REQUIRED, detail=OPERATOR_REQUIRED_DETAIL
         )
 
     return guard
@@ -314,9 +375,9 @@ def token_guard(config: WebConfig) -> Callable[[Request], Awaitable[None]]:
 def _register_public(app: FastAPI, *, config: WebConfig) -> None:
     """Health and the page itself: reachable with no token.
 
-    ``/healthz`` is unauthenticated because the container healthcheck has no
-    token, and it therefore reports **nothing** about the session - see
-    :class:`~src.web.schemas.HealthRow`.
+    ``/healthz`` is unauthenticated from the Pi itself because the container
+    healthcheck has no token, and it therefore reports **nothing** about the
+    session - see :class:`~src.web.schemas.HealthRow`.
 
     The page is unauthenticated because it is inert: HTML, CSS and JavaScript
     with no data in them. Every number it displays comes from the API, which
@@ -325,8 +386,19 @@ def _register_public(app: FastAPI, *, config: WebConfig) -> None:
     """
 
     @app.get("/healthz", tags=["system"])
-    async def healthz() -> HealthRow:
-        """Liveness for the container healthcheck. Says nothing about the session."""
+    async def healthz(request: Request) -> HealthRow:
+        """Liveness for the container healthcheck. Says nothing about the session.
+
+        Without a token from the Pi itself only (ANH-152): from anywhere else it
+        takes this console's device token, like every read.
+        """
+        client = request.client
+        from_pi = client is not None and is_loopback_host(client.host)
+        if not from_pi and identify_device(config, None, request.headers.get(TOKEN_HEADER)) is None:
+            raise HTTPException(
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail=f"a valid {TOKEN_HEADER} header is required",
+            )
         return HealthRow(status="ok", service=SERVICE_NAME)
 
     @app.get("/", include_in_schema=False)
@@ -378,25 +450,130 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     dependency list is built once, here, so no group of routes can be
     registered without it by accident.
     """
-    auth: Sequence[params.Depends] = (Depends(token_guard(config)),)
+    device = device_guard(config, services)
+    auth: Sequence[params.Depends] = (Depends(device),)
+    acting = operator_guard(services, device, touch=True)
+    _register_access(app, services=services, config=config, device=device, acting=acting)
     _register_reads(app, services=services, config=config, auth=auth)
     _register_profiles(app, services=services, auth=auth)
     _register_riders(app, services=services, auth=auth)
-    _register_remote_launch(app, services=services, auth=auth)
-    _register_feedback(app, services=services, auth=auth)
-    _register_session(app, services=services, auth=auth)
-    _register_manual(app, services=services, auth=auth)
-    _register_safety(app, services=services, auth=auth)
-    _register_records(app, services=services, auth=auth)
-    _register_service(app, services=services, auth=auth)
-    register_preflight(app, services=services, auth=auth)
+    _register_remote_launch(app, services=services, auth=auth, acting=acting)
+    _register_feedback(app, services=services, auth=auth, acting=acting)
+    _register_session(app, services=services, auth=auth, device=device, acting=acting)
+    _register_manual(app, services=services, auth=auth, acting=acting)
+    _register_safety(
+        app,
+        services=services,
+        auth=auth,
+        acting=acting,
+        present=operator_guard(services, device, touch=False),
+    )
+    _register_records(app, services=services, auth=auth, acting=acting)
+    _register_service(app, services=services, auth=auth, acting=acting)
+    register_preflight(app, services=services, auth=auth, acting=acting)
 
 
-def _register_service(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+def _register_access(
+    app: FastAPI,
+    *,
+    services: Services,
+    config: WebConfig,
+    device: DeviceGuard,
+    acting: OperatorGuard,
+) -> None:
+    """The sign-in screen: who may sign in here, signing in and out (ANH-152).
+
+    The cookie is ``HttpOnly`` (no script reads it), ``SameSite=Strict`` (no
+    other site's page sends it) and ``Secure`` on a console that serves TLS,
+    which every console off loopback does: a ``Secure`` cookie is never sent
+    over clear HTTP, so a console in clear (loopback) sets it without.
+    """
+
+    def answer(device_id: str, session: SignedIn | None) -> AccessRow:
+        access = services.access
+        return AccessRow.of(
+            None if access is None else access.held,
+            session,
+            None if access is None or session is None else access.remaining(session),
+            None if access is None else access.locked,
+            device_id,
+        )
+
+    # A Secure cookie is never sent over clear HTTP: only a console that serves TLS sets it.
+    secure = config.tls is not None
+
+    @app.get("/api/access", tags=["access"])
+    async def read_access(request: Request, device_id: str = Depends(device)) -> AccessRow:
+        """Who may sign in on this console, and who is signed in on this device. Never a hash."""
+        return answer(device_id, signed_in(services, request, device_id, touch=False))
+
+    @app.post("/api/access/sign-in", tags=["access"])
+    async def sign_in(
+        body: SignInBody, response: Response, device_id: str = Depends(device)
+    ) -> AccessRow:
+        """Sign an operator of the list in on this device. 403: no list, or an operator it
+        does not hold; 401: a wrong code; 423: locked out after five wrong codes in a row.
+        """
+        access = services.access
+        if access is None:
+            raise _sign_in_failure(NoList())
+        signed = await access.sign_in(body.user_id, body.code, device_id)
+        if isinstance(signed, Err):
+            raise _sign_in_failure(signed.error)
+        cookie, session = signed.value
+        response.set_cookie(
+            SESSION_COOKIE,
+            cookie,
+            httponly=True,
+            samesite="strict",
+            secure=secure,
+            path="/",
+        )
+        return answer(device_id, session)
+
+    @app.post("/api/access/sign-out", tags=["access"])
+    async def sign_out(
+        request: Request, response: Response, device_id: str = Depends(device)
+    ) -> AccessRow:
+        """End this device's session, if there is one. Always 200."""
+        access = services.access
+        if access is not None:
+            access.sign_out(request.cookies.get(SESSION_COOKIE))
+        response.delete_cookie(
+            SESSION_COOKIE, httponly=True, samesite="strict", secure=secure, path="/"
+        )
+        return answer(device_id, None)
+
+    @app.post("/api/access/refresh", tags=["access"])
+    async def stay_signed_in(
+        device_id: str = Depends(device), who: SignedIn = Depends(acting)
+    ) -> AccessRow:
+        """Stay signed in: an action that does nothing but restart the idle period."""
+        return answer(device_id, who)
+
+
+def _sign_in_failure(refusal: NoList | UnknownOperator | Locked | WrongCode) -> Refusal:
+    """A refused sign-in as its status, its code and its sentence. Never the code typed."""
+    detail = describe_refusal(refusal)
+    match refusal:
+        case NoList():
+            return Refusal(HTTPStatus.FORBIDDEN, code="no_list", detail=detail)
+        case UnknownOperator():
+            return Refusal(HTTPStatus.FORBIDDEN, code="unknown_operator", detail=detail)
+        case Locked():
+            return Refusal(HTTPStatus.LOCKED, code="locked", detail=detail)
+        case WrongCode():
+            return Refusal(HTTPStatus.UNAUTHORIZED, code="wrong_code", detail=detail)
+    raise assert_never(refusal)
+
+
+def _register_service(
+    app: FastAPI, *, services: Services, auth: Sequence[params.Depends], acting: OperatorGuard
+) -> None:
     """Putting a console that keeps restarting back in service."""
 
     @app.post("/api/service/restore", dependencies=auth, tags=["system"])
-    async def restore_service(body: RestoreBody) -> ServiceRow:
+    async def restore_service(who: SignedIn = Depends(acting)) -> ServiceRow:
         """Put the console back in service. Never automatic, and always by name.
 
         A console that started several times in a row after an unclean stop
@@ -408,7 +585,7 @@ def _register_service(app: FastAPI, *, services: Services, auth: Sequence[params
         **409** when the console is in service: there is nothing to lift.
         """
         restorer = services.service
-        operator = _require_operator(body.operator)
+        operator = who.user_id
         if restorer is None:
             raise HTTPException(
                 status_code=HTTPStatus.CONFLICT,
@@ -423,7 +600,9 @@ def _register_service(app: FastAPI, *, services: Services, auth: Sequence[params
         )
 
 
-def _register_records(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+def _register_records(
+    app: FastAPI, *, services: Services, auth: Sequence[params.Depends], acting: OperatorGuard
+) -> None:
     """The session records on disk: their list, and one of them as an archive.
 
     Both read the disk, on threads kept apart from everything else the console
@@ -459,7 +638,7 @@ def _register_records(app: FastAPI, *, services: Services, auth: Sequence[params
         )
 
     @app.get("/api/records/{name}/archive", dependencies=auth, tags=["records"])
-    async def export_record(name: str) -> FileResponse:
+    async def export_record(name: str, _who: SignedIn = Depends(acting)) -> FileResponse:
         """One record as ``<name>.tar.gz``. 409 while a session is in progress.
 
         Refused during a session on purpose: compressing tens of megabytes is
@@ -714,7 +893,7 @@ def _register_riders(app: FastAPI, *, services: Services, auth: Sequence[params.
 
 
 def _register_remote_launch(
-    app: FastAPI, *, services: Services, auth: Sequence[params.Depends]
+    app: FastAPI, *, services: Services, auth: Sequence[params.Depends], acting: OperatorGuard
 ) -> None:
     @app.get("/api/remote-launch", dependencies=auth, tags=["session"])
     async def read_remote_launch() -> RemoteLaunchRow | None:
@@ -730,8 +909,10 @@ def _register_remote_launch(
         status_code=HTTPStatus.ACCEPTED,
         tags=["session"],
     )
-    async def confirm_remote_launch(body: RemoteLaunchConfirmBody) -> RemoteLaunchAcceptedRow:
-        operator = _require_operator(body.operator)
+    async def confirm_remote_launch(
+        body: RemoteLaunchConfirmBody, who: SignedIn = Depends(acting)
+    ) -> RemoteLaunchAcceptedRow:
+        operator = who.user_id
         confirm = services.remote_launch_confirm
         if confirm is None:
             raise Refusal(
@@ -766,14 +947,15 @@ NOTHING_TO_FILL_DETAIL: Final[str] = (
 )
 
 
-def _register_feedback(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+def _register_feedback(
+    app: FastAPI, *, services: Services, auth: Sequence[params.Depends], acting: OperatorGuard
+) -> None:
     """The rider's feedback after a session with somebody on board (ANH-146).
 
     The card is the console's, the feedback is the rider's: health data. It is
     read from the request here, never echoed back, never logged; a refusal
     names the field, never what was in it (:mod:`src.passenger_feedback`).
-    The operator is the console's access, as for every other request: no
-    named operator yet (ANH-152).
+    Entered by an operator signed in on the console (ANH-152).
     """
 
     @app.get("/api/feedback", dependencies=auth, tags=["session"])
@@ -789,7 +971,7 @@ def _register_feedback(app: FastAPI, *, services: Services, auth: Sequence[param
         status_code=HTTPStatus.ACCEPTED,
         tags=["session"],
     )
-    async def give_feedback(request: Request) -> FeedbackRow:
+    async def give_feedback(request: Request, _who: SignedIn = Depends(acting)) -> FeedbackRow:
         """Enter the feedback of the card's session; one entered before is replaced.
 
         The body is read here, not by a model: a refused model would quote the
@@ -821,7 +1003,7 @@ def _register_feedback(app: FastAPI, *, services: Services, auth: Sequence[param
         return FeedbackRow.of(store.view())
 
     @app.post("/api/feedback/skip", dependencies=auth, tags=["session"])
-    async def skip_feedback() -> FeedbackRow:
+    async def skip_feedback(_who: SignedIn = Depends(acting)) -> FeedbackRow:
         """Close the card: "non renseigne" if nothing was entered; one entered is still sent."""
         store = _require_feedback(services)
         if isinstance(store.skip(), Err):
@@ -836,8 +1018,22 @@ def _require_feedback(services: Services) -> PassengerFeedback:
     return store
 
 
-def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
-    """Start, stop and the emergency stop."""
+def _register_session(
+    app: FastAPI,
+    *,
+    services: Services,
+    auth: Sequence[params.Depends],
+    device: DeviceGuard,
+    acting: OperatorGuard,
+) -> None:
+    """Start, stop and the emergency stop.
+
+    A start takes an operator signed in. The STOP and the emergency stop take a
+    device token only: anyone at the screen must be able to stop the machine,
+    signed in or not, and neither waits for anything the sign-in holds. They
+    are attributed to the operator signed in on that device, or else to the
+    device itself (``device:<id>``, ANH-152).
+    """
     surface = services.surface
 
     @app.post(
@@ -846,7 +1042,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         status_code=HTTPStatus.ACCEPTED,
         tags=["session"],
     )
-    async def start_session(body: StartBody) -> CommandRow:
+    async def start_session(body: StartBody, who: SignedIn = Depends(acting)) -> CommandRow:
         """Ask for a session to start. 202: accepted, not yet acted on.
 
         The profile id is checked for shape here and its existence is checked
@@ -869,7 +1065,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         """
         _require_motion_enabled(services)
         _require_programs_enabled(services)
-        operator = _require_operator(body.operator)
+        operator = who.user_id
         _refuse_typed_age(body.subject_age)
         _require_profiles_shown(services.store, body.profiles_digest)
         passenger = _require_passenger(services, body.subject_id)
@@ -894,27 +1090,38 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         status_code=HTTPStatus.ACCEPTED,
         tags=["session"],
     )
-    async def stop_session(body: EndBody) -> CommandRow:
+    async def stop_session(
+        body: EndBody, request: Request, device_id: str = Depends(device)
+    ) -> CommandRow:
         """End the running session on the commissioned ramp. 202: accepted.
 
         The ordinary stop. It is deliberately *not* the fast one: a
         deceleration faster than the drive's commissioned ramp trips
         overvoltage and drops the machine into a freewheel, which is a longer
         coast-down with a person inside.
+
+        Never refused for want of a sign-in (ANH-152): stopping is never harder
+        than starting. Signed in, it counts as an action of that operator.
         """
-        operator = _require_operator(body.operator)
+        who = signed_in(services, request, device_id, touch=True)
+        operator = device_actor(device_id) if who is None else who.user_id
         submitted = surface.submit_end(operator=operator, reason=body.reason)
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
         raise _end_failure(submitted.error)
 
     @app.post("/api/session/estop", dependencies=auth, tags=["session"])
-    async def emergency_stop(body: EstopBody) -> EstopRow:
+    async def emergency_stop(
+        body: EstopBody, request: Request, device_id: str = Depends(device)
+    ) -> EstopRow:
         """Latch the emergency stop. 200, because it has already happened.
 
-        Never refused. Not for a blank operator name, not for a missing reason,
-        not because no session is running, and there is no confirmation step -
-        a stop that asks "are you sure?" is not an emergency stop.
+        Never refused. Not for want of a sign-in (only the device token is
+        required, ANH-152), not for a missing reason, not because no session is
+        running, and there is no confirmation step - a stop that asks "are you
+        sure?" is not an emergency stop. Attributed to the operator signed in on
+        the device, else to the device (``device:<id>``); finding that out is a
+        dictionary lookup, never the sign-in's lock.
 
         This returns **before the control loop has ticked**: the latch is three
         synchronous attribute-level steps in
@@ -927,10 +1134,14 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         so the fastest stop available is the ramp, and the measured output speed
         in the next snapshot is the only thing that speaks about motion.
         """
-        return EstopRow.of(surface.submit_estop(operator=body.operator, reason=body.reason))
+        who = signed_in(services, request, device_id, touch=False)
+        operator = device_actor(device_id) if who is None else who.user_id
+        return EstopRow.of(surface.submit_estop(operator=operator, reason=body.reason))
 
 
-def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
+def _register_manual(
+    app: FastAPI, *, services: Services, auth: Sequence[params.Depends], acting: OperatorGuard
+) -> None:
     """The manual session: start it, set its target, and the drive's fault reset.
 
     Every one of them is a request for motion or a write to the drive, so each
@@ -946,7 +1157,7 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         status_code=HTTPStatus.ACCEPTED,
         tags=["manual"],
     )
-    async def start_manual(body: ManualStartBody) -> CommandRow:
+    async def start_manual(body: ManualStartBody, who: SignedIn = Depends(acting)) -> CommandRow:
         """Start a manual session, target 0. The occupancy is declared here, once.
 
         403 when motion is disabled or the occupancy is refused by
@@ -958,7 +1169,7 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         does not hold now). The loop checks the rider again when it arms.
         """
         _require_motion_enabled(services)
-        operator = _require_operator(body.operator)
+        operator = who.user_id
         occupancy = _require_occupancy(body.occupancy)
         _require_occupancy_allowed(services, occupancy)
         subject = _require_rider_for(services, occupancy, body.subject_id)
@@ -977,7 +1188,7 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         status_code=HTTPStatus.ACCEPTED,
         tags=["manual"],
     )
-    async def manual_target(body: ManualTargetBody) -> CommandRow:
+    async def manual_target(body: ManualTargetBody, who: SignedIn = Depends(acting)) -> CommandRow:
         """Set the manual target in OUTPUT rpm. The setpoint walks to it at the motion limits.
 
         Only a target: never a setpoint, never faster than the anti-nausea
@@ -985,7 +1196,7 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         ``0`` or ``[min_run, ceiling]`` is refused by the loop, not clamped.
         """
         _require_motion_enabled(services)
-        operator = _require_operator(body.operator)
+        operator = who.user_id
         if not math.isfinite(body.output_rpm) or body.output_rpm < 0.0:
             raise HTTPException(
                 status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -1004,26 +1215,32 @@ def _register_manual(app: FastAPI, *, services: Services, auth: Sequence[params.
         status_code=HTTPStatus.ACCEPTED,
         tags=["manual"],
     )
-    async def fault_reset(body: FaultResetBody) -> CommandRow:
+    async def fault_reset(who: SignedIn = Depends(acting)) -> CommandRow:
         """Reset a drive fault: named, explicit, and never automatic.
 
         The loop refuses it unless the machine is at rest, every verdict has
         been acknowledged by name, and the drive shows the shaft stopped.
         """
         _require_motion_enabled(services)
-        operator = _require_operator(body.operator)
-        submitted = surface.submit_fault_reset(operator=operator)
+        submitted = surface.submit_fault_reset(operator=who.user_id)
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
         raise _command_failure(submitted.error)
 
 
-def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
-    """The attestation gate, acknowledgement and the presence ping."""
+def _register_safety(
+    app: FastAPI,
+    *,
+    services: Services,
+    auth: Sequence[params.Depends],
+    acting: OperatorGuard,
+    present: OperatorGuard,
+) -> None:
+    """The attestation gate, acknowledgement and the presence ping: each by a signed-in operator."""
     surface = services.surface
 
     @app.post("/api/safety/attest", dependencies=auth, tags=["safety"])
-    async def attest(body: AttestBody) -> AttestationRow:
+    async def attest(body: AttestBody, who: SignedIn = Depends(acting)) -> AttestationRow:
         """Record, by name, that a real emergency stop is wired in.
 
         Both boxes must be ticked. They are two separate facts - the STO jumper
@@ -1065,13 +1282,13 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
                     "into P24 -> STO"
                 ),
             )
-        recorded = surface.attest_estop_wiring(body.operator)
+        recorded = surface.attest_estop_wiring(who.user_id)
         if isinstance(recorded, Ok):
             return AttestationRow.of(recorded.value)
         raise _attestation_failure(recorded.error)
 
     @app.post("/api/safety/acknowledge", dependencies=auth, tags=["safety"])
-    async def acknowledge(body: AckBody) -> AckRow:
+    async def acknowledge(body: AckBody, who: SignedIn = Depends(acting)) -> AckRow:
         """Clear the latched safety verdicts. The only thing that can.
 
         Never called automatically from anywhere. ``estop_released`` is the
@@ -1079,13 +1296,13 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
         cannot see the contact, and the default is ``False`` so that forgetting
         to ask fails closed.
         """
-        cleared = surface.acknowledge(body.operator, estop_released=body.estop_released)
+        cleared = surface.acknowledge(who.user_id, estop_released=body.estop_released)
         if isinstance(cleared, Ok):
             return AckRow.of(cleared.value)
         raise _acknowledge_failure(cleared.error)
 
     @app.post("/api/presence", dependencies=auth, tags=["safety"])
-    async def presence(body: PresenceBody) -> PresenceRow:
+    async def presence(who: SignedIn = Depends(present)) -> PresenceRow:
         """An attendant's screen saying it is still there.
 
         Feeds the ``attendant_absent`` rule, which freezes the setpoint after a
@@ -1093,10 +1310,12 @@ def _register_safety(app: FastAPI, *, services: Services, auth: Sequence[params.
         deliberately unlogged as an event: it happens every few seconds, and the
         freshness of the instant is the entire signal.
 
-        It proves a browser tab is open and reachable. It does not prove a human
-        is watching, and nothing in software can.
+        It proves a browser tab is open and reachable with an operator signed
+        in (ANH-152). It does not prove a human is watching, and nothing in
+        software can. It is not an action: it never restarts the session's idle
+        period, so a session left alone ends, and with it the pings.
         """
-        return PresenceRow(at=surface.note_presence(body.operator))
+        return PresenceRow(at=surface.note_presence(who.user_id))
 
 
 # =========================================================================
@@ -1443,20 +1662,6 @@ def _require_occupancy_allowed(services: Services, occupancy: Occupancy) -> None
             return
         case Err(refused):
             raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail=refused.detail)
-
-
-def _require_operator(operator: str) -> str:
-    """The operator's name, or a 400 explaining why one is needed.
-
-    Required for a start, an end and an acknowledgement, and deliberately **not**
-    for an emergency stop: a stop must never be refused for a missing form field.
-    """
-    if not operator.strip():
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail="an operator name is required: an unattributable session record is not one",
-        )
-    return operator
 
 
 def _require_known_profile(

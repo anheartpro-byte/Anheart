@@ -25,7 +25,7 @@ EOF
 cat > "$ANHEART_ROOT/etc/anheart/anheart.env" <<'EOF'
 UI_PORT=8090
 UI_HOST=127.0.0.1
-UI_TOKEN=synthetic-network-test-token
+DEVICE_TOKEN=synthetic-network-test-token
 EOF
 printf 'Include %s/etc/ssh/sshd_config.d/*.conf\n' "$ANHEART_ROOT" > "$ANHEART_ROOT/etc/ssh/sshd_config"
 fingerprint() {

@@ -113,6 +113,7 @@ from src.web.routes import (
 )
 from src.web.schemas import AttestationRow, SnapshotRow, StatusRow
 from tests import test_cloud_sync as dashboard_tests
+from tests.access_support import OPERATOR_ID
 from tests.medical_support import signed
 from tests.record_console_support import recorded_rig
 from tests.roster_support import RIDER_ID
@@ -639,7 +640,6 @@ async def test_the_route_takes_the_bench_confirmation_by_name_and_records_it_ver
                 },
                 {"operator": OPERATOR, "bench_bridged_declared": True, "mushroom_wired_nc": True},
                 {"operator": OPERATOR},
-                {"operator": " ", "bench_bridged_declared": True},
             ):
                 refused = await client.post("/api/safety/attest", json=body)
                 assert refused.status_code == HTTPStatus.BAD_REQUEST, body
@@ -648,13 +648,13 @@ async def test_the_route_takes_the_bench_confirmation_by_name_and_records_it_ver
             accepted = await attest_bench(client)
             assert accepted.status_code == HTTPStatus.OK
             row = parse(AttestationRow, accepted)
-            assert (row.operator, row.statement) == (OPERATOR, BENCH_BRIDGED_ATTESTATION)
+            assert (row.operator, row.statement) == (OPERATOR_ID, BENCH_BRIDGED_ATTESTATION)
             after = parse(StatusRow, await client.get("/api/status"))
             assert after.attested
             assert after.attestation == row
         logged = [r.getMessage() for r in caplog.records if r.name == "src.training.safety"]
         assert any(
-            message.endswith(f": {BENCH_BRIDGED_ATTESTATION}") and repr(OPERATOR) in message
+            message.endswith(f": {BENCH_BRIDGED_ATTESTATION}") and repr(OPERATOR_ID) in message
             for message in logged
         )
     finally:
@@ -939,10 +939,6 @@ async def test_the_screen_estop_latches_a_bench_session_and_wants_a_named_releas
             )
             assert held.status_code == HTTPStatus.CONFLICT
             assert "estop_released" in held.text
-            nameless = await client.post(
-                "/api/safety/acknowledge", json={"operator": " ", "estop_released": True}
-            )
-            assert nameless.status_code == HTTPStatus.BAD_REQUEST
             cleared = await client.post(
                 "/api/safety/acknowledge", json={"operator": OPERATOR, "estop_released": True}
             )

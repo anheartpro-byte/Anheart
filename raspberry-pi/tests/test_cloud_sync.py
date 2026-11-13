@@ -110,6 +110,7 @@ from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, MotorRpm, Seconds, UnixMillis
 from src.wall_clock import WallClockProbe
 from src.web.app import create_app
+from tests.access_support import OPERATOR_ID, signed_http
 from tests.medical_support import signed, unsigned
 from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, listed, roster_document
 from tests.test_contract import shared
@@ -2914,9 +2915,7 @@ async def test_the_confirming_operator_is_recorded_and_the_roster_name_stays_off
     await rig_.run(0.2)
     web = replace(config_of().web, token=WEB_KEY)
     app = create_app(services=rig_.panel.services, config=web)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-    ) as session:
+    async with signed_http(app, rig_.panel.services) as session:
         headers = {"X-Anheart-Token": WEB_KEY}
         offered = await session.get("/api/remote-launch", headers=headers)
         assert offered.status_code == 200
@@ -2952,10 +2951,10 @@ async def test_the_confirming_operator_is_recorded_and_the_roster_name_stays_off
         event for event in loaded.value.events if event.detail == "console: launch_confirmed"
     ]
     assert len(confirmations) == 1
-    assert confirmations[0].actor == operator_alias(confirmer)
+    assert confirmations[0].actor == OPERATOR_ID, "the account signed in (ANH-152)"
     logbook = (root / "logbook" / "events.jsonl").read_text(encoding="utf-8")
     assert "launch_confirmed" in logbook
-    assert operator_alias(confirmer) in logbook
+    assert OPERATOR_ID in logbook
     written = b"\n".join(path.read_bytes() for path in root.rglob("*") if path.is_file())
     assert RIDER_NAME.encode("utf-8") not in written
     assert RIDER_NAME not in caplog.text

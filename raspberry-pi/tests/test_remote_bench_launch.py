@@ -46,7 +46,7 @@ from src.local_panel import OUT_OF_SERVICE, DriveSide, build_panel
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
 from src.record.reader import read
 from src.record.schema import Manifest, RecordedBallast
-from src.record.session import BENCH_ATTESTED, operator_alias
+from src.record.session import BENCH_ATTESTED
 from src.record.writer import MANIFEST
 from src.remote_launch import (
     BENCH_LAUNCH_ATTESTATION,
@@ -65,6 +65,7 @@ from src.training.types import MAX_BALLAST_KG, Ballast, Occupancy
 from src.units import Kilograms, OutputRpm
 from src.web.app import create_app
 from src.web.schemas import RemoteLaunchRow
+from tests.access_support import OPERATOR_ID, signed_http
 from tests.medical_support import signed
 from tests.record_support import manifest
 from tests.test_cloud_sync import (
@@ -405,9 +406,7 @@ async def test_a_bench_launch_refused_at_its_arming_after_the_2xx_is_a_failed_se
 async def confirm_over_http(rig_: Linked, operator: str, *, attested: bool) -> httpx.Response:
     web = replace(config_of().web, token=WEB_KEY)
     app = create_app(services=rig_.panel.services, config=web)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-    ) as session:
+    async with signed_http(app, rig_.panel.services) as session:
         headers = {"X-Anheart-Token": WEB_KEY}
         offered = await session.get("/api/remote-launch", headers=headers)
         assert offered.status_code == HTTPStatus.OK
@@ -477,7 +476,7 @@ async def test_the_site_launches_a_ballasted_bench_session_the_console_confirms_
     assert record.manifest.session_id is not None
     attestations = [event for event in record.events if event.detail == BENCH_ATTESTED]
     assert len(attestations) == 1
-    assert attestations[0].actor == operator_alias(confirmer)
+    assert attestations[0].actor == OPERATOR_ID, "the account signed in (ANH-152)"
     assert BENCH_LAUNCH_ATTESTATION in BENCH_ATTESTED
 
 

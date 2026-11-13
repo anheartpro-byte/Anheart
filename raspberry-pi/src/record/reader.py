@@ -9,7 +9,7 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
-from src.record.codec import IDENTIFIER, Privacy, validate_manifest
+from src.record.codec import ACTOR, Privacy, validate_manifest
 from src.record.ecg import RawBlock, decode_block
 from src.record.rows import Row, finite
 from src.record.schema import DriveFrame, Event, Manifest, ReadWarning, RecordError
@@ -128,7 +128,7 @@ def read(path: Path) -> Result[Recording, RecordError]:
             if sensor.value is not None:
                 finite(sensor.value)
         events = _jsonl(path / "events.jsonl", EVENT, warnings)
-        if any(IDENTIFIER.fullmatch(event.actor) is None for event in events):
+        if any(ACTOR.fullmatch(event.actor) is None for event in events):
             return Err(RecordError("read", "invalid_actor"))
         recording = Recording(
             manifest,

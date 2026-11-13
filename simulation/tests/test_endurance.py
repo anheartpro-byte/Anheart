@@ -380,6 +380,9 @@ async def test_ex1_the_operator_waits_for_the_console_and_reports_what_it_refuse
             return httpx.Response(409, json={"detail": "une seance est deja en cours"})
         if request.url.path == "/api/presence":
             raise httpx.ReadError("the console is gone")
+        if request.url.path == "/api/manual/target" and calls.count("/api/manual/target") == 1:
+            # The session ended on its own (ANH-152): signed in again, asked once more.
+            return httpx.Response(401, json={"code": "operator_required"})
         return httpx.Response(200, json={})
 
     async with httpx.AsyncClient(
@@ -388,11 +391,20 @@ async def test_ex1_the_operator_waits_for_the_console_and_reports_what_it_refuse
         operator = Operator(http)
         await operator.ready(attempts=3, wait=0.0)
         await operator.attest()
+        await operator.target(5.0)
         with pytest.raises(AnomalyError, match=r"POST /api/manual/start: HTTP 409 .*deja en cours"):
             await operator.start_manual()
         with pytest.raises(AnomalyError, match="POST /api/presence: the console did not answer"):
             await operator.ping()
-    assert calls[:3] == ["/healthz", "/healthz", "/api/safety/attest"]
+    assert calls[:7] == [
+        "/healthz",
+        "/healthz",
+        "/api/access/sign-in",
+        "/api/safety/attest",
+        "/api/manual/target",
+        "/api/access/sign-in",
+        "/api/manual/target",
+    ]
 
     def silent(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, request=request)

@@ -166,7 +166,7 @@ test("a console without a pre-flight says so and offers no run", () => {
   assert.equal(node("start-preflight-note").textContent, "");
 });
 
-test("a stop the dashboard may not count is said, a lost one with its acknowledgement by name (ANH-145)", async () => {
+test("a stop the dashboard may not count is said, a lost one with its acknowledgement by the operator signed in (ANH-145, ANH-152)", async () => {
   const { context, node } = page();
   const owed = "seance terminee sur emergency_stop pas encore recue par le tableau de bord";
   const held = "seance mal terminee ou de fin inconnue que le tableau de bord ne recevra pas (fin refusee, k1) : a acquitter a la console, page Pre-vol";
@@ -185,12 +185,11 @@ test("a stop the dashboard may not count is said, a lost one with its acknowledg
     sent.push([path, options]);
     return Promise.resolve({ ...preflightRow({ occupiedBlock: null }), unreported_stop: null });
   };
-  node("manual-operator").value = "Mme Durand";
   context.doAcknowledgeStops();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(sent.length, 1);
   assert.equal(sent[0][0], "/api/preflight/acknowledge");
-  assert.equal(JSON.stringify(sent[0][1]), JSON.stringify({ method: "POST", body: { operator: "Mme Durand" } }));
+  assert.equal(JSON.stringify(sent[0][1]), JSON.stringify({ method: "POST" }));
   assert.equal(node("preflight-ack").hidden, true);
   assert.match(node("preflight-note").textContent, /acquittee/);
 });

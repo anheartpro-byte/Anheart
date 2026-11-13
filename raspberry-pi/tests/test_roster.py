@@ -412,7 +412,8 @@ def test_a_list_is_offered_fifteen_minutes_without_a_newer_one() -> None:
 
 def test_nothing_in_the_console_holds_a_list_it_was_not_given() -> None:
     """``Roster.adopt`` is for tests and the simulation: no source file of the console calls
-    it. The only ``adopt`` calls under ``src/`` are the profile store's own."""
+    it. The only ``adopt`` calls under ``src/`` are the profile store's own, and the signed
+    operator list's (ANH-152), which is not a roster."""
     calls: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -424,6 +425,7 @@ def test_nothing_in_the_console_holds_a_list_it_was_not_given() -> None:
             and node.func.attr == "adopt"
         )
     assert calls == [
+        "src/operator_sync.py: self._access.adopt",
         "src/programme_catalog.py: store.adopt",
         "src/programme_catalog.py: self._store.adopt",
         "src/training/plan.py: self.adopt",

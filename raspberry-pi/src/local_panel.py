@@ -183,6 +183,7 @@ from src.cloud_sync import (
     StartedSession,
     end_is_failure,
 )
+from src.console_access import AccessNote, ConsoleAccess, OperatorList, load_failures, load_list
 from src.contract import SoftwareVersion, read_software_version
 from src.control_surface import (
     LOCAL_SUBJECT,
@@ -206,8 +207,10 @@ from src.health import HealthContext, HealthWatch
 from src.health_system import cpu_temperature
 from src.link_state import NOT_CONFIGURED, LinkHealth
 from src.local_config import (
+    KEY_DEVICE_TOKEN,
     KEY_UI_TLS_CERT,
     KEY_UI_TLS_KEY,
+    KEY_UI_TOKEN,
     RETIRED_KEYS,
     CameraSource,
     CloudConfig,
@@ -237,6 +240,7 @@ from src.motor.sto import (
     UnconfiguredStoSource,
     sto_bridged,
 )
+from src.operator_sync import OperatorSync
 from src.panel_lifecycle import PanelTasks, WebRunner
 from src.panel_status import EcgLinkStatus, PanelStatus
 from src.passenger_feedback import PassengerFeedback, SessionIdReader
@@ -1170,6 +1174,7 @@ class LocalPanel:
         "_last_measured",
         "_listener",
         "_on_board",
+        "_operators",
         "_preflight",
         "_presence",
         "_recorded_presence",
@@ -1260,6 +1265,8 @@ class LocalPanel:
         self._transport: HttpxTransport | None = transport
         # The signed programme catalogue (ANH-138): only with a dashboard link.
         self._catalog: ProgrammeCatalog | None = None
+        # The signed operator list (ANH-152): asked for only with a dashboard link.
+        self._operators: OperatorSync | None = None
         self._last_measured: MotorRpm = MotorRpm(0)
         # The rider's feedback after a session with somebody on board (ANH-146),
         # memory only; and how to find, later, the dashboard's identifier of
@@ -1335,6 +1342,7 @@ class LocalPanel:
         transport: HttpxTransport | None,
         health: HealthWatch | None,
         catalog: ProgrammeCatalog | None = None,
+        operators: OperatorSync | None = None,
     ) -> None:
         """Finish wiring the dashboard after construction, once its panel preflight exists."""
         self._listener = cloud
@@ -1342,6 +1350,7 @@ class LocalPanel:
         self._transport = transport
         self._health = health
         self._catalog = catalog
+        self._operators = operators
         self._services = replace(
             self._services,
             remote_launch_current=cloud.current_remote_launch,
@@ -2083,6 +2092,20 @@ class LocalPanel:
         except Exception:  # as cloud_step: an observer must not stop the machine
             _logger.exception("programme catalogue step failed; the programmes are unchanged")
 
+    async def operators_step(self) -> None:
+        """Ask for the signed operator list when it is due (ANH-152). No-op without a link.
+
+        A task of its own, fenced as :meth:`catalog_step`: a bug in it leaves the
+        list in force as it was, and stops nothing.
+        """
+        operators = self._operators
+        if operators is None:
+            return
+        try:
+            await operators.step()
+        except Exception:  # as cloud_step: an observer must not stop the machine
+            _logger.exception("operator list step failed; the list in force is unchanged")
+
     def catalog_at_rest(self) -> bool:
         """Whether the programmes may change now (ANH-138 EX-2, EX-5).
 
@@ -2157,6 +2180,7 @@ class LocalPanel:
             asyncio.create_task(self._every(STOP_WATCH_PERIOD, self.cloud_stop_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.roster_step, stop)),
             asyncio.create_task(self._every(CLOUD_PERIOD, self.catalog_step, stop)),
+            asyncio.create_task(self._every(CLOUD_PERIOD, self.operators_step, stop)),
             asyncio.create_task(self._every(WALL_CLOCK_PERIOD, self.clock_step, stop)),
             asyncio.create_task(self._every(PREFLIGHT_PERIOD, self.preflight_step, stop)),
         )
@@ -2465,6 +2489,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     deposit: DepositTask | None = None,
     roster: Roster | None = None,
     preflight: bool = False,
+    access: ConsoleAccess | None = None,
 ) -> LocalPanel:
     """Wire everything, in the plan's order. Opens no port and starts no task.
 
@@ -2512,6 +2537,10 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     serves it to the page and announces it; :func:`run_console` asks for it.
     ``False``: no list judges a start, which is what a test that is not about
     the pre-flight wants.
+
+    ``access`` is who may act (ANH-152, :mod:`src.console_access`); ``None``:
+    the one of the data folder, its signed list verified again. A simulation
+    gives one holding the list it signs in on.
     """
     version = read_software_version()
     riders = Roster(linked=config.cloud is not None) if roster is None else roster
@@ -2638,6 +2667,18 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     rules = rules_of(config)
     say = functools.partial(say_catalog, recorder, clock)
     screened = screen_stored(store, rules, say)
+    # Linked or not: the operator list accepted before is verified again (ANH-152).
+    public_key = read_public_key()
+    operators_path = profiles_path.parent / OPERATORS_FILE
+    lockout_path = profiles_path.parent / LOCKOUT_FILE
+    if access is None:
+        access = ConsoleAccess(
+            clock=clock,
+            held=stored_operators(operators_path, public_key, say),
+            lockout_path=lockout_path,
+            failures=load_failures(lockout_path),
+            note=functools.partial(note_access, recorder, clock),
+        )
 
     sensor_hub = SensorHub(clock=clock, kinds=config.sensors, fs=ECG_SAMPLE_RATE)
     bridge = EcgBridge(
@@ -2694,6 +2735,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         verdicts=runtime,
         roster=riders,
         preflight=monitor,
+        access=access,
     )
     panel = LocalPanel(
         clock=clock,
@@ -2753,8 +2795,17 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             rules=rules,
             at_rest=panel.catalog_at_rest,
             say=say,
-            public_key=read_public_key(),
+            public_key=public_key,
             report=screened,
+        )
+        operators = OperatorSync(
+            clock=clock,
+            transport=link,
+            access=access,
+            path=operators_path,
+            public_key=public_key,
+            at_rest=panel.catalog_at_rest,
+            say=say,
         )
         cloud = CloudSync(
             clock=clock,
@@ -2784,8 +2835,45 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             roster=riders,
             catalog_fields=catalog.wire_fields,
         )
-        panel.attach_cloud(cloud=cloud, transport=owned, health=health, catalog=catalog)
+        panel.attach_cloud(
+            cloud=cloud, transport=owned, health=health, catalog=catalog, operators=operators
+        )
     return panel
+
+
+OPERATORS_FILE: Final[str] = "operators.json"
+"""The signed operator list accepted last, next to the programmes (ANH-152)."""
+
+LOCKOUT_FILE: Final[str] = "operator_lockout.json"
+"""Wrong codes in a row, per operator: a restart does not lift a lock (ANH-152)."""
+
+
+def stored_operators(
+    path: Path, public_key: bytes | None, say: Callable[[str], None]
+) -> OperatorList | None:
+    """The list accepted before this start, verified again; ``None`` when there is none or
+    it no longer verifies, which is said: the console then opens no action until a list
+    is accepted."""
+    loaded = load_list(path, public_key)
+    if isinstance(loaded, Err):
+        say(f"{loaded.error} : aucune action ouverte avant la prochaine liste")
+        return None
+    return loaded.value
+
+
+def note_access(recorder: SessionRecorder | None, clock: Clock, entry: AccessNote) -> None:
+    """A sign-in, a sign-out, a lock: in the console's log, and in the logbook. Never a code."""
+    _logger.info("%r (%r)", entry.detail, entry.actor)
+    if recorder is not None:
+        recorder.journal.log(
+            note(
+                wall_clock=clock.unix_millis(),
+                at=clock.monotonic(),
+                kind=EventKind.WARNING if entry.warning else EventKind.OPERATOR_ACTION,
+                detail=entry.detail,
+                actor=entry.actor,
+            )
+        )
 
 
 def say_catalog(recorder: SessionRecorder | None, clock: Clock, words: str) -> None:
@@ -3384,6 +3472,12 @@ def main(environ: Mapping[str, str] | None = None) -> int:
     env = load_environment() if environ is None else environ
     for key in retired_keys(env):
         _logger.warning("configuration: %s is set and no longer read: %s", key, RETIRED_KEYS[key])
+    if env.get(KEY_UI_TOKEN, "").strip() and not env.get(KEY_DEVICE_TOKEN, "").strip():
+        _logger.warning(
+            "configuration: %s is the former name of %s (ANH-152): read as it, rename it",
+            KEY_UI_TOKEN,
+            KEY_DEVICE_TOKEN,
+        )
     loaded = load_local_config(env)
     if isinstance(loaded, Err):
         for problem in loaded.error:

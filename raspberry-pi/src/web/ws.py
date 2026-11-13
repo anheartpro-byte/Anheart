@@ -15,7 +15,9 @@ So the handshake is refused, **before** ``accept``, unless:
 * the ``Origin`` header is absent or in the configured allowlist (see
   :meth:`~src.web.deps.WebConfig.origin_allowed` for why absent is allowed),
   and
-* the shared token matches, when one is configured.
+* the token is a device token of this console, when one is configured: its
+  own ``DEVICE_TOKEN`` or a tablet of the signed list (ANH-152). Reading the
+  telemetry takes no operator signed in.
 
 Refusing before ``accept`` matters: a socket that is accepted and then closed
 has already been upgraded, and the page's script has already been told it
@@ -54,7 +56,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from src.clock import Clock
 from src.telemetry import PayloadKind, TelemetryClient, TelemetryHub
-from src.web.deps import TOKEN_QUERY_PARAM, Services, WebConfig
+from src.web.deps import TOKEN_QUERY_PARAM, Services, WebConfig, identify_device
 from src.web.schemas import WsEnvelope, encode_envelope, payload_is_terminal
 
 _logger: logging.Logger = logging.getLogger(__name__)
@@ -125,7 +127,8 @@ async def serve_telemetry(websocket: WebSocket, *, services: Services, config: W
         _logger.warning("refused telemetry socket from origin %s", logged_header(origin))
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=_BAD_ORIGIN)
         return
-    if not config.token_matches(websocket.query_params.get(TOKEN_QUERY_PARAM)):
+    presented = websocket.query_params.get(TOKEN_QUERY_PARAM)
+    if identify_device(config, services.access, presented) is None:
         _logger.warning("refused telemetry socket: bad or missing token")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=_BAD_TOKEN)
         return

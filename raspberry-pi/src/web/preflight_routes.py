@@ -10,19 +10,19 @@ reason to hold a person on board.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Final
 
-from fastapi import FastAPI, HTTPException, params
+from fastapi import Depends, FastAPI, HTTPException, Request, params
 
+from src.console_access import SignedIn
 from src.record_uplink import LOST_STOP, NOT_LINKED
 from src.result import Err
 from src.training.preflight import PreflightMonitor, PreflightReport
 from src.training.types import Occupancy
 from src.web.deps import Services
-from src.web.schemas import StopsAcknowledgeBody
 
 NO_PREFLIGHT: Final[str] = "aucun pre-vol sur cette console"
 
@@ -98,8 +98,15 @@ class PreflightRow:
         )
 
 
-def register_preflight(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
-    """The two routes, behind the token check like every route of the console."""
+def register_preflight(
+    app: FastAPI,
+    *,
+    services: Services,
+    auth: Sequence[params.Depends],
+    acting: Callable[[Request], Awaitable[SignedIn]],
+) -> None:
+    """The routes, behind the device token like every route of the console; the two that
+    act take an operator signed in (ANH-152)."""
 
     @app.get("/api/preflight", dependencies=auth, tags=["safety"])
     async def read_preflight() -> PreflightRow | None:
@@ -113,7 +120,7 @@ def register_preflight(app: FastAPI, *, services: Services, auth: Sequence[param
         status_code=HTTPStatus.ACCEPTED,
         tags=["safety"],
     )
-    async def run_preflight() -> PreflightRow:
+    async def run_preflight(_who: SignedIn = Depends(acting)) -> PreflightRow:
         """Start a new run: the BITalino's battery is read again at rest, then every control
         is waited for again. Starts nothing and refuses nothing by itself."""
         monitor = services.preflight
@@ -123,21 +130,16 @@ def register_preflight(app: FastAPI, *, services: Services, auth: Sequence[param
         return PreflightRow.of(monitor)
 
     @app.post("/api/preflight/acknowledge", dependencies=auth, tags=["safety"])
-    async def acknowledge_stops(body: StopsAcknowledgeBody) -> PreflightRow:
-        """Release, by name, the sessions the dashboard will never have (refused for
-        good, unreadable, given up) that hold a person on board. Nothing else: a hold that
-        clears once the dashboard has a session stays. Starts nothing. **400** without a
-        name; **409** while a session runs, or when nothing of that kind is held."""
-        if not body.operator.strip():
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail="an operator name is required: the acknowledgement is by name",
-            )
+    async def acknowledge_stops(who: SignedIn = Depends(acting)) -> PreflightRow:
+        """Release, by the operator signed in, the sessions the dashboard will never have
+        (refused for good, unreadable, given up) that hold a person on board. Nothing
+        else: a hold that clears once the dashboard has a session stays. Starts nothing.
+        **409** while a session runs, or when nothing of that kind is held."""
         monitor = services.preflight
         acknowledge = services.stop_acknowledge
         if monitor is None or acknowledge is None:
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=NOT_LINKED)
-        released = await acknowledge(body.operator)
+        released = await acknowledge(who.user_id)
         if isinstance(released, Err):
             raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=released.error)
         return PreflightRow.of(monitor)

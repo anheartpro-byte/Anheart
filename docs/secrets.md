@@ -47,7 +47,7 @@ projet de les tenir.
 | Secret | Ce qu'il ouvre | Où il vit | Qui y a accès | Rotation |
 |---|---|---|---|---|
 | Clé de la machine, `MACHINE_API_KEY` | les routes machine de Convex au nom d'une machine : heartbeat, séances, mesures ([MEN-01](menaces.md#men-01-clé-machine-volée-ou-rejouée)) | sur le Pi, `/etc/anheart/anheart.env` (root, mode 600) ; sur un poste de développement, `raspberry-pi/.env`. Une machine peut avoir plusieurs clés valides à la fois, pendant le chevauchement d'une rotation ; de chacune, Convex ne garde qu'un sélecteur, un vérificateur salé (HMAC-SHA-256) et un préfixe d'affichage, jamais la clé ([convex.md](convex.md#machine_api_keys--les-clés-des-machines-anh-165)) | root du Pi ; la personne qui l'installe ; l'admin Anheart ou l'admin de l'organisation de la machine qui crée la clé, à qui elle est montrée une fois (l'admin Anheart aussi à la création de la machine) ; qui la crée en ligne de commande, avec la clé de déploiement Convex. Un gestionnaire n'a pas accès aux clés | [3.1](#31-clé-de-la-machine) |
-| Jeton de la page de la console, `UI_TOKEN` (le « jeton d'appareil » du ticket) | la page et l'API de la console ; exigé dès qu'elle écoute hors de la boucle locale ([MEN-05](menaces.md#men-05-appareil-hostile-sur-le-réseau-de-la-console)) | `/etc/anheart/anheart.env` ; chaque tablette qui l'a saisi le garde dans le stockage de session de son navigateur | root du Pi ; chaque opérateur à qui il a été donné | [3.2](#32-jeton-de-la-page-de-la-console) |
+| Jeton de l'appareil de la console, `DEVICE_TOKEN` (`UI_TOKEN` avant ANH-152, encore lu sous ce nom) | les lectures de la console, STOP et E-STOP, et avec un opérateur connecté ses actions ; exigé dès qu'elle écoute hors de la boucle locale ; la liste signée ne peut pas le révoquer ([MEN-05](menaces.md#men-05-appareil-hostile-sur-le-réseau-de-la-console)) | `/etc/anheart/anheart.env` ; chaque tablette qui l'a saisi le garde dans le stockage local de son navigateur (depuis ANH-152 ; avant, le stockage de session) | root du Pi ; chaque personne à qui il a été donné | [3.2](#32-jeton-de-la-page-de-la-console) |
 | Jeton d'une tablette (ANH-152, `anhd1.<64 chiffres hexadécimaux>`) | depuis le lot de la console d'ANH-152, les lectures de la console et son E-STOP, et, avec un opérateur connecté, ses actions, depuis cette tablette ([securite.md, 17](securite.md#17-la-connexion-nommée-à-la-console-anh-152)) | chaque tablette qui l'a saisi ; Convex n'en garde que le SHA-256 (`machine_devices`), signé vers la machine dans la liste des opérateurs | l'admin Anheart ou l'admin de l'organisation de la machine qui la crée, à qui il est montré une fois ; la personne qui le saisit | révoquer la tablette sur la fiche de la machine, en créer une autre |
 | Code de console d'un opérateur (ANH-152) | depuis le lot de la console d'ANH-152, une connexion nommée à la console des machines où l'opérateur est activé, avec un jeton de tablette | la mémoire de l'opérateur ; Convex n'en garde que le haché scrypt (`machine_operators`), signé vers chaque machine où il est activé, où il se vérifie hors ligne. Un code de 6 chiffres se retrouve hors ligne depuis ce haché en quelques heures ([securite.md, 17.2](securite.md#172-le-code--un-secret-faible-haché-et-ce-qui-le-protège-vraiment)) | l'opérateur seul : aucun admin ne le voit ni ne le pose | l'opérateur en choisit un autre sur le site, page « Mes machines » ; à faire par chaque opérateur d'une machine dont la clé ou le disque a fui |
 | Clé privée TLS de la console | le certificat que les tablettes acceptent pour cette console | `/var/lib/anheart/tls` sur le Pi, au compte `anheart` ; l'autorité qui l'a signée n'est gardée nulle part | compte `anheart`, root ; quiconque a la carte SD | [pi-image.md, Renouveler](pi-image.md#renouveler) |
@@ -193,12 +193,20 @@ lisait : une clé n'ouvre les routes que si elle est une ligne de la table
 Non essayée. Rien à faire tant que la page n'écoute que sur la boucle locale
 (`UI_HOST=127.0.0.1`).
 
+Depuis ANH-152 la console a deux sortes de jetons d'appareil : le sien,
+`DEVICE_TOKEN` du `.env` (l'ancien `UI_TOKEN`, encore lu sous ce nom s'il est
+seul), et ceux des tablettes, créés sur la fiche de la machine du site
+(carte « Accès à la console »), montrés une fois et révocables : une tablette
+révoquée n'ouvre plus rien à la synchronisation suivante de la console, au
+repos. Perdre une tablette : la révoquer sur le site. Pour le jeton du `.env` :
+
 1. Tirer une valeur aléatoire d'au moins 16 caractères, sur le Pi :
    `openssl rand -hex 16`.
-2. `sudo nano /etc/anheart/anheart.env`, remplacer `UI_TOKEN`, puis
-   `sudo systemctl restart anheart`, **au repos**.
-3. Sur chaque tablette, saisir le nouveau jeton. L'ancien, gardé par le
-   navigateur, reçoit **401**.
+2. `sudo nano /etc/anheart/anheart.env`, remplacer `DEVICE_TOKEN` (et retirer
+   `UI_TOKEN` s'il reste : deux valeurs différentes font refuser le
+   démarrage), puis `sudo systemctl restart anheart`, **au repos**.
+3. Sur chaque tablette qui l'utilisait, saisir le nouveau jeton. L'ancien,
+   gardé par le navigateur, reçoit **401**.
 
 À faire aussi quand une tablette est perdue ou volée
 ([pi-image.md](pi-image.md#une-tablette-perdue-ou-volée)).

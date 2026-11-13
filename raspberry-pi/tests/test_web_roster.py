@@ -23,6 +23,7 @@ from src.units import Bpm, MotorRpm
 from src.web.app import create_app
 from src.web.deps import Services
 from src.web.schemas import PlanPreviewRow, RosterRow
+from tests.access_support import open_access, signed_http
 from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, listed
 from tests.test_web_api import (
     GEOMETRY,
@@ -61,11 +62,10 @@ def client(rig: Rig, roster: Roster | None) -> httpx.AsyncClient:
         geometry=GEOMETRY,
         ceilings=_ceiling,
         roster=roster,
+        access=open_access(rig.clock),
     )
     app = create_app(services=services, config=rig.config)
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver", headers=auth()
-    )
+    return signed_http(app, services, headers=auth())
 
 
 async def test_the_list_is_served_with_the_site_s_values_and_what_a_programme_needs(

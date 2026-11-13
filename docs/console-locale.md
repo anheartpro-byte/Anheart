@@ -134,6 +134,7 @@ Les limites de sécurité sont dans [securite.md](securite.md).
 15. [Écarts connus entre le code, la page et les README](#15-écarts-connus-entre-le-code-la-page-et-les-readme)
 16. [L'enregistrement de séance (boîte noire locale)](#16-lenregistrement-de-séance-boîte-noire-locale)
 17. [Page « Pre-vol » (ANH-142)](#17-page--pre-vol--anh-142)
+18. [Connexion de l'opérateur (ANH-152)](#18-connexion-de-lopérateur-anh-152)
 
 ---
 
@@ -344,6 +345,12 @@ L'indicateur de rotation (pastille **Rotation**, et `Mesure` / `Vitesse mesuree`
 ---
 
 ## 4. Barre latérale
+
+Sous les pastilles, le bloc de connexion de l'opérateur (ANH-152,
+[section 18](#18-connexion-de-lopérateur-anh-152)) : `aucune liste d'operateurs recue`,
+`aucun operateur connecte` avec le choix du nom, le code et `Se connecter`, ou
+`connecte : <nom> (deconnexion sans action dans <n> min)` avec `Rester connecte` et
+`Se deconnecter`.
 
 ### Pastilles d'état
 
@@ -867,7 +874,7 @@ Si l'avertissement se lève avant l'arrêt, la consigne remonte vers la cible (b
 | Élément | Rôle |
 |---|---|
 | case `BANC - personne a bord : NON (moteur decouple, ou bras couple avec la capsule VIDE ou LESTEE)` | déclaration obligatoire avant tout démarrage ; la page refuse de démarrer si elle n'est pas cochée |
-| champ `Operateur` | nom de la personne qui pilote ; obligatoire (400 sinon) |
+| (pas de champ) | depuis ANH-152 la séance est celle de l'opérateur connecté ; sans connexion, 401 `operator_required` |
 | bouton `Demarrer MANUEL` | `POST /api/manual/start` avec `occupancy: "bench"` ; la cible initiale est 0 |
 
 La page ne propose **que** la déclaration BANC, qui ne nomme aucun passager. Une séance
@@ -1311,7 +1318,7 @@ La séance **programmée** (AUTO), où la fréquence cardiaque pilote la vitesse
 |---|---|
 | `Profil` (liste) | les profils stockés, affichés `nom (id)` |
 | `Duree totale (minutes, vide = celle du profil)` | surcharge optionnelle de la durée |
-| `Operateur` | obligatoire |
+| (pas de champ `Operateur`) | depuis ANH-152, l'opérateur connecté ; sans connexion, 401 `operator_required` |
 | `Passager (liste du tableau de bord, obligatoire)` (liste) | les passagers que le tableau de bord donne à cette machine (`GET /api/roster`, section « Le passager » plus bas), affichés par leur nom. Première ligne `- choisir le passager -` (ou `- aucun passager propose -` quand la liste est vide ou absente) |
 | ligne sous la liste | ce que le site a réglé pour le passager choisi : `age <n> ans · FC max <n> bpm (reglees sur le site par un gestionnaire, non modifiables ici)`. En rouge, suivie de la phrase de refus, quand une valeur manque sur le site (`FC max inconnue`, `age inconnu`). `aucun passager choisi` sinon ; `le passager choisi n'est plus dans la liste du tableau de bord : en choisir un`, en rouge, quand une liste plus récente ne le porte plus |
 | ligne suivante | l'état de la liste : `liste du tableau de bord recue il y a <n> s` (ou `min`) ; en rouge, la raison pour laquelle personne n'est proposé, ou la dernière demande restée sans réponse |
@@ -1375,8 +1382,8 @@ personne dans le rayon du bras` sous l'alias du confirmateur, à côté de
 distante. La procédure complète au banc est dans
 [raspberry-pi.md](raspberry-pi.md#séance-de-banc-lestée-lancée-du-site-anh-250).
 
-L'opérateur renseigne le champ **Operateur** déjà présent dans la carte Programme,
-puis fait un seul geste sur **Cette personne est a bord et prete**. Le bouton envoie
+L'opérateur, connecté (ANH-152 ; avant, il renseignait le champ **Operateur** de la
+carte Programme), fait un seul geste sur **Cette personne est a bord et prete**. Le bouton envoie
 la confirmation locale; la tâche CloudSync exécute ensuite le contrôle local,
 `training/start`, puis soumet le départ à la boîte de la machine seulement après un
 2xx. Le bouton **Demarrer la seance** reste masqué tant qu'une offre est affichée.
@@ -1643,21 +1650,24 @@ carte Mode MANUEL.
 
 ### Carte « Acces »
 
-Champ `Jeton partage` et bouton `Utiliser ce jeton`. Le jeton est gardé dans le
-`sessionStorage` du navigateur (onglet courant) et envoyé dans l'en-tête
-`X-Anheart-Token` (et en paramètre `?token=` du WebSocket).
+Champ `Jeton de l'appareil` et bouton `Utiliser ce jeton`. Le jeton est gardé dans le
+`localStorage` du navigateur (cette tablette, tous ses onglets, depuis ANH-152 ;
+`sessionStorage`, l'onglet courant, avant) et envoyé dans l'en-tête `X-Anheart-Token`
+(et en paramètre `?token=` du WebSocket). C'est `DEVICE_TOKEN` du `.env` (l'appareil
+`local`, `UI_TOKEN` avant ANH-152), ou le jeton d'une tablette créé sur la fiche de la
+machine du site, montré une fois ([section 18](#18-connexion-de-lopérateur-anh-152)).
 
 - En boucle locale (`UI_HOST=127.0.0.1`), le jeton est facultatif : laisser vide.
-- Hors boucle locale, la console **refuse de démarrer** sans `UI_TOKEN` d'au moins
-  16 caractères (message vérifié :
-  `configuration: UI_HOST/UI_PORT/UI_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback`).
+- Hors boucle locale, la console **refuse de démarrer** sans `DEVICE_TOKEN` (ou
+  `UI_TOKEN`) d'au moins 16 caractères (message :
+  `configuration: UI_HOST/UI_PORT/DEVICE_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback`).
 - Hors boucle locale, elle refuse aussi de démarrer **sans certificat** : la page,
   les commandes et le jeton n'y circulent qu'en TLS
   ([section 1](#depuis-une-tablette--la-page-en-tls) ; message :
   `configuration: UI_HOST/UI_TLS_CERT/UI_TLS_KEY: refusing to serve the operator interface on '0.0.0.0' in clear HTTP: ...`).
   Les deux refus sont dits ensemble quand les deux manquent.
-- Si `UI_TOKEN` est défini, toute route `/api/*` sans le bon jeton répond 401
-  `a valid x-anheart-token header is required`.
+- Si `DEVICE_TOKEN` est défini, toute route `/api/*` sans le jeton d'un appareil de la
+  console répond 401 `a valid x-anheart-token header is required`.
 
 La note sous la carte dit `connecte a la machine` quand l'API répond, sinon l'erreur.
 
@@ -1906,7 +1916,7 @@ nécessaire.
 
 | Élément | Rôle |
 |---|---|
-| champ `votre nom` | obligatoire |
+| (pas de champ `votre nom`) | depuis ANH-152, l'acquittement est celui de l'opérateur connecté |
 | case de déclaration séparée | ses mots sont ceux du mode de la console (`estop_released_label` de `/api/status`) : `le coup de poing a ete deverrouille (tire)` sous les autres sources, `aucun coup de poing n'est cable : la cause de l'arret d'urgence de l'ecran est ecartee et personne n'est dans le rayon du bras` sous `bridged_declared`. La page ne propose jamais la phrase de l'autre mode, ni aucune case avant d'avoir lu ces mots ; des mots nouveaux décochent la case. Même champ `estop_released`, même règle du Pi. La lecture STO ne remplace pas cette confirmation humaine. Par défaut non cochée, pour échouer du côté sûr |
 | bouton `Acquitter` | `POST /api/safety/acknowledge` : efface les verdicts verrouillés. **Rien d'autre ne le fait**, jamais automatiquement |
 
@@ -1971,7 +1981,7 @@ Sous l'acquittement, et seulement quand la console se dit hors service
 ([section 4](#pastille-service--en-service-ou-hors-service)), la carte montre le titre
 `Console hors service`, la phrase `La console a redemarre plusieurs fois apres un arret
 non propre et n'accepte aucun depart. Faire verifier la machine avant de la remettre en
-service.`, un champ `votre nom` et le bouton `Remettre en service`
+service.` et le bouton `Remettre en service`, pour l'opérateur connecté (ANH-152)
 (`POST /api/service/restore`).
 
 | Résultat | Ce que la page écrit sous le bouton |
@@ -1995,7 +2005,8 @@ deux faits distincts :
 
 - case `Le pont STO a ete retire du variateur.`
 - case `Un arret d'urgence a accrochage est cable normalement ferme sur P24 → STO.`
-- champ `Votre nom`, bouton `Enregistrer l'attestation` (`POST /api/safety/attest`).
+- bouton `Enregistrer l'attestation` (`POST /api/safety/attest`), au nom de l'opérateur
+  connecté (ANH-152 ; plus de champ `Votre nom`).
 
 Les deux cases sont nécessaires, séparément : une personne sûre d'un seul des deux faits
 ne doit pas pouvoir valider les deux d'un clic. Une demi-attestation est refusée **sans
@@ -2245,9 +2256,9 @@ Cela prouve qu'un onglet est ouvert et joignable, **pas** qu'un humain regarde.
 
 Rejoué en simulation, dans cet ordre :
 
-1. **Securite** → cocher les deux cases, saisir un nom, `Enregistrer l'attestation`.
-2. **Tableau de bord** → cocher `BANC - personne a bord : NON`, saisir `Operateur`,
-   `Demarrer MANUEL`. La note dit `demande envoyee : manual_start bench - pas encore prise par la machine`,
+0. **Barre latérale** → choisir son nom, taper son code, `Se connecter` (ANH-152).
+1. **Securite** → cocher les deux cases, `Enregistrer l'attestation`.
+2. **Tableau de bord** → cocher `BANC - personne a bord : NON`, `Demarrer MANUEL`. La note dit `demande envoyee : manual_start bench - pas encore prise par la machine`,
    puis `demarrage pris par la machine : manual_start bench (cible 0)` (44 ms après le
    clic sur le variateur simulé).
 3. Composer une cible avec `+1 tr/min` ou `+ palier`, puis `Appliquer`. Le bandeau
@@ -2460,10 +2471,18 @@ asynchrones et « minces » : ils lisent l'état ou déposent une intention dans
 lettres à une place ; aucun ne parle au variateur. La boucle de contrôle (toutes les 0,2 s)
 exécute l'intention.
 
-**Authentification.** Les routes `/api/*` exigent l'en-tête `X-Anheart-Token` quand
-`UI_TOKEN` est défini (comparaison en temps constant), sinon 401. `/healthz`, `/`,
-`/app.css`, `/app.js` sont publics (la page est inerte sans l'API). `/openapi.json` est
-servi ; `/docs` et `/redoc` sont désactivés.
+**Authentification (ANH-152).** Les routes `/api/*` exigent l'en-tête
+`X-Anheart-Token` d'un appareil de la console quand `DEVICE_TOKEN` est défini : le sien
+(comparaison en temps constant) ou celui d'une tablette de la liste signée ; sinon 401.
+Toute route qui agit exige en plus un opérateur connecté sur cet appareil (cookie
+`anheart_operator`), sinon **401** `{"code": "operator_required"}` : démarrages, cible,
+reset, attestation, acquittement, présence, pré-vol (relance et acquittement), départ
+distant, retour du passager, remise en service, export d'un enregistrement. Seuls la
+connexion et la déconnexion, l'aperçu d'un programme, **STOP** et **E-STOP** n'en
+demandent pas ; STOP et E-STOP sont attribués à l'opérateur connecté, sinon à
+l'appareil (`device:<id>`). `/`, `/app.css`, `/app.js` sont publics (la page est inerte
+sans l'API) ; `/healthz` l'est depuis le Pi lui-même seulement, et demande le jeton
+d'ailleurs. `/openapi.json` est servi ; `/docs` et `/redoc` sont désactivés.
 
 **Codes qui ont un sens.**
 
@@ -2471,8 +2490,9 @@ servi ; `/docs` et `/redoc` sont désactivés.
 |---|---|
 | 200 | réponse lue, ou E-STOP **déjà** verrouillé |
 | 202 | intention acceptée dans la boîte aux lettres ; la boucle n'a pas encore agi. Le corps porte `request_id`, l'identifiant de la demande ; ce que la boucle en fait arrive ensuite comme événement `taken`, `refused` ou `cancelled` portant le même identifiant |
-| 400 | requête mal formée : nom vide, attestation incomplète, profil incohérent |
-| 401 | jeton absent ou faux |
+| 400 | requête mal formée : attestation incomplète, profil incohérent |
+| 401 | jeton absent ou faux ; ou, code `operator_required`, aucun opérateur connecté sur cet appareil (ANH-152) ; ou, code `wrong_code`, un code faux à la connexion |
+| 423 | connexion refusée : opérateur verrouillé après cinq codes faux de suite (code `locked`) |
 | 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
 | 404 | profil inconnu, fichier statique absent, enregistrement inconnu |
 | 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance). Un refus de la boîte aux lettres pour un démarrage, un arrêt, une cible ou un reset porte `{"detail", "code", "waiting_request_id"}` (voir plus bas). Le refus préalable d'un démarrage pour défaut variateur porte seulement `{"detail"}` |
@@ -2486,10 +2506,19 @@ servi ; `/docs` et `/redoc` sont désactivés.
 
 | Méthode | Chemin | Rôle | Retour |
 |---|---|---|---|
-| GET | `/healthz` | vivacité pour le healthcheck du conteneur ; ne dit rien de la séance | 200 `{"status":"ok","service":"anheart-operator-interface"}` |
+| GET | `/healthz` | vivacité pour le healthcheck du conteneur ; ne dit rien de la séance ; sans jeton depuis le Pi seulement (ANH-152) | 200 `{"status":"ok","service":"anheart-operator-interface"}` ; 401 d'ailleurs sans jeton |
 | GET | `/` | la page | 200, 404 si le fichier manque |
 | GET | `/app.css` | feuille de style | 200, 404 |
 | GET | `/app.js` | script | 200, 404 |
+
+### Connexion (ANH-152)
+
+| Méthode | Chemin | Corps | Rôle | Retour |
+|---|---|---|---|---|
+| GET | `/api/access` | - | l'écran de connexion : `{received, issued_at_ms, device, operators: [{user_id, name, locked_for_s}], signed_in: {user_id, name, idle_left_s, lifetime_left_s} \| null}` ; jamais un haché ni un jeton | 200 |
+| POST | `/api/access/sign-in` | `{"user_id", "code"}` | connecte un opérateur de la liste sur cet appareil ; le code n'est ni renvoyé, ni gardé, ni journalisé | 200 (même corps, cookie posé) ; 401 `wrong_code` ; 423 `locked` ; 403 `no_list` (aucune liste reçue), `unknown_operator` |
+| POST | `/api/access/sign-out` | - | ferme la session de cet appareil | 200 (cookie effacé) |
+| POST | `/api/access/refresh` | - | « Rester connecte » : une action qui ne fait que relancer le délai sans action | 200 ; 401 `operator_required` |
 
 ### Lectures (jeton si configuré)
 
@@ -2553,19 +2582,19 @@ console.
 | GET | `/api/feedback` | - | la carte « Retour du passager » (ANH-146) : `{current, given_up, scales, comfort, free_text_max}` ; `current` vaut `null` sans carte, sinon `{ended_at_ms, status, status_text, code, can_submit}` ; jamais les valeurs saisies | 200 |
 | POST | `/api/feedback` | `{"nausea_score", "dizziness_score", "comfort", "free_text"?}` | saisit le retour de la séance de la carte, ou remplace la saisie pas encore envoyée ; mémoire seulement | 202 (même corps que la lecture) ; 400 `malformed_body` ; 422 `invalid_feedback` (le champ nommé, jamais sa valeur) ; 409 `nothing_to_fill` |
 | POST | `/api/feedback/skip` | `{}` | ferme la carte : « non renseigné » si rien n'était saisi, rien n'est envoyé ; un retour saisi part quand même | 200 (même corps) ; 409 `nothing_to_fill` |
-| POST | `/api/remote-launch/confirm` | `{"session_id", "operator"}` | confirme localement l'offre et attribue l'action à l'opérateur; la route ne fait aucun appel réseau, CloudSync traite ensuite la demande | 202 `{session_id, state}` ; 400 (opérateur vide) ; 409 (`launch_not_pending`, `launch_in_progress`, `passenger_unavailable`, `launch_refused`) |
+| POST | `/api/remote-launch/confirm` | `{"session_id", "bench_attested"?}` | confirme localement l'offre au nom de l'opérateur connecté ; la route ne fait aucun appel réseau, CloudSync traite ensuite la demande | 202 `{session_id, state}` ; 401 `operator_required` ; 409 (`launch_not_pending`, `launch_in_progress`, `passenger_unavailable`, `launch_refused`) |
 | GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}]}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
-| POST | `/api/session/start` | `{"profile_id", "operator", "total_duration_s"?, "subject_id", "profiles_digest"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé ; `profiles_digest` est le `digest` de la liste que la page a montrée | 202 `{kind, operator, detail, at, request_id}` ; 403 (mouvement ou programmes désactivés) ; 400 (nom vide, id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi, sans `profiles_digest`) ; 409 (dont : passager refusé, variateur en défaut, `profiles_changed` : les programmes ne sont plus ceux de la liste montrée) ; 412 |
-| POST | `/api/session/stop` | `{"operator", "reason"?}` | fin sur la rampe mise en service | 202 `{kind, operator, detail, at, request_id}` ; 400 ; 409 |
-| POST | `/api/session/estop` | `{"operator"?, "reason"?}` | verrouille l'arrêt d'urgence, **jamais refusé** | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
+| POST | `/api/session/start` | `{"profile_id", "total_duration_s"?, "subject_id", "profiles_digest"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé ; `profiles_digest` est le `digest` de la liste que la page a montrée | 202 `{kind, operator, detail, at, request_id}` (`operator` : l'identifiant du compte connecté) ; 401 `operator_required` ; 403 (mouvement ou programmes désactivés) ; 400 (id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi, sans `profiles_digest`) ; 409 (dont : passager refusé, variateur en défaut, `profiles_changed` : les programmes ne sont plus ceux de la liste montrée) ; 412 |
+| POST | `/api/session/stop` | `{"reason"?}` | fin sur la rampe mise en service ; **sans connexion** (ANH-152), attribuée à l'opérateur connecté sinon à l'appareil | 202 `{kind, operator, detail, at, request_id}` ; 409 |
+| POST | `/api/session/estop` | `{"reason"?}` | verrouille l'arrêt d'urgence, **jamais refusé** pour qui tient un jeton d'appareil, connecté ou non ; `operator` est le compte connecté ou `device:<id>` (ANH-152) | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
 
 ### Manuel et variateur
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "operator", "subject_id"?}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois ; `occupied` nomme un passager de la liste, d'au moins `min_rider_age` du fichier médical (vérifié par la boucle), `bench` n'en nomme aucun | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue, passager manquant ou nommé sur le banc) ; 409 (dont : passager absent de la liste, année de naissance absente, variateur en défaut) ; 400 ; 412 |
-| POST | `/api/manual/target` | `{"output_rpm", "operator"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 (même corps) ; 422 (négatif, non fini) ; 400 ; 409 |
-| POST | `/api/drive/fault-reset` | `{"operator"}` | reset nommé d'un défaut variateur | 202 (même corps) ; 400 ; 409 |
+| POST | `/api/manual/start` | `{"occupancy": "bench" \| "occupied", "subject_id"?}` | séance manuelle, cible 0 ; l'occupation est déclarée une fois ; `occupied` nomme un passager de la liste, d'au moins `min_rider_age` du fichier médical (vérifié par la boucle), `bench` n'en nomme aucun | 202 (même corps que ci-dessus) ; 403 (mouvement désactivé, occupation refusée) ; 422 (occupation inconnue, passager manquant ou nommé sur le banc) ; 409 (dont : passager absent de la liste, année de naissance absente, variateur en défaut) ; 400 ; 412 |
+| POST | `/api/manual/target` | `{"output_rpm"}` | cible en tr/min **de sortie** ; la consigne y marche aux limites de mouvement | 202 (même corps) ; 422 (négatif, non fini) ; 400 ; 409 |
+| POST | `/api/drive/fault-reset` | - | reset d'un défaut variateur par l'opérateur connecté | 202 (même corps) ; 400 ; 409 |
 
 ### La boîte aux lettres : une demande, un sort, et la console le dit
 
@@ -2610,13 +2639,13 @@ Les codes d'un refus immédiat (`code` du corps 409 ou 412) : `start_pending`,
 
 | Méthode | Chemin | Corps | Rôle | Retour |
 |---|---|---|---|---|
-| POST | `/api/safety/attest` | `{"operator", "sto_jumper_removed", "mushroom_wired_nc"}` ; sous `bridged_declared`, `{"operator", "bench_bridged_declared"}` (les champs que nomme `attestation_fields` de `/api/status`) | attestation du câblage, ou de banc, pour ce démarrage | 200 ; 400 (une case manque, case de l'autre mode, nom vide) |
-| POST | `/api/safety/acknowledge` | `{"operator", "estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
-| POST | `/api/presence` | `{"operator"?}` | signal de présence de l'accompagnant (règle `attendant_absent`) | 200 `{"at": …}` |
+| POST | `/api/safety/attest` | `{"sto_jumper_removed", "mushroom_wired_nc"}` ; sous `bridged_declared`, `{"bench_bridged_declared"}` (les champs que nomme `attestation_fields` de `/api/status`) | attestation du câblage, ou de banc, pour ce démarrage | 200 ; 400 (une case manque, case de l'autre mode) ; 401 `operator_required` |
+| POST | `/api/safety/acknowledge` | `{"estop_released"?}` (défaut `false`) | efface les verdicts verrouillés | 200 `{operator, at, wall_clock, cleared}` ; 400 ; 409 |
+| POST | `/api/presence` | - | signal de présence de l'accompagnant connecté (règle `attendant_absent`) ; ne relance pas le délai sans action de la session ; la page ne l'envoie que connectée | 200 `{"at": …}` ; 401 `operator_required` |
 | GET | `/api/preflight` | - | le pré-vol tel que la console le juge maintenant, au banc et avec une personne à bord ([section 17](#17-page--pre-vol--anh-142)) | 200 `{running, last, battery_pct, bench, occupied, unreported_stop, acknowledgeable}` (`unreported_stop` : pourquoi une personne à bord est retenue pour une séance que le tableau de bord ne compte pas, ou `null` ; `acknowledgeable` : cette retenue est une séance perdue, la seule que l'opérateur peut acquitter, ANH-145) ; `null` sur une console sans pré-vol |
 | POST | `/api/preflight/run` | - | « Relancer » : une nouvelle passe, la batterie du BITalino relue au repos ; ne lance et ne refuse rien | 202, le même objet ; 409 sur une console sans pré-vol |
-| POST | `/api/preflight/acknowledge` | `{operator}` | « Acquitter une seance perdue » (ANH-145) : l'opérateur, nommé, lève les seules séances perdues (refusées pour de bon, illisibles, abandonnées), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 400 sans nom ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
-| POST | `/api/service/restore` | `{"operator"}` | remet en service une console hors service ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 400 (nom vide) ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
+| POST | `/api/preflight/acknowledge` | - | « Acquitter une seance perdue » (ANH-145) : l'opérateur connecté lève les seules séances perdues (refusées pour de bon, illisibles, abandonnées), écrites au journal de bord ; ne lance rien | 200, l'objet du pré-vol ; 401 `operator_required` ; 409 pendant une séance, quand aucune séance n'est perdue (une retenue qui se lèvera d'elle-même reste), avant la liste des enregistrements, ou console non reliée |
+| POST | `/api/service/restore` | - | remet en service une console hors service, par l'opérateur connecté ; ne lance rien | 200 `{out_of_service, unclean_starts, threshold, window_s, unclean_stop, open_record, persisted}` (`persisted: false` : vaut jusqu'au prochain redémarrage seulement) ; 401 `operator_required` ; 409 (console en service, ou console qui ne garde pas d'état de redémarrage) |
 
 ### Enregistrements
 
@@ -2633,7 +2662,8 @@ répondu à temps. Détail dans
 
 ### WebSocket `/ws/telemetry`
 
-- Paramètre `?token=<jeton>` si `UI_TOKEN` est défini. Hors boucle locale, cette URL ne
+- Paramètre `?token=<jeton>` si `DEVICE_TOKEN` est défini : celui de la console ou
+  d'une tablette de la liste (ANH-152) ; aucune connexion d'opérateur n'est demandée. Hors boucle locale, cette URL ne
   circule qu'à l'intérieur de TLS (`wss://`), et la console ne tient pas de journal
   d'accès : le jeton n'est lisible ni sur le réseau ni dans le journal du service.
 - La poignée de main est refusée **avant** acceptation (code 1008) si l'en-tête `Origin`
@@ -2987,3 +3017,50 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino
   ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).
+
+## 18. Connexion de l'opérateur (ANH-152)
+
+Depuis ANH-152, chaque action de la console porte une identité authentifiée : un
+opérateur connecté, choisi dans la liste que le tableau de bord signe pour cette machine,
+avec son code. Plus aucun champ de nom n'existe sur la page : là où ce document dit
+encore « par son nom » ou « nommé », c'est l'opérateur connecté. Le détail de la liste,
+de la connexion et de l'amorçage est dans
+[raspberry-pi.md, 8.9](raspberry-pi.md#89-la-liste-des-opérateurs-signée-anh-152).
+
+### Qui peut quoi
+
+| Qui | Ce qu'il peut |
+|---|---|
+| Toute personne devant une tablette qui tient un jeton d'appareil de la console, connectée ou non | lire la page (état, télémétrie, WebSocket, programmes, passagers, pré-vol) ; **STOP** ; **E-STOP** |
+| Un opérateur connecté sur cette tablette | en plus : démarrer (manuel, programme, départ distant), régler la cible, reset du variateur, attester, acquitter, signaler sa présence, relancer et acquitter le pré-vol, saisir le retour du passager, remettre en service, exporter un enregistrement |
+| Un admin de l'organisation de la machine, ou l'admin Anheart, sur le site | activer et désactiver les opérateurs, créer et révoquer les tablettes ; jamais voir ni poser un code |
+| L'opérateur lui-même, sur le site (« Mes machines ») | choisir et changer son code |
+
+### Ce que la page montre
+
+La barre latérale, sur toutes les pages :
+
+- `aucune liste d'operateurs recue : seuls STOP, E-STOP et les lectures sont ouverts`,
+  en rouge : cette console n'a jamais reçu sa liste ; personne ne peut se connecter.
+- `aucun operateur connecte : ...`, en rouge, la liste des noms, un champ `Code` masqué
+  et `Se connecter`. Un opérateur verrouillé se lit `<nom> (verrouille <n> min)`. Le
+  code quitte son champ dès l'envoi, quelle que soit la réponse.
+- `connecte : <nom> (deconnexion sans action dans <n> min)`, en rouge sous 5 min, avec
+  `Rester connecte` (relance le délai) et `Se deconnecter`.
+
+Une action refusée faute de connexion (401 `operator_required`) est dite sous le bloc
+de connexion, qui se relit aussitôt. Les journaux d'événements de la page affichent le
+nom de l'opérateur (résolu par la liste tenue) ou `tablette <id>` ; la console, elle,
+n'écrit que l'identifiant.
+
+### Les durées
+
+| Quoi | Durée |
+|---|---|
+| Session sans action (la présence de l'accompagnant, envoyée par la page toutes les quelques secondes, n'en est pas une) | 30 min |
+| Session, quoi qu'on fasse | 8 h |
+| Verrouillage après 5 codes faux de suite, redémarrage compris | 15 min |
+
+Une session qui se ferme pendant une rotation arrête le signal de présence : la règle
+`attendant_absent` fige la consigne à 60 s et la fait descendre à 120 s, ce qui est le
+côté sûr. STOP et E-STOP restent disponibles sans connexion.

@@ -6,6 +6,7 @@ reused here with the two console-specific services switched on.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from http import HTTPStatus
@@ -30,6 +31,7 @@ from src.web.app import create_app
 from src.web.deps import Services
 from src.web.routes import MOTION_DISABLED_DETAIL, PROGRAMS_DISABLED_DETAIL
 from src.web.schemas import PanelRow
+from tests.access_support import open_access, signed_client
 from tests.medical_support import signed, unsigned
 from tests.test_web_api import (
     OPERATOR,
@@ -96,7 +98,9 @@ class FixedPanel:
         return self.status
 
 
-def _console_app(rig: Rig, status: PanelStatus) -> httpx.AsyncClient:
+def _console_app(
+    rig: Rig, status: PanelStatus
+) -> contextlib.AbstractAsyncContextManager[httpx.AsyncClient]:
     services = Services(
         clock=rig.clock,
         surface=rig.surface,
@@ -107,9 +111,10 @@ def _console_app(rig: Rig, status: PanelStatus) -> httpx.AsyncClient:
         geometry=MachineGeometry(radius=Metres(1.5)),
         motion_enabled=False,
         panel=FixedPanel(status),
+        access=open_access(rig.clock),
     )
     app = create_app(services=services, config=rig.config)
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
+    return signed_client(app, services, auth())
 
 
 @pytest.fixture
@@ -298,7 +303,7 @@ def _manual_app(
     *,
     ceilings: Callable[[Occupancy], Result[MotorRpm, OccupancyRefused]] | None,
     medical_refusal: str | None = None,
-) -> httpx.AsyncClient:
+) -> contextlib.AbstractAsyncContextManager[httpx.AsyncClient]:
     services = Services(
         clock=rig.clock,
         surface=rig.surface,
@@ -311,9 +316,10 @@ def _manual_app(
         programs_enabled=False,
         medical_refusal=medical_refusal,
         ceilings=ceilings,
+        access=open_access(rig.clock),
     )
     app = create_app(services=services, config=rig.config)
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
+    return signed_client(app, services, auth())
 
 
 async def test_a_manual_session_is_started_targeted_and_its_fault_reset_submitted(
@@ -371,7 +377,6 @@ async def test_a_manual_session_is_started_targeted_and_its_fault_reset_submitte
     ("body", "status"),
     [
         ({"output_rpm": -1.0, "operator": OPERATOR}, HTTPStatus.UNPROCESSABLE_ENTITY),
-        ({"output_rpm": 2.0, "operator": " "}, HTTPStatus.BAD_REQUEST),
     ],
 )
 async def test_a_target_that_is_not_a_speed_is_refused_at_the_route(

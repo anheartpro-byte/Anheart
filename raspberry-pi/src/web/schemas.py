@@ -32,12 +32,14 @@ means a response cannot be edited after it was built from a snapshot.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final, assert_never
 
 from pydantic import TypeAdapter
 
 from src.bitalino_client import LinkStats
+from src.console_access import OperatorList, SignedIn
 from src.control_surface import (
     Command,
     EndSession,
@@ -141,14 +143,12 @@ def _enum_name(name: str) -> str:
 class StartBody:
     """Start a session.
 
-    ``operator`` is required and must not be blank. Every safety record in this
-    system carries a name, because an unattributable one is not a record, and
-    the supervisor already refuses blank attributions - refusing here too means
-    the operator finds out at the field rather than at the stop.
+    No ``operator`` field (ANH-152): the operator is the one signed in on the
+    device, an authenticated account, never a name typed here. A body that
+    still sends one has it ignored.
     """
 
     profile_id: str
-    operator: str
     total_duration_s: float | None = None
     subject_id: str | None = None
     """The rider, by the identifier the riders' list gives (``GET /api/roster``). Required.
@@ -169,7 +169,6 @@ class StartBody:
 @dataclass(frozen=True, slots=True)
 class RemoteLaunchConfirmBody:
     session_id: str
-    operator: str
     bench_attested: bool = False
     """The operator ticked the bench attestation: a bench launch (ANH-250) is refused
     without it, ``bench_unattested``. An automatic launch does not read it."""
@@ -310,7 +309,6 @@ class ManualStartBody:
     """
 
     occupancy: str
-    operator: str
     subject_id: str | None = None
 
 
@@ -319,21 +317,12 @@ class ManualTargetBody:
     """A manual target in OUTPUT rpm: 0, or between the minimum running speed and the ceiling."""
 
     output_rpm: float
-    operator: str
-
-
-@dataclass(frozen=True, slots=True)
-class FaultResetBody:
-    """Reset a drive fault. Always a named, explicit operator action."""
-
-    operator: str
 
 
 @dataclass(frozen=True, slots=True)
 class EndBody:
-    """End the running session on the controlled ramp."""
+    """End the running session on the controlled ramp. By whoever is signed in, else the device."""
 
-    operator: str
     reason: str = "operator ended the session"
 
 
@@ -341,14 +330,12 @@ class EndBody:
 class EstopBody:
     """Latch the emergency stop.
 
-    ``operator`` and ``reason`` are both optional, and that is the one place in
-    this API where attribution is not required. An emergency stop must never be
-    refused for a missing form field - not by validation, not by a confirmation
-    dialog, not by anything. A nameless stop that happened beats a named one
-    that was rejected.
+    ``reason`` is optional, and the stop is attributed to whoever is signed in
+    on the device, else to the device itself (ANH-152). An emergency stop must
+    never be refused for a missing form field - not by validation, not by a
+    confirmation dialog, not by anything.
     """
 
-    operator: str = ""
     reason: str = "operator pressed the emergency stop"
 
 
@@ -361,22 +348,7 @@ class AckBody:
     must fail closed rather than quietly assume it has.
     """
 
-    operator: str
     estop_released: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class RestoreBody:
-    """Put a console that is out of service back in service, by name."""
-
-    operator: str
-
-
-@dataclass(frozen=True, slots=True)
-class StopsAcknowledgeBody:
-    """Accept, by name, that the dashboard may not count a stop the console holds (ANH-145)."""
-
-    operator: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,22 +365,9 @@ class AttestBody:
     is refused under every other source.
     """
 
-    operator: str
     sto_jumper_removed: bool = False
     mushroom_wired_nc: bool = False
     bench_bridged_declared: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class PresenceBody:
-    """An attendant's screen saying it is still there.
-
-    Feeds the ``attendant_absent`` rule. It proves a browser tab is open and
-    reachable; it does not prove a human is looking at it, and nothing in
-    software can.
-    """
-
-    operator: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1776,6 +1735,86 @@ class PresenceRow:
     """
 
     at: float
+
+
+@dataclass(frozen=True, slots=True)
+class SignInBody:
+    """Sign in on this device (ANH-152): an operator of the list, and their code.
+
+    The code is read once, hashed off the loop, and never echoed, stored or logged.
+    """
+
+    user_id: str
+    code: str
+
+
+@dataclass(frozen=True, slots=True)
+class ListedOperatorRow:
+    user_id: str
+    name: str
+    locked_for_s: float | None
+    """How long this operator stays locked out after five wrong codes; ``None``: not locked."""
+
+
+@dataclass(frozen=True, slots=True)
+class SignedInRow:
+    user_id: str
+    name: str
+    idle_left_s: float
+    """Before the session ends without an action."""
+
+    lifetime_left_s: float
+    """Before the session ends whatever is done."""
+
+
+@dataclass(frozen=True, slots=True)
+class AccessRow:
+    """The sign-in screen (``GET /api/access``): who may sign in, who is signed in here.
+
+    ``received``: whether this console ever accepted a signed list; without
+    one, nobody can sign in. ``device``: the id of the device this page is on
+    (``local``, ``loopback`` or a tablet of the list). Never a hash nor a token.
+    """
+
+    received: bool
+    issued_at_ms: int | None
+    device: str
+    operators: tuple[ListedOperatorRow, ...]
+    signed_in: SignedInRow | None
+
+    @classmethod
+    def of(
+        cls,
+        held: OperatorList | None,
+        session: SignedIn | None,
+        remaining: tuple[float, float] | None,
+        locked: Callable[[str], float | None] | None,
+        device: str,
+    ) -> AccessRow:
+        operators = () if held is None else held.operators
+        return cls(
+            received=held is not None,
+            issued_at_ms=None if held is None else int(held.issued_at),
+            device=device,
+            operators=tuple(
+                ListedOperatorRow(
+                    user_id=o.user_id,
+                    name=o.name,
+                    locked_for_s=None if locked is None else locked(o.user_id),
+                )
+                for o in operators
+            ),
+            signed_in=(
+                None
+                if session is None or remaining is None
+                else SignedInRow(
+                    user_id=session.user_id,
+                    name=session.name,
+                    idle_left_s=round(remaining[0], 1),
+                    lifetime_left_s=round(remaining[1], 1),
+                )
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
