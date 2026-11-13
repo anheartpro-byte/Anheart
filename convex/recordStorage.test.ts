@@ -105,6 +105,14 @@ async function upload(
   return args;
 }
 describe("ANH-130 verified session deposits", () => {
+  it("knows every key of the complete manifest written by the Pi, and the Pi writes every key it knows", () => {
+    // The fixture holds every key of the Pi's manifest (test_record_contract.py): each is
+    // one Convex reads, and each key Convex reads is one the Pi writes.
+    expect(Object.keys(completePiManifest).sort()).toEqual(
+      Object.keys(depositManifest.shape).sort(),
+    );
+  });
+
   it("accepts the complete manifest written by the Pi and rejects an extra key", () => {
     expect(depositManifest.safeParse(completePiManifest).success).toBe(true);
     expect(depositManifest.safeParse({

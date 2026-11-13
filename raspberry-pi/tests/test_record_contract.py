@@ -1,3 +1,4 @@
+import dataclasses
 import gzip
 import hashlib
 import json
@@ -21,8 +22,10 @@ from src.record.schema import (
     Event,
     EventKind,
     GeometrySnapshot,
+    Manifest,
     Preflight,
     Profile,
+    RecordedBallast,
 )
 from src.record.writer import MANIFEST, TICK_COLUMNS, Writer
 from src.result import Err, Ok
@@ -79,6 +82,9 @@ def complete_manifest_record(root: Path) -> Path:
             base_hz=50.0,
         ),
         preflight=(Preflight(check="synthetic-check", passed=True),),
+        # Every key of the manifest is in this fixture, the ballast too, though a real
+        # record carries one only for a bench session launched from the dashboard.
+        ballast=RecordedBallast(mass_kg=80.0),
     )
     created = Writer.create(root, given)
     assert isinstance(created, Ok)
@@ -116,6 +122,13 @@ def test_complete_manifest_fixture_matches_the_writer_and_reads(tmp_path: Path) 
     assert loaded.value.manifest.subject_fit is True
     assert loaded.value.manifest.fitness_questionnaire_version == "0.1.0"
     assert not loaded.value.warnings
+
+
+def test_the_complete_fixture_holds_every_key_of_the_manifest() -> None:
+    """``convex/recordStorage.test.ts`` holds Convex's deposit schema to this fixture, both
+    ways: a key the Pi writes is in it only if every key of the manifest is."""
+    written = set(mapping(JSON.validate_json(MANIFEST_FIXTURE.read_bytes())))
+    assert written == {field.name for field in dataclasses.fields(Manifest)}
 
 
 def test_older_manifest_without_fitness_fields_still_reads(tmp_path: Path) -> None:
