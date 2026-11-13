@@ -524,6 +524,50 @@ async def test_a_stop_the_dashboard_has_not_counted_holds_a_person_on_board_not_
     await rig_.panel.close()
 
 
+async def test_the_page_acknowledges_a_held_stop_by_name(tmp_path: Path) -> None:
+    """ANH-145: ``POST /api/preflight/acknowledge``, wired to the dashboard link."""
+    rig_ = linked(tmp_path, preflight=True)
+    cloud = rig_.panel.cloud
+    assert cloud is not None
+    assert rig_.panel.services.stop_acknowledge == cloud.acknowledge_unreported_stop
+    told: list[str] = []
+    held: list[str | None] = ["seance terminee sur emergency_stop pas encore recue"]
+
+    def acknowledge(operator: str) -> str | None:
+        told.append(operator)
+        words, held[0] = held[0], None
+        return words
+
+    services = replace(rig_.panel.services, stop_acknowledge=acknowledge)
+    app = create_app(services=services, config=config_from(BASE_ENV).web)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as session:
+            row = cast("Mapping[str, object]", (await session.get("/api/preflight")).json())
+            assert row["unreported_stop"] is None
+            blank = await session.post("/api/preflight/acknowledge", json={"operator": " "})
+            assert blank.status_code == HTTPStatus.BAD_REQUEST
+            done = await session.post("/api/preflight/acknowledge", json={"operator": OPERATOR})
+            assert done.status_code == HTTPStatus.OK
+            again = await session.post("/api/preflight/acknowledge", json={"operator": OPERATOR})
+            assert again.status_code == HTTPStatus.CONFLICT
+            assert told == [OPERATOR, OPERATOR]
+            unlinked = create_app(
+                services=replace(services, stop_acknowledge=None),
+                config=config_from(BASE_ENV).web,
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=unlinked), base_url="http://testserver"
+            ) as other:
+                refused = await other.post(
+                    "/api/preflight/acknowledge", json={"operator": OPERATOR}
+                )
+                assert refused.status_code == HTTPStatus.CONFLICT
+    finally:
+        await rig_.panel.close()
+
+
 async def test_a_bench_launch_arms_when_only_a_person_on_board_would_be_refused(
     tmp_path: Path,
 ) -> None:

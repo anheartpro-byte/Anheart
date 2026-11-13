@@ -1307,6 +1307,7 @@ class LocalPanel:
             self._services,
             remote_launch_current=cloud.current_remote_launch,
             remote_launch_confirm=cloud.confirm_remote_launch,
+            stop_acknowledge=cloud.acknowledge_unreported_stop,
             # Only a linked console offers it: the feedback has nowhere else to go.
             feedback=self._feedback,
         )

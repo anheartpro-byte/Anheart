@@ -165,3 +165,35 @@ test("a console without a pre-flight says so and offers no run", () => {
   assert.equal(node("preflight-rows").children.length, 0);
   assert.equal(node("start-preflight-note").textContent, "");
 });
+
+test("a stop the dashboard may not count is said, with its acknowledgement by name (ANH-145)", async () => {
+  const { context, node } = page();
+  const held = "seance terminee sur emergency_stop pas encore recue par le tableau de bord";
+  context.renderPreflight(preflightRow({ occupiedBlock: null }));
+  assert.equal(node("preflight-ack").hidden, true);
+  assert.equal(node("preflight-held").hidden, true);
+  context.renderPreflight({ ...preflightRow(), unreported_stop: held });
+  assert.equal(node("preflight-ack").hidden, false);
+  assert.equal(node("preflight-held").textContent, `Personne a bord retenue : ${held}`);
+  const sent = [];
+  context.api = (path, options) => {
+    sent.push([path, options]);
+    return Promise.resolve({ ...preflightRow({ occupiedBlock: null }), unreported_stop: null });
+  };
+  node("manual-operator").value = "Mme Durand";
+  context.doAcknowledgeStops();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], "/api/preflight/acknowledge");
+  assert.equal(JSON.stringify(sent[0][1]), JSON.stringify({ method: "POST", body: { operator: "Mme Durand" } }));
+  assert.equal(node("preflight-ack").hidden, true);
+  assert.match(node("preflight-note").textContent, /acquittee/);
+});
+
+test("a refused acknowledgement is said where the page says what it did", async () => {
+  const { context, node } = page();
+  context.api = () => Promise.reject(new Error("aucune seance mal terminee n'est retenue"));
+  context.doAcknowledgeStops();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(node("preflight-note").textContent, /aucune seance mal terminee/);
+});
