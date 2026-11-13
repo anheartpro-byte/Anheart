@@ -2305,14 +2305,16 @@ partagé et son champ « opérateur ».
 L'admin ne voit jamais un code et ne peut pas en poser un : un code connu
 de deux personnes n'identifie plus celle qui a agi. Un opérateur qui a oublié
 son code en choisit un autre sur le site ; un opérateur qui part est
-désactivé, et le départ d'un membre de l'organisation le retire de la liste
-de lui-même. La formation (`trainedAt`, ANH-106) n'est pas encore exigée.
+désactivé, et le départ d'un membre de l'organisation (ou un rôle qui n'est
+plus admin ni gestionnaire) le désactive de lui-même et efface son code :
+revenu, il faut l'activer de nouveau, et il choisit un nouveau code. La formation (`trainedAt`, ANH-106) n'est pas encore exigée.
 
 ### 17.2 Le code : un secret faible, haché, et ce qui le protège vraiment
 
 Un code de 6 chiffres n'a qu'un million de valeurs. Il est haché par Convex
-avec scrypt (N = 32 768, r = 8, p = 1, sel aléatoire de 16 octets par
-code, paramètres et sel dans la liste signée), dans une action Node :
+avec scrypt (N = 32 768, r = 8, p = 1, sel aléatoire de 16 octets tiré à
+chaque code choisi, le même sur toutes les machines de l'opérateur ;
+paramètres et sel dans la liste signée), dans une action Node :
 le runtime par défaut de Convex n'offre que WebCrypto, sans haché lent, et
 Argon2id n'est pas assuré dans le runtime Node de Convex, alors que scrypt est
 dans `node:crypto` comme dans `hashlib` de Python sur le Pi. Le code en clair

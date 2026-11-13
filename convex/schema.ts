@@ -683,9 +683,10 @@ export default defineSchema({
     // machine's programme list it was made from, checked when the machine
     // arms it (`programme_changed`). Absent when the machine had sent none.
     profilesDigest: v.optional(v.string()),
-    // The console operator's account (ANH-152, contract 1.13), or for a launch
-    // from the dashboard its launcher: the site shows their name from it.
-    // Absent on older sessions, which keep the name typed in `operatorName`.
+    // The console operator's account (ANH-152, contract 1.13), when the machine
+    // named one of its operators: the site shows their name from it. Absent on
+    // older sessions and on launches from the dashboard, which keep the name
+    // in `operatorName`.
     operatorId: v.optional(v.id("users")),
     localRef: v.optional(v.string()), // Pi-side idempotency key, local sessions
     // The start as the machine dated it, on its own clock (unix ms), for a

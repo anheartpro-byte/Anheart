@@ -607,7 +607,7 @@ avec elle, hors ligne compris.
 | `operatorCode` | Optionnel. `{algorithm: "scrypt", n, r, p, salt, hash}` : le haché scrypt du code de console, sel de 16 octets et empreinte de 32 octets en base64, avec ses paramètres (`code` de l'entrée `operator_list` du contrat). Posé par l'opérateur seul (`consoleCodes.setMyOperatorCode`), jamais servi au site. Absent : l'opérateur n'a pas encore choisi de code, la console ne le liste pas. |
 | `codeSetAt` | Quand ce code a été posé. |
 | `enabledAt`, `enabledBy` | La dernière activation et son auteur (un admin). |
-| `disabledAt`, `disabledBy` | Absents tant que l'opérateur est activé ; posés par une désactivation, effacés par une nouvelle activation. |
+| `disabledAt`, `disabledBy` | Absents tant que l'opérateur est activé ; posés par une désactivation, effacés par une nouvelle activation. Le départ du membre pose `disabledAt` seul et efface aussi `operatorCode` et `codeSetAt`. |
 | `trainedAt` | Optionnel, la formation de l'opérateur sur cette machine : écrit par ANH-106, lu par personne aujourd'hui. |
 
 Index : `by_machine` (la fiche, la liste signée), `by_user` (le code d'une
@@ -1391,7 +1391,8 @@ Autres règles notables :
   ligne `memberships` du compte (et sur `users` pour l'affichage).
 - **Retirer un compte** (`users.deleteUser`) : un admin d'organisation ou un
   gestionnaire retire le compte de **son** organisation seulement
-  (appartenance, liens et droits de lancement de cette organisation) ; le
+  (appartenance, liens, droits de lancement et lignes d'opérateur de console
+  de cette organisation, avec le haché de son code) ; le
   compte lui-même n'est supprimé que s'il n'appartient à aucune autre.
   L'admin Anheart le supprime partout.
 - **E-mail déjà utilisé** (`users.createPatient`) : le message ne nomme le
@@ -3477,8 +3478,12 @@ de [`contracts/machine-api.json`](../contracts/machine-api.json).
 - **Pas de révision.** La liste est petite (100 opérateurs et 20 tablettes
   au plus, 200 000 octets au plus) et entière à chaque réponse : la console
   compare ce qu'elle reçoit à ce qu'elle tient et n'écrit que ce qui change.
-  Le départ d'un membre de l'organisation, qui ne touche aucune ligne de ces
-  tables, y paraît donc aussi.
+  Le départ d'un membre de l'organisation (fin de son appartenance, compte ou
+  organisation supprimés dans Clerk, rôle qui n'est plus admin ni
+  gestionnaire) désactive ses lignes `machine_operators` de cette
+  organisation et efface son code (`releaseOperator`, sans auteur dans
+  `disabledBy`) : revenu, il lui faut une nouvelle activation par un admin
+  et un nouveau code, jamais les anciens. La liste suivante ne le tient plus.
 - **Ce qu'un tiers qui tient la liste peut faire.** Le texte n'est pas
   secret au sens d'une clé, mais il ne sort que vers la machine authentifiée
   par sa clé. Qui le tient (la clé de la machine volée, le disque du Pi lu)

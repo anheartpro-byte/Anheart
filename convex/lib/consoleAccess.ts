@@ -17,6 +17,8 @@
  */
 import { v, type Infer } from "convex/values";
 import machineApi from "../../contracts/machine-api.json";
+import type { Id } from "../_generated/dataModel";
+import type { MutationCtx } from "../_generated/server";
 
 const SECTION = machineApi.operator_list;
 
@@ -34,6 +36,37 @@ export const DEVICE_ACTOR_PREFIX = SECTION.device_actor_prefix;
 
 /** The roles of an organisation whose members may be enabled as operators. */
 export const OPERATOR_ROLES: readonly string[] = ["admin", "gestionnaire"];
+
+/**
+ * A member who leaves the operator roles of an organisation (their membership
+ * ended, their account or the organisation deleted, or a role that is no
+ * longer admin nor gestionnaire): their operator rows there are disabled and
+ * their code cleared. Coming back takes a new activation by an admin and a new
+ * code, never the old ones. Returns the rows changed.
+ */
+export async function releaseOperator(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  organizationId: Id<"organizations">,
+  at: number,
+): Promise<number> {
+  const rows = await ctx.db
+    .query("machine_operators")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  let changed = 0;
+  for (const row of rows) {
+    if (row.organizationId !== organizationId) continue;
+    if (row.disabledAt !== undefined && row.operatorCode === undefined) continue;
+    await ctx.db.patch(row._id, {
+      disabledAt: row.disabledAt ?? at,
+      operatorCode: undefined,
+      codeSetAt: undefined,
+    });
+    changed += 1;
+  }
+  return changed;
+}
 
 /** A code as stored and as signed: the parameters, the salt and the hash, in base64. */
 export const operatorCodeValidator = v.object({
