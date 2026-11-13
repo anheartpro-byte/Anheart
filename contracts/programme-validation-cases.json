@@ -412,6 +412,19 @@
       }
     },
     {
+      "name": "warmup_rpm_ceiling_fraction absurde (1e308) est refusé, sans exception",
+      "changes": {
+        "warmup_rpm_ceiling_fraction": 1e+308
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "warmup_fraction_out_of_range"
+        ],
+        "detail": "training profile refused: warmup_fraction_out_of_range"
+      }
+    },
+    {
       "name": "aucune voie est refusé",
       "changes": {
         "channels": []

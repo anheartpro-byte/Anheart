@@ -469,7 +469,7 @@ def test_neither_speed_bound_may_be_zero_or_reverse(rpm: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "fraction", [0.0, -0.1, 1.0001, 1.5, math.nan, math.inf, -math.inf], ids=str
+    "fraction", [0.0, -0.1, 1.0001, 1.5, 1e308, math.nan, math.inf, -math.inf], ids=str
 )
 def test_the_warmup_fraction_must_be_a_ratio(fraction: float) -> None:
     """``(0, 1]``, and a non-finite fraction is refused rather than crashed.

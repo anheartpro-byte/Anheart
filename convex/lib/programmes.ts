@@ -214,6 +214,7 @@ const CHECKS: ReadonlyArray<
     (p) =>
       !positiveFinite(p.warmupRpmCeilingFraction) ||
       p.maxRpm <= 0 ||
+      !Number.isFinite(p.maxRpm * p.warmupRpmCeilingFraction) ||
       Math.floor(p.maxRpm * p.warmupRpmCeilingFraction) >= p.minRunRpm,
   ],
   ["ecg_channel_missing", (p) => p.channels.includes("ECG")],

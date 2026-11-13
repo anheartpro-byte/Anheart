@@ -851,8 +851,14 @@ def _check_warmup_fraction(profile: TrainingProfile) -> Violation | None:
 def _check_warmup_ceiling_turns(profile: TrainingProfile) -> Violation | None:
     # Guarded on the two fields it derives from, because this check runs even
     # when they are themselves refused: floor(-inf) raises OverflowError, and a
-    # refusal must never turn into a traceback.
-    if not _is_positive_finite(profile.warmup_rpm_ceiling_fraction) or profile.max_rpm <= 0:
+    # refusal must never turn into a traceback. So does floor(inf), which a
+    # finite but absurd fraction (1e308, refused for its range) multiplies to.
+    fraction = profile.warmup_rpm_ceiling_fraction
+    if (
+        not _is_positive_finite(fraction)
+        or profile.max_rpm <= 0
+        or not math.isfinite(profile.max_rpm * fraction)
+    ):
         return None
     if profile.warmup_rpm_ceiling >= profile.min_run_rpm:
         return None
