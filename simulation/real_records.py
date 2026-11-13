@@ -176,6 +176,9 @@ class _ArchiveError(ValueError):
     pass
 
 
+_SPARSE: Final[str] = "the archive holds a sparse member: a record is plain files"
+
+
 class _BoundedHeader(tarfile.TarInfo):
     """A member header whose extension payload is bounded before tarfile reads it.
 
@@ -183,9 +186,23 @@ class _BoundedHeader(tarfile.TarInfo):
     called with the header parsed and its payload not yet read, for the first
     header of a member and for each extension header chained to it. The type
     stubs leave it out, so the parent's is reached by name.
+
+    Refused there, before tarfile reads anything of them: a global extension
+    header, which tarfile copies into every member after it, and an old GNU
+    sparse member, whose extended headers tarfile reads without checking the
+    stream holds them. The sparse forms of a PAX header are refused where
+    tarfile handles them (``_proc_gnusparse_00``, ``_01``, ``_10``, and any
+    ``GNU.sparse.`` key in ``_apply_pax_info``): a sparse map is read whole, and
+    its numbers are parsed unchecked. None of them is a form a record is written in.
     """
 
     def _proc_member(self, tar: tarfile.TarFile) -> tarfile.TarInfo:
+        if self.type == tarfile.XGLTYPE:
+            raise _ArchiveError(
+                "the archive holds a global extension header: a record's members carry their own"
+            )
+        if self.type == tarfile.GNUTYPE_SPARSE:
+            raise _ArchiveError(_SPARSE)
         if self.type in _EXTENSIONS and self.size > MAX_EXTENSION_BYTES:
             raise _ArchiveError("the archive holds an extension header above MAX_EXTENSION_BYTES")
         parent = cast(
@@ -193,6 +210,26 @@ class _BoundedHeader(tarfile.TarInfo):
             getattr(super(), "_proc_member"),  # noqa: B009  # absent from the stubs
         )
         return parent(tar)
+
+    def _proc_gnusparse_00(self, _next: tarfile.TarInfo, _raw_headers: object) -> None:
+        raise _ArchiveError(_SPARSE)
+
+    def _proc_gnusparse_01(self, _next: tarfile.TarInfo, _pax_headers: object) -> None:
+        raise _ArchiveError(_SPARSE)
+
+    def _proc_gnusparse_10(
+        self, _next: tarfile.TarInfo, _pax_headers: object, _tar: tarfile.TarFile
+    ) -> None:
+        raise _ArchiveError(_SPARSE)
+
+    def _apply_pax_info(self, pax_headers: Mapping[str, str], encoding: str, errors: str) -> None:
+        if any(keyword.startswith("GNU.sparse.") for keyword in pax_headers):
+            raise _ArchiveError(_SPARSE)
+        parent = cast(
+            "Callable[[Mapping[str, str], str, str], None]",
+            getattr(super(), "_apply_pax_info"),  # noqa: B009  # absent from the stubs
+        )
+        parent(pax_headers, encoding, errors)
 
 
 class BoundedArchive(gzip.GzipFile):
@@ -227,6 +264,10 @@ def _check_size(member: tarfile.TarInfo) -> None:
 def _unpack_members(tar: tarfile.TarFile, content: BoundedArchive, into: Path) -> None:
     total = 0
     for count, member in enumerate(tar, start=1):
+        # A stream is read once and no member is looked up again: tarfile keeping them
+        # all would keep every header, with its extension payload, to the end. Its
+        # iterator reads the next one when it has none left, so emptying them is safe.
+        cast("list[tarfile.TarInfo]", getattr(tar, "members")).clear()  # noqa: B009  # unstubbed
         if count > MAX_ARCHIVE_MEMBERS:
             raise _ArchiveError("the archive exceeds MAX_ARCHIVE_MEMBERS")
         _check_size(member)
@@ -265,6 +306,10 @@ def unpack(archive: Path, into: Path) -> Result[Path, str]:
         return Err("the archive holds a chain of extension headers too long to read")
     except (OSError, EOFError, tarfile.TarError, zlib.error):
         return Err("the archive cannot be read as a .tar.gz of a record folder")
+    except (ValueError, IndexError):
+        # What tarfile raises on a header it parses without checking, refused by the hooks
+        # above where they can; any other is still a refusal, never a traceback.
+        return Err("the archive holds a header tarfile cannot read")
     folders = [path for path in sorted(into.iterdir()) if (path / "manifest.json").is_file()]
     if len(folders) != 1:
         return Err("the archive must hold exactly one record folder")

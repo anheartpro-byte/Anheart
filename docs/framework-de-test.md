@@ -4415,9 +4415,16 @@ et le padding. Le flux refuse avant de remettre des octets au-delà de
 extension annoncée au-delà de 64 Kio (`MAX_EXTENSION_BYTES`) est refusée sans
 être lue, une chaîne d'extensions trop longue pour la récursion de `tarfile`
 aussi, et un fragment de moins de 512 octets après le dernier membre n'est
-pas pris pour la fin de l'archive.
+pas pris pour la fin de l'archive. Un en-tête PAX global et toute forme creuse
+(GNU ancien, clés `GNU.sparse.`) sont refusés avant d'être lus, et les membres
+extraits ne restent pas en mémoire : des archives de quelques dizaines de Kio
+qui prenaient des gigaoctets sont refusées avec une mémoire de quelques Mio,
+vérifiée par `tracemalloc` dans les tests.
 Une taille négative, une taille non nulle hors fichier ordinaire, un en-tête
-invalide ou une erreur de décompression donne un refus nommé.
+invalide, une erreur de décompression, ou une erreur de valeur ou d'index que
+`tarfile` lève sur un en-tête, donne un refus nommé. L'import borne aussi
+l'ECG avant de le lire : 39 000 blocs et `MAX_ECG_BYTES` décompressés au plus,
+ce que tient la séance la plus longue.
 Le compte des membres et leurs tailles effectives sont vérifiés avant
 d'écrire le membre suivant. L'import, le rejeu,
 le jugement de bibliothèque et le visualiseur utilisent cette même extraction.

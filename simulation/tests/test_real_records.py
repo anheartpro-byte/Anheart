@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import tarfile
+import tracemalloc
 import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -240,8 +241,9 @@ def test_a_directory_cannot_reduce_the_byte_budget_or_carry_content(
     assert list(into.iterdir()) == []
 
 
+# A global header is refused on its type alone (the test of the global header below).
 @pytest.mark.parametrize(
-    "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
+    "kind", [tarfile.XHDTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
 )
 @pytest.mark.parametrize("payload_bytes", [1, 1024])
 def test_extension_payloads_cannot_read_past_the_decompressed_byte_limit(
@@ -265,8 +267,9 @@ def test_extension_payloads_cannot_read_past_the_decompressed_byte_limit(
     assert list(into.iterdir()) == []
 
 
+# A global header is refused on its type alone (the test of the global header below).
 @pytest.mark.parametrize(
-    "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
+    "kind", [tarfile.XHDTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
 )
 @pytest.mark.parametrize("after_manifest", [False, True])
 def test_an_extension_header_cannot_have_a_negative_size(
@@ -341,7 +344,7 @@ def test_deflate_errors_are_a_named_archive_refusal(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
+    "kind", [tarfile.XHDTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
 )
 def test_an_extension_header_above_its_bound_is_refused_before_its_payload_is_read(
     tmp_path: Path, kind: bytes
@@ -388,6 +391,141 @@ def test_a_long_chain_of_extension_headers_is_a_named_refusal(tmp_path: Path) ->
     into = tmp_path / "out"
     assert unpack(archive, into) == Err(
         "the archive holds a chain of extension headers too long to read"
+    )
+
+
+SPARSE = "the archive holds a sparse member: a record is plain files"
+GLOBAL = "the archive holds a global extension header: a record's members carry their own"
+
+
+def _unpacked_within(archive: Path, into: Path, peak_bytes: int) -> object:
+    """What ``unpack`` answers, after checking it held no more than ``peak_bytes`` at once."""
+    tracemalloc.start()
+    try:
+        result = unpack(archive, into)
+        _now, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < peak_bytes, f"held {peak} bytes"
+    return result
+
+
+def _pax_archive(archive: Path, data: bytes, pax: Mapping[str, str]) -> None:
+    """One member, its PAX header holding ``pax``, as tarfile writes it."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        member = tarfile.TarInfo("record/manifest.json")
+        member.size = len(data)
+        member.pax_headers = dict(pax)
+        tar.addfile(member, io.BytesIO(data))
+    archive.write_bytes(gzip.compress(buffer.getvalue(), mtime=0))
+
+
+@pytest.mark.parametrize(
+    ("pax", "data"),
+    [
+        ({"GNU.sparse.size": "abc"}, b"{}"),
+        ({"GNU.sparse.realsize": "1e3"}, b"{}"),
+        ({"GNU.sparse.map": "0,x"}, b"{}"),
+        ({"GNU.sparse.major": "1", "GNU.sparse.minor": "0"}, b"abc\n".ljust(512, b"\0")),
+        ({"GNU.sparse.name": "record/other.json"}, b"{}"),
+    ],
+    ids=["size", "realsize", "map 0.1", "map 1.0", "name"],
+)
+def test_a_sparse_pax_member_is_a_named_refusal(
+    tmp_path: Path, pax: Mapping[str, str], data: bytes
+) -> None:
+    """tarfile parses the numbers of a sparse PAX header without checking them: each form
+    used to end the import with a ValueError. A record is plain files: refused by name."""
+    archive = tmp_path / "sparse.tar.gz"
+    _pax_archive(archive, data, pax)
+    assert unpack(archive, tmp_path / "out") == Err(SPARSE)
+
+
+def test_an_old_gnu_sparse_member_is_refused_before_its_extended_headers(tmp_path: Path) -> None:
+    """Its header says more sparse headers follow and the stream ends instead: tarfile read
+    them without checking and raised an IndexError."""
+    member = tarfile.TarInfo("record/a.bin")
+    member.type = tarfile.GNUTYPE_SPARSE
+    header = bytearray(member.tobuf(tarfile.GNU_FORMAT))
+    header[482] = 1
+    header[483:495] = b"%011o\0" % 0
+    header[148:156] = b" " * 8
+    header[148:156] = b"%06o\0 " % sum(header[:512])
+    archive = tmp_path / "old-sparse.tar.gz"
+    archive.write_bytes(gzip.compress(bytes(header[:512]), mtime=0))
+    assert unpack(archive, tmp_path / "out") == Err(SPARSE)
+
+
+def test_a_large_sparse_map_is_refused_unread(tmp_path: Path) -> None:
+    """A GNU sparse 1.0 map of two million numbers, a few kilobytes compressed: tarfile
+    read it whole into a list (940 MB for eight million). Refused before it is read."""
+    numbers = 2_000_000
+    sparse_map = b"%d\n" % (numbers // 2) + b"0\n" * numbers
+    content = sparse_map + b"\0" * (-len(sparse_map) % tarfile.BLOCKSIZE)
+    pax = {
+        "GNU.sparse.major": "1",
+        "GNU.sparse.minor": "0",
+        "GNU.sparse.realsize": "0",
+        "GNU.sparse.name": "record/a.bin",
+    }
+    archive = tmp_path / "sparse-map.tar.gz"
+    _pax_archive(archive, content, pax)
+    assert _unpacked_within(archive, tmp_path / "out", 16 * 1024 * 1024) == Err(SPARSE)
+
+
+def test_a_global_extension_header_is_refused_and_never_copied_into_every_member(
+    tmp_path: Path,
+) -> None:
+    """tarfile copies a global header into each member after it, and kept every member:
+    60 kB of keys and 2000 members, 100 kB compressed, took gigabytes. Refused on its type."""
+    keys = {f"k{index:05d}": "" for index in range(5000)}
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT, pax_headers=keys) as tar:
+        for _ in range(2000):
+            folder = tarfile.TarInfo("record")
+            folder.type = tarfile.DIRTYPE
+            tar.addfile(folder)
+    archive = tmp_path / "global.tar.gz"
+    archive.write_bytes(gzip.compress(buffer.getvalue(), mtime=0))
+    assert _unpacked_within(archive, tmp_path / "out", 16 * 1024 * 1024) == Err(GLOBAL)
+
+
+def test_members_are_not_kept_once_extracted(tmp_path: Path) -> None:
+    """Each member's own PAX header is let go once the member is written: 1500 members of
+    600 keys each are read with the memory of a few, not of all."""
+    keys = {f"k{index:04d}": "" for index in range(600)}
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for index in range(1500):
+            member = tarfile.TarInfo(f"record/{index:04d}")
+            member.size = 1
+            member.pax_headers = dict(keys)
+            tar.addfile(member, io.BytesIO(b"x"))
+    archive = tmp_path / "many-headers.tar.gz"
+    archive.write_bytes(gzip.compress(buffer.getvalue(), mtime=0))
+    into = tmp_path / "out"
+    assert _unpacked_within(archive, into, 16 * 1024 * 1024) == Err(
+        "the archive must hold exactly one record folder"
+    )
+    assert (into / "record" / "1499").read_bytes() == b"x"
+
+
+@pytest.mark.parametrize("raised", [ValueError, IndexError])
+def test_what_tarfile_raises_on_a_header_it_cannot_read_is_a_named_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raised: type[Exception]
+) -> None:
+    """The hooks refuse the headers known to break tarfile; any other it fails on is still a
+    refusal, never a traceback out of the import."""
+
+    def failing(_member: tarfile.TarInfo, _tar: tarfile.TarFile) -> tarfile.TarInfo:
+        raise raised("unchecked header")
+
+    archive = tmp_path / "plain.tar.gz"
+    _pax_archive(archive, b"{}", {})
+    monkeypatch.setattr(tarfile.TarInfo, "_proc_builtin", failing)
+    assert unpack(archive, tmp_path / "out") == Err(
+        "the archive holds a header tarfile cannot read"
     )
 
 
