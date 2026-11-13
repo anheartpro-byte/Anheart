@@ -1212,6 +1212,11 @@ export const launchAutoSession = mutation({
       if (!Number.isFinite(args.totalDurationS) || args.totalDurationS <= 0) {
         throw refusal("invalid_duration");
       }
+      // A launch only shortens a validated programme (ANH-137 EX-5): the
+      // machine's hold would absorb any longer total.
+      if (args.totalDurationS > profile.totalDurationS) {
+        throw refusal("duration_above_programme");
+      }
     }
 
     const sessionId = await ctx.db.insert("sessions", {

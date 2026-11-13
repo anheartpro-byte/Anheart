@@ -70,7 +70,7 @@ from src.control_surface import (
     StartSession,
 )
 from src.local_config import CardiacTiers, CloudConfig, LocalConfig, load_local_config
-from src.local_panel import LocalPanel, build_panel, describe_resolve_error
+from src.local_panel import LocalPanel, build_panel, describe_resolve_error, remote_total_refusal
 from src.medical import SHIPPED_PARAMETERS, MedicalStatus
 from src.motor.drive import ControlWord, DriveError
 from src.motor.simulated import SimulatedDrive
@@ -101,7 +101,7 @@ from src.roster import (
     RosterState,
     describe_passenger_refusal,
 )
-from src.training.plan import JsonValue, ResolveError
+from src.training.plan import JsonValue, ResolveError, UnknownProfile
 from src.training.runtime import EndReason, RuntimeState
 from src.training.types import Occupancy, TelemetrySnapshot
 from src.units import Bpm, Monotonic, MotorRpm, Seconds, UnixMillis
@@ -853,7 +853,7 @@ async def test_a_launch_is_submitted_through_the_surface_with_the_rider(tmp_path
     r = rig(tmp_path)
     assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
     r.dashboard.answer(
-        "/api/machine/training/poll", launch_answer({**LAUNCH, "totalDurationS": 2700})
+        "/api/machine/training/poll", launch_answer({**LAUNCH, "totalDurationS": 1500})
     )
     await r.step()
     assert r.panel.surface.pending is None
@@ -873,7 +873,7 @@ async def test_a_launch_is_submitted_through_the_surface_with_the_rider(tmp_path
     assert pending.subject_id == RIDER_ID
     assert pending.subject_hr_max == Bpm(170)
     assert pending.cloud_session_id == "remote-1"
-    assert pending.total_duration_s == Seconds(2700.0)
+    assert pending.total_duration_s == Seconds(1500.0)
     assert DASHBOARD_OPERATOR in pending.operator
     assert pending.confirmed_by == OPERATOR
     r.dashboard.answer(POLL_PATH, launch_answer(None))
@@ -3127,6 +3127,40 @@ async def test_an_unknown_preset_is_refused(
     assert "inconnu" in reason
 
 
+async def test_an_unknown_preset_with_a_duration_is_refused_as_unknown(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    launch = {**LAUNCH, "profileId": "jog_150", "totalDurationS": 9000}
+    reason = await refused_launch(tmp_path, caplog, launch)
+    assert "inconnu" in reason
+
+
+async def test_a_launch_longer_than_its_preset_is_refused_before_training_start(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ANH-137 EX-5: the dashboard shortens a programme, never lengthens it."""
+    reason = await refused_launch(tmp_path, caplog, {**LAUNCH, "totalDurationS": 1800.5})
+    assert reason == (
+        "demarrage refuse : un lancement du tableau de bord ne peut que raccourcir "
+        "le programme (1800.5 s demandees, 1800 s au programme)"
+    )
+
+
+def test_a_launch_whose_preset_cannot_be_found_is_refused_by_the_duration_check() -> None:
+    """Fail closed: no programme to measure the asked total against is no launch."""
+    command = StartSession(
+        profile_id="jog_150",
+        operator=OPERATOR,
+        total_duration_s=Seconds(900.0),
+        at=Monotonic(0.0),
+        request_id="duration",
+        cloud_session_id="remote-1",
+    )
+    assert remote_total_refusal(command, Err(UnknownProfile("jog_150", ()))) == (
+        "demarrage refuse : programme 'jog_150' inconnu sur cette machine"
+    )
+
+
 async def test_a_preset_too_hard_for_the_rider_is_refused(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -3201,6 +3235,24 @@ async def test_a_local_programme_is_registered_as_auto_for_its_rider(tmp_path: P
     assert body["userId"] == RIDER_ID
     assert body["subjectLabel"] == RIDER_NAME
     assert body["subjectHrMax"] == 190
+    await rig_.panel.close()
+
+
+async def test_a_programme_started_at_the_console_may_still_be_lengthened(tmp_path: Path) -> None:
+    """ANH-137 EX-5 bounds a launch from the dashboard only: the console keeps its override."""
+    rig_ = linked(tmp_path)
+    rig_.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-4"}))
+    await rig_.panel.roster_step()
+    submitted = rig_.panel.surface.submit_start(
+        profile_id=PROFILE,
+        operator=OPERATOR,
+        total_duration_s=Seconds(2700.0),
+        subject_id=RIDER_ID,
+    )
+    assert isinstance(submitted, Ok)
+    await rig_.run(2.0)
+    assert rig_.panel.runtime.state is RuntimeState.RUNNING
+    assert rig_.dashboard.to("/api/machine/training/local")[0]["totalDurationS"] == 2700.0
     await rig_.panel.close()
 
 
@@ -3359,7 +3411,7 @@ def test_an_unknown_end_reason_fails_loudly() -> None:
 
 def test_an_unknown_resolve_error_fails_loudly() -> None:
     with pytest.raises(AssertionError):
-        describe_resolve_error(cast("ResolveError", object()))
+        describe_resolve_error(cast(ResolveError, object()))
 
 
 @pytest.mark.parametrize("path", ["/api/machine/heartbeat", "/api/machine/profiles"])

@@ -118,6 +118,14 @@
       "medical_parameters": {
         "registered": "Version des paramètres médicaux enregistrée"
       },
+      "programme": {
+        "created": "Programme créé",
+        "updated": "Brouillon de programme modifié",
+        "report_attached": "Rapport de simulation joint",
+        "validated": "Programme validé",
+        "published": "Programme publié",
+        "retired": "Programme retiré"
+      },
       "record": {
         "deleted": "Enregistrement supprimé"
       }
@@ -132,6 +140,7 @@
       "organization": "Organisation",
       "software_release": "Version logicielle",
       "medical_parameters_version": "Version des paramètres médicaux",
+      "programme": "Programme",
       "patient_invitation": "Invitation du patient"
     },
     "roles": {
@@ -271,6 +280,15 @@
     "downgrade_reason_required": "La descente de niveau exige un motif de 3 à 500 caractères.",
     "occupied_requires_signed_medical_parameters": "La validation avec une personne à bord exige une clé médicale de production et une version des paramètres médicaux.",
     "machine_validation_insufficient": "Le niveau de validation de la machine ne permet pas cette configuration.",
+    "programme_not_found": "Programme introuvable.",
+    "programme_wrong_status": "Le programme n'est plus dans l'état que demande cette étape. Rechargez la page.",
+    "programme_refused": "La validation du Pi refuse ce programme.",
+    "programme_id_taken": "Un autre programme porte déjà cet identifiant.",
+    "programme_self_validation": "Qui a créé ou modifié en dernier un brouillon ne peut pas le valider : un autre admin Anheart doit le faire.",
+    "programme_medical_version_unavailable": "Aucune version des paramètres médicaux n'est enregistrée sur ce serveur, comme en production tant que les valeurs médicales signées (ANH-98) manquent : aucun programme ne peut être validé.",
+    "programme_medical_version_not_current": "Le brouillon a été vérifié pour une version des paramètres médicaux qui n'est plus la version courante : enregistrez-le à nouveau.",
+    "programme_simulation_report_missing": "Joignez d'abord le rapport de simulation au brouillon.",
+    "invalid_medical_signoff": "La signature médicale demande un signataire (1 à 200 caractères), une date passée et une note de 1000 caractères au plus.",
     "not_authenticated": "Votre session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour continuer.",
     "account_not_registered": "Votre compte n'est pas encore prêt sur le serveur. Patientez quelques instants, puis reconnectez-vous si le message persiste.",
     "no_active_organization": "Choisissez une organisation pour continuer.",
@@ -294,6 +312,7 @@
     "hard_max_above_hr_max": "La FC limite du programme dépasse la FC max du pratiquant. Choisissez un autre programme.",
     "rider_birth_year_missing": "L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
     "rider_too_young": "Ce pratiquant n'a pas l'âge minimum requis pour une séance auto.",
+    "duration_above_programme": "La durée demandée dépasse celle du programme : un lancement peut seulement la raccourcir.",
     "invalid_duration": "La durée doit être un nombre positif.",
     "session_not_found": "Séance introuvable. Elle a peut-être été supprimée.",
     "session_not_managed": "Vous ne pouvez pas arrêter cette séance.",

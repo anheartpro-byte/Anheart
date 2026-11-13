@@ -469,7 +469,7 @@ def test_neither_speed_bound_may_be_zero_or_reverse(rpm: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "fraction", [0.0, -0.1, 1.0001, 1.5, math.nan, math.inf, -math.inf], ids=str
+    "fraction", [0.0, -0.1, 1.0001, 1.5, 1e308, math.nan, math.inf, -math.inf], ids=str
 )
 def test_the_warmup_fraction_must_be_a_ratio(fraction: float) -> None:
     """``(0, 1]``, and a non-finite fraction is refused rather than crashed.
@@ -735,6 +735,12 @@ def test_an_implausible_age_is_refused_rather_than_clamped(age: int) -> None:
     error = _err(hr_max_from_age(age))
     assert error.quantity == "subject_age_years"
     assert (error.low, error.high) == (float(MIN_SUBJECT_AGE_YEARS), float(MAX_SUBJECT_AGE_YEARS))
+
+
+@pytest.mark.parametrize(("age", "value"), [(10**400, math.inf), (-(10**400), -math.inf)])
+def test_an_age_beyond_every_float_is_refused_rather_than_raised(age: int, value: float) -> None:
+    """``float(10**400)`` raises: the refusal names an infinite age instead."""
+    assert _err(hr_max_from_age(age)).value == value
 
 
 @given(
@@ -1238,6 +1244,50 @@ def test_an_implausible_age_in_a_document_is_malformed() -> None:
     error = _err(parse_profile(document))
     assert isinstance(error, Malformed)
     assert "subject_age_years" in error.detail
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("total_duration_s", 10**400, "'total_duration_s' must be a number a float can hold"),
+        ("max_rpm", 10**400, "'max_rpm' must be a whole number a float can hold"),
+        ("max_rpm", 2 * 10**308, "'max_rpm' must be a whole number a float can hold"),
+        ("subject_hr_max", -(10**400), "'subject_hr_max' must be a whole number a float can hold"),
+        (
+            "subject_age_years",
+            10**400,
+            "'subject_age_years' must be a whole number a float can hold",
+        ),
+    ],
+)
+def test_an_integer_beyond_every_float_is_malformed_not_raised(
+    key: str, value: int, message: str
+) -> None:
+    """JSON has no bound on an integer; ``float()`` of one past ~1.8e308 raises.
+
+    Not a case of contracts/programme-validation-cases.json: JavaScript has no
+    such integer (``JSON.parse`` reads it as ``Infinity``), so Convex never
+    sees one. The integer that still fits a float is read as before.
+    """
+    document = dict(profile_to_document(BASE))
+    if key == "subject_age_years":
+        del document["subject_hr_max"]
+    document[key] = value
+    error = _err(parse_profile(document))
+    assert isinstance(error, Malformed)
+    assert message in error.detail
+    document[key] = 10**308 if value > 0 else -(10**308)
+    assert "a float can hold" not in str(parse_profile(document))
+
+
+def test_a_store_file_with_an_integer_beyond_every_float_is_moved_aside(tmp_path: Path) -> None:
+    """What a hand-edited file holds must not stop the console starting."""
+    document = {**profile_to_document(BASE), "max_rpm": 10**400}
+    path = tmp_path / "profiles.json"
+    path.write_text(json.dumps({"version": 1, "rev": 3, "profiles": [document]}), encoding="utf-8")
+    report = _ok(_store(tmp_path).load())
+    assert report.source is LoadSource.DEFAULTS_AFTER_CORRUPTION
+    assert report.quarantined is not None
 
 
 def test_a_well_formed_document_with_an_unsafe_limit_is_rejected_not_malformed() -> None:

@@ -358,7 +358,7 @@ async def test_a_200_answered_after_the_minute_is_abandoned_and_its_refusal_owed
     [
         pytest.param(dict(LAUNCH), LaunchStage.UNCONFIRMED, id="the-same-launch"),
         pytest.param(
-            {**LAUNCH, "totalDurationS": 2700},
+            {**LAUNCH, "totalDurationS": 1500},
             LaunchStage.WAITING_CONFIRMATION,
             id="the-launch-changed",
         ),

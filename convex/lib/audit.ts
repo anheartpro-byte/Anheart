@@ -43,6 +43,7 @@ export const AUDIT_TARGET_TYPES = [
   "organization",
   "software_release",
   "medical_parameters_version",
+  "programme",
   "patient_invitation",
 ] as const;
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[number];
@@ -95,6 +96,12 @@ export const AUDIT_ACTIONS = [
   "registry.level_lowered", // Admin lowers validation level; target: machine.
   "software_release.recorded", // Admin records a release; target: software release.
   "medical_parameters.registered", // Operator registers a version; target: medical version.
+  "programme.created", // Anheart admin creates a catalogue draft (ANH-137); target: programme.
+  "programme.updated", // Anheart admin rewrites a draft, without values; target: programme.
+  "programme.report_attached", // Anheart admin attaches a simulation report; target: programme.
+  "programme.validated", // A second Anheart admin validates a draft; target: programme.
+  "programme.published", // Anheart admin publishes a validated programme; target: programme.
+  "programme.retired", // Anheart admin retires a published programme; target: programme.
   "record.deleted", // Authorised user or retention cron deletes a recording; target: session.
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -147,6 +154,12 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "registry.level_lowered": "machine",
   "software_release.recorded": "software_release",
   "medical_parameters.registered": "medical_parameters_version",
+  "programme.created": "programme",
+  "programme.updated": "programme",
+  "programme.report_attached": "programme",
+  "programme.validated": "programme",
+  "programme.published": "programme",
+  "programme.retired": "programme",
   "record.deleted": "session",
 };
 
@@ -252,6 +265,12 @@ export const SENSITIVE_MUTATIONS: Readonly<
   "machines.removeGestionnaireFromMachine": ["machine_gestionnaire.removed"],
   "medicalParametersStore.insertVersion": ["medical_parameters.registered"],
   "patientInvitations.prepare": ["user.invited"],
+  "programmes.create": ["programme.created"],
+  "programmes.updateDraft": ["programme.updated"],
+  "programmes.attachSimulationReport": ["programme.report_attached"],
+  "programmes.validate": ["programme.validated"],
+  "programmes.publish": ["programme.published"],
+  "programmes.retire": ["programme.retired"],
   "recordStorage.remove": ["record.deleted"],
   "recordStorage.enforceRetention": ["record.deleted"],
   "sessionFeedback.storeMachineFeedback": ["session.feedback_submitted"],
@@ -280,7 +299,7 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
   "machineKeys.recordKeyUse":
     "Machine HTTP authentication refreshes the key-use timestamp, without a rights change.",
   "machineRegistry.generateUploadUrl":
-    "Anheart admin prepares an upload URL; registry attachment is audited separately.",
+    "Anheart admin prepares an upload URL; registry and programme report attachments are audited separately.",
   "machines.updateMachine":
     "Authorised machine manager changes only name and location.",
   "machines.recordHeartbeat":

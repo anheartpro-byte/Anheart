@@ -495,6 +495,18 @@ describe("a launch is refused when the duration asked for is not a positive numb
     );
   });
 
+  it("refuses a duration longer than the programme's, and takes one equal to it (ANH-137 EX-5)", async () => {
+    const w = await seedWorld(modules);
+
+    await expectNothingQueued(
+      w,
+      () => launch(w, { totalDurationS: 600.5 }),
+      "duration_above_programme",
+    );
+    const sessionId = await launch(w, { totalDurationS: 600 });
+    expect((await rowOf(w, sessionId))?.totalDurationS).toBe(600);
+  });
+
   it("queues the duration asked for in place of the programme's, and offers it to the machine", async () => {
     const w = await seedWorld(modules);
 

@@ -10,6 +10,7 @@ import {
   feedbackComfortValidator,
   feedbackSubmitterValidator,
 } from "./lib/feedback";
+import { programmeFields } from "./lib/programmes";
 import { recordState } from "./lib/recordStorage";
 import {
   summaryFiguresValidator,
@@ -460,6 +461,18 @@ export default defineSchema({
     .index("by_machine", ["machineId"])
     .index("by_machine_and_profile", ["machineId", "profileId"])
     .index("by_organization", ["organizationId"]),
+
+  // The programme catalogue (ANH-137), written by the Anheart admin only
+  // (convex/programmes.ts). Not yet sent to the machines (ANH-138).
+  programmes: defineTable(programmeFields)
+    .index("by_status", ["status"])
+    .index("by_profile_id", ["profileId"]),
+
+  // The whole programme as published, one row per publication. Never changed.
+  programme_revisions: defineTable({
+    programmeId: v.id("programmes"),
+    ...programmeFields,
+  }),
 
   // Machines - Raspberry Pi devices. A machine belongs to exactly one
   // organisation; everything it writes through the machine routes inherits

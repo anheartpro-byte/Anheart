@@ -179,6 +179,8 @@ export const DASHBOARD_ERRORS = {
   rider_too_young:
     "The rider is younger than the minimum age in the current medical parameters version.",
   invalid_duration: "A duration is a positive number of seconds.",
+  duration_above_programme:
+    "A launch may shorten the programme's total duration, never lengthen it.",
 
   // Sessions.
   session_not_found:
@@ -226,6 +228,24 @@ export const DASHBOARD_ERRORS = {
     "Occupied validation requires a production medical key and a medical parameters version.",
   machine_validation_insufficient:
     "The machine's validation level does not permit this configuration.",
+
+  // The programme catalogue (convex/programmes.ts, ANH-137).
+  programme_not_found: "The programme does not exist.",
+  programme_wrong_status:
+    "The programme is not in the state this transition starts from.",
+  programme_refused:
+    "The Pi's validation refuses the programme. Thrown as `{code, message, violations}`, `message` being the Pi's own (`detail` in plan.py).",
+  programme_id_taken: "Another programme already has this profile id.",
+  programme_self_validation:
+    "The author of a draft, or its last writer, cannot validate it: another Anheart admin must.",
+  programme_medical_version_unavailable:
+    "No medical parameters version is registered, as in production until ANH-98: no programme can be validated.",
+  programme_medical_version_not_current:
+    "The draft was checked against a medical parameters version that is not the current one: save it again.",
+  programme_simulation_report_missing:
+    "No simulation report is attached to the draft.",
+  invalid_medical_signoff:
+    "The medical sign-off needs a signer (1 to 200 characters), a past date and a note of at most 1000 characters.",
 
   // Alerts to the gestionnaires (convex/notifications.ts).
   notification_not_found:

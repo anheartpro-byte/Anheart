@@ -86,6 +86,7 @@ import logging
 import math
 import os
 import re
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum, unique
@@ -204,6 +205,16 @@ better-fitting formula is the one used. Either way it remains an estimate: see
 """
 
 
+def _holds_float(value: int) -> bool:
+    """Whether ``float(value)`` returns: an integer beyond every float raises ``OverflowError``.
+
+    JSON has no bound on an integer and ``json.loads`` reads ``10**400`` as one,
+    so every reader of an untrusted number asks this first: a refusal must
+    never turn into a traceback.
+    """
+    return abs(value) <= sys.float_info.max
+
+
 def hr_max_from_age(
     age_years: int, formula: HrMaxFormula = HR_MAX_FORMULA
 ) -> Result[Bpm, OutOfRange]:
@@ -226,7 +237,9 @@ def hr_max_from_age(
         return Err(
             OutOfRange(
                 quantity="subject_age_years",
-                value=float(age_years),
+                value=float(age_years)
+                if _holds_float(age_years)
+                else (math.inf if age_years > 0 else -math.inf),
                 low=float(MIN_SUBJECT_AGE_YEARS),
                 high=float(MAX_SUBJECT_AGE_YEARS),
             )
@@ -851,8 +864,14 @@ def _check_warmup_fraction(profile: TrainingProfile) -> Violation | None:
 def _check_warmup_ceiling_turns(profile: TrainingProfile) -> Violation | None:
     # Guarded on the two fields it derives from, because this check runs even
     # when they are themselves refused: floor(-inf) raises OverflowError, and a
-    # refusal must never turn into a traceback.
-    if not _is_positive_finite(profile.warmup_rpm_ceiling_fraction) or profile.max_rpm <= 0:
+    # refusal must never turn into a traceback. So does floor(inf), which a
+    # finite but absurd fraction (1e308, refused for its range) multiplies to.
+    fraction = profile.warmup_rpm_ceiling_fraction
+    if (
+        not _is_positive_finite(fraction)
+        or profile.max_rpm <= 0
+        or not math.isfinite(profile.max_rpm * fraction)
+    ):
         return None
     if profile.warmup_rpm_ceiling >= profile.min_run_rpm:
         return None
@@ -1227,6 +1246,9 @@ class _Reader:
         if isinstance(value, bool):
             self.note(f"{key!r} must be a number, got bool")
             return 0.0
+        if isinstance(value, int) and not _holds_float(value):
+            self.note(f"{key!r} must be a number a float can hold, got int")
+            return 0.0
         if isinstance(value, int | float):
             return float(value)
         self.note(f"{key!r} must be a number, got {_kind(value)}")
@@ -1242,6 +1264,9 @@ class _Reader:
         value = self._doc.get(key, _MISSING)
         if isinstance(value, bool):
             self.note(f"{key!r} must be a whole number, got bool")
+            return 0
+        if isinstance(value, int) and not _holds_float(value):
+            self.note(f"{key!r} must be a whole number a float can hold, got int")
             return 0
         if isinstance(value, int):
             return value
