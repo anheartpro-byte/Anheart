@@ -695,13 +695,26 @@ describe("machine page: deleting the machine", () => {
     },
   );
 
-  it("does not offer to delete a machine that is in a session", async () => {
+  it("does not offer to delete a machine that is in a session, and says why", async () => {
     const { user } = await open("admin", machine({ status: "in_session" }));
     const button = screen.getByRole("button", deleteButton);
 
     expect(button.hasAttribute("disabled")).toBe(true);
+    expect(button.getAttribute("aria-describedby")).toBe("delete-blocked");
+    expect(screen.getByText(fr.errors.machine_in_session).id).toBe(
+      "delete-blocked",
+    );
     await user.click(button);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("gives no reason while the machine may be deleted", async () => {
+    await open("admin");
+
+    expect(
+      screen.getByRole("button", deleteButton).hasAttribute("aria-describedby"),
+    ).toBe(false);
+    expect(screen.queryByText(fr.errors.machine_in_session)).toBeNull();
   });
 });
 
@@ -781,6 +794,8 @@ describe("machine page: launching a session on the machine", () => {
     });
     mutation(api.training.launchAutoSession).mockResolvedValue(newSession);
     const { user } = await open("gestionnaire");
+    // The window applies the server's age rule to whoever rides.
+    signedInAs("gestionnaire", { birthYear: 1986 });
     expect(screen.queryByRole("dialog")).toBeNull();
 
     await user.click(screen.getByRole("button", launchButton));

@@ -128,13 +128,17 @@ function machine(over: Partial<Machine> = {}) {
   });
 }
 
-function signedInAs(role: "admin" | "org_admin" | "gestionnaire" | "user") {
+function signedInAs(
+  role: "admin" | "org_admin" | "gestionnaire" | "user",
+  record: object = { birthYear: 1986 },
+) {
   answer("users:getCurrentUser", {
     _id: "me",
     role,
     firstName: "Ada",
     lastName: "Lovelace",
     email: "ada@anheart.test",
+    ...record,
   });
 }
 
@@ -148,12 +152,25 @@ const PATIENT_OPTION = "Paul Martin (paul@anheart.test)";
 const MYSELF_OPTION = `${t.myself} (Ada Lovelace)`;
 
 /** A gestionnaire with one patient, whose record holds what `record` says. */
-function gestionnaireWithPatient(record: object | undefined) {
+function gestionnaireWithPatient(record: object | null | undefined) {
   signedInAs("gestionnaire");
   machine();
   answer("users:getPatientsForGestionnaire", [PATIENT]);
   answer("training:listLaunchRights", []);
   answer("users:getUserById", record);
+}
+
+/** The readiness answer, carrying the server's clock at `serverNow`. */
+function readinessAt(serverNow: number) {
+  answer(READINESS, {
+    serverNow,
+    questionnaireVersion: "0.1.0",
+    consentTextVersion: "0.1.0",
+    fitness: null,
+    consent: { active: null, latestSigned: null, lastWithdrawnAt: undefined },
+    launchRefusal: null,
+    canValidate: false,
+  });
 }
 
 function open(props: Partial<Parameters<typeof LaunchTrainingModal>[0]> = {}) {
@@ -620,6 +637,121 @@ describe("ANH-203 launch window: what stops a launch before the server is asked"
     expect(launchDisabled(screen)).toBe(false);
   });
 
+  it("a patient under 18 who launches for himself sees the refusal before the click, one of 18 does not", async () => {
+    signedInAs("user", { birthYear: 2008 });
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain("au moins 18 ans");
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+
+    signedInAs("user", { birthYear: 2007 });
+    screen.rerender(
+      <LaunchTrainingModal
+        open
+        onOpenChange={() => {}}
+        machineId={machineId}
+        profileId={ENDURANCE.profileId}
+      />,
+    );
+    expect(screen.text()).not.toContain("au moins 18 ans");
+    expect(launchDisabled(screen)).toBe(false);
+  });
+
+  it("a patient whose own birth year is unknown cannot launch for himself", () => {
+    signedInAs("user", {});
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain(t.birthYearMissing);
+    expect(launchDisabled(screen)).toBe(true);
+  });
+
+  it("ties the disabled launch button to the reason shown", () => {
+    signedInAs("user", { birthYear: 2008 });
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    const reason = screen.button(t.submit).getAttribute("aria-describedby");
+    expect(reason).toBe("launch-blocker");
+    expect(screen.textOf(screen.field(reason!))).toBe(
+      "Séance auto réservée aux pratiquants d'au moins 18 ans.",
+    );
+  });
+
+  it("ties the launch button to no reason when nothing stops it", () => {
+    signedInAs("user");
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(launchDisabled(screen)).toBe(false);
+    expect(screen.button(t.submit).hasAttribute("aria-describedby")).toBe(
+      false,
+    );
+  });
+
+  // The server counts the age on its own clock (training.ts `ageFrom`): the
+  // window reads that clock from the readiness answer, never the computer's.
+  it("counts the age on the server's clock: a browser 60 s behind across the new year does not refuse a rider the server accepts", () => {
+    const serverNow = new Date("2027-01-01T00:00:30Z").getTime();
+    vi.setSystemTime(serverNow - 60_000);
+    signedInAs("user", { birthYear: 2008 });
+    machine();
+    readinessAt(serverNow);
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).not.toContain("au moins 18 ans");
+    expect(launchDisabled(screen)).toBe(false);
+  });
+
+  it("counts the age on the server's clock: a browser a year behind does not refuse a rider the server accepts", () => {
+    vi.setSystemTime(new Date("2025-07-01T12:00:00Z"));
+    signedInAs("user", { birthYear: 2007 });
+    machine();
+    readinessAt(new Date("2026-07-01T12:00:00Z").getTime());
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).not.toContain("au moins 18 ans");
+    expect(launchDisabled(screen)).toBe(false);
+  });
+
+  it("counts the age on the server's clock: a browser a year ahead does not let through a rider the server refuses", () => {
+    vi.setSystemTime(new Date("2027-07-01T12:00:00Z"));
+    signedInAs("user", { birthYear: 2008 });
+    machine();
+    readinessAt(new Date("2026-07-01T12:00:00Z").getTime());
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain("au moins 18 ans");
+    expect(launchDisabled(screen)).toBe(true);
+  });
+
+  it("keeps launch disabled while the chosen patient's record is loading", async () => {
+    gestionnaireWithPatient(undefined);
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    await choose(screen, PATIENT_OPTION);
+
+    expect(screen.text()).toContain(t.riderLoading);
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+  });
+
+  it("keeps launch disabled for a chosen patient the server no longer gives (deleted or not readable)", async () => {
+    gestionnaireWithPatient(null);
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    await choose(screen, PATIENT_OPTION);
+
+    expect(screen.text()).toContain(t.riderNotFound);
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+  });
+
   it("a patient with neither a max heart rate nor a birth year, on record or in his launch right, is refused", async () => {
     gestionnaireWithPatient({});
     answer("training:listLaunchRights", [
@@ -783,6 +915,20 @@ describe("ANH-203 launch window: the rider's max heart rate and the programme's 
     await choose(screen, PATIENT_OPTION);
 
     // 208 - 0.7 x 40
+    expect(screen.text()).toContain(
+      `${t.riderHrMax} : 180 bpm (${t.hrMaxEstimated})`,
+    );
+  });
+
+  it("estimates the max heart rate on the server's clock, not on a browser a year behind", async () => {
+    vi.setSystemTime(new Date("2025-07-01T12:00:00Z"));
+    gestionnaireWithPatient({ birthYear: 1986 });
+    readinessAt(new Date("2026-07-01T12:00:00Z").getTime());
+    const { screen } = open();
+
+    await choose(screen, PATIENT_OPTION);
+
+    // 208 - 0.7 x 40 at the server's 2026; the browser's 2025 would give 181.
     expect(screen.text()).toContain(
       `${t.riderHrMax} : 180 bpm (${t.hrMaxEstimated})`,
     );

@@ -395,7 +395,8 @@ describe("my machines: what cannot be launched", () => {
 
 describe("my machines: launching a session", () => {
   function twoMachines(me: CurrentUser["role"]) {
-    const user = signedInAs(me);
+    // Of age: the window applies the server's age rule to whoever rides.
+    const user = signedInAs(me, { birthYear: 1986 });
     answer(api.training.listLaunchableMachines, [
       machine(paris, "Paris", { profiles: [profile("Endurance")] }),
       machine(lyon, "Lyon", { profiles: [profile("Tonus")] }),

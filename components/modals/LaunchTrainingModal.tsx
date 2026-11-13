@@ -181,14 +181,11 @@ function LaunchForm({
     const birthYear = riderDoc
       ? readOptionalNumber(riderDoc, "birthYear")
       : undefined;
+    // An estimate counts the age on the server's clock, as the server does:
+    // none before the readiness answer gives that clock.
     const computed =
-      hrMax !== undefined || birthYear !== undefined
-        ? effectiveHrMax(
-            hrMax,
-            birthYear,
-            new Date().getTime(),
-            medicalParameters,
-          )
+      hrMax !== undefined || (birthYear !== undefined && readiness)
+        ? effectiveHrMax(hrMax, birthYear, serverNow, medicalParameters)
         : null;
     if (computed) {
       riderHrMax = {
@@ -245,16 +242,24 @@ function LaunchForm({
     blocker = t("errors.fitness_expired");
   else if (readiness.launchRefusal !== null)
     blocker = t(`errors.${readiness.launchRefusal}`);
+  // Never launchable before the chosen patient's record is known.
+  else if (riderIsPatient && riderDoc === undefined)
+    blocker = t("training.launch.riderLoading");
+  else if (riderIsPatient && riderDoc === null)
+    blocker = t("training.launch.riderNotFound");
   else if (riderHrMax.state === "missing" || notWholeOnRecord("hrMax"))
     blocker = t("training.launch.hrMaxMissing");
   else if (notWholeOnRecord("birthYear"))
     blocker = t("training.launch.birthYearMissing");
-  else if (riderIsPatient && riderDoc) {
-    const birthYear = readOptionalNumber(riderDoc, "birthYear");
+  else if (riderRecord) {
+    // Same rule as the server (training.ts `ageFrom`), whoever rides, on the
+    // server's clock (known here: readiness is loaded): a patient launching
+    // for himself sees the refusal before the click.
+    const birthYear = readOptionalNumber(riderRecord, "birthYear");
     if (birthYear === undefined)
       blocker = t("training.launch.birthYearMissing");
     else if (
-      new Date().getUTCFullYear() - birthYear - 1 <
+      new Date(serverNow).getUTCFullYear() - birthYear - 1 <
       medicalParameters.minRiderAge
     )
       blocker = t("training.launch.tooYoung", {
@@ -330,7 +335,10 @@ function LaunchForm({
       )}
 
       {blocker && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-50 dark:bg-amber-950/40 p-3 text-sm text-amber-800 dark:text-amber-200">
+        <div
+          id="launch-blocker"
+          className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-50 dark:bg-amber-950/40 p-3 text-sm text-amber-800 dark:text-amber-200"
+        >
           <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
           <span>{blocker}</span>
         </div>
@@ -477,7 +485,12 @@ function LaunchForm({
       </div>
 
       <div className="flex gap-3 pt-2">
-        <Button type="submit" disabled={!canSubmit} className="flex-1">
+        <Button
+          type="submit"
+          disabled={!canSubmit}
+          aria-describedby={blocker ? "launch-blocker" : undefined}
+          className="flex-1"
+        >
           {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
           {t("training.launch.submit")}
         </Button>

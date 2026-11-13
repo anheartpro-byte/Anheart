@@ -371,11 +371,19 @@ export default function MachineDetailPage({
                 <p className="text-sm text-muted-foreground">
                   {t("machines.deleteDesc")}
                 </p>
+                {machine.status === "in_session" && (
+                  <p id="delete-blocked" className="text-sm text-destructive">
+                    {t("errors.machine_in_session")}
+                  </p>
+                )}
               </div>
               <Button
                 variant="destructive"
                 onClick={() => setShowDeleteDialog(true)}
                 disabled={machine.status === "in_session"}
+                aria-describedby={
+                  machine.status === "in_session" ? "delete-blocked" : undefined
+                }
               >
                 <Trash2 className="h-4 w-4 mr-2" />
                 {t("common.delete")}
