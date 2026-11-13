@@ -257,12 +257,6 @@ describe("EX-6 a member of centre A never reads centre B, even by direct identif
       const sessionId = await withCentreBSession(w);
       const me = as(w.t, actor);
       const machineId = w.orgBMachine;
-      await w.t.run((ctx) =>
-        ctx.db.patch(machineId, {
-          apiKeySelector: "ef".repeat(16),
-          apiKey: `hmac-sha256:1:${"00".repeat(16)}:${"00".repeat(32)}`,
-        }),
-      );
       const keyId = await w.t.run((ctx) =>
         ctx.db.insert("machine_api_keys", {
           machineId,
@@ -279,7 +273,6 @@ describe("EX-6 a member of centre A never reads centre B, even by direct identif
         me.mutation(api.machines.deleteMachine, { machineId }),
         me.mutation(api.machineKeys.createMachineKey, { machineId }),
         me.mutation(api.machineKeys.revokeMachineKey, { keyId }),
-        me.mutation(api.machineKeys.revokeLegacyMachineKey, { machineId }),
         me.mutation(api.machines.assignGestionnaireToMachine, {
           machineId,
           gestionnaireId: w.manager,
@@ -350,7 +343,6 @@ async function snapshotCentreB(w: World) {
     return {
       machine: machine && {
         name: machine.name,
-        apiKey: machine.apiKey,
         isDeleted: machine.isDeleted ?? false,
         status: machine.status,
       },
@@ -398,7 +390,6 @@ async function deletedTargets(w: World): Promise<Targets> {
   return await w.t.run(async (ctx) => {
     const machineId = await ctx.db.insert("machines", {
       name: "Removed machine",
-      apiKey: "synthetic-hash",
       status: "online" as const,
       lastHeartbeat: NOW,
       createdAt: NOW,
@@ -1896,7 +1887,6 @@ describe("EX-5 a row that has no organisation is served to the Anheart admin onl
     return await w.t.run(async (ctx) => {
       const machine = await ctx.db.insert("machines", {
         name: "Unattached machine",
-        apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW,
         createdAt: NOW,

@@ -173,11 +173,13 @@ pas la copier dans un ticket, un journal ou une capture. Le déploiement visé
 est celui de la clé chargée, et l'option `--prod` est ignorée dans ce dépôt
 ([convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
 
-Au redéploiement de la production (ANH-82), la migration
-`moveMachineKeysToTable` déplace les clés existantes dans la table sans les
-changer ([convex.md](convex.md#migration-des-clés-machine-anh-165)) ; seules
-les machines dont la valeur est historique (réversible, refusée depuis
-ANH-121) ont besoin d'une nouvelle clé, créée de cette façon
+Au redéploiement de la production (ANH-82, 29 octobre 2026), la migration
+`moveMachineKeysToTable` a déplacé les clés existantes dans la table sans les
+changer ([convex.md](convex.md#migration-des-clés-machine-anh-165)). Elle a
+quitté le code depuis, avec l'ancien champ et le repli qui le lisait : une clé
+n'ouvre les routes que si elle est une ligne de la table (ANH-238). Une
+machine dont la valeur était historique (réversible, refusée depuis ANH-121) a
+besoin d'une nouvelle clé, créée de cette façon
 ([convex.md](convex.md#migration-des-credentials-avec-anh-82--opération-à-réaliser)).
 
 ### 3.2 Jeton de la page de la console

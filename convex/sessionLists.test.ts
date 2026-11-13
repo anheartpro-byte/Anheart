@@ -413,7 +413,6 @@ describe("ANH-158 lists of sessions: what the rule leaves out", () => {
       const gone = await ctx.db.insert("machines", {
         organizationId: w.orgA,
         name: "Removed machine",
-        apiKey: "synthetic-hash",
         status: "offline",
         lastHeartbeat: NOW,
         createdAt: NOW,

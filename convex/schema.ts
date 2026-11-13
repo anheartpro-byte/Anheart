@@ -463,17 +463,10 @@ export default defineSchema({
 
   // Machines - Raspberry Pi devices. A machine belongs to exactly one
   // organisation; everything it writes through the machine routes inherits
-  // that organisation on the server.
+  // that organisation on the server. Its keys live in `machine_api_keys`.
   machines: defineTable({
     organizationId,
     name: v.string(),
-    // The single key of a machine written before ANH-165: its verifier and its
-    // public selector. The keys now live in `machine_api_keys`; the migration
-    // `migrations/machineApiKeys:moveMachineKeysToTable` moves these two
-    // fields there and clears them. Until it has run, a key still found here
-    // opens the machine routes (`convex/lib/machineAuth.ts`).
-    apiKey: v.optional(v.string()),
-    apiKeySelector: v.optional(v.string()),
     authenticationEnabled: v.optional(v.boolean()),
     status: v.union(
       v.literal("online"),
@@ -499,8 +492,6 @@ export default defineSchema({
     health: v.optional(machineHealthValidator),
     healthUpdatedAt: v.optional(v.number()),
   })
-    .index("by_api_key", ["apiKey"])
-    .index("by_apiKeySelector", ["apiKeySelector"])
     .index("by_status", ["status"])
     .index("by_is_deleted", ["isDeleted"])
     .index("by_organization", ["organizationId"]),
@@ -538,8 +529,9 @@ export default defineSchema({
     // characters of its selector.
     prefix: v.string(),
     createdAt: v.number(),
-    // Absent on a key moved from `machines.apiKey` or issued from the command
-    // line (`createKeyByOperator`).
+    // Absent on a key moved from the former `machines.apiKey` (ANH-165
+    // migration, October 2026) or issued from the command line
+    // (`createKeyByOperator`).
     createdBy: v.optional(v.id("users")),
     // The key opens nothing from this instant on. Set at creation, or by the
     // rotation that replaces the key (end of the overlap).

@@ -1,8 +1,7 @@
 /**
  * The keys of a machine (ANH-165): what a key is worth at a given instant,
- * how one is issued, how a rotation retires the keys it replaces, and how the
- * single key a machine carried before (`machines.apiKey`) is moved into the
- * table `machine_api_keys`.
+ * how one is issued, and how a rotation retires the keys it replaces. The
+ * table `machine_api_keys` is the only place a machine key lives (ANH-238).
  *
  * A key is `anh1.<selector>.<secret>` (convex/lib/crypto.ts). The table keeps
  * its public selector, a salted verifier of the whole key and a prefix to
@@ -10,9 +9,9 @@
  * the call that issued it.
  */
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { MutationCtx } from "../_generated/server";
 import { refusal } from "./errors";
-import { generateApiKey, isApiKeyVerifier } from "./crypto";
+import { generateApiKey } from "./crypto";
 
 /** A use of a key is written at most this often (`lastUsedAt`). */
 export const KEY_USE_REFRESH_MS = 60_000;
@@ -36,30 +35,6 @@ type Key = Doc<"machine_api_keys">;
 /** What the dashboard shows of a key: `anh1.` and 8 characters of its selector. */
 export function keyPrefix(selector: string): string {
   return `anh1.${selector.slice(0, 8)}`;
-}
-
-/**
- * A historical verifier and its selector, under the migration's rules.
- * It opens the routes through the legacy fallback only when `tableKey` is
- * null: a selector already in the table is decided by that row alone.
- * Deletion and disabled authentication suspend every key of a machine;
- * keeping this key visible lets its admin revoke it before restoration.
- */
-export async function legacyKeyOf(ctx: QueryCtx, machine: Doc<"machines">) {
-  const { apiKey, apiKeySelector: selector } = machine;
-  if (
-    apiKey === undefined ||
-    selector === undefined ||
-    !/^[a-f0-9]{32}$/.test(selector) ||
-    !isApiKeyVerifier(apiKey)
-  ) {
-    return null;
-  }
-  const tableKey = await ctx.db
-    .query("machine_api_keys")
-    .withIndex("by_selector", (q) => q.eq("selector", selector))
-    .first();
-  return { selector, keyHash: apiKey, tableKey };
 }
 
 /** Whether the key opens the machine routes at `now`. */
@@ -174,9 +149,7 @@ export async function insertMachineKey(
  * Issue a new key for the machine and retire every key it holds that is
  * still valid: each one stays valid until the end of the overlap (sooner if
  * it expired sooner), then the job `revokeExpiredKeys` revokes it; with no
- * overlap, each one is revoked here, at once. A key the machine still carries
- * in `machines.apiKey` is moved into the table first, and retired the same
- * way.
+ * overlap, each one is revoked here, at once.
  */
 export async function rotateMachineKey(
   ctx: MutationCtx,
@@ -194,7 +167,6 @@ export async function rotateMachineKey(
   replaced: Id<"machine_api_keys">[];
 }> {
   const { now } = options;
-  await moveLegacyKey(ctx, machine, now);
   const current = await ctx.db
     .query("machine_api_keys")
     .withIndex("by_machine_and_revoked", (q) =>
@@ -226,46 +198,4 @@ export async function rotateMachineKey(
     }
   }
   return { issued, replaced };
-}
-
-/**
- * Move the single key of a machine written before ANH-165 into the table,
- * then clear `machines.apiKey` and `machines.apiKeySelector`. The same key
- * goes on opening the machine routes, now as a row of the table.
- *
- * A legacy value that is not a verifier with its selector (the reversible
- * encodings refused since ANH-121) opens nothing: it is cleared, not moved.
- * A selector already in the table belongs to that row's machine alone. If
- * it belongs to another machine, report a conflict and keep the legacy fields.
- * Idempotent: a machine without these fields is left as it is.
- */
-export async function moveLegacyKey(
-  ctx: MutationCtx,
-  machine: Doc<"machines">,
-  now: number,
-): Promise<"moved" | "discarded" | "conflict" | "none"> {
-  const { apiKey, apiKeySelector: selector } = machine;
-  if (apiKey === undefined && selector === undefined) return "none";
-  let outcome: "moved" | "discarded" = "discarded";
-  const legacy = await legacyKeyOf(ctx, machine);
-  if (legacy !== null) {
-    const { tableKey: already, selector, keyHash } = legacy;
-    if (already !== null && already.machineId !== machine._id) return "conflict";
-    if (already === null) {
-      await ctx.db.insert("machine_api_keys", {
-        machineId: machine._id,
-        selector,
-        keyHash,
-        prefix: keyPrefix(selector),
-        // When the key entered the table: the day it was issued is not known.
-        createdAt: now,
-      });
-    }
-    outcome = "moved";
-  }
-  await ctx.db.patch(machine._id, {
-    apiKey: undefined,
-    apiKeySelector: undefined,
-  });
-  return outcome;
 }

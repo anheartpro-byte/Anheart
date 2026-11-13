@@ -617,7 +617,6 @@ describe("transition: before Clerk Organizations is configured (ANHEART_ORG_ID u
       return await ctx.db.insert("machines", {
         organizationId: organization,
         name: "Other machine",
-        apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW,
         createdAt: NOW,

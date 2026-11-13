@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api";
+import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+import { generateApiKey } from "./lib/crypto";
 import {
   machineFixture,
   machineHeaders,
@@ -241,4 +243,84 @@ describe("ANH-121 machine authentication", () => {
     });
     expect(response.status).toBe(401);
   });
+});
+
+describe("ANH-238 EX-8 only a row of machine_api_keys opens the machine routes", () => {
+  it.each(["apiKey", "apiKeySelector"])(
+    "refuses a machine document that carries %s, the key field of before ANH-165",
+    async (field) => {
+      const f = await machineFixture(modules);
+      const legacy = { [field]: "ef".repeat(16) } as unknown as { name: string };
+      await expect(
+        f.t.run((ctx) => ctx.db.patch(f.machineId, legacy)),
+      ).rejects.toThrow(new RegExp(field));
+      expect(await f.t.run((ctx) => ctx.db.get(f.machineId))).not.toHaveProperty(
+        field,
+      );
+    },
+  );
+
+  it.each([
+    "no key",
+    "an unknown key",
+    "a key whose row is gone",
+    "a revoked key",
+    "an expired key",
+  ] as const)(
+    "refuses %s with 401 on all 13 routes and both queries, and opens them to a valid key",
+    async (kind) => {
+      // Given the machine's first key, then a second valid key of the same machine.
+      const f = await machineFixture(modules);
+      const valid = await f.admin.mutation(api.machineKeys.createMachineKey, {
+        machineId: f.machineId,
+      });
+      const [first] = await f.t.run((ctx) =>
+        ctx.db
+          .query("machine_api_keys")
+          .withIndex("by_machine", (q) => q.eq("machineId", f.machineId))
+          .collect(),
+      );
+      // When the first key is made the one to refuse.
+      let refused: string | null = f.apiKey;
+      if (kind === "no key") refused = null;
+      if (kind === "an unknown key") refused = (await generateApiKey()).plain;
+      if (kind === "a key whose row is gone")
+        await f.t.run((ctx) => ctx.db.delete(first._id));
+      if (kind === "a revoked key")
+        await f.admin.mutation(api.machineKeys.revokeMachineKey, {
+          keyId: first._id,
+        });
+      if (kind === "an expired key")
+        await f.t.run((ctx) =>
+          ctx.db.patch(first._id, { expiresAt: Date.now() - 1 }),
+        );
+      // Then every route refuses it before its own code, and both queries find nothing.
+      expect(machineRoutes).toHaveLength(13);
+      for (const [method, path] of machineRoutes) {
+        const response = await f.t.fetch(path, {
+          method,
+          headers:
+            refused === null
+              ? { [CONTRACT_HEADER]: CONTRACT_VERSION }
+              : machineHeaders(refused),
+        });
+        expect(response.status, `${method} ${path}`).toBe(401);
+      }
+      for (const query of [
+        internal.machines.getMachineByApiKey,
+        internal.machines.validateMachineApiKey,
+      ]) {
+        if (refused !== null)
+          expect(await f.t.query(query, { apiKey: refused })).toBeNull();
+        expect((await f.t.query(query, { apiKey: valid.apiKey }))?._id).toBe(
+          f.machineId,
+        );
+      }
+      const response = await f.t.fetch("/api/machine/heartbeat", {
+        method: "POST",
+        headers: machineHeaders(valid.apiKey),
+      });
+      expect(response.status).toBe(200);
+    },
+  );
 });

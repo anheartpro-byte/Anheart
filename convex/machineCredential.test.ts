@@ -59,17 +59,10 @@ describe("ANH-121 salted credential storage and migration", () => {
     },
   );
 
-  it("replaces a synthetic reversible legacy record without accepting its old key", async () => {
-    // Given a pre-migration record with no selector and a reversible credential.
+  it("refuses a reversible legacy credential, and stores only salted verifiers", async () => {
+    // Given a credential of before ANH-121, which no table holds (ANH-238).
     const f = await machineFixture(modules);
     const legacyKey = "synthetic-legacy-credential";
-    const legacyStorage = btoa(legacyKey).split("").reverse().join("");
-    await f.t.run((ctx) =>
-      ctx.db.patch(f.machineId, {
-        apiKey: legacyStorage,
-        apiKeySelector: undefined,
-      }),
-    );
     const before = await f.t.fetch("/api/machine/heartbeat", {
       method: "POST",
       headers: { Authorization: `Bearer ${legacyKey}` },
@@ -86,14 +79,12 @@ describe("ANH-121 salted credential storage and migration", () => {
       api.machineKeys.createMachineKey,
       { machineId: f.machineId },
     );
-    // Then the legacy storage is cleared, not moved, and only salted verifiers remain.
+    // Then only salted verifiers are stored, never a key.
     const stored = await f.t.run(async (ctx) => ({
       machine: await ctx.db.get(f.machineId),
       keys: await ctx.db.query("machine_api_keys").collect(),
     }));
-    expect(stored.machine?.apiKey).toBeUndefined();
-    expect(stored.machine?.apiKeySelector).toBeUndefined();
-    expect(JSON.stringify(stored).includes(legacyStorage)).toBe(false);
+    expect(JSON.stringify(stored).includes(replacement.apiKey)).toBe(false);
     for (const key of stored.keys) {
       expect(key.keyHash.startsWith("hmac-sha256:1:")).toBe(true);
       expect(key.selector.length).toBe(32);
@@ -110,15 +101,11 @@ describe("ANH-121 salted credential storage and migration", () => {
     expect(newResponse.status).toBe(200);
   });
 
-  it("keeps a disabled legacy machine refused with its new key", async () => {
-    // Given a disabled legacy machine requiring credential cleanup.
+  it("keeps a disabled machine refused with its new key", async () => {
+    // Given a disabled machine.
     const f = await machineFixture(modules);
     await f.t.run((ctx) =>
-      ctx.db.patch(f.machineId, {
-        authenticationEnabled: false,
-        apiKey: "synthetic-legacy-encoding",
-        apiKeySelector: undefined,
-      }),
+      ctx.db.patch(f.machineId, { authenticationEnabled: false }),
     );
     // When / Then a new key does not reactivate the machine.
     const replacement = await f.admin.mutation(
@@ -130,20 +117,12 @@ describe("ANH-121 salted credential storage and migration", () => {
       headers: machineHeaders(replacement.apiKey),
     });
     expect(response.status).toBe(401);
-    const machine = await f.t.run((ctx) => ctx.db.get(f.machineId));
-    expect(machine?.apiKey).toBeUndefined();
   });
 
-  it("issues no key for a deleted legacy machine", async () => {
-    // Given a deleted legacy machine.
+  it("issues no key for a deleted machine", async () => {
+    // Given a deleted machine.
     const f = await machineFixture(modules);
-    await f.t.run((ctx) =>
-      ctx.db.patch(f.machineId, {
-        isDeleted: true,
-        apiKey: "synthetic-legacy-encoding",
-        apiKeySelector: undefined,
-      }),
-    );
+    await f.t.run((ctx) => ctx.db.patch(f.machineId, { isDeleted: true }));
     const keysBefore = await f.t.run((ctx) =>
       ctx.db.query("machine_api_keys").collect(),
     );

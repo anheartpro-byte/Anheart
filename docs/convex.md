@@ -493,7 +493,6 @@ purge supplémentaire n'est livré ici.
 | Champ | Rôle |
 |---|---|
 | `name`, `location` | Nom, lieu. |
-| `apiKey`, `apiKeySelector` | **Hérités, optionnels (ANH-165).** La clé unique d'une machine écrite avant ANH-165 : vérificateur salé versionné `hmac-sha256:1:<sel hex>:<digest hex>` et sélecteur public de 128 bits. Les clés vivent désormais dans [`machine_api_keys`](#machine_api_keys--les-clés-des-machines-anh-165) ; aucune fonction n'écrit plus ces deux champs. La migration `moveMachineKeysToTable` ([§8](#migration-des-clés-machine-anh-165)) déplace la clé dans la table et vide les deux champs, sauf si le sélecteur est déjà tenu par une autre machine : les champs sont alors conservés, le conflit est compté dans `selectorConflicts` et doit être examiné à la main (§8) ; tant qu'elle n'a pas tourné, une clé encore ici ouvre les routes machine comme avant (§6). Une valeur réversible d'avant ANH-121 n'ouvre rien ; la migration l'efface sans la déplacer. |
 | `authenticationEnabled` | `false` refuse l'authentification ; absent ou `true` l'autorise sous réserve d'une clé valide et d'une machine non supprimée. Distinct de `status` et de `programsEnabled`. Aucun nouveau contrôle public/UI de ce champ. |
 | `status` | `"online"` \| `"offline"` \| `"in_session"`. |
 | `lastHeartbeat` | ms Unix du dernier heartbeat. |
@@ -505,7 +504,7 @@ purge supplémentaire n'est livré ici.
 | `lastVersionSeenAt` | ms Unix du dernier heartbeat qui a actualisé les versions rapportées. |
 | `medicalParametersVersion` | Version médicale annoncée par `medical_parameters_version` dans le heartbeat. Une chaîne est la version que le Pi annonce après sa vérification locale du fichier signé ; `null` est classé non signé ; l'absence signifie qu'aucune version bien formée n'a été retenue. |
 
-Index : `by_api_key` (historique, inutilisé pour authentifier), `by_apiKeySelector` (lu seulement pour une clé pas encore déplacée dans `machine_api_keys`), `by_status`, `by_is_deleted`.
+Index : `by_status`, `by_is_deleted`. Une machine ne porte aucune clé : ses clés sont dans [`machine_api_keys`](#machine_api_keys--les-clés-des-machines-anh-165), seul endroit où une requête machine est authentifiée (ANH-238). Les anciens champs `apiKey` et `apiKeySelector`, et leurs index `by_api_key` et `by_apiKeySelector`, ont quitté le schéma une fois la migration passée sur les deux déploiements ([§8](#migration-des-clés-machine-anh-165)).
 
 Les réponses de `machines.getMachine`, `training.listLaunchableMachines` et
 `training.getMachineLive` calculent aussi `medicalParametersStatus` et
@@ -546,7 +545,7 @@ dans la réponse de l'appel qui l'a créée.
 | `selector` | Partie publique de la clé `anh1.<sélecteur>.<secret>` (128 bits aléatoires) : ce par quoi une requête cherche sa clé. Seule, elle n'ouvre rien. |
 | `keyHash` | `hmac-sha256:1:<sel>:<digest>` de la clé entière, vérifié par `crypto.subtle.verify` (§6). |
 | `prefix` | Ce que la fiche de la machine montre : `anh1.` suivi des 8 premiers caractères du sélecteur (par exemple `anh1.3f9c01ab`). |
-| `createdAt`, `createdBy` | Création et son auteur. Pas d'auteur pour une clé créée en ligne de commande (`createKeyByOperator`) ou déplacée par la migration ; pour cette dernière, `createdAt` est la date du déplacement, celle de l'émission n'étant pas connue. |
+| `createdAt`, `createdBy` | Création et son auteur. Pas d'auteur pour une clé créée en ligne de commande (`createKeyByOperator`) ou déplacée par la migration d'ANH-165 (passée en octobre 2026, retirée depuis) ; pour cette dernière, `createdAt` est la date du déplacement, celle de l'émission n'étant pas connue. |
 | `expiresAt` | Optionnel. Dès cet instant (§6), la clé n'ouvre plus rien, que la tâche l'ait révoquée ou non. Posé à la création (d'une heure à dix ans plus tard, compté sur l'horloge du serveur), ou par la rotation qui remplace la clé (fin du chevauchement). |
 | `revokedAt`, `revokedBy` | La clé n'ouvre plus rien : révoquée par quelqu'un (`revokedBy`), par une rotation sans chevauchement (`revokedBy` est alors l'auteur de la rotation), ou par la tâche `revoke-expired-machine-keys` une fois son expiration passée (sans `revokedBy`). |
 | `replacedBy` | La clé créée par la rotation qui a retiré celle-ci. |
@@ -1640,12 +1639,12 @@ machines, registre et niveaux de validation, versions logicielles et
 médicales, suppression d'enregistrements.
 
 La liste de référence est `SENSITIVE_MUTATIONS` dans
-[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 43 mutations publiques ou
+[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 45 mutations publiques ou
 internes, avec leurs actions attendues. Les actions Convex et routes HTTP
 font écrire leurs effets par ces mutations. `NON_SENSITIVE_MUTATIONS`
 classe toutes les autres avec un motif : télémétrie et états transitoires,
 synchronisation opérationnelle, calculs de résumés, dépôts de fichiers,
-notifications, changements de nom/langue et les quatre migrations de
+notifications, changements de nom/langue et les trois migrations de
 `convex/migrations/`. Les purges de
 ces autres données ne purgent jamais `audit_log`.
 
@@ -1868,7 +1867,7 @@ D'autres écritures la relancent aussi :
   heartbeat qui rend active une séance interrompue ;
 - celle d'une machine : `createMachine`, `updateMachine`, `deleteMachine`,
   `restoreMachine`, `syncProfiles` quand la console pousse de nouveaux
-  programmes, `moveLegacyKey` ;
+  programmes ;
 - les appartenances : le webhook Clerk (`clerkWebhook.applyEvent`),
   `users.getOrCreateUser`, `updateUserRole`, `deleteUser`,
   `patientInvitations.prepare`.
@@ -1942,10 +1941,9 @@ compte (`limitUser`, ANH-166) avant tout le reste.
 
 | Fonction | Autorisation | Rôle |
 |---|---|---|
-| `listMachineKeys` | admin Anheart ; admin de l'organisation de la machine | Toutes les clés non révoquées d'abord : au plus une ligne historique `{kind: "legacy", prefix, state: "active"}` en tête, puis les lignes `{kind: "table", ...}` les plus récentes. Les clés révoquées les plus récentes complètent jusqu'à 50 lignes au total, par une lecture bornée ; aucune clé non révoquée n'est coupée, même au-delà de 50. Les lignes de la table gardent `prefix`, `state`, `createdAt`, `createdByName` (`null` sans auteur), `lastUsedAt`, `expiresAt`, `revokedAt` (`null` quand absents). `state` vaut `active`, `replaced` (encore valide pendant le chevauchement), `expired` ou `revoked`, à l'heure du serveur : une fiche ouverte voit « Révoquée » une fois la tâche passée, ou « Expirée » lors d'une lecture avant cette révocation. La ligne historique n'invente ni identifiant ni dates : vérificateur valide et sélecteur de 32 caractères hexadécimaux, selon la règle commune à la migration et à la révocation, sans ligne de même sélecteur dans la table ; une valeur réversible ou un sélecteur déjà dans la table n'en donne pas. Jamais la clé, son sélecteur ni son vérificateur. `[]` pour tout autre rôle, pour une machine inconnue ou d'une autre organisation ; machine supprimée : admin Anheart seul. |
-| `createMachineKey` | idem | `{machineId, overlapMinutes?, lifetimeMinutes?}` → `{keyId, apiKey, prefix}`. La clé en clair `apiKey` n'est visible **qu'à ce moment**. Chaque clé encore valide de la machine le reste pendant le chevauchement `overlapMinutes` (24 h par défaut ; nombre entier de minutes de 0 à 10 080, soit 7 jours), puis elle n'ouvre plus rien et la tâche la révoque ; avec 0, elles sont révoquées aussitôt. Une clé qui expirait avant la fin du chevauchement garde son expiration ; une clé déjà expirée est laissée à la tâche. `lifetimeMinutes` (nombre entier de minutes, d'une heure à dix ans) fait expirer la nouvelle clé autant de minutes après sa création, comptées sur l'horloge du serveur : le site envoie une durée, jamais une date ; absent, elle n'expire pas. Une clé encore dans `machines.apiKey` est d'abord déplacée dans la table, puis retirée comme les autres. Refus : `not_authorized` (gestionnaire, patient), `machine_not_found` (machine inconnue, supprimée ou d'une autre organisation : même réponse), `invalid_key_overlap`, `invalid_key_expiry` ; rien n'est écrit. |
+| `listMachineKeys` | admin Anheart ; admin de l'organisation de la machine | Toutes les clés non révoquées d'abord, les plus récentes en tête. Les clés révoquées les plus récentes complètent jusqu'à 50 lignes au total, par une lecture bornée ; aucune clé non révoquée n'est coupée, même au-delà de 50. Chaque ligne donne `_id`, `prefix`, `state`, `createdAt`, `createdByName` (`null` sans auteur), `lastUsedAt`, `expiresAt`, `revokedAt` (`null` quand absents). `state` vaut `active`, `replaced` (encore valide pendant le chevauchement), `expired` ou `revoked`, à l'heure du serveur : une fiche ouverte voit « Révoquée » une fois la tâche passée, ou « Expirée » lors d'une lecture avant cette révocation. Jamais la clé, son sélecteur ni son vérificateur. `[]` pour tout autre rôle, pour une machine inconnue ou d'une autre organisation ; machine supprimée : admin Anheart seul. |
+| `createMachineKey` | idem | `{machineId, overlapMinutes?, lifetimeMinutes?}` → `{keyId, apiKey, prefix}`. La clé en clair `apiKey` n'est visible **qu'à ce moment**. Chaque clé encore valide de la machine le reste pendant le chevauchement `overlapMinutes` (24 h par défaut ; nombre entier de minutes de 0 à 10 080, soit 7 jours), puis elle n'ouvre plus rien et la tâche la révoque ; avec 0, elles sont révoquées aussitôt. Une clé qui expirait avant la fin du chevauchement garde son expiration ; une clé déjà expirée est laissée à la tâche. `lifetimeMinutes` (nombre entier de minutes, d'une heure à dix ans) fait expirer la nouvelle clé autant de minutes après sa création, comptées sur l'horloge du serveur : le site envoie une durée, jamais une date ; absent, elle n'expire pas. Refus : `not_authorized` (gestionnaire, patient), `machine_not_found` (machine inconnue, supprimée ou d'une autre organisation : même réponse), `invalid_key_overlap`, `invalid_key_expiry` ; rien n'est écrit. |
 | `revokeMachineKey` | idem | `{keyId}` : la clé n'ouvre plus rien dès la requête suivante (`revokedAt`, `revokedBy`). Une clé déjà révoquée reste telle quelle. La clé d'une machine supprimée peut être révoquée. Refus : `not_authorized`, `machine_key_not_found` (clé inconnue, ou d'une machine d'une autre organisation ou disparue : même réponse). |
-| `revokeLegacyMachineKey` | exactement les mêmes droits que `revokeMachineKey` | `{machineId}` : `limitUser`, puis `requireRole(ctx, ORGANIZATION_ADMIN_ROLES)` et `inScope` sur l'organisation de la machine. Accepte une machine supprimée. La clé historique est déplacée par `moveLegacyKey`, comme dans la migration, puis révoquée aussitôt (`revokedAt`, `revokedBy`), avec un audit `machine_key.revoked` ciblant la ligne créée et `machineId` dans les détails. Sans clé historique qui ouvre les routes par le repli, machine absente ou hors de portée : `machine_key_not_found`, aucune écriture. |
 
 Révoquer la clé qui en a remplacé une autre ne prolonge pas celle-ci : elle
 reste `replaced` et expire à la fin de son chevauchement. Pour garder la
@@ -2520,12 +2518,10 @@ aléatoire de 256 bits. Ce mécanisme n'est pas destiné à des mots de passe hu
 L'index `by_selector` de `machine_api_keys` sélectionne une seule clé ; une
 clé révoquée ou expirée, ou dont la machine est supprimée ou désactivée, est
 refusée ; puis WebCrypto `subtle.verify("HMAC", …)` vérifie le digest ; aucune
-comparaison JavaScript de secrets n'est effectuée. Un sélecteur présent dans la
-table n'est jugé que par elle. Un sélecteur absent peut être la clé unique
-d'une machine écrite avant ANH-165, que la migration n'a pas encore déplacée :
-elle est cherchée par l'index `by_apiKeySelector` de `machines`, sous les
-mêmes règles de machine, et vérifiée de même. Après la migration, ce repli ne
-trouve plus rien. Le [runtime Convex](https://docs.convex.dev/functions/runtimes)
+comparaison JavaScript de secrets n'est effectuée. La table est le seul endroit
+où une clé est cherchée (ANH-238) : un sélecteur qu'elle ne tient pas n'ouvre
+rien, même avec un secret qui a été valide. Le repli sur l'ancien champ
+`machines.apiKey` a quitté le code avec ce champ. Le [runtime Convex](https://docs.convex.dev/functions/runtimes)
 prend en charge WebCrypto ; son [vérificateur HMAC natif](https://github.com/get-convex/convex-backend/blob/588c89b23f669e9ab158848d1ecd53707dac09b8/crates/webcrypto/src/hmac.rs)
 appelle `aws_lc_rs::hmac::verify`, dont la [comparaison est à temps constant](https://docs.rs/aws-lc-rs/1.16.3/aws_lc_rs/hmac/fn.verify.html).
 La recherche du sélecteur et les rejets de format/état ne promettent pas un
@@ -3285,67 +3281,23 @@ le refus par le schéma d'une machine qui porterait encore `config`
 
 ### Migration des clés machine (ANH-165)
 
-**Pas encore exécutée, sur aucun déploiement.** Une action interne de
-`convex/migrations/machineApiKeys.ts`, à lancer à la main, une fois par
-déploiement, **après** avoir déployé ce code :
+**Exécutée sur le développement et sur la production les 28 et
+29 octobre 2026** (ANH-82), puis retirée (ANH-238). L'action
+`migrations/machineApiKeys:moveMachineKeysToTable` déplaçait la clé unique de
+chaque machine (`machines.apiKey`, `machines.apiKeySelector`) dans
+`machine_api_keys`, sans expiration ni auteur, puis vidait ces deux champs ;
+une valeur réversible d'avant ANH-121 était effacée sans être déplacée
+(`legacyDiscarded`), et un sélecteur déjà tenu par une autre machine restait en
+place, compté dans `selectorConflicts`. Elle a quitté le code avec les deux
+champs, leurs index et le repli de `convex/lib/machineAuth.ts` : une machine ne
+s'authentifie plus que par une ligne de la table (§6).
 
-```bash
-npx convex run migrations/machineApiKeys:moveMachineKeysToTable
-```
-
-Comme les lignes de la section précédente, celle-ci vise le déploiement que
-désigne la clé `CONVEX_DEPLOY_KEY` chargée ; pour la production, la précéder
-de la clé de production, après l'avoir lue comme à l'étape 1 ci-dessus.
-
-L'action parcourt toutes les machines par pages, chacune traitée par une
-mutation interne dans sa propre transaction, sans planification ni cron.
-`pageSize` est facultatif : 100 par défaut, entier de 1 à 1000, refusé sinon
-avant toute écriture. Pour choisir des pages de 50 machines :
-
-```bash
-npx convex run migrations/machineApiKeys:moveMachineKeysToTable '{"pageSize":50}'
-```
-
-En cas d'interruption, relancer la même commande : les pages déjà validées
-restent acquises et ne créent aucune clé en double.
-
-Elle déplace la clé unique de chaque machine (`machines.apiKey`,
-`machines.apiKeySelector`) dans `machine_api_keys`, sans expiration ni auteur,
-puis vide ces deux champs. **Aucune machine n'est coupée, ni avant ni après** :
-tant que la migration n'a pas tourné, une clé encore dans `machines` ouvre les
-routes comme avant (§6) ; après, la même clé les ouvre comme ligne de la
-table. Le déploiement du code ne demande donc pas de fenêtre d'interruption.
-Une valeur qui n'est pas un vérificateur avec son sélecteur (les encodages
-réversibles refusés depuis ANH-121) n'ouvre rien : elle est effacée sans être
-déplacée, et sa machine a besoin d'une nouvelle clé (fiche de la machine,
-**Nouvelle clé**).
-
-Un sélecteur déjà présent dans la table ne compte comme déplacé que si sa
-ligne appartient à la même machine : les deux champs historiques sont alors
-vidés sans insérer de doublon. S'il appartient à une autre machine, le cas est
-compté dans `selectorConflicts` : rien n'est inséré ni effacé, les champs
-historiques restent en place. La table juge seule ce sélecteur ; la clé de sa
-ligne n'ouvre que la machine de cette ligne, et la clé historique de la machine
-en conflit n'ouvre pas celle-ci. Si `selectorConflicts` n'est pas nul, chercher
-les deux machines à partir du sélecteur dans `machines.apiKeySelector` et
-`machine_api_keys.selector`, puis examiner cette incohérence avant de la
-corriger ; une nouvelle clé peut être créée sur la machine en conflit.
-
-Résultat : `{machinesChecked, keysMoved, legacyDiscarded, selectorConflicts}`,
-somme de toutes les pages. `machinesChecked`
-doit valoir le nombre de documents de `machines` (commande de la section
-précédente). La migration est idempotente : une seconde exécution renvoie
-`keysMoved: 0`, `legacyDiscarded: 0` et le même `selectorConflicts` tant que
-les incohérences persistent.
-Créer une clé sur une machine pas encore migrée y déplace d'abord sa clé, qui
-reçoit le chevauchement comme les autres. Un conflit ne bloque pas cette
-rotation : la nouvelle clé est émise, les champs historiques restent en place.
-
-Une fois la migration passée sur **tous** les déploiements, les champs
-`machines.apiKey` et `machines.apiKeySelector`, l'index `by_apiKeySelector` et
-le repli de `convex/lib/machineAuth.ts` peuvent être retirés (pas fait ici).
-`convex/machineKeys.test.ts` exerce la migration en mémoire ; ce n'est pas une
-preuve sur des données réelles.
+Avant de pousser ce schéma sur un déploiement, le contrôle en lecture seule de
+[deploiement.md, section 3.7](deploiement.md#37-contrôler-les-champs-retirés-des-machines)
+vérifie qu'aucune machine ne porte plus `apiKey` ni `apiKeySelector`, et dit
+quoi faire sinon. `convex/machineAuth.test.ts` vérifie que le schéma refuse
+ces champs et qu'une clé absente, inconnue, sortie de la table, révoquée ou
+expirée reçoit 401 sur les 13 routes, quand une clé valide les ouvre.
 
 ### Rotation d'une clé machine (ANH-165)
 
@@ -3646,15 +3598,12 @@ anciens documents ; cela ne leur accorde aucun droit d'authentification.
    de perte du résultat, créer une autre clé ; aucune récupération n'est possible.
 4. Vérifier un heartbeat avec la nouvelle clé et **401** avec l'ancienne.
    Traiter aussi les machines supprimées/désactivées : leur valeur historique
-   doit disparaître sans les réactiver ni distribuer leur credential. Depuis
-   ANH-165, la migration `moveMachineKeysToTable`
-   ([§8](#migration-des-clés-machine-anh-165)) efface toute valeur
-   réversible, machines supprimées et désactivées comprises, et la compte
-   dans `legacyDiscarded` sans l'exporter ; elle déplace les vérificateurs
-   avec leur sélecteur dans la table (`keysMoved`), sauf un vérificateur dont
-   le sélecteur est déjà tenu par une autre machine : ses champs sont
-   conservés, le conflit est compté dans `selectorConflicts` et doit être
-   examiné à la main (§8).
+   doit disparaître sans les réactiver ni distribuer leur credential. La
+   migration `moveMachineKeysToTable`
+   ([§8](#migration-des-clés-machine-anh-165)) l'a fait sur les deux
+   déploiements en octobre 2026 : valeurs réversibles effacées sans export,
+   vérificateurs déplacés dans la table. Les anciens champs ont quitté le
+   schéma depuis (ANH-238).
 5. En cas d'échec, laisser la synchronisation interrompue ou revenir uniquement
    à une version qui conserve ce schéma et ce vérificateur. Ne jamais restaurer
    la base64 réversible, les anciennes clés ou l'ancien code d'authentification.
@@ -3738,8 +3687,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée), les membres comptés comme des comptes (un patient de deux organisations compté une fois par l'admin Anheart et encore par le centre B, un compte gestionnaire dans un centre et patient dans l'autre compté une fois en tout et une fois dans chaque rôle, une seconde appartenance inactive écartée, des rôles dont la somme est le total pour un admin d'organisation), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |
 | `convex/dashboard.cost.test.ts` | Ce que lit un appel de `dashboard.counters` (ANH-226), mesuré en mémoire sur deux jeux réalistes (« aujourd'hui », « cible ») : documents, plages d'index et octets par rôle. Pour l'admin Anheart, exactement l'appelant, les appartenances actives, les machines non supprimées et les séances ouvertes, en 7 plages. Rien de plus quand s'ajoutent séances terminées, machines supprimées, appartenances inactives ou heartbeats. Rien de plus pour un admin, un gestionnaire ou un patient d'un centre quand un autre centre grossit. Au jeu « cible », moins de 10 % des limites d'un appel. Le résultat mesuré est celui que reçoit le site. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
-| `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
-| `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; la migration (clé historique acceptée avant, déplacée, idempotente, valeur réversible effacée, table seule juge d'un sélecteur, sélecteur déjà présent à la même machine sans doublon, conflit avec une autre machine sans effacement et rotation toujours possible, pages mixtes et sommes exactes, bornes de pageSize sans écriture, parc vide, relance après une page validée, clé pas encore déplacée prise dans une rotation). T03 : ligne historique avant migration sans secret, ligne de table après migration, absence de ligne réversible ou de sélecteur déjà présent ; révocation historique, audit et 401 sur les 13 routes, autre machine intacte, refus sans écriture et machine supprimée révoquée avant restauration ; 55 rotations dans le même chevauchement et toutes les 56 clés listées, histoire révoquée bornée aux frontières 49, 50 et 51 clés non révoquées. |
+| `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). ANH-238 EX-8 : le schéma refuse `machines.apiKey` et `machines.apiKeySelector` ; une clé absente, inconnue, dont la ligne a quitté la table, révoquée ou expirée reçoit 401 sur les 13 routes et ne donne rien aux deux queries, quand une clé valide de la même machine les ouvre. Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
+| `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; 55 rotations dans le même chevauchement et toutes les 56 clés listées, histoire révoquée bornée aux frontières 49, 50 et 51 clés non révoquées. |
 | `convex/machineKeyClock.test.ts` | ANH-238 : l'expiration jugée à l'horloge de l'action même avec une query en cache (les deux portes, les 13 routes, avant le contrat et la limite) ; un échec d'écriture de `lastUsedAt` ne change aucune réponse et se rattrape à la requête suivante ; un heartbeat refusé 426 écrit la dernière utilisation sans prendre de jeton. |
 | `convex/trainingPrivacy.test.ts`, `convex/sessions.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions` et `getCompletedSessionsForUser`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |

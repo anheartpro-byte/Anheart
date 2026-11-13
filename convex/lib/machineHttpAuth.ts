@@ -45,13 +45,13 @@ export async function authenticateMachineRequest(
     apiKey: authHeader.substring(7),
   });
   const now = Date.now();
-  if (!found || (found.key !== undefined && !keyIsValid(found.key, now))) {
+  if (!found || !keyIsValid(found.key, now)) {
     return {
       error: machineErrorResponse(401, "unauthorized", "Invalid API key"),
     };
   }
   const { key, ...machine } = found;
-  if (key !== undefined && keyUseIsDue(key, now)) {
+  if (keyUseIsDue(key, now)) {
     try {
       await ctx.runMutation(internal.machineKeys.recordKeyUse, {
         keyId: key.id,

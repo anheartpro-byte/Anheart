@@ -161,7 +161,6 @@ describe("ANH-154 machines.setGestionnaireMachines", () => {
     const gone = await w.t.run(async (ctx) => {
       const id = await ctx.db.insert("machines", {
         name: "Removed machine",
-        apiKey: "synthetic-hash",
         status: "offline" as const,
         lastHeartbeat: 0,
         createdAt: NOW,

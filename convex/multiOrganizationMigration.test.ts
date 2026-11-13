@@ -189,7 +189,6 @@ describe("EX-4 migration: attach existing rows to the Anheart organisation", () 
       const machine = await ctx.db.insert("machines", {
         organizationId: organization,
         name: "Other machine",
-        apiKey: "synthetic-hash",
         status: "online" as const,
         lastHeartbeat: NOW,
         createdAt: NOW,
@@ -257,7 +256,6 @@ describe("EX-4 migration: attach existing rows to the Anheart organisation", () 
     const orphans = await w.t.run(async (ctx) => {
       const gone = await ctx.db.insert("machines", {
         name: "Removed machine",
-        apiKey: "synthetic-hash",
         status: "offline" as const,
         lastHeartbeat: 0,
         createdAt: NOW,
@@ -764,7 +762,6 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
           ctx.db.insert("machines", {
             organizationId,
             name: "Machine of the duplicate",
-            apiKey: "synthetic-hash",
             status: "offline" as const,
             lastHeartbeat: NOW,
             createdAt: NOW,

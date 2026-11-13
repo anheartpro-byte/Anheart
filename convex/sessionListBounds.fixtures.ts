@@ -32,7 +32,6 @@ export async function boundsWorld(documentsRead: number, sparse = false) {
         await ctx.db.insert("machines", {
           organizationId: w.orgA,
           name: `Synthetic machine ${i}`,
-          apiKey: "synthetic-hash",
           status: "offline",
           lastHeartbeat: NOW,
           createdAt: NOW,

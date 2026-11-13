@@ -226,7 +226,6 @@ export const SENSITIVE_MUTATIONS: Readonly<
     "machine_key.revoked",
   ],
   "machineKeys.revokeMachineKey": ["machine_key.revoked"],
-  "machineKeys.revokeLegacyMachineKey": ["machine_key.revoked"],
   "machineKeys.revokeExpiredKeys": ["machine_key.expired_revoked"],
   "machineKeys.createKeyByOperator": [
     "machine_key.created",
@@ -338,8 +337,6 @@ export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
     "Authorised staff changes only a patient's name and language.",
   "migrations/retireLegacyRecording.failOpenRecordingSessions":
     "One-off operator data migration retires open legacy recording sessions, without a product decision.",
-  "migrations/machineApiKeys.moveMachineKeysPage":
-    "One page of the one-off operator data migration moves legacy machine keys into their table, without a product decision.",
   "migrations/multiOrganization.attachExistingRowsToAnheart":
     "One-off operator data migration attaches existing rows to Anheart, without a product decision.",
   "migrations/multiOrganization.repairDuplicatedAnheartOrganization":
