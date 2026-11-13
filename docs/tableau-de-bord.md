@@ -387,7 +387,7 @@ Admin et gestionnaire de la machine.
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. Depuis ANH-138 (contrat 1.11), elle dit « Programmes de secours » quand la machine n'a jamais reçu de catalogue signé, et liste chaque programme du catalogue que la machine a refusé : « refusé par la machine : » suivi de sa raison ; un programme refusé n'est pas lançable ([programmes.md](programmes.md#publication-vers-les-machines-anh-138)). | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
 | **Clés de la machine** | Toutes les clés non révoquées d'abord (historique en tête, puis les plus récentes), puis les révoquées récentes jusqu'à 50 lignes au total : préfixe, état, création et son auteur, dernière utilisation, expiration ; boutons **Nouvelle clé** et **Révoquer** (ci-dessous). Sur une machine supprimée, visible seulement à l'admin Anheart, avec **Révoquer** seul. | admin Anheart, admin de l'organisation si la machine n'est pas supprimée (ANH-165, ANH-238) |
-| Zone de danger | **Supprimer** (suppression douce, refusée si une séance est active ou en attente). | admin, gestionnaire |
+| Zone de danger | **Supprimer** (suppression douce, refusée si une séance est active ou en attente ; grisé sur une machine en séance, la raison écrite sous la ligne). | admin, gestionnaire |
 
 **Registre (ANH-147).** `MachineRegistryCard` lit
 `machineRegistry.getRegistry` ; une réponse `null` ne rend rien. L'écriture
@@ -1242,8 +1242,12 @@ version des paramètres médicaux n'est enregistrée sur le serveur, la machine
 annonce un fichier non signé (mode banc), elle n'est pas lançable, est hors
 ligne, est déjà en séance, a les programmes désactivés, n'a aucun programme,
 la FC max ou l'année de naissance manque (ou la valeur enregistrée n'est pas
-un entier, pour un patient comme pour « Moi-même »), ou le pratiquant est plus
-jeune que l'âge minimum de la version médicale courante. L'absence de version
+un entier, pour un patient comme pour « Moi-même »), le pratiquant est plus
+jeune que l'âge minimum de la version médicale courante (âge compté comme le
+serveur, sur son horloge lue dans `fitness.getRiderReadiness`, comme
+l'estimation de la FC max), ou la fiche du patient choisi n'est pas encore
+chargée ou n'est plus lisible. Le bouton grisé est relié à la raison
+affichée (`aria-describedby`). L'absence de version
 de référence affiche « Aucune version des paramètres médicaux n'est enregistrée
 sur le serveur : aucune séance auto ne peut être lancée à distance. » Le mode banc
 affiche « Paramètres médicaux non signés : la machine est en mode banc

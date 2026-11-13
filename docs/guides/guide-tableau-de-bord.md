@@ -899,7 +899,7 @@ requis ; la seconde indique leur nombre et la date la plus récente.
 
 | Bouton | Effet |
 |---|---|
-| **Supprimer** (ligne « Désactiver cette machine. Peut être restaurée par un admin. ») | Grisé si la machine est **En session**. Fenêtre « Supprimer cette machine? », « Cette machine sera désactivée. Un administrateur pourra la restaurer ultérieurement si nécessaire. », **Annuler** / **Supprimer**. En cas de succès, retour à la liste des machines. |
+| **Supprimer** (ligne « Désactiver cette machine. Peut être restaurée par un admin. ») | Grisé si la machine est **En session**, avec la raison écrite en rouge sous la ligne : « La machine est en séance : elle ne peut pas être supprimée maintenant. ». Fenêtre « Supprimer cette machine? », « Cette machine sera désactivée. Un administrateur pourra la restaurer ultérieurement si nécessaire. », **Annuler** / **Supprimer**. En cas de succès, retour à la liste des machines. |
 
 > **Refus de suppression.** Si le serveur refuse (séance en attente sur la
 > machine, par exemple), la fenêtre reste ouverte et un **message d'échec**
@@ -1023,6 +1023,8 @@ S'ouvre depuis **Mes machines** ou le détail d'une machine.
 | « La machine est déjà en séance. » | Une séance tourne. | Attendre la fin, ou l'arrêter. |
 | « Programmes auto désactivés sur cette machine : aucune séance auto ne peut y être lancée. » | La machine refuse les séances auto (réglage de la machine). | Voir [§6.5](#65-pourquoi-programmes-auto-désactivés-sur-cette-machine). |
 | « Aucun programme n'a été synchronisé depuis la machine. » | Aucun programme reçu. | Créer un programme à la console de la machine. |
+| « Chargement de la fiche du pratiquant… » | La fiche du patient choisi n'est pas encore arrivée : **Lancer** reste grisé en attendant. | Patienter. |
+| « Pratiquant introuvable : sa fiche a été supprimée ou ne vous est plus accessible. » | Le serveur ne donne plus la fiche du patient choisi. | Choisir un autre pratiquant ; vérifier dans **Patients**. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Ni FC max ni année de naissance. Aussi quand la FC max enregistrée n'est pas un nombre entier : elle compte comme non renseignée. | [Procédure P7](#p7-renseigner-la-fc-max-et-lannée-de-naissance). |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | FC max saisie mais pas l'année de naissance. L'année est **toujours** obligatoire (contrôle de l'âge). Aussi quand l'année enregistrée n'est pas un nombre entier. | Idem. |
 | « Séance auto réservée aux pratiquants d'au moins 18 ans. » | Pratiquant trop jeune. | Aucune séance auto possible. |
@@ -1040,8 +1042,9 @@ Les deux règles : **zone haute ≤ 90 % de la FC max** (arrondi à l'entier
 inférieur) et **FC limite du programme ≤ FC max**.
 
 > Pour « Moi-même » comme pour un patient, la fenêtre applique la règle d'âge
-> du serveur : elle bloque avant le clic si l'année de naissance manque ou
-> donne un âge trop jeune.
+> du serveur, sur l'horloge du serveur et non sur celle de l'ordinateur : elle
+> bloque avant le clic si l'année de naissance manque ou donne un âge trop
+> jeune. La raison affichée est reliée au bouton **Lancer** grisé.
 
 **Après « Lancer »** : le serveur refait tous les contrôles ; en cas de refus,
 son message (en anglais, voir [§7](#7-tableau-des-messages)) s'affiche en rouge
@@ -2574,7 +2577,7 @@ aucun refus du serveur n'arrive en anglais.
 | « Votre rôle ne permet pas cette action. » | Action réservée à un autre rôle (l'administrateur, le plus souvent). Sur le site en ligne, tant que le redéploiement n'a pas eu lieu, c'est encore « Unauthorized. Required roles: admin. Your role: gestionnaire », qui s'affiche aussi à la fin de **Modifier** une machine par un gestionnaire, alors que la modification est enregistrée (voir [§4.5](#45-fenêtre-nouvelle-machine--modifier)). | Vérifier ce qui a été enregistré ; demander à un administrateur. |
 | « Vous ne gérez pas cette machine. » | Machine non attribuée à vous. | P6. |
 | « Machine introuvable. Elle a peut-être été supprimée. » | Machine supprimée ou inexistante (modification, clé, gestionnaires). | Vérifier dans **Machines**. |
-| « La machine est en séance : elle ne peut pas être supprimée maintenant. » / « Une séance attend son départ sur cette machine : annulez-la avant de supprimer la machine. » | Suppression impossible (message d'échec en bas à droite de l'écran, voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
+| « La machine est en séance : elle ne peut pas être supprimée maintenant. » / « Une séance attend son départ sur cette machine : annulez-la avant de supprimer la machine. » | Suppression impossible. Machine en séance : la raison est écrite en rouge dans la carte, sous le bouton **Supprimer** grisé. Le message d'échec en bas à droite de l'écran ne paraît que si le serveur refuse après la confirmation (séance en attente, ou machine passée en séance entre temps ; voir [§4.6](#carte-zone-de-danger)). | Attendre la fin ou annuler la séance en attente. |
 | « Vous ne pouvez pas supprimer votre propre compte. » | Tentative de suppression de soi. | Demander à un autre administrateur. |
 | « Votre compte n'est pas encore prêt sur le serveur. Patientez quelques instants, puis reconnectez-vous si le message persiste. » | Votre fiche n'existe pas encore, ou a été supprimée. | Revenir sur `/fr`, attendre quelques secondes ([§3.1](#31-se-connecter-clerk)). |
 | « Votre session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour continuer. » | Session Clerk expirée. | Se reconnecter. |

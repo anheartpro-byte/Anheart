@@ -1227,7 +1227,9 @@
       "readinessLoading": "Vérification de l'aptitude et du consentement du pratiquant…",
       "readinessUnavailable": "Impossible de vérifier l'aptitude et le consentement du pratiquant.",
       "birthYearMissing": "L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto.",
-      "tooYoung": "Séance auto réservée aux pratiquants d'au moins {min} ans."
+      "tooYoung": "Séance auto réservée aux pratiquants d'au moins {min} ans.",
+      "riderLoading": "Chargement de la fiche du pratiquant…",
+      "riderNotFound": "Pratiquant introuvable : sa fiche a été supprimée ou ne vous est plus accessible."
     },
     "bench": {
       "button": "Séance de banc lestée",
