@@ -2255,8 +2255,10 @@ Gravité haute : avec une personne à bord, tout niveau `RAMP_DOWN` ou plus
 (défaut du variateur, arrêt d'urgence, verdict qui arrête) ; partout, un
 niveau `GO_SILENT` ou une action inconnue du serveur, et une exception du
 tic. Une fin `safety_verdict` dont le verdict n'est pas reçu est grave même au
-banc : l'arrêt a pu être un `GO_SILENT`, et la gravité d'un incident n'est
-jamais abaissée quand le reste arrive. Chaque incident grave ouvert est une
+banc, l'arrêt ayant pu être un `GO_SILENT` ; quand son verdict arrive,
+l'incident prend la gravité observée, et un niveau observé n'est jamais
+abaissé. Un verdict tardif rejoint l'incident même si un admin l'a déjà clos,
+et le rouvre s'il le rend grave. Chaque incident grave ouvert est une
 alerte aux admins Anheart, dans le site (aucun e-mail : les alertes par e-mail
 sont coupées en production).
 

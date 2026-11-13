@@ -901,11 +901,21 @@ l'événement `drive_fault`, le verdict `drive_fault` (`RAMP_DOWN`) puis la fin
   même au banc, puisque l'arrêt a pu être un `GO_SILENT` ;
 - un verdict d'arrêt (`RAMP_DOWN` ou plus) ou un défaut qui arrive après sa
   fin se joint à l'incident d'attente de la même fin, qui prend alors sa
-  règle, son type et son instant ;
-- une jonction garde la gravité la plus haute (jamais abaissée), et prévient
-  les admins Anheart si elle la fait passer à `high` ;
-- un incident clos n'est rejoint que par le même `(sessionId, rule, t)` : une
-  observation nouvelle de la même séance en ouvre un autre, qui sera revu.
+  règle, son type et son instant, et **la gravité de ce qui a été observé**
+  au lieu de celle que la fin supposait : une fin `safety_verdict` au banc,
+  `high` tant que son verdict manque, devient `medium` quand arrive un
+  `QUICK_STOP`, et ne retient plus les séances programmées ;
+- toute autre jonction garde la gravité la plus haute : un niveau observé
+  n'est jamais abaissé ; elle prévient les admins Anheart si elle la fait
+  passer à `high` ;
+- un incident d'attente déjà clos par un admin est rejoint quand même par son
+  verdict tardif, qui y est noté (règle, instant, gravité observée) : il reste
+  clos, sauf si sa gravité observée est `high` et que celle qu'il avait ne
+  l'était pas, auquel cas il est rouvert (`open`, clôture effacée, cause et
+  action gardées) et les admins Anheart en sont prévenus ;
+- un incident précis déjà clos n'est rejoint que par le même `(sessionId,
+  rule, t)` : une observation nouvelle de la même séance en ouvre un autre,
+  qui sera revu.
 
 Deux arrêts distincts d'une même séance (un `hr_drop` qui la termine, puis un
 arrêt d'urgence pendant la descente) restent deux incidents. **Un incident
@@ -919,7 +929,9 @@ reste).
 **Trois refus de pré-vol de suite.** Le serveur reconnaît un refus du pré-vol
 de la console à la raison de fin de séance qui commence par
 `preflight_refusal_prefix` (`refusee par la machine : pre-vol :`), épinglé
-dans [l'entrée `incidents` du contrat](../contracts/machine-api.json) : Convex
+dans [l'entrée `incidents` du contrat](../contracts/machine-api.json), comme
+les trois fins qui ouvrent un incident (`stop_ends` : `emergency_stop`,
+`safety_verdict`, `tick_exception`, lues par Convex dans `STOP_ENDS`) : Convex
 le lit dans ce fichier (`PREFLIGHT_REFUSAL`), et un test de la console vérifie
 que la raison qu'elle envoie commence ainsi. Ne comptent que les lancements
 venus du site : un départ décidé à la console et refusé par son pré-vol n'est

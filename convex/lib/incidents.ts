@@ -116,14 +116,20 @@ const END_OF: Record<StopKind, End> = {
  * emergency stop zeroes the reference (`QUICK_STOP`), a tick exception goes
  * silent, and a safety verdict may have been any stop up to `GO_SILENT`.
  */
-const END_LEVEL: Record<End, string> = {
+export const END_LEVEL: Record<End, string> = {
   emergency_stop: "QUICK_STOP",
   tick_exception: "GO_SILENT",
   safety_verdict: UNKNOWN_LEVEL,
 };
 
+/**
+ * The ends that open an incident, as the shared contract pins them
+ * (`incidents.stop_ends`), the console's `STOP_ENDS` too.
+ */
+export const STOP_ENDS: readonly string[] = machineApi.incidents.stop_ends;
+
 function isEnd(word: string): word is End {
-  return word === "safety_verdict" || word === "emergency_stop" || word === "tick_exception";
+  return STOP_ENDS.includes(word) && word in END_LEVEL;
 }
 
 /** What was seen of an incident: an event of the session, or its end. */
@@ -142,6 +148,16 @@ function placeholder(incident: Doc<"incidents">): boolean {
   return incident.rule === incident.kind;
 }
 
+/**
+ * A placeholder whose severity is the end's guess: one the end opened alone.
+ * The verdict on a fault also names its incident after its kind
+ * (`drive_fault`), but at the level it observed; a tick exception is `high`
+ * either way.
+ */
+function guessed(incident: Doc<"incidents">): boolean {
+  return placeholder(incident) && incident.kind !== "drive_fault";
+}
+
 /** The incidents a session has opened, a handful at most, oldest first. */
 async function incidentsOf(
   ctx: QueryCtx,
@@ -155,10 +171,10 @@ async function incidentsOf(
 }
 
 /**
- * The incident, not closed, that an observation of `kind` belongs to: a
- * placeholder of the same stop (an end that arrived first, or a fault's
- * verdict before the fault), or, for the verdict on a fault (`faultVerdict`),
- * the fault itself. The latest of them.
+ * The incident that an observation of `kind` belongs to: a placeholder of the
+ * same stop (an end that arrived first, or a fault's verdict before the
+ * fault), closed or not, or, for the verdict on a fault (`faultVerdict`), the
+ * fault itself if it is not closed. The latest of them.
  */
 function joined(
   incidents: Doc<"incidents">[],
@@ -166,8 +182,8 @@ function joined(
   faultVerdict: boolean,
 ): Doc<"incidents"> | undefined {
   const joins = (incident: Doc<"incidents">) => {
-    if (incident.status === "closed") return false;
-    if (faultVerdict && incident.kind === "drive_fault") return true;
+    if (faultVerdict && incident.kind === "drive_fault" && incident.status !== "closed")
+      return true;
     if (!placeholder(incident)) return false;
     if (kind === "drive_fault")
       return incident.kind === "drive_fault" || incident.kind === "safety_verdict";
@@ -178,9 +194,11 @@ function joined(
 }
 
 /**
- * Join `observation` to `incident`: the higher severity, and, for a
- * placeholder, the precise rule, kind and instant of an event. Alerts the
- * Anheart admins when it becomes `high`.
+ * Join `observation` to `incident`: for a placeholder, the precise rule, kind
+ * and instant of an event, and the severity it observed in place of the end's
+ * guess; otherwise the higher severity, an observed level never lowered. A
+ * closed incident keeps what is joined to it, and opens again only when it
+ * becomes `high`. Alerts the Anheart admins when it becomes `high`.
  */
 async function join(
   ctx: MutationCtx,
@@ -188,15 +206,19 @@ async function join(
   incident: Doc<"incidents">,
   observation: Observation,
 ): Promise<Id<"incidents">> {
-  const severity = higher(
-    incident.severity,
-    severityOf(observation.kind, incident.occupied, observation.level),
-  );
+  const observed = severityOf(observation.kind, incident.occupied, observation.level);
   const precise = placeholder(incident) && observation.fromEvent;
+  const severity =
+    precise && guessed(incident) ? observed : higher(incident.severity, observed);
+  const reopened =
+    incident.status === "closed" && severity === "high" && incident.severity !== "high";
   await ctx.db.patch(incident._id, {
     severity,
     ...(precise
       ? { kind: observation.kind, rule: observation.rule, t: observation.t }
+      : {}),
+    ...(reopened
+      ? { status: "open" as const, closedBy: undefined, closedAt: undefined }
       : {}),
   });
   if (severity === "high" && incident.severity !== "high") {
