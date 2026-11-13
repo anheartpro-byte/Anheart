@@ -676,6 +676,7 @@ def test_an_id_held_twice_is_refused_twice_and_a_refused_one_is_named() -> None:
             programme(profile_id="kept"),
             {"profile_id": 7},
             {"profile_id": "x" * 100, "medical_parameters_version": "0"},
+            {"profile_id": "jog_\ud800", "medical_parameters_version": "0"},
         ],
         RULES,
     )
@@ -686,6 +687,9 @@ def test_an_id_held_twice_is_refused_twice_and_a_refused_one_is_named() -> None:
     )
     assert rejected[2].profile_id == "7"
     assert rejected[3].profile_id == "x" * 64
+    # Named in the report's JSON: a surrogate has no UTF-8, and is said as U+FFFD.
+    assert rejected[4].profile_id == "jog_\ufffd"
+    assert rejected[4].profile_id.encode("utf-8") == b"jog_\xef\xbf\xbd"
 
 
 def test_a_long_reason_is_bounded() -> None:

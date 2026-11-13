@@ -119,6 +119,7 @@ from src.web.routes import (
     PROFILES_CHANGED,
     PROFILES_CHANGED_DETAIL,
     PROFILES_DIGEST_MISSING_DETAIL,
+    STATIC_CACHE_CONTROL,
 )
 from src.web.schemas import (
     AckRow,
@@ -1498,6 +1499,9 @@ async def test_the_page_is_served_with_no_token(client: httpx.AsyncClient) -> No
         response = await client.get(path)
         assert response.status_code == HTTPStatus.OK, path
         assert fragment in response.text
+        # Asked again at each load: a script kept from a former version sends no
+        # list digest, and every start it asks for is refused (ANH-138).
+        assert response.headers["cache-control"] == STATIC_CACHE_CONTROL == "no-cache", path
 
 
 async def test_the_page_references_nothing_off_this_machine() -> None:

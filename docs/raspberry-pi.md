@@ -2604,10 +2604,10 @@ exactement pareil, sans tableau de bord.
 | Sens | Quoi | Route Convex | Cadence |
 |---|---|---|---|
 | Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle, la version du contrat et, si la console enregistre, `recordDegraded` : l'enregistrement de séance est incomplet ou ne peut pas être écrit ([15.3](#153-quand-le-disque-refuse-se-remplit-ou-se-tait)) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
-| Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur ; depuis le contrat 1.11, avec ce que la console a fait du catalogue signé : `catalogRevision` (`null` sur les programmes de secours), `accepted`, `rejected` avec la raison de chaque refus ([8.8](#88-le-catalogue-de-programmes-signé-anh-138)) | `POST /api/machine/profiles` | quand la révision du magasin change, ou ce qu'elle dit du catalogue |
+| Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur ; depuis le contrat 1.11, avec ce que la console a fait du catalogue signé : `catalogRevision` (`null` sur les programmes de secours), `accepted`, `rejected` avec la raison de chaque refus ([8.8](#88-le-catalogue-de-programmes-signé-anh-138)) ; depuis le contrat 1.12, `profilesDigest`, l'empreinte de la liste tenue, la même que le `digest` de `GET /api/profiles` | `POST /api/machine/profiles` | quand la révision du magasin change, ce qu'elle dit du catalogue, ou l'empreinte de sa liste |
 | Convex → Pi | le catalogue de programmes publié, signé (contrat 1.11, ANH-138) : la console vérifie la signature, revalide chaque programme et garde ceux qu'elle accepte ([8.8](#88-le-catalogue-de-programmes-signé-anh-138)) | `GET /api/machine/programmes?since=<révision>` | au démarrage, puis au plus une fois par minute, **au repos seulement**, par une tâche à elle (`catalog_step`) |
 | Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance, et son passager (`userId`, plus `subjectLabel` tant que la console a son nom en mémoire ; rien pour le banc) | `POST /api/machine/training/local` | dès que le dossier de son enregistrement existe, par la tâche de veille (8.6), avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
-| Pi → Convex | confirmation du départ d'une séance lancée à distance : `startedAt` est l'heure murale lue à la demande, `sessionAgeMs` vaut 0 | `POST /api/machine/training/start` | par la tâche CloudSync après le clic opérateur et les contrôles locaux, avant `submit_start` ; après un 2xx, le curseur évite une seconde confirmation |
+| Pi → Convex | confirmation du départ d'une séance lancée à distance : `startedAt` est l'heure murale lue à la demande, `sessionAgeMs` vaut 0 ; pour un lancement automatique, depuis le contrat 1.12, `profilesDigest`, l'empreinte de la liste que la console tient | `POST /api/machine/training/start` | par la tâche CloudSync après le clic opérateur et les contrôles locaux, avant `submit_start` ; après un 2xx, le curseur évite une seconde confirmation |
 | Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 3 s quand elle a du retard |
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, rangés après filtrage des pings `attendant_ping` et événements `t < 0` | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
@@ -2845,7 +2845,25 @@ séance ne poste pas `training/start` une seconde fois. Sans confirmation, il
 n'y a ni demande réseau ni armement. Un refus local avant la demande ou au
 moment de l'armement est écrit comme une fin échouée et rend ce lancement
 définitif. Un refus du tableau de bord n'envoie pas `training/end` et ne peut
-plus être confirmé. Une absence de réponse ou un empêchement temporaire ne
+plus être confirmé.
+
+**Le lancement lié à la liste (contrat 1.12).** Un lancement automatique
+nomme un programme par son identifiant, et l'écran de confirmation n'en
+montre que le nom : la console a pu prendre, au repos, un autre contenu sous
+le même identifiant entre le lancement et le poll qui l'apporte (le
+catalogue d'un autre déploiement signé par la même clé, une mise à jour de
+l'image). Le lancement porte donc l'empreinte de la liste d'où il a été fait
+(`profilesDigest` du poll, que Convex a prise de l'envoi des profils), et la
+console envoie celle de la liste qu'elle tient avec `training/start`. Convex
+refuse un lancement d'une autre liste, 409 `programme_changed`, la séance
+échouée avec ce code ; la console, elle, n'arme jamais un lancement
+automatique dont l'empreinte n'est pas la sienne, ni un lancement sans
+empreinte (fait avant le déploiement de 1.12, ou pour une console qui n'en
+envoyait pas), même sur un 2xx : elle l'écrit comme une fin échouée, avec les
+mots de `programme_changed`, et il faut le relancer. Un lancement de banc ne
+porte aucun programme : sa confirmation ne change pas. Testé par
+`tests/test_launch_programme_list.py` (un tableau de bord qui arme tout ce
+qu'on lui envoie : la console seule tient le refus). Une absence de réponse ou un empêchement temporaire ne
 demande pas de fin; seul un nouveau clic explicite peut refaire une demande :
 si le poll propose toujours la séance, ou, une fois qu'il ne la propose plus,
 60 s au plus après le clic de la première confirmation restée sans réponse
@@ -3332,7 +3350,9 @@ ses propres règles et refuse, un par un, ce qui ne passe pas.
    ramène aux programmes de secours. Un magasin sans tampon (jamais de
    catalogue) n'est pas touché.
 5. **Le tableau de bord le sait** par `POST /api/machine/profiles`
-   (`catalogRevision`, `accepted`, `rejected`), renvoyé dès que cela change.
+   (`catalogRevision`, `accepted`, `rejected`), renvoyé dès que cela change,
+   avec l'empreinte de la liste (contrat 1.12) : un lancement fait d'une autre
+   liste n'est jamais armé ([8.3](#83-ce-que-chaque-réponse-fait-au-curseur)).
 
 **Jamais pendant une séance ni sous un lancement.** Rien n'est demandé hors
 du repos. Ce qui revient d'une demande faite au repos n'est appliqué que si

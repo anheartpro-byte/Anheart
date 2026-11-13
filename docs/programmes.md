@@ -84,7 +84,9 @@ vérifications de `TrainingProfile` et de `parse_profile` dans
 le même message, par exemple `training profile refused:
 zone_above_subject_ceiling`. Les refus sont ceux de l'énumération
 `Violation` : identifiant de profil en snake_case de 64 caractères au plus,
-nom non blanc (au sens de Python), durées positives et finies, retour au calme d'au
+nom non blanc (au sens de Python) et sans surrogat isolé (`name_lone_surrogate` : il
+n'a pas d'UTF-8, et aucune réponse de la console ne pourrait le porter), durées
+positives et finies, retour au calme d'au
 moins la rampe du variateur (4 s) et du plancher médical, récupération d'au
 moins le plancher médical, maintien (la durée totale moins les phases fixes)
 d'au moins `holdMinS`, seuils cardiaques positifs, FC max du sujet entre 100

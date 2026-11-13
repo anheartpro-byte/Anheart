@@ -113,6 +113,7 @@ from src.web.app import create_app
 from tests.medical_support import signed, unsigned
 from tests.roster_support import RIDER, RIDER_ID, RIDER_NAME, listed, roster_document
 from tests.test_contract import shared
+from tests.test_web_api import SHIPPED_DIGEST
 
 TICK: Final[Seconds] = Seconds(0.2)
 OPERATOR: Final[str] = "dr. attending"
@@ -138,6 +139,8 @@ LAUNCH: Final[Mapping[str, JsonValue]] = {
     "operatorName": "Dr Manager",
     "subjectAge": 30,
     "subjectLabel": RIDER_NAME,
+    # Contract 1.12: made from the list the rigs' consoles hold, the shipped one.
+    "profilesDigest": SHIPPED_DIGEST,
 }
 
 
@@ -1672,7 +1675,12 @@ async def test_a_409_is_shown_logged_and_never_ended_or_retried(
 
     starts = r.dashboard.to(START)
     assert starts == [
-        {"sessionId": "remote-1", "startedAt": int(r.clock.unix_millis()), "sessionAgeMs": 0}
+        {
+            "sessionId": "remote-1",
+            "startedAt": int(r.clock.unix_millis()),
+            "sessionAgeMs": 0,
+            "profilesDigest": SHIPPED_DIGEST,
+        }
     ]
     assert r.panel.surface.pending is None
     assert r.runtime.state is RuntimeState.IDLE

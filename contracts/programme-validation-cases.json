@@ -559,6 +559,28 @@
       }
     },
     {
+      "name": "nom qui porte un surrogat isolé, sans UTF-8 ni JSON écrit par la machine, est refusé",
+      "changes": {
+        "name": "jog \ud800"
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "name_lone_surrogate"
+        ],
+        "detail": "training profile refused: name_lone_surrogate"
+      }
+    },
+    {
+      "name": "nom qui porte une paire de surrogats, un seul caractère, est accepté",
+      "changes": {
+        "name": "jog \ud83d\ude00"
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
       "name": "nom fait d'une marque d'ordre des octets, non blanche pour Python, est accepté",
       "changes": {
         "name": "\ufeff"

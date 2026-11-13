@@ -46,6 +46,8 @@ from src.contract import (
     unsupported_refusal,
     version_of,
 )
+from src.result import Ok
+from src.training.plan import SHIPPED_DEFAULTS_PATH, parse_store, profiles_digest
 
 REPOSITORY: Final[Path] = Path(__file__).resolve().parents[2]
 SHARED: Final[Path] = REPOSITORY / "contracts" / "machine-api.json"
@@ -100,6 +102,23 @@ def test_ex1_the_refusals_of_a_start_are_the_shared_file_s() -> None:
         ErrorCode("fitness_expired"),
         ErrorCode("consent_missing"),
     } <= ARMING_REFUSALS
+
+
+def test_the_programme_list_digest_has_the_shape_of_the_shared_file() -> None:
+    """Contract 1.12: what the console sends with its programmes and its start, and what
+    Convex keeps and compares, is one SHA-256 in the shared file's shape."""
+    entry = shared()["launch_programme_list"]
+    assert isinstance(entry, dict)
+    listed = cast("dict[str, object]", entry)
+    assert listed["since"] == "1.12"
+    assert listed["field"] == "profilesDigest"
+    pattern = listed["digest_pattern"]
+    assert isinstance(pattern, str)
+    parsed = parse_store(SHIPPED_DEFAULTS_PATH.read_text(encoding="utf-8"))
+    assert isinstance(parsed, Ok)
+    for profiles in ((), parsed.value.profiles):
+        assert re.fullmatch(pattern, profiles_digest(profiles)) is not None
+    assert re.fullmatch(pattern, profiles_digest(()).upper()) is None
 
 
 # =========================================================================

@@ -2539,7 +2539,10 @@ clé), et la page n'a pas encore redemandé la liste. Sur ce refus, la page
 dit la phrase de la console, ne garde aucun programme choisi, redemande la
 liste, et **Démarrer** attend un programme choisi et son aperçu. Un
 démarrage sans empreinte est refusé (422) : la page et la console sont
-livrées ensemble.
+livrées ensemble. La page et ses fichiers (`/`, `/app.js`, `/app.css`) sont
+servis `Cache-Control: no-cache` : le navigateur les garde, mais les redemande
+à chaque chargement, et ne fait jamais tourner un script plus ancien que sa
+console.
 
 ### Séance
 
