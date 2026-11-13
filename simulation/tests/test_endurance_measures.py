@@ -29,6 +29,7 @@ from simulation.endurance_measures import (
     DataFolder,
     DataState,
     Footprint,
+    Gaps,
     Histogram,
     Kind,
     Mode,
@@ -50,6 +51,7 @@ from simulation.endurance_measures import (
     document,
     footprint,
     judge,
+    judged,
     markdown,
     observed,
     open_descriptors,
@@ -547,45 +549,139 @@ def test_ex2_a_descriptor_that_leaks_fails_and_descriptors_that_come_and_go_do_n
     leaking = tuple(
         replace(sample, descriptors=12 + index // 10) for index, sample in enumerate(run.samples)
     )
-    # One reading of the second half caught descriptors open for a moment: the floor stays.
-    transient = tuple(
-        replace(sample, descriptors=40) if index == 80 else sample
-        for index, sample in enumerate(run.samples)
-    )
 
+    fine = check_descriptors(run)
     leak = check_descriptors(replace(run, samples=leaking))
-    noise = check_descriptors(replace(run, samples=transient))
     few = check_descriptors(replace(run, samples=run.samples[:6]))
 
-    assert check_descriptors(run).status is Status.PASS
+    assert fine.status is Status.PASS
+    assert fine.measured == (
+        "12 au début, au moins 12 sur la fin (5 relevés depuis 23 h 00) ; au plus 15, 15 à la fin"
+    )
     assert leak.status is Status.FAIL
-    assert "plancher 12 puis 16 descripteurs ouverts (au plus 21, 21 à la fin)" in leak.measured
-    assert noise.status is Status.PASS
-    assert "plancher 12 puis 12 descripteurs ouverts (au plus 40," in noise.measured
+    assert "12 au début, au moins 21 sur la fin" in leak.measured
     assert few.status is Status.FAIL
     assert "trop peu" in few.measured
+
+
+def counted(run: Run, descriptors: Callable[[float], int]) -> Run:
+    """``run`` with, at each reading, the descriptors ``descriptors`` gives for its instant."""
+    return replace(
+        run,
+        samples=tuple(
+            replace(sample, descriptors=descriptors(sample.at)) for sample in run.samples
+        ),
+    )
+
+
+def leaking_from(start: float, every: float) -> Callable[[float], int]:
+    """Twelve descriptors open, and one more leaked every ``every`` seconds from ``start`` on."""
+    return lambda at: 12 if at < start else 13 + int((at - start) // every)
+
+
+TWO_HOURS = replace(steady(2.0), samples=tuple(reading(30.0 * (n + 1)) for n in range(240)))
+"""The shape of the two real-time hours on the Pi: a reading every 30 s."""
+
+
+def test_ex2_a_leak_that_starts_late_in_the_day_fails_unless_it_starts_in_its_last_hour() -> None:
+    """The nightly day: a session every ~1900 s, one descriptor leaked by each."""
+    day = steady()
+
+    for start in (13 * 3600.0, 22 * 3600.0 + 45 * 60):
+        late = check_descriptors(counted(day, leaking_from(start, 1900.0)))
+        assert late.status is Status.FAIL, f"leak from {start} s"
+    blind = check_descriptors(counted(day, leaking_from(23 * 3600.0 + 15 * 60, 1900.0)))
+
+    assert blind.status is Status.PASS, "the documented blind window: the last hour"
+    assert "(5 relevés depuis 23 h 00)" in blind.measured
+
+
+def test_ex2_a_leak_that_starts_late_in_two_hours_fails_unless_in_their_last_quarter_hour() -> None:
+    """The two real-time hours on the Pi: a cycle every ~11 minutes, one descriptor each."""
+    for start in (91 * 60.0, 104 * 60.0):
+        late = check_descriptors(counted(TWO_HOURS, leaking_from(start, 660.0)))
+        assert late.status is Status.FAIL, f"leak from minute {start / 60:.0f}"
+    blind = check_descriptors(counted(TWO_HOURS, leaking_from(106 * 60.0, 660.0)))
+
+    assert blind.status is Status.PASS, "the documented blind window: the last 15 minutes"
+    assert "(31 relevés depuis 1 h 45)" in blind.measured
+
+
+def test_ex2_a_descriptor_open_or_closed_for_one_reading_fails_nothing() -> None:
+    flat = counted(steady(), lambda _at: 12)
+    start = len(flat.samples) - len(judged(flat))
+
+    def one(index: int, descriptors: int) -> Check:
+        return check_descriptors(
+            replace(
+                flat,
+                samples=tuple(
+                    replace(sample, descriptors=descriptors) if number == index else sample
+                    for number, sample in enumerate(flat.samples)
+                ),
+            )
+        )
+
+    for index in (start + 3, 50, len(flat.samples) - 3, len(flat.samples) - 1):
+        for descriptors in (40, 11):
+            verdict = one(index, descriptors)
+            assert verdict.status is Status.PASS, (index, descriptors, verdict.measured)
+    # Four readings judged, the last quarter holds one: the end is still two of them.
+    short = replace(
+        steady(1.0),
+        samples=(*(reading(600.0 * (n + 1)) for n in range(4)), reading(3000.0, descriptors=40)),
+    )
+    assert check_descriptors(short).status is Status.PASS
 
 
 STALL_MS = PANEL_SAFETY.loop_stall_freeze_gap * 1000.0
 """The gap at which the console's ``loop_stall`` rule freezes the arm, in ms."""
 
+GAPS = Gaps(
+    bound=STALL_MS,
+    exact=Quantiles(count=36_000, p50=201.0, p99=229.0, highest=517.0),
+    seen=86_400.0,
+)
+"""A real-time run in good health, as the page saw its ticks."""
 
-def test_ex2_in_real_time_a_gap_between_ticks_that_reaches_the_loop_stall_bound_fails() -> None:
-    gaps = Quantiles(count=36_000, p50=201.0, p99=229.0, highest=517.0)
-    run = replace(steady(), mode=Mode.REAL_TIME, period=gaps, stall=STALL_MS)
+
+def test_ex2_in_real_time_a_stall_fails_tick_gap_and_names_its_cause() -> None:
+    run = replace(steady(), mode=Mode.REAL_TIME, gaps=GAPS)
+    exact = GAPS.exact
+    assert exact is not None
+    over_merges = Quantiles(count=3, p50=420.0, p99=633.6, highest=633.6)
 
     fine = check_tick_gap(run)
-    stalled = check_tick_gap(replace(run, period=replace(gaps, highest=STALL_MS)))
-    unread = check_tick_gap(replace(run, period=None))
+    merged = check_tick_gap(replace(run, gaps=replace(GAPS, merged=over_merges)))
+    reached = check_tick_gap(
+        replace(run, gaps=replace(GAPS, exact=replace(exact, highest=STALL_MS)))
+    )
+    latched = check_tick_gap(replace(run, gaps=replace(GAPS, verdict="took 1.00 s between ticks")))
+    unread = check_tick_gap(replace(run, gaps=replace(GAPS, exact=None)))
+    partial = check_tick_gap(replace(run, gaps=replace(GAPS, seen=0.89 * 86_400)))
 
     assert fine is not None
     assert fine.status is Status.PASS
-    assert fine.threshold == "maximum < 600 ms (gel loop_stall de la console)"
-    assert "maximum 517.0 ms sur 36000 écarts" in fine.measured
-    assert stalled is not None
-    assert stalled.status is Status.FAIL, "reaching the bound is a stall"
-    assert unread is not None
-    assert (unread.status, unread.measured) == (Status.FAIL, "aucun écart entre deux tics relevé")
+    assert fine.threshold == (
+        "aucun verdict loop_stall de la console ; écart entre deux tics consécutifs < 600 ms ; "
+        "tics relevés sur 90% de l'essai au moins"
+    )
+    assert (
+        fine.measured == "p50 201.0 ms, p99 229.0 ms, maximum 517.0 ms sur 36000 écarts consécutifs"
+    )
+    # A gap over snapshots the hub merged adds two real ones: it is said, not judged a stall.
+    assert merged is not None
+    assert merged.status is Status.PASS
+    assert "3 écarts sur des instantanés fusionnés par le hub (au plus 633.6 ms)" in merged.measured
+    for verdict, cause in (
+        (reached, "un écart de 600.0 ms entre deux tics consécutifs"),
+        (latched, "la console a levé loop_stall : took 1.00 s between ticks"),
+        (unread, "aucun écart entre deux tics consécutifs relevé"),
+        (partial, "tics relevés sur 76896 s des 86400 s de l'essai"),
+    ):
+        assert verdict is not None
+        assert verdict.status is Status.FAIL
+        assert verdict.measured.startswith(cause)
     assert check_tick_gap(steady()) is None, "on the manual clock every gap is 200 ms"
     assert [check.name for check in judge(run)] == [
         "rss",
@@ -596,7 +692,6 @@ def test_ex2_in_real_time_a_gap_between_ticks_that_reaches_the_loop_stall_bound_
         "rotation",
         "sessions",
     ]
-    assert not passed(judge(replace(run, period=replace(gaps, highest=1005.9))))
 
 
 def test_ex2_the_data_folder_is_held_to_what_the_arming_gate_plans_for() -> None:
@@ -713,7 +808,8 @@ def test_ex2_a_session_that_ends_otherwise_or_never_reaches_the_dashboard_fails(
 
 
 def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_path: Path) -> None:
-    run = replace(steady(), period=Quantiles(count=10, p50=200.0, p99=212.0, highest=260.0))
+    exact = Quantiles(count=10, p50=200.0, p99=212.0, highest=260.0)
+    run = replace(steady(), gaps=Gaps(bound=STALL_MS, exact=exact, seen=86_400.0))
     checks = judge(run)
 
     data, summary = write_report(run, checks, tmp_path / "out")
@@ -729,6 +825,7 @@ def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_pat
     assert [obj(check)["name"] for check in seq(report["checks"])] == [
         "rss",
         "tick",
+        "tick_gap",
         "descriptors",
         "data",
         "rotation",
@@ -738,6 +835,12 @@ def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_pat
     assert obj(seq(report["samples"])[0])["allocated_blocks"] is None
     assert obj(report["tick_ms"]) == {"count": 432_000, "p50": 0.9, "p99": 4.5, "max": 80.0}
     assert obj(report["tick_period_ms"])["p99"] == 212.0
+    assert obj(report["tick_gaps"]) == {
+        "bound_ms": 600.0,
+        "merged_ms": None,
+        "seen_s": 86_400.0,
+        "loop_stall_verdict": None,
+    }
     assert obj(report["data"])["bounded_by_rotation"] is True
     assert obj(obj(report["data"])["per_recorded_hour"])["entries"] == 18048
     assert obj(report["sync"])["heartbeats"] == 8640
