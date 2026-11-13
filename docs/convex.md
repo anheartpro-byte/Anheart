@@ -266,7 +266,7 @@ un accès calculé (`db[method]`) ou un nom de table construit peut lui échappe
 confirmer par ANH-87a** ; rien n'est supprimé, ni avant ni après cinq ans,
 tant que cette durée et sa mise en œuvre ne sont pas décidées. La portée de
 l'immutabilité est précisée dans
-[securite.md §14](securite.md).
+[securite.md §14](securite.md#14-journal-daudit-anh-167).
 
 ### `users` : comptes
 
