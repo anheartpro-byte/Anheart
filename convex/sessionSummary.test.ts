@@ -890,6 +890,10 @@ describe("summary helpers", () => {
       referenceRadiusM: null,
       endReason: "x".repeat(MAX_TEXT_CHARS),
     });
+    // The console's STO source (ANH-92) is accepted and changes no figure.
+    expect(manifestContext({ sto_source: "bridged_declared" })).toEqual(
+      manifestContext({}),
+    );
     expect(manifestContext("text")).toBeNull();
     expect(manifestContext(null)).toBeNull();
     expect(

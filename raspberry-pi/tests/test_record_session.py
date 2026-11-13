@@ -33,6 +33,7 @@ from src.local_panel import (
 )
 from src.medical import SHIPPED_DOCUMENT
 from src.motor.drive import DriveFault
+from src.motor.sto import StoSourceKind
 from src.record import commands
 from src.record import journal as journal_module
 from src.record.journal import (
@@ -104,6 +105,7 @@ STAMP = Stamp(
     software_version="test",
     config_hash="ab" * 32,
     medical_parameters_version="cd" * 32,
+    sto_source=StoSourceKind.SIM_READY,
 )
 
 
@@ -494,6 +496,24 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         version,
     )
     assert serial.config_hash != base.config_hash
+    # ANH-92: the STO source shapes what may arm, and every manifest names it.
+    assert (base.sto_source, serial.sto_source) == (StoSourceKind.SIM_READY, StoSourceKind.NONE)
+    bridged = stamp_for(
+        config_of(
+            {
+                **env,
+                "MOTOR_BACKEND": "serial",
+                "MOTOR_PORT": "/dev/ttyUSB0",
+                "STO_SOURCE": "bridged_declared",
+            }
+        ),
+        limits,
+        safety,
+        DEFAULT_MOTION_LIMITS,
+        version,
+    )
+    assert bridged.sto_source is StoSourceKind.BRIDGED_DECLARED
+    assert bridged.config_hash != serial.config_hash
 
 
 def test_ex5_the_stamp_takes_its_version_from_the_build_and_never_from_the_environment() -> None:

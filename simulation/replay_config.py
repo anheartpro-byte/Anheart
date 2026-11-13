@@ -16,6 +16,7 @@ from src.medical import SHIPPED_PARAMETERS, shipped_status
 from src.motor.atv320 import SerialSettings
 from src.motor.drive import RegisterMap
 from src.motor.ftdi_link import Parity
+from src.motor.sto import StoSourceKind
 from src.panel_status import EcgSource, MotorBackend
 from src.record.configuration import MAX_CONFIG_BYTES
 from src.result import Err, Ok, Result
@@ -76,6 +77,8 @@ class _Document:
     camera: CameraSource
     drive_link: str | None
     native_drive: _NativeDrive | None = None
+    sto_source: StoSourceKind | None = None
+    """Absent from the document of a console older than ANH-92's record of it."""
 
 
 _DOCUMENT: Final[TypeAdapter[_Document]] = TypeAdapter(_Document)

@@ -40,6 +40,7 @@ from src.motor.drive import (
     EmergencyStopOutcome,
 )
 from src.motor.simulated import SimulatedDrive
+from src.motor.sto import StoSourceKind
 from src.record.codec import Privacy
 from src.record.journal import DEFAULT_LIMITS, Cause, Journal, Limits, just_before
 from src.record.reader import Recording, read
@@ -186,6 +187,7 @@ STAMP: Final[Stamp] = Stamp(
     software_version="test",
     config_hash="ab" * 32,
     medical_parameters_version="cd" * 32,
+    sto_source=StoSourceKind.SIM_READY,
 )
 
 

@@ -113,6 +113,20 @@ describe("ANH-130 verified session deposits", () => {
     }).success).toBe(false);
   });
 
+  it("accepts the console's STO source, null or absent, and no other value", () => {
+    const { sto_source: written, ...older } = completePiManifest;
+    expect(written).toBe("drive_input");
+    for (const source of ["bridged_declared", null]) {
+      expect(
+        depositManifest.safeParse({ ...older, sto_source: source }).success,
+      ).toBe(true);
+    }
+    expect(depositManifest.safeParse(older).success).toBe(true);
+    expect(
+      depositManifest.safeParse({ ...older, sto_source: "bridged" }).success,
+    ).toBe(false);
+  });
+
   it.each(["0.1.0", null])(
     "accepts the two fitness manifest fields (%s)",
     async (version) => {

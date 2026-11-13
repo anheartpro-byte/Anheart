@@ -13,6 +13,7 @@ acknowledgement and the new start it requires.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Mapping
 from dataclasses import replace
@@ -57,6 +58,7 @@ from src.motor.sto import (
     UnconfiguredStoSource,
     sto_ready,
 )
+from src.record import commands
 from src.result import Err, Ok, Result
 from src.training.motion import ramp_duration
 from src.training.preflight import (
@@ -112,6 +114,7 @@ from src.web.routes import (
 from src.web.schemas import AttestationRow, SnapshotRow, StatusRow
 from tests import test_cloud_sync as dashboard_tests
 from tests.medical_support import signed
+from tests.record_console_support import recorded_rig
 from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import (
     BENCH_ENV,
@@ -663,6 +666,26 @@ async def test_the_route_takes_the_bench_confirmation_by_name_and_records_it_ver
             assert not parse(StatusRow, await client.get("/api/status")).attested
     finally:
         await again.panel.close()
+
+
+async def test_a_record_made_under_the_bridge_says_so_and_so_does_its_configuration(
+    tmp_path: Path,
+) -> None:
+    """The manifest names the bridge: its ``confirm_estop_wiring`` is the bench statement."""
+    recorded = recorded_rig(tmp_path, env=BRIDGED_ENV)
+    try:
+        async with recorded.rig.http() as client:
+            await recorded.tick(1.0)
+            await start_bench(recorded.rig, client, 5)
+            await recorded.tick(1.0)
+        recording = recorded.recording()
+    finally:
+        await recorded.rig.panel.close()
+    manifest = recording.manifest
+    assert (manifest.sto_source, manifest.occupancy) == (StoSourceKind.BRIDGED_DECLARED, "bench")
+    assert commands.encode(commands.ConfirmEstopWiring()) in [e.detail for e in recording.events]
+    applied = recorded.root / "config" / f"{manifest.config_hash}.json"
+    assert json.loads(applied.read_bytes())["sto_source"] == "bridged_declared"
 
 
 @pytest.mark.parametrize(
