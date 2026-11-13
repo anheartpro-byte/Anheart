@@ -9,12 +9,16 @@ record's manifest, the start with a person on board, the page) is in
 from __future__ import annotations
 
 import ctypes
+import statistics
 import struct
 import sys
+import time
+from collections.abc import Callable
 from typing import cast
 
 import pytest
 
+from src import wall_clock
 from src.units import Seconds
 from src.wall_clock import (
     TIMEX_BYTES,
@@ -171,6 +175,113 @@ def test_ex1_the_console_judges_its_clock_on_linux_and_nowhere_else() -> None:
     assert isinstance(on_the_pi, KernelClock)
     assert on_a_mac is None
     assert (here is not None) == (sys.platform == "linux")
+
+
+def test_the_c_library_is_searched_once_not_at_each_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first reading finds ``adjtimex`` in the C library; the next ones reuse it."""
+    found: list[int] = []
+    answer = struct.pack("@Illlli", 0, 0, 0, 52_000, 950, 0)
+
+    def adjtimex(buffer: ctypes.Array[ctypes.c_char]) -> int:
+        ctypes.memmove(buffer, answer, len(answer))
+        return 0
+
+    def find() -> Callable[[ctypes.Array[ctypes.c_char]], int]:
+        found.append(1)
+        return adjtimex
+
+    monkeypatch.setattr(wall_clock, "libc_adjtimex", find)
+    clock = KernelClock()
+    states = [clock.read() for _ in range(3)]
+    assert found == [1]
+    assert states == [Synchronised(Seconds(0.00095), Seconds(0.052))] * 3
+
+
+def test_what_is_found_in_the_c_library_is_called_with_the_buffer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``libc_adjtimex`` looks the call up once and hands each buffer to it, on any system:
+    the C library is replaced here by one that has the call."""
+    opened: list[None] = []
+    handed: list[ctypes.Array[ctypes.c_char]] = []
+
+    class Library:
+        def __init__(self, name: None) -> None:
+            opened.append(name)
+
+        def adjtimex(self, buffer: ctypes.Array[ctypes.c_char]) -> int:
+            handed.append(buffer)
+            return 5
+
+    monkeypatch.setattr(ctypes, "CDLL", Library)
+    call = wall_clock.libc_adjtimex()
+    first = ctypes.create_string_buffer(TIMEX_BYTES)
+    second = ctypes.create_string_buffer(TIMEX_BYTES)
+    assert (call(first), call(second)) == (5, 5)
+    assert opened == [None]
+    assert handed == [first, second]
+
+
+def test_a_system_without_the_call_is_asked_again_at_the_next_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A search that fails keeps nothing: the clock stays unreadable, and is asked again."""
+    found: list[int] = []
+
+    def find() -> Callable[[ctypes.Array[ctypes.c_char]], int]:
+        found.append(1)
+        raise AttributeError("adjtimex")
+
+    monkeypatch.setattr(wall_clock, "libc_adjtimex", find)
+    clock = KernelClock()
+    assert (
+        clock.read()
+        == clock.read()
+        == Unreadable("adjtimex indisponible sur ce systeme : AttributeError")
+    )
+    assert found == [1, 1]
+
+
+@pytest.mark.parametrize("long_bytes", [4, 16])
+def test_a_system_whose_long_is_not_8_bytes_is_not_read(long_bytes: int) -> None:
+    """``maxerror`` and ``esterror`` are read at the offsets of a 64-bit ``struct timex``.
+    Elsewhere they sit at others: nothing is read, and nothing is trusted."""
+    asked: list[int] = []
+
+    def adjtimex(_buffer: ctypes.Array[ctypes.c_char]) -> int:
+        asked.append(1)
+        return 0
+
+    state = KernelClock(adjtimex, long_bytes=long_bytes).read()
+    assert state == Unreadable(
+        f"long de {long_bytes} octets : struct timex lue seulement en 64 bits"
+    )
+    assert not is_trusted(state)
+    assert asked == []
+
+
+def test_this_system_is_read_with_its_own_long() -> None:
+    """The guard takes the size of a C ``long`` here: 8 bytes on the 64-bit systems the
+    console runs on (the Pi's arm64 image, CI, a Mac)."""
+    assert ctypes.sizeof(ctypes.c_long) == 8
+    assert not isinstance(KernelClock(lambda _buffer: 0).read(), Unreadable)
+
+
+def test_the_real_probe_answers_at_once() -> None:
+    """The console asks from a task on its event loop (``LocalPanel.clock_step``): the
+    answer must never wait, or the loop stalls (``loop_stall``). One system call that
+    copies a few kernel variables, so a reading takes microseconds. The median of many
+    readings is pinned under 5 ms, far above that and far below any service a slow
+    probe would query; a reading preempted by a busy machine does not move a median."""
+    clock = KernelClock()
+    spent: list[float] = []
+    for _ in range(101):
+        started = time.perf_counter()
+        clock.read()
+        spent.append(time.perf_counter() - started)
+    assert statistics.median(spent) < 0.005
 
 
 # =========================================================================

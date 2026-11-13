@@ -68,7 +68,8 @@ _ESTIMATED_ERROR_AT: Final[int] = 32
 """Where ``maxerror`` and ``esterror`` sit in ``struct timex`` on a 64-bit Linux
 (arm64, x86-64), the only systems the console's image is built for: an
 ``unsigned int`` and its padding, then ``long offset``, ``long freq``,
-``long maxerror``, ``long esterror``."""
+``long maxerror``, ``long esterror``. Where a C ``long`` is not 8 bytes (a 32-bit
+system) the fields sit elsewhere: :class:`KernelClock` then reads nothing."""
 
 
 # =========================================================================
@@ -185,12 +186,18 @@ type Adjtimex = Callable[[ctypes.Array[ctypes.c_char]], int]
 (0 to 5) or -1. Raises ``AttributeError`` or ``OSError`` where there is no such call."""
 
 
-def libc_adjtimex(buffer: ctypes.Array[ctypes.c_char]) -> int:
-    """The C library's ``adjtimex`` on ``buffer``. Linux only: elsewhere the name is missing.
+def libc_adjtimex() -> Adjtimex:
+    """The C library's ``adjtimex``, looked up once by whoever keeps what this returns.
 
+    Linux only: elsewhere the name is missing, and this raises ``AttributeError``.
     A foreign call has no static type: it returns a C ``int``, narrowed here.
     """
-    return cast("int", ctypes.CDLL(None).adjtimex(buffer))
+    symbol = ctypes.CDLL(None).adjtimex
+
+    def adjtimex(buffer: ctypes.Array[ctypes.c_char]) -> int:
+        return cast("int", symbol(buffer))
+
+    return adjtimex
 
 
 def judge(max_error_us: int, estimated_error_us: int) -> WallClockState:
@@ -216,18 +223,29 @@ class KernelClock:
     One system call that copies a few kernel variables: it takes no file, no
     socket and no device, and it needs no privilege. The kernel's clock state
     is the machine's, not the container's: the console reads the Pi's from
-    inside its image.
+    inside its image. The C library is searched for the call once, at the
+    first reading, not at each one.
     """
 
-    __slots__ = ("_call",)
+    __slots__ = ("_call", "_long_bytes")
 
-    def __init__(self, call: Adjtimex = libc_adjtimex) -> None:
-        self._call: Adjtimex = call
+    def __init__(
+        self, call: Adjtimex | None = None, long_bytes: int = ctypes.sizeof(ctypes.c_long)
+    ) -> None:
+        # Mutable: ``None`` until the first reading finds the C library's call.
+        self._call: Adjtimex | None = call
+        self._long_bytes: int = long_bytes
 
     def read(self) -> WallClockState:
         """The clock's state, or :class:`Unreadable` where the kernel cannot be asked."""
+        if self._long_bytes != _LONG_BYTES:
+            return Unreadable(
+                f"long de {self._long_bytes} octets : struct timex lue seulement en 64 bits"
+            )
         buffer = ctypes.create_string_buffer(TIMEX_BYTES)
         try:
+            if self._call is None:
+                self._call = libc_adjtimex()
             code = self._call(buffer)
         except (AttributeError, OSError) as error:
             return Unreadable(f"adjtimex indisponible sur ce systeme : {type(error).__name__}")
