@@ -195,12 +195,12 @@ CLOSING_LIMIT: Final[int] = 120
 """Seconds the last session is given to reach the dashboard once the run is over."""
 
 POINTS_MISSING: Final[int] = 5
+"""1 Hz points a session may lack on the dashboard against the seconds the scenario timed."""
 
 BUSY_RETRIES: Final[int] = 3
 """Times a command is sent again, a second of the console's life apart, when the console
 refused it because it still held another (one request at a time): a loop starved on a
 loaded host takes the first late, and is not a console in bad health."""
-"""1 Hz points a session may lack on the dashboard against the seconds the scenario timed."""
 
 READY_ATTEMPTS: Final[int] = 100
 READY_WAIT: Final[float] = 0.1
