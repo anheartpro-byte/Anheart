@@ -1765,8 +1765,9 @@ Le refus d'un lancement par la console donne aussi **Séance échouée**.
 Un code dédié attend un ajout au contrat du Pi.
 
 **Incident grave ouvert** : seuls les admins Anheart la reçoivent, dans
-l'organisation Anheart, à l'ouverture de chaque incident de gravité haute,
-quelle que soit l'organisation de la machine ; ni l'admin d'organisation ni
+l'organisation Anheart, à l'ouverture d'un incident de gravité haute, et
+aussi quand un incident existant devient grave (un incident clos se rouvre
+alors), quelle que soit l'organisation de la machine ; ni l'admin d'organisation ni
 le gestionnaire de la machine ne la voient. Elle propose **Voir les
 incidents** (la page
 [Incidents](../tableau-de-bord.md#incidents--frdashboardincidents-et-frdashboardincidentsid),
@@ -1784,17 +1785,22 @@ Le défaut variateur, le verdict de sécurité et la fin en échec d'une même
 séance se regroupent dans votre alerte non lue. Le défaut variateur est
 prioritaire sur le verdict de sécurité, lui-même prioritaire sur la séance
 échouée : le type affiché peut donc devenir plus précis. Un verdict de
-fréquence cardiaque et la fin en échec se regroupent aussi. L'unique e-mail
-dit le type de départ et n'est pas renvoyé quand le type change. « N
+fréquence cardiaque et la fin en échec se regroupent aussi. L'e-mail dit
+le type de départ et n'est pas renvoyé quand le type change ; si aucun
+e-mail n'est parti à la création parce que vous ne vouliez pas ce type, un
+e-mail part quand le type monte vers un type que vous voulez. « N
 événements regroupés » compte tous les événements fondus dans l'alerte, de
 tous types, et non les répétitions du type affiché. Une alerte
-lue reste inchangée ; l'événement suivant en crée une nouvelle. Sans séance,
-le regroupement reste par machine.
+lue reste inchangée ; l'événement suivant en crée une nouvelle. « Machine
+hors ligne » reste regroupée par machine.
 
 Un défaut variateur signalé par la machine sans nommer la séance rejoint
-l'alerte de la séance dont l'enregistrement tient ce défaut, quel que soit
-l'ordre d'arrivée : vous recevez **1 alerte et 1 e-mail** pour ce défaut.
-Une séance sans défaut variateur reste à part d'un défaut hors séance.
+l'alerte de la séance dont l'enregistrement a reçu ce défaut à moins de
+90 s, quel que soit l'ordre d'arrivée : vous recevez **1 alerte et
+1 e-mail** pour ce défaut. Au delà de 90 s d'écart (lien coupé puis
+rétabli), ou si seul un verdict d'une autre règle était arrivé, vous en
+recevez encore 2. Un défaut plus tardif donne une nouvelle alerte, et une
+séance sans défaut variateur reste à part d'un défaut hors séance.
 
 ---
 

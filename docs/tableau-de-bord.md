@@ -1069,7 +1069,8 @@ Le refus de départ par la console est couvert par **Séance échouée** ; un
 code dédié attend un ajout au contrat du Pi.
 
 - **Incident grave ouvert** (ANH-145) : pour l'admin Anheart seulement, dans
-  son organisation, à l'ouverture de chaque incident de gravité haute, quelle
+  son organisation, à l'ouverture d'un incident de gravité haute, ou quand un
+  incident déjà ouvert devient grave (ou se rouvre en le devenant), quelle
   que soit l'organisation de la machine ; avec **Voir les incidents** (la
   page [Incidents](#incidents--frdashboardincidents-et-frdashboardincidentsid))
   et **Voir la séance**. Jamais d'e-mail : la page ne propose pas
@@ -1096,13 +1097,18 @@ en échec se regroupent dans une seule alerte non lue par destinataire. Son
 type peut devenir plus précis : défaut variateur, puis arrêt demandé par la
 sécurité, puis séance échouée, par priorité décroissante. Cela regroupe aussi
 un verdict de fréquence cardiaque et la fin en échec. Une alerte déjà lue
-reste inchangée ; l'événement suivant en crée une nouvelle. Les alertes sans
-séance gardent leur regroupement par machine.
+reste inchangée ; l'événement suivant en crée une nouvelle. Les alertes
+« Machine hors ligne » gardent leur regroupement par machine.
 
-Un heartbeat en défaut qui ne nomme pas la séance rejoint l'alerte de la
-séance dont l'enregistrement tient un défaut variateur, dans tout ordre
-d'arrivée : **1 alerte et 1 e-mail par destinataire** pour ce défaut. Une
-séance sans défaut variateur reste à part d'un défaut hors séance. Détail :
+Un défaut variateur ne rejoint que le même défaut, à moins de 90 s
+(`SAME_FAULT_MS`) : un heartbeat en défaut qui ne nomme pas la séance
+rejoint l'alerte de la séance dont l'enregistrement a reçu ce défaut dans
+cette borne, dans tout ordre d'arrivée, soit **1 alerte et 1 e-mail par
+destinataire** pour ce défaut. Plus de 90 s d'écart (lien coupé puis
+rétabli) donnent encore 2 alertes, comme un verdict d'une autre règle seul
+arrivé avant le heartbeat. Un défaut plus tardif donne une nouvelle alerte,
+et une séance sans défaut variateur reste à part d'un défaut hors séance.
+Détail :
 [convex.md](convex.md#notificationsts-alertes-aux-gestionnaires-anh-90).
 
 En bas, **Alertes par e-mail** : un interrupteur par type d'alerte. Par
@@ -1112,8 +1118,11 @@ page : jamais de fréquence cardiaque, de nom de passager ni de raison. Tant
 que le déploiement n'a pas sa clé d'envoi, la carte l'écrit (« L'envoi
 d'e-mails n'est pas configuré sur ce déploiement : les alertes restent dans le
 site. ») ; les choix sont gardés pour le jour où elle le sera.
-L'e-mail n'est envoyé qu'à la création de l'alerte et dit son type de départ ;
-il n'est pas renvoyé si le type devient ensuite plus précis sur le site.
+Une alerte a un seul e-mail, envoyé à sa création et qui dit son type de
+départ ; il n'est pas renvoyé si le type devient plus précis. Si aucun
+e-mail n'est parti à la création (type non choisi), un e-mail part quand le
+type monte vers un type choisi. Un e-mail en échec final n'est pas retenté
+par les événements suivants.
 
 Tests : `app/[locale]/dashboard/notifications/page.test.tsx` (refus au
 patient, contenu de chaque type, liens, marquer lu, refus traduit, liste
