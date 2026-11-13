@@ -99,8 +99,9 @@ export function ProfileList({
       )}
       {catalog !== undefined && catalog.rejected.length > 0 && (
         <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
-          {catalog.rejected.map((r) => (
-            <li key={r.profileId} className="flex items-start gap-2">
+          {catalog.rejected.map((r, index) => (
+            // The machine may refuse two entries of one id: the rank tells them apart.
+            <li key={`${index}:${r.profileId}`} className="flex items-start gap-2">
               <Ban className="h-4 w-4 mt-0.5 shrink-0" />
               <span>{t("programs.rejected", { profileId: r.profileId, reason: r.reason })}</span>
             </li>

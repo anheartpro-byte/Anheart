@@ -1837,11 +1837,12 @@ ANH-137 ajoute les codes du catalogue de programmes (`programmes.ts`) :
 | `programme_refused` | La validation du Pi refuse le programme. Levé comme un objet `{code, message, violations}` : `message` est le message du Pi (`detail` de `plan.py`, par exemple `training profile refused: zone_above_subject_ceiling`) et `violations` ses valeurs de `Violation`, dans son ordre. La page affiche `message` tel quel. |
 | `programme_not_found` | Le programme n'existe pas. |
 | `programme_wrong_status` | Le programme n'est pas dans l'état d'où part la transition demandée. |
-| `programme_id_taken` | Un autre programme porte déjà ce `profileId`. |
+| `programme_id_taken` | Un autre programme porte déjà ce `profileId`, ou c'est l'identifiant d'un programme de secours livré avec la console (`standard_30_min`, `standard_45_min`, ANH-138). |
 | `programme_self_validation` | L'admin a créé le brouillon ou l'a réécrit en dernier. |
 | `programme_medical_version_unavailable` | Aucune version des paramètres médicaux n'est enregistrée : c'est le cas de la production tant qu'ANH-98 n'a pas livré les valeurs signées, et aucun programme ne peut y être validé. |
 | `programme_medical_version_not_current` | Le brouillon a été vérifié pour une autre version que la version courante : l'enregistrer de nouveau. |
 | `programme_simulation_report_missing` | Aucun rapport de simulation joint. |
+| `programme_catalog_too_large` | Publié, le programme rendrait le texte signé du catalogue plus grand que `max_payload_bytes` (500 000 octets), au-delà de ce qu'une console lit (ANH-138). |
 | `invalid_medical_signoff` | Signataire vide ou de plus de 200 caractères, note de plus de 1000, date qui n'est pas en ms entières, antérieure à 2024 ou à plus d'un jour dans le futur. |
 
 Un rapport refusé (type, taille, âge) répond `invalid_registry_file`, comme
@@ -2435,11 +2436,11 @@ d'une séance.
 | Fonction | Droits et effet |
 |---|---|
 | `list` (query) | Admin Anheart : tous les programmes, avec `simulationReportUrl`, l'URL du rapport joint. Tout autre compte : les programmes `published` du catalogue Anheart (`organizationId` nul), `simulationReport` et `simulationReportUrl` nuls. Anonyme : `not_authenticated`. |
-| `create` (mutation) | Admin Anheart. Les champs du profil ; validation du Pi, `profileId` libre ; écrit un brouillon `revision: 0`, `medicalParametersVersion` du fichier livré. Dupliquer un programme, c'est le créer depuis sa copie (le site préremplit le formulaire). |
+| `create` (mutation) | Admin Anheart. Les champs du profil ; validation du Pi, `profileId` libre et qui n'est pas celui d'un programme de secours de la console (`FALLBACK_PROFILE_IDS`, lus dans `raspberry-pi/config/profiles.default.json`) ; écrit un brouillon `revision: 0`, `medicalParametersVersion` du fichier livré. Dupliquer un programme, c'est le créer depuis sa copie (le site préremplit le formulaire). |
 | `updateDraft` (mutation) | Admin Anheart, brouillon seulement. Mêmes contrôles ; efface `simulationReport` et `medicalSignoff`, qui portaient sur d'autres valeurs. |
 | `attachSimulationReport` (mutation) | Admin Anheart, brouillon seulement. Fichier PDF ou JSON d'au plus 10 Mio déposé depuis moins d'une heure (URL de dépôt de `machineRegistry.generateUploadUrl`). |
 | `validate` (mutation) | De `draft` à `validated`. Admin Anheart autre que `createdBy` et `updatedBy` ; dans cet ordre : validation du Pi sur les valeurs enregistrées, version médicale courante égale à `medicalParametersVersion`, rapport joint, signature médicale `{by, at, note}` bornée. |
-| `publish` (mutation) | De `validated` à `published`, admin Anheart : `revision` plus 1 et copie complète dans `programme_revisions`. |
+| `publish` (mutation) | De `validated` à `published`, admin Anheart : `revision` plus 1 et copie complète dans `programme_revisions`. Refusé `programme_catalog_too_large` si le texte signé du catalogue, ce programme compris, dépassait `max_payload_bytes`. |
 | `retire` (mutation) | De `published` à `retired`, admin Anheart : le programme sort du catalogue publié. |
 | `publishedCatalog` (query interne) | Le texte que `GET /api/machine/programmes` signe (ANH-138) : `{catalogRevision, unchanged, programmes}` du catalogue Anheart (`organizationId` nul), `programmes` vide quand `since` vaut la révision (`catalogPayload`, `convex/lib/programmes.ts`). |
 
@@ -3196,6 +3197,21 @@ l'entrée `programme_catalog` de
   publication et à chaque retrait, les deux seuls changements de ce qui est
   publié. `since` égal à cette révision : `unchanged: true` et `programmes`
   vide, signé lui aussi. `since` absent ou différent : la liste entière.
+  `catalogRevision` 0 veut dire que rien n'a jamais été publié : la console
+  ne le prend pas pour un catalogue et garde ses programmes de secours.
+  Poser la clé sur un déploiement où rien n'est publié ne vide donc aucune
+  console.
+- **La taille.** Le texte signé fait au plus `max_payload_bytes` octets
+  (500 000 octets) : `programmes.publish` refuse un programme qui le ferait
+  dépasser (`programme_catalog_too_large`), et la réponse entière reste
+  sous le Mio qu'une console lit ; une réponse plus grande est refusée par
+  la console, qui l'écrit dans son journal de bord.
+- **Les identifiants réservés.** Aucun programme du catalogue ne prend
+  l'identifiant d'un programme de secours de la console (`standard_30_min`,
+  `standard_45_min`) : `create` et `updateDraft` le refusent
+  (`programme_id_taken`), et `validate` et `publish` le vérifient de
+  nouveau, pour un brouillon écrit avant cette réserve. Un même identifiant
+  ne désigne donc jamais deux programmes différents d'une machine à l'autre.
 - **La clé.** La clé privée est dans la variable d'environnement Convex
   `ANHEART_CATALOG_SIGNING_KEY` (PKCS #8, en PEM ou en base64 sur une
   ligne), jamais dans le dépôt ; sa moitié publique est
@@ -3216,7 +3232,15 @@ l'entrée `programme_catalog` de
   `machines.programmeCatalog`. La fiche machine affiche chaque programme
   refusé, « refusé par la machine : » suivi de la raison, et « programmes de
   secours » quand `catalogRevision` est `null`. Un programme refusé n'est
-  pas dans `machine_profiles` : il n'est pas lançable.
+  pas dans `machine_profiles` : il n'est pas lançable. Chaque `reason` fait au
+  plus 500 caractères et chaque `profileId` 64, comptés en points de code
+  Unicode comme la console les compte (un emoji vaut un) ; au-delà, 400
+  `invalid_request`.
+- **Ce que Convex ne juge pas.** Convex valide un programme avec la
+  version médicale courante du serveur, sans connaître le fichier médical
+  de chaque console : des paliers cardiaques ou un plafond qui ne sont pas
+  ceux d'une machine n'apparaissent que sur sa fiche, « refusé par la
+  machine : » suivi de la raison.
 
 ### Routes retirées
 

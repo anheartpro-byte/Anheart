@@ -267,8 +267,12 @@ partie privée hors du dépôt :
 
 1. `openssl genpkey -algorithm ed25519 -out <chemin hors du dépôt>/catalogue.key`,
    puis `openssl pkey -in <chemin hors du dépôt>/catalogue.key -pubout -out raspberry-pi/config/anheart_catalog.pub`.
-2. Poser la partie privée dans Convex, sur le déploiement visé, avec son
-   accord explicite :
+2. **Publier d'abord les programmes** sur ce déploiement (page Programmes du
+   site), puis poser la partie privée dans Convex, avec l'accord explicite de
+   l'utilisateur. Signé, le catalogue remplace les programmes de chaque
+   console : sans programme publié (révision 0) une console garde ses
+   programmes de secours, mais un catalogue dont tout est retiré la laisse
+   sans programme.
    `npx convex env set ANHEART_CATALOG_SIGNING_KEY "$(openssl pkey -in <chemin hors du dépôt>/catalogue.key -outform DER | base64 | tr -d '\n')"`
    (PKCS #8 en base64 sur une ligne ; le PEM complet est accepté aussi).
    Une valeur qui n'est pas une clé Ed25519 n'est jamais servie : la route

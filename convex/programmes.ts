@@ -23,6 +23,8 @@ import { refusal } from "./lib/errors";
 import { currentMedicalParameters } from "./lib/medicalParameters";
 import {
   catalogPayload,
+  FALLBACK_PROFILE_IDS,
+  MAX_CATALOG_PAYLOAD_BYTES,
   PROGRAMME_MEDICAL_VERSION,
   PROGRAMME_SCHEMA_VERSION,
   programmeProfileFields,
@@ -96,12 +98,16 @@ function requireValid(profile: ProgrammeProfile): void {
     });
 }
 
-/** A profile id keys session records on the machines: one programme each. */
+/**
+ * A profile id keys session records on the machines: one programme each, and
+ * never the id of a console's fallback programme (ANH-138).
+ */
 async function requireFreeProfileId(
   ctx: MutationCtx,
   profileId: string,
   self: Id<"programmes"> | null,
 ): Promise<void> {
+  if (FALLBACK_PROFILE_IDS.includes(profileId)) throw refusal("programme_id_taken");
   const holder = await ctx.db
     .query("programmes")
     .withIndex("by_profile_id", (q) => q.eq("profileId", profileId))
@@ -236,6 +242,8 @@ export const validate = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { admin, programme } = await programmeIn(ctx, args.programmeId, "draft");
+    // Checked again: a draft may predate the reserved ids.
+    await requireFreeProfileId(ctx, programme.profileId, programme._id);
     if (admin._id === programme.createdBy || admin._id === programme.updatedBy)
       throw refusal("programme_self_validation");
     requireValid(programme);
@@ -280,6 +288,7 @@ export const publish = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { admin, programme } = await programmeIn(ctx, args.programmeId, "validated");
+    await requireFreeProfileId(ctx, programme.profileId, programme._id);
     const fields = Object.fromEntries(
       Object.entries(programme).filter(([key]) => !key.startsWith("_")),
     ) as WithoutSystemFields<Doc<"programmes">>;
@@ -290,6 +299,13 @@ export const publish = mutation({
       updatedBy: admin._id,
       updatedAt: Date.now(),
     };
+    // The machines must still be able to read the whole catalogue (ANH-138).
+    const others = (await ctx.db.query("programmes").collect()).filter(
+      (row) => row.organizationId === null && row._id !== programme._id,
+    );
+    const text = catalogPayload([...others, published], null);
+    if (new TextEncoder().encode(text).length > MAX_CATALOG_PAYLOAD_BYTES)
+      throw refusal("programme_catalog_too_large");
     await ctx.db.replace(programme._id, published);
     await ctx.db.insert("programme_revisions", {
       programmeId: programme._id,

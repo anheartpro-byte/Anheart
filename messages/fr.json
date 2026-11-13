@@ -293,6 +293,7 @@
     "programme_medical_version_unavailable": "Aucune version des paramètres médicaux n'est enregistrée sur ce serveur, comme en production tant que les valeurs médicales signées (ANH-98) manquent : aucun programme ne peut être validé.",
     "programme_medical_version_not_current": "Le brouillon a été vérifié pour une version des paramètres médicaux qui n'est plus la version courante : enregistrez-le à nouveau.",
     "programme_simulation_report_missing": "Joignez d'abord le rapport de simulation au brouillon.",
+    "programme_catalog_too_large": "Publié, ce programme rendrait le catalogue signé plus grand que ce qu'une machine lit : retirez d'abord un programme.",
     "invalid_medical_signoff": "La signature médicale demande un signataire (1 à 200 caractères), une date passée et une note de 1000 caractères au plus.",
     "not_authenticated": "Votre session a expiré ou vous n'êtes plus connecté. Reconnectez-vous pour continuer.",
     "account_not_registered": "Votre compte n'est pas encore prêt sur le serveur. Patientez quelques instants, puis reconnectez-vous si le message persiste.",

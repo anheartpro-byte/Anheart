@@ -16,6 +16,7 @@
 import { v, type Infer, type ObjectType } from "convex/values";
 import machineApi from "../../contracts/machine-api.json";
 import shippedMedical from "../../raspberry-pi/config/medical_parameters.json";
+import shippedDefaults from "../../raspberry-pi/config/profiles.default.json";
 import { decodeBase64 } from "./medicalParameters";
 
 /** `NAMEPLATE_MOTOR_RPM`: `max_rpm` above it needs `allow_above_nameplate`. */
@@ -252,6 +253,17 @@ export function programmeRefusal(p: ProgrammeProfile): ProgrammeRefusal | null {
 export const CATALOG_SIGNING_KEY_ENV = machineApi.programme_catalog.signing_key_env;
 const MAX_REPORT_ENTRIES = machineApi.programme_catalog.max_report_entries;
 const MAX_REASON_CHARS = machineApi.programme_catalog.max_reason_chars;
+/** The largest signed text a console is sent: well inside what it reads (1 MiB in all). */
+export const MAX_CATALOG_PAYLOAD_BYTES = machineApi.programme_catalog.max_payload_bytes;
+
+/**
+ * The ids of the programmes a console ships as its fallback
+ * (`raspberry-pi/config/profiles.default.json`): no catalogue programme may
+ * take one, with other values under the same name.
+ */
+export const FALLBACK_PROFILE_IDS: readonly string[] = shippedDefaults.profiles.map(
+  (profile) => profile.profile_id,
+);
 
 /** What the catalogue is made of: a programme's profile, state and medical version. */
 export type CatalogRow = ProgrammeProfile & {
@@ -349,8 +361,12 @@ export const machineCatalogValidator = v.object({
   reportedAt: v.number(),
 });
 
+/**
+ * At most `max` characters, counted as the console counts them (Python's `len`,
+ * code points): an emoji is one, where `length` counts two UTF-16 units.
+ */
 const shortText = (value: unknown, max: number): value is string =>
-  typeof value === "string" && value.length <= max;
+  typeof value === "string" && Array.from(value).length <= max;
 
 /**
  * The catalogue report of a `POST /api/machine/profiles` body: undefined for a

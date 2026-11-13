@@ -269,6 +269,28 @@ describe("ANH-138 what a machine says of the catalogue (POST /api/machine/profil
     expect((await live(w))?.programmeCatalog).toBeUndefined();
   });
 
+  it("counts a reason and an id in code points, as the console does: an emoji is one", async () => {
+    const w = await seedMachineWorld(modules);
+    const max = machineApi.programme_catalog.max_reason_chars;
+    // 500 code points, 1000 UTF-16 units: what the console sends at its bound.
+    const atTheBound = "\u{1F6B4}".repeat(max);
+    expect(atTheBound.length).toBe(2 * max);
+    const accepted = await sendProfiles(w, {
+      ...PROFILES,
+      catalogRevision: 4,
+      accepted: [],
+      rejected: [{ profileId: "\u{1F6B4}".repeat(64), reason: atTheBound }],
+    });
+    expect(accepted.status).toBe(200);
+    const over = await sendProfiles(w, {
+      ...PROFILES,
+      catalogRevision: 4,
+      accepted: [],
+      rejected: [{ profileId: "x", reason: `${atTheBound}x` }],
+    });
+    expect(over.status).toBe(400);
+  });
+
   const tooLong = "x".repeat(machineApi.programme_catalog.max_reason_chars + 1);
   const tooMany = Array.from({ length: machineApi.programme_catalog.max_report_entries + 1 }, (_, n) => `p${n}`);
   it.each([

@@ -177,6 +177,14 @@ ensuite quitté le code avec les anciens champs
 pousser ce schéma, le contrôle de la
 [section 3.7](#37-contrôler-les-champs-retirés-des-machines).
 
+Le catalogue de programmes signé (ANH-138, contrat 1.11) ne part vers les
+consoles qu'une fois la variable `ANHEART_CATALOG_SIGNING_KEY` posée sur le
+déploiement. **Publier les programmes avant de la poser** : le catalogue
+signé remplace alors les programmes de chaque console. Tant que rien n'est
+publié, une console garde ses programmes de secours ; un catalogue dont
+tout a été retiré la laisse sans programme. Procédure de la clé :
+[secrets.md, 3.4](secrets.md#34-clés-de-signature).
+
 ### 3.2 Vérifier un déploiement sans navigateur
 
 ```sh

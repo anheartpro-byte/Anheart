@@ -518,6 +518,29 @@ describe("ANH-203 programmes of a machine", () => {
     expect(screen.text()).not.toContain(t.programs.fallback);
   });
 
+  it("lists two refusals of one id each on its own line, without a duplicate key (ANH-138)", () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const screen = render(
+      <ProfileList
+        profiles={[]}
+        programsEnabled
+        catalog={{
+          revision: 4,
+          rejected: [
+            { profileId: "twice", reason: "identifiant en double dans le catalogue" },
+            { profileId: "twice", reason: "identifiant en double dans le catalogue" },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.text().split("twice : refusé par la machine : identifiant en double").length - 1,
+    ).toBe(2);
+    expect(logged).not.toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
   it("the card treats a machine this person cannot read as one with programmes disabled", () => {
     answer("training:listMachineProfiles", [ENDURANCE]);
     answer("training:getMachineLive", null);
