@@ -1087,9 +1087,9 @@ vagal (effondrement scripté au début du HOLD de son footing).
 
 Ce que fait le code aujourd'hui : un verrou du runtime interdit à la consigne
 de **monter** tant que la tendance des cinq dernières lectures de FC est sous
--20 bpm/min (ou inconnue). Mais une petite montée **décidée au tick même où
-l'effondrement commence**, avant que le capteur ne voie la moindre chute, va
-encore jusqu'au bout. L'invariant `vasovagal_no_accel` le relève.
+-20 bpm/min (ou inconnue). Mais une petite montée **décidée au tick qui suit
+le début de l'effondrement**, avant que le capteur ne voie la moindre chute,
+va encore jusqu'au bout. L'invariant `vasovagal_no_accel` le relève.
 
 Ce que montre l'exécution réelle (`simulation.quick S07`, rapport HTML,
 capture de la recette 5) : 4 violations de t = 679,2 s à 679,8 s, consigne
