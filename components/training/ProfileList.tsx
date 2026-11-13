@@ -15,11 +15,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Heart, Timer, Gauge, ListChecks, Ban, Hand } from "lucide-react";
 import { armRpm, formatMinutes, type TrainingProfile } from "@/lib/training";
 
+/** What the machine said of the signed catalogue (ANH-138), as `getMachineLive` gives it. */
+type ProgrammeCatalog = {
+  revision: number | null;
+  rejected: { profileId: string; reason: string }[];
+};
+
 /** Synced presets, read-only. Speeds are shown as arm rpm, motor rpm underneath. */
 export function ProfileList({
   profiles,
   programsEnabled,
   medicalParametersStatus,
+  catalog,
 }: {
   profiles: TrainingProfile[];
   programsEnabled: boolean;
@@ -30,6 +37,8 @@ export function ProfileList({
     | "current"
     | "obsolete"
     | "ahead";
+  /** Absent: the machine says nothing of the catalogue (a console before contract 1.11). */
+  catalog?: ProgrammeCatalog;
 }) {
   const t = useTranslations("training");
   const medicalIssue =
@@ -85,6 +94,19 @@ export function ProfileList({
           ))}
         </div>
       )}
+      {catalog?.revision === null && (
+        <p className="text-sm text-muted-foreground">{t("programs.fallback")}</p>
+      )}
+      {catalog !== undefined && catalog.rejected.length > 0 && (
+        <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
+          {catalog.rejected.map((r) => (
+            <li key={r.profileId} className="flex items-start gap-2">
+              <Ban className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{t("programs.rejected", { profileId: r.profileId, reason: r.reason })}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
         <Hand className="h-3.5 w-3.5" />
         {t("manualOnlyAtMachine")}
@@ -131,6 +153,7 @@ export function MachineProgramsCard({
             profiles={profiles}
             programsEnabled={live?.programsEnabled ?? false}
             medicalParametersStatus={medicalParametersStatus}
+            catalog={live?.programmeCatalog}
           />
         )}
       </CardContent>

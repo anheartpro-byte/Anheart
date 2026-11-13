@@ -1175,7 +1175,9 @@
       "maxRpm": "Max speed",
       "hardMax": "HR limit",
       "armRpm": "{rpm} rpm arm",
-      "motorRpm": "{rpm} rpm motor"
+      "motorRpm": "{rpm} rpm motor",
+      "fallback": "Fallback programmes: the machine has not received a signed catalogue yet.",
+      "rejected": "{profileId}: refused by the machine: {reason}"
     },
     "rights": {
       "title": "Launch rights",

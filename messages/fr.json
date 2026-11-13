@@ -1175,7 +1175,9 @@
       "maxRpm": "Vitesse max",
       "hardMax": "FC limite",
       "armRpm": "{rpm} tr/min bras",
-      "motorRpm": "{rpm} tr/min moteur"
+      "motorRpm": "{rpm} tr/min moteur",
+      "fallback": "Programmes de secours : la machine n'a encore reçu aucun catalogue signé.",
+      "rejected": "{profileId} : refusé par la machine : {reason}"
     },
     "rights": {
       "title": "Droits de lancement",
