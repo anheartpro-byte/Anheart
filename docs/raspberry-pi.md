@@ -763,6 +763,7 @@ une autre séance la tient (`machine_busy`).
 | `src/control_surface.py` | La boîte aux lettres entre la page web et la boucle : **un seul** ordre à la fois, plus le dernier instantané de télémétrie. Chaque ordre accepté reçoit un identifiant, et son sort (pris, refusé, annulé par un STOP) est publié une fois, sous cet identifiant. | Aucun `await` (vérifié par test) ; l'E-STOP ne passe pas par la boîte aux lettres, il verrouille le superviseur tout de suite ; aucun ordre n'en remplace un autre en silence : un départ n'entre que dans une boîte vide au repos, et seul un STOP prend la place de ce qui attend, en le disant ; l'état ne redevient pas `idle` tant qu'un départ ou un arrêt accepté attend ; l'identifiant n'entre dans aucune décision. Table et courses dans [console-locale.md](console-locale.md#la-boîte-aux-lettres--une-demande-un-sort-et-la-console-le-dit), tenues par `tests/test_request_fates.py`. |
 | `src/cloud_sync.py` | Le lien avec le tableau de bord Convex : battement de cœur, programmes, lancements et arrêts venus du site, et ce que chaque réponse du serveur veut dire pour ce qui a été envoyé. | Ne peut pas arrêter la machine en tombant en panne ; ne peut lancer aucune séance manuelle avec une personne à bord ni régler une vitesse, seulement soumettre, après la confirmation et l'attestation de l'opérateur, le départ manuel de banc d'une séance de banc lestée lancée du site (contrat 1.9) ; n'arme rien d'un serveur d'une autre majeure de contrat ; ne garde aucune file en mémoire ; cherche l'arrêt demandé du site par une tâche à part, qui n'attend derrière aucun envoi ; demande la liste des passagers par une autre tâche à part, que ni le battement de cœur ni l'interrogation des lancements n'attendent ; arrête une séance lancée du site dont le site n'a pas pris le départ. Porte 100 %. |
 | `src/roster.py` | La liste des passagers que le tableau de bord donne à la machine : lecture de la réponse, liste tenue en mémoire, âge d'un passager à bord et FC max pour une séance programmée ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)). | Une réponse remplace la liste en entier ; sans réponse, la liste n'est plus proposée 15 min après sa réception ; une clé refusée la vide ; une valeur absente du site reste inconnue, jamais remplacée ; le nom n'est jamais écrit ni journalisé. Porte 100 %. |
+| `src/programme_catalog.py` | Le catalogue de programmes signé (ANH-138) : demandé au repos, signature Ed25519 vérifiée avec `config/anheart_catalog.pub`, chaque programme revalidé avec les règles de la console, les acceptés écrits sur le magasin ([4.4](#44-séance-programmée-auto), [8.8](#88-le-catalogue-de-programmes-signé-anh-138)). | Rien n'est lu avant la signature ; jamais demandé ni appliqué pendant une séance ; une réponse refusée laisse les programmes tels quels ; ne démarre et n'arme rien. Porte 100 %. |
 | `src/record_uplink.py` | L'envoi des séances au tableau de bord, **relues sur le disque** : déclaration, télémétrie, événements, fin, avec un curseur par enregistrement. | La séance en cours d'abord ; rien n'est avancé sans acquittement ; rien n'est abandonné quand le lien retient ; toute lecture et toute écriture de curseur se fait sur un fil `record-io`, bornée en taille et en durée ([section 8](#8-la-synchronisation-avec-le-tableau-de-bord)). Porte 100 %. |
 | `src/link_state.py` | L'état du lien que l'opérateur lit sur la page (pastille **Serveur**) : `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure`. Tenu à partir de ce que les échanges du lien ont dit en dernier. | Aucune requête n'est faite pour lui et rien n'en tourne dans le tic de commande ; `joignable` seulement sur une réponse du tableau de bord, dans sa propre forme, qui prend ce que la console envoie, et jamais au-delà de 25 s sans une telle réponse ; jamais changé par une seule requête perdue, ni par les réponses à la question d'arrêt (tests de propriétés) ; le motif donné à la page est une ligne de 160 caractères au plus. Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
 | `src/contract.py` | Le contrat versionné de ce lien : version, en-tête, décision « ce serveur est-il de ma majeure ? », lecture de `VERSION`. | Seule une version bien formée de la même majeure est acceptée (test de propriété). Voir [section 14](#14-versions-et-compatibilité). Porte 100 %. |
@@ -1505,8 +1506,22 @@ est renvoyé comme séance échouée avec la raison.
 moteur (5,5 tr/min de sortie). Ils **ne peuvent pas atteindre leur zone** sur le
 sujet modélisé (constat 7 de `simulation/README.md`) : ce sont des profils de
 banc. La zone « jog » 145-155 bpm n'est pas livrée ; elle existe dans les
-scénarios de simulation. La console copie les profils livrés dans
-`data/profiles.local.json` (dossier ignoré par git).
+scénarios de simulation.
+
+**D'où viennent les programmes (ANH-138).** Du catalogue de programmes
+signé, publié sur le site par l'équipe Anheart ([8.8](#88-le-catalogue-de-programmes-signé-anh-138)) :
+la console ne garde, dans `data/profiles.local.json` (dossier ignoré par
+git), que ceux qu'elle a revalidés et acceptés, avec la révision du
+catalogue et la version médicale sous laquelle elle les a acceptés. Les
+profils livrés sont ses **programmes de secours** : chargés seulement tant
+qu'aucun catalogue signé n'a été accepté (pas encore de magasin, ou un
+magasin illisible mis de côté), et le site affiche alors « programmes de
+secours ». Un magasin écrit avant ANH-138, sans catalogue, reste chargé tel
+quel jusqu'au premier catalogue accepté, et le site le montre de la même
+façon. Aucune route de la console n'écrit plus un profil
+(`PUT` et `DELETE /api/profiles` sont retirés). Les portes ci-dessus
+s'appliquent à un programme du catalogue comme à tout autre, à chaque
+départ, après sa revalidation à la réception.
 
 ### 4.5 Le passager : la liste du tableau de bord (ANH-84)
 
@@ -2586,7 +2601,8 @@ exactement pareil, sans tableau de bord.
 | Sens | Quoi | Route Convex | Cadence |
 |---|---|---|---|
 | Pi → Convex | battement de cœur avec l'état (mode, phase, FC, vitesses, g, action de sécurité), la version logicielle, la version du contrat et, si la console enregistre, `recordDegraded` : l'enregistrement de séance est incomplet ou ne peut pas être écrit ([15.3](#153-quand-le-disque-refuse-se-remplit-ou-se-tait)) | `POST /api/machine/heartbeat` | toutes les 10 s (seuil hors ligne du tableau de bord : 90 s) |
-| Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur | `POST /api/machine/profiles` | quand la révision du magasin change |
+| Pi → Convex | profils dont les paliers cardiaques égalent ceux du superviseur ; depuis le contrat 1.11, avec ce que la console a fait du catalogue signé : `catalogRevision` (`null` sur les programmes de secours), `accepted`, `rejected` avec la raison de chaque refus ([8.8](#88-le-catalogue-de-programmes-signé-anh-138)) | `POST /api/machine/profiles` | quand la révision du magasin change, ou ce qu'elle dit du catalogue |
+| Convex → Pi | le catalogue de programmes publié, signé (contrat 1.11, ANH-138) : la console vérifie la signature, revalide chaque programme et garde ceux qu'elle accepte ([8.8](#88-le-catalogue-de-programmes-signé-anh-138)) | `GET /api/machine/programmes?since=<révision>` | au démarrage, puis au plus une fois par minute, **au repos seulement**, par une tâche à elle (`catalog_step`) |
 | Pi → Convex | toute séance lancée ici (MANUEL ou AUTO), sous la référence que porte son enregistrement (`local_ref` du manifeste), avec le début tel que la console l'a daté et l'âge de la séance, et son passager (`userId`, plus `subjectLabel` tant que la console a son nom en mémoire ; rien pour le banc) | `POST /api/machine/training/local` | dès que le dossier de son enregistrement existe, par la tâche de veille (8.6), avant tout autre envoi de la séance ; refaite tant qu'elle n'est pas acquittée, après un redémarrage aussi |
 | Pi → Convex | confirmation du départ d'une séance lancée à distance : `startedAt` est l'heure murale lue à la demande, `sessionAgeMs` vaut 0 | `POST /api/machine/training/start` | par la tâche CloudSync après le clic opérateur et les contrôles locaux, avant `submit_start` ; après un 2xx, le curseur évite une seconde confirmation |
 | Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 3 s quand elle a du retard |
@@ -2618,7 +2634,9 @@ Règles :
   et des paramètres médicaux signés, un lancement AUTO reçu est laissé comme
   s'il n'était pas là, comme quand une telle console ne demandait rien. La
   liste des passagers ne lance rien : elle dit qui un départ tapé à la console
-  peut nommer.
+  peut nommer. Le catalogue signé ne lance rien non plus : il dit quels
+  programmes la console accepte de proposer, après les avoir revalidés
+  ([8.8](#88-le-catalogue-de-programmes-signé-anh-138)).
 * Le poll offre au plus un lancement distant à la fois. Un nouveau résultat
   remplace l'offre précédente; un résultat réussi sans lancement la retire.
   Tant qu'elle est offerte, la page Seance montre le nom obtenu par
@@ -3228,6 +3246,97 @@ pas par un vrai SIGKILL (celui de l'enregistrement est dans
 niveau du corps du battement de cœur, hors de `live` ; le côté Convex ne le
 lit pas encore et ne l'affiche nulle part.
 
+### 8.8 Le catalogue de programmes signé (ANH-138)
+
+`src/programme_catalog.py`, contrat 1.11 (entrée `programme_catalog` de
+[`contracts/machine-api.json`](../contracts/machine-api.json), côté Convex :
+[convex.md](convex.md#le-catalogue-signé-contrat-111-anh-138)). Les programmes
+que l'équipe Anheart publie sur le site arrivent sur la machine sans
+intervention, mais la console reste l'autorité : elle revalide chacun avec
+ses propres règles et refuse, un par un, ce qui ne passe pas.
+
+1. **Au repos seulement** (`LocalPanel.catalog_at_rest`) : runtime `idle`
+   ou `finished`, aucun départ dans la boîte aux lettres, aucun lancement du
+   tableau de bord offert, en confirmation ou pas encore armé
+   (`CloudSync.launch_in_hand`). Au démarrage, puis au plus une fois par
+   minute (`CATALOG_PERIOD`), par une tâche à elle, `catalog_step`, avec la
+   même clôture que les autres tâches du lien : une exception y est
+   journalisée et ne touche ni la console ni ses programmes. La première
+   demande d'un démarrage est toujours la liste entière (`since` absent) :
+   elle est jugée avec les règles de ce démarrage. Les suivantes portent
+   `since=<révision tenue>`.
+2. **La signature avant toute lecture** (`signed_text`) : `payload` est un
+   texte, dont les octets UTF-8 exacts doivent porter la signature Ed25519 de
+   la clé Anheart, vérifiée avec `config/anheart_catalog.pub` (embarquée
+   dans l'image, distincte de `medical.pub`) par la même fonction que le
+   fichier médical. Une signature absente, illisible ou qui ne se vérifie
+   pas, une clé publique illisible, un texte mal formé : la réponse est
+   écartée, la console l'écrit une fois, en `warning`, dans son journal de
+   bord (`logbook/events.jsonl` sous les enregistrements) et dans son
+   journal, et **ses programmes restent ceux d'avant**. La même réponse
+   refusée n'est pas réécrite à chaque minute.
+3. **Chaque programme revalidé** (`review`), dans cet ordre :
+   `medical_parameters_version` égale à la version signée de la console
+   (paramètres non signés : aucun programme accepté) ; tous les contrôles de
+   `parse_profile` (`plan.py`), avec les bornes du fichier médical de la
+   console, et les mêmes mots que le site ; paliers `hard_max_bpm` et
+   `critical_bpm` égaux à `HR_HARD_MAX_BPM` et `HR_CRITICAL_BPM` du fichier
+   signé ; `min_run_rpm` au moins la plus petite consigne des limites de
+   mouvement signées (`min_run_motor_rpm`) ; `max_rpm` au plus la plaque
+   moteur (1380 tr/min), même avec `allow_above_nameplate` ; un plafond
+   personne à bord disponible (sinon sa raison, par exemple
+   `OCCUPANCY_OCCUPIED_ENABLED=false`), et `max_rpm` sous ce plafond. Un
+   identifiant présent deux fois est refusé deux fois. Chaque refus garde sa
+   raison, 500 caractères au plus.
+4. **Les acceptés remplacent le magasin**, en une écriture atomique (fichier
+   temporaire, `fsync`, puis renommage ; `ProfileStore.replace_catalog` par
+   `ProfileWriter`, hors de la boucle), avec la révision du catalogue et la
+   version médicale de la console. Une écriture refusée par le disque laisse
+   l'ancien fichier entier et les programmes d'avant, et se dit dans le
+   journal de bord ; le catalogue est redemandé en entier à la période
+   suivante. Un catalogue identique à ce que le magasin tient n'est pas
+   réécrit. Un catalogue vide vide le magasin : la machine n'a plus de
+   programme.
+5. **Le tableau de bord le sait** par `POST /api/machine/profiles`
+   (`catalogRevision`, `accepted`, `rejected`), renvoyé dès que cela change.
+
+**Jamais pendant une séance.** Rien n'est demandé hors du repos, et ce qui
+revient d'une demande faite au repos n'est appliqué que si la console y est
+toujours : une séance armée entre-temps laisse les programmes tels quels, et
+le catalogue est redemandé au repos suivant. Une séance court sur sa copie
+figée (`Program`) : un programme retiré du catalogue ne part qu'à la
+prochaine mise à jour, au repos, et ne l'interrompt jamais. Une séance
+armée pendant les quelques millisecondes de l'écriture du fichier a déjà sa
+copie figée elle aussi.
+
+**Au démarrage.** Un magasin accepté sous d'autres paramètres médicaux que
+ceux de la console (une nouvelle image, un nouveau fichier signé) est écarté
+en mémoire : aucun programme jusqu'au prochain catalogue accepté, chaque
+programme refusé avec cette raison, une ligne dans le journal de bord.
+
+**Sans catalogue.** Un serveur qui ne signe rien (`not_configured`, l'état
+de tous les déploiements tant que la clé n'est pas posée), un serveur
+antérieur au contrat 1.11 (404), pas de réponse : rien n'est reçu, rien ne
+change, rien n'est écrit dans le journal de bord. La clé publique livrée
+aujourd'hui n'a pas de partie privée ([secrets.md](secrets.md#34-clés-de-signature)) :
+tant qu'elle n'est pas remplacée, aucune console n'accepte de catalogue.
+
+**Limite : le rejeu.** Comme pour le fichier médical, la console ne refuse
+pas une révision plus ancienne que celle qu'elle tient : un texte signé un
+jour par la clé reste acceptable, revalidé par les mêmes règles. Il faudrait,
+pour le rejouer, se placer entre la console et Convex malgré TLS ; il ne
+pourrait que remettre des programmes publiés un jour, ou un catalogue vide.
+Refuser les révisions anciennes bloquerait en revanche une console après la
+remise à zéro d'un déploiement : le choix est laissé ouvert.
+
+Testé par `tests/test_programme_catalog.py` (horloge manuelle, clés créées
+pendant le test), `tests/test_profile_persistence.py` (écriture hors de la
+boucle, entière, sous un moteur qui tourne) et `tests/test_plan.py`. Non
+vérifié : aucun déploiement Convex réel n'a signé de catalogue, et le délai
+de deux minutes entre une publication et un programme lançable sur le site
+(au plus une minute pour la demande, puis l'envoi des profils) n'a pas été
+mesuré contre le déploiement de développement.
+
 ---
 
 ## 9. Les capteurs BITalino
@@ -3777,14 +3886,14 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.10`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.11`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.10`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.11`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`
