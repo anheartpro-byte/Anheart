@@ -1119,8 +1119,11 @@ retire ses doublons. Il ne traite que les objets portant une réservation connue
 Un enregistrement local illisible ou en échec ne bloque pas les suivants :
 la sélection continue après lui et réessaie ensuite. Un enregistrement
 illisible (curseur, manifeste ou fichiers), un manifeste refusé par le
-lecteur strict par exemple, n'atteint jamais le serveur : le journal système
-le dit une fois, par son seul nom de dossier, sans rien de son contenu. Une suppression cloud
+lecteur strict par exemple, n'atteint pas le serveur tant qu'il le reste : le
+journal système le dit une fois, par son seul nom de dossier, sans rien de
+son contenu. Il est relu à chaque passage, au cas où l'erreur était
+passagère, mais ne retient plus la file : seul, il ne compte pas comme un
+échec, et un enregistrement nouveau passe aussitôt. Une suppression cloud
 est conservée dans le curseur comme révocation, y compris après redémarrage ;
 les octets locaux restent présents et aucun marqueur de dépôt n'est créé.
 La réservation signale un fichier rejeté même s'il n'est pas dans la page de

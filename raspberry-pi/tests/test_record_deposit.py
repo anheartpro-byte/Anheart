@@ -563,13 +563,8 @@ async def test_a_new_record_is_sent_at_once_while_a_refused_one_waits_five_minut
     await deposit.close()
 
 
-async def test_a_record_the_reader_refuses_is_said_once_in_the_log_by_its_name_alone(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A manifest the strict reader refuses (a zone counter written as text) never reaches
-    the server, so no incident opens there: the Pi's log keeps a trace, once, with the name
-    of the record and nothing of its content."""
-    record = ready_record(tmp_path / "records")
+def unreadable_for_the_strict_reader(record: Path) -> None:
+    """A zone counter written as text: the reader of the Pi refuses the manifest."""
     manifest_path = record / "manifest.json"
     text = manifest_path.read_text(encoding="utf-8")
     assert text.count('"end_observation":null') == 1
@@ -577,6 +572,16 @@ async def test_a_record_the_reader_refuses_is_said_once_in_the_log_by_its_name_a
         text.replace('"end_observation":null', '"end_observation":{"t":1.0,"zone_in_s":"12.5"}'),
         encoding="utf-8",
     )
+
+
+async def test_a_record_the_reader_refuses_is_said_once_in_the_log_by_its_name_alone(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A manifest the strict reader refuses (a zone counter written as text) never reaches
+    the server, so no incident opens there: the Pi's log keeps a trace, once, with the name
+    of the record and nothing of its content."""
+    record = ready_record(tmp_path / "records")
+    unreadable_for_the_strict_reader(record)
     caplog.set_level(logging.WARNING, logger="src.record.deposit")
     server = DepositServer()
     clock = ManualClock()
@@ -590,6 +595,31 @@ async def test_a_record_the_reader_refuses_is_said_once_in_the_log_by_its_name_a
     assert "12.5" not in said[0]
     assert "zone" not in said[0]
     assert server.calls == 0
+    await deposit.close()
+
+
+async def test_an_unreadable_record_left_alone_does_not_hold_a_new_one_back(
+    tmp_path: Path,
+) -> None:
+    """Once said unreadable, the only record left is passed over and not taken for a failure
+    of the queue: no wait doubling up to five minutes, and a session closed then is sent at
+    the pace the link loop asks for a step."""
+    root = tmp_path / "records"
+    unreadable_for_the_strict_reader(ready_record(root, 1))
+    server = RefusingServer()
+    clock = ManualClock()
+    deposit = RecordDeposit(root, clock, server, server.upload)
+    for _ in range(6):
+        await deposit.step()
+        clock.advance(Seconds(2))
+    ready_record(root, 2)
+    clock.advance(Seconds(1))
+    deposit.schedule()
+    for _ in range(200):
+        if server.asked:
+            break
+        await asyncio.sleep(0.01)
+    assert server.asked == ["session-2"]
     await deposit.close()
 
 

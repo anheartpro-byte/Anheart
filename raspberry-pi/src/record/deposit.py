@@ -134,15 +134,21 @@ class RecordDeposit:
         self._backoff = MIN_BACKOFF if succeeded else Seconds(min(MAX_BACKOFF, self._backoff * 2))
         self._next = Monotonic(now + delay)
 
-    def _unreadable(self, path: Path) -> None:
-        """Say once in the system log that a record is never deposited: its name, nothing of it."""
-        if path not in self._unread:
-            self._unread.add(path)
-            _logger.warning(
-                "deposit: the record %r cannot be read (its cursor, its manifest or its files): "
-                "it is not deposited, and stays on the card",
-                path.name,
-            )
+    def _unreadable(self, path: Path) -> bool:
+        """Say once in the system log that a record cannot be read: its name, nothing of it.
+
+        Answers whether it was said before. Then the record is passed over like a waiting
+        one, read again at each step, and no longer holds the whole queue back.
+        """
+        if path in self._unread:
+            return True
+        self._unread.add(path)
+        _logger.warning(
+            "deposit: the record %r could not be read (its cursor, its manifest or its files): "
+            "it is passed over, read again at each step, and stays on the card",
+            path.name,
+        )
+        return False
 
     async def _work[T](self, work: Callable[[], T]) -> Result[T, RecordError]:
         async with self._disk:

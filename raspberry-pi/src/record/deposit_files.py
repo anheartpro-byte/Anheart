@@ -46,11 +46,13 @@ def next_record(
     root: Path,
     after: Path | None = None,
     waiting: frozenset[Path] = frozenset(),
-    unreadable: Callable[[Path], None] | None = None,
+    unreadable: Callable[[Path], bool] | None = None,
 ) -> Result[DepositRecord | None, RecordError]:
     """The first record to deposit after ``after``, in turn, passing over the ``waiting`` ones.
 
-    A record that cannot be read is passed over too, and handed to ``unreadable``.
+    A record that cannot be read is passed over too, and handed to ``unreadable``: one it
+    answers True for, already said unreadable, counts as passed over and not as a failure,
+    so that alone it leaves the answer ``Ok(None)``.
     """
     try:
         paths = records(root)
@@ -67,9 +69,8 @@ def next_record(
             continue
         selected = eligible_record(path)
         if isinstance(selected, Err):
-            failure = selected.error
-            if unreadable is not None:
-                unreadable(path)
+            if unreadable is None or not unreadable(path):
+                failure = selected.error
         elif selected.value is not None:
             return selected
     return Ok(None) if failure is None else Err(failure)
