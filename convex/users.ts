@@ -19,7 +19,11 @@ import {
 import { effectiveHrMax } from "./training";
 import { currentMedicalParameters } from "./lib/medicalParameters";
 import { refusal } from "./lib/errors";
-import { OPERATOR_ROLES, releaseOperator } from "./lib/consoleAccess";
+import {
+  deleteMembership,
+  insertMembership,
+  updateMembership,
+} from "./lib/memberships";
 import {
   ORGANIZATION_ADMIN_ROLES,
   STAFF_ROLES,
@@ -66,9 +70,9 @@ async function mirrorMembership(
   )
     return;
   if (membership) {
-    await ctx.db.patch(membership._id, { role, active: true });
+    await updateMembership(ctx, membership, { role, active: true });
   } else {
-    await ctx.db.insert("memberships", {
+    await insertMembership(ctx, {
       userId: user._id,
       organizationId,
       role,
@@ -170,7 +174,7 @@ export const getOrCreateUser = mutation({
       createdAt: Date.now(),
     });
     if (home) {
-      await ctx.db.insert("memberships", {
+      await insertMembership(ctx, {
         userId,
         organizationId: home.organization._id,
         role: home.role,
@@ -321,10 +325,8 @@ export const updateUserRole = mutation({
       throw refusal("user_not_found");
     }
 
-    await ctx.db.patch(membership._id, { role: args.role });
+    await updateMembership(ctx, membership, { role: args.role });
     await ctx.db.patch(args.userId, { role: args.role });
-    if (!OPERATOR_ROLES.includes(args.role))
-      await releaseOperator(ctx, args.userId, membership.organizationId, Date.now());
     if (membership.role !== args.role)
       await audit(ctx, {
         actor: userActor(currentUser),
@@ -742,7 +744,7 @@ export const deleteUser = mutation({
     const kept = memberships.filter((m) => !removable(m.organizationId));
     for (const membership of memberships) {
       if (removable(membership.organizationId)) {
-        await ctx.db.delete(membership._id);
+        await deleteMembership(ctx, membership);
         affectedOrganizations.add(membership.organizationId);
       }
     }

@@ -27,6 +27,11 @@ import { internalMutation, type MutationCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
+  deleteMembership,
+  insertMembership,
+  updateMembership,
+} from "../lib/memberships";
+import {
   DEFAULT_ORGANIZATION_SLUG,
   anheartClerkOrganizationId,
   findMembership,
@@ -200,7 +205,7 @@ export const attachExistingRowsToAnheart = internalMutation({
     for (const user of users) {
       await ctx.db.patch(user._id, { organizationId: anheart });
       if (!(await findMembership(ctx, user._id, anheart))) {
-        await ctx.db.insert("memberships", {
+        await insertMembership(ctx, {
           userId: user._id,
           organizationId: anheart,
           role: user.role,
@@ -425,17 +430,17 @@ export const repairDuplicatedAnheartOrganization = internalMutation({
     }
 
     for (const membership of plan.moves) {
-      await ctx.db.patch(membership._id, { organizationId: anheart._id });
+      await updateMembership(ctx, membership, { organizationId: anheart._id });
     }
     for (const { membership, held } of plan.merges) {
-      await ctx.db.patch(held._id, {
+      await updateMembership(ctx, held, {
         role: membership.role,
         active: membership.active,
         clerkMembershipId: membership.clerkMembershipId,
         clerkUpdatedAt: membership.clerkUpdatedAt,
         clerkEventAt: membership.clerkEventAt,
       });
-      await ctx.db.delete(membership._id);
+      await deleteMembership(ctx, membership);
     }
     for (const user of plan.users) {
       await ctx.db.patch(user._id, { organizationId: anheart._id });
