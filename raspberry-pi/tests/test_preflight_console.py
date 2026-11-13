@@ -28,7 +28,11 @@ from src.health import HealthWatch
 from src.health_system import Celsius, SystemHealth
 from src.local_panel import LocalPanel, build_panel, describe_start_refusal, record_preflight
 from src.motor.drive import DriveFault
-from src.result import Ok
+from src.record.logbook import ACTIVE as LOGBOOK_ACTIVE
+from src.record.logbook import DIRECTORY as LOGBOOK
+from src.record.session import operator_alias
+from src.record_uplink import LOST_STOP, NOT_LINKED, NOTHING_LOST, SESSION_RUNS
+from src.result import Err, Ok, Result
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.training.preflight import (
     BATTERY_WAIT,
@@ -41,6 +45,7 @@ from src.training.preflight import (
 from src.training.types import Occupancy
 from src.units import Monotonic, Percent, Seconds, UnixMillis
 from src.web.app import create_app
+from src.web.preflight_routes import PreflightRow
 from tests.test_cloud_sync import (
     LAUNCH,
     OPERATOR,
@@ -521,22 +526,28 @@ async def test_a_stop_the_dashboard_has_not_counted_holds_a_person_on_board_not_
     assert on_board.control == "incidents"
     assert words in on_board.detail
     assert monitor.refusal(Occupancy.BENCH) is None
+    # It clears by itself once the link delivers: not offered to the operator.
+    assert not PreflightRow.of(monitor).acknowledgeable
+    words = LOST_STOP.format(why="fin refusee, k17remote")
+    row = PreflightRow.of(monitor)
+    assert row.unreported_stop == words
+    assert row.acknowledgeable, "a session lost for good is"
     await rig_.panel.close()
 
 
-async def test_the_page_acknowledges_a_held_stop_by_name(tmp_path: Path) -> None:
-    """ANH-145: ``POST /api/preflight/acknowledge``, wired to the dashboard link."""
+async def test_the_page_acknowledges_a_lost_stop_by_name(tmp_path: Path) -> None:
+    """ANH-145: ``POST /api/preflight/acknowledge``, wired to the panel, which notes it."""
     rig_ = linked(tmp_path, preflight=True)
-    cloud = rig_.panel.cloud
-    assert cloud is not None
-    assert rig_.panel.services.stop_acknowledge == cloud.acknowledge_unreported_stop
+    assert rig_.panel.services.stop_acknowledge == rig_.panel.acknowledge_lost_stops
     told: list[str] = []
-    held: list[str | None] = ["seance terminee sur emergency_stop pas encore recue"]
+    answers: list[Result[tuple[str, ...], str]] = [
+        Ok(("fin refusee, k17remote",)),
+        Err(NOTHING_LOST),
+    ]
 
-    def acknowledge(operator: str) -> str | None:
+    async def acknowledge(operator: str) -> Result[tuple[str, ...], str]:
         told.append(operator)
-        words, held[0] = held[0], None
-        return words
+        return answers.pop(0)
 
     services = replace(rig_.panel.services, stop_acknowledge=acknowledge)
     app = create_app(services=services, config=config_from(BASE_ENV).web)
@@ -552,6 +563,7 @@ async def test_the_page_acknowledges_a_held_stop_by_name(tmp_path: Path) -> None
             assert done.status_code == HTTPStatus.OK
             again = await session.post("/api/preflight/acknowledge", json={"operator": OPERATOR})
             assert again.status_code == HTTPStatus.CONFLICT
+            assert cast("Mapping[str, object]", again.json())["detail"] == NOTHING_LOST
             assert told == [OPERATOR, OPERATOR]
             unlinked = create_app(
                 services=replace(services, stop_acknowledge=None),
@@ -564,8 +576,65 @@ async def test_the_page_acknowledges_a_held_stop_by_name(tmp_path: Path) -> None
                     "/api/preflight/acknowledge", json={"operator": OPERATOR}
                 )
                 assert refused.status_code == HTTPStatus.CONFLICT
+                assert cast("Mapping[str, object]", refused.json())["detail"] == NOT_LINKED
     finally:
         await rig_.panel.close()
+
+
+async def test_the_panel_notes_an_acknowledgement_in_the_logbook_by_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ANH-145: what was released, by whom, in the logbook and in the log (``%r``)."""
+    r = rig(tmp_path, record_root=tmp_path / "records", preflight=True)
+    journal = r.journal
+    assert journal is not None
+    try:
+
+        async def released(_self: CloudSync) -> Result[tuple[str, ...], str]:
+            return Ok(("fin refusee, k17remote",))
+
+        monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", released)
+        done = await r.panel.acknowledge_lost_stops("Mme\nDurand")
+        assert done == Ok(("fin refusee, k17remote",))
+        assert "'Mme\\nDurand'" in caplog.text, "the name is quoted in the log"
+        journal.drain()
+        logbook = (journal.root / LOGBOOK / LOGBOOK_ACTIVE).read_text(encoding="utf-8")
+        line = cast("Mapping[str, object]", json.loads(logbook.splitlines()[-1]))
+        assert line["kind"] == "operator_action"
+        assert line["detail"] == "lost_stops_acknowledged: fin refusee, k17remote"
+        assert line["actor"] == operator_alias("Mme\nDurand")
+
+        async def refused(_self: CloudSync) -> Result[tuple[str, ...], str]:
+            return Err(SESSION_RUNS)
+
+        monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", refused)
+        assert await r.panel.acknowledge_lost_stops(OPERATOR) == Err(SESSION_RUNS)
+    finally:
+        await r.panel.close()
+
+
+async def test_a_console_that_records_nothing_logs_an_acknowledgement_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig_ = linked(tmp_path, preflight=True)
+    try:
+
+        async def released(_self: CloudSync) -> Result[tuple[str, ...], str]:
+            return Ok(("fin abandonnee, k1",))
+
+        monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", released)
+        assert await rig_.panel.acknowledge_lost_stops(OPERATOR) == Ok(("fin abandonnee, k1",))
+        assert "lost_stops_acknowledged: fin abandonnee, k1" in caplog.text
+    finally:
+        await rig_.panel.close()
+
+
+async def test_a_console_not_linked_has_nothing_to_acknowledge(tmp_path: Path) -> None:
+    panel = _console(tmp_path, ManualClock())
+    try:
+        assert await panel.acknowledge_lost_stops(OPERATOR) == Err(NOT_LINKED)
+    finally:
+        await panel.close()
 
 
 async def test_a_bench_launch_arms_when_only_a_person_on_board_would_be_refused(
