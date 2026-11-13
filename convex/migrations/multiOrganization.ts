@@ -31,12 +31,20 @@ import {
   insertMembership,
   updateMembership,
 } from "../lib/memberships";
+import { SYSTEM_ACTOR } from "../lib/audit";
 import {
   DEFAULT_ORGANIZATION_SLUG,
   anheartClerkOrganizationId,
   findMembership,
   findUnlinkedDefaultOrganization,
 } from "../lib/auth";
+
+/**
+ * A release of a console operator these migrations cause (ANH-152) is the
+ * system's, on the state Clerk's webhook gave the membership: the operator
+ * source stays the three registered functions' (`auditCompleteness.test.ts`).
+ */
+const BY_MIGRATION = { actor: SYSTEM_ACTOR, source: "webhook" } as const;
 
 /** Rows attached per run when the operator does not choose. */
 const DEFAULT_BATCH_SIZE = 500;
@@ -205,12 +213,11 @@ export const attachExistingRowsToAnheart = internalMutation({
     for (const user of users) {
       await ctx.db.patch(user._id, { organizationId: anheart });
       if (!(await findMembership(ctx, user._id, anheart))) {
-        await insertMembership(ctx, {
-          userId: user._id,
-          organizationId: anheart,
-          role: user.role,
-          active: true,
-        });
+        await insertMembership(
+          ctx,
+          { userId: user._id, organizationId: anheart, role: user.role, active: true },
+          BY_MIGRATION,
+        );
       }
       attached++;
     }
@@ -430,7 +437,7 @@ export const repairDuplicatedAnheartOrganization = internalMutation({
     }
 
     for (const membership of plan.moves) {
-      await updateMembership(ctx, membership, { organizationId: anheart._id });
+      await updateMembership(ctx, membership, { organizationId: anheart._id }, BY_MIGRATION);
     }
     for (const { membership, held } of plan.merges) {
       await updateMembership(ctx, held, {
@@ -439,8 +446,8 @@ export const repairDuplicatedAnheartOrganization = internalMutation({
         clerkMembershipId: membership.clerkMembershipId,
         clerkUpdatedAt: membership.clerkUpdatedAt,
         clerkEventAt: membership.clerkEventAt,
-      });
-      await deleteMembership(ctx, membership);
+      }, BY_MIGRATION);
+      await deleteMembership(ctx, membership, BY_MIGRATION);
     }
     for (const user of plan.users) {
       await ctx.db.patch(user._id, { organizationId: anheart._id });

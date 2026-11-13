@@ -378,6 +378,25 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         ];
       })),
     );
+    // An operator of the machine, with a code: their departure releases it (ANH-152).
+    await w.t.run((ctx) =>
+      ctx.db.insert("machine_operators", {
+        organizationId: w.orgA,
+        machineId: w.machine,
+        userId: memberId,
+        operatorCode: {
+          algorithm: "scrypt",
+          n: 32768,
+          r: 8,
+          p: 1,
+          salt: "c3ludGhldGljLXNhbHQ=",
+          hash: "c3ludGhldGljLWNvZGUtaGFzaA==",
+        },
+        codeSetAt: NOW,
+        enabledAt: NOW,
+        enabledBy: w.orgAdmin,
+      }),
+    );
     const deactivation = {
       eventId: "audit-member-delete",
       event: {
@@ -393,6 +412,9 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         await w.t.mutation(internal.clerkWebhook.applyEvent, deactivation);
         return [
           system("membership.deactivated", memberId, "user", "webhook", w.orgA),
+          system("machine_operator.released", memberId, "user", "webhook", w.orgA, {
+            count: 1,
+          }),
         ];
       })),
     );

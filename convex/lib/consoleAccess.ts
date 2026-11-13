@@ -19,6 +19,7 @@ import { v, type Infer } from "convex/values";
 import machineApi from "../../contracts/machine-api.json";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { audit, type AuditOrigin } from "./audit";
 
 const SECTION = machineApi.operator_list;
 
@@ -42,13 +43,16 @@ export const OPERATOR_ROLES: readonly string[] = ["admin", "gestionnaire"];
  * ended, their account or the organisation deleted, or a role that is no
  * longer admin nor gestionnaire): their operator rows there are disabled and
  * their code cleared. Coming back takes a new activation by an admin and a new
- * code, never the old ones. Returns the rows changed.
+ * code, never the old ones. Returns the rows changed; when there is one, the
+ * audit log says so (`machine_operator.released`, the count only, never a
+ * code nor a hash), in the name of `origin`.
  */
 export async function releaseOperator(
   ctx: MutationCtx,
   userId: Id<"users">,
   organizationId: Id<"organizations">,
   at: number,
+  origin: AuditOrigin,
 ): Promise<number> {
   const rows = await ctx.db
     .query("machine_operators")
@@ -65,6 +69,14 @@ export async function releaseOperator(
     });
     changed += 1;
   }
+  if (changed > 0)
+    await audit(ctx, {
+      ...origin,
+      organizationId,
+      action: "machine_operator.released",
+      targetId: userId,
+      details: { count: changed },
+    });
   return changed;
 }
 

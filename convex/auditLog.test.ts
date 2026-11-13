@@ -564,6 +564,8 @@ describe("ANH-167 T01-b append-only and T01-c no purge", () => {
         "AuditTargetType",
         "AuditAction",
         "AuditActor",
+        // Who writes an entry, for a helper that audits on its caller's behalf (ANH-152).
+        "AuditOrigin",
       ].sort(),
     );
     expect(sources["./lib/audit.ts"]).not.toMatch(

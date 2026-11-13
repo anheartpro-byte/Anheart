@@ -12,6 +12,7 @@
  */
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import type { AuditOrigin } from "./audit";
 import { OPERATOR_ROLES, releaseOperator } from "./consoleAccess";
 
 type MembershipFields = Omit<Doc<"memberships">, "_id" | "_creationTime">;
@@ -20,20 +21,25 @@ type MembershipFields = Omit<Doc<"memberships">, "_id" | "_creationTime">;
 async function releaseUnlessOperator(
   ctx: MutationCtx,
   membership: Pick<MembershipFields, "userId" | "organizationId" | "role" | "active">,
+  origin: AuditOrigin,
   at: number,
 ): Promise<void> {
   if (!membership.active || !OPERATOR_ROLES.includes(membership.role))
-    await releaseOperator(ctx, membership.userId, membership.organizationId, at);
+    await releaseOperator(ctx, membership.userId, membership.organizationId, at, origin);
 }
 
-/** A new membership. `at`: when the change took place (Clerk's date, else now). */
+/**
+ * A new membership. `origin`: who made the change, for the audit of a release.
+ * `at`: when the change took place (Clerk's date, else now).
+ */
 export async function insertMembership(
   ctx: MutationCtx,
   fields: MembershipFields,
+  origin: AuditOrigin,
   at: number = Date.now(),
 ): Promise<Id<"memberships">> {
   const id = await ctx.db.insert("memberships", fields);
-  await releaseUnlessOperator(ctx, fields, at);
+  await releaseUnlessOperator(ctx, fields, origin, at);
   return id;
 }
 
@@ -42,18 +48,20 @@ export async function updateMembership(
   ctx: MutationCtx,
   membership: Doc<"memberships">,
   change: Partial<MembershipFields>,
+  origin: AuditOrigin,
   at: number = Date.now(),
 ): Promise<void> {
   await ctx.db.patch(membership._id, change);
-  await releaseUnlessOperator(ctx, { ...membership, ...change }, at);
+  await releaseUnlessOperator(ctx, { ...membership, ...change }, origin, at);
 }
 
 /** A membership removed: the member is out of that organisation. */
 export async function deleteMembership(
   ctx: MutationCtx,
   membership: Doc<"memberships">,
+  origin: AuditOrigin,
   at: number = Date.now(),
 ): Promise<void> {
   await ctx.db.delete(membership._id);
-  await releaseOperator(ctx, membership.userId, membership.organizationId, at);
+  await releaseOperator(ctx, membership.userId, membership.organizationId, at, origin);
 }

@@ -103,7 +103,8 @@
       "machine_operator": {
         "enabled": "Console operator enabled",
         "disabled": "Console operator disabled",
-        "code_set": "Console code set"
+        "code_set": "Console code set",
+        "released": "Console operator released on leaving"
       },
       "machine_device": {
         "created": "Console tablet created",
