@@ -2672,26 +2672,41 @@ si l'enregistrement de cette séance a reçu un défaut dans cette même borne.
 
 Un événement d'une séance (défaut, verdict, fin en échec, heartbeat qui la
 nomme), sans alerte non lue de cette séance, reprend l'alerte `drive_fault`
-non lue sans séance de la machine écrite depuis moins de `SAME_FAULT_MS`, ou
-écrite pendant la séance. Les dates d'une séance ne servent que si le
-serveur l'a terminée (`endedAt`) et que sa console a daté son départ
-(`machineStartedAt`, axe de la machine) : elles sont alors sur l'horloge du
-serveur, et l'alerte doit avoir été écrite entre son `startedAt` et
-`SAME_FAULT_MS` après son `endedAt`. Sinon (séance active ou interrompue
-pour le serveur, enregistrement rattrapé après un redémarrage de la console,
-dont la fin arrive en dernier, ou console sans axe dont les dates sont
-celles de l'horloge du Pi), seule compte la borne de `SAME_FAULT_MS`. Pour un verdict ou une fin, l'enregistrement de la
-séance doit aussi tenir un défaut. L'alerte prend alors cette séance.
+non lue sans séance de la machine écrite depuis moins de `SAME_FAULT_MS`.
+Pour un verdict ou une fin, l'enregistrement de la séance doit aussi avoir
+reçu un défaut depuis moins de `SAME_FAULT_MS` : la fin tardive d'une séance
+dont l'alerte a été lue ne donne pas son nom à l'alerte d'un défaut plus
+récent. L'alerte prend alors cette séance.
+
+Une seule exception, la fenêtre datée : quand cet événement arrive alors que
+le serveur a déjà terminé la séance (`endedAt`), que sa console a daté son
+départ (`machineStartedAt`, axe de la machine, dates sur l'horloge du
+serveur) et que le destinataire n'a aucune alerte non lue de cette séance,
+il reprend aussi une alerte sans séance écrite entre son `startedAt` et
+`SAME_FAULT_MS` après son `endedAt`. L'ordre du Pi, qui envoie les
+événements avant la fin, ne produit presque jamais ce cas, et un heartbeat
+sans séance ne regarde jamais cette fenêtre. Une séance active ou
+interrompue pour le serveur, un enregistrement rattrapé après un
+redémarrage de la console (sa fin arrive en dernier) ou une console sans
+axe (dates de l'horloge du Pi) n'ont que la borne de `SAME_FAULT_MS`.
 
 Au delà de la borne, un défaut donne une nouvelle alerte et son e-mail : un
 défaut hors séance lu par l'un et pas par l'autre, puis un défaut d'une
 séance trois semaines plus tard, en donne une seconde à chacun ; de même pour
-l'enregistrement d'une séance arrivé deux heures en retard, après un autre
-défaut hors séance. Un `drive_fault` ne reprend jamais une alerte liée à une
-autre séance, et l'horloge du Pi n'élargit jamais la fenêtre : au pire, une
-alerte de plus. Deux défauts différents de la même machine arrivés à moins
-de 90 s l'un de l'autre se fondent, comme un défaut qui se répète : leur
-alerte reste non lue et les compte tous les deux.
+l'enregistrement d'une séance arrivé deux heures en retard, plus de 90 s
+après un autre défaut hors séance. Un `drive_fault` ne reprend jamais une
+alerte liée à une autre séance, et l'horloge du Pi n'élargit jamais la
+fenêtre : au pire, une alerte de plus.
+
+« Arrivés à moins de 90 s » se lit à l'heure d'arrivée au serveur, quelles
+que soient les dates réelles des défauts. Deux défauts différents de la même
+machine arrivés à moins de 90 s l'un de l'autre se fondent donc, comme un
+défaut qui se répète, même quand l'un est ancien : l'enregistrement d'une
+séance qui arrive deux heures en retard, 60 s après un autre défaut hors
+séance, se fond dans l'alerte de ce défaut récent. L'alerte reste non lue et
+les compte tous les deux ; le défaut fondu n'envoie pas son propre e-mail,
+mais un e-mail de défaut variateur sur la même machine est parti au plus
+90 s plus tôt.
 
 **Lecture bornée (ANH-237).** Une livraison ne lit plus toutes les non lues
 de la machine : l'index
@@ -2718,9 +2733,7 @@ parmi ses derniers événements. Aucune alerte ne disparaît ni ne descend.
 Garantie, selon l'ordre d'arrivée, pour le même défaut : **1 alerte et
 1 e-mail par destinataire** quand le heartbeat et l'enregistrement de la
 séance arrivent à moins de `SAME_FAULT_MS` l'un de l'autre, dans les deux
-ordres, et aussi, pour une séance que le serveur a terminée et dont la
-console date le départ, quand le heartbeat a été écrit entre son départ et
-`SAME_FAULT_MS` après sa fin. Le heartbeat, le verdict et l'événement du
+ordres. Le heartbeat, le verdict et l'événement du
 défaut, dans les 6 ordres et aussi en un seul lot (verdict planifié avant le
 défaut par `storeEvents`), donnent ainsi 1 alerte de compteur 3 ; avec la
 fin en échec, à toute place, compteur 4 (tests par les mutations internes
@@ -2732,8 +2745,9 @@ destinataire qui a lu la première, une seule alerte de compteur 6 à celui
 qui ne l'a pas lue (une alerte non lue par séance).
 
 Limites, qui donnent encore 2 alertes pour un même défaut : un heartbeat
-et l'enregistrement arrivés à plus de `SAME_FAULT_MS` l'un de l'autre, hors
-de la fenêtre d'une séance terminée et datée. Par exemple, un lien coupé
+et l'enregistrement arrivés à plus de `SAME_FAULT_MS` l'un de l'autre, même
+pour une séance datée (heartbeat au départ et enregistrement 10 min plus
+tard, ou enregistrement, fin, puis heartbeat 100 s après). Par exemple, un lien coupé
 puis rétabli dont l'enregistrement met plus de 90 s à suivre le heartbeat de
 la reconnexion, ou une route du heartbeat qui échoue plus de 90 s pendant
 que les lots d'événements passent. Et, quand seul un verdict d'une autre

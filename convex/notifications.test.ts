@@ -1438,27 +1438,30 @@ describe("session alert grouping (T03)", () => {
     async ({ after, alerts: expected }) => {
       const w = await seedWorld(modules);
       const sessionId = await session(w);
-      await w.t.run(async (ctx) => {
-        await ctx.db.patch(sessionId, {
+      await w.t.run((ctx) =>
+        ctx.db.patch(sessionId, {
           status: "failed",
           endedAt: NOW,
           machineStartedAt: NOW,
-        });
-        await ctx.db.insert("training_events", {
-          organizationId: w.orgA,
-          sessionId,
-          machineId: w.machine,
-          ...event(1, "verdict", verdictOfFault),
-        });
-      });
+        }),
+      );
       vi.setSystemTime(NOW + after);
       await w.t.mutation(internal.notifications.deliver, {
         machineId: w.machine,
         type: "drive_fault",
         count: 1,
       });
-      // Delivered past the bound of the alert itself: only the window decides.
+      // A verdict received after the end, past the bound of the alert itself:
+      // only the window decides. Rare: the Pi sends its events before the end.
       vi.setSystemTime(NOW + after + SAME_FAULT_MS + 1);
+      await w.t.run((ctx) =>
+        ctx.db.insert("training_events", {
+          organizationId: w.orgA,
+          sessionId,
+          machineId: w.machine,
+          ...event(1, "verdict", verdictOfFault),
+        }),
+      );
       await deliver(w, sessionId, "verdict");
 
       const own = (await alerts(w)).filter((row) => row.userId === w.manager);
@@ -1538,6 +1541,79 @@ describe("session alert grouping (T03)", () => {
     ]);
     expect(await emailsTo(w, w.manager)).toBe(2);
   });
+
+  it("R2 Q7: the late failed end of a read session does not name a newer idle fault alert", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await session(w);
+    await inputs.batch(w, sessionId);
+    const read = (await alerts(w)).find((row) => row.userId === w.manager);
+    if (!read) throw new Error("Missing manager alert");
+    await as(w.t, "manager").mutation(api.notifications.markRead, {
+      notificationId: read._id,
+    });
+    vi.setSystemTime(NOW + 3 * 60 * 60 * 1000);
+    await inputs.heartbeat(w);
+    vi.setSystemTime(NOW + 3 * 60 * 60 * 1000 + 30_000);
+    await w.t.mutation(internal.training.endTrainingSession, {
+      machineId: w.machine,
+      sessionId,
+      failed: true,
+      reason: "safety_verdict: drive_fault",
+    });
+    await delivered(w);
+
+    expect(
+      (await alerts(w))
+        .filter((row) => row.userId === w.manager && !row.read)
+        .map((row) => [row.type, row.sessionId]),
+    ).toEqual([
+      ["drive_fault", undefined],
+      ["session_failed", sessionId],
+    ]);
+  });
+
+  it.each([
+    ["heartbeat at the start, record 10 min later, then the end", "heartbeat"],
+    ["record, end 20 s later, heartbeat 100 s after the record", "record"],
+  ] as const)(
+    "R1: a dated session gives 2 alerts when its heartbeat and record arrive more than 90 s apart: %s",
+    async (_label, first) => {
+      const w = await seedWorld(modules);
+      const sessionId = await session(w);
+      await w.t.run((ctx) =>
+        ctx.db.patch(sessionId, { machineStartedAt: NOW }),
+      );
+      const end = async (at: number) => {
+        vi.setSystemTime(at);
+        await w.t.mutation(internal.training.endTrainingSession, {
+          machineId: w.machine,
+          sessionId,
+          failed: true,
+          reason: "safety_verdict: drive_fault",
+          endedAt: NOW + 1_000,
+        });
+        await delivered(w);
+      };
+      if (first === "heartbeat") {
+        await inputs.heartbeat(w);
+        vi.setSystemTime(NOW + 10 * 60 * 1000);
+        await inputs.batch(w, sessionId);
+        await end(NOW + 10 * 60 * 1000 + 1_000);
+      } else {
+        await inputs.batch(w, sessionId);
+        await end(NOW + 20_000);
+        vi.setSystemTime(NOW + 100_000);
+        await inputs.heartbeat(w);
+      }
+
+      expect(
+        (await alerts(w))
+          .filter((row) => row.userId === w.manager)
+          .map((row) => row.sessionId ?? null)
+          .sort(),
+      ).toEqual([null, sessionId].sort());
+    },
+  );
 
   it("EX-5: gives two alerts for two faults of one session to the recipient who read the first", async () => {
     const w = await seedWorld(modules);

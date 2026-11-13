@@ -388,8 +388,8 @@ async function sessionFaulted(
  * the machine's fault alert without a session written within `SAME_FAULT_MS`,
  * or while that session ran (from its start to `SAME_FAULT_MS` after its end,
  * for a session the server ended and whose machine dated its start), when the
- * event is a fault or the session's record holds one. Undefined otherwise: a
- * new alert, never a lost one.
+ * event is a fault or the session's record received one within
+ * `SAME_FAULT_MS`. Undefined otherwise: a new alert, never a lost one.
  */
 async function sameFault(
   ctx: QueryCtx,
@@ -438,7 +438,7 @@ async function sameFault(
   );
   return during !== undefined &&
     (type === "drive_fault" ||
-      (await sessionFaulted(ctx, event.sessionId, 0)))
+      (await sessionFaulted(ctx, event.sessionId, now - SAME_FAULT_MS)))
     ? during
     : undefined;
 }

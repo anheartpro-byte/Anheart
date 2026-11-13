@@ -1796,9 +1796,8 @@ hors ligne » reste regroupée par machine.
 
 Un défaut variateur signalé par la machine sans nommer la séance et
 l'enregistrement de la séance qui tient ce défaut se rejoignent s'ils
-arrivent à moins de 90 s l'un de l'autre, dans les deux ordres, ou, pour
-une séance terminée que la machine a datée, si le signalement tombe entre
-son départ et 90 s après sa fin. Vous recevez alors **1 alerte et 1 e-mail**
+arrivent à moins de 90 s l'un de l'autre, dans les deux ordres. Vous
+recevez alors **1 alerte et 1 e-mail**
 pour ce défaut. Vous en recevez encore 2 au delà de 90 s d'écart (par
 exemple un enregistrement long à remonter après un lien rétabli), ou si
 seul un verdict d'une autre règle était arrivé. Un défaut plus tardif donne une
