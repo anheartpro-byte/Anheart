@@ -599,7 +599,9 @@ d'enregistrement ECG, retiré.
   séance, qui peuvent venir de deux horloges), le bouton **Arrêter la
   séance** (§5.4) et le bouton **Voir le détail**. Elle redevient active, et
   la page avec elle, dès que la machine la nomme de nouveau ; la fin envoyée
-  par la machine, même tard, la clôt.
+  par la machine, même tard, la clôt. Une séance auto interrompue reste
+  affichée ainsi après sa borne, où elle cesse de retenir son pratiquant
+  (§5.3, ANH-233).
 - Séance d'entraînement **finie** : le même panneau, figé, et le bouton
   **Voir le détail**.
 - La page n'affiche rien d'autre : la console locale n'envoie pas l'ECG brut au
@@ -1136,7 +1138,13 @@ Après **Lancer** :
    avec « Pratiquant déjà dans une autre séance, en attente ou en cours : une
    seule à la fois. » ; si c'est la machine, avec « Cette
    machine a déjà une séance en attente ou en cours : une seule à la fois. ».
-   Le message ne dit pas où est l'autre séance.
+   Le message ne dit pas où est l'autre séance. Une séance **auto**
+   interrompue ne compte plus passé son départ, sa durée prévue et 6 min de
+   marge de rampe (ANH-233), même si sa machine a été supprimée ; elle reste
+   affichée interrompue. Une séance **manuelle** interrompue compte sans borne
+   tant que sa machine se tait : décision ouverte, borne à fixer avec le
+   responsable médical ou action d'administration auditée
+   ([convex.md](convex.md#revérification-à-larmement-anh-144)).
 2. Le site ouvre la vue en direct : « En attente que la machine arme la
    séance… ».
 3. Le Pi interroge Convex toutes les 3 s. Il refait **ses** contrôles

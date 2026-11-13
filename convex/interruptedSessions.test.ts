@@ -28,6 +28,12 @@
  * the machine is silent or runs the session again, and no longer once it is
  * back without naming it (EX-5).
  *
+ * ANH-233: an interrupted auto session holds its rider up to its start, its
+ * duration and `AUTO_RAMP_MARGIN_MS`, and no longer, though it stays
+ * interrupted and running for its machine; the deletion of its machine
+ * changes nothing to that bound. A manual one, or an auto one of unknown
+ * duration, still holds its rider (EX-2, a decision still open).
+ *
  * Everything runs in memory with `convex-test`, the server's clock faked.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,7 +42,11 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SESSION_SILENCE_MS } from "../lib/training";
 import { machineHeaders } from "./machineAuth.fixtures";
-import { INTERRUPT_BATCH } from "./training";
+import {
+  AUTO_RAMP_MARGIN_MS,
+  INTERRUPT_BATCH,
+  REPEATED_START_WINDOW_MS,
+} from "./training";
 import {
   addSession,
   as,
@@ -962,43 +972,43 @@ describe("ANH-231 EX-3 a session with recent news is never marked, whichever pag
 // ANH-231 EX-5: the link cut for 11 minutes during a session
 // ---------------------------------------------------------------------------
 
-describe("ANH-231 EX-5 a launch is refused while the machine is silent or runs the session again", () => {
-  /** A launch from the dashboard by the Anheart admin, for the world's patient. */
-  const launch = (w: MachineWorld, machineId: Id<"machines">) =>
-    w.admin.mutation(api.training.launchAutoSession, {
-      machineId,
-      profileId: w.profileId,
-      userId: w.patient,
-    });
+/** A launch from the dashboard by the Anheart admin, for the world's patient. */
+const launch = (w: MachineWorld, machineId: Id<"machines">) =>
+  w.admin.mutation(api.training.launchAutoSession, {
+    machineId,
+    profileId: w.profileId,
+    userId: w.patient,
+  });
 
-  /** The stable code of a refused call (convex/lib/errors.ts), or null. */
-  const refusalOf = (call: Promise<unknown>) =>
-    call.then(
-      () => null,
-      (error: unknown) => (error instanceof ConvexError ? error.data : error),
-    );
+/** The stable code of a refused call (convex/lib/errors.ts), or null. */
+const refusalOf = (call: Promise<unknown>) =>
+  call.then(
+    () => null,
+    (error: unknown) => (error instanceof ConvexError ? error.data : error),
+  );
 
-  /**
-   * A session launched for the patient and armed by the first machine, which
-   * names it once; then nothing from the machine for 11 minutes, both jobs
-   * running every minute.
-   */
-  async function linkCutFor11Minutes() {
-    const w = await machineWorld();
-    const sessionId = await launch(w, w.machine);
-    await post(w, "/api/machine/training/start", { sessionId });
-    await heartbeat(w, sessionId);
-    for (let minute = 1; minute <= 11; minute++) {
-      await jobAt(w, NOW + minute * MINUTE);
-    }
-    expect((await machineOf(w, w.machine))?.status).toBe("offline");
-    expect((await sessionOf(w, sessionId))?.status).toBe("interrupted");
-    // The other machine is up: whatever holds the rider is not its state.
-    vi.setSystemTime(NOW + 11 * MINUTE + 10 * SECOND);
-    await heartbeat(w, undefined, w.otherKey);
-    return { w, sessionId };
+/**
+ * A session launched for the patient and armed by the first machine, which
+ * names it once; then nothing from the machine for 11 minutes, both jobs
+ * running every minute.
+ */
+async function linkCutFor11Minutes() {
+  const w = await machineWorld();
+  const sessionId = await launch(w, w.machine);
+  await post(w, "/api/machine/training/start", { sessionId });
+  await heartbeat(w, sessionId);
+  for (let minute = 1; minute <= 11; minute++) {
+    await jobAt(w, NOW + minute * MINUTE);
   }
+  expect((await machineOf(w, w.machine))?.status).toBe("offline");
+  expect((await sessionOf(w, sessionId))?.status).toBe("interrupted");
+  // The other machine is up: whatever holds the rider is not its state.
+  vi.setSystemTime(NOW + 11 * MINUTE + 10 * SECOND);
+  await heartbeat(w, undefined, w.otherKey);
+  return { w, sessionId };
+}
 
+describe("ANH-231 EX-5 a launch is refused while the machine is silent or runs the session again", () => {
   const sessionCount = (w: MachineWorld) =>
     w.t.run(async (ctx) => (await ctx.db.query("sessions").collect()).length);
 
@@ -1031,5 +1041,115 @@ describe("ANH-231 EX-5 a launch is refused while the machine is silent or runs t
     const next = await launch(w, w.machine);
     expect((await sessionOf(w, next))?.status).toBe("pending");
     expect(await sessionCount(w)).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ANH-233: an interrupted session whose machine never comes back
+// ---------------------------------------------------------------------------
+
+describe("ANH-233 an interrupted auto session holds its rider until its start, its duration and the ramp margin", () => {
+  // The world's programme lasts 600 s; its start is confirmed at NOW.
+  const BOUND = NOW + 600 * SECOND + AUTO_RAMP_MARGIN_MS;
+  const DAY = 24 * 60 * MINUTE;
+
+  /** The patient launched at `at` on the other machine, which is up. */
+  const launchElsewhereAt = (w: MachineWorld, at: number) => {
+    vi.setSystemTime(at);
+    return launch(w, w.otherMachine);
+  };
+
+  /** A session started at the machine for the patient, then 11 minutes without news of it. */
+  async function silentLocal(w: MachineWorld, body: Record<string, unknown>) {
+    const { sessionId } = await post(w, "/api/machine/training/local", {
+      localRef: "record-1",
+      operatorName: "op-0123456789abcdef",
+      userId: w.patient,
+      ...body,
+    });
+    for (let minute = 1; minute <= 11; minute++) {
+      await jobAt(w, NOW + minute * MINUTE);
+    }
+    const session = await sessionOf(w, sessionId as Id<"sessions">);
+    expect(session?.status).toBe("interrupted");
+    vi.setSystemTime(NOW + 11 * MINUTE + 10 * SECOND);
+    await heartbeat(w, undefined, w.otherKey);
+    return session;
+  }
+
+  it("covers a late arming, the overrun grace and the slowest descent of a programme", () => {
+    const slowestDescentS = (2 * 1380) / 15 + 4;
+    expect(AUTO_RAMP_MARGIN_MS).toBeGreaterThanOrEqual(
+      REPEATED_START_WINDOW_MS + (30 + slowestDescentS) * SECOND,
+    );
+  });
+
+  it("holds the rider up to the bound, then no longer, the session left interrupted and running for its machine", async () => {
+    const { w, sessionId } = await linkCutFor11Minutes();
+    const interruptedAt = (await sessionOf(w, sessionId))?.interruptedAt;
+
+    expect(await refusalOf(launchElsewhereAt(w, BOUND))).toBe("rider_busy");
+    const next = await launchElsewhereAt(w, BOUND + SECOND);
+    // Armed there too: the recheck at arming no longer counts it either.
+    await post(
+      w,
+      "/api/machine/training/start",
+      { sessionId: next },
+      w.otherKey,
+    );
+    expect((await sessionOf(w, next))?.status).toBe("active");
+
+    const held = await sessionOf(w, sessionId);
+    expect(held).toMatchObject({ status: "interrupted", interruptedAt });
+    expect(held?.endedAt).toBeUndefined();
+    expect(await statusAsked(w, sessionId)).toMatchObject({ active: true });
+  });
+
+  it("is not released by the deletion of its machine, whose key is refused: the same bound applies (EX-3)", async () => {
+    const { w, sessionId } = await linkCutFor11Minutes();
+    await w.admin.mutation(api.machines.deleteMachine, {
+      machineId: w.machine,
+    });
+    const refused = await w.t.fetch("/api/machine/heartbeat", {
+      method: "POST",
+      headers: {
+        ...machineHeaders(w.machineKey),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ activeSessionId: sessionId }),
+    });
+    expect(refused.status).toBe(401);
+
+    expect(await refusalOf(launch(w, w.otherMachine))).toBe("rider_busy");
+    expect(await refusalOf(launchElsewhereAt(w, BOUND))).toBe("rider_busy");
+    const next = await launchElsewhereAt(w, BOUND + SECOND);
+    expect((await sessionOf(w, next))?.status).toBe("pending");
+    expect((await sessionOf(w, sessionId))?.status).toBe("interrupted");
+  });
+
+  it("counts from when the server heard of a session its machine dated on a clock a day behind", async () => {
+    const w = await machineWorld();
+    const session = await silentLocal(w, {
+      kind: "auto",
+      startedAt: NOW - DAY,
+      totalDurationS: 600,
+    });
+    expect(session?.startedAt).toBe(NOW - DAY);
+
+    expect(await refusalOf(launchElsewhereAt(w, BOUND))).toBe("rider_busy");
+    const next = await launchElsewhereAt(w, BOUND + SECOND);
+    expect((await sessionOf(w, next))?.status).toBe("pending");
+  });
+
+  it.each<[string, "auto" | "manual"]>([
+    ["a manual session (EX-2, a decision still open)", "manual"],
+    ["an auto session of unknown duration", "auto"],
+  ])("still holds the rider thirty days later for %s", async (_what, kind) => {
+    const w = await machineWorld();
+    await silentLocal(w, { kind, startedAt: NOW, sessionAgeMs: 0 });
+
+    expect(await refusalOf(launchElsewhereAt(w, NOW + 30 * DAY))).toBe(
+      "rider_busy",
+    );
   });
 });

@@ -13,7 +13,8 @@
  *   default): the sweep fails it, and the poll never offers it, even before
  *   the sweep has run;
  * - EX-3: `rider_busy` and `machine_busy`; an interrupted session holds its
- *   rider and its machine while its machine has said nothing since;
+ *   rider and its machine while its machine has said nothing since, an auto
+ *   one no longer past its start, its duration and the ramp margin (ANH-233);
  * - centre B: the same rules across organisations, and a refusal that names
  *   nothing of the other organisation.
  */
@@ -29,6 +30,7 @@ import { DASHBOARD_ERRORS } from "./lib/errors";
 import {
   ARMING_REFUSAL_CODES,
   ARMING_REFUSALS,
+  AUTO_RAMP_MARGIN_MS,
   DEFAULT_PENDING_SESSION_TTL_S,
   EXPIRED_REASON,
   pendingSessionTtlMs,
@@ -889,6 +891,39 @@ describe("ANH-144 EX-3 a machine has one session at a time", () => {
       "pending",
     );
   });
+
+  it.each<[string, "rider" | "machine"]>([
+    ["its rider, on another machine", "rider"],
+    ["its machine", "machine"],
+  ])(
+    "counts an interrupted auto session for %s up to its start, its duration and the ramp margin, and no longer (ANH-233)",
+    async (_what, held) => {
+      const w = await seedWorld(modules);
+      const other = await addSession(w, {
+        machineId: held === "rider" ? w.otherMachine : w.machine,
+        userId: held === "rider" ? w.patient : w.stranger,
+        status: "interrupted",
+        kind: "auto",
+      });
+      await w.t.run((ctx) =>
+        ctx.db.patch(other, { interruptedAt: NOW, totalDurationS: 600 }),
+      );
+      const bound = NOW + 600 * SECOND + AUTO_RAMP_MARGIN_MS;
+
+      vi.setSystemTime(bound);
+      expect(await refusalOf(launch(w, "manager"))).toEqual(
+        held === "rider" ? RIDER_BUSY : MACHINE_BUSY,
+      );
+      vi.setSystemTime(bound + 1);
+      expect((await rowOf(w, await launch(w, "manager")))?.status).toBe(
+        "pending",
+      );
+      expect(await rowOf(w, other)).toMatchObject({
+        status: "interrupted",
+        interruptedAt: NOW,
+      });
+    },
+  );
 
   it("does not count a launch failed before its start as running or waiting", async () => {
     const w = await seedWorld(modules);
