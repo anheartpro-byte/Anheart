@@ -748,11 +748,44 @@ function expiresSoon(session: Doc<"sessions">, now: number): boolean {
 }
 
 /**
+ * How long after its start and its programme's duration a working console may
+ * still be busy with an auto session (ANH-233), on the console's shipped
+ * files. It arms at most `REPEATED_START_WINDOW_MS` (90 s) after the start
+ * the server dated; its rule `session_overrun` ends a programme still running
+ * 30 s past its duration; that ending's descent takes at most 188 s, from the
+ * 1380 rpm nameplate on a programme's ramp (2 x 1380 / 15 rpm/s plus the
+ * drive's 4 s), longer than the walk on the signed motion limits from there;
+ * and the ending then runs the profile's whole recovery again (300 s), motor
+ * stopped, the rider on board. 608 s, rounded up to the minute.
+ * `contracts/hold-bound.json` holds this value, and
+ * `raspberry-pi/tests/test_hold_bound.py` recomputes it from the console's
+ * code and files.
+ */
+export const AUTO_RAMP_MARGIN_MS = 11 * 60_000;
+
+/**
+ * Whether an auto session is past its start, its duration and
+ * `AUTO_RAMP_MARGIN_MS`: its console, if it still works, has stopped turning
+ * and finished the recovery of a shipped profile. Nothing says so of a manual
+ * session, nor of an auto one of unknown duration.
+ */
+function pastAutoHold(session: Doc<"sessions">, now: number): boolean {
+  const duration = session.totalDurationS ?? 0;
+  if (session.kind !== "auto" || !(duration > 0)) return false;
+  // Never before the server heard of it: a local start may be the machine's own clock.
+  const start = Math.max(session.startedAt, session._creationTime);
+  return now > start + duration * 1000 + AUTO_RAMP_MARGIN_MS;
+}
+
+/**
  * Whether a training session may still hold its rider and its machine: a
  * launch waiting for its machine (and not expired), a session running, or one
  * interrupted while its machine has said nothing since: it may still be
  * running. An interrupted session whose machine has been heard since is not
  * running there, since a heartbeat naming it would have made it active again.
+ * An interrupted auto session past `pastAutoHold` holds nothing either,
+ * whether or not its machine still exists (ANH-233). A manual one, or an auto
+ * one of unknown duration, has no such bound: an open decision (EX-2).
  * A session of the retired recording mode (no `kind`) is history, and holds
  * no rider (see `machineHeld` for its machine).
  */
@@ -765,6 +798,7 @@ async function mayHold(
   if (session.status === "pending") return !expired(session, now);
   if (session.status === "active") return true;
   if (session.status !== "interrupted") return false;
+  if (pastAutoHold(session, now)) return false;
   const machine = await ctx.db.get(session.machineId);
   return (
     machine === null ||
@@ -1081,7 +1115,8 @@ async function expireWaitingLaunches(
  * One session at a time (ANH-144): refused with the stable code `rider_busy`
  * when the rider has a session that may still hold them on any machine, of
  * any organisation, and `machine_busy` when the machine has one (`mayHold`):
- * waiting for its machine, running, or interrupted on a machine silent since.
+ * waiting for its machine, running, or interrupted on a machine silent since
+ * (an auto one no longer once past `pastAutoHold`).
  * Neither refusal says where. A launch that has waited too long holds nobody:
  * it is failed on the way, as the sweep would have failed it.
  */
