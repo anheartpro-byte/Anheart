@@ -551,26 +551,30 @@ class ProgrammeCatalog:
         A store holding one accepted before had it from another deployment
         signed by the same key: its programmes are not this dashboard's to
         launch, nor its revision to report. The console goes back to its
-        shipped fallback, says so once, and reports none. A store that holds
-        no catalogue is left as it is.
+        shipped fallback and reports none. Said in the logbook when decided,
+        before the write, so that a restart in between loses no line. Shipped
+        fallback unreadable: no programme, in memory only; the disk keeps the
+        catalogue, judged again at the next start, which a repaired image
+        takes back to its fallback. A store that holds no catalogue is left as
+        it is.
         """
         held = self._store.catalog
         if held is not None:
             if not self._at_rest():
                 self._asked = None
                 return
+            gone = f"catalogue {held.revision} retire : ce tableau de bord n'en publie aucun"
             defaults = self._store.read_defaults()
-            fallback = defaults.value.profiles if isinstance(defaults, Ok) else ()
-            if not await self._replace(fallback, None, NOTHING_PUBLISHED):
-                return
-            self._say(
-                f"catalogue {held.revision} retire : ce tableau de bord n'en publie aucun, "
-                + (
-                    "programmes de secours repris"
-                    if isinstance(defaults, Ok)
-                    else f"aucun programme, ceux de secours illisibles : {defaults.error.detail}"
+            if isinstance(defaults, Err):
+                self._say(
+                    f"{gone}, aucun programme jusqu'au prochain demarrage, ceux de secours "
+                    f"illisibles : {defaults.error.detail}"
                 )
-            )
+                self._store.adopt(StoreContent(rev=self._store.rev, profiles=(), catalog=None))
+            else:
+                self._say(f"{gone}, retour aux programmes de secours")
+                if not await self._replace(defaults.value.profiles, None, NOTHING_PUBLISHED):
+                    return
             self._refused = None
             self._report = CatalogReport(revision=None, accepted=(), rejected=())
         self._held = NOTHING_PUBLISHED

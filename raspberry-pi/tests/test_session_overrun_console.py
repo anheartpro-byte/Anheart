@@ -74,6 +74,7 @@ from tests.test_runtime_session_overrun import (
     _nothing_asks_for_the_descent,  # pyright: ignore[reportPrivateUsage]
 )
 from tests.test_standstill_console import END, LINKED_ENV, Console, console
+from tests.test_web_api import shown_digest
 
 QUICK_PROFILE: Final[str] = "ending_quick"
 """A whole programme in 80 s: its five phases, and the shortest recovery a profile may have."""
@@ -157,7 +158,9 @@ async def _until(run: Console, elapsed: float) -> list[TelemetrySnapshot]:
 
 
 async def _type_start(session: httpx.AsyncClient) -> httpx.Response:
-    return await session.post("/api/session/start", json=START_BODY)
+    return await session.post(
+        "/api/session/start", json={**START_BODY, "profiles_digest": await shown_digest(session)}
+    )
 
 
 async def _to_its_end(run: Console) -> None:

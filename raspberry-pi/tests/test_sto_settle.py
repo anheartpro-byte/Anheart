@@ -19,6 +19,7 @@ from src.units import Bpm, MotorRpm, OutputRpm, Seconds
 from tests.roster_support import RIDER_ID
 from tests.test_failure_rig import PROGRAMME_ENV, attest, make_rig
 from tests.test_runtime import OPERATOR, sto_rig
+from tests.test_web_api import shown_digest
 
 
 @pytest.mark.parametrize("manual", [False, True])
@@ -53,6 +54,7 @@ async def test_sto_held_open_until_standstill_keeps_only_its_latch(
                         "profile_id": "failure_short",
                         "operator": OPERATOR,
                         "subject_id": RIDER_ID,
+                        "profiles_digest": await shown_digest(client),
                     }
                 ),
             )

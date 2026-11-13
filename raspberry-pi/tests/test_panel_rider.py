@@ -40,6 +40,7 @@ from src.units import Bpm, Seconds, UnixMillis
 from tests.record_console_support import RecordedRig, recorded_rig
 from tests.roster_support import CHILD, RIDER, RIDER_ID, RIDER_NAME
 from tests.test_failure_rig import OPERATOR, PROGRAMME_ENV, SHORT_PROFILE, attest
+from tests.test_web_api import shown_digest
 
 FITTING: Final[Rider] = replace(
     RIDER, user_id="k17fitting0synthetic", name="Fitting Rider", hr_max=Bpm(160), birth_year=1980
@@ -108,7 +109,10 @@ async def test_a_programme_runs_for_the_rider_named_and_the_record_names_them_by
     recorded = console(tmp_path)
     async with recorded.rig.http() as session:
         await attest(session)
-        started = await session.post("/api/session/start", json=start_body(FITTING.user_id))
+        started = await session.post(
+            "/api/session/start",
+            json={**start_body(FITTING.user_id), "profiles_digest": await shown_digest(session)},
+        )
         assert started.status_code == httpx.codes.ACCEPTED, started.text
         await recorded.tick(1.0)
     assert state_of(recorded) is RuntimeState.RUNNING, recorded.rig.refusals()
@@ -132,7 +136,10 @@ async def test_a_programme_whose_zone_is_too_high_for_the_rider_is_refused(
     recorded = console(tmp_path)
     async with recorded.rig.http() as session:
         await attest(session)
-        answered = await session.post("/api/session/start", json=start_body(TOO_LOW.user_id))
+        answered = await session.post(
+            "/api/session/start",
+            json={**start_body(TOO_LOW.user_id), "profiles_digest": await shown_digest(session)},
+        )
     assert answered.status_code == httpx.codes.UNPROCESSABLE_ENTITY
     assert "zone_above_subject_ceiling" in answered.text
     assert state_of(recorded) is RuntimeState.IDLE
@@ -168,8 +175,17 @@ async def test_a_value_the_site_has_not_set_refuses_the_programme_at_once(
     recorded = console(tmp_path)
     async with recorded.rig.http() as session:
         await attest(session)
-        no_hr = await session.post("/api/session/start", json=start_body(NO_HR_MAX.user_id))
-        no_year = await session.post("/api/session/start", json=start_body(NO_BIRTH_YEAR.user_id))
+        no_hr = await session.post(
+            "/api/session/start",
+            json={**start_body(NO_HR_MAX.user_id), "profiles_digest": await shown_digest(session)},
+        )
+        no_year = await session.post(
+            "/api/session/start",
+            json={
+                **start_body(NO_BIRTH_YEAR.user_id),
+                "profiles_digest": await shown_digest(session),
+            },
+        )
     assert no_hr.status_code == httpx.codes.CONFLICT
     assert "FC max du passager non renseignee sur le site" in no_hr.text
     assert no_year.status_code == httpx.codes.CONFLICT
@@ -207,7 +223,12 @@ async def test_a_programme_naming_nobody_is_refused(tmp_path: Path) -> None:
         await attest(session)
         nobody = await session.post(
             "/api/session/start",
-            json={"profile_id": SHORT_PROFILE, "operator": OPERATOR, "total_duration_s": None},
+            json={
+                "profile_id": SHORT_PROFILE,
+                "operator": OPERATOR,
+                "total_duration_s": None,
+                "profiles_digest": await shown_digest(session),
+            },
         )
     assert nobody.status_code == httpx.codes.UNPROCESSABLE_ENTITY
     assert "passager requis" in nobody.text
@@ -225,7 +246,12 @@ async def test_an_age_typed_at_the_console_is_refused_and_never_used(tmp_path: P
     async with recorded.rig.http() as session:
         await attest(session)
         typed = await session.post(
-            "/api/session/start", json={**start_body(RIDER_ID), "subject_age": 30}
+            "/api/session/start",
+            json={
+                **start_body(RIDER_ID),
+                "subject_age": 30,
+                "profiles_digest": await shown_digest(session),
+            },
         )
     assert typed.status_code == httpx.codes.UNPROCESSABLE_ENTITY
     assert "ne se saisit plus a la console" in typed.text
@@ -240,7 +266,10 @@ async def test_a_rider_of_a_list_too_old_is_refused_until_the_dashboard_answers(
     recorded.clock.advance(Seconds(ROSTER_MAX_AGE + 60.0))
     async with recorded.rig.http() as session:
         await attest(session)
-        stale = await session.post("/api/session/start", json=start_body(RIDER_ID))
+        stale = await session.post(
+            "/api/session/start",
+            json={**start_body(RIDER_ID), "profiles_digest": await shown_digest(session)},
+        )
         listed = await session.get("/api/roster")
     assert stale.status_code == httpx.codes.CONFLICT
     assert stale.json()["detail"] == (

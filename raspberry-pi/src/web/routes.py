@@ -93,6 +93,7 @@ from src.training.plan import (
     ResolveError,
     UnknownProfile,
     is_profile_id,
+    profiles_digest,
 )
 from src.training.preflight import (
     BRIDGED_BENCH_ONLY,
@@ -238,6 +239,8 @@ VERDICT_LATCHED: Final[str] = "verdict_latched"
 ESTOP_UNATTESTED: Final[str] = "estop_unattested"
 STO_NOT_READY: Final[str] = "sto_not_ready"
 STO_BRIDGED_BENCH_ONLY: Final[str] = "sto_bridged_bench_only"
+PROFILES_CHANGED: Final[str] = "profiles_changed"
+"""The programmes are no longer those the page showed: chosen and previewed again first."""
 
 ESTOP_WIRING_FIELDS: Final[tuple[str, ...]] = ("sto_jumper_removed", "mushroom_wired_nc")
 """The confirmations ``/api/safety/attest`` requires under every source but a declared bridge."""
@@ -841,6 +844,13 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         by resolving it, before anything is submitted, so an operator gets a
         404 rather than a session that starts and immediately ends.
 
+        The programmes must be those the page showed: the ``digest`` of
+        ``GET /api/profiles`` comes back with the start, and one that is no
+        longer the list's is refused (409 ``profiles_changed``), so that a
+        programme whose content changed under its id is never started unseen.
+        Checked with no wait before the submission, and the catalogue changes
+        nothing while a start waits in the mailbox (ANH-138).
+
         The rider is named, by the list's identifier, and nothing else of them
         is taken: an age sent with the start is refused (422), since the age
         and the maximum heart rate are the site's. A rider the list does not
@@ -852,6 +862,7 @@ def _register_session(app: FastAPI, *, services: Services, auth: Sequence[params
         _require_programs_enabled(services)
         operator = _require_operator(body.operator)
         _refuse_typed_age(body.subject_age)
+        _require_profiles_shown(services.store, body.profiles_digest)
         passenger = _require_passenger(services, body.subject_id)
         _require_known_profile(
             services, body.profile_id, body.total_duration_s, hr_max=passenger.hr_max
@@ -1465,6 +1476,26 @@ def _require_known_profile(
         raise _resolve_failure(resolved.error)
 
 
+PROFILES_DIGEST_MISSING_DETAIL: Final[str] = (
+    "demarrage sans l'empreinte de la liste des programmes (profiles_digest) : recharger la "
+    "page, choisir un programme et en faire l'apercu."
+)
+PROFILES_CHANGED_DETAIL: Final[str] = (
+    "les programmes de la console ont change depuis que cette page les a lus : rien n'a ete "
+    "demarre."
+)
+
+
+def _require_profiles_shown(store: ProfileStore, digest: str | None) -> None:
+    """Refuse a start sent from a programme list other than the console's now (ANH-138)."""
+    if digest is None:
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail=PROFILES_DIGEST_MISSING_DETAIL
+        )
+    if digest != profiles_digest(store.list_profiles()):
+        raise Refusal(HTTPStatus.CONFLICT, code=PROFILES_CHANGED, detail=PROFILES_CHANGED_DETAIL)
+
+
 TYPED_AGE_DETAIL: Final[str] = (
     "l'age du passager ne se saisit plus a la console : il vient du site, avec sa FC max, "
     "regles par un gestionnaire. Choisir le passager dans la liste (subject_id)."
@@ -1541,10 +1572,12 @@ def _optional_seconds(value: float | None) -> Seconds | None:
 
 
 def _profile_list(store: ProfileStore) -> ProfileListRow:
-    """Render the store's contents, with the revision an edit must send back."""
+    """Render the store's contents, with their revision and the digest a start sends back."""
+    profiles = store.list_profiles()
     return ProfileListRow(
         rev=int(store.rev),
-        profiles=tuple(ProfileRow.of(profile) for profile in store.list_profiles()),
+        profiles=tuple(ProfileRow.of(profile) for profile in profiles),
+        digest=profiles_digest(profiles),
     )
 
 

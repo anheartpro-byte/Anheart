@@ -916,7 +916,7 @@ async def test_a_catalogue_nothing_was_ever_published_in_is_no_catalogue(tmp_pat
 
 
 LEFT: Final[str] = (
-    "catalogue 5 retire : ce tableau de bord n'en publie aucun, programmes de secours repris"
+    "catalogue 5 retire : ce tableau de bord n'en publie aucun, retour aux programmes de secours"
 )
 
 
@@ -992,12 +992,17 @@ async def test_a_return_to_the_fallback_waits_for_the_rest_and_for_the_disk(
     await r.step(1)
     assert ids(r) == ["dev_only"]
     assert r.catalog.wire_fields()["catalogRevision"] == 5
-    assert len(r.said) == 1
-    assert r.said[0].startswith("catalogue 0 non enregistre, programmes inchanges : ")
+    # Said when decided, then that the disk refused it.
+    assert len(r.said) == 2
+    assert r.said[0] == LEFT
+    assert r.said[1].startswith("catalogue 0 non enregistre, programmes inchanges : ")
     monkeypatch.undo()
     await r.step(CATALOG_PERIOD)
     assert ids(r) == shipped
-    assert r.said[1:] == [LEFT]
+    assert r.said[2:] == [LEFT]
+
+
+SHIPPED_IDS: Final[list[str]] = ["standard_30_min", "standard_45_min"]
 
 
 async def test_without_readable_fallback_programmes_the_console_keeps_none(
@@ -1016,10 +1021,24 @@ async def test_without_readable_fallback_programmes_the_console_keeps_none(
     await r.step(CATALOG_PERIOD)
     assert ids(r) == []
     assert r.catalog.wire_fields()["catalogRevision"] is None
-    assert r.said == [
-        "catalogue 5 retire : ce tableau de bord n'en publie aucun, "
-        "aucun programme, ceux de secours illisibles : absent"
+    said = [
+        "catalogue 5 retire : ce tableau de bord n'en publie aucun, aucun programme jusqu'au "
+        "prochain demarrage, ceux de secours illisibles : absent"
     ]
+    assert r.said == said
+    # Nothing written: the disk keeps the catalogue. Said once.
+    assert [p.profile_id for p in r.on_disk().profiles] == ["dev_only"]
+    await r.step(CATALOG_PERIOD)
+    assert r.said == said
+    # Restarted under a repaired image: the catalogue is judged again, and left.
+    monkeypatch.undo()
+    again = make_rig(tmp_path, stored=r.on_disk())
+    assert ids(again) == ["dev_only"]
+    again.sign(0, [])
+    await again.step()
+    assert ids(again) == SHIPPED_IDS
+    assert again.on_disk().catalog is None
+    assert again.said == [LEFT]
 
 
 async def test_an_answer_too_large_to_read_is_refused_once_in_the_logbook(tmp_path: Path) -> None:

@@ -52,6 +52,7 @@ from tests.test_sto_open_during_stop import (
     standing,
     stopping,
 )
+from tests.test_web_api import shown_digest
 
 PROGRAMME_DRIVE_INPUT: Final[Mapping[str, str]] = {
     **PROGRAMME_ENV,
@@ -235,7 +236,9 @@ async def test_a_short_opening_during_a_programme_latches_and_nothing_starts_una
         assert runtime.state is RuntimeState.FINISHED
         assert runtime.end_reason is EndReason.SAFETY_VERDICT
         # A START typed now is refused with the click, on the runtime's latch: nothing is armed.
-        typed = await session.post("/api/session/start", json=START)
+        typed = await session.post(
+            "/api/session/start", json={**START, "profiles_digest": await shown_digest(session)}
+        )
         assert typed.status_code == httpx.codes.CONFLICT, typed.text
         assert typed.json()["code"] == "verdict_latched"
         assert f"({RULE_STO_OPEN})" in typed.json()["detail"]

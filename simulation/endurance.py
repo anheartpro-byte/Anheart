@@ -65,6 +65,7 @@ from pathlib import Path
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 from tests.fake_record_dashboard import RecordingDashboard
 from tests.roster_support import RIDER_ID
 
@@ -101,6 +102,7 @@ from src.training.runtime import EndReason, RuntimeState
 from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, Seconds, UnixMillis
 from src.web.app import create_app
+from src.web.schemas import ProfileListRow
 
 OUT_DIR: Final[Path] = Path(__file__).resolve().parent / "out" / "endurance"
 
@@ -383,6 +385,9 @@ class Screen:
                 self.refusal = event.detail
 
 
+_PROFILE_LIST: Final[TypeAdapter[ProfileListRow]] = TypeAdapter(ProfileListRow)
+
+
 class Operator:
     """The person at the console: every command through its HTTP API."""
 
@@ -411,6 +416,20 @@ class Operator:
         if answered.is_error:
             raise AnomalyError(f"POST {path}: HTTP {answered.status_code} {answered.text[:300]}")
 
+    async def _profiles_digest(self) -> str:
+        """The digest of the programme list, read as the page reads it before a start."""
+        try:
+            listing = await self._http.get("/api/profiles")
+        except httpx.TransportError as error:
+            raise AnomalyError(
+                f"GET /api/profiles: the console did not answer ({error!r})"
+            ) from error
+        if listing.is_error:
+            raise AnomalyError(
+                f"GET /api/profiles: HTTP {listing.status_code} {listing.text[:300]}"
+            )
+        return _PROFILE_LIST.validate_json(listing.content).digest
+
     async def attest(self) -> None:
         """Attest the wiring of the emergency stop, as a start requires since this boot."""
         await self._post(
@@ -431,7 +450,8 @@ class Operator:
 
         ``total``: the duration the operator chooses for it, or ``None`` for its own.
         The rider is named, and nothing else of them: their age and maximum heart
-        rate are the dashboard's (:mod:`tests.roster_support`).
+        rate are the dashboard's (:mod:`tests.roster_support`). The programmes are
+        those the operator read, by the digest of their list (ANH-138).
         """
         await self._post(
             "/api/session/start",
@@ -440,6 +460,7 @@ class Operator:
                 "operator": OPERATOR,
                 "total_duration_s": total,
                 "subject_id": RIDER_ID,
+                "profiles_digest": await self._profiles_digest(),
             },
         )
 

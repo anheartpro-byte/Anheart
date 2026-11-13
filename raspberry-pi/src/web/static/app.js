@@ -60,6 +60,7 @@ var state = {
   profiles: [],
   profilesShown: null,   // the programmes the choice shows, as one string: rebuilt only when they change
   previewNeeded: false,  // the catalogue withdrew or changed the programme chosen: no Start before a new preview
+  profilesDigest: null,  // the digest of the list shown, sent with a start: the console refuses another list's
   roster: null,          // the last /api/roster answer: names live here, in this page's memory only
   rosterShown: null,     // the riders the list shows, as one string: rebuilt only when it changes
   riderLost: false,      // the rider chosen here is no longer in the list
@@ -3594,6 +3595,7 @@ function refreshProfiles() {
 }
 
 function renderProfiles(listing) {
+  state.profilesDigest = listing.digest;
   var shown = JSON.stringify(listing.profiles);
   if (shown === state.profilesShown) {
     return;
@@ -3875,6 +3877,7 @@ function doStart() {
       operator: rememberOperator(el("operator").value),
       total_duration_s: durationSeconds(),
       subject_id: riderId(),
+      profiles_digest: state.profilesDigest,
     },
   })
     .then(function (command) {
@@ -3883,8 +3886,23 @@ function doStart() {
       loadStatus();
     })
     .catch(function (error) {
+      if (error && error.code === "profiles_changed") {
+        return profilesChanged(error);
+      }
       problem(el("start-note"), error);
     });
+}
+
+/*
+  The console refused the start: its programmes are no longer those this page
+  showed (ANH-138). Nothing was started. Nothing stays chosen, the list is asked
+  again, and Start waits for a programme chosen and previewed from it.
+*/
+function profilesChanged(error) {
+  el("profile").value = "";
+  onProfileChange();
+  previewWithdrawn(error.message + " Choisir un programme et en faire l'apercu avant de demarrer.");
+  return refreshProfiles();
 }
 
 /*

@@ -425,6 +425,7 @@ def test_nothing_in_the_console_holds_a_list_it_was_not_given() -> None:
         )
     assert calls == [
         "src/programme_catalog.py: store.adopt",
+        "src/programme_catalog.py: self._store.adopt",
         "src/training/plan.py: self.adopt",
         "src/training/plan.py: self.adopt",
         "src/web/profile_writer.py: self._store.adopt",

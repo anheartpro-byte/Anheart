@@ -94,6 +94,7 @@ from tests.test_web_api import (
     auth,
     build_rig,
     parse,
+    shown_digest,
     state_of,
     surface_rig,
 )
@@ -731,9 +732,15 @@ def start_body(operator: str) -> Body:
 async def test_a_second_start_gets_a_code_a_fixed_sentence_and_nothing_of_the_first(
     web: WebRig, screen: httpx.AsyncClient
 ) -> None:
-    first = await screen.post("/api/session/start", json=start_body(ALICE))
+    first = await screen.post(
+        "/api/session/start",
+        json={**start_body(ALICE), "profiles_digest": await shown_digest(screen)},
+    )
 
-    second = await screen.post("/api/session/start", json=start_body(BOB))
+    second = await screen.post(
+        "/api/session/start",
+        json={**start_body(BOB), "profiles_digest": await shown_digest(screen)},
+    )
 
     assert refusal_of(second) == RefusedAtOnce(
         detail=START_PENDING_DETAIL, code=START_PENDING, waiting_request_id=request_of(first)
@@ -752,7 +759,10 @@ async def test_a_start_that_finds_a_reset_waiting_is_refused_and_the_reset_keeps
 ) -> None:
     reset = await screen.post("/api/drive/fault-reset", json={"operator": ALICE})
 
-    start = await screen.post("/api/session/start", json=start_body(BOB))
+    start = await screen.post(
+        "/api/session/start",
+        json={**start_body(BOB), "profiles_digest": await shown_digest(screen)},
+    )
 
     assert refusal_of(start) == RefusedAtOnce(
         detail=REQUEST_WAITING_DETAIL, code=REQUEST_WAITING, waiting_request_id=request_of(reset)
@@ -766,6 +776,8 @@ async def test_each_refusal_at_once_has_its_code(web: WebRig, screen: httpx.Asyn
     codes: dict[str, str] = {}
 
     async def refused(name: str, path: str, body: Body) -> None:
+        if path == "/api/session/start":
+            body = {**body, "profiles_digest": await shown_digest(screen)}
         answer = await screen.post(path, json=body)
         codes[name] = refusal_of(answer).code
 
@@ -805,10 +817,16 @@ async def test_a_start_under_a_latched_verdict_or_before_the_attestation_has_its
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=rig.app), base_url="http://testserver", headers=auth()
     ) as session:
-        unattested = await session.post("/api/session/start", json=start_body(BOB))
+        unattested = await session.post(
+            "/api/session/start",
+            json={**start_body(BOB), "profiles_digest": await shown_digest(session)},
+        )
         rig.attest()
         rig.surface.submit_estop(operator=ALICE, reason="pain")
-        latched = await session.post("/api/session/start", json=start_body(BOB))
+        latched = await session.post(
+            "/api/session/start",
+            json={**start_body(BOB), "profiles_digest": await shown_digest(session)},
+        )
 
     assert refusal_of(unattested, HTTPStatus.PRECONDITION_FAILED).code == ESTOP_UNATTESTED
     under_verdict = refusal_of(latched)
@@ -853,7 +871,10 @@ async def test_a_run_state_that_is_not_one_fails_loudly_instead_of_getting_a_cod
     monkeypatch.setattr(ControlSurface, "submit_start", busy)
     assert web.surface.pending is None
     with pytest.raises(AssertionError):
-        _ = await screen.post("/api/session/start", json=start_body(BOB))
+        _ = await screen.post(
+            "/api/session/start",
+            json={**start_body(BOB), "profiles_digest": await shown_digest(screen)},
+        )
 
 
 async def test_the_status_lists_what_became_of_the_last_requests(
@@ -1017,6 +1038,8 @@ class Console:
         ]
 
     async def post(self, path: str, body: Body) -> httpx.Response:
+        if path == "/api/session/start":
+            body = {**body, "profiles_digest": await shown_digest(self.http)}
         return await self.http.post(path, json=body)
 
     async def manual_start(self, operator: str) -> httpx.Response:

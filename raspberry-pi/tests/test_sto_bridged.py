@@ -131,7 +131,7 @@ from tests.test_runtime import GEOMETRY, LIMITS, FakeDrive, sto_rig
 from tests.test_runtime import Rig as RuntimeRig
 from tests.test_sto import RegisterPort
 from tests.test_sto_runtime import MemorySto
-from tests.test_web_api import make_snapshot, parse, probe_socket
+from tests.test_web_api import make_snapshot, parse, probe_socket, shown_digest
 from tests.test_web_sto import socket_frames
 
 SERIAL: Final[Mapping[str, str]] = {"MOTOR_BACKEND": "serial", "MOTOR_PORT": "/dev/ttyUSB-test"}
@@ -415,6 +415,7 @@ async def test_every_console_start_with_a_person_on_board_is_refused_with_the_be
                     "operator": OPERATOR,
                     "total_duration_s": None,
                     "subject_id": RIDER_ID,
+                    "profiles_digest": await shown_digest(client),
                 },
             )
             occupied = await client.post(

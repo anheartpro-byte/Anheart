@@ -49,6 +49,7 @@ from tests.test_failure_rig import PROGRAMME_ENV, attest, make_rig, start_manual
 from tests.test_runtime import GEOMETRY, LIMITS, OPERATOR, FakeDrive, Rig
 from tests.test_runtime import sto_rig as _rig
 from tests.test_sto import RegisterPort
+from tests.test_web_api import shown_digest
 
 
 @dataclass(slots=True)
@@ -629,7 +630,12 @@ async def test_local_http_starts_return_the_named_sto_refusal(
             json=(
                 {"occupancy": "bench", "operator": OPERATOR}
                 if manual
-                else {"profile_id": "failure_short", "operator": OPERATOR, "subject_id": RIDER_ID}
+                else {
+                    "profile_id": "failure_short",
+                    "operator": OPERATOR,
+                    "subject_id": RIDER_ID,
+                    "profiles_digest": await shown_digest(client),
+                }
             ),
         )
         assert response.status_code == 412

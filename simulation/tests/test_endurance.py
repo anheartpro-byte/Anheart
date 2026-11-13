@@ -343,6 +343,32 @@ async def test_ex1_a_day_of_no_length_runs_no_session_and_judges_nothing_green(
     assert "rotation" not in verdicts, "no record, nothing to say of the rotation"
 
 
+async def test_the_operator_reports_a_programme_list_it_cannot_read() -> None:
+    """A programme start reads the list's digest first (ANH-138): no answer, or an error,
+    is an anomaly said by its route, and no start is sent."""
+    calls: list[str] = []
+
+    def unreadable(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(503, text="console starting", request=request)
+
+    def gone(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        raise httpx.ReadError("the console is gone")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(unreadable), base_url="http://console"
+    ) as http:
+        with pytest.raises(AnomalyError, match=r"GET /api/profiles: HTTP 503 console starting"):
+            await Operator(http).start_programme(None)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(gone), base_url="http://console"
+    ) as http:
+        with pytest.raises(AnomalyError, match="GET /api/profiles: the console did not answer"):
+            await Operator(http).start_programme(None)
+    assert calls == ["/api/profiles", "/api/profiles"]
+
+
 async def test_ex1_the_operator_waits_for_the_console_and_reports_what_it_refuses() -> None:
     calls: list[str] = []
 

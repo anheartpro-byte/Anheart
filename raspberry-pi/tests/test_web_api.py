@@ -33,7 +33,7 @@ import asyncio
 import math
 import re
 import socket
-from collections.abc import AsyncIterator, Callable, MutableMapping
+from collections.abc import AsyncIterator, Callable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
@@ -71,7 +71,12 @@ from src.telemetry import (
     PayloadKind,
     TelemetryHub,
 )
-from src.training.plan import ProfileStore
+from src.training.plan import (
+    SHIPPED_DEFAULTS_PATH,
+    ProfileStore,
+    parse_store,
+    profiles_digest,
+)
 from src.training.safety import SafetyLimits, SafetyObservation, SafetySupervisor
 from src.training.types import (
     HeartRateSample,
@@ -109,6 +114,11 @@ from src.web.deps import (
     Services,
     TlsFiles,
     WebConfig,
+)
+from src.web.routes import (
+    PROFILES_CHANGED,
+    PROFILES_CHANGED_DETAIL,
+    PROFILES_DIGEST_MISSING_DETAIL,
 )
 from src.web.schemas import (
     AckRow,
@@ -221,13 +231,19 @@ def build_limits() -> SafetyLimits:
     return SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
 
 
-def build_rig(tmp_path: Path, *, token: str | None = TOKEN, host: str = "127.0.0.1") -> Rig:
+def build_rig(
+    tmp_path: Path,
+    *,
+    token: str | None = TOKEN,
+    host: str = "127.0.0.1",
+    defaults: Path = SHIPPED_DEFAULTS_PATH,
+) -> Rig:
     """Assemble a complete interface over a temporary profile store."""
     clock = ManualClock()
     supervisor = SafetySupervisor(clock=clock, limits=build_limits())
     hub = TelemetryHub(clock=clock)
     surface = ControlSurface(clock=clock, supervisor=supervisor, sink=hub)
-    store = ProfileStore(tmp_path / "profiles.json")
+    store = ProfileStore(tmp_path / "profiles.json", defaults)
     loaded = store.load()
     assert isinstance(loaded, Ok)
     config = WebConfig(host=host, port=8080, token=token)
@@ -335,9 +351,15 @@ def rig(tmp_path: Path) -> Rig:
 @pytest.fixture
 async def client(rig: Rig) -> AsyncIterator[httpx.AsyncClient]:
     """An HTTP client speaking to the app in-process, over ASGI."""
-    transport = httpx.ASGITransport(app=rig.app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as session:
+    async with client_of(rig) as session:
         yield session
+
+
+def client_of(rig: Rig) -> httpx.AsyncClient:
+    """An HTTP client speaking to ``rig``'s app in-process, over ASGI."""
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=rig.app), base_url="http://testserver"
+    )
 
 
 def auth() -> dict[str, str]:
@@ -598,7 +620,12 @@ async def test_a_start_is_refused_until_the_estop_wiring_is_attested(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     assert response.status_code == HTTPStatus.PRECONDITION_FAILED
     assert "attested" in detail(response)
@@ -646,7 +673,12 @@ async def test_start_stop_flow(client: httpx.AsyncClient, rig: Rig) -> None:
     started = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     assert started.status_code == HTTPStatus.ACCEPTED, started.text
     assert parse(CommandRow, started).kind == "start"
@@ -678,10 +710,18 @@ async def test_a_second_start_is_refused(client: httpx.AsyncClient, rig: Rig) ->
     """
     rig.attest()
     body = {"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR}
-    first = await client.post("/api/session/start", headers=auth(), json=body)
+    first = await client.post(
+        "/api/session/start",
+        headers=auth(),
+        json={**body, "profiles_digest": await shown_digest(client, auth())},
+    )
     assert first.status_code == HTTPStatus.ACCEPTED
 
-    second = await client.post("/api/session/start", headers=auth(), json=body)
+    second = await client.post(
+        "/api/session/start",
+        headers=auth(),
+        json={**body, "profiles_digest": await shown_digest(client, auth())},
+    )
     assert second.status_code == HTTPStatus.CONFLICT
     assert second.json()["code"] == "start_pending"
     assert "un demarrage est deja demande" in detail(second)
@@ -702,7 +742,12 @@ async def test_a_second_stop_is_refused(client: httpx.AsyncClient, rig: Rig) -> 
     await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     first = await client.post("/api/session/stop", headers=auth(), json={"operator": OPERATOR})
     assert first.status_code == HTTPStatus.ACCEPTED
@@ -716,9 +761,70 @@ async def test_a_start_needs_an_operator_name(client: httpx.AsyncClient, rig: Ri
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": " "},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": PROFILE_ID,
+            "operator": " ",
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     assert response.status_code == HTTPStatus.BAD_REQUEST
+
+
+async def test_a_start_sent_from_a_list_the_console_no_longer_holds_is_refused(
+    tmp_path: Path,
+) -> None:
+    """ANH-138: the same id, another content. The page read the list, then the console
+    restarted under an image whose fallback programme changed: its start is refused 409
+    ``profiles_changed`` and nothing is submitted; read again, the start is taken."""
+    shipped = SHIPPED_DEFAULTS_PATH.read_text(encoding="utf-8")
+    defaults = tmp_path / "profiles.default.json"
+    defaults.write_text(shipped, encoding="utf-8")
+    before = build_rig(tmp_path, defaults=defaults)
+    async with client_of(before) as session:
+        listing = parse(ProfileListRow, await session.get("/api/profiles", headers=auth()))
+    assert listing.digest == SHIPPED_DIGEST
+    # The image is updated: the same ids, the first programme's zone moved.
+    changed = shipped.replace('"zone_low_bpm": 118', '"zone_low_bpm": 120', 1)
+    assert changed != shipped
+    defaults.write_text(changed, encoding="utf-8")
+    after = build_rig(tmp_path, defaults=defaults)
+    after.attest()
+    body = {"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR}
+    async with client_of(after) as session:
+        refused = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={**body, "profiles_digest": listing.digest},
+        )
+        assert refused.status_code == HTTPStatus.CONFLICT, refused.text
+        assert refused.json() == {
+            "detail": PROFILES_CHANGED_DETAIL,
+            "code": PROFILES_CHANGED,
+            "waiting_request_id": None,
+        }
+        assert after.surface.pending is None
+        read_again = await shown_digest(session, auth())
+        assert read_again != listing.digest
+        taken = await session.post(
+            "/api/session/start", headers=auth(), json={**body, "profiles_digest": read_again}
+        )
+    assert taken.status_code == HTTPStatus.ACCEPTED, taken.text
+
+
+async def test_a_start_without_the_list_digest_is_refused(
+    rig: Rig, client: httpx.AsyncClient
+) -> None:
+    """A page that does not send the digest it read cannot start a programme (ANH-138)."""
+    rig.attest()
+    response = await client.post(
+        "/api/session/start",
+        headers=auth(),
+        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
+    )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert detail(response) == PROFILES_DIGEST_MISSING_DETAIL
+    assert rig.surface.pending is None
 
 
 async def test_a_start_for_an_unknown_profile_is_refused_before_submission(
@@ -729,7 +835,12 @@ async def test_a_start_for_an_unknown_profile_is_refused_before_submission(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": "no_such_profile", "operator": OPERATOR},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": "no_such_profile",
+            "operator": OPERATOR,
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     assert response.status_code == HTTPStatus.NOT_FOUND
     assert rig.surface.pending is None
@@ -744,7 +855,12 @@ async def test_a_start_with_a_malformed_profile_id_is_refused(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": "Not A Profile Id", "operator": OPERATOR},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": "Not A Profile Id",
+            "operator": OPERATOR,
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     assert response.status_code == HTTPStatus.BAD_REQUEST
 
@@ -762,6 +878,7 @@ async def test_an_impossible_duration_override_is_refused(
             "profile_id": PROFILE_ID,
             "operator": OPERATOR,
             "total_duration_s": 60.0,
+            "profiles_digest": await shown_digest(client, auth()),
         },
     )
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
@@ -858,7 +975,12 @@ async def test_a_start_is_refused_while_a_latched_verdict_stands(
     response = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     assert response.status_code == HTTPStatus.CONFLICT
     assert "acknowledged" in detail(response)
@@ -919,7 +1041,12 @@ async def test_acknowledging_clears_the_latch_and_allows_a_start(
     started = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     assert started.status_code == HTTPStatus.ACCEPTED
 
@@ -1265,7 +1392,12 @@ async def test_a_go_silent_verdict_cannot_be_acknowledged_away(
     start = await client.post(
         "/api/session/start",
         headers=auth(),
-        json={"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR},
+        json={
+            "subject_id": RIDER_ID,
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "profiles_digest": await shown_digest(client, auth()),
+        },
     )
     assert start.status_code == HTTPStatus.CONFLICT
 
@@ -2459,6 +2591,21 @@ def parse[T](shape: type[T], response: httpx.Response) -> T:
     """
     assert response.status_code < HTTPStatus.BAD_REQUEST, response.text
     return TypeAdapter(shape).validate_json(response.content)
+
+
+def _shipped_digest() -> str:
+    parsed = parse_store(SHIPPED_DEFAULTS_PATH.read_text(encoding="utf-8"))
+    assert isinstance(parsed, Ok)
+    return profiles_digest(sorted(parsed.value.profiles, key=lambda p: p.profile_id))
+
+
+SHIPPED_DIGEST: Final[str] = _shipped_digest()
+"""The digest of the shipped programmes, as ``GET /api/profiles`` gives it (ANH-138)."""
+
+
+async def shown_digest(client: httpx.AsyncClient, headers: Mapping[str, str] | None = None) -> str:
+    """The digest of the programme list, read as the page reads it before a start (ANH-138)."""
+    return parse(ProfileListRow, await client.get("/api/profiles", headers=headers)).digest
 
 
 def detail(response: httpx.Response) -> str:

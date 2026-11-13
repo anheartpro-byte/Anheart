@@ -44,7 +44,7 @@ from tests.test_sto_open_unread import (
     state_of,
     until_the_stop_is_over,
 )
-from tests.test_web_api import parse
+from tests.test_web_api import parse, shown_digest
 
 STARTS: Final[Mapping[str, tuple[str, Mapping[str, object]]]] = {
     "programme": ("/api/session/start", START),
@@ -54,6 +54,15 @@ SOURCES: Final[Mapping[str, Mapping[str, str]]] = {
     "drive_input": PROGRAMME_DRIVE_INPUT,
     "sim_ready": PROGRAMME_SIM_READY,
 }
+
+
+async def with_digest(
+    session: httpx.AsyncClient, path: str, body: Mapping[str, object]
+) -> Mapping[str, object]:
+    """A programme start's body with the digest of the list the page read (ANH-138)."""
+    if path != "/api/session/start":
+        return body
+    return {**body, "profiles_digest": await shown_digest(session)}
 
 
 def latched_words(verdict: SafetyVerdict) -> str:
@@ -120,7 +129,7 @@ async def test_a_start_under_the_runtime_s_own_latch_is_refused_at_once_until_ac
     async with scene.rig.http() as session:
         if isinstance(scene.panel.sto, DriveInputStoSource):
             # Before the next reading the surface refuses for the chain itself, as it always has.
-            unread = await session.post(path, json=body)
+            unread = await session.post(path, json=await with_digest(session, path, body))
             assert unread.status_code == httpx.codes.PRECONDITION_FAILED, unread.text
             assert unread.json()["code"] == "sto_not_ready"
         await read_ready(scene)
@@ -129,7 +138,7 @@ async def test_a_start_under_the_runtime_s_own_latch_is_refused_at_once_until_ac
         assert shown.rule == RULE_STO_OPEN  # the verdict the page shows
         counters = surface.counters
         written = len(scene.writes)
-        refused = await session.post(path, json=body)
+        refused = await session.post(path, json=await with_digest(session, path, body))
         assert refused.status_code == httpx.codes.CONFLICT, refused.text
         assert refused.json() == refusal(latched)
         assert surface.pending is None  # nothing was put in the mailbox
@@ -141,7 +150,7 @@ async def test_a_start_under_the_runtime_s_own_latch_is_refused_at_once_until_ac
         assert commands_since(scene, written) == []
         assert standing(runtime) == latched
         await acknowledge_once_read(scene)
-        taken = await session.post(path, json=body)
+        taken = await session.post(path, json=await with_digest(session, path, body))
         assert taken.status_code == httpx.codes.ACCEPTED, taken.text
         await scene.run(5)
         assert state_of(scene) is RuntimeState.RUNNING
@@ -166,12 +175,12 @@ async def test_a_supervisor_s_latched_verdict_alone_is_answered_by_the_surface_a
     assert floor.rule == RULE_PRESENCE_CAMERA_LOST
     assert runtime.floor == floor  # nothing of the runtime's own
     async with scene.rig.http() as session:
-        unattested = await session.post(path, json=body)
+        unattested = await session.post(path, json=await with_digest(session, path, body))
         assert unattested.status_code == httpx.codes.PRECONDITION_FAILED, unattested.text
         assert unattested.json()["code"] == "estop_unattested"
         await attest(session)
         accepted, refused_count, published = surface.counters
-        refused = await session.post(path, json=body)
+        refused = await session.post(path, json=await with_digest(session, path, body))
         assert refused.status_code == httpx.codes.CONFLICT, refused.text
         assert refused.json() == refusal(floor)
         assert surface.counters == (accepted, refused_count + 1, published)  # the surface's answer
@@ -184,7 +193,7 @@ async def test_a_supervisor_s_latched_verdict_alone_is_answered_by_the_surface_a
         assert held is not None
         assert held.rule == RULE_OPERATOR_ESTOP
         assert runtime.floor == floor
-        named = await session.post(path, json=body)
+        named = await session.post(path, json=await with_digest(session, path, body))
         assert named.status_code == httpx.codes.CONFLICT, named.text
         assert named.json() == refusal(held)  # the verdict the surface stands on, not the floor
         assert surface.pending is None

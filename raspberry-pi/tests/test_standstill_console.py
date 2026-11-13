@@ -59,6 +59,7 @@ from tests.test_failure_rig import (
     make_rig,
     start_programme,
 )
+from tests.test_web_api import shown_digest
 
 LINKED_ENV: Final[Mapping[str, str]] = {
     **PROGRAMME_ENV,
@@ -255,6 +256,7 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
                 "operator": OPERATOR,
                 "total_duration_s": None,
                 "subject_id": RIDER_ID,
+                "profiles_digest": await shown_digest(session),
             },
         )
         assert typed.status_code == 409, typed.text

@@ -47,6 +47,7 @@ from tests.test_web_api import (
     GEOMETRY,
     OPERATOR,
     PROFILE_ID,
+    SHIPPED_DIGEST,
     TOKEN,
     StubPorts,
     auth,
@@ -176,7 +177,12 @@ HANDLERS: Final[tuple[_Handler, ...]] = (
         False,
         "POST",
         "/api/session/start",
-        {"profile_id": PROFILE_ID, "operator": OPERATOR, "subject_id": RIDER_ID},
+        {
+            "profile_id": PROFILE_ID,
+            "operator": OPERATOR,
+            "subject_id": RIDER_ID,
+            "profiles_digest": SHIPPED_DIGEST,
+        },
     ),
     _Handler(
         "stop_session",

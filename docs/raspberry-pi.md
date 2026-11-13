@@ -3320,10 +3320,16 @@ ses propres règles et refuse, un par un, ce qui ne passe pas.
    console garde ses programmes de secours. Si elle tenait un catalogue
    signé, il venait d'un autre déploiement signé par la même clé (la console
    a été rattachée ailleurs) : elle **revient aux programmes de secours**,
-   l'écrit sans tampon de catalogue, l'annonce `catalogRevision: null` et le
-   dit une fois au journal de bord (`catalogue 5 retire : ce tableau de bord
-   n'en publie aucun, programmes de secours repris`). Au redémarrage, le
-   magasin sans tampon reste tel quel. Un magasin sans tampon (jamais de
+   l'écrit sans tampon de catalogue et l'annonce `catalogRevision: null`. Le
+   journal de bord le dit dès la décision, avant l'écriture
+   (`catalogue 5 retire : ce tableau de bord n'en publie aucun, retour aux
+   programmes de secours`) : un redémarrage entre les deux ne perd pas la
+   ligne, et une écriture refusée se dit à la suite. Au redémarrage, le
+   magasin sans tampon reste tel quel. Si le fichier des programmes de
+   secours est illisible, rien n'est écrit : la console n'a plus de
+   programme, en mémoire seulement, et le dit une fois ; le disque garde le
+   catalogue, jugé de nouveau au démarrage suivant, qu'une image réparée
+   ramène aux programmes de secours. Un magasin sans tampon (jamais de
    catalogue) n'est pas touché.
 5. **Le tableau de bord le sait** par `POST /api/machine/profiles`
    (`catalogRevision`, `accepted`, `rejected`), renvoyé dès que cela change.
@@ -3369,10 +3375,19 @@ qu'il est offert tel quel. Retiré, aucun autre n'est choisi à sa place ;
 modifié sous le même identifiant, son aperçu ne vaut plus. Dans les deux cas
 la page le dit sous les boutons et **Démarrer** attend l'aperçu de ce que
 l'opérateur choisit alors : la page n'envoie jamais un programme que
-l'opérateur n'a ni choisi ni vu. Reste une fenêtre : un catalogue
-accepté par la console après la dernière demande de la page (10 s au plus)
-et avant **Démarrer** n'y paraît pas encore ; la console résout alors le
-programme qu'elle tient.
+l'opérateur n'a ni choisi ni vu. `GET /api/profiles` porte `digest`, l'empreinte (SHA-256) du contenu entier de ses
+programmes, et la page la renvoie avec **Démarrer** (`profiles_digest`). La
+console refuse un démarrage dont l'empreinte n'est plus celle de sa liste
+(409, code `profiles_changed`, rien n'est démarré) : un même identifiant peut
+désigner un autre contenu après un redémarrage (une mise à jour de l'image
+qui change un programme de secours, un autre déploiement signé par la même
+clé), et la page n'a pas encore redemandé la liste. Sur ce refus, la page
+dit la phrase de la console, ne garde aucun programme choisi, redemande la
+liste, et **Démarrer** attend un programme choisi et son aperçu. Un
+démarrage sans empreinte est refusé (422) : la page et la console sont
+livrées ensemble. L'empreinte est vérifiée sans attente avant la remise du
+démarrage, et le catalogue ne change rien tant qu'un démarrage attend dans la
+boîte aux lettres : le programme qui part est celui que l'opérateur a vu.
 
 **Sans catalogue.** Un serveur qui ne signe rien (`not_configured`, l'état
 de tous les déploiements tant que la clé n'est pas posée), un serveur
@@ -3394,8 +3409,9 @@ Testé par `tests/test_programme_catalog.py` (horloge manuelle, clés créées
 pendant le test ; l'écriture retenue pendant que la tâche du lien offre un
 lancement ; le démarrage avec et sans tableau de bord),
 `tests/test_profile_persistence.py` (écriture hors de la boucle, entière,
-sous un moteur qui tourne), `tests/test_plan.py` et
-`tests/web/panel_profiles.test.mjs` (la page). Non
+sous un moteur qui tourne), `tests/test_plan.py`, `tests/test_web_api.py`
+(l'empreinte refusée après un redémarrage sous des programmes de secours
+changés) et `tests/web/panel_profiles.test.mjs` (la page). Non
 vérifié : aucun déploiement Convex réel n'a signé de catalogue, et le délai
 de deux minutes entre une publication et un programme lançable sur le site
 (au plus une minute pour la demande, puis l'envoi des profils) n'a pas été

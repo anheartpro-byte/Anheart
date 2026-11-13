@@ -225,6 +225,56 @@ test("an operator's own choice clears a preview said under the previous one", as
   assert.equal(context.state.zone.low, 120);
 });
 
+test("a start sends the digest of the list shown; refused for another list, the page starts over", async () => {
+  const { context, nodes } = panel();
+  const sent = console_(context);
+  const before = { rev: 1, digest: "d1", profiles: [profile("jog_court", "Jog"), profile("jog_long", "Jog long", 120)] };
+  const after = { rev: 1, digest: "d2", profiles: [profile("jog_court", "Jog", 124), profile("jog_long", "Jog long", 120)] };
+  context.renderProfiles(before);
+  await chooseAndPreview(context, nodes, "jog_court");
+  const answer = context.api;
+  context.api = (path, init) => {
+    if (path === "/api/session/start" && init.body.profiles_digest === "d1") {
+      sent.push([path, init.body]);
+      const refusal = new Error("les programmes de la console ont change depuis que cette page les a lus : rien n'a ete demarre.");
+      refusal.status = 409;
+      refusal.code = "profiles_changed";
+      return Promise.reject(refusal);
+    }
+    if (path === "/api/profiles") {
+      sent.push([path, undefined]);
+      return Promise.resolve(after);
+    }
+    return answer(path, init);
+  };
+  context.doStart();
+  await settle();
+  await settle();
+  // The digest of the list shown went with the start, and the list was asked again.
+  const digests = sent.filter(([path]) => path === "/api/session/start").map(([, body]) => body.profiles_digest);
+  assert.deepEqual(digests, ["d1"]);
+  assert.ok(sent.some(([path]) => path === "/api/profiles"));
+  assert.equal(context.state.profilesDigest, "d2");
+  // Nothing stays chosen, the preview is gone, and the page says why.
+  assert.equal(nodes.get("profile").value, "");
+  assert.deepEqual(nodes.get("plan-limits").children, []);
+  assert.equal(nodes.get("start-note").className, "note note-bad");
+  assert.equal(
+    nodes.get("start-note").textContent,
+    "les programmes de la console ont change depuis que cette page les a lus : rien n'a ete demarre. Choisir un programme et en faire l'apercu avant de demarrer.",
+  );
+  assert.equal(nodes.get("start").disabled, true);
+  context.doStart();
+  assert.deepEqual(starts(sent), ["jog_court"], "no second start before a new choice and preview");
+  // Chosen and previewed again: the start goes with the new list's digest.
+  await chooseAndPreview(context, nodes, "jog_court");
+  context.doStart();
+  assert.deepEqual(
+    sent.filter(([path]) => path === "/api/session/start").map(([, body]) => body.profiles_digest),
+    ["d1", "d2"],
+  );
+});
+
 test("none left: nothing is chosen, and no zone is drawn", () => {
   const { context, nodes } = panel();
   context.renderProfiles(listing(profile("standard_30_min", "30 min")));

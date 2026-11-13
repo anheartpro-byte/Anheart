@@ -1439,6 +1439,23 @@ def profile_to_document(profile: TrainingProfile) -> Mapping[str, JsonValue]:
     }
 
 
+def profiles_digest(profiles: Sequence[TrainingProfile]) -> str:
+    """A digest of these programmes' whole content, in this order (ANH-138).
+
+    What the console page shows with the list, and sends back with a start:
+    the same id may come to stand for another content (another deployment
+    signed by the same key, a fallback changed by an image update), and a
+    start must run the content the operator saw.
+    """
+    text = json.dumps(
+        [profile_to_document(profile) for profile in profiles],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 # =========================================================================
 # The store file
 # =========================================================================

@@ -52,6 +52,7 @@ from src.units import Monotonic, MotorRpm, Seconds, UnixMillis
 from src.wall_clock import WallClockProbe
 from src.web.app import create_app
 from tests.roster_support import RIDER_ID, listed
+from tests.test_web_api import shown_digest
 
 TICK: Final[Seconds] = Seconds(0.2)
 OPERATOR: Final[str] = "dr. attending"
@@ -437,6 +438,7 @@ async def start_programme(session: httpx.AsyncClient) -> None:
             "operator": OPERATOR,
             "total_duration_s": None,
             "subject_id": RIDER_ID,
+            "profiles_digest": await shown_digest(session),
         },
     )
     if started.status_code != 202:

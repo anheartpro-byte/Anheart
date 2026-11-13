@@ -62,6 +62,7 @@ from tests.test_web_api import (
     make_snapshot,
     parse,
     probe_socket,
+    shown_digest,
 )
 
 INSTANCE: Final[re.Pattern[str]] = re.compile(r"\A[0-9a-f]{32}\Z")
@@ -303,7 +304,11 @@ async def test_a_programme_start_is_refused_at_once_while_the_drive_shows_a_faul
     )
     counted = rig.surface.counters
     async with _client(rig) as session:
-        refused = await session.post("/api/session/start", headers=auth(), json=_start_body())
+        refused = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={**_start_body(), "profiles_digest": await shown_digest(session, auth())},
+        )
     assert refused.status_code == HTTPStatus.CONFLICT
     said = detail(refused)
     assert said == DRIVE_FAULT_DETAIL.format(code="ObF, LFT 18")
@@ -321,7 +326,11 @@ async def test_a_fault_whose_code_was_not_read_is_refused_all_the_same(rig: Rig)
         make_snapshot(at=rig.clock.monotonic(), drive_state=DriveState.FAULT, fault=None)
     )
     async with _client(rig) as session:
-        refused = await session.post("/api/session/start", headers=auth(), json=_start_body())
+        refused = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={**_start_body(), "profiles_digest": await shown_digest(session, auth())},
+        )
     assert refused.status_code == HTTPStatus.CONFLICT
     assert detail(refused).startswith("demarrage refuse : variateur en defaut (?)")
 
@@ -343,7 +352,11 @@ async def test_a_drive_that_shows_no_fault_never_has_a_start_refused_for_one(
     rig.attest()
     rig.surface.publish(make_snapshot(at=rig.clock.monotonic(), drive_state=state))
     async with _client(rig) as session:
-        taken = await session.post("/api/session/start", headers=auth(), json=_start_body())
+        taken = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={**_start_body(), "profiles_digest": await shown_digest(session, auth())},
+        )
     assert taken.status_code == HTTPStatus.ACCEPTED, taken.text
 
 
@@ -352,7 +365,11 @@ async def test_before_the_first_tick_a_start_is_not_refused_for_a_fault_nobody_r
 ) -> None:
     rig.attest()
     async with _client(rig) as session:
-        taken = await session.post("/api/session/start", headers=auth(), json=_start_body())
+        taken = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={**_start_body(), "profiles_digest": await shown_digest(session, auth())},
+        )
     assert taken.status_code == HTTPStatus.ACCEPTED, taken.text
 
 
@@ -369,7 +386,11 @@ async def test_a_fault_read_too_long_ago_refuses_nothing(rig: Rig) -> None:
     )
     rig.clock.advance(Seconds(DRIVE_STATUS_STALE_AFTER))
     async with _client(rig) as session:
-        taken = await session.post("/api/session/start", headers=auth(), json=_start_body())
+        taken = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={**_start_body(), "profiles_digest": await shown_digest(session, auth())},
+        )
     assert taken.status_code == HTTPStatus.ACCEPTED, taken.text
 
 
@@ -381,13 +402,21 @@ async def test_a_fault_that_has_cleared_no_longer_refuses(rig: Rig) -> None:
         )
     )
     async with _client(rig) as session:
-        refused = await session.post("/api/session/start", headers=auth(), json=_start_body())
+        refused = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={**_start_body(), "profiles_digest": await shown_digest(session, auth())},
+        )
         assert refused.status_code == HTTPStatus.CONFLICT
         rig.clock.advance(Seconds(0.2))
         rig.surface.publish(
             make_snapshot(at=rig.clock.monotonic(), drive_state=DriveState.SWITCH_ON_DISABLED)
         )
-        taken = await session.post("/api/session/start", headers=auth(), json=_start_body())
+        taken = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={**_start_body(), "profiles_digest": await shown_digest(session, auth())},
+        )
     assert taken.status_code == HTTPStatus.ACCEPTED, taken.text
 
 
@@ -401,12 +430,23 @@ async def test_what_cannot_be_started_anyway_is_still_told_its_own_reason_first(
     )
     async with _client(rig) as session:
         nameless = await session.post(
-            "/api/session/start", headers=auth(), json={"profile_id": PROFILE_ID, "operator": " "}
+            "/api/session/start",
+            headers=auth(),
+            json={
+                "profile_id": PROFILE_ID,
+                "operator": " ",
+                "profiles_digest": await shown_digest(session, auth()),
+            },
         )
         unknown = await session.post(
             "/api/session/start",
             headers=auth(),
-            json={"profile_id": "nope", "operator": OPERATOR, "subject_id": RIDER_ID},
+            json={
+                "profile_id": "nope",
+                "operator": OPERATOR,
+                "subject_id": RIDER_ID,
+                "profiles_digest": await shown_digest(session, auth()),
+            },
         )
     assert nameless.status_code == HTTPStatus.BAD_REQUEST
     assert unknown.status_code == HTTPStatus.NOT_FOUND
