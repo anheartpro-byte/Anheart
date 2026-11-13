@@ -47,6 +47,7 @@ const MANAGEMENT = [
   "sessions",
   "reports",
   "notifications",
+  "programmes",
 ];
 
 describe("ANH-187 the sidebar of each role", () => {
@@ -78,7 +79,7 @@ describe("ANH-187 the sidebar of each role", () => {
     expect(navigationFor(granted("user"))).toEqual({
       administration: [],
       management: [],
-      myHealth: ["myMachines", "sessions", "reports"],
+      myHealth: ["myMachines", "sessions", "reports", "programmes"],
     });
   });
 

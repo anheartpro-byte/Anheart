@@ -91,7 +91,7 @@ const dateValue = (value: number | undefined) =>
   value === undefined ? "" : new Date(value).toISOString().slice(0, 10);
 const day = (data: FormData, key: string) => Date.parse(text(data, key));
 
-function useRegistryUpload() {
+export function useRegistryUpload() {
   const t = useTranslations();
   const generateUploadUrl = useMutationWithFeedback(
     api.machineRegistry.generateUploadUrl,

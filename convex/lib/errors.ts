@@ -245,7 +245,7 @@ export const DASHBOARD_ERRORS = {
   programme_simulation_report_missing:
     "No simulation report is attached to the draft.",
   invalid_medical_signoff:
-    "The medical sign-off needs a signer (1 to 200 characters), a past date and a note of at most 1000 characters.",
+    "The medical signature needs a signer (1 to 200 characters), a past date and a note of at most 1000 characters.",
 
   // Alerts to the gestionnaires (convex/notifications.ts).
   notification_not_found:
