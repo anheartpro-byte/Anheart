@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ZodError } from "zod";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -109,12 +110,12 @@ describe("ANH-249 the schemas of a record export, under zod 4.6", () => {
     expect(trace).toContain('"detail":"ok","type":"event"');
   });
 
-  it("refuses an event without its text and a geometry carrying text", () => {
+  it("refuses an event without its text and a geometry carrying text, by their schemas", () => {
     expect(() =>
       recordTrace(manifest(), "t\n1\n", '{"t":1,"kind":"note"}\n'),
-    ).toThrow();
+    ).toThrow(ZodError);
     expect(() =>
       recordTrace(manifest({ geometry: { gear_ratio: "ten" } }), "t\n1\n", ""),
-    ).toThrow();
+    ).toThrow(ZodError);
   });
 });
