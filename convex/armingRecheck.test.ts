@@ -905,10 +905,18 @@ describe("ANH-144 EX-3 a machine has one session at a time", () => {
         status: "interrupted",
         kind: "auto",
       });
+      // A whole millisecond a second after its row was written (`_creationTime`,
+      // fractional in convex-test): the bound is `startedAt` alone, to the ms.
+      const created = (await rowOf(w, other))?._creationTime ?? NOW;
+      const start = Math.ceil(created) + SECOND;
       await w.t.run((ctx) =>
-        ctx.db.patch(other, { interruptedAt: NOW, totalDurationS: 600 }),
+        ctx.db.patch(other, {
+          startedAt: start,
+          interruptedAt: NOW,
+          totalDurationS: 600,
+        }),
       );
-      const bound = NOW + 600 * SECOND + AUTO_RAMP_MARGIN_MS;
+      const bound = start + 600 * SECOND + AUTO_RAMP_MARGIN_MS;
 
       vi.setSystemTime(bound);
       expect(await refusalOf(launch(w, "manager"))).toEqual(

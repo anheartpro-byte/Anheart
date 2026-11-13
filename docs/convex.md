@@ -1510,27 +1510,41 @@ transactionnelle, la seconde relit ce que la première a écrit. Le refus
 pratiquant.
 
 **Borne d'une séance auto interrompue (ANH-233).** Une séance auto `interrupted` cesse de tenir son pratiquant et sa machine
-après `départ + totalDurationS + AUTO_RAMP_MARGIN_MS` (6 min,
+après `départ + totalDurationS + AUTO_RAMP_MARGIN_MS` (11 min,
 `convex/training.ts`), sur l'horloge du serveur. Le départ est `startedAt`,
 mais jamais avant que le serveur ait connu la séance (`_creationTime`) : une
 séance déclarée par sa machine sans `sessionAgeMs` porte la date de
 l'horloge de la machine, qui peut retarder. La marge couvre ce qu'une
-console qui fonctionne peut encore faire tourner après la durée prévue, sur
-les réglages livrés :
+console qui fonctionne peut encore faire d'un programme après sa durée
+prévue, avec ses fichiers livrés :
 
 - elle arme au plus 90 s après le départ daté par le serveur (confirmation
   répétée, `REPEATED_START_WINDOW_MS`, contrat 1.8) ;
-- sa règle `session_overrun` fait descendre un programme qui tourne encore
-  30 s après sa durée ([console-locale.md](console-locale.md)) ;
-- cette descente dure au plus 188 s, depuis la vitesse nominale de 1380
-  tr/min moteur sur la rampe d'un programme (2 × 1380 / 15 tr/min par
-  seconde, plus les 4 s de rampe du variateur ; 40,8 s depuis le plafond
-  livré de 276 tr/min), plus que la marche aux limites de mouvement depuis la
-  même vitesse (110,8 s, et 107,8 s depuis 1344 tr/min) et que la roue libre
-  après une coupure secteur (environ 145 s selon le modèle de simulation,
-  jamais mesuré).
+- sa règle `session_overrun` met fin à un programme qui tourne encore 30 s
+  après sa durée ([console-locale.md](console-locale.md)), et une fin
+  ouverte à temps (STOP, verdict de fréquence cardiaque) ne s'ouvre pas plus
+  tard ;
+- la descente de cette fin, comme le runtime l'attend, depuis la vitesse
+  nominale de 1380 tr/min moteur : la marche aux limites de mouvement
+  signées, jugée au plus grand rayon qu'une console accepte
+  (`MAX_ARM_RADIUS_M`, 5 m), plus le passage à zéro, ou deux fois la vitesse
+  sur la pente d'un programme (15 tr/min par seconde), la plus longue des
+  deux, plus les 4 s de rampe du variateur : 188 s avec les fichiers livrés
+  (164 s de marche, 184 s de pente) ;
+- puis toute la récupération du programme, de nouveau : une fin ouverte
+  tard la refait entière (300 s dans les programmes livrés), moteur arrêté,
+  le passager à bord et surveillé.
 
-Soit 308 s, arrondies à 6 min. Au delà, la séance reste `interrupted` : le
+Soit 608 s, arrondies à la minute supérieure : 11 min.
+`contracts/hold-bound.json` porte cette marge et
+`REPEATED_START_WINDOW_MS`, auxquels `convex/interruptedSessions.test.ts`
+tient les deux constantes. `raspberry-pi/tests/test_hold_bound.py` refait le
+calcul avec le code et les fichiers de la console
+(`config/medical_parameters.json`, `config/profiles.default.json`, la pente,
+la grâce, la rampe du variateur) et échoue si la marge n'est plus ce pire
+cas arrondi à la minute : des limites de mouvement plus lentes signées
+(ANH-98), une pente plus lente ou une récupération livrée plus longue le
+font échouer. Au delà, la séance reste `interrupted` : le
 serveur ne la déclare pas finie, `getTrainingStatus` répond toujours
 `active: true` à sa machine, `requestStop` reste possible, la fin envoyée
 tard la clôt comme avant, et les listes et les compteurs la montrent comme
@@ -1553,6 +1567,13 @@ tant que sa machine se tait. Pour une séance manuelle, la borne est à fixer
 avec le responsable médical, ou remplacée par une action d'administration
 auditée « clore comme abandonnée » ; la décision revient au chef de projet,
 avant la mise en production.
+
+**Point ouvert.** Un programme personnalisé dont la récupération
+(`recovery_s`) dépasse celle des programmes livrés, ou permis au-dessus de
+la vitesse nominale (`allow_above_nameplate`), n'est pas couvert par la
+marge : la console n'en plafonne pas la récupération, et le serveur ne la
+connaît pas (`machine_profiles` ne la porte pas). À trancher avec la
+décision ci-dessus.
 
 **Limites.** Une séance `interrupted` dont la machine ne revient jamais (et
 dont la fin n'arrive jamais) n'est close par aucune fonction : une séance
@@ -3729,7 +3750,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/rateLimits.test.ts`, `convex/rateLimitsSource.test.ts` | La limitation de débit et la taille des corps (ANH-166) : chaque limite du contrat partagé sur sa route (sa réserve, puis 429 avec l'attente, puis de nouveau acceptée, une autre machine jamais retenue), rien d'écrit pour un heartbeat refusé, la limite avant le corps, la demande d'arrêt jamais limitée, **1000 heartbeats en 10 s** limités sans erreur (2 acceptés, 998 refusés 429), les tailles (16 Kio exactement accepté, un octet de plus refusé, octets et non caractères, `Content-Length` trop grand ou trop petit), 601 points refusés avant d'en lire un, le plus grand lot valide accepté ; par compte, 60 écritures puis `rate_limited`, un refus rend son jeton, 5 lancements par minute, l'arrêt jamais limité, et **chaque** mutation et action publique de la matrice refusée une fois les écritures de son acteur épuisées, l'arrêt excepté. Le second fichier remplace `contracts/machine-api.json` par un autre et vérifie que les limites et les tailles le suivent, et que le module refuse de se charger sans la limite ou la taille d'une route qu'il borne. |
 | `convex/contract.test.ts`, `convex/contractSource.test.ts` | Le contrat versionné (ANH-133) : 426 sur chaque route sans majeure servie sauf celle de la demande d'arrêt (qui répond avec la seule clé, sans rien écrire d'autre que la dernière utilisation de la clé), clé vérifiée avant le contrat, rien d'écrit de la machine, de ses séances ni de ses heartbeats pour une requête refusée (la dernière utilisation de la clé, elle, est écrite pour toute requête dont la clé est acceptée, au plus une fois par minute : §6), `server_contract_version` dans le poll, un code stable pour chaque refus, versions stockées à chaque heartbeat. Le second fichier remplace `contracts/machine-api.json` par un autre contrat et vérifie que le code le suit : la valeur est bien lue dans ce fichier. |
 | `convex/crons.test.ts` | Le cron `check-offline-machines` (celui des clés expirées est dans `convex/machineKeys.test.ts`), qui ne touche aucune séance, et `interrupt-silent-sessions`, une autre tâche, toutes les minutes elle aussi (ANH-231). |
-| `convex/interruptedSessions.test.ts` | La séance sans nouvelles (ANH-216) : marquée `interrupted` 10 min après la dernière nouvelle et pas avant, une seule fois ; marquée aussi quand la machine répond sans la nommer ; un lancement daté de sa confirmation ; ni l'ancien mode, ni `pending`, ni une séance finie touchés. Jamais marquée tant que sa machine la nomme (trois heures) ni pendant que ses points ou ses événements arrivent ; toujours `active: true` pour la machine ; rendue `active` par le heartbeat qui la nomme ; arrêt demandé transmis ; fin tardive acceptée avec sa date, mesures tardives stockées. Une machine ne ranime ni ne couvre la séance d'une autre ; lecture et arrêt réservés à ceux d'une séance active, jamais à un compte du centre B. Sous les limites d'une transaction Convex (`transactionLimits`), avec 507 séances muettes dont les heartbeats dépassent ce qu'une transaction peut lire (ANH-231, EX-3) : les machines passent hors ligne avec leur alerte sans qu'aucune séance change ; la tâche marque `INTERRUPT_BATCH` séances au plus par transaction, chaque page à sa propre heure, la suivante planifiée aussitôt, jusqu'à la dernière, et s'arrête sur une page vide ; mêlées aux muettes sur toutes les pages, les séances nommées par leur machine, ou avec un point, un événement, un départ confirmé ou une déclaration récents restent actives. Lien coupé 11 min pendant une séance (EX-5) : un lancement est refusé sur sa machine (`machine_offline`) et pour son pratiquant sur une autre (`rider_busy`), encore après le heartbeat qui nomme la séance (`machine_busy`, `rider_busy`), et accepté quand la machine revient sans la nommer. Borne d'une séance auto interrompue (ANH-233) : la marge couvre l'armement tardif, la grâce de `session_overrun` et la descente la plus lente ; le pratiquant reste tenu à `départ + totalDurationS + AUTO_RAMP_MARGIN_MS` et ne l'est plus une seconde après, où un lancement ailleurs est accepté et armé, la séance restant `interrupted`, sans fin, `active: true` pour sa machine ; la suppression de la machine (sa clé refusée, 401) ne le libère pas plus tôt ; une séance déclarée avec un départ daté un jour trop tôt par l'horloge de la machine est comptée depuis sa déclaration ; une séance manuelle (EX-2, décision ouverte) ou auto sans durée le tient encore 30 jours après. `convex/armingRecheck.test.ts` vérifie la même borne pour la machine (`machine_busy`) comme pour le pratiquant. |
+| `convex/interruptedSessions.test.ts` | La séance sans nouvelles (ANH-216) : marquée `interrupted` 10 min après la dernière nouvelle et pas avant, une seule fois ; marquée aussi quand la machine répond sans la nommer ; un lancement daté de sa confirmation ; ni l'ancien mode, ni `pending`, ni une séance finie touchés. Jamais marquée tant que sa machine la nomme (trois heures) ni pendant que ses points ou ses événements arrivent ; toujours `active: true` pour la machine ; rendue `active` par le heartbeat qui la nomme ; arrêt demandé transmis ; fin tardive acceptée avec sa date, mesures tardives stockées. Une machine ne ranime ni ne couvre la séance d'une autre ; lecture et arrêt réservés à ceux d'une séance active, jamais à un compte du centre B. Sous les limites d'une transaction Convex (`transactionLimits`), avec 507 séances muettes dont les heartbeats dépassent ce qu'une transaction peut lire (ANH-231, EX-3) : les machines passent hors ligne avec leur alerte sans qu'aucune séance change ; la tâche marque `INTERRUPT_BATCH` séances au plus par transaction, chaque page à sa propre heure, la suivante planifiée aussitôt, jusqu'à la dernière, et s'arrête sur une page vide ; mêlées aux muettes sur toutes les pages, les séances nommées par leur machine, ou avec un point, un événement, un départ confirmé ou une déclaration récents restent actives. Lien coupé 11 min pendant une séance (EX-5) : un lancement est refusé sur sa machine (`machine_offline`) et pour son pratiquant sur une autre (`rider_busy`), encore après le heartbeat qui nomme la séance (`machine_busy`, `rider_busy`), et accepté quand la machine revient sans la nommer. Borne d'une séance auto interrompue (ANH-233) : la marge est celle de `contracts/hold-bound.json` (le pire cas, calculé par `raspberry-pi/tests/test_hold_bound.py` avec le code et les fichiers de la console) ; le pratiquant reste tenu à `départ + totalDurationS + AUTO_RAMP_MARGIN_MS` et ne l'est plus une seconde après, où un lancement ailleurs est accepté et armé, la séance restant `interrupted`, sans fin, `active: true` pour sa machine ; la suppression de la machine (sa clé refusée, 401) ne le libère pas plus tôt ; une séance déclarée avec un départ daté un jour trop tôt par l'horloge de la machine est comptée depuis sa déclaration ; une séance manuelle (EX-2, décision ouverte), même avec une durée, ou auto sans durée le tient encore 30 jours après. `convex/armingRecheck.test.ts` vérifie la même borne pour la machine (`machine_busy`) comme pour le pratiquant, tenue à l'instant exact de la borne et levée une milliseconde après, sur un départ plus tardif que l'écriture de la ligne. |
 | `convex/repeatedStartConfirmation.test.ts` | La confirmation répétée du départ (ANH-240), par la mutation interne et par la route réelle avec une vraie clé : 200 sans aucune écriture (documents entiers, journal d'audit, fonctions planifiées) pour un départ déjà confirmé dont la machine n'a rien envoyé, dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (89 s et 90 s, mais 400 à 91 s, et la fenêtre comptée depuis un départ que la machine a daté avant sa confirmation), répété deux fois, y compris quand la machine est passée en ligne ou hors ligne entre-temps ou qu'un heartbeat ne nomme pas la séance ; refus inchangés, code et statut compris, pour une séance avec un point, un événement ou un heartbeat qui la nomme (reçu à la milliseconde même du départ compris), un arrêt demandé, terminée, échouée, annulée, interrompue, démarrée à la machine, d'une autre machine (même centre et autre centre) ou refusée à l'armement. |
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée), les membres comptés comme des comptes (un patient de deux organisations compté une fois par l'admin Anheart et encore par le centre B, un compte gestionnaire dans un centre et patient dans l'autre compté une fois en tout et une fois dans chaque rôle, une seconde appartenance inactive écartée, des rôles dont la somme est le total pour un admin d'organisation), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |

@@ -41,6 +41,7 @@ import { ConvexError } from "convex/values";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SESSION_SILENCE_MS } from "../lib/training";
+import holdBoundText from "../contracts/hold-bound.json?raw";
 import { machineHeaders } from "./machineAuth.fixtures";
 import {
   AUTO_RAMP_MARGIN_MS,
@@ -69,6 +70,11 @@ afterEach(() => {
 
 const MINUTE = 60_000;
 const SECOND = 1_000;
+
+const holdBound = JSON.parse(holdBoundText) as {
+  repeated_start_window_s: number;
+  auto_hold_margin_s: number;
+};
 
 const machineWorld = () => seedMachineWorld(modules);
 type MachineWorld = Awaited<ReturnType<typeof machineWorld>>;
@@ -1077,10 +1083,11 @@ describe("ANH-233 an interrupted auto session holds its rider until its start, i
     return session;
   }
 
-  it("covers a late arming, the overrun grace and the slowest descent of a programme", () => {
-    const slowestDescentS = (2 * 1380) / 15 + 4;
-    expect(AUTO_RAMP_MARGIN_MS).toBeGreaterThanOrEqual(
-      REPEATED_START_WINDOW_MS + (30 + slowestDescentS) * SECOND,
+  it("is the margin of contracts/hold-bound.json, which the console's tests work out from its code and files", () => {
+    // raspberry-pi/tests/test_hold_bound.py fails unless the margin covers the console's worst case.
+    expect(AUTO_RAMP_MARGIN_MS).toBe(holdBound.auto_hold_margin_s * SECOND);
+    expect(REPEATED_START_WINDOW_MS).toBe(
+      holdBound.repeated_start_window_s * SECOND,
     );
   });
 
@@ -1141,15 +1148,24 @@ describe("ANH-233 an interrupted auto session holds its rider until its start, i
     expect((await sessionOf(w, next))?.status).toBe("pending");
   });
 
-  it.each<[string, "auto" | "manual"]>([
-    ["a manual session (EX-2, a decision still open)", "manual"],
-    ["an auto session of unknown duration", "auto"],
-  ])("still holds the rider thirty days later for %s", async (_what, kind) => {
-    const w = await machineWorld();
-    await silentLocal(w, { kind, startedAt: NOW, sessionAgeMs: 0 });
+  it.each<[string, "auto" | "manual", number | undefined]>([
+    ["a manual session (EX-2, a decision still open)", "manual", undefined],
+    ["a manual session, even one with a duration", "manual", 600],
+    ["an auto session of unknown duration", "auto", undefined],
+  ])(
+    "still holds the rider thirty days later for %s",
+    async (_what, kind, totalDurationS) => {
+      const w = await machineWorld();
+      await silentLocal(w, {
+        kind,
+        startedAt: NOW,
+        sessionAgeMs: 0,
+        totalDurationS,
+      });
 
-    expect(await refusalOf(launchElsewhereAt(w, NOW + 30 * DAY))).toBe(
-      "rider_busy",
-    );
-  });
+      expect(await refusalOf(launchElsewhereAt(w, NOW + 30 * DAY))).toBe(
+        "rider_busy",
+      );
+    },
+  );
 });

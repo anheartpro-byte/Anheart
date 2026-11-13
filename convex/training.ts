@@ -748,22 +748,26 @@ function expiresSoon(session: Doc<"sessions">, now: number): boolean {
 }
 
 /**
- * How long after its start and its programme's duration an auto session may
- * still turn (ANH-233), on the shipped settings. Its console arms at most
- * `REPEATED_START_WINDOW_MS` (90 s) after the start the server dated; its
- * rule `session_overrun` brings down a programme still running 30 s past its
- * duration; and that descent takes at most 188 s, from the 1380 rpm nameplate
- * on a programme's ramp (2 x 1380 / 15 rpm/s plus the drive's 4 s; 40.8 s
- * from the shipped ceiling of 276), longer than the walk on the motion limits
- * from there (110.8 s, 107.8 s from 1344) and than coasting after a power cut
- * (about 145 s in the simulation model, never measured). 308 s, rounded up.
+ * How long after its start and its programme's duration a working console may
+ * still be busy with an auto session (ANH-233), on the console's shipped
+ * files. It arms at most `REPEATED_START_WINDOW_MS` (90 s) after the start
+ * the server dated; its rule `session_overrun` ends a programme still running
+ * 30 s past its duration; that ending's descent takes at most 188 s, from the
+ * 1380 rpm nameplate on a programme's ramp (2 x 1380 / 15 rpm/s plus the
+ * drive's 4 s), longer than the walk on the signed motion limits from there;
+ * and the ending then runs the profile's whole recovery again (300 s), motor
+ * stopped, the rider on board. 608 s, rounded up to the minute.
+ * `contracts/hold-bound.json` holds this value, and
+ * `raspberry-pi/tests/test_hold_bound.py` recomputes it from the console's
+ * code and files.
  */
-export const AUTO_RAMP_MARGIN_MS = 6 * 60_000;
+export const AUTO_RAMP_MARGIN_MS = 11 * 60_000;
 
 /**
  * Whether an auto session is past its start, its duration and
- * `AUTO_RAMP_MARGIN_MS`: its console, if it still works, has stopped it.
- * Nothing says so of a manual session, nor of an auto one of unknown duration.
+ * `AUTO_RAMP_MARGIN_MS`: its console, if it still works, has stopped turning
+ * and finished the recovery of a shipped profile. Nothing says so of a manual
+ * session, nor of an auto one of unknown duration.
  */
 function pastAutoHold(session: Doc<"sessions">, now: number): boolean {
   const duration = session.totalDurationS ?? 0;

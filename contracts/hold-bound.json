@@ -1,0 +1,5 @@
+{
+  "description": "Combien de temps le tableau de bord tient encore le passager et la machine d'une séance auto interrompue, après son départ et sa durée prévue (ANH-233). auto_hold_margin_s est AUTO_RAMP_MARGIN_MS de convex/training.ts, repeated_start_window_s est REPEATED_START_WINDOW_MS : convex/interruptedSessions.test.ts les y tient. raspberry-pi/tests/test_hold_bound.py calcule le pire cas avec le code et les fichiers de la console (paramètres médicaux, programmes livrés) et échoue si la marge ne le couvre plus, arrondi à la minute supérieure. Voir docs/convex.md, Revérification à l'armement.",
+  "repeated_start_window_s": 90,
+  "auto_hold_margin_s": 660
+}

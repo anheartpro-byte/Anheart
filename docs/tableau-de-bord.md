@@ -1139,11 +1139,14 @@ Après **Lancer** :
    seule à la fois. » ; si c'est la machine, avec « Cette
    machine a déjà une séance en attente ou en cours : une seule à la fois. ».
    Le message ne dit pas où est l'autre séance. Une séance **auto**
-   interrompue ne compte plus passé son départ, sa durée prévue et 6 min de
-   marge de rampe (ANH-233), même si sa machine a été supprimée ; elle reste
+   interrompue ne compte plus passé son départ, sa durée prévue et 11 min de
+   marge (ANH-233 : descente depuis la vitesse nominale, puis récupération
+   refaite entière), même si sa machine a été supprimée ; elle reste
    affichée interrompue. Une séance **manuelle** interrompue compte sans borne
    tant que sa machine se tait : décision ouverte, borne à fixer avec le
-   responsable médical ou action d'administration auditée
+   responsable médical ou action d'administration auditée. Un programme
+   personnalisé à récupération plus longue que celle des programmes livrés
+   n'est pas couvert, point ouvert lui aussi
    ([convex.md](convex.md#revérification-à-larmement-anh-144)).
 2. Le site ouvre la vue en direct : « En attente que la machine arme la
    séance… ».
