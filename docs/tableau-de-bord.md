@@ -259,7 +259,7 @@ Barre latérale (`components/dashboard/AppSidebar.tsx`) :
 | Administration | Gestionnaires, Membres, Utilisateurs | admin, admin d'organisation |
 | Administration | Audit | admin, admin d'organisation |
 | Administration | Paramètres | admin |
-| Gestion | Patients, Machines, Mes machines, Sessions, Rapports, Alertes, Programmes | admin, admin d'organisation, gestionnaire |
+| Gestion | Patients, Machines, Mes machines, Sessions, Rapports, Alertes, Programmes, Incidents | admin, admin d'organisation, gestionnaire |
 | Ma Santé | Mes machines, Sessions, Rapports, Programmes | patient |
 
 Tant que le compte se charge, ou quand le serveur n'accepte aucune
@@ -1065,8 +1065,14 @@ Un identifiant inconnu ou du texte libre, comme
 clés propres du catalogue comptent, jamais `constructor` ou `toString`.
 Les raisons encore brutes sur les pages de séance restent un point de suivi.
 Le refus de départ par la console est couvert par **Séance échouée** ; un
-code dédié attend un ajout au contrat du Pi. Les alertes d'incident restent
-bloquées par ANH-145.
+code dédié attend un ajout au contrat du Pi.
+
+- **Incident grave ouvert** (ANH-145) : pour l'admin Anheart seulement, dans
+  son organisation, à l'ouverture de chaque incident de gravité haute, quelle
+  que soit l'organisation de la machine ; avec **Voir les incidents** (la
+  page [Incidents](#incidents--frdashboardincidents-et-frdashboardincidentsid))
+  et **Voir la séance**. Jamais d'e-mail : la page ne propose pas
+  d'interrupteur pour ce type, l'envoi d'e-mails étant coupé en production.
 
 Chaque alerte donne la machine, l'heure, « N fois, dernière à … » quand
 plusieurs événements s'y sont fondus pendant qu'elle était non lue, le
@@ -1115,6 +1121,58 @@ patient, contenu de chaque type, liens, marquer lu, refus traduit, liste
 coupée, interrupteurs, absence de clé) et
 `components/dashboard/notification-bell.test.tsx` (cloche absente, sans
 nombre, nombre au singulier et au pluriel, « 99+ »).
+
+### Incidents : `/fr/dashboard/incidents` et `/fr/dashboard/incidents/{id}`
+
+Le registre des incidents (ANH-145). Admin Anheart (toutes organisations),
+admin d'organisation (la sienne) et gestionnaire (ses machines) ; un patient
+lit « Les incidents sont réservés aux gestionnaires et aux administrateurs. ».
+Le serveur ouvre seul un incident à chaque événement de sécurité qui demande
+une revue (verdict `QUICK_STOP` ou `GO_SILENT`, défaut du variateur, arrêt
+d'urgence, exception de la boucle, trois refus de pré-vol de suite,
+enregistrement refusé) et calcule sa gravité
+([convex.md](convex.md#incidents--registre-des-incidents-anh-145)).
+
+**La liste** : les plus récents d'abord, 1000 au plus (la page le dit quand
+elle est coupée), avec la date d'ouverture, la machine, le type, la règle
+(`hr_critical`, `OHF`), la gravité (« Haute » en rouge), le statut (« Ouvert »,
+« Analysé », « Clos »), la personne à bord, et **Voir la fiche**. L'admin
+Anheart y a **Exporter en CSV** : tout ce qui est listé, un fichier
+`incidents-AAAA-MM-JJ.csv` (UTF-8 avec sa marque, fins de ligne CRLF, dates
+ISO en UTC, aucune cellule lue comme une formule), pour l'analyse de risques
+(ANH-103) et le dossier technique (ANH-105) ; colonnes `identifiant_incident`,
+`ouvert_le_utc`, `identifiant_organisation`, `identifiant_machine`, `machine`,
+`identifiant_seance`, `type`, `regle`, `instant_machine_utc`, `gravite`,
+`personne_a_bord`, `statut`, `cause`, `action`, `analyse_par`, `clos_par`,
+`clos_le_utc`, `identifiant_fichier_refuse`.
+
+**La fiche** : le type, la gravité et le statut ; tant qu'un incident de
+gravité haute n'est pas clos, la raison du blocage : « Séances programmées
+fermées sur cette machine jusqu'à la clôture de cet incident par un admin
+Anheart. Une séance de banc reste possible. » ; la machine, l'heure
+d'ouverture, la règle, la personne à bord, qui l'a analysé et qui l'a clos ;
+**Voir la séance** ; les événements de la séance à 60 s au plus de l'instant
+de l'incident (écart en secondes, type, texte de la machine) ; la carte
+**Enregistrement de séance** (téléchargement et visualiseur, celle de la page
+de la séance) ; puis **Analyse et clôture** : la cause et l'action menée (2000
+caractères au plus chacune). **Enregistrer l'analyse** les écrit (statut
+« Analysé ») ; **Clore l'incident**, que seul l'admin Anheart voit, les écrit
+et clôt l'incident. Une analyse seule ne rouvre pas la machine : seule la
+clôture le fait. Un incident clos se lit sans formulaire.
+
+**Le blocage au lancement** : tant qu'un incident de gravité haute de la
+machine est ouvert ou analysé, **Lancer une séance auto** est refusé avec
+« Un incident grave est ouvert sur cette machine : les séances programmées y
+sont fermées jusqu'à sa clôture par un admin Anheart (page Incidents). Une
+séance de banc reste possible. », et un lancement déjà en attente échoue avec
+la même raison. Une séance de banc lestée reste possible
+([5.6](#56-séance-de-banc-lestée-anh-250)).
+
+Tests : `app/[locale]/dashboard/incidents/page.test.tsx` (refus au patient,
+liste vide, lignes, lien de la fiche, export réservé à l'admin Anheart, liste
+coupée, contenu du CSV) et `app/[locale]/dashboard/incidents/[id]/page.test.tsx`
+(introuvable, raison du blocage, séance, événements, enregistrement, analyse
+envoyée, clôture réservée à l'admin Anheart, incident clos en lecture seule).
 
 ---
 
@@ -1798,7 +1856,8 @@ Pièges :
 | Pages retouchées au retrait de l'ancien mode ECG (Sessions, vue en direct, détail, Rapports, fenêtre machine) | Compilées et couvertes par `npm run test:lib` ; **pas rouvertes dans un navigateur** depuis. |
 | Pages Sessions et Rapports servies par pages (ANH-158) | Le serveur est testé en mémoire (`convex/sessionLists.test.ts`), les deux pages dans le DOM simulé, où Convex est remplacé par une doublure qui sert les pages d'une liste. **Pas ouvertes dans un navigateur, ni contre un vrai serveur** : ce que deviennent des pages déjà affichées quand une séance arrive ou change de statut pendant la lecture repose sur Convex et n'est pas rejoué. |
 | Textes encore en anglais | Nom « Unknown », motif « Cancelled before start by … », raison de fin brute sur les pages de séance (en suivi). Dans les alertes, l'identifiant connu est traduit ; son complément et le texte libre restent tels quels. Fiches d'un administrateur ou d'un gestionnaire, erreurs de saisie du formulaire patient, confirmation de suppression d'un compte. |
-| Alertes aux gestionnaires (ANH-90) | Écrites et lues par Convex, testées en mémoire ; la page et la cloche testées dans le DOM simulé. **Jamais vues dans un navigateur ni contre un vrai serveur** : le délai de moins d'une minute repose sur le heartbeat de 10 s de la console et l'abonnement de Convex, **non mesuré**. **Aucun e-mail n'a été envoyé** : le compte Resend, sa clé, le domaine d'envoi et l'adresse du site sont à fournir par le responsable produit ([convex.md §8](convex.md#envoi-de-mails-anh-90-anh-237)). Les alertes d'un incident attendent ANH-145. |
+| Alertes aux gestionnaires (ANH-90) | Écrites et lues par Convex, testées en mémoire ; la page et la cloche testées dans le DOM simulé. **Jamais vues dans un navigateur ni contre un vrai serveur** : le délai de moins d'une minute repose sur le heartbeat de 10 s de la console et l'abonnement de Convex, **non mesuré**. **Aucun e-mail n'a été envoyé** : le compte Resend, sa clé, le domaine d'envoi et l'adresse du site sont à fournir par le responsable produit ([convex.md §8](convex.md#envoi-de-mails-anh-90-anh-237)). |
+| Registre des incidents (ANH-145) | Le serveur testé en mémoire (création, gravité, blocage, droits), les deux pages dans le DOM simulé, Convex remplacé. **Jamais vu dans un navigateur ni contre un vrai serveur**, ni déroulé en simulation contre le déploiement de dev (critère d'acceptation du ticket, à faire au prochain déploiement). Aucune déclaration d'incident à la main (`manual` est réservé). |
 | Sélecteur d'organisation, page Membres | Composants de Clerk, couverts par des tests unitaires qui les remplacent. Le changement d'organisation de bout en bout (deux organisations, données qui changent) relève du test navigateur ANH-83 et de la recette sur l'instance Clerk de développement. |
 | Compte avec FC max ou année de naissance renseignée | Risque d'échec de `users.getCurrentUser` (validateur incomplet), donc de pages vides pour ce compte. **À vérifier en premier** sur un déploiement. Voir [convex.md §9](convex.md#9-défauts-connus-et-reste-à-faire). |
 | Questionnaire d'aptitude | Le questionnaire 0.1.0 contient des questions provisoires [MED] ; le médecin doit les remplacer par le contenu signé (ANH-98). |

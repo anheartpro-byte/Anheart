@@ -21,7 +21,7 @@ export const AUDIT_CSV_COLUMNS = [
   "source",
 ] as const;
 
-function cell(value: string) {
+export function cell(value: string) {
   const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
   return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }

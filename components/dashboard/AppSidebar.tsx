@@ -32,6 +32,7 @@ import {
   UserCog,
   Bell,
   ListChecks,
+  ShieldAlert,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -70,6 +71,11 @@ const ENTRIES: Record<string, NavItem> = {
     labelKey: "programmes",
     href: "/dashboard/programmes",
     icon: ListChecks,
+  },
+  incidents: {
+    labelKey: "incidents",
+    href: "/dashboard/incidents",
+    icon: ShieldAlert,
   },
 };
 

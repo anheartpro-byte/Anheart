@@ -34,6 +34,7 @@ export function DashboardBreadcrumb() {
       "my-machines": t("myMachines"),
       members: t("members"),
       notifications: t("notifications"),
+      incidents: t("incidents"),
       audit: t("audit"),
       programmes: t("programmes"),
       new: tBreadcrumb("new"),
