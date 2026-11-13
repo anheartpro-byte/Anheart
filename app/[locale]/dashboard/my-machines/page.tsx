@@ -15,6 +15,7 @@ import { isStaff } from "@/lib/organizationAccess";
 import { ConsentCard } from "@/components/training/ConsentCard";
 import { FitnessCard } from "@/components/training/FitnessCard";
 import { LaunchableMachineCard } from "@/components/training/LaunchableMachineCard";
+import { OperatorCodeCard } from "@/components/training/OperatorCodeCard";
 
 export default function MyMachinesPage() {
   const t = useTranslations();
@@ -100,6 +101,9 @@ export default function MyMachinesPage() {
           ))}
         </div>
       )}
+
+      {/* The console code of an operator (ANH-152): staff only, shown when they are one. */}
+      {isStaff(user?.role) && <OperatorCodeCard />}
 
       {user && (
         <section aria-labelledby="my-readiness-title" className="space-y-3">

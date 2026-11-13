@@ -36,6 +36,7 @@ import {
   PROFILES_DIGEST,
   signCatalog,
 } from "./lib/programmes";
+import { DEVICE_ACTOR_PREFIX } from "./lib/consoleAccess";
 
 const http = httpRouter();
 http.route({
@@ -504,24 +505,60 @@ http.route({
     if (raw !== null && !CATALOG_SINCE.test(raw)) {
       return refuse(400, "invalid_request", "since must be a whole number, 0 or more");
     }
-    const unsigned = { status: "not_configured", server_contract_version: CONTRACT_VERSION };
-    const key = process.env[CATALOG_SIGNING_KEY_ENV];
-    if (!key) return json(200, unsigned);
-    const payload = await ctx.runQuery(internal.programmes.publishedCatalog, {
-      since: raw === null ? null : Number(raw),
-    });
-    const signature = await signCatalog(payload, key);
-    if (signature === null) {
-      console.error(`${CATALOG_SIGNING_KEY_ENV} is set but is not an Ed25519 private key`);
-      return json(200, unsigned);
-    }
-    return json(200, {
-      status: "signed",
-      payload,
-      signature,
-      server_contract_version: CONTRACT_VERSION,
-    });
+    return await signedAnswer(() =>
+      ctx.runQuery(internal.programmes.publishedCatalog, {
+        since: raw === null ? null : Number(raw),
+      }),
+    );
   }),
+});
+
+/**
+ * The answer of a signed route: `{status: "signed", payload, signature}`, the
+ * text that `load` gives signed by the key in `ANHEART_CATALOG_SIGNING_KEY`;
+ * `{status: "not_configured"}` without a usable key, `load` then never called.
+ */
+async function signedAnswer(load: () => Promise<string>): Promise<Response> {
+  const unsigned = { status: "not_configured", server_contract_version: CONTRACT_VERSION };
+  const key = process.env[CATALOG_SIGNING_KEY_ENV];
+  if (!key) return json(200, unsigned);
+  const payload = await load();
+  const signature = await signCatalog(payload, key);
+  if (signature === null) {
+    console.error(`${CATALOG_SIGNING_KEY_ENV} is set but is not an Ed25519 private key`);
+    return json(200, unsigned);
+  }
+  return json(200, {
+    status: "signed",
+    payload,
+    signature,
+    server_contract_version: CONTRACT_VERSION,
+  });
+}
+
+/**
+ * GET /api/machine/operators (contract 1.13, ANH-152)
+ * -> {status: "signed", payload, signature, server_contract_version}
+ *  | {status: "not_configured", server_contract_version}
+ *
+ * Who may sign in at this machine's console and from which tablets
+ * (`consoleAccess.operatorList`), signed on the catalogue's channel: same key,
+ * same envelope, a text that says `kind: "operator_list"`. Dated by this
+ * action's clock, so that the console refuses an older list replayed. Never
+ * rate limited: read only, like the roster, asked once a minute at most, at
+ * rest.
+ */
+http.route({
+  path: "/api/machine/operators",
+  method: "GET",
+  handler: machineRoute(async (ctx, _req, machineId) =>
+    signedAnswer(() =>
+      ctx.runQuery(internal.consoleAccess.operatorList, {
+        machineId,
+        issuedAt: Date.now(),
+      }),
+    ),
+  ),
 });
 
 /**
@@ -577,7 +614,9 @@ http.route({
  * POST /api/machine/training/local {...}: register a session started at the
  * machine. `startedAt` is the start as the machine dated it; `sessionAgeMs`,
  * optional, how long ago that was on its monotonic clock. Without it the
- * session is dated as the machine wrote it.
+ * session is dated as the machine wrote it. `operatorId` (contract 1.13,
+ * ANH-152): the account of the operator signed in at the console, kept when
+ * it is an operator of this machine.
  * One per minute per machine, twenty in reserve (ANH-228).
  */
 http.route({
@@ -609,6 +648,7 @@ http.route({
         startedAt: b.startedAt,
         sessionAgeMs: optNum(b.sessionAgeMs),
         operatorName: b.operatorName,
+        operatorId: optStr(b.operatorId),
         userId: optStr(b.userId),
         subjectLabel: optStr(b.subjectLabel),
         profileId: optStr(b.profileId),
@@ -761,8 +801,11 @@ const MAX_EVENT_DETAIL = 2000;
 const EVENT_KIND = /^[a-z][a-z0-9_]{0,63}$/;
 /** The kind of the event that carries the rider's feedback (contract 1.7). */
 const FEEDBACK_KIND = "feedback";
-/** `system`, `remote` or an opaque operator identifier: never a name. */
-const EVENT_ACTOR = /^[A-Za-z0-9_-]{1,64}$/;
+/**
+ * `system`, `remote` or an opaque operator identifier, never a name; since
+ * contract 1.13 also a tablet that acted with nobody signed in (`device:<id>`).
+ */
+const EVENT_ACTOR = new RegExp(`^(${DEVICE_ACTOR_PREFIX})?[A-Za-z0-9_-]{1,64}$`);
 
 /** One well-formed event of a request, or null. */
 function eventOf(raw: unknown) {

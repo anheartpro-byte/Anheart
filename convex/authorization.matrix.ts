@@ -247,6 +247,30 @@ async function machineKeyOf(
   );
 }
 
+/** An enabled operator row of `userId` on `machineId`, without a code (ANH-152). */
+async function operatorOf(w: World, userId: Id<"users">, machineId: Id<"machines">) {
+  return await w.t.run(async (ctx) => {
+    const machine = await ctx.db.get(machineId);
+    if (machine?.organizationId === undefined) throw new Error("A machine without organisation");
+    return await ctx.db.insert("machine_operators", {
+      organizationId: machine.organizationId,
+      machineId,
+      userId,
+      enabledAt: NOW,
+      enabledBy: w.orgAdmin,
+    });
+  });
+}
+
+async function operatorRowOf(w: World, userId: Id<"users">, machineId: Id<"machines">) {
+  return await w.t.run((ctx) =>
+    ctx.db
+      .query("machine_operators")
+      .withIndex("by_machine_and_user", (q) => q.eq("machineId", machineId).eq("userId", userId))
+      .unique(),
+  );
+}
+
 export const MATRIX: Entry[] = [
   {
     id: "audit.list",
@@ -1233,6 +1257,234 @@ export const MATRIX: Entry[] = [
         scope: "foreign",
         expect: refuse(UNAUTHORIZED),
         note: "not an admin",
+      },
+    ],
+  },
+  // =========================================================================
+  // consoleAccess.ts, consoleCodes.ts (ANH-152): the console's operators and
+  // tablets are the admins'; the code is the operator's own
+  // =========================================================================
+  {
+    id: "consoleAccess.listConsoleAccess",
+    ref: api.consoleAccess.listConsoleAccess,
+    kind: "query",
+    build: async (w) => {
+      await operatorOf(w, w.manager, w.machine);
+      return { machineId: w.machine };
+    },
+    onSuccess: (res, w) => {
+      const r = res as { operators: { userId: string }[] } | null;
+      if (r?.operators.length !== 1 || r.operators[0].userId !== w.manager)
+        throw new Error("The machine's operator is not listed");
+      if (JSON.stringify(r).includes("scrypt")) throw new Error("A code hash is listed");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: empty, note: "null for a user" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: empty,
+        note: "null even to a gestionnaire of the machine: its console access is the admins'",
+      },
+      { actor: "admin", expect: ok, note: "admin lists" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "null for a machine of another organisation" },
+      { actor: "orgBManager", scope: "foreign", expect: empty, note: "null for a machine of another organisation" },
+    ],
+  },
+  {
+    id: "consoleAccess.enableOperator",
+    ref: api.consoleAccess.enableOperator,
+    kind: "mutation",
+    build: async (w) => ({ machineId: w.machine, userId: w.manager }),
+    onSuccess: async (_res, w) => {
+      const row = await operatorRowOf(w, w.manager, w.machine);
+      if (row === null || row.disabledAt !== undefined)
+        throw new Error("The operator is not enabled");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: refuse(UNAUTHORIZED),
+        note: "a gestionnaire does not enable operators, not even themselves",
+      },
+      { actor: "admin", expect: ok, note: "admin enables" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_not_found/),
+        note: "a machine of another organisation does not exist for them",
+      },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+    ],
+  },
+  {
+    id: "consoleAccess.disableOperator",
+    ref: api.consoleAccess.disableOperator,
+    kind: "mutation",
+    build: async (w) => {
+      await operatorOf(w, w.manager, w.machine);
+      return { machineId: w.machine, userId: w.manager };
+    },
+    onSuccess: async (_res, w) => {
+      const row = await operatorRowOf(w, w.manager, w.machine);
+      if (row?.disabledAt === undefined) throw new Error("The operator is not disabled");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: refuse(UNAUTHORIZED),
+        note: "a gestionnaire does not disable operators",
+      },
+      { actor: "admin", expect: ok, note: "admin disables" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_not_found/),
+        note: "a machine of another organisation does not exist for them",
+      },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+    ],
+  },
+  {
+    id: "consoleAccess.listMyOperatorMachines",
+    ref: api.consoleAccess.listMyOperatorMachines,
+    kind: "query",
+    build: async (w) => {
+      await operatorOf(w, w.manager, w.machine);
+      return {};
+    },
+    onSuccess: (res, w) => {
+      const rows = res as { machineId: string; codeSet: boolean }[];
+      if (rows.length !== 1 || rows[0].machineId !== w.machine)
+        throw new Error("The caller's machine is not listed");
+      if (JSON.stringify(rows).includes("scrypt")) throw new Error("A code hash is listed");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "self", expect: ok, note: "their own console rights" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "another member's rights are never listed" },
+      { actor: "orgAdmin", scope: "other", expect: empty, note: "an admin lists none but their own" },
+      { actor: "patient", expect: empty, note: "a patient operates no machine" },
+      { actor: "orgBManager", scope: "foreign", expect: empty, note: "nothing of centre A" },
+    ],
+  },
+  {
+    id: "consoleAccess.createDevice",
+    ref: api.consoleAccess.createDevice,
+    kind: "mutation",
+    build: async (w) => ({ machineId: w.machine, name: "Tablette" }),
+    onSuccess: async (res, w) => {
+      const r = res as { deviceId: Id<"machine_devices">; token: string };
+      if (!/^anhd1\.[0-9a-f]{64}$/.test(r.token)) throw new Error("No one-time token issued");
+      const device = await w.t.run((ctx) => ctx.db.get(r.deviceId));
+      if (device?.machineId !== w.machine) throw new Error("The tablet is not the machine's");
+      if (JSON.stringify(device).includes(r.token)) throw new Error("The plain token is stored");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: refuse(UNAUTHORIZED),
+        note: "a gestionnaire of the machine is not an admin",
+      },
+      { actor: "admin", expect: ok, note: "admin creates" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_not_found/),
+        note: "a machine of another organisation does not exist for them",
+      },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+    ],
+  },
+  {
+    id: "consoleAccess.revokeDevice",
+    ref: api.consoleAccess.revokeDevice,
+    kind: "mutation",
+    build: async (w) => ({
+      deviceId: await w.t.run((ctx) =>
+        ctx.db.insert("machine_devices", {
+          organizationId: w.orgA,
+          machineId: w.machine,
+          name: "Tablette",
+          tokenSha256: "0".repeat(64),
+          prefix: "anhd1.00000000",
+          createdAt: NOW,
+          createdBy: w.orgAdmin,
+        }),
+      ),
+    }),
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const device = await w.t.run((ctx) => ctx.db.get(args.deviceId as Id<"machine_devices">));
+      if (device?.revokedAt === undefined) throw new Error("The tablet is not revoked");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "patient", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+      {
+        actor: "manager",
+        scope: "own",
+        expect: refuse(UNAUTHORIZED),
+        note: "a gestionnaire of the machine is not an admin",
+      },
+      { actor: "admin", expect: ok, note: "admin revokes" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "admin of the machine's organisation" },
+      {
+        actor: "orgBAdmin",
+        scope: "foreign",
+        expect: refuse(/machine_device_not_found/),
+        note: "a tablet of another organisation's machine does not exist for them",
+      },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "not an admin" },
+    ],
+  },
+  {
+    id: "consoleCodes.setMyOperatorCode",
+    ref: api.consoleCodes.setMyOperatorCode,
+    kind: "action",
+    build: async (w) => {
+      await operatorOf(w, w.manager, w.machine);
+      return { code: "482915" };
+    },
+    onSuccess: async (_res, w) => {
+      const row = await operatorRowOf(w, w.manager, w.machine);
+      if (row?.operatorCode?.algorithm !== "scrypt") throw new Error("No code hash stored");
+      if (JSON.stringify(row).includes("482915")) throw new Error("The code is stored in clear");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "manager", scope: "self", expect: ok, note: "an operator sets their own code" },
+      {
+        actor: "otherManager",
+        scope: "other",
+        expect: refuse(/operator_not_enabled/),
+        note: "only an operator has a code; none is set for anyone else",
+      },
+      {
+        actor: "orgAdmin",
+        scope: "other",
+        expect: refuse(/operator_not_enabled/),
+        note: "an admin sets no one's code but their own",
+      },
+      { actor: "patient", expect: refuse(/operator_not_enabled/), note: "a patient operates no machine" },
+      {
+        actor: "orgBManager",
+        scope: "foreign",
+        expect: refuse(/operator_not_enabled/),
+        note: "an operator of centre A is not one of centre B",
       },
     ],
   },
@@ -4394,6 +4646,7 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   { method: "GET", path: "/api/machine/training/poll", tests: "httpRoutes.test.ts (auto, this machine); rateLimits.test.ts (limit per machine); armingRecheck.test.ts (never a launch refused at arming, expired included)" },
   { method: "GET", path: "/api/machine/roster", tests: "httpRoutes.test.ts" },
   { method: "GET", path: "/api/machine/programmes", tests: "programmeCatalog.test.ts (signature verified with a test key, since, not configured); machineAuth.test.ts (machine key)" },
+  { method: "GET", path: "/api/machine/operators", tests: "consoleAccess.test.ts (signature verified with a test key, disabled operator and revoked tablet left out, not configured); machineAuth.test.ts (machine key); rateLimitsRoutes.test.ts (never limited)" },
   { method: "POST", path: "/api/machine/profiles", tests: "httpRoutes.test.ts (malformed body)" },
   { method: "POST", path: "/api/machine/training/start", tests: "httpRoutes.test.ts (non-pending refused); contract.test.ts and armingRecheck.test.ts (409 with the arming refusal's code)" },
   { method: "POST", path: "/api/machine/training/local", tests: "httpRoutes.test.ts (idempotent)" },

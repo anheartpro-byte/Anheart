@@ -11,6 +11,8 @@
 import type * as audit from "../audit.js";
 import type * as clerkWebhook from "../clerkWebhook.js";
 import type * as cloudVersion from "../cloudVersion.js";
+import type * as consoleAccess from "../consoleAccess.js";
+import type * as consoleCodes from "../consoleCodes.js";
 import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
 import type * as ecgData from "../ecgData.js";
@@ -21,6 +23,7 @@ import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auditIndex from "../lib/auditIndex.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_clerkWebhook from "../lib/clerkWebhook.js";
+import type * as lib_consoleAccess from "../lib/consoleAccess.js";
 import type * as lib_contract from "../lib/contract.js";
 import type * as lib_crypto from "../lib/crypto.js";
 import type * as lib_errors from "../lib/errors.js";
@@ -79,6 +82,8 @@ declare const fullApi: ApiFromModules<{
   audit: typeof audit;
   clerkWebhook: typeof clerkWebhook;
   cloudVersion: typeof cloudVersion;
+  consoleAccess: typeof consoleAccess;
+  consoleCodes: typeof consoleCodes;
   crons: typeof crons;
   dashboard: typeof dashboard;
   ecgData: typeof ecgData;
@@ -89,6 +94,7 @@ declare const fullApi: ApiFromModules<{
   "lib/auditIndex": typeof lib_auditIndex;
   "lib/auth": typeof lib_auth;
   "lib/clerkWebhook": typeof lib_clerkWebhook;
+  "lib/consoleAccess": typeof lib_consoleAccess;
   "lib/contract": typeof lib_contract;
   "lib/crypto": typeof lib_crypto;
   "lib/errors": typeof lib_errors;

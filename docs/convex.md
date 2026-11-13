@@ -590,6 +590,42 @@ l'empreinte (`by_key_hash`) : l'empreinte est salée (ANH-121), elle change à
 chaque calcul et ne peut pas servir à chercher une clé. La recherche se fait
 par le sélecteur, puis l'empreinte est vérifiée.
 
+### `machine_operators` et `machine_devices` : qui agit à la console (ANH-152)
+
+La console de la machine exige depuis ANH-152 une connexion nommée : un
+opérateur choisit son nom et tape son code, sur une tablette dont le jeton
+est connu. Ces deux tables disent qui, et depuis quelles tablettes. La
+console n'en reçoit qu'une copie signée
+([§6](#la-liste-des-opérateurs-signée-contrat-113-anh-152)) et décide seule
+avec elle, hors ligne compris.
+
+`machine_operators`, une ligne par machine et par membre :
+
+| Champ | Rôle |
+|---|---|
+| `organizationId`, `machineId`, `userId` | La machine, son organisation, le membre. |
+| `operatorCode` | Optionnel. `{algorithm: "scrypt", n, r, p, salt, hash}` : le haché scrypt du code de console, sel de 16 octets et empreinte de 32 octets en base64, avec ses paramètres (`code` de l'entrée `operator_list` du contrat). Posé par l'opérateur seul (`consoleCodes.setMyOperatorCode`), jamais servi au site. Absent : l'opérateur n'a pas encore choisi de code, la console ne le liste pas. |
+| `codeSetAt` | Quand ce code a été posé. |
+| `enabledAt`, `enabledBy` | La dernière activation et son auteur (un admin). |
+| `disabledAt`, `disabledBy` | Absents tant que l'opérateur est activé ; posés par une désactivation, effacés par une nouvelle activation. |
+| `trainedAt` | Optionnel, la formation de l'opérateur sur cette machine : écrit par ANH-106, lu par personne aujourd'hui. |
+
+Index : `by_machine` (la fiche, la liste signée), `by_user` (le code d'une
+personne, ses machines), `by_machine_and_user` (une ligne précise).
+
+`machine_devices`, une ligne par tablette :
+
+| Champ | Rôle |
+|---|---|
+| `organizationId`, `machineId` | La machine et son organisation. |
+| `name` | Le nom donné sur le site (1 à 100 caractères). |
+| `tokenSha256` | SHA-256 en hexadécimal du jeton `anhd1.<64 chiffres hexadécimaux>` (32 octets aléatoires). Le jeton n'est montré qu'une fois, dans la réponse de `createDevice`. Un haché simple suffit : un jeton aléatoire de 256 bits ne se devine pas, contrairement à un code de 6 chiffres. |
+| `prefix` | Ce que la fiche montre : `anhd1.` et les 8 premiers chiffres. |
+| `createdAt`, `createdBy` | Création et son auteur. |
+| `revokedAt`, `revokedBy` | La tablette n'ouvre plus rien dès la synchronisation suivante de la console. |
+
+Index : `by_machine`.
+
 ### `sessions`
 
 | Champ | Rôle |
@@ -605,7 +641,8 @@ par le sélecteur, puis l'empreinte est vérifiée.
 | `origin` | `remote` (site) \| `local` (machine). |
 | `profileId`, `profileName`, `zoneLowBpm`, `zoneHighBpm`, `totalDurationS` | Programme lancé. |
 | `subjectHrMax`, `subjectAge`, `subjectLabel` | FC max retenue, âge, nom du pratiquant. |
-| `operatorName` | Qui a lancé. |
+| `operatorName` | Qui a lancé. Pour une séance démarrée à la console, le nom tapé par une console antérieure à ANH-152 ; absent quand `operatorId` est posé. |
+| `operatorId` | Depuis ANH-152 (contrat 1.13), le compte de l'opérateur connecté à la console, gardé seulement s'il est un opérateur de la machine (`machine_operators`). `getTrainingSession` en sert le nom à la place de `operatorName` : le nom est résolu ici, jamais stocké. |
 | `profilesDigest` | Un lancement auto du tableau de bord, depuis le contrat 1.12 : l'empreinte de la liste de programmes de la machine au lancement, revérifiée quand elle l'arme (`programme_changed`). Absent quand la machine n'en avait envoyé aucune. |
 | `localRef` | Clé d'idempotence côté Pi (séances locales). |
 | `stopRequestedAt` | Posé par `requestStop` : le Pi le lit et arrête. |
@@ -686,7 +723,9 @@ commandes distantes, pré-vol, avertissements, fin.
 
 `sessionId`, `machineId`, `seq`, `t` (ms Unix sur l'horloge de la machine,
 lu comme `training_telemetry.t`), `kind`, `detail`, `actor` (`system`, `remote`
-ou un identifiant opaque d'opérateur, jamais un nom). Index
+ou un identifiant opaque d'opérateur, jamais un nom ; depuis ANH-152,
+l'identifiant du compte de l'opérateur connecté, ou `device:<id>` pour un
+E-STOP ou un STOP fait depuis une tablette sans opérateur connecté). Index
 `by_session_and_seq`, `by_session_and_t` (les événements autour d'un
 incident, ANH-145) et `by_organization`.
 
@@ -2251,6 +2290,37 @@ Fonctions internes :
   d'atteinte). La clé créée n'a pas d'auteur ; elle est imprimée une fois, dans
   le terminal de la commande ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)).
 
+### `consoleAccess.ts` et `consoleCodes.ts` (la console : opérateurs et tablettes, ANH-152)
+
+Les opérateurs et les tablettes d'une machine sont aux admins : l'admin
+Anheart pour toute machine, l'admin d'une organisation pour les machines de
+son organisation. Un gestionnaire, même de la machine, n'y a pas accès. Le
+code, lui, est à l'opérateur : il le choisit sur le site pour son propre
+compte, et personne d'autre ne peut ni le poser ni le lire, l'admin compris.
+Chaque écriture prend un jeton de la limite du compte (`limitUser`) avant
+tout le reste.
+
+| Fonction | Autorisation | Rôle |
+|---|---|---|
+| `listConsoleAccess` | admin Anheart ; admin de l'organisation de la machine | `{operators, candidates, devices}` : chaque opérateur (`userId`, `name`, `enabled`, `eligible`, `codeSet`, `enabledAt`, `disabledAt`, `codeSetAt`, `trainedAt`), `eligible` faux pour un compte qui n'est plus admin ni gestionnaire actif de l'organisation (la console ne le liste plus) ; les membres admins et gestionnaires actifs qui ne sont pas activés ; chaque tablette (`_id`, `name`, `prefix`, `createdAt`, `createdByName`, `revokedAt`). Jamais un code, son haché ni un jeton. `null` pour tout autre rôle, une machine inconnue, supprimée ou d'une autre organisation. |
+| `enableOperator` | idem | `{machineId, userId}`. Le membre doit être admin ou gestionnaire actif de l'organisation de la machine (sinon `operator_not_eligible`) ; au plus 100 opérateurs activés par machine (`too_many_operators`). Le code qu'il a déjà posé pour une autre machine de l'organisation est repris : il peut se connecter dès la synchronisation suivante ; sinon il doit d'abord le choisir. Activer un opérateur activé ne change rien. Refus : `not_authorized`, `machine_not_found` (machine inconnue, supprimée ou d'une autre organisation : même réponse). |
+| `disableOperator` | idem | `{machineId, userId}` : `disabledAt`, `disabledBy`. À la synchronisation suivante au repos, l'opérateur ne peut plus se connecter à cette console et sa session y prend fin. Refus : `not_authorized`, `machine_not_found`, `machine_operator_not_found`. |
+| `createDevice` | idem | `{machineId, name}` → `{deviceId, token, prefix}`. Le jeton en clair n'est visible **qu'à ce moment** ; il se tape une fois sur la tablette (page de la console, carte Accès). Au plus 20 tablettes non révoquées (`too_many_devices`), un nom de 1 à 100 caractères (`invalid_device_name`). |
+| `revokeDevice` | idem | `{deviceId}` : `revokedAt`, `revokedBy`. La tablette n'ouvre plus rien à la synchronisation suivante, ses sessions prennent fin. Une tablette révoquée reste telle quelle. Refus : `not_authorized`, `machine_device_not_found`. |
+| `listMyOperatorMachines` | tout compte connecté, pour lui-même | Les machines de son organisation où il est opérateur activé, avec `codeSet` et `codeSetAt`. Jamais le haché. |
+| `consoleCodes.setMyOperatorCode` (action) | l'opérateur, pour lui-même | `{code}` : 6 à 12 chiffres, ni un même chiffre répété ni une suite qui monte ou qui descend (`invalid_operator_code`). Vérifie d'abord la limite du compte et qu'il est opérateur activé quelque part dans son organisation (`operator_not_enabled`), puis hache le code avec scrypt (`node:crypto`, runtime Node : le runtime par défaut n'a pas de haché lent) et le pose sur toutes ses lignes de l'organisation, activées ou non. Le code n'est ni stocké, ni journalisé, ni renvoyé ; l'audit (`machine_operator.code_set`) ne porte que le nombre de lignes. |
+
+Fonctions internes : `prepareOperatorCode` (la limite et le droit, avant le
+hachage), `storeOperatorCode` (le haché sur les lignes, audité),
+`operatorList` (le texte signé de la route, §6).
+
+Pourquoi l'opérateur choisit son code, et pas l'admin : un code que l'admin
+poserait ou verrait serait connu de deux personnes, et l'attestation de
+l'arrêt d'urgence, l'acquittement d'un verdict ou la confirmation d'une
+personne à bord n'identifieraient plus celui qui les a faits. L'admin décide
+qui est habilité ; la personne habilitée décide de son secret. Un code oublié
+se remplace par l'opérateur lui-même, connecté au site.
+
 ### `sessions.ts` (lectures seulement)
 
 Aucune fonction de ce module ne crée, ne démarre ni ne termine une séance. Une
@@ -3162,10 +3232,11 @@ déploiement.
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) ; 16 Kio max | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` ; depuis 1.11, et `{catalogRevision\|null, accepted: [profileId], rejected: [{profileId, reason}]}` (200 entrées en tout, `reason` de 500 caractères au plus ; mal formés : 400 `invalid_request`, rien n'est écrit) ; depuis 1.12, et `profilesDigest`, 64 chiffres hexadécimaux minuscules (autre forme : 400 `invalid_request`), effacé quand il manque | `{count}` | quand la révision du magasin change, ou depuis 1.11 ce que la console dit du catalogue ; nouvel essai après 15 s ; limite 1 toutes les 10 s, réserve 5 |
 | `GET /api/machine/programmes?since=<révision>` | `since` facultatif, entier de 0 ou plus (sinon 400 `invalid_request`) | `{status: "signed", payload, signature, server_contract_version}`, ou `{status: "not_configured", server_contract_version}` sans clé de signature utilisable ([ci-dessous](#le-catalogue-signé-contrat-111-anh-138)) | contrat 1.11 : au démarrage de la console, puis au plus une fois par minute, au repos seulement ; non limitée en débit |
+| `GET /api/machine/operators` | - | `{status: "signed", payload, signature, server_contract_version}`, ou `{status: "not_configured", server_contract_version}` sans clé de signature utilisable ([ci-dessous](#la-liste-des-opérateurs-signée-contrat-113-anh-152)) | contrat 1.13 : au démarrage de la console, puis au plus une fois par minute, au repos seulement ; non limitée en débit |
 | `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent, fitnessQuestionnaireVersion\|null}]}` (`getRoster`, [`roster` du contrat 1.6](../contracts/machine-api.json)) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
 | `GET /api/machine/training/poll` | - | `{session: null, incidents_open_high, server_contract_version}` ou `{session: {sessionId, mode: "auto", profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName, profilesDigest\|null}, incidents_open_high, server_contract_version}` (`profilesDigest` depuis 1.12, à toute console : l'empreinte de la liste d'où le lancement a été fait) ou, depuis 1.9 et seulement à une console qui l'annonce, `{session: {sessionId, mode: "bench", occupancy: "ballast", ballastKg\|null, notes\|null, operatorName}, incidents_open_high, server_contract_version}`. `incidents_open_high` (depuis 1.10, ANH-145, à toute console) : le nombre d'incidents de gravité haute de la machine ouverts ou analysés, que le pré-vol lit | toutes les 3 s, sans séance en cours ni lancement en attente, quels que soient les programmes depuis 1.9 (un lancement auto que la console ne prend pas est laissé comme s'il n'était pas là) |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?, profilesDigest?}` (`profilesDigest` depuis 1.12 : l'empreinte de la liste que la machine tient ; une valeur qui n'est pas du texte n'est pas lue) | `{success: true}`, aussi pour une confirmation répétée d'un départ déjà confirmé dont la machine n'a encore rien envoyé et sans arrêt demandé, dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (contrat 1.8) ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
-| `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local ; limite 1 par minute, réserve 20 |
+| `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, operatorId? (1.13), profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local ; limite 1 par minute, réserve 20 |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
 | `POST /api/machine/training/telemetry` | `{sessionId, points: [{t, elapsedS, phase, bpm?, motorRpm, outputRpm, setpointMotorRpm, gLoad, safetyAction}]}` (600 points et 300 Kio max) | `{stored, duplicates, rejected}` | lots de 300 points max : toutes les 5 s pour une séance à jour, toutes les 3 s pour ce qui est en retard |
 | `POST /api/machine/training/events` | `{sessionId, events: [{seq, t, kind, detail, actor}]}` (200 événements et 2,5 Mio max, 2000 caractères de texte par événement) ; depuis 1.7, ou un seul événement `kind: "feedback"` (retour du passager) | `{stored, duplicates, rejected}` ; `{stored: 1, duplicates: 0, rejected: 0}` pour un retour enregistré | avec la télémétrie, 200 événements max par envoi ; un retour à part, à un serveur qui annonce 1.7 ou plus |
@@ -3378,6 +3449,52 @@ l'entrée `programme_catalog` de
   de chaque console : des paliers cardiaques ou un plafond qui ne sont pas
   ceux d'une machine n'apparaissent que sur sa fiche, « refusé par la
   machine : » suivi de la raison.
+
+### La liste des opérateurs signée (contrat 1.13, ANH-152)
+
+`GET /api/machine/operators` porte vers la machine la liste de qui peut se
+connecter à sa console et depuis quelles tablettes, sur le canal du
+catalogue : même clé `ANHEART_CATALOG_SIGNING_KEY`, même clé publique dans
+l'image, même enveloppe `{status: "signed", payload, signature}` ou
+`{status: "not_configured"}`. Définition partagée : l'entrée `operator_list`
+de [`contracts/machine-api.json`](../contracts/machine-api.json).
+
+- **Ce qui est signé.** `payload` est le texte JSON
+  `{kind: "operator_list", machineId, issuedAt, operators, devices}`
+  construit par `consoleAccess.operatorList` (`operatorListPayload`,
+  `convex/lib/consoleAccess.ts`). `kind` sépare les deux usages de la clé :
+  la console refuse un catalogue présenté comme une liste, et l'inverse.
+  `operators` : chaque opérateur activé, dont le code est posé, et qui est
+  encore admin ou gestionnaire actif de l'organisation de la machine,
+  `{userId, name, code}`, trié par `userId` ; `name` est le nom du compte,
+  100 caractères au plus, que la console affiche sur son écran de connexion.
+  `devices` : chaque tablette non révoquée, `{deviceId, name, tokenSha256}`.
+- **La date.** `issuedAt` est l'horloge de l'action au moment de la réponse.
+  La console refuse une liste plus ancienne que la sienne : une réponse
+  ancienne rejouée ne réactive pas un opérateur désactivé. Une restauration
+  de Convex depuis une sauvegarde ne rajeunit pas l'horloge : la liste
+  suivante est acceptée.
+- **Pas de révision.** La liste est petite (100 opérateurs et 20 tablettes
+  au plus, 200 000 octets au plus) et entière à chaque réponse : la console
+  compare ce qu'elle reçoit à ce qu'elle tient et n'écrit que ce qui change.
+  Le départ d'un membre de l'organisation, qui ne touche aucune ligne de ces
+  tables, y paraît donc aussi.
+- **Ce qu'un tiers qui tient la liste peut faire.** Le texte n'est pas
+  secret au sens d'une clé, mais il ne sort que vers la machine authentifiée
+  par sa clé. Qui le tient (la clé de la machine volée, le disque du Pi lu)
+  peut essayer hors ligne le million de codes à 6 chiffres contre chaque
+  haché : scrypt avec N = 32 768, r = 8 (32 Mio par essai) ralentit cet
+  essai, il ne l'empêche pas. Sur un processeur de bureau c'est de l'ordre
+  de quelques heures par opérateur, moins sur du matériel dédié. Le code
+  trouvé n'ouvre que la console d'une machine où l'opérateur est activé, et
+  il faut encore un jeton de tablette de cette machine. Le verrouillage après
+  5 échecs ne protège que les essais en ligne, sur la console. D'où les
+  règles : un code ne sert qu'à la console, jamais ailleurs ; une clé de
+  machine qui a fui se révoque
+  ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)) et les opérateurs de
+  cette machine changent leur code.
+- **Non limitée en débit**, comme le roster et le catalogue : lecture seule,
+  demandée au plus une fois par minute, au repos.
 
 ### Routes retirées
 
@@ -4195,6 +4312,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/httpRoutes.test.ts` | 12 des 14 routes machine enregistrées dans `http.ts` : corps mal formés sur toutes les routes POST, dont les deux de `recordHttp.ts` ; idempotence, liaison ressource-machine et filtrage des séances pour les 10 routes hors enregistrements. `GET /api/machine/records/status` et les cas métier des trois routes d'enregistrement sont exercés dans les suites dédiées. |
 | `convex/launchProgrammeList.test.ts` | Contrat 1.12 : l'empreinte de la liste gardée avec les programmes, effacée par le corps d'une console antérieure, refusée en 400 sous une autre forme ; enregistrée sur un lancement auto et rendue par le poll (`null` sans) ; le départ armé sur la même liste, refusé `programme_changed` sur une autre, ou quand une seule des deux empreintes est connue (la séance échouée avec ce code, la machine laissée comme elle était, la même réponse à une confirmation répétée), armé quand aucune ne l'est ; un lancement expiré dit qu'il a expiré ; un lancement de banc armé quelle que soit l'empreinte ; la route `training/start` lit l'empreinte et répond 409. |
 | `convex/programmeCatalog.test.ts` | ANH-138 : `GET /api/machine/programmes` et le rapport du catalogue de `POST /api/machine/profiles`. Sans clé, `not_configured` ; avec une paire Ed25519 créée pendant le test (aucune clé privée écrite nulle part), la signature se vérifie avec sa moitié publique et plus avec un octet changé ni une autre clé ; seuls les programmes publiés du catalogue Anheart, triés, avec les clés du document de profil de la console (`config/profiles.default.json`) et la version médicale ; `since` égal à la révision ne renvoie aucun programme ; `since` illisible, 400 ; clé inutilisable, `not_configured` et une erreur journalisée ; une clé machine inconnue, 401 ; la révision compte publications et retraits. Le rapport : gardé sur la machine, `null` pour les programmes de secours, effacé par le corps d'une console antérieure, et refusé en 400 sans rien écrire quand il est mal formé. |
+| `convex/consoleAccess.test.ts` | ANH-152 : la forme d'un code (6 à 12 chiffres, ni répété ni suite) ; le code haché par scrypt avec ses paramètres et son sel, recalculé par le test, absent en clair de toute ligne et de l'audit, posé sur toutes les lignes de l'opérateur et repris par une machine activée ensuite ; refus d'un code mal formé, d'un compte qui n'est opérateur nulle part ; activation réservée aux admins et gestionnaires actifs de l'organisation de la machine, double activation et double désactivation sans effet ; tablettes : jeton montré une fois, seul son SHA-256 gardé, révocation, bornes ; `GET /api/machine/operators` : `not_configured` sans clé, signature vérifiée avec une paire créée pendant le test, seuls les opérateurs activés, avec code et encore membres, seules les tablettes non révoquées ; `operatorId` d'une séance locale gardé s'il est un opérateur de la machine, son nom servi par `getTrainingSession` ; un événement `device:<id>` accepté. Qui peut appeler chaque fonction : les lignes `consoleAccess.*` et `consoleCodes.setMyOperatorCode` de la matrice. |
 | `convex/journalTrace.test.ts` | Le test d'acceptation de la synchronisation, côté Convex : il rejoue, dans l'ordre et aux mêmes instants, **les requêtes que la console du Pi a réellement envoyées** pendant son propre test d'acceptation (`contracts/fixtures/journal-sync-trace.json` : séance, coupure réseau à 3 min, console tuée à 5 min, retour du réseau à 8 min, machine datée de 1970). Convex doit répondre à chacune comme la trace l'a noté, et détenir à la fin chaque point 1 Hz et chaque événement une seule fois, et la fin avec sa raison. Le test du Pi échoue si le fichier n'est plus ce que la console envoie. |
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance que le résumé provisoire d'ANH-89, la mutation de migration des séances restées ouvertes, et le refus par le schéma de `machines.config` (ANH-211). |
@@ -4432,6 +4550,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.13` | La connexion nommée à la console (ANH-152, [entrée `operator_list`](../contracts/machine-api.json), [§6](#la-liste-des-opérateurs-signée-contrat-113-anh-152)) : la route `GET /api/machine/operators`, non limitée en débit, qui répond la liste signée des opérateurs et des tablettes de la machine, ou `not_configured` sans clé ; `actor` d'un événement peut valoir `device:<id>` ; `POST /api/machine/training/local` accepte `operatorId`, gardé s'il est un opérateur de la machine, `operatorName` restant exigé. Aucun code d'erreur nouveau. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi. |
 | `1.12` | Le lancement auto lié à la liste de programmes d'où il a été fait ([entrée `launch_programme_list`](../contracts/machine-api.json), [§6](#lancement-lié-à-la-liste-de-programmes-contrat-112)) : `profilesDigest` dans le corps de `POST /api/machine/profiles` et de `POST /api/machine/training/start`, facultatif, et dans le lancement auto du poll ; un refus à l'armement de plus en **409**, `programme_changed`, pour un lancement auto seulement. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.11` | Le catalogue de programmes signé vers les machines (ANH-138, [entrée `programme_catalog`](../contracts/machine-api.json), [§6](#le-catalogue-signé-contrat-111-anh-138)) : la route `GET /api/machine/programmes?since=`, non limitée en débit, qui répond le texte du catalogue et sa signature Ed25519, ou `not_configured` sans clé ; trois champs facultatifs dans le corps de `POST /api/machine/profiles`, `catalogRevision`, `accepted` et `rejected`. Aucun code d'erreur nouveau. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi qui porte sa moitié publique. |
 | `1.10` | Le registre des incidents (ANH-145, [entrée `incidents`](../contracts/machine-api.json)) : la réponse de `GET /api/machine/training/poll` porte `incidents_open_high`, le nombre d'incidents de gravité haute de la machine ouverts ou analysés, à toute console. Un refus à l'armement de plus en **409**, `incident_open`, pour un lancement automatique seulement. Ordre de déploiement : Convex avant l'image du Pi. |

@@ -297,6 +297,15 @@ function fullName(user: Pick<Doc<"users">, "firstName" | "lastName">) {
   return `${user.firstName} ${user.lastName}`.trim();
 }
 
+/** Who operated the session: the account's name, else the name its console sent. */
+async function operatorNameOf(
+  ctx: QueryCtx,
+  s: Pick<Doc<"sessions">, "operatorId" | "operatorName">,
+): Promise<string | undefined> {
+  const operator = s.operatorId === undefined ? null : await ctx.db.get(s.operatorId);
+  return operator === null ? s.operatorName : fullName(operator);
+}
+
 export const grantLaunchRight = mutation({
   args: { machineId: v.id("machines"), userId: v.id("users") },
   returns: v.null(),
@@ -1765,7 +1774,9 @@ export const getTrainingSession = query({
       totalDurationS: s.totalDurationS,
       subjectHrMax: s.subjectHrMax,
       subjectLabel: s.subjectLabel,
-      operatorName: s.operatorName,
+      // The console operator's account, named here (ANH-152); an older session
+      // keeps the name typed at its console.
+      operatorName: await operatorNameOf(ctx, s),
       startedAt: s.startedAt,
       ...(await lastSignal(ctx, s)),
       serverNow: Date.now(),
@@ -2194,6 +2205,8 @@ export const registerLocalSession = internalMutation({
     startedAt: v.number(),
     sessionAgeMs: v.optional(v.number()),
     operatorName: v.string(),
+    // Contract 1.13 (ANH-152): the console's signed-in operator, by account.
+    operatorId: v.optional(v.string()),
     userId: v.optional(v.string()),
     subjectLabel: v.optional(v.string()),
     profileId: v.optional(v.string()),
@@ -2227,6 +2240,21 @@ export const registerLocalSession = internalMutation({
         ? claimedRider
         : null;
     const unassigned = args.userId !== undefined && userId === null;
+    // The console's operator, by account, when they are one of this machine's
+    // (ANH-152): their name is then the site's to show, never stored here.
+    const claimedOperator = args.operatorId
+      ? ctx.db.normalizeId("users", args.operatorId)
+      : null;
+    const operatorId =
+      claimedOperator &&
+      (await ctx.db
+        .query("machine_operators")
+        .withIndex("by_machine_and_user", (q) =>
+          q.eq("machineId", args.machineId).eq("userId", claimedOperator),
+        )
+        .unique()) !== null
+        ? claimedOperator
+        : undefined;
     const notes = [
       ...(args.occupancy ? [`Occupancy: ${args.occupancy}`] : []),
       ...(unassigned
@@ -2257,7 +2285,8 @@ export const registerLocalSession = internalMutation({
       totalDurationS: args.totalDurationS,
       subjectHrMax: args.subjectHrMax,
       subjectLabel: unassigned ? undefined : args.subjectLabel,
-      operatorName: args.operatorName,
+      operatorName: operatorId === undefined ? args.operatorName : undefined,
+      operatorId,
     });
     await audit(ctx, {
       actor: machineActor(args.machineId),

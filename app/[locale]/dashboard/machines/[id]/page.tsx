@@ -56,6 +56,7 @@ import { LaunchBenchModal } from "@/components/modals/LaunchBenchModal";
 import { MachineLiveCard } from "@/components/training/MachineLiveCard";
 import { MachineHealthCard } from "@/components/machines/MachineHealthCard";
 import { MachineKeysCard } from "@/components/machines/MachineKeysCard";
+import { MachineConsoleAccessCard } from "@/components/machines/MachineConsoleAccessCard";
 import { MachineRegistryCard } from "@/components/machines/MachineRegistryCard";
 import { MachineProgramsCard } from "@/components/training/ProfileList";
 import { LaunchRightsCard } from "@/components/training/LaunchRightsCard";
@@ -353,6 +354,11 @@ export default function MachineDetailPage({
           machineId={machineId}
           deleted={machine.isDeleted === true}
         />
+      )}
+
+      {/* Who may act at the console (ANH-152): its admins' only. */}
+      {isOrganizationAdmin(user?.role) && !machine.isDeleted && (
+        <MachineConsoleAccessCard machineId={machineId} />
       )}
 
       {/* Danger Zone - Only show if not deleted */}

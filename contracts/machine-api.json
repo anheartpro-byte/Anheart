@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.12",
+  "contract_version": "1.13",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "heartbeat_response_fields": ["success", "serverTime", "server_contract_version"],
@@ -26,6 +26,21 @@
     "field": "profilesDigest",
     "digest_pattern": "^[0-9a-f]{64}$",
     "description": "Depuis 1.12, un lancement automatique est lié à la liste de programmes d'où il a été fait. La console envoie avec `POST /api/machine/profiles` `profilesDigest`, l'empreinte SHA-256 du contenu entier de ses programmes en 64 chiffres hexadécimaux minuscules (`digest_pattern`), la même que le `digest` de son `GET /api/profiles` ; Convex la garde avec la liste, refuse 400 une valeur d'une autre forme, et l'efface quand une console antérieure envoie sa liste sans elle. `launchAutoSession` enregistre sur le lancement l'empreinte de la machine à cet instant, et le poll la rend avec le lancement automatique (`profilesDigest`, `null` pour un lancement fait sans). La console envoie avec `POST /api/machine/training/start` l'empreinte de la liste qu'elle tient : un lancement fait d'une autre liste, fait sans empreinte et confirmé avec une, ou fait avec une et confirmé sans, est refusé 409 `programme_changed` (`arming_refusals`), la séance échouée avec ce code ; il faut le relancer. Un lancement et une confirmation tous deux sans empreinte (une console antérieure) sont armés comme avant. Une console 1.12 n'arme jamais un lancement automatique dont l'empreinte n'est pas celle de sa liste, ni un lancement sans empreinte, même si le serveur l'accepte. Un lancement de banc ne porte aucun programme et ne change pas. Ordre de déploiement : Convex avant l'image du Pi."
+  },
+  "operator_list": {
+    "since": "1.13",
+    "route": "GET /api/machine/operators",
+    "description": "Depuis 1.13 (ANH-152), la liste des opérateurs habilités de la machine et de ses tablettes descend vers la console, signée sur le canal du catalogue (`programme_catalog`) : même clé `signing_key_env`, même clé publique `public_key`, même enveloppe. `GET /api/machine/operators` répond `{status: \"signed\", payload, signature, server_contract_version}` ou, sans clé utilisable, `{status: \"not_configured\", server_contract_version}`. Le texte signé porte `{kind, machineId, issuedAt, operators, devices}` : `kind` vaut `kind` (un catalogue n'est jamais lu comme une liste, ni l'inverse) ; `machineId`, la machine authentifiée ; `issuedAt`, l'horloge du serveur en millisecondes Unix au moment de la réponse ; `operators`, chaque opérateur activé sur la machine, membre actif de son organisation avec le rôle admin ou gestionnaire, et dont le code est défini, sous la forme `{userId, name, code: {algorithm, n, r, p, salt, hash}}` (scrypt de `code`, sel et empreinte en base64, paramètres dans le texte signé), trié par `userId` ; `devices`, chaque tablette non révoquée, `{deviceId, name, tokenSha256}` (SHA-256 en hexadécimal du jeton, qui n'est montré qu'une fois sur le site), trié par `deviceId`. Au plus `max_operators` opérateurs et `max_devices` tablettes par machine, `name` d'au plus `max_name_chars` caractères. Rien d'autre n'ouvre la console : un opérateur ou une tablette absent du texte n'y entre pas. La console n'interroge la route qu'au repos, comme le catalogue, au démarrage puis au plus une fois par `poll_period_s` ; elle refuse et journalise une signature invalide, un `kind` autre, ou un `issuedAt` plus ancien que celui qu'elle tient (une liste ancienne rejouée), et garde alors sa liste. Une console qui n'a jamais accepté de liste n'ouvre aucune action, seulement l'E-STOP, le STOP et les lectures avec un jeton d'appareil. Le code d'un opérateur est haché par Convex (`code`), jamais montré à personne, et vérifié hors ligne par la console. Depuis 1.13 aussi : un événement de `POST /api/machine/training/events` peut porter `actor` `device_actor_prefix` suivi de l'identifiant de la tablette (un E-STOP ou un STOP sans opérateur connecté) ; `POST /api/machine/training/local` peut porter `operatorId`, l'identifiant d'utilisateur de l'opérateur connecté, que le serveur garde s'il est un opérateur de la machine (le site en résout le nom) et ignore sinon, `operatorName` restant exigé. Route non limitée en débit, comme le roster. Un serveur antérieur répond 404 : la console garde sa liste. Ordre de déploiement : Convex, puis la clé dans Convex, puis l'image du Pi.",
+    "kind": "operator_list",
+    "signing_key_env": "ANHEART_CATALOG_SIGNING_KEY",
+    "public_key": "raspberry-pi/config/anheart_catalog.pub",
+    "poll_period_s": 60,
+    "max_payload_bytes": 200000,
+    "max_operators": 100,
+    "max_devices": 20,
+    "max_name_chars": 100,
+    "code": { "algorithm": "scrypt", "n": 32768, "r": 8, "p": 1, "salt_bytes": 16, "hash_bytes": 32, "min_digits": 6, "max_digits": 12 },
+    "device_actor_prefix": "device:"
   },
   "contract_exempt_routes": {
     "GET /api/machine/training/status": "Porte la demande d'arrêt, qui doit atteindre une séance en cours quelle que soit la version du contrat. La clé de la machine reste exigée et la réponse annonce `server_contract_version`. Une console d'une autre majeure n'en retient que ce qui arrête : `stopRequested: true` ou `active: false`."

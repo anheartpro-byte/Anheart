@@ -387,6 +387,7 @@ Admin et gestionnaire de la machine.
 | **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un admin ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient (la séance de banc lestée est réservée au personnel). La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. Depuis ANH-138 (contrat 1.11), elle dit « Programmes de secours » quand la machine n'a jamais reçu de catalogue signé, et liste chaque programme du catalogue que la machine a refusé : « refusé par la machine : » suivi de sa raison ; un programme refusé n'est pas lançable ([programmes.md](programmes.md#publication-vers-les-machines-anh-138)). | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
 | **Clés de la machine** | Toutes les clés non révoquées d'abord (historique en tête, puis les plus récentes), puis les révoquées récentes jusqu'à 50 lignes au total : préfixe, état, création et son auteur, dernière utilisation, expiration ; boutons **Nouvelle clé** et **Révoquer** (ci-dessous). Sur une machine supprimée, visible seulement à l'admin Anheart, avec **Révoquer** seul. | admin Anheart, admin de l'organisation si la machine n'est pas supprimée (ANH-165, ANH-238) |
+| **Accès à la console** (ANH-152) | Deux parties. **Opérateurs de la console** : chaque opérateur activé ou désactivé, « Code défini le … » ou « Code à définir par l'opérateur », un avertissement pour qui n'est plus admin ni gestionnaire de l'organisation (la console ne le liste plus) ; **Activer un opérateur** parmi les admins et gestionnaires actifs, **Désactiver** avec confirmation (effet à la synchronisation suivante de la console, au repos). **Tablettes** : nom, préfixe du jeton, création et son auteur, révocation ; **Nouvelle tablette** montre le jeton une seule fois, à taper une fois sur la tablette (page de la console, carte Accès) ; **Révoquer** avec confirmation. Un admin ne voit jamais un code et ne peut pas en poser un. | admin Anheart, admin de l'organisation, machine non supprimée |
 | Zone de danger | **Supprimer** (suppression douce, refusée si une séance est active ou en attente ; grisé sur une machine en séance, la raison écrite sous la ligne). | admin, gestionnaire |
 
 **Registre (ANH-147).** `MachineRegistryCard` lit
@@ -541,6 +542,13 @@ patient = celles où il a le droit.
   signal, la carte affiche « Hors ligne » et grise le bouton (§6). Elle le grise
   aussi si la machine annonce des paramètres médicaux non signés ou si aucune
   version de référence n'est enregistrée, avec la raison affichée.
+- La carte **Code de console** (ANH-152) paraît à un admin ou un gestionnaire
+  activé comme opérateur d'au moins une machine de son organisation : la
+  liste de ces machines avec « Code défini le … » ou « Code à définir », et un
+  formulaire à deux champs masqués (6 à 12 chiffres, ni un chiffre répété ni
+  une suite). Le code vaut pour toutes ces machines et pour celles où il sera
+  activé ensuite ; il est haché par le serveur et n'est montré à personne.
+  Chaque console le reçoit à sa synchronisation suivante, au repos.
 - La section **Mon aptitude et mon consentement** est disponible à tous les
   rôles, y compris sans machine. Le passager y remplit ou met à jour son
   questionnaire et signe lui-même le texte de consentement.

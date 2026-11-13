@@ -15,6 +15,7 @@ import {
   NOW,
   person,
   propsOf,
+  wasMounted,
   renderPage,
   router,
   signedInAs,
@@ -36,6 +37,11 @@ vi.mock("@/components/training/FitnessCard", async () => ({
 }));
 vi.mock("@/components/training/ConsentCard", async () => ({
   ConsentCard: (await import("@/test-support/pages")).standIn("ConsentCard"),
+}));
+vi.mock("@/components/training/OperatorCodeCard", async () => ({
+  OperatorCodeCard: (await import("@/test-support/pages")).standIn(
+    "OperatorCodeCard",
+  ),
 }));
 
 /**
@@ -154,6 +160,8 @@ describe("my machines: what each visitor sees", () => {
       ).toBeTruthy();
       expect(propsOf("FitnessCard")).toEqual({ userId: user._id });
       expect(propsOf("ConsentCard")).toEqual({ userId: user._id });
+      // ANH-152: the console code is staff's; the card says nothing to a non-operator.
+      expect(wasMounted("OperatorCodeCard")).toBe(role !== "user");
     },
   );
 
