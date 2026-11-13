@@ -164,7 +164,7 @@ from __future__ import annotations
 
 import logging
 import math
-from asyncio import CancelledError, Task, create_task, shield
+from asyncio import CancelledError, Task, create_task, shield, wait
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum, unique
@@ -1016,6 +1016,9 @@ class ShutdownReport:
 
     detail: str
 
+
+SETTLE_POLL: Final[Seconds] = Seconds(0.05)
+"""How often a stop that waits for an inspection looks at this runtime's clock again."""
 
 IDLE_POLL_PERIOD: Final[Seconds] = Seconds(0.5)
 """How often an idle runtime reads the drive: 2 Hz, reads only.
@@ -2416,7 +2419,32 @@ class TrainingRuntime:
     async def _finish_cancelled_inspection[E](
         self, now: Monotonic, inspection: Task[Result[DriveStatus, E]]
     ) -> None:
-        """Own the actual initial reply and stop observed motion before the caller exits."""
+        """Own the actual initial reply and stop observed motion before the caller exits.
+
+        Waited for until the supervisor's silence bound has passed since the
+        inspection began (``loop_stall_silent_gap``, on this runtime's clock),
+        and no longer (ANH-162). A tick that came back later would silence
+        the console under ``loop_stall`` anyway, and an inspection of the real
+        link takes a few tenths of a second, or fails at its first read that
+        gets no answer, under 1 s at the shipped serial settings. A drive call
+        that never returns would otherwise hold the console's controlled stop
+        until the process is killed. Past the bound the inspection is given up
+        and this runtime goes silent: no frame at all, the emergency zero
+        included, since it would go through the link that did not answer, on
+        the event loop. The drive's ``ttO`` owns any stop, as for a frozen
+        console, and the controlled stop goes on to its end.
+        """
+        if not await self._settled(now, inspection):
+            inspection.cancel()
+            self._end_unknown_episode(
+                now,
+                "the drive did not answer an inspection within the supervisor's silence bound "
+                "while the console was stopping; no further frames will be sent, its ttO "
+                "timeout carries any stop. Verify standstill before an operator restarts "
+                "this process; no session will resume automatically",
+                address_proven=False,
+            )
+            return
         status = await inspection
         if isinstance(status, Ok):
             await self._judge_idle(now, status.value)
@@ -2432,6 +2460,14 @@ class TrainingRuntime:
                 "this process; no session will resume automatically",
                 address_proven=self._drive.acquisition_evidence.address_proven,
             )
+
+    async def _settled[T](self, began: Monotonic, task: Task[T]) -> bool:
+        """Whether ``task`` ended before the supervisor's silence bound after ``began``."""
+        bound = Monotonic(began + self._supervisor.limits.loop_stall_silent_gap)
+        while not task.done() and self._clock.monotonic() < bound:
+            # The poll is the loop's; the bound is read on this runtime's clock.
+            await wait((task,), timeout=SETTLE_POLL)
+        return task.done()
 
     async def _inspect_for_start(self, now: Monotonic) -> Result[DriveStatus, StartRefusal]:
         opened = await begin_inspection(self._drive, reopen=True)

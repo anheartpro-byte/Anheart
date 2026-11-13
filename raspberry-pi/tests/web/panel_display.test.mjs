@@ -4424,3 +4424,14 @@ test("a red blocking control at the bench disables the bench start and says why"
   assert.equal(page.node("manual-start").disabled, false);
   assert.equal(page.node("manual-preflight-note").textContent, "");
 });
+
+// ANH-162: the out-of-service banner took 175 px of a 420 px wide screen, its words in a
+// narrow column beside the title. Measured in a browser after the change: 117 px, every
+// word kept. Here, the two rules that make it so.
+test("a banner's words go under its title, and a small screen gets a compact banner", () => {
+  const css = readFileSync(new URL("app.css", assets), "utf8");
+  const banner = /\n\.banner \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  assert.match(banner, /flex-wrap: wrap;/);
+  const narrow = /@media \(max-width: 560px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+  assert.match(narrow, /\.banner \{[^}]*padding:[^}]*font-size:/);
+});

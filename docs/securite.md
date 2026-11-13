@@ -1631,10 +1631,21 @@ côté systemd en [pi-image.md](pi-image.md#le-chien-de-garde).
   cours serait terminée sur sa rampe par une panne du relais. S'il ne démarre
   jamais, la console est arrêtée de la même façon toutes les 300 s
   ([pi-image.md](pi-image.md#le-chien-de-garde)).
-- **Un appel au variateur qui ne rendrait jamais la main pendant
-  l'inspection au repos** retient l'arrêt contrôlé de la console : elle est
-  alors traitée comme une console qui ne répond à rien. Le vrai pilote borne
-  chaque échange.
+- **Un appel au variateur qui ne rend pas la main pendant une inspection**
+  (lecture au repos, ou celle d'un départ) ne retient plus l'arrêt contrôlé
+  qu'un temps borné (ANH-162) : l'arrêt attend la réponse jusqu'à 3 s après le
+  début de l'inspection, sur l'horloge de la console (la borne de silence du
+  superviseur, celle de `loop_stall`). Une réponse venue à temps est jugée
+  comme avant : un variateur trouvé en marche est mis à zéro et coupé. Après,
+  l'inspection est abandonnée et la console se tait (verrou `comms_lost`,
+  `GO_SILENT`) sans aucune trame, pas même le zéro d'urgence, qui passerait
+  par la liaison qui ne répond pas : c'est le `ttO` du variateur qui arrête un
+  moteur en marche, comme pour une console figée. L'arrêt contrôlé va ensuite
+  au bout, et la console sort en erreur si elle avait déjà terminé un tic
+  (comme toute console figée, 9.4). Avant ce correctif elle restait
+  bloquée jusqu'à ce qu'on la tue (environ 60 s sous systemd). Le vrai pilote
+  borne chaque échange sauf l'ouverture du port (`open`), qui est le cas
+  réel.
 
 ### 9.6 Essai au banc : procédure (non faite)
 
@@ -1672,7 +1683,7 @@ logiciel ne les lit pas.
 | Réglage du variateur | Relevé | Ce que cela décide |
 |---|---|---|
 | [ModbusTimeout] `ttO`, délai de perte de communication | à noter (réglage d'usine : 10,0 s ; le simulateur suppose 3 s) | c'est le temps pendant lequel le bras garde sa vitesse après la disparition de la console. Il entre dans chaque critère d'abandon ci-dessous. Au-dessus de 10 s : **ne pas faire les essais C et D**, faire d'abord fixer ce réglage (ticket ANH-76) |
-| [Modbus Error Resp] `SLL`, réaction à la perte de communication | à noter | [Ramp stop] : attendu, les essais se font. [Freewheel Stop] (réglage d'usine) : les essais se font, le bras ralentit seul, sans frein, et l'écart est noté. **[Ignore], [Configured Stop], [Fallback Speed] ou [Speed maintained] : essais C et D interdits.** Sous ces valeurs le variateur ne s'arrête pas sur la perte de la console : l'essai deviendrait l'essai C bis, sans la décision qu'il exige |
+| [Modbus Error Resp] `SLL`, réaction à la perte de communication | à noter | [Ramp stop] : attendu, les essais se font. [Freewheel Stop] (réglage d'usine) : les essais se font, le bras ralentit seul, sans frein, et l'écart est noté. **[Ignore], [Configured Stop], [Fallback Speed] ou [Speed maintained] : essais C et D interdits.** Sous ces valeurs le variateur ne s'arrête pas sur la perte de la console : l'essai deviendrait l'essai C bis, sans la décision qu'il exige. **Toute autre valeur, ou une valeur qu'on ne sait pas lire : essais C et D interdits de même**, la noter telle qu'affichée. La console ne lit pas `SLL` et n'en suppose rien : elle rappelle de le vérifier au clavier à chaque armement (journal), et rien dans son code ne change selon sa valeur |
 
 Les réglages ne se corrigent pas « pour l'essai » : s'ils n'ont pas la valeur
 attendue, on le note et on s'arrête là, sauf pour l'essai C bis, qui est une
