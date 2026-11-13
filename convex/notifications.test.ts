@@ -141,6 +141,41 @@ async function emailOf(w: World, notificationId: Id<"notifications">) {
 // ---------------------------------------------------------------------------
 
 describe("who receives an alert about a machine", () => {
+  it("is, for a high incident, the Anheart organisation's admins, not its other members nor one deleted in Clerk", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await addSession(w, {
+      machineId: w.machine,
+      status: "failed",
+    });
+    await w.t.run(async (ctx) => {
+      for (const [userId, role] of [
+        [w.manager, "gestionnaire"],
+        [w.orgAdmin, "admin"],
+      ] as const)
+        await ctx.db.insert("memberships", {
+          userId,
+          organizationId: w.anheartOrg,
+          role,
+          active: true,
+        });
+      await ctx.db.patch(w.orgAdmin, { clerkDeletedAt: NOW });
+    });
+
+    await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      type: "incident_high",
+      sessionId,
+      count: 1,
+    });
+
+    const rows = await w.t.run((ctx) =>
+      ctx.db.query("notifications").collect(),
+    );
+    expect(rows.map((row) => [row.userId, row.organizationId])).toEqual([
+      [w.admin, w.anheartOrg],
+    ]);
+  });
+
   it("is its gestionnaire and its organisation's admin, nobody else", async () => {
     const w = await seedWorld(modules);
 
@@ -1663,6 +1698,21 @@ describe("session alert grouping (T03)", () => {
     expect(own.map((row) => [row.type, row.sessionId, row.count])).toEqual([
       ["safety_verdict", sessionId, 2],
       ["drive_fault", undefined, 2],
+    ]);
+  });
+
+  it("does not fold a verdict without a session into a fault without one", async () => {
+    const w = await seedWorld(modules);
+    for (const type of ["drive_fault", "safety_verdict"] as const)
+      await w.t.mutation(internal.notifications.deliver, {
+        machineId: w.machine,
+        type,
+        count: 1,
+      });
+    const own = (await alerts(w)).filter((row) => row.userId === w.manager);
+    expect(own.map((row) => row.type)).toEqual([
+      "drive_fault",
+      "safety_verdict",
     ]);
   });
 

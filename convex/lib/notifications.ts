@@ -344,8 +344,8 @@ export async function retryDelivery(
 
 /**
  * How many unread alerts one lookup of a delivery reads. Folding keeps one
- * unread alert per session and per kind without one, so only the latest
- * alerts of a machine read by a fault without a session can reach it.
+ * unread alert per session and per kind without one: only the machine's
+ * latest unread alerts, read for a fault without a session, can exceed it.
  */
 const FOLD_SCAN = 50;
 
