@@ -34,7 +34,7 @@ from src.local_config import (
 from src.medical import SHIPPED_PARAMETERS, MedicalStatus
 from src.motor.ftdi_link import SCHNEIDER_CABLE_URL, Parity
 from src.result import Err, Ok
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.types import Occupancy, OccupancyRefused
 from src.units import Bpm, GLoadPerSecond, MotorRpm, ResultantG
 from tests.medical_support import signed, unsigned
@@ -111,7 +111,7 @@ def test_the_bench_env_loads_as_documented() -> None:
     assert config.web.host == "127.0.0.1"
     assert config.web.token is None
     assert config.medical.signed
-    assert config.motion == DEFAULT_MOTION_LIMITS
+    assert config.motion == default_motion_limits()
 
 
 def test_the_simulation_env_needs_no_hardware_key() -> None:
@@ -436,7 +436,7 @@ def test_signed_motion_limits_outside_the_limiter_s_bounds_are_refused_with_the_
         f"{MEDICAL}:hr_hard_max_bpm",
         f"{MEDICAL}:motion_limits",
     }
-    assert any("g_rate" in problem.detail for problem in problems)
+    assert any("g_rate (g_per_s)" in problem.detail for problem in problems)
 
 
 def test_unsigned_parameters_start_the_console_in_bench_mode_only() -> None:
@@ -454,7 +454,7 @@ def test_unsigned_parameters_start_the_console_in_bench_mode_only() -> None:
         "personne a bord refusee : parametres medicaux non signes"
     )
     # The values still govern the bench: the motion limits are the file's.
-    assert config.motion == DEFAULT_MOTION_LIMITS
+    assert config.motion == default_motion_limits()
 
 
 def test_signed_parameters_leave_both_flags_to_the_env() -> None:

@@ -48,7 +48,7 @@ import pytest
 from src.local_panel import RUNTIME_LIMITS
 from src.result import Err, Ok, is_ok
 from src.training import runtime as runtime_module
-from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, motor_rate_limit, ramp_duration
+from src.training.motion import MotionLimits, default_motion_limits, motor_rate_limit, ramp_duration
 from src.training.plan import MIN_RECOVERY_S, TrainingProfile
 from src.training.runtime import EndReason, RuntimeState, SafetyStanding
 from src.training.safety import (
@@ -186,10 +186,10 @@ def _walk_of(mode: Mode) -> Walk:
     """The accelerated rig for a programme, the machine's own limits for a manual session."""
     if mode == "programme":
         return Walk(motion=RIG_MOTION, passage_slew=float(LIMITS.slew))
-    return Walk(motion=DEFAULT_MOTION_LIMITS, passage_slew=None)
+    return Walk(motion=default_motion_limits(), passage_slew=None)
 
 
-SHIPPED: Final[Walk] = Walk(motion=DEFAULT_MOTION_LIMITS, passage_slew=float(RUNTIME_LIMITS.slew))
+SHIPPED: Final[Walk] = Walk(motion=default_motion_limits(), passage_slew=float(RUNTIME_LIMITS.slew))
 """The shipped programme on the console's limits (the rig of ``_console_rig``)."""
 
 
@@ -539,7 +539,7 @@ async def test_on_the_shipped_programme_a_stop_under_a_freeze_is_the_ordinary_st
     assert _rules_shown(free) == set()
     assert _setpoints(under) == _setpoints(free)
     _assert_an_ordinary_walk(start, under, SHIPPED)
-    rate = motor_rate_limit(MotorRpm(0), DEFAULT_MOTION_LIMITS, GEOMETRY)
+    rate = motor_rate_limit(MotorRpm(0), default_motion_limits(), GEOMETRY)
     minimum = int(REAL_PROFILE.min_run_rpm)
     reached = (_setpoints(under).index(minimum) + 1) * TICK
     assert reached >= (start - minimum) / rate, "faster than the anti-nausea limits allow"
@@ -556,7 +556,7 @@ async def test_a_stop_after_a_long_freeze_spends_one_tick_of_motion_not_the_hold
     rig.runtime.request_stop("operator: stop button")
     first = await rig.step()
     step = MANUAL_SPEED - int(first.setpoint.motor_rpm)
-    rate = motor_rate_limit(MotorRpm(MANUAL_SPEED), DEFAULT_MOTION_LIMITS, GEOMETRY)
+    rate = motor_rate_limit(MotorRpm(MANUAL_SPEED), default_motion_limits(), GEOMETRY)
     assert 1 <= step <= rate * TICK + 1, f"a first step of {step} rpm after a 20 s hold"
     down = [first, *await _walk_down(rig, standing)]
     _assert_an_ordinary_walk(MANUAL_SPEED, down, _walk_of("bench"))

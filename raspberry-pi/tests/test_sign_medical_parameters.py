@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import os
 import shutil
 import subprocess
 import sys
@@ -141,7 +142,28 @@ def _copy_installation(tmp_path: Path, changes: Mapping[str, int | float]) -> Pa
             id="huge-integer",
         ),
         pytest.param(
-            {"motion_limits.g_per_s": 0.6}, "g_rate", ("verify", "sign"), id="motion-import"
+            {"motion_limits.g_per_s": 0.6},
+            f"{MEDICAL_FILE}:motion_limits: g_rate (g_per_s) must be",
+            ("verify", "sign"),
+            id="motion-bounds",
+        ),
+        pytest.param(
+            {"recovery_min_s": 301.0},
+            "profils livres (profiles.default.json)",
+            ("verify", "sign"),
+            id="recovery-above-shipped-profiles",
+        ),
+        pytest.param(
+            {"cooldown_min_s": 241.0},
+            "profils livres (profiles.default.json)",
+            ("verify", "sign"),
+            id="cooldown-above-shipped-profiles",
+        ),
+        pytest.param(
+            {"zone_ceiling_fraction": 0.85},
+            "profils livres (profiles.default.json)",
+            ("verify", "sign"),
+            id="zone-ceiling-below-shipped-profiles",
         ),
         pytest.param(
             {"hr_critical_bpm": 250},
@@ -202,6 +224,21 @@ def test_main_refuses_out_of_bounds_before_asking_for_a_passphrase(
     assert files.signature.read_bytes() == before
 
 
+def test_main_verifies_the_three_files_it_is_pointed_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``verify`` and ``sign`` are handed the same three paths, whichever is changed."""
+    files = write_signed(tmp_path)
+    monkeypatch.setattr(signer, "PARAMETERS_PATH", files.parameters)
+    monkeypatch.setattr(signer, "SIGNATURE_PATH", files.signature)
+    monkeypatch.setattr(signer, "PUBLIC_KEY_PATH", files.public_key)
+    assert signer.main(["verify"]) == 0
+    assert capsys.readouterr().out.startswith("version 0.1.0")
+    files.signature.write_bytes(b"not a signature")
+    assert signer.main(["verify"]) == 1
+    assert capsys.readouterr().err.startswith("refuse : ")
+
+
 def test_module_import_with_unusable_shipped_integer_reraises(tmp_path: Path) -> None:
     copied = _copy_installation(tmp_path, {"occupied_ceiling_g": 10**399})
     result = subprocess.run(
@@ -218,10 +255,68 @@ def test_module_import_with_unusable_shipped_integer_reraises(tmp_path: Path) ->
     assert "un entier de 400 chiffres" in result.stderr
 
 
-def test_console_import_with_shipped_motion_out_of_bounds_exits_one(tmp_path: Path) -> None:
-    copied = _copy_installation(tmp_path, {"motion_limits.g_per_s": 0.6})
+@pytest.mark.parametrize(
+    ("changes", "said"),
+    [
+        pytest.param(
+            {"motion_limits.g_per_s": 0.6},
+            f"{MEDICAL_FILE}:motion_limits: g_rate (g_per_s) must be finite and in (0, 0.5], "
+            "got 0.6",
+            id="motion-above-its-bound",
+        ),
+        pytest.param({"motion_limits.g_per_s": 0}, "g_per_s", id="motion-zero"),
+        pytest.param({"motion_limits.g_per_s": -0.1}, "g_per_s", id="motion-negative"),
+        pytest.param(
+            {"motion_limits.min_run_motor_rpm": 0}, "min_run_motor_rpm", id="min-run-zero"
+        ),
+        pytest.param({"motion_limits.max_interval_s": 0}, "max_interval_s", id="interval-zero"),
+        pytest.param(
+            {"recovery_min_s": 301.0},
+            "the profile store cannot start",
+            id="shipped-profiles-refused",
+        ),
+    ],
+)
+def test_a_medical_file_the_console_cannot_run_with_keeps_the_service_down(
+    tmp_path: Path, changes: Mapping[str, int | float], said: str
+) -> None:
+    """ANH-235: whatever refuses it, the bounds of the console at startup, the parser of
+    the medical file at import, or the shipped profiles it makes unreadable: one
+    ``configuration:`` line, code 2, the one the service does not restart on. Never a
+    traceback and code 1, started again and again."""
+    copied = _copy_installation(tmp_path, changes)
     result = subprocess.run(
-        [sys.executable, "-c", "import src.local_config"],
+        [sys.executable, "-m", "src.local_panel"],
+        cwd=copied,
+        env={"PATH": os.environ["PATH"], **SIM_ENV},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 2, result
+    lines = [line for line in result.stderr.splitlines() if "configuration: " in line]
+    assert len(lines) == 1, result.stderr
+    assert said in lines[0]
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param({"recovery_min_s": 300.0}, id="recovery-300"),
+        pytest.param({"cooldown_min_s": 240.0}, id="cooldown-240"),
+        pytest.param({"zone_ceiling_fraction": 0.852}, id="zone-ceiling-0.852"),
+    ],
+)
+def test_verify_accepts_the_shipped_profiles_at_their_edge(
+    tmp_path: Path, changes: Mapping[str, int | float]
+) -> None:
+    """Edited, the file is no longer the one signed: verify gets to the signature."""
+    copied = _copy_installation(tmp_path, changes)
+    result = subprocess.run(
+        [sys.executable, "scripts/sign_medical_parameters.py", "verify"],
         cwd=copied,
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -229,7 +324,45 @@ def test_console_import_with_shipped_motion_out_of_bounds_exits_one(tmp_path: Pa
         timeout=20,
         check=False,
     )
-    assert result.returncode == 1
-    assert "ValueError: g_rate must be finite and in (0, 0.5], got 0.6" in result.stderr
-    assert str(Path("src") / "training" / "motion.py") in result.stderr
-    assert f"{MEDICAL_FILE}:motion_limits" not in result.stderr
+    assert result.returncode == 1, result
+    assert "la signature ne correspond pas au fichier" in result.stderr
+    assert "profils livres" not in result.stderr
+
+
+def test_a_file_whose_profile_values_changed_since_the_command_started_is_refused(
+    tmp_path: Path,
+) -> None:
+    """The shipped profiles are judged with the values the command read at its start."""
+    key = Ed25519PrivateKey.generate()
+    files = write_signed(tmp_path, signer=key)
+    before = files.signature.read_bytes()
+    files.parameters.write_bytes(with_values({"recovery_min_s": 61.0}))
+    with pytest.raises(signer.SigningError, match="la relancer pour juger les profils livres"):
+        signer.sign(key, files.parameters, files.signature, files.public_key)
+    assert files.signature.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("changes", "why"),
+    [
+        pytest.param({"hr_hard_max_bpm": 150, "hr_critical_bpm": 160}, "paliers", id="tiers"),
+        pytest.param({"motion_limits.min_run_motor_rpm": 200}, "min_run_rpm", id="min-run"),
+    ],
+)
+def test_a_file_the_shipped_profiles_cannot_run_under_is_signed_with_a_warning(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    changes: Mapping[str, int | float],
+    why: str,
+) -> None:
+    """ANH-235: read, they would not be run: the signer is told which, the file is signed."""
+    key = Ed25519PrivateKey.generate()
+    files = write_signed(tmp_path, signer=key)
+    assert signer.describe(files.parameters, files.signature, files.public_key)
+    assert capsys.readouterr().err == "", "the shipped file: no warning"
+    files.parameters.write_bytes(with_values(changes))
+    assert signer.sign(key, files.parameters, files.signature, files.public_key) == "0.1.0"
+    warned = capsys.readouterr().err
+    assert warned.startswith("attention : avec ce fichier la console ne lancerait pas")
+    assert f"standard_30_min ({why}" in warned
+    assert f"standard_45_min ({why}" in warned

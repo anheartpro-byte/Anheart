@@ -223,10 +223,10 @@ from src.training.hr_control import (
 from src.training.idle_recovery import IdleLink as _IdleLink
 from src.training.idle_recovery import UnknownEpisode
 from src.training.motion import (
-    DEFAULT_MOTION_LIMITS,
     MotionLimits,
     Ramp,
     carry_after,
+    default_motion_limits,
     next_setpoint,
     ramp_duration,
 )
@@ -1342,7 +1342,7 @@ class TrainingRuntime:
         safety: SafetyLimits,
         tracker_limits: TrackerLimits | None = None,
         supervisor: SafetySupervisor | None = None,
-        motion: MotionLimits = DEFAULT_MOTION_LIMITS,
+        motion: MotionLimits | None = None,
         limit_radius: Metres | None = None,
         arming_gate: ArmingGate | None = None,
         preflight: PreflightGate | None = None,
@@ -1367,7 +1367,8 @@ class TrainingRuntime:
         warm-up and cooldown alike: see :mod:`src.training.motion`. Only the
         safety descents (a verdict's REDUCE or RAMP_DOWN on a programme, at
         ``RuntimeLimits.slew``) and the emergency zero (QUICK_STOP, the drive's
-        own commissioned ramp) move faster; see :meth:`_descend`.
+        own commissioned ramp) move faster; see :meth:`_descend`. ``None``: the
+        shipped file's (:func:`~src.training.motion.default_motion_limits`).
 
         ``limit_radius`` is where the g-rate limit of ``motion`` is evaluated,
         when that is further out than ``geometry.radius`` (the reference radius
@@ -1410,7 +1411,7 @@ class TrainingRuntime:
         self._rise_reading_within: Seconds = min(
             limits.rise_reading_within, self._tracker.limits.stale_after
         )
-        self._motion: MotionLimits = motion
+        self._motion: MotionLimits = default_motion_limits() if motion is None else motion
         # The geometry every motion limit is evaluated through: the machine's,
         # with the radius moved out to `limit_radius` when one was given. Only
         # the g-rate term depends on the radius. Display keeps `_geometry`.

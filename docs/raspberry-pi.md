@@ -3829,7 +3829,7 @@ Ce qui suit est ce qu'en fait la console.
 | `occupied_ceiling_g` | 1,2 g résultant | `LocalConfig.ceiling_for(OCCUPIED)` ([4.1](#41-occupation-déclarée)) |
 | `zone_ceiling_fraction` | 0,9 | `plan.ZONE_CEILING_FRACTION` : `zone_high ≤ 0,9 × FC max` |
 | `hr_max_formula` | `tanaka` | `plan.hr_max_from_age` : 208 - 0,7 × âge |
-| `motion_limits` | 0,25 tr/min de sortie/s ; 0,03 g/s ; 55 tr/min moteur ; 1,0 s | `LocalConfig.motion` et `motion.DEFAULT_MOTION_LIMITS` : chaque rampe de consigne |
+| `motion_limits` | 0,25 tr/min de sortie/s ; 0,03 g/s ; 55 tr/min moteur ; 1,0 s | `LocalConfig.motion` (et `motion.default_motion_limits()` pour les tests et la simulation) : chaque rampe de consigne |
 | `recovery_min_s` | 60 s | `plan.MIN_RECOVERY_S` : récupération minimale d'un profil, et celle d'une séance manuelle avec personne à bord |
 | `cooldown_min_s` | 4 s | `plan.MIN_COOLDOWN_S` : retour au calme minimal d'un profil (refus `cooldown_too_short`), en plus de la rampe du variateur (`cooldown_faster_than_drive_ramp`, 4 s, réglage d'ingénierie qui reste dans le code) |
 
@@ -3839,13 +3839,14 @@ sont les mêmes, quoi qu'il arrive ensuite au fichier sur le disque. Au
 démarrage, `load_local_config` vérifie les paliers (100..220 bpm), l'âge
 (10..100 ans) et les bornes du limiteur de mouvement, signés ou non. Un palier
 ou un âge hors bornes est un problème de configuration (clé
-`config/medical_parameters.json:<membre>`, code 2). Pour les limites de
-mouvement du fichier livré, le refus intervient plus tôt :
-`src/training/motion.py` construit `DEFAULT_MOTION_LIMITS` à l'import. Une
-limite hors bornes y lève `ValueError`, avec un code de sortie 1, avant
-`load_local_config` et sans clé `config/medical_parameters.json:motion_limits`.
-Ce comportement est vérifié par un sous-processus `python -c "import src.local_config"`
-sur une copie du dépôt où `g_per_s` vaut `0.6`.
+`config/medical_parameters.json:<membre>`, code 2). Une limite de mouvement
+hors bornes aussi (ANH-235) : clé `config/medical_parameters.json:motion_limits`,
+et le refus nomme le membre à corriger, par exemple `g_rate (g_per_s) must be
+finite and in (0, 0.5], got 0.6`. Aucune limite n'est jugée à l'import de
+`src/training/motion.py` : le service ne relance pas une console sortie en
+code 2, alors qu'il relancerait en boucle une erreur d'import (code 1). Vérifié
+par un sous-processus `python -m src.local_panel` sur une copie du dépôt où
+`g_per_s` vaut `0.6`.
 
 **Au démarrage.**
 
@@ -3853,8 +3854,8 @@ sur une copie du dépôt où `g_per_s` vaut `0.6`.
 |---|---|
 | Signature vérifiée avec `config/medical.pub` | démarrage normal ; `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` valent ce que dit le `.env` |
 | Signature absente ou illisible (`medical_parameters.sig`), qui ne se vérifie pas (un octet du fichier changé, une fin de ligne comprise), clé publique absente ou qui n'est pas une clé Ed25519 | **mode banc seulement** : voir ci-dessous |
-| Fichier absent, illisible, qui n'est pas du JSON strict (UTF-8, sans membre en double, sans `NaN`), dont un membre manque, est inconnu ou n'a pas le bon type, ou dont un membre flottant contient un entier qu'aucun flottant ne représente | la console **ne démarre pas** : aucune valeur ne permet même une séance de banc (chaque rampe manuelle suit les limites de mouvement). L'erreur sort à l'import (`MedicalParametersUnusableError`), avec un code de sortie 1, comme pour des profils livrés inutilisables |
-| Limite de mouvement hors bornes dans le fichier livré | la console **ne démarre pas** : `ValueError` à l'import de `src/training/motion.py`, code de sortie 1 |
+| Fichier absent, illisible, qui n'est pas du JSON strict (UTF-8, sans membre en double, sans `NaN`), dont un membre manque, est inconnu ou n'a pas le bon type, ou dont un membre flottant contient un entier qu'aucun flottant ne représente | la console **ne démarre pas** : aucune valeur ne permet même une séance de banc (chaque rampe manuelle suit les limites de mouvement). L'erreur sort à l'import de `src/medical.py` (`MedicalParametersUnusableError`) ; la console la dit en une ligne `configuration: parametres medicaux inutilisables : ...`, sans trace, et sort en code 2, que le service ne relance pas (ANH-235). De même pour des profils livrés inutilisables sans magasin local (`configuration: the profile store cannot start: ...`), y compris quand c'est le fichier médical qui les fait refuser |
+| Limite de mouvement hors bornes dans le fichier livré | la console **ne démarre pas**, en code de sortie 2, que le service ne relance pas : au-dessus des bornes du limiteur, problème de configuration `config/medical_parameters.json:motion_limits` qui nomme le membre ; nulle ou négative, refus du lecteur du fichier (ligne précédente), qui le nomme aussi |
 
 **Le mode banc.** Quand la signature ne se vérifie pas :
 

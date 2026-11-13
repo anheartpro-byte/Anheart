@@ -52,7 +52,7 @@ import pytest
 from src.local_panel import RUNTIME_LIMITS, describe_start_refusal
 from src.motor.drive import CommTimeout, ControlWord
 from src.result import Err, Ok, is_ok
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.plan import MIN_RECOVERY_S, TrainingProfile
 from src.training.runtime import (
     RULE_DISABLE_REFUSED,
@@ -209,7 +209,7 @@ async def _console_rig(seconds: float = AT_SPEED) -> Rig:
     rig = _rig(
         profile=REAL_PROFILE,
         limits=RUNTIME_LIMITS,
-        motion=DEFAULT_MOTION_LIMITS,
+        motion=default_motion_limits(),
         occupant=Occupant(),
     )
     assert is_ok(await rig.start())
@@ -226,7 +226,7 @@ async def _scripted_rig(climb: float) -> Rig:
     programme climbs) for ``climb`` seconds. No simulated occupant: what the
     heart does next is the test's to say, one bpm at a time.
     """
-    rig = _rig(profile=REAL_PROFILE, limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(profile=REAL_PROFILE, limits=RUNTIME_LIMITS, motion=default_motion_limits())
     rig.fed_bpm = Bpm(82)
     assert is_ok(await rig.start())
     await rig.run(181.0)
@@ -301,7 +301,7 @@ def _read_before_the_start(rig: Rig, bpm: int) -> None:
 
 async def _manual(occupancy: Occupancy, target: int = 200) -> Rig:
     """A manual session at ``target`` motor rpm, a heart rate on the wire either way."""
-    rig = _rig(motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(motion=default_motion_limits())
     _read_before_the_start(rig, 80)
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
     assert is_ok(await rig.runtime.start_manual(occupancy, OPERATOR, MANUAL_CEILING))
@@ -577,7 +577,7 @@ async def test_an_empty_capsule_session_stopped_by_a_warning_ends_there_too() ->
     invites somebody to walk up and look. The person at risk is that one, not
     the one the capsule does not hold.
     """
-    rig = _rig(motion=DEFAULT_MOTION_LIMITS, safety=_low_current_warning(_profile()))
+    rig = _rig(motion=default_motion_limits(), safety=_low_current_warning(_profile()))
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
     assert is_ok(await rig.runtime.start_manual(Occupancy.BENCH, OPERATOR, MANUAL_CEILING))
     wanted = motor_to_output_rpm(MANUAL_CEILING, GEOMETRY.ratio)
@@ -765,7 +765,7 @@ async def test_a_heart_rate_rising_too_fast_that_reaches_standstill_ends_the_ses
     warning lifted about 20 s after the standstill and the arm restarted 50 s
     later, into a heart that had just been judged to be rising too fast.
     """
-    rig = _rig(profile=REAL_PROFILE, limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(profile=REAL_PROFILE, limits=RUNTIME_LIMITS, motion=default_motion_limits())
     rig.fed_bpm = Bpm(80)
     assert is_ok(await rig.start())
     await rig.run(AT_SPEED)
@@ -1317,7 +1317,7 @@ async def test_a_warning_during_baseline_before_the_arm_has_moved_ends_nothing()
     rig = _rig(
         profile=REAL_PROFILE,
         limits=RUNTIME_LIMITS,
-        motion=DEFAULT_MOTION_LIMITS,
+        motion=default_motion_limits(),
         occupant=Occupant(),
     )
     assert is_ok(await rig.start())
@@ -1533,7 +1533,7 @@ async def test_the_screen_is_told_before_the_first_motion_too() -> None:
     rig = _rig(
         profile=REAL_PROFILE,
         limits=RUNTIME_LIMITS,
-        motion=DEFAULT_MOTION_LIMITS,
+        motion=default_motion_limits(),
         occupant=Occupant(),
     )
     assert is_ok(await rig.start())

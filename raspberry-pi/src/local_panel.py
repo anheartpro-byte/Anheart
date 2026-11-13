@@ -135,6 +135,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import importlib
 import logging
 import os
 import signal
@@ -147,6 +148,23 @@ from threading import Thread
 from typing import Final, Protocol, assert_never, final
 
 from dotenv import dotenv_values
+
+from src.log_format import json_handler
+from src.medical_unusable import MedicalParametersUnusableError
+
+# The medical file is read when src.medical is first imported, before anything below:
+# one that cannot be used is a configuration problem, said once, with the exit code
+# the service does not restart on (EXIT_CONFIG), never an import that fails and is
+# started again and again.
+try:
+    importlib.import_module("src.medical")
+except MedicalParametersUnusableError as unusable:
+    if __name__ != "__main__":
+        raise
+    logging.basicConfig(level=logging.INFO, handlers=[json_handler()])
+    # One line, no traceback: the file is what is wrong, not this code.
+    logging.getLogger(__name__).error("configuration: %s", unusable)  # noqa: TRY400
+    raise SystemExit(2) from None
 
 from src.bitalino_client import BITalinoClient, LinkStats, SampleBatch
 from src.bitalino_rfcomm_macos import device_factory_for
@@ -200,7 +218,6 @@ from src.local_config import (
     load_local_config,
     retired_keys,
 )
-from src.log_format import json_handler
 from src.motor.atv320 import (
     AUXILIARY_READ_BUDGET,
     ATV320Drive,
@@ -459,6 +476,12 @@ class Armable:
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
 EXIT_CONFIG: Final[int] = 2
+
+
+class ProfilesUnusableError(ValueError):
+    """Neither the local store nor the shipped profiles can be used: a configuration
+    problem (the shipped file, or a medical file that refuses it), exit code 2."""
+
 
 EXIT_GRACE: Final[Seconds] = Seconds(5.0)
 """Once the console has stopped (the drive first, then the session record), the
@@ -2607,7 +2630,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     store = ProfileStore(profiles_path, defaults_path)
     match store.load():
         case Err(error):
-            raise ValueError(f"the profile store cannot start: {error}")
+            raise ProfilesUnusableError(f"the profile store cannot start: {error}")
         case _:
             pass
     # Linked or not: a stored catalogue is judged by this start's rules before anything
@@ -3375,9 +3398,14 @@ def main(environ: Mapping[str, str] | None = None) -> int:
     unsigned = config.medical.warning
     if unsigned is not None:
         _logger.error("medical parameters: %s", unsigned)
-    return asyncio.run(
-        run_console(config, stopped=bound_exit, notify_socket=env.get(NOTIFY_SOCKET))
-    )
+    try:
+        return asyncio.run(
+            run_console(config, stopped=bound_exit, notify_socket=env.get(NOTIFY_SOCKET))
+        )
+    except ProfilesUnusableError as unusable:
+        refused = unusable
+    _logger.error("configuration: %s", refused)
+    return EXIT_CONFIG
 
 
 if __name__ == "__main__":

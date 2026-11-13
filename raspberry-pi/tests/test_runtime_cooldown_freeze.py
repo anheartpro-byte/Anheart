@@ -44,7 +44,7 @@ from hypothesis import strategies as st
 
 from src.local_panel import RUNTIME_LIMITS
 from src.result import Err, Ok, is_ok
-from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, motor_rate_limit
+from src.training.motion import MotionLimits, default_motion_limits, motor_rate_limit
 from src.training.plan import TrainingProfile
 from src.training.runtime import EndReason, RuntimeLimits, RuntimeState, SafetyStanding
 from src.training.safety import RULE_SESSION_OVERRUN, RULE_SESSION_STANDSTILL, SafetySupervisor
@@ -272,7 +272,7 @@ async def _shipped_before_cooldown(shift: int) -> Rig:
     """
     profile = replace(REAL_PROFILE, total_duration_s=Seconds(SHIPPED_PLANNED + shift * TICK))
     rig = _rig(
-        profile=profile, limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS, occupant=Occupant()
+        profile=profile, limits=RUNTIME_LIMITS, motion=default_motion_limits(), occupant=Occupant()
     )
     assert is_ok(await rig.start())
     await rig.run(1.0)
@@ -496,7 +496,7 @@ async def test_a_descent_still_under_way_at_the_recovery_goes_on_under_a_freeze(
     so the twin's cooldown is bound by them alone wherever the period falls.)
     """
     witness, rig = await _twins(
-        SHORT_COOLDOWN, SHORT_COOLDOWN_AT - 2 * TICK, motion=DEFAULT_MOTION_LIMITS
+        SHORT_COOLDOWN, SHORT_COOLDOWN_AT - 2 * TICK, motion=default_motion_limits()
     )
     _freeze(rig)
     for twin in (witness, rig):
@@ -737,13 +737,13 @@ async def test_on_the_shipped_programme_the_descent_under_a_freeze_is_never_behi
     start, under, free = await _descents(witness, rig)
 
     _assert_an_ordinary_walk(start, under, SHIPPED)
-    _assert_inside_the_motion_limits(start, under, DEFAULT_MOTION_LIMITS)
+    _assert_inside_the_motion_limits(start, under, default_motion_limits())
     _assert_never_behind(under, free)
     if ahead:
         assert len(free) > len(under), "at this alignment the ordinary cooldown was not the slower"
     else:
         assert _setpoints(under) == _setpoints(free), "at this alignment the two were the same"
-    rate = motor_rate_limit(MotorRpm(0), DEFAULT_MOTION_LIMITS, GEOMETRY)
+    rate = motor_rate_limit(MotorRpm(0), default_motion_limits(), GEOMETRY)
     assert RUNTIME_LIMITS.slew > rate, "the shipped law's nominal ramp is above the motion limits"
 
 
@@ -764,7 +764,7 @@ async def test_at_every_alignment_the_descent_is_never_behind_and_never_too_fast
     And the two are the same only where the head start outlasts the descent:
     elsewhere the ordinary cooldown arrives later, by up to several seconds.
     """
-    walk = Walk(motion=DEFAULT_MOTION_LIMITS, passage_slew=float(SLOW_LAW.slew))
+    walk = Walk(motion=default_motion_limits(), passage_slew=float(SLOW_LAW.slew))
     frozen: set[tuple[int, ...]] = set()
     later: list[int] = []
     for shift in ALIGNMENTS:
@@ -773,12 +773,12 @@ async def test_at_every_alignment_the_descent_is_never_behind_and_never_too_fast
             profile,
             COOLDOWN_AT + shift * TICK - 2 * TICK,
             limits=SLOW_LAW,
-            motion=DEFAULT_MOTION_LIMITS,
+            motion=default_motion_limits(),
         )
         start, under, free = await _descents(witness, rig)
         assert start == int(LONG.max_rpm), "the setpoint is not parked at the ceiling"
         _assert_an_ordinary_walk(start, under, walk)
-        _assert_inside_the_motion_limits(start, under, DEFAULT_MOTION_LIMITS)
+        _assert_inside_the_motion_limits(start, under, default_motion_limits())
         _assert_never_behind(under, free)
         frozen.add(tuple(_setpoints(under)))
         later.append(len(free) - len(under))
@@ -820,19 +820,19 @@ async def test_with_the_shipped_settings_the_descent_keeps_both_bounds_at_every_
     programme (two places, 2.6 s at the widest) and, at every place and on
     every run, the test above with the law slowed.
     """
-    walk = Walk(motion=DEFAULT_MOTION_LIMITS, passage_slew=float(RUNTIME_LIMITS.slew))
+    walk = Walk(motion=default_motion_limits(), passage_slew=float(RUNTIME_LIMITS.slew))
     frozen: set[tuple[int, ...]] = set()
     same: list[bool] = []
     for shift in ALIGNMENTS:
         profile = replace(LONG, total_duration_s=Seconds(PLANNED + shift * TICK))
-        witness = await _started(profile, limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+        witness = await _started(profile, limits=RUNTIME_LIMITS, motion=default_motion_limits())
         await _until(witness, COOLDOWN_AT + shift * TICK - 2 * TICK)
         assert _verdict(witness) is None
         rig = copy.deepcopy(witness)
         start, under, free = await _descents(witness, rig)
         assert start == int(REAL_PROFILE.max_rpm), "the setpoint is not parked at the ceiling"
         _assert_an_ordinary_walk(start, under, walk)
-        _assert_inside_the_motion_limits(start, under, DEFAULT_MOTION_LIMITS)
+        _assert_inside_the_motion_limits(start, under, default_motion_limits())
         _assert_never_behind(under, free)
         frozen.add(tuple(_setpoints(under)))
         same.append(_setpoints(under) == _setpoints(free))

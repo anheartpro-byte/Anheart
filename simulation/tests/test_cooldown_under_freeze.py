@@ -33,7 +33,7 @@ from simulation.scenario import SCENARIO_DIR
 from simulation.tests.conftest import run_file
 from src.geometry import CONFIRMED_GEAR_RATIO
 from src.record.rows import Row
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.safety import RULE_LOOP_STALL, RULE_SESSION_OVERRUN, RULE_SESSION_STANDSTILL
 from src.units import output_to_motor_slew
 
@@ -47,12 +47,12 @@ PLANNED: Final[float] = 1800.0
 OVERRUN_AT: Final[float] = PLANNED + 30.0
 """Past this ``session_overrun`` ends a session that is still in progress."""
 
-MIN_RUN: Final[int] = int(DEFAULT_MOTION_LIMITS.min_run)
+MIN_RUN: Final[int] = int(default_motion_limits().min_run)
 
 TICK: Final[float] = 0.2
 
 ANGULAR_LIMIT: Final[float] = float(
-    output_to_motor_slew(DEFAULT_MOTION_LIMITS.output_accel, CONFIRMED_GEAR_RATIO)
+    output_to_motor_slew(default_motion_limits().output_accel, CONFIRMED_GEAR_RATIO)
 )
 """The angular acceleration limit at the motor shaft, rpm/s: the fastest the
 motion limits ever allow, whatever the radius the g-rate limit is judged at."""

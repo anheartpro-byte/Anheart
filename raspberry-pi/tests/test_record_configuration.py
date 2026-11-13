@@ -31,7 +31,7 @@ from src.record.schema import EventKind
 from src.record.session import applied_configuration, stamp_for
 from src.record.upload import owed_records
 from src.result import Err, Ok
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.runtime import RuntimeState
 from src.training.safety import SafetyLimits
 from src.units import Bpm, UnixMillis
@@ -61,9 +61,9 @@ def test_document_hash_stays_identical_and_excludes_secrets_identities_and_healt
         }
     )
     safety = SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
-    content = applied_configuration(config, RUNTIME_LIMITS, safety, DEFAULT_MOTION_LIMITS)
+    content = applied_configuration(config, RUNTIME_LIMITS, safety, default_motion_limits())
     stamp = stamp_for(
-        config, RUNTIME_LIMITS, safety, DEFAULT_MOTION_LIMITS, SoftwareVersion("reference")
+        config, RUNTIME_LIMITS, safety, default_motion_limits(), SoftwareVersion("reference")
     )
     assert hashlib.sha256(content).hexdigest() == stamp.config_hash
     # Changed once on purpose by ANH-92, which added `sto_source` to the document.
@@ -89,9 +89,9 @@ def test_native_document_excludes_the_port_and_keeps_the_structured_settings() -
     link = DriveLink(settings, RegisterMap(offset=1))
     native = replace(config, drive_link=link)
     safety = SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
-    content = applied_configuration(native, RUNTIME_LIMITS, safety, DEFAULT_MOTION_LIMITS)
+    content = applied_configuration(native, RUNTIME_LIMITS, safety, default_motion_limits())
     other_port = replace(native, drive_link=replace(link, settings=replace(settings, port="COM99")))
-    other = applied_configuration(other_port, RUNTIME_LIMITS, safety, DEFAULT_MOTION_LIMITS)
+    other = applied_configuration(other_port, RUNTIME_LIMITS, safety, default_motion_limits())
     assert content == other
     assert b'"drive_link":"native"' in content
     assert b'"native_drive":{"baudrate":19200' in content

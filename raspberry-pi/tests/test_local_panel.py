@@ -10,17 +10,20 @@ told to exit before it serves a single request.
 from __future__ import annotations
 
 import asyncio
+import importlib.abc
+import importlib.machinery
 import os
 import runpy
 import signal
 import stat
 import sys
 import threading
+import types
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, cast, override
 
 import pytest
 
@@ -39,6 +42,7 @@ from src.local_panel import (
     DriveSide,
     EcgLink,
     LocalPanel,
+    ProfilesUnusableError,
     ServiceDesk,
     UvicornRunner,
     bound_exit,
@@ -55,6 +59,7 @@ from src.local_panel import (
     run_console,
 )
 from src.medical import SHIPPED_PARAMETERS, MedicalStatus
+from src.medical_unusable import MedicalParametersUnusableError
 from src.motor.atv320 import ATV320Drive, FtdiModbusClient
 from src.motor.drive import DriveFault, DriveState, LowSpeedNotZero, describe_fault
 from src.motor.simulated import SimulatedDrive, SimulatedDriveConfig
@@ -641,6 +646,70 @@ def test_main_runs_the_console_on_a_good_configuration(monkeypatch: pytest.Monke
     # ANH-162: the service manager's socket is the one of the environment, or none.
     assert main({**BASE_ENV, "NOTIFY_SOCKET": "/run/anheart/notify"}) == EXIT_OK
     assert told == [None, "/run/anheart/notify"]
+
+
+def test_main_refuses_shipped_profiles_it_cannot_read_as_a_configuration_problem(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ANH-235: the profiles the console falls back to cannot be read (a medical file that
+    refuses them, no local store): code 2, one line, and the service stays down."""
+
+    async def refused(
+        _config: LocalConfig, *, stopped: Callable[[int], object], notify_socket: str | None
+    ) -> int:
+        del stopped, notify_socket
+        raise ProfilesUnusableError("the profile store cannot start: shipped profiles refused")
+
+    monkeypatch.setattr(local_panel, "run_console", refused)
+    assert main(BASE_ENV) == EXIT_CONFIG
+    assert "configuration: the profile store cannot start: shipped profiles refused" in (
+        caplog.text
+    )
+
+
+class _UnusableMedicalFile(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Imports ``src.medical`` as a shipped file that cannot be parsed would."""
+
+    @override
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None,
+        target: types.ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        del path, target
+        if fullname != "src.medical":
+            return None
+        return importlib.machinery.ModuleSpec(fullname, self)
+
+    @override
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> types.ModuleType | None:
+        return None
+
+    @override
+    def exec_module(self, module: types.ModuleType) -> None:
+        raise MedicalParametersUnusableError(("motion_limits.g_per_s : nombre positif",))
+
+
+@pytest.mark.parametrize("entry", [True, False], ids=["run as the console", "imported"])
+def test_a_medical_file_that_cannot_be_used_stops_the_console_as_a_configuration_problem(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, entry: bool
+) -> None:
+    """ANH-235: read when the console is imported, the file stops it there: run as the
+    console, one ``configuration:`` line and code 2; imported, the error as it is."""
+    monkeypatch.delitem(sys.modules, "src.medical")
+    monkeypatch.delitem(sys.modules, "src.local_panel")  # run afresh, the module kept apart
+    monkeypatch.setattr(sys, "meta_path", [_UnusableMedicalFile(), *sys.meta_path])
+    if entry:
+        with pytest.raises(SystemExit) as stopped:
+            runpy.run_module("src.local_panel", run_name="__main__")
+        assert stopped.value.code == EXIT_CONFIG
+        assert "configuration: parametres medicaux inutilisables : motion_limits.g_per_s" in (
+            caplog.text
+        )
+    else:
+        with pytest.raises(MedicalParametersUnusableError):
+            runpy.run_module("src.local_panel", run_name="src.local_panel_again")
 
 
 # =========================================================================

@@ -18,7 +18,7 @@ from src.record.configuration import MAX_CONFIG_BYTES
 from src.record.rows import JsonValue
 from src.record.session import applied_configuration
 from src.result import Err, Ok
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.units import (
     Bpm,
     GearRatio,
@@ -37,7 +37,7 @@ def _document() -> dict[str, JsonValue]:
         mapping(
             JSON.validate_json(
                 applied_configuration(
-                    loaded.value, RUNTIME_LIMITS, PANEL_SAFETY, DEFAULT_MOTION_LIMITS
+                    loaded.value, RUNTIME_LIMITS, PANEL_SAFETY, default_motion_limits()
                 )
             )
         )
@@ -71,7 +71,7 @@ def test_verified_document_uses_the_domain_constructors_and_all_recorded_limits(
     config = replace(loaded.value, geometry=geometry, leg_tip_radius=Metres(2.6))
     runtime = replace(RUNTIME_LIMITS, slew=RpmPerSecond(18))
     safety = replace(PANEL_SAFETY, hard_max_bpm=Bpm(147))
-    motion = replace(DEFAULT_MOTION_LIMITS, output_accel=OutputRpmPerSecond(0.18))
+    motion = replace(default_motion_limits(), output_accel=OutputRpmPerSecond(0.18))
     raw = applied_configuration(config, runtime, safety, motion)
     path = tmp_path / "config.json"
     path.write_bytes(raw)

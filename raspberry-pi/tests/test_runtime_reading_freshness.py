@@ -15,7 +15,7 @@ from src.training.hr_control import (
     HeartRateTracker,
     TrackerLimits,
 )
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.runtime import HeldAtStandstill, RiseHold
 from src.training.types import HEART_RATE_STALE_AFTER, Occupancy, SafetyAction, SignalQuality
 from src.units import Bpm, Monotonic, MotorRpm, Seconds, motor_to_output_rpm
@@ -35,7 +35,7 @@ async def programme() -> Rig:
     rig = build_rig(
         profile=climbing_profile(),
         limits=REAL_LIMITS,
-        motion=DEFAULT_MOTION_LIMITS,
+        motion=default_motion_limits(),
     )
     rig.fed_bpm = Bpm(70)
     assert is_ok(await rig.start())
@@ -60,7 +60,7 @@ async def turning() -> Rig:
 
 
 async def occupied() -> Rig:
-    rig = build_rig(motion=DEFAULT_MOTION_LIMITS)
+    rig = build_rig(motion=default_motion_limits())
     rig.fed_bpm = Bpm(70)
     rig.feed(Bpm(70))
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
@@ -133,7 +133,7 @@ async def test_the_rise_gate_never_outlasts_the_tracker_freshness(
     rig = build_rig(
         profile=climbing_profile(),
         limits=LIMITS,
-        motion=DEFAULT_MOTION_LIMITS,
+        motion=default_motion_limits(),
         tracker_limits=tracker_limits,
     )
     rig.fed_bpm = Bpm(70)
