@@ -53,6 +53,7 @@ const NEVER_LIMITED = [
   "POST /api/machine/training/start",
   "GET /api/machine/records/status",
   "GET /api/machine/roster",
+  "GET /api/machine/programmes",
 ] as const;
 
 describe("ANH-228 refused writes", () => {
@@ -138,13 +139,13 @@ describe("ANH-228 refused writes", () => {
 });
 
 describe("ANH-228 routes that must never depend on a limiter", () => {
-  it("keeps exactly the five exempt routes outside the contract's limits", () => {
+  it("keeps exactly the six exempt routes outside the contract's limits", () => {
     for (const route of NEVER_LIMITED) {
       expect(Object.keys(shared.rate_limits.routes)).not.toContain(route);
     }
   });
 
-  it("still serves all five routes with every machine bucket exhausted", async () => {
+  it("still serves all six routes with every machine bucket exhausted", async () => {
     const w = await seedMachineWorld(modules);
     const sessionId = await session(w);
     const pending = await w.admin.mutation(api.training.launchAutoSession, {
@@ -208,6 +209,9 @@ describe("ANH-228 routes that must never depend on a limiter", () => {
     const roster = await send(w, "roster", undefined, headers);
     expect(roster.status).toBe(200);
     expect(await roster.json()).toHaveProperty("riders");
+    const catalogue = await send(w, "programmes", undefined, headers);
+    expect(catalogue.status).toBe(200);
+    expect(await catalogue.json()).toHaveProperty("status");
     expect(
       (await send(w, `training/status?sessionId=${sessionId}`)).status,
     ).toBe(200);

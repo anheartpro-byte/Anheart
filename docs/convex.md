@@ -442,14 +442,20 @@ synchronisation (`syncProfiles`).
 
 Le Pi n'envoie que les programmes dont les paliers égalent ceux de son
 superviseur (`runnable_profiles` dans `raspberry-pi/src/cloud_sync.py`) : un
-programme que le Pi refuserait n'est jamais proposé sur le site.
+programme que le Pi refuserait n'est jamais proposé sur le site. Depuis le
+contrat 1.11 (ANH-138), ce sont les programmes du catalogue signé que la
+machine a revalidés et acceptés, ou ses programmes de secours tant qu'elle
+n'a reçu aucun catalogue signé ; ce qu'elle a refusé est dans
+`machines.programmeCatalog`, jamais ici.
 
 ### `programmes` et `programme_revisions` : le catalogue de programmes (ANH-137)
 
 Les programmes de séance que l'équipe Anheart écrit depuis le site, sans
 toucher au Pi. Règles, cycle de vie et rôles : [programmes.md](programmes.md).
-Ils ne partent pas encore vers les machines (ANH-138) : les lancements
-utilisent toujours `machine_profiles`.
+Ceux qui sont publiés partent vers les machines, signés, par
+`GET /api/machine/programmes` (ANH-138, [§6](#6-routes-http-machine-convexhttpts)) ;
+chaque machine les revalide, et les lancements utilisent toujours
+`machine_profiles`, c'est-à-dire ce qu'elle a accepté.
 
 | Champ | Sens |
 |---|---|
@@ -522,6 +528,7 @@ purge supplémentaire n'est livré ici.
 | `lastHeartbeat` | ms Unix du dernier heartbeat. |
 | `isDeleted`, `deletedAt`, `deletedBy` | Suppression douce. |
 | `programsEnabled` | Rapporté par le Pi : accepte-t-il les séances auto ? |
+| `programmeCatalog` | Rapporté par le Pi avec ses programmes depuis le contrat 1.11 (ANH-138) : `{revision, rejected: [{profileId, reason}], reportedAt}`. `revision` est la révision du catalogue signé que la machine a acceptée, ou `null` quand elle tourne sur ses programmes de secours (aucun catalogue signé jamais reçu) ; `rejected`, les programmes qu'elle a refusés et pourquoi ; `reportedAt`, la date de réception. Absent : une console antérieure, qui n'en dit rien (son envoi efface le champ). Rendu par `training.getMachineLive`. |
 | `live` | Dernier état rapporté par le Pi (voir ci-dessous). |
 | `softwareVersion` | Version logicielle annoncée par le Pi dans son heartbeat (tag git, par exemple `pi-0.4.2`). Absente tant qu'aucun heartbeat ne l'a donnée, et effacée si le dernier heartbeat n'en portait pas de bien formée. |
 | `contractVersion` | Version du contrat machine annoncée par le Pi : l'en-tête `X-Anheart-Contract` du dernier heartbeat accepté. |
@@ -1830,11 +1837,12 @@ ANH-137 ajoute les codes du catalogue de programmes (`programmes.ts`) :
 | `programme_refused` | La validation du Pi refuse le programme. Levé comme un objet `{code, message, violations}` : `message` est le message du Pi (`detail` de `plan.py`, par exemple `training profile refused: zone_above_subject_ceiling`) et `violations` ses valeurs de `Violation`, dans son ordre. La page affiche `message` tel quel. |
 | `programme_not_found` | Le programme n'existe pas. |
 | `programme_wrong_status` | Le programme n'est pas dans l'état d'où part la transition demandée. |
-| `programme_id_taken` | Un autre programme porte déjà ce `profileId`. |
+| `programme_id_taken` | Un autre programme porte déjà ce `profileId`, ou c'est l'identifiant d'un programme de secours livré avec la console (`standard_30_min`, `standard_45_min`, ANH-138). |
 | `programme_self_validation` | L'admin a créé le brouillon ou l'a réécrit en dernier. |
 | `programme_medical_version_unavailable` | Aucune version des paramètres médicaux n'est enregistrée : c'est le cas de la production tant qu'ANH-98 n'a pas livré les valeurs signées, et aucun programme ne peut y être validé. |
 | `programme_medical_version_not_current` | Le brouillon a été vérifié pour une autre version que la version courante : l'enregistrer de nouveau. |
 | `programme_simulation_report_missing` | Aucun rapport de simulation joint. |
+| `programme_catalog_too_large` | Publié, le programme rendrait le texte signé du catalogue plus grand que `max_payload_bytes` (500 000 octets), au-delà de ce qu'une console lit (ANH-138). |
 | `invalid_medical_signoff` | Signataire vide ou de plus de 200 caractères, note de plus de 1000, date qui n'est pas en ms entières, antérieure à 2024 ou à plus d'un jour dans le futur. |
 
 Un rapport refusé (type, taille, âge) répond `invalid_registry_file`, comme
@@ -2428,12 +2436,13 @@ d'une séance.
 | Fonction | Droits et effet |
 |---|---|
 | `list` (query) | Admin Anheart : tous les programmes, avec `simulationReportUrl`, l'URL du rapport joint. Tout autre compte : les programmes `published` du catalogue Anheart (`organizationId` nul), `simulationReport` et `simulationReportUrl` nuls. Anonyme : `not_authenticated`. |
-| `create` (mutation) | Admin Anheart. Les champs du profil ; validation du Pi, `profileId` libre ; écrit un brouillon `revision: 0`, `medicalParametersVersion` du fichier livré. Dupliquer un programme, c'est le créer depuis sa copie (le site préremplit le formulaire). |
+| `create` (mutation) | Admin Anheart. Les champs du profil ; validation du Pi, `profileId` libre et qui n'est pas celui d'un programme de secours de la console (`FALLBACK_PROFILE_IDS`, lus dans `raspberry-pi/config/profiles.default.json`) ; écrit un brouillon `revision: 0`, `medicalParametersVersion` du fichier livré. Dupliquer un programme, c'est le créer depuis sa copie (le site préremplit le formulaire). |
 | `updateDraft` (mutation) | Admin Anheart, brouillon seulement. Mêmes contrôles ; efface `simulationReport` et `medicalSignoff`, qui portaient sur d'autres valeurs. |
 | `attachSimulationReport` (mutation) | Admin Anheart, brouillon seulement. Fichier PDF ou JSON d'au plus 10 Mio déposé depuis moins d'une heure (URL de dépôt de `machineRegistry.generateUploadUrl`). |
 | `validate` (mutation) | De `draft` à `validated`. Admin Anheart autre que `createdBy` et `updatedBy` ; dans cet ordre : validation du Pi sur les valeurs enregistrées, version médicale courante égale à `medicalParametersVersion`, rapport joint, signature médicale `{by, at, note}` bornée. |
-| `publish` (mutation) | De `validated` à `published`, admin Anheart : `revision` plus 1 et copie complète dans `programme_revisions`. |
+| `publish` (mutation) | De `validated` à `published`, admin Anheart : `revision` plus 1 et copie complète dans `programme_revisions`. Refusé `programme_catalog_too_large` si le texte signé du catalogue, ce programme compris, dépassait `max_payload_bytes`. |
 | `retire` (mutation) | De `published` à `retired`, admin Anheart : le programme sort du catalogue publié. |
+| `publishedCatalog` (query interne) | Le texte que `GET /api/machine/programmes` signe (ANH-138) : `{catalogRevision, unchanged, programmes}` du catalogue Anheart (`organizationId` nul), `programmes` vide quand `since` vaut la révision (`catalogPayload`, `convex/lib/programmes.ts`). |
 
 Chaque mutation est limitée comme toute écriture d'un compte et écrit sa
 ligne d'audit. `convex/lib/programmes.ts` porte les champs (repris par le
@@ -2761,7 +2770,7 @@ Clé inconnue, révoquée ou expirée : **401**
 `{"error": "unauthorized", "message": "Invalid API key"}`, la même réponse
 dans les trois cas.
 
-**Contrat** : chaque route (12 des 13, l'exception suit) exige ensuite l'en-tête
+**Contrat** : chaque route (13 des 14, l'exception suit) exige ensuite l'en-tête
 `X-Anheart-Contract: <majeure.mineure>`, vérifié **après** la clé et avant
 tout traitement, par le même point de passage que l'authentification
 (`validateMachineAuth`, `convex/lib/machineHttpAuth.ts`). En-tête absent,
@@ -2785,7 +2794,7 @@ listées dans `contracts/machine-api.json` (`contract_exempt_routes`), et
 passent par `authenticateMachineRequest` au lieu de `validateMachineAuth`.
 
 La suppression (`isDeleted`) ou la désactivation explicite
-(`authenticationEnabled: false`) produit aussi **401**, sur les 13 routes et
+(`authenticationEnabled: false`) produit aussi **401**, sur les 14 routes et
 les deux queries internes d'authentification, quelle que soit la clé. Une
 machine simplement `offline` peut envoyer son heartbeat avec une clé valide.
 Une machine restaurée retrouve ses clés qui n'ont été ni révoquées ni
@@ -2852,7 +2861,7 @@ se sert toujours de sa clé, au moins pour demander l'arrêt. Cette écriture
 ne consomme aucun jeton du seau de débit : « rien n'est écrit », ailleurs dans
 cette page, s'entend hors de cette date.
 
-**Erreurs** : tout refus des 13 routes machine (les 401 et les 426 compris)
+**Erreurs** : tout refus des 14 routes machine (les 401 et les 426 compris)
 a la forme
 `{"error": "<code stable>", "message": "<texte>"}`. Le code ne change pas
 d'une version à l'autre ; le texte, en anglais, est fait pour être lu et peut
@@ -2928,7 +2937,7 @@ qui fonctionne comme prévu ne les atteint jamais.
 | `POST /api/machine/training/events` | 10 par seconde | 10 | une fois par étape du lien (1 s) |
 | `POST /api/machine/records/upload-url` | 10 par seconde | 64 | 64 fichiers par étape du dépôt, 4 transferts à la fois |
 | `POST /api/machine/training/local` | 1 par minute | 20 | une déclaration par séance démarrée à la machine ; rattrapage une séance à la fois, après l'envoi de la précédente |
-| `POST /api/machine/profiles` | 1 toutes les 10 s | 5 | une fois par révision des programmes modifiés par l'opérateur ; pas de nouvel essai avant 15 s après un échec |
+| `POST /api/machine/profiles` | 1 toutes les 10 s | 5 | une fois par révision des programmes, et depuis 1.11 une fois par nouvel état du catalogue (au plus une réponse du catalogue par minute) ; pas de nouvel essai avant 15 s après un échec |
 | `POST /api/machine/records/commit` | 10 par seconde | 64 | au plus un commit par réservation `upload-url`, 64 fichiers par étape du dépôt |
 
 Ces trois plafonds (ANH-228) suivent le trafic attendu d'une console : une
@@ -3040,7 +3049,8 @@ déploiement.
 | Méthode et chemin | Corps / paramètres | Réponse 200 | Cadence côté Pi |
 |---|---|---|---|
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) ; 16 Kio max | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
-| `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s ; limite 1 toutes les 10 s, réserve 5 |
+| `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` ; depuis 1.11, et `{catalogRevision\|null, accepted: [profileId], rejected: [{profileId, reason}]}` (200 entrées en tout, `reason` de 500 caractères au plus ; mal formés : 400 `invalid_request`, rien n'est écrit) | `{count}` | quand la révision du magasin change, ou depuis 1.11 ce que la console dit du catalogue ; nouvel essai après 15 s ; limite 1 toutes les 10 s, réserve 5 |
+| `GET /api/machine/programmes?since=<révision>` | `since` facultatif, entier de 0 ou plus (sinon 400 `invalid_request`) | `{status: "signed", payload, signature, server_contract_version}`, ou `{status: "not_configured", server_contract_version}` sans clé de signature utilisable ([ci-dessous](#le-catalogue-signé-contrat-111-anh-138)) | contrat 1.11 : au démarrage de la console, puis au plus une fois par minute, au repos seulement ; non limitée en débit |
 | `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent, fitnessQuestionnaireVersion\|null}]}` (`getRoster`, [`roster` du contrat 1.6](../contracts/machine-api.json)) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
 | `GET /api/machine/training/poll` | - | `{session: null, incidents_open_high, server_contract_version}` ou `{session: {sessionId, mode: "auto", profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, incidents_open_high, server_contract_version}` ou, depuis 1.9 et seulement à une console qui l'annonce, `{session: {sessionId, mode: "bench", occupancy: "ballast", ballastKg\|null, notes\|null, operatorName}, incidents_open_high, server_contract_version}`. `incidents_open_high` (depuis 1.10, ANH-145, à toute console) : le nombre d'incidents de gravité haute de la machine ouverts ou analysés, que le pré-vol lit | toutes les 3 s, sans séance en cours ni lancement en attente, quels que soient les programmes depuis 1.9 (un lancement auto que la console ne prend pas est laissé comme s'il n'était pas là) |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}`, aussi pour une confirmation répétée d'un départ déjà confirmé dont la machine n'a encore rien envoyé et sans arrêt demandé, dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (contrat 1.8) ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
@@ -3165,6 +3175,72 @@ Détails du contrat :
   envoie ce qui manque, la séance en cours d'abord, puis les précédentes de
   la plus ancienne à la plus récente, sans limite d'ancienneté ni de nombre
   ([raspberry-pi.md §8](raspberry-pi.md#8-la-synchronisation-avec-le-tableau-de-bord)).
+
+### Le catalogue signé (contrat 1.11, ANH-138)
+
+`GET /api/machine/programmes` porte vers les machines les programmes
+`published` du catalogue Anheart ([programmes.md](programmes.md)), sous une
+signature que la console vérifie avant de les lire. Définition partagée :
+l'entrée `programme_catalog` de
+[`contracts/machine-api.json`](../contracts/machine-api.json).
+
+- **Ce qui est signé.** `payload` est un texte JSON,
+  `{catalogRevision, unchanged, programmes}`, construit par
+  `programmes.publishedCatalog` (`catalogPayload`, `convex/lib/programmes.ts`)
+  et envoyé tel quel : ce sont ses octets UTF-8 exacts que `signature`
+  (Ed25519, base64) signe, sans forme canonique à recalculer. Chaque
+  programme y a la forme du document de profil de la console (les clés de
+  `profile_to_document`, `raspberry-pi/src/training/plan.py`), avec
+  `medical_parameters_version` ; triés par `profile_id`.
+- **La révision.** `catalogRevision` est la somme des `revision` des
+  programmes du catalogue, plus un par programme retiré : un de plus à chaque
+  publication et à chaque retrait, les deux seuls changements de ce qui est
+  publié. `since` égal à cette révision : `unchanged: true` et `programmes`
+  vide, signé lui aussi. `since` absent ou différent : la liste entière.
+  `catalogRevision` 0 veut dire que rien n'a jamais été publié : la console
+  ne le prend pas pour un catalogue et garde ses programmes de secours.
+  Poser la clé sur un déploiement où rien n'est publié ne vide donc aucune
+  console.
+- **La taille.** Le texte signé fait au plus `max_payload_bytes` octets
+  (500 000 octets) : `programmes.publish` refuse un programme qui le ferait
+  dépasser (`programme_catalog_too_large`), et la réponse entière reste
+  sous le Mio qu'une console lit ; une réponse plus grande est refusée par
+  la console, qui l'écrit dans son journal de bord.
+- **Les identifiants réservés.** Aucun programme du catalogue ne prend
+  l'identifiant d'un programme de secours de la console (`standard_30_min`,
+  `standard_45_min`) : `create` et `updateDraft` le refusent
+  (`programme_id_taken`), et `validate` et `publish` le vérifient de
+  nouveau, pour un brouillon écrit avant cette réserve. Un même identifiant
+  ne désigne donc jamais deux programmes différents d'une machine à l'autre.
+- **La clé.** La clé privée est dans la variable d'environnement Convex
+  `ANHEART_CATALOG_SIGNING_KEY` (PKCS #8, en PEM ou en base64 sur une
+  ligne), jamais dans le dépôt ; sa moitié publique est
+  `raspberry-pi/config/anheart_catalog.pub` dans l'image de chaque console
+  ([secrets.md](secrets.md#34-clés-de-signature)). Sans variable, la route
+  répond `{status: "not_configured"}` et ne lit rien ; avec une valeur qui
+  n'est pas une clé Ed25519, la même réponse et une erreur dans les journaux
+  de Convex. Dans les deux cas la console n'a rien reçu et garde ses
+  programmes. Aujourd'hui la variable n'est posée sur aucun déploiement.
+- **Ce qui n'est pas signé** (`status`, `server_contract_version`) ne peut
+  qu'empêcher une mise à jour : rien hors du texte signé ne fait accepter un
+  programme.
+- **Ce que la machine en dit.** La console revalide chaque programme avec ses
+  propres règles ([raspberry-pi.md, 8](raspberry-pi.md#8-la-synchronisation-avec-le-tableau-de-bord)),
+  puis envoie `POST /api/machine/profiles` avec `catalogRevision`, `accepted`
+  et `rejected`. `syncProfiles` remplace `machine_profiles` par `profiles`,
+  comme avant, et garde `{revision, rejected}` dans
+  `machines.programmeCatalog`. La fiche machine affiche chaque programme
+  refusé, « refusé par la machine : » suivi de la raison, et « programmes de
+  secours » quand `catalogRevision` est `null`. Un programme refusé n'est
+  pas dans `machine_profiles` : il n'est pas lançable. Chaque `reason` fait au
+  plus 500 caractères et chaque `profileId` 64, comptés en points de code
+  Unicode comme la console les compte (un emoji vaut un) ; au-delà, 400
+  `invalid_request`.
+- **Ce que Convex ne juge pas.** Convex valide un programme avec la
+  version médicale courante du serveur, sans connaître le fichier médical
+  de chaque console : des paliers cardiaques ou un plafond qui ne sont pas
+  ceux d'une machine n'apparaissent que sur sa fiche, « refusé par la
+  machine : » suivi de la raison.
 
 ### Routes retirées
 
@@ -3595,7 +3671,7 @@ Avant de pousser ce schéma sur un déploiement, le contrôle en lecture seule d
 vérifie qu'aucune machine ne porte plus `apiKey` ni `apiKeySelector`, et dit
 quoi faire sinon. `convex/machineAuth.test.ts` vérifie que le schéma refuse
 ces champs et qu'une clé absente, inconnue, sortie de la table, révoquée ou
-expirée reçoit 401 sur les 13 routes, quand une clé valide les ouvre.
+expirée reçoit 401 sur les 14 routes, quand une clé valide les ouvre.
 
 ### Rotation d'une clé machine (ANH-165)
 
@@ -3968,7 +4044,8 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/organizationChoice.test.ts` | Ce que le site lit pour travailler dans une organisation (ANH-187) : raison du refus de l'organisation de l'appel, `org_id` du jeton, rôles portés par Clerk ; organisations proposées à la création d'une machine ; gestionnaires d'une organisation et leurs liens comptés dans celle-ci. |
 | `convex/organizationIsolation.test.ts` | Ce que la matrice n'exprime pas : l'autre sens (le centre A sur le centre B), la même réponse pour un identifiant d'une autre organisation et pour un identifiant inconnu, les appels qui mêlent deux organisations dans leurs arguments, un compte membre de deux organisations (liens patient et machine fixés dans une seule), ce qu'une machine écrit, les lignes sans organisation. |
 | `convex/multiOrganizationMigration.test.ts` | La migration : rattachement, appartenances, idempotence, lots, liaison avec `ANHEART_ORG_ID`. |
-| `convex/httpRoutes.test.ts` | 12 des 13 routes machine enregistrées dans `http.ts` : corps mal formés sur toutes les routes POST, dont les deux de `recordHttp.ts` ; idempotence, liaison ressource-machine et filtrage des séances pour les 10 routes hors enregistrements. `GET /api/machine/records/status` et les cas métier des trois routes d'enregistrement sont exercés dans les suites dédiées. |
+| `convex/httpRoutes.test.ts` | 12 des 14 routes machine enregistrées dans `http.ts` : corps mal formés sur toutes les routes POST, dont les deux de `recordHttp.ts` ; idempotence, liaison ressource-machine et filtrage des séances pour les 10 routes hors enregistrements. `GET /api/machine/records/status` et les cas métier des trois routes d'enregistrement sont exercés dans les suites dédiées. |
+| `convex/programmeCatalog.test.ts` | ANH-138 : `GET /api/machine/programmes` et le rapport du catalogue de `POST /api/machine/profiles`. Sans clé, `not_configured` ; avec une paire Ed25519 créée pendant le test (aucune clé privée écrite nulle part), la signature se vérifie avec sa moitié publique et plus avec un octet changé ni une autre clé ; seuls les programmes publiés du catalogue Anheart, triés, avec les clés du document de profil de la console (`config/profiles.default.json`) et la version médicale ; `since` égal à la révision ne renvoie aucun programme ; `since` illisible, 400 ; clé inutilisable, `not_configured` et une erreur journalisée ; une clé machine inconnue, 401 ; la révision compte publications et retraits. Le rapport : gardé sur la machine, `null` pour les programmes de secours, effacé par le corps d'une console antérieure, et refusé en 400 sans rien écrire quand il est mal formé. |
 | `convex/journalTrace.test.ts` | Le test d'acceptation de la synchronisation, côté Convex : il rejoue, dans l'ordre et aux mêmes instants, **les requêtes que la console du Pi a réellement envoyées** pendant son propre test d'acceptation (`contracts/fixtures/journal-sync-trace.json` : séance, coupure réseau à 3 min, console tuée à 5 min, retour du réseau à 8 min, machine datée de 1970). Convex doit répondre à chacune comme la trace l'a noté, et détenir à la fin chaque point 1 Hz et chaque événement une seule fois, et la fin avec sa raison. Le test du Pi échoue si le fichier n'est plus ce que la console envoie. |
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
 | `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance que le résumé provisoire d'ANH-89, la mutation de migration des séances restées ouvertes, et le refus par le schéma de `machines.config` (ANH-211). |
@@ -3986,9 +4063,9 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/dashboard.cost.test.ts` | Ce que lit un appel de `dashboard.counters` (ANH-226), mesuré en mémoire sur deux jeux réalistes (« aujourd'hui », « cible ») : documents, plages d'index et octets par rôle. Pour l'admin Anheart, exactement l'appelant, les appartenances actives, les machines non supprimées et les séances ouvertes, en 7 plages. Rien de plus quand s'ajoutent séances terminées, machines supprimées, appartenances inactives ou heartbeats. Rien de plus pour un admin, un gestionnaire ou un patient d'un centre quand un autre centre grossit. Au jeu « cible », moins de 10 % des limites d'un appel. Le résultat mesuré est celui que reçoit le site. |
 | [`convex/programmes.test.ts`](../convex/programmes.test.ts) | Le catalogue de programmes (ANH-137) : chaque cas de `contracts/programme-validation-cases.json` passé à `programmes.create`, même verdict et même message que le Pi, rien d'écrit sur un refus ; le critère d'acceptation (jog 145-155, 30 min, créé, refusé à son auteur, validé par un second admin, publié avec sa copie, lu par un gestionnaire qui ne peut pas l'écrire) ; transitions refusées hors de leur état, validation refusée au créateur et au dernier rédacteur, sans rapport, sans version médicale enregistrée ou pour une autre version, signature mal formée ; `profileId` unique ; rapport refusé par type, taille et âge ; programme retiré hors du catalogue publié. Les droits, rôle par rôle, sont dans la matrice. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
-| `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). ANH-238 EX-8 : le schéma refuse `machines.apiKey` et `machines.apiKeySelector` ; une clé absente, inconnue, dont la ligne a quitté la table, révoquée ou expirée reçoit 401 sur les 13 routes et ne donne rien aux deux queries, quand une clé valide de la même machine les ouvre. Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
+| `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). ANH-238 EX-8 : le schéma refuse `machines.apiKey` et `machines.apiKeySelector` ; une clé absente, inconnue, dont la ligne a quitté la table, révoquée ou expirée reçoit 401 sur les 14 routes et ne donne rien aux deux queries, quand une clé valide de la même machine les ouvre. Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
 | `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; 55 rotations dans le même chevauchement et toutes les 56 clés listées, histoire révoquée bornée aux frontières 49, 50 et 51 clés non révoquées. |
-| `convex/machineKeyClock.test.ts` | ANH-238 : l'expiration jugée à l'horloge de l'action même avec une query en cache (les deux portes, les 13 routes, avant le contrat et la limite) ; un échec d'écriture de `lastUsedAt` ne change aucune réponse et se rattrape à la requête suivante ; un heartbeat refusé 426 écrit la dernière utilisation sans prendre de jeton. |
+| `convex/machineKeyClock.test.ts` | ANH-238 : l'expiration jugée à l'horloge de l'action même avec une query en cache (les deux portes, les 14 routes, avant le contrat et la limite) ; un échec d'écriture de `lastUsedAt` ne change aucune réponse et se rattrape à la requête suivante ; un heartbeat refusé 426 écrit la dernière utilisation sans prendre de jeton. |
 | `convex/trainingPrivacy.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine absente de la table : lien orphelin retiré, nommé ou non, sans le compter dans le retour au site mais en le listant dans l'audit, y compris pour un nettoyage seul ; liens orphelins de l'autre organisation gardés et refus sans nettoyage ni audit (ANH-232). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |
@@ -4085,7 +4162,7 @@ nom de l'en-tête, liste des codes d'erreur), et les constantes de
 |---|---|
 | Même **majeure** des deux côtés | Les deux se parlent. |
 | **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
-| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 12 des 13 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre que la dernière utilisation de la clé ([§6](#6-routes-http-machine-convexhttpts)). |
+| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 13 des 14 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre que la dernière utilisation de la clé ([§6](#6-routes-http-machine-convexhttpts)). |
 | Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
 | Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
 
@@ -4206,6 +4283,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.11` | Le catalogue de programmes signé vers les machines (ANH-138, [entrée `programme_catalog`](../contracts/machine-api.json), [§6](#le-catalogue-signé-contrat-111-anh-138)) : la route `GET /api/machine/programmes?since=`, non limitée en débit, qui répond le texte du catalogue et sa signature Ed25519, ou `not_configured` sans clé ; trois champs facultatifs dans le corps de `POST /api/machine/profiles`, `catalogRevision`, `accepted` et `rejected`. Aucun code d'erreur nouveau. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi qui porte sa moitié publique. |
 | `1.10` | Le registre des incidents (ANH-145, [entrée `incidents`](../contracts/machine-api.json)) : la réponse de `GET /api/machine/training/poll` porte `incidents_open_high`, le nombre d'incidents de gravité haute de la machine ouverts ou analysés, à toute console. Un refus à l'armement de plus en **409**, `incident_open`, pour un lancement automatique seulement. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.9` | Le lancement d'une séance de banc lestée depuis le site (ANH-250, [entrée `bench_launch`](../contracts/machine-api.json)) : le poll porte `mode` (`auto` pour un lancement auto, à côté de ses champs de toujours ; `bench` pour `{sessionId, mode, occupancy: "ballast", ballastKg, notes, operatorName}`). Un lancement de banc n'est offert qu'à un poll qui annonce 1.9 ou plus, et n'est créé que pour une machine dont le dernier heartbeat l'a annoncé (`machine_contract_too_old` sinon). Un refus à l'armement de plus en **409**, `machine_busy`, pour un lancement de banc seulement. Le manifeste d'enregistrement peut porter `ballast: {mass_kg}` ; le dépôt l'accepte, un manifeste sans lui reste valide. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.8` | Une confirmation répétée de `POST /api/machine/training/start` pour un départ déjà confirmé, dont la machine n'a encore rien envoyé (ni point, ni événement, ni heartbeat qui nomme la séance, ni fin) et dont l'arrêt n'a pas été demandé, répond **200** sans rien changer dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (ANH-240) ; tout autre cas reste refusé comme avant. La console garde l'offre restée sans réponse que le poll ne propose plus, pour cette séance seulement et 60 s au plus après le clic ; l'offre n'est plus confirmable dès que le serveur refuse, et disparaît au poll suivant qui ne la propose plus. Aucun champ ni code nouveau. |
@@ -4265,7 +4343,19 @@ exception du tic au banc ferme donc le banc de cette console jusqu'à ce qu'un
 admin Anheart close l'incident ([deploiement.md](deploiement.md#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). Une console `1.10` face à un serveur `1.9` ne reçoit pas le champ : le
 contrôle reste orange « non annoncé », comme avant.
 
-La console de ce dépôt est en `1.10`. Elle connaît les codes de refus à
+**Catalogue signé (1.11).** Une console antérieure n'appelle jamais
+`GET /api/machine/programmes` et envoie ses profils sans `catalogRevision` :
+le serveur `1.11` les accepte comme avant, remplace `machine_profiles` et
+efface `machines.programmeCatalog`, dont la fiche machine ne dit alors rien.
+Une console `1.11` face à un serveur antérieur reçoit 404 de la route
+(un 404 sans code, `RouteMissing`) : elle n'a rien reçu et garde ses
+programmes, ceux de secours si elle n'a jamais reçu de catalogue ; ce
+serveur lit `storeRev`, `programsEnabled` et `profiles` de son envoi et
+ignore les trois champs nouveaux. Face à un serveur `1.11` sans clé de
+signature, elle reçoit `not_configured`, avec le même effet. Rien ne
+dépend de la mineure annoncée par l'autre côté.
+
+La console de ce dépôt est en `1.11`. Elle connaît les codes de refus à
 l'armement et demande le départ après confirmation de son opérateur, avant
 d'armer ; elle n'arme que sur un 2xx de `training/start` et n'envoie pas de
 fin sur un 409. Une console antérieure, qui arme avant de confirmer, s'arrête

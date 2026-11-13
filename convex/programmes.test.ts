@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import cases from "../contracts/programme-validation-cases.json";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import type { ProgrammeProfile } from "./lib/programmes";
+import {
+  FALLBACK_PROFILE_IDS,
+  MAX_CATALOG_PAYLOAD_BYTES,
+  type ProgrammeProfile,
+} from "./lib/programmes";
 import { registryUpload } from "./machineRegistry.fixtures";
 import {
   addSecondAdmin,
@@ -51,6 +55,10 @@ describe("ANH-137 EX-2 the Pi's verdict on every shared case", () => {
   it.each(cases.cases)("$name", async (testCase) => {
     const w = await seedWorld(modules);
     const profile = camel({ ...cases.base, ...testCase.changes });
+    // The shipped ids are the consoles' fallbacks, which no catalogue programme
+    // takes (ANH-138): such a case runs under another id, no verdict reads it.
+    if (FALLBACK_PROFILE_IDS.includes(profile.profileId))
+      profile.profileId = `case_${profile.profileId}`;
     const error = await failure(
       as(w.t, "admin").mutation(api.programmes.create, profile),
     );
@@ -142,6 +150,71 @@ describe("ANH-137 acceptance: jog 145-155, 30 min", () => {
         ),
       ),
     ).toMatch(/not_authorized/);
+  });
+});
+
+describe("ANH-138 what the machines are sent", () => {
+  it("keeps the ids of the consoles' fallback programmes out of the catalogue", async () => {
+    expect(FALLBACK_PROFILE_IDS).toEqual(["standard_30_min", "standard_45_min"]);
+    const w = await seedWorld(modules);
+    const admin = as(w.t, "admin");
+    for (const profileId of FALLBACK_PROFILE_IDS) {
+      expect(
+        String(await failure(admin.mutation(api.programmes.create, { ...JOG, profileId }))),
+      ).toMatch(/programme_id_taken/);
+    }
+    const draft = await insertProgramme(w, "draft", w.admin);
+    expect(
+      String(
+        await failure(
+          admin.mutation(api.programmes.updateDraft, {
+            programmeId: draft,
+            ...JOG,
+            profileId: "standard_45_min",
+          }),
+        ),
+      ),
+    ).toMatch(/programme_id_taken/);
+  });
+
+  it("never validates nor publishes a programme that holds a fallback id from before its reservation", async () => {
+    const w = await seedWorld(modules);
+    const admin = as(w.t, "admin");
+    const draft = await insertProgramme(w, "draft", await addSecondAdmin(w), {
+      profileId: "standard_30_min",
+    });
+    expect(
+      String(
+        await failure(
+          admin.mutation(api.programmes.validate, { programmeId: draft, medicalSignoff: SIGNOFF }),
+        ),
+      ),
+    ).toMatch(/programme_id_taken/);
+    const validated = await insertProgramme(w, "validated", w.admin, {
+      profileId: "standard_45_min",
+    });
+    expect(
+      String(await failure(admin.mutation(api.programmes.publish, { programmeId: validated }))),
+    ).toMatch(/programme_id_taken/);
+    expect(await programme(w, draft)).toMatchObject({ status: "draft" });
+    expect(await programme(w, validated)).toMatchObject({ status: "validated", revision: 0 });
+  });
+
+  it("refuses to publish what would make the signed catalogue larger than a console reads", async () => {
+    const w = await seedWorld(modules);
+    const admin = as(w.t, "admin");
+    await insertProgramme(w, "published", w.admin, { profileId: "already_there" });
+    const huge = await insertProgramme(w, "validated", w.admin, {
+      profileId: "too_long_a_name",
+      name: "x".repeat(MAX_CATALOG_PAYLOAD_BYTES),
+    });
+    expect(
+      String(await failure(admin.mutation(api.programmes.publish, { programmeId: huge }))),
+    ).toMatch(/programme_catalog_too_large/);
+    expect(await programme(w, huge)).toMatchObject({ status: "validated", revision: 0 });
+    expect(
+      await w.t.run((ctx) => ctx.db.query("programme_revisions").collect()),
+    ).toEqual([]);
   });
 });
 

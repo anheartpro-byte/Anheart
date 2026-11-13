@@ -46,6 +46,7 @@ export const machineRoutes = [
   ["POST", "/api/machine/heartbeat"],
   ["GET", "/api/machine/training/poll"],
   ["GET", "/api/machine/roster"],
+  ["GET", "/api/machine/programmes"],
   ["POST", "/api/machine/profiles"],
   ["POST", "/api/machine/training/start"],
   ["POST", "/api/machine/training/local"],

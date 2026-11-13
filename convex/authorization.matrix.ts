@@ -4393,6 +4393,7 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   { method: "POST", path: "/api/machine/heartbeat", tests: "machineAuth.test.ts; httpRoutes.test.ts; rateLimits.test.ts (limit per machine, 16 KiB, 1000 heartbeats in 10 s)" },
   { method: "GET", path: "/api/machine/training/poll", tests: "httpRoutes.test.ts (auto, this machine); rateLimits.test.ts (limit per machine); armingRecheck.test.ts (never a launch refused at arming, expired included)" },
   { method: "GET", path: "/api/machine/roster", tests: "httpRoutes.test.ts" },
+  { method: "GET", path: "/api/machine/programmes", tests: "programmeCatalog.test.ts (signature verified with a test key, since, not configured); machineAuth.test.ts (machine key)" },
   { method: "POST", path: "/api/machine/profiles", tests: "httpRoutes.test.ts (malformed body)" },
   { method: "POST", path: "/api/machine/training/start", tests: "httpRoutes.test.ts (non-pending refused); contract.test.ts and armingRecheck.test.ts (409 with the arming refusal's code)" },
   { method: "POST", path: "/api/machine/training/local", tests: "httpRoutes.test.ts (idempotent)" },

@@ -30,6 +30,11 @@ import {
 } from "./lib/rateLimits";
 import { isMedicalVersion } from "./lib/medicalParameters";
 import { parseMachineFeedback } from "./lib/feedback";
+import {
+  CATALOG_SIGNING_KEY_ENV,
+  catalogReportOf,
+  signCatalog,
+} from "./lib/programmes";
 
 const http = httpRouter();
 http.route({
@@ -388,6 +393,9 @@ http.route({
 /**
  * POST /api/machine/profiles {storeRev, programsEnabled, profiles[]}
  * One every 10 s per machine, five in reserve (ANH-228).
+ * Contract 1.11 (ANH-138): and `{catalogRevision, accepted, rejected}`, what
+ * the machine made of the signed catalogue; absent from an older console,
+ * whose machine then has no catalogue state any more.
  */
 http.route({
   path: "/api/machine/profiles",
@@ -399,6 +407,14 @@ http.route({
         400,
         "invalid_request",
         "Expected {storeRev, programsEnabled, profiles}",
+      );
+    }
+    const catalog = catalogReportOf(body);
+    if (catalog === null) {
+      return refuse(
+        400,
+        "invalid_request",
+        "Expected {catalogRevision, accepted, rejected} with {storeRev, programsEnabled, profiles}",
       );
     }
     const keys = [
@@ -446,8 +462,52 @@ http.route({
       storeRev: body.storeRev,
       programsEnabled: body.programsEnabled === true,
       profiles,
+      catalog,
     });
     return json(200, result);
+  }),
+});
+
+/** `since` of the catalogue route: a whole number of 0 or more, the revision held. */
+const CATALOG_SINCE = /^(0|[1-9][0-9]{0,14})$/;
+
+/**
+ * GET /api/machine/programmes?since=<revision> (contract 1.11, ANH-138)
+ * -> {status: "signed", payload, signature, server_contract_version}
+ *  | {status: "not_configured", server_contract_version}
+ *
+ * The published catalogue as signed text (`programmes.publishedCatalog`), its
+ * programmes left out when `since` is its revision already. The signature is
+ * Ed25519 by the key in `ANHEART_CATALOG_SIGNING_KEY`, never in the
+ * repository; without a usable key nothing is signed and the machine keeps
+ * its programmes. Never rate limited: read only, like the roster, and asked
+ * once a minute at most, at rest.
+ */
+http.route({
+  path: "/api/machine/programmes",
+  method: "GET",
+  handler: machineRoute(async (ctx, req) => {
+    const raw = new URL(req.url).searchParams.get("since");
+    if (raw !== null && !CATALOG_SINCE.test(raw)) {
+      return refuse(400, "invalid_request", "since must be a whole number, 0 or more");
+    }
+    const unsigned = { status: "not_configured", server_contract_version: CONTRACT_VERSION };
+    const key = process.env[CATALOG_SIGNING_KEY_ENV];
+    if (!key) return json(200, unsigned);
+    const payload = await ctx.runQuery(internal.programmes.publishedCatalog, {
+      since: raw === null ? null : Number(raw),
+    });
+    const signature = await signCatalog(payload, key);
+    if (signature === null) {
+      console.error(`${CATALOG_SIGNING_KEY_ENV} is set but is not an Ed25519 private key`);
+      return json(200, unsigned);
+    }
+    return json(200, {
+      status: "signed",
+      payload,
+      signature,
+      server_contract_version: CONTRACT_VERSION,
+    });
   }),
 });
 

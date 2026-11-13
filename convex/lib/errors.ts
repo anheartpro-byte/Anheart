@@ -244,6 +244,8 @@ export const DASHBOARD_ERRORS = {
     "The draft was checked against a medical parameters version that is not the current one: save it again.",
   programme_simulation_report_missing:
     "No simulation report is attached to the draft.",
+  programme_catalog_too_large:
+    "Published, the programme would make the signed catalogue larger than a console reads (ANH-138): retire one first.",
   invalid_medical_signoff:
     "The medical signature needs a signer (1 to 200 characters), a past date and a note of at most 1000 characters.",
 

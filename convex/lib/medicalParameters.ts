@@ -348,7 +348,7 @@ export function medicalParametersStatus(
   return comparison < 0 ? "obsolete" : "ahead";
 }
 
-function decodeBase64(value: string): Uint8Array<ArrayBuffer> | null {
+export function decodeBase64(value: string): Uint8Array<ArrayBuffer> | null {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
     return null;
   }

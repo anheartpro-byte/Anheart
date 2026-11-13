@@ -480,6 +480,67 @@ describe("ANH-203 programmes of a machine", () => {
     expect(screen.text()).not.toContain(t.programs.disabled);
   });
 
+  it("says the machine runs its fallback programmes when it never received a signed catalogue (ANH-138)", () => {
+    answer("training:listMachineProfiles", [ENDURANCE]);
+    answer("training:getMachineLive", {
+      programsEnabled: true,
+      live: null,
+      programmeCatalog: { revision: null, rejected: [], reportedAt: 0 },
+    });
+
+    const screen = render(<MachineProgramsCard machineId={machineId} />);
+
+    expect(screen.text()).toContain(t.programs.fallback);
+    expect(screen.text()).toContain("Endurance");
+  });
+
+  it("lists each programme the machine refused with its reason, and nothing of the kind when it refused none (ANH-138)", () => {
+    const screen = render(
+      <ProfileList
+        profiles={[ENDURANCE]}
+        programsEnabled
+        catalog={{
+          revision: 4,
+          rejected: [{ profileId: "jog_rapide", reason: "max_rpm 900 au-dessus du plafond 800" }],
+        }}
+      />,
+    );
+
+    expect(screen.text()).toContain(
+      "jog_rapide : refusé par la machine : max_rpm 900 au-dessus du plafond 800",
+    );
+    expect(screen.text()).not.toContain(t.programs.fallback);
+
+    screen.rerender(
+      <ProfileList profiles={[ENDURANCE]} programsEnabled catalog={{ revision: 4, rejected: [] }} />,
+    );
+    expect(screen.text()).not.toContain("refusé par la machine");
+    expect(screen.text()).not.toContain(t.programs.fallback);
+  });
+
+  it("lists two refusals of one id each on its own line, without a duplicate key (ANH-138)", () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const screen = render(
+      <ProfileList
+        profiles={[]}
+        programsEnabled
+        catalog={{
+          revision: 4,
+          rejected: [
+            { profileId: "twice", reason: "identifiant en double dans le catalogue" },
+            { profileId: "twice", reason: "identifiant en double dans le catalogue" },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.text().split("twice : refusé par la machine : identifiant en double").length - 1,
+    ).toBe(2);
+    expect(logged).not.toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
   it("the card treats a machine this person cannot read as one with programmes disabled", () => {
     answer("training:listMachineProfiles", [ENDURANCE]);
     answer("training:getMachineLive", null);

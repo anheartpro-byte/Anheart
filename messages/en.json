@@ -293,6 +293,7 @@
     "programme_medical_version_unavailable": "No medical parameters version is registered on this server, as in production until the signed medical values (ANH-98) exist: no programme can be validated.",
     "programme_medical_version_not_current": "The draft was checked against a medical parameters version that is no longer current: save it again.",
     "programme_simulation_report_missing": "Attach the simulation report to the draft first.",
+    "programme_catalog_too_large": "Published, this programme would make the signed catalogue larger than a machine reads: retire a programme first.",
     "invalid_medical_signoff": "The medical signature needs a signer (1 to 200 characters), a past date and a note of at most 1000 characters.",
     "not_authenticated": "Your session has expired or you are signed out. Sign in again to continue.",
     "account_not_registered": "Your account is not ready on the server yet. Wait a few moments, then sign in again if this message persists.",
@@ -1175,7 +1176,9 @@
       "maxRpm": "Max speed",
       "hardMax": "HR limit",
       "armRpm": "{rpm} rpm arm",
-      "motorRpm": "{rpm} rpm motor"
+      "motorRpm": "{rpm} rpm motor",
+      "fallback": "Fallback programmes: the machine has not received a signed catalogue yet.",
+      "rejected": "{profileId}: refused by the machine: {reason}"
     },
     "rights": {
       "title": "Launch rights",
