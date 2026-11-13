@@ -545,8 +545,8 @@ expect_private "after the first start"
 
 step "2. Second install: nothing changes"
 # A secret in the configuration, and a console restarted to read it.
-in_machine sed -i "s/^# UI_TOKEN=.*/UI_TOKEN=$TOKEN/" "$ENV_FILE"
-expect_in "$(in_machine grep -c "^UI_TOKEN=$TOKEN$" "$ENV_FILE")" "1" "a secret is written in the configuration"
+in_machine sed -i "s/^# DEVICE_TOKEN=.*/DEVICE_TOKEN=$TOKEN/" "$ENV_FILE"
+expect_in "$(in_machine grep -c "^DEVICE_TOKEN=$TOKEN$" "$ENV_FILE")" "1" "a secret is written in the configuration"
 in_machine systemctl restart anheart
 wait_for_console "after the restart with a token"
 expect_at_rest "after a restart by hand"

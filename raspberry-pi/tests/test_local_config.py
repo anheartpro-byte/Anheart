@@ -332,7 +332,7 @@ def test_a_network_bind_without_a_token_is_refused() -> None:
     keys = _keys(_with(SIM_ENV, UI_HOST="0.0.0.0"))  # noqa: S104  # the refusal is the point
     # And, since ANH-151, without a certificate: both are said at once
     # (tests/test_console_tls.py has the certificate's own tests).
-    assert keys == {"UI_HOST/UI_PORT/UI_TOKEN", "UI_HOST/UI_TLS_CERT/UI_TLS_KEY"}
+    assert keys == {"UI_HOST/UI_PORT/DEVICE_TOKEN", "UI_HOST/UI_TLS_CERT/UI_TLS_KEY"}
 
 
 def test_every_problem_is_reported_at_once() -> None:

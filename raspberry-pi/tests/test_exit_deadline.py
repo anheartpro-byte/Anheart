@@ -26,12 +26,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import httpx
+
 from src.clock import ManualClock
 from src.local_panel import EXIT_GRACE, EXIT_OK
 from src.record.codec import Privacy
 from src.record.writer import Writer
 from src.result import Ok
 from src.units import UnixMillis
+from tests.access_support import CODE, OPERATOR_ID
 from tests.record_support import manifest
 
 WORKER: Final[Path] = Path(__file__).with_name("exit_deadline_worker.py")
@@ -85,10 +88,18 @@ def wait_for(condition: str, read: Path, process: subprocess.Popen[str], timeout
 
 
 def ask_for_archive(port: int, name: str, process: subprocess.Popen[str]) -> socket.socket:
-    """Send the request and keep the connection open while the console is asked to stop."""
+    """Sign in, send the request, and keep the connection open while the console is asked
+    to stop. An export is an action: it takes an operator signed in (ANH-152)."""
     link = connect(port, process)
+    signed = httpx.post(
+        f"http://127.0.0.1:{port}/api/access/sign-in",
+        json={"user_id": OPERATOR_ID, "code": CODE},
+    )
+    signed.raise_for_status()
+    cookie = signed.headers["set-cookie"].split(";", 1)[0]
     link.sendall(
-        f"GET /api/records/{name}/archive HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n".encode()
+        f"GET /api/records/{name}/archive HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+        f"Cookie: {cookie}\r\n\r\n".encode()
     )
     return link
 

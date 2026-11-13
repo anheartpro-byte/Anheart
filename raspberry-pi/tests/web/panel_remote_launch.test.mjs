@@ -263,7 +263,6 @@ test("the confirmation of a bench launch says the attestation was ticked; a prog
     sent.push([path, options]);
     return Promise.resolve(null);
   };
-  node("operator").value = "Operateur";
   context.renderRemoteLaunch(bench());
   node("remote-launch-attest").checked = true;
   context.doConfirmRemoteLaunch();
@@ -273,7 +272,7 @@ test("the confirmation of a bench launch says the attestation was ticked; a prog
     "/api/remote-launch/confirm",
     {
       method: "POST",
-      body: { session_id: "remote-session", operator: "Operateur", bench_attested: true },
+      body: { session_id: "remote-session", bench_attested: true },
     },
   ]);
   context.renderRemoteLaunch(offer({ session_id: "programme" }));

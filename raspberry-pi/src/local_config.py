@@ -63,7 +63,13 @@ console's certificate and its private key, PEM: both or neither) and
 ``UI_TLS_NAMES`` (the addresses and names a tablet opens the console at, the
 ones the certificate carries). All three are optional on loopback. Off
 loopback the first two are required: there the console serves TLS or does not
-start, as it does not start without ``UI_TOKEN``. Only the two paths are read
+start, as it does not start without ``DEVICE_TOKEN``.
+
+``DEVICE_TOKEN`` (ANH-152) is the console's own device token, the one no list
+can revoke: the tablet of the bench, the local browser. It was called
+``UI_TOKEN``, which is still read when ``DEVICE_TOKEN`` is absent, so that a
+deployed console keeps its tablet through the update; both set and different
+is refused. The tablets of the signed operator list come on top of it. Only the two paths are read
 here; the files are opened when the console starts (:mod:`src.web.tls`).
 
 Nothing here opens a port or reads a clock. ``env`` is passed in, so the whole
@@ -135,7 +141,8 @@ KEY_ARM_RADIUS_M: Final[str] = "ARM_RADIUS_M"
 KEY_GEAR_RATIO: Final[str] = "GEAR_RATIO"
 KEY_UI_HOST: Final[str] = "UI_HOST"
 KEY_UI_PORT: Final[str] = "UI_PORT"
-KEY_UI_TOKEN: Final[str] = "UI_TOKEN"  # noqa: S105  # a key NAME, not a secret
+KEY_DEVICE_TOKEN: Final[str] = "DEVICE_TOKEN"  # noqa: S105  # a key NAME, not a secret
+KEY_UI_TOKEN: Final[str] = "UI_TOKEN"  # noqa: S105  # its name before ANH-152, still read
 KEY_UI_TLS_CERT: Final[str] = "UI_TLS_CERT"
 KEY_UI_TLS_KEY: Final[str] = "UI_TLS_KEY"
 KEY_UI_TLS_NAMES: Final[str] = "UI_TLS_NAMES"
@@ -920,7 +927,8 @@ def _tls_names(env: Mapping[str, str], *, served: bool) -> Result[tuple[str, ...
 def _web(env: Mapping[str, str]) -> Result[WebConfig, tuple[ConfigProblem, ...]]:
     """Where the page listens and how it is carried. Every problem, not only the first."""
     host = _text(env, KEY_UI_HOST, DEFAULT_HOST)
-    token = _text(env, KEY_UI_TOKEN, "") or None
+    token = _text(env, KEY_DEVICE_TOKEN, "") or None
+    legacy = _text(env, KEY_UI_TOKEN, "") or None
     port = _port(env)
     tls = _tls(env)
     # Half a certificate is said once, as that: the names are not blamed for it.
@@ -928,7 +936,19 @@ def _web(env: Mapping[str, str]) -> Result[WebConfig, tuple[ConfigProblem, ...]]
     refusals = [
         ConfigProblem(key, refusal)
         for key, refusal in (
-            (f"{KEY_UI_HOST}/{KEY_UI_PORT}/{KEY_UI_TOKEN}", token_refusal(host, token)),
+            (
+                f"{KEY_UI_HOST}/{KEY_UI_PORT}/{KEY_DEVICE_TOKEN}",
+                token_refusal(host, token or legacy),
+            ),
+            (
+                f"{KEY_DEVICE_TOKEN}/{KEY_UI_TOKEN}",
+                None
+                if token is None or legacy is None or legacy == token
+                else (
+                    f"{KEY_UI_TOKEN} est l'ancien nom de {KEY_DEVICE_TOKEN} : deux valeurs "
+                    f"differentes, garder {KEY_DEVICE_TOKEN} seul"
+                ),
+            ),
             (
                 f"{KEY_UI_HOST}/{KEY_UI_TLS_CERT}/{KEY_UI_TLS_KEY}",
                 clear_http_refusal(host, tls.value) if isinstance(tls, Ok) else None,
@@ -945,10 +965,16 @@ def _web(env: Mapping[str, str]) -> Result[WebConfig, tuple[ConfigProblem, ...]]
         )
     try:
         return Ok(
-            WebConfig(host=host, port=port.value, token=token, tls=tls.value, names=names.value)
+            WebConfig(
+                host=host,
+                port=port.value,
+                token=token or legacy,
+                tls=tls.value,
+                names=names.value,
+            )
         )
     except ValueError as error:
-        return Err((ConfigProblem(f"{KEY_UI_HOST}/{KEY_UI_PORT}/{KEY_UI_TOKEN}", str(error)),))
+        return Err((ConfigProblem(f"{KEY_UI_HOST}/{KEY_UI_PORT}/{KEY_DEVICE_TOKEN}", str(error)),))
 
 
 def retired_keys(env: Mapping[str, str]) -> tuple[str, ...]:

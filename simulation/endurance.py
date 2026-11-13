@@ -61,11 +61,13 @@ from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
+from http import HTTPStatus
 from pathlib import Path
 from typing import Final, Protocol
 
 import httpx
 from pydantic import TypeAdapter
+from tests.access_support import CODE, OPERATOR_ID, held_list
 from tests.fake_record_dashboard import RecordingDashboard
 from tests.roster_support import RIDER_ID
 
@@ -90,6 +92,7 @@ from simulation.endurance_measures import (
 )
 from src.bitalino_client import SampleBatch
 from src.clock import Clock, ManualClock, RealClock
+from src.console_access import ConsoleAccess
 from src.control_surface import EventKind
 from src.ecg_pipeline import EcgFrame, TreatFunction, Treatment, treat_ecg, treat_off_loop
 from src.local_config import LocalConfig, load_local_config
@@ -106,7 +109,7 @@ from src.web.schemas import ProfileListRow
 
 OUT_DIR: Final[Path] = Path(__file__).resolve().parent / "out" / "endurance"
 
-OPERATOR: Final[str] = "endurance"
+SIGN_IN: Final[str] = "/api/access/sign-in"
 TICK: Final[Seconds] = Seconds(0.2)
 TICKS_PER_SECOND: Final[int] = 5
 
@@ -349,6 +352,8 @@ def build_console(
         transport=lambda _config: dashboard,
         journal=journal,
         deposit=None if isinstance(clock, ManualClock) else deposit,
+        # The list the dashboard would have signed (ANH-152): the operator signs in on it.
+        access=ConsoleAccess(clock=clock, held=held_list(), lockout_path=None),
     )
     return Console(
         panel=panel,
@@ -397,13 +402,15 @@ class Operator:
         self._http: httpx.AsyncClient = http
 
     async def ready(self, attempts: int = READY_ATTEMPTS, wait: float = READY_WAIT) -> None:
-        """Wait for the console's page to answer; :class:`AnomalyError` when it never does."""
+        """Wait for the console's page to answer, then sign in (ANH-152); :class:`AnomalyError`
+        when it never answers."""
         for _ in range(attempts):
             try:
                 answered = (await self._http.get("/healthz")).is_success
             except httpx.TransportError:
                 answered = False
             if answered:
+                await self._post(SIGN_IN, {"user_id": OPERATOR_ID, "code": CODE})
                 return
             await asyncio.sleep(wait)
         raise AnomalyError("the console never answered on /healthz")
@@ -411,6 +418,11 @@ class Operator:
     async def _post(self, path: str, body: Mapping[str, object]) -> None:
         try:
             answered = await self._http.post(path, json=dict(body))
+            if answered.status_code == HTTPStatus.UNAUTHORIZED and path != SIGN_IN:
+                # A day outlives a session (30 min without an action, 8 h at most): the
+                # operator signs in again, as at the console, and asks once more.
+                await self._post(SIGN_IN, {"user_id": OPERATOR_ID, "code": CODE})
+                answered = await self._http.post(path, json=dict(body))
         except httpx.TransportError as error:
             raise AnomalyError(f"POST {path}: the console did not answer ({error!r})") from error
         if answered.is_error:
@@ -434,16 +446,16 @@ class Operator:
         """Attest the wiring of the emergency stop, as a start requires since this boot."""
         await self._post(
             "/api/safety/attest",
-            {"operator": OPERATOR, "sto_jumper_removed": True, "mushroom_wired_nc": True},
+            {"sto_jumper_removed": True, "mushroom_wired_nc": True},
         )
 
     async def start_manual(self) -> None:
         """Ask for a bench manual session."""
-        await self._post("/api/manual/start", {"occupancy": "bench", "operator": OPERATOR})
+        await self._post("/api/manual/start", {"occupancy": "bench"})
 
     async def target(self, output_rpm: float) -> None:
         """Give the manual session a target."""
-        await self._post("/api/manual/target", {"output_rpm": output_rpm, "operator": OPERATOR})
+        await self._post("/api/manual/target", {"output_rpm": output_rpm})
 
     async def start_programme(self, total: float | None) -> None:
         """Ask for the scenario's programmed session, for the adult rider the dashboard lists.
@@ -457,7 +469,6 @@ class Operator:
             "/api/session/start",
             {
                 "profile_id": PROFILE_ID,
-                "operator": OPERATOR,
                 "total_duration_s": total,
                 "subject_id": RIDER_ID,
                 "profiles_digest": await self._profiles_digest(),
@@ -466,11 +477,11 @@ class Operator:
 
     async def stop(self, reason: str) -> None:
         """End the running session on its controlled ramp."""
-        await self._post("/api/session/stop", {"operator": OPERATOR, "reason": reason})
+        await self._post("/api/session/stop", {"reason": reason})
 
     async def ping(self) -> None:
         """Say the attendant is at the console, as the open page does."""
-        await self._post("/api/presence", {"operator": OPERATOR})
+        await self._post("/api/presence", {})
 
 
 # =========================================================================

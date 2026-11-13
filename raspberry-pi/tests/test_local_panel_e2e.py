@@ -34,6 +34,7 @@ from src.training.types import SafetyAction, TelemetrySnapshot
 from src.units import Monotonic, MotorRpm, Seconds, UnixMillis
 from src.web.app import create_app
 from src.web.schemas import EcgRow, SnapshotRow, WsEnvelope
+from tests.access_support import signed_http
 from tests.test_web_api import probe_socket
 
 SIM_ENV: Final[Mapping[str, str]] = {
@@ -188,7 +189,7 @@ RATE: Final[float] = 0.25 * RATIO
 
 def _client(panel: LocalPanel) -> httpx.AsyncClient:
     app = create_app(services=panel.services, config=sim_config().web)
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
+    return signed_http(app, panel.services)
 
 
 async def _ticks(panel: LocalPanel, clock: ManualClock, seconds: float) -> list[TelemetrySnapshot]:

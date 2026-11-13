@@ -32,6 +32,7 @@ from src.local_panel import LocalPanel, ServiceDesk, build_panel
 from src.record.journal import Journal
 from src.wall_clock import WallClockProbe
 from src.web import routes
+from tests.access_support import held_list
 
 _never = threading.Event()
 
@@ -59,7 +60,7 @@ def main(root: Path, port: str, mode: str) -> int:
         preflight: bool,
     ) -> LocalPanel:
         # The console's own profile store stays out of the repository's ``data/``.
-        return build_panel(
+        panel = build_panel(
             config,
             clock=clock,
             journal=journal,
@@ -69,6 +70,11 @@ def main(root: Path, port: str, mode: str) -> int:
             service=service,
             preflight=preflight,
         )
+        # The export is an action (ANH-152): the parent signs in on the test list.
+        access = panel.services.access
+        if access is not None:
+            access.adopt(held_list())
+        return panel
 
     with contextlib.ExitStack() as patched:
         patched.enter_context(mock.patch.object(routes, "discard", never_returns))

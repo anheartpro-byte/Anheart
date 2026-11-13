@@ -178,7 +178,6 @@ const STARTS = {
     path: "/api/manual/start",
     press: (page) => {
       page.node("manual-bench").checked = true;
-      page.node("manual-operator").value = "op";
       page.context.doManualStart();
     },
   },
@@ -188,7 +187,6 @@ const STARTS = {
     press: (page) => {
       page.context.state.profiles = [{ profile_id: "standard_30_min", name: "Standard", zone_low_bpm: 100, zone_high_bpm: 120 }];
       page.node("profile").value = "standard_30_min";
-      page.node("operator").value = "op";
       page.context.doStart();
     },
   },

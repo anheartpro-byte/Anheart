@@ -48,10 +48,15 @@ var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
 var STANDSTILL_RPM = 0.05;      // below this, the output shaft is called stopped
 var STANDARD_G = 9.80665;       // m/s2, for the 0.1 Gr manual step
 var LOOP_ANSWER_S = 1;          // the loop empties its mailbox every 0.2 s: past this, on its clock, no answer is coming
-var OPERATOR_INPUT_IDS = ["manual-operator", "operator", "ack-operator", "attest-operator", "service-operator"];
+/* ANH-152: the sign-in of this device, and how often it is read again. */
+var ACCESS_MS = 5000;
+/* The idle period left under which "Rester connecte" is offered loudly. */
+var ACCESS_WARN_S = 300;
 
 var state = {
   token: "",
+  // GET /api/access: who may sign in here and who is signed in on this device (ANH-152).
+  access: null,
   socket: null,
   connected: false,
   lastFrameAt: 0,
@@ -206,27 +211,103 @@ function speedLine(view) {
     num(view.hertz, 2) + " Hz · Gc " + num(view.g_load, 3) + " · Gr " + num(view.resultant_g, 3);
 }
 
-function rememberOperator(value) {
-  var name = value.trim();
-  try {
-    window.sessionStorage.setItem("anheart-operator", name);
-  } catch {
-    // This page can still attribute a command when storage is unavailable.
-  }
-  return name;
+/*
+  Who an identifier is, as the page says it (ANH-152): the console records an account by its
+  identifier, never a name, and a stop made with nobody signed in as the tablet that made it.
+  The name is the list's, which only this page and the sign-in screen show.
+*/
+function actorName(id) {
+  if (!id) return "";
+  if (id.indexOf("device:") === 0) return "tablette " + id.slice("device:".length);
+  var known = state.access && state.access.operators.filter(function (o) {
+    return o.user_id === id;
+  })[0];
+  return known ? known.name : id;
 }
 
-/** The shared operator name, retained in this tab across a reload. */
-function operatorName() {
-  for (var i = 0; i < OPERATOR_INPUT_IDS.length; i += 1) {
-    var value = document.getElementById(OPERATOR_INPUT_IDS[i]).value.trim();
-    if (value) return value;
+/* ------------------------------------------------------------- sign-in */
+
+function loadAccess() {
+  return api("/api/access").then(function (access) {
+    state.access = access;
+    renderAccess();
+  }).catch(function () {
+    /* the banner and the token note say the console does not answer */
+  });
+}
+
+function renderAccess() {
+  var access = state.access;
+  var who = el("access-who");
+  var signed = access && access.signed_in;
+  show(el("access-sign-in"), Boolean(access && access.received && !signed));
+  show(el("access-signed"), Boolean(signed));
+  if (!access) {
+    text(who, "connexion : -");
+    return;
   }
-  try {
-    return window.sessionStorage.getItem("anheart-operator") || "";
-  } catch {
-    return "";
+  if (!access.received) {
+    text(who, "aucune liste d'operateurs recue : seuls STOP, E-STOP et les lectures sont ouverts");
+    who.className = "note note-bad";
+    return;
   }
+  if (signed) {
+    var minutes = Math.max(0, Math.floor(signed.idle_left_s / 60));
+    text(who, "connecte : " + signed.name + " (deconnexion sans action dans " + minutes + " min)");
+    who.className = signed.idle_left_s < ACCESS_WARN_S ? "note note-bad" : "note";
+    return;
+  }
+  text(who, "aucun operateur connecte : seuls STOP, E-STOP et les lectures sont ouverts");
+  who.className = "note note-bad";
+  var select = el("access-operator");
+  var chosen = select.value;
+  select.textContent = "";
+  access.operators.forEach(function (operator) {
+    var option = document.createElement("option");
+    option.value = operator.user_id;
+    option.textContent = operator.locked_for_s
+      ? operator.name + " (verrouille " + Math.ceil(operator.locked_for_s / 60) + " min)"
+      : operator.name;
+    select.appendChild(option);
+  });
+  select.value = chosen;
+}
+
+function doSignIn() {
+  var code = el("access-code");
+  var typed = code.value;
+  // The code leaves the field at once, whatever the answer: it is kept nowhere.
+  code.value = "";
+  api("/api/access/sign-in", {
+    method: "POST",
+    body: { user_id: el("access-operator").value, code: typed },
+  }).then(function (access) {
+    state.access = access;
+    text(el("access-note"), "");
+    renderAccess();
+  }).catch(function (error) {
+    problem(el("access-note"), error);
+    loadAccess();
+  });
+}
+
+function doSignOut() {
+  api("/api/access/sign-out", { method: "POST" }).then(function (access) {
+    state.access = access;
+    renderAccess();
+  }).catch(function (error) {
+    problem(el("access-note"), error);
+  });
+}
+
+function doStaySignedIn() {
+  api("/api/access/refresh", { method: "POST" }).then(function (access) {
+    state.access = access;
+    renderAccess();
+  }).catch(function (error) {
+    problem(el("access-note"), error);
+    loadAccess();
+  });
 }
 
 /* -------------------------------------------------------------------- api */
@@ -258,6 +339,10 @@ function api(path, options) {
         // a code that does not change with the wording, and the request found in the way, if any.
         refusal.code = body && body.code ? body.code : null;
         refusal.waiting = body && body.waiting_request_id ? body.waiting_request_id : null;
+        if (refusal.code === "operator_required") {
+          problem(el("access-note"), refusal);
+          loadAccess();
+        }
         throw refusal;
       }
       return body;
@@ -1142,7 +1227,7 @@ function loadPreflight() {
   that ended on a stop; a person on board is no longer held for it.
 */
 function doAcknowledgeStops() {
-  api("/api/preflight/acknowledge", { method: "POST", body: { operator: operatorName() } })
+  api("/api/preflight/acknowledge", { method: "POST" })
     .then(function (row) {
       ok(el("preflight-note"), "seance perdue acquittee : elle ne retient plus une personne a bord");
       renderPreflight(row);
@@ -1201,9 +1286,9 @@ function renderAttestForm(status) {
   show(el("ack-released-row"), Boolean(label));
 }
 
-/** What /api/safety/attest is sent: the name, and each confirmation of the console's mode. */
+/** What /api/safety/attest is sent: each confirmation of the console's mode, by whoever is signed in. */
 function attestBody() {
-  var body = { operator: el("attest-operator").value };
+  var body = {};
   attestFields().forEach(function (field) {
     var box = ATTEST_BOXES[field];
     if (box) {
@@ -1653,7 +1738,7 @@ function renderService(service, watchdog) {
 }
 
 function doRestoreService() {
-  api("/api/service/restore", { method: "POST", body: { operator: el("service-operator").value } })
+  api("/api/service/restore", { method: "POST" })
     .then(function (service) {
       ok(
         el("service-note"),
@@ -1863,7 +1948,6 @@ function doConfirmRemoteLaunch() {
     method: "POST",
     body: {
       session_id: offer.session_id,
-      operator: rememberOperator(el("operator").value),
       bench_attested: offer.mode === "bench" && Boolean(el("remote-launch-attest").checked),
     },
   }).then(function () {
@@ -2603,7 +2687,7 @@ function doManualStart() {
   var stream = liveStream();
   api("/api/manual/start", {
     method: "POST",
-    body: { occupancy: "bench", operator: rememberOperator(el("manual-operator").value) },
+    body: { occupancy: "bench" },
   })
     .then(function (command) {
       state.manualDraft = null;
@@ -2688,7 +2772,7 @@ function doManualApply() {
   var stream = liveStream();
   api("/api/manual/target", {
     method: "POST",
-    body: { output_rpm: rpm, operator: operatorName() },
+    body: { output_rpm: rpm },
   })
     .then(function (command) {
       requestSent("target", command, stream, rpm);
@@ -2711,7 +2795,7 @@ function doManualApply() {
 
 function doFaultReset() {
   var stream = liveStream();
-  api("/api/drive/fault-reset", { method: "POST", body: { operator: operatorName() } })
+  api("/api/drive/fault-reset", { method: "POST" })
     .then(function (command) {
       requestSent("reset", command, stream);
     })
@@ -2777,7 +2861,7 @@ function addEvent(event) {
     li.className = "event-" + item.kind;
     var when = new Date(item.wall_clock).toLocaleTimeString();
     li.textContent =
-      when + "  " + item.kind + (item.operator ? " [" + item.operator + "]" : "") +
+      when + "  " + item.kind + (item.operator ? " [" + actorName(item.operator) + "]" : "") +
       (item.detail ? "  " + item.detail : "");
     list.appendChild(li);
   });
@@ -3544,7 +3628,7 @@ function loadStatus() {
     if (status.attestation) {
       ok(
         el("attest-note"),
-        "atteste par " + status.attestation.operator + " a " +
+        "atteste par " + actorName(status.attestation.operator) + " a " +
           new Date(status.attestation.wall_clock).toLocaleTimeString() +
           " (valable jusqu'au prochain redemarrage du Pi)"
       );
@@ -3874,7 +3958,6 @@ function doStart() {
     method: "POST",
     body: {
       profile_id: profile.profile_id,
-      operator: rememberOperator(el("operator").value),
       total_duration_s: durationSeconds(),
       subject_id: riderId(),
       profiles_digest: state.profilesDigest,
@@ -3909,8 +3992,9 @@ function profilesChanged(error) {
   STOP. Like the emergency stop, it does not wait in silence for its answer:
   see renderStopUnanswered().
 
-  The console can refuse a STOP (nothing to end, a stop already under way, no
-  operator name): that is an answer, said in an alert as it always was. A
+  The console can refuse a STOP (nothing to end, a stop already under way): that
+  is an answer. It takes no sign-in (ANH-152): stopping is never harder than
+  starting, said in an alert as it always was. A
   request that got no answer, or an error of the console's own, is something
   else: nothing says the session is ending, and the page says exactly that.
 */
@@ -3922,7 +4006,7 @@ function doStop() {
   window.setTimeout(renderStopUnanswered, STOP_ANSWER_MS);
   api("/api/session/stop", {
     method: "POST",
-    body: { operator: operatorName(), reason: "operator pressed STOP" },
+    body: { reason: "operator pressed STOP" },
   }).then(
     function () {
       // Accepted. A doubt that proof has ended since, and a later one, are left alone.
@@ -3978,7 +4062,7 @@ function doEstop() {
   // a fault of this page while it draws a receipt must not be reported as a request that failed.
   api("/api/session/estop", {
     method: "POST",
-    body: { operator: operatorName(), reason: "operator pressed E-STOP" },
+    body: { reason: "operator pressed E-STOP" },
   }).then(
     function (receipt) {
       // What the receipt proves is recorded before anything is drawn.
@@ -4005,10 +4089,10 @@ function doEstop() {
 function doAcknowledge() {
   api("/api/safety/acknowledge", {
     method: "POST",
-    body: { operator: el("ack-operator").value, estop_released: el("ack-released").checked },
+    body: { estop_released: el("ack-released").checked },
   })
     .then(function (record) {
-      var said = "acquitte par " + record.operator + (record.cleared.length ? " : " + record.cleared.join(", ") : "");
+      var said = "acquitte par " + actorName(record.operator) + (record.cleared.length ? " : " + record.cleared.join(", ") : "");
       ok(el("ack-note"), said);
       // The 200 says the latches were cleared, not that they stay so: the next frames do.
       state.ackGiven = { at: record.at, cleared: record.cleared, text: said };
@@ -4198,30 +4282,22 @@ function doAttest() {
     });
 }
 
+/* The attendant's presence: an operator signed in on this device, or nobody (ANH-152). */
 function ping() {
-  api("/api/presence", { method: "POST", body: { operator: operatorName() } }).catch(
-    function () {
-      /* the attendant rule will notice; nothing useful to show here */
-    }
-  );
+  if (!state.access || !state.access.signed_in) {
+    return;
+  }
+  api("/api/presence", { method: "POST" }).catch(function () {
+    /* the attendant rule will notice; the sign-in says why */
+  });
 }
 
 /* ----------------------------------------------------------------- wiring */
 
 function start() {
-  var rememberedOperator = operatorName();
-  OPERATOR_INPUT_IDS.forEach(function (id) {
-    el(id).value = rememberedOperator;
-    el(id).addEventListener("input", function () {
-      var value = el(id).value;
-      OPERATOR_INPUT_IDS.forEach(function (other) {
-        if (other !== id) el(other).value = value;
-      });
-      rememberOperator(value);
-    });
-  });
+  // The device token of this tablet (ANH-152): typed once, kept by this browser.
   try {
-    state.token = window.sessionStorage.getItem("anheart-token") || "";
+    state.token = window.localStorage.getItem("anheart-token") || "";
   } catch {
     state.token = "";
   }
@@ -4230,12 +4306,15 @@ function start() {
   el("save-token").onclick = function () {
     state.token = el("token").value;
     try {
-      window.sessionStorage.setItem("anheart-token", state.token);
+      window.localStorage.setItem("anheart-token", state.token);
     } catch {
       /* kept for this page only */
     }
     boot();
   };
+  el("access-go").onclick = doSignIn;
+  el("access-out").onclick = doSignOut;
+  el("access-stay").onclick = doStaySignedIn;
   el("record-export").onclick = exportRecord;
   el("nav-console").onclick = function () {
     showView("console");
@@ -4330,6 +4409,7 @@ function start() {
   window.setInterval(loadCamera, 1000);
   loadCamera();
   window.setInterval(ping, PRESENCE_MS);
+  window.setInterval(loadAccess, ACCESS_MS);
   window.setInterval(function () {
     loadStatus().catch(function () {
       /* shown by the banner and the token note */
@@ -4339,6 +4419,7 @@ function start() {
 }
 
 function boot() {
+  loadAccess();
   loadPanel();
   loadPreflight();
   loadRemoteLaunch();

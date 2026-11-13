@@ -195,7 +195,6 @@ test("a start and a preview name the rider chosen, or nobody, and nothing else o
   const { context, nodes, storage } = panel();
   context.state.profiles = [{ profile_id: "standard_30_min", zone_low_bpm: 118, zone_high_bpm: 138 }];
   nodes.get("profile").value = "standard_30_min";
-  nodes.get("operator").value = "Declared actor";
   context.renderRoster(roster([ADULT]));
   const sent = [];
   context.api = (path, options) => {

@@ -1254,6 +1254,9 @@ class RecordUplink:
             "kind": declaration.kind,
             "startedAt": owed.start_ms,
             "operatorName": declaration.operator,
+            # Contract 1.13 (ANH-152): the account signed in at the console, which the
+            # dashboard keeps when it is an operator of this machine, and names itself.
+            "operatorId": declaration.operator,
         }
         age = self._age_ms(now, owed)
         if age is not None:

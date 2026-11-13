@@ -18,13 +18,15 @@ beside it to fall back to, and nothing that answers a clear request with a
 redirect. Clear HTTP stays possible on loopback only, where nothing leaves the
 machine: development, the simulator, the tests.
 
-**Who may talk to it.** A token in a header for the API, checked with
-``hmac.compare_digest``, plus an ``Origin`` allowlist for the WebSocket
-handshake (see ``ws.py`` for why the socket needs its own check). The token is
-a *shared* secret, not a login: it stops the other things on the clinic wifi,
-which is the actual threat, and it does not pretend to identify an operator.
-Attribution is a name typed into the attestation and acknowledgement fields,
-which the safety supervisor refuses to accept blank.
+**Who may talk to it.** A device token in a header for the API, plus an
+``Origin`` allowlist for the WebSocket handshake (see ``ws.py`` for why the
+socket needs its own check). Since ANH-152 the token names a device
+(:func:`identify_device`): the console's own ``DEVICE_TOKEN`` (``UI_TOKEN``
+before), checked with ``hmac.compare_digest``, or the token of a tablet of the
+signed operator list (:mod:`src.console_access`). A device token opens the
+reads, the STOP and the emergency stop. Every other action also takes an
+operator signed in on that device: attribution is an authenticated account,
+never a name typed in a field.
 
 **What a handler can reach.** :class:`Services` is one frozen record, passed in
 at construction and closed over by the route factories. Not ``app.state``:
@@ -46,6 +48,7 @@ from typing import Final, Protocol, final, runtime_checkable
 from uuid import uuid4
 
 from src.clock import Clock
+from src.console_access import LOCAL_DEVICE, LOOPBACK_DEVICE, ConsoleAccess
 from src.control_surface import ControlSurface
 from src.geometry import MachineGeometry
 from src.motor.sto import StoSource
@@ -69,7 +72,12 @@ _logger: logging.Logger = logging.getLogger(__name__)
 
 
 TOKEN_HEADER: Final[str] = "x-anheart-token"  # noqa: S105  # a header NAME, not a secret
-"""Header carrying the shared token. Lowercase: header lookups are case-insensitive."""
+"""Header carrying the device token. Lowercase: header lookups are case-insensitive."""
+
+SESSION_COOKIE: Final[str] = "anheart_operator"
+"""The cookie of an operator's session (ANH-152): ``HttpOnly``, ``SameSite=Strict``,
+``Secure`` on a console that serves TLS. A cookie flagged ``Secure`` is never sent over
+clear HTTP, and a console in clear listens on loopback only (:func:`clear_http_refusal`)."""
 
 TOKEN_QUERY_PARAM: Final[str] = "token"  # noqa: S105  # a parameter NAME, not a secret
 """Query parameter carrying the token on the WebSocket handshake.
@@ -341,6 +349,25 @@ class WebConfig:
         return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
 
 
+def identify_device(
+    config: WebConfig, access: ConsoleAccess | None, presented: str | None
+) -> str | None:
+    """The device a request comes from, by its token; ``None``: no device of this console.
+
+    No token configured (loopback only): every caller is the Pi itself,
+    :data:`~src.console_access.LOOPBACK_DEVICE`. The configured
+    ``DEVICE_TOKEN``: :data:`~src.console_access.LOCAL_DEVICE`, the console's
+    own, which no list can revoke. Otherwise a tablet of the signed list.
+    Memory only, no wait: the emergency stop depends on it.
+    """
+    if config.token is None:
+        return LOOPBACK_DEVICE
+    if config.token_matches(presented):
+        return LOCAL_DEVICE
+    listed = None if access is None else access.device_of(presented)
+    return None if listed is None else listed.device_id
+
+
 # =========================================================================
 # Serial port discovery
 # =========================================================================
@@ -607,6 +634,12 @@ class Services:
 
     preflight: PreflightMonitor | None = None
     """The pre-flight (``/api/preflight``, ANH-142); ``None``: this console judges none."""
+
+    access: ConsoleAccess | None = None
+    """Who may act (ANH-152): the signed operator list, the sign-in, the sessions.
+
+    ``None`` is a console that never accepted a list: nobody can sign in, and
+    only the reads, the STOP and the emergency stop answer."""
 
     instance: str = field(default_factory=new_instance)
     """What this run of the console calls itself (:func:`new_instance`).

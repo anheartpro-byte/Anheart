@@ -42,6 +42,7 @@ from src.web.app import create_app
 from src.web.deps import Services, WebConfig
 from src.web.schemas import CommandRow
 from src.web.ws import LOGGED_HEADER_LIMIT, logged_header
+from tests.access_support import open_access, sign_in
 from tests.roster_support import RIDER_ID, listed
 from tests.test_web_api import (
     GEOMETRY,
@@ -241,7 +242,7 @@ HANDLERS: Final[tuple[_Handler, ...]] = (
 )
 
 
-def _app_with_manual_sessions(tmp_path: Path) -> FastAPI:
+def _app_with_manual_sessions(tmp_path: Path) -> tuple[FastAPI, Services]:
     """The interface of ``build_rig``, plus a ceiling for each occupancy so manual routes open."""
     clock = ManualClock()
     supervisor = SafetySupervisor(clock=clock, limits=build_limits())
@@ -262,8 +263,10 @@ def _app_with_manual_sessions(tmp_path: Path) -> FastAPI:
         geometry=GEOMETRY,
         ceilings=ceiling,
         roster=listed(clock),
+        access=open_access(clock),
     )
-    return create_app(services=services, config=WebConfig(host="127.0.0.1", port=8080, token=TOKEN))
+    config = WebConfig(host="127.0.0.1", port=8080, token=TOKEN)
+    return create_app(services=services, config=config), services
 
 
 @pytest.mark.parametrize("handler", HANDLERS, ids=[handler.name for handler in HANDLERS])
@@ -275,7 +278,7 @@ async def test_a_handler_given_something_that_is_not_a_result_answers_500(
     No caller can produce this (the types forbid it), so it is forced: the call
     whose answer the handler unwraps is replaced by one that returns a string.
     """
-    app = _app_with_manual_sessions(tmp_path)
+    app, services = _app_with_manual_sessions(tmp_path)
     monkeypatch.setattr(
         handler.owner,
         handler.attribute,
@@ -283,6 +286,7 @@ async def test_a_handler_given_something_that_is_not_a_result_answers_500(
     )
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        await sign_in(client, services, headers=auth())
         response = await client.request(
             handler.method, handler.path, headers=auth(), json=handler.body
         )

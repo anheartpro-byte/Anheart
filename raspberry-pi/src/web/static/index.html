@@ -192,6 +192,29 @@
   <div id="service-detail" class="bind"></div>
   <div id="bind" class="bind">&mdash;</div>
 
+  <!--
+    ANH-152: who acts. Every action but STOP and E-STOP takes an operator signed in
+    on this device, from the signed list of the dashboard; the code is checked by the
+    console, never stored by the page. Nobody signed in: the stops and the reads only.
+  -->
+  <div id="access" class="access">
+    <p id="access-who" class="note">connexion : &mdash;</p>
+    <div id="access-sign-in" class="hidden">
+      <label>Operateur
+        <select id="access-operator"></select>
+      </label>
+      <label>Code
+        <input id="access-code" type="password" inputmode="numeric" autocomplete="off" />
+      </label>
+      <button id="access-go" class="btn" type="button">Se connecter</button>
+    </div>
+    <div id="access-signed" class="hidden">
+      <button id="access-stay" class="btn" type="button">Rester connecte</button>
+      <button id="access-out" class="btn" type="button">Se deconnecter</button>
+    </div>
+    <p id="access-note" class="note"></p>
+  </div>
+
   <nav class="nav">
     <button id="nav-console" class="nav-item" type="button">Tableau de bord</button>
     <button id="nav-sensors" class="nav-item" type="button">Capteurs</button>
@@ -238,9 +261,6 @@
         <label class="check">
           <input id="manual-bench" type="checkbox" />
           BANC - personne a bord : NON (moteur decouple, ou bras couple avec la capsule VIDE ou LESTEE)
-        </label>
-        <label>Operateur
-          <input id="manual-operator" type="text" autocomplete="off" placeholder="qui pilote" />
         </label>
         <button id="manual-start" class="btn btn-go" type="button">Demarrer MANUEL</button>
         <p id="manual-preflight-note" class="note"></p>
@@ -432,9 +452,6 @@
         <label>Duree totale (minutes, vide = celle du profil)
           <input id="duration" type="number" min="1" step="1" placeholder="celle du profil" />
         </label>
-        <label>Operateur
-          <input id="operator" type="text" autocomplete="off" placeholder="qui conduit la seance" />
-        </label>
         <!--
           The rider, from the list the dashboard gives this machine (GET /api/roster).
           Their age and max heart rate are shown, never typed: a manager sets them on
@@ -553,8 +570,10 @@
       <h2>Acces</h2>
       <p class="note" id="token-note">
         Cette interface commande un moteur. Hors boucle locale elle refuse de demarrer sans jeton.
+        Le jeton de cette tablette se cree sur la fiche de la machine du site, une fois, et
+        se garde dans ce navigateur.
       </p>
-      <label>Jeton partage
+      <label>Jeton de l'appareil
         <input id="token" type="password" autocomplete="off" placeholder="vide en boucle locale" />
       </label>
       <button id="save-token" class="btn" type="button">Utiliser ce jeton</button>
@@ -596,7 +615,6 @@
           offered before the console has said which words are true.
         -->
         <div class="ackrow">
-          <input id="ack-operator" type="text" autocomplete="off" placeholder="votre nom" />
           <label id="ack-released-row" class="check hidden">
             <input id="ack-released" type="checkbox" />
             <span id="ack-released-label"></span>
@@ -617,7 +635,6 @@
             Faire verifier la machine avant de la remettre en service.
           </p>
           <div class="ackrow">
-            <input id="service-operator" type="text" autocomplete="off" placeholder="votre nom" />
             <button id="service-restore-button" class="btn" type="button">Remettre en service</button>
           </div>
         </div>
@@ -650,9 +667,6 @@
         <label id="attest-bench-row" class="check hidden">
           <input id="attest-bench" type="checkbox" />
           J'atteste ce texte tel qu'il est ecrit ci-dessus.
-        </label>
-        <label>Votre nom
-          <input id="attest-operator" type="text" autocomplete="off" placeholder="qui atteste" />
         </label>
         <button id="attest" class="btn" type="button">Enregistrer l'attestation</button>
         <p id="attest-note" class="note">

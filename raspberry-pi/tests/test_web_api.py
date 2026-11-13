@@ -139,6 +139,7 @@ from src.web.schemas import (
     encode_envelope,
 )
 from src.web.ws import TELEMETRY_PATH
+from tests.access_support import OPERATOR_ID, open_access, sign_in
 from tests.roster_support import RIDER_ID, listed
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
@@ -220,6 +221,7 @@ class Rig:
     store: ProfileStore
     config: WebConfig
     app: FastAPI
+    services: Services
 
     def attest(self) -> None:
         """Pass the startup gate, the way an operator does before a session."""
@@ -257,6 +259,7 @@ def build_rig(
         ports=StubPorts(),
         geometry=GEOMETRY,
         roster=listed(clock),
+        access=open_access(clock),
     )
     return Rig(
         clock=clock,
@@ -266,6 +269,7 @@ def build_rig(
         store=store,
         config=config,
         app=create_app(services=services, config=config),
+        services=services,
     )
 
 
@@ -351,8 +355,9 @@ def rig(tmp_path: Path) -> Rig:
 
 @pytest.fixture
 async def client(rig: Rig) -> AsyncIterator[httpx.AsyncClient]:
-    """An HTTP client speaking to the app in-process, over ASGI."""
+    """An HTTP client speaking to the app in-process, over ASGI, its operator signed in."""
     async with client_of(rig) as session:
+        await sign_in(session, rig.services, headers=auth())
         yield session
 
 
@@ -541,6 +546,7 @@ async def test_remote_launch_reads_and_confirmation_use_the_authenticated_operat
         roster=listed(rig.clock),
         remote_launch_current=lambda: offer,
         remote_launch_confirm=confirm,
+        access=open_access(rig.clock),
     )
     app = create_app(services=services, config=rig.config)
     transport = httpx.ASGITransport(app=app)
@@ -558,33 +564,36 @@ async def test_remote_launch_reads_and_confirmation_use_the_authenticated_operat
         )
         assert row.can_confirm
         assert "subject_label" not in _keys(response)
-        blank = await session.post(
+        unsigned = await session.post(
             "/api/remote-launch/confirm",
             headers=auth(),
-            json={"session_id": "remote-session", "operator": "  "},
+            json={"session_id": "remote-session"},
         )
-        assert blank.status_code == HTTPStatus.BAD_REQUEST
+        assert unsigned.status_code == HTTPStatus.UNAUTHORIZED
+        assert unsigned.json()["code"] == "operator_required"
+        assert calls == []
+        await sign_in(session, services, headers=auth())
         stale = await session.post(
             "/api/remote-launch/confirm",
             headers=auth(),
-            json={"session_id": "stale", "operator": "Confirming Operator"},
+            json={"session_id": "stale"},
         )
         assert stale.status_code == HTTPStatus.CONFLICT
         assert stale.json()["code"] == ConfirmationCode.NOT_PENDING.value
-        assert calls == [("stale", "Confirming Operator", False)]
+        assert calls == [("stale", OPERATOR_ID, False)]
         accepted = await session.post(
             "/api/remote-launch/confirm",
             headers=auth(),
-            json={"session_id": "remote-session", "operator": "Confirming Operator"},
+            json={"session_id": "remote-session"},
         )
         assert accepted.status_code == HTTPStatus.ACCEPTED
         assert parse(RemoteLaunchAcceptedRow, accepted).state == "request_in_progress"
-    assert calls[-1] == ("remote-session", "Confirming Operator", False)
+    assert calls[-1] == ("remote-session", OPERATOR_ID, False)
     assert rig.surface.pending is None
     payload = await subscriber.next_payload()
     assert payload.event is not None
     assert payload.event.kind is EventKind.LAUNCH_CONFIRMED
-    assert payload.event.operator == "Confirming Operator"
+    assert payload.event.operator == OPERATOR_ID
     assert "Roster Name" not in payload.event.detail
 
 
@@ -642,14 +651,16 @@ async def test_the_attestation_needs_both_confirmations(client: httpx.AsyncClien
     assert response.status_code == HTTPStatus.BAD_REQUEST
 
 
-async def test_the_attestation_needs_a_name(client: httpx.AsyncClient) -> None:
-    """An unattributable safety record is not a safety record."""
-    response = await client.post(
-        "/api/safety/attest",
-        headers=auth(),
-        json={"operator": "  ", "sto_jumper_removed": True, "mushroom_wired_nc": True},
-    )
-    assert response.status_code == HTTPStatus.BAD_REQUEST
+async def test_the_attestation_needs_an_operator_signed_in(rig: Rig) -> None:
+    """An unattributable safety record is not a safety record (ANH-152: by account)."""
+    async with client_of(rig) as session:
+        response = await session.post(
+            "/api/safety/attest",
+            headers=auth(),
+            json={"sto_jumper_removed": True, "mushroom_wired_nc": True},
+        )
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json()["code"] == "operator_required"
 
 
 async def test_a_recorded_attestation_opens_the_gate(client: httpx.AsyncClient, rig: Rig) -> None:
@@ -662,7 +673,7 @@ async def test_a_recorded_attestation_opens_the_gate(client: httpx.AsyncClient, 
             json={"operator": OPERATOR, "sto_jumper_removed": True, "mushroom_wired_nc": True},
         ),
     )
-    assert recorded.operator == OPERATOR
+    assert recorded.operator == OPERATOR_ID
     assert "STO" in recorded.statement
     assert isinstance(rig.supervisor.require_estop_confirmed(), Ok)
 
@@ -756,20 +767,22 @@ async def test_a_second_stop_is_refused(client: httpx.AsyncClient, rig: Rig) -> 
     assert second.status_code == HTTPStatus.CONFLICT
 
 
-async def test_a_start_needs_an_operator_name(client: httpx.AsyncClient, rig: Rig) -> None:
-    """A session record nobody is answerable for is not a session record."""
+async def test_a_start_needs_an_operator_signed_in(rig: Rig) -> None:
+    """A session record nobody is answerable for is not a session record (ANH-152)."""
     rig.attest()
-    response = await client.post(
-        "/api/session/start",
-        headers=auth(),
-        json={
-            "subject_id": RIDER_ID,
-            "profile_id": PROFILE_ID,
-            "operator": " ",
-            "profiles_digest": await shown_digest(client, auth()),
-        },
-    )
-    assert response.status_code == HTTPStatus.BAD_REQUEST
+    async with client_of(rig) as session:
+        response = await session.post(
+            "/api/session/start",
+            headers=auth(),
+            json={
+                "subject_id": RIDER_ID,
+                "profile_id": PROFILE_ID,
+                "profiles_digest": await shown_digest(session, auth()),
+            },
+        )
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json()["code"] == "operator_required"
+    assert rig.surface.pending is None
 
 
 async def test_a_start_sent_from_a_list_the_console_no_longer_holds_is_refused(
@@ -791,8 +804,9 @@ async def test_a_start_sent_from_a_list_the_console_no_longer_holds_is_refused(
     defaults.write_text(changed, encoding="utf-8")
     after = build_rig(tmp_path, defaults=defaults)
     after.attest()
-    body = {"subject_id": RIDER_ID, "profile_id": PROFILE_ID, "operator": OPERATOR}
+    body = {"subject_id": RIDER_ID, "profile_id": PROFILE_ID}
     async with client_of(after) as session:
+        await sign_in(session, after.services, headers=auth())
         refused = await session.post(
             "/api/session/start",
             headers=auth(),
@@ -999,15 +1013,17 @@ async def test_acknowledging_without_releasing_the_mushroom_is_refused(
     assert "pulled back out" in detail(response)
 
 
-async def test_acknowledging_needs_a_name(client: httpx.AsyncClient) -> None:
-    """Putting the machine back into service is a human act with a name on it."""
-    await client.post("/api/session/estop", headers=auth(), json={})
-    response = await client.post(
-        "/api/safety/acknowledge",
-        headers=auth(),
-        json={"operator": "", "estop_released": True},
-    )
-    assert response.status_code == HTTPStatus.BAD_REQUEST
+async def test_acknowledging_needs_an_operator_signed_in(rig: Rig) -> None:
+    """Putting the machine back into service is a human act with a name on it (ANH-152)."""
+    async with client_of(rig) as session:
+        await session.post("/api/session/estop", headers=auth(), json={})
+        response = await session.post(
+            "/api/safety/acknowledge",
+            headers=auth(),
+            json={"estop_released": True},
+        )
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json()["code"] == "operator_required"
 
 
 async def test_acknowledging_with_nothing_latched_is_refused(

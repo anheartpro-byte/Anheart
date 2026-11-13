@@ -73,7 +73,7 @@ from src.local_config import LocalConfig
 from src.motor.drive import DriveState, DriveStatus
 from src.motor.sto import StoSourceKind
 from src.record import commands
-from src.record.codec import IDENTIFIER, Privacy
+from src.record.codec import ACTOR, IDENTIFIER, Privacy
 from src.record.ecg import RuntimeDelivery
 from src.record.journal import (
     MIN_FREE_BYTES,
@@ -150,13 +150,18 @@ _MOTION: Final[TypeAdapter[MotionLimits]] = TypeAdapter(MotionLimits)
 
 
 def operator_alias(operator: str) -> str:
-    """A stable, opaque stand-in for a name typed at the console. Never the name.
+    """Who a record names for ``operator``: never a name.
 
-    The same name gives the same alias on every session of every machine, so
-    records can be lined up by operator without any of them holding a name.
-    It is a pseudonym, not anonymity: whoever holds the list of operators can
-    recompute it.
+    Since ANH-152 the operator of the console is an account signed in, named by
+    its identifier, or a tablet that acted with nobody signed in
+    (``device:<id>``): both are opaque already, and kept as they are, so that
+    the dashboard resolves the name. Anything else is a name (the launcher of a
+    session from the dashboard, ``<name> (tableau de bord)``): a stable, opaque
+    stand-in for it, the same on every session of every machine. A pseudonym,
+    not anonymity: whoever holds the list of names can recompute it.
     """
+    if ACTOR.fullmatch(operator) is not None:
+        return operator
     name = " ".join(operator.split()).casefold()
     if not name:
         return UNATTRIBUTED

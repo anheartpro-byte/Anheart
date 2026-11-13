@@ -362,14 +362,13 @@ test("under the bridge the card offers the bench declaration, in the console's e
   assert.equal(page.node("attest-state").textContent, "non atteste");
 });
 
-test("the bench body carries the name and the bench declaration, never the two boxes", async () => {
+test("the bench body carries the bench declaration, never the two boxes", async () => {
   const page = await answered(status(BENCH_MODE, { attested: false }));
   const sent = [];
   page.context.api = (path, options) => {
     sent.push([path, options && options.body]);
     return Promise.resolve(path === "/api/status" ? status(BENCH_MODE) : null);
   };
-  page.node("attest-operator").value = "Operateur";
   page.node("attest-bench").checked = true;
   // Ticked once, under another console: still never sent under this one.
   page.node("attest-jumper").checked = true;
@@ -378,7 +377,7 @@ test("the bench body carries the name and the bench declaration, never the two b
   await settle();
   const [path, body] = sent[0];
   assert.equal(path, "/api/safety/attest");
-  assert.deepEqual(JSON.parse(JSON.stringify(body)), { operator: "Operateur", bench_bridged_declared: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(body)), { bench_bridged_declared: true });
 });
 
 test("under every other source only ANH-92's two boxes are offered and sent", async () => {
@@ -394,30 +393,27 @@ test("under every other source only ANH-92's two boxes are offered and sent", as
     sent.push([path, options && options.body]);
     return Promise.resolve(path === "/api/status" ? status(WIRED_MODE) : null);
   };
-  page.node("attest-operator").value = "Operateur";
   page.node("attest-jumper").checked = true;
   page.node("attest-mushroom").checked = true;
   page.node("attest-bench").checked = true;
   page.context.doAttest();
   await settle();
   assert.deepEqual(JSON.parse(JSON.stringify(sent[0][1])), {
-    operator: "Operateur",
     sto_jumper_removed: true,
     mushroom_wired_nc: true,
   });
 });
 
-test("a field the page does not know is not invented: the name alone goes, and the console judges", async () => {
+test("a field the page does not know is not invented: nothing goes, and the console judges", async () => {
   const page = await answered(status({ ...WIRED_MODE, attestation_fields: ["something_new"] }));
   const sent = [];
   page.context.api = (_path, options) => {
     sent.push(options && options.body);
     return Promise.reject(new Error("refused"));
   };
-  page.node("attest-operator").value = "Operateur";
   page.context.doAttest();
   await settle();
-  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), { operator: "Operateur" });
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), {});
   assert.equal(page.node("attest-note").textContent, "refused");
 });
 
@@ -436,12 +432,11 @@ for (const [name, mode, label] of [
       sent.push([path, options && options.body]);
       return Promise.reject(new Error("nothing is latched to acknowledge"));
     };
-    page.node("ack-operator").value = "Operateur";
     page.node("ack-released").checked = true;
     page.context.doAcknowledge();
     await settle();
     assert.deepEqual(sent[0][0], "/api/safety/acknowledge");
-    assert.deepEqual(JSON.parse(JSON.stringify(sent[0][1])), { operator: "Operateur", estop_released: true });
+    assert.deepEqual(JSON.parse(JSON.stringify(sent[0][1])), { estop_released: true });
   });
 }
 
@@ -493,7 +488,6 @@ test("the bench start sends a bench session, and a refusal of the console is sai
     return Promise.reject(new Error(BENCH_ONLY));
   };
   page.node("manual-bench").checked = true;
-  page.node("manual-operator").value = "Operateur";
   page.context.doManualStart();
   await settle();
   assert.equal(sent[0][0], "/api/manual/start");

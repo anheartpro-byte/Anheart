@@ -30,8 +30,11 @@ def healthy(env: Mapping[str, str]) -> bool:
             if certificate
             else True
         )
+        # Off the Pi's own address /healthz takes the device token (ANH-152).
+        token = env.get("DEVICE_TOKEN", "") or env.get("UI_TOKEN", "")
+        headers = {"x-anheart-token": token} if token else {}
         with httpx.Client(verify=trust, timeout=3, trust_env=False) as client:
-            return client.get(url).status_code == HTTPStatus.OK
+            return client.get(url, headers=headers).status_code == HTTPStatus.OK
     except (OSError, ValueError, httpx.HTTPError):
         return False
 

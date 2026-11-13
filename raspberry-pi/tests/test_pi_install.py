@@ -565,7 +565,7 @@ def test_the_generated_configuration_is_the_template_and_holds_no_secret(
     assert _mode(machine.env_file) == 0o600
     settings = _settings(machine.env_file)
     assert settings["MACHINE_API_KEY"] == "", "a new machine is linked to no dashboard"
-    assert "UI_TOKEN" not in settings
+    assert "DEVICE_TOKEN" not in settings
     loaded = load_local_config(settings)
     assert isinstance(loaded, Ok), "the console would refuse the generated configuration"
     assert loaded.value.cloud is None
@@ -585,12 +585,14 @@ def test_a_value_docker_would_misread_is_named_without_being_shown(machine: Mach
     machine.env_file.write_text(
         _read(ENV_TEMPLATE)
         .replace("MOTOR_MAX_RPM=300\n", "MOTOR_MAX_RPM=300   # bench ceiling\n")
-        .replace("# UI_TOKEN=\n", f'UI_TOKEN="{PAGE_TOKEN}"\n'),
+        .replace("# DEVICE_TOKEN=\n", f'DEVICE_TOKEN="{PAGE_TOKEN}"\n'),
         encoding="utf-8",
     )
     warned = machine.install()
     assert warned.exit_code == 0, warned.output
-    assert "read as part of the value of: MOTOR_MAX_RPM UI_TOKEN (write KEY=value" in warned.output
+    assert (
+        "read as part of the value of: MOTOR_MAX_RPM DEVICE_TOKEN (write KEY=value" in warned.output
+    )
     assert PAGE_TOKEN not in warned.output
     assert "bench ceiling" not in warned.output
 
@@ -628,7 +630,7 @@ def test_an_existing_configuration_is_kept_and_its_secrets_are_never_shown(
     filled = (
         _read(ENV_TEMPLATE)
         .replace("MACHINE_API_KEY=\n", f"MACHINE_API_KEY={MACHINE_KEY}\n")
-        .replace("# UI_TOKEN=\n", f"UI_TOKEN={PAGE_TOKEN}\n")
+        .replace("# DEVICE_TOKEN=\n", f"DEVICE_TOKEN={PAGE_TOKEN}\n")
     )
     assert MACHINE_KEY in filled
     assert PAGE_TOKEN in filled

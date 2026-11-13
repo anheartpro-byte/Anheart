@@ -2285,10 +2285,10 @@ sont coupées en production).
 Qui a attesté le câblage de l'arrêt d'urgence, qui a acquitté un verdict, qui
 a confirmé qu'une personne est à bord : chaque action de la console doit
 porter une identité authentifiée, pas un nom tapé dans un champ. ANH-152 le
-fait en deux lots : Convex et le site d'abord (ce lot), la console ensuite.
-**Tant que le lot de la console n'est pas fusionné et installé, rien de ce
-qui suit n'est appliqué par une machine** : la console garde son jeton
-partagé et son champ « opérateur ».
+fait en deux lots : Convex et le site, puis la console. **Une machine ne
+l'applique qu'avec une image qui porte le lot de la console** ; l'essai au
+banc du 21 et 22 novembre 2026 se fait sur une image figée, antérieure, qui
+garde le jeton partagé et le champ « opérateur ».
 
 ### 17.1 Qui décide de quoi
 
@@ -2326,8 +2326,8 @@ opérateur sur un processeur de bureau, moins sur du matériel dédié. Ce
 n'est pas un risque accepté par cette page : c'est la limite d'un code court,
 écrite pour qu'on ne la prenne pas pour une protection. Ce qui protège :
 
-- **en ligne**, le verrouillage de la console après 5 échecs (lot de la
-  console), qui ne cède pas à un redémarrage ;
+- **en ligne**, le verrouillage de la console après 5 échecs, qui ne cède
+  pas à un redémarrage (17.4) ;
 - **hors ligne**, la liste ne sort que vers la machine authentifiée par sa
   clé, et un code trouvé n'ouvre que la console d'une machine où l'opérateur
   est activé, avec en plus un jeton de tablette de cette machine ;
@@ -2351,15 +2351,60 @@ en rejouant une ancienne réponse. Détail :
 Aujourd'hui la clé privée du catalogue n'est posée sur aucun déploiement, et
 la clé publique livrée n'a pas de partie privée
 ([secrets.md, 3.4](secrets.md#34-clés-de-signature)) : aucune console ne
-peut encore accepter de liste. Le lot de la console devra donc arriver avec
-une procédure d'amorçage, sans quoi une console qui exige une liste n'ouvrirait
-plus rien que l'E-STOP.
+peut encore accepter de liste. Une image qui porte le lot de la console,
+installée avant que la clé soit posée, n'ouvrirait plus que STOP, E-STOP et
+les lectures ; l'amorçage est écrit dans
+[raspberry-pi.md, 8.9](raspberry-pi.md#89-la-liste-des-opérateurs-signée-anh-152).
 
-### 17.4 Ce que ce lot ne couvre pas
+### 17.4 Ce que la console garantit
+
+- **Fermée par défaut.** Une console qui n'a jamais accepté de liste
+  n'ouvre aucune action. Toute route qui agit exige un opérateur de la liste
+  connecté sur l'appareil qui l'appelle ; un test énumère les routes de
+  l'API et exige ce refus de chacune, sauf d'une liste écrite de routes qui
+  n'agissent pas ou qui arrêtent (`tests/test_web_access.py`).
+- **Arrêter ne demande jamais de connexion.** E-STOP et STOP demandent le
+  seul jeton d'appareil, sont attribués à l'opérateur connecté ou sinon à
+  l'appareil (`device:<id>`), et ne passent ni par le verrou de la connexion
+  ni par son haché : un test tient une connexion bloquée pendant son calcul
+  et vérifie que l'E-STOP répond aussitôt. Arrêter n'est jamais plus difficile
+  que démarrer : c'est pourquoi STOP, que le ticket rangeait parmi les routes
+  `/api/session/*` qui exigent une session, n'en exige pas.
+- **Le verrouillage.** Cinq codes faux de suite verrouillent l'opérateur
+  15 min. Le compte est écrit sur le disque et un opérateur trouvé verrouillé
+  au démarrage l'est 15 min à partir de ce démarrage : couper le courant ne
+  donne pas d'essais. Une connexion à la fois : une rafale de codes ne passe
+  pas le verrou. À 5 essais par quart d'heure, essayer le million de codes en
+  ligne prend des années. Revers : quiconque tient un jeton d'appareil peut
+  verrouiller un opérateur 15 min en tapant cinq codes faux ; STOP et E-STOP
+  restent disponibles. Un fichier de comptes que le disque refuse est gardé en
+  mémoire : un redémarrage avant l'écriture suivante l'oublie.
+- **La session.** Liée à l'appareil, 8 h au plus, 30 min sans action, fermée
+  par la déconnexion, par une nouvelle liste qui ne tient plus l'opérateur ou
+  la tablette, et par tout redémarrage (elle n'existe qu'en mémoire). Le
+  signal de présence de l'accompagnant n'est pas une action : une tablette
+  ouverte et laissée seule se déconnecte, et la règle `attendant_absent`
+  arrête alors une rotation en cours (côté sûr).
+- **Le cookie.** `HttpOnly` (aucun script ne le lit), `SameSite=Strict`
+  (aucune page d'un autre site ne l'envoie), `Path=/`, et `Secure` sur une
+  console qui sert TLS. Les actions demandent en plus l'en-tête du jeton
+  d'appareil, qu'une page d'un autre site ne peut pas poser.
+- **Le journal.** Connexion, déconnexion, expiration, code faux et
+  verrouillage vont au journal de bord sous l'identifiant de l'opérateur ou
+  de l'appareil ; jamais un code, un haché ni un jeton. `events.jsonl` et les
+  séances de Convex nomment l'opérateur par l'identifiant de son compte, le
+  nom est résolu par le site ; les anciens enregistrements gardent leur alias
+  `op-...` et restent lisibles.
+
+### 17.5 Ce qui n'est pas couvert
 
 | Limite | Conséquence |
 |---|---|
-| La console n'applique rien encore | Le jeton partagé et le nom tapé restent la seule protection jusqu'au lot de la console |
+| Le cookie sans `Secure` sur une console en clair | Une console en clair n'écoute que sur la boucle locale (elle refuse de démarrer autrement, section 11) : le cookie ne quitte pas le Pi. Un mandataire TLS placé devant une console en clair, que rien ne livre, recevrait un cookie sans `Secure` : à ne pas faire. Tant que le TLS n'est pas en service sur un Pi installé (section 11), aucune tablette n'atteint la console par le réseau |
+| Une console hors ligne garde sa dernière liste sans limite de durée | Un opérateur désactivé ou une tablette révoquée sur le site restent valables sur une console qui ne se synchronise plus |
+| La liste n'est pas liée à sa machine | Une liste copiée sur le disque d'une autre console du même déploiement y serait acceptée ; écrire sur ce disque donne bien plus (MEN-04) |
+| Le jeton `DEVICE_TOKEN` du `.env` ne se révoque pas depuis le site | Il se change dans le `.env` ([secrets.md, 3.2](secrets.md#32-jeton-de-la-page-de-la-console)) |
+| Une rotation de la clé du catalogue laisse les consoles sur leur liste | Jusqu'à la nouvelle image, une désactivation sur le site n'y arrive pas |
 | Un code de 6 chiffres se trouve hors ligne en quelques heures à partir de la liste | Voir 17.2 : la liste ne doit pas fuir, et une fuite se traite par la révocation de la clé de la machine et le changement des codes |
 | L'admin peut activer un membre sans qu'il le sache | Sans code posé par ce membre, il n'est pas dans la liste et ne peut pas se connecter ; s'il a déjà un code dans l'organisation, il peut se connecter à la nouvelle machine dès sa synchronisation |
 | Le site ne dit pas encore quelle liste une console tient | Une désactivation prend effet à la synchronisation suivante au repos ; l'admin ne voit pas quand elle a eu lieu |

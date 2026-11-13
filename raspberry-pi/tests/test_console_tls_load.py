@@ -65,6 +65,7 @@ from src.training.safety import RULE_DRIVE_FAULT, RULE_LOOP_STALL
 from src.units import Seconds
 from src.web.app import build_server, create_app, serve
 from src.web.deps import TOKEN_HEADER, Services
+from tests.access_support import sign_in
 from tests.test_failure_rig import BENCH_ENV, ENERGISED, MIN_RUN, OPERATOR, config_of, no_dsp
 from tests.test_web_api import TOKEN
 from tests.tls_support import (
@@ -246,7 +247,9 @@ async def start_session(console: Console, page: httpx.AsyncClient) -> None:
     await until(lambda: console.turning() >= MIN_RUN, "the shaft turning")
 
 
-async def attest(page: httpx.AsyncClient) -> None:
+async def attest(console: Console, page: httpx.AsyncClient) -> None:
+    """Sign the page's operator in (ANH-152), then attest the wiring."""
+    await sign_in(page, console.panel.services)
     attested = await page.post(
         "/api/safety/attest",
         json={"operator": OPERATOR, "sto_jumper_removed": True, "mushroom_wired_nc": True},
@@ -384,7 +387,7 @@ async def test_ex3_stalled_tls_clients_move_neither_the_tick_nor_either_stop_of_
             stalled = Stalled(console.port)
             runtime = console.panel.runtime
             async with page_of(console, material.client()) as page:
-                await attest(page)
+                await attest(console, page)
                 await start_session(console, page)
                 own = console.web.connections()
                 assert len(own) == 1, "the page holds one connection"
@@ -486,7 +489,7 @@ async def test_ex3_an_expired_certificate_never_keeps_a_session_from_being_stopp
             with pytest.raises(httpx.ConnectError, match="certificate has expired"):
                 await verifying.get("/healthz")
         async with page_of(console, unverified()) as page:
-            await attest(page)
+            await attest(console, page)
             await start_session(console, page)
             assert console.state() is RuntimeState.RUNNING
             stop = await page.post("/api/session/stop", json={"operator": OPERATOR})

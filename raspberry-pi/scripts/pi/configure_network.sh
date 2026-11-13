@@ -37,8 +37,9 @@ done
 port="$(value "$env_file" UI_PORT)"
 [[ "$port" =~ ^[0-9]{4,5}$ ]] && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || die 'UI_PORT must be 1024..65535'
 [ "$port" != 8123 ] || die 'UI_PORT 8123 is reserved for the bench tool'
-token="$(value "$env_file" UI_TOKEN)"
-[ "${#token}" -ge 16 ] || die 'configure a UI_TOKEN of at least 16 characters first'
+token="$(value "$env_file" DEVICE_TOKEN)"
+[ -n "$token" ] || token="$(value "$env_file" UI_TOKEN)"
+[ "${#token}" -ge 16 ] || die 'configure a DEVICE_TOKEN of at least 16 characters first'
 if systemctl is-active --quiet anheart.service; then
     die 'stop the console deliberately before changing its network'
 fi

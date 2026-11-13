@@ -37,6 +37,7 @@ from src.units import Monotonic, UnixMillis
 from src.web.app import create_app
 from src.web.deps import WebConfig
 from src.web.schemas import PanelRow, ServiceRow, StatusRow
+from tests.access_support import OPERATOR_ID, sign_in
 from tests.roster_support import RIDER_ID, listed
 from tests.test_failure_rig import (
     BENCH_ENV,
@@ -275,14 +276,17 @@ async def test_ex2_a_named_operator_puts_the_console_back_in_service_and_nothing
     await rig.panel.close()
 
 
-async def test_ex2_restoring_takes_a_name_and_refuses_a_console_in_service(
+async def test_ex2_restoring_takes_an_operator_and_refuses_a_console_in_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rig = console(tmp_path, deaths=THRESHOLD, monkeypatch=monkeypatch)
-    async with rig.http() as session:
-        nameless = await restore(session, operator="   ")
-        assert nameless.status_code == HTTPStatus.BAD_REQUEST
-        assert "operator name is required" in detail(nameless)
+    app = create_app(services=rig.panel.services, config=rig.config.web)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as session:
+        unsigned = await restore(session)
+        assert unsigned.status_code == HTTPStatus.UNAUTHORIZED
+        assert "connexion d'un operateur requise" in detail(unsigned)
         assert parse(PanelRow, await session.get("/api/panel")).service.out_of_service
     in_service = console(tmp_path / "in-service", monkeypatch=monkeypatch)
     async with in_service.http() as session:
@@ -312,6 +316,7 @@ async def test_ex2_restoring_takes_the_token_like_every_other_route(
         service = rig.panel.service
         assert service is not None
         assert service.status().out_of_service, "a caller without the token lifted nothing"
+        await sign_in(session, rig.panel.services, headers=auth())
         known = await session.post(
             "/api/service/restore", json={"operator": OPERATOR}, headers=auth()
         )
@@ -417,11 +422,17 @@ async def test_ex2_the_start_that_goes_out_of_service_writes_it_and_the_restorin
         ("warning", "system", "unclean_stop: demarrage apres arret non propre"),
         ("warning", "system", f"out_of_service: {OUT_OF_SERVICE}"),
     ]
-    signed = lines[2]
+    # The operator's sign-in, then their restoring, both by account (ANH-152).
+    assert (lines[2]["kind"], lines[2]["actor"], lines[2]["detail"]) == (
+        "operator_action",
+        OPERATOR_ID,
+        "console: connexion",
+    )
+    signed = lines[3]
     assert signed["kind"] == "operator_action"
     assert signed["detail"] == "service_restored: console remise en service"
-    assert str(signed["actor"]).startswith("op-")
-    assert OPERATOR not in json.dumps(lines), "an alias in the logbook, never the name"
+    assert signed["actor"] == OPERATOR_ID
+    assert OPERATOR not in json.dumps(lines), "an account in the logbook, never a name"
 
 
 async def test_ex2_a_start_after_a_clean_stop_writes_nothing(

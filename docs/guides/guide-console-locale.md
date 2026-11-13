@@ -262,7 +262,7 @@ l'emporte sur `.env`.**
 | `GEAR_RATIO` | non (défaut `49.79`) | | rapport du réducteur |
 | `UI_HOST` | non (défaut `127.0.0.1`) | | adresse d'écoute de la page |
 | `UI_PORT` | non (défaut `8080`) | jamais `8123` | port de la page |
-| `UI_TOKEN` | obligatoire si `UI_HOST` n'est pas `127.0.0.1` | au moins 16 caractères | mot de passe partagé de la page |
+| `DEVICE_TOKEN` (ancien nom `UI_TOKEN`, encore lu) | obligatoire si `UI_HOST` n'est pas `127.0.0.1` | au moins 16 caractères | jeton de l'appareil de la console ; les tablettes ont chacune le leur, créé sur le site (ANH-152) |
 | `UI_TLS_CERT`, `UI_TLS_KEY` | obligatoires si `UI_HOST` n'est pas `127.0.0.1` | deux chemins : le certificat de la console et sa clé privée | hors boucle locale, la page n'est servie qu'en TLS (`https://`) |
 | `UI_TLS_NAMES` | non | adresses et noms séparés par des virgules | les adresses auxquelles une tablette ouvre la console, celles du certificat |
 | `SENSORS` | non (défaut `ECG`) | liste parmi `ECG,EDA,SpO2,RESP,EMG,LUX` | capteurs affichés ; `ECG` toujours présent |
@@ -338,7 +338,7 @@ ERROR __main__: configuration: UI_PORT: 8123 est le port de scripts/bench_consol
   configuration du Pi) ;
 * depuis un autre appareil du réseau : **ce n'est pas encore possible sur un Pi
   installé.** Depuis le 10 octobre 2026, une console qui écoute ailleurs que sur
-  la boucle locale exige, en plus de `UI_TOKEN` (au moins 16 caractères), son
+  la boucle locale exige, en plus de `DEVICE_TOKEN` (au moins 16 caractères), son
   certificat (`UI_TLS_CERT`, `UI_TLS_KEY`) et ne sert sa page qu'en
   `https://` ; sans l'un ou l'autre elle refuse de démarrer. Le script qui fait
   ce certificat existe, mais l'installation du Pi ne le donne pas encore à la
@@ -1016,7 +1016,9 @@ Repères :
 
 1. Carte **Acces**, note `connecte a la machine` (ou l'erreur si l'API ne répond pas).
 2. Champ **Jeton partage** : laisser vide quand la console écoute en boucle locale
-   (`127.0.0.1`). Sinon, saisir la valeur de `UI_TOKEN`.
+   (`127.0.0.1`). Sinon, saisir la valeur de `DEVICE_TOKEN`, ou le jeton de la tablette
+   créé sur la fiche de la machine du site. Puis se connecter : choisir son nom, taper
+   son code (ANH-152, [console-locale.md, 18](../console-locale.md#18-connexion-de-lopérateur-anh-152)).
 3. Bouton **Utiliser ce jeton** : garde le jeton pour cet onglet seulement (il faut le
    ressaisir dans un nouvel onglet).
 4. Carte **Systeme** :
@@ -2184,7 +2186,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 |---|---|---|
 | ✔ `configuration: ARM_RADIUS_M: obligatoire, sans valeur par defaut ...` | rayon non fourni | ajouter `ARM_RADIUS_M=` avec la valeur mesurée |
 | ✔ `configuration: UI_PORT: 8123 est le port de scripts/bench_console.py` | port réservé à l'outil de banc | garder 8080 ou un autre port |
-| `configuration: UI_HOST/UI_PORT/UI_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback` | page ouverte au réseau sans jeton assez long | mettre un `UI_TOKEN` d'au moins 16 caractères |
+| `configuration: UI_HOST/UI_PORT/DEVICE_TOKEN: refusing to serve on '0.0.0.0' with a 5-character token: at least 16 characters are required off loopback` | page ouverte au réseau sans jeton assez long | mettre un `DEVICE_TOKEN` d'au moins 16 caractères |
 | `configuration: UI_HOST/UI_TLS_CERT/UI_TLS_KEY: refusing to serve the operator interface on '0.0.0.0' in clear HTTP: ...` | page ouverte au réseau sans certificat | revenir à `UI_HOST=127.0.0.1`, ou donner à la console son certificat ([pi-image.md](../pi-image.md#le-certificat-de-la-console)) |
 | `configuration: UI_TLS_CERT/UI_TLS_KEY: the certificate ... is not a file the console can see` (ou un autre motif) | le certificat ou sa clé ne peut pas être servi | lire le motif, qui nomme le fichier ([raspberry-pi.md, 12.5](../raspberry-pi.md#125-la-page-en-tls-hors-de-la-boucle-locale)) |
 | `configuration: MOTOR_BACKEND: '' : attendu 'sim' ou 'serial'` | variable absente ou fausse | la renseigner |
