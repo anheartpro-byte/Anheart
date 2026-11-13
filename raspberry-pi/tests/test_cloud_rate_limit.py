@@ -405,6 +405,24 @@ async def test_a_local_hold_changes_the_reason_but_keeps_the_server_429_states(
     assert paced.link.state is LinkState.REACHABLE
 
 
+async def test_a_heartbeat_held_here_names_no_server_response(tmp_path: Path) -> None:
+    """The reason under the pill says the heartbeat was held here, not ``HTTP 429``."""
+    time = clock()
+    server = Dashboard()
+    sync = sync_over(tmp_path, time, PacedTransport(server, time))
+    server.answer(HEARTBEAT, limited(Seconds(60.0)))
+
+    await sync.step()
+    assert sync.link.state is LinkState.REACHABLE
+    assert sync.link.detail == "heartbeat : HTTP 429 (rate_limited)"
+
+    time.advance(HEARTBEAT_PERIOD)
+    await sync.step()
+    assert len(server.to(HEARTBEAT)) == 1, "held here, not sent"
+    assert sync.link.state is LinkState.REACHABLE
+    assert sync.link.detail == "heartbeat : requete retenue ici, non envoyee (rate_limited)"
+
+
 @pytest.mark.parametrize(
     "refused",
     [

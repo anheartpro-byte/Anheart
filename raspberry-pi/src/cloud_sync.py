@@ -652,6 +652,28 @@ class PacedTransport:
         return result
 
 
+def held_here(refused: Refused) -> bool:
+    """Whether ``refused`` is :class:`PacedTransport`'s own answer: nothing was sent.
+
+    A server using these exact words would only change the wording on the
+    console and in the log, never the state of the link.
+    """
+    return (
+        refused.status == TOO_MANY_REQUESTS
+        and refused.code == RATE_LIMITED
+        and refused.detail == HELD_HERE
+    )
+
+
+def refusal_words(refused: Refused) -> str:
+    """What the console shows of a refusal: its status and stable code, never the server's
+    sentence; a request held here names no server response."""
+    if held_here(refused):
+        return "requete retenue ici, non envoyee (rate_limited)"
+    words = f"HTTP {refused.status}"
+    return words if refused.code is None else f"{words} ({refused.code})"
+
+
 LOGGED_WORDS_LIMIT: Final[int] = 200
 """Most characters the dashboard's own words take in the log, quotes and escapes included."""
 
@@ -1481,7 +1503,7 @@ class CloudSync:
                     case Unreachable():
                         self._link.heartbeat_failed(error.detail)
                     case Refused():
-                        self._link.heartbeat_failed(f"HTTP {error.status}")
+                        self._link.heartbeat_failed(refusal_words(error))
                     case _ as unreachable:
                         assert_never(unreachable)
             case _ as unreachable:
@@ -1940,17 +1962,7 @@ class CloudSync:
         other refusal (a 404 or a 400 with no stable code) could come from
         anything that listens at the address: it proves nothing.
         """
-        words = f"HTTP {refused.status}"
-        if refused.code is not None:
-            words = f"{words} ({refused.code})"
-        # PacedTransport's synthetic refusal. A server using these exact words
-        # would only change the wording here and in the log, never the state.
-        if (
-            refused.status == TOO_MANY_REQUESTS
-            and refused.code == RATE_LIMITED
-            and refused.detail == HELD_HERE
-        ):
-            words = "requete retenue ici, non envoyee (rate_limited)"
+        words = refusal_words(refused)
         if refused.code == CONTRACT_UNSUPPORTED:
             sentence = unsupported_refusal(refused.supported)
             self._link.contract_refused(now, sentence, contract=contract)
@@ -1969,11 +1981,7 @@ class CloudSync:
         if refused != self._last_refused:
             self._last_refused = refused
             code = "sans code" if refused.code is None else refused.code
-            if (
-                refused.status == TOO_MANY_REQUESTS
-                and refused.code == RATE_LIMITED
-                and refused.detail == HELD_HERE
-            ):
+            if held_here(refused):
                 _logger.warning("dashboard: a request held here, not sent (%s)", code)
             elif include_words:
                 _logger.warning(

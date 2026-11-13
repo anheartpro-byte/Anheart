@@ -1591,7 +1591,7 @@ class LocalPanel:
         Before anything: a console out of service arms nothing. After the
         ceiling, the rider: a person on board is a rider the riders' list
         holds now, at least the medical file's ``min_rider_age``
-        (:meth:`_on_board_refusal`), and
+        (:meth:`_cleared_on_board`), and
         the bench names nobody (:meth:`_manual_rider`).
 
         A bench launch from the dashboard the operator confirmed here
@@ -1619,9 +1619,9 @@ class LocalPanel:
         rider = named.value
         fitness_version = None
         if rider is not None:
-            on_board = self._on_board_refusal(rider)
+            on_board = self._cleared_on_board(rider)
             if isinstance(on_board, Err):
-                self._refuse_start(command, on_board.error)
+                self._refuse_start(command, describe_on_board_refusal(on_board.error))
                 return
             fitness_version = on_board.value
         blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
@@ -1697,7 +1697,7 @@ class LocalPanel:
             self._on_board = None
             self._feedback.ended(reader)
 
-    def _on_board_refusal(self, rider: Rider) -> Result[str, str]:
+    def _cleared_on_board(self, rider: Rider) -> Result[str, OnBoardRefusal]:
         """The admitted questionnaire version, or why this manual start is refused.
 
         The minimum age of a programmed session, counted the same way from the
@@ -1712,12 +1712,12 @@ class LocalPanel:
                 rider.name, rider_words(age.value) if isinstance(age, Ok) else ""
             )
         if isinstance(age, Err):
-            return Err(describe_passenger_refusal(age.error))
+            return Err(age.error)
         cleared = cleared_to_board(rider, self._clock.unix_millis())
         if isinstance(cleared, Err):
-            return Err(describe_passenger_refusal(cleared.error))
-        too_young = rider_age_refusal(age.value, self._config.min_rider_age)
-        return cleared if too_young is None else Err(too_young)
+            return Err(cleared.error)
+        young = too_young(age.value, self._config.min_rider_age)
+        return cleared if young is None else Err(young)
 
     def _manual_rider(self, command: StartManual) -> Result[Rider | None, PassengerRefusal]:
         """Who rides a manual session: nobody on the bench, a rider of the list on board.
@@ -2068,13 +2068,21 @@ class LocalPanel:
             self._recorder.note_sensors(readings)
 
     async def cloud_step(self) -> None:
-        """One dashboard step. A failure here is logged and never ends the console.
+        """One dashboard step: heartbeat, programmes, poll, the sending, then the feedback.
 
-        The only task allowed to swallow an exception, and deliberately so: the
-        dashboard is an observer, and a bug in reporting to it must not bring a
-        running session down (every other task failing stops the console, which
-        ramps the machine down). The link's own calls return ``Result``; this
-        fence is for what nobody predicted.
+        Every :data:`CLOUD_PERIOD` at most: a step that waits on the sending
+        (a slow disk, a slow upload) delays the next one by as much. What must
+        not wait behind it has a task of its own: the stop watch
+        (:meth:`cloud_stop_step`), the riders' list, the catalogue and the
+        operators' list.
+
+        A failure here is logged and never ends the console. The observers'
+        tasks (this one, those above and the pre-flight's) are the only ones
+        that swallow an exception, and deliberately so: the dashboard is an
+        observer, and a bug in reporting to it must not bring a running session
+        down (every other task failing stops the console, which ramps the
+        machine down). The link's own calls return ``Result``; this fence is
+        for what nobody predicted.
         """
         cloud = self._cloud
         if cloud is None:
@@ -3195,12 +3203,37 @@ def rider_age_refusal(age: int | None, minimum: int) -> str | None:
     """
     if age is None:
         return "demarrage refuse : age du passager requis pour une seance programmee"
-    if age < minimum:
-        return (
-            f"demarrage refuse : {rider_words(age)}, minimum {minimum} ans "
-            "(min_rider_age des parametres medicaux)"
-        )
-    return None
+    young = too_young(age, minimum)
+    return None if young is None else describe_on_board_refusal(young)
+
+
+@dataclass(frozen=True, slots=True)
+class TooYoung:
+    """A rider younger than the medical file's ``min_rider_age``."""
+
+    age: int
+    minimum: int
+
+
+type OnBoardRefusal = PassengerRefusal | TooYoung
+"""Why a session refuses the person on board: :func:`describe_on_board_refusal` says it."""
+
+
+def too_young(age: int, minimum: int) -> TooYoung | None:
+    """A rider of ``age`` below ``minimum`` (``min_rider_age``), or ``None``."""
+    return TooYoung(age, minimum) if age < minimum else None
+
+
+def describe_on_board_refusal(refusal: OnBoardRefusal) -> str:
+    """One line for a start refused for the person on board. Never the rider's name."""
+    match refusal:
+        case TooYoung(age=age, minimum=minimum):
+            return (
+                f"demarrage refuse : {rider_words(age)}, minimum {minimum} ans "
+                "(min_rider_age des parametres medicaux)"
+            )
+        case _:
+            return describe_passenger_refusal(refusal)
 
 
 def rider_words(age: int) -> str:
