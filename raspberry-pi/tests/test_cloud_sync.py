@@ -2260,6 +2260,35 @@ async def test_a_session_ended_on_a_stop_holds_until_a_poll_asked_after_its_end(
     assert unreported(r.sync) is None
 
 
+async def test_an_unreadable_count_after_a_stop_holds_until_a_readable_one_or_the_operator(
+    tmp_path: Path,
+) -> None:
+    """ANH-145: only a count read is one asked after the stop's end; the operator may
+    accept, by name, that the dashboard does not count it."""
+    r = rig(tmp_path)
+    r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-1"}))
+    r.dashboard.answer("/api/machine/training/status", status_answer())
+    assert r.sync.acknowledge_unreported_stop(OPERATOR) is None, "nothing held"
+    r.runtime.state = RuntimeState.RUNNING
+    r.sync.session_started(manual(r.clock))
+    for _ in range(3):
+        await r.step()
+    r.runtime.state = RuntimeState.FINISHED
+    r.runtime.end_reason = EndReason.TICK_EXCEPTION
+    await r.step()
+    assert r.dashboard.to(ENDED)[-1]["reason"] == "tick_exception"
+    r.dashboard.answer(
+        POLL_PATH,
+        ok({SERVER_VERSION_FIELD: CONTRACT_VERSION, "session": None, "incidents_open_high": "x"}),
+    )
+    await r.step(float(POLL_PERIOD))
+    await r.step(float(POLL_PERIOD))
+    assert r.sync.incidents_open_high is None
+    assert unreported(r.sync) == STOP_NOT_COUNTED
+    assert r.sync.acknowledge_unreported_stop(OPERATOR) == STOP_NOT_COUNTED
+    assert unreported(r.sync) is None
+
+
 async def test_an_auto_session_registers_its_programme(tmp_path: Path) -> None:
     r = rig(tmp_path)
     profile = r.panel.services.store.list_profiles()[0]

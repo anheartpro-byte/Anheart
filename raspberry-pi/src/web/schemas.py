@@ -368,6 +368,13 @@ class RestoreBody:
 
 
 @dataclass(frozen=True, slots=True)
+class StopsAcknowledgeBody:
+    """Accept, by name, that the dashboard may not count a stop the console holds (ANH-145)."""
+
+    operator: str
+
+
+@dataclass(frozen=True, slots=True)
 class AttestBody:
     """Confirm, by name, that a real emergency stop is wired in.
 

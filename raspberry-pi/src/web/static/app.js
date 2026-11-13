@@ -1090,6 +1090,10 @@ function renderPreflight(row) {
   var rows = el("preflight-rows");
   rows.textContent = "";
   el("preflight-run").disabled = !row;
+  var held = row ? row.unreported_stop : null;
+  el("preflight-held").hidden = !held;
+  el("preflight-ack").hidden = !held;
+  text(el("preflight-held"), held ? "Personne a bord retenue : " + held : "");
   if (!row) {
     pill(el("preflight-state"), "aucun", "");
     text(el("preflight-summary"), "cette console ne juge aucun pre-vol");
@@ -1126,6 +1130,21 @@ function loadPreflight() {
   return api("/api/preflight").then(renderPreflight).catch(function () {
     /* the banner and the token note already say the API is unreachable */
   });
+}
+
+/*
+  ANH-145: the operator accepts, by name, that the dashboard may not count a session
+  that ended on a stop; a person on board is no longer held for it.
+*/
+function doAcknowledgeStops() {
+  api("/api/preflight/acknowledge", { method: "POST", body: { operator: operatorName() } })
+    .then(function (row) {
+      ok(el("preflight-note"), "seance non recue acquittee : elle ne retient plus une personne a bord");
+      renderPreflight(row);
+    })
+    .catch(function (error) {
+      problem(el("preflight-note"), error);
+    });
 }
 
 function doRunPreflight() {
@@ -4148,6 +4167,7 @@ function start() {
     showView("preflight");
   };
   el("preflight-run").onclick = doRunPreflight;
+  el("preflight-ack").onclick = doAcknowledgeStops;
   el("run-goto-safety").onclick = function () {
     showView("safety");
   };

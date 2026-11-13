@@ -106,6 +106,7 @@ from src.record.upload import (
     reference_in,
 )
 from src.result import Err, Ok, Result
+from src.training.runtime import EndReason
 from src.units import Monotonic, Seconds, UnixMillis, elapsed
 
 _logger: Final[logging.Logger] = logging.getLogger(__name__)
@@ -409,16 +410,26 @@ class _Step(Enum):
     """Set aside: it is taken up again at the next start of the console."""
 
 
-STOP_ENDS: Final[frozenset[str]] = frozenset({"emergency_stop", "safety_verdict", "tick_exception"})
+STOP_ENDS: Final[frozenset[str]] = frozenset(
+    reason.value
+    for reason in (EndReason.EMERGENCY_STOP, EndReason.SAFETY_VERDICT, EndReason.TICK_EXCEPTION)
+)
 """The ends that open an incident on the dashboard (ANH-145): until it has the end of a
 session that ended so, and its events, the count of serious incidents it announces does
-not count it."""
+not count it. Pinned to ``incidents.stop_ends`` of the shared contract, which Convex reads."""
 
 UNKNOWN_END: Final[str] = (
     "seance(s) d'une execution precedente de la console pas encore recue(s) par le tableau "
     "de bord : leur fin est inconnue"
 )
 """Why :attr:`RecordUplink.unreported_stop` holds for a record whose end is not read yet."""
+
+LOST_STOP: Final[str] = (
+    "seance mal terminee ou de fin inconnue que le tableau de bord ne recevra pas ({why}) : "
+    "a acquitter a la console, page Pre-vol"
+)
+"""Why :attr:`RecordUplink.unreported_stop` holds, until the operator acknowledges it, for a
+session that ended on a stop (or whose end is unknown) and that the sending gave up on."""
 
 _NOTHING_TO_DECLARE: Final[Declaration] = Declaration(kind="auto", operator="")
 """For a launch that never started: the dashboard already knows it."""
@@ -479,6 +490,22 @@ def _end_word(reason: str) -> str:
     return reason.partition(":")[0].strip()
 
 
+def _stop_or_unknown(reason: str | None) -> bool:
+    """Whether an end may open an incident: one of :data:`STOP_ENDS`, or not known
+    (``None``: still running, or of an earlier run; or :data:`UNOBSERVED_END`)."""
+    return reason is None or reason == UNOBSERVED_END or _end_word(reason) in STOP_ENDS
+
+
+def _reason_of(owed: _Owed) -> str | None:
+    """How the runtime said ``owed`` ended; ``None`` when it did not say."""
+    return None if owed.ended is None else owed.ended.end.reason
+
+
+def _identity(owed: _Owed) -> str:
+    """Which session ``owed`` is, as the list of records waiting names it."""
+    return owed.local_ref if owed.record is None else owed.record.name
+
+
 def _halted(wait: _Wait) -> _Step:
     """What a pass comes to when a request was not acknowledged."""
     return _Step.HELD if wait is _Wait.HOLD else _Step.BUSY
@@ -528,6 +555,7 @@ class RecordUplink:
         "_io",
         "_last_batch",
         "_live",
+        "_lost",
         "_owed_queue",
         "_said",
         "_scan_at",
@@ -537,6 +565,7 @@ class RecordUplink:
         "_start_refused",
         "_stop_told",
         "_unwritten",
+        "_waived",
     )
 
     def __init__(
@@ -573,6 +602,10 @@ class RecordUplink:
         self._unwritten: bool = False
         # When the dashboard last acknowledged the end of a session ended on a stop.
         self._stop_told: Monotonic | None = None
+        # A stop the sending gave up on, until the operator acknowledges it (ANH-145).
+        self._lost: str | None = None
+        # The sessions the operator acknowledged the dashboard may not count.
+        self._waived: frozenset[str] = frozenset()
 
     # --- read access -----------------------------------------------------
 
@@ -651,19 +684,55 @@ class RecordUplink:
         end is known only once its record is read, so it counts as one until the
         dashboard acknowledged its end. ``None`` once every such end was acknowledged.
         Memory only (ANH-145, the pre-flight's ``incidents`` control).
+
+        And, before all, a session that ended so (or whose end is unknown) and that
+        the sending gave up on, the dashboard refusing it for good or its record
+        unreadable (:data:`LOST_STOP`): it holds until the operator acknowledges it
+        (:meth:`acknowledge`), as do the sessions still owed when they did.
         """
+        if self._lost is not None:
+            return self._lost
         for owed in (self._catching, *self._owed_queue):
-            if owed is None or owed.refused_launch or owed.cursor.end == "sent":
+            if (
+                owed is None
+                or owed.refused_launch
+                or owed.cursor.end == "sent"
+                or _identity(owed) in self._waived
+            ):
                 continue
-            ended = owed.ended
-            if ended is None:
+            reason = _reason_of(owed)
+            if reason is None or reason == UNOBSERVED_END:
                 return UNKNOWN_END
-            word = _end_word(ended.end.reason)
+            word = _end_word(reason)
             if word in STOP_ENDS:
                 return f"seance terminee sur {word} pas encore recue par le tableau de bord"
-        if self._backlog or (self._source is not None and not self._scanned):
+        if any(name not in self._waived for name in self._backlog) or (
+            self._source is not None and not self._scanned
+        ):
             return UNKNOWN_END
         return None
+
+    def acknowledge(self) -> None:
+        """The operator accepts that the dashboard may not count the stops held now: the
+        one given up on, those still owed, and a count not asked again since the last
+        end it acknowledged. A session ended after this holds again."""
+        held = {_identity(owed) for owed in (self._catching, *self._owed_queue) if owed}
+        self._waived = self._waived | held | set(self._backlog)
+        self._lost = None
+        self._stop_told = None
+
+    def _lose(self, identity: str, why: str, reason: str | None) -> None:
+        """The sending gives up on a session: if it may have opened an incident, the
+        pre-flight holds a person on board until the operator acknowledges it."""
+        if not _stop_or_unknown(reason) or identity in self._waived or self._lost is not None:
+            return
+        _logger.warning(
+            "dashboard: %s (%s), which may have ended on a stop: a person on board waits for "
+            "the operator's acknowledgement",
+            why,
+            identity,
+        )
+        self._lost = LOST_STOP.format(why=why)
 
     @property
     def stop_told_at(self) -> Monotonic | None:
@@ -792,6 +861,7 @@ class RecordUplink:
                     "dashboard: the end of %s could not be delivered and is given up",
                     waiting.cursor.session_id or waiting.local_ref,
                 )
+                self._lose(_identity(waiting), "fin abandonnee", _reason_of(waiting))
             else:
                 self._queue(waiting.record.name)
         self._catching = owed
@@ -859,6 +929,7 @@ class RecordUplink:
                     opened.error.detail,
                 )
                 self._forget(name)
+                self._lose(name, "enregistrement illisible", None)
             return None  # a disk that is only slow: the same record at the next step
         self._forget(name)
         return self._resumed(opened.value, source)
@@ -1107,6 +1178,7 @@ class RecordUplink:
         if isinstance(answer, Refusal):
             # It cannot be declared, so nothing of it can be sent: it is closed here.
             owed.cursor = replace(owed.cursor, state="complete", refused=owed.cursor.refused + 1)
+            self._lose(_identity(owed), "declaration refusee", _reason_of(owed))
             return _Step.DONE
         found = answer.document.get("sessionId")
         if not isinstance(found, str):
@@ -1316,7 +1388,9 @@ class RecordUplink:
         owed.cursor = replace(
             owed.cursor, end="sent", refused=owed.cursor.refused + _refused(answer)
         )
-        if _end_word(end.reason) in STOP_ENDS:
+        if isinstance(answer, Refusal):
+            self._lose(_identity(owed), "fin refusee", end.reason)
+        elif _end_word(end.reason) in STOP_ENDS:
             self._stop_told = self._clock.monotonic()
         return None
 
@@ -1398,6 +1472,7 @@ class RecordUplink:
             session_id,
             error.detail,
         )
+        self._lose(_identity(owed), "enregistrement illisible", None)
         return _Step.DROPPED
 
     # --- the two things every pass does -------------------------------------

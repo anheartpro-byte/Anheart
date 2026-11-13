@@ -52,11 +52,13 @@ from src.record_uplink import (
     EVENTS_RETRY_PERIOD,
     LIST_LOST,
     LOCAL_PATH,
+    LOST_STOP,
     MAX_REFUSALS,
     RECORD_UNREADABLE,
     RETRY_PERIOD,
     START_PATH,
     START_UNKNOWN,
+    STOP_ENDS,
     TELEMETRY_PATH,
     TELEMETRY_PERIOD,
     UNKNOWN_END,
@@ -85,6 +87,7 @@ from tests.record_uplink_support import (
     recording,
     tie,
 )
+from tests.test_contract import shared
 
 START = EPOCH_MS + 100_000
 """When a session armed at the first instant of a test started, on the machine's clock."""
@@ -2956,3 +2959,114 @@ async def test_the_records_of_an_earlier_run_are_unreported_until_their_end_is_a
     await b.run(int(RETRY_PERIOD) + 5)
     assert cursor_of_record(left.path).end == "sent"
     assert b.unreported_stop() is None
+
+
+def test_the_ends_that_hold_are_the_runtime_s_and_the_contract_s() -> None:
+    incidents = cast("Mapping[str, object]", shared()["incidents"])
+    assert set(cast("list[str]", incidents["stop_ends"])) == STOP_ENDS
+    assert {"emergency_stop", "safety_verdict", "tick_exception"} == STOP_ENDS
+
+
+# The reviewers' cases (ANH-145): the sending gives up on a stop, the hold stays.
+
+GONE = Refusal("session_not_found (HTTP 404): gone", final=True)
+
+
+async def test_a_stop_whose_declaration_is_refused_for_good_holds_until_acknowledged(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path, recording=False)
+    b.link.answer(LOCAL_PATH, DOWN)
+    b.uplink.begin(armed(b.clock))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop: ecran"))
+    await b.step()
+    b.link.answer(LOCAL_PATH, Refusal("machine_not_found (HTTP 400): no", final=True))
+    await b.run(int(RETRY_PERIOD) + 5)
+    assert b.link.to(END_PATH) == [], "the dashboard never heard of it"
+    assert b.unreported_stop() == LOST_STOP.format(why="declaration refusee")
+    b.uplink.acknowledge()
+    assert b.unreported_stop() is None
+
+
+async def test_a_stop_whose_end_is_refused_for_good_holds_and_is_not_told(tmp_path: Path) -> None:
+    b = bench(tmp_path, recording=False)
+    b.uplink.begin(armed(b.clock, remote="k17remote", kind="auto"))
+    await b.step()
+    b.link.answer(END_PATH, GONE)
+    b.uplink.finished(RuntimeEnd(failed=True, reason="tick_exception: boom"))
+    await b.run(5)
+    assert len(b.link.to(END_PATH)) == 1
+    assert b.uplink.stop_told_at is None, "a refused end is no end the dashboard has"
+    assert b.unreported_stop() == LOST_STOP.format(why="fin refusee")
+
+
+async def test_a_refused_end_that_was_no_stop_holds_nothing(tmp_path: Path) -> None:
+    b = bench(tmp_path, recording=False)
+    b.uplink.begin(armed(b.clock, remote="k17remote", kind="auto"))
+    await b.step()
+    b.link.answer(END_PATH, GONE)
+    b.uplink.finished(RuntimeEnd(failed=False, reason="programme_complete"))
+    await b.run(5)
+    assert b.unreported_stop() is None
+
+
+async def test_a_recordless_stop_given_up_for_the_next_end_holds(tmp_path: Path) -> None:
+    b = bench(tmp_path, recording=False)
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop: ecran"))
+    await b.step()
+    b.uplink.begin(armed(b.clock, remote="k2"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=False, reason="operator_stop: fini"))
+    assert b.unreported_stop() == LOST_STOP.format(why="fin abandonnee")
+
+
+async def test_an_end_the_link_did_not_see_is_of_unknown_end(tmp_path: Path) -> None:
+    b = bench(tmp_path, recording=False)
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
+    await b.step()
+    # The runtime ended k1 and armed the next before the link's next step.
+    b.uplink.begin(armed(b.clock, remote="k2"))
+    assert b.unreported_stop() == UNKNOWN_END
+
+
+async def test_an_unreadable_record_of_an_earlier_run_holds_until_acknowledged(
+    tmp_path: Path,
+) -> None:
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-old")
+    left.tick(3.0)
+    left.close("emergency_stop", stop=None)
+    tie(left.path, Cursor(session_id="cloud-old"))
+    (left.path / "manifest.json").write_text("{not json", encoding="utf-8")
+    b = old.restarted()
+    b.link.answer(END_PATH, DOWN)
+    await b.run(5)
+    assert b.link.to(END_PATH) == []
+    assert b.unreported_stop() == LOST_STOP.format(why="enregistrement illisible")
+    b.uplink.acknowledge()
+    assert b.unreported_stop() is None
+
+
+async def test_an_acknowledgement_waives_what_is_owed_then_and_nothing_after(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path, recording=False)
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.begin(armed(b.clock))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="safety_verdict"))
+    await b.step()
+    assert b.unreported_stop() is not None
+    b.uplink.acknowledge()
+    assert b.unreported_stop() is None, "the operator accepted it: a revoked key, say"
+    b.uplink.begin(armed(b.clock, remote="k2", kind="auto"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    assert b.unreported_stop() == (
+        "seance terminee sur emergency_stop pas encore recue par le tableau de bord"
+    )

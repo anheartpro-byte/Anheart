@@ -1058,6 +1058,17 @@ class CloudSync:
             return STOP_NOT_COUNTED
         return None
 
+    def acknowledge_unreported_stop(self, operator: str) -> str | None:
+        """The operator, named, accepts that the dashboard may not count the stops held
+        now (:attr:`unreported_stop`): a person on board is no longer held for them. What
+        was acknowledged; ``None`` when nothing was held. Logged by name."""
+        held = self.unreported_stop
+        if held is None:
+            return None
+        self._uplink.acknowledge()
+        _logger.warning("dashboard: %s acknowledged a stop it may not count: %s", operator, held)
+        return held
+
     @property
     def incidents_open_high(self) -> int | None:
         """The serious incidents of this machine open or analysed, as the last compatible
@@ -1485,13 +1496,13 @@ class CloudSync:
             self._refuse_server(refusal, launch)
             return
         self._incompatible = None
-        self._counted_at = now
         incidents = polled.value.get("incidents_open_high")
-        self._incidents_open_high = (
-            incidents
-            if isinstance(incidents, int) and not isinstance(incidents, bool) and incidents >= 0
-            else None
-        )
+        if isinstance(incidents, int) and not isinstance(incidents, bool) and incidents >= 0:
+            self._incidents_open_high = incidents
+            # Only a count read is one asked after a stop's end: an unreadable one is none.
+            self._counted_at = now
+        else:
+            self._incidents_open_high = None
         if launch is None:
             # Left unanswered, its start may be held active by the dashboard: kept for a
             # repeated confirmation, until its hold is over (`_process_confirmation`).
