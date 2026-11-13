@@ -85,6 +85,10 @@ patient : ni entrée de menu, ni bouton (`lib/organizationAccess.ts`).
 | **gestionnaire** | Voir et gérer **ses** machines (liées par l'admin) et **ses** patients. Créer des patients. Régler leur physiologie. Accorder / retirer le droit de lancement sur ses machines, **à ses patients**. Lancer une séance auto sur ses machines, pour lui-même ou un de ses patients. |
 | **user** (patient) | Voir ses propres séances et rapports. Lancer une séance auto **pour lui-même seulement**, sur les machines où un gestionnaire ou un admin lui a donné le droit. Arrêter sa propre séance. |
 
+Le **catalogue de programmes** (ANH-137) n'est écrit que par l'admin
+Anheart ; tous les autres rôles lisent les programmes publiés, sans pouvoir
+les modifier ([programmes.md](programmes.md)).
+
 Le journal **Audit** est réservé aux administrateurs : l'admin Anheart voit
 toutes les organisations et les actions globales ; l'admin d'organisation
 (`org_admin`) ne voit que son organisation. Gestionnaire et patient n'y ont
@@ -255,8 +259,8 @@ Barre latérale (`components/dashboard/AppSidebar.tsx`) :
 | Administration | Gestionnaires, Membres, Utilisateurs | admin, admin d'organisation |
 | Administration | Audit | admin, admin d'organisation |
 | Administration | Paramètres | admin |
-| Gestion | Patients, Machines, Mes machines, Sessions, Rapports, Alertes | admin, admin d'organisation, gestionnaire |
-| Ma Santé | Mes machines, Sessions, Rapports | patient |
+| Gestion | Patients, Machines, Mes machines, Sessions, Rapports, Alertes, Programmes | admin, admin d'organisation, gestionnaire |
+| Ma Santé | Mes machines, Sessions, Rapports, Programmes | patient |
 
 Tant que le compte se charge, ou quand le serveur n'accepte aucune
 organisation pour l'appel (§2), seule l'entrée « Tableau de bord » est
@@ -971,6 +975,52 @@ filtres envoyés, pagination, libellés, export filtré par lots de 200 et
 plafond de 10 000 lignes avec son message. Cette preuve utilise un DOM
 simulé et Convex remplacé ; la vérification de bout en bout dans un
 navigateur reste bloquée par ANH-83.
+
+### Programmes : `/fr/dashboard/programmes`
+
+Le catalogue de programmes de séance (ANH-137, règles et cycle de vie dans
+[programmes.md](programmes.md)). Tout compte dont l'organisation est
+acceptée par le serveur l'ouvre ; la page lit `programmes.list`.
+
+- **Admin d'organisation, gestionnaire, patient** : les programmes publiés,
+  en lecture seule (nom, identifiant, état, zone, durée, vitesse maximale en
+  tr/min du bras et du moteur, révision) et, par « Voir », la version des
+  paramètres médicaux, la signature médicale et l'aperçu.
+- **Admin Anheart** : tous les programmes, avec ces actions selon l'état.
+  « Nouveau programme » ouvre un brouillon prérempli avec les valeurs du
+  `standard_30_min` livré sur le Pi ; « Dupliquer » ouvre un brouillon copié
+  (identifiant suffixé `_copie`, nom suivi de « (copie) ») ; sur un
+  brouillon, « Modifier », le dépôt du rapport de simulation (PDF ou JSON,
+  10 Mio au plus, URL de dépôt de `machineRegistry.generateUploadUrl`) et
+  « Valider » ; « Publier » sur un programme validé, « Retirer » sur un
+  programme publié ; le lien « Rapport » ouvre le rapport joint.
+
+Le formulaire (`components/programmes/ProgrammeEditor.tsx`) reprend les
+champs du Pi, chacun suivi de son nom dans `plan.py`, durées en secondes,
+vitesses en tr/min moteur. À chaque saisie il affiche le verdict de la
+validation du Pi, dans les mots du Pi (`training profile refused:
+zone_above_subject_ceiling`) : c'est la fonction que le serveur exécute,
+`programmeRefusal` de `convex/lib/programmes.ts`. Un programme refusé ne peut
+pas être enregistré ; le serveur le refuserait de même (`programme_refused`).
+Un nombre s'écrit en chiffres seulement : sans signe, espace, exposant ni
+écriture hexadécimale ; une durée ou la fraction d'échauffement peut avoir une
+partie décimale après une seule virgule ou un seul point (« 1,800 » s'y lit
+1,8 s), un seuil ou une vitesse non. Tout autre texte est signalé sous le
+formulaire, avec le nom du champ, et bloque l'enregistrement. Chaque
+« Nouveau programme », « Dupliquer » ou « Modifier » ouvre un formulaire neuf.
+
+L'aperçu (`components/programmes/ProgrammePreview.tsx`) trace les cinq
+phases sur la durée totale, le maintien étant ce que la durée totale laisse,
+la zone sur l'échauffement et le maintien, et les paliers FC max et critique
+et la FC max du sujet sur toute la séance ; sous la courbe, la durée de
+chaque phase. Des durées incohérentes (maintien nul ou négatif, nombre
+illisible) n'ont pas d'aperçu.
+
+« Valider » ouvre la double validation : signataire médical, date de sa
+signature et note. Le serveur refuse l'auteur ou le dernier rédacteur du
+brouillon, un brouillon sans rapport, et toute validation tant qu'aucune
+version des paramètres médicaux n'est enregistrée, ce qui est le cas en
+production jusqu'à ANH-98 ; chaque refus est affiché par son message traduit.
 
 ### Paramètres : `/fr/dashboard/settings`
 
@@ -1754,6 +1804,7 @@ Pièges :
 | Questionnaire d'aptitude | Le questionnaire 0.1.0 contient des questions provisoires [MED] ; le médecin doit les remplacer par le contenu signé (ANH-98). |
 | Texte de consentement | Le texte 0.1.0 est provisoire et non valide juridiquement ; il doit être remplacé après ANH-87b. Les avis d'hébergement et de rétention des réponses restent à traiter dans ANH-172. |
 | Signature à la console | La signature est disponible sur le site seulement. La console ne propose pas de signer un consentement. |
+| Catalogue de programmes (ANH-137) | Page, formulaire et aperçu testés dans le DOM simulé, Convex remplacé ; le serveur testé en mémoire. **Jamais vus dans un navigateur ni contre un vrai serveur.** La simulation n'est pas lancée depuis le site : le rapport est joint à la main (`workflow_dispatch` à venir, [programmes.md](programmes.md#rapport-de-simulation)). Les programmes ne partent pas encore vers les machines (ANH-138). |
 | Retour du passager (ANH-146) | Carte, rapport, colonne de l'historique et export CSV testés dans le DOM simulé, Convex remplacé ; le serveur testé en mémoire. **Jamais vus dans un navigateur ni contre un vrai serveur.** Les libellés de l'échelle sont provisoires, sans validité médicale (ANH-98). L'avis sur les données de santé (ANH-172) n'est pas rendu, et l'export devra s'y conformer. |
 | Aptitude et consentement à l'armement | Depuis le contrat 1.6, le serveur les contrôle au lancement depuis le site et à l'armement. Un passager devenu non prêt pendant l'attente est refusé avec sa raison (ANH-143). Tests en mémoire, jamais sur une vraie machine. |
 | Aptitude et consentement au départ de la console | Depuis le contrat 1.6, la console les contrôle avant tout départ avec personne à bord, pour un programme ou une séance manuelle `occupied`. Tests avec variateur simulé, jamais sur une vraie machine ; limites de fraîcheur dans [console-locale.md](console-locale.md). |

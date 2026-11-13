@@ -540,6 +540,93 @@
     "stopRequestSent": "Demande envoyée. L'état de la séance s'affiche sur cette page.",
     "done": "Action effectuée."
   },
+  "programmes": {
+    "title": "Programmes",
+    "description": "Le catalogue des programmes de séance d'Anheart. Seule l'équipe Anheart les écrit ; un programme ne se valide que par un second admin, avec la signature médicale et le rapport de simulation. Les organisations utilisent ceux qui sont publiés.",
+    "readOnly": "Les programmes publiés par Anheart, en lecture seule.",
+    "empty": "Aucun programme.",
+    "zone": "{low} à {high} bpm",
+    "maxRpm": "{arm} tr/min bras ({motor} tr/min moteur)",
+    "copyName": "{name} (copie)",
+    "medicalVersion": "Paramètres médicaux {version}",
+    "signedOff": "signature médicale de {by} le {at}",
+    "saved": "Brouillon enregistré.",
+    "attached": "Rapport de simulation joint.",
+    "validated": "Programme validé.",
+    "published": "Programme publié.",
+    "retired": "Programme retiré.",
+    "columns": {
+      "name": "Programme",
+      "status": "État",
+      "zone": "Zone",
+      "duration": "Durée",
+      "maxRpm": "Vitesse max",
+      "revision": "Révision",
+      "actions": "Actions"
+    },
+    "status": {
+      "draft": "Brouillon",
+      "validated": "Validé",
+      "published": "Publié",
+      "retired": "Retiré"
+    },
+    "actions": {
+      "new": "Nouveau programme",
+      "view": "Voir",
+      "duplicate": "Dupliquer",
+      "edit": "Modifier",
+      "attach": "Rapport de simulation (PDF ou JSON)",
+      "validate": "Valider",
+      "publish": "Publier",
+      "retire": "Retirer",
+      "report": "Rapport"
+    },
+    "editor": {
+      "invalid": "Nombre invalide : {fields}. Des chiffres seulement, avec au plus une virgule ou un point décimal pour les durées et la fraction d'échauffement.",
+      "createTitle": "Nouveau brouillon",
+      "editTitle": "Modifier le brouillon",
+      "refused": "Refusé par la validation du Pi :",
+      "accepted": "La validation du Pi accepte ce programme.",
+      "evidenceCleared": "Enregistrer efface le rapport de simulation et la signature médicale du brouillon : ils portaient sur les valeurs précédentes.",
+      "save": "Enregistrer",
+      "cancel": "Annuler"
+    },
+    "fields": {
+      "profileId": "Identifiant (profile_id)",
+      "name": "Nom (name)",
+      "totalDurationS": "Durée totale, s (total_duration_s)",
+      "baselineS": "Mesure de référence, s (baseline_s)",
+      "warmupMaxS": "Échauffement max, s (warmup_max_s)",
+      "holdMinS": "Maintien min, s (hold_min_s)",
+      "cooldownS": "Retour au calme, s (cooldown_s)",
+      "recoveryS": "Récupération, s (recovery_s)",
+      "zoneLowBpm": "Zone basse, bpm (zone_low_bpm)",
+      "zoneHighBpm": "Zone haute, bpm (zone_high_bpm)",
+      "hardMaxBpm": "Palier FC max, bpm (hard_max_bpm)",
+      "criticalBpm": "Palier critique, bpm (critical_bpm)",
+      "subjectHrMax": "FC max du sujet, bpm (subject_hr_max)",
+      "minRunRpm": "Vitesse min de marche, tr/min moteur (min_run_rpm)",
+      "maxRpm": "Vitesse max, tr/min moteur (max_rpm)",
+      "warmupRpmCeilingFraction": "Plafond d'échauffement, part de la vitesse max (warmup_rpm_ceiling_fraction)",
+      "channels": "Voies enregistrées (channels)",
+      "allowAboveNameplate": "Autoriser une vitesse au-dessus de la plaque, 1380 tr/min (allow_above_nameplate)"
+    },
+    "preview": {
+      "label": "Phases du programme et zone de {low} à {high} bpm sur {duration}",
+      "unusable": "Durées incohérentes : pas d'aperçu.",
+      "hardMax": "Palier FC max",
+      "critical": "Palier critique",
+      "subjectHrMax": "FC max du sujet"
+    },
+    "validation": {
+      "title": "Valider le programme",
+      "description": "Double validation : un admin Anheart qui n'a ni créé ni modifié en dernier ce brouillon le valide, avec la signature médicale. La version médicale courante du serveur et le rapport de simulation joint sont exigés.",
+      "by": "Signataire médical",
+      "at": "Date de la signature",
+      "note": "Note",
+      "submit": "Valider"
+    }
+  },
   "nav": {
     "audit": "Audit",
     "dashboard": "Tableau de bord",
@@ -557,7 +644,8 @@
     "faq": "FAQ",
     "myMachines": "Mes machines",
     "members": "Membres",
-    "notifications": "Alertes"
+    "notifications": "Alertes",
+    "programmes": "Programmes"
   },
   "sidebar": {
     "main": "Principal",

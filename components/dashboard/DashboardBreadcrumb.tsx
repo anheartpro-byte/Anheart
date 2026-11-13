@@ -35,6 +35,7 @@ export function DashboardBreadcrumb() {
       members: t("members"),
       notifications: t("notifications"),
       audit: t("audit"),
+      programmes: t("programmes"),
       new: tBreadcrumb("new"),
       live: tBreadcrumb("live"),
       edit: tBreadcrumb("edit"),

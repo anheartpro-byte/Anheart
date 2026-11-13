@@ -31,6 +31,7 @@ import {
   Gauge,
   UserCog,
   Bell,
+  ListChecks,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -64,6 +65,11 @@ const ENTRIES: Record<string, NavItem> = {
     labelKey: "notifications",
     href: "/dashboard/notifications",
     icon: Bell,
+  },
+  programmes: {
+    labelKey: "programmes",
+    href: "/dashboard/programmes",
+    icon: ListChecks,
   },
 };
 

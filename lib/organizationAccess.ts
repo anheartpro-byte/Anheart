@@ -70,6 +70,7 @@ const NO_NAVIGATION: Navigation = {
  * - Organisation admin: the same without the settings, which are Anheart's.
  * - Gestionnaire: management, with the alerts of the machines they manage.
  * - Patient: their machines, sessions and reports.
+ * - Everyone above: the programme catalogue, read-only but for the Anheart admin.
  */
 export function navigationFor(
   account: AccountAccess | null | undefined,
@@ -93,9 +94,12 @@ export function navigationFor(
           "sessions",
           "reports",
           "notifications",
+          "programmes",
         ]
       : [],
-    myHealth: isPatient(role) ? ["myMachines", "sessions", "reports"] : [],
+    myHealth: isPatient(role)
+      ? ["myMachines", "sessions", "reports", "programmes"]
+      : [],
   };
 }
 

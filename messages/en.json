@@ -288,7 +288,7 @@
     "programme_medical_version_unavailable": "No medical parameters version is registered on this server, as in production until the signed medical values (ANH-98) exist: no programme can be validated.",
     "programme_medical_version_not_current": "The draft was checked against a medical parameters version that is no longer current: save it again.",
     "programme_simulation_report_missing": "Attach the simulation report to the draft first.",
-    "invalid_medical_signoff": "The medical sign-off needs a signer (1 to 200 characters), a past date and a note of at most 1000 characters.",
+    "invalid_medical_signoff": "The medical signature needs a signer (1 to 200 characters), a past date and a note of at most 1000 characters.",
     "not_authenticated": "Your session has expired or you are signed out. Sign in again to continue.",
     "account_not_registered": "Your account is not ready on the server yet. Wait a few moments, then sign in again if this message persists.",
     "no_active_organization": "Choose an organization to continue.",
@@ -540,6 +540,93 @@
     "stopRequestSent": "Request sent. This page shows the state of the session.",
     "done": "Done."
   },
+  "programmes": {
+    "title": "Programmes",
+    "description": "Anheart's catalogue of session programmes. Only the Anheart team writes them; a programme is validated only by a second admin, with the medical signature and the simulation report. Organisations use the published ones.",
+    "readOnly": "The programmes Anheart published, read only.",
+    "empty": "No programme.",
+    "zone": "{low} to {high} bpm",
+    "maxRpm": "{arm} arm rpm ({motor} motor rpm)",
+    "copyName": "{name} (copy)",
+    "medicalVersion": "Medical parameters {version}",
+    "signedOff": "medical signature by {by} on {at}",
+    "saved": "Draft saved.",
+    "attached": "Simulation report attached.",
+    "validated": "Programme validated.",
+    "published": "Programme published.",
+    "retired": "Programme retired.",
+    "columns": {
+      "name": "Programme",
+      "status": "Status",
+      "zone": "Zone",
+      "duration": "Duration",
+      "maxRpm": "Max speed",
+      "revision": "Revision",
+      "actions": "Actions"
+    },
+    "status": {
+      "draft": "Draft",
+      "validated": "Validated",
+      "published": "Published",
+      "retired": "Retired"
+    },
+    "actions": {
+      "new": "New programme",
+      "view": "View",
+      "duplicate": "Duplicate",
+      "edit": "Edit",
+      "attach": "Simulation report (PDF or JSON)",
+      "validate": "Validate",
+      "publish": "Publish",
+      "retire": "Retire",
+      "report": "Report"
+    },
+    "editor": {
+      "invalid": "Invalid number: {fields}. Digits only, with at most one decimal comma or point for the durations and the warmup fraction.",
+      "createTitle": "New draft",
+      "editTitle": "Edit the draft",
+      "refused": "Refused by the Pi's validation:",
+      "accepted": "The Pi's validation accepts this programme.",
+      "evidenceCleared": "Saving clears the draft's simulation report and medical signature: they were about the previous values.",
+      "save": "Save",
+      "cancel": "Cancel"
+    },
+    "fields": {
+      "profileId": "Identifier (profile_id)",
+      "name": "Name (name)",
+      "totalDurationS": "Total duration, s (total_duration_s)",
+      "baselineS": "Baseline, s (baseline_s)",
+      "warmupMaxS": "Longest warmup, s (warmup_max_s)",
+      "holdMinS": "Shortest hold, s (hold_min_s)",
+      "cooldownS": "Cooldown, s (cooldown_s)",
+      "recoveryS": "Recovery, s (recovery_s)",
+      "zoneLowBpm": "Zone low, bpm (zone_low_bpm)",
+      "zoneHighBpm": "Zone high, bpm (zone_high_bpm)",
+      "hardMaxBpm": "Hard maximum, bpm (hard_max_bpm)",
+      "criticalBpm": "Critical tier, bpm (critical_bpm)",
+      "subjectHrMax": "Subject's max heart rate, bpm (subject_hr_max)",
+      "minRunRpm": "Lowest running speed, motor rpm (min_run_rpm)",
+      "maxRpm": "Max speed, motor rpm (max_rpm)",
+      "warmupRpmCeilingFraction": "Warmup ceiling, share of the max speed (warmup_rpm_ceiling_fraction)",
+      "channels": "Recorded channels (channels)",
+      "allowAboveNameplate": "Allow a speed above the nameplate, 1380 rpm (allow_above_nameplate)"
+    },
+    "preview": {
+      "label": "Programme phases and zone from {low} to {high} bpm over {duration}",
+      "unusable": "Inconsistent durations: no preview.",
+      "hardMax": "Hard maximum",
+      "critical": "Critical tier",
+      "subjectHrMax": "Subject's max heart rate"
+    },
+    "validation": {
+      "title": "Validate the programme",
+      "description": "Double validation: an Anheart admin who neither created nor last changed this draft validates it, with the medical signature. The server's current medical version and an attached simulation report are required.",
+      "by": "Medical signer",
+      "at": "Date of the signature",
+      "note": "Note",
+      "submit": "Validate"
+    }
+  },
   "nav": {
     "audit": "Audit",
     "dashboard": "Dashboard",
@@ -557,7 +644,8 @@
     "faq": "FAQ",
     "myMachines": "My machines",
     "members": "Members",
-    "notifications": "Alerts"
+    "notifications": "Alerts",
+    "programmes": "Programmes"
   },
   "sidebar": {
     "main": "Main",

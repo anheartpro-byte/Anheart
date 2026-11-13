@@ -20,7 +20,8 @@ les lancements utilisent toujours les programmes synchronisés par le Pi.
 Décision produit du 1er octobre 2026 : l'équipe Anheart crée, valide et
 publie les programmes ; une organisation cliente n'en écrit jamais, elle
 utilise ceux qui sont publiés. Tables `programmes` et `programme_revisions`,
-fonctions de `convex/programmes.ts` : voir [convex.md](convex.md).
+fonctions de `convex/programmes.ts` : voir [convex.md](convex.md). Page du
+site : `/dashboard/programmes`, voir [tableau-de-bord.md](tableau-de-bord.md#programmes--frdashboardprogrammes).
 
 ### Qui fait quoi
 
@@ -81,7 +82,7 @@ vérifications de `TrainingProfile` et de `parse_profile` dans
 le même message, par exemple `training profile refused:
 zone_above_subject_ceiling`. Les refus sont ceux de l'énumération
 `Violation` : identifiant de profil en snake_case de 64 caractères au plus,
-nom non blanc (au sens de Python), durées positives et finies, cool-down d'au
+nom non blanc (au sens de Python), durées positives et finies, retour au calme d'au
 moins la rampe du variateur (4 s) et du plancher médical, récupération d'au
 moins le plancher médical, maintien (la durée totale moins les phases fixes)
 d'au moins `holdMinS`, seuils cardiaques positifs, FC max du sujet entre 100
@@ -107,7 +108,7 @@ Convex ne le reçoit jamais ; des tests du Pi le couvrent (lecture d'un profil,
 magasin de profils écarté au démarrage, `PUT /api/profiles`).
 
 Les bornes que `plan.py` prend dans le fichier médical (plancher de
-récupération, plancher de cool-down, fraction de zone) sont lues dans le même
+récupération, plancher de retour au calme, fraction de zone) sont lues dans le même
 fichier, `raspberry-pi/config/medical_parameters.json` : les deux côtés ne
 peuvent pas diverger.
 
@@ -145,7 +146,7 @@ Deux choix de cette version, relevés en revue et laissés tels quels :
 ### Rapport de simulation
 
 Le rapport est un fichier PDF ou JSON d'au plus 10 Mio que l'admin joint au
-brouillon, déposé dans Convex Storage depuis moins d'une heure
+brouillon depuis la page Programmes, déposé dans Convex Storage depuis moins d'une heure
 (`simulationReport` garde son `storageId`). Il vient de la simulation
 d'ANH-99, `python -m simulation.quick --cohort` (`report.json`) ; l'option
 `--profile <json>` qui simulera le programme lui-même appartient à ANH-99 et

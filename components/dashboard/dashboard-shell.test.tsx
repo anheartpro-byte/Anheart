@@ -155,6 +155,7 @@ const MANAGER_ENTRIES = [
   [nav.sessions, "/dashboard/sessions"],
   [nav.reports, "/dashboard/reports"],
   [nav.notifications, "/dashboard/notifications"],
+  [nav.programmes, "/dashboard/programmes"],
 ];
 const ORGANIZATION_ADMIN_ENTRIES = [
   [nav.gestionnaires, "/dashboard/gestionnaires"],
@@ -170,6 +171,7 @@ const PATIENT_ENTRIES = [
   [nav.myMachines, "/dashboard/my-machines"],
   [nav.sessions, "/dashboard/sessions"],
   [nav.reports, "/dashboard/reports"],
+  [nav.programmes, "/dashboard/programmes"],
 ];
 
 beforeEach(() => {
@@ -337,7 +339,7 @@ describe("ANH-203 dashboard menu: the current page", () => {
         entry.getAttribute("data-tooltip"),
         screen.textOf(entry),
       ]);
-    expect(hints.length).toBe(4);
+    expect(hints.length).toBe(5);
     for (const [hint, label] of hints) expect(hint).toBe(label);
   });
 });
@@ -400,6 +402,7 @@ describe("ANH-203 breadcrumb of a dashboard page", () => {
     ["reports", nav.reports],
     ["notifications", nav.notifications],
     ["audit", nav.audit],
+    ["programmes", nav.programmes],
   ])("the level « %s » reads « %s »", (segment, label) => {
     expect(crumbs(`/dashboard/${segment}`).at(-1)).toEqual([label, null]);
   });
