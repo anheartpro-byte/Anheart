@@ -33,7 +33,7 @@ from src.record_uplink import (
     RecordUplink,
     Sender,
 )
-from src.result import Ok
+from src.result import Ok, Result
 from src.units import Monotonic, Seconds, UnixMillis
 from tests.record_support import manifest, row
 
@@ -118,6 +118,13 @@ class Bench:
     cancelled: list[str]
     said: list[str]
     """What the operator was told on the console, in order."""
+
+    noted: list[str] = field(default_factory=list[str])
+    """The logbook's lines of the acknowledgements made through :meth:`acknowledge`."""
+
+    async def acknowledge(self) -> Result[tuple[str, ...], str]:
+        """The operator acknowledges the sessions given up on; the logbook is ``noted``."""
+        return await self.uplink.acknowledge(self.noted.append)
 
     async def step(self, seconds: float = 1.0) -> None:
         """One second of the link's two tasks: the running session is told to the

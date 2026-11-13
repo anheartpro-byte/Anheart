@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
@@ -582,7 +582,10 @@ async def test_the_panel_notes_an_acknowledgement_in_the_logbook_by_alias(
     assert journal is not None
     try:
 
-        async def released(_self: CloudSync) -> Result[tuple[str, ...], str]:
+        async def released(
+            _self: CloudSync, noted: Callable[[str], None]
+        ) -> Result[tuple[str, ...], str]:
+            noted("lost_stops_acknowledged: fin refusee, k17remote")
             return Ok(("fin refusee, k17remote",))
 
         monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", released)
@@ -596,7 +599,9 @@ async def test_the_panel_notes_an_acknowledgement_in_the_logbook_by_alias(
         assert line["detail"] == "lost_stops_acknowledged: fin refusee, k17remote"
         assert line["actor"] == operator_alias("Mme\nDurand")
 
-        async def refused(_self: CloudSync) -> Result[tuple[str, ...], str]:
+        async def refused(
+            _self: CloudSync, _noted: Callable[[str], None]
+        ) -> Result[tuple[str, ...], str]:
             return Err(SESSION_RUNS)
 
         monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", refused)
@@ -611,7 +616,10 @@ async def test_a_console_that_records_nothing_logs_an_acknowledgement_only(
     rig_ = linked(tmp_path, preflight=True)
     try:
 
-        async def released(_self: CloudSync) -> Result[tuple[str, ...], str]:
+        async def released(
+            _self: CloudSync, noted: Callable[[str], None]
+        ) -> Result[tuple[str, ...], str]:
+            noted("lost_stops_acknowledged: fin abandonnee, k1")
             return Ok(("fin abandonnee, k1",))
 
         monkeypatch.setattr(CloudSync, "acknowledge_lost_stops", released)

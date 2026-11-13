@@ -2967,19 +2967,27 @@ des enregistrements (`.sync-lost-stops.json`, comme un curseur) et
 l'acquittement ; le curseur qui clôt une telle séance n'est écrit qu'une
 fois elle écrite au registre (sinon le démarrage suivant la renvoie, et elle
 est perdue de nouveau, une seule fois). Une console qui n'enregistre rien les
-garde en mémoire seulement. Reste en mémoire seulement, et oubliée par un
-redémarrage à cet instant, la perte d'une séance sans enregistrement, qui n'a
-pas de curseur à retenir : avant la première liste des enregistrements d'une
-exécution précédente (le registre de celle-ci n'est pas écrit avant d'être
-lu, pour ne pas l'écraser), et, pour une fin abandonnée, jusqu'au pas suivant
-(une seconde environ). Un enregistrement illisible reste dû sur le disque : l'acquittement
+garde en mémoire seulement. Une perte arrivée avant la première liste des
+enregistrements d'une exécution précédente est ajoutée au registre de
+celle-ci, jamais écrite par-dessus. Reste en mémoire seulement jusqu'au pas
+suivant de l'envoi (une seconde environ), et oubliée par un redémarrage à cet
+instant, la perte d'une séance sans enregistrement, qui n'a pas de curseur à
+retenir : une fin abandonnée, ou la déclaration refusée de la séance en
+cours. Un enregistrement illisible reste dû sur le disque : l'acquittement
 le lève pour cette exécution seulement, en mémoire, et le démarrage suivant le
 liste et le retient de nouveau, jusqu'à ce qu'il soit lu et envoyé ou
 acquitté encore. L'acquittement efface ces séances, celles affichées quand il
 est demandé et elles seules : une séance perdue pendant qu'il s'écrit retient
 encore. Une ligne `lost_stops_acknowledged`
 est écrite au journal de bord (`logbook/events.jsonl`), avec l'alias de
-l'opérateur et ce qui a été levé ; le nom va aussi au journal du système.
+l'opérateur et ce qui est levé, dès la décision et avant l'écriture du
+registre ; si le registre ne s'écrit pas, une ligne `lost_stops_unwritten`
+suit avec le refus. Le registre écrit par l'acquittement garde ce qu'il a
+levé : le démarrage suivant le dit (`seance(s) perdue(s) levee(s) par un
+acquittement avant ce demarrage : ...`, sur la page et au journal de bord),
+puis l'efface. Une écriture arrivée après son attente, ou juste avant un
+redémarrage, ne lève donc jamais rien que le journal de bord ne dise. Le nom
+va aussi au journal du système.
 
 **Ce qu'il ne couvre pas**, refusé en 409 avec la raison : une retenue qui se
 lèvera d'elle-même quand le lien aura livré la séance (une fin pas encore

@@ -40,6 +40,7 @@ from src.record.cursor import (
     LOST_STOPS_UNREADABLE,
     Cursor,
     CursorError,
+    LostStops,
     NoCursor,
     cursor_of,
     load,
@@ -55,6 +56,8 @@ from src.record.rows import JsonValue
 from src.record.schema import Event, EventKind, RecordError
 from src.record.upload import MAX_POINTS, READ_CHUNK, TAIL_CHUNK, Batch, read_batch, read_head
 from src.record_uplink import (
+    ACKNOWLEDGED,
+    ACKNOWLEDGEMENT_UNWRITTEN,
     BIND_GRACE,
     CATCH_UP_PERIOD,
     CLOSE_GRACE,
@@ -71,6 +74,7 @@ from src.record_uplink import (
     NOT_LISTED,
     NOTHING_LOST,
     RECORD_UNREADABLE,
+    RELEASED_BEFORE,
     RETRY_PERIOD,
     SESSION_RUNS,
     START_PATH,
@@ -111,6 +115,9 @@ START = EPOCH_MS + 100_000
 
 DOWN = Held("no route to host")
 ENDED = RuntimeEnd(failed=False, reason="operator_stop: fini")
+
+type Lines = tuple[str, ...]
+"""The lines of the register of the sessions given up on, as its writer takes them."""
 
 
 def stored(count: int = 0, *, rejected: int = 0) -> Acked:
@@ -3053,7 +3060,7 @@ async def restarted_and_listed(b: Bench) -> Bench:
 
 
 async def acknowledged(b: Bench) -> tuple[str, ...]:
-    released = await b.uplink.acknowledge()
+    released = await b.acknowledge()
     assert isinstance(released, Ok), released
     return released.value
 
@@ -3069,7 +3076,7 @@ async def test_a_stop_whose_declaration_is_refused_for_good_holds_across_a_resta
     await b.run(3)
     assert lost(b, "declaration refusee"), "its end is unknown: still running"
     # Never while a session runs.
-    assert await b.uplink.acknowledge() == Err(SESSION_RUNS)
+    assert await b.acknowledge() == Err(SESSION_RUNS)
     b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop: ecran"))
     record.close("emergency_stop", stop=None)
     b.disk.current = None
@@ -3186,9 +3193,9 @@ async def test_the_acknowledgement_releases_losses_only_never_a_hold_that_clears
     tmp_path: Path,
 ) -> None:
     fresh = bench(tmp_path)
-    assert await fresh.uplink.acknowledge() == Err(NOT_LISTED), "before the list is made"
+    assert await fresh.acknowledge() == Err(NOT_LISTED), "before the list is made"
     b = await listed(tmp_path)
-    assert await b.uplink.acknowledge() == Err(NOTHING_LOST)
+    assert await b.acknowledge() == Err(NOTHING_LOST)
     b.link.answer(END_PATH, DOWN)
     b.uplink.begin(armed(b.clock))
     await b.step()
@@ -3197,7 +3204,7 @@ async def test_the_acknowledgement_releases_losses_only_never_a_hold_that_clears
     held = b.unreported_stop()
     assert held == "seance terminee sur safety_verdict pas encore recue par le tableau de bord"
     # The link would deliver it: it is not the operator's to lift.
-    assert await b.uplink.acknowledge() == Err(NOTHING_LOST)
+    assert await b.acknowledge() == Err(NOTHING_LOST)
     assert b.unreported_stop() == held
 
 
@@ -3226,7 +3233,7 @@ async def test_a_register_the_disk_refuses_is_written_again_and_an_ack_is_refuse
     b = await listed(tmp_path)
     real = store_lost_stops
 
-    def full(_root: Path, _lost: tuple[str, ...]) -> Result[None, CursorError]:
+    def full(_root: Path, _lost: Lines, _released: Lines) -> Result[None, CursorError]:
         return Err(CursorError("OSError:ENOSPC"))
 
     monkeypatch.setattr("src.record_uplink.store_lost_stops", full)
@@ -3237,7 +3244,7 @@ async def test_a_register_the_disk_refuses_is_written_again_and_an_ack_is_refuse
     await b.run(3)
     assert "could not be written (OSError:ENOSPC)" in caplog.text
     assert lost(b, "fin refusee"), "held in memory all the same"
-    refused = await b.uplink.acknowledge()
+    refused = await b.acknowledge()
     assert isinstance(refused, Err)
     assert refused.error.startswith(LOST_UNWRITTEN)
     monkeypatch.setattr("src.record_uplink.store_lost_stops", real)
@@ -3264,7 +3271,7 @@ async def test_a_console_that_records_nothing_keeps_its_losses_in_memory(
 
 async def test_a_register_that_is_no_file_holds(tmp_path: Path) -> None:
     (tmp_path / LOST_STOPS_NAME).mkdir()
-    assert load_lost_stops(tmp_path) == (LOST_STOPS_UNREADABLE,)
+    assert load_lost_stops(tmp_path).lost == (LOST_STOPS_UNREADABLE,)
 
 
 async def test_the_losses_are_written_once_the_register_of_an_earlier_run_is_read(
@@ -3313,15 +3320,16 @@ async def test_a_session_lost_while_an_acknowledgement_is_written_still_holds(
     writing = asyncio.Event()
     written = threading.Event()
 
-    def slow(root: Path, lost: tuple[str, ...]) -> Result[None, CursorError]:
+    def slow(root: Path, lost: Lines, released: Lines) -> Result[None, CursorError]:
         if not lost:
             loop.call_soon_threadsafe(writing.set)
             written.wait(5.0)
-        return real(root, lost)
+        return real(root, lost, released)
 
     monkeypatch.setattr("src.record_uplink.store_lost_stops", slow)
-    acknowledgement = asyncio.create_task(b.uplink.acknowledge())
+    acknowledgement = asyncio.create_task(b.acknowledge())
     await asyncio.wait_for(writing.wait(), 5.0)
+    assert b.noted == [ACKNOWLEDGED + k1], "in the logbook before the register is written"
     b.link.answer(END_PATH, GONE)
     # The link comes back: k2 is lost, and the one disk thread is taken, so its write
     # must wait.
@@ -3334,7 +3342,7 @@ async def test_a_session_lost_while_an_acknowledgement_is_written_still_holds(
 
     assert b.uplink.lost_stops == (k2,)
     assert lost(b, "fin refusee")
-    assert load_lost_stops(tmp_path) == (k2,)
+    assert load_lost_stops(tmp_path).lost == (k2,)
     await b.run(5)
     assert lost(b, "fin refusee")
     again = await restarted_and_listed(b)
@@ -3353,7 +3361,7 @@ async def test_a_cursor_that_closes_a_lost_session_waits_for_its_loss_on_disk(
     await b.run(3)
     real = store_lost_stops
 
-    def full(_root: Path, _lost: tuple[str, ...]) -> Result[None, CursorError]:
+    def full(_root: Path, _lost: Lines, _released: Lines) -> Result[None, CursorError]:
         return Err(CursorError("OSError:ENOSPC"))
 
     monkeypatch.setattr("src.record_uplink.store_lost_stops", full)
@@ -3368,7 +3376,7 @@ async def test_a_cursor_that_closes_a_lost_session_waits_for_its_loss_on_disk(
     # The disk takes the register again; the console restarts before anything else.
     monkeypatch.setattr("src.record_uplink.store_lost_stops", real)
     await b.step()
-    assert load_lost_stops(tmp_path) == b.uplink.lost_stops
+    assert load_lost_stops(tmp_path).lost == b.uplink.lost_stops
     again = await restarted_and_listed(b)
     await again.run(5)
     assert len(again.link.to(END_PATH)) == 2, "sent again, refused again"
@@ -3389,34 +3397,154 @@ async def test_an_acknowledgement_whose_write_lands_after_its_wait_is_written_ov
     b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
     await b.run(3)
     held = b.uplink.lost_stops
-    assert load_lost_stops(tmp_path) == held
+    assert load_lost_stops(tmp_path).lost == held
 
     real = store_lost_stops
     loop = asyncio.get_running_loop()
     landed = asyncio.Event()
     go = threading.Event()
 
-    def late(root: Path, lost: tuple[str, ...]) -> Result[None, CursorError]:
+    def late(root: Path, lost: Lines, released: Lines) -> Result[None, CursorError]:
         go.wait(5.0)
-        wrote = real(root, lost)
+        wrote = real(root, lost, released)
         loop.call_soon_threadsafe(landed.set)
         return wrote
 
     monkeypatch.setattr("src.record_uplink.store_lost_stops", late)
     monkeypatch.setattr("src.record_uplink.READ_TIMEOUT", Seconds(0.01))
-    refused = await b.uplink.acknowledge()
+    refused = await b.acknowledge()
     assert isinstance(refused, Err)
     assert refused.error == f"{LOST_UNWRITTEN} ({TIMEOUT})"
+    assert b.noted == [ACKNOWLEDGED + " ; ".join(held), ACKNOWLEDGEMENT_UNWRITTEN + refused.error]
     go.set()
     await asyncio.wait_for(landed.wait(), 5.0)
     # Its thread gives the one slot back a moment after the write lands: a step before
     # then is refused as busy, and on a loaded host both steps below were.
     await asyncio.wait_for(slot_free(io), 5.0)
-    assert load_lost_stops(tmp_path) == (), "landed after its wait"
+    assert load_lost_stops(tmp_path).lost == (), "landed after its wait"
     assert b.uplink.lost_stops == held, "still held"
 
     monkeypatch.undo()  # the disk answers again, in time
     await b.run(2)
-    assert load_lost_stops(tmp_path) == held
+    assert load_lost_stops(tmp_path) == LostStops(lost=held)
     again = await restarted_and_listed(b)
     assert again.uplink.lost_stops == held
+    assert again.said == [], "nothing was released"
+
+
+async def test_an_acknowledgement_that_lands_late_just_before_a_restart_is_told_by_the_next_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The register the acknowledgement wrote says what it released: the next start tells
+    the logbook (``said``, which writes it there with no session open), then empties it."""
+    b = await listed(tmp_path)
+    b.link.answer(END_PATH, GONE)
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    await b.run(3)
+    (k1,) = b.uplink.lost_stops
+
+    real = store_lost_stops
+    loop = asyncio.get_running_loop()
+    landed = asyncio.Event()
+    go = threading.Event()
+
+    def late(root: Path, lost: Lines, released: Lines) -> Result[None, CursorError]:
+        go.wait(5.0)
+        wrote = real(root, lost, released)
+        loop.call_soon_threadsafe(landed.set)
+        return wrote
+
+    monkeypatch.setattr("src.record_uplink.store_lost_stops", late)
+    monkeypatch.setattr("src.record_uplink.READ_TIMEOUT", Seconds(0.01))
+    assert isinstance(await b.acknowledge(), Err)
+    go.set()
+    await asyncio.wait_for(landed.wait(), 5.0)
+    monkeypatch.undo()
+    assert load_lost_stops(tmp_path) == LostStops(released=(k1,))
+
+    # The console stops before its next step writes the losses again.
+    again = await restarted_and_listed(b)
+    assert again.said == [RELEASED_BEFORE.format(lines=k1)]
+    assert f"before this start released {k1}" in caplog.text
+    assert again.uplink.lost_stops == ()
+    assert again.unreported_stop() is None
+    await again.step()
+    assert load_lost_stops(tmp_path) == LostStops(), "said once, then emptied"
+    third = await restarted_and_listed(again)
+    assert third.said == []
+
+
+async def test_every_release_of_a_run_is_told_by_the_next_start_once(tmp_path: Path) -> None:
+    """Two acknowledgements in one run: the register carries both releases, whatever the
+    logbook kept of the lines written when they were decided."""
+    b = await listed(tmp_path)
+    b.link.answer(END_PATH, GONE)
+    for remote in ("k1", "k2"):
+        b.uplink.begin(armed(b.clock, remote=remote, kind="auto"))
+        await b.step()
+        b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+        await b.run(3)
+        await acknowledged(b)
+    k1, k2 = (line.removeprefix(ACKNOWLEDGED) for line in b.noted)
+    assert k1 != k2
+    assert load_lost_stops(tmp_path) == LostStops(released=(k1, k2))
+    again = await restarted_and_listed(b)
+    assert again.said == [RELEASED_BEFORE.format(lines=f"{k1} ; {k2}")]
+    await again.step()
+    assert load_lost_stops(tmp_path) == LostStops()
+
+
+async def test_a_register_that_will_not_be_written_is_warned_of_once_per_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    b = await listed(tmp_path)
+    real = store_lost_stops
+    refusing = True
+
+    def flaky(root: Path, lost: Lines, released: Lines) -> Result[None, CursorError]:
+        return Err(CursorError("OSError:EIO")) if refusing else real(root, lost, released)
+
+    monkeypatch.setattr("src.record_uplink.store_lost_stops", flaky)
+    b.link.answer(END_PATH, GONE)
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    await b.run(10)
+    warning = "the sessions given up on could not be written"
+    assert caplog.text.count(warning) == 1, "once, not at every step"
+    refusing = False
+    await b.step()
+    assert load_lost_stops(tmp_path).lost == b.uplink.lost_stops
+    # A new failure is a new episode: said again, once.
+    refusing = True
+    b.uplink.begin(armed(b.clock, remote="k2", kind="auto"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    await b.run(10)
+    assert caplog.text.count(warning) == 2
+
+
+async def test_a_loss_before_the_list_is_made_is_added_to_the_register_at_once(
+    tmp_path: Path,
+) -> None:
+    """Not kept in memory until the list of an earlier run's records is made: added to the
+    register that run kept, never written over it, its releases kept for the start to tell."""
+    store_lost_stops(tmp_path, ("fin refusee, k0",), ("fin refusee, kx",))
+    b = bench(tmp_path)
+    b.link.answer(END_PATH, GONE)
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    b.clock.advance(Seconds(1.0))
+    await b.uplink.step()  # serves k1 first: the list is not made yet
+    assert await b.acknowledge() == Err(NOT_LISTED)
+    (k1,) = b.uplink.lost_stops
+    assert load_lost_stops(tmp_path) == LostStops(
+        lost=("fin refusee, k0", k1), released=("fin refusee, kx",)
+    )
+    await b.step()  # the list is made now
+    assert b.said == [RELEASED_BEFORE.format(lines="fin refusee, kx")]
+    assert b.uplink.lost_stops == ("fin refusee, k0", k1)
+    await b.step()
+    assert load_lost_stops(tmp_path) == LostStops(lost=("fin refusee, k0", k1))

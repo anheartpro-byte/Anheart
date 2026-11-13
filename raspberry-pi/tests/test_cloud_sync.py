@@ -2280,7 +2280,8 @@ async def test_an_unreadable_count_after_a_stop_holds_until_a_readable_one(
     r = rig(tmp_path)
     r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-1"}))
     r.dashboard.answer("/api/machine/training/status", status_answer())
-    assert await r.sync.acknowledge_lost_stops() == Err(NOTHING_LOST), "nothing lost"
+    noted: list[str] = []
+    assert await r.sync.acknowledge_lost_stops(noted.append) == Err(NOTHING_LOST), "nothing lost"
     r.runtime.state = RuntimeState.RUNNING
     r.sync.session_started(manual(r.clock))
     for _ in range(3):
@@ -2298,10 +2299,11 @@ async def test_an_unreadable_count_after_a_stop_holds_until_a_readable_one(
     assert r.sync.incidents_open_high is None
     assert unreported(r.sync) == STOP_NOT_COUNTED
     # It clears by itself with a count read: not the operator's to lift.
-    assert await r.sync.acknowledge_lost_stops() == Err(NOTHING_LOST)
+    assert await r.sync.acknowledge_lost_stops(noted.append) == Err(NOTHING_LOST)
     assert unreported(r.sync) == STOP_NOT_COUNTED
     r.runtime.state = RuntimeState.RUNNING
-    assert await r.sync.acknowledge_lost_stops() == Err(SESSION_RUNS)
+    assert await r.sync.acknowledge_lost_stops(noted.append) == Err(SESSION_RUNS)
+    assert noted == [], "nothing decided, nothing for the logbook"
 
 
 async def test_an_auto_session_registers_its_programme(tmp_path: Path) -> None:

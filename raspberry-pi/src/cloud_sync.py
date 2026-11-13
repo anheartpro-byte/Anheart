@@ -1144,14 +1144,17 @@ class CloudSync:
             return STOP_NOT_COUNTED
         return None
 
-    async def acknowledge_lost_stops(self) -> Result[tuple[str, ...], str]:
+    async def acknowledge_lost_stops(
+        self, noted: Callable[[str], None]
+    ) -> Result[tuple[str, ...], str]:
         """Release the sessions the sending gave up on, which the dashboard will never
         have (:attr:`~src.record_uplink.RecordUplink.lost_stops`), and nothing else: a hold
         that clears once the dashboard has a session is not lifted. Refused while a
-        session runs. What was released, or why not, in the operator's words."""
+        session runs. What was released, or why not, in the operator's words; ``noted``
+        takes the logbook's lines (:meth:`~src.record_uplink.RecordUplink.acknowledge`)."""
         if self._runtime.state in (RuntimeState.RUNNING, RuntimeState.ENDING):
             return Err(SESSION_RUNS)
-        return await self._uplink.acknowledge()
+        return await self._uplink.acknowledge(noted)
 
     @property
     def incidents_open_high(self) -> int | None:

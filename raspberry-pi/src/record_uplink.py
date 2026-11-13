@@ -89,6 +89,7 @@ from src.clock import Clock
 from src.contract import ErrorCode
 from src.record.cursor import (
     Cursor,
+    LostStops,
     UnreadableCursor,
     load_lost_stops,
     store,
@@ -449,6 +450,17 @@ LOST_UNWRITTEN: Final[str] = "acquittement non ecrit sur le disque : reessayer"
 NOT_LINKED: Final[str] = "console non reliee au tableau de bord : rien a acquitter"
 """The refusals of :meth:`RecordUplink.acknowledge`, in the operator's words."""
 
+ACKNOWLEDGED: Final[str] = "lost_stops_acknowledged: "
+ACKNOWLEDGEMENT_UNWRITTEN: Final[str] = "lost_stops_unwritten: "
+"""The logbook's lines of :meth:`RecordUplink.acknowledge`: what the operator released, then
+the refusal, when the register that releases it could not be written."""
+
+RELEASED_BEFORE: Final[str] = (
+    "seance(s) perdue(s) levee(s) par un acquittement avant ce demarrage : {lines}"
+)
+"""What the first start after an acknowledgement says of it, from the register itself: a
+write that landed late, or just before a restart, is never a release the logbook misses."""
+
 LOST_STOP: Final[str] = (
     "seance mal terminee ou de fin inconnue que le tableau de bord ne recevra pas ({why}) : "
     "a acquitter a la console, page Pre-vol"
@@ -484,14 +496,21 @@ def _write(record: Path, cursor: Cursor) -> Result[None, RecordError]:
     return Ok(None) if isinstance(wrote, Ok) else Err(RecordError("sync", wrote.error.detail))
 
 
-def _write_lost(root: Path, lost: tuple[str, ...]) -> Result[None, RecordError]:
-    wrote = store_lost_stops(root, lost)
+def _write_lost(
+    root: Path, lost: tuple[str, ...], released: tuple[str, ...]
+) -> Result[None, RecordError]:
+    wrote = store_lost_stops(root, lost, released)
     return Ok(None) if isinstance(wrote, Ok) else Err(RecordError("sync", wrote.error.detail))
 
 
-def _list_owed(
-    root: Path, current: str | None
-) -> Result[tuple[Listed, tuple[str, ...]], RecordError]:
+def _merge_lost(root: Path, lost: tuple[str, ...]) -> Result[None, RecordError]:
+    """Before the register an earlier run kept is listed: add ``lost`` to it, keeping all of it."""
+    kept = load_lost_stops(root)
+    merged = (*kept.lost, *(line for line in lost if line not in kept.lost))
+    return _write_lost(root, merged, kept.released)
+
+
+def _list_owed(root: Path, current: str | None) -> Result[tuple[Listed, LostStops], RecordError]:
     """The records an earlier run left owed, and the sessions it gave up on (ANH-145)."""
     listed = owed_records(root, current)
     return listed if isinstance(listed, Err) else Ok((listed.value, load_lost_stops(root)))
@@ -595,9 +614,11 @@ class RecordUplink:
         "_last_batch",
         "_live",
         "_lost",
+        "_lost_failing",
         "_lost_here",
         "_lost_unwritten",
         "_owed_queue",
+        "_released",
         "_said",
         "_scan_at",
         "_scanned",
@@ -652,7 +673,11 @@ class RecordUplink:
         # lists again and so holds for again.
         self._lost: tuple[str, ...] = ()
         self._lost_unwritten: bool = False
+        self._lost_failing: bool = False
         self._lost_here: tuple[str, ...] = ()
+        # What the operator released in this run, written with the register until the next
+        # start tells it to the logbook.
+        self._released: tuple[str, ...] = ()
 
     # --- read access -----------------------------------------------------
 
@@ -759,11 +784,14 @@ class RecordUplink:
         """The sessions given up on that only the operator's acknowledgement releases."""
         return (*self._lost, *self._lost_here)
 
-    async def acknowledge(self) -> Result[tuple[str, ...], str]:
+    async def acknowledge(self, noted: Callable[[str], None]) -> Result[tuple[str, ...], str]:
         """Release the sessions given up on (:attr:`lost_stops`), and only them: a hold
         that clears by itself once the dashboard has the session is not the operator's to
         lift. Refused while a session runs, before the records of an earlier run are
-        listed (they may hold more), and when there is none. What was released."""
+        listed (they may hold more), and when there is none. What was released.
+
+        ``noted`` takes the logbook's lines: what is released, once decided and before
+        anything is written, then the refusal if the register is not written."""
         if self._live is not None:
             return Err(SESSION_RUNS)
         if self._source is not None and not self._scanned:
@@ -771,14 +799,22 @@ class RecordUplink:
         kept, here = self._lost, self._lost_here
         if not kept and not here:
             return Err(NOTHING_LOST)
+        # Said first: a write that times out may still land, and release them.
+        noted(ACKNOWLEDGED + " ; ".join((*kept, *here)))
         source = self._source
         if source is not None and kept:
-            wrote = await self._disk(functools.partial(_write_lost, source.root, ()), READ_TIMEOUT)
+            freed = (*self._released, *kept)
+            write = functools.partial(_write_lost, source.root, (), freed)
+            wrote = await self._disk(write, READ_TIMEOUT)
             if isinstance(wrote, Err):
-                # A write that timed out may still land, empty: the next step writes
-                # the losses, which still hold, again.
+                # A write that timed out may still land: the next step writes the losses,
+                # which still hold, again, and should the console stop first, the register
+                # says what it released, which the next start tells the logbook.
                 self._lost_unwritten = True
-                return Err(f"{LOST_UNWRITTEN} ({wrote.error.detail})")
+                refusal = f"{LOST_UNWRITTEN} ({wrote.error.detail})"
+                noted(ACKNOWLEDGEMENT_UNWRITTEN + refusal)
+                return Err(refusal)
+            self._released = freed
         # Only what the operator was shown: a session lost during the write still
         # holds, and is written at once, or at the next step.
         self._lost = tuple(line for line in self._lost if line not in kept)
@@ -791,8 +827,9 @@ class RecordUplink:
         """The sending gives up on a session: if it may have opened an incident, the
         pre-flight holds a person on board until the operator acknowledges it, across
         restarts (written next to the records at once by an async caller, at the next
-        step otherwise, and never before the register kept by an earlier run is read:
-        :meth:`_keep_lost`). A console that records nothing keeps them in memory only.
+        step otherwise, and added to the register kept by an earlier run, never written
+        over it: :meth:`_keep_lost`). A console that records nothing keeps them in memory
+        only.
         Not ``kept``: a record the next start lists again, which holds for it again."""
         line = f"{why}, {identity}"
         # Lost again after a restart that found it in the register: once is enough.
@@ -813,15 +850,23 @@ class RecordUplink:
     async def _keep_lost(self) -> None:
         """Write the sessions given up on next to the records, when they changed."""
         source = self._source
-        # Not before the register an earlier run kept is read: it would be written over.
-        if source is None or not self._lost_unwritten or not self._scanned:
+        if source is None or not self._lost_unwritten:
             return
         lost = self._lost
-        wrote = await self._disk(functools.partial(_write_lost, source.root, lost), READ_TIMEOUT)
+        write = (
+            functools.partial(_write_lost, source.root, lost, self._released)
+            if self._scanned
+            # The register an earlier run kept is not read yet: added to, never written over.
+            else functools.partial(_merge_lost, source.root, lost)
+        )
+        wrote = await self._disk(write, READ_TIMEOUT)
         if isinstance(wrote, Ok):
             # A session lost during the write is written at the next turn.
             self._lost_unwritten = self._lost != lost
-        else:
+            self._lost_failing = False
+        elif not self._lost_failing:
+            # Said once until a write succeeds again, as for a cursor.
+            self._lost_failing = True
             _logger.warning(
                 "dashboard: the sessions given up on could not be written (%s): written at "
                 "the next step; until then a restart forgets them",
@@ -1046,10 +1091,18 @@ class RecordUplink:
             return False
         listed, kept = scanned.value
         # The sessions an earlier run gave up on, and kept: they still hold (ANH-145).
-        merged = (*kept, *(line for line in self._lost if line not in kept))
-        self._lost_unwritten = merged != kept
+        merged = (*kept.lost, *(line for line in self._lost if line not in kept.lost))
+        # Written again when it changed, or to empty what it released once that is said.
+        self._lost_unwritten = merged != kept.lost or bool(kept.released)
         self._lost = merged
         self._scanned = True
+        if kept.released:
+            lines = " ; ".join(kept.released)
+            _logger.warning(
+                "dashboard: the register says an acknowledgement before this start released %s",
+                lines,
+            )
+            self._said(RELEASED_BEFORE.format(lines=lines))
         if listed.set_aside:
             _logger.warning(
                 "dashboard: %d records without a cursor were set aside with the list of "

@@ -1373,14 +1373,15 @@ class LocalPanel:
     async def acknowledge_lost_stops(self, operator: str) -> Result[tuple[str, ...], str]:
         """The operator, named, releases the sessions the dashboard will never have that
         held a person on board (ANH-145). Written to the logbook with the operator's alias
-        and what was released, and to the log; refused while a session runs."""
+        and what is released, once decided and before the disk is, and to the log;
+        refused while a session runs."""
         cloud = self._cloud
         if cloud is None:
             return Err(NOT_LINKED)
-        released = await cloud.acknowledge_lost_stops()
-        if isinstance(released, Err):
-            return released
-        detail = "lost_stops_acknowledged: " + " ; ".join(released.value)
+        return await cloud.acknowledge_lost_stops(functools.partial(self._noted, operator))
+
+    def _noted(self, operator: str, detail: str) -> None:
+        """One line of an acknowledgement of lost sessions, in the logbook and in the log."""
         _logger.warning("%s, by %r", detail, operator)
         recorder = self._recorder
         if recorder is not None:
@@ -1393,7 +1394,6 @@ class LocalPanel:
                     actor=operator_alias(operator),
                 )
             )
-        return released
 
     @property
     def preflight(self) -> PreflightMonitor | None:
