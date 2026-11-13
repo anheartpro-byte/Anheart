@@ -18,12 +18,12 @@ from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from src.geometry import MachineGeometry
-from src.medical import SHIPPED_PARAMETERS
+from src.medical import SHIPPED_PARAMETERS, MotionLimitValues
 from src.training.motion import (
-    DEFAULT_MOTION_LIMITS,
     MotionLimits,
     carry_after,
     count_reversals,
+    default_motion_limits,
     limits_of,
     motor_rate_limit,
     next_setpoint,
@@ -43,7 +43,7 @@ from src.units import (
 )
 
 ARM: Final[MachineGeometry] = MachineGeometry(radius=Metres(1.5))
-LIMITS: Final[MotionLimits] = DEFAULT_MOTION_LIMITS
+LIMITS: Final[MotionLimits] = default_motion_limits()
 MIN_RUN: Final[int] = int(LIMITS.min_run)
 CEILING: Final[int] = 1600
 
@@ -390,3 +390,29 @@ def test_a_signed_value_outside_the_limiter_s_bounds_is_refused() -> None:
     values = replace(SHIPPED_PARAMETERS.motion_limits, output_rpm_per_s=OutputRpmPerSecond(2.5))
     with pytest.raises(ValueError, match="output_accel"):
         limits_of(values)
+
+
+SHIPPED_MOTION: Final[MotionLimitValues] = SHIPPED_PARAMETERS.motion_limits
+
+
+@pytest.mark.parametrize(
+    ("member", "values"),
+    [
+        ("output_rpm_per_s", replace(SHIPPED_MOTION, output_rpm_per_s=OutputRpmPerSecond(2.5))),
+        ("g_per_s", replace(SHIPPED_MOTION, g_per_s=GLoadPerSecond(0.6))),
+        ("min_run_motor_rpm", replace(SHIPPED_MOTION, min_run_motor_rpm=MotorRpm(201))),
+        ("max_interval_s", replace(SHIPPED_MOTION, max_interval_s=Seconds(2.5))),
+    ],
+)
+def test_a_refused_signed_value_is_named_as_the_medical_file_names_it(
+    member: str, values: MotionLimitValues
+) -> None:
+    """ANH-235: the refusal says which member of ``motion_limits`` to fix."""
+    with pytest.raises(ValueError, match=rf"\({member}\) must be"):
+        limits_of(values)
+
+
+def test_the_shipped_limits_are_built_once_when_first_asked_for() -> None:
+    """Not at import: the console's startup check reports a refused one (code 2)."""
+    assert default_motion_limits() is default_motion_limits()
+    assert default_motion_limits() == limits_of(SHIPPED_MOTION)

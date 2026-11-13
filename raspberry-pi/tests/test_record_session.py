@@ -68,7 +68,7 @@ from src.record.session import (
 )
 from src.result import Err, Ok
 from src.sim.physiology import Physiology, SubjectState
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.plan import ProfileStore, Program
 from src.training.runtime import EndReason, RecordStorageLow, RuntimeLimits, RuntimeState
 from src.training.safety import SafetyLimits
@@ -445,7 +445,7 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         "RECORD_MACHINE_ID": "machine-7",
         "RECORD_ORGANIZATION_ID": "org-9",
     }
-    base = stamp_for(config_of(env), limits, safety, DEFAULT_MOTION_LIMITS, version)
+    base = stamp_for(config_of(env), limits, safety, default_motion_limits(), version)
     assert (base.machine_id, base.organization_id, base.software_version) == (
         "machine-7",
         "org-9",
@@ -462,10 +462,10 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         "MACHINE_API_KEY": "machine-key",
         "CONVEX_URL": "https://example.convex.site",
     }
-    assert stamp_for(config_of(secrets), limits, safety, DEFAULT_MOTION_LIMITS, version) == base
+    assert stamp_for(config_of(secrets), limits, safety, default_motion_limits(), version) == base
 
     other_radius = stamp_for(
-        config_of({**env, "ARM_RADIUS_M": "1.6"}), limits, safety, DEFAULT_MOTION_LIMITS, version
+        config_of({**env, "ARM_RADIUS_M": "1.6"}), limits, safety, default_motion_limits(), version
     )
     assert other_radius.config_hash != base.config_hash
     assert other_radius.medical_parameters_version == base.medical_parameters_version
@@ -474,7 +474,7 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         config_of(env),
         limits,
         SafetyLimits(hard_max_bpm=Bpm(150), critical_bpm=Bpm(160)),
-        DEFAULT_MOTION_LIMITS,
+        default_motion_limits(),
         version,
     )
     # Applied limits are in the hash; the version is the file's, whatever is applied.
@@ -483,7 +483,7 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
 
     loaded = load_local_config(env, unsigned())
     assert isinstance(loaded, Ok)
-    bench = stamp_for(loaded.value, limits, safety, DEFAULT_MOTION_LIMITS, version)
+    bench = stamp_for(loaded.value, limits, safety, default_motion_limits(), version)
     assert bench.medical_parameters_version == f"unsigned-sha256:{SHIPPED_DOCUMENT.sha256}"
     assert bench.medical_warning == loaded.value.medical.warning
     assert bench.config_hash != base.config_hash
@@ -492,7 +492,7 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         config_of({**env, "MOTOR_BACKEND": "serial", "MOTOR_PORT": "/dev/ttyUSB0"}),
         limits,
         safety,
-        DEFAULT_MOTION_LIMITS,
+        default_motion_limits(),
         version,
     )
     assert serial.config_hash != base.config_hash
@@ -509,7 +509,7 @@ def test_the_stamp_hashes_what_shapes_a_session_and_no_secret() -> None:
         ),
         limits,
         safety,
-        DEFAULT_MOTION_LIMITS,
+        default_motion_limits(),
         version,
     )
     assert bridged.sto_source is StoSourceKind.BRIDGED_DECLARED
@@ -521,19 +521,19 @@ def test_ex5_the_stamp_takes_its_version_from_the_build_and_never_from_the_envir
     limits = RuntimeLimits(slew=RpmPerSecond(15.0), start_hysteresis_rpm=MotorRpm(10))
     safety = SafetyLimits(hard_max_bpm=Bpm(148), critical_bpm=Bpm(158))
     built = SoftwareVersion("pi-1.4.2")
-    plain = stamp_for(config_of(BENCH_ENV), limits, safety, DEFAULT_MOTION_LIMITS, built)
+    plain = stamp_for(config_of(BENCH_ENV), limits, safety, default_motion_limits(), built)
     overridden = stamp_for(
         config_of({**BENCH_ENV, "ANHEART_SOFTWARE_VERSION": "set-by-hand"}),
         limits,
         safety,
-        DEFAULT_MOTION_LIMITS,
+        default_motion_limits(),
         built,
     )
     assert plain.software_version == "pi-1.4.2"
     assert overridden == plain
     # The version is a fact about the build, not a setting: another build, the same hashes.
     other = stamp_for(
-        config_of(BENCH_ENV), limits, safety, DEFAULT_MOTION_LIMITS, SoftwareVersion("pi-1.4.3")
+        config_of(BENCH_ENV), limits, safety, default_motion_limits(), SoftwareVersion("pi-1.4.3")
     )
     assert other.software_version == "pi-1.4.3"
     assert (other.config_hash, other.medical_parameters_version) == (

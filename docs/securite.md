@@ -2026,22 +2026,25 @@ Hors du Pi, sur le poste du signataire, depuis `raspberry-pi/` :
    inchangée. Il refuse aussi une clé privée qui n'est pas celle de
    `config/medical.pub`, écrit `config/medical_parameters.sig`, puis vérifie la
    signature comme la console.
-   Le script ne vérifie pas que les profils livrés
-   (`config/profiles.default.json`) restent recevables. La console lit d'abord
-   `data/profiles.local.json` et ne lit les profils livrés que si ce magasin est
-   absent ou refusé. Un `recovery_min_s`, un `cooldown_min_s` ou une
-   `zone_ceiling_fraction` qui refuse les profils livrés empêche donc la console
-   de démarrer dès qu'elle les charge (premier démarrage, magasin local absent
-   ou refusé ; code 1, avec une trace Python). Un magasin local refusé par ces
+   Il vérifie aussi, avec le code de la console, que les profils livrés
+   (`config/profiles.default.json`) restent recevables avec ce fichier
+   (ANH-235) : la console lit d'abord `data/profiles.local.json` et ne lit les
+   profils livrés que si ce magasin est absent ou refusé, et un
+   `recovery_min_s`, un `cooldown_min_s` ou une `zone_ceiling_fraction` qui
+   refuse les profils livrés l'empêcherait de démarrer dès qu'elle les charge
+   (premier démarrage, magasin local absent ou refusé ; code 1, avec une trace
+   Python). Ce jugement se fait avec les valeurs que la commande a lues à son
+   lancement : un fichier dont ces trois valeurs ont changé depuis est refusé,
+   et la commande est à relancer. Un magasin local refusé par ces
    valeurs est mis de côté au démarrage sous
    `data/profiles.local.json.corrupt-<empreinte>` (12 premiers caractères du
    SHA-256 de son contenu), puis la console tente les profils livrés.
    La gate Pi signale sur la PR le refus des profils livrés.
 4. `python scripts/sign_medical_parameters.py verify` : vérifie le format,
-   les mêmes bornes que `sign`, puis la signature. Pour les deux commandes,
-   un fichier livré inutilisable, y compris une limite de
-   mouvement refusée à l'import, produit `refuse : ...` sur stderr et un code
-   de sortie 1, sans trace Python ni écriture. Puis une PR ordinaire, relue ;
+   les mêmes bornes et les profils livrés comme `sign`, puis la signature.
+   Pour les deux commandes, un fichier livré inutilisable produit
+   `refuse : ...` sur stderr et un code de sortie 1, sans trace Python ni
+   écriture. Puis une PR ordinaire, relue ;
    la check-list de release relit toute valeur `[MED]` qui change ([release.md](release.md)).
 
 ### 13.5 Ce que cela ne couvre pas

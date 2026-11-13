@@ -139,12 +139,13 @@ class MotionLimits:
     """The longest interval one step may be paid for with (see the module docstring)."""
 
     def __post_init__(self) -> None:
-        _finite_in("output_accel", self.output_accel, MAX_OUTPUT_ACCEL)
-        _finite_in("g_rate", self.g_rate, MAX_G_RATE)
-        _finite_in("max_interval", self.max_interval, MAX_INTERVAL_CEILING)
+        # Each named as the medical file names it too: that is where a refused one is fixed.
+        _finite_in("output_accel (output_rpm_per_s)", self.output_accel, MAX_OUTPUT_ACCEL)
+        _finite_in("g_rate (g_per_s)", self.g_rate, MAX_G_RATE)
+        _finite_in("max_interval (max_interval_s)", self.max_interval, MAX_INTERVAL_CEILING)
         _require(
             1 <= self.min_run <= MAX_MIN_RUN,
-            f"min_run must be 1..{MAX_MIN_RUN} motor rpm, got {self.min_run}",
+            f"min_run (min_run_motor_rpm) must be 1..{MAX_MIN_RUN} motor rpm, got {self.min_run}",
         )
 
 
@@ -158,8 +159,17 @@ def limits_of(values: MotionLimitValues) -> MotionLimits:
     )
 
 
-DEFAULT_MOTION_LIMITS: Final[MotionLimits] = limits_of(SHIPPED_PARAMETERS.motion_limits)
-"""The shipped file's limits: 0.25 output rpm/s, 0.03 g/s, 55 motor rpm, 1 s."""
+@lru_cache(maxsize=1)
+def default_motion_limits() -> MotionLimits:
+    """The shipped file's limits: 0.25 output rpm/s, 0.03 g/s, 55 motor rpm, 1 s.
+
+    Built when first asked for, never at import: a shipped value outside the
+    bounds above is a configuration problem the console reports at startup
+    and exits on with the code its service does not restart on
+    (:func:`src.local_config.load_local_config`), not an import that fails and
+    is started again and again. Raises ``ValueError`` like :func:`limits_of`.
+    """
+    return limits_of(SHIPPED_PARAMETERS.motion_limits)
 
 
 def motor_rate_limit(speed: MotorRpm, limits: MotionLimits, geometry: MachineGeometry) -> float:

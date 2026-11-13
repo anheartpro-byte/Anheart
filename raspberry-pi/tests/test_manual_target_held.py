@@ -63,7 +63,7 @@ from src.local_panel import RUNTIME_LIMITS
 from src.motor.drive import BadResponse, DriveError
 from src.result import Err, Ok, Result, is_ok
 from src.training.hr_control import HeartRateTracker
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.runtime import (
     EndReason,
     HeldAtStandstill,
@@ -279,7 +279,7 @@ async def _on_the_console_s_limits(bpm: int) -> Rig:
     What a real start looks like to the heart-rate gate: the ECG has been
     running, so the tracker holds more readings than its trend needs.
     """
-    rig = _rig(limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(limits=RUNTIME_LIMITS, motion=default_motion_limits())
     _read_before_the_start(rig, bpm)
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
     assert is_ok(await rig.runtime.start_manual(Occupancy.OCCUPIED, OPERATOR, MANUAL_CEILING))
@@ -481,7 +481,7 @@ async def test_a_verdict_on_a_session_s_first_tick_takes_back_a_target_typed_bef
     nothing standing, the same target is followed at once: the second half
     shows the first half is not a session that simply cannot move.
     """
-    caught = _rig(motion=DEFAULT_MOTION_LIMITS)
+    caught = _rig(motion=default_motion_limits())
     assert is_ok(caught.runtime.confirm_estop_wiring(OPERATOR))
     assert is_ok(await caught.runtime.start_manual(Occupancy.BENCH, OPERATOR, MANUAL_CEILING))
     assert _ask(caught, 200) == Ok(MotorRpm(200))
@@ -493,7 +493,7 @@ async def test_a_verdict_on_a_session_s_first_tick_takes_back_a_target_typed_bef
     assert isinstance(caught.runtime.acknowledge(OPERATOR), Ok)
     assert not _moved([first, *await caught.run(30.0)])
 
-    free = _rig(motion=DEFAULT_MOTION_LIMITS)
+    free = _rig(motion=default_motion_limits())
     assert is_ok(free.runtime.confirm_estop_wiring(OPERATOR))
     assert is_ok(await free.runtime.start_manual(Occupancy.BENCH, OPERATOR, MANUAL_CEILING))
     assert _ask(free, 200) == Ok(MotorRpm(200))
@@ -732,7 +732,7 @@ async def test_a_first_target_before_the_trend_is_known_is_refused_then_taken() 
     is taken and followed at once. On ``da5efa9`` the first one was accepted
     and the arm left four seconds later, when the fifth reading came.
     """
-    rig = _rig(limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(limits=RUNTIME_LIMITS, motion=default_motion_limits())
     rig.fed_bpm = Bpm(75)
     rig.feed(Bpm(75))
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
@@ -1028,7 +1028,7 @@ async def _session(occupancy: Occupancy, deaf: _Deaf) -> _Session:
     The readings before the start are pushed out of band, a second apart, as
     ``_read_before_the_start`` does, and each is given to the shadow tracker.
     """
-    rig = _rig(motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(motion=default_motion_limits())
     rig.fed_bpm = Bpm(80)
     session = _Session(rig=rig, occupancy=occupancy, deaf=deaf)
     for _ in range(6):
@@ -1123,7 +1123,7 @@ async def test_a_first_target_on_a_steady_heart_rate_is_taken_and_followed_at_on
 
 async def test_an_empty_capsule_has_no_heart_rate_to_wait_for() -> None:
     """Nobody on board: no reading has ever been fed, and a target is taken and followed."""
-    rig = _rig(motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(motion=default_motion_limits())
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
     assert is_ok(await rig.runtime.start_manual(Occupancy.BENCH, OPERATOR, MANUAL_CEILING))
     await rig.run(10.0, feed=False)
@@ -1303,7 +1303,7 @@ async def test_a_manual_start_under_a_standing_verdict_is_refused_and_carries_no
     session it arms asks for nothing: the target is zero until somebody types
     one, so no start can stand in for a target.
     """
-    rig = _rig(motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(motion=default_motion_limits())
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
     rig.runtime.trip_from_thread("rig_freeze", SafetyAction.FREEZE, "under test")
     await rig.step()
@@ -1338,7 +1338,7 @@ async def test_the_hold_announced_before_a_target_is_the_one_it_would_be_refused
     announced, and a gap of six seconds, which is not yet a warning, is
     announced as no usable heart rate, again the reason of the refusal.
     """
-    rig = _rig(limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+    rig = _rig(limits=RUNTIME_LIMITS, motion=default_motion_limits())
     rig.fed_bpm = Bpm(75)
     rig.feed(Bpm(75))
     assert is_ok(rig.runtime.confirm_estop_wiring(OPERATOR))
@@ -1376,7 +1376,7 @@ async def test_nothing_is_announced_with_nobody_on_board_nor_outside_a_manual_se
     until the next start: a hold read off that record would be announced at
     rest, to an operator who has nothing to type.
     """
-    idle = _rig(limits=RUNTIME_LIMITS, motion=DEFAULT_MOTION_LIMITS)
+    idle = _rig(limits=RUNTIME_LIMITS, motion=default_motion_limits())
     assert _announced(idle) is None, "announced before any session, with no reading at all"
 
     bench = await _not_moved_yet(Occupancy.BENCH)

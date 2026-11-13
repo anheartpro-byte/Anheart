@@ -30,7 +30,7 @@ from simulation.invariants import rules_seen
 from simulation.scenario import SCENARIO_DIR
 from simulation.tests.conftest import run_file
 from src.record.rows import Row
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.safety import (
     RULE_HR_STALE,
     RULE_LOOP_STALL,
@@ -48,7 +48,7 @@ STOP_AT: Final[float] = 432.0
 REMOTE_STOP_AT: Final[float] = 160.0
 """The manual scenario's stop, ten seconds after the loop stalled."""
 
-MIN_RUN: Final[int] = int(DEFAULT_MOTION_LIMITS.min_run)
+MIN_RUN: Final[int] = int(default_motion_limits().min_run)
 
 TICK: Final[float] = 0.2
 

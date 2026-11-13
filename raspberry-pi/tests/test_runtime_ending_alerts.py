@@ -61,7 +61,7 @@ from src.motor.drive import DriveFault
 from src.result import Err, Ok, is_ok
 from src.training import runtime as runtime_module
 from src.training.hr_control import Gains
-from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, ramp_duration
+from src.training.motion import MotionLimits, default_motion_limits, ramp_duration
 from src.training.plan import COMMISSIONED_DECEL_S, MIN_RECOVERY_S, TrainingProfile
 from src.training.runtime import (
     BENCH_RECOVERY,
@@ -199,7 +199,7 @@ async def _shipped() -> Rig:
     rig = _rig(
         profile=REAL_PROFILE,
         limits=RUNTIME_LIMITS,
-        motion=DEFAULT_MOTION_LIMITS,
+        motion=default_motion_limits(),
         occupant=Occupant(),
     )
     started = await rig.start()
@@ -694,7 +694,7 @@ async def test_a_manual_ending_is_stated_with_the_descent_from_the_speed_it_open
     stated = seen[-1].ending
     assert stated is not None
     assert stated.opened == Seconds(_since_start(rig))
-    assert float(stated.descent) == pytest.approx(_expected(200, DEFAULT_MOTION_LIMITS, None))
+    assert float(stated.descent) == pytest.approx(_expected(200, default_motion_limits(), None))
     assert float(stated.descent) == pytest.approx(12.0 + float(COMMISSIONED_DECEL_S))
     assert stated.recovery == recovery
 
@@ -733,7 +733,7 @@ async def test_an_emergency_stop_at_speed_is_stated_with_the_descent_from_the_sp
         _target(rig, 200)
         await rig.run(30.0)
         speed = int(_applied(rig))
-        expected = _expected(speed, DEFAULT_MOTION_LIMITS, None)
+        expected = _expected(speed, default_motion_limits(), None)
     assert speed > 0, "the arm is not turning: not this case"
 
     with _observations() as seen:
@@ -859,7 +859,7 @@ async def test_a_stop_on_an_arm_that_is_not_coming_down_buys_its_own_descent_and
     await rig.step()
     opened = _since_start(rig)
 
-    expected = _expected(held, DEFAULT_MOTION_LIMITS, float(RUNTIME_LIMITS.slew))
+    expected = _expected(held, default_motion_limits(), float(RUNTIME_LIMITS.slew))
     assert expected < 45.0, "the descent expected from a HOLD speed is not a matter of minutes"
     latest = opened + expected + 30.0
     while _overrun(rig) is None:
@@ -907,7 +907,7 @@ async def test_a_manual_descent_blocked_below_the_ceiling_is_judged_on_the_speed
         "the ceiling's own walk is not the long one: not this case"
     )
 
-    expected = _expected(300, DEFAULT_MOTION_LIMITS, None)
+    expected = _expected(300, default_motion_limits(), None)
     assert expected == pytest.approx(24.0)
     await rig.run(expected + 30.0 - 2.0)
     assert _overrun(rig) is None, f"fired early, {_since_start(rig):.1f} s in"
@@ -1011,7 +1011,7 @@ async def test_every_descent_of_a_programme_fits_the_time_its_ending_is_given(pa
     control law far quicker than the motion limits (70 rpm/s) it is the walk
     that paces every descent, and the walk that is stated.
     """
-    programme = _rig(profile=pace.profile, limits=pace.limits, motion=DEFAULT_MOTION_LIMITS)
+    programme = _rig(profile=pace.profile, limits=pace.limits, motion=default_motion_limits())
     programme.fed_bpm = Bpm(82)
     started = await programme.start()
     assert is_ok(started), started
@@ -1040,13 +1040,15 @@ async def test_every_descent_of_a_programme_fits_the_time_its_ending_is_given(pa
                 assert _since_start(rig) < opened + 300.0, f"{what}: the setpoint never came down"
             stated = seen[-1].ending
         assert stated is not None, what
-        assert float(stated.descent) == pytest.approx(_expected(speed, DEFAULT_MOTION_LIMITS, slew))
+        assert float(stated.descent) == pytest.approx(
+            _expected(speed, default_motion_limits(), slew)
+        )
         took[what] = _since_start(rig) - opened
         assert took[what] <= float(stated.descent) - float(COMMISSIONED_DECEL_S) + TICK, (
             f"{what}: {took[what]:.1f} s to come down from {speed} motor rpm, "
             f"{float(stated.descent):.1f} s expected"
         )
-    walk_alone = _expected(speed, DEFAULT_MOTION_LIMITS, None)
+    walk_alone = _expected(speed, default_motion_limits(), None)
     assert took["a STOP under a latched FREEZE"] < took["a STOP"] + 2 * TICK
     if slew < 12.0:
         assert took["a STOP"] > walk_alone + 25.0, "the slow law is not what paced this descent"

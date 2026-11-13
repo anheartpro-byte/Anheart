@@ -15,19 +15,24 @@ one and no other: never use it to sign anything else (the programme catalogue
 has a key of its own).
 
 ``sign`` reads ``config/medical_parameters.json``, refuses it if it is
-malformed (the console's own parser, :func:`src.medical.parse_document`) or
+malformed (the console's own parser, :func:`src.medical.parse_document`),
 outside the console's startup bounds (:func:`src.local_config.load_local_config`),
-refuses a private key whose public half is not ``config/medical.pub``, then
-writes the detached Ed25519 signature of the file's exact bytes to
-``config/medical_parameters.sig`` and checks it the way the console will.
-The bounds are checked before comparing the key or writing any signature.
+or if the console would then refuse its shipped profiles
+(``config/profiles.default.json``, its own :func:`src.training.plan.parse_store`,
+which holds them to ``recovery_min_s``, ``cooldown_min_s`` and
+``zone_ceiling_fraction``), refuses a private key whose public half is not
+``config/medical.pub``, then writes the detached Ed25519 signature of the
+file's exact bytes to ``config/medical_parameters.sig`` and checks it the way
+the console will. All of this is checked before comparing the key or writing
+any signature.
 
-``verify`` checks the file's shape, the same startup bounds, then its signature,
-and says which version is signed, by whom, and with which key.
+``verify`` checks the file's shape, the same startup bounds, the shipped
+profiles, then its signature, and says which version is signed, by whom, and
+with which key.
 
-An unusable shipped file, including an integer no float can represent or a
-motion limit refused at import, is reported as ``refuse : ...`` on stderr:
-exit code 1, no traceback, no passphrase prompt and no file written.
+An unusable shipped file, such as an integer no float can represent, is
+reported as ``refuse : ...`` on stderr: exit code 1, no traceback, no
+passphrase prompt and no file written.
 
 The same check, without this repository's code (OpenSSL 3)::
 
@@ -61,12 +66,14 @@ try:
     from src.medical import (
         PARAMETERS_PATH,
         PUBLIC_KEY_PATH,
+        SHIPPED_PARAMETERS,
         SIGNATURE_PATH,
         MedicalDocument,
         MedicalStatus,
         parse_document,
         status_of,
     )
+    from src.training.plan import SHIPPED_DEFAULTS_PATH, parse_store
 except ValueError as error:
     if __name__ != "__main__":
         raise
@@ -95,6 +102,27 @@ def _console_bounds(document: MedicalDocument) -> None:
             )
 
 
+def _shipped_profiles(document: MedicalDocument) -> None:
+    """The shipped profiles, read by the console's own code, which holds them to the values
+    of the medical file it read when it started: those this command read, and so these."""
+    signed, read = document.parameters, SHIPPED_PARAMETERS
+    if (signed.recovery_min_s, signed.cooldown_min_s, signed.zone_ceiling_fraction) != (
+        read.recovery_min_s,
+        read.cooldown_min_s,
+        read.zone_ceiling_fraction,
+    ):
+        raise SigningError(
+            "recovery_min_s, cooldown_min_s ou zone_ceiling_fraction n'est plus celui lu au "
+            "lancement de la commande : la relancer pour juger les profils livres"
+        )
+    parsed = parse_store(SHIPPED_DEFAULTS_PATH.read_text(encoding="utf-8"))
+    if isinstance(parsed, Err):
+        raise SigningError(
+            f"la console refuserait ses profils livres ({SHIPPED_DEFAULTS_PATH.name}) avec ce "
+            f"fichier et ne demarrerait pas sans magasin local : {parsed.error.detail}"
+        )
+
+
 def public_pem(private: Ed25519PrivateKey) -> bytes:
     """The public half of ``private``, as ``config/medical.pub`` holds it."""
     return private.public_key().public_bytes(
@@ -107,6 +135,7 @@ def _checked_document(content: bytes, *, where: str) -> MedicalDocument:
     if isinstance(parsed, Err):
         raise SigningError("fichier refuse par la console : " + " ; ".join(parsed.error))
     _console_bounds(parsed.value)
+    _shipped_profiles(parsed.value)
     return parsed.value
 
 
@@ -196,7 +225,9 @@ def main(argv: list[str] | None = None) -> int:
     generate.add_argument("private_key", type=Path)
     signing = commands.add_parser("sign", help="signer config/medical_parameters.json")
     signing.add_argument("private_key", type=Path)
-    commands.add_parser("verify", help="verifier comme la console au demarrage")
+    commands.add_parser(
+        "verify", help="verifier le fichier, les profils livres et la signature comme la console"
+    )
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "generate-key":
@@ -205,11 +236,10 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "sign":
             _checked_document(PARAMETERS_PATH.read_bytes(), where=PARAMETERS_PATH.name)
             private = load_private_key(arguments.private_key, _passphrase(confirm=False))
-            print(
-                f"signe : version {sign(private, parameters_path=PARAMETERS_PATH)}, {SIGNATURE_PATH}"
-            )
+            version = sign(private, PARAMETERS_PATH, SIGNATURE_PATH, PUBLIC_KEY_PATH)
+            print(f"signe : version {version}, {SIGNATURE_PATH}")
         else:
-            print(describe())
+            print(describe(PARAMETERS_PATH, SIGNATURE_PATH, PUBLIC_KEY_PATH))
     except SigningError as error:
         print(f"refuse : {error}", file=sys.stderr)
         return 1

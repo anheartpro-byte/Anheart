@@ -79,7 +79,7 @@ from src.training.hr_control import (
     StaleSequence,
     TrackerLimits,
 )
-from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, motor_rate_limit
+from src.training.motion import MotionLimits, default_motion_limits, motor_rate_limit
 from src.training.plan import INITIAL_REV, Channel, Program, TrainingProfile
 from src.training.preflight import PreflightRefused, StoBridgedOnBoard, StoNotReady
 from src.training.runtime import (
@@ -3584,7 +3584,7 @@ async def _climbing_rig(
 ) -> tuple[Rig, list[tuple[float, MotorRpm, SafetyAction]]]:
     rig = _rig(
         profile=_climbing_profile(**overrides),
-        motion=DEFAULT_MOTION_LIMITS,
+        motion=default_motion_limits(),
         limit_radius=limit_radius,
     )
     rig.fed_bpm = Bpm(82)
@@ -3611,7 +3611,7 @@ def _assert_motion_limited(
     that radius, with one rpm of slack. The 0 <-> min_run passage is exempt, as
     the motion module documents.
     """
-    motion = DEFAULT_MOTION_LIMITS
+    motion = default_motion_limits()
     last_change = trace[0][0]
     for (_, a, _), (t, b, action) in pairwise(trace):
         if a == b:

@@ -112,7 +112,7 @@ from src.sensors.base import SensorKind
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.sim.physiology import Physiology, SubjectState
 from src.training.hr_control import HeartRateRejection, TrackerReading
-from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits
+from src.training.motion import MotionLimits, default_motion_limits
 from src.training.plan import INITIAL_REV, Program, TrainingProfile
 from src.training.preflight import PreflightInputs, PreflightMonitor, PreflightReport
 from src.training.runtime import (
@@ -202,11 +202,11 @@ STO_INPUT: Final[LogicInput] = LogicInput.LI1
 def load_motion() -> MotionLimits:
     """The shipped motion limits: the ``motion_limits`` of ``config/medical_parameters.json``.
 
-    Read and checked when :mod:`src.medical` and :mod:`src.training.motion` are
-    imported: a file the console could not use stops the simulation there, as
-    it stops the console.
+    Read when :mod:`src.medical` is imported, checked here against the bounds
+    of :mod:`src.training.motion`: a value the console would refuse at startup
+    stops the simulation with the same ``ValueError``.
     """
-    return DEFAULT_MOTION_LIMITS
+    return default_motion_limits()
 
 
 # =========================================================================

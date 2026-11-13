@@ -25,7 +25,7 @@ import pytest
 
 from src.motor.drive import CommTimeout, ControlWord, DriveFault
 from src.result import Err, Ok, is_ok
-from src.training.motion import DEFAULT_MOTION_LIMITS, Ramp
+from src.training.motion import Ramp, default_motion_limits
 from src.training.runtime import (
     RULE_DISABLE_REFUSED,
     RULE_DRIVE_PRECOMMANDED,
@@ -69,7 +69,7 @@ from tests.test_runtime_manual import (
 
 
 def _rig(**kwargs: object) -> Rig:
-    return _programme_rig(motion=DEFAULT_MOTION_LIMITS, **kwargs)  # type: ignore[arg-type]  # keyword pass-through
+    return _programme_rig(motion=default_motion_limits(), **kwargs)  # type: ignore[arg-type]  # keyword pass-through
 
 
 def _standing(rig: Rig) -> SafetyVerdict | None:
@@ -411,7 +411,7 @@ async def test_under_a_reduce_the_ramp_announced_is_the_descent_to_zero() -> Non
         assert view.ramp == Ramp(
             start=snapshot.setpoint.motor_rpm,
             target=MotorRpm(0),
-            limits=DEFAULT_MOTION_LIMITS,
+            limits=default_motion_limits(),
             geometry=GEOMETRY,
         )
     # The arrival time is the time to zero, and it is a true one: it shrinks by a tick a tick.

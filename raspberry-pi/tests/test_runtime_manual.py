@@ -44,7 +44,7 @@ from src.result import Err, Ok, is_ok
 from src.training import motion as motion_module
 from src.training import runtime as runtime_module
 from src.training.hr_control import TrackerLimits
-from src.training.motion import DEFAULT_MOTION_LIMITS, MotionLimits, Ramp, motor_rate_limit
+from src.training.motion import MotionLimits, Ramp, default_motion_limits, motor_rate_limit
 from src.training.runtime import (
     RULE_DRIVE_PRECOMMANDED,
     AlreadyStarted,
@@ -120,12 +120,12 @@ def _rig(**kwargs: object) -> Rig:
     because a programme's setpoint walks them too; every manual test here is
     about the real 0.25 output rpm/s and 0.03 g/s.
     """
-    return _programme_rig(motion=DEFAULT_MOTION_LIMITS, **kwargs)  # type: ignore[arg-type]  # keyword pass-through
+    return _programme_rig(motion=default_motion_limits(), **kwargs)  # type: ignore[arg-type]  # keyword pass-through
 
 
 CEILING: Final[MotorRpm] = MotorRpm(300)
-MIN_RUN: Final[int] = int(DEFAULT_MOTION_LIMITS.min_run)
-RATE: Final[float] = motor_rate_limit(MotorRpm(0), DEFAULT_MOTION_LIMITS, GEOMETRY)
+MIN_RUN: Final[int] = int(default_motion_limits().min_run)
+RATE: Final[float] = motor_rate_limit(MotorRpm(0), default_motion_limits(), GEOMETRY)
 
 
 def _out(rpm: int) -> OutputRpm:
@@ -228,7 +228,7 @@ async def test_a_manual_start_is_refused_before_the_drive_is_touched(
 
 async def test_motion_limits_too_slow_to_ever_move_refuse_the_start() -> None:
     rig = _rig()
-    crawling = replace(DEFAULT_MOTION_LIMITS, output_accel=OutputRpmPerSecond(0.01))
+    crawling = replace(default_motion_limits(), output_accel=OutputRpmPerSecond(0.01))
     runtime = TrainingRuntime(
         sto=ready_sto(),
         clock=rig.clock,
@@ -443,7 +443,7 @@ async def test_the_arrival_time_of_a_snapshot_is_the_walk_from_what_that_snapsho
         view = snapshot.manual
         assert view is not None
         expected = motion_module.ramp_duration(
-            snapshot.setpoint.motor_rpm, view.target.motor_rpm, DEFAULT_MOTION_LIMITS, GEOMETRY
+            snapshot.setpoint.motor_rpm, view.target.motor_rpm, default_motion_limits(), GEOMETRY
         )
         announced = view.ramp_eta
         assert announced == expected, (snapshot.setpoint.motor_rpm, view.target.motor_rpm)
@@ -490,7 +490,7 @@ async def test_two_snapshots_of_the_same_state_carry_the_same_manual_view() -> N
     assert one.manual.ramp == Ramp(
         start=MotorRpm(200),
         target=MotorRpm(200),
-        limits=DEFAULT_MOTION_LIMITS,
+        limits=default_motion_limits(),
         geometry=GEOMETRY,
     )
     assert one.manual.ramp_eta == 0.0

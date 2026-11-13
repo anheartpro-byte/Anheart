@@ -57,7 +57,7 @@ from src.local_panel import RUNTIME_LIMITS
 from src.motor.drive import ControlWord, DriveError, DriveFault
 from src.result import Err, Ok, Result, is_ok
 from src.training import runtime as runtime_module
-from src.training.motion import DEFAULT_MOTION_LIMITS
+from src.training.motion import default_motion_limits
 from src.training.runtime import EndReason, RuntimeState, SafetyStanding, TrainingRuntime
 from src.training.safety import (
     RULE_COMMS_LOST,
@@ -280,7 +280,7 @@ async def test_the_shipped_programme_then_twice_its_length_at_rest_and_a_new_sta
     rig = _rig(
         profile=REAL_PROFILE,
         limits=RUNTIME_LIMITS,
-        motion=DEFAULT_MOTION_LIMITS,
+        motion=default_motion_limits(),
         occupant=Occupant(),
     )
     assert is_ok(await rig.start())
