@@ -721,8 +721,9 @@ prise sinon). Aucun essai matériel de cette procédure n'est consigné ici.
 
 Avant l'étape 4, la page « Pre-vol » de la console
 ([4.2](#le-pré-vol-anh-142)) doit être sans rouge dans la colonne Banc : un
-contrôle bloquant rouge (disque, variateur, attestation, verdict, contrat,
-incident grave annoncé) grise le bouton de confirmation et refuserait le départ.
+contrôle bloquant rouge (disque, variateur, attestation, verdict, contrat)
+grise le bouton de confirmation et refuserait le départ. Un incident grave
+ouvert n'y est qu'un avertissement (ANH-145).
 
 Un lancement de banc refusé à la console (verdict à acquitter, console hors
 service, caméra, attestation absente au démarrage, contrôle bloquant du
@@ -1224,7 +1225,7 @@ suivent sans changement.
 | 6 | `clock` | bloquant | avertissement | horloge synchronisée, erreur garantie (`maxerror` du noyau) sous 5 s. Une horloge temps réel seule ne suffit pas. Sur un système qui ne peut pas être interrogé (le Mac du banc), l'erreur est inconnue : rouge avec une personne à bord, orange au banc. Avec le variateur simulé (`MOTOR_BACKEND=sim` : aucun moteur réel, personne dans une capsule simulée), cette erreur inconnue est orange même avec une personne à bord ; une horloge que personne ne tient y reste rouge |
 | 7 | `contract` | bloquant | bloquant | aucun refus de contrat du tableau de bord ; console non reliée : sans objet ; tableau de bord muet : orange, non vérifié |
 | 8 | `medical` | bloquant | sans objet | paramètres médicaux signés. La version attendue n'est pas jugée (aucune référence du serveur) |
-| 9 | `incidents` | bloquant | bloquant | aucun incident grave ouvert annoncé. Tant que le serveur n'en annonce aucun compte (ANH-145), orange « non annonces » |
+| 9 | `incidents` | bloquant | avertissement | aucun incident grave ouvert ou analysé annoncé par le dernier poll (`incidents_open_high`, contrat 1.10, ANH-145). Un compte non nul ferme tout départ avec une personne à bord, et n'est qu'un avertissement au banc (EX-4 d'ANH-145) ; sans compte annoncé (serveur antérieur, aucun poll reçu), orange « non annonces » |
 | 10 | `bitalino` | bloquant | avertissement | BITalino connecté, aucune lecture de sa batterie attendue ni en cours, batterie lue à cette passe au moins `BITALINO_MIN_BATTERY_PCT` (30 % par défaut), lue il y a moins de 30 min |
 | 11 | `ecg` | bloquant | sans objet | qualité ECG `good` sans interruption depuis 30 s |
 | 12 | `temperature` | avertissement | avertissement | Pi sous 70 °C, mesuré par le pré-vol à chaque pas (zone thermique du noyau), console reliée ou non ; non mesurée (hors Linux) : orange |
@@ -1237,7 +1238,13 @@ personne à bord (capsule vide ou lestée d'environ 80 kg, vitesse pilotée,
 aucune règle cardiaque), une horloge non fiable, un BITalino absent ou une
 batterie basse ne créent aucun danger pour une personne, et les premiers essais
 se font au banc, souvent sans Internet. Ils sont visibles et écrits, ils ne
-bloquent pas. Tous les autres contrôles bloquants bloquent aussi le banc.
+bloquent pas. Un incident grave ouvert non plus (ANH-145, EX-4 : « seules les
+séances manuelles en banc restent possibles ») : il ferme les séances
+programmées et tout départ avec une personne à bord, et laisse la séance de
+banc qui permet d'en chercher la cause. Cette règle, plus précise et plus
+récente, remplace pour ce seul contrôle la décision du 29 octobre, qui le
+bloquait aussi au banc. Tous les autres contrôles bloquants bloquent aussi le
+banc.
 
 **Les passes.** Une passe commence avec la console, chaque fois que la
 console revient au repos après une séance (donc avant chaque séance), et quand

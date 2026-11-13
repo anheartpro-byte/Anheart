@@ -2858,7 +2858,8 @@ la carte dit pourquoi : `Depart refuse, pre-vol : batterie BITalino 20 % < 30 %`
 De même pour `Demarrer MANUEL` (une séance de banc) avec la liste du banc. Une
 batterie basse, un BITalino absent ou une horloge non fiable ne retiennent pas
 un départ de banc : ce sont des avertissements au banc (décision du pilote du
-29 octobre 2026).
+29 octobre 2026). Un incident grave ouvert non plus (ANH-145) : il retient
+tout départ avec une personne à bord, et n'est qu'un avertissement au banc.
 
 Le bouton de confirmation de la carte « Depart distant » suit la même règle :
 pour une séance de banc lestée lancée du site, la colonne Banc ; pour un programme,
@@ -2886,7 +2887,11 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
   serveur ne donne aucune référence. La version logicielle reste orange « non
   jugee » ; la signature des paramètres médicaux, elle, est exigée.
 - Les incidents graves ouverts : orange « non annonces » tant que le serveur
-  n'en annonce pas le compte (ANH-145) ; rouge dès qu'il en annonce un.
+  n'en annonce pas le compte (serveur antérieur au contrat 1.10, ou aucun
+  poll reçu) ; dès qu'il en annonce un, rouge avec une personne à bord et
+  orange au banc (ANH-145), avec la raison : `1 incident(s) grave(s)
+  ouvert(s) sur cette machine : aucune personne a bord avant leur cloture par
+  un admin Anheart`. Il redevient vert au poll qui suit la clôture du dernier.
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino
   ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).

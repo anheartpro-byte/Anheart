@@ -298,7 +298,12 @@ def _incidents(inputs: PreflightInputs) -> Result[str, Finding]:
     if count is None:
         return Err(Unjudged("incidents graves ouverts : non annonces par le tableau de bord"))
     if count > 0:
-        return Err(Failed(f"{count} incident(s) grave(s) ouvert(s) sur cette machine"))
+        return Err(
+            Failed(
+                f"{count} incident(s) grave(s) ouvert(s) sur cette machine : aucune personne "
+                "a bord avant leur cloture par un admin Anheart"
+            )
+        )
     return Ok("aucun incident grave ouvert")
 
 
@@ -460,7 +465,9 @@ CONTROLS: Final[tuple[Control, ...]] = (
         id="incidents",
         label="Aucun incident grave ouvert",
         on_board=BLOCK,
-        bench=BLOCK,
+        # ANH-145 EX-4: an open serious incident closes programmed sessions, not the
+        # manual bench session that looks for its cause.
+        bench=WARN,
         max_duration=Seconds(30.0),
         check=_incidents,
     ),
