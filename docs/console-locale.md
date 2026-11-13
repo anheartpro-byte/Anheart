@@ -2951,7 +2951,7 @@ tableau de bord en échec : `refusee par la machine : pre-vol : <raison>`.
 
 Tant qu'une personne à bord est retenue pour une séance mal terminée que le
 tableau de bord ne compte pas encore, la carte le dit sous `Relancer`
-(`Personne a bord retenue : <raison>`) ; pour une séance perdue seulement,
+(`Personne a bord retenue : <raison>`, qui nomme toutes les séances perdues, séparées par ` ; `, puisque l'acquittement les lève toutes) ; pour une séance perdue seulement,
 elle propose `Acquitter une seance perdue` (`POST /api/preflight/acknowledge`,
 au nom de l'opérateur).
 
@@ -2986,14 +2986,23 @@ le lève pour cette exécution seulement, en mémoire, et le démarrage suivant 
 liste et le retient de nouveau, jusqu'à ce qu'il soit lu et envoyé ou
 acquitté encore. L'acquittement efface ces séances, celles affichées quand il
 est demandé et elles seules : une séance perdue pendant qu'il s'écrit retient
-encore. Une ligne `lost_stops_acknowledged`
-est écrite au journal de bord (`logbook/events.jsonl`), avec l'alias de
-l'opérateur et ce qui est levé, dès la décision et avant l'écriture du
-registre ; si le registre ne s'écrit pas, une ligne `lost_stops_unwritten`
-suit avec le refus. Le registre écrit par l'acquittement garde ce qu'il a
-levé : le démarrage suivant le dit (`seance(s) perdue(s) levee(s) par un
-acquittement avant ce demarrage : ...`, sur la page et au journal de bord),
-puis l'efface. Une écriture arrivée après son attente, ou juste avant un
+encore. Le journal de bord (`logbook/events.jsonl`) en garde, avec l'alias
+de l'opérateur, ces lignes, chacune avec les séances concernées :
+
+* `lost_stops_acknowledgement_requested` : la demande, écrite dès la
+  décision et avant le registre. Elle ne dit pas encore que les séances sont
+  levées ;
+* `lost_stops_acknowledged` : la levée, une fois le registre écrit (ou tout
+  de suite, pour une console qui n'enregistre rien ou un enregistrement
+  illisible, levé en mémoire seulement) ;
+* `lost_stops_unwritten` : le refus, quand le registre ne s'écrit pas. Rien
+  n'est levé, sauf si l'écriture arrive après son attente.
+
+Une demande que ne suit aucune des deux autres a été coupée par un arrêt de
+la console. Le registre écrit par l'acquittement garde ce qu'il a levé : le
+démarrage suivant écrit au journal de bord, séance ouverte ou non,
+`lost_stops_released_before_start` avec ces séances (ligne du système), puis
+l'efface. Une écriture arrivée après son attente, ou juste avant un
 redémarrage, ne lève donc jamais rien que le journal de bord ne dise. Le nom
 va aussi au journal du système.
 

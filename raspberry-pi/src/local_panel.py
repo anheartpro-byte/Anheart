@@ -3027,7 +3027,23 @@ def record_source(journal: Journal, clock: Clock) -> RecordSource:
     def current() -> Path | None:
         return journal.status(clock.monotonic()).path
 
-    return RecordSource(root=journal.root, current=current, io=RecordIo(1), boot_id=boot_identity())
+    def logbook(detail: str) -> None:
+        line = note(
+            wall_clock=clock.unix_millis(),
+            at=clock.monotonic(),
+            kind=EventKind.WARNING,
+            detail=detail,
+            actor=SYSTEM,
+        )
+        journal.log(line)
+
+    return RecordSource(
+        root=journal.root,
+        current=current,
+        io=RecordIo(1),
+        boot_id=boot_identity(),
+        logbook=logbook,
+    )
 
 
 def build_recorder(

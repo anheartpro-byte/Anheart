@@ -57,6 +57,7 @@ from src.record.schema import Event, EventKind, RecordError
 from src.record.upload import MAX_POINTS, READ_CHUNK, TAIL_CHUNK, Batch, read_batch, read_head
 from src.record_uplink import (
     ACKNOWLEDGED,
+    ACKNOWLEDGEMENT_REQUESTED,
     ACKNOWLEDGEMENT_UNWRITTEN,
     BIND_GRACE,
     CATCH_UP_PERIOD,
@@ -3050,7 +3051,7 @@ def lost(b: Bench, why: str) -> bool:
     return (
         words is not None
         and words.startswith(LOST_STOP.format(why=why).split(" (")[0])
-        and (f"({why}, " in words)
+        and (f"({why}, " in words or f" ; {why}, " in words)
     )
 
 
@@ -3186,6 +3187,47 @@ async def test_probe_r1_recordless_stop_displaced_then_restart(tmp_path: Path) -
     await again.run(3)
     assert lost(again, FORGOTTEN_END)
     assert load_lost_stops(tmp_path).lost == again.uplink.lost_stops != ()
+
+
+async def test_r6_recordless_stop_end_then_restart(tmp_path: Path) -> None:
+    """The second reviewer's probe: a recording console whose session got no record, an
+    E-STOP with the link down, then a bench session ends after it: held all along, on
+    disk, and after a restart as a loss."""
+    b = bench(tmp_path)
+    await b.run(2)  # listed
+    b.link.answer(END_PATH, DOWN)
+    b.link.answer(LOCAL_PATH, DOWN)
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))  # no record ever appears
+    await b.run(3)
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop: x"))
+    await b.run(15)
+    held = "seance terminee sur emergency_stop pas encore recue par le tableau de bord"
+    assert b.unreported_stop() == held
+    b.uplink.begin(armed(b.clock, remote="k2"))
+    await b.run(2)
+    b.uplink.finished(RuntimeEnd(failed=False, reason="operator_stop: fini"))
+    await b.run(15)
+    assert b.unreported_stop() == held
+    (line,) = load_lost_stops(tmp_path).pending
+    again = b.restarted()
+    await again.run(5)
+    assert again.unreported_stop() == LOST_STOP.format(why=line)
+
+
+async def test_the_pre_flight_names_every_session_an_acknowledgement_releases(
+    tmp_path: Path,
+) -> None:
+    """ANH-145: all of them, as the acknowledgement releases all of them."""
+    b = await listed(tmp_path)
+    b.link.answer(END_PATH, GONE)
+    for remote in ("k1", "k2"):
+        b.uplink.begin(armed(b.clock, remote=remote, kind="auto"))
+        await b.step()
+        b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+        await b.run(3)
+    first, second = b.uplink.lost_stops
+    assert b.unreported_stop() == LOST_STOP.format(why=f"{first} ; {second}")
+    assert await acknowledged(b) == (first, second)
 
 
 async def test_a_recordless_end_the_dashboard_takes_leaves_nothing_in_the_register(
@@ -3520,7 +3562,7 @@ async def test_a_session_lost_while_an_acknowledgement_is_written_still_holds(
     monkeypatch.setattr("src.record_uplink.store_lost_stops", slow)
     acknowledgement = asyncio.create_task(b.acknowledge())
     await asyncio.wait_for(writing.wait(), 5.0)
-    assert b.noted == [ACKNOWLEDGED + k1], "in the logbook before the register is written"
+    assert b.noted == [ACKNOWLEDGEMENT_REQUESTED + k1], "asked, before the register is written"
     b.link.answer(END_PATH, GONE)
     # The link comes back: k2 is lost, and the one disk thread is taken, so its write
     # must wait.
@@ -3530,6 +3572,7 @@ async def test_a_session_lost_while_an_acknowledgement_is_written_still_holds(
     assert k2.startswith("fin refusee, ")
     written.set()
     assert await acknowledgement == Ok((k1,)), "only what the operator was shown"
+    assert b.noted == [ACKNOWLEDGEMENT_REQUESTED + k1, ACKNOWLEDGED + k1], "then done"
 
     assert b.uplink.lost_stops == (k2,)
     assert lost(b, "fin refusee")
@@ -3606,7 +3649,10 @@ async def test_an_acknowledgement_whose_write_lands_after_its_wait_is_written_ov
     refused = await b.acknowledge()
     assert isinstance(refused, Err)
     assert refused.error == f"{LOST_UNWRITTEN} ({TIMEOUT})"
-    assert b.noted == [ACKNOWLEDGED + " ; ".join(held), ACKNOWLEDGEMENT_UNWRITTEN + refused.error]
+    assert b.noted == [
+        ACKNOWLEDGEMENT_REQUESTED + " ; ".join(held),
+        ACKNOWLEDGEMENT_UNWRITTEN + refused.error,
+    ]
     go.set()
     await asyncio.wait_for(landed.wait(), 5.0)
     # Its thread gives the one slot back a moment after the write lands: a step before
@@ -3620,7 +3666,7 @@ async def test_an_acknowledgement_whose_write_lands_after_its_wait_is_written_ov
     assert load_lost_stops(tmp_path) == LostStops(lost=held)
     again = await restarted_and_listed(b)
     assert again.uplink.lost_stops == held
-    assert again.said == [], "nothing was released"
+    assert again.logbook == [], "nothing was released"
 
 
 async def test_an_acknowledgement_that_lands_late_just_before_a_restart_is_told_by_the_next_start(
@@ -3657,14 +3703,14 @@ async def test_an_acknowledgement_that_lands_late_just_before_a_restart_is_told_
 
     # The console stops before its next step writes the losses again.
     again = await restarted_and_listed(b)
-    assert again.said == [RELEASED_BEFORE.format(lines=k1)]
+    assert again.logbook == [RELEASED_BEFORE + k1]
     assert f"before this start released {k1}" in caplog.text
     assert again.uplink.lost_stops == ()
     assert again.unreported_stop() is None
     await again.step()
     assert load_lost_stops(tmp_path) == LostStops(), "said once, then emptied"
     third = await restarted_and_listed(again)
-    assert third.said == []
+    assert third.logbook == []
 
 
 async def test_every_release_of_a_run_is_told_by_the_next_start_once(tmp_path: Path) -> None:
@@ -3678,11 +3724,11 @@ async def test_every_release_of_a_run_is_told_by_the_next_start_once(tmp_path: P
         b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
         await b.run(3)
         await acknowledged(b)
-    k1, k2 = (line.removeprefix(ACKNOWLEDGED) for line in b.noted)
+    k1, k2 = (line.removeprefix(ACKNOWLEDGED) for line in b.noted if line.startswith(ACKNOWLEDGED))
     assert k1 != k2
     assert load_lost_stops(tmp_path) == LostStops(released=(k1, k2))
     again = await restarted_and_listed(b)
-    assert again.said == [RELEASED_BEFORE.format(lines=f"{k1} ; {k2}")]
+    assert again.logbook == [f"{RELEASED_BEFORE}{k1} ; {k2}"]
     await again.step()
     assert load_lost_stops(tmp_path) == LostStops()
 
@@ -3739,7 +3785,7 @@ async def test_a_loss_before_the_list_is_made_is_added_to_the_register_at_once(
         lost=("fin refusee, k0", k1), released=("fin refusee, kx",)
     )
     await b.step()  # the list is made now
-    assert b.said == [RELEASED_BEFORE.format(lines="fin refusee, kx")]
+    assert b.logbook == [RELEASED_BEFORE + "fin refusee, kx"]
     assert b.uplink.lost_stops == ("fin refusee, k0", k1)
     await b.step()
     assert load_lost_stops(tmp_path) == LostStops(lost=("fin refusee, k0", k1))

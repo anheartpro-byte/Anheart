@@ -371,7 +371,9 @@ async def test_no_stop_is_asked_once_the_dashboard_holds_the_end_of_a_session_wi
     root = tmp_path / "records"
     root.mkdir()
     disk = Disk(root)
-    source = RecordSource(root=root, current=disk.in_progress, io=RecordIo(1), boot_id=BOOT)
+    source = RecordSource(
+        root=root, current=disk.in_progress, io=RecordIo(1), boot_id=BOOT, logbook=print
+    )
     r = rig(tmp_path, records=source)
     r.dashboard.answer(STATUS, status_answer())
     r.sync.session_started(manual(r.clock, remote="remote-1"))
@@ -536,7 +538,11 @@ async def watched(
         tiers=config_of().tiers,
         programs_enabled=True,
         records=RecordSource(
-            root=root, current=disk.in_progress, io=SlowIo(waits, read_s), boot_id=BOOT
+            root=root,
+            current=disk.in_progress,
+            io=SlowIo(waits, read_s),
+            boot_id=BOOT,
+            logbook=print,
         ),
     )
     dashboard.answer(LOCAL, ok({"sessionId": "cloud-1"}))

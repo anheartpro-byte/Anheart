@@ -122,6 +122,9 @@ class Bench:
     noted: list[str] = field(default_factory=list[str])
     """The logbook's lines of the acknowledgements made through :meth:`acknowledge`."""
 
+    logbook: list[str] = field(default_factory=list[str])
+    """What the sending wrote to the logbook itself, in order."""
+
     async def acknowledge(self) -> Result[tuple[str, ...], str]:
         """The operator acknowledges the sessions given up on; the logbook is ``noted``."""
         return await self.uplink.acknowledge(self.noted.append)
@@ -175,12 +178,14 @@ def bench(
     link = Link() if link is None else link
     disk = Disk(root)
     cancelled: list[str] = []
+    logbook: list[str] = []
     source = (
         RecordSource(
             root=root,
             current=disk.in_progress,
             io=RecordIo(1) if io is None else io,
             boot_id=boot_id,
+            logbook=logbook.append,
         )
         if recording
         else None
@@ -193,7 +198,15 @@ def bench(
         start_refused=cancelled.append,
         said=said.append,
     )
-    return Bench(clock=clock, link=link, disk=disk, uplink=uplink, cancelled=cancelled, said=said)
+    return Bench(
+        clock=clock,
+        link=link,
+        disk=disk,
+        uplink=uplink,
+        cancelled=cancelled,
+        said=said,
+        logbook=logbook,
+    )
 
 
 def armed(clock: ManualClock, *, remote: str | None = None, kind: str = "manual") -> ArmedSession:

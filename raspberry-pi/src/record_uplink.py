@@ -266,6 +266,9 @@ class RecordSource:
     boot_id: str | None
     """What names this start of the system (:func:`~src.record.cursor.boot_identity`)."""
 
+    logbook: Callable[[str], None]
+    """Writes one line to the console's logbook, whether a session record is open or not."""
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Declaration:
@@ -455,16 +458,17 @@ LOST_UNWRITTEN: Final[str] = "acquittement non ecrit sur le disque : reessayer"
 NOT_LINKED: Final[str] = "console non reliee au tableau de bord : rien a acquitter"
 """The refusals of :meth:`RecordUplink.acknowledge`, in the operator's words."""
 
+ACKNOWLEDGEMENT_REQUESTED: Final[str] = "lost_stops_acknowledgement_requested: "
 ACKNOWLEDGED: Final[str] = "lost_stops_acknowledged: "
 ACKNOWLEDGEMENT_UNWRITTEN: Final[str] = "lost_stops_unwritten: "
-"""The logbook's lines of :meth:`RecordUplink.acknowledge`: what the operator released, then
-the refusal, when the register that releases it could not be written."""
+"""The logbook's lines of :meth:`RecordUplink.acknowledge`: what the operator asked to release,
+written before the register is; then that it is released, or the refusal when the register
+could not be written. A request with neither after it was cut by a stop of the console: the
+next start says what the register released (:data:`RELEASED_BEFORE`)."""
 
-RELEASED_BEFORE: Final[str] = (
-    "seance(s) perdue(s) levee(s) par un acquittement avant ce demarrage : {lines}"
-)
-"""What the first start after an acknowledgement says of it, from the register itself: a
-write that landed late, or just before a restart, is never a release the logbook misses."""
+RELEASED_BEFORE: Final[str] = "lost_stops_released_before_start: "
+"""The logbook's line of the first start after an acknowledgement, from the register itself:
+a write that landed late, or just before a restart, is never a release the logbook misses."""
 
 LOST_STOP: Final[str] = (
     "seance mal terminee ou de fin inconnue que le tableau de bord ne recevra pas ({why}) : "
@@ -796,7 +800,8 @@ class RecordUplink:
         until the operator acknowledges it (:meth:`acknowledge`).
         """
         if lost := self.lost_stops:
-            return LOST_STOP.format(why=lost[0])
+            # All of them: the acknowledgement releases all of them.
+            return LOST_STOP.format(why=" ; ".join(lost))
         for owed in (self._catching, *self._owed_queue):
             if owed is None or owed.refused_launch or owed.cursor.end == "sent":
                 continue
@@ -830,8 +835,9 @@ class RecordUplink:
         kept, here = self._lost, self._lost_here
         if not kept and not here:
             return Err(NOTHING_LOST)
+        released = " ; ".join((*kept, *here))
         # Said first: a write that times out may still land, and release them.
-        noted(ACKNOWLEDGED + " ; ".join((*kept, *here)))
+        noted(ACKNOWLEDGEMENT_REQUESTED + released)
         source = self._source
         pending = self._pending
         if source is not None and kept:
@@ -852,6 +858,7 @@ class RecordUplink:
         self._lost = tuple(line for line in self._lost if line not in kept)
         self._lost_unwritten = bool(self._lost) or self._pending != pending
         self._lost_here = tuple(line for line in self._lost_here if line not in here)
+        noted(ACKNOWLEDGED + released)
         await self._keep_lost()
         return Ok((*kept, *here))
 
@@ -1156,7 +1163,7 @@ class RecordUplink:
                 "dashboard: the register says an acknowledgement before this start released %s",
                 lines,
             )
-            self._said(RELEASED_BEFORE.format(lines=lines))
+            source.logbook(RELEASED_BEFORE + lines)
         if listed.set_aside:
             _logger.warning(
                 "dashboard: %d records without a cursor were set aside with the list of "

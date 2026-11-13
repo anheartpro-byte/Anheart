@@ -148,7 +148,11 @@ async def measured(
         tiers=config_of().tiers,
         programs_enabled=True,
         records=RecordSource(
-            root=root, current=disk.in_progress, io=SlowIo(waits, 0.0), boot_id=BOOT
+            root=root,
+            current=disk.in_progress,
+            io=SlowIo(waits, 0.0),
+            boot_id=BOOT,
+            logbook=print,
         ),
         roster=roster,
     )
