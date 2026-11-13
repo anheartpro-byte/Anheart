@@ -38,8 +38,8 @@ class HeldInspection(HeldCommand):
         self.fail_open = False
         self.fail_before_open = False
         self.fail_read = False
-        self.writes = 0
-        self.reads = 0
+        self.writes: int = 0
+        self.reads: int = 0
 
     @override
     async def open(self) -> Result[None, DriveError]:
@@ -247,6 +247,7 @@ class Stubborn(HeldInspection):
             return await super().read_status()
         except asyncio.CancelledError:
             await self.release.wait()
+            self.reads += 1  # every read it makes is counted, this late one too
             return await self.inner.read_status()
 
 
@@ -466,11 +467,16 @@ async def test_a_call_that_ignores_its_cancel_still_lets_the_stop_end_and_reads_
             rig.clock.advance(Seconds(bound + 0.1))
             await asyncio.wait((task,), timeout=2)
             assert task.done()
-            assert rig.panel.runtime.silent
-            held.release.set()  # the open comes back now, after the silence
+            runtime = rig.panel.runtime
+            assert runtime.silent
+            believed = (runtime.idle_link.reads, runtime.drive_status)
+            held.release.set()  # the call comes back now, after the silence
             await asyncio.sleep(0.1)
-            assert (held.reads, held.writes) == (reads, writes)
-            assert not rig.panel.runtime.drive_link_acquired or not hold_open
+            # The read it was making completes, late; no other frame reaches the drive.
+            late = 0 if hold_open else 1
+            assert (held.reads, held.writes) == (reads + late, writes)
+            assert (runtime.idle_link.reads, runtime.drive_status) == believed, "nor believed"
+            assert not runtime.drive_link_acquired or not hold_open
         finally:
             held.release.set()
             stop.set()

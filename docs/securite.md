@@ -1654,7 +1654,11 @@ côté systemd en [pi-image.md](pi-image.md#le-chien-de-garde).
   marche, comme pour une console figée, et le logiciel ne relit ni `ttO` ni
   `SLL` (ANH-76). L'arrêt contrôlé va au bout, et la console sort en erreur
   (code 1, arrêt non propre, compté comme tel au démarrage suivant), qu'elle
-  ait déjà terminé un tic ou non. Avant ce correctif elle restait bloquée
+  ait déjà terminé un tic ou non. Il en va de même, depuis ce correctif, de
+  toute console qui s'est tue en abandonnant la liaison (`comms_lost`), y
+  compris quand la reprise automatique s'épuise en cours de route : son arrêt,
+  même demandé par un opérateur, compte parmi les arrêts non propres qui la
+  mettent hors service (9.4). Avant ce correctif elle restait bloquée
   jusqu'à ce qu'on la tue (environ 60 s sous systemd). Le vrai pilote borne
   chaque échange sauf l'ouverture du port (`open`), qui est le cas réel.
 
