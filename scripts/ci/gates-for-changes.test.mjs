@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { classify, decide } from "./gates-for-changes.mjs";
+import { classify, decide, PAGES_READ_BY_PI_TESTS } from "./gates-for-changes.mjs";
 
 const script = fileURLToPath(new URL("gates-for-changes.mjs", import.meta.url));
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -165,6 +167,10 @@ test("the CI itself, manifests, lockfiles and files tested on both sides run eve
     "contracts/machine-api.json",
     "contracts/README.md",
     "docs/pi-image.md",
+    "docs/raspberry-pi.md",
+    "docs/console-locale.md",
+    "docs/guides/guide-console-locale.md",
+    "docs/client/manuel-operateur.md",
   ];
   for (const path of forced) {
     const { kind, ...needed } = classify(path);
@@ -172,6 +178,31 @@ test("the CI itself, manifests, lockfiles and files tested on both sides run eve
     assert.deepEqual(needed, EVERYTHING, path);
     assert.deepEqual(gates([...DOCS, path]), EVERYTHING, path);
   }
+});
+
+test("every page of docs/ a Python test opens runs the Python gates, alone in its pull request", () => {
+  // The Python files of raspberry-pi/tests/, simulation/ and the hosted simulation
+  // that name docs/ in their code, and the pages they name.
+  const files = spawnSync("git", ["ls-files", "-z", "--", "raspberry-pi/tests/*.py", "simulation/*.py", "deploy/simulation-vercel/*.py"], { cwd: root, encoding: "utf8" })
+    .stdout.split("\0")
+    .filter(Boolean);
+  assert.ok(files.length > 100, "the Python tests were not read");
+  /** @type {Set<string>} */
+  const opened = new Set();
+  for (const file of files) {
+    const text = readFileSync(join(root, file), "utf8");
+    if (!/["']docs["']|["']docs\//.test(text)) continue;
+    for (const [, name = ""] of text.matchAll(/["'](?:docs\/)?([\w/.-]+\.md)["']/g)) {
+      if (existsSync(join(root, "docs", name))) opened.add(`docs/${name}`);
+    }
+  }
+  assert.deepEqual([...opened].sort(), [...PAGES_READ_BY_PI_TESTS].sort());
+  for (const page of PAGES_READ_BY_PI_TESTS) {
+    assert.deepEqual(gates([page]), EVERYTHING, page);
+    assert.deepEqual(gates([...DOCS, page]), EVERYTHING, page);
+  }
+  // Any other page still runs nothing of its own.
+  assert.deepEqual(gates(["docs/securite.md", "docs/guides/guide-tableau-de-bord.md"]), NOTHING);
 });
 
 test("names that only look like a listed directory are not listed", () => {
