@@ -189,6 +189,14 @@ class LostStops:
     releases them carries them, so that a write which lands late, or just before a restart,
     is still told in the logbook by the next start, which then empties this."""
 
+    pending: tuple[str, ...] = ()
+    """The ends of sessions without a record, of the run ``run``, that may have been a stop and
+    wait in memory for the dashboard: each as the loss it becomes if that run stops first.
+    Any other run that reads them holds them as losses."""
+
+    run: str = ""
+    """Which run of the console wrote ``pending``."""
+
 
 _LOST_STOPS: Final[TypeAdapter[LostStops]] = TypeAdapter(LostStops)
 
@@ -268,10 +276,14 @@ def load_lost_stops(root: Path) -> LostStops:
 
 
 def store_lost_stops(
-    root: Path, lost: tuple[str, ...], released: tuple[str, ...]
+    root: Path,
+    lost: tuple[str, ...],
+    released: tuple[str, ...],
+    pending: tuple[str, ...] = (),
+    run: str = "",
 ) -> Result[None, CursorError]:
     """Write the register of ``root``, as a cursor is written. Blocking; never raises."""
-    register = LostStops(lost=lost, released=released)
+    register = LostStops(lost=lost, released=released, pending=pending, run=run)
     return _write(root / LOST_STOPS_NAME, _LOST_STOPS.dump_json(register))
 
 

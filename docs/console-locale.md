@@ -2962,7 +2962,14 @@ enregistrement illisible (`seance mal terminee ou de fin inconnue que le
 tableau de bord ne recevra pas (...) : a acquitter a la console, page
 Pre-vol`). La fin d'une séance sans enregistrement n'est jamais abandonnée
 pour la suivante : elle attend derrière, en mémoire, et retient comme une fin
-pas encore reçue (ANH-144). Les refus, qu'aucun démarrage ne renverra, sont
+pas encore reçue (ANH-144). Si elle a pu finir sur un arrêt (ou de fin
+inconnue), elle est aussi écrite au registre, au pas d'envoi qui suit sa fin
+et avant que sa fin parte : une console qui s'arrête avant de l'avoir envoyée
+la retrouve au démarrage suivant comme une séance perdue (`fin perdue au
+redemarrage`), à acquitter. Cette ligne disparaît quand le tableau de bord a
+sa fin, quand il la refuse pour de bon (elle devient la perte `fin refusee`),
+ou quand la séance est liée à son enregistrement, que le démarrage suivant
+liste. Les refus, qu'aucun démarrage ne renverra, sont
 écrits à côté
 des enregistrements (`.sync-lost-stops.json`, comme un curseur) et
 **retiennent encore après un redémarrage de la console**, jusqu'à

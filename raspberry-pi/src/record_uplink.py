@@ -385,6 +385,11 @@ class _Owed:
     """The sending gave up on it (ANH-145): its cursor, which closes it, is not written
     before its loss is in the register, or a restart would forget the loss."""
 
+    pending: str | None = None
+    """Its line in the register while its end, which may have been a stop, waits in memory
+    with no record to read it back from (ANH-144): the loss it becomes if the console stops
+    first. ``None`` for any other session."""
+
     caught_up: bool = False
     last_transfer: Monotonic | None = None
     next_try: Monotonic | None = None
@@ -468,6 +473,10 @@ LOST_STOP: Final[str] = (
 """Why :attr:`RecordUplink.unreported_stop` holds, until the operator acknowledges it, for a
 session that ended on a stop (or whose end is unknown) and that the sending gave up on."""
 
+FORGOTTEN_END: Final[str] = "fin perdue au redemarrage"
+"""Why a session is held as lost when the end that waited in memory, with no record to read
+it back from, was forgotten by a stop of the console (ANH-144)."""
+
 _NOTHING_TO_DECLARE: Final[Declaration] = Declaration(kind="auto", operator="")
 """For a launch that never started: the dashboard already knows it."""
 
@@ -497,17 +506,33 @@ def _write(record: Path, cursor: Cursor) -> Result[None, RecordError]:
 
 
 def _write_lost(
-    root: Path, lost: tuple[str, ...], released: tuple[str, ...]
+    root: Path,
+    lost: tuple[str, ...],
+    released: tuple[str, ...],
+    pending: tuple[str, ...],
+    run: str,
 ) -> Result[None, RecordError]:
-    wrote = store_lost_stops(root, lost, released)
+    # A run is named only where it left ends waiting.
+    wrote = store_lost_stops(root, lost, released, pending, run if pending else "")
     return Ok(None) if isinstance(wrote, Ok) else Err(RecordError("sync", wrote.error.detail))
 
 
-def _merge_lost(root: Path, lost: tuple[str, ...]) -> Result[None, RecordError]:
-    """Before the register an earlier run kept is listed: add ``lost`` to it, keeping all of it."""
+def _held(register: LostStops, run: str) -> tuple[str, ...]:
+    """What ``register`` holds for a person on board, read by ``run``: its losses, and the
+    ends another run left waiting in its memory, which stopping forgot (ANH-144)."""
+    earlier = () if register.run == run else register.pending
+    return (*register.lost, *(line for line in earlier if line not in register.lost))
+
+
+def _merge_lost(
+    root: Path, lost: tuple[str, ...], pending: tuple[str, ...], run: str
+) -> Result[None, RecordError]:
+    """Before the register an earlier run kept is listed: add ``lost`` to it, keeping all of it,
+    with ``pending`` as this run's."""
     kept = load_lost_stops(root)
-    merged = (*kept.lost, *(line for line in lost if line not in kept.lost))
-    return _write_lost(root, merged, kept.released)
+    held = _held(kept, run)
+    merged = (*held, *(line for line in lost if line not in held))
+    return _write_lost(root, merged, kept.released, pending, run)
 
 
 def _list_owed(root: Path, current: str | None) -> Result[tuple[Listed, LostStops], RecordError]:
@@ -618,7 +643,9 @@ class RecordUplink:
         "_lost_here",
         "_lost_unwritten",
         "_owed_queue",
+        "_pending",
         "_released",
+        "_run",
         "_said",
         "_scan_at",
         "_scanned",
@@ -678,6 +705,10 @@ class RecordUplink:
         # What the operator released in this run, written with the register until the next
         # start tells it to the logbook.
         self._released: tuple[str, ...] = ()
+        # The ends of this run that wait in memory with no record (``_Owed.pending``), in
+        # the register under this run's name: another run reads them as losses.
+        self._pending: tuple[str, ...] = ()
+        self._run: str = uuid4().hex
 
     # --- read access -----------------------------------------------------
 
@@ -802,9 +833,10 @@ class RecordUplink:
         # Said first: a write that times out may still land, and release them.
         noted(ACKNOWLEDGED + " ; ".join((*kept, *here)))
         source = self._source
+        pending = self._pending
         if source is not None and kept:
             freed = (*self._released, *kept)
-            write = functools.partial(_write_lost, source.root, (), freed)
+            write = functools.partial(_write_lost, source.root, (), freed, pending, self._run)
             wrote = await self._disk(write, READ_TIMEOUT)
             if isinstance(wrote, Err):
                 # A write that timed out may still land: the next step writes the losses,
@@ -818,7 +850,7 @@ class RecordUplink:
         # Only what the operator was shown: a session lost during the write still
         # holds, and is written at once, or at the next step.
         self._lost = tuple(line for line in self._lost if line not in kept)
-        self._lost_unwritten = bool(self._lost)
+        self._lost_unwritten = bool(self._lost) or self._pending != pending
         self._lost_here = tuple(line for line in self._lost_here if line not in here)
         await self._keep_lost()
         return Ok((*kept, *here))
@@ -852,17 +884,17 @@ class RecordUplink:
         source = self._source
         if source is None or not self._lost_unwritten:
             return
-        lost = self._lost
+        lost, pending = self._lost, self._pending
         write = (
-            functools.partial(_write_lost, source.root, lost, self._released)
+            functools.partial(_write_lost, source.root, lost, self._released, pending, self._run)
             if self._scanned
             # The register an earlier run kept is not read yet: added to, never written over.
-            else functools.partial(_merge_lost, source.root, lost)
+            else functools.partial(_merge_lost, source.root, lost, pending, self._run)
         )
         wrote = await self._disk(write, READ_TIMEOUT)
         if isinstance(wrote, Ok):
-            # A session lost during the write is written at the next turn.
-            self._lost_unwritten = self._lost != lost
+            # A session lost, or an end that came, during the write is written at the next turn.
+            self._lost_unwritten = self._lost != lost or self._pending != pending
             self._lost_failing = False
         elif not self._lost_failing:
             # Said once until a write succeeds again, as for a cursor.
@@ -986,7 +1018,22 @@ class RecordUplink:
             return
         age = self._age_ms(now, owed)
         owed.ended = _Ended(end, None if age is None else owed.start_ms + age, now)
+        if owed.record is None and self._source is not None and _stop_or_unknown(end.reason):
+            # Its end is in memory alone: in the register before any step sends it, so that
+            # a console that stops first holds it, as a loss, at its next start (ANH-144).
+            owed.pending = f"{FORGOTTEN_END}, {_identity(owed)}"
+            self._pending = (*self._pending, owed.pending)
+            self._lost_unwritten = True
         self._take(owed)
+
+    def _unpend(self, owed: _Owed) -> None:
+        """``owed`` no longer needs its line in the register: its end reached the dashboard, was
+        refused (a loss, then), or its record now says it."""
+        line = owed.pending
+        if line is not None:
+            owed.pending = None
+            self._pending = tuple(waiting for waiting in self._pending if waiting != line)
+            self._lost_unwritten = True
 
     def _take(self, owed: _Owed) -> None:
         """Make ``owed`` the session being caught up: the one that just ended comes first."""
@@ -1087,10 +1134,20 @@ class RecordUplink:
             self._scan_at = Monotonic(now + RETRY_PERIOD)
             return False
         listed, kept = scanned.value
-        # The sessions an earlier run gave up on, and kept: they still hold (ANH-145).
-        merged = (*kept.lost, *(line for line in self._lost if line not in kept.lost))
-        # Written again when it changed, or to empty what it released once that is said.
-        self._lost_unwritten = merged != kept.lost or bool(kept.released)
+        # The sessions an earlier run gave up on, and kept, and the ends it left waiting in
+        # its memory, which its stop forgot: they hold (ANH-145, ANH-144).
+        held = _held(kept, self._run)
+        merged = (*held, *(line for line in self._lost if line not in held))
+        forgotten = len(held) - len(kept.lost)
+        if forgotten:
+            _logger.warning(
+                "dashboard: %d end(s) of sessions without a record were waiting in memory when "
+                "the console stopped: a person on board waits for the operator's acknowledgement",
+                forgotten,
+            )
+        # Written again unless it says just this: what it released, once said, is emptied.
+        own = kept.pending if kept.run == self._run else ()
+        self._lost_unwritten = merged != kept.lost or bool(kept.released) or own != self._pending
         self._lost = merged
         self._scanned = True
         if kept.released:
@@ -1211,6 +1268,7 @@ class RecordUplink:
         # cursor on disk is what lets the console take the record up again
         # where the dashboard stopped, with the age of its session.
         await self._persist(owed)
+        self._unpend(owed)  # the next start lists its record
 
     def _say_unreadable(self, now: Monotonic, live: _Owed) -> None:
         """Tell the operator, once, of a running session whose record cannot be tied to it.
@@ -1338,6 +1396,7 @@ class RecordUplink:
             owed.cursor = replace(owed.cursor, state="complete", refused=owed.cursor.refused + 1)
             self._lose(_identity(owed), "declaration refusee", _reason_of(owed))
             owed.lost = True
+            self._unpend(owed)
             return _Step.DONE
         found = answer.document.get("sessionId")
         if not isinstance(found, str):
@@ -1553,6 +1612,7 @@ class RecordUplink:
             owed.lost = True
         elif _end_word(end.reason) in STOP_ENDS:
             self._stop_told = self._clock.monotonic()
+        self._unpend(owed)
         return None
 
     async def _finish(
