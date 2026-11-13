@@ -1298,7 +1298,12 @@ La date commune `--exclude-newer 2026-10-21T00:00:00Z` a été avancée au
 21 octobre 2026 (ANH-248) pour prendre `certifi` 2026.10.19 et `pillow`
 13.0.0, qui corrigent des avis publiés après le 7 octobre. Seuls ces deux
 paquets ont été mis à jour avec `--upgrade-package` ; les autres versions
-et empreintes sont restées celles du 7 octobre.
+et empreintes sont restées celles du 7 octobre. La commande d'en-tête ne
+reproduit donc un verrou qu'avec ce verrou en place, dont `uv` garde les
+versions : compilés à partir de rien au 21 octobre, `fonttools`, `narwhals`,
+`pycparser` et `starlette` monteraient aussi, et, dans le verrou des tests,
+`ast-serialize`, `hypothesis`, `pluggy` et `ruff`. La prochaine avance de
+date pourra régénérer les verrous en entier.
 
 La date commune et, pour la simulation
 hébergée, la contrainte de `requirements-base.txt` gardent les paquets partagés
