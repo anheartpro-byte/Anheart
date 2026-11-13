@@ -26,6 +26,7 @@ from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
 from src.health import HealthWatch
 from src.health_system import Celsius, SystemHealth
 from src.local_panel import LocalPanel, build_panel, describe_start_refusal, record_preflight
+from src.motor.drive import DriveFault
 from src.result import Ok
 from src.sim.bitalino import SimulatedBitalinoClient
 from src.training.preflight import (
@@ -433,18 +434,19 @@ async def test_a_console_without_a_preflight_serves_none_and_refuses_a_run() -> 
 async def test_a_bench_launch_is_refused_before_its_start_when_a_bench_control_is_red(
     tmp_path: Path,
 ) -> None:
-    """An open serious incident announced by the server blocks the bench too."""
+    """A drive in fault blocks the bench as it blocks a person on board."""
     rig_ = linked(tmp_path, preflight=True)
-    announced = ok(
-        {"session": dict(BENCH), SERVER_VERSION_FIELD: CONTRACT_VERSION, "incidents_open_high": 1}
-    )
-    rig_.dashboard.answer(POLL_PATH, announced)
-    await rig_.run(13.0)  # the poll offers the launch; the next heartbeat carries the count
+    rig_.dashboard.answer(POLL_PATH, launch_answer(dict(BENCH)))
+    await rig_.run(1.0)
+    simulator = rig_.panel.drive.simulator
+    assert simulator is not None
+    simulator.inject_fault(DriveFault.OVERCURRENT)
+    await rig_.run(1.0)
     monitor = rig_.panel.preflight
     assert monitor is not None
     refused = monitor.refusal(Occupancy.BENCH)
     assert refused is not None
-    assert refused.control == "incidents"
+    assert refused.control == "drive_state"
     cloud = rig_.panel.cloud
     assert cloud is not None
     assert isinstance(cloud.confirm_remote_launch("remote-bench", OPERATOR, True), Ok)
@@ -454,9 +456,43 @@ async def test_a_bench_launch_is_refused_before_its_start_when_a_bench_control_i
     (end,) = rig_.dashboard.to(END)
     assert end["sessionId"] == "remote-bench"
     assert end["failed"] is True
-    assert end["reason"] == (
-        "refusee par la machine : pre-vol : 1 incident(s) grave(s) ouvert(s) sur cette machine"
+    reason = end["reason"]
+    assert isinstance(reason, str)
+    assert reason.startswith("refusee par la machine : pre-vol : variateur en defaut")
+    await rig_.panel.close()
+
+
+async def test_a_serious_incident_read_on_the_poll_refuses_a_person_on_board_and_warns_at_the_bench(
+    tmp_path: Path,
+) -> None:
+    """ANH-145 EX-4: the count the server announces on the poll closes programmed sessions,
+    and leaves the manual bench session that looks for the cause."""
+    rig_ = linked(tmp_path, preflight=True)
+    announced = ok(
+        {"session": dict(BENCH), SERVER_VERSION_FIELD: CONTRACT_VERSION, "incidents_open_high": 1}
     )
+    rig_.dashboard.answer(POLL_PATH, announced)
+    await rig_.run(13.0)  # the poll offers the launch and announces the count
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    on_board = monitor.refusal(Occupancy.OCCUPIED)
+    assert on_board is not None
+    assert on_board.control == "incidents"
+    assert on_board.detail == (
+        "pre-vol : 1 incident(s) grave(s) ouvert(s) sur cette machine : aucune personne a bord "
+        "avant leur cloture par un admin Anheart"
+    )
+    assert monitor.refusal(Occupancy.BENCH) is None
+    bench = {r.id: r.state for r in judge(CONTROLS, monitor.inputs(), Occupancy.BENCH).results}
+    assert bench["incidents"] is ControlState.WARN
+    cloud = rig_.panel.cloud
+    assert cloud is not None
+    assert isinstance(cloud.confirm_remote_launch("remote-bench", OPERATOR, True), Ok)
+    await rig_.run(1.8)
+    assert [body["sessionId"] for body in rig_.dashboard.to(START)] == ["remote-bench"]
+    manual = rig_.panel.runtime.manual
+    assert manual is not None
+    assert manual.occupancy is Occupancy.BENCH
     await rig_.panel.close()
 
 

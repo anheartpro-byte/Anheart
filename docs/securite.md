@@ -2209,7 +2209,10 @@ Sans personne à bord (capsule vide ou lestée, vitesse pilotée, aucune règle
 cardiaque), une horloge non fiable, un BITalino absent ou une batterie basse
 ne créent aucun danger pour une personne : ils sont affichés et écrits, ils ne
 bloquent pas. La qualité ECG et les paramètres médicaux sont sans objet au
-banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
+banc. Un incident grave ouvert est lui aussi un avertissement au banc
+([section 16](#16-le-registre-des-incidents-anh-145)) : la règle d'ANH-145,
+plus récente, remplace pour ce contrôle la décision du 29 octobre, qui le
+bloquait au banc. Tous les autres contrôles bloquants bloquent aussi le banc. L'occupation
 jugée est celle du départ : une séance de banc lestée lancée depuis le site
 (ANH-250) est jugée avec les règles du banc, au pré-vol du lancement comme à
 l'armement ; un programme lancé du site, avec celles d'une personne à bord.
@@ -2246,8 +2249,9 @@ de lancer une séance programmée sur cette machine (« incident ouvert »,
 l'armement (409 `incident_open`, contrat 1.10). Le poll annonce le compte à la
 console (`incidents_open_high`), dont le pré-vol refuse tout départ avec une
 personne à bord tant qu'il n'est pas nul ([section 15](#15-le-pré-vol-avant-chaque-séance-anh-142)).
-Le serveur laisse possible la seule séance manuelle de banc, aucune personne
-à bord : c'est elle qui permet de chercher la cause. Seul un admin Anheart clôt un incident,
+Seule la séance manuelle de banc, aucune personne à bord, reste possible, au
+serveur comme à la console (où le contrôle n'est qu'un avertissement au banc) :
+c'est elle qui permet de chercher la cause. Seul un admin Anheart clôt un incident,
 et seulement avec sa cause et l'action menée : c'est cette clôture qui rouvre
 la machine aux séances programmées. Une analyse seule ne la rouvre pas.
 

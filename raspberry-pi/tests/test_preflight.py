@@ -162,6 +162,8 @@ def test_the_list_is_in_its_order_and_says_every_control_once() -> None:
     assert severities["bitalino"] == (Severity.BLOCK, Severity.WARN)
     assert severities["ecg"] == (Severity.BLOCK, None)
     assert severities["medical"] == (Severity.BLOCK, None)
+    # ANH-145 EX-4: a serious incident refuses a person on board, warns at the bench.
+    assert severities["incidents"] == (Severity.BLOCK, Severity.WARN)
     for blocking in ("drive_link", "drive_state", "estop", "verdict", "disk", "contract"):
         assert severities[blocking] == (Severity.BLOCK, Severity.BLOCK)
     for warning in ("temperature", "cloud", "records", "software"):
