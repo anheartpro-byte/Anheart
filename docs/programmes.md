@@ -2,18 +2,19 @@
 
 ## Aujourd'hui
 
-Les programmes sont définis et conservés sur chaque Raspberry Pi. Quand leur
-révision change, le Pi synchronise avec Convex les profils que sa configuration
-de sécurité autorise. Convex les copie dans `machine_profiles`, liés à leur
-machine ; `syncProfiles` remplace cette liste en bloc. Le site lit ces profils
-pour montrer le nom, la zone, la durée, la FC limite et la vitesse maximale.
-Ils sont en lecture seule dans le site. Le Pi reste la source de vérité des
-programmes proposés.
+Depuis ANH-137, l'équipe Anheart écrit un **catalogue** de programmes dans
+Convex, depuis le site, sans toucher au code ni au Pi (section suivante).
+Depuis ANH-138, ce qui y est publié descend vers chaque machine, signé
+([Publication vers les machines](#publication-vers-les-machines-anh-138)) :
+le Pi le revalide avec ses propres règles, garde ce qu'il accepte et dit ce
+qu'il refuse, et pourquoi.
 
-Depuis ANH-137, l'équipe Anheart écrit aussi un **catalogue** de programmes
-dans Convex, depuis le site, sans toucher au code ni au Pi (section suivante).
-Ce catalogue ne part pas encore vers les machines : c'est ANH-138. D'ici là,
-les lancements utilisent toujours les programmes synchronisés par le Pi.
+Le Pi reste la source de vérité des programmes proposés. Quand ses
+programmes changent, il synchronise avec Convex les profils que sa
+configuration de sécurité autorise. Convex les copie dans `machine_profiles`,
+liés à leur machine ; `syncProfiles` remplace cette liste en bloc. Le site lit
+ces profils pour montrer le nom, la zone, la durée, la FC limite et la
+vitesse maximale, en lecture seule, et les lancements n'utilisent qu'eux.
 
 ## Catalogue de programmes (ANH-137)
 
@@ -44,8 +45,9 @@ ne borne : Convex refuse une durée plus longue que celle du programme
 (`duration_above_programme`), et la console refuse elle aussi un lancement du
 tableau de bord plus long que son programme, avant `training/start`, en le
 rendant comme une séance échouée avec sa raison. Une durée saisie à la
-console reste libre, comme avant. Le lancement depuis le catalogue arrive
-avec ANH-138.
+console reste libre, comme avant. Un programme du catalogue se lance de la
+même façon, une fois qu'une machine l'a accepté : il est alors dans ses
+programmes synchronisés.
 
 ### Cycle de vie
 
@@ -158,6 +160,42 @@ Convex, un secret externe qui n'existe pas encore. Le champ ne changera pas :
 le workflow déposera son rapport dans Convex Storage et en écrira le
 `storageId` dans `simulationReport`, sans migration.
 
+## Publication vers les machines (ANH-138)
+
+Ce qui est publié part vers les machines sans intervention, mais chaque
+machine reste l'autorité : tout ce qui descend du cloud est une proposition
+que le Pi revalide ([README](README.md), « Qui décide quoi »).
+
+### Ce que Convex envoie
+
+`GET /api/machine/programmes?since=<révision>` (contrat 1.11, détail dans
+[convex.md](convex.md#le-catalogue-signé-contrat-111-anh-138)) rend, à une
+machine authentifiée par sa clé, un texte signé : la révision globale du
+catalogue (`catalogRevision`, un de plus à chaque publication et à chaque
+retrait) et tous les programmes `published` du catalogue Anheart, chacun avec
+sa `medicalParametersVersion`, ou aucun quand la machine a déjà cette
+révision. La signature est Ed25519, par la clé privée Anheart que Convex lit
+dans `ANHEART_CATALOG_SIGNING_KEY` ; la machine la vérifie avec la clé
+publique de son image, `raspberry-pi/config/anheart_catalog.pub`. Sans clé
+posée dans Convex, rien n'est signé (`not_configured`) et les machines
+gardent leurs programmes : c'est l'état de tous les déploiements aujourd'hui
+([secrets.md](secrets.md#34-clés-de-signature)).
+
+Un programme retiré n'est plus envoyé : la machine le perd à sa prochaine
+mise à jour, au repos. Une séance déjà lancée garde sa propre copie
+(`sessions`), et la console la sienne : rien ne l'interrompt.
+
+### Ce que la fiche machine montre
+
+La machine dit ce qu'elle a fait du catalogue avec ses programmes
+(`POST /api/machine/profiles`) : la révision acceptée, ou `null` quand elle
+tourne sur ses **programmes de secours** (ceux livrés avec la console, quand
+aucun catalogue signé n'a jamais été reçu), et chaque programme refusé avec
+sa raison. La carte Programmes de la fiche machine affiche « Programmes de
+secours » dans le premier cas, et « refusé par la machine : » suivi de la
+raison pour chaque refus. Un programme refusé n'est pas dans les programmes
+synchronisés de la machine : il n'est pas lançable sur elle.
+
 ## Vérification d'un lancement distant
 
 Un lancement auto depuis le site passe deux contrôles successifs :
@@ -198,7 +236,7 @@ parité de calcul ne remplace pas la vérification du fichier signé par le Pi.
 ## Reste à faire
 
 Le catalogue enregistre `medicalParametersVersion` et ne valide un programme
-que pour la version médicale courante du serveur. Le Pi devra refuser un
-programme validé pour une autre version médicale, revalider tout programme
-reçu et vérifier les paliers et le plafond de sa machine : ces contrôles
-relèvent d'ANH-138, avec la publication vers les machines.
+que pour la version médicale courante du serveur. Le Pi devra interroger la
+route, vérifier la signature, refuser un programme validé pour une autre
+version médicale, revalider tout programme reçu et vérifier les paliers et le
+plafond de sa machine : c'est la couche Pi d'ANH-138.
