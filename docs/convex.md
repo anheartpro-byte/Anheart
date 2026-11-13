@@ -861,44 +861,96 @@ client : `organizationId` (celle de la machine), `machineId`, `sessionId?`,
 `kind`, `rule`, `t`, `severity`, `occupied`, `status`, `openedAt` (horloge du
 serveur), puis `analyzedBy?`, `analysis?` (la cause), `action?`, `closedBy?`,
 `closedAt?`, `recordId?` (le fichier refusé d'un `record_rejected`). Index
-`by_machine_and_status` (le blocage), `by_organization` (la liste d'un admin
-d'organisation) et `by_session` (`sessionId`, `rule`, `t` : l'unicité).
+`by_machine_and_status_and_severity` (le blocage ne lit que les incidents
+`high` ouverts ou analysés ; il remplace `by_machine_and_status` du ticket,
+qui en est le préfixe), `by_machine` (la liste d'un gestionnaire, du plus
+récent au plus ancien, quel que soit le statut), `by_organization` (la liste
+d'un admin d'organisation) et `by_session` (`sessionId`, `rule`, `t` :
+l'unicité).
 
 | `kind` | Ouvert par | `rule` | `t` |
 |---|---|---|---|
-| `safety_verdict` | `training.storeEvents` : un événement `verdict` d'action `QUICK_STOP` ou `GO_SILENT`, ou d'une action que ce serveur ne sait pas lire, **même si la séance continue** ; `training.endTrainingSession` : une fin `safety_verdict` | la règle (`hr_critical`), lue dans `<règle> (<ACTION>): …` ; `unknown` si le texte n'a pas cette forme | celui de l'événement ; pour la fin, celui du verdict d'arrêt le plus sévère parmi les 500 derniers événements de la séance (le plus récent à égalité), sinon la fin, avec `rule: "safety_verdict"` |
-| `emergency_stop`, `tick_exception` | `training.endTrainingSession` : une fin de ce nom (`<fin>` ou `<fin>: <raison>`) | le nom de la fin | la fin, sur l'horloge de la machine |
-| `drive_fault` | `training.storeEvents` : un événement `drive_fault` autre que `cleared` | le mnémonique (`OHF`), `drive_fault` s'il est illisible | celui de l'événement |
-| `preflight_repeated_failure` | `training.endTrainingSession` : la **troisième** fin de suite, sur la machine, d'un lancement refusé par le pré-vol de la console (raison `refusee par la machine : pre-vol : …`) ; la quatrième n'en ouvre pas d'autre | `preflight` | la fin de la troisième |
-| `record_rejected` | `recordStorage` : l'enregistrement de la séance passe `rejected` | le code du refus du fichier (`sha256_mismatch`, `size_mismatch`, `invalid_manifest`) | la fin de la séance, sinon son début |
+| `safety_verdict` | `training.storeEvents` : un événement `verdict` d'action `QUICK_STOP` ou `GO_SILENT`, ou d'une action que ce serveur ne sait pas lire, **même si la séance continue** ; `training.endTrainingSession` : une fin `safety_verdict` | la règle (`hr_critical`), lue dans `<règle> (<ACTION>): …` ; `unknown` si le texte n'a pas cette forme | celui de l'événement ; pour la fin, celui de son verdict (ci-dessous) |
+| `emergency_stop` | un verdict `operator_estop`, `drive_precommanded` ou `enable_unconfirmed` (ceux qui finissent la séance en `emergency_stop`), ou une fin `emergency_stop` | la règle du verdict | celui du verdict |
+| `tick_exception` | un verdict `tick_exception` (`GO_SILENT`), ou une fin `tick_exception` | `tick_exception` | celui du verdict |
+| `drive_fault` | un événement `drive_fault` autre que `cleared` ; son verdict `drive_fault` (`RAMP_DOWN`) et la fin `safety_verdict` qui le suit s'y joignent | le mnémonique (`OHF`), `drive_fault` s'il est illisible | celui de l'événement |
+| `preflight_repeated_failure` | `training.endTrainingSession` : la **troisième** fin de suite, sur la machine, d'un lancement refusé par le pré-vol de la console ; la quatrième n'en ouvre pas d'autre | `preflight` | la fin de la troisième |
+| `record_rejected` | `recordStorage` : l'enregistrement de la séance passe `rejected` | le code du refus du fichier (`sha256_mismatch`, `size_mismatch`, `invalid_manifest`) | la fin de la séance sur l'axe de la machine (`machineEndOf`), là où sont ses événements |
 | `manual` | aucune fonction encore : le type est réservé à une déclaration à la main | | |
 
-**Un incident par `(sessionId, rule, t)`** : un événement renvoyé (même rang
-ou autre rang au même instant) n'en ouvre pas un second, et une fin
-`safety_verdict` reprend la règle et l'instant du verdict qui en a peut-être
-déjà ouvert un. Une fin déjà reçue ne change rien (`endTrainingSession` est
-idempotente). Seuls les événements stockés par l'appel comptent. Un défaut du
-variateur que seul le heartbeat annonce, hors de tout événement de séance,
-n'ouvre pas d'incident (l'alerte `drive_fault` reste).
+**Un événement physique, un incident.** La console écrit le verdict qu'elle
+verrouille, puis termine la séance pour lui (`_begin_ending` de
+`raspberry-pi/src/training/runtime.py`) : un arrêt d'urgence est le verdict
+`operator_estop` puis la fin `emergency_stop` ; une exception du tic, le
+verdict `tick_exception` puis la fin de ce nom ; un défaut du variateur,
+l'événement `drive_fault`, le verdict `drive_fault` (`RAMP_DOWN`) puis la fin
+`safety_verdict`. Chacun ne fait qu'un incident, du type de son verdict
+(`kindOfVerdict`), dans n'importe quel ordre d'arrivée :
+
+- une fin cherche, parmi les 500 derniers événements de la séance, le plus
+  ancien verdict d'arrêt (`RAMP_DOWN` ou plus) qui donne cette fin, et se
+  joint à son incident (ou à celui du défaut, pour le verdict `drive_fault`) ;
+  elle l'ouvre s'il n'existe pas encore (un verdict `RAMP_DOWN` n'en ouvre pas
+  seul) ;
+- une fin qui ne trouve pas son verdict se joint à l'incident déjà ouvert de
+  la séance qui donne cette fin (un défaut dont le verdict est en retard),
+  sans en changer la gravité ; sinon elle en ouvre un à son nom (`rule` égal
+  au `kind`, un incident « d'attente »), au niveau que la fin implique :
+  `QUICK_STOP` pour un arrêt d'urgence, `GO_SILENT` pour une exception du
+  tic, et pour une fin `safety_verdict` une action inconnue, donc `high`
+  même au banc, puisque l'arrêt a pu être un `GO_SILENT` ;
+- un verdict d'arrêt (`RAMP_DOWN` ou plus) ou un défaut qui arrive après sa
+  fin se joint à l'incident d'attente de la même fin, qui prend alors sa
+  règle, son type et son instant ;
+- une jonction garde la gravité la plus haute (jamais abaissée), et prévient
+  les admins Anheart si elle la fait passer à `high` ;
+- un incident clos n'est rejoint que par le même `(sessionId, rule, t)` : une
+  observation nouvelle de la même séance en ouvre un autre, qui sera revu.
+
+Deux arrêts distincts d'une même séance (un `hr_drop` qui la termine, puis un
+arrêt d'urgence pendant la descente) restent deux incidents. **Un incident
+par `(sessionId, rule, t)`** : un événement renvoyé (même rang ou autre rang
+au même instant) n'en ouvre pas un second. Une fin déjà reçue ne change rien
+(`endTrainingSession` est idempotente). Seuls les événements stockés par
+l'appel comptent. Un défaut du variateur que seul le heartbeat annonce, hors
+de tout événement de séance, n'ouvre pas d'incident (l'alerte `drive_fault`
+reste).
+
+**Trois refus de pré-vol de suite.** Le serveur reconnaît un refus du pré-vol
+de la console à la raison de fin de séance qui commence par
+`preflight_refusal_prefix` (`refusee par la machine : pre-vol :`), épinglé
+dans [l'entrée `incidents` du contrat](../contracts/machine-api.json) : Convex
+le lit dans ce fichier (`PREFLIGHT_REFUSAL`), et un test de la console vérifie
+que la raison qu'elle envoie commence ainsi. Ne comptent que les lancements
+venus du site : un départ décidé à la console et refusé par son pré-vol n'est
+jamais envoyé. Le compte est celui des trois séances les plus récentes de la
+machine (par date de lancement) : toute autre séance de la machine (démarrée,
+annulée, refusée pour une autre raison, refusée par le serveur à l'armement)
+le remet à zéro, et l'incident s'ouvre à la troisième exactement.
 
 **Gravité** (EX-3, `severityOf`) : `high` pour un `tick_exception`, pour un
 niveau `GO_SILENT` (ou une action inconnue, côté sûr), et avec une personne
 à bord pour un niveau `RAMP_DOWN` ou plus ; sinon `medium` pour un défaut du
 variateur ou un verdict (au banc), et `low` pour le reste. Le niveau est
 l'action du verdict, `RAMP_DOWN` pour un défaut du variateur (le verdict du
-superviseur sur un défaut) et pour une fin `safety_verdict` sans verdict
-reçu, `QUICK_STOP` pour l'E-STOP de l'écran, aucun pour le pré-vol et
-l'enregistrement. `occupied` est `personOnBoard` de la séance
-(`convex/lib/machineRegistry.ts`) : séance automatique, ou manuelle notée
-`Occupancy: occupied`, jamais une séance de banc lestée.
+superviseur sur un défaut), celui qu'implique la fin quand son verdict manque
+(ci-dessus), aucun pour le pré-vol et l'enregistrement. Un arrêt d'urgence au
+banc est donc `low`, une exception du tic toujours `high`. `occupied` est
+`personOnBoard` de la séance (`convex/lib/machineRegistry.ts`) : séance
+automatique, ou manuelle notée `Occupancy: occupied`, jamais une séance de
+banc lestée.
 
 **Statuts.** `open` à l'ouverture ; `analyzed` quand une personne de la
 machine a écrit la cause et l'action ; `closed` quand l'admin Anheart l'a
-clos, avec sa cause et son action. **Tant qu'un incident `high` de la machine
-est `open` ou `analyzed`, aucune séance programmée n'y est lancée ni armée**
-([§4](#4-fonctions-de-trainingts)) ; une séance de banc reste possible.
-Chaque incident `high` ouvert est une alerte `incident_high` aux admins
-Anheart ([§5](#notificationsts-alertes-aux-gestionnaires-anh-90)).
+clos, avec sa cause et son action. `analyzedBy` est toujours l'auteur de la
+cause et de l'action telles qu'elles sont : l'analyste quand l'admin clôt sur
+son texte, l'admin quand il l'écrit ou le change en clôturant. **Tant qu'un
+incident `high` de la machine est `open` ou `analyzed`, aucune séance
+programmée n'y est lancée ni armée** ([§4](#4-fonctions-de-trainingts)) ; une
+séance de banc reste possible. Le compte (`openHighIncidents`) ne lit que ces
+incidents, `HIGH_COUNT_LIMIT` (100) au plus par statut. Chaque incident `high`
+ouvert est une alerte `incident_high` aux admins Anheart
+([§5](#notificationsts-alertes-aux-gestionnaires-anh-90)).
 
 ### Deux horloges
 
@@ -2308,11 +2360,11 @@ les lisent, les analysent et les closent. Un patient n'y a jamais accès
 
 | Fonction | Type | Qui | Effet |
 |---|---|---|---|
-| `list` | query | admin Anheart (toutes organisations), admin d'organisation (la sienne), gestionnaire (ses machines) | Les incidents, du plus récent au plus ancien, `INCIDENT_LIST_LIMIT` (1000) au plus, avec le nom de la machine et les textes d'analyse : ce que la page liste et ce que l'admin Anheart exporte en CSV. |
-| `get` | query | qui a accès à la machine | La fiche : l'incident, les noms de qui l'a analysé et clos, la séance (statut, dates, raison de fin, état de l'enregistrement) et ses événements à `INCIDENT_EVENT_WINDOW_MS` (60 s) au plus de l'instant de l'incident, `INCIDENT_EVENT_LIMIT` (200) au plus, si l'appelant peut lire la séance, et `canClose` (admin Anheart, incident non clos). `null` pour une machine qu'il n'atteint pas. |
+| `list` | query | admin Anheart (toutes organisations), admin d'organisation (la sienne), gestionnaire (ses machines) | Les incidents, du plus récent au plus ancien quel que soit leur statut, `INCIDENT_LIST_LIMIT` (1000) au plus, avec le nom de la machine et les textes d'analyse : ce que la page liste et ce que l'admin Anheart exporte en CSV. Pour un gestionnaire, les 1000 plus récents de chacune de ses machines (`by_machine`), puis les 1000 plus récents de tous, et seulement ceux de son organisation (`inScope`). |
+| `get` | query | qui a accès à la machine, l'incident dans son périmètre (`inScope`, comme `canAccessSession`) | La fiche : l'incident, les noms de qui l'a analysé et clos, la séance (statut, dates, raison de fin, état de l'enregistrement) et ses événements à `INCIDENT_EVENT_WINDOW_MS` (60 s) au plus de l'instant de l'incident, `INCIDENT_EVENT_LIMIT` (200) au plus, si l'appelant peut lire la séance, et `canClose` (admin Anheart, incident non clos). `null` pour une machine qu'il n'atteint pas. |
 | `analyze` | mutation | qui a accès à la machine | Écrit la cause (`analysis`) et l'action, rognées, de 1 à 2000 caractères chacune, et `analyzedBy` ; passe l'incident `analyzed`. Refusé sur un incident clos (`incident_closed`). Un incident `high` analysé ferme toujours les séances programmées. Audit `incident.analyzed`. |
-| `close` | mutation | admin Anheart seulement | Écrit la cause et l'action (mêmes bornes), `analyzedBy` s'il manquait, `closedBy`, `closedAt` ; passe l'incident `closed`. La clôture du dernier incident `high` ouvert ou analysé rouvre la machine aux séances programmées. Audit `incident.closed`. |
-| `openHighCount` | query interne | route `training/poll` | Le nombre d'incidents `high` de la machine `open` ou `analyzed` : le champ `incidents_open_high` du poll. |
+| `close` | mutation | admin Anheart seulement | Écrit la cause et l'action (mêmes bornes), `closedBy`, `closedAt`, et `analyzedBy` : l'admin, sauf s'il clôt sur la cause et l'action déjà écrites, qui restent à leur analyste ; passe l'incident `closed`. La clôture du dernier incident `high` ouvert ou analysé rouvre la machine aux séances programmées. Audit `incident.closed`. |
+| `openHighCount` | query interne | route `training/poll` | Le nombre d'incidents `high` de la machine `open` ou `analyzed` (`HIGH_COUNT_LIMIT`, 100, au plus par statut ; seuls ceux-là sont lus) : le champ `incidents_open_high` du poll. |
 
 ### Rattrapage des résumés : `sessionReportsBackfill.ts` (ANH-234)
 
@@ -3933,7 +3985,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/gestionnairePatients.test.ts` | `users.assignPatientsToGestionnaire` : ajout seul, retrait seul, les deux, liste inchangée (aucune ligne réécrite), identifiant répété, patient d'une autre organisation traité comme un compte inconnu, admin d'une autre organisation refusé comme pour un gestionnaire inconnu, deux enregistrements successifs (ANH-208). |
 | `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |
 | `convex/cloudVersion.test.ts` | La constante `CLOUD_VERSION` est celle de `convex/VERSION` et celle que répond le code déployé (ANH-134). |
-| `convex/incidents.test.ts` | Le registre des incidents (ANH-145) : la règle de gravité, cas par cas ; ce qui ouvre un incident pour chaque `kind` (verdict `QUICK_STOP` ou `GO_SILENT` séance continuant, action inconnue, défaut du variateur, fins `emergency_stop`, `tick_exception` et `safety_verdict` avec ou sans verdict reçu, troisième refus de pré-vol de suite, enregistrement refusé) et ce qui n'en ouvre pas ; un seul incident pour un événement envoyé deux fois ou une fin renvoyée ; l'alerte aux seuls admins Anheart ; le blocage (lancement refusé `incident_open` ouvert puis analysé, accepté une fois clos, banc toujours possible, offre retirée et départ refusé 409 à l'armement) et le compte du poll ; la fiche (événements à 60 s, noms) et les bornes de l'analyse et de la clôture ; l'acceptation du ticket (`hr_critical` avec une personne à bord). Les droits sont dans la matrice. |
+| `convex/incidents.test.ts` | Le registre des incidents (ANH-145) : la règle de gravité, cas par cas ; un seul incident pour un arrêt d'urgence, une exception du tic ou un défaut du variateur tels que la console les écrit (verdict puis fin), dans les deux ordres d'arrivée, et le niveau d'une fin dont le verdict n'arrive jamais ; le compte borné des seuls incidents `high`, la liste d'un gestionnaire par date, le périmètre, la date d'un enregistrement refusé sur l'axe de la machine, l'auteur de la cause à la clôture, le préfixe des refus de pré-vol lu dans le contrat ; ce qui ouvre un incident pour chaque `kind` (verdict `QUICK_STOP` ou `GO_SILENT` séance continuant, action inconnue, défaut du variateur, fins `emergency_stop`, `tick_exception` et `safety_verdict` avec ou sans verdict reçu, troisième refus de pré-vol de suite, enregistrement refusé) et ce qui n'en ouvre pas ; un seul incident pour un événement envoyé deux fois ou une fin renvoyée ; l'alerte aux seuls admins Anheart ; le blocage (lancement refusé `incident_open` ouvert puis analysé, accepté une fois clos, banc toujours possible, offre retirée et départ refusé 409 à l'armement) et le compte du poll ; la fiche (événements à 60 s, noms) et les bornes de l'analyse et de la clôture ; l'acceptation du ticket (`hr_critical` avec une personne à bord). Les droits sont dans la matrice. |
 
 ### Lire la matrice
 
@@ -4196,7 +4248,9 @@ protège, en refusant le lancement (`incident_open` au site) puis son départ
 n'envoie pas de fin). Une console `1.9` le lit déjà (ANH-142) et le juge
 **bloquant aussi au banc** : face à un serveur `1.10`, un incident grave
 ouvert lui refuse aussi une séance de banc, du côté sûr, jusqu'à sa mise à
-jour. Une console `1.10` face à un serveur `1.9` ne reçoit pas le champ : le
+jour. Entre le déploiement de Convex et celui de l'image du Pi, une seule
+exception du tic au banc ferme donc le banc de cette console jusqu'à ce qu'un
+admin Anheart close l'incident ([deploiement.md](deploiement.md#34-ordre-de-mise-à-jour-entre-convex-et-les-consoles)). Une console `1.10` face à un serveur `1.9` ne reçoit pas le champ : le
 contrôle reste orange « non annoncé », comme avant.
 
 La console de ce dépôt est en `1.10`. Elle connaît les codes de refus à

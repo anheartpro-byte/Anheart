@@ -21,6 +21,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   canAccessMachine,
   canAccessSession,
+  inScope,
   requireRole,
   STAFF_ROLES,
   type CurrentUser,
@@ -109,14 +110,13 @@ async function visibleIncidents(
   const rows: Doc<"incidents">[] = [];
   for (const link of links) {
     if (link.organizationId !== caller.organizationId) continue;
-    rows.push(
-      ...(await ctx.db
-        .query("incidents")
-        .withIndex("by_machine_and_status", (q) =>
-          q.eq("machineId", link.machineId),
-        )
-        .take(INCIDENT_LIST_LIMIT)),
-    );
+    // The most recent of each machine, whatever their status.
+    const latest = await ctx.db
+      .query("incidents")
+      .withIndex("by_machine", (q) => q.eq("machineId", link.machineId))
+      .order("desc")
+      .take(INCIDENT_LIST_LIMIT);
+    rows.push(...latest.filter((row) => inScope(caller, row.organizationId)));
   }
   return rows
     .sort((a, b) => b._creationTime - a._creationTime)
@@ -137,14 +137,18 @@ export const list = query({
   },
 });
 
-/** The incident, when the caller reaches its machine; null otherwise. */
+/**
+ * The incident, when it is in the caller's scope and the caller reaches its
+ * machine; null otherwise. An incident is always its machine's organisation's:
+ * both are checked, as `canAccessSession` checks a session's.
+ */
 async function reachable(
   ctx: QueryCtx,
   caller: CurrentUser,
   incidentId: Id<"incidents">,
 ): Promise<Doc<"incidents"> | null> {
   const incident = await ctx.db.get(incidentId);
-  if (!incident) return null;
+  if (!incident || !inScope(caller, incident.organizationId)) return null;
   return (await canAccessMachine(ctx, incident.machineId, caller))
     ? incident
     : null;
@@ -285,7 +289,9 @@ export const analyze = mutation({
 /**
  * Close an incident, with its cause and its action: the Anheart admin only.
  * The last `high` incident of a machine closed, programmed sessions may be
- * launched on it again.
+ * launched on it again. `analyzedBy` stays whoever wrote the cause and the
+ * action as they are: the analyst when the admin closes on their text, the
+ * admin when the admin writes it (or changes it).
  */
 export const close = mutation({
   args: review,
@@ -296,11 +302,18 @@ export const close = mutation({
     const incident = await ctx.db.get(args.incidentId);
     if (!incident) throw refusal("incident_not_found");
     if (incident.status === "closed") throw refusal("incident_closed");
+    const analysis = text(args.analysis);
+    const action = text(args.action);
+    const unchanged =
+      analysis === incident.analysis && action === incident.action;
     await ctx.db.patch(incident._id, {
       status: "closed",
-      analysis: text(args.analysis),
-      action: text(args.action),
-      analyzedBy: incident.analyzedBy ?? caller._id,
+      analysis,
+      action,
+      analyzedBy:
+        unchanged && incident.analyzedBy !== undefined
+          ? incident.analyzedBy
+          : caller._id,
       closedBy: caller._id,
       closedAt: Date.now(),
     });

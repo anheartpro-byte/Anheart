@@ -21,6 +21,7 @@ import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import {
+  HIGH_COUNT_LIMIT,
   levelRank,
   PREFLIGHT_REFUSAL,
   severityOf,
@@ -28,6 +29,7 @@ import {
 } from "./lib/incidents";
 import {
   INCIDENT_EVENT_WINDOW_MS,
+  INCIDENT_LIST_LIMIT,
   INCIDENT_TEXT_MAX,
 } from "./incidents";
 import {
@@ -331,7 +333,7 @@ describe("ANH-145 EX-2 an end opens an incident", () => {
     ]);
   });
 
-  it("opens one named after the end when no verdict was received, medium at the bench", async () => {
+  it("opens one named after the end when no verdict was received, high: the stop may have been GO_SILENT", async () => {
     const w = await seedLaunchWorld(modules);
     const sessionId = await session(w, "bench");
     await end(w, sessionId, "safety_verdict");
@@ -340,7 +342,7 @@ describe("ANH-145 EX-2 an end opens an incident", () => {
         kind: "safety_verdict",
         rule: "safety_verdict",
         t: NOW + 5_000,
-        severity: "medium",
+        severity: "high",
       }),
     ]);
   });
@@ -379,6 +381,248 @@ describe("ANH-145 EX-2 an end opens an incident", () => {
         sessionId: third,
         severity: "low",
       }),
+    ]);
+  });
+});
+
+describe("ANH-145 EX-2 one physical event, one incident, as the Pi records it", () => {
+  it.each([
+    ["auto", "high"],
+    ["bench", "low"],
+  ] as const)(
+    "an emergency stop (%s): the operator_estop verdict, then the end emergency_stop, is one emergency stop, %s",
+    async (occupancy, severity) => {
+      const w = await seedLaunchWorld(modules);
+      const sessionId = await session(w, occupancy);
+      await sendEvents(w, sessionId, [
+        {
+          t: NOW + 1000,
+          kind: "verdict",
+          detail: "operator_estop (QUICK_STOP): operator emergency stop: ecran",
+        },
+      ]);
+      await end(w, sessionId, "emergency_stop: ecran");
+      expect(summary(await incidents(w))).toEqual([
+        expect.objectContaining({ kind: "emergency_stop", rule: "operator_estop", severity }),
+      ]);
+    },
+  );
+
+  it.each(["drive_precommanded", "enable_unconfirmed"])(
+    "a %s verdict, then the end emergency_stop, is one emergency stop",
+    async (rule) => {
+      const w = await seedLaunchWorld(modules);
+      const sessionId = await session(w);
+      await sendEvents(w, sessionId, [
+        { t: NOW + 1000, kind: "verdict", detail: `${rule} (QUICK_STOP): the drive` },
+      ]);
+      await end(w, sessionId, "emergency_stop");
+      expect(summary(await incidents(w))).toEqual([
+        expect.objectContaining({ kind: "emergency_stop", rule, severity: "high" }),
+      ]);
+    },
+  );
+
+  it("a tick exception: the tick_exception verdict, then the end, is one tick exception, high", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w, "bench");
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "verdict", detail: "tick_exception (GO_SILENT): boom" },
+    ]);
+    await end(w, sessionId, "tick_exception: boom");
+    expect(await incidents(w)).toEqual([
+      expect.objectContaining({
+        kind: "tick_exception",
+        rule: "tick_exception",
+        t: NOW + 1000,
+        severity: "high",
+      }),
+    ]);
+  });
+
+  it.each([
+    ["occupied", "high"],
+    ["bench", "medium"],
+  ] as const)(
+    "a drive fault (%s): the fault, its RAMP_DOWN verdict, then the end safety_verdict, is one drive fault, %s",
+    async (occupancy, severity) => {
+      const w = await seedLaunchWorld(modules);
+      const sessionId = await session(w, occupancy);
+      await sendEvents(w, sessionId, [
+        { t: NOW + 1000, kind: "drive_fault", detail: "OHF (LFT 17): drive overheat" },
+        { t: NOW + 1000, kind: "verdict", detail: "drive_fault (RAMP_DOWN): OHF" },
+      ]);
+      await end(w, sessionId, "safety_verdict: drive_fault");
+      expect(summary(await incidents(w))).toEqual([
+        expect.objectContaining({ kind: "drive_fault", rule: "OHF", severity }),
+      ]);
+    },
+  );
+
+  it("an end received before its events: the late verdict joins it, with its rule and its instant", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w);
+    await end(w, sessionId, "safety_verdict: hr_critical");
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "verdict", detail: "hr_critical (QUICK_STOP): 190" },
+    ]);
+    expect(await incidents(w)).toEqual([
+      expect.objectContaining({
+        kind: "safety_verdict",
+        rule: "hr_critical",
+        t: NOW + 1000,
+        severity: "high",
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      "emergency_stop",
+      [{ kind: "verdict", detail: "operator_estop (QUICK_STOP): ecran" }],
+      { kind: "emergency_stop", rule: "operator_estop", severity: "low" },
+    ],
+    [
+      "tick_exception",
+      [{ kind: "verdict", detail: "tick_exception (GO_SILENT): boom" }],
+      { kind: "tick_exception", rule: "tick_exception", severity: "high" },
+    ],
+    [
+      "safety_verdict",
+      [
+        { kind: "drive_fault", detail: "OHF (LFT 17): drive overheat" },
+        { kind: "verdict", detail: "drive_fault (RAMP_DOWN): OHF" },
+      ],
+      // The end alone could have been a GO_SILENT: it is not lowered after.
+      { kind: "drive_fault", rule: "OHF", severity: "high" },
+    ],
+    [
+      "safety_verdict",
+      [{ kind: "verdict", detail: "hr_drop (RAMP_DOWN): fall" }],
+      { kind: "safety_verdict", rule: "hr_drop", severity: "high" },
+    ],
+  ] as const)(
+    "an end %s received before its events opens one incident, which they join",
+    async (reason, late, expected) => {
+      const w = await seedLaunchWorld(modules);
+      const sessionId = await session(w, "bench");
+      await end(w, sessionId, reason);
+      await sendEvents(
+        w,
+        sessionId,
+        late.map((event) => ({ ...event, t: NOW + 1000 })),
+      );
+      expect(summary(await incidents(w))).toEqual([
+        expect.objectContaining(expected),
+      ]);
+      expect((await incidents(w))[0].t).toBe(NOW + 1000);
+    },
+  );
+
+  it.each([
+    ["emergency_stop", "auto", "high"],
+    ["emergency_stop", "bench", "low"],
+    ["tick_exception", "bench", "high"],
+    ["safety_verdict", "bench", "high"],
+    ["safety_verdict", "auto", "high"],
+  ] as const)(
+    "an end %s (%s) whose events never arrive is %s: never below what the end may have been",
+    async (reason, occupancy, severity) => {
+      const w = await seedLaunchWorld(modules);
+      await end(w, await session(w, occupancy), reason);
+      expect(summary(await incidents(w))).toEqual([
+        expect.objectContaining({ kind: reason, rule: reason, severity }),
+      ]);
+    },
+  );
+
+  it("keeps the higher severity, and alerts the Anheart admins once it becomes high", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w, "bench");
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "drive_fault", detail: "OHF (LFT 17): drive overheat" },
+    ]);
+    expect(summary(await incidents(w))).toEqual([
+      expect.objectContaining({ severity: "medium" }),
+    ]);
+    // A verdict on the fault more severe than its own (a later Pi, say): raised.
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "verdict", detail: "drive_fault (GO_SILENT): OHF" },
+    ]);
+    // The end, its verdict known, adds nothing; nor a less severe one.
+    await end(w, sessionId, "safety_verdict");
+    await sendEvents(w, sessionId, [
+      { t: NOW + 2000, kind: "verdict", detail: "drive_fault (RAMP_DOWN): OHF" },
+    ]);
+    expect(summary(await incidents(w))).toEqual([
+      expect.objectContaining({ kind: "drive_fault", rule: "OHF", severity: "high" }),
+    ]);
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    const alerts = await w.t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .filter((q) => q.eq(q.field("type"), "incident_high"))
+        .collect(),
+    );
+    expect(alerts.map((row) => row.count)).toEqual([1]);
+  });
+
+  it("joins an end whose verdict is late to the fault already open, without raising it", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w, "bench");
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "drive_fault", detail: "OHF (LFT 17): drive overheat" },
+    ]);
+    await end(w, sessionId, "safety_verdict");
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "verdict", detail: "drive_fault (RAMP_DOWN): OHF" },
+    ]);
+    expect(summary(await incidents(w))).toEqual([
+      expect.objectContaining({ kind: "drive_fault", rule: "OHF", severity: "medium" }),
+    ]);
+  });
+
+  it("opens a new incident for a stop whose incident was closed meanwhile", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w, "bench");
+    await end(w, sessionId, "emergency_stop");
+    const [placeholder] = await incidents(w);
+    await close(w, placeholder._id);
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "verdict", detail: "operator_estop (QUICK_STOP): ecran" },
+    ]);
+    expect(summary(await incidents(w)).map(({ rule, status }) => [rule, status])).toEqual([
+      ["emergency_stop", "closed"],
+      ["operator_estop", "open"],
+    ]);
+  });
+
+  it("names the right kind for a verdict seen alone: an emergency stop, a tick exception", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w);
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "verdict", detail: "operator_estop (QUICK_STOP): ecran" },
+      { t: NOW + 2000, kind: "verdict", detail: "tick_exception (GO_SILENT): boom" },
+    ]);
+    expect(summary(await incidents(w)).map(({ kind }) => kind)).toEqual([
+      "emergency_stop",
+      "tick_exception",
+    ]);
+  });
+
+  it("opens a second incident for a second stop of another kind in the same session", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w);
+    await sendEvents(w, sessionId, [
+      { t: NOW + 1000, kind: "verdict", detail: "hr_drop (RAMP_DOWN): fall" },
+      { t: NOW + 2000, kind: "verdict", detail: "operator_estop (QUICK_STOP): ecran" },
+    ]);
+    await end(w, sessionId, "safety_verdict");
+    expect(summary(await incidents(w)).map(({ rule }) => rule).sort()).toEqual([
+      "hr_drop",
+      "operator_estop",
     ]);
   });
 });
@@ -424,6 +668,46 @@ describe("ANH-145 EX-2 a rejected record opens an incident", () => {
         severity: "low",
       }),
     ]);
+  });
+
+  it("dates it at the end on the machine's axis, where the session's events are", async () => {
+    const w = await seedLaunchWorld(modules);
+    const sessionId = await session(w);
+    // The machine started it 10 s before the server's date of it.
+    await w.t.run((ctx) =>
+      ctx.db.patch(sessionId, {
+        machineStartedAt: NOW - 10_000,
+        status: "completed",
+        endedAt: NOW + 60_000,
+      }),
+    );
+    const fileId = await w.t.run(async (ctx) =>
+      ctx.db.insert("session_record_files", {
+        sessionId,
+        machineId: w.machine,
+        organizationId: w.orgA,
+        path: "manifest.json",
+        storageId: await ctx.storage.store(new Blob(["x"])),
+        sha256: "0".repeat(64),
+        size: 1,
+        uploadedAt: NOW,
+        verified: false,
+      }),
+    );
+    const file = await w.t.run((ctx) => ctx.db.get(fileId));
+    await w.t.mutation(internal.recordStorage.finishVerification, {
+      fileId,
+      storageId: file!.storageId,
+      rejection: "invalid_manifest",
+    });
+    expect((await incidents(w))[0].t).toBe(NOW + 50_000);
+  });
+});
+
+describe("ANH-145 the three pre-flight refusals are counted by the contract's words", () => {
+  it("reads the prefix the console writes from the shared contract", () => {
+    expect(PREFLIGHT_REFUSAL).toBe(shared.incidents.preflight_refusal_prefix);
+    expect(PREFLIGHT_REFUSAL).toBe("refusee par la machine : pre-vol :");
   });
 });
 
@@ -511,7 +795,12 @@ describe("ANH-145 EX-4 a high incident closes programmed sessions until the Anhe
       analyzedBy: w.manager,
     });
     expect(await codeOf(launch(w))).toBe("incident_open");
-    await close(w, incidentId);
+    // Closed on the manager's own text: the analysis stays theirs.
+    await as(w.t, "admin").mutation(api.incidents.close, {
+      incidentId,
+      analysis: "electrodes decollees",
+      action: "electrodes changees",
+    });
     expect(await w.t.run((ctx) => ctx.db.get(incidentId))).toMatchObject({
       status: "closed",
       analyzedBy: w.manager,
@@ -519,6 +808,23 @@ describe("ANH-145 EX-4 a high incident closes programmed sessions until the Anhe
       closedAt: NOW,
     });
     expect(await codeOf(launch(w))).toBeNull();
+  });
+
+  it("attributes the cause and the action to the admin who rewrites them on closing", async () => {
+    const w = await seedLaunchWorld(modules);
+    const incidentId = await highIncident(w);
+    await as(w.t, "manager").mutation(api.incidents.analyze, {
+      incidentId,
+      analysis: "electrodes decollees",
+      action: "electrodes changees",
+    });
+    await close(w, incidentId);
+    expect(await w.t.run((ctx) => ctx.db.get(incidentId))).toMatchObject({
+      analysis: "capteur ECG decolle",
+      action: "electrodes changees, consigne rappelee",
+      analyzedBy: w.admin,
+      closedBy: w.admin,
+    });
   });
 
   it("closes nothing for an incident that is not high, nor on another machine", async () => {
@@ -669,6 +975,72 @@ describe("ANH-145 EX-4 the poll announces the machine's high incidents", () => {
 // ---------------------------------------------------------------------------
 // EX-5: the sheet, the analysis and the closing
 // ---------------------------------------------------------------------------
+
+describe("ANH-145 what the staff read, and how much the server reads for it", () => {
+  const insert = (
+    w: World,
+    fields: Partial<Doc<"incidents">> & Pick<Doc<"incidents">, "machineId">,
+  ) =>
+    w.t.run((ctx) =>
+      ctx.db.insert("incidents", {
+        organizationId: w.orgA,
+        kind: "manual",
+        rule: "manual",
+        t: NOW,
+        severity: "high",
+        occupied: false,
+        status: "open",
+        openedAt: NOW,
+        ...fields,
+      }),
+    );
+
+  it("counts the high incidents open or analysed, at most HIGH_COUNT_LIMIT of each status", async () => {
+    const w = await seedLaunchWorld(modules);
+    for (let index = 0; index < HIGH_COUNT_LIMIT + 5; index++) {
+      await insert(w, { machineId: w.machine });
+      await insert(w, { machineId: w.machine, severity: "medium" });
+    }
+    await insert(w, { machineId: w.machine, status: "analyzed" });
+    expect(
+      await w.t.query(internal.incidents.openHighCount, { machineId: w.machine }),
+    ).toBe(HIGH_COUNT_LIMIT + 1);
+  });
+
+  it("lists to a gestionnaire the open incident opened last, past INCIDENT_LIST_LIMIT closed ones", async () => {
+    const w = await seedLaunchWorld(modules);
+    for (let index = 0; index < INCIDENT_LIST_LIMIT; index++)
+      await insert(w, { machineId: w.machine, status: "closed", severity: "low" });
+    const latest = await insert(w, { machineId: w.machine, rule: "latest" });
+    const listed = await as(w.t, "manager").query(api.incidents.list, {});
+    expect(listed).toHaveLength(INCIDENT_LIST_LIMIT);
+    expect(listed[0]._id).toBe(latest);
+  });
+
+  it("serves an incident only in the caller's scope, whatever its machine says", async () => {
+    const w = await seedLaunchWorld(modules);
+    // An incident of another organisation on centre A's machine: never written so.
+    const stray = await insert(w, { machineId: w.machine, organizationId: w.orgB });
+    for (const actor of ["manager", "orgAdmin"] as const) {
+      expect(await as(w.t, actor).query(api.incidents.get, { incidentId: stray })).toBeNull();
+      expect(
+        (await as(w.t, actor).query(api.incidents.list, {})).map((row) => row._id),
+      ).not.toContain(stray);
+      expect(
+        await codeOf(
+          as(w.t, actor).mutation(api.incidents.analyze, {
+            incidentId: stray,
+            analysis: "cause",
+            action: "action",
+          }),
+        ),
+      ).toBe("incident_not_found");
+    }
+    expect(
+      await as(w.t, "admin").query(api.incidents.get, { incidentId: stray }),
+    ).not.toBeNull();
+  });
+});
 
 describe("ANH-145 EX-5 an incident's sheet, its analysis and its closing", () => {
   it("shows the session's events within 60 s of the instant, and who analysed and closed it", async () => {

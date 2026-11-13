@@ -2231,7 +2231,10 @@ Chaque événement de sécurité qui mérite une revue devient un incident dans
 Convex, lié à la machine, à la séance et, s'il y a lieu, à l'enregistrement :
 verdict `QUICK_STOP` ou `GO_SILENT` (même si la séance continue), défaut du
 variateur, fin `emergency_stop`, `safety_verdict` ou `tick_exception`, trois
-refus de pré-vol de suite, enregistrement refusé. Le détail est dans
+refus de pré-vol de suite, enregistrement refusé. Un même événement
+physique ne fait qu'un incident : l'arrêt d'urgence (son verdict puis sa fin),
+l'exception du tic, le défaut du variateur avec son verdict et sa fin, dans
+n'importe quel ordre d'arrivée. Le détail est dans
 [convex.md](convex.md#incidents--registre-des-incidents-anh-145).
 
 ### 16.1 La règle : un incident ouvert de gravité haute ferme les séances programmées
@@ -2251,8 +2254,11 @@ la machine aux séances programmées. Une analyse seule ne la rouvre pas.
 Gravité haute : avec une personne à bord, tout niveau `RAMP_DOWN` ou plus
 (défaut du variateur, arrêt d'urgence, verdict qui arrête) ; partout, un
 niveau `GO_SILENT` ou une action inconnue du serveur, et une exception du
-tic. Chaque incident grave ouvert est une alerte aux admins Anheart, dans le
-site (aucun e-mail : les alertes par e-mail sont coupées en production).
+tic. Une fin `safety_verdict` dont le verdict n'est pas reçu est grave même au
+banc : l'arrêt a pu être un `GO_SILENT`, et la gravité d'un incident n'est
+jamais abaissée quand le reste arrive. Chaque incident grave ouvert est une
+alerte aux admins Anheart, dans le site (aucun e-mail : les alertes par e-mail
+sont coupées en production).
 
 ### 16.2 Ce que le registre ne couvre pas
 
@@ -2261,5 +2267,6 @@ site (aucun e-mail : les alertes par e-mail sont coupées en production).
 | Une séance démarrée à la console, sans lancement du site, n'est connue du serveur qu'une fois armée | Le serveur ne peut pas la refuser ; seul le pré-vol de la console la refuse, et seulement s'il a reçu le compte d'un poll |
 | Une console qui n'a jamais reçu de poll (tableau de bord injoignable) ne connaît pas le compte | Le contrôle reste orange, « non annonce » : il ne bloque pas. Un incident grave ouvert ne la retient donc pas hors ligne |
 | Un défaut du variateur annoncé par le seul heartbeat, hors de tout événement de séance, n'ouvre pas d'incident | L'alerte `drive_fault` reste ; le pré-vol refuse de toute façon un départ sur un variateur en défaut |
-| Un refus de pré-vol d'un départ décidé à la console n'est pas envoyé au serveur | Seuls les refus de lancements venus du site comptent pour les trois refus de suite |
+| Un refus de pré-vol d'un départ décidé à la console n'est pas envoyé au serveur | Seuls les refus de lancements venus du site comptent pour les trois refus de suite ; toute autre séance de la machine remet le compte à zéro |
+| Une séance mal terminée pendant que le lien était coupé n'est connue du serveur qu'à l'arrivée de ses événements et de sa fin | Jusque-là le compte annoncé reste celui d'avant : un nouveau lancement est possible côté serveur ; voir le pré-vol de la console pour ce qui le retient |
 | Aucune déclaration d'incident à la main n'existe encore (`manual` est réservé) | Un événement que le logiciel ne voit pas ne bloque pas la machine |

@@ -31,7 +31,7 @@ import {
 } from "./lib/recordStorage";
 import { SUMMARY_FILES } from "./lib/sessionSummary";
 import { scheduleRecordSummary } from "./sessionReports";
-import { openIncident } from "./lib/incidents";
+import { machineEndOf, openIncident } from "./lib/incidents";
 
 const fileMetadata = v.object({
   id: v.id("session_record_files"),
@@ -186,8 +186,10 @@ async function refreshStatus(
     await openIncident(ctx, session, {
       kind: "record_rejected",
       rule: after.rejection ?? "record_rejected",
-      t: session.endedAt ?? session.startedAt,
+      // On the machine's axis, as the events around it are.
+      t: machineEndOf(session),
       level: null,
+      fromEvent: false,
       recordId: after.fileId,
     });
 }

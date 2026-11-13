@@ -11,10 +11,20 @@
  *   refusal in a row of a launch on the same machine;
  * - `recordStorage`, when a session's record becomes `rejected`.
  *
- * One incident per `(sessionId, rule, t)`: an event sent again opens nothing.
- * An end `safety_verdict` takes the rule and the instant of the most severe
- * stopping verdict among the session's last events, so the verdict that
- * already opened one is not counted twice.
+ * **One physical event, one incident.** The Pi records the verdict it
+ * latches, then ends the session for it: an emergency stop is the verdict
+ * `operator_estop` (or `drive_precommanded`, `enable_unconfirmed`) and the end
+ * `emergency_stop`; a tick exception the verdict `tick_exception` and the end
+ * of that name; a drive fault the event `drive_fault`, the verdict
+ * `drive_fault` (`RAMP_DOWN`) and the end `safety_verdict`
+ * (raspberry-pi/src/training/runtime.py, `_begin_ending`). Each of them is
+ * one incident, of the kind of its verdict (`kindOfVerdict`), whichever of
+ * its events and its end arrives first: an end that finds the verdict it was
+ * given joins its incident; an end that finds none opens one named after
+ * itself (`rule` = `kind`, a placeholder), at the level the end implies, which
+ * the verdict or the fault joins when it arrives. A join keeps the higher
+ * severity. And one incident per `(sessionId, rule, t)`: an event sent again
+ * opens nothing.
  *
  * While a `high` incident of a machine is `open` or `analyzed`
  * (`openHighIncidents`), no programmed session is launched there
@@ -22,6 +32,7 @@
  * (`armingRefusal`), and the machine's console is told the count on its poll
  * (`incidents_open_high`). A bench session, nobody on board, stays possible.
  */
+import machineApi from "../../contracts/machine-api.json";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { personOnBoard } from "./machineRegistry";
@@ -71,48 +82,165 @@ export function severityOf(
   return "low";
 }
 
-type Opening = {
+const SEVERITIES: IncidentSeverity[] = ["low", "medium", "high"];
+
+function higher(a: IncidentSeverity, b: IncidentSeverity): IncidentSeverity {
+  return SEVERITIES.indexOf(a) >= SEVERITIES.indexOf(b) ? a : b;
+}
+
+/** How the Pi ends a session, for the ends that open an incident. */
+type End = "safety_verdict" | "emergency_stop" | "tick_exception";
+type StopKind = End | "drive_fault";
+
+/** The Pi's verdicts that end a session on `emergency_stop` (runtime.py, safety.py). */
+const ESTOP_RULES = ["operator_estop", "drive_precommanded", "enable_unconfirmed"];
+
+/** The kind of the incident a stopping verdict of `rule` belongs to. */
+export function kindOfVerdict(rule: string): StopKind {
+  if (ESTOP_RULES.includes(rule)) return "emergency_stop";
+  if (rule === "tick_exception") return "tick_exception";
+  if (rule === "drive_fault") return "drive_fault";
+  return "safety_verdict";
+}
+
+/** The end each kind of stop gives the session. */
+const END_OF: Record<StopKind, End> = {
+  safety_verdict: "safety_verdict",
+  drive_fault: "safety_verdict",
+  emergency_stop: "emergency_stop",
+  tick_exception: "tick_exception",
+};
+
+/**
+ * The level an end implies when none of its verdicts was received: an
+ * emergency stop zeroes the reference (`QUICK_STOP`), a tick exception goes
+ * silent, and a safety verdict may have been any stop up to `GO_SILENT`.
+ */
+const END_LEVEL: Record<End, string> = {
+  emergency_stop: "QUICK_STOP",
+  tick_exception: "GO_SILENT",
+  safety_verdict: UNKNOWN_LEVEL,
+};
+
+function isEnd(word: string): word is End {
+  return word === "safety_verdict" || word === "emergency_stop" || word === "tick_exception";
+}
+
+/** What was seen of an incident: an event of the session, or its end. */
+type Observation = {
   kind: IncidentKind;
   rule: string;
   t: number;
   level: string | null;
+  /** From an event of the session: its rule and its instant are the precise ones. */
+  fromEvent: boolean;
   recordId?: Id<"session_record_files">;
 };
 
+/** An incident named after its kind: its precise rule and instant are not known yet. */
+function placeholder(incident: Doc<"incidents">): boolean {
+  return incident.rule === incident.kind;
+}
+
+/** The incidents a session has opened, a handful at most, oldest first. */
+async function incidentsOf(
+  ctx: QueryCtx,
+  sessionId: Id<"sessions">,
+): Promise<Doc<"incidents">[]> {
+  const rows = await ctx.db
+    .query("incidents")
+    .withIndex("by_session", (q) => q.eq("sessionId", sessionId))
+    .take(100);
+  return rows.sort((a, b) => a._creationTime - b._creationTime);
+}
+
 /**
- * Open the incident of `session`, unless one is already open for the same
- * `(rule, t)`. Schedules the alert to the Anheart admins for a `high` one.
- * Returns the new incident, or null.
+ * The incident, not closed, that an observation of `kind` belongs to: a
+ * placeholder of the same stop (an end that arrived first, or a fault's
+ * verdict before the fault), or, for the verdict on a fault (`faultVerdict`),
+ * the fault itself. The latest of them.
+ */
+function joined(
+  incidents: Doc<"incidents">[],
+  kind: IncidentKind,
+  faultVerdict: boolean,
+): Doc<"incidents"> | undefined {
+  const joins = (incident: Doc<"incidents">) => {
+    if (incident.status === "closed") return false;
+    if (faultVerdict && incident.kind === "drive_fault") return true;
+    if (!placeholder(incident)) return false;
+    if (kind === "drive_fault")
+      return incident.kind === "drive_fault" || incident.kind === "safety_verdict";
+    return incident.kind === kind;
+  };
+  const found = incidents.filter(joins);
+  return found[found.length - 1];
+}
+
+/**
+ * Join `observation` to `incident`: the higher severity, and, for a
+ * placeholder, the precise rule, kind and instant of an event. Alerts the
+ * Anheart admins when it becomes `high`.
+ */
+async function join(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+  incident: Doc<"incidents">,
+  observation: Observation,
+): Promise<Id<"incidents">> {
+  const severity = higher(
+    incident.severity,
+    severityOf(observation.kind, incident.occupied, observation.level),
+  );
+  const precise = placeholder(incident) && observation.fromEvent;
+  await ctx.db.patch(incident._id, {
+    severity,
+    ...(precise
+      ? { kind: observation.kind, rule: observation.rule, t: observation.t }
+      : {}),
+  });
+  if (severity === "high" && incident.severity !== "high") {
+    await scheduleAlert(ctx, session.machineId, "incident_high", {
+      sessionId: session._id,
+    });
+  }
+  return incident._id;
+}
+
+/**
+ * Open the incident of `session` for `observation`, or join the one already
+ * open for the same `(rule, t)`. Schedules the alert to the Anheart admins
+ * for a `high` one. Returns the incident.
  */
 export async function openIncident(
   ctx: MutationCtx,
   session: Doc<"sessions">,
-  opening: Opening,
-): Promise<Id<"incidents"> | null> {
+  observation: Observation,
+): Promise<Id<"incidents">> {
   const known = await ctx.db
     .query("incidents")
     .withIndex("by_session", (q) =>
       q
         .eq("sessionId", session._id)
-        .eq("rule", opening.rule)
-        .eq("t", opening.t),
+        .eq("rule", observation.rule)
+        .eq("t", observation.t),
     )
     .first();
-  if (known) return null;
+  if (known) return await join(ctx, session, known, observation);
   const occupied = personOnBoard(session);
-  const severity = severityOf(opening.kind, occupied, opening.level);
+  const severity = severityOf(observation.kind, occupied, observation.level);
   const incidentId = await ctx.db.insert("incidents", {
     organizationId: session.organizationId,
     machineId: session.machineId,
     sessionId: session._id,
-    kind: opening.kind,
-    rule: opening.rule,
-    t: opening.t,
+    kind: observation.kind,
+    rule: observation.rule,
+    t: observation.t,
     severity,
     occupied,
     status: "open",
     openedAt: Date.now(),
-    recordId: opening.recordId,
+    recordId: observation.recordId,
   });
   if (severity === "high") {
     await scheduleAlert(ctx, session.machineId, "incident_high", {
@@ -136,45 +264,66 @@ function verdictOf(detail: string): { rule: string; level: string } | null {
 
 type Event = { t: number; kind: string; detail: string };
 
-/** EX-2: the incident a newly stored event of `session` opens, if any. */
+/**
+ * EX-2: the incident a newly stored event of `session` opens or joins. A
+ * stopping verdict (`RAMP_DOWN` up) or a drive fault joins the incident of
+ * its stop already open (`joined`); otherwise a verdict from `QUICK_STOP` up,
+ * or a drive fault, opens one.
+ */
 export async function openIncidentOfEvent(
   ctx: MutationCtx,
   session: Doc<"sessions">,
   event: Event,
 ): Promise<Id<"incidents"> | null> {
+  let observation: Observation;
   if (event.kind === "verdict") {
     const verdict = verdictOf(event.detail);
-    if (verdict === null || levelRank(verdict.level) < levelRank("QUICK_STOP"))
+    if (verdict === null || levelRank(verdict.level) < levelRank("RAMP_DOWN"))
       return null;
-    return await openIncident(ctx, session, {
-      kind: "safety_verdict",
+    observation = {
+      kind: kindOfVerdict(verdict.rule),
       rule: verdict.rule,
       t: event.t,
       level: verdict.level,
-    });
-  }
-  if (event.kind === "drive_fault" && driveFaultAlerts(event.detail)) {
+      fromEvent: true,
+    };
+  } else if (event.kind === "drive_fault" && driveFaultAlerts(event.detail)) {
     // The supervisor's verdict on a drive fault is `RAMP_DOWN`.
-    return await openIncident(ctx, session, {
+    observation = {
       kind: "drive_fault",
       rule: driveFaultCode(event.detail) ?? "drive_fault",
       t: event.t,
       level: "RAMP_DOWN",
-    });
+      fromEvent: true,
+    };
+  } else {
+    return null;
   }
-  return null;
+  const faultVerdict = event.kind === "verdict" && observation.kind === "drive_fault";
+  const target = joined(
+    await incidentsOf(ctx, session._id),
+    observation.kind,
+    faultVerdict,
+  );
+  if (target) return await join(ctx, session, target, observation);
+  const opens =
+    event.kind === "drive_fault" ||
+    levelRank(observation.level) >= levelRank("QUICK_STOP");
+  return opens ? await openIncident(ctx, session, observation) : null;
 }
 
-/** How many of a session's last events an end `safety_verdict` reads. */
+/** How many of a session's last events an end reads for its verdict. */
 export const VERDICT_SCAN = 500;
 
 /**
- * The most severe stopping verdict among the session's last events, the
- * latest of equals; null when none was received.
+ * The verdict the Pi ended the session on with `end`: the earliest stopping
+ * verdict (`RAMP_DOWN` up) among the session's last events that gives this
+ * end. Null when none was received.
  */
-async function stoppingVerdict(
+async function endingVerdict(
   ctx: QueryCtx,
   sessionId: Id<"sessions">,
+  end: End,
 ): Promise<{ rule: string; level: string; t: number } | null> {
   const events = await ctx.db
     .query("training_events")
@@ -187,15 +336,19 @@ async function stoppingVerdict(
     if (
       verdict !== null &&
       levelRank(verdict.level) >= levelRank("RAMP_DOWN") &&
-      (found === null || levelRank(verdict.level) > levelRank(found.level))
+      END_OF[kindOfVerdict(verdict.rule)] === end
     )
       found = { ...verdict, t: event.t };
   }
   return found;
 }
 
-/** The words the console ends a launch its pre-flight refused with. */
-export const PREFLIGHT_REFUSAL = "refusee par la machine : pre-vol :";
+/**
+ * The words the console ends a launch its pre-flight refused with, as the
+ * shared contract pins them (`incidents.preflight_refusal_prefix`).
+ */
+export const PREFLIGHT_REFUSAL: string =
+  machineApi.incidents.preflight_refusal_prefix;
 
 /** How many pre-flight refusals in a row open an incident. */
 export const PREFLIGHT_REFUSALS = 3;
@@ -208,9 +361,9 @@ function refusedByPreflight(session: Doc<"sessions">): boolean {
 }
 
 /**
- * EX-2: the incident the end of `session` opens, if any. `reason` is what the
- * machine sent, `t` the end on the machine's clock. Called once the session
- * is ended.
+ * EX-2: the incident the end of `session` opens or joins. `reason` is what
+ * the machine sent, `t` the end on the machine's clock. Called once the
+ * session is ended.
  */
 export async function openIncidentOfEnd(
   ctx: MutationCtx,
@@ -219,21 +372,44 @@ export async function openIncidentOfEnd(
   t: number,
 ): Promise<Id<"incidents"> | null> {
   const end = reason.split(":")[0].trim();
-  if (end === "emergency_stop" || end === "tick_exception") {
-    return await openIncident(ctx, session, {
-      kind: end,
-      rule: end,
-      t,
-      // The screen's E-STOP zeroes the reference at once.
-      level: end === "emergency_stop" ? "QUICK_STOP" : null,
-    });
-  }
-  if (end === "safety_verdict") {
-    const verdict = await stoppingVerdict(ctx, session._id);
-    return await openIncident(ctx, session, {
-      kind: "safety_verdict",
-      ...(verdict ?? { rule: "safety_verdict", level: "RAMP_DOWN", t }),
-    });
+  if (isEnd(end)) {
+    const verdict = await endingVerdict(ctx, session._id, end);
+    if (verdict === null) {
+      // Its verdict not received: the stop already open that gives this end
+      // (a fault whose verdict is late) is it; else the end alone, at the
+      // level it implies.
+      const open = (await incidentsOf(ctx, session._id)).filter(
+        (row) =>
+          row.status !== "closed" &&
+          row.kind !== "preflight_repeated_failure" &&
+          row.kind !== "record_rejected" &&
+          row.kind !== "manual" &&
+          END_OF[row.kind] === end,
+      );
+      const stop = open[open.length - 1];
+      const alone: Observation = {
+        kind: end,
+        rule: end,
+        t,
+        level: END_LEVEL[end],
+        fromEvent: false,
+      };
+      return stop
+        ? await join(ctx, session, stop, { ...alone, kind: stop.kind, level: null })
+        : await openIncident(ctx, session, alone);
+    }
+    const observation: Observation = {
+      kind: kindOfVerdict(verdict.rule),
+      ...verdict,
+      fromEvent: true,
+    };
+    const incidents = await incidentsOf(ctx, session._id);
+    const target =
+      incidents.find((row) => row.rule === verdict.rule && row.t === verdict.t) ??
+      joined(incidents, observation.kind, observation.kind === "drive_fault");
+    return target
+      ? await join(ctx, session, target, observation)
+      : await openIncident(ctx, session, observation);
   }
   if (!refusedByPreflight(session)) return null;
   // Exactly the third refusal in a row on this machine, most recent first.
@@ -251,10 +427,29 @@ export async function openIncidentOfEnd(
     rule: "preflight",
     t,
     level: null,
+    fromEvent: false,
   });
 }
 
-/** How many `high` incidents of the machine are `open` or `analyzed`. */
+/**
+ * The end of a session on its machine's axis, where its events are dated:
+ * the server's date shifted back by the machine's own start (`machineAxis`
+ * in convex/training.ts), the start when it has not ended.
+ */
+export function machineEndOf(session: Doc<"sessions">): number {
+  const at = session.endedAt ?? session.startedAt;
+  return session.machineStartedAt === undefined
+    ? at
+    : at - (session.startedAt - session.machineStartedAt);
+}
+
+/** The most `high` incidents counted of one status (the poll's figure is bounded). */
+export const HIGH_COUNT_LIMIT = 100;
+
+/**
+ * How many `high` incidents of the machine are `open` or `analyzed`,
+ * `2 * HIGH_COUNT_LIMIT` at most: only those are read.
+ */
 export async function openHighIncidents(
   ctx: QueryCtx,
   machineId: Id<"machines">,
@@ -263,11 +458,11 @@ export async function openHighIncidents(
   for (const status of ["open", "analyzed"] as const) {
     const rows = await ctx.db
       .query("incidents")
-      .withIndex("by_machine_and_status", (q) =>
-        q.eq("machineId", machineId).eq("status", status),
+      .withIndex("by_machine_and_status_and_severity", (q) =>
+        q.eq("machineId", machineId).eq("status", status).eq("severity", "high"),
       )
-      .collect();
-    count += rows.filter((row) => row.severity === "high").length;
+      .take(HIGH_COUNT_LIMIT);
+    count += rows.length;
   }
   return count;
 }

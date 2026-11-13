@@ -51,6 +51,7 @@ from tests.test_cloud_sync import (
     ok,
     rig,
 )
+from tests.test_contract import shared
 from tests.test_local_panel import BASE_ENV, SERIAL_ENV, FakeEcgClient, config_from, ecg_link
 from tests.test_preflight import _green  # pyright: ignore[reportPrivateUsage]  # one fixture
 from tests.test_remote_bench_launch import BENCH
@@ -257,6 +258,11 @@ async def test_a_launch_on_a_red_preflight_comes_back_failed_with_its_reason(
         "refusee par la machine : pre-vol : variateur injoignable : aucune lecture recente "
         "de son etat"
     )
+    # ANH-145: the dashboard counts three such refusals in a row by these words.
+    incidents = cast("Mapping[str, object]", shared()["incidents"])
+    prefix = incidents["preflight_refusal_prefix"]
+    assert isinstance(prefix, str)
+    assert reason.startswith(prefix)
     await r.panel.close()
 
 

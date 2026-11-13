@@ -871,7 +871,14 @@ export default defineSchema({
     // The rejected file of a `record_rejected` incident.
     recordId: v.optional(v.id("session_record_files")),
   })
-    .index("by_machine_and_status", ["machineId", "status"])
+    // The blocking count reads the high ones only (`openHighIncidents`).
+    .index("by_machine_and_status_and_severity", [
+      "machineId",
+      "status",
+      "severity",
+    ])
+    // A machine's incidents, most recently opened last (a gestionnaire's list).
+    .index("by_machine", ["machineId"])
     .index("by_organization", ["organizationId"])
     .index("by_session", ["sessionId", "rule", "t"]),
 
