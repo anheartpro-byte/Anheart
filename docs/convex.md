@@ -2673,17 +2673,23 @@ si l'enregistrement de cette séance a reçu un défaut dans cette même borne.
 Un événement d'une séance (défaut, verdict, fin en échec, heartbeat qui la
 nomme), sans alerte non lue de cette séance, reprend l'alerte `drive_fault`
 non lue sans séance de la machine écrite pendant la séance : pas avant son
-`startedAt`, pas plus de `SAME_FAULT_MS` après son `endedAt`. Pour un
-verdict ou une fin, l'enregistrement de la séance doit aussi tenir un
-défaut. L'alerte prend alors cette séance.
+`startedAt`, pas plus de `SAME_FAULT_MS` après son `endedAt`. Tant que le
+serveur n'a pas d'`endedAt` (séance active ou interrompue, ou enregistrement
+rattrapé après un redémarrage de la console, dont la fin arrive en dernier),
+cette fenêtre n'a pas de fin. Pour un verdict ou une fin, l'enregistrement
+de la séance doit aussi tenir un défaut. L'alerte prend alors cette séance.
 
 Au delà de la borne, un défaut donne une nouvelle alerte et son e-mail : un
 défaut hors séance lu par l'un et pas par l'autre, puis un défaut d'une
 séance trois semaines plus tard, en donne une seconde à chacun. Un
 `drive_fault` ne reprend jamais une alerte liée à une autre séance. Les dates
 de séance sont celles du serveur pour une console qui date son départ (axe de
-la machine) ; une horloge de Pi fausse sans cet axe peut empêcher une reprise
-(une alerte de plus), jamais en perdre une.
+la machine). Sur une console qui ne donne pas l'âge de sa séance, les dates
+sont celles de l'horloge du Pi : en avance, elle peut empêcher une reprise
+(une alerte de plus) ; en retard, elle élargit la fenêtre vers le passé, et
+une séance qui a un défaut peut alors reprendre une alerte de défaut sans
+séance plus ancienne, sans lien avec elle, encore non lue : ce défaut ne
+donne alors pas d'alerte à part.
 
 **Lecture bornée (ANH-237).** Une livraison ne lit plus toutes les non lues
 de la machine : l'index
@@ -2707,24 +2713,29 @@ règles ci-dessus. L'enregistrement tient un défaut quand l'un des 50 derniers
 (`drive_fault (RAMP_DOWN): …`) ; le défaut termine la séance, il est donc
 parmi ses derniers événements. Aucune alerte ne disparaît ni ne descend.
 
-Garantie : **le même défaut, dans la borne de temps, donne 1 alerte et
-1 e-mail par destinataire**. Le heartbeat, le verdict et l'événement du
+Garantie, selon l'ordre d'arrivée, pour le même défaut : **1 alerte et
+1 e-mail par destinataire** quand le heartbeat arrive d'abord et que
+l'enregistrement de la séance arrive tant qu'elle est ouverte pour le
+serveur, ou moins de `SAME_FAULT_MS` après son `endedAt` ; c'est le cas d'un
+lien coupé puis rétabli, où le heartbeat passe le premier. Quand
+l'enregistrement arrive d'abord, le heartbeat n'est rejoint que s'il arrive
+moins de `SAME_FAULT_MS` après. Le heartbeat, le verdict et l'événement du
 défaut, dans les 6 ordres et aussi en un seul lot (verdict planifié avant le
-défaut par `storeEvents`), livrés à moins de `SAME_FAULT_MS` les uns des
-autres, donnent 1 alerte de compteur 3 ; avec la fin en échec, à toute
-place, compteur 4 (tests par les mutations internes des routes, et deux
-ordres par les routes HTTP elles-mêmes). Ni `training.ts`, ni `http.ts`, ni
+défaut par `storeEvents`), donnent ainsi 1 alerte de compteur 3 ; avec la
+fin en échec, à toute place, compteur 4 (tests par les mutations internes
+des routes, et deux ordres par les routes HTTP elles-mêmes). Ni `training.ts`, ni `http.ts`, ni
 le contrat ne changent. Une séance dont l'enregistrement ne tient aucun
 défaut (verdict cardiaque seul, par exemple) reste à part d'un défaut sans
 séance : 2 alertes. Deux défauts d'une même séance donnent 2 alertes au
 destinataire qui a lu la première, une seule alerte de compteur 6 à celui
 qui ne l'a pas lue (une alerte non lue par séance).
 
-Limites, qui donnent encore 2 alertes pour un même défaut : un heartbeat
-livré plus de `SAME_FAULT_MS` après le défaut de l'enregistrement (lien
-coupé puis rétabli, lot d'événements en retard) ; et, quand seul un verdict
-d'une autre règle est arrivé à la livraison du heartbeat, puis le défaut
-ensuite. Le défaut doit être stocké quand arrive l'autre moitié : le Pi
+Limites, qui donnent encore 2 alertes pour un même défaut : un
+enregistrement arrivé d'abord, puis le heartbeat du défaut plus de
+`SAME_FAULT_MS` après, par exemple quand la route du heartbeat échoue ou est
+refusée plus de 90 s alors que les lots d'événements passent ; et, quand
+seul un verdict d'une autre règle est arrivé à la livraison du heartbeat,
+puis le défaut ensuite. Le défaut doit être stocké quand arrive l'autre moitié : le Pi
 envoie les événements avant la fin.
 
 Ce regroupement s'applique aussi aux verdicts hors défaut variateur : par
@@ -2804,9 +2815,12 @@ lire. Il est écrit dans la langue du compte (`users.language`). Il n'est mis
 en file que si le déploiement a ses trois variables (§8), que le
 destinataire veut ce type par e-mail et qu'il a une adresse.
 
-Un seul e-mail est mis en file, à la création de l'alerte, selon le réglage
+Un seul e-mail est mis en file par alerte, à sa création, selon le réglage
 du type de départ. Il ne dit que ce type de départ, même si l'alerte monte
-ensuite en précision ; cette montée ne renvoie aucun e-mail. `email.type`
+ensuite en précision ; cette montée ne renvoie aucun e-mail. Seule
+exception : si aucun e-mail n'a été mis en file à la création (type non
+choisi, envoi indisponible), une montée vers un type que le destinataire
+veut en met un en file, de ce nouveau type. `email.type`
 conserve le type de création, y compris si la montée précède le premier
 envoi ou arrive entre deux reprises : le type et le corps restent ainsi
 identiques malgré cette montée entre les tentatives pour la même clé
@@ -2816,8 +2830,8 @@ le type de l'alerte.
 
 **Un type de plus.** Ajouter un type dans `notificationTypeValidator` et
 `notificationEmailFields` de `convex/schema.ts`, une entrée de
-`NOTIFICATION_TYPES` dans `convex/lib/notifications.ts` avec son `foldsBy`,
-sa `sessionPriority` et `emailByDefault`, le choix correspondant dans
+`NOTIFICATION_TYPES` dans `convex/lib/notifications.ts` avec sa
+`sessionPriority` et `emailByDefault`, le choix correspondant dans
 `emailChoicesValidator` (`convex/notifications.ts`), le type dans `TYPES`
 de la page des alertes (`app/[locale]/dashboard/notifications/page.tsx`),
 les libellés français et anglais d'`alertEmail`

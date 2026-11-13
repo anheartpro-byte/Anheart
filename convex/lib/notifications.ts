@@ -50,47 +50,41 @@ import { LIVE_FRESH_MS } from "../../lib/training";
 export type { NotificationType };
 
 /**
- * Each kind of alert: its priority within a session, its fallback grouping,
- * and whether it goes by e-mail too for an account that has not chosen
- * (`notification_settings`).
+ * Each kind of alert: its priority within a session, and whether it goes by
+ * e-mail too for an account that has not chosen (`notification_settings`).
  *
- * - "machine": a state of the machine. A new event folds into the
- *   recipient's unread alert of that kind for that machine.
- * - "session": something that happened in one session. It folds into the
- *   recipient's unread alert for that session only. With a session, all
- *   kinds with a positive session priority fold together, keeping the highest.
+ * With a session, every kind with a positive session priority folds into the
+ * recipient's unread alert of that session, keeping the highest. Otherwise a
+ * kind folds into the recipient's unread alert of the same kind and session,
+ * or without a session: `machine_offline` by machine, with no time bound.
+ * A drive fault only folds into the same fault, within `SAME_FAULT_MS`
+ * (`sameFault`).
  */
 export const NOTIFICATION_TYPES = {
   machine_offline: {
-    foldsBy: "machine",
     sessionPriority: 0,
     emailByDefault: false,
   },
   session_failed: {
-    foldsBy: "session",
     sessionPriority: 1,
     emailByDefault: true,
   },
   drive_fault: {
-    foldsBy: "machine",
     sessionPriority: 3,
     emailByDefault: true,
   },
   safety_verdict: {
-    foldsBy: "session",
     sessionPriority: 2,
     emailByDefault: true,
   },
   // To the Anheart admins: never folded into an alert of the machine's staff.
   incident_high: {
-    foldsBy: "session",
     sessionPriority: 0,
     emailByDefault: false,
   },
 } as const satisfies Record<
   NotificationType,
   {
-    foldsBy: "machine" | "session";
     sessionPriority: number;
     emailByDefault: boolean;
   }
@@ -344,8 +338,9 @@ export async function retryDelivery(
 }
 
 /**
- * How many unread alerts one lookup of a delivery reads. Folding keeps one
- * unread alert per session, and the time bound below few without one.
+ * How many unread alerts one lookup of a delivery reads. Folding leaves one
+ * unread alert per session, and the time bound below leaves few without a
+ * session; past this many, a delivery writes one alert more, never fewer.
  */
 const FOLD_SCAN = 50;
 

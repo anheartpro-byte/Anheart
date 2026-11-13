@@ -1794,13 +1794,17 @@ tous types, et non les répétitions du type affiché. Une alerte
 lue reste inchangée ; l'événement suivant en crée une nouvelle. « Machine
 hors ligne » reste regroupée par machine.
 
-Un défaut variateur signalé par la machine sans nommer la séance rejoint
-l'alerte de la séance dont l'enregistrement a reçu ce défaut à moins de
-90 s, quel que soit l'ordre d'arrivée : vous recevez **1 alerte et
-1 e-mail** pour ce défaut. Au delà de 90 s d'écart (lien coupé puis
-rétabli), ou si seul un verdict d'une autre règle était arrivé, vous en
-recevez encore 2. Un défaut plus tardif donne une nouvelle alerte, et une
-séance sans défaut variateur reste à part d'un défaut hors séance.
+Un défaut variateur signalé par la machine sans nommer la séance, arrivé
+d'abord, rejoint l'alerte de la séance dont l'enregistrement tient ce
+défaut tant que la séance est ouverte ou moins de 90 s après sa fin, même
+après un lien coupé puis rétabli. Si l'enregistrement arrive d'abord, le
+défaut signalé par la machine ne le rejoint que dans les 90 s. Vous recevez
+alors **1 alerte et 1 e-mail** pour ce défaut. Vous en recevez encore 2 si
+ce signalement arrive plus de 90 s après l'enregistrement (signalement de
+la machine en échec pendant que ses événements passent), ou si seul un
+verdict d'une autre règle était arrivé. Un défaut plus tardif donne une
+nouvelle alerte, et une séance sans défaut variateur reste à part d'un
+défaut hors séance.
 
 ---
 

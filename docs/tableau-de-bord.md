@@ -1100,14 +1100,18 @@ un verdict de fréquence cardiaque et la fin en échec. Une alerte déjà lue
 reste inchangée ; l'événement suivant en crée une nouvelle. Les alertes
 « Machine hors ligne » gardent leur regroupement par machine.
 
-Un défaut variateur ne rejoint que le même défaut, à moins de 90 s
-(`SAME_FAULT_MS`) : un heartbeat en défaut qui ne nomme pas la séance
-rejoint l'alerte de la séance dont l'enregistrement a reçu ce défaut dans
-cette borne, dans tout ordre d'arrivée, soit **1 alerte et 1 e-mail par
-destinataire** pour ce défaut. Plus de 90 s d'écart (lien coupé puis
-rétabli) donnent encore 2 alertes, comme un verdict d'une autre règle seul
-arrivé avant le heartbeat. Un défaut plus tardif donne une nouvelle alerte,
-et une séance sans défaut variateur reste à part d'un défaut hors séance.
+Un défaut variateur ne rejoint que le même défaut. Un heartbeat en défaut
+qui ne nomme pas la séance, arrivé d'abord, est rejoint par l'enregistrement
+de la séance qui tient ce défaut tant que la séance est ouverte, ou moins de
+90 s (`SAME_FAULT_MS`) après sa fin : c'est le cas d'un lien coupé puis
+rétabli, où le heartbeat passe le premier. Un enregistrement arrivé d'abord
+n'est rejoint que par un heartbeat arrivé moins de 90 s après. Le même
+défaut donne alors **1 alerte et 1 e-mail par destinataire**. Restent 2
+alertes : un heartbeat arrivé plus de 90 s après l'enregistrement (route du
+heartbeat en échec ou refusée pendant que les événements passent), ou un
+verdict d'une autre règle seul arrivé avant le heartbeat. Un défaut plus
+tardif donne une nouvelle alerte, et une séance sans défaut variateur reste
+à part d'un défaut hors séance.
 Détail :
 [convex.md](convex.md#notificationsts-alertes-aux-gestionnaires-anh-90).
 
