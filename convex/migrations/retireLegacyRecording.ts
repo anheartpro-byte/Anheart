@@ -1,14 +1,14 @@
 /**
  * Data migration for the retirement of the ECG recording mode.
  *
- * Two internal mutations, run by hand once per deployment after this code is
+ * One internal mutation, run by hand once per deployment after this code is
  * deployed (never from the application, never by a schedule):
  *
  *     npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
- *     npx convex run migrations/retireLegacyRecording:removeMachineConfig
  *
- * Both are idempotent: a second run finds nothing left to change and says so
- * in its result.
+ * It is idempotent: a second run finds nothing left to change and says so in
+ * its result. Its twin `removeMachineConfig` ran on every deployment in
+ * October 2026, then left with the field it cleared (ANH-211).
  *
  * What a "recording session" is in the data: a row of `sessions` WITHOUT
  * `kind`. The recording mode never wrote that field; every training session
@@ -66,30 +66,5 @@ export const failOpenRecordingSessions = internalMutation({
       }
     }
     return { machinesChecked: machines.length, sessionsFailed };
-  },
-});
-
-/**
- * Remove the recorder settings (`config`) from every machine document.
- *
- * The field is still declared, optional, in the schema so that this code can
- * be deployed while documents carry it. Once this mutation has run on a
- * deployment, no document has the field and it can leave the schema.
- */
-export const removeMachineConfig = internalMutation({
-  args: {},
-  returns: v.object({
-    machinesChecked: v.number(),
-    machinesCleared: v.number(),
-  }),
-  handler: async (ctx) => {
-    const machines = await ctx.db.query("machines").collect();
-    let machinesCleared = 0;
-    for (const machine of machines) {
-      if (machine.config === undefined) continue;
-      await ctx.db.patch(machine._id, { config: undefined });
-      machinesCleared += 1;
-    }
-    return { machinesChecked: machines.length, machinesCleared };
   },
 });

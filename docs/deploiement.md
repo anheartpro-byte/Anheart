@@ -235,12 +235,11 @@ par la personne qui en répond (ANH-82) :
 
 Avant de le lancer, par la pipeline ou à la main :
 
-1. Le nouveau schéma n'ajoute que des tables et des champs facultatifs, et rend
-   `sessions.userId` et `machines.config` facultatifs. Dans sa version d'avant
-   le retrait de l'ancien mode ECG, il a été accepté tel quel par les données
-   de développement ; la version actuelle n'a été poussée sur aucun
-   déploiement. Les données de production peuvent différer : `convex deploy`
-   refusera le tout s'il trouve un document non conforme, sans rien modifier.
+1. Le nouveau schéma n'ajoute que des tables et des champs facultatifs, rend
+   `sessions.userId` facultatif et ne déclare plus `machines.config`
+   (ANH-211). `convex deploy` refuse le tout s'il trouve un document non
+   conforme, sans rien modifier : faire d'abord le contrôle en lecture seule
+   de la [section 3.7](#37-contrôler-les-champs-retirés-des-machines).
 2. Le site de production (branche `main`) appelle l'ancienne API, et **elle
    n'est plus entièrement là**. Le retrait de l'ancien mode d'enregistrement
    ECG a supprimé trois mutations du module `sessions` (création, fin et
@@ -272,7 +271,7 @@ Avant de le lancer, par la pipeline ou à la main :
    exception tant que `main` n'a pas reçu `vercel.json` : un push sur `main`
    qui n'apporte pas ce fichier déploie encore le site de production tout seul
    ([§5.1](#avant-et-après-larrivée-sur-main)).
-4. Exécuter les deux mutations de migration du retrait de l'ancien mode ECG
+4. Exécuter la mutation de migration du retrait de l'ancien mode ECG
    (voir [convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg)).
 5. Créer le premier admin et la machine (voir [convex.md](convex.md#8-déployer)).
 6. Déployer quand aucune séance n'est en cours, et lancer la migration
@@ -502,6 +501,60 @@ de projet du 14 octobre 2026 ; seul levier, manuel :
 
 **Avec le site.** `getSessionTelemetry` et `getTrainingSession` gardent leurs
 arguments et la forme de leurs réponses : le site n'a rien à changer.
+
+### 3.7 Contrôler les champs retirés des machines
+
+Depuis ANH-211, le schéma ne déclare plus `machines.config`, les réglages de
+l'ancien enregistreur ECG. La migration qui vidait ce champ
+(`migrations/retireLegacyRecording:removeMachineConfig`) a tourné sur le
+développement et sur la production les 28 et 29 octobre 2026
+([passation](handoff.md), section 6),
+puis a quitté le code avec le champ.
+
+**Quand.** Sur chaque déploiement, avant d'y pousser ce schéma pour la
+première fois (`npx convex dev --once` ou `npx convex deploy`). Le
+développement a été contrôlé le 13 novembre 2026 : 5 machines, aucune ne
+porte le champ. La production reste à contrôler, au moment de son
+déploiement.
+
+**Comment.** La requête ne fait que lire : une query Convex n'a aucun moyen
+d'écrire. Dans le tableau de bord Convex du déploiement, page **Data**, menu
+`⋮`, **Custom query** (« Custom test query »), coller :
+
+```js
+import { query } from "convex:/_system/repl/wrappers.js";
+
+export default query({
+  handler: async (ctx) => {
+    const machines = await ctx.db.query("machines").collect();
+    const carrying = (field) =>
+      machines.filter((machine) => machine[field] !== undefined).length;
+    return { machines: machines.length, config: carrying("config") };
+  },
+});
+```
+
+Elle ne renvoie que des nombres.
+
+**Résultat attendu** : `config` vaut `0` ; `machines` est le nombre de
+machines, supprimées comprises.
+
+**Sinon, ne pas déployer.** Convex refuse un schéma que des documents
+existants ne respectent pas : le déploiement échouerait sans rien modifier, et
+le code en service resterait en place. Relancer d'abord la migration sur ce
+déploiement. Elle n'est plus dans ce code, mais dans celui qu'il sert encore
+(la production sert depuis le 29 octobre 2026 un code qui la contient ; le
+dernier commit de `develop` qui la contient est `72294f2`) :
+
+```bash
+npx convex run migrations/retireLegacyRecording:removeMachineConfig
+```
+
+précédée de la clé du déploiement visé, lue comme le dit
+[convex.md](convex.md#migration-du-retrait-de-lancien-mode-ecg) (l'option
+`--prod` est ignorée dans ce dépôt). Puis relancer la requête. Un déploiement
+dont le code n'a pas cette fonction reçoit d'abord `72294f2`, puis la
+migration, puis ce code.
 
 ---
 

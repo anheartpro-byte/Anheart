@@ -17,7 +17,9 @@ machines, les séances et la télémétrie. Il sert deux clients :
 > [deploiement.md](deploiement.md#4-essai-de-bout-en-bout-du-1er-octobre-2026).
 > Il n'est **pas** en production (ticket ANH-82), et n'a jamais été appelé par
 > un vrai Pi. Le retrait de l'ancien mode d'enregistrement ECG décrit ici
-> (routes, mutations, champ `config`, migration) n'est déployé **nulle part**.
+> (routes, mutations, migration) a été déployé avec ANH-82 fin octobre 2026 ;
+> le champ `config` des machines, vidé par la migration, a ensuite quitté le
+> schéma (ANH-211).
 > Cet état de déploiement est historique ; les tests locaux Convex
 > sont désormais exécutables avec `npm run test:convex`. Les fichiers `convex/training.ts`, `lib/training.ts`,
 > `components/training/` et la page `my-machines` ne sont pas encore commités
@@ -495,7 +497,6 @@ purge supplémentaire n'est livré ici.
 | `authenticationEnabled` | `false` refuse l'authentification ; absent ou `true` l'autorise sous réserve d'une clé valide et d'une machine non supprimée. Distinct de `status` et de `programsEnabled`. Aucun nouveau contrôle public/UI de ce champ. |
 | `status` | `"online"` \| `"offline"` \| `"in_session"`. |
 | `lastHeartbeat` | ms Unix du dernier heartbeat. |
-| `config` | **Obsolète.** `{ sampleRate, channels, batchInterval }`, réglages de l'ancien enregistreur ECG. Facultatif ; aucune fonction ne le lit ni ne l'écrit. Il reste déclaré le temps que la migration `removeMachineConfig` le retire des documents ([§8](#8-déployer)), puis il quittera le schéma. |
 | `isDeleted`, `deletedAt`, `deletedBy` | Suppression douce. |
 | `programsEnabled` | Rapporté par le Pi : accepte-t-il les séances auto ? |
 | `live` | Dernier état rapporté par le Pi (voir ci-dessous). |
@@ -1644,7 +1645,7 @@ internes, avec leurs actions attendues. Les actions Convex et routes HTTP
 font écrire leurs effets par ces mutations. `NON_SENSITIVE_MUTATIONS`
 classe toutes les autres avec un motif : télémétrie et états transitoires,
 synchronisation opérationnelle, calculs de résumés, dépôts de fichiers,
-notifications, changements de nom/langue et les cinq migrations de
+notifications, changements de nom/langue et les quatre migrations de
 `convex/migrations/`. Les purges de
 ces autres données ne purgent jamais `audit_log`.
 
@@ -3185,16 +3186,16 @@ déploiement ni contre Resend.
 
 ### Migration du retrait de l'ancien mode ECG
 
-**Pas encore exécutée, sur aucun déploiement.** Deux mutations internes de
+**Exécutée sur le développement et sur la production les 28 et
+29 octobre 2026** (ANH-82). Une mutation interne de
 `convex/migrations/retireLegacyRecording.ts`, à lancer à la main, une fois par
 déploiement, **après** avoir déployé ce code :
 
 ```bash
 npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
-npx convex run migrations/retireLegacyRecording:removeMachineConfig
 ```
 
-**Telles qu'écrites, ces deux lignes visent le déploiement de développement.**
+**Telle qu'écrite, cette ligne vise le déploiement de développement.**
 Ce qui le décide est la clé `CONVEX_DEPLOY_KEY` de `.env.local`, celle du
 développement
 ([deploiement.md, section 2](deploiement.md#2-les-clés-et-où-elles-sont-rangées)) :
@@ -3227,13 +3228,11 @@ deux temps.
    ne pas continuer. Cette lecture ne passe pas par la CLI et ne contacte
    aucun déploiement : elle ne dépend donc pas de ce que la CLI choisirait,
    et elle n'affiche pas la partie secrète de la clé.
-2. **Lancer les deux mutations avec cette clé** :
+2. **Lancer la mutation avec cette clé** :
 
    ```bash
    CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" \
      npx convex run migrations/retireLegacyRecording:failOpenRecordingSessions
-   CONVEX_DEPLOY_KEY="$(grep '^CONVEX_DEPLOY_KEY_PROD=' .env.local | cut -d= -f2-)" \
-     npx convex run migrations/retireLegacyRecording:removeMachineConfig
    ```
 
    Une variable déjà présente dans l'environnement l'emporte sur celle de
@@ -3241,28 +3240,23 @@ deux temps.
    clé passée sur la ligne remplace donc celle du développement, pour cette
    commande seulement.
 
-Cette forme n'a été essayée sur aucun déploiement : la migration n'a tourné
-nulle part.
-
 | Mutation | Effet | Résultat renvoyé |
 |---|---|---|
 | `failOpenRecordingSessions` | Passe `failed` toute séance de l'ancien mode (sans `kind`) encore `pending` ou `active`, avec `endReason = "legacy mode retired"` et `endedAt`. Les séances d'enregistrement finies et toutes les séances d'entraînement ne sont pas touchées ; les lignes gardent leur forme (pas de `kind` ajouté). Le statut de la machine n'est pas écrit : le prochain heartbeat le recalcule. | `{machinesChecked, sessionsFailed}` |
-| `removeMachineConfig` | Retire le champ `config` de chaque machine, supprimées comprises. Rien d'autre ne change. | `{machinesChecked, machinesCleared}` |
 
-Les deux sont idempotentes : une seconde exécution renvoie zéro. Pourquoi la
-première compte : une séance d'enregistrement restée `pending` refuse tout
-lancement auto sur sa machine (« A session is already waiting for this
-machine ») et empêche de supprimer cette machine.
+Elle est idempotente : une seconde exécution renvoie zéro. Pourquoi elle
+compte : une séance d'enregistrement restée `pending` refuse tout lancement
+auto sur sa machine (« A session is already waiting for this machine ») et
+empêche de supprimer cette machine.
 
 **Les compteurs à vérifier**, sur chaque déploiement, en gardant la sortie des
-quatre exécutions :
+deux exécutions :
 
 | Compteur | Ce qu'il doit valoir |
 |---|---|
 | `machinesChecked`, dans les deux résultats | le nombre de documents de la table `machines` du déploiement visé, machines supprimées comprises : la migration a lu toutes ses machines. Le compter à part, avec la commande donnée sous ce tableau. |
 | `sessionsFailed`, première exécution | le nombre de séances de l'ancien mode restées `pending` ou `active`. À noter : rien ne permet de le retrouver ensuite. |
-| `machinesCleared`, première exécution | le nombre de machines qui portaient `config`. En production, où le schéma en service (branche `main`) exige ce champ sur chaque machine, il doit être égal à `machinesChecked`. |
-| `sessionsFailed` et `machinesCleared`, **seconde exécution** | `0`. Relancer chaque mutation une fois : ce zéro est la preuve que la première a tout traité. |
+| `sessionsFailed`, **seconde exécution** | `0`. Relancer la mutation une fois : ce zéro est la preuve que la première a tout traité. |
 
 Pour compter les machines d'un déploiement, précéder la commande de la même
 variable `CONVEX_DEPLOY_KEY` qu'à l'étape 2 pour la production :
@@ -3276,13 +3270,17 @@ récents : il ne compte pas au-delà. Avec `--format jsonLines` chaque document
 tient sur une ligne, et `--limit` repousse la borne. Si le nombre obtenu est
 égal à la limite donnée, la relever et recommencer.
 
-Le champ `machines.config` reste déclaré, facultatif, dans le schéma : le
-retirer tant que des documents le portent ferait échouer `convex deploy`. Une
-fois `removeMachineConfig` passée sur **tous** les déploiements, le champ peut
-quitter `convex/schema.ts`. La valeur `recording` de `sessions.kind`, elle, a
-pu partir tout de suite : aucun code ne l'a jamais écrite.
+La seconde mutation de ce retrait, `removeMachineConfig`, a vidé
+`machines.config` sur les deux déploiements ; le champ a ensuite quitté
+`convex/schema.ts`, avec la mutation et ses tests (ANH-211). Avant de pousser
+ce schéma sur un déploiement, le contrôle en lecture seule de
+[deploiement.md, section 3.7](deploiement.md#37-contrôler-les-champs-retirés-des-machines)
+vérifie qu'aucune machine ne porte plus le champ : sinon Convex refuserait le
+schéma. La valeur `recording` de `sessions.kind`, elle, a pu partir tout de
+suite : aucun code ne l'a jamais écrite.
 
-`convex/legacyRecordingRetired.test.ts` exerce ces deux mutations en mémoire
+`convex/legacyRecordingRetired.test.ts` exerce cette mutation en mémoire, et
+le refus par le schéma d'une machine qui porterait encore `config`
 (`npm run test:convex`). Ce n'est pas une preuve sur des données réelles.
 
 ### Migration des clés machine (ANH-165)
@@ -3726,7 +3724,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/httpRoutes.test.ts` | 12 des 13 routes machine enregistrées dans `http.ts` : corps mal formés sur toutes les routes POST, dont les deux de `recordHttp.ts` ; idempotence, liaison ressource-machine et filtrage des séances pour les 10 routes hors enregistrements. `GET /api/machine/records/status` et les cas métier des trois routes d'enregistrement sont exercés dans les suites dédiées. |
 | `convex/journalTrace.test.ts` | Le test d'acceptation de la synchronisation, côté Convex : il rejoue, dans l'ordre et aux mêmes instants, **les requêtes que la console du Pi a réellement envoyées** pendant son propre test d'acceptation (`contracts/fixtures/journal-sync-trace.json` : séance, coupure réseau à 3 min, console tuée à 5 min, retour du réseau à 8 min, machine datée de 1970). Convex doit répondre à chacune comme la trace l'a noté, et détenir à la fin chaque point 1 Hz et chaque événement une seule fois, et la fin avec sa raison. Le test du Pi échoue si le fichier n'est plus ce que la console envoie. |
 | `convex/journalSync.test.ts` | Ce que Convex fait d'une séance envoyée tard ou deux fois : une ligne par point et par événement quel que soit le nombre d'envois, la route des événements et ses tailles. Puis deux consoles rejouées. Celle qui ne dit pas son âge (contrat 1.0) : rien ne change pour elle, horloge reculée de 10 min en cours de séance (tout est stocké), machine datée de 1970 déclarée en retard (jamais en direct, aucun point refusé). Celle qui dit son âge : borne de cohérence sur son propre axe, dates du serveur, données tardives lues comme tardives, rien de perdu. |
-| `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance que le résumé provisoire d'ANH-89, et les deux mutations de migration. |
+| `convex/legacyRecordingRetired.test.ts` | Retrait de l'ancien mode ECG : routes disparues (404), modules réduits à leurs lectures, aucune écriture dans `ecg_data` ni `session_summaries`, rien de planifié en fin de séance que le résumé provisoire d'ANH-89, la mutation de migration des séances restées ouvertes, et le refus par le schéma de `machines.config` (ANH-211). |
 | `convex/sessionSummary.test.ts` | Les chiffres d'un résumé (ANH-89) sur des enregistrements de fixture écrits comme la console les écrit : durée, FC absente ou présente, temps en zone et ses bornes, vitesse, g aux deux rayons avec et sans géométrie, fenêtres de variation de g et chaque raison de ne pas juger un tic, verdicts et règle de fin, colonnes trouvées par leur nom, lignes illisibles, fichiers refusés ; temps en zone repris des compteurs de la console quand le manifeste porte les trois, valides, recompté sur les tics sinon, avec `zone.source` (`"console"` ou `"ticks"`) sur le seul résumé final (ANH-234). |
 | `convex/sessionReports.test.ts` | Le résumé de bout en bout (ANH-89) : provisoire à la fin, final après le dépôt des trois fichiers, jamais remplacé par le provisoire, idempotent, enregistrement illisible, séance non terminée ou de l'ancien mode ; et qui lit le résumé et l'historique d'un pratiquant ; compteurs de la console retenus par le résumé final et l'historique (`zone.source: "console"`), recalcul (`"ticks"`) pour un enregistrement qui ne les porte pas, et résumé stocké sans `zone.source` toujours valide (ANH-234) ; note de nausée du retour dans l'historique, `null` sans retour (ANH-146). |
 | `convex/sessionFeedback.test.ts` | Le retour du passager (ANH-146) : une ligne par séance, remplacée par la dernière écriture du passager ou de l'opérateur, dans les deux ordres ; fenêtre de 24 h à la milliseconde près, horloge simulée, pour le site et la machine ; séance d'atelier, non terminée ou de l'ancien mode refusée des deux côtés ; bornes de la saisie par la mutation du site ; événement `feedback` de la route des événements : ligne `operator`, aucune ligne `training_events`, refus d'un retour mêlé, double ou illisible, séance d'une autre machine, événements ordinaires inchangés ; valeurs sentinelles absentes des refus, de l'audit, des notifications, de `training_events` et des journaux ; export par organisation, identifiants seuls, chiffres du résumé ou `null`, pages de 100 au plus. Les droits, rôle par rôle, sont dans la matrice. |

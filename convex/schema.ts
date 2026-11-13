@@ -482,18 +482,6 @@ export default defineSchema({
     ),
     lastHeartbeat: v.number(),
     location: v.optional(v.string()),
-    // DEPRECATED: settings of the retired ECG recorder. No function reads or
-    // writes this field. It stays declared, optional, only so that a
-    // deployment whose machines still carry it accepts this schema; the
-    // migration `migrations/retireLegacyRecording:removeMachineConfig` strips
-    // it from the documents, after which the field can leave the schema.
-    config: v.optional(
-      v.object({
-        sampleRate: v.number(),
-        channels: v.array(v.string()),
-        batchInterval: v.number(),
-      }),
-    ),
     createdAt: v.number(),
     isDeleted: v.optional(v.boolean()), // Soft delete flag
     deletedAt: v.optional(v.number()), // When it was deleted
