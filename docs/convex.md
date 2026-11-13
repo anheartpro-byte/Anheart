@@ -177,8 +177,8 @@ requête. Les valeurs fermées sont définies dans
 | `organizationId` | Identifiant d'organisation, facultatif pour une action globale. Une ligne sans organisation n'est lisible que par l'admin Anheart. |
 | `actorId` | Identifiant de `users` ou de `machines`, absent pour le système. |
 | `actorRole` | `admin`, `org_admin`, `gestionnaire`, `user`, `machine` ou `system`. Le rôle de l'acteur au moment de l'effet. |
-| `action` | Une des 43 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
-| `targetType` | `user`, `machine`, `machine_key`, `session`, `fitness_assessment`, `consent`, `organization`, `software_release`, `medical_parameters_version` ou `patient_invitation`. Déduit de l'action par `AUDIT_ACTION_TARGET`. `user.invited` cible une `patient_invitation`, y compris quand aucun profil unique ne peut être lié à l'invitation. |
+| `action` | Une des 51 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
+| `targetType` | `user`, `machine`, `machine_key`, `session`, `fitness_assessment`, `consent`, `organization`, `software_release`, `medical_parameters_version`, `programme` ou `patient_invitation`. Déduit de l'action par `AUDIT_ACTION_TARGET`. `user.invited` cible une `patient_invitation`, y compris quand aucun profil unique ne peut être lié à l'invitation. |
 | `targetId` | Chaîne, identifiant de la cible ; il reste dans le journal après la suppression de celle-ci. |
 | `details` | Objet facultatif, dont seules les clés ci-dessous sont admises. |
 | `requestId` | Identifiant de requête Convex lu par `ctx.meta.getRequestMetadata()`, partagé par la route ou l'action d'origine et la mutation qu'elle appelle, ainsi que par les lignes d'une même requête. |
@@ -223,8 +223,9 @@ passe aussi ce format et doit exister dans le registre des releases Pi.
 existence en base ne garantit pas un format, puisque l'insertion interne
 accepte un texte libre. Cette vérification métier reste inchangée. La machine
 de la fiche et l'identifiant de la version créée restent les cibles de leurs lignes.
-La clé `medicalParametersVersion` reste admise par le schéma, mais aucun
-appel courant ne la remplit.
+La clé `medicalParametersVersion` n'est remplie que par `programme.validated`
+(ANH-137) : la version écrite par le serveur pour laquelle le programme a été
+validé.
 
 Conformément au principe 6 du processus de développement, aucune donnée de
 santé ni texte libre ne doit y entrer : ni FC max, année de naissance,
@@ -442,6 +443,33 @@ synchronisation (`syncProfiles`).
 Le Pi n'envoie que les programmes dont les paliers égalent ceux de son
 superviseur (`runnable_profiles` dans `raspberry-pi/src/cloud_sync.py`) : un
 programme que le Pi refuserait n'est jamais proposé sur le site.
+
+### `programmes` et `programme_revisions` : le catalogue de programmes (ANH-137)
+
+Les programmes de séance que l'équipe Anheart écrit depuis le site, sans
+toucher au Pi. Règles, cycle de vie et rôles : [programmes.md](programmes.md).
+Ils ne partent pas encore vers les machines (ANH-138) : les lancements
+utilisent toujours `machine_profiles`.
+
+| Champ | Sens |
+|---|---|
+| `profileId`, `name`, `totalDurationS`, `baselineS`, `warmupMaxS`, `holdMinS`, `cooldownS`, `recoveryS`, `zoneLowBpm`, `zoneHighBpm`, `hardMaxBpm`, `criticalBpm`, `subjectHrMax`, `minRunRpm`, `maxRpm`, `warmupRpmCeilingFraction`, `channels`, `allowAboveNameplate` | Les champs d'un `TrainingProfile` du Pi (`raspberry-pi/src/training/plan.py`), en camelCase, mêmes unités (s, bpm, tr/min moteur). `channels` : noms de voies du Pi (`ECG`, `EDA`, `SpO2`, `RESP`, `EMG`, `LUX`). Un `profileId` n'appartient qu'à un programme, retiré compris. |
+| `organizationId` | `null` : catalogue Anheart, seul cas écrit pour l'instant. |
+| `status` | `draft`, `validated`, `published` ou `retired`. |
+| `schemaVersion` | Version de la forme de la ligne, 1. |
+| `revision` | 0 jusqu'à la première publication, plus 1 à chaque publication. |
+| `medicalParametersVersion` | Version du fichier médical dont les bornes ont servi à la validation : celle de `raspberry-pi/config/medical_parameters.json`, écrite par le serveur à chaque enregistrement. |
+| `medicalSignoff` | `{by, at, note}` (signataire médical, date de sa signature en ms Unix, note), ou `null` avant la validation. |
+| `simulationReport` | `storageId` du rapport de simulation joint, ou `null`. Effacé à chaque réécriture du brouillon. |
+| `validatedBy` | Admin qui a validé, ou `null`. |
+| `createdBy`, `updatedBy`, `createdAt`, `updatedAt` | Auteur, dernier à avoir écrit les valeurs ou changé l'état, dates en ms Unix. Joindre un rapport ne change pas `updatedBy`. |
+
+Index : `by_status` (le catalogue publié), `by_profile_id` (unicité).
+
+`programme_revisions` garde la copie complète du programme à chaque
+publication, avec `programmeId`, sans jamais la modifier. Une séance garde
+de son côté sa propre copie figée (`profileId`, `profileName`, zone, durée,
+FC max) : retirer un programme ne change aucune séance.
 
 ### `machine_registry` : identité, mesures et validation (ANH-147)
 
@@ -1142,6 +1170,13 @@ Autres règles notables :
   synthétiques, sur un déploiement mono-organisation après migration ; la
   matrice par organisation est décrite en [§10](#10-tests-automatisés).
 
+- **Catalogue de programmes** (ANH-137) : seul l'admin Anheart écrit
+  (créer, modifier un brouillon, joindre un rapport, valider, publier,
+  retirer) ; un admin d'organisation, un gestionnaire ou un patient est
+  refusé (`not_authorized`). Valider exige un admin Anheart qui n'a ni créé
+  ni réécrit en dernier le brouillon. Tout autre compte, de toute
+  organisation, lit les programmes publiés du catalogue, sans le rapport de
+  simulation. Voir [`programmes.ts`](#programmests--catalogue-de-programmes-anh-137).
 - **Créer une machine** : admin Anheart seulement, dans l'organisation qu'il
   désigne (`organizationId`, par défaut la sienne). C'est la seule fonction
   publique qui prend une organisation en argument.
@@ -1661,6 +1696,23 @@ Aucun ne cite une valeur saisie :
 Une séance que l'appelant ne peut pas lire répond `session_not_found`, comme
 une séance inconnue.
 
+ANH-137 ajoute les codes du catalogue de programmes (`programmes.ts`) :
+
+| Code | Sens |
+|---|---|
+| `programme_refused` | La validation du Pi refuse le programme. Levé comme un objet `{code, message, violations}` : `message` est le message du Pi (`detail` de `plan.py`, par exemple `training profile refused: zone_above_subject_ceiling`) et `violations` ses valeurs de `Violation`, dans son ordre. La page affiche `message` tel quel. |
+| `programme_not_found` | Le programme n'existe pas. |
+| `programme_wrong_status` | Le programme n'est pas dans l'état d'où part la transition demandée. |
+| `programme_id_taken` | Un autre programme porte déjà ce `profileId`. |
+| `programme_self_validation` | L'admin a créé le brouillon ou l'a réécrit en dernier. |
+| `programme_medical_version_unavailable` | Aucune version des paramètres médicaux n'est enregistrée : c'est le cas de la production tant qu'ANH-98 n'a pas livré les valeurs signées, et aucun programme ne peut y être validé. |
+| `programme_medical_version_not_current` | Le brouillon a été vérifié pour une autre version que la version courante : l'enregistrer de nouveau. |
+| `programme_simulation_report_missing` | Aucun rapport de simulation joint. |
+| `invalid_medical_signoff` | Signataire vide ou de plus de 200 caractères, note de plus de 1000, date qui n'est pas en ms entières, antérieure à 2024 ou à plus d'un jour dans le futur. |
+
+Un rapport refusé (type, taille, âge) répond `invalid_registry_file`, comme
+une pièce jointe du registre.
+
 ### Fonctions par fichier
 
 Résumé des fonctions les plus utilisées par le site. Dans ces tableaux,
@@ -1700,15 +1752,15 @@ L'interface est décrite dans
 ### `convex/lib/audit.ts` (ANH-167)
 
 La bibliothèque définit les actions, leurs cibles et `audit(ctx, entry)`.
-Les 43 actions couvrent comptes et invitations, appartenances Clerk, liens
+Les 51 actions couvrent comptes et invitations, appartenances Clerk, liens
 gestionnaires et droits de lancement, changement de physiologie sans les
 valeurs, soumission et validation d'aptitude sans réponses ni verdict, consentements, lancement et
 arrêt de séances, clés machine, création/suppression/restauration de
 machines, registre et niveaux de validation, versions logicielles et
-médicales, suppression d'enregistrements.
+médicales, suppression d'enregistrements, catalogue de programmes.
 
 La liste de référence est `SENSITIVE_MUTATIONS` dans
-[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 45 mutations publiques ou
+[`convex/lib/audit.ts`](../convex/lib/audit.ts) : 51 mutations publiques ou
 internes, avec leurs actions attendues. Les actions Convex et routes HTTP
 font écrire leurs effets par ces mutations. `NON_SENSITIVE_MUTATIONS`
 classe toutes les autres avec un motif : télémétrie et états transitoires,
@@ -1765,9 +1817,13 @@ Pour ajouter une mutation sensible :
    et la ligne attendue. Le test compare exactement les clés des scénarios
    à celles de la liste et observe chaque action déclarée.
 
-ANH-137 (programme publié), ANH-141 (configuration approuvée) et ANH-145
-(incident clos) ajouteront leurs actions de cette façon ; elles ne sont pas
-implémentées par ANH-167.
+ANH-137 a ajouté de cette façon les six actions du catalogue de programmes,
+cible `programme`, lignes sans organisation (lisibles par l'admin Anheart
+seul) : `programme.created`, `programme.updated` (avec `fields`, les champs
+changés), `programme.report_attached`, `programme.validated` (avec
+`medicalParametersVersion`), `programme.published` et `programme.retired`.
+ANH-141 (configuration approuvée) et ANH-145 (incident clos) ajouteront les
+leurs de la même façon.
 
 `audit()` lit une fois les métadonnées de requête puis insère une ligne,
 sans autre lecture, contrôle métier ni chemin de refus ajouté. Son contrat
@@ -2213,6 +2269,23 @@ Autorisation : pratiquant, admin ou accès à la machine. `getRecentEcgData`
 applique un **retard de 5 s** aux gestionnaires sur une séance active. Le site
 n'appelle plus que `getSessionDataStats`, pour la carte d'historique du détail
 d'une séance.
+
+### `programmes.ts` : catalogue de programmes (ANH-137)
+
+| Fonction | Droits et effet |
+|---|---|
+| `list` (query) | Admin Anheart : tous les programmes, avec `simulationReportUrl`, l'URL du rapport joint. Tout autre compte : les programmes `published` du catalogue Anheart (`organizationId` nul), `simulationReportUrl` nul. Anonyme : `not_authenticated`. |
+| `create` (mutation) | Admin Anheart. Les champs du profil ; validation du Pi, `profileId` libre ; écrit un brouillon `revision: 0`, `medicalParametersVersion` du fichier livré. Dupliquer un programme, c'est le créer depuis sa copie (le site préremplit le formulaire). |
+| `updateDraft` (mutation) | Admin Anheart, brouillon seulement. Mêmes contrôles ; efface `simulationReport` et `medicalSignoff`, qui portaient sur d'autres valeurs. |
+| `attachSimulationReport` (mutation) | Admin Anheart, brouillon seulement. Fichier PDF ou JSON d'au plus 10 Mio déposé depuis moins d'une heure (URL de dépôt de `machineRegistry.generateUploadUrl`). |
+| `validate` (mutation) | De `draft` à `validated`. Admin Anheart autre que `createdBy` et `updatedBy` ; dans cet ordre : validation du Pi sur les valeurs enregistrées, version médicale courante égale à `medicalParametersVersion`, rapport joint, signature médicale `{by, at, note}` bornée. |
+| `publish` (mutation) | De `validated` à `published`, admin Anheart : `revision` plus 1 et copie complète dans `programme_revisions`. |
+| `retire` (mutation) | De `published` à `retired`, admin Anheart : le programme sort du catalogue publié. |
+
+Chaque mutation est limitée comme toute écriture d'un compte et écrit sa
+ligne d'audit. `convex/lib/programmes.ts` porte les champs (repris par le
+schéma) et `programmeRefusal`, le miroir de la validation du Pi
+([programmes.md](programmes.md#validation-identique-au-pi)).
 
 ### `softwareReleases.ts` (registre des versions publiées)
 
@@ -3756,6 +3829,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/machineEdit.test.ts` | Ce que fait le formulaire de machine pour un gestionnaire : `machines.updateMachine` enregistre le nom et le lieu sans toucher aux liens, et `machines.assignMachineToGestionnaires` reste réservé à l'admin (ANH-155). |
 | `convex/dashboard.test.ts` | Les compteurs du tableau de bord (ANH-159) au-delà de la matrice : ce qu'aucun chiffre ne compte (membre retiré, machine supprimée, séance close, autre organisation), ce que l'admin Anheart seul compte (lignes sans organisation, machine restaurée), les membres comptés comme des comptes (un patient de deux organisations compté une fois par l'admin Anheart et encore par le centre B, un compte gestionnaire dans un centre et patient dans l'autre compté une fois en tout et une fois dans chaque rôle, une seconde appartenance inactive écartée, des rôles dont la somme est le total pour un admin d'organisation), de quoi sont faits les chiffres d'un gestionnaire, et une machine silencieuse que sa fiche dit encore en ligne, remise au site avec son dernier signal et `serverNow` pour qu'il la juge hors ligne. |
 | `convex/dashboard.cost.test.ts` | Ce que lit un appel de `dashboard.counters` (ANH-226), mesuré en mémoire sur deux jeux réalistes (« aujourd'hui », « cible ») : documents, plages d'index et octets par rôle. Pour l'admin Anheart, exactement l'appelant, les appartenances actives, les machines non supprimées et les séances ouvertes, en 7 plages. Rien de plus quand s'ajoutent séances terminées, machines supprimées, appartenances inactives ou heartbeats. Rien de plus pour un admin, un gestionnaire ou un patient d'un centre quand un autre centre grossit. Au jeu « cible », moins de 10 % des limites d'un appel. Le résultat mesuré est celui que reçoit le site. |
+| [`convex/programmes.test.ts`](../convex/programmes.test.ts) | Le catalogue de programmes (ANH-137) : chaque cas de `contracts/programme-validation-cases.json` passé à `programmes.create`, même verdict et même message que le Pi, rien d'écrit sur un refus ; le critère d'acceptation (jog 145-155, 30 min, créé, refusé à son auteur, validé par un second admin, publié avec sa copie, lu par un gestionnaire qui ne peut pas l'écrire) ; transitions refusées hors de leur état, validation refusée au créateur et au dernier rédacteur, sans rapport, sans version médicale enregistrée ou pour une autre version, signature mal formée ; `profileId` unique ; rapport refusé par type, taille et âge ; programme retiré hors du catalogue publié. Les droits, rôle par rôle, sont dans la matrice. |
 | `convex/completeness.test.ts` | Échoue si une fonction publique ou une route n'a pas de cellule de matrice, si une fonction n'a aucune cellule appelée depuis une autre organisation, ou si une fonction qui prend un identifiant n'a pas de cellule `foreign`. |
 | `convex/machineAuth.test.ts`, `convex/machineCredential.test.ts` | Authentification et clés machine (ANH-121, complétés par ANH-132). ANH-238 EX-8 : le schéma refuse `machines.apiKey` et `machines.apiKeySelector` ; une clé absente, inconnue, dont la ligne a quitté la table, révoquée ou expirée reçoit 401 sur les 13 routes et ne donne rien aux deux queries, quand une clé valide de la même machine les ouvre. Leur monde est un déploiement mono-organisation après migration, sans revendication d'organisation. |
 | `convex/machineKeys.test.ts` | Les clés d'une machine (ANH-165), sur le même monde : première clé dans la table et rien sur la machine ; rotation (les deux clés valides pendant le chevauchement, l'ancienne refusée à la milliseconde de sa fin dans le test en mémoire, sans cache de Convex, heartbeats continus à travers le changement de clé, chevauchement 0, expiration jamais allongée, autre machine intacte) ; tâche des clés expirées ; révocation immédiate sur chacune des routes machine, avant la limite de débit ; expiration et ses bornes ; machine supprimée ou désactivée ; `lastUsedAt` écrit au plus une fois par minute et l'authentification qui ne fait que lire ; la liste de la fiche sans aucun secret ni journal qui en contienne ; les deux fonctions de ligne de commande ; 55 rotations dans le même chevauchement et toutes les 56 clés listées, histoire révoquée bornée aux frontières 49, 50 et 51 clés non révoquées. |

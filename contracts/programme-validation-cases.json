@@ -1,0 +1,639 @@
+{
+  "description": "Cas de validation d'un programme du catalogue (ANH-137). Chaque cas est le profil `base` modifié par `changes`, aux clés de raspberry-pi/src/training/plan.py. `expected` est le verdict de `parse_profile` : `accepted`, `rejected` (les violations dans l'ordre du Pi et son message `detail`) ou `malformed` (son message `detail`). Lu par raspberry-pi/tests/test_programme_validation_parity.py et par convex/programmes.test.ts, qui exigent ce verdict et ce message des deux côtés.",
+  "base": {
+    "profile_id": "standard_30_min",
+    "name": "30 min",
+    "total_duration_s": 1800.0,
+    "baseline_s": 180.0,
+    "warmup_max_s": 300.0,
+    "hold_min_s": 300.0,
+    "cooldown_s": 240.0,
+    "recovery_s": 300.0,
+    "zone_low_bpm": 118,
+    "zone_high_bpm": 138,
+    "hard_max_bpm": 148,
+    "critical_bpm": 158,
+    "subject_hr_max": 162,
+    "min_run_rpm": 55,
+    "max_rpm": 276,
+    "warmup_rpm_ceiling_fraction": 0.6,
+    "channels": [
+      "ECG"
+    ],
+    "allow_above_nameplate": false
+  },
+  "cases": [
+    {
+      "name": "le programme livré standard_30_min est accepté",
+      "changes": {},
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "jog 145-155, 30 min, pour une FC max de 175 est accepté",
+      "changes": {
+        "profile_id": "jog_145_155_30_min",
+        "name": "jog 145-155, 30 min",
+        "zone_low_bpm": 145,
+        "zone_high_bpm": 155,
+        "hard_max_bpm": 165,
+        "critical_bpm": 175,
+        "subject_hr_max": 175
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "zone_high_bpm égal à 0,9 x subject_hr_max (144 pour 160) est accepté",
+      "changes": {
+        "subject_hr_max": 160,
+        "zone_high_bpm": 144
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "zone_high_bpm au-dessus de 0,9 x subject_hr_max (145 pour 160) est refusé",
+      "changes": {
+        "subject_hr_max": 160,
+        "zone_high_bpm": 145
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "zone_above_subject_ceiling"
+        ],
+        "detail": "training profile refused: zone_above_subject_ceiling"
+      }
+    },
+    {
+      "name": "zone_high_bpm 146 pour une FC max de 162 (145,8) est refusé",
+      "changes": {
+        "zone_high_bpm": 146
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "zone_above_subject_ceiling"
+        ],
+        "detail": "training profile refused: zone_above_subject_ceiling"
+      }
+    },
+    {
+      "name": "jog 145-155 pour une FC max de 170 (153) est refusé",
+      "changes": {
+        "zone_low_bpm": 145,
+        "zone_high_bpm": 155,
+        "hard_max_bpm": 165,
+        "critical_bpm": 175,
+        "subject_hr_max": 170
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "zone_above_subject_ceiling"
+        ],
+        "detail": "training profile refused: zone_above_subject_ceiling"
+      }
+    },
+    {
+      "name": "min_run_rpm 55 au plafond d'échauffement exact (276 x 0,2 arrondi à 55) est accepté",
+      "changes": {
+        "warmup_rpm_ceiling_fraction": 0.2
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "plafond d'échauffement 54 sous min_run_rpm 55 est refusé",
+      "changes": {
+        "warmup_rpm_ceiling_fraction": 0.199
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "warmup_ceiling_below_min_run"
+        ],
+        "detail": "training profile refused: warmup_ceiling_below_min_run"
+      }
+    },
+    {
+      "name": "min_run_rpm 55 égal à max_rpm 55 est accepté",
+      "changes": {
+        "max_rpm": 55,
+        "warmup_rpm_ceiling_fraction": 1.0
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "min_run_rpm au-dessus de max_rpm est refusé",
+      "changes": {
+        "min_run_rpm": 56,
+        "max_rpm": 55
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "min_run_above_max",
+          "warmup_ceiling_below_min_run"
+        ],
+        "detail": "training profile refused: min_run_above_max, warmup_ceiling_below_min_run"
+      }
+    },
+    {
+      "name": "max_rpm à la plaque 1380 est accepté",
+      "changes": {
+        "max_rpm": 1380
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "max_rpm 1381 au-dessus de la plaque est refusé",
+      "changes": {
+        "max_rpm": 1381
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "rpm_above_nameplate"
+        ],
+        "detail": "training profile refused: rpm_above_nameplate"
+      }
+    },
+    {
+      "name": "max_rpm 1381 avec allow_above_nameplate est accepté",
+      "changes": {
+        "max_rpm": 1381,
+        "allow_above_nameplate": true
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "durées dont la somme vaut exactement la durée totale est accepté",
+      "changes": {
+        "total_duration_s": 1320.0
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "durée totale une seconde trop courte pour hold_min_s est refusé",
+      "changes": {
+        "total_duration_s": 1319.0
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "hold_too_short"
+        ],
+        "detail": "training profile refused: hold_too_short"
+      }
+    },
+    {
+      "name": "durées fractionnaires égales à la durée totale sur le papier sont refusées par l'arrondi des flottants",
+      "changes": {
+        "total_duration_s": 1320.3,
+        "hold_min_s": 300.3
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "hold_too_short"
+        ],
+        "detail": "training profile refused: hold_too_short"
+      }
+    },
+    {
+      "name": "cooldown_s 4 à la rampe du variateur est accepté",
+      "changes": {
+        "cooldown_s": 4.0
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "cooldown_s 3,9 sous la rampe et le plancher médical est refusé",
+      "changes": {
+        "cooldown_s": 3.9
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "cooldown_faster_than_drive_ramp",
+          "cooldown_too_short"
+        ],
+        "detail": "training profile refused: cooldown_faster_than_drive_ramp, cooldown_too_short"
+      }
+    },
+    {
+      "name": "recovery_s 60 au plancher médical est accepté",
+      "changes": {
+        "recovery_s": 60.0
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "recovery_s 59,9 sous le plancher médical est refusé",
+      "changes": {
+        "recovery_s": 59.9
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "recovery_too_short"
+        ],
+        "detail": "training profile refused: recovery_too_short"
+      }
+    },
+    {
+      "name": "zone vide (basse égale à haute) est refusée",
+      "changes": {
+        "zone_low_bpm": 138
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "zone_not_ascending"
+        ],
+        "detail": "training profile refused: zone_not_ascending"
+      }
+    },
+    {
+      "name": "subject_hr_max 220 à la borne haute est accepté",
+      "changes": {
+        "subject_hr_max": 220
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "subject_hr_max 221 est refusé",
+      "changes": {
+        "subject_hr_max": 221
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "subject_hr_max_implausible"
+        ],
+        "detail": "training profile refused: subject_hr_max_implausible"
+      }
+    },
+    {
+      "name": "subject_hr_max 99 est refusé avec la zone et le palier qui en dépendent",
+      "changes": {
+        "subject_hr_max": 99
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "subject_hr_max_implausible",
+          "zone_above_subject_ceiling",
+          "hard_max_above_subject_max"
+        ],
+        "detail": "training profile refused: subject_hr_max_implausible, zone_above_subject_ceiling, hard_max_above_subject_max"
+      }
+    },
+    {
+      "name": "hard_max_bpm au-dessus de subject_hr_max est refusé, critical_bpm n'étant plus au-dessus",
+      "changes": {
+        "hard_max_bpm": 163
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "hard_max_above_subject_max",
+          "critical_not_above_hard_max"
+        ],
+        "detail": "training profile refused: hard_max_above_subject_max, critical_not_above_hard_max"
+      }
+    },
+    {
+      "name": "critical_bpm égal à hard_max_bpm est refusé",
+      "changes": {
+        "critical_bpm": 148
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "critical_not_above_hard_max"
+        ],
+        "detail": "training profile refused: critical_not_above_hard_max"
+      }
+    },
+    {
+      "name": "zone_low_bpm 0 est refusé",
+      "changes": {
+        "zone_low_bpm": 0
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "bpm_not_positive"
+        ],
+        "detail": "training profile refused: bpm_not_positive"
+      }
+    },
+    {
+      "name": "min_run_rpm 0 est refusé",
+      "changes": {
+        "min_run_rpm": 0
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "rpm_not_positive"
+        ],
+        "detail": "training profile refused: rpm_not_positive"
+      }
+    },
+    {
+      "name": "max_rpm 0 est refusé",
+      "changes": {
+        "max_rpm": 0
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "rpm_not_positive",
+          "min_run_above_max"
+        ],
+        "detail": "training profile refused: rpm_not_positive, min_run_above_max"
+      }
+    },
+    {
+      "name": "warmup_rpm_ceiling_fraction 0 est refusé",
+      "changes": {
+        "warmup_rpm_ceiling_fraction": 0.0
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "warmup_fraction_out_of_range"
+        ],
+        "detail": "training profile refused: warmup_fraction_out_of_range"
+      }
+    },
+    {
+      "name": "warmup_rpm_ceiling_fraction 1 est accepté",
+      "changes": {
+        "warmup_rpm_ceiling_fraction": 1.0
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "warmup_rpm_ceiling_fraction 1,01 est refusé",
+      "changes": {
+        "warmup_rpm_ceiling_fraction": 1.01
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "warmup_fraction_out_of_range"
+        ],
+        "detail": "training profile refused: warmup_fraction_out_of_range"
+      }
+    },
+    {
+      "name": "aucune voie est refusé",
+      "changes": {
+        "channels": []
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "ecg_channel_missing"
+        ],
+        "detail": "training profile refused: ecg_channel_missing"
+      }
+    },
+    {
+      "name": "sans ECG est refusé",
+      "changes": {
+        "channels": [
+          "EDA"
+        ]
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "ecg_channel_missing"
+        ],
+        "detail": "training profile refused: ecg_channel_missing"
+      }
+    },
+    {
+      "name": "ECG en double est refusé",
+      "changes": {
+        "channels": [
+          "ECG",
+          "ECG"
+        ]
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "duplicate_channel"
+        ],
+        "detail": "training profile refused: duplicate_channel"
+      }
+    },
+    {
+      "name": "toutes les voies avec ECG est accepté",
+      "changes": {
+        "channels": [
+          "ECG",
+          "EDA",
+          "SpO2",
+          "RESP",
+          "EMG",
+          "LUX"
+        ]
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "profile_id avec une majuscule est refusé",
+      "changes": {
+        "profile_id": "Jog_30"
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "bad_profile_id"
+        ],
+        "detail": "training profile refused: bad_profile_id"
+      }
+    },
+    {
+      "name": "profile_id de 64 caractères est accepté",
+      "changes": {
+        "profile_id": "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj"
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "profile_id de 65 caractères est refusé",
+      "changes": {
+        "profile_id": "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj"
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "bad_profile_id"
+        ],
+        "detail": "training profile refused: bad_profile_id"
+      }
+    },
+    {
+      "name": "profile_id suivi d'un saut de ligne est refusé",
+      "changes": {
+        "profile_id": "jog_30_min\n"
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "bad_profile_id"
+        ],
+        "detail": "training profile refused: bad_profile_id"
+      }
+    },
+    {
+      "name": "nom fait d'espaces est refusé",
+      "changes": {
+        "name": "  \t "
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "empty_name"
+        ],
+        "detail": "training profile refused: empty_name"
+      }
+    },
+    {
+      "name": "nom fait d'un séparateur d'unité, blanc pour Python, est refusé",
+      "changes": {
+        "name": "\u001f"
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "empty_name"
+        ],
+        "detail": "training profile refused: empty_name"
+      }
+    },
+    {
+      "name": "nom fait d'une marque d'ordre des octets, non blanche pour Python, est accepté",
+      "changes": {
+        "name": "\ufeff"
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "durée totale nulle est refusée avec le maintien qu'elle supprime",
+      "changes": {
+        "total_duration_s": 0.0
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "non_positive_duration",
+          "hold_too_short"
+        ],
+        "detail": "training profile refused: non_positive_duration, hold_too_short"
+      }
+    },
+    {
+      "name": "durée d'échauffement négative est refusée",
+      "changes": {
+        "warmup_max_s": -1.0
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "non_positive_duration"
+        ],
+        "detail": "training profile refused: non_positive_duration"
+      }
+    },
+    {
+      "name": "plusieurs refus sont rendus dans l'ordre du Pi",
+      "changes": {
+        "profile_id": "",
+        "name": "",
+        "cooldown_s": 1.0,
+        "recovery_s": 1.0,
+        "zone_low_bpm": 150,
+        "zone_high_bpm": 140,
+        "critical_bpm": 100,
+        "max_rpm": 2000,
+        "channels": [
+          "EDA",
+          "EDA"
+        ]
+      },
+      "expected": {
+        "verdict": "rejected",
+        "violations": [
+          "bad_profile_id",
+          "empty_name",
+          "cooldown_faster_than_drive_ramp",
+          "cooldown_too_short",
+          "recovery_too_short",
+          "zone_not_ascending",
+          "critical_not_above_hard_max",
+          "rpm_above_nameplate",
+          "ecg_channel_missing",
+          "duplicate_channel"
+        ],
+        "detail": "training profile refused: bad_profile_id, empty_name, cooldown_faster_than_drive_ramp, cooldown_too_short, recovery_too_short, zone_not_ascending, critical_not_above_hard_max, rpm_above_nameplate, ecg_channel_missing, duplicate_channel"
+      }
+    },
+    {
+      "name": "zone_high_bpm non entier est mal formé",
+      "changes": {
+        "zone_high_bpm": 138.5
+      },
+      "expected": {
+        "verdict": "malformed",
+        "detail": "profile: 'zone_high_bpm' must be a whole number, got float"
+      }
+    },
+    {
+      "name": "deux nombres non entiers sont mal formés dans l'ordre de lecture",
+      "changes": {
+        "max_rpm": 276.5,
+        "hard_max_bpm": 148.5
+      },
+      "expected": {
+        "verdict": "malformed",
+        "detail": "profile: 'hard_max_bpm' must be a whole number, got float; profile: 'max_rpm' must be a whole number, got float"
+      }
+    }
+  ]
+}

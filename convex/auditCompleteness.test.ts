@@ -14,6 +14,12 @@ import { CONSENT_TEXT_VERSION } from "../lib/consentText";
 import { auditCsv } from "../lib/auditCsv";
 import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
 import { mockClerkInvitations } from "./patientInvitation.fixtures";
+import {
+  addSecondAdmin,
+  insertProgramme,
+  JOG,
+  SIGNOFF,
+} from "./programmes.fixtures";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import {
   addSession,
@@ -120,6 +126,24 @@ function system(
     source,
     organizationId,
     actorRole: "system",
+    ...(details === undefined ? {} : { details }),
+  };
+}
+/** A write of the Anheart catalogue (ANH-137): a global row, by the admin. */
+function catalogue(
+  w: World,
+  action: AuditAction,
+  targetId: string,
+  details?: Expected["details"],
+): Expected {
+  return {
+    action,
+    targetId,
+    targetType: "programme",
+    actorId: w.admin,
+    actorRole: "admin",
+    source: "site",
+    organizationId: undefined,
     ...(details === undefined ? {} : { details }),
   };
 }
@@ -936,6 +960,67 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
           { role: "user", userId: invitation?.userId, added: [w.manager] },
         ),
       ];
+    });
+  },
+  "programmes.create": async (w) =>
+    observe(w, async () => {
+      const id = await as(w.t, "admin").mutation(api.programmes.create, JOG);
+      return [catalogue(w, "programme.created", id)];
+    }),
+  "programmes.updateDraft": async (w) => {
+    const programmeId = await insertProgramme(w, "draft", w.admin);
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.programmes.updateDraft, {
+        programmeId,
+        ...JOG,
+        name: "synthetic renamed",
+      });
+      return [
+        catalogue(w, "programme.updated", programmeId, { fields: ["name"] }),
+      ];
+    });
+  },
+  "programmes.attachSimulationReport": async (w) => {
+    const programmeId = await insertProgramme(w, "draft", w.admin);
+    const storageId = await registryUpload(w);
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.programmes.attachSimulationReport, {
+        programmeId,
+        storageId,
+      });
+      return [catalogue(w, "programme.report_attached", programmeId)];
+    });
+  },
+  "programmes.validate": async (w) => {
+    const programmeId = await insertProgramme(
+      w,
+      "draft",
+      await addSecondAdmin(w),
+    );
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.programmes.validate, {
+        programmeId,
+        medicalSignoff: SIGNOFF,
+      });
+      return [
+        catalogue(w, "programme.validated", programmeId, {
+          medicalParametersVersion: "0.1.0",
+        }),
+      ];
+    });
+  },
+  "programmes.publish": async (w) => {
+    const programmeId = await insertProgramme(w, "validated", w.admin);
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.programmes.publish, { programmeId });
+      return [catalogue(w, "programme.published", programmeId)];
+    });
+  },
+  "programmes.retire": async (w) => {
+    const programmeId = await insertProgramme(w, "published", w.admin);
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.programmes.retire, { programmeId });
+      return [catalogue(w, "programme.retired", programmeId)];
     });
   },
   "recordStorage.remove": async (w) => {

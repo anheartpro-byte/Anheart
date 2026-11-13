@@ -118,6 +118,14 @@
       "medical_parameters": {
         "registered": "Medical parameters version registered"
       },
+      "programme": {
+        "created": "Programme created",
+        "updated": "Programme draft changed",
+        "report_attached": "Simulation report attached",
+        "validated": "Programme validated",
+        "published": "Programme published",
+        "retired": "Programme retired"
+      },
       "record": {
         "deleted": "Recording deleted"
       }
@@ -132,6 +140,7 @@
       "organization": "Organization",
       "software_release": "Software release",
       "medical_parameters_version": "Medical parameters version",
+      "programme": "Programme",
       "patient_invitation": "Patient invitation"
     },
     "roles": {
@@ -271,6 +280,15 @@
     "downgrade_reason_required": "Lowering validation requires a reason of 3 to 500 characters.",
     "occupied_requires_signed_medical_parameters": "Occupied validation requires a production medical key and a medical parameters version.",
     "machine_validation_insufficient": "The machine's validation level does not permit this configuration.",
+    "programme_not_found": "Programme not found.",
+    "programme_wrong_status": "The programme is no longer in the state this step needs. Reload the page.",
+    "programme_refused": "The Pi's validation refuses this programme.",
+    "programme_id_taken": "Another programme already has this identifier.",
+    "programme_self_validation": "Whoever created a draft or last changed it cannot validate it: another Anheart admin must.",
+    "programme_medical_version_unavailable": "No medical parameters version is registered on this server, as in production until the signed medical values (ANH-98) exist: no programme can be validated.",
+    "programme_medical_version_not_current": "The draft was checked against a medical parameters version that is no longer current: save it again.",
+    "programme_simulation_report_missing": "Attach the simulation report to the draft first.",
+    "invalid_medical_signoff": "The medical sign-off needs a signer (1 to 200 characters), a past date and a note of at most 1000 characters.",
     "not_authenticated": "Your session has expired or you are signed out. Sign in again to continue.",
     "account_not_registered": "Your account is not ready on the server yet. Wait a few moments, then sign in again if this message persists.",
     "no_active_organization": "Choose an organization to continue.",

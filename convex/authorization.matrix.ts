@@ -32,11 +32,13 @@ import { CONSENT_TEXT_VERSION } from "../lib/consentText";
 import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 import { notifyMachine } from "./lib/notifications";
 import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
+import { addSecondAdmin, insertProgramme, JOG, SIGNOFF } from "./programmes.fixtures";
 import {
   addSession,
   as,
   makeRiderReady,
   NOW,
+  ORG_B_ACTORS,
   ROLE_OF,
   type Actor,
   type Claims,
@@ -2695,6 +2697,121 @@ export const MATRIX: Entry[] = [
   },
 
   // =========================================================================
+  // programmes.ts (ANH-137): the Anheart admin writes, everyone reads published
+  // =========================================================================
+  {
+    id: "programmes.list",
+    ref: api.programmes.list,
+    kind: "query",
+    build: async (w) => {
+      await insertProgramme(w, "published", w.admin);
+      await insertProgramme(w, "draft", w.admin, { profileId: "jog_draft" });
+      return {};
+    },
+    onSuccess: (res) => {
+      const rows = res as Array<{ status: string; simulationReportUrl: string | null }>;
+      if (rows.map((row) => row.status).sort().join() !== "draft,published" || rows.some((row) => row.simulationReportUrl === null))
+        throw new Error("The Anheart admin reads every programme with its report");
+    },
+    onFiltered: (res) => {
+      const rows = res as Array<{ status: string; simulationReportUrl: string | null }>;
+      if (rows.length !== 1 || rows[0].status !== "published" || rows[0].simulationReportUrl !== null)
+        throw new Error("Anyone else reads the published catalogue only, without the report");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "every programme, drafts included" },
+      ...(["orgAdmin", "manager", "patient"] as const).map((actor) => ({ actor, expect: filtered, note: "published programmes only, read-only" })),
+      ...ORG_B_ACTORS.map((actor) => ({ actor, scope: "foreign" as const, expect: filtered, note: "the Anheart catalogue, published only" })),
+    ],
+  },
+  {
+    id: "programmes.create",
+    ref: api.programmes.create,
+    kind: "mutation",
+    build: async () => ({ ...JOG }),
+    onSuccess: async (res, w) => {
+      const row = await w.t.run((ctx) => ctx.db.get(res as Id<"programmes">));
+      if (row?.status !== "draft" || row.createdBy !== w.admin || row.organizationId !== null)
+        throw new Error("Expected a draft of the Anheart catalogue by the admin");
+    },
+    cases: catalogueWriteCases(),
+  },
+  {
+    id: "programmes.updateDraft",
+    ref: api.programmes.updateDraft,
+    kind: "mutation",
+    build: async (w) => ({
+      programmeId: await insertProgramme(w, "draft", w.admin),
+      ...JOG,
+      name: "jog 145-155, 31 min",
+      totalDurationS: 1860,
+    }),
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const row = await w.t.run((ctx) => ctx.db.get(args.programmeId as Id<"programmes">));
+      if (row?.totalDurationS !== 1860 || row.simulationReport !== null)
+        throw new Error("Expected the rewritten draft, its report cleared");
+    },
+    cases: catalogueWriteCases(),
+  },
+  {
+    id: "programmes.attachSimulationReport",
+    ref: api.programmes.attachSimulationReport,
+    kind: "mutation",
+    build: async (w) => {
+      const programmeId = await insertProgramme(w, "draft", w.admin);
+      await w.t.run((ctx) => ctx.db.patch(programmeId, { simulationReport: null }));
+      return { programmeId, storageId: await registryUpload(w) };
+    },
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const row = await w.t.run((ctx) => ctx.db.get(args.programmeId as Id<"programmes">));
+      if (row?.simulationReport !== args.storageId) throw new Error("Expected the report attached");
+    },
+    cases: catalogueWriteCases(),
+  },
+  {
+    id: "programmes.validate",
+    ref: api.programmes.validate,
+    kind: "mutation",
+    build: async (w) => ({
+      programmeId: await insertProgramme(w, "draft", await addSecondAdmin(w)),
+      medicalSignoff: SIGNOFF,
+    }),
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const row = await w.t.run((ctx) => ctx.db.get(args.programmeId as Id<"programmes">));
+      if (row?.status !== "validated" || row.validatedBy !== w.admin || row.medicalSignoff?.by !== SIGNOFF.by)
+        throw new Error("Expected the draft validated by the second admin, with the sign-off");
+    },
+    cases: catalogueWriteCases(),
+  },
+  {
+    id: "programmes.publish",
+    ref: api.programmes.publish,
+    kind: "mutation",
+    build: async (w) => ({ programmeId: await insertProgramme(w, "validated", w.admin) }),
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const [row, revisions] = await w.t.run(async (ctx) => [
+        await ctx.db.get(args.programmeId as Id<"programmes">),
+        await ctx.db.query("programme_revisions").collect(),
+      ] as const);
+      if (row?.status !== "published" || row.revision !== 1 || revisions.length !== 1 || revisions[0].revision !== 1)
+        throw new Error("Expected revision 1 published and copied");
+    },
+    cases: catalogueWriteCases(),
+  },
+  {
+    id: "programmes.retire",
+    ref: api.programmes.retire,
+    kind: "mutation",
+    build: async (w) => ({ programmeId: await insertProgramme(w, "published", w.admin) }),
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const row = await w.t.run((ctx) => ctx.db.get(args.programmeId as Id<"programmes">));
+      if (row?.status !== "retired") throw new Error("Expected the programme retired");
+    },
+    cases: catalogueWriteCases(),
+  },
+
+  // =========================================================================
   // organizations.ts
   // =========================================================================
   {
@@ -3685,6 +3802,16 @@ export const MATRIX: Entry[] = [
 
 function registryTarget(w: World, actor: Actor, scope: Scope) {
   return actor === "orgAdmin" && scope === "foreign" ? w.orgBMachine : w.machine;
+}
+
+/** A write of the programme catalogue (ANH-137): the Anheart admin's alone. */
+function catalogueWriteCases(): Case[] {
+  return [
+    { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+    { actor: "admin", expect: ok, note: "the Anheart admin writes the catalogue" },
+    ...(["orgAdmin", "manager", "patient"] as const).map((actor) => ({ actor, expect: refuse(UNAUTHORIZED), note: "only the Anheart admin writes the catalogue" })),
+    ...ORG_B_ACTORS.map((actor) => ({ actor, scope: "foreign" as const, expect: refuse(UNAUTHORIZED), note: "centre B never writes the catalogue" })),
+  ];
 }
 
 function registryReadCases(): Case[] {
