@@ -1029,18 +1029,19 @@ S'ouvre depuis **Mes machines** ou le détail d'une machine.
 | « Pratiquant introuvable : sa fiche a été supprimée ou ne vous est plus accessible. » | Le serveur ne donne plus la fiche du patient choisi. | Choisir un autre pratiquant ; vérifier dans **Patients**. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Ni FC max ni année de naissance. Aussi quand la FC max enregistrée n'est pas un nombre entier : elle compte comme non renseignée. | [Procédure P7](#p7-renseigner-la-fc-max-et-lannée-de-naissance). |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | FC max saisie mais pas l'année de naissance. L'année est **toujours** obligatoire (contrôle de l'âge). Aussi quand l'année enregistrée n'est pas un nombre entier. | Idem. |
-| « Séance auto réservée aux pratiquants d'au moins 18 ans. » | Pratiquant trop jeune. | Aucune séance auto possible. |
+| « Séance auto réservée aux pratiquants d'au moins {âge minimum} ans. » | Pratiquant trop jeune : l'âge minimum est celui des paramètres médicaux signés (18 ans dans la version 0.1.0). | Aucune séance auto possible. |
 
 **Avertissements** (encadré rouge, le bouton **Lancer** reste actif mais le
 serveur refusera) :
 
-- « La zone monte à {zone haute} bpm, au delà de 90 % de la FC max du
+- « La zone monte à {zone haute} bpm, au delà de {fraction} % de la FC max du
   pratiquant ({FC max} bpm → plafond {plafond} bpm). Le serveur refusera ce
   lancement. »
 - « La FC limite du programme ({FC limite} bpm) dépasse la FC max du
   pratiquant ({FC max} bpm). Le serveur refusera ce lancement. »
 
-Les deux règles : **zone haute ≤ 90 % de la FC max** (arrondi à l'entier
+Les deux règles : **zone haute ≤ la fraction de la FC max fixée par les
+paramètres médicaux signés** (90 % dans la version 0.1.0, arrondi à l'entier
 inférieur) et **FC limite du programme ≤ FC max**.
 
 > Pour « Moi-même » comme pour un patient, la fenêtre applique la règle d'âge
@@ -2082,8 +2083,9 @@ l'accord médical. **Le site ne permet pas de créer un programme.**
 **Ce que vous devez voir** : une ligne « Footing », cœur « 150 à 155 bpm (FC
 limite ...) », sa durée et sa vitesse max.
 
-**Quels pratiquants peuvent le suivre.** Le serveur exige zone haute ≤ 90 % de
-la FC max (arrondi inférieur) :
+**Quels pratiquants peuvent le suivre.** Le serveur exige zone haute ≤ la
+fraction de la FC max fixée par les paramètres médicaux signés (arrondi
+inférieur). Avec celle de la version 0.1.0, 90 % :
 
 - 155 bpm demande une FC max d'**au moins 173 bpm** (90 % de 173 = 155,7,
   arrondi à 155) ;
@@ -2105,8 +2107,8 @@ patient (pour lui même, avec le droit de lancement).
 
 - la machine est **En ligne**, pas en séance, programmes auto activés, au moins
   un programme ;
-- le pratiquant a une **année de naissance** et une FC max retenue (P7), et au
-  moins 18 ans ;
+- le pratiquant a une **année de naissance** et une FC max retenue (P7), et
+  l'âge minimum des paramètres médicaux signés (18 ans dans la version 0.1.0) ;
 - le programme est compatible avec sa FC max (P9) ;
 - **une personne est à côté de la machine** : le pratiquant doit être installé
   et la machine prête. Le site ne voit pas la machine.
@@ -2505,8 +2507,8 @@ rapport à la FC max du pratiquant, et l'âge. Un refus donne une séance
 | « Aucun programme n'a été synchronisé depuis la machine. » | Fenêtre de lancement | Idem. | P9. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Physiologie absente, ou FC max enregistrée qui n'est pas un nombre entier. | P7. |
 | « L'année de naissance du pratiquant n'est pas renseignée... » | Fenêtre de lancement | Année absente (obligatoire), ou année enregistrée qui n'est pas un nombre entier. | P7. |
-| « Séance auto réservée aux pratiquants d'au moins 18 ans. » | Fenêtre de lancement | Trop jeune. | Aucune séance auto. |
-| « La zone monte à ... bpm, au delà de 90 % de la FC max du pratiquant ... Le serveur refusera ce lancement. » | Fenêtre de lancement | Programme trop intense pour ce pratiquant. | Choisir un programme plus doux, ou mesurer la FC max réelle (P7). |
+| « Séance auto réservée aux pratiquants d'au moins {âge minimum} ans. » | Fenêtre de lancement | Trop jeune pour l'âge minimum des paramètres médicaux signés. | Aucune séance auto. |
+| « La zone monte à ... bpm, au delà de {fraction} % de la FC max du pratiquant ... Le serveur refusera ce lancement. » | Fenêtre de lancement | Programme trop intense pour ce pratiquant. | Choisir un programme plus doux, ou mesurer la FC max réelle (P7). |
 | « La FC limite du programme (...) dépasse la FC max du pratiquant (...). Le serveur refusera ce lancement. » | Fenêtre de lancement | Idem. | Idem. |
 | « La durée doit être un nombre positif » | Fenêtre de lancement | Durée invalide. | Corriger ou vider. |
 | « En attente que la machine arme la séance… » | Vue en direct, détail | La machine n'a pas encore pris la séance. | Attendre quelques secondes ; au delà d'une minute, [§6.3](#63-si-la-machine-est-hors-ligne). |
@@ -2557,7 +2559,7 @@ aucun refus du serveur n'arrive en anglais.
 | « Ce programme n'est plus sur la machine. Rechargez la page et choisissez-en un autre. » | Le programme a été retiré de la machine entre temps. | Rouvrir la fenêtre et choisir un programme présent. |
 | « La FC max (ou l'année de naissance) du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Physiologie absente, ou valeur enregistrée qui n'est pas un nombre entier. | P7. |
 | « L'année de naissance du pratiquant n'est pas renseignée : un gestionnaire doit la saisir avant toute séance auto. » | Année de naissance absente, ou enregistrée sans être un nombre entier. | P7. |
-| « Ce pratiquant n'a pas l'âge minimum requis pour une séance auto. » | Pratiquant de moins de 18 ans (le serveur compte l'âge en supposant l'anniversaire pas encore passé). | Aucune séance auto. |
+| « Ce pratiquant n'a pas l'âge minimum requis pour une séance auto. » | Pratiquant sous l'âge minimum des paramètres médicaux courants, 18 ans dans la version 0.1.0 (le serveur compte l'âge en supposant l'anniversaire pas encore passé). | Aucune séance auto. |
 | « La zone du programme dépasse le plafond médical courant pour la FC max du pratiquant. Choisissez un autre programme. » | Zone trop haute pour ce pratiquant. | Autre programme, ou FC max mesurée. |
 | « La FC limite du programme dépasse la FC max du pratiquant. Choisissez un autre programme. » | FC limite du programme au dessus de la FC max. | Idem. |
 | « La durée doit être un nombre positif. » | Durée nulle ou négative. | Corriger. |
@@ -2656,19 +2658,21 @@ Il faut le créer à la console de la machine, et il doit respecter les seuils
 cardiaques de la machine, sinon il n'apparaît pas. Voir P9.
 
 **Le site dit que la zone est trop haute pour mon patient. Que faire ?**
-La zone haute doit rester sous 90 % de sa FC max. Choisissez un programme plus
+La zone haute doit rester sous la fraction de sa FC max fixée par les
+paramètres médicaux signés (90 % dans la version 0.1.0). Choisissez un programme plus
 doux, ou faites mesurer sa FC max réelle et saisissez la (P7) : une FC max
 mesurée remplace l'estimation par l'âge.
 
 **Pourquoi l'année de naissance est obligatoire alors que j'ai saisi une FC
 max mesurée ?**
-Elle sert au contrôle de l'âge (18 ans minimum), refait par le serveur et par
-la machine.
+Elle sert au contrôle de l'âge (âge minimum des paramètres médicaux signés,
+18 ans dans la version 0.1.0), refait par le serveur et par la machine.
 
-**Un patient de 18 ans est refusé.**
+**Un patient qui a tout juste l'âge minimum est refusé.**
 Le serveur calcule l'âge avec la seule année de naissance, en supposant que
-l'anniversaire n'est pas encore passé : quelqu'un né en 2008 est compté 17 ans
-pendant toute l'année 2026.
+l'anniversaire n'est pas encore passé : avec l'âge minimum de la version
+0.1.0 (18 ans), quelqu'un né en 2008 est compté 17 ans pendant toute
+l'année 2026.
 
 **Pourquoi mon patient ne voit pas la séance qu'il a faite à la machine ?**
 En production, une séance démarrée à la console n'est pas encore rattachée au

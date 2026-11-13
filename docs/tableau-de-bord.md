@@ -1215,7 +1215,8 @@ Règles :
   `208 − 0,7 × âge` (affichée « estimée (208 − 0,7 × âge) »).
 - L'année de naissance doit donner un âge de 10 à 100 ans.
 - **L'année de naissance est obligatoire pour toute séance auto**, même avec une
-  FC max mesurée : elle sert au contrôle d'âge (18 ans minimum, voir
+  FC max mesurée : elle sert au contrôle d'âge (âge minimum des paramètres
+  médicaux signés, `min_rider_age`, 18 ans dans la version 0.1.0, voir
   [securite.md](securite.md)).
 - Les deux valeurs sont des **entiers** : la carte et le serveur refusent tout
   autre nombre. Une valeur déjà enregistrée qui n'en est pas un compte comme
@@ -1309,7 +1310,7 @@ Après **Lancer** :
    | Le passager n'a pas de consentement actif pour le texte courant. | `consent_missing` : le consentement a été retiré ou porte sur une ancienne version du texte. |
    | Expirée : départ non confirmé à temps | La machine n'en a pas confirmé le départ en 5 min (`PENDING_SESSION_TTL_S`, [convex.md](convex.md#revérification-à-larmement-anh-144)) : machine hors ligne, par exemple. Passée échouée dans la minute qui suit. La console de ce dépôt demande le départ après la confirmation de son opérateur, avant d'armer, n'arme que sur un 2xx et n'envoie pas de fin sur 409 ; une console antérieure, qui arme d'abord, s'arrête aussitôt sur la rampe ordinaire sur un refus. Le lancement n'est plus offert à la machine 45 s avant l'échéance. |
    | FC max du pratiquant modifiée avant le départ | La FC max retenue n'est plus celle du lancement : relancer la séance. |
-   | Âge du pratiquant refusé avant le départ | L'année de naissance a été effacée, ou donne moins de 18 ans. |
+   | Âge du pratiquant refusé avant le départ | L'année de naissance a été effacée, ou donne un âge sous le minimum des paramètres médicaux courants (`minRiderAge`). |
    | Pratiquant déjà dans une autre séance, en attente ou en cours : une seule à la fois. | Une séance a démarré pour lui sur une autre machine pendant l'attente. |
    | Machine passée dans une autre organisation avant le départ | La machine a changé d'organisation. |
    | Machine supprimée avant le départ | La machine a été supprimée. |

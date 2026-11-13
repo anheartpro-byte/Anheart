@@ -117,7 +117,8 @@ connaître l'état du variateur (prêt, en marche, en défaut…).
 **FC max (HRmax)**\
 Fréquence cardiaque maximale de la personne. Sur le site on la saisit ou on
 la déduit de l'année de naissance. Un programme est refusé si le haut de sa
-zone dépasse 90 % de la FC max de la personne.
+zone dépasse la fraction de la FC max fixée par les paramètres médicaux
+signés (`zone_ceiling_fraction`, 90 % dans la version 0.1.0).
 
 **g centripète (Gc) / g résultant (Gr)** (`src/units.py`)\
 Gc = ω²·r / 9,81, l'accélération due à la rotation, au rayon r. Gr = √(Gc² + 1),

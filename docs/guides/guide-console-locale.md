@@ -844,8 +844,8 @@ Repères, carte **Programme** (à gauche) :
 4. **Passager (liste du tableau de bord, obligatoire)** : la personne qui monte, choisie
    dans la liste que le tableau de bord donne à cette machine. Sous la liste, son âge et
    sa FC max, réglés sur le site par un gestionnaire : on les lit, on ne les tape pas.
-   Sans passager, sans FC max ou sans année de naissance sur le site, ou à moins de
-   18 ans : refus. La capture date d'avant ce changement (ANH-84, 14 octobre 2026) : elle
+   Sans passager, sans FC max ou sans année de naissance sur le site, ou sous l'âge
+   minimum du fichier médical signé (`min_rider_age`, 18 ans dans la version 0.1.0) : refus. La capture date d'avant ce changement (ANH-84, 14 octobre 2026) : elle
    montre encore l'ancien champ **Age du passager**, qui n'existe plus.
 5. **Previsualiser** : calcule le programme **sans rien démarrer**.
 6. **Demarrer la seance** : démarre. Il est actif seulement si `PROGRAMS_ENABLED=true`,

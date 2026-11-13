@@ -84,8 +84,9 @@ points :
 
 - **Votre année de naissance** doit avoir été saisie par votre gestionnaire.
   Sans elle, la séance est refusée.
-- **Votre âge.** Aujourd'hui, le logiciel refuse une séance auto à une
-  personne de moins de 18 ans.
+- **Votre âge.** Le logiciel refuse une séance auto sous l'âge minimum fixé
+  par les paramètres médicaux signés : 18 ans dans la version en service
+  aujourd'hui (0.1.0).
 - **Votre fréquence cardiaque maximale.** Elle est soit mesurée et saisie par
   votre gestionnaire, soit estimée par le logiciel à partir de votre âge. Elle
   sert à écarter un programme trop intense pour vous.
