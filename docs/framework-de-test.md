@@ -21,7 +21,7 @@ xfail…) sont définis dans le [glossaire](glossaire.md).
 7. [Le visualiseur 2D : `simulation.live`](#7-le-visualiseur-2d--simulationlive)
 8. [Écrire un nouveau scénario JSON](#8-écrire-un-nouveau-scénario-json)
 9. [La cohorte de 30 personnes](#9-la-cohorte-de-30-personnes)
-10. [La matrice de 187 pannes](#10-la-matrice-de-187-pannes)
+10. [La matrice de 217 pannes](#10-la-matrice-de-217-pannes)
 11. [Les invariants vérifiés sur chaque trace](#11-les-invariants-vérifiés-sur-chaque-trace)
 12. [Les « xfail strict » et le cas résiduel S07](#12-les--xfail-strict--et-le-cas-résiduel-s07)
 13. [La géométrie extraite de la CAO](#13-la-géométrie-extraite-de-la-cao)
@@ -205,7 +205,7 @@ tests passés, 100 % de branches sur la chaîne de sécurité (10386 instruction
 |---|---|---|
 | `test_battery.py` | 182 | chaque scénario de `scenarios/` : invariants, attentes, chemin de sortie, aller-retour JSONL |
 | `test_cohort.py` | 202 | les 30 personnes × 3 séances, la reproductibilité du fichier de cohorte, la barrière d'âge et de FC max |
-| `test_failures.py` | 381 | les 187 cas de la matrice de pannes, plus « aucun cas ne laisse du couple ou un arbre qui tourne » |
+| `test_failures.py` | 448 | les 217 cas de la matrice de pannes, plus « aucun cas ne laisse du couple ou un arbre qui tourne » |
 | `test_scenario.py` | 49 | le parseur de scénarios (refus des clés inconnues, des valeurs invalides) |
 | `test_limits.py` | 36 | g à 27 et 32 tr/min, limites anti-nausée, profils livrés |
 | `test_invariants.py` | 29 | le vérificateur lui-même : chaque invariant doit se déclencher sur une trace corrompue exprès |
@@ -217,6 +217,11 @@ tests passés, 100 % de branches sur la chaîne de sécurité (10386 instruction
 | `test_properties.py` | 5 | propriétés hypothesis : n'importe quelle suite de consignes, n'importe quel arrêt à n'importe quel moment, n'importe quel sujet plausible |
 | `test_panel_crosscheck.py` | 1 | la vraie console (`build_panel`) monte à 27 tr/min par **exactement** les mêmes consignes que le harnais |
 | **Total** | **961** | |
+
+Le compte de `test_failures.py` est celui du 13 novembre 2026, après les cas
+de l'entrée STO d'ANH-92 ; les autres comptes et le total datent d'avant, et
+d'autres fichiers sont venus depuis. La commande ci-dessous donne les comptes
+du jour.
 
 ```sh
 PYTHONPATH=.:raspberry-pi raspberry-pi/.venv/bin/python -m pytest simulation/tests --co -q | tail -15
@@ -331,7 +336,7 @@ usage: python -m simulation.quick [-h] [--cohort] [--failures] [--all] [--dsp]
 |---|---|
 | `target` | un **cas de la matrice** (`drive_fault_overcurrent_manual`), un **scénario** (`manual_27_rpm`) ou un **identifiant de sujet** (`S07` : ses trois séances). Cherché dans cet ordre. |
 | `--cohort` | 30 sujets × 3 séances (90 exécutions) |
-| `--failures` | la matrice de pannes (187 cas) |
+| `--failures` | la matrice de pannes (217 cas) |
 | `--all` | scénarios + pannes + cohorte |
 | `--dsp` | exécute la **vraie** chaîne ECG là où elle est demandée. Sans `--dsp`, un scénario `dsp` tourne en mode `direct`, et un cas qui a besoin du vrai DSP est marqué `SKIPPED` |
 | `--workers N` | nombre de processus (0 = un par CPU, défaut) |
@@ -844,11 +849,13 @@ Deux façons de faire :
    viennent du même générateur, dans un ordre fixe ; changer la taille change
    aussi les sujets suivants, donc les tableaux de `simulation/README.md`.
 
-## 10. La matrice de 187 pannes
+## 10. La matrice de 217 pannes
 
 ### 10.1 Ce que c'est
 
-`simulation/failures.py` construit 187 **cas**. Chaque cas est un document de
+`simulation/failures.py` construit 217 **cas** : 187 dans les familles
+d'origine, et depuis ANH-92 11 cas de l'entrée STO et 19 cas de l'arrêt lu par
+une entrée du variateur. Chaque cas est un document de
 scénario dans le même schéma JSON (section 8), plus ce qui doit être vrai
 après. Pour chaque cas, `tests/test_failures.py` vérifie :
 
@@ -869,7 +876,8 @@ après. Pour chaque cas, `tests/test_failures.py` vérifie :
 Un second test vérifie qu'**aucun cas**, défaut connu ou pas, ne laisse du
 couple ou un arbre qui tourne.
 
-Familles (catégories `drive`, `ecg`, `process`, `operator`) : perte de
+Familles (catégories `drive`, `ecg`, `process`, `operator`, et `sto` depuis
+ANH-92) : perte de
 communication à chaque phase ; **chacun des 60 codes LFT** plus un code
 inconnu (251), en AUTO et en MANUEL ; variateur trouvé déjà en marche ;
 mots de commande refusés ; écho LFRD faux ; vitesse qui ne suit pas ; état
@@ -878,8 +886,9 @@ le vrai DSP ; SIGTERM à chaque phase ; exception dans le tick ; arrêt de
 boucle 1-5 s ; saut d'horloge ; erreurs opérateur (double START, réarmement
 interdit, consignes absurdes).
 
-Résultat : **187 PASS, 0 XFAIL** d'après `simulation/README.md` (avec
-`--dsp`). Sans `--dsp`, `simulation.quick --failures` donne 180 PASS et 7
+Résultat : **187 PASS, 0 XFAIL** pour les 187 cas d'origine d'après
+`simulation/README.md` (avec `--dsp`), qui garde ces mesures comme
+historiques ; les cas d'ANH-92 tournent avec le même juge. Sans `--dsp`, `simulation.quick --failures` donne 180 PASS et 7
 SKIPPED (les 7 cas à vrai DSP).
 
 ```sh
