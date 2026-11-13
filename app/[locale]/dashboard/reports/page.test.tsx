@@ -146,6 +146,20 @@ describe("reports", () => {
     ).toBeTruthy();
   });
 
+  it("keeps its live region mounted while the first page loads, then puts the message in it", async () => {
+    signedInAs("user");
+    answer(LIST, undefined);
+    const view = await renderPage(<ReportsPage />);
+    const region = screen.getByRole("status");
+    expect(region.textContent).toBe("");
+    expect(screen.queryByRole("heading")).toBeNull();
+
+    serverLists();
+    await view.refresh();
+    expect(screen.getByRole("status")).toBe(region);
+    expect(region.textContent).toBe(fr.reports.noReports);
+  });
+
   it("says so when there is no report", async () => {
     signedInAs("user");
     serverLists();
@@ -191,6 +205,30 @@ describe("reports", () => {
     // 44 min 40 s is shown as the nearest minute.
     expect(second.getByText("45 min")).toBeTruthy();
     expect(screen.queryByText(fr.reports.noReports)).toBeNull();
+  });
+
+  it("ANH-250 marks a ballasted bench session, with its mass when declared, and no other", async () => {
+    signedInAs("gestionnaire");
+    serverLists(
+      completed("k57abcd1234efgh5678", {
+        kind: "manual",
+        ballast: { massKg: 80 },
+      }),
+      completed("k57zzzz0000yyyy1111", {
+        kind: "manual",
+        ballast: { massKg: null },
+      }),
+      completed("k57wwww2222xxxx3333"),
+    );
+    await renderPage(<ReportsPage />);
+
+    expect(
+      report("EFGH5678").getByText("Banc lesté · 80 kg"),
+    ).toBeTruthy();
+    expect(
+      report("YYYY1111").getByText(fr.training.ballast.badge),
+    ).toBeTruthy();
+    expect(report("XXXX3333").queryByText(/Banc lesté/)).toBeNull();
   });
 
   it("leads from each report to the detail of its session and to its printable report", async () => {
@@ -341,6 +379,17 @@ describe.each([
   ["fr", fr],
   ["en", en],
 ] as const)("reports: empty pages (%s, T02-f)", (locale, messages) => {
+  it("keeps one live region mounted, empty while reports are listed", async () => {
+    signedInAs("gestionnaire");
+    serverLists(completed("k57abcd1234efgh5678"));
+    await renderPage(<ReportsPage />, { locale });
+
+    expect(screen.getByRole("status").textContent).toBe("");
+    expect(
+      screen.getByText(`${messages.reports.sessionReport} - EFGH5678`),
+    ).toBeTruthy();
+  });
+
   it("T02-e explains an empty unfinished page and keeps the message while reading more, until the list is done", async () => {
     signedInAs("gestionnaire");
     answer(LIST, (args) =>

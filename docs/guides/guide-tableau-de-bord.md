@@ -79,7 +79,7 @@ ordinateur ou une tablette, n'importe où, il permet de :
 
 | Le site ne peut pas | Pourquoi, et où le faire |
 |---|---|
-| Démarrer une séance **manuelle** (vitesse choisie par l'opérateur), ou en régler la vitesse. | Volontaire : le manuel se démarre **uniquement à la console de la machine**, par quelqu'un qui se tient à côté. Le site l'affiche partout : « Manuel : uniquement depuis la console de la machine ». Seule exception, sans personne à bord : un admin ou un gestionnaire peut proposer une **séance de banc lestée**, que la console ne démarre qu'après la confirmation et l'attestation de son opérateur ([tableau-de-bord.md, 5.6](../tableau-de-bord.md#56-séance-de-banc-lestée-anh-250)). |
+| Démarrer une séance **manuelle** (vitesse choisie par l'opérateur), ou en régler la vitesse. | Volontaire : le manuel se démarre **uniquement à la console de la machine**, par quelqu'un qui se tient à côté. Le site l'affiche sur la carte des programmes et dans la fenêtre de lancement : « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un administrateur ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient. Seule exception, sans personne à bord : un admin ou un gestionnaire peut proposer une **séance de banc lestée**, que la console ne démarre qu'après la confirmation et l'attestation de son opérateur ([tableau-de-bord.md, 5.6](../tableau-de-bord.md#56-séance-de-banc-lestée-anh-250)). |
 | Arrêter la machine **instantanément**. | Le bouton du site est une **demande** : la machine la lit toutes les 3 s environ, puis décélère sur sa rampe de sécurité. L'arrêt d'urgence est **sur la machine**. |
 | Créer ou modifier un **programme**. | Les programmes sont écrits à la console de la machine, puis recopiés sur le site en lecture seule. |
 | Forcer un départ. | La machine revérifie tout et peut refuser. |
@@ -670,8 +670,8 @@ gestionnaire de la machine. Sinon : « Machine introuvable » et lien
 │ │ Repos     Inactif  ♥ 72 bpm    │ │ ♥ 118 à 138 bpm (FC limite 148)│   │
 │ │ Vitesse du bras  Charge  Action│ │ ⏱ 30 min  ⌚ 5.5 tr/min bras   │   │
 │ │ 0.0 tr/min       1.00 g  Aucune│ │            276 tr/min moteur  │   │
-│ │ Moteur 0 · Consigne 0  Variateur│ │ ✋ Manuel : uniquement depuis  │   │
-│ │ Mis à jour il y a 8 secondes   │ │   la console de la machine    │   │
+│ │ Moteur 0 · Consigne 0  Variateur│ │ ✋ Manuel : depuis la console  │   │
+│ │ Mis à jour il y a 8 secondes   │ │   de la machine ...           │   │
 │ └───────────────────────────────┘ └───────────────────────────────┘   │
 │ ┌───────────────────────────────────────────────────────────────────┐ │
 │ │ 🔑 Droits de lancement                                              │ │
@@ -779,7 +779,7 @@ Messages possibles :
   machine a déclaré qu'elle n'accepte pas de séance auto ; les programmes sont
   grisés et aucun lancement n'est possible ;
 - « **Aucun programme synchronisé depuis la machine** » ;
-- toujours, en bas : « Manuel : uniquement depuis la console de la machine ».
+- toujours, en bas : « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un administrateur ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient, qui ne peut pas proposer de séance de banc.
 
 On ne peut ni ajouter ni modifier un programme ici (voir [procédure P9](#p9-préparer-un-programme-exemple--footing-150-à-155-bpm)).
 
@@ -937,7 +937,7 @@ page de lancement**, surtout pour les patients.
 │ │ Programmes · 2 programmes        │ │ ...                            ││
 │ │  30 min  ♥ 118 à 138 bpm ...     │ │ [ ▶ Lancer une séance auto ]   ││
 │ │  45 min  ♥ 118 à 138 bpm ...     │ │        (grisé)                 ││
-│ │ ✋ Manuel : uniquement depuis ... │ │ La machine est hors ligne.     ││
+│ │ ✋ Manuel : depuis la console ... │ │ La machine est hors ligne.     ││
 │ │ [ ▶ Lancer une séance auto ] [👁 Détails]│                          ││
 │ └─────────────────────────────────┘ └─────────────────────────────────┘│
 └───────────────────────────────────────────────────────────────────────┘
@@ -1001,7 +1001,9 @@ S'ouvre depuis **Mes machines** ou le détail d'une machine.
 │ Notes              <Notes optionnelles...>                    │
 │ ⓘ La séance reste « en attente » jusqu'à ce que la machine   │
 │   l'arme. La machine peut encore refuser le départ ...       │
-│ ✋ Manuel : uniquement depuis la console de la machine        │
+│ ✋ Manuel : depuis la console de la machine. Sans personne à  │
+│   bord, une séance de banc lestée peut aussi être proposée   │
+│   depuis le site.                                            │
 │ [ Lancer                                   ]  [ Annuler ]     │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -1095,7 +1097,7 @@ capture d'origine, est « Sessions » depuis ANH-194.
 | Colonne **Patient** | Nom du pratiquant. « Unknown » pour une séance démarrée à la machine sans pratiquant connu. |
 | Colonne **Type** | Badge **Auto** (jauge), **Manuel** (main, ambre) ou **Enregistrement** (courbe) ; badge d'origine **Tableau de bord** (écran) ou **Machine** (puce). |
 | **Démarrée à** | Date et heure. |
-| **Durée** | Séance finie : durée (« 25m 3s »). Séance interrompue : « Fin inconnue ». Autre séance non finie : temps écoulé depuis le début (« 12 minutes »). |
+| **Durée** | Séance finie : durée (« 25m 3s »). Séance interrompue : « Fin inconnue ». Séance de l'ancien mode d'enregistrement jamais finie : « - ». Autre séance non finie : temps écoulé depuis le début (« 12 minutes »). |
 | **Voir en direct** (séance active) | Ouvre la vue en direct. |
 | Icône **œil** (autres statuts) | Ouvre le détail. |
 | Clic sur la ligne | Même effet. |
@@ -1344,7 +1346,7 @@ direct.
 | « En attente de l'appareil » | Séance d'entraînement en attente : « En attente que la machine arme la séance… ». |
 | Carte **Entraînement** (séances auto et manuelles) | **Programme**, **Zone cible**, **Durée prévue**, **FC max du pratiquant**, **Opérateur**, **Origine** (Tableau de bord / Machine), encadré **Motif de fin** (rouge si échouée), puis **Télémétrie** : les mêmes deux courbes que la vue en direct, pour toute la séance (jusqu'à 2 heures). « Aucune télémétrie reçue pour l'instant. » si rien n'a été reçu. |
 | Carte **Ancien enregistrement ECG** (séances de l'ancien mode seulement, à la place de la carte Entraînement) | « Cette séance vient de l'ancien mode d'enregistrement ECG, retiré du logiciel. Elle est conservée en lecture seule. » ; « Canaux enregistrés » ; puis, si des données existent, « Lots de données », « Durée des données » et « Données enregistrées de ... à ... ». Sinon « Aucune donnée ECG enregistrée pour cette session ». Le tracé n'est plus affiché. |
-| « Informations patient », « Chronologie de la session », « Notes de session » | Nom et adresse, début, durée (« En cours » pour une séance d'entraînement non finie), fin, « Démarrée par », notes. |
+| « Informations patient », « Chronologie de la session », « Notes de session » | Nom et adresse, début, durée (la règle de **Sessions** : « 25m 3s », ou « 1h 2m » au delà d'une heure, sans les secondes ; mais « En cours » pour une séance d'entraînement non finie), fin, « Démarrée par », notes. |
 
 **Lire le motif de fin** (champ « Motif de fin ») :
 
@@ -1458,7 +1460,7 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 |---|---|
 | En tête | Flèche retour vers **Patients**, nom, adresse, bouton **Modifier** (fenêtre du [§4.13](#413-patients-liste-et-fenêtres-patient)). |
 | **Informations patient** | Nom, badge de rôle, adresse, langue, date de création. Bouton **Supprimer** : fenêtre « Êtes-vous sûr de vouloir supprimer cet utilisateur? », texte anglais « This action cannot be undone... », **Annuler** / **Supprimer**. La suppression est **définitive** ; en cas de refus, un message d'échec s'affiche en bas à droite de l'écran. |
-| **Sessions récentes** | Les 10 dernières séances du patient visibles par vous : machine, statut, début, durée. La durée suit la règle de **Sessions** : séance finie, sa durée (« 25m 3s ») ; séance interrompue, « Fin inconnue » ; autre séance non finie, temps écoulé depuis le début (« 12 minutes »). Action : **Voir en direct** (active), **Voir le rapport** (terminée, ouvre le détail), « - » sinon. Une séance échouée, en attente ou interrompue s'ouvre depuis **Sessions**. |
+| **Sessions récentes** | Les 10 dernières séances du patient visibles par vous : machine, statut, début, durée. La durée suit la règle de **Sessions** : séance finie, sa durée (« 25m 3s ») ; séance interrompue, « Fin inconnue » ; séance de l'ancien mode jamais finie, « - » ; autre séance non finie, temps écoulé depuis le début (« 12 minutes »). Action : **Voir en direct** (active), **Voir le rapport** (terminée ou interrompue, ouvre le détail), « - » sinon. Une séance échouée ou en attente s'ouvre depuis **Sessions**. |
 | **Physiologie** | Voir ci dessous. |
 
 **Carte « Physiologie »** :
@@ -1666,6 +1668,8 @@ administrateur (sinon « Admin access required » ; identifiant inconnu :
   **Afficher plus** ajoute les 50 suivantes tant qu'il en reste. Titre :
   « Rapport de session » et les 8 derniers caractères de l'identifiant.
 - **Voir** : ouvre le détail de la séance ([§4.12](#412-détail-dune-séance)).
+- Une séance de banc lestée porte le badge « Banc lesté », suivi de la masse
+  déclarée quand elle l'a été (« Banc lesté · 80 kg »).
 - Le plafond de lecture du serveur (ANH-227) peut rendre une page vide alors
   que des séances restent à lire. Si aucun rapport n'est encore chargé, une
   carte indique « Aucun rapport à afficher pour l'instant : d'autres séances

@@ -384,7 +384,7 @@ Admin et gestionnaire de la machine.
 | Gestionnaires | Liste, badge « Propriétaire » pour le premier. | lecture |
 | **Registre de la machine** | Quatre sections : **Identité**, **Mesures**, **Variateur**, **Validation** ; version remontée et attendue, verdicts des verrous, signalements. | admin Anheart en écriture ; admin d'organisation en lecture seule ; aucun registre pour le gestionnaire |
 | **État en direct** | Mode, phase, fréquence cardiaque, vitesse du bras (et moteur, consigne), charge g, action de sécurité, état du variateur ; badge « En direct » / « Données périmées » et « Mis à jour il y a … », recalculés chaque seconde (§6). L'action de sécurité et l'état du variateur sont traduits ; une valeur que le site ne connaît pas s'affiche telle quelle. | lecture |
-| **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : uniquement depuis la console de la machine ». La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. Depuis ANH-138 (contrat 1.11), elle dit « Programmes de secours » quand la machine n'a jamais reçu de catalogue signé, et liste chaque programme du catalogue que la machine a refusé : « refusé par la machine : » suivi de sa raison ; un programme refusé n'est pas lançable ([programmes.md](programmes.md#publication-vers-les-machines-anh-138)). | lecture |
+| **Programmes** | Programmes synchronisés depuis le Pi (lecture seule) : zone, durée, vitesse max, FC limite. Mention « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un admin ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient (la séance de banc lestée est réservée au personnel). La carte explique aussi si les programmes auto sont désactivés, si la machine annonce un fichier médical non signé ou si aucune version de référence n'est enregistrée. Depuis ANH-138 (contrat 1.11), elle dit « Programmes de secours » quand la machine n'a jamais reçu de catalogue signé, et liste chaque programme du catalogue que la machine a refusé : « refusé par la machine : » suivi de sa raison ; un programme refusé n'est pas lançable ([programmes.md](programmes.md#publication-vers-les-machines-anh-138)). | lecture |
 | **Droits de lancement** | Patients autorisés, « Accordé par {nom}, {date} », leur FC max ; boutons **Accorder** (choisir un patient) et **Retirer** (avec confirmation). | admin, gestionnaire |
 | **Clés de la machine** | Toutes les clés non révoquées d'abord (historique en tête, puis les plus récentes), puis les révoquées récentes jusqu'à 50 lignes au total : préfixe, état, création et son auteur, dernière utilisation, expiration ; boutons **Nouvelle clé** et **Révoquer** (ci-dessous). Sur une machine supprimée, visible seulement à l'admin Anheart, avec **Révoquer** seul. | admin Anheart, admin de l'organisation si la machine n'est pas supprimée (ANH-165, ANH-238) |
 | Zone de danger | **Supprimer** (suppression douce, refusée si une séance est active ou en attente ; grisé sur une machine en séance, la raison écrite sous la ligne). | admin, gestionnaire |
@@ -555,8 +555,9 @@ Tous, **En attente** (lancée du site, la machine ne l'a pas encore armée),
 Actives, **Interrompues** (aucune nouvelle depuis 10 min, fin inconnue),
 Terminées, Échouées. Colonnes : patient, machine,
 **Type** (badges Auto / Manuel / Enregistrement et origine), statut, début,
-durée (« Fin inconnue » pour une séance interrompue). Un clic ouvre la vue
-en direct (séance active) ou le détail.
+durée (« Fin inconnue » pour une séance interrompue, « - » pour une séance
+de l'ancien mode jamais finie, `lib/sessionDuration.ts`). Un clic ouvre la
+vue en direct (séance active) ou le détail.
 
 La liste est servie **par pages de 50**, du début le plus récent au plus ancien
 (`sessions.listSessionsPaginated`, [convex.md §5](convex.md#sessionsts-lectures-seulement)).
@@ -619,7 +620,8 @@ d'enregistrement ECG, retiré.
 Nom du pratiquant (ou « Pratiquant non précisé »), machine, statut, bandeau
 d'échec avec la raison. Pour une séance **interrompue, fin inconnue** : un
 bandeau orange qui le dit, avec la date à laquelle le serveur l'a marquée,
-la durée « Fin inconnue » au lieu de « En cours », et le bouton **Voir en
+la durée « Fin inconnue » au lieu de « En cours » (la règle des listes,
+`lib/sessionDuration.ts`), et le bouton **Voir en
 direct**, d'où son arrêt peut encore être demandé. Pour une séance
 d'entraînement terminée (`completed` ou `failed`), la carte **Résumé de la
 séance** (ANH-89, ci-dessous) ; une séance interrompue n'est pas terminée et
@@ -744,7 +746,8 @@ sans créer un deuxième dossier ni écraser ses champs communs.
 Fiche patient : identité, **Sessions récentes** (les 10 dernières : machine,
 statut, début, durée, comme la page Sessions : « Fin inconnue » pour une
 séance interrompue, temps depuis le début pour une séance active ou en
-attente), bouton Modifier, suppression, les cartes
+attente ; **Voir le rapport** ouvre le détail d'une séance terminée ou
+interrompue), bouton Modifier, suppression, les cartes
 **Physiologie** (voir §5.1), **Aptitude** et **Consentement**, et la carte
 **Historique et progression** (ANH-89,
 `components/training/RiderHistoryCard.tsx`). Celle-ci liste les séances
@@ -849,7 +852,8 @@ l'enregistrement peut encore être défait. La règle des cases est dans
 ### Rapports : `/fr/dashboard/reports`
 
 Séances terminées visibles par l'utilisateur : pratiquant, machine, date,
-durée et le bouton **Voir** qui ouvre le détail. Le bouton **Rapport PDF**
+durée, le badge « Banc lesté » (avec la masse déclarée) d'une séance de banc
+lestée (ANH-250) et le bouton **Voir** qui ouvre le détail. Le bouton **Rapport PDF**
 ouvre le rapport des seules séances d'entraînement (`auto` ou `manual`, ANH-89).
 Une séance de l'ancien mode ECG (`recording`) conserve **Voir** et indique
 « Ancien enregistrement ECG : aucun rapport disponible. » Elles sont servies par pages
@@ -861,7 +865,10 @@ fin de la liste. Si aucun rapport n'est encore chargé, une carte indique
 « Aucun rapport à afficher pour l'instant : d'autres séances restent à lire »
 et explique qu'**Afficher plus** poursuit la lecture. Le message reste visible
 pendant le chargement suivant ; « Aucun rapport disponible pour le moment »
-ne s'affiche qu'une fois la liste finie et vide.
+ne s'affiche qu'une fois la liste finie et vide. Ces messages, comme ceux de
+la page Sessions (liste vide, recherche limitée aux séances chargées), sont
+écrits dans une région `role="status"` toujours présente, vide quand il n'y
+a rien à dire : un lecteur d'écran annonce chaque message qui y paraît.
 L'ancien rapport PDF, construit sur les données ECG, a été retiré avec le mode
 d'enregistrement ; le rapport d'une séance d'entraînement est la page
 [Rapport d'une séance](#rapport-dune-séance--frdashboardsessionsidreport). La
@@ -1711,11 +1718,16 @@ d'autre message. Le toaster mesure cette place avec `ResizeObserver` et la
 publie dans `--feedback-toaster-space` sur `<html>` ; la réservation disparaît
 avec le dernier message ou au démontage. Sans `ResizeObserver`, les messages
 restent utilisables mais aucune place n'est réservée.
-Les fenêtres se centrent dans l'espace libre au-dessus de la pile, à toutes
-les largeurs. Une grande fenêtre défile à l'intérieur ; les boutons d'un
+Les fenêtres se centrent dans l'espace libre au-dessus de la pile, là où la
+pile peut les recouvrir : sous 82rem (1312 px) de large. Au delà, la pile est
+à côté d'une fenêtre de largeur normale (`sm:max-w-lg`), qui reste centrée
+dans tout l'écran. Une grande fenêtre défile à l'intérieur ; les boutons d'un
 `DialogFooter` collant restent visibles. Les formulaires sans ce pied
 (`MachineFormModal`, `PatientFormModal`, `LaunchTrainingModal`) gardent leurs
-boutons atteignables en faisant défiler la fenêtre. Sans message, une fenêtre
+boutons atteignables en faisant défiler la fenêtre. À l'ouverture, le champ
+que Radix met au focus est amené dans la vue au-dessus du pied (Radix le
+met au focus sans faire défiler). Chaque nouveau message est amené dans la
+vue de la pile, même quand elle déborde. Sans message, une fenêtre
 qui tient dans l'écran garde sa taille et sa position.
 Le menu latéral mobile réserve la même place sous son contenu, y compris
 sous le pied du menu, afin que les messages ne le recouvrent pas.

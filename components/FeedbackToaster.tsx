@@ -34,6 +34,19 @@ export function FeedbackToaster() {
   );
   const stackRef = useRef<HTMLDivElement>(null);
   const hasToasts = toasts.length > 0;
+  // The newest message is the last of the list (lib/feedback.ts `withNewest`).
+  const newestId = hasToasts ? toasts[toasts.length - 1].id : 0;
+  const newestRef = useRef<HTMLDivElement>(null);
+  const shownId = useRef(0);
+
+  // A stack that overflows scrolls to a new message, wherever it was
+  // scrolled to; closing a message scrolls nothing.
+  useEffect(() => {
+    if (newestId <= shownId.current) return;
+    shownId.current = newestId;
+    // Called only where it exists: the tests' documents have none.
+    newestRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [newestId]);
 
   useEffect(() => {
     const stack = stackRef.current;
@@ -97,6 +110,7 @@ export function FeedbackToaster() {
       .map((toast) => (
         <div
           key={toast.id}
+          ref={toast.id === newestId ? newestRef : undefined}
           data-feedback-message=""
           data-kind={toast.kind}
           // A modal dialog turns pointer events off on the page: a message,

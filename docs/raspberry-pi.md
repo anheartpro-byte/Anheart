@@ -3216,7 +3216,9 @@ lequel la même requête serait encore refusée.
   plus petit, que le plus grand déjà reçu. Sa première déclaration (séance
   démarrée à la machine) ou la confirmation de son départ (`startedAt` d'un
   lancement du site : l'arrivée de la confirmation moins l'âge que la console
-  donne de la séance, jamais avant le lancement) date de plus de 10 min ; une
+  donne de la séance, jamais avant le lancement ; l'âge n'est lu que si la
+  console envoie aussi sa date de début, ce que fait celle de ce dépôt) date
+  de plus de 10 min ; une
   déclaration refaite ne compte pas. Toutes ces dates sont celles du serveur : la date de
   début que la machine a écrite n'est pas lue. C'est la tâche de Convex qui
   passe toutes les minutes

@@ -238,3 +238,32 @@ describe("ANH-232 space above the feedback stack", () => {
     expect(reserved()).toBe("");
   });
 });
+
+describe("ANH-232 a new message in a stack that overflows", () => {
+  it("brings each new message into view, success or failure, and scrolls nothing when one is closed", () => {
+    const scrolled: { text: string | null; options: unknown }[] = [];
+    const prototype = window.Element.prototype as { scrollIntoView?: unknown };
+    prototype.scrollIntoView = function (this: Element, options: unknown) {
+      scrolled.push({ text: this.textContent, options });
+    };
+    try {
+      mount();
+      act(() => pushFeedback("error", "Premier refus"));
+      act(() => pushFeedback("error", "Second refus"));
+      // A success is drawn above the failures: it is brought into view too.
+      act(() => pushFeedback("success", "Enregistré"));
+      expect(scrolled).toEqual(
+        ["Premier refus", "Second refus", "Enregistré"].map((text) => ({
+          text,
+          options: { block: "nearest" },
+        })),
+      );
+
+      act(() => dismissFeedback(getFeedbackToasts()[2].id));
+      act(() => dismissFeedback(getFeedbackToasts()[1].id));
+      expect(scrolled).toHaveLength(3);
+    } finally {
+      delete prototype.scrollIntoView;
+    }
+  });
+});

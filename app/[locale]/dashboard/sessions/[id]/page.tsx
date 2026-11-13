@@ -33,6 +33,7 @@ import { format } from "date-fns";
 import { fr, enUS } from "date-fns/locale";
 import { useSessionStatusLabel } from "@/components/dashboard/statusLabels";
 import { isTrainingKind, SESSION_SILENCE_MS } from "@/lib/training";
+import { sessionDuration } from "@/lib/sessionDuration";
 import { TrainingDetailsCard } from "@/components/training/TrainingDetailsCard";
 import { SessionRecordCard } from "@/components/training/SessionRecordCard";
 import { SessionFeedbackCard } from "@/components/training/SessionFeedbackCard";
@@ -90,15 +91,12 @@ export default function SessionDetailPage({
     : (session.subjectLabel ?? t("training.session.riderNotSpecified"));
 
   const interrupted = isTraining && session.status === "interrupted";
-  // A session of the former recording mode that never ended is not running,
-  // and the end of an interrupted one has not been received.
-  const duration = session.endedAt
-    ? formatDuration(session.endedAt - session.startedAt)
-    : interrupted
-      ? t("sessions.unknownEnd")
-      : isTraining
-        ? t("sessions.inProgress")
-        : "-";
+  const duration = sessionDuration(
+    session,
+    t("sessions.unknownEnd"),
+    dateLocale,
+    t("sessions.inProgress"),
+  );
 
   return (
     <div className="space-y-6">
@@ -408,20 +406,6 @@ function SessionStatusBadge({ status }: { status: string }) {
       {statusLabel(status)}
     </Badge>
   );
-}
-
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  }
-  return `${seconds}s`;
 }
 
 function SessionDetailSkeleton() {

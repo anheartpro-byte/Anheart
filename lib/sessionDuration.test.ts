@@ -13,7 +13,7 @@ const UNKNOWN_END = "Fin inconnue";
 
 /** Started 20 minutes ago; `endedAt` is left out unless given. */
 function started(status: string, over: Partial<TimedSession> = {}) {
-  return { status, startedAt: NOW - 1_200_000, ...over };
+  return { status, startedAt: NOW - 1_200_000, kind: "auto", ...over };
 }
 
 beforeEach(() => {
@@ -53,6 +53,38 @@ describe("the length shown for a session", () => {
       expect(sessionDuration(session, UNKNOWN_END, fr)).toBe("environ 1 heure");
     },
   );
+
+  it.each(["active", "pending"])(
+    "a %s session says it is in progress where the page asks for it, without counting time",
+    (status) => {
+      const session = started(status, { kind: "manual" });
+
+      expect(sessionDuration(session, UNKNOWN_END, fr, "En cours")).toBe(
+        "En cours",
+      );
+    },
+  );
+
+  it.each(["active", "pending"])(
+    "a recording of the former mode left %s and never ended has no length, however long ago it started",
+    (status) => {
+      const session = started(status, { kind: "recording" });
+
+      expect(sessionDuration(session, UNKNOWN_END, fr)).toBe("-");
+      expect(sessionDuration(session, UNKNOWN_END, fr, "En cours")).toBe("-");
+      vi.setSystemTime(NOW + 86_400_000);
+      expect(sessionDuration(session, UNKNOWN_END, fr)).toBe("-");
+    },
+  );
+
+  it("a recording of the former mode that ended shows how long it lasted", () => {
+    const session = started("completed", {
+      kind: "recording",
+      endedAt: NOW - 900_000,
+    });
+
+    expect(sessionDuration(session, UNKNOWN_END, fr)).toBe("5m 0s");
+  });
 
   it("counts that time in the language asked for", () => {
     expect(sessionDuration(started("active"), "End unknown", enUS)).toBe(

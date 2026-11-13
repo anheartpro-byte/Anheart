@@ -455,6 +455,10 @@ describe("dashboard.counters: the cost of a call, world « today »", () => {
     );
     // Two ranges of machines, two of sessions, one of memberships.
     expect(used.ranges).toBe(caller.ranges + 5);
+    // The figures of docs/convex.md: 2 documents for the caller (its
+    // account, its organisation), 7 ranges whatever the volume.
+    expect(caller.documents).toBe(2);
+    expect(used.ranges).toBe(7);
   });
 
   it("reads none of the rows no figure counts: ended sessions, deleted machines, inactive memberships, heartbeats", async () => {

@@ -207,10 +207,15 @@ export const getSession = query({
   },
 });
 
+/** The most rows `listSessions` returns, and its default: the site asks for 10. */
+const LIST_SESSIONS_MAX = 50;
+
 /**
- * The `limit` (50 by default) most recent sessions the caller may read,
- * narrowed by the filters. For the short lists of the site (home page, a
- * patient's page); the Sessions page reads `listSessionsPaginated`.
+ * The `limit` most recent sessions the caller may read, narrowed by the
+ * filters: 50 by default and at most, 1 at least, as an unfiltered
+ * gestionnaire reads up to (managed machines + 1) * limit rows. For the
+ * short lists of the site (home page, a patient's page); the Sessions page
+ * reads `listSessionsPaginated`.
  */
 export const listSessions = query({
   args: {
@@ -220,11 +225,16 @@ export const listSessions = query({
   returns: v.array(listedSessionValidator),
   handler: async (ctx, { limit, ...filters }) => {
     const caller = await getCurrentUserOrThrow(ctx);
+    // `take` wants a whole number: a fraction is floored, NaN is the default.
+    const wanted = Math.floor(limit ?? LIST_SESSIONS_MAX);
     const sessions = await newestReadableSessions(
       ctx,
       caller,
       filters,
-      limit ?? 50,
+      Math.min(
+        Math.max(Number.isNaN(wanted) ? LIST_SESSIONS_MAX : wanted, 1),
+        LIST_SESSIONS_MAX,
+      ),
     );
     return await listedRows(ctx, caller, sessions);
   },

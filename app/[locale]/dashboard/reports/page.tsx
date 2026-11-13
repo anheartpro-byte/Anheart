@@ -19,6 +19,8 @@ import {
 import { Link } from "@/i18n/navigation";
 import { isOrganizationAdmin } from "@/lib/organizationAccess";
 import { FeedbackExportButton } from "@/components/training/FeedbackExportButton";
+import { BallastBadge } from "@/components/training/TrainingBadges";
+import type { Ballast } from "@/lib/training";
 
 /** Reports asked for at once: the first page, then each "Show more". */
 const PAGE_SIZE = 50;
@@ -39,43 +41,64 @@ export default function ReportsPage() {
     { initialNumItems: PAGE_SIZE },
   );
 
-  if (user === undefined || status === "LoadingFirstPage") {
-    return <ReportsPageSkeleton />;
-  }
+  // The page keeps one tree while it loads: its live region stays mounted.
+  const loading = user === undefined || status === "LoadingFirstPage";
   // The riders' feedback export (ANH-146): the gate of the audit page.
   const exportAllowed =
-    isOrganizationAdmin(user?.role) && user?.organizationAccess === "granted";
+    !loading &&
+    isOrganizationAdmin(user?.role) &&
+    user?.organizationAccess === "granted";
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{t("title")}</h1>
-        <p className="text-muted-foreground">{t("description")}</p>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {t("failedSessionsHint")}
-        </p>
-      </div>
+      {loading ? (
+        <div>
+          <Skeleton className="h-8 w-48 mb-2" />
+          <Skeleton className="h-4 w-72" />
+        </div>
+      ) : (
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t("title")}
+          </h1>
+          <p className="text-muted-foreground">{t("description")}</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {t("failedSessionsHint")}
+          </p>
+        </div>
+      )}
 
       {exportAllowed && <FeedbackExportButton />}
 
-      {sessions.length > 0 ? (
-        <div className="grid gap-4">
-          {sessions.map((session) => (
-            <SessionReportCard key={session._id} session={session} />
-          ))}
-        </div>
+      {/* One live region, always mounted (ANH-227): a message put in it is
+          announced, which a region inserted with its text is not reliably.
+          Empty, it takes no room. */}
+      <div role="status" className="empty:mb-0">
+        {!loading && sessions.length === 0 && (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
+              <p className="text-muted-foreground text-center">
+                {status === "Exhausted" ? t("noReports") : t("nothingYet")}
+              </p>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {loading ? (
+        <ReportsGridSkeleton />
       ) : (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <p role="status" className="text-muted-foreground text-center">
-              {status === "Exhausted" ? t("noReports") : t("nothingYet")}
-            </p>
-          </CardContent>
-        </Card>
+        sessions.length > 0 && (
+          <div className="grid gap-4">
+            {sessions.map((session) => (
+              <SessionReportCard key={session._id} session={session} />
+            ))}
+          </div>
+        )
       )}
 
-      {(status === "CanLoadMore" || status === "LoadingMore") && (
+      {!loading && (status === "CanLoadMore" || status === "LoadingMore") && (
         <div className="flex justify-center">
           <Button
             variant="outline"
@@ -100,6 +123,7 @@ interface SessionReportCardProps {
     patientName: string;
     machineName: string;
     kind: string;
+    ballast?: Ballast;
   };
 }
 
@@ -168,38 +192,33 @@ function SessionReportCard({ session }: SessionReportCardProps) {
               {duration > 0 ? t("durationMinutes", { minutes: duration }) : "-"}
             </span>
           </div>
+          <BallastBadge ballast={session.ballast} />
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function ReportsPageSkeleton() {
+function ReportsGridSkeleton() {
   return (
-    <div className="space-y-6">
-      <div>
-        <Skeleton className="h-8 w-48 mb-2" />
-        <Skeleton className="h-4 w-72" />
-      </div>
-      <div className="grid gap-4">
-        {[1, 2, 3].map((i) => (
-          <Card key={i}>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <Skeleton className="h-5 w-48" />
-                <Skeleton className="h-9 w-28" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-6">
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-4 w-20" />
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+    <div className="grid gap-4">
+      {[1, 2, 3].map((i) => (
+        <Card key={i}>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <Skeleton className="h-5 w-48" />
+              <Skeleton className="h-9 w-28" />
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-6">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-4 w-20" />
+            </div>
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

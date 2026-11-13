@@ -52,19 +52,24 @@ function DialogContent({
   children,
   showCloseButton = true,
   onInteractOutside,
+  onOpenAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
 }) {
   // Keep focused fields above the footer: two 36px buttons, an 8px gap and
   // 24px padding on phones; one 36px row and 24px padding from sm.
+  // The space of the messages is reserved only where they can cover the
+  // window: from 82rem the stack (24rem wide, 1rem from the right) is beside
+  // a window of sm:max-w-lg. shortcut: a wider window given by a caller
+  // could still meet it up to 98rem (sm:max-w-3xl); none does today.
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[calc((100dvh-var(--feedback-toaster-space,0px))/2)] left-[50%] z-50 grid max-h-[calc(100dvh-var(--feedback-toaster-space,0px)-2rem)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto scroll-pb-26 rounded-lg border p-6 shadow-lg duration-200 outline-none sm:max-w-lg sm:scroll-pb-15",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[calc((100dvh-var(--feedback-toaster-space,0px))/2)] left-[50%] z-50 grid max-h-[calc(100dvh-var(--feedback-toaster-space,0px)-2rem)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto scroll-pb-26 rounded-lg border p-6 shadow-lg duration-200 outline-none sm:max-w-lg sm:scroll-pb-15 min-[82rem]:top-[50dvh] min-[82rem]:max-h-[calc(100dvh-2rem)]",
           className
         )}
         onInteractOutside={(event) => {
@@ -72,6 +77,21 @@ function DialogContent({
           // The site's messages are drawn above the window, not outside it:
           // closing one leaves the window open (components/FeedbackToaster.tsx).
           if (isFeedbackElement(event.target)) event.preventDefault()
+        }}
+        onOpenAutoFocus={(event) => {
+          onOpenAutoFocus?.(event)
+          if (event.defaultPrevented) return
+          // Radix focuses the first field without scrolling (preventScroll):
+          // once it has, bring that field into view, inside the scroll
+          // padding kept above the footer.
+          const content = event.currentTarget as HTMLElement
+          queueMicrotask(() => {
+            const focused = document.activeElement
+            if (focused && focused !== content && content.contains(focused)) {
+              // Called only where it exists: the tests' documents have none.
+              focused.scrollIntoView?.({ block: "nearest" })
+            }
+          })
         }}
         {...props}
       >

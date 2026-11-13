@@ -405,6 +405,25 @@ describe("my machines: launching a session", () => {
     return user;
   }
 
+  it.each([
+    ["user", fr.training.manualOnlyAtMachine, fr.training.manualFromMachine],
+    [
+      "gestionnaire",
+      fr.training.manualFromMachine,
+      fr.training.manualOnlyAtMachine,
+    ],
+  ] as const)(
+    "ANH-250 tells a %s where a manual session starts, the bench session to the staff only",
+    async (role, shown, hidden) => {
+      twoMachines(role);
+      await renderPage(<MyMachinesPage />);
+
+      expect(cardOf("Paris").getByText(shown)).toBeTruthy();
+      expect(cardOf("Lyon").getByText(shown)).toBeTruthy();
+      expect(screen.queryByText(hidden)).toBeNull();
+    },
+  );
+
   it("a patient launches a programme of the machine they chose, for themselves, and is taken to the live view", async () => {
     twoMachines("user");
     const { user } = await renderPage(<MyMachinesPage />);

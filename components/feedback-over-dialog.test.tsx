@@ -153,3 +153,62 @@ describe("ANH-194 a message above an open window", () => {
     expect(screen.queryByRole("main")).toBeNull();
   });
 });
+
+describe("ANH-232 the field focused when a real window opens", () => {
+  /** Each element scrolled into view, with the options given. */
+  function watchScrolls() {
+    const scrolled: { element: Element; options: unknown }[] = [];
+    const prototype = window.Element.prototype as { scrollIntoView?: unknown };
+    prototype.scrollIntoView = function (this: Element, options: unknown) {
+      scrolled.push({ element: this, options });
+    };
+    return {
+      scrolled,
+      restore: () => delete prototype.scrollIntoView,
+    };
+  }
+
+  function form(onOpenAutoFocus?: (event: Event) => void) {
+    render(
+      <Dialog open>
+        <DialogContent
+          aria-describedby={undefined}
+          onOpenAutoFocus={onOpenAutoFocus}
+        >
+          <DialogTitle>Nouvelle machine</DialogTitle>
+          <input aria-label="Nom" />
+        </DialogContent>
+      </Dialog>,
+    );
+  }
+
+  it("is brought into view once Radix has focused it, inside the window's scroll padding", async () => {
+    const { scrolled, restore } = watchScrolls();
+    try {
+      form();
+      const field = screen.getByRole("textbox", { name: "Nom" });
+      expect(document.activeElement).toBe(field);
+      await act(async () => {});
+
+      expect(scrolled).toEqual([
+        { element: field, options: { block: "nearest" } },
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("is left alone when the caller takes the focus on opening", async () => {
+    const { scrolled, restore } = watchScrolls();
+    const onOpenAutoFocus = vi.fn((event: Event) => event.preventDefault());
+    try {
+      form(onOpenAutoFocus);
+      await act(async () => {});
+
+      expect(onOpenAutoFocus).toHaveBeenCalledOnce();
+      expect(scrolled).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+});

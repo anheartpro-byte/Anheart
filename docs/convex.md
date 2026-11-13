@@ -651,7 +651,10 @@ source d'ANH-180 ; son effet en production dépend du redéploiement ANH-82.
 
 `sessionId`, `machineId`, `t`, `elapsedS`, `phase`, `bpm` (absent = pas de FC
 fiable), `motorRpm`, `outputRpm`, `setpointMotorRpm`, `gLoad`, `safetyAction`.
-Index `by_session_and_t`.
+Index `by_session_and_t`. Un point dont l'`elapsedS` est négatif n'est pas
+stocké et compte dans `rejected`, sans refuser le reste du lot : seul un
+client fautif en envoie un (le Pi saute de tels ticks,
+`raspberry-pi/src/record/upload.py`).
 
 **Une ligne par `(sessionId, t)`.** Un point envoyé une seconde fois (réponse
 perdue, console redémarrée) n'est pas inséré de nouveau : la ligne déjà là
@@ -1580,7 +1583,7 @@ l'organisation de la machine. Action d'audit `session.bench_launched`.
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
 | `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Planifie le résumé provisoire de la séance (`sessionReports.summarizeTelemetry`, ANH-89) et, pour une séance `failed`, l'alerte `session_failed` (ANH-90). |
 | `getTrainingStatus` | `{status, active, stopRequested}`. `active` vaut vrai pour une séance `active` **et** pour une séance `interrupted` : le Pi arrête sa séance sur `active: false`, et Convex ne demande jamais l'arrêt d'une séance faute d'en avoir des nouvelles. |
-| `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; pour une séance qui a un axe machine, un point daté hors de la séance est compté dans `rejected` ; ni l'un ni l'autre n'est écrit. Retourne `{stored, duplicates, rejected}`. |
+| `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; pour une séance qui a un axe machine, un point daté hors de la séance est compté dans `rejected`, comme un point dont l'`elapsedS` est négatif ; aucun n'est écrit. Retourne `{stored, duplicates, rejected}`. |
 | `storeEvents` | La même chose pour les événements : un événement est un `(sessionId, seq)`. Retourne `{stored, duplicates, rejected}`. Les événements nouvellement stockés peuvent planifier une alerte `safety_verdict` ou `drive_fault` (ANH-90). |
 
 Les refus de `markTrainingStarted`, `registerLocalSession`,
@@ -2152,7 +2155,13 @@ D'autres écritures la relancent aussi :
   programmes ;
 - les appartenances : le webhook Clerk (`clerkWebhook.applyEvent`),
   `users.getOrCreateUser`, `updateUserRole`, `deleteUser`,
-  `patientInvitations.prepare`.
+  `patientInvitations.prepare` ;
+- l'inscription d'une version des paramètres médicaux
+  (`medicalParametersStore.insertVersion`), qui passe en échec les
+  lancements en attente déjà expirés ;
+- la vérification des fichiers d'un enregistrement (`recordStorage`), qui
+  écrit l'état de l'enregistrement sur la séance : seulement pour une séance
+  encore active ou en attente, la plupart arrivant après la fin.
 
 Une ligne de `machine_heartbeats`, de télémétrie ou d'événements ne la relance
 pas.
@@ -2252,7 +2261,7 @@ routes d'entraînement.
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `getSession` | pratiquant ou accès machine | Détail avec patient et machine. |
-| `listSessions` | connecté | Les `limit` (50 par défaut) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status` (`pending`, `active`, `interrupted`, `completed` ou `failed`), `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
+| `listSessions` | connecté | Les `limit` (50 par défaut et au plus, 1 au moins : une valeur hors de ces bornes y est ramenée, une fraction arrondie à l'entier inférieur, NaN pris pour la valeur par défaut) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status` (`pending`, `active`, `interrupted`, `completed` ou `failed`), `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
 | `listSessionsPaginated` | connecté | Les mêmes séances, avec les mêmes filtres, **page par page** (`paginationOpts`, pour `usePaginatedQuery`). Page Sessions (un statut par onglet) et page Rapports (`status: "completed"`). |
 | `getActiveSessionForMachine` | accès machine | Séance `active` (une séance `interrupted` n'en est pas une). |
 
@@ -2295,7 +2304,7 @@ une telle séance pour tout le monde, comme avant ce ticket.
 **Les listes courtes du gestionnaire (ANH-227).** Sans `machineId` ni `userId`,
 `listSessions` fusionne une source par
 machine gérée dans son organisation, plus une source pour les séances dont
-il est le pratiquant. Chaque source lit au plus `limit` séances (50 par défaut), du plus récent au
+il est le pratiquant. Chaque source lit au plus `limit` séances (50 par défaut et au plus), du plus récent au
 plus ancien. L'organisation et, si demandé, le statut sont dans l'index :
 
 | Source | Sans statut | Avec statut |
@@ -3442,7 +3451,12 @@ marquage ne tourne pas dans la transaction de `check-offline-machines` : avec
 beaucoup de séances orphelines, ces limites atteintes empêcheraient aussi de
 passer les machines hors ligne. Ni son coût ni son échec ne retiennent ce
 passage. Chaque page rend `{marked, done}` : combien de séances elle a
-marquées, et si c'était la dernière.
+marquées, et si c'était la dernière. Une page qui échoue arrête la chaîne,
+sans autre reprise : la tâche de la minute suivante repart de la première
+séance active (`cursor: null`). Les séances déjà marquées ont quitté
+l'index, elle ne relit donc que celles qui ont des nouvelles. Seule une page
+qui échouerait à chaque passage retiendrait les séances placées après elle :
+à l'exploitant de lire alors l'erreur dans les journaux de Convex.
 
 `interrupted` n'est **pas une fin** : la séance peut tourner encore sur une
 machine dont le lien est coupé depuis 10 min. Rien n'est demandé à la

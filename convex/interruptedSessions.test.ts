@@ -40,7 +40,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { SESSION_SILENCE_MS } from "../lib/training";
+import { LIVE_FRESH_MS, SESSION_SILENCE_MS } from "../lib/training";
 import holdBoundText from "../contracts/hold-bound.json?raw";
 import { machineHeaders } from "./machineAuth.fixtures";
 import {
@@ -570,8 +570,12 @@ describe("ANH-216 EX-1 who may read and stop an interrupted session", () => {
 
 /** Silent sessions enough for eleven pages of the job, the last one short. */
 const MANY = 10 * INTERRUPT_BATCH + 7;
-/** The heartbeats the first machine sends, one per 5 s for eight minutes. */
-const UNNAMING_BEATS = 96;
+/**
+ * The heartbeats the first machine sends, one per 5 s for ten minutes: the
+ * most a machine may send over `SESSION_SILENCE_MS` (one per 5 s,
+ * contracts/machine-api.json), so the worst a silent session costs a page.
+ */
+const UNNAMING_BEATS = SESSION_SILENCE_MS / (5 * SECOND);
 /** When every session of these worlds started at `NOW` is due to be marked. */
 const DUE = NOW + SESSION_SILENCE_MS + SECOND;
 
@@ -611,7 +615,7 @@ function insertSilentSessions(
 
 /**
  * `MANY` silent sessions on the first machine, whose console, restarted on
- * records it cannot read, beat every 5 s for eight minutes from `NOW`
+ * records it cannot read, beat every 5 s for ten minutes from `NOW`
  * without naming any of them, then fell silent: each of them costs the job
  * every one of those heartbeats.
  */
@@ -686,7 +690,9 @@ describe("ANH-231 EX-3 a machine without news is marked offline, however many se
 
   it("marks every silent machine offline, each with its alert, and changes none of the sessions", async () => {
     const { w, sessions } = await silentWorld();
-    vi.setSystemTime(DUE);
+    // The first machine beat until just before DUE: offline once that is
+    // older than LIVE_FRESH_MS, with its silent sessions still over the limit.
+    vi.setSystemTime(DUE + LIVE_FRESH_MS);
 
     expect(
       await w.t.mutation(internal.machines.checkOfflineMachines, {}),
@@ -825,6 +831,47 @@ describe("ANH-231 EX-3 the job marks the silent sessions a bounded page per tran
     expect(await statusesOf(w, sessions.slice(INTERRUPT_BATCH))).toEqual(
       new Set(["completed"]),
     );
+  });
+
+  it("leaves active a session that gets news between two pages of the same chain, and one registered between them", async () => {
+    const w = await limitedWorld();
+    const sessions = await insertSilentSessions(w, INTERRUPT_BATCH + 3);
+    vi.setSystemTime(DUE);
+    expect(await interrupt(w, null)).toEqual({
+      marked: INTERRUPT_BATCH,
+      done: false,
+    });
+    const [named, pointed, silent] = sessions.slice(INTERRUPT_BATCH);
+
+    // Before the next page runs: the machine names one of the three left,
+    // a point of another arrives, and a new session is registered.
+    vi.setSystemTime(DUE + SECOND);
+    await w.t.mutation(internal.machines.recordHeartbeat, {
+      machineId: w.machine,
+      activeSessionId: named,
+    });
+    await w.t.mutation(internal.training.storeTelemetry, {
+      machineId: w.machine,
+      sessionId: pointed,
+      points: [point(NOW, 60)],
+    });
+    const [registered] = await insertSilentSessions(w, 1);
+
+    expect(await interrupt(w, await nextCursor(w))).toEqual({
+      marked: 1,
+      done: true,
+    });
+    const [namedRow, pointedRow, silentRow, registeredRow] = await rowsOf(w, [
+      named,
+      pointed,
+      silent,
+      registered,
+    ]);
+    expect(namedRow?.status).toBe("active");
+    expect(pointedRow?.status).toBe("active");
+    expect(registeredRow?.status).toBe("active");
+    expect(silentRow?.status).toBe("interrupted");
+    expect(silentRow?.interruptedAt).toBe(DUE + SECOND);
   });
 
   it("finds nothing to do in a deployment without an active session", async () => {

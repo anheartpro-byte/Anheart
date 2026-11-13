@@ -2372,7 +2372,8 @@ const batchOutcome = v.object({
   stored: v.number(),
   /** Already stored by an earlier call: left as they were. */
   duplicates: v.number(),
-  /** Dated outside the session (see `sessionWindow`): not stored. */
+  /** Dated outside the session (see `sessionWindow`), or a telemetry point
+   * with a negative `elapsedS`: not stored. */
   rejected: v.number(),
 });
 
@@ -2384,7 +2385,9 @@ const batchOutcome = v.object({
  *
  * For a session that has a machine axis, a point dated outside the session
  * is counted and not stored; it does not refuse the batch, whose other points
- * are stored. For any other session no date is refused.
+ * are stored. For any other session no date is refused. A point with a
+ * negative `elapsedS` is counted and not stored the same way: only a faulty
+ * client sends one (the Pi skips such ticks, `record/upload.py`).
  */
 export const storeTelemetry = internalMutation({
   args: {
@@ -2400,7 +2403,7 @@ export const storeTelemetry = internalMutation({
     const window = sessionWindow(s);
     const outcome = { stored: 0, duplicates: 0, rejected: 0 };
     for (const p of args.points) {
-      if (!inWindow(window, p.t)) {
+      if (!inWindow(window, p.t) || p.elapsedS < 0) {
         outcome.rejected++;
         continue;
       }

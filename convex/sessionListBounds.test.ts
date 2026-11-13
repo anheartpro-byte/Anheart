@@ -212,7 +212,8 @@ describe.each([1, 5, 10, 50, 100])(
         expect(result.map((row) => row._id)).toEqual(
           expected
             .filter((row) => status === undefined || row.status === status)
-            .slice(0, limit)
+            // A limit over 50 is bounded to 50 (`listSessions`).
+            .slice(0, Math.min(limit, 50))
             .map((row) => row.id),
         );
       }
@@ -230,6 +231,26 @@ describe("ANH-227 short lists: default list", () => {
     expect(listed.map((row) => row._id)).toEqual(
       expected.slice(0, 50).map((row) => row.id),
     );
+  });
+
+  it("bounds the limit a caller asks for to 1..50, under the read budget", async () => {
+    const w = await boundsWorld(420, true);
+    const expected = expectedForManager(w, w.seeded).map((row) => row.id);
+    const reader = as(w.t, "manager");
+    const ids = async (limit: number) =>
+      (await reader.query(api.sessions.listSessions, { limit })).map(
+        (row) => row._id,
+      );
+
+    expect(await ids(10_000)).toEqual(expected.slice(0, 50));
+    expect(await ids(10)).toEqual(expected.slice(0, 10));
+    expect(await ids(0)).toEqual(expected.slice(0, 1));
+    expect(await ids(-5)).toEqual(expected.slice(0, 1));
+    // `take` refuses what is not a whole number: floored, NaN the default.
+    expect(await ids(2.5)).toEqual(expected.slice(0, 2));
+    expect(await ids(0.5)).toEqual(expected.slice(0, 1));
+    expect(await ids(Number.NaN)).toEqual(expected.slice(0, 50));
+    expect(await ids(Number.POSITIVE_INFINITY)).toEqual(expected.slice(0, 50));
   });
 });
 

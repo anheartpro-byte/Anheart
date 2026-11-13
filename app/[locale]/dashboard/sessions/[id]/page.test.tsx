@@ -283,7 +283,8 @@ describe("session detail: a training session", () => {
     expect(valueUnder(fr.sessionDetail.ended)).toBe(
       format(STARTED + 3_725_000, "PPp", { locale: frLocale }),
     );
-    expect(valueUnder(fr.sessions.duration)).toBe("1h 2m 5s");
+    // The rule of the lists of sessions (lib/sessionDuration.ts).
+    expect(valueUnder(fr.sessions.duration)).toBe("1h 2m");
   });
 
   it.each([
