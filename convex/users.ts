@@ -19,6 +19,7 @@ import {
 import { effectiveHrMax } from "./training";
 import { currentMedicalParameters } from "./lib/medicalParameters";
 import { refusal } from "./lib/errors";
+import { OPERATOR_ROLES, releaseOperator } from "./lib/consoleAccess";
 import {
   ORGANIZATION_ADMIN_ROLES,
   STAFF_ROLES,
@@ -322,6 +323,8 @@ export const updateUserRole = mutation({
 
     await ctx.db.patch(membership._id, { role: args.role });
     await ctx.db.patch(args.userId, { role: args.role });
+    if (!OPERATOR_ROLES.includes(args.role))
+      await releaseOperator(ctx, args.userId, membership.organizationId, Date.now());
     if (membership.role !== args.role)
       await audit(ctx, {
         actor: userActor(currentUser),
@@ -707,6 +710,11 @@ export const deleteUser = mutation({
       .query("machine_user_permissions")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
       .collect();
+    // ... and console operator rows, with the hash of their code (ANH-152)
+    const operatorRows = await ctx.db
+      .query("machine_operators")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
     // ... and the alerts the account received (ANH-90)
     const alerts = await ctx.db
       .query("notifications")
@@ -717,6 +725,7 @@ export const deleteUser = mutation({
       ...managerRelations,
       ...machineRelations,
       ...launchRights,
+      ...operatorRows,
       ...alerts,
     ]) {
       if (removable(row.organizationId)) {

@@ -14,6 +14,7 @@ import {
 } from "./lib/auth";
 import { normalizedEmail } from "./lib/patientInvitation";
 import { audit, SYSTEM_ACTOR } from "./lib/audit";
+import { OPERATOR_ROLES, releaseOperator } from "./lib/consoleAccess";
 import {
   clerkEventValidator,
   parseClerkEvent,
@@ -86,6 +87,7 @@ export const applyEvent = internalMutation({
           .collect();
         for (const row of memberships) {
           await ctx.db.patch(row._id, { active: false });
+          await releaseOperator(ctx, user._id, row.organizationId, event.occurredAt);
           if (row.active) {
             await audit(ctx, {
               actor: SYSTEM_ACTOR,
@@ -132,8 +134,10 @@ export const applyEvent = internalMutation({
               q.eq("organizationId", organization._id),
             )
             .collect();
-          for (const row of memberships)
+          for (const row of memberships) {
             await ctx.db.patch(row._id, { active: false });
+            await releaseOperator(ctx, row.userId, organization._id, event.occurredAt);
+          }
           await audit(ctx, {
             actor: SYSTEM_ACTOR,
             source: "webhook",
@@ -262,6 +266,8 @@ export const applyEvent = internalMutation({
           event.deleted)
       ) {
         await ctx.db.patch(row._id, values);
+        if (!values.active || !OPERATOR_ROLES.includes(values.role))
+          await releaseOperator(ctx, user._id, row.organizationId, event.occurredAt);
         if (!row.active && values.active) {
           await audit(ctx, {
             actor: SYSTEM_ACTOR,

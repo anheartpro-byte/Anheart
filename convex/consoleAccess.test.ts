@@ -10,7 +10,7 @@
  */
 import { scryptSync } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import { CATALOG_SIGNING_KEY_ENV } from "./lib/programmes";
@@ -22,7 +22,7 @@ import {
   operatorListPayload,
   tokenSha256,
 } from "./lib/consoleAccess";
-import { as, modules, NOW, seedWorld, type World } from "./test.setup";
+import { as, modules, NOW, ORG_A_CLERK_ORG, seedWorld, type World } from "./test.setup";
 import machineApi from "../contracts/machine-api.json";
 
 afterEach(() => {
@@ -288,6 +288,94 @@ describe("ANH-152 EX-1 enabling and disabling an operator", () => {
       expect.objectContaining({ machineId: w.machine, codeSet: true }),
     ]);
     expect(JSON.stringify(mine)).not.toContain("scrypt");
+  });
+});
+
+describe("ANH-152 an operator who leaves the operator roles", () => {
+  /** What Clerk says of the manager's membership of centre A, at `at`. */
+  const membership = (
+    w: World,
+    at: number,
+    change: { deleted: boolean; role: "admin" | "gestionnaire" | "user"; membershipId: string },
+  ) =>
+    w.t.mutation(internal.clerkWebhook.applyEvent, {
+      eventId: `evt_${at}`,
+      event: {
+        kind: "membership",
+        deleted: change.deleted,
+        organization: {
+          id: ORG_A_CLERK_ORG,
+          name: "Centre A",
+          slug: "centre-a",
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+        occurredAt: at,
+        updatedAt: at,
+        membershipId: change.membershipId,
+        userId: "manager",
+        firstName: "manager",
+        lastName: "Synthetic",
+        email: "manager@example.invalid",
+        role: change.role,
+      },
+    });
+
+  async function operatorOnTheList(w: World) {
+    const key = await machineKey(w);
+    vi.stubEnv(CATALOG_SIGNING_KEY_ENV, (await keyPair()).privateBase64);
+    await enable(w, w.manager);
+    await as(w.t, "manager").action(api.consoleCodes.setMyOperatorCode, { code: aCode() });
+    const listed = async () =>
+      (JSON.parse((await fetchList(w, key)).payload ?? "") as Payload).operators.map((o) => o.userId);
+    expect(await listed()).toEqual([w.manager]);
+    return listed;
+  }
+
+  it("is disabled with their code cleared, and re-admitted needs a new activation and a new code", async () => {
+    const w = await seedWorld(modules);
+    const listed = await operatorOnTheList(w);
+    await membership(w, NOW + 1, { deleted: true, role: "gestionnaire", membershipId: "orgmem_1" });
+    expect(await listed()).toEqual([]);
+    const [left] = await rowsOf(w, w.manager);
+    expect(left.disabledAt).toBe(NOW + 1);
+    expect(left.operatorCode).toBeUndefined();
+    expect(left.codeSetAt).toBeUndefined();
+    // Re-admitted months later: not an operator again by themselves.
+    await membership(w, NOW + 2, { deleted: false, role: "gestionnaire", membershipId: "orgmem_2" });
+    expect(await listed()).toEqual([]);
+    // Enabled again: still no code until they set a new one.
+    await enable(w, w.manager);
+    expect(await listed()).toEqual([]);
+    await as(w.t, "manager").action(api.consoleCodes.setMyOperatorCode, { code: aCode() });
+    expect(await listed()).toEqual([w.manager]);
+  });
+
+  it("is disabled when their role is no longer one of an operator, and when their account goes", async () => {
+    const w = await seedWorld(modules);
+    const listed = await operatorOnTheList(w);
+    await membership(w, NOW + 1, { deleted: false, role: "user", membershipId: "orgmem_1" });
+    expect(await listed()).toEqual([]);
+    await membership(w, NOW + 2, { deleted: false, role: "gestionnaire", membershipId: "orgmem_1" });
+    expect(await listed()).toEqual([]);
+    expect((await rowsOf(w, w.manager))[0].operatorCode).toBeUndefined();
+
+    const again = await seedWorld(modules);
+    await operatorOnTheList(again);
+    await again.t.mutation(internal.clerkWebhook.applyEvent, {
+      eventId: "evt_user_deleted",
+      event: { kind: "userDeleted", userId: "manager", occurredAt: NOW + 1, updatedAt: NOW + 1 },
+    });
+    const [gone] = await rowsOf(again, again.manager);
+    expect(gone.disabledAt).toBe(NOW + 1);
+    expect(gone.operatorCode).toBeUndefined();
+  });
+
+  it("goes with the account an admin deletes, the hash of their code too", async () => {
+    const w = await seedWorld(modules);
+    await operatorOnTheList(w);
+    await as(w.t, "orgAdmin").mutation(api.users.deleteUser, { userId: w.manager });
+    expect(await rowsOf(w, w.manager)).toEqual([]);
   });
 });
 
