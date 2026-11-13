@@ -5,6 +5,8 @@ import gzip
 import hashlib
 import json
 import os
+import tracemalloc
+import zlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,6 +32,7 @@ from simulation.tests.test_record_console_parity import console_record
 from simulation.tests.test_replay_modbus import console_native
 from src.record import writer as shared_writer
 from src.record.codec import JSON, mapping
+from src.record.ecg import MAX_RAW_BLOCK_BYTES, Header, RawBlock, encode_block
 from src.record.reader import Recording, read
 from src.record.writer import MANIFEST
 from src.result import Err, Ok
@@ -568,6 +571,91 @@ def test_a_failed_publication_leaves_no_folder_the_import_made(
     monkeypatch.setattr(importer, "_publish", refused)
     result = import_record(source, "opaque", shelf, config=config)
     assert result == Err("the import could not read or write its files")
+    assert not above.exists()
+
+
+def _largest_zero_block(seq: int) -> bytes:
+    """A raw block at its bound, all zeros: a few kilobytes on disk, a megabyte inside."""
+    small = encode_block(
+        RawBlock(Header(seq=seq, t_first=float(seq), n_samples=1, channels=("ECG",)), ((0,),))
+    )
+    prefix = zlib.decompress(small, wbits=31).split(b"\n", 1)[0]
+    samples = MAX_RAW_BLOCK_BYTES // 2
+    assert prefix.count(b'"n_samples":1,') == 1
+    prefix = prefix.replace(b'"n_samples":1,', b'"n_samples":%d,' % samples)
+    return gzip.compress(prefix + b"\n" + b"\0" * MAX_RAW_BLOCK_BYTES, mtime=0)
+
+
+def test_an_import_refuses_more_ecg_than_the_longest_record_before_reading_it(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path
+) -> None:
+    """The reader keeps every decoded block: a hundred of the largest blocks, a few
+    kilobytes each compressed, took gigabytes. Their sizes are summed from their gzip
+    trailers first, and the source is refused without one being decoded."""
+    source, config = sources["programme"]
+    hostile = copy(source, tmp_path / "hostile")
+    raw = hostile / "ecg_raw"
+    start = len(tuple(raw.glob("*.bin.gz")))
+    for index in range(100):
+        (raw / f"{start + index:06d}.bin.gz").write_bytes(_largest_zero_block(start + index))
+    reseal(hostile)
+    archive = tmp_path / "hostile.tar.gz"
+    pack(hostile, archive)
+    assert archive.stat().st_size < 1024 * 1024
+    tracemalloc.start()
+    try:
+        result = import_record(archive, "opaque", tmp_path / "library", config=config)
+        _now, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result == Err("the source record holds more ECG than the longest record")
+    assert peak < 64 * 1024 * 1024, f"held {peak} bytes"
+    assert not (tmp_path / "library").exists()
+
+
+def test_an_import_refuses_more_ecg_blocks_than_the_longest_record(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, config = sources["programme"]
+    blocks = len(tuple((source / "ecg_raw").glob("*.bin.gz")))
+    assert blocks > 1
+    monkeypatch.setattr(importer, "MAX_ECG_BLOCKS", blocks - 1)
+    result = import_record(source, "opaque", tmp_path / "library", config=config)
+    assert result == Err("the source record holds more ECG blocks than the longest record")
+
+
+def test_a_block_too_short_to_say_its_size_counts_for_nothing_before_the_reader_refuses_it(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path
+) -> None:
+    source, config = sources["programme"]
+    broken = copy(source, tmp_path / "broken")
+    (broken / "ecg_raw" / "999999.bin.gz").write_bytes(b"gz")
+    reseal(broken)
+    result = import_record(broken, "opaque", tmp_path / "library", config=config)
+    assert result == Err("the source record cannot be read")
+
+
+def test_a_library_folder_that_cannot_be_made_leaves_no_folder_the_import_made(
+    sources: dict[str, tuple[Path, Path]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The making of the library folder fails half way: the folders it made are taken away."""
+    source, config = sources["programme"]
+    above = tmp_path / "new"
+    shelf = above / "library"
+    made = Path.mkdir
+
+    def half_way(
+        path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+    ) -> None:
+        if path == shelf:
+            made(above)
+            raise PermissionError(13, "not allowed here")
+        made(path, mode, parents, exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", half_way)
+    result = import_record(source, "opaque", shelf, config=config)
+    assert result == Err("the import could not read or write its files")
+    monkeypatch.undo()
     assert not above.exists()
 
 

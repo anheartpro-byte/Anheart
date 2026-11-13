@@ -1052,15 +1052,24 @@ compteur borne les octets réellement lus du flux décompressé à 512 Mio plus
 40 930 240 octets (`MAX_ARCHIVE_HEADER_BYTES` : un en-tête de 512 octets et
 au plus 511 octets de padding par membre, plus un bloc tar de 10 240 octets).
 Les extensions PAX et GNU longues, invisibles dans l'itérateur public,
-partagent ce plafond d'octets, sans compter comme membres. Aucune surcharge
-de `TarInfo` ou `TarFile` ne porte ces bornes. Une sous-classe de `TarInfo`
-en ajoute une : une extension annoncée au-delà de 64 Kio
+partagent ce plafond d'octets, sans compter comme membres. Une sous-classe de
+`TarInfo` en ajoute : une extension annoncée au-delà de 64 Kio
 (`MAX_EXTENSION_BYTES`) est refusée avant que son contenu soit lu, `tarfile`
-le gardant entier en mémoire. Une chaîne d'extensions trop longue pour être
-lue (`tarfile` les lit l'une après l'autre par récursion) et un fragment de
-moins de 512 octets après le dernier membre, sans bloc de fin, sont refusés
-aussi. Les tailles négatives, tailles non nulles hors fichiers ordinaires,
-en-têtes invalides et erreurs de décompression donnent un refus nommé. Il retire ensuite sa copie
+le gardant entier en mémoire ; un en-tête PAX global, que `tarfile` recopie
+dans chaque membre suivant, et toute forme creuse (membre GNU ancien, clés
+`GNU.sparse.` d'un en-tête PAX et leurs tables, lues entières et converties
+sans contrôle) sont refusés avant que `tarfile` n'en lise rien. Les membres
+déjà extraits ne restent pas en mémoire. Une chaîne d'extensions trop longue
+pour être lue (`tarfile` les lit l'une après l'autre par récursion) et un
+fragment de moins de 512 octets après le dernier membre, sans bloc de fin,
+sont refusés aussi. Les tailles négatives, tailles non nulles hors fichiers
+ordinaires, en-têtes invalides, erreurs de décompression, et toute erreur de
+valeur ou d'index que `tarfile` lève sur un en-tête donnent un refus nommé,
+jamais une trace d'exception. L'import refuse, avant que le lecteur ne
+décode et ne garde les blocs ECG, plus de 39 000 blocs ou plus d'octets
+décompressés (la taille que chaque bloc gzip annonce) que n'en tient la séance
+la plus longue, deux heures de programme et dix minutes, six voies à 1000 Hz
+(`MAX_ECG_BYTES`, environ 97 Mio). Il retire ensuite sa copie
 temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du

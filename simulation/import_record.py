@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Final
 
 from simulation.import_privacy import (
     anonymous_events,
@@ -35,9 +36,12 @@ from simulation.replay_report import ReplayReport
 from src.clock import ManualClock
 from src.record.codec import JSON, Privacy, document, encode
 from src.record.containment import resolve_under
+from src.record.ecg import SAMPLE_RATE
+from src.record.journal import RAW_BLOCKS_PER_SECOND
 from src.record.reader import Recording, read
 from src.record.writer import EVENT, MANIFEST, Writer
 from src.result import Err, Ok, Result
+from src.sensors.base import SensorKind
 from src.units import UnixMillis
 
 
@@ -103,6 +107,40 @@ def _publish(files: tuple[tuple[Path, Path], ...]) -> None:
         raise
 
 
+LONGEST_RECORD_S: Final[int] = 2 * 3600 + 10 * 60
+"""The longest record an import reads: a programme of two hours, the longest the deposit
+plans for (``docs/enregistrement.md``, its 36 000 raw blocks), and ten minutes for the
+eight seconds before the start, the descent and the monitored recovery."""
+
+MAX_ECG_BLOCKS: Final[int] = RAW_BLOCKS_PER_SECOND * LONGEST_RECORD_S
+"""39 000 raw blocks: one per acquisition batch, five a second."""
+
+MAX_ECG_BYTES: Final[int] = LONGEST_RECORD_S * (SAMPLE_RATE * 2 * len(SensorKind) + 1024)
+"""What those blocks hold decompressed: every sample of every channel at 1000 Hz, two
+bytes each, and a kibibyte a second for the header lines (a few hundred bytes a block).
+
+The reader keeps every decoded block in memory, so this is also what bounds the memory
+an import may take: that of a real record of this length with all six channels, and no
+more, however small the archive is compressed."""
+
+
+GZIP_SIZE_BYTES: Final[int] = 4
+"""The trailer field of a gzip member that gives its decompressed size."""
+
+
+def _inflated_bytes(block: Path) -> int:
+    """The size a gzip block says it holds once decompressed (its last four bytes).
+
+    A block that lies about it fails its own check when the reader decompresses it,
+    within a block's bound (``inflate``): a block that is read holds what it says.
+    """
+    with block.open("rb") as content:
+        if content.seek(0, 2) < GZIP_SIZE_BYTES:
+            return 0
+        content.seek(-GZIP_SIZE_BYTES, 2)
+        return int.from_bytes(content.read(GZIP_SIZE_BYTES), "little")
+
+
 def _load_source(source: Path) -> Result[Recording, str]:  # noqa: PLR0911  # one return per refusal
     members = tuple(source.rglob("*"))
     if any(path.is_symlink() for path in members):
@@ -126,6 +164,12 @@ def _load_source(source: Path) -> Result[Recording, str]:  # noqa: PLR0911  # on
         for path in members
     ):
         return Err("the source record contains an entry outside schema 2")
+    # Before the reader decodes and keeps them all: no more ECG than the longest record.
+    blocks = tuple(source.glob("ecg_raw/*.bin.gz"))
+    if len(blocks) > MAX_ECG_BLOCKS:
+        return Err("the source record holds more ECG blocks than the longest record")
+    if sum(_inflated_bytes(block) for block in blocks) > MAX_ECG_BYTES:
+        return Err("the source record holds more ECG than the longest record")
     loaded = read(source)
     if isinstance(loaded, Err):
         return Err("the source record cannot be read")
@@ -221,8 +265,8 @@ def _publish_into(library: Path, files: tuple[tuple[Path, Path], ...]) -> None:
     while not folder.exists():
         created.append(folder)
         folder = folder.parent
-    library.mkdir(parents=True, exist_ok=True)
     try:
+        library.mkdir(parents=True, exist_ok=True)
         _publish(files)
     except OSError:
         for made in created:
