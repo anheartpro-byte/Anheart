@@ -11,6 +11,7 @@ import {
   ANHEART_ORGANIZATION_DELETED_IN_CLERK,
   ANHEART_ORGANIZATION_DUPLICATED,
   attachExistingRowsToAnheart,
+  DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT,
   duplicateHoldsData,
   repairDuplicatedAnheartOrganization,
   repairNotConfirmed,
@@ -814,6 +815,31 @@ describe("ANH-225 EX-1 repair: two Anheart organisations", () => {
       expect(await mirror(w)).toEqual(before);
     },
   );
+
+  it("refuses, and changes nothing, when one account holds two memberships of the webhook's row", async () => {
+    const { w, duplicate } = await duplicatedWorld();
+    await w.t.run(async (ctx) => {
+      const held = await ctx.db
+        .query("memberships")
+        .withIndex("by_organization", (q) => q.eq("organizationId", duplicate))
+        .first();
+      if (held === null) throw new Error("The webhook wrote no membership");
+      await ctx.db.insert("memberships", {
+        userId: held.userId,
+        organizationId: duplicate,
+        role: "user",
+        active: false,
+      });
+    });
+    const before = await mirror(w);
+
+    for (const args of [{}, CONFIRMED]) {
+      await expect(repair(w, args)).rejects.toThrow(
+        DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT,
+      );
+    }
+    expect(await mirror(w)).toEqual(before);
+  });
 
   // ANH-225 review: ANHEART_ORG_ID copied from a client organisation the
   // webhook already mirrors. Nothing in the database tells it from Anheart's:

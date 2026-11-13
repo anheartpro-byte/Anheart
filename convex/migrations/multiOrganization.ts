@@ -21,6 +21,9 @@
  *
  *     npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{}'
  *     npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{"apply": true, "expectedName": "..."}'
+ *
+ * The name sits in single quotes for the shell: an apostrophe in it is
+ * written `'\''` there (docs/convex.md, Sortir de deux organisations Anheart).
  */
 import { ConvexError, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "../_generated/server";
@@ -107,6 +110,17 @@ export function duplicateHoldsData(table: string): string {
     `automatically (docs/convex.md, Sortir de deux organisations Anheart).`
   );
 }
+
+/**
+ * One account holds two memberships of the webhook's row. Clerk gives an
+ * account one membership per organisation, so the repair does not know which
+ * one to keep, and moving both would give the account two memberships of the
+ * default organisation.
+ */
+export const DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT =
+  "An account holds two memberships of the row the Clerk webhook created for " +
+  "the Anheart organisation. Nothing was changed: keep one of them by hand " +
+  "(docs/convex.md, Sortir de deux organisations Anheart).";
 
 /**
  * Tables whose rows belong to an organisation and would be lost with it. The
@@ -315,6 +329,10 @@ async function planRepair(ctx: MutationCtx) {
     .query("memberships")
     .withIndex("by_organization", (q) => q.eq("organizationId", duplicate._id))
     .collect();
+  const members = new Set(memberships.map((membership) => membership.userId));
+  if (members.size !== memberships.length) {
+    throw new ConvexError(DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT);
+  }
   // A member the default organisation already has keeps that membership.
   const merges: Array<{
     membership: Doc<"memberships">;

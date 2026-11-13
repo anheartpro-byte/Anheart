@@ -4124,6 +4124,11 @@ dans `absorbs.name` :
 npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{"apply": true, "expectedName": "<absorbs.name>"}'
 ```
 
+Le nom est écrit en JSON, entre guillemets, dans une chaîne que le shell lit
+entre apostrophes : une apostrophe du nom s'y écrit `'\''` (« L'Atelier »
+devient `"expectedName": "L'\''Atelier"`), un guillemet `\"` et une barre
+oblique inverse `\\`.
+
 Sans `expectedName`, ou avec un autre nom, elle refuse sans rien écrire.
 Sinon, en une seule transaction :
 
@@ -4157,7 +4162,11 @@ La description comme l'application refusent, sans rien écrire :
   gestionnaire et une machine ou un patient, invitation de patient. Le message
   nomme la table. Quelqu'un a alors travaillé dans cette organisation, et
   rattacher ou supprimer ces lignes demande de les examiner une à une : aucune
-  procédure n'est écrite pour ce cas, qui revient au responsable produit.
+  procédure n'est écrite pour ce cas, qui revient au responsable produit ;
+- si un même compte a deux appartenances dans la ligne du webhook (Clerk n'en
+  donne qu'une par organisation) : les déplacer toutes deux lui en laisserait
+  deux dans l'organisation par défaut. N'en garder qu'une, à la main, puis
+  relancer la description.
 
 Relancée après une réparation, ou quand l'ordre de l'amorçage a été suivi,
 elle répond `status: "nothing_to_repair"` et ne change rien. Comme la
