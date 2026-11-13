@@ -559,7 +559,8 @@ describe("ANH-203 training panel: what it says of a session", () => {
     const screen = panel();
 
     expect(screen.text()).toContain(t.completed);
-    expect(screen.text()).toContain("operator_stop");
+    expect(screen.text()).toContain(fr.sessionReport.endReasons.operator_stop);
+    expect(screen.text()).not.toContain("operator_stop");
     expect(screen.text()).toContain(`5:00 ${t.elapsed}`);
     expect(screen.text()).not.toContain(t.failed);
   });
@@ -591,6 +592,23 @@ describe("ANH-203 training panel: what it says of a session", () => {
     expect(screen.text()).toContain(t.failed);
     expect(screen.text().includes("drive_fault")).toBe(hasReason);
     expect(screen.text()).not.toContain(t.completed);
+  });
+
+  it("a failed session says the machine's end code in French and keeps its words", () => {
+    session({
+      status: "failed",
+      canStop: false,
+      endedAt: NOW - 1_000,
+      endReason: "safety_verdict: hr_critical (QUICK_STOP): synthetic",
+    });
+    telemetry([]);
+
+    const screen = panel();
+
+    expect(screen.text()).toContain(
+      `${fr.sessionReport.endReasons.safety_verdict} : hr_critical (QUICK_STOP): synthetic`,
+    );
+    expect(screen.text()).not.toContain("safety_verdict:");
   });
 
   it.each([

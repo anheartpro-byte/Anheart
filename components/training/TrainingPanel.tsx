@@ -276,8 +276,8 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
             <span className="font-semibold">
               {t("training.session.completed")}
             </span>
-            {training.endReason && (
-              <span className="block text-xs mt-1">{training.endReason}</span>
+            {endReason && (
+              <span className="block text-xs mt-1">{endReason}</span>
             )}
           </Banner>
         )}
