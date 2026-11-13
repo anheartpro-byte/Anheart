@@ -43,7 +43,7 @@ from src.result import Ok, Result
 from src.units import Monotonic, Seconds, UnixMillis
 from src.web.app import create_app
 from src.web.schemas import AccessRow
-from tests.access_support import CODE, OPERATOR_ID, OPERATOR_NAME, held_list, scrypt_code
+from tests.access_support import CODE, OPERATOR_ID, OPERATOR_NAME, held_list, signed_code
 from tests.fake_dashboard import FakeDashboard
 
 ENV: Final[Mapping[str, str]] = {
@@ -70,7 +70,7 @@ class SigningDashboard(FakeDashboard):
     async def get(self, path: str, params: Mapping[str, str] | None = None) -> Reply:
         if path != OPERATORS_PATH:
             return await super().get(path, params)
-        code = scrypt_code(CODE)
+        code = signed_code(CODE)
         entries = [
             {
                 "userId": user_id,

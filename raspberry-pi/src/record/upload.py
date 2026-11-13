@@ -50,7 +50,6 @@ from pathlib import Path
 from typing import Final, Literal, cast
 
 from src.record import commands
-from src.record.codec import IDENTIFIER
 from src.record.commands import INPUT_KINDS
 from src.record.cursor import (
     Baseline,
@@ -99,7 +98,9 @@ _NAMED: Final[re.Pattern[str]] = re.compile(r"\d{4}-\d{2}-\d{2}T\d{6}Z_([A-Za-z0
 """A record directory as the writer names it: the stamp of its start, then its identifier."""
 
 _EVENT_KIND: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,63}")
-_ACTOR_MAX: Final[int] = 64
+_ACTOR: Final[re.Pattern[str]] = re.compile(r"(?:device:)?[A-Za-z0-9_-]{1,64}")
+"""An actor as the dashboard takes it (``EVENT_ACTOR``, contract 1.13): an identifier,
+or a tablet's ``device:<id>`` for an E-STOP or a STOP with nobody signed in."""
 
 _T: Final[int] = TICK_COLUMNS.index("t")
 _PHASE: Final[int] = TICK_COLUMNS.index("phase")
@@ -480,8 +481,7 @@ def _event(raw: bytes, seq: int, start_ms: int) -> Wire | _Omitted | None:
         or _EVENT_KIND.fullmatch(kind) is None
         or not isinstance(detail, str)
         or not isinstance(actor, str)
-        or IDENTIFIER.fullmatch(actor) is None
-        or len(actor) > _ACTOR_MAX
+        or _ACTOR.fullmatch(actor) is None
     ):
         return None
     if t < 0 or (kind in INPUT_KINDS and detail == commands.encode(commands.AttendantPing())):

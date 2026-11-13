@@ -1,14 +1,16 @@
 """ANH-152: the signed operator list, the sign-in, the sessions and the lockout.
 
 Every key here is made at run time and forgotten with the test: no private key
-is written anywhere. The codes are hashed with cheap scrypt parameters
-(:mod:`tests.access_support`); one test checks the real ones of the contract.
+is written anywhere. A list read from a signed text carries the contract's scrypt
+parameters, the only ones taken; a list held in memory carries cheap ones
+(:mod:`tests.access_support`), so that a sign-in costs nothing.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import hashlib
 import json
 import threading
@@ -23,15 +25,23 @@ from pydantic import TypeAdapter
 
 from src.clock import ManualClock
 from src.console_access import (
+    CODE_CHANGED,
+    CONSOLE_LOCKOUT_FAILURES,
+    DEVICE_LOCKOUT_FAILURES,
+    HASH_BYTES,
     LIST_KIND,
     LOCAL_DEVICE,
     LOCKOUT_FAILURES,
     LOCKOUT_PERIOD,
     LOOPBACK_DEVICE,
     MAX_PAYLOAD_BYTES,
-    MAX_SCRYPT_MEMORY,
+    NO_FAILURES,
     OPERATORS_PATH,
     OPERATORS_PERIOD,
+    SALT_BYTES,
+    SCRYPT_N,
+    SCRYPT_P,
+    SCRYPT_R,
     SESSION_DROPPED,
     SESSION_IDLE,
     SESSION_LIFETIME,
@@ -42,6 +52,7 @@ from src.console_access import (
     NoList,
     ScryptCode,
     StoredList,
+    StoredLockout,
     UnknownOperator,
     WrongCode,
     code_matches,
@@ -55,7 +66,15 @@ from src.console_access import (
 )
 from src.result import Err, Ok
 from src.units import Seconds
-from tests.access_support import CODE, OPERATOR_ID, OPERATOR_NAME, held_list, listed, tablet
+from tests.access_support import (
+    CODE,
+    OPERATOR_ID,
+    OPERATOR_NAME,
+    held_list,
+    listed,
+    scrypt_code,
+    tablet,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -64,6 +83,8 @@ class _Code(TypedDict):
     n: int
     r: int
     p: int
+    salt_bytes: int
+    hash_bytes: int
 
 
 class _Section(TypedDict):
@@ -88,10 +109,24 @@ def b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
-def code_document(code: str = CODE, *, n: int = 16, r: int = 1, p: int = 1) -> dict[str, object]:
+@functools.cache
+def _hashed(code: str) -> bytes:
+    """``code`` hashed with the contract's parameters: once per code, as they are slow."""
     salt = b"sel-de-test-1234"
-    digest = hashlib.scrypt(code.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
-    return {"algorithm": "scrypt", "n": n, "r": r, "p": p, "salt": b64(salt), "hash": b64(digest)}
+    return hashlib.scrypt(
+        code.encode(), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, maxmem=64 * 2**20, dklen=32
+    )
+
+
+def code_document(code: str = CODE) -> dict[str, object]:
+    return {
+        "algorithm": "scrypt",
+        "n": SCRYPT_N,
+        "r": SCRYPT_R,
+        "p": SCRYPT_P,
+        "salt": b64(b"sel-de-test-1234"),
+        "hash": b64(_hashed(code)),
+    }
 
 
 def list_document(**overrides: object) -> dict[str, object]:
@@ -143,7 +178,8 @@ def test_constants_are_the_contract_s() -> None:
     assert section["max_payload_bytes"] == MAX_PAYLOAD_BYTES
     assert section["device_actor_prefix"] == device_actor("")
     code = section["code"]
-    assert 128 * code["r"] * (code["n"] + 2 + code["p"]) <= MAX_SCRYPT_MEMORY
+    assert (code["n"], code["r"], code["p"]) == (SCRYPT_N, SCRYPT_R, SCRYPT_P)
+    assert (code["salt_bytes"], code["hash_bytes"]) == (SALT_BYTES, HASH_BYTES)
 
 
 def test_a_code_hashed_with_the_contract_s_parameters_is_checked() -> None:
@@ -158,7 +194,7 @@ def test_a_code_hashed_with_the_contract_s_parameters_is_checked() -> None:
 
 
 def test_reads_a_well_formed_list() -> None:
-    read = read_list(text(list_document()))
+    read = read_list(text(list_document()), None)
     assert isinstance(read, Ok)
     held = read.value
     assert (held.machine_id, held.issued_at) == ("machine-1", 1_790_000_000_000)
@@ -166,6 +202,13 @@ def test_reads_a_well_formed_list() -> None:
     assert held.operator(OPERATOR_ID) is held.operators[0]
     assert held.operator("someone-else") is None
     assert held.devices[0].token_sha256 == bytes.fromhex("ab" * 32)
+
+
+def test_a_list_of_another_machine_is_refused_when_the_console_knows_its_own() -> None:
+    payload = text(list_document())
+    assert isinstance(read_list(payload, "machine-1"), Ok)
+    refused = read_list(payload, "machine-2")
+    assert refused == Err("liste d'une autre machine ('machine-1', cette console est 'machine-2')")
 
 
 @pytest.mark.parametrize(
@@ -240,7 +283,7 @@ def test_reads_a_well_formed_list() -> None:
     ],
 )
 def test_refuses_a_list_that_is_not_one_whole(why: str, payload: str) -> None:
-    assert isinstance(read_list(payload), Err), why
+    assert isinstance(read_list(payload, None), Err), why
 
 
 @pytest.mark.parametrize(
@@ -253,21 +296,21 @@ def test_refuses_a_list_that_is_not_one_whole(why: str, payload: str) -> None:
         ("salt not base64", {"salt": "*"}),
         ("salt not ASCII", {"salt": "é"}),
         ("hash missing", {"hash": None}),
-        ("n below 2", {"n": 1}),
-        ("n not a power of two", {"n": 24}),
-        ("r below 1", {"r": 0}),
-        ("p below 1", {"p": 0}),
-        ("too much memory", {"n": 2**17, "r": 8}),
+        ("another n", {"n": SCRYPT_N // 2}),
+        ("another r", {"r": 1}),
+        ("another p, hours of hashing", {"p": 1000}),
+        ("r of 1 with a large n, refused by OpenSSL", {"n": 2**16, "r": 1}),
         ("an empty salt", {"salt": ""}),
-        ("a hash too short", {"hash": b64(b"x" * 15)}),
+        ("a salt of another length", {"salt": b64(b"x" * 8)}),
+        ("a hash of another length", {"hash": b64(b"x" * 31)}),
     ],
 )
-def test_refuses_a_code_the_console_could_not_or_should_not_check(
+def test_refuses_a_code_hashed_otherwise_than_by_the_contract(
     why: str, change: Mapping[str, object]
 ) -> None:
     code = {**code_document(), **change}
     operator = {"userId": OPERATOR_ID, "name": OPERATOR_NAME, "code": code}
-    assert isinstance(read_list(text(list_document(operators=[operator]))), Err), why
+    assert isinstance(read_list(text(list_document(operators=[operator])), None), Err), why
 
 
 # =========================================================================
@@ -308,33 +351,40 @@ def stored(path: Path, answer: Mapping[str, object]) -> None:
 def test_a_stored_list_is_verified_again_at_the_start(tmp_path: Path) -> None:
     signer = Signer()
     path = tmp_path / "data" / "operators.json"
-    assert load_list(path, signer.public) == Ok(None)
+    assert load_list(path, signer.public, None) == Ok(None)
     stored(path, signer.answer(text(list_document())))
-    loaded = load_list(path, signer.public)
+    assert isinstance(load_list(path, signer.public, "machine-1"), Ok)
+    assert isinstance(load_list(path, signer.public, "machine-2"), Err)
+    loaded = load_list(path, signer.public, None)
     assert isinstance(loaded, Ok)
     assert loaded.value is not None
     assert loaded.value.operators[0].user_id == OPERATOR_ID
     # Another key: refused, nothing opens.
-    assert isinstance(load_list(path, Signer().public), Err)
+    assert isinstance(load_list(path, Signer().public, None), Err)
     # Verified but not a list.
     stored(path, signer.answer(text(list_document(kind="catalogue"))))
-    assert isinstance(load_list(path, signer.public), Err)
+    assert isinstance(load_list(path, signer.public, None), Err)
     path.write_text("{}", encoding="utf-8")
-    assert load_list(path, signer.public) == Err("liste des operateurs enregistree mal formee")
+    assert load_list(path, signer.public, None) == Err(
+        "liste des operateurs enregistree mal formee"
+    )
     path.unlink()
     path.mkdir()
-    refused = load_list(path, signer.public)
+    refused = load_list(path, signer.public, None)
     assert isinstance(refused, Err)
     assert refused.error.startswith("liste des operateurs illisible")
 
 
 def test_lockout_counts_are_read_back_or_counted_again(tmp_path: Path) -> None:
     path = tmp_path / "operator_lockout.json"
-    assert load_failures(path) == {}
-    path.write_text('{"schema_version": 1, "failures": {"a": 3}}', encoding="utf-8")
-    assert load_failures(path) == {"a": 3}
+    assert load_failures(path) == NO_FAILURES
+    path.write_text(
+        '{"schema_version": 1, "failures": {"a": 3}, "devices": {"t": 4}, "console": 7}',
+        encoding="utf-8",
+    )
+    assert load_failures(path) == StoredLockout(failures={"a": 3}, devices={"t": 4}, console=7)
     path.write_text("not json", encoding="utf-8")
-    assert load_failures(path) == {}
+    assert load_failures(path) == NO_FAILURES
 
 
 def test_a_file_the_disk_refuses_is_said_and_leaves_no_temporary(tmp_path: Path) -> None:
@@ -355,7 +405,7 @@ def access_of(
     *,
     held: bool = True,
     lockout: Path | None = None,
-    failures: Mapping[str, int] | None = None,
+    failures: StoredLockout | None = None,
 ) -> tuple[ConsoleAccess, list[AccessNote]]:
     notes: list[AccessNote] = []
     access = ConsoleAccess(
@@ -401,7 +451,11 @@ async def test_five_wrong_codes_lock_the_operator_out_and_the_lock_ends(tmp_path
     assert await access.sign_in(OPERATOR_ID, "000000", "tablette-1") == Err(
         Locked(retry_after=LOCKOUT_PERIOD)
     )
-    assert load_failures(path) == {OPERATOR_ID: LOCKOUT_FAILURES}
+    assert load_failures(path) == StoredLockout(
+        failures={OPERATOR_ID: LOCKOUT_FAILURES},
+        devices={"tablette-1": LOCKOUT_FAILURES},
+        console=LOCKOUT_FAILURES,
+    )
     assert notes[-1].actor == device_actor("tablette-1")
     assert notes[-1].warning
     # Locked: even the right code is not checked.
@@ -411,18 +465,125 @@ async def test_five_wrong_codes_lock_the_operator_out_and_the_lock_ends(tmp_path
     assert access.locked(OPERATOR_ID) == Seconds(LOCKOUT_PERIOD - 60.0)
     clock.advance(LOCKOUT_PERIOD)
     assert access.locked(OPERATOR_ID) is None
-    # The period over: a wrong code counts from one again, the right one clears all.
+    # The period over: a wrong code counts from one again, the right one clears the
+    # operator's count, on the disk too.
     assert await access.sign_in(OPERATOR_ID, "000000", LOCAL_DEVICE) == Err(
         WrongCode(LOCKOUT_FAILURES - 1)
     )
     assert isinstance(await access.sign_in(OPERATOR_ID, CODE, LOCAL_DEVICE), Ok)
-    assert load_failures(path) == {}
+    assert load_failures(path).failures == {}
     assert all(CODE not in note.detail and "000000" not in note.detail for note in notes)
+
+
+async def test_a_lock_that_ended_is_cleared_on_the_disk_and_a_restart_finds_none(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock()
+    path = tmp_path / "operator_lockout.json"
+    access, _ = access_of(clock, lockout=path)
+    for _ in range(LOCKOUT_FAILURES):
+        assert isinstance(await access.sign_in(OPERATOR_ID, "000000", LOCAL_DEVICE), Err)
+    clock.advance(Seconds(LOCKOUT_PERIOD + 1.0))
+    assert isinstance(await access.sign_in(OPERATOR_ID, CODE, LOCAL_DEVICE), Ok)
+    assert load_failures(path) == NO_FAILURES
+    restarted, _ = access_of(clock, lockout=path, failures=load_failures(path))
+    assert isinstance(await restarted.sign_in(OPERATOR_ID, CODE, LOCAL_DEVICE), Ok)
+
+
+async def test_a_lock_that_ended_is_cleared_on_the_disk_before_a_wrong_code(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock()
+    path = tmp_path / "operator_lockout.json"
+    access, _ = access_of(clock, lockout=path, failures=load_failures(path))
+    for _ in range(LOCKOUT_FAILURES):
+        assert isinstance(await access.sign_in(OPERATOR_ID, "000000", LOCAL_DEVICE), Err)
+    clock.advance(Seconds(LOCKOUT_PERIOD + 1.0))
+    assert access.locked(OPERATOR_ID) is None
+    assert await access.sign_in(OPERATOR_ID, "000000", LOCAL_DEVICE) == Err(
+        WrongCode(LOCKOUT_FAILURES - 1)
+    )
+    assert load_failures(path) == StoredLockout(
+        failures={OPERATOR_ID: 1}, devices={LOCAL_DEVICE: 1}, console=1
+    )
+
+
+async def test_one_device_trying_codes_across_operators_is_locked_out() -> None:
+    clock = ManualClock()
+    operators = tuple(listed(user_id=f"op-{i}", code=f"48291{i}") for i in range(4))
+    notes: list[AccessNote] = []
+    access = ConsoleAccess(
+        clock=clock, held=held_list(operators=operators), lockout_path=None, note=notes.append
+    )
+    tried = 0
+    for operator in operators[:2]:
+        for _ in range(LOCKOUT_FAILURES):
+            assert isinstance(await access.sign_in(operator.user_id, "000001", "tablette-1"), Err)
+            tried += 1
+    assert tried == DEVICE_LOCKOUT_FAILURES
+    refused = await access.sign_in("op-2", "482912", "tablette-1")
+    assert refused == Err(Locked(retry_after=LOCKOUT_PERIOD, scope="device"))
+    assert notes[-1] == AccessNote(
+        "console: connexions depuis device:tablette-1 verrouillees 15 min apres 10 codes faux",
+        device_actor("tablette-1"),
+        True,
+    )
+    # Another device is not this one's lock.
+    assert isinstance(await access.sign_in("op-2", "482912", LOCAL_DEVICE), Ok)
+    # A whole period: the device may try again.
+    clock.advance(LOCKOUT_PERIOD)
+    assert isinstance(await access.sign_in("op-3", "482913", "tablette-1"), Ok)
+
+
+async def test_a_device_s_count_clears_after_a_period_without_a_wrong_code() -> None:
+    clock = ManualClock()
+    operators = tuple(listed(user_id=f"op-{i}", code=f"48291{i}") for i in range(3))
+    access = ConsoleAccess(clock=clock, held=held_list(operators=operators), lockout_path=None)
+    for operator in operators[:2]:
+        for _ in range(LOCKOUT_FAILURES - 1):
+            assert isinstance(await access.sign_in(operator.user_id, "000001", "tablette-1"), Err)
+    clock.advance(LOCKOUT_PERIOD)
+    remaining = LOCKOUT_FAILURES - 1
+    assert await access.sign_in("op-2", "000001", "tablette-1") == Err(WrongCode(remaining))
+
+
+async def test_the_whole_console_has_a_ceiling_of_wrong_codes(tmp_path: Path) -> None:
+    clock = ManualClock()
+    path = tmp_path / "operator_lockout.json"
+    operators = tuple(listed(user_id=f"op-{i}", code=f"48291{i}") for i in range(5))
+    devices = tuple(tablet(f"tablette-{i}", f"jeton-{i}") for i in range(4))
+    access = ConsoleAccess(
+        clock=clock,
+        held=held_list(operators=operators, devices=devices),
+        lockout_path=path,
+    )
+    tried = 0
+    for i in range(4):
+        for _ in range(LOCKOUT_FAILURES):
+            refused = await access.sign_in(f"op-{i}", "000001", f"tablette-{i}")
+            assert isinstance(refused, Err)
+            tried += 1
+    assert tried == CONSOLE_LOCKOUT_FAILURES
+    refused = await access.sign_in("op-4", "482914", LOCAL_DEVICE)
+    assert refused == Err(Locked(retry_after=LOCKOUT_PERIOD, scope="console"))
+    # A restart does not lift it.
+    restarted = ConsoleAccess(
+        clock=clock,
+        held=held_list(operators=operators, devices=devices),
+        lockout_path=path,
+        failures=load_failures(path),
+    )
+    clock.advance(Seconds(60.0))
+    refused = await restarted.sign_in("op-4", "482914", LOCAL_DEVICE)
+    assert refused == Err(Locked(retry_after=Seconds(LOCKOUT_PERIOD - 60.0), scope="console"))
 
 
 async def test_a_restart_does_not_lift_a_lock() -> None:
     clock = ManualClock()
-    access, _ = access_of(clock, failures={OPERATOR_ID: LOCKOUT_FAILURES, "other": 2})
+    found = StoredLockout(
+        failures={OPERATOR_ID: LOCKOUT_FAILURES, "other": 2}, devices={}, console=0
+    )
+    access, _ = access_of(clock, failures=found)
     assert access.locked(OPERATOR_ID) == LOCKOUT_PERIOD
     assert access.locked("other") is None
     clock.advance(Seconds(LOCKOUT_PERIOD - 1.0))
@@ -533,6 +694,16 @@ async def test_a_new_list_ends_the_sessions_it_no_longer_opens() -> None:
     assert access.session(kept, LOCAL_DEVICE, touch=False) is None
 
 
+async def test_a_new_code_ends_the_sessions_opened_with_the_old_one() -> None:
+    access, notes = access_of(ManualClock())
+    cookie = await signed_cookie(access)
+    renewed = (listed(code="739154"),)
+    access.adopt(held_list(operators=renewed, issued_at=1_790_000_000_001))
+    assert access.session(cookie, LOCAL_DEVICE, touch=False) is None
+    assert notes[-1] == AccessNote(CODE_CHANGED, OPERATOR_ID, False)
+    assert renewed[0].code == scrypt_code("739154")
+
+
 def test_a_tablet_is_known_by_its_token_only() -> None:
     access, _ = access_of(ManualClock())
     found = access.device_of("jeton-de-la-tablette")
@@ -547,8 +718,10 @@ def test_a_tablet_is_known_by_its_token_only() -> None:
     [
         (NoList(), "aucune liste d'operateurs"),
         (UnknownOperator(), "operateur inconnu"),
-        (Locked(retry_after=Seconds(30.0)), "encore 1 min"),
+        (Locked(retry_after=Seconds(30.0)), "operateur verrouille encore 1 min"),
         (Locked(retry_after=LOCKOUT_PERIOD), "encore 15 min"),
+        (Locked(retry_after=LOCKOUT_PERIOD, scope="device"), "sur cet appareil encore 15 min"),
+        (Locked(retry_after=LOCKOUT_PERIOD, scope="console"), "sur cette console encore"),
         (WrongCode(remaining=2), "2 essai(s)"),
     ],
 )

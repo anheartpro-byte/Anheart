@@ -4,13 +4,15 @@ Every action of the console takes an operator signed in on the device
 (:mod:`src.console_access`). A test that is not about the sign-in gives the
 console a list held in memory (:func:`held_list`, adopted without a signature:
 the signature is :mod:`tests.test_operator_sync`'s subject) and signs in once.
-The code is hashed with scrypt parameters far below Convex's, so that a sign-in
-costs nothing; the console takes the parameters the list carries.
+Held in memory, the code is hashed with scrypt parameters far below Convex's, so
+that a sign-in costs nothing. A list the console reads from a signed text takes
+the contract's parameters only (:func:`signed_code`).
 """
 
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 from collections.abc import AsyncGenerator
 from typing import Final, override
@@ -20,6 +22,10 @@ from fastapi import FastAPI
 
 from src.clock import Clock
 from src.console_access import (
+    HASH_BYTES,
+    SCRYPT_N,
+    SCRYPT_P,
+    SCRYPT_R,
     ConsoleAccess,
     ListedDevice,
     ListedOperator,
@@ -45,6 +51,21 @@ def scrypt_code(code: str, salt: bytes = SALT) -> ScryptCode:
     n, r, p = 16, 1, 1
     digest = hashlib.scrypt(code.encode("utf-8"), salt=salt, n=n, r=r, p=p, dklen=32)
     return ScryptCode(n=n, r=r, p=p, salt=salt, digest=digest)
+
+
+@functools.cache
+def signed_code(code: str, salt: bytes = SALT) -> ScryptCode:
+    """``code`` hashed as Convex hashes it, for a list read from a signed text. Once per code."""
+    digest = hashlib.scrypt(
+        code.encode("utf-8"),
+        salt=salt,
+        n=SCRYPT_N,
+        r=SCRYPT_R,
+        p=SCRYPT_P,
+        maxmem=64 * 1024 * 1024,
+        dklen=HASH_BYTES,
+    )
+    return ScryptCode(n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, salt=salt, digest=digest)
 
 
 def listed(

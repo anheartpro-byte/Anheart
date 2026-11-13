@@ -1964,9 +1964,9 @@ Pas à pas pour un défaut **réarmable** (constaté avec `ObF`) :
    tourne encore.
 2. Lisez la phrase du défaut et **traitez la cause** (par exemple, pour `ObF` :
    allonger la rampe de décélération, jamais la raccourcir).
-3. Assurez-vous qu'un nom figure dans un champ opérateur de la page (le reset prend le
-   premier nom trouvé : Operateur du mode manuel, de la page Seance, ou de Securite).
-   Sans nom : `an operator name is required ...`.
+3. Connectez-vous (barre latérale : votre nom, votre code, « Se connecter ») : le
+   reset est fait au nom de l'opérateur connecté. Sans connexion :
+   `connexion d'un operateur requise : seuls le STOP, l'E-STOP et les lectures sont ouverts sans connexion`.
 4. Cliquez **Reset defaut variateur**. La note dit
    `demande envoyee : fault_reset - pas encore prise par la machine`, puis
    `reset pris par la machine : le variateur ne signale plus de defaut` quand la
@@ -2204,7 +2204,7 @@ anglais). Ceux marqués ✔ ont été vus pendant la préparation de ce guide.
 | Message | Ce que ça veut dire | Quoi faire |
 |---|---|---|
 | ✔ `cochez la declaration BANC (personne a bord : NON) avant de demarrer` | case BANC non cochée | vérifier que personne n'est dans la capsule (vide ou lestée), cocher |
-| ✔ `an operator name is required: an unattributable session record is not one` | nom vide | taper votre nom (champ Operateur, ou votre nom en Securite) |
+| ✔ `connexion d'un operateur requise : seuls le STOP, l'E-STOP et les lectures sont ouverts sans connexion` | aucun opérateur connecté sur cette tablette | choisir votre nom et taper votre code dans la barre latérale, « Se connecter » |
 | ✔ `nobody has attested the emergency stop this boot: ...` | attestation pas faite depuis le démarrage | §13.1 |
 | `nobody has attested the bench declaration this boot: ...` | sous `STO_SOURCE=bridged_declared` : déclaration de banc pas faite depuis le démarrage | §13.1 |
 | ✔ `both confirmations are required, separately: ...` | une seule case cochée | cocher les deux, seulement si les deux sont vraies |

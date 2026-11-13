@@ -54,7 +54,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
-from typing import Final, assert_never
+from typing import Final, assert_never, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, params
 from fastapi.responses import FileResponse, JSONResponse
@@ -146,8 +146,6 @@ from src.web.schemas import (
     CameraRow,
     CommandRow,
     EcgRow,
-    EndBody,
-    EstopBody,
     EstopRow,
     FaultRow,
     FeedbackRow,
@@ -1090,9 +1088,7 @@ def _register_session(
         status_code=HTTPStatus.ACCEPTED,
         tags=["session"],
     )
-    async def stop_session(
-        body: EndBody, request: Request, device_id: str = Depends(device)
-    ) -> CommandRow:
+    async def stop_session(request: Request, device_id: str = Depends(device)) -> CommandRow:
         """End the running session on the commissioned ramp. 202: accepted.
 
         The ordinary stop. It is deliberately *not* the fast one: a
@@ -1101,23 +1097,25 @@ def _register_session(
         coast-down with a person inside.
 
         Never refused for want of a sign-in (ANH-152): stopping is never harder
-        than starting. Signed in, it counts as an action of that operator.
+        than starting. Signed in, it counts as an action of that operator. Nor for
+        its body: ``{"reason": ...}`` is read when it is there, and any other or
+        none is the default reason (:func:`stop_reason`).
         """
         who = signed_in(services, request, device_id, touch=True)
         operator = device_actor(device_id) if who is None else who.user_id
-        submitted = surface.submit_end(operator=operator, reason=body.reason)
+        reason = await stop_reason(request, END_REASON)
+        submitted = surface.submit_end(operator=operator, reason=reason)
         if isinstance(submitted, Ok):
             return CommandRow.of(submitted.value)
         raise _end_failure(submitted.error)
 
     @app.post("/api/session/estop", dependencies=auth, tags=["session"])
-    async def emergency_stop(
-        body: EstopBody, request: Request, device_id: str = Depends(device)
-    ) -> EstopRow:
+    async def emergency_stop(request: Request, device_id: str = Depends(device)) -> EstopRow:
         """Latch the emergency stop. 200, because it has already happened.
 
         Never refused. Not for want of a sign-in (only the device token is
-        required, ANH-152), not for a missing reason, not because no session is
+        required, ANH-152), not for its body (none, empty, not JSON: the default
+        reason, :func:`stop_reason`), not because no session is
         running, and there is no confirmation step - a stop that asks "are you
         sure?" is not an emergency stop. Attributed to the operator signed in on
         the device, else to the device (``device:<id>``); finding that out is a
@@ -1136,7 +1134,36 @@ def _register_session(
         """
         who = signed_in(services, request, device_id, touch=False)
         operator = device_actor(device_id) if who is None else who.user_id
-        return EstopRow.of(surface.submit_estop(operator=operator, reason=body.reason))
+        reason = await stop_reason(request, ESTOP_REASON)
+        return EstopRow.of(surface.submit_estop(operator=operator, reason=reason))
+
+
+END_REASON: Final[str] = "operator ended the session"
+"""The reason of a STOP whose body gives none."""
+
+ESTOP_REASON: Final[str] = "operator pressed the emergency stop"
+"""The reason of an E-STOP whose body gives none."""
+
+STOP_BODY_LIMIT: Final[int] = 4096
+"""The longest body a stop's reason is read from; a longer one is the default reason."""
+
+
+async def stop_reason(request: Request, default: str) -> str:
+    """The reason a STOP or an E-STOP body gives, else ``default``. Never raises.
+
+    A stop is never refused for its body: none, empty, too long, not JSON, not
+    an object, or a reason that is not text is the default reason. Read from
+    the raw bytes, never by FastAPI's validation, which answers 422.
+    """
+    raw = await request.body()
+    if len(raw) > STOP_BODY_LIMIT:
+        return default
+    try:
+        parsed: object = json.loads(raw)  # pyright: ignore[reportAny]  # narrowed below
+    except (ValueError, RecursionError):
+        return default
+    given = cast(Mapping[str, object], parsed).get("reason") if isinstance(parsed, dict) else None
+    return given if isinstance(given, str) and given.strip() else default
 
 
 def _register_manual(

@@ -11,9 +11,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+import src.operator_sync as operator_sync_module
 from src.clock import ManualClock
 from src.cloud_sync import TOO_LARGE_ANSWER, Document, Refused, Unreachable
 from src.console_access import (
@@ -23,18 +25,19 @@ from src.console_access import (
     OPERATORS_PERIOD,
     ConsoleAccess,
     load_list,
+    replace_file,
 )
 from src.operator_sync import OperatorSync
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
 from src.units import Seconds
-from tests.access_support import OPERATOR_ID, OPERATOR_NAME, scrypt_code
+from tests.access_support import OPERATOR_ID, OPERATOR_NAME, signed_code
 
 type Reply = Result[Document, Unreachable | Refused]
 
 
 def payload(issued_at: int = 1_790_000_000_000, *, operators: int = 1, **extra: object) -> str:
-    code = scrypt_code("482915")
+    code = signed_code("482915")
     entry = {
         "userId": OPERATOR_ID,
         "name": OPERATOR_NAME,
@@ -99,7 +102,7 @@ class Rig:
         self.dashboard.reply = Ok({"status": "signed", "payload": text, "signature": signature})
 
 
-def make_rig(path: Path) -> Rig:
+def make_rig(path: Path, machine_id: str | None = None) -> Rig:
     clock = ManualClock()
     key = Ed25519PrivateKey.generate()
     public = key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
@@ -115,6 +118,7 @@ def make_rig(path: Path) -> Rig:
         public_key=public,
         at_rest=lambda: rest[0],
         say=said.append,
+        machine_id=machine_id,
     )
     return Rig(clock, dashboard, access, sync, key, public, said, rest, path)
 
@@ -129,17 +133,24 @@ async def test_accepts_a_signed_list_writes_it_and_asks_again_after_the_period(
     assert held is not None
     assert held.operators[0].user_id == OPERATOR_ID
     assert rig.said == ["liste des operateurs recue : 1 operateur(s), 0 tablette(s)"]
-    stored = load_list(rig.path, rig.public)
+    stored = load_list(rig.path, rig.public, None)
     assert stored == Ok(held)
     await rig.step(OPERATORS_PERIOD - 1.0)
     assert rig.dashboard.asked == 1
-    # The same holders again: nothing written, nothing said.
+    # The same holders again: nothing written, nothing said, its date taken in memory.
     rig.path.unlink()
     rig.sign(payload(1_790_000_000_500))
     await rig.step(1.0)
     assert rig.dashboard.asked == 2
     assert not rig.path.exists()
     assert len(rig.said) == 1
+    newer = rig.access.held
+    assert newer is not None
+    assert newer.issued_at == 1_790_000_000_500
+    # So a list from between the two, replayed, is refused.
+    rig.sign(payload(1_790_000_000_200, operators=0))
+    await rig.step(OPERATORS_PERIOD)
+    assert rig.access.held == newer
 
 
 async def test_nothing_is_asked_away_from_rest(tmp_path: Path) -> None:
@@ -175,7 +186,7 @@ async def test_an_older_list_is_refused_once_and_the_newer_one_kept(tmp_path: Pa
     held = rig.access.held
     assert held is not None
     assert len(held.operators) == 1
-    refused = [words for words in rig.said if "plus ancienne" in words]
+    refused = [words for words in rig.said if "pas plus recente" in words]
     assert len(refused) == 1
     # A newer list with fewer operators is taken.
     rig.sign(payload(1_790_000_001_000, operators=0))
@@ -183,6 +194,56 @@ async def test_an_older_list_is_refused_once_and_the_newer_one_kept(tmp_path: Pa
     held = rig.access.held
     assert held is not None
     assert held.operators == ()
+
+
+async def test_a_list_of_the_same_instant_is_taken_only_when_it_is_the_same(
+    tmp_path: Path,
+) -> None:
+    rig = make_rig(tmp_path / "operators.json")
+    rig.sign(payload(1_790_000_000_000))
+    await rig.step()
+    held = rig.access.held
+    rig.sign(payload(1_790_000_000_000))
+    await rig.step(OPERATORS_PERIOD)
+    assert rig.access.held == held
+    rig.sign(payload(1_790_000_000_000, operators=0))
+    await rig.step(OPERATORS_PERIOD)
+    assert rig.access.held == held
+    assert any("pas plus recente" in words for words in rig.said)
+
+
+async def test_a_session_that_begins_during_the_write_keeps_the_list_in_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = make_rig(tmp_path / "operators.json")
+    real = replace_file
+
+    def begin_during(path: Path, content: bytes) -> Result[None, str]:
+        rig.rest[0] = False
+        return real(path, content)
+
+    monkeypatch.setattr(operator_sync_module, "replace_file", begin_during)
+    rig.sign(payload())
+    await rig.step()
+    # Written, not adopted: the session runs under the list it began with.
+    assert rig.access.held is None
+    assert rig.path.exists()
+    monkeypatch.setattr(operator_sync_module, "replace_file", real)
+    rig.rest[0] = True
+    await rig.step()  # asked again at the next rest, at once
+    assert rig.access.held is not None
+
+
+async def test_a_list_of_another_machine_is_refused(tmp_path: Path) -> None:
+    rig = make_rig(tmp_path / "operators.json", machine_id="machine-2")
+    rig.sign(payload())
+    await rig.step()
+    assert rig.access.held is None
+    assert "liste d'une autre machine" in rig.said[0]
+    mine = make_rig(tmp_path / "mine.json", machine_id="machine-1")
+    mine.sign(payload())
+    await mine.step()
+    assert mine.access.held is not None
 
 
 async def test_a_bad_answer_is_refused_and_said_once(tmp_path: Path) -> None:

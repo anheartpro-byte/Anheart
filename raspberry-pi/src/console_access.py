@@ -10,10 +10,12 @@ device token), on the programme catalogue's channel: same Ed25519 key, same
 public key in the image (``operator_list`` of ``contracts/machine-api.json``,
 contract 1.13). :class:`~src.operator_sync.OperatorSync` asks for it at rest only, verifies the
 signature over the exact bytes before reading anything, refuses a text that
-does not say it is an operator list, and refuses a list older than the one it
-holds (an old answer replayed would bring back a disabled operator). What it
-accepts is written to ``data/operators.json`` as it was received, signature
-included, and verified again at the next start (:func:`load_list`).
+does not say it is an operator list, a list of another machine than
+``RECORD_MACHINE_ID`` when that is set, a code hashed with other parameters than
+the contract's, and a list that is not newer than the one it holds (an old
+answer replayed would bring back a disabled operator). What it accepts is
+written to ``data/operators.json`` as it was received, signature included, and
+verified again at the next start (:func:`load_list`).
 
 **A console that never accepted a list opens no action.** Reads, the STOP and
 the emergency stop stay reachable with a device token (``src/web/routes.py``);
@@ -22,17 +24,23 @@ as it is the last one.
 
 **The sign-in** (:meth:`ConsoleAccess.sign_in`). An operator of the list, their
 code checked offline against the hash, off the event loop, one sign-in at a
-time. Five wrong codes in a row lock that operator out for
-:data:`LOCKOUT_PERIOD`; the count is written to ``data/operator_lockout.json``
-and a restart does not lift a lock: an operator found locked at the start is
-locked for a whole period from it. A 6-digit code is a weak secret, and this
-lockout is what protects it on the console; anyone holding the list itself
-can try every code offline (``docs/securite.md``, section 17).
+time. Three counts of wrong codes, each locking for :data:`LOCKOUT_PERIOD`:
+:data:`LOCKOUT_FAILURES` in a row lock that operator out;
+:data:`DEVICE_LOCKOUT_FAILURES` from one device, whatever the operator, lock
+that device's sign-ins; :data:`CONSOLE_LOCKOUT_FAILURES` on the whole console
+lock every sign-in. A right code clears its operator's count; a device's and
+the console's clear after a whole period without a wrong code. The counts are
+written to ``data/operator_lockout.json`` and a restart does not lift a lock:
+what is found locked at the start is locked for a whole period from it. A
+6-digit code is a weak secret, and these counts are what protect it on the
+console; anyone holding the list itself can try every code offline
+(``docs/securite.md``, section 17).
 
 **The session** (:meth:`ConsoleAccess.session`). Bound to the device that
 signed in, ended by an explicit sign-out, after :data:`SESSION_LIFETIME`, after
 :data:`SESSION_IDLE` without an action, or when a new list no longer holds its
-operator or its tablet. In memory only: a restart signs everyone out.
+operator or its tablet, or holds another code for its operator. In memory
+only: a restart signs everyone out.
 
 Nothing here commands the machine, and nothing here can delay a stop: the
 emergency stop needs only :meth:`ConsoleAccess.device_of`, a digest and a
@@ -91,11 +99,24 @@ SESSION_IDLE: Final[Seconds] = Seconds(30 * 60.0)
 LOCKOUT_FAILURES: Final[int] = 5
 """Wrong codes in a row that lock an operator out."""
 
-LOCKOUT_PERIOD: Final[Seconds] = Seconds(15 * 60.0)
-"""How long a locked operator stays locked."""
+DEVICE_LOCKOUT_FAILURES: Final[int] = 10
+"""Wrong codes from one device, whatever the operator, that lock that device's sign-ins."""
 
-MAX_SCRYPT_MEMORY: Final[int] = 64 * 1024 * 1024
-"""The most memory one code's parameters may ask for: a list cannot exhaust the Pi."""
+CONSOLE_LOCKOUT_FAILURES: Final[int] = 20
+"""Wrong codes on the whole console that lock every sign-in: the ceiling of a guess."""
+
+LOCKOUT_PERIOD: Final[Seconds] = Seconds(15 * 60.0)
+"""How long a lock lasts; and how long without a wrong code clears a device's count, or
+the console's."""
+
+SCRYPT_N: Final[int] = 32768
+SCRYPT_R: Final[int] = 8
+SCRYPT_P: Final[int] = 1
+SALT_BYTES: Final[int] = 16
+HASH_BYTES: Final[int] = 32
+"""The one set of parameters a code may carry (``code`` of the shared file), Convex's.
+Any other is refused when the list is read: parameters a list could choose would hold
+the sign-in for hours, or have OpenSSL refuse to hash."""
 
 DEVICE_ACTOR_PREFIX: Final[str] = "device:"
 """Who an event names when a tablet acted with nobody signed in (``device_actor_prefix``)."""
@@ -109,12 +130,25 @@ LOOPBACK_DEVICE: Final[str] = "loopback"
 _ID: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _SHA256_HEX: Final = re.compile(r"[0-9a-f]{64}")
 _MAX_NAME_CHARS: Final[int] = 100
-_MIN_N: Final[int] = 2
-_DIGEST_BYTES: Final[range] = range(16, 65)
 
 
 SESSION_DROPPED: Final[str] = "console: session fermee, retiree de la liste"
 """What the logbook says of a session a new list ended."""
+
+CODE_CHANGED: Final[str] = "console: session fermee, code change"
+"""What the logbook says of a session a new code for its operator ended."""
+
+type LockScope = Literal["operator", "device", "console"]
+"""What a count of wrong codes is about: an operator, a device, or the whole console."""
+
+type _Count = tuple[LockScope, str]
+"""One count: its scope, and the operator or the device (empty for the console)."""
+
+_LIMITS: Final[Mapping[LockScope, int]] = {
+    "operator": LOCKOUT_FAILURES,
+    "device": DEVICE_LOCKOUT_FAILURES,
+    "console": CONSOLE_LOCKOUT_FAILURES,
+}
 
 
 def device_actor(device_id: str) -> str:
@@ -205,13 +239,9 @@ def _code(value: object) -> ScryptCode | None:
         or p is None
         or salt is None
         or digest is None
-        or n < _MIN_N
-        or n & (n - 1) != 0
-        or r < 1
-        or p < 1
-        or scrypt_memory(n, r, p) > MAX_SCRYPT_MEMORY
-        or not salt
-        or len(digest) not in _DIGEST_BYTES
+        or (n, r, p) != (SCRYPT_N, SCRYPT_R, SCRYPT_P)
+        or len(salt) != SALT_BYTES
+        or len(digest) != HASH_BYTES
     ):
         return None
     return ScryptCode(n=n, r=r, p=p, salt=salt, digest=digest)
@@ -257,12 +287,13 @@ def _entries(value: object) -> Sequence[object] | None:
     return cast(Sequence[object], value) if isinstance(value, list) else None
 
 
-def read_list(text: str) -> Result[OperatorList, str]:
+def read_list(text: str, machine_id: str | None) -> Result[OperatorList, str]:
     """The signed text as an :class:`OperatorList`, or why it is not one.
 
     The one place its untyped value enters, annotated ``object`` at once. Every
     entry must be well formed and every id appear once: a list is taken whole
-    or not at all.
+    or not at all. ``machine_id``: this machine (``RECORD_MACHINE_ID``), whose
+    list alone is taken; ``None`` when it is not set, and any machine's is.
     """
     try:
         parsed: object = json.loads(text)  # pyright: ignore[reportAny]  # narrowed below
@@ -273,11 +304,11 @@ def read_list(text: str) -> Result[OperatorList, str]:
     document = cast(Mapping[str, object], parsed)
     if document.get("kind") != LIST_KIND:
         return Err("texte signe qui n'est pas une liste des operateurs")
-    machine_id = _identifier(document.get("machineId"))
+    listed_for = _identifier(document.get("machineId"))
     issued_at = _whole(document.get("issuedAt"))
     operators = _entries(document.get("operators"))
     devices = _entries(document.get("devices"))
-    if machine_id is None or issued_at is None or operators is None or devices is None:
+    if listed_for is None or issued_at is None or operators is None or devices is None:
         return Err("liste des operateurs mal formee")
     listed = tuple(_operator(entry) for entry in operators)
     tablets = tuple(_device(entry) for entry in devices)
@@ -291,14 +322,21 @@ def read_list(text: str) -> Result[OperatorList, str]:
         or len({d.device_id for d in kept_devices}) != len(kept_devices)
     ):
         return Err("liste des operateurs mal formee")
-    return Ok(
-        OperatorList(
-            machine_id=machine_id,
-            issued_at=UnixMillis(issued_at),
-            operators=kept,
-            devices=kept_devices,
-        )
+    held = OperatorList(
+        machine_id=listed_for,
+        issued_at=UnixMillis(issued_at),
+        operators=kept,
+        devices=kept_devices,
     )
+    return _of_machine(held, machine_id)
+
+
+def _of_machine(held: OperatorList, machine_id: str | None) -> Result[OperatorList, str]:
+    """``held`` when it is this machine's list, or the machine is not known."""
+    if machine_id is not None and machine_id != held.machine_id:
+        listed_for = held.machine_id
+        return Err(f"liste d'une autre machine ({listed_for!r}, cette console est {machine_id!r})")
+    return Ok(held)
 
 
 def signed_text(
@@ -347,11 +385,21 @@ class StoredList:
 
 @validated(frozen=True, slots=True, kw_only=True, config=ConfigDict(extra="forbid"))
 class StoredLockout:
-    """``data/operator_lockout.json``: wrong codes in a row, per operator."""
+    """``data/operator_lockout.json``: the counts of wrong codes. Validated wire shapes,
+    replaced whole: never mutated."""
 
     schema_version: Literal[1] = 1
     failures: dict[str, int]
-    """A validated wire shape, replaced whole: never mutated."""
+    """In a row, per operator."""
+
+    devices: dict[str, int]
+    """Per device, whatever the operator."""
+
+    console: int
+    """On the whole console."""
+
+
+NO_FAILURES: Final[StoredLockout] = StoredLockout(failures={}, devices={}, console=0)
 
 
 STORED_LIST: Final[TypeAdapter[StoredList]] = TypeAdapter(StoredList)
@@ -374,8 +422,11 @@ def replace_file(path: Path, content: bytes) -> Result[None, str]:
     return Ok(None)
 
 
-def load_list(path: Path, public_key: bytes | None) -> Result[OperatorList | None, str]:
-    """The list kept at ``path``, verified again; ``None`` when there is none. Startup only."""
+def load_list(
+    path: Path, public_key: bytes | None, machine_id: str | None
+) -> Result[OperatorList | None, str]:
+    """The list kept at ``path``, verified again; ``None`` when there is none. Startup only.
+    ``machine_id``: as :func:`read_list`."""
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
@@ -392,25 +443,27 @@ def load_list(path: Path, public_key: bytes | None) -> Result[OperatorList | Non
     )
     if isinstance(text, Err):
         return Err(f"liste des operateurs enregistree refusee : {text.error}")
-    read = read_list(stored.payload)
-    return read if isinstance(read, Err) else Ok(read.value)
+    read = read_list(stored.payload, machine_id)
+    if isinstance(read, Err):
+        return Err(f"liste des operateurs enregistree refusee : {read.error}")
+    return Ok(read.value)
 
 
-def load_failures(path: Path) -> Mapping[str, int]:
+def load_failures(path: Path) -> StoredLockout:
     """The lockout counts kept at ``path``; none when absent or unreadable. Startup only.
 
     An unreadable file is said and read as no failure: the console then still
     locks after five wrong codes, counted again from this start.
     """
     try:
-        return _STORED_LOCKOUT.validate_json(path.read_bytes()).failures
+        return _STORED_LOCKOUT.validate_json(path.read_bytes())
     except FileNotFoundError:
-        return {}
+        return NO_FAILURES
     except (OSError, ValueError) as error:
         _logger.warning(
             "operator lockout counts unreadable, counted again: %s", type(error).__name__
         )
-        return {}
+        return NO_FAILURES
 
 
 # =========================================================================
@@ -441,9 +494,11 @@ class UnknownOperator:
 
 @dataclass(frozen=True, slots=True)
 class Locked:
-    """Too many wrong codes: no code is checked until ``retry_after`` has passed."""
+    """Too many wrong codes: no code is checked until ``retry_after`` has passed.
+    ``scope``: what is locked, this operator, this device or the whole console."""
 
     retry_after: Seconds
+    scope: LockScope = "operator"
 
 
 @dataclass(frozen=True, slots=True)
@@ -454,6 +509,12 @@ class WrongCode:
 
 
 type SignInRefusal = NoList | UnknownOperator | Locked | WrongCode
+
+_LOCKED_WORDS: Final[Mapping[LockScope, str]] = {
+    "operator": "operateur verrouille",
+    "device": "connexion verrouillee sur cet appareil",
+    "console": "toute connexion verrouillee sur cette console",
+}
 
 
 def describe_refusal(refusal: SignInRefusal) -> str:
@@ -468,7 +529,7 @@ def describe_refusal(refusal: SignInRefusal) -> str:
             return "operateur inconnu de cette console"
         case Locked():
             return (
-                f"trop de codes faux : operateur verrouille encore "
+                f"trop de codes faux : {_LOCKED_WORDS[refusal.scope]} encore "
                 f"{max(1, round(refusal.retry_after / 60))} min"
             )
         case WrongCode():
@@ -499,6 +560,20 @@ def code_matches(code: str, held: ScryptCode) -> bool:
     return hmac.compare_digest(computed, held.digest)
 
 
+_LOCK_SUBJECTS: Final[Mapping[LockScope, str]] = {
+    "operator": "{name} verrouille",
+    "device": f"connexions depuis {DEVICE_ACTOR_PREFIX}{{name}} verrouillees",
+    "console": "toute connexion verrouillee",
+}
+
+
+def _lock_words(key: _Count, count: int) -> str:
+    """What the logbook says of a lock: never a code."""
+    scope, name = key
+    subject = _LOCK_SUBJECTS[scope].format(name=name)
+    return f"console: {subject} {round(LOCKOUT_PERIOD / 60)} min apres {count} codes faux"
+
+
 @final
 class ConsoleAccess:
     """The list held, the sessions open, the lockout counts. See the module docstring.
@@ -511,6 +586,7 @@ class ConsoleAccess:
     __slots__ = (
         "_clock",
         "_failures",
+        "_last_failure",
         "_list",
         "_lock",
         "_locked_since",
@@ -526,14 +602,15 @@ class ConsoleAccess:
         clock: Clock,
         held: OperatorList | None,
         lockout_path: Path | None,
-        failures: Mapping[str, int] | None = None,
+        failures: StoredLockout | None = None,
         note: Callable[[AccessNote], None] = lambda _note: None,
         verify: Callable[[str, ScryptCode], bool] = code_matches,
     ) -> None:
         """``held``: the list accepted before this start, or ``None``. ``lockout_path``:
         where the counts are kept; ``None``: in memory only (a test). ``failures``: the
-        counts read from it (:func:`load_failures`); an operator found locked is locked
-        for a whole :data:`LOCKOUT_PERIOD` from now. ``note``: a line for the logbook.
+        counts read from it (:func:`load_failures`); what is found locked is locked for
+        a whole :data:`LOCKOUT_PERIOD` from now, and every count found is a wrong code
+        of now. ``note``: a line for the logbook.
         ``verify``: whether a code is the hash's (:func:`code_matches`), run off the loop.
         """
         self._clock: Clock = clock
@@ -542,11 +619,17 @@ class ConsoleAccess:
         self._note: Callable[[AccessNote], None] = note
         self._verify: Callable[[str, ScryptCode], bool] = verify
         self._sessions: dict[str, SignedIn] = {}
-        self._failures: dict[str, int] = dict(failures or {})
-        now = clock.monotonic()
-        self._locked_since: dict[str, Monotonic] = {
-            user_id: now for user_id, count in self._failures.items() if count >= LOCKOUT_FAILURES
+        found = NO_FAILURES if failures is None else failures
+        self._failures: dict[_Count, int] = {
+            **{("operator", user_id): count for user_id, count in found.failures.items()},
+            **{("device", device_id): count for device_id, count in found.devices.items()},
+            **({("console", ""): found.console} if found.console > 0 else {}),
         }
+        now = clock.monotonic()
+        self._locked_since: dict[_Count, Monotonic] = {
+            key: now for key, count in self._failures.items() if count >= _LIMITS[key[0]]
+        }
+        self._last_failure: dict[_Count, Monotonic] = dict.fromkeys(self._failures, now)
         self._lock: asyncio.Lock = asyncio.Lock()
 
     @property
@@ -564,7 +647,10 @@ class ConsoleAccess:
 
     def locked(self, user_id: str) -> Seconds | None:
         """How long ``user_id`` stays locked out, or ``None`` when they are not."""
-        since = self._locked_since.get(user_id)
+        return self._left(("operator", user_id))
+
+    def _left(self, key: _Count) -> Seconds | None:
+        since = self._locked_since.get(key)
         if since is None:
             return None
         left = Seconds(LOCKOUT_PERIOD - elapsed(since, self._clock.monotonic()))
@@ -572,13 +658,20 @@ class ConsoleAccess:
 
     def adopt(self, accepted: OperatorList) -> None:
         """Put a new list in force: a session whose operator or tablet it no longer
-        holds ends. The caller verified and wrote it; this touches memory only."""
+        holds ends, and so does one whose operator it holds with another code. The
+        caller verified and wrote it; this touches memory only."""
+        before = self._list
+        codes = {} if before is None else {o.user_id: o.code for o in before.operators}
         self._list = accepted
         devices = {d.device_id for d in accepted.devices} | {LOCAL_DEVICE, LOOPBACK_DEVICE}
         for cookie, session in tuple(self._sessions.items()):
-            if accepted.operator(session.user_id) is None or session.device_id not in devices:
+            listed = accepted.operator(session.user_id)
+            if listed is None or session.device_id not in devices:
                 del self._sessions[cookie]
                 self._note(AccessNote(SESSION_DROPPED, session.user_id, False))
+            elif listed.code != codes.get(session.user_id):
+                del self._sessions[cookie]
+                self._note(AccessNote(CODE_CHANGED, session.user_id, False))
 
     async def sign_in(
         self, user_id: str, code: str, device_id: str
@@ -596,17 +689,20 @@ class ConsoleAccess:
             listed = held.operator(user_id)
             if listed is None:
                 return Err(UnknownOperator())
-            left = self.locked(user_id)
-            if left is not None:
-                return Err(Locked(retry_after=left))
-            if user_id in self._locked_since:
-                # The period is over: five more codes before the next lock.
-                del self._locked_since[user_id]
-                self._failures.pop(user_id, None)
+            counts: tuple[_Count, _Count, _Count] = (
+                ("operator", user_id),
+                ("device", device_id),
+                ("console", ""),
+            )
+            if self._clear_expired(counts):
+                await self._persist()
+            locked = self._lock_of(counts)
+            if locked is not None:
+                return Err(locked)
             matches = await anyio.to_thread.run_sync(partial(self._verify, code, listed.code))
             if not matches:
-                return Err(await self._failed(user_id, device_id))
-            if self._failures.pop(user_id, None) is not None:
+                return Err(await self._failed(counts, device_id))
+            if self._failures.pop(counts[0], None) is not None:
                 await self._persist()
             now = self._clock.monotonic()
             session = SignedIn(
@@ -621,29 +717,65 @@ class ConsoleAccess:
             self._note(AccessNote("console: connexion", user_id, False))
             return Ok((cookie, session))
 
-    async def _failed(self, user_id: str, device_id: str) -> SignInRefusal:
-        count = self._failures.get(user_id, 0) + 1
-        self._failures[user_id] = count
+    def _clear_expired(self, counts: Sequence[_Count]) -> bool:
+        """Clear the counts that are over; whether there was one.
+
+        A lock is over after :data:`LOCKOUT_PERIOD`. A device's count and the
+        console's are also over after a whole period without a wrong code; an
+        operator's runs until their right code.
+        """
+        now = self._clock.monotonic()
+        over = [key for key in counts if key in self._failures and self._over(key, now)]
+        for key in over:
+            del self._failures[key]
+            _ = self._locked_since.pop(key, None)
+            _ = self._last_failure.pop(key, None)
+        return bool(over)
+
+    def _over(self, key: _Count, now: Monotonic) -> bool:
+        since = self._locked_since.get(key)
+        if since is not None:
+            return elapsed(since, now) >= LOCKOUT_PERIOD
+        return key[0] != "operator" and elapsed(self._last_failure[key], now) >= LOCKOUT_PERIOD
+
+    def _lock_of(self, counts: Sequence[_Count]) -> Locked | None:
+        """The longest lock among ``counts``, or ``None``."""
+        found: list[tuple[Seconds, LockScope]] = [
+            (left, key[0]) for key in counts if (left := self._left(key)) is not None
+        ]
+        if not found:
+            return None
+        left, scope = max(found)
+        return Locked(retry_after=left, scope=scope)
+
+    async def _failed(self, counts: Sequence[_Count], device_id: str) -> SignInRefusal:
+        now = self._clock.monotonic()
+        actor = device_actor(device_id)
+        for key in counts:
+            count = self._failures.get(key, 0) + 1
+            self._failures[key] = count
+            self._last_failure[key] = now
+            if count >= _LIMITS[key[0]]:
+                self._locked_since[key] = now
+                self._note(AccessNote(_lock_words(key, count), actor, True))
         await self._persist()
-        if count >= LOCKOUT_FAILURES:
-            self._locked_since[user_id] = self._clock.monotonic()
-            self._note(
-                AccessNote(
-                    f"console: {user_id} verrouille {round(LOCKOUT_PERIOD / 60)} min "
-                    f"apres {count} codes faux",
-                    device_actor(device_id),
-                    True,
-                )
-            )
-            return Locked(retry_after=LOCKOUT_PERIOD)
-        self._note(AccessNote(f"console: code faux pour {user_id}", device_actor(device_id), True))
-        return WrongCode(remaining=LOCKOUT_FAILURES - count)
+        locked = self._lock_of(counts)
+        if locked is not None:
+            return locked
+        self._note(AccessNote(f"console: code faux pour {counts[0][1]}", actor, True))
+        return WrongCode(remaining=min(_LIMITS[key[0]] - self._failures[key] for key in counts))
 
     async def _persist(self) -> None:
         path = self._lockout_path
         if path is None:
             return
-        content = _STORED_LOCKOUT.dump_json(StoredLockout(failures=dict(self._failures))) + b"\n"
+        counts = self._failures
+        stored = StoredLockout(
+            failures={name: n for (scope, name), n in counts.items() if scope == "operator"},
+            devices={name: n for (scope, name), n in counts.items() if scope == "device"},
+            console=counts.get(("console", ""), 0),
+        )
+        content = _STORED_LOCKOUT.dump_json(stored) + b"\n"
         written = await anyio.to_thread.run_sync(partial(replace_file, path, content))
         if isinstance(written, Err):
             # Kept in memory: a restart before the next write forgets these counts.

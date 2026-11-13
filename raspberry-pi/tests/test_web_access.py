@@ -2,7 +2,8 @@
 
 * every route that acts refuses a request with no operator signed in on the
   device (401 ``operator_required``), and the set of routes that do not is
-  pinned here, so that a new route has to be placed on one side;
+  pinned here, so that a new route has to be placed on one side; every GET
+  route too: a new one fails until it is named a read or an action;
 * the reads take a device token: the console's own, or a tablet of the list;
 * the STOP and the emergency stop take a device token only, are attributed to
   the device when nobody is signed in, and never wait for a sign-in;
@@ -25,6 +26,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
+from starlette.routing import Route
 
 from src.clock import ManualClock
 from src.console_access import (
@@ -45,10 +47,10 @@ from src.training.safety import SafetyLimits, SafetySupervisor
 from src.units import Bpm, Metres, Seconds
 from src.web.app import create_app
 from src.web.deps import SESSION_COOKIE, Services, TlsFiles, WebConfig, identify_device
-from src.web.routes import OPERATOR_REQUIRED
+from src.web.routes import END_REASON, ESTOP_REASON, OPERATOR_REQUIRED, STOP_BODY_LIMIT
 from src.web.schemas import AccessRow
 from tests.access_support import CODE, OPERATOR_ID, OPERATOR_NAME, held_list, tablet
-from tests.test_web_api import StubPorts, make_snapshot, probe_socket
+from tests.test_web_api import StubPorts, event, make_snapshot, probe_socket
 
 TOKEN: Final[str] = "a-device-token-of-the-console"  # noqa: S105  # a test fixture
 TABLET_TOKEN: Final[str] = "a-token-of-a-tablet-of-the-list"  # noqa: S105  # a test fixture
@@ -66,6 +68,34 @@ UNSIGNED_POSTS: Final[frozenset[str]] = frozenset(
 )
 """The only routes that change something, or may, and take no operator: signing in and
 out, the dry run of a programme (it starts nothing), and the two stops."""
+
+READS: Final[frozenset[str]] = frozenset(
+    {
+        "/",
+        "/app.css",
+        "/app.js",
+        "/healthz",
+        "/openapi.json",
+        "/api/access",
+        "/api/camera",
+        "/api/ecg",
+        "/api/feedback",
+        "/api/panel",
+        "/api/preflight",
+        "/api/profiles",
+        "/api/records",
+        "/api/remote-launch",
+        "/api/roster",
+        "/api/sensors",
+        "/api/snapshot",
+        "/api/status",
+    }
+)
+"""Every GET route that only reads, and takes no operator. A new GET route is in neither
+this set nor :data:`ACTING_GETS` and fails the test that pins them."""
+
+ACTING_GETS: Final[frozenset[str]] = frozenset({"/api/records/{name}/archive"})
+"""The GET routes that act (an archive marks its record), and so take an operator."""
 
 
 @dataclass(slots=True)
@@ -147,9 +177,18 @@ def posts(app: FastAPI) -> set[str]:
     }
 
 
+def gets(app: FastAPI) -> set[str]:
+    """Every path the app answers a GET on, its own and FastAPI's."""
+    return {
+        route.path
+        for route in app.routes
+        if isinstance(route, Route) and "GET" in (route.methods or set[str]())
+    }
+
+
 def acting_routes(app: FastAPI) -> list[tuple[str, str]]:
     found = [("POST", path) for path in posts(app) if path not in UNSIGNED_POSTS]
-    return sorted([*found, ("GET", "/api/records/{name}/archive")])
+    return sorted([*found, *(("GET", path) for path in ACTING_GETS)])
 
 
 # =========================================================================
@@ -193,6 +232,31 @@ async def test_the_routes_that_take_no_operator_are_exactly_these(
         "/api/access/refresh",
         "/api/records/{name}/archive",
     }
+
+
+async def test_every_get_route_is_a_read_or_takes_an_operator(
+    rig: tuple[Console, httpx.AsyncClient],
+) -> None:
+    c, client = rig
+    assert gets(c.app) == READS | ACTING_GETS
+    surface = c.surface
+
+    def state() -> tuple[object, ...]:
+        return (
+            surface.counters,
+            surface.fates,
+            surface.pending,
+            surface.attendant_last_seen,
+            surface.estop_latched,
+            c.services.store.rev,
+        )
+
+    before = state()
+    for path in sorted(READS):
+        answered = await client.get(path, headers=device())
+        assert answered.status_code != HTTPStatus.UNAUTHORIZED, path
+    # Read with nobody signed in, and nothing was asked of the machine.
+    assert state() == before
 
 
 async def test_an_operator_signed_in_acts_under_their_account(
@@ -261,6 +325,48 @@ async def test_the_stop_takes_no_sign_in(rig: tuple[Console, httpx.AsyncClient])
     assert answered.json()["code"] == "nothing_running"
 
 
+STOP_BODIES: Final[tuple[tuple[bytes | None, str | None], ...]] = (
+    (None, None),
+    (b"", "application/json"),
+    (b"stop!", "text/plain"),
+    (b"\xff\xfe", "application/json"),
+    (b"null", "application/json"),
+    (b"[1, 2]", "application/json"),
+    (b'{"reason": 7}', "application/json"),
+    (b'{"reason": "  "}', "application/json"),
+    (b"[" * 2000 + b"]" * 2000, "application/json"),
+    (b'{"reason": "' + b"x" * STOP_BODY_LIMIT + b'"}', "application/json"),
+)
+"""Bodies no stop is refused for: none, empty, not JSON, not UTF-8, not an object, a
+reason that is not text or is blank, nested too deep to read, too long to read."""
+
+
+@pytest.mark.parametrize(("content", "content_type"), STOP_BODIES)
+async def test_a_stop_is_never_refused_for_its_body(
+    tmp_path: Path, content: bytes | None, content_type: str | None
+) -> None:
+    c = console(tmp_path)
+    headers = device() | ({} if content_type is None else {"content-type": content_type})
+    async with c.client() as client:
+        stop = await client.post("/api/session/stop", content=content, headers=headers)
+        assert stop.status_code == HTTPStatus.CONFLICT, stop.text
+        estop = await client.post("/api/session/estop", content=content, headers=headers)
+        assert estop.status_code == HTTPStatus.OK, estop.text
+        assert estop.json()["reason"] == ESTOP_REASON
+    assert c.services.supervisor.standing is not None
+
+
+async def test_a_stop_says_the_reason_its_body_gives(tmp_path: Path) -> None:
+    c = console(tmp_path)
+    async with c.client() as client:
+        given = await client.post(
+            "/api/session/estop", json={"reason": "fumee", "operator": "Jean"}, headers=device()
+        )
+        assert given.json()["reason"] == "fumee"
+        assert given.json()["operator"] == device_actor(LOCAL_DEVICE)
+    assert END_REASON == "operator ended the session"
+
+
 async def test_a_sign_in_being_checked_never_delays_the_emergency_stop(tmp_path: Path) -> None:
     release = threading.Event()
     started = threading.Event()
@@ -307,6 +413,31 @@ async def test_the_socket_takes_a_tablet_token_of_the_list(tmp_path: Path) -> No
     assert accepted[0]["type"] == "websocket.accept"
     refused = await probe_socket(c.app, origin=None, token="not-a-token-of-it")  # noqa: S106  # a test value
     assert [m["type"] for m in refused] == ["websocket.close"]
+
+
+async def test_a_revoked_tablet_s_socket_is_closed_before_its_next_frame(
+    tmp_path: Path,
+) -> None:
+    c = console(tmp_path)
+    access = c.access
+    assert access is not None
+    c.surface.publish(make_snapshot())
+
+    def revoke() -> None:
+        access.adopt(held_list(issued_at=1_790_000_000_001))  # the tablet is gone
+        c.services.hub.publish_event(event("after the revocation"))
+
+    sent = await probe_socket(
+        c.app, origin=None, token=TABLET_TOKEN, replies=2, on_first_frame=revoke
+    )
+    frames = [m for m in sent if m["type"] == "websocket.send"]
+    assert len(frames) == 1
+    assert sent[-1]["type"] == "websocket.close"
+    assert sent[-1]["code"] == 1008
+    # The console's own token is no list's to revoke.
+    kept = await probe_socket(c.app, origin=None, token=TOKEN, replies=2, on_first_frame=revoke)
+    assert len([m for m in kept if m["type"] == "websocket.send"]) >= 2
+    assert all(m.get("code") != 1008 for m in kept)
 
 
 def test_who_a_device_is() -> None:

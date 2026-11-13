@@ -37,11 +37,23 @@ from src.units import Monotonic, elapsed
 _logger: logging.Logger = logging.getLogger(__name__)
 
 
-def _bounded_list(text: str) -> Result[OperatorList, str]:
+def _bounded_list(text: str, machine_id: str | None) -> Result[OperatorList, str]:
     """The signed text read, when it is no longer than Convex ever sends."""
     if len(text.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         return Err(f"liste au-dela de {MAX_PAYLOAD_BYTES} octets")
-    return read_list(text)
+    return read_list(text, machine_id)
+
+
+def _not_newer(accepted: OperatorList, held: OperatorList | None) -> bool:
+    """Whether ``accepted`` would go back on ``held``: older, or as old and not the same.
+
+    Two different lists of one instant cannot both be the last: the one held stays.
+    """
+    if held is None:
+        return False
+    return accepted.issued_at < held.issued_at or (
+        accepted.issued_at == held.issued_at and accepted != held
+    )
 
 
 @final
@@ -57,6 +69,7 @@ class OperatorSync:
         "_asked",
         "_at_rest",
         "_clock",
+        "_machine_id",
         "_path",
         "_public_key",
         "_refused",
@@ -74,9 +87,12 @@ class OperatorSync:
         public_key: bytes | None,
         at_rest: Callable[[], bool],
         say: Callable[[str], None],
+        machine_id: str | None,
     ) -> None:
         """``path``: where an accepted answer is written. ``at_rest``: whether the list
-        may change now (the catalogue's rest). ``say``: one warning for the logbook."""
+        may change now (the catalogue's rest). ``say``: one warning for the logbook.
+        ``machine_id``: this machine (``RECORD_MACHINE_ID``), ``None`` when not set: a
+        list of another is refused."""
         self._clock: Clock = clock
         self._transport: CloudTransport = transport
         self._access: ConsoleAccess = access
@@ -84,6 +100,7 @@ class OperatorSync:
         self._public_key: bytes | None = public_key
         self._at_rest: Callable[[], bool] = at_rest
         self._say: Callable[[str], None] = say
+        self._machine_id: str | None = machine_id
         self._asked: Monotonic | None = None
         self._refused: tuple[str, object] | None = None
 
@@ -107,7 +124,7 @@ class OperatorSync:
         elif text.value is None:
             _logger.info("operator list: the dashboard signs none")
         else:
-            read = _bounded_list(text.value)
+            read = _bounded_list(text.value, self._machine_id)
             if isinstance(read, Err):
                 self._refuse(read.error, signature)
             else:
@@ -115,11 +132,14 @@ class OperatorSync:
 
     async def _receive(self, accepted: OperatorList, payload: str, signature: object) -> None:
         held = self._access.held
-        if held is not None and accepted.issued_at < held.issued_at:
-            self._refuse("liste plus ancienne que celle de la console", signature)
+        if _not_newer(accepted, held):
+            self._refuse("liste qui n'est pas plus recente que celle de la console", signature)
             return
         self._refused = None
         if held is not None and accepted.same_holders(held):
+            # Nobody gains or loses: its date alone is taken, in memory, so that a list
+            # replayed from between the two is refused. The disk is not written each minute.
+            self._access.adopt(accepted)
             return
         if not self._at_rest():
             # A session began during the request: asked again at the next rest.
@@ -128,6 +148,11 @@ class OperatorSync:
         envelope = StoredList(payload=payload, signature=cast(str, signature))
         content = STORED_LIST.dump_json(envelope) + b"\n"
         written = await anyio.to_thread.run_sync(partial(replace_file, self._path, content))
+        if not self._at_rest():
+            # A session began during the write: the disk holds the new list, memory the
+            # one in force for that session; adopted at the next rest, or the next start.
+            self._asked = None
+            return
         if isinstance(written, Err):
             self._say(
                 f"liste des operateurs non enregistree ({written.error}) : en vigueur "

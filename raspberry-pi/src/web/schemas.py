@@ -320,26 +320,6 @@ class ManualTargetBody:
 
 
 @dataclass(frozen=True, slots=True)
-class EndBody:
-    """End the running session on the controlled ramp. By whoever is signed in, else the device."""
-
-    reason: str = "operator ended the session"
-
-
-@dataclass(frozen=True, slots=True)
-class EstopBody:
-    """Latch the emergency stop.
-
-    ``reason`` is optional, and the stop is attributed to whoever is signed in
-    on the device, else to the device itself (ANH-152). An emergency stop must
-    never be refused for a missing form field - not by validation, not by a
-    confirmation dialog, not by anything.
-    """
-
-    reason: str = "operator pressed the emergency stop"
-
-
-@dataclass(frozen=True, slots=True)
 class AckBody:
     """Clear the latched safety verdicts.
 
