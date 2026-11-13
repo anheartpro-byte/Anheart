@@ -2032,10 +2032,13 @@ Hors du Pi, sur le poste du signataire, depuis `raspberry-pi/` :
    profils livrés que si ce magasin est absent ou refusé, et un
    `recovery_min_s`, un `cooldown_min_s` ou une `zone_ceiling_fraction` qui
    refuse les profils livrés l'empêcherait de démarrer dès qu'elle les charge
-   (premier démarrage, magasin local absent ou refusé ; code 1, avec une trace
-   Python). Ce jugement se fait avec les valeurs que la commande a lues à son
+   (premier démarrage, magasin local absent ou refusé ; une ligne
+   `configuration:`, code 2, que le service ne relance pas). Ce jugement se fait avec les valeurs que la commande a lues à son
    lancement : un fichier dont ces trois valeurs ont changé depuis est refusé,
-   et la commande est à relancer. Un magasin local refusé par ces
+   et la commande est à relancer. Un fichier dont les paliers cardiaques ou
+   `min_run_motor_rpm` empêcheraient la console de lancer des profils livrés
+   (elle les lit, mais ne les propose pas) est signé avec un avertissement
+   `attention : ...` qui les nomme : la décision reste au signataire. Un magasin local refusé par ces
    valeurs est mis de côté au démarrage sous
    `data/profiles.local.json.corrupt-<empreinte>` (12 premiers caractères du
    SHA-256 de son contenu), puis la console tente les profils livrés.

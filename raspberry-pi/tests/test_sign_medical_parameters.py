@@ -255,12 +255,36 @@ def test_module_import_with_unusable_shipped_integer_reraises(tmp_path: Path) ->
     assert "un entier de 400 chiffres" in result.stderr
 
 
-def test_shipped_motion_out_of_bounds_is_a_configuration_problem_the_service_keeps_down(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("changes", "said"),
+    [
+        pytest.param(
+            {"motion_limits.g_per_s": 0.6},
+            f"{MEDICAL_FILE}:motion_limits: g_rate (g_per_s) must be finite and in (0, 0.5], "
+            "got 0.6",
+            id="motion-above-its-bound",
+        ),
+        pytest.param({"motion_limits.g_per_s": 0}, "g_per_s", id="motion-zero"),
+        pytest.param({"motion_limits.g_per_s": -0.1}, "g_per_s", id="motion-negative"),
+        pytest.param(
+            {"motion_limits.min_run_motor_rpm": 0}, "min_run_motor_rpm", id="min-run-zero"
+        ),
+        pytest.param({"motion_limits.max_interval_s": 0}, "max_interval_s", id="interval-zero"),
+        pytest.param(
+            {"recovery_min_s": 301.0},
+            "the profile store cannot start",
+            id="shipped-profiles-refused",
+        ),
+    ],
+)
+def test_a_medical_file_the_console_cannot_run_with_keeps_the_service_down(
+    tmp_path: Path, changes: Mapping[str, int | float], said: str
 ) -> None:
-    """ANH-235: refused at startup with code 2, the one the service does not restart on,
-    naming the member of the file; never an import that fails with code 1, restarted."""
-    copied = _copy_installation(tmp_path, {"motion_limits.g_per_s": 0.6})
+    """ANH-235: whatever refuses it, the bounds of the console at startup, the parser of
+    the medical file at import, or the shipped profiles it makes unreadable: one
+    ``configuration:`` line, code 2, the one the service does not restart on. Never a
+    traceback and code 1, started again and again."""
+    copied = _copy_installation(tmp_path, changes)
     result = subprocess.run(
         [sys.executable, "-m", "src.local_panel"],
         cwd=copied,
@@ -272,10 +296,9 @@ def test_shipped_motion_out_of_bounds_is_a_configuration_problem_the_service_kee
         check=False,
     )
     assert result.returncode == 2, result
-    assert (
-        f"configuration: {MEDICAL_FILE}:motion_limits: "
-        "g_rate (g_per_s) must be finite and in (0, 0.5], got 0.6"
-    ) in result.stderr
+    lines = [line for line in result.stderr.splitlines() if "configuration: " in line]
+    assert len(lines) == 1, result.stderr
+    assert said in lines[0]
     assert "Traceback" not in result.stderr
 
 
@@ -317,3 +340,29 @@ def test_a_file_whose_profile_values_changed_since_the_command_started_is_refuse
     with pytest.raises(signer.SigningError, match="la relancer pour juger les profils livres"):
         signer.sign(key, files.parameters, files.signature, files.public_key)
     assert files.signature.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("changes", "why"),
+    [
+        pytest.param({"hr_hard_max_bpm": 150, "hr_critical_bpm": 160}, "paliers", id="tiers"),
+        pytest.param({"motion_limits.min_run_motor_rpm": 200}, "min_run_rpm", id="min-run"),
+    ],
+)
+def test_a_file_the_shipped_profiles_cannot_run_under_is_signed_with_a_warning(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    changes: Mapping[str, int | float],
+    why: str,
+) -> None:
+    """ANH-235: read, they would not be run: the signer is told which, the file is signed."""
+    key = Ed25519PrivateKey.generate()
+    files = write_signed(tmp_path, signer=key)
+    assert signer.describe(files.parameters, files.signature, files.public_key)
+    assert capsys.readouterr().err == "", "the shipped file: no warning"
+    files.parameters.write_bytes(with_values(changes))
+    assert signer.sign(key, files.parameters, files.signature, files.public_key) == "0.1.0"
+    warned = capsys.readouterr().err
+    assert warned.startswith("attention : avec ce fichier la console ne lancerait pas")
+    assert f"standard_30_min ({why}" in warned
+    assert f"standard_45_min ({why}" in warned

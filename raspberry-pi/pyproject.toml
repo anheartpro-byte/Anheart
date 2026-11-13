@@ -234,6 +234,7 @@ include = [
     # that protects the person on board is read there, and whether the console
     # may take a person on board at all is decided there.
     "src/medical.py",
+    "src/medical_unusable.py",
     # The macOS BITalino transport: on the Mac every heart rate is computed
     # from bytes that crossed it, and a silent link must surface as lost.
     "src/bitalino_rfcomm_macos.py",
@@ -323,6 +324,7 @@ safety_chain = [
     "src/ecg_pipeline.py",
     "src/local_config.py",
     "src/medical.py",
+    "src/medical_unusable.py",
     "src/bitalino_rfcomm_macos.py",
     "src/local_panel.py",
     "src/panel_lifecycle.py",

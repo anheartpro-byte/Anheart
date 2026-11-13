@@ -67,6 +67,7 @@ from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
+from src.medical_unusable import MedicalParametersUnusableError
 from src.result import Err, Ok, Result
 from src.units import Bpm, GLoadPerSecond, MotorRpm, OutputRpmPerSecond, ResultantG, Seconds
 
@@ -283,19 +284,6 @@ class MedicalStatus:
         if self.unsigned is None:
             return None
         return f"{UNSIGNED_SENTENCE} ({self.unsigned.detail}) : {BENCH_ONLY}"
-
-
-class MedicalParametersUnusableError(ValueError):
-    """The shipped file cannot be read or parsed: the installation is broken.
-
-    Raised once, when this module is imported, because every module that uses
-    a medical value needs one to exist. A file that parses but is not signed
-    does not raise: it is the bench mode.
-    """
-
-    def __init__(self, problems: tuple[str, ...]) -> None:
-        self.problems: tuple[str, ...] = problems
-        super().__init__("parametres medicaux inutilisables : " + " ; ".join(problems))
 
 
 # =========================================================================

@@ -300,19 +300,30 @@ def _medical_refusal(document: Mapping[str, object], rules: LocalRules) -> str |
     return None
 
 
-def _machine_refusal(profile: TrainingProfile, rules: LocalRules) -> str | None:
-    """Why this machine would not run the profile, whoever rides; ``None`` when it would."""
-    tiers = rules.tiers
+def signed_values_refusal(
+    profile: TrainingProfile, tiers: CardiacTiers, min_run: MotorRpm
+) -> str | None:
+    """Why the signed medical values would keep this machine from running the profile: its
+    tiers are not the supervisor's, or it runs slower than the motion limits let anything
+    run. ``None`` when they would not."""
     if profile.hard_max_bpm != tiers.hard_max_bpm or profile.critical_bpm != tiers.critical_bpm:
         return (
             f"paliers {profile.hard_max_bpm}/{profile.critical_bpm} bpm, ceux de la machine "
             f"sont {tiers.hard_max_bpm}/{tiers.critical_bpm} bpm"
         )
-    if profile.min_run_rpm < rules.min_run:
+    if profile.min_run_rpm < min_run:
         return (
             f"min_run_rpm {profile.min_run_rpm} sous la plus petite consigne des limites de "
-            f"mouvement signees ({rules.min_run} tr/min moteur)"
+            f"mouvement signees ({min_run} tr/min moteur)"
         )
+    return None
+
+
+def _machine_refusal(profile: TrainingProfile, rules: LocalRules) -> str | None:
+    """Why this machine would not run the profile, whoever rides; ``None`` when it would."""
+    refused = signed_values_refusal(profile, rules.tiers, rules.min_run)
+    if refused is not None:
+        return refused
     if profile.max_rpm > NAMEPLATE_MOTOR_RPM:
         return (
             f"max_rpm {profile.max_rpm} au-dessus de la plaque moteur "

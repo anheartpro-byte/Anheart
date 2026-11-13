@@ -37,7 +37,6 @@ from src.medical import (
     UNSIGNED_SENTENCE,
     HrMaxFormula,
     MedicalDocument,
-    MedicalParametersUnusableError,
     MedicalStatus,
     MotionLimitValues,
     SignatureProblem,
@@ -49,6 +48,7 @@ from src.medical import (
     status_of,
     verify_signature,
 )
+from src.medical_unusable import MedicalParametersUnusableError
 from src.result import Err, Ok
 from src.units import Bpm, GLoadPerSecond, MotorRpm, OutputRpmPerSecond, ResultantG, Seconds
 from tests.medical_support import SHIPPED_CONTENT, public_pem, with_values, write_signed

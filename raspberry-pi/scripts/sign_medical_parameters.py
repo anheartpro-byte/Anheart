@@ -32,7 +32,10 @@ with which key.
 
 An unusable shipped file, such as an integer no float can represent, is
 reported as ``refuse : ...`` on stderr: exit code 1, no traceback, no
-passphrase prompt and no file written.
+passphrase prompt and no file written. A file under which the console would
+read shipped profiles but not run them (their cardiac tiers are not the file's,
+or they run slower than its ``min_run_motor_rpm``) is checked and signed all
+the same, with an ``attention : ...`` line on stderr naming them.
 
 The same check, without this repository's code (OpenSSL 3)::
 
@@ -62,7 +65,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from src.result import Err
 
 try:
-    from src.local_config import MEDICAL_FILE, load_local_config
+    from src.local_config import MEDICAL_FILE, CardiacTiers, load_local_config
     from src.medical import (
         PARAMETERS_PATH,
         PUBLIC_KEY_PATH,
@@ -73,6 +76,7 @@ try:
         parse_document,
         status_of,
     )
+    from src.programme_catalog import signed_values_refusal
     from src.training.plan import SHIPPED_DEFAULTS_PATH, parse_store
 except ValueError as error:
     if __name__ != "__main__":
@@ -120,6 +124,19 @@ def _shipped_profiles(document: MedicalDocument) -> None:
         raise SigningError(
             f"la console refuserait ses profils livres ({SHIPPED_DEFAULTS_PATH.name}) avec ce "
             f"fichier et ne demarrerait pas sans magasin local : {parsed.error.detail}"
+        )
+    # Read, but not run: said, the signer decides.
+    tiers = CardiacTiers(hard_max_bpm=signed.hr_hard_max_bpm, critical_bpm=signed.hr_critical_bpm)
+    unrunnable = [
+        f"{profile.profile_id} ({why})"
+        for profile in parsed.value.profiles
+        if (why := signed_values_refusal(profile, tiers, signed.motion_limits.min_run_motor_rpm))
+    ]
+    if unrunnable:
+        print(
+            f"attention : avec ce fichier la console ne lancerait pas ces profils livres "
+            f"({SHIPPED_DEFAULTS_PATH.name}) : " + " ; ".join(unrunnable),
+            file=sys.stderr,
         )
 
 
