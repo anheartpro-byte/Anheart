@@ -103,7 +103,8 @@ def test_current_repository_differences_are_named_without_echoing_the_document(
 
 def test_a_console_document_older_than_its_sto_source_still_loads(tmp_path: Path) -> None:
     document = _document()
-    assert document.pop("sto_source") == "sim_ready"
+    removed = document.pop("sto_source")
+    assert removed == "sim_ready"
     assert isinstance(_load(tmp_path, document), Ok)
 
 

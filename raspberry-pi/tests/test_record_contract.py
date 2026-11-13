@@ -137,7 +137,8 @@ def test_older_manifest_without_the_sto_source_still_reads_and_an_unknown_one_is
     document = dict(mapping(JSON.validate_json(MANIFEST_FIXTURE.read_bytes())))
     current = MANIFEST.validate_json(MANIFEST_FIXTURE.read_bytes())
     assert current.sto_source is StoSourceKind.DRIVE_INPUT
-    assert document.pop("sto_source") == "drive_input"
+    removed = document.pop("sto_source")
+    assert removed == "drive_input"
     older = MANIFEST.validate_json(encode(document, Privacy()))
     assert older == replace(current, sto_source=None)
     with pytest.raises(ValidationError, match="sto_source"):
