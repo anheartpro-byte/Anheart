@@ -25,20 +25,25 @@
  * recipients are retried. A new alert may queue a REST e-mail action in
  * `notificationEmails`, whose delivery state and retries stay on that alert.
  *
+ * - `incident_high`: `convex/lib/incidents.ts`, when a `high` incident opens
+ *   (ANH-145).
+ *
  * Recipients: the gestionnaires linked to the machine who are still active
  * gestionnaires of its organisation, and the active admins of that
  * organisation. Nobody else: not a patient, not the Anheart team as such
- * (its fleet alerts are ANH-150's).
- *
- * Extension point: an incident on a machine (ANH-145) is one more type
- * (`notificationTypeValidator` in convex/schema.ts, `NOTIFICATION_TYPES`
- * below, two translations) and one call of `scheduleAlert` where the
- * incident is created.
+ * (its fleet alerts are ANH-150's). Except `incident_high`, which goes to the
+ * active admins of the Anheart organisation only, in that organisation: they
+ * are the ones who close it.
  */
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { organizationRoleOf } from "./auth";
+import {
+  anheartClerkOrganizationId,
+  DEFAULT_ORGANIZATION_SLUG,
+  isAnheartOrganization,
+  organizationRoleOf,
+} from "./auth";
 import { emailSettings, type NotificationType } from "./notificationEmail";
 
 export type { NotificationType };
@@ -74,6 +79,12 @@ export const NOTIFICATION_TYPES = {
     foldsBy: "session",
     sessionPriority: 2,
     emailByDefault: true,
+  },
+  // To the Anheart admins: never folded into an alert of the machine's staff.
+  incident_high: {
+    foldsBy: "session",
+    sessionPriority: 0,
+    emailByDefault: false,
   },
 } as const satisfies Record<
   NotificationType,
@@ -235,6 +246,47 @@ export async function recipientsOf(
   return users;
 }
 
+/** The Anheart organisation (`isAnheartOrganization`), or null when it has none. */
+export async function anheartOrganization(
+  ctx: QueryCtx,
+): Promise<Doc<"organizations"> | null> {
+  const clerkOrgId = anheartClerkOrganizationId();
+  const candidates =
+    clerkOrgId === null
+      ? await ctx.db
+          .query("organizations")
+          .withIndex("by_slug", (q) => q.eq("slug", DEFAULT_ORGANIZATION_SLUG))
+          .collect()
+      : await ctx.db
+          .query("organizations")
+          .withIndex("by_clerk_org_id", (q) => q.eq("clerkOrgId", clerkOrgId))
+          .collect();
+  return (
+    candidates.find(
+      (row) => row.deletedAt === undefined && isAnheartOrganization(row),
+    ) ?? null
+  );
+}
+
+/** The active admins of the Anheart organisation: who hears of a high incident. */
+async function anheartAdmins(ctx: MutationCtx): Promise<Doc<"users">[]> {
+  const organization = await anheartOrganization(ctx);
+  if (organization === null) return [];
+  const members = await ctx.db
+    .query("memberships")
+    .withIndex("by_active_and_organization", (q) =>
+      q.eq("active", true).eq("organizationId", organization._id),
+    )
+    .collect();
+  const users: Doc<"users">[] = [];
+  for (const member of members) {
+    if (member.role !== "admin") continue;
+    const user = await ctx.db.get(member.userId);
+    if (user && user.clerkDeletedAt === undefined) users.push(user);
+  }
+  return users;
+}
+
 export type MachineEvent = {
   /** The session it happened in, for the kinds that fold by session. */
   sessionId?: Id<"sessions">;
@@ -303,7 +355,11 @@ export async function notifyRecipient(
   type: NotificationType,
   event: MachineEvent,
 ): Promise<number> {
-  const organizationId = machine.organizationId;
+  // A high incident's alert is the Anheart admins', in their organisation.
+  const organizationId =
+    type === "incident_high"
+      ? (await anheartOrganization(ctx))?._id
+      : machine.organizationId;
   if (organizationId === undefined) return 0;
   const now = Date.now();
   const detail =
@@ -429,7 +485,10 @@ export async function notifyMachine(
   try {
     const organization = await ctx.db.get(organizationId);
     if (!organization || organization.deletedAt !== undefined) return 0;
-    users = await recipientsOf(ctx, machine, organizationId);
+    users =
+      type === "incident_high"
+        ? await anheartAdmins(ctx)
+        : await recipientsOf(ctx, machine, organizationId);
   } catch {
     await retryDelivery(ctx, machine._id, type, event, retry);
     return 0;

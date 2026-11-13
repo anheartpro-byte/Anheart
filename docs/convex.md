@@ -675,12 +675,14 @@ commandes distantes, pré-vol, avertissements, fin.
 `sessionId`, `machineId`, `seq`, `t` (ms Unix sur l'horloge de la machine,
 lu comme `training_telemetry.t`), `kind`, `detail`, `actor` (`system`, `remote`
 ou un identifiant opaque d'opérateur, jamais un nom). Index
-`by_session_and_seq` et `by_organization`.
+`by_session_and_seq`, `by_session_and_t` (les événements autour d'un
+incident, ANH-145) et `by_organization`.
 
 `seq` est le rang de l'événement dans l'enregistrement. **Une ligne par
 `(sessionId, seq)`** : un événement envoyé une seconde fois n'est pas inséré
-de nouveau (`storeEvents`). Aucune fonction publique ne lit encore cette
-table : la machine l'écrit, les tests la lisent. Seuls les événements d'une
+de nouveau (`storeEvents`). Une seule fonction publique la lit :
+`incidents.get`, pour les événements à 60 s au plus de l'instant d'un
+incident, à qui peut lire la séance. Seuls les événements d'une
 séance y arrivent, ceux de son enregistrement : rien de ce que la console
 noterait hors séance n'est envoyé. Le retour du passager que la console
 envoie par la même route (`kind: "feedback"`, contrat 1.7) n'y est jamais
@@ -851,6 +853,53 @@ notification, les détails d'une ligne d'audit (l'action
 L'export n'en sort que les notes et le ressenti, avec des identifiants, sans
 nom, sans adresse et sans le texte libre.
 
+### `incidents` : registre des incidents (ANH-145)
+
+Une ligne par événement de sécurité qui demande une revue humaine, ouverte
+par le serveur là où il l'apprend (`convex/lib/incidents.ts`), jamais par un
+client : `organizationId` (celle de la machine), `machineId`, `sessionId?`,
+`kind`, `rule`, `t`, `severity`, `occupied`, `status`, `openedAt` (horloge du
+serveur), puis `analyzedBy?`, `analysis?` (la cause), `action?`, `closedBy?`,
+`closedAt?`, `recordId?` (le fichier refusé d'un `record_rejected`). Index
+`by_machine_and_status` (le blocage), `by_organization` (la liste d'un admin
+d'organisation) et `by_session` (`sessionId`, `rule`, `t` : l'unicité).
+
+| `kind` | Ouvert par | `rule` | `t` |
+|---|---|---|---|
+| `safety_verdict` | `training.storeEvents` : un événement `verdict` d'action `QUICK_STOP` ou `GO_SILENT`, ou d'une action que ce serveur ne sait pas lire, **même si la séance continue** ; `training.endTrainingSession` : une fin `safety_verdict` | la règle (`hr_critical`), lue dans `<règle> (<ACTION>): …` ; `unknown` si le texte n'a pas cette forme | celui de l'événement ; pour la fin, celui du verdict d'arrêt le plus sévère parmi les 500 derniers événements de la séance (le plus récent à égalité), sinon la fin, avec `rule: "safety_verdict"` |
+| `emergency_stop`, `tick_exception` | `training.endTrainingSession` : une fin de ce nom (`<fin>` ou `<fin>: <raison>`) | le nom de la fin | la fin, sur l'horloge de la machine |
+| `drive_fault` | `training.storeEvents` : un événement `drive_fault` autre que `cleared` | le mnémonique (`OHF`), `drive_fault` s'il est illisible | celui de l'événement |
+| `preflight_repeated_failure` | `training.endTrainingSession` : la **troisième** fin de suite, sur la machine, d'un lancement refusé par le pré-vol de la console (raison `refusee par la machine : pre-vol : …`) ; la quatrième n'en ouvre pas d'autre | `preflight` | la fin de la troisième |
+| `record_rejected` | `recordStorage` : l'enregistrement de la séance passe `rejected` | le code du refus du fichier (`sha256_mismatch`, `size_mismatch`, `invalid_manifest`) | la fin de la séance, sinon son début |
+| `manual` | aucune fonction encore : le type est réservé à une déclaration à la main | | |
+
+**Un incident par `(sessionId, rule, t)`** : un événement renvoyé (même rang
+ou autre rang au même instant) n'en ouvre pas un second, et une fin
+`safety_verdict` reprend la règle et l'instant du verdict qui en a peut-être
+déjà ouvert un. Une fin déjà reçue ne change rien (`endTrainingSession` est
+idempotente). Seuls les événements stockés par l'appel comptent. Un défaut du
+variateur que seul le heartbeat annonce, hors de tout événement de séance,
+n'ouvre pas d'incident (l'alerte `drive_fault` reste).
+
+**Gravité** (EX-3, `severityOf`) : `high` pour un `tick_exception`, pour un
+niveau `GO_SILENT` (ou une action inconnue, côté sûr), et avec une personne
+à bord pour un niveau `RAMP_DOWN` ou plus ; sinon `medium` pour un défaut du
+variateur ou un verdict (au banc), et `low` pour le reste. Le niveau est
+l'action du verdict, `RAMP_DOWN` pour un défaut du variateur (le verdict du
+superviseur sur un défaut) et pour une fin `safety_verdict` sans verdict
+reçu, `QUICK_STOP` pour l'E-STOP de l'écran, aucun pour le pré-vol et
+l'enregistrement. `occupied` est `personOnBoard` de la séance
+(`convex/lib/machineRegistry.ts`) : séance automatique, ou manuelle notée
+`Occupancy: occupied`, jamais une séance de banc lestée.
+
+**Statuts.** `open` à l'ouverture ; `analyzed` quand une personne de la
+machine a écrit la cause et l'action ; `closed` quand l'admin Anheart l'a
+clos, avec sa cause et son action. **Tant qu'un incident `high` de la machine
+est `open` ou `analyzed`, aucune séance programmée n'y est lancée ni armée**
+([§4](#4-fonctions-de-trainingts)) ; une séance de banc reste possible.
+Chaque incident `high` ouvert est une alerte `incident_high` aux admins
+Anheart ([§5](#notificationsts-alertes-aux-gestionnaires-anh-90)).
+
 ### Deux horloges
 
 Un Raspberry Pi n'a pas d'horloge sauvegardée. Démarré sans réseau, il date ce
@@ -1000,7 +1049,7 @@ après 30 secondes; les seuils d'avertissement sont CPU > 70 °C, disque < 1 Gio
 serveur seul ([§5](#notificationsts-alertes-aux-gestionnaires-anh-90)).
 `organizationId` (celle de la machine, obligatoire), `userId` (le
 destinataire), `type` (`machine_offline`, `session_failed`, `drive_fault`,
-`safety_verdict`), `machineId`, `sessionId?`, `detail?`, `count`,
+`safety_verdict`, `incident_high`), `machineId`, `sessionId?`, `detail?`, `count`,
 `createdAt`, `updatedAt`, `read`, `email?` (état d'envoi sur cette ligne :
 `status` = `pending`, `sent` ou `failed`, `attempts`, `queuedAt`, `updatedAt`,
 `resendId?`, `failureCode?`, `type?` qui garde le type de création de l'alerte).
@@ -1021,7 +1070,13 @@ au regroupement), `by_user` (suppression d'un compte) et `by_updated` (purge à 
 facultatif par type : l'alerte part aussi par e-mail), `updatedAt`. Un type
 non choisi prend sa valeur par défaut : oui pour `session_failed`,
 `drive_fault` et `safety_verdict`, non pour `machine_offline` (une machine
-éteinte chaque soir en enverrait un chaque soir). Index `by_user`.
+éteinte chaque soir en enverrait un chaque soir) et pour `incident_high`
+(les alertes par e-mail sont coupées en production, ANH-145 n'en ajoute
+aucune). Index `by_user`.
+
+Une alerte `incident_high` (ANH-145) est écrite dans l'organisation Anheart,
+pas dans celle de la machine : elle va aux admins Anheart, qui la lisent
+dans leur organisation.
 
 ---
 
@@ -1156,6 +1211,8 @@ Règles propres aux séances d'entraînement (`convex/training.ts`) :
 | **Arrêter / annuler** | le pratiquant de la séance, ou un admin / gestionnaire de la machine. |
 | Régler FC max et année de naissance | admin, ou gestionnaire du patient. **Jamais le patient lui-même.** |
 | Lire la télémétrie et le détail d'une séance | le pratiquant, ou admin / gestionnaire de la machine. |
+| **Lire et analyser un incident** (ANH-145) | qui a accès à sa machine (`canAccessMachine`) : l'admin Anheart, l'admin de l'organisation de la machine, un gestionnaire de la machine. Jamais un `user`. |
+| **Clore un incident** (ANH-145) | l'admin Anheart seulement, avec la cause et l'action. Sa clôture est ce qui rouvre la machine aux séances programmées. |
 
 Autres règles notables :
 
@@ -1364,7 +1421,9 @@ le site) :
    courante, `fit` et validée ; `fitness_expired` si sa date de validité est
    passée ; `consent_missing` si le consentement courant est absent ou retiré.
    Cet ordre est aussi celui des codes renvoyés dans `myLaunchRefusal`.
-4. Machine : `machine_offline` (statut écrit `offline`).
+4. Machine : `machine_offline` (statut écrit `offline`) ; puis
+   `incident_open` (ANH-145) tant qu'un incident de gravité haute de la
+   machine est ouvert ou analysé ([`incidents`](#incidents--registre-des-incidents-anh-145)).
 5. Paramètres médicaux : `medical_parameters_unavailable` si aucune version
    courante n'est inscrite ; `medical_parameters_unsigned` si le heartbeat a
    explicitement annoncé `null` (fichier absent ou signature non vérifiée sur
@@ -1467,6 +1526,7 @@ stable du refus (`ARMING_REFUSALS`, `convex/training.ts`, et
 | 1 | Le lancement attend depuis **au plus** `PENDING_SESSION_TTL_S` (300 s par défaut), compté depuis le lancement (`startedAt` d'une séance `pending`), sur l'horloge du serveur. `endReason` vaut alors « expired before the machine armed it ». | `expired_before_start` |
 | 2 | La machine existe et n'est pas supprimée. Une machine supprimée est refusée à sa clé (401) avant que son départ soit lu : ce code est surtout celui qu'écrit la tâche planifiée. | `machine_deleted_before_start` |
 | 3 | La machine est toujours dans l'organisation de la séance. | `organization_changed_before_start` |
+| 3 bis | Depuis 1.10 (ANH-145), aucun incident de gravité haute de la machine n'est ouvert ou analysé. | `incident_open` |
 | 4 | Celui qui a lancé (`startedById`) pourrait lancer **maintenant** cette séance, dans l'organisation de la machine, sous la règle de `launchAutoSession` : un patient pour lui-même, avec son droit de lancement (`machine_user_permissions`) ; un gestionnaire sur une machine qu'il gère, pour un patient qu'il suit ; un admin de l'organisation ; l'admin Anheart. Son rôle est relu dans ses adhésions actives (`rolesHeldNow`, `convex/lib/auth.ts`), pas dans un jeton : personne n'appelle à ce moment-là. Le pratiquant a toujours son compte (ni effacé, ni marqué supprimé dans Clerk) et reste membre actif de l'organisation. Un lancement sans `startedById` est refusé. | `right_revoked_before_start` |
 | 5 | Depuis 1.6 (ANH-143), la dernière saisie d'aptitude est de la version courante du questionnaire, `fit` et validée, sa validité n'est pas dépassée, puis le consentement au texte courant est actif dans l'organisation de la séance. Un changement pendant l'attente est refusé, dans cet ordre. | `rider_not_fit`, `fitness_expired`, `consent_missing` |
 | 6 | L'âge du pratiquant est connu et atteint l'âge minimum (`minRiderAge`) de la version médicale courante. | `age_refused_before_start` |
@@ -1477,7 +1537,8 @@ La zone cible n'est pas revérifiée à l'armement : aucune version ne peut êtr
 inscrite pendant qu'un lancement auto attend.
 
 **Séance de banc lestée (ANH-250, contrat 1.9).** Après les contrôles 1 à 3,
-un lancement de banc ne passe par aucun contrôle de pratiquant (4 à 8) : celui
+un lancement de banc ne passe ni par le contrôle des incidents (3 bis :
+personne à bord, ANH-145) ni par aucun contrôle de pratiquant (4 à 8) : celui
 qui l'a lancé pourrait encore le lancer, c'est-à-dire qu'il est admin ou
 gestionnaire et atteint la machine, son rôle relu dans ses adhésions actives
 (`rolesHeldNow`, `benchLauncherRefusal`), sinon `right_revoked_before_start` ;
@@ -1715,6 +1776,15 @@ ANH-137 ajoute les codes du catalogue de programmes (`programmes.ts`) :
 Un rapport refusé (type, taille, âge) répond `invalid_registry_file`, comme
 une pièce jointe du registre.
 
+ANH-145 ajoute quatre codes, du lancement et du registre des incidents :
+
+| Code | Sens |
+|---|---|
+| `incident_open` | Un incident de gravité haute de la machine est ouvert ou analysé : `launchAutoSession` refuse, et c'est aussi un refus à l'armement (409, contrat 1.10). |
+| `incident_not_found` | L'incident n'existe pas, ou sa machine n'est pas atteinte par l'appelant : même réponse. |
+| `incident_closed` | L'incident est clos : il n'est plus ni analysé ni clos de nouveau. |
+| `incident_text_required` | La cause ou l'action manque (vide une fois rognée) ou dépasse `INCIDENT_TEXT_MAX` (2000 caractères). |
+
 ### Fonctions par fichier
 
 Résumé des fonctions les plus utilisées par le site. Dans ces tableaux,
@@ -1824,8 +1894,10 @@ cible `programme`, lignes sans organisation (lisibles par l'admin Anheart
 seul) : `programme.created`, `programme.updated` (avec `fields`, les champs
 changés), `programme.report_attached`, `programme.validated` (avec
 `medicalParametersVersion`), `programme.published` et `programme.retired`.
-ANH-141 (configuration approuvée) et ANH-145 (incident clos) ajouteront les
-leurs de la même façon.
+ANH-141 (configuration approuvée) ajoutera les siennes de la même façon.
+ANH-145 a ajouté `incident.analyzed` et `incident.closed` (cible `incident`,
+détail `machineId` seul : ni la cause ni l'action, texte libre, n'entrent dans
+le journal ; elles restent sur l'incident).
 
 `audit()` lit une fois les métadonnées de requête puis insère une ligne,
 sans autre lecture, contrôle métier ni chemin de refus ajouté. Son contrat
@@ -2227,6 +2299,21 @@ sinon, identifiant illisible compris), la saisie (`invalid_request`,
 avec `submittedBy: "operator"` et une ligne d'audit dont l'acteur est la
 machine, sans détail.
 
+### `incidents.ts` (registre des incidents, ANH-145)
+
+Les incidents sont ouverts par le serveur
+([`incidents`](#incidents--registre-des-incidents-anh-145)) ; ces fonctions
+les lisent, les analysent et les closent. Un patient n'y a jamais accès
+(`not_authorized`).
+
+| Fonction | Type | Qui | Effet |
+|---|---|---|---|
+| `list` | query | admin Anheart (toutes organisations), admin d'organisation (la sienne), gestionnaire (ses machines) | Les incidents, du plus récent au plus ancien, `INCIDENT_LIST_LIMIT` (1000) au plus, avec le nom de la machine et les textes d'analyse : ce que la page liste et ce que l'admin Anheart exporte en CSV. |
+| `get` | query | qui a accès à la machine | La fiche : l'incident, les noms de qui l'a analysé et clos, la séance (statut, dates, raison de fin, état de l'enregistrement) et ses événements à `INCIDENT_EVENT_WINDOW_MS` (60 s) au plus de l'instant de l'incident, `INCIDENT_EVENT_LIMIT` (200) au plus, si l'appelant peut lire la séance, et `canClose` (admin Anheart, incident non clos). `null` pour une machine qu'il n'atteint pas. |
+| `analyze` | mutation | qui a accès à la machine | Écrit la cause (`analysis`) et l'action, rognées, de 1 à 2000 caractères chacune, et `analyzedBy` ; passe l'incident `analyzed`. Refusé sur un incident clos (`incident_closed`). Un incident `high` analysé ferme toujours les séances programmées. Audit `incident.analyzed`. |
+| `close` | mutation | admin Anheart seulement | Écrit la cause et l'action (mêmes bornes), `analyzedBy` s'il manquait, `closedBy`, `closedAt` ; passe l'incident `closed`. La clôture du dernier incident `high` ouvert ou analysé rouvre la machine aux séances programmées. Audit `incident.closed`. |
+| `openHighCount` | query interne | route `training/poll` | Le nombre d'incidents `high` de la machine `open` ou `analyzed` : le champ `incidents_open_high` du poll. |
+
 ### Rattrapage des résumés : `sessionReportsBackfill.ts` (ANH-234)
 
 La mutation interne `backfillSummaries` est à lancer une fois après le
@@ -2431,6 +2518,7 @@ structurée ne contient que des identifiants et des codes.
 | `session_failed` | `training.endTrainingSession` (route de fin) | La machine termine une séance comme échouée (refus de départ par la machine compris). Une seule fois : une fin renvoyée ne change rien. |
 | `session_failed` | `failBeforeStart` (`training.ts`, ANH-144) | Un lancement refusé avant que sa machine l'arme : par la tâche `sweepPendingSessions` (expiré, droit retiré, physiologie changée…), par la route de départ (`markTrainingStarted`, 409), ou expiré par un nouveau lancement. La liste rend son `endCode` (`reasonCode`), que la page traduit. Une confirmation répétée n'alerte pas de nouveau. |
 | `safety_verdict` | `training.storeEvents` | Un événement `verdict` dont l'action termine la séance : `RAMP_DOWN`, `QUICK_STOP`, `GO_SILENT`, ou une action que ce serveur ne sait pas lire (côté sûr). `FREEZE` et `REDUCE`, qui régulent sans arrêter, et `cleared` ne donnent rien. L'action la plus sévère est gardée. |
+| `incident_high` | `openIncident` (`convex/lib/incidents.ts`, ANH-145) | Un incident de gravité haute s'ouvre. Va aux seuls admins actifs de l'organisation Anheart (`anheartOrganization`), écrite dans cette organisation, jamais aux gestionnaires ni aux admins de l'organisation de la machine. Regroupée par séance avec l'alerte `incident_high` non lue de la même séance, jamais avec une autre (`sessionPriority` 0). Sans e-mail par défaut. |
 
 **Refus de la console (ANH-237).** La console envoie déjà le refus d'un
 lancement par `POST /api/machine/training/end` :
@@ -2581,9 +2669,7 @@ d'idempotence. Pour une ligne antérieure sans `email.type`, l'envoi reprend
 le type de l'alerte.
 « Machine hors ligne » reste sans e-mail par défaut.
 
-**Extension bloquée (ANH-145).** Les alertes d'incident attendent la livraison
-d'ANH-145. Aucun type ni table d'incident n'est créé ici.
-À cette livraison, ajouter un type dans `notificationTypeValidator` et
+**Un type de plus.** Ajouter un type dans `notificationTypeValidator` et
 `notificationEmailFields` de `convex/schema.ts`, une entrée de
 `NOTIFICATION_TYPES` dans `convex/lib/notifications.ts` avec son `foldsBy`,
 sa `sessionPriority` et `emailByDefault`, le choix correspondant dans
@@ -2592,7 +2678,10 @@ de la page des alertes (`app/[locale]/dashboard/notifications/page.tsx`),
 les libellés français et anglais d'`alertEmail`
 (`convex/lib/notificationEmail.ts`), et ses deux traductions dans
 `messages/fr.json` et `messages/en.json`. Appeler ensuite `scheduleAlert`
-là où l'incident est créé.
+là où l'événement est vu. `incident_high` (ANH-145) a suivi cette liste, sauf
+`TYPES` : la page ne propose pas de l'envoyer par e-mail, l'utilisateur a
+coupé les alertes par e-mail en production et seuls les admins Anheart la
+reçoivent.
 
 ---
 
@@ -2889,7 +2978,7 @@ déploiement.
 | `POST /api/machine/heartbeat` | `{live, programsEnabled, activeSessionId?, software_version, contract_version, medical_parameters_version\|null, config_hash\|null, health?}` ; champs de santé détaillés au §2 (`batteryLevel`, `wifiStrength` acceptés, non envoyés) ; 16 Kio max | `{success: true, serverTime, server_contract_version}` | toutes les 10 s |
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` | `{count}` | quand la révision du magasin change ; nouvel essai après 15 s ; limite 1 toutes les 10 s, réserve 5 |
 | `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent, fitnessQuestionnaireVersion\|null}]}` (`getRoster`, [`roster` du contrat 1.6](../contracts/machine-api.json)) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
-| `GET /api/machine/training/poll` | - | `{session: null, server_contract_version}` ou `{session: {sessionId, mode: "auto", profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, server_contract_version}` ou, depuis 1.9 et seulement à une console qui l'annonce, `{session: {sessionId, mode: "bench", occupancy: "ballast", ballastKg\|null, notes\|null, operatorName}, server_contract_version}` | toutes les 3 s, sans séance en cours ni lancement en attente, quels que soient les programmes depuis 1.9 (un lancement auto que la console ne prend pas est laissé comme s'il n'était pas là) |
+| `GET /api/machine/training/poll` | - | `{session: null, incidents_open_high, server_contract_version}` ou `{session: {sessionId, mode: "auto", profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName}, incidents_open_high, server_contract_version}` ou, depuis 1.9 et seulement à une console qui l'annonce, `{session: {sessionId, mode: "bench", occupancy: "ballast", ballastKg\|null, notes\|null, operatorName}, incidents_open_high, server_contract_version}`. `incidents_open_high` (depuis 1.10, ANH-145, à toute console) : le nombre d'incidents de gravité haute de la machine ouverts ou analysés, que le pré-vol lit | toutes les 3 s, sans séance en cours ni lancement en attente, quels que soient les programmes depuis 1.9 (un lancement auto que la console ne prend pas est laissé comme s'il n'était pas là) |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?}` | `{success: true}`, aussi pour une confirmation répétée d'un départ déjà confirmé dont la machine n'a encore rien envoyé et sans arrêt demandé, dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (contrat 1.8) ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
 | `POST /api/machine/training/local` | `{localRef, kind: "auto"\|"manual", startedAt, sessionAgeMs?, operatorName, profileId?, profileName?, zoneLowBpm?, zoneHighBpm?, totalDurationS?, subjectHrMax?, occupancy?, userId?, subjectLabel?}` | `{sessionId}` | avant tout autre envoi d'une séance démarrée à la machine, et de nouveau tant qu'elle n'est pas acquittée (après un redémarrage de la console aussi) ; idempotent par `localRef`, qui est la référence de l'enregistrement local ; limite 1 par minute, réserve 20 |
 | `GET /api/machine/training/status?sessionId=…` | - | `{status, active, stopRequested, server_contract_version}` ; 404 si inconnue. Répond quel que soit le contrat annoncé. | toutes les 3 s pendant une séance |
@@ -3844,6 +3933,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/gestionnairePatients.test.ts` | `users.assignPatientsToGestionnaire` : ajout seul, retrait seul, les deux, liste inchangée (aucune ligne réécrite), identifiant répété, patient d'une autre organisation traité comme un compte inconnu, admin d'une autre organisation refusé comme pour un gestionnaire inconnu, deux enregistrements successifs (ANH-208). |
 | `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |
 | `convex/cloudVersion.test.ts` | La constante `CLOUD_VERSION` est celle de `convex/VERSION` et celle que répond le code déployé (ANH-134). |
+| `convex/incidents.test.ts` | Le registre des incidents (ANH-145) : la règle de gravité, cas par cas ; ce qui ouvre un incident pour chaque `kind` (verdict `QUICK_STOP` ou `GO_SILENT` séance continuant, action inconnue, défaut du variateur, fins `emergency_stop`, `tick_exception` et `safety_verdict` avec ou sans verdict reçu, troisième refus de pré-vol de suite, enregistrement refusé) et ce qui n'en ouvre pas ; un seul incident pour un événement envoyé deux fois ou une fin renvoyée ; l'alerte aux seuls admins Anheart ; le blocage (lancement refusé `incident_open` ouvert puis analysé, accepté une fois clos, banc toujours possible, offre retirée et départ refusé 409 à l'armement) et le compte du poll ; la fiche (événements à 60 s, noms) et les bornes de l'analyse et de la clôture ; l'acceptation du ticket (`hr_critical` avec une personne à bord). Les droits sont dans la matrice. |
 
 ### Lire la matrice
 
@@ -4052,6 +4142,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.10` | Le registre des incidents (ANH-145, [entrée `incidents`](../contracts/machine-api.json)) : la réponse de `GET /api/machine/training/poll` porte `incidents_open_high`, le nombre d'incidents de gravité haute de la machine ouverts ou analysés, à toute console. Un refus à l'armement de plus en **409**, `incident_open`, pour un lancement automatique seulement. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.9` | Le lancement d'une séance de banc lestée depuis le site (ANH-250, [entrée `bench_launch`](../contracts/machine-api.json)) : le poll porte `mode` (`auto` pour un lancement auto, à côté de ses champs de toujours ; `bench` pour `{sessionId, mode, occupancy: "ballast", ballastKg, notes, operatorName}`). Un lancement de banc n'est offert qu'à un poll qui annonce 1.9 ou plus, et n'est créé que pour une machine dont le dernier heartbeat l'a annoncé (`machine_contract_too_old` sinon). Un refus à l'armement de plus en **409**, `machine_busy`, pour un lancement de banc seulement. Le manifeste d'enregistrement peut porter `ballast: {mass_kg}` ; le dépôt l'accepte, un manifeste sans lui reste valide. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.8` | Une confirmation répétée de `POST /api/machine/training/start` pour un départ déjà confirmé, dont la machine n'a encore rien envoyé (ni point, ni événement, ni heartbeat qui nomme la séance, ni fin) et dont l'arrêt n'a pas été demandé, répond **200** sans rien changer dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (ANH-240) ; tout autre cas reste refusé comme avant. La console garde l'offre restée sans réponse que le poll ne propose plus, pour cette séance seulement et 60 s au plus après le clic ; l'offre n'est plus confirmable dès que le serveur refuse, et disparaît au poll suivant qui ne la propose plus. Aucun champ ni code nouveau. |
 | `1.7` | Le retour du passager après une séance (ANH-146) : un événement `kind: "feedback"`, seul dans sa requête, sur `POST /api/machine/training/events`, stocké dans `session_feedback` et jamais dans `training_events` ([entrée `feedback_events`](../contracts/machine-api.json), [§6](#routes-utilisées-par-la-console-locale-raspberry-pisrccloud_syncpy)). Trois codes en **400** : `feedback_not_eligible`, `feedback_session_not_ended`, `feedback_window_closed`. Rien ne change pour les autres événements ni les autres routes. |
@@ -4097,7 +4188,18 @@ lit un lancement sans `mode` comme un lancement auto, comme avant. Le
 manifeste d'une séance de banc lestée porte `ballast` : déposé à un Convex
 `1.8`, il serait refusé (`.strict()`) ; d'où l'ordre, Convex d'abord.
 
-La console de ce dépôt est en `1.9`. Elle connaît les codes de refus à
+**Registre des incidents (1.10).** Le poll porte `incidents_open_high` à
+toute console, quelle que soit la version qu'elle annonce. Une console `1.8`
+ou antérieure l'ignore : son pré-vol ne le juge pas, et seul le serveur la
+protège, en refusant le lancement (`incident_open` au site) puis son départ
+(409 `incident_open`, un code qu'elle ne connaît pas : elle n'arme pas et
+n'envoie pas de fin). Une console `1.9` le lit déjà (ANH-142) et le juge
+**bloquant aussi au banc** : face à un serveur `1.10`, un incident grave
+ouvert lui refuse aussi une séance de banc, du côté sûr, jusqu'à sa mise à
+jour. Une console `1.10` face à un serveur `1.9` ne reçoit pas le champ : le
+contrôle reste orange « non annoncé », comme avant.
+
+La console de ce dépôt est en `1.10`. Elle connaît les codes de refus à
 l'armement et demande le départ après confirmation de son opérateur, avant
 d'armer ; elle n'arme que sur un 2xx de `training/start` et n'envoie pas de
 fin sur un 409. Une console antérieure, qui arme avant de confirmer, s'arrête

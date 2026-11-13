@@ -71,6 +71,13 @@ operator's physical confirmation and the bench attestation
 (:mod:`src.cloud_sync`); its start may be refused ``machine_busy`` (another
 open session holds the machine).
 
+Since 1.10 the poll answer carries ``incidents_open_high`` (ANH-145,
+``incidents`` of the shared file): how many high-severity incidents of the
+machine are open or analysed, which the pre-flight reads
+(:mod:`src.training.preflight`). While it is above 0 the dashboard refuses to
+launch an automatic session there, and refuses its start 409
+``incident_open``; a bench launch is never refused for it.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -113,7 +120,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.9")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.10")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -144,11 +151,13 @@ ARMING_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("hr_max_changed_before_start"),
         ErrorCode("rider_busy"),
         ErrorCode("machine_busy"),
+        ErrorCode("incident_open"),
     }
 )
-"""The codes of the 409 a server answers a start it refuses (contract 1.6, and
-``machine_busy`` since 1.9 for a bench launch; ``arming_refusals`` of the shared
-file). Pinned to the shared file."""
+"""The codes of the 409 a server answers a start it refuses (contract 1.6,
+``machine_busy`` since 1.9 for a bench launch, ``incident_open`` since 1.10 for
+an automatic one; ``arming_refusals`` of the shared file). Pinned to the shared
+file."""
 
 STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
     {

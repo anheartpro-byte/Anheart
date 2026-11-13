@@ -62,6 +62,7 @@ const DEFAULTS = {
   session_failed: true,
   drive_fault: true,
   safety_verdict: true,
+  incident_high: false,
 };
 
 function serverHas(alerts: Alert[], emailAvailable = true) {

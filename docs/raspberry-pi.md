@@ -2585,7 +2585,7 @@ exactement pareil, sans tableau de bord.
 | Pi → Convex | télémétrie à 1 Hz **relue dans `ticks.csv`** : le premier tic de chaque seconde entière de la séance | `POST /api/machine/training/telemetry` | toutes les 5 s quand la séance est à jour ; un lot de 300 points au plus toutes les 3 s quand elle a du retard |
 | Pi → Convex | événements de la séance **relus dans `events.jsonl`**, rangés après filtrage des pings `attendant_ping` et événements `t < 0` | `POST /api/machine/training/events` | avec la télémétrie, 200 au plus par envoi |
 | Pi → Convex | fin de séance, avec la raison que porte l'enregistrement | `POST /api/machine/training/end` | quand l'enregistrement est fermé et sa télémétrie acquittée |
-| Convex → Pi | le lancement proposé au dernier poll, avec la version du contrat du serveur. AUTO : profil, identifiant de passager, FC max, âge (déduit de l'année de naissance), libellé reçu pour la retenue locale. BANC LESTÉ (contrat 1.9, ANH-250) : masse déclarée, note, lanceur, aucun passager | `GET /api/machine/training/poll` | toutes les 3 s au repos, quels que soient les programmes, y compris tant qu'une offre attend une décision et qu'aucune séance ne tourne |
+| Convex → Pi | le lancement proposé au dernier poll, avec la version du contrat du serveur. AUTO : profil, identifiant de passager, FC max, âge (déduit de l'année de naissance), libellé reçu pour la retenue locale. BANC LESTÉ (contrat 1.9, ANH-250) : masse déclarée, note, lanceur, aucun passager. Le compte des incidents graves ouverts de la machine (`incidents_open_high`, contrat 1.10, ANH-145), que lit le pré-vol | `GET /api/machine/training/poll` | toutes les 3 s au repos, quels que soient les programmes, y compris tant qu'une offre attend une décision et qu'aucune séance ne tourne |
 | Convex → Pi | la liste des passagers de la machine : identifiant, nom, FC max, année de naissance ([4.5](#45-le-passager--la-liste-du-tableau-de-bord-anh-84)), gardée en mémoire seulement | `GET /api/machine/roster` | au démarrage, puis toutes les 60 s au repos, par une tâche à elle |
 | Convex → Pi | une demande d'arrêt transmise au chemin STOP ordinaire : la consigne descend aux limites de mouvement, même sous FREEZE (section 7) | `GET /api/machine/training/status` | dès que le tableau de bord tient la séance pour démarrée, puis toutes les 3 s tant qu'elle n'est pas finie, par une **tâche à part** (`cloud_stop_step`) : la question ne passe derrière aucun envoi ([8.6](#86-ce-que-la-synchronisation-ne-peut-pas-coûter)) |
 
@@ -3770,14 +3770,14 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.9`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.10`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.9`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.10`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`
@@ -3840,6 +3840,14 @@ Ce que fait la console :
   peut être refusé `machine_busy` (une autre séance tient la machine). Son
   manifeste porte `ballast` : l'ordre de déploiement est Convex d'abord, puis
   l'image du Pi.
+* **Le registre des incidents** (contrat 1.10, ANH-145) : la réponse du poll
+  porte `incidents_open_high`, le nombre d'incidents de gravité haute de la
+  machine ouverts ou analysés ; le pré-vol le lit (contrôle `incidents`,
+  [4.2](#le-pré-vol-anh-142)). Un compte absent, négatif ou qui n'est pas un
+  entier compte comme non annoncé ; le dernier compte lu reste tant qu'un poll
+  échoue. Le départ d'un programme lancé du site peut être refusé
+  `incident_open` (409) : la console n'arme pas et n'envoie pas de fin. Face à
+  un serveur `1.9`, le champ manque : le contrôle reste orange.
 * **Un serveur qui refuse le contrat** (réponse 426, code
   `contract_unsupported`) : la console l'écrit dans son journal et affiche
   `serveur incompatible (contrat X vs Y)`, X étant sa version et Y les

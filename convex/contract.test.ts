@@ -153,7 +153,7 @@ async function startAfter(
 describe("ANH-133 EX-1 one contract, defined in contracts/machine-api.json", () => {
   it("serves the version, header and error codes of the shared file", () => {
     expect(CONTRACT_VERSION).toBe(shared.contract_version);
-    expect(CONTRACT_VERSION).toBe("1.9");
+    expect(CONTRACT_VERSION).toBe("1.10");
     expect(CONTRACT_HEADER).toBe(shared.header);
     expect(MACHINE_ERROR_CODES).toEqual(Object.keys(shared.error_codes));
     expect(MACHINE_ERROR_CODES.length).toBeGreaterThan(0);
@@ -409,6 +409,7 @@ describe("ANH-133 EX-4 the poll answer names the server's contract", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       session: null,
+      incidents_open_high: 0,
       [shared.server_version_field]: CONTRACT_VERSION,
     });
   });
@@ -624,6 +625,28 @@ describe("ANH-133 EX-5 every refusal is {error: <stable code>, message}", () => 
         await seedSession(w, w.machine, "active");
         return post(w, "/api/machine/training/start", { sessionId });
       },
+    },
+    {
+      name: "training/start: an auto launch while a high incident of its machine is open",
+      status: 409,
+      code: "incident_open",
+      run: (w) =>
+        startAfter(w, (sessionId) =>
+          w.t.run((ctx) =>
+            ctx.db.insert("incidents", {
+              organizationId: w.organizationId,
+              machineId: w.machine,
+              sessionId,
+              kind: "manual",
+              rule: "manual",
+              t: 0,
+              severity: "high",
+              occupied: false,
+              status: "open",
+              openedAt: Date.now(),
+            }),
+          ),
+        ),
     },
     {
       name: "training/start: an identifier that is not one",

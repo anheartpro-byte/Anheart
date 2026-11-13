@@ -1642,6 +1642,7 @@ describe("what a machine reports through its routes", () => {
         subjectAge: null,
         operatorName: "dashboard",
       },
+      incidents_open_high: 0,
       server_contract_version: CONTRACT_VERSION,
     });
   });

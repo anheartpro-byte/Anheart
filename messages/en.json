@@ -128,6 +128,10 @@
       },
       "record": {
         "deleted": "Recording deleted"
+      },
+      "incident": {
+        "analyzed": "Incident analysed",
+        "closed": "Incident closed"
       }
     },
     "targets": {
@@ -141,7 +145,8 @@
       "software_release": "Software release",
       "medical_parameters_version": "Medical parameters version",
       "programme": "Programme",
-      "patient_invitation": "Patient invitation"
+      "patient_invitation": "Patient invitation",
+      "incident": "Incident"
     },
     "roles": {
       "admin": "Anheart admin",
@@ -328,6 +333,10 @@
     "release_notes_too_long": "Notes are limited to 2000 characters.",
     "level_change_needs_notes": "Changing the validation level of a recorded version needs notes that say why.",
     "notification_not_found": "Alert not found.",
+    "incident_open": "A high-severity incident is open on this machine: programmed sessions are closed there until an Anheart admin closes it (Incidents page). A bench session remains possible.",
+    "incident_not_found": "Incident not found.",
+    "incident_closed": "This incident is closed.",
+    "incident_text_required": "Enter the cause and the action, 2000 characters at most each.",
     "invitation_failed": "The invitation delivery was not confirmed. Please retry.",
     "invalid_invitation": "Check the name and email address.",
     "invitation_unavailable": "This invitation cannot be created. Check your permissions and organization members.",
@@ -1507,7 +1516,8 @@
       "machine_offline": "Machine offline",
       "session_failed": "Session failed",
       "drive_fault": "Drive fault",
-      "safety_verdict": "Stop requested by the safety layer"
+      "safety_verdict": "Stop requested by the safety layer",
+      "incident_high": "High-severity incident opened"
     },
     "verdict": {
       "RAMP_DOWN": "Controlled stop requested",

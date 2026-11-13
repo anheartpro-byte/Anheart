@@ -2425,6 +2425,7 @@ quand il ne la propose plus (carte « Depart distant » ci-dessus).
 | `FC max du pratiquant modifiee avant le depart (hr_max_changed_before_start)` | la FC max a changé depuis la création du lancement |
 | `pratiquant deja dans une autre seance en attente ou en cours : une seule a la fois (rider_busy)` | le pratiquant est déjà tenu par une autre séance |
 | `machine deja tenue par une autre seance en attente ou en cours : une seule a la fois (machine_busy)` | séance de banc lestée lancée du site (contrat 1.9) : une autre séance tient encore la machine |
+| `incident grave ouvert sur cette machine : seances programmees fermees jusqu'a sa cloture (incident_open)` | programme lancé du site (contrat 1.10, ANH-145) : un incident de gravité haute de la machine est ouvert ou analysé, jusqu'à sa clôture par un admin Anheart |
 | `attestation requise : capsule lestee, aucune personne a bord, personne dans le rayon du bras` | confirmation d'une séance de banc lestée sans la case d'attestation cochée (409 `bench_unattested`) ; rien n'est envoyé |
 | `depart distant refuse (HTTP <n>, <code>)` (ou `depart distant refuse (HTTP <n>)` sans code) | autre refus de `training/start`; le texte reçu du tableau de bord n'est pas repris |
 | `depart distant non confirme : confirmation indisponible` | lien retenu, par exemple réseau, clé, délai, 429 ou 5xx ; aucun départ n'est armé |

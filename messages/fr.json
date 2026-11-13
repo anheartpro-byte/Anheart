@@ -128,6 +128,10 @@
       },
       "record": {
         "deleted": "Enregistrement supprimé"
+      },
+      "incident": {
+        "analyzed": "Incident analysé",
+        "closed": "Incident clos"
       }
     },
     "targets": {
@@ -141,7 +145,8 @@
       "software_release": "Version logicielle",
       "medical_parameters_version": "Version des paramètres médicaux",
       "programme": "Programme",
-      "patient_invitation": "Invitation du patient"
+      "patient_invitation": "Invitation du patient",
+      "incident": "Incident"
     },
     "roles": {
       "admin": "Admin Anheart",
@@ -328,6 +333,10 @@
     "release_notes_too_long": "Les notes sont limitées à 2000 caractères.",
     "level_change_needs_notes": "Changer le niveau de validation d'une version déjà enregistrée exige des notes qui disent pourquoi.",
     "notification_not_found": "Alerte introuvable.",
+    "incident_open": "Un incident grave est ouvert sur cette machine : les séances programmées y sont fermées jusqu'à sa clôture par un admin Anheart (page Incidents). Une séance de banc reste possible.",
+    "incident_not_found": "Incident introuvable.",
+    "incident_closed": "Cet incident est clos.",
+    "incident_text_required": "Renseignez la cause et l'action, 2000 caractères au plus chacune.",
     "invitation_failed": "L'envoi de l'invitation n'a pas été confirmé. Réessayez.",
     "invalid_invitation": "Vérifiez le nom et l'adresse e-mail.",
     "invitation_unavailable": "Cette invitation ne peut pas être créée. Vérifiez vos droits et les membres de votre organisation.",
@@ -1507,7 +1516,8 @@
       "machine_offline": "Machine hors ligne",
       "session_failed": "Séance échouée",
       "drive_fault": "Défaut variateur",
-      "safety_verdict": "Arrêt demandé par la sécurité"
+      "safety_verdict": "Arrêt demandé par la sécurité",
+      "incident_high": "Incident grave ouvert"
     },
     "verdict": {
       "RAMP_DOWN": "Arrêt progressif demandé",
