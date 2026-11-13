@@ -249,8 +249,10 @@ function LaunchForm({
     blocker = t("training.launch.hrMaxMissing");
   else if (notWholeOnRecord("birthYear"))
     blocker = t("training.launch.birthYearMissing");
-  else if (riderIsPatient && riderDoc) {
-    const birthYear = readOptionalNumber(riderDoc, "birthYear");
+  else if (riderRecord) {
+    // Same rule as the server (training.ts `ageFrom`), whoever rides: a
+    // patient launching for himself sees the refusal before the click.
+    const birthYear = readOptionalNumber(riderRecord, "birthYear");
     if (birthYear === undefined)
       blocker = t("training.launch.birthYearMissing");
     else if (

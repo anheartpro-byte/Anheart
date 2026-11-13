@@ -128,13 +128,17 @@ function machine(over: Partial<Machine> = {}) {
   });
 }
 
-function signedInAs(role: "admin" | "org_admin" | "gestionnaire" | "user") {
+function signedInAs(
+  role: "admin" | "org_admin" | "gestionnaire" | "user",
+  record: object = { birthYear: 1986 },
+) {
   answer("users:getCurrentUser", {
     _id: "me",
     role,
     firstName: "Ada",
     lastName: "Lovelace",
     email: "ada@anheart.test",
+    ...record,
   });
 }
 
@@ -618,6 +622,38 @@ describe("ANH-203 launch window: what stops a launch before the server is asked"
     );
     expect(screen.text()).not.toContain("au moins 18 ans");
     expect(launchDisabled(screen)).toBe(false);
+  });
+
+  it("a patient under 18 who launches for himself sees the refusal before the click, one of 18 does not", async () => {
+    signedInAs("user", { birthYear: 2008 });
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain("au moins 18 ans");
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+
+    signedInAs("user", { birthYear: 2007 });
+    screen.rerender(
+      <LaunchTrainingModal
+        open
+        onOpenChange={() => {}}
+        machineId={machineId}
+        profileId={ENDURANCE.profileId}
+      />,
+    );
+    expect(screen.text()).not.toContain("au moins 18 ans");
+    expect(launchDisabled(screen)).toBe(false);
+  });
+
+  it("a patient whose own birth year is unknown cannot launch for himself", () => {
+    signedInAs("user", {});
+    machine();
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain(t.birthYearMissing);
+    expect(launchDisabled(screen)).toBe(true);
   });
 
   it("a patient with neither a max heart rate nor a birth year, on record or in his launch right, is refused", async () => {

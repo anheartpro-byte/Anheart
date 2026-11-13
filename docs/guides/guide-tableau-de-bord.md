@@ -1039,9 +1039,9 @@ serveur refusera) :
 Les deux règles : **zone haute ≤ 90 % de la FC max** (arrondi à l'entier
 inférieur) et **FC limite du programme ≤ FC max**.
 
-> Pour « Moi-même », la fenêtre ne contrôle pas l'âge à l'avance : c'est le
-> serveur qui refusera si votre année de naissance manque. Elle bloque
-> seulement si votre année enregistrée n'est pas un nombre entier.
+> Pour « Moi-même » comme pour un patient, la fenêtre applique la règle d'âge
+> du serveur : elle bloque avant le clic si l'année de naissance manque ou
+> donne un âge trop jeune.
 
 **Après « Lancer »** : le serveur refait tous les contrôles ; en cas de refus,
 son message (en anglais, voir [§7](#7-tableau-des-messages)) s'affiche en rouge
@@ -2752,9 +2752,6 @@ Pour le mainteneur de la documentation technique :
 
 - elle ne signale pas le défaut de **Assigner des Machines** (§9.2 n°2), ni
   l'erreur affichée au gestionnaire qui modifie une machine (n°4) ;
-- elle dit que la fenêtre bloque le lancement pour un pratiquant de moins de 18
-  ans : ce contrôle ne vaut que pour un patient choisi dans la liste, pas pour
-  « Moi-même » ;
 - elle ne précise pas qu'un gestionnaire peut lancer pour ses patients **sans**
   qu'ils aient le droit de lancement ;
 - son encadré d'en tête dit le site en production avec une version précédente

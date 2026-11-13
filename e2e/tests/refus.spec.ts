@@ -201,13 +201,12 @@ test("1. un passager mineur ne peut pas lancer, la raison est affichée", async 
   await expect(forRider.getByText(say("fr", "training.launch.tooYoung", { min: minAge }))).toBeVisible();
   await expect(forRider.getByRole("button", { name: say("fr", "training.launch.submit"), exact: true })).toBeDisabled();
 
-  // The passenger's own launch is refused by the server, and stays on the page.
+  // The passenger's own dialog says it before any launch too.
   const rider = await pageAs("passagerMineurA");
   const dialog = await openLaunch(rider, "fr", machine.name);
   await choose(rider, dialog.getByRole("combobox").first(), new RegExp(`^${escape(programme.name)} ·`));
-  await dialog.getByRole("button", { name: say("fr", "training.launch.submit"), exact: true }).click();
-  await expect(dialog.getByText(say("fr", "errors.rider_too_young"))).toBeVisible();
-  await expect(rider).toHaveURL(/\/fr\/dashboard\/my-machines$/);
+  await expect(dialog.getByText(say("fr", "training.launch.tooYoung", { min: minAge }))).toBeVisible();
+  await expect(dialog.getByRole("button", { name: say("fr", "training.launch.submit"), exact: true })).toBeDisabled();
 
   expect(await sessionsOn(run, machine.id), "aucune séance créée").toHaveLength(0);
 });
