@@ -44,6 +44,7 @@ export default function SessionReportPage({
   const { id } = use(params);
   const sessionId = id as Id<"sessions">;
   const t = useTranslations("sessionReport");
+  const problem = useCatalogLabel("sessionReport.recordProblems");
   const tFeedback = useTranslations("sessionFeedback");
   const kind = useCatalogLabel("training.kind");
   const status = useSessionStatusLabel();
@@ -99,6 +100,9 @@ export default function SessionReportPage({
 
   const finished =
     session.status === "completed" || session.status === "failed";
+  // A session that never started has no report worth printing: a title and a note.
+  const notStarted =
+    summary !== null && "absent" in summary && summary.absent === "not_started";
   const dateLocale = locale === "fr" ? fr : enUS;
   const rider = session.patient
     ? `${session.patient.firstName} ${session.patient.lastName}`
@@ -138,7 +142,11 @@ export default function SessionReportPage({
             {label}
           </Button>
         ))}
-        <Button size="sm" disabled={!finished} onClick={() => window.print()}>
+        <Button
+          size="sm"
+          disabled={!finished || notStarted}
+          onClick={() => window.print()}
+        >
           <Printer className="mr-2 h-4 w-4" />
           {t("download")}
         </Button>
@@ -190,7 +198,9 @@ export default function SessionReportPage({
               </p>
               {summary.recordProblem !== null && (
                 <p className="text-sm text-amber-700 dark:text-amber-400 print:text-black dark:print:text-black">
-                  {t("recordProblem", { problem: summary.recordProblem })}
+                  {t("recordProblem", {
+                    problem: problem(summary.recordProblem),
+                  })}
                 </p>
               )}
               <SessionSummaryFigures

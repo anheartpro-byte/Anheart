@@ -196,8 +196,12 @@ def test_an_unknown_key_of_the_final_observation_is_still_refused() -> None:
 
 
 @pytest.mark.parametrize("key", ZONE_KEYS)
-@pytest.mark.parametrize("bad", ["-0.2", "NaN", "Infinity", "-Infinity", "1e400"])
+@pytest.mark.parametrize(
+    "bad", ["-0.2", "NaN", "Infinity", "-Infinity", "1e400", '"12.5"', "true", "false"]
+)
 def test_a_zone_counter_that_is_not_a_finite_duration_is_refused(key: str, bad: str) -> None:
+    """A number of seconds, positive or zero, finite: never a text or a boolean either, which
+    a lax reader would have taken for 12.5 or 1.0 where Convex refuses the manifest."""
     text = MANIFEST_FIXTURE.read_text(encoding="utf-8")
     written = {"zone_in_s": "14.2", "zone_above_s": "3.4", "zone_below_s": "6.0"}[key]
     assert text.count(f'"{key}":{written}') == 1

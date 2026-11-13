@@ -1485,6 +1485,19 @@
     "provisionalNote": "Calculé sur la télémétrie à 1 Hz en attendant l'enregistrement de la séance : il sera remplacé par le résumé de l'enregistrement déposé.",
     "finalNote": "Calculé sur l'enregistrement déposé de la séance (tics à 5 Hz).",
     "recordProblem": "L'enregistrement déposé n'a pas pu être lu ({problem}) : le résumé reste provisoire.",
+    "recordProblems": {
+      "missing_file": "un fichier manque",
+      "too_large": "un fichier est trop grand",
+      "invalid_manifest": "manifeste illisible",
+      "invalid_encoding": "encodage illisible",
+      "invalid_ticks": "tics illisibles",
+      "no_session_ticks": "aucun tic de séance",
+      "summary_failed": "le calcul du résumé a échoué"
+    },
+    "zoneSource": {
+      "console": "Temps en zone compté par la console pendant la séance.",
+      "ticks": "Temps en zone recompté sur les tics de l'enregistrement."
+    },
     "none": "Le résumé de cette séance n'est pas encore calculé.",
     "notStartedNote": "Cette séance n'a pas démarré sur la machine : elle n'a pas de résumé.",
     "notStarted": "Non démarrée",

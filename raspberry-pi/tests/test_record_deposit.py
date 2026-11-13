@@ -443,6 +443,42 @@ async def test_rejected_blob_is_replaced_instead_of_reusing_the_deleted_id(tmp_p
     await deposit.close()
 
 
+async def test_a_file_the_server_refused_is_sent_again_only_after_a_growing_wait(
+    tmp_path: Path,
+) -> None:
+    """The refusal comes back as long as the server is the same: each new sending of the
+    refused manifest waits longer, never once a second (the pace of a success)."""
+    record = ready_record(tmp_path / "records")
+    refused = {
+        "record": "rejected",
+        "expectedCount": 0,
+        "files": [
+            {
+                "path": "manifest.json",
+                "sha256": "bad",
+                "verified": False,
+                "rejection": "invalid_manifest",
+            }
+        ],
+    }
+    server = ScriptedDepositServer(status_reply=Ok(refused))
+    clock = ManualClock()
+    deposit = RecordDeposit(record.parent, clock, server, server.upload)
+    await deposit.step()
+    assert server.uploads_sent == 1
+    asked = server.calls
+    clock.advance(Seconds(1))
+    deposit.schedule()
+    await asyncio.sleep(0)
+    assert server.calls == asked, "asked again within a second, as after a success"
+    clock.advance(Seconds(3))
+    deposit.schedule()
+    await deposit.close()
+    await deposit.step()
+    assert server.calls > asked
+    await deposit.close()
+
+
 async def test_saved_upload_receipt_is_committed_again_without_sending_file(tmp_path: Path) -> None:
     record = ready_record(tmp_path / "records")
     cursor = load(record)

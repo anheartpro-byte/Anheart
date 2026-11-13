@@ -1011,7 +1011,7 @@ un rejeu conforme ne remplace pas ce contrôle.
 Le reader reste strict : une clé inconnue refuse la ligne, le bloc ou le
 manifeste. Les ajouts restent au schéma 2 et n'ajoutent aucun kind
 d'événement. Certains ajoutent des clés au manifeste, dont `subject_fit` et
-`fitness_questionnaire_version` (ANH-143, dernier paragraphe de cette
+`fitness_questionnaire_version` (ANH-143, avant-dernier paragraphe de cette
 section) et les trois compteurs de zone de `end_observation` (ANH-234). Les
 versions ci-dessous désignent les révisions du lecteur, pas une nouvelle
 valeur de `schema_version` :

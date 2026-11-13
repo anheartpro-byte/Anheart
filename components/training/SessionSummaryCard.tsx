@@ -6,6 +6,7 @@ import { ClipboardList, FileDown } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Link } from "@/i18n/navigation";
+import { useCatalogLabel } from "@/components/dashboard/statusLabels";
 import {
   Card,
   CardAction,
@@ -30,6 +31,7 @@ export function SessionSummaryCard({
   sessionId: Id<"sessions">;
 }) {
   const t = useTranslations("sessionReport");
+  const problem = useCatalogLabel("sessionReport.recordProblems");
   const summary = useQuery(api.sessionReports.getSummary, { sessionId });
 
   if (summary === undefined) return <Skeleton className="h-48 w-full" />;
@@ -69,7 +71,7 @@ export function SessionSummaryCard({
         <CardContent className="space-y-3">
           {report.recordProblem !== null && (
             <p className="text-sm text-amber-700 dark:text-amber-400">
-              {t("recordProblem", { problem: report.recordProblem })}
+              {t("recordProblem", { problem: problem(report.recordProblem) })}
             </p>
           )}
           <SessionSummaryFigures

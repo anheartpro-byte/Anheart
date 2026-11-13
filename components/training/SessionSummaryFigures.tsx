@@ -97,6 +97,11 @@ export function SessionSummaryFigures({
           </Figure>
         </dl>
       )}
+      {zone?.source !== undefined && (
+        <p className="text-xs text-muted-foreground">
+          {t(`zoneSource.${zone.source}`)}
+        </p>
+      )}
 
       <div className="print:break-inside-avoid">
         <p className="mb-2 font-semibold">{t("gTitle")}</p>

@@ -882,7 +882,7 @@ d'enregistrement ; le rapport d'une séance d'entraînement est la page
 [Rapport d'une séance](#rapport-dune-séance--frdashboardsessionsidreport). La
 page Rapports ne liste que les séances `completed`. Une phrase sous la
 description, même quand la liste est vide, explique comment ouvrir le rapport
-d'un entraînement échoué : **Sessions > Échouées > Voir**, puis la carte
+d'un entraînement échoué : **Sessions > Échouées**, l'œil « Voir le rapport » de sa ligne, puis la carte
 **Résumé de la séance > Rapport PDF**, ou l'historique du passager depuis sa
 fiche si vous y avez accès. Tous les rôles, y compris le passager, peuvent
 ouvrir l'onglet **Échouées** pour les séances qu'ils sont autorisés à lire.

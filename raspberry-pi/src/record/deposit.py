@@ -162,11 +162,15 @@ class RecordDeposit:
             pending.append((name, rejected))
             if len(pending) >= FILES_PER_STEP:
                 break
-        return all(
+        sent = all(
             await asyncio.gather(
                 *(self._send_bounded(record, name, rejected) for name, rejected in pending)
             )
         )
+        # A file the server refused, sent again as it was: only a later server can take it.
+        # Not a success, so the next attempt waits, doubling, and the records after this
+        # one go first, instead of the same refusal coming back every second.
+        return sent and not any(rejected for _name, rejected in pending)
 
     async def _complete(self, record: DepositRecord, remote: RemoteStatus) -> bool:
         cursor = remote.cursor

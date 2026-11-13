@@ -1485,6 +1485,19 @@
     "provisionalNote": "Computed from the 1 Hz telemetry until the session's record arrives: it will be replaced by the summary of the deposited record.",
     "finalNote": "Computed from the session's deposited record (5 Hz ticks).",
     "recordProblem": "The deposited record could not be read ({problem}): the summary stays provisional.",
+    "recordProblems": {
+      "missing_file": "a file is missing",
+      "too_large": "a file is too large",
+      "invalid_manifest": "unreadable manifest",
+      "invalid_encoding": "unreadable encoding",
+      "invalid_ticks": "unreadable ticks",
+      "no_session_ticks": "no session ticks",
+      "summary_failed": "the summary could not be computed"
+    },
+    "zoneSource": {
+      "console": "Time in zone counted by the console during the session.",
+      "ticks": "Time in zone counted again on the ticks of the record."
+    },
     "none": "The summary of this session is not computed yet.",
     "notStartedNote": "This session did not start on the machine: it has no summary.",
     "notStarted": "Not started",
