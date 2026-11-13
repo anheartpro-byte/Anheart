@@ -45,6 +45,7 @@ from simulation.endurance_measures import (
     check_rss,
     check_sessions,
     check_tick,
+    check_tick_gap,
     darwin_memory,
     document,
     footprint,
@@ -61,6 +62,7 @@ from simulation.endurance_measures import (
     warm_up,
     write_report,
 )
+from simulation.harness import PANEL_SAFETY
 from simulation.tests.conftest import document as parsed
 from simulation.tests.conftest import obj, seq
 from src.record.cursor import BASELINE_NAME, CURSOR_SUFFIX
@@ -359,8 +361,13 @@ def test_ex1_a_reading_holds_the_four_measures(tmp_path: Path) -> None:
     record(root, OPEN, blocks=3, closed=False)
     tick = Quantiles(count=5, p50=1.0, p99=2.0, highest=3.0)
 
-    reading = Sampler(DataFolder(root)).take(42.0, tick)
+    sampler = Sampler(DataFolder(root))
+    reading = sampler.take(42.0, tick)
+    # Counted at every reading, not once for the run: a descriptor opened since is seen.
+    with (tmp_path / "held").open("w", encoding="ascii"):
+        held = sampler.take(43.0, None)
 
+    assert held.descriptors == reading.descriptors + 1
     assert reading.at == 42.0
     assert reading.rss > 10 * MIB
     assert reading.descriptors >= 3
@@ -505,6 +512,24 @@ def test_ex2_memory_that_grows_by_more_than_a_tenth_after_the_first_hour_fails()
     assert "trop peu" in within.measured, "a run too short to judge is not a run that passes"
 
 
+def test_ex2_memory_is_held_to_ten_per_cent_exactly() -> None:
+    """At 10 % from the first reading after the warm-up it passes, at 11 % it fails."""
+    flat = tuple(replace(sample, rss=100 * MIB) for sample in steady().samples)
+
+    def peak(rss_mib: int) -> Check:
+        top = tuple(
+            replace(sample, rss=rss_mib * MIB) if index == len(flat) // 2 else sample
+            for index, sample in enumerate(flat)
+        )
+        return check_rss(replace(steady(), samples=top))
+
+    assert peak(110).status is Status.PASS
+    assert peak(90).status is Status.PASS
+    assert peak(111).status is Status.FAIL
+    assert peak(89).status is Status.FAIL
+    assert "écart maximal 11.0%" in peak(111).measured
+
+
 def test_ex2_a_tick_whose_99th_centile_reaches_150_ms_fails() -> None:
     run = steady()
 
@@ -522,15 +547,56 @@ def test_ex2_a_descriptor_that_leaks_fails_and_descriptors_that_come_and_go_do_n
     leaking = tuple(
         replace(sample, descriptors=12 + index // 10) for index, sample in enumerate(run.samples)
     )
+    # One reading of the second half caught descriptors open for a moment: the floor stays.
+    transient = tuple(
+        replace(sample, descriptors=40) if index == 80 else sample
+        for index, sample in enumerate(run.samples)
+    )
 
     leak = check_descriptors(replace(run, samples=leaking))
+    noise = check_descriptors(replace(run, samples=transient))
     few = check_descriptors(replace(run, samples=run.samples[:6]))
 
     assert check_descriptors(run).status is Status.PASS
     assert leak.status is Status.FAIL
-    assert "au plus 16 puis 21" in leak.measured
+    assert "plancher 12 puis 16 descripteurs ouverts (au plus 21, 21 à la fin)" in leak.measured
+    assert noise.status is Status.PASS
+    assert "plancher 12 puis 12 descripteurs ouverts (au plus 40," in noise.measured
     assert few.status is Status.FAIL
     assert "trop peu" in few.measured
+
+
+STALL_MS = PANEL_SAFETY.loop_stall_freeze_gap * 1000.0
+"""The gap at which the console's ``loop_stall`` rule freezes the arm, in ms."""
+
+
+def test_ex2_in_real_time_a_gap_between_ticks_that_reaches_the_loop_stall_bound_fails() -> None:
+    gaps = Quantiles(count=36_000, p50=201.0, p99=229.0, highest=517.0)
+    run = replace(steady(), mode=Mode.REAL_TIME, period=gaps, stall=STALL_MS)
+
+    fine = check_tick_gap(run)
+    stalled = check_tick_gap(replace(run, period=replace(gaps, highest=STALL_MS)))
+    unread = check_tick_gap(replace(run, period=None))
+
+    assert fine is not None
+    assert fine.status is Status.PASS
+    assert fine.threshold == "maximum < 600 ms (gel loop_stall de la console)"
+    assert "maximum 517.0 ms sur 36000 écarts" in fine.measured
+    assert stalled is not None
+    assert stalled.status is Status.FAIL, "reaching the bound is a stall"
+    assert unread is not None
+    assert (unread.status, unread.measured) == (Status.FAIL, "aucun écart entre deux tics relevé")
+    assert check_tick_gap(steady()) is None, "on the manual clock every gap is 200 ms"
+    assert [check.name for check in judge(run)] == [
+        "rss",
+        "tick",
+        "tick_gap",
+        "descriptors",
+        "data",
+        "rotation",
+        "sessions",
+    ]
+    assert not passed(judge(replace(run, period=replace(gaps, highest=1005.9))))
 
 
 def test_ex2_the_data_folder_is_held_to_what_the_arming_gate_plans_for() -> None:

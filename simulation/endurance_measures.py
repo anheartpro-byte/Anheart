@@ -20,9 +20,13 @@ And it judges a run against the thresholds of the ticket (:func:`judge`):
     than two hours) every reading stays within 10 % of the first one;
 ``tick``
     the 99th centile of the tick stays under 150 ms;
+``tick_gap``
+    in real time, the longest gap between two ticks stays under the gap at
+    which the console's own ``loop_stall`` rule freezes the arm: no stall;
 ``descriptors``
-    the highest count of the second half of the run does not exceed the
-    highest count of the first half: a descriptor that leaks grows without end;
+    the lowest count of the second half of the run does not exceed the lowest
+    count of the first half: a descriptor that leaks is never closed, and
+    raises the floor; one open for a moment raises one reading only;
 ``data``
     what the code guarantees today about the data folder: a record takes no
     more files than the arming gate plans for (five raw blocks a second), no
@@ -550,6 +554,10 @@ class Run:
     period: Quantiles | None = None
     """Time between two ticks, real-time runs only: what the ``loop_stall`` rule judges."""
 
+    stall: float | None = None
+    """The gap between two ticks, in ms, at which the console's ``loop_stall`` rule
+    freezes the arm: read from its own supervisor. Real-time runs only."""
+
     sessions: tuple[Session, ...] = ()
     sync: Sync | None = None
     data: DataState | None = None
@@ -643,9 +651,40 @@ def check_tick(run: Run) -> Check | None:
     return Check("tick", status, threshold, measured)
 
 
+def check_tick_gap(run: Run) -> Check | None:
+    """No stall: the longest gap between two ticks stays under the ``loop_stall`` bound.
+
+    ``None`` for a run that is not made in real time. The gaps are read between
+    the snapshots a subscriber of the hub receives, and the hub may merge two
+    of them (snapshots coalesce): a gap read is never shorter than the true
+    one, so a PASS proves that no gap reached the bound.
+    """
+    stall = run.stall
+    if stall is None:
+        return None
+    threshold = f"maximum < {stall:.0f} ms (gel loop_stall de la console)"
+    period = run.period
+    if period is None:
+        return Check("tick_gap", Status.FAIL, threshold, "aucun écart entre deux tics relevé")
+    measured = (
+        f"p50 {period.p50:.1f} ms, p99 {period.p99:.1f} ms, maximum {period.highest:.1f} ms "
+        f"sur {period.count} écarts"
+    )
+    status = Status.PASS if period.highest < stall else Status.FAIL
+    return Check("tick_gap", status, threshold, measured)
+
+
 def check_descriptors(run: Run) -> Check:
-    """No descriptor leaks: the second half of the run opens no more than the first."""
-    threshold = "le maximum de la seconde moitié ne dépasse pas celui de la première"
+    """No descriptor leaks: the floor of the second half is no higher than the first's.
+
+    A leaked descriptor is never closed: it raises every later reading, the
+    lowest included. One open for a moment (a block being written, a request
+    being answered) raises the reading that caught it, never the lowest of a
+    half: :data:`MIN_JUDGED` leaves two readings in each at least. The price: a
+    leak that only starts after the lowest reading of the second half is not
+    seen; the leaks of a run of sessions start with the first ones.
+    """
+    threshold = "le plancher de la seconde moitié ne dépasse pas celui de la première"
     kept = judged(run)
     if len(kept) < MIN_JUDGED:
         return Check(
@@ -655,10 +694,12 @@ def check_descriptors(run: Run) -> Check:
             f"{len(kept)} relevés après la chauffe : trop peu",
         )
     half = len(kept) // 2
-    first = max(sample.descriptors for sample in kept[:half])
-    second = max(sample.descriptors for sample in kept[half:])
+    first = min(sample.descriptors for sample in kept[:half])
+    second = min(sample.descriptors for sample in kept[half:])
+    highest = max(sample.descriptors for sample in kept)
     measured = (
-        f"au plus {first} puis {second} descripteurs ouverts ({kept[-1].descriptors} à la fin)"
+        f"plancher {first} puis {second} descripteurs ouverts "
+        f"(au plus {highest}, {kept[-1].descriptors} à la fin)"
     )
     return Check(
         "descriptors", Status.PASS if second <= first else Status.FAIL, threshold, measured
@@ -793,6 +834,7 @@ def judge(run: Run) -> tuple[Check, ...]:
     checks = (
         check_rss(run),
         check_tick(run),
+        check_tick_gap(run),
         check_descriptors(run),
         check_data(run),
         check_rotation(run),
