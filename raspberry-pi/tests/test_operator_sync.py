@@ -28,7 +28,6 @@ from src.console_access import (
     load_list,
     replace_file,
 )
-from src.operator_sync import DATE_WRITE_PERIOD, OperatorSync
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
 from src.units import Seconds
@@ -87,7 +86,7 @@ class Rig:
     clock: ManualClock
     dashboard: Dashboard
     access: ConsoleAccess
-    sync: OperatorSync
+    sync: operator_sync_module.OperatorSync
     signer: Ed25519PrivateKey
     public: bytes
     said: list[str]
@@ -111,7 +110,7 @@ def make_rig(path: Path, machine_id: str | None = None) -> Rig:
     access = ConsoleAccess(clock=clock, held=None, lockout_path=None)
     said: list[str] = []
     rest = [True]
-    sync = OperatorSync(
+    sync = operator_sync_module.OperatorSync(
         clock=clock,
         transport=dashboard,
         access=access,
@@ -148,7 +147,7 @@ async def test_accepts_a_signed_list_writes_it_and_asks_again_after_the_period(
     assert newer.issued_at == 1_790_000_000_500
     assert load_list(rig.path, rig.public, None) == Ok(held)
     rig.sign(payload(1_790_000_003_600))
-    await rig.step(DATE_WRITE_PERIOD)
+    await rig.step(operator_sync_module.DATE_WRITE_PERIOD)
     newest = rig.access.held
     assert newest is not None
     assert load_list(rig.path, rig.public, None) == Ok(newest)
