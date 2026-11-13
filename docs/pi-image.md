@@ -1272,6 +1272,7 @@ du tableau de bord sont copiés à part.
    git archive --format=tar HEAD \
        simulation/__init__.py simulation/endurance.py simulation/endurance_measures.py \
        raspberry-pi/tests/__init__.py raspberry-pi/tests/fake_dashboard.py \
+       raspberry-pi/tests/fake_record_dashboard.py raspberry-pi/tests/roster_support.py \
      | ssh <utilisateur>@<pi> 'mkdir -p anheart-endurance && tar -xf - -C anheart-endurance'
    ```
 
@@ -1304,6 +1305,39 @@ du tableau de bord sont copiés à part.
    jour ; le journal examine les purges toutes les six heures, donc les deux
    heures prouvent les confirmations, et le scénario de 24 h prouve la purge.
 
+   **Ce que garantit un code de sortie 0.** Pendant les deux heures :
+
+   * `tick_gap` : aucun écart entre deux tics n'a atteint le gel `loop_stall`
+     de la console (600 ms, trois périodes de 200 ms, lu dans son propre
+     superviseur et non recopié). Il n'y a donc eu **aucun gel de la boucle**.
+     L'écart est lu entre les instantanés qu'un abonné du hub de télémétrie
+     reçoit ; le hub peut en fondre deux en un, et l'écart lu n'est alors
+     jamais plus court que le vrai : un `PASS` prouve l'absence de gel. Un
+     `FAIL` donne l'écart maximal mesuré ; un essai sans aucun écart relevé
+     échoue aussi ;
+   * `tick` : 99e centile de la durée du tic sous 150 ms ;
+   * `rss` : mémoire à 10 % près de son premier relevé après la première heure ;
+   * `descriptors` : le plancher des descripteurs ouverts (le relevé le plus
+     bas) de la seconde moitié ne dépasse pas celui de la première. Un
+     descripteur qui fuit n'est jamais refermé et relève le plancher ; un
+     descripteur ouvert un instant (un bloc en cours d'écriture, une requête)
+     ne relève que le relevé qui l'a vu, et ne fait plus échouer l'essai ;
+   * `data`, `rotation`, `sessions` : dossier de données borné, enregistrements
+     confirmés, chaque séance finie comme prévu et livrée, heartbeats avec
+     santé ;
+   * la console est sortie par son propre arrêt avec le code 0 : aucune de ses
+     tâches n'a échoué et sa boucle n'a jamais passé plus de 3 s sans finir un
+     tic.
+
+   Ce qu'il ne garantit pas : aucun seuil ne juge une **dérive lente** du tic
+   qui resterait sous 150 ms et sous 600 ms. Comparer le 99e centile de la
+   dernière heure à celui de la première a été écarté : ces centiles valent
+   quelques millisecondes, la charge de la machine les fait varier du simple
+   au double sans que la console change, et aucune marge ne viendrait du
+   ticket. Une dérive qui compte pour la personne à bord finit sur l'une des
+   deux bornes, qui sont jugées ; la colonne « Tic p50 / p99 » des relevés
+   permet de lire la tendance.
+
 4. **Relever.** Le résumé est affiché à la fin et écrit dans
    `~/anheart-endurance/out/endurance.md` (le détail dans `endurance.json`, ce
    que la console a dit dans `console.log`). L'image ne tourne plus sous root :
@@ -1319,16 +1353,19 @@ du tableau de bord sont copiés à part.
    de la [section 6](#6-installer-un-vrai-raspberry-pi), étape 5.
 
 À noter dans le ticket : le modèle du Pi, la version de l'image, le tableau des
-seuils, la ligne « Écart entre deux tics », le code de sortie.
+seuils (dont `tick_gap`), la ligne « Écart entre deux tics », le code de sortie.
 
 Pour mesurer aussi ce que **coûte** un tic sur le Pi, sans attendre deux
 heures : la même commande avec `simulated --hours 1` à la place de
 `real-time --minutes 120` joue une heure simulée, chaque tic chronométré.
 
 Cette commande n'a été lancée ni sur un Pi ni dans l'image : sur le poste de
-développement, la même commande Python a tourné hors Docker, avec ces cinq
-fichiers seulement à côté de la console
+développement, la même commande Python a tourné hors Docker
 ([framework-de-test.md, section 17.6](framework-de-test.md#176-mesures-relevées)).
+Le scénario importe aussi `fake_record_dashboard.py` et `roster_support.py`,
+absents de la première version de l'étape 1 : avec les sept fichiers de
+l'étape 1 seulement à côté de `src/` et `config/` de la console, il s'importe
+(vérifié hors Docker le 13 novembre 2026).
 
 ### 9.2 Une journée au banc, capsule vide
 
@@ -1361,7 +1398,11 @@ fait de l'extérieur, en lecture seule, depuis une seconde session SSH.
 
 2. **Pendant la journée** : les séances du protocole de banc, sans rien changer
    à la façon de travailler. Noter l'heure de début, le nombre de séances, et
-   tout message inattendu de la console.
+   tout message inattendu de la console. Un départ refusé faute de place
+   (`demarrage refuse : espace disque insuffisant` ou `plus assez de fichiers
+   libres`) se traite comme le dit
+   [console-locale.md, section 16](console-locale.md#16-lenregistrement-de-séance-boîte-noire-locale),
+   et se note avec son heure et les deux `df` du moment.
 
 3. **En fin de journée**, arrêter la boucle (Ctrl-C), puis relever la
    régularité du tic dans les enregistrements du jour. La console ne publie pas
@@ -1380,7 +1421,8 @@ fait de l'extérieur, en lecture seule, depuis une seconde session SSH.
 
 4. **Juger le relevé**, sur le poste de développement, avec les seuils de
    l'essai simulé (mémoire stable à 10 % près après la première heure, aucun
-   descripteur qui fuit) :
+   descripteur qui fuit : le plancher de la seconde moitié ne dépasse pas celui
+   de la première) :
 
    ```sh
    scp <utilisateur>@<pi>:endurance-banc.csv .
