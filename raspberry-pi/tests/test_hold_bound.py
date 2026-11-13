@@ -63,7 +63,7 @@ def shared_seconds(key: str) -> float:
     """One number of the shared file, in seconds."""
     loaded: object = json.loads(SHARED.read_text(encoding="utf-8"))  # pyright: ignore[reportAny]  # narrowed below
     assert isinstance(loaded, dict)
-    value = cast("Mapping[str, object]", loaded)[key]
+    value = cast(Mapping[str, object], loaded)[key]
     assert isinstance(value, int | float)
     return float(value)
 
