@@ -98,9 +98,11 @@ FINAL_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("invalid_request"),
     }
 )
-"""The refusals after which the same feedback would always be refused: it is dropped.
-Any other (``request_failed``, a refusal with no code) may be of the moment: it waits
-and is sent again, within the 24 hours."""
+"""The refusals after which the same feedback would always be refused, also when the link
+did not mark the refusal final itself (:attr:`~src.record_uplink.Refusal.final`, the
+contract's final codes, which it always reads first): the two of this route, and two the
+contract calls final too. Dropped. Any other (``request_failed``, a refusal with no code)
+may be of the moment: it waits and is sent again, within the 24 hours."""
 
 
 @unique
@@ -539,7 +541,7 @@ class PassengerFeedback:
                 if answer.code == SESSION_NOT_ENDED:
                     self._later(entry, current, Delivery.WAITING_END, now)
                     return
-                if answer.code not in FINAL_REFUSALS:
+                if not answer.final and answer.code not in FINAL_REFUSALS:
                     self._later(entry, current, Delivery.WAITING_LINK, now)
                     return
                 entry.delivery = Delivery.REFUSED

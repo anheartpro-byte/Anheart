@@ -590,6 +590,7 @@ class RecordUplink:
         "_catching",
         "_clock",
         "_held_until",
+        "_identified",
         "_io",
         "_last_batch",
         "_live",
@@ -639,6 +640,10 @@ class RecordUplink:
         self._held_until: Monotonic | None = None
         self._last_batch: Monotonic | None = None
         self._unwritten: bool = False
+        # The dashboard's identifier of each session declared in this run, by the
+        # reference its record carries: a session set aside for the next one is read
+        # again from its record, as another object (ANH-146).
+        self._identified: dict[str, str] = {}
         # When the dashboard last acknowledged the end of a session ended on a stop.
         self._stop_told: Monotonic | None = None
         # The sessions the sending gave up on that may have ended on a stop, until the
@@ -665,13 +670,14 @@ class RecordUplink:
         """How to read, later, the dashboard's identifier of the session running now.
 
         The identifier of a session started at the machine is learned once it is
-        declared, which may be after its end; the reader follows that session
-        and no other, whatever runs then. ``None`` when no session runs.
+        declared, which may be after its end, and after another session took its
+        place and it was read again from its record; the reader follows that
+        session and no other, whatever runs then. ``None`` when no session runs.
         """
         live = self._live
         if live is None:
             return None
-        return lambda: live.cursor.session_id
+        return lambda: live.cursor.session_id or self._identified.get(live.local_ref)
 
     @property
     def following(self) -> str | None:
@@ -1291,6 +1297,7 @@ class RecordUplink:
             self._later(now, owed)
             return _Step.BUSY
         owed.cursor = replace(owed.cursor, session_id=found)
+        self._identified[owed.local_ref] = found
         return found
 
     async def _confirm(self, now: Monotonic, owed: _Owed, session_id: str) -> _Step | None:

@@ -384,6 +384,32 @@ describe("ANH-146 M4 the bounds of a feedback, from the site", () => {
     expect(await rowsOf(w)).toEqual([]);
   });
 
+  it.each([
+    ["a key too many", { ...FEEDBACK, note: SECRET }],
+    ["a key missing", { dizzinessScore: 9, comfort: "bad", freeText: SECRET }],
+  ])("refuses a call with %s as feedback_invalid, without quoting it", async (_name, fields) => {
+    const w = await seedWorld(modules);
+    const sessionId = await session(w);
+    const text = await refusalText(submit(w, sessionId, fields));
+    expect(text).toContain("feedback_invalid");
+    expect(text).not.toContain(SECRET);
+    expect(await rowsOf(w)).toEqual([]);
+  });
+
+  it("refuses an identifier that is no session as session_not_found, without quoting it", async () => {
+    const w = await seedWorld(modules);
+    await session(w);
+    const text = await refusalText(
+      as(w.t, "patient").mutation(api.sessionFeedback.submitSessionFeedback, {
+        sessionId: `not-a-session-${SECRET}`,
+        ...FEEDBACK,
+      }),
+    );
+    expect(text).toContain("session_not_found");
+    expect(text).not.toContain(SECRET);
+    expect(await rowsOf(w)).toEqual([]);
+  });
+
   it("accepts 0 and 10, and 500 characters of text", async () => {
     const w = await seedWorld(modules);
     const low = await session(w);

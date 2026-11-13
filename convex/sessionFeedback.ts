@@ -193,21 +193,21 @@ export const getSessionFeedback = query({
  * `feedback_window_closed`, and `feedback_invalid` for a value off the scale.
  */
 export const submitSessionFeedback = mutation({
-  args: {
-    sessionId: v.id("sessions"),
-    // Every value entered is loose here, whatever its type, and checked below
-    // by validateFeedback: a validator would quote a wrong value back, in the
-    // refusal and in the deployment's log.
-    nauseaScore: v.any(),
-    dizzinessScore: v.any(),
-    comfort: v.any(),
-    freeText: v.optional(v.any()),
-  },
+  // The call is loose here, its keys as its values, and checked below: an
+  // argument validator would quote what it was given back, free text
+  // included, in the refusal and in the deployment's log.
+  args: v.any(),
   returns: v.null(),
-  handler: async (ctx, { sessionId, ...input }) => {
+  handler: async (ctx, args) => {
+    const { sessionId: given, ...input } =
+      typeof args === "object" && args !== null
+        ? (args as Record<string, unknown>)
+        : {};
     await limitUser(ctx);
     const caller = await getCurrentUserOrThrow(ctx);
-    const session = await ctx.db.get(sessionId);
+    const sessionId =
+      typeof given === "string" ? ctx.db.normalizeId("sessions", given) : null;
+    const session = sessionId === null ? null : await ctx.db.get(sessionId);
     if (!session || !(await canAccessSession(ctx, session, caller)))
       throw refusal("session_not_found");
     if (!isRider(session, caller)) throw refusal("feedback_rider_only");
