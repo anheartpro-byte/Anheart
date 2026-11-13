@@ -107,7 +107,7 @@ async function started(w: MachineWorld, at: number = NOW + 2 * SECOND) {
 
 /**
  * Every row a confirmation could write: the sessions, the machines, the audit
- * rows, what the machines sent, and what is scheduled. Whole documents,
+ * rows, what the machines and the riders sent, and what is scheduled. Whole documents,
  * `_creationTime` included; of a scheduled function, what was scheduled and
  * not how far its run has gone, since the alerts run meanwhile.
  */
@@ -119,6 +119,7 @@ const everything = (w: Backend) =>
     telemetry: await ctx.db.query("training_telemetry").collect(),
     events: await ctx.db.query("training_events").collect(),
     heartbeats: await ctx.db.query("machine_heartbeats").collect(),
+    feedback: await ctx.db.query("session_feedback").collect(),
     scheduled: (
       await ctx.db.system.query("_scheduled_functions").collect()
     ).map(({ _id, _creationTime, name, args, scheduledTime }) => ({

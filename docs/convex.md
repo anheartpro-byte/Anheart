@@ -4602,7 +4602,7 @@ stockés comme avant ; le passager peut toujours donner le sien depuis le
 site.
 
 **Retour arrière : ne pas redescendre Convex sous `1.7` tant qu'une console
-`1.7` est en service.** La console décide d'envoyer d'après le dernier
+`1.7` ou plus récente est en service.** La console décide d'envoyer d'après le dernier
 heartbeat : pendant un intervalle de heartbeat, elle croirait encore parler à
 un serveur `1.7`, et un retour envoyé à ce moment finirait dans
 `training_events`.
