@@ -165,6 +165,19 @@ async function observe(w: Pick<World, "t">, call: () => Promise<Expected[]>) {
   }
   return written;
 }
+/** The operator row of centre A's manager on its machine (ANH-152). */
+async function operatorRow(w: World): Promise<string> {
+  const row = await w.t.run((ctx) =>
+    ctx.db
+      .query("machine_operators")
+      .withIndex("by_machine_and_user", (q) =>
+        q.eq("machineId", w.machine).eq("userId", w.manager),
+      )
+      .unique(),
+  );
+  if (row === null) throw new Error("no operator row");
+  return row._id;
+}
 /** A high incident of centre A's machine, open (ANH-145). */
 const addIncident = (w: World) =>
   w.t.run((ctx) =>
@@ -365,6 +378,25 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         ];
       })),
     );
+    // An operator of the machine, with a code: their departure releases it (ANH-152).
+    await w.t.run((ctx) =>
+      ctx.db.insert("machine_operators", {
+        organizationId: w.orgA,
+        machineId: w.machine,
+        userId: memberId,
+        operatorCode: {
+          algorithm: "scrypt",
+          n: 32768,
+          r: 8,
+          p: 1,
+          salt: "c3ludGhldGljLXNhbHQ=",
+          hash: "c3ludGhldGljLWNvZGUtaGFzaA==",
+        },
+        codeSetAt: NOW,
+        enabledAt: NOW,
+        enabledBy: w.orgAdmin,
+      }),
+    );
     const deactivation = {
       eventId: "audit-member-delete",
       event: {
@@ -380,6 +412,9 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         await w.t.mutation(internal.clerkWebhook.applyEvent, deactivation);
         return [
           system("membership.deactivated", memberId, "user", "webhook", w.orgA),
+          system("machine_operator.released", memberId, "user", "webhook", w.orgA, {
+            count: 1,
+          }),
         ];
       })),
     );
@@ -613,6 +648,81 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
       return consentIds.map((id) =>
         site(w, "consent.withdrawn", id, "consent", "patient"),
       );
+    });
+  },
+  "consoleAccess.enableOperator": async (w) =>
+    observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.consoleAccess.enableOperator, {
+        machineId: w.machine,
+        userId: w.manager,
+      });
+      const row = await operatorRow(w);
+      return [
+        site(w, "machine_operator.enabled", row, "machine_operator", "orgAdmin", w.orgA, {
+          machineId: w.machine,
+          userId: w.manager,
+        }),
+      ];
+    }),
+  "consoleAccess.disableOperator": async (w) => {
+    await as(w.t, "orgAdmin").mutation(api.consoleAccess.enableOperator, {
+      machineId: w.machine,
+      userId: w.manager,
+    });
+    const row = await operatorRow(w);
+    return observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.consoleAccess.disableOperator, {
+        machineId: w.machine,
+        userId: w.manager,
+      });
+      return [
+        site(w, "machine_operator.disabled", row, "machine_operator", "orgAdmin", w.orgA, {
+          machineId: w.machine,
+          userId: w.manager,
+        }),
+      ];
+    });
+  },
+  "consoleAccess.storeOperatorCode": async (w) => {
+    await as(w.t, "orgAdmin").mutation(api.consoleAccess.enableOperator, {
+      machineId: w.machine,
+      userId: w.manager,
+    });
+    return observe(w, async () => {
+      await as(w.t, "manager").action(api.consoleCodes.setMyOperatorCode, { code: "482915" });
+      return [
+        site(w, "machine_operator.code_set", w.manager, "user", "manager", w.orgA, {
+          count: 1,
+        }),
+      ];
+    });
+  },
+  "consoleAccess.createDevice": async (w) =>
+    observe(w, async () => {
+      const issued = await as(w.t, "orgAdmin").mutation(api.consoleAccess.createDevice, {
+        machineId: w.machine,
+        name: "Tablette",
+      });
+      return [
+        site(w, "machine_device.created", issued.deviceId, "machine_device", "orgAdmin", w.orgA, {
+          machineId: w.machine,
+        }),
+      ];
+    }),
+  "consoleAccess.revokeDevice": async (w) => {
+    const issued = await as(w.t, "orgAdmin").mutation(api.consoleAccess.createDevice, {
+      machineId: w.machine,
+      name: "Tablette",
+    });
+    return observe(w, async () => {
+      await as(w.t, "orgAdmin").mutation(api.consoleAccess.revokeDevice, {
+        deviceId: issued.deviceId,
+      });
+      return [
+        site(w, "machine_device.revoked", issued.deviceId, "machine_device", "orgAdmin", w.orgA, {
+          machineId: w.machine,
+        }),
+      ];
     });
   },
   "machineKeys.createMachineKey": async (w) => {
@@ -2426,6 +2536,9 @@ describe("ANH-167 T02-f operator isolation", () => {
       "./machineKeys.ts:createKeyByOperator",
       "./machineKeys.ts:revokeKeyByOperator",
       "./medicalParametersStore.ts:insertVersion",
+      // A release of a console operator these migrations cause (ANH-152).
+      "./migrations/multiOrganization.ts:attachExistingRowsToAnheart",
+      "./migrations/multiOrganization.ts:repairDuplicatedAnheartOrganization",
     ]);
     expect(internalReferences).toEqual([
       "./medicalParameters.ts:registerVersion:insertVersion",

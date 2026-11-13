@@ -37,6 +37,8 @@ export const AUDIT_TARGET_TYPES = [
   "user",
   "machine",
   "machine_key",
+  "machine_operator",
+  "machine_device",
   "session",
   "fitness_assessment",
   "consent",
@@ -87,6 +89,12 @@ export const AUDIT_ACTIONS = [
   "machine_key.created", // Admin or operator creates a key; target: machine key.
   "machine_key.revoked", // Admin or operator revokes a key; target: machine key.
   "machine_key.expired_revoked", // Cron revokes an expired key; target: machine key.
+  "machine_operator.enabled", // Admin enables a member on a machine's console (ANH-152); target: operator row.
+  "machine_operator.disabled", // Admin disables an operator of a machine's console; target: operator row.
+  "machine_operator.code_set", // Operator sets their own console code, never the code; target: user.
+  "machine_operator.released", // Member leaves the operator roles: operator rows disabled, code cleared, never the code; target: user.
+  "machine_device.created", // Admin creates a tablet token, never the token; target: device.
+  "machine_device.revoked", // Admin revokes a tablet token; target: device.
   "machine.created", // Admin creates a machine; target: machine.
   "machine.deleted", // Authorised machine manager soft-deletes a machine; target: machine.
   "machine.restored", // Admin restores a machine; target: machine.
@@ -147,6 +155,12 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "machine_key.created": "machine_key",
   "machine_key.revoked": "machine_key",
   "machine_key.expired_revoked": "machine_key",
+  "machine_operator.enabled": "machine_operator",
+  "machine_operator.disabled": "machine_operator",
+  "machine_operator.code_set": "user",
+  "machine_operator.released": "user",
+  "machine_device.created": "machine_device",
+  "machine_device.revoked": "machine_device",
   "machine.created": "machine",
   "machine.deleted": "machine",
   "machine.restored": "machine",
@@ -233,6 +247,7 @@ export const SENSITIVE_MUTATIONS: Readonly<
     "patient_gestionnaire.assigned",
     "account.deleted_in_clerk",
     "organization.deleted",
+    "machine_operator.released",
   ],
   "users.getOrCreateUser": ["membership.created", "membership.role_changed"],
   "fitness.submitFitnessAnswers": ["fitness.submitted"],
@@ -252,6 +267,11 @@ export const SENSITIVE_MUTATIONS: Readonly<
     "machine_key.revoked",
   ],
   "machineKeys.revokeKeyByOperator": ["machine_key.revoked"],
+  "consoleAccess.enableOperator": ["machine_operator.enabled"],
+  "consoleAccess.disableOperator": ["machine_operator.disabled"],
+  "consoleAccess.storeOperatorCode": ["machine_operator.code_set"],
+  "consoleAccess.createDevice": ["machine_device.created"],
+  "consoleAccess.revokeDevice": ["machine_device.revoked"],
   "machineRegistry.updateIdentity": ["registry.identity_updated"],
   "machineRegistry.recordRadii": ["registry.radii_recorded"],
   "machineRegistry.attachDriveParameterSheet": [
@@ -301,6 +321,8 @@ export const SENSITIVE_MUTATIONS: Readonly<
 };
 
 export const NON_SENSITIVE_MUTATIONS: Readonly<Record<string, string>> = {
+  "consoleAccess.prepareOperatorCode":
+    "Rate-limits and checks the caller before their console code is hashed; writes no right.",
   "machineHealth.purge":
     "Cron removes expired heartbeat and machine health history samples.",
   "machineKeys.recordKeyUse":
@@ -388,15 +410,17 @@ export function machineActor(
 
 export const SYSTEM_ACTOR = { kind: "system" } as const satisfies AuditActor;
 
+/** Who wrote an entry, and through what: operator calls act as the system only. */
+export type AuditOrigin =
+  | { source: Exclude<AuditSource, "operator">; actor: AuditActor }
+  | { source: "operator"; actor: Extract<AuditActor, { kind: "system" }> };
+
 type AuditEntry = {
   organizationId: Id<"organizations"> | undefined;
   action: AuditAction;
   targetId: string;
   details?: Infer<typeof auditDetailsValidator>;
-} & (
-  | { source: Exclude<AuditSource, "operator">; actor: AuditActor }
-  | { source: "operator"; actor: Extract<AuditActor, { kind: "system" }> }
-);
+} & AuditOrigin;
 
 function boundedDetails(details: AuditEntry["details"]): AuditEntry["details"] {
   if (

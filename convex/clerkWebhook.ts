@@ -14,6 +14,10 @@ import {
 } from "./lib/auth";
 import { normalizedEmail } from "./lib/patientInvitation";
 import { audit, SYSTEM_ACTOR } from "./lib/audit";
+import { insertMembership, updateMembership } from "./lib/memberships";
+
+/** What Clerk changes, the system writes. */
+const FROM_CLERK = { actor: SYSTEM_ACTOR, source: "webhook" } as const;
 import {
   clerkEventValidator,
   parseClerkEvent,
@@ -85,7 +89,7 @@ export const applyEvent = internalMutation({
           .withIndex("by_user", (q) => q.eq("userId", user._id))
           .collect();
         for (const row of memberships) {
-          await ctx.db.patch(row._id, { active: false });
+          await updateMembership(ctx, row, { active: false }, FROM_CLERK, event.occurredAt);
           if (row.active) {
             await audit(ctx, {
               actor: SYSTEM_ACTOR,
@@ -133,7 +137,7 @@ export const applyEvent = internalMutation({
             )
             .collect();
           for (const row of memberships)
-            await ctx.db.patch(row._id, { active: false });
+            await updateMembership(ctx, row, { active: false }, FROM_CLERK, event.occurredAt);
           await audit(ctx, {
             actor: SYSTEM_ACTOR,
             source: "webhook",
@@ -241,11 +245,12 @@ export const applyEvent = internalMutation({
         clerkEventAt: event.occurredAt,
       };
       if (!row) {
-        await ctx.db.insert("memberships", {
-          userId: user._id,
-          organizationId: organization._id,
-          ...values,
-        });
+        await insertMembership(
+          ctx,
+          { userId: user._id, organizationId: organization._id, ...values },
+          FROM_CLERK,
+          event.occurredAt,
+        );
         if (values.active)
           await audit(ctx, {
             actor: SYSTEM_ACTOR,
@@ -261,7 +266,7 @@ export const applyEvent = internalMutation({
           row.clerkMembershipId !== event.membershipId ||
           event.deleted)
       ) {
-        await ctx.db.patch(row._id, values);
+        await updateMembership(ctx, row, values, FROM_CLERK, event.occurredAt);
         if (!row.active && values.active) {
           await audit(ctx, {
             actor: SYSTEM_ACTOR,

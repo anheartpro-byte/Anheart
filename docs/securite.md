@@ -2122,8 +2122,10 @@ La source **`operator` est une extension d'EX-1 décidée pendant le
 développement faute de valeur adaptée, à relire par le chef de projet**.
 Elle identifie les fonctions lancées en ligne de commande avec la clé de
 déploiement : `machineKeys.createKeyByOperator`,
-`machineKeys.revokeKeyByOperator` et `medicalParameters.registerVersion`
-(via `medicalParametersStore.insertVersion`). Ces chemins internes écrivent
+`machineKeys.revokeKeyByOperator`, `medicalParameters.registerVersion`
+(via `medicalParametersStore.insertVersion`), et les deux migrations
+d'organisations (`migrations/multiOrganization`) pour le retrait d'un
+opérateur de console qu'elles causeraient (ANH-152). Ces chemins internes écrivent
 avec l'acteur `system`, sans compte humain attribué ; le test de complétude
 vérifie leur isolement du site et des routes machine.
 
@@ -2283,3 +2285,87 @@ sont coupées en production).
 | Un refus de pré-vol d'un départ décidé à la console n'est pas envoyé au serveur | Seuls les refus de lancements venus du site comptent pour les trois refus de suite ; toute autre séance de la machine remet le compte à zéro |
 | Une séance mal terminée pendant que le lien était coupé n'est connue du serveur qu'à l'arrivée de ses événements et de sa fin | Jusque-là le compte annoncé reste celui d'avant, et le serveur accepterait un nouveau lancement. Le pré-vol de la console le retient : avec une personne à bord, il refuse tout départ tant qu'une séance de cette exécution terminée sur `emergency_stop`, `safety_verdict` ou `tick_exception`, ou un enregistrement d'une exécution précédente (fin inconnue), n'a pas sa fin acquittée, puis jusqu'au premier poll qui rend un compte lisible demandé après cet acquittement ; au banc, un avertissement. Une séance que l'envoi abandonne (déclaration ou fin refusée pour de bon, fin d'une séance sans enregistrement abandonnée pour la suivante) est écrite à côté des enregistrements et retient une personne à bord, redémarrage compris, jusqu'à l'acquittement nommé de l'opérateur, page Pré-vol, noté au journal de bord ; un enregistrement illisible, toujours dû sur le disque, retient de même, et un acquittement ne vaut que jusqu'au démarrage suivant, qui le liste de nouveau ; le curseur qui clôt une séance perdue n'est écrit qu'après elle ; seule la perte d'une séance sans enregistrement, avant la première liste des enregistrements ou jusqu'au pas suivant une fin abandonnée, n'est qu'en mémoire et un redémarrage à cet instant l'oublie ; pas jusqu'à une annonce du serveur, qui ne connaîtra jamais cet incident. Une fin que le lien n'a pas vue compte comme une fin inconnue, due jusqu'à son envoi. L'acquittement ne lève que ces séances perdues : jamais une retenue qui se lèvera d'elle-même quand le lien aura livré la séance, jamais pendant une séance. Restent : un enregistrement mis de côté sans curseur à la première liste (antérieur à la synchronisation, jamais envoyé) ne retient rien, et un départ de banc n'est jamais retenu |
 | Aucune déclaration d'incident à la main n'existe encore (`manual` est réservé) | Un événement que le logiciel ne voit pas ne bloque pas la machine |
+
+## 17. La connexion nommée à la console (ANH-152)
+
+Qui a attesté le câblage de l'arrêt d'urgence, qui a acquitté un verdict, qui
+a confirmé qu'une personne est à bord : chaque action de la console doit
+porter une identité authentifiée, pas un nom tapé dans un champ. ANH-152 le
+fait en deux lots : Convex et le site d'abord (ce lot), la console ensuite.
+**Tant que le lot de la console n'est pas fusionné et installé, rien de ce
+qui suit n'est appliqué par une machine** : la console garde son jeton
+partagé et son champ « opérateur ».
+
+### 17.1 Qui décide de quoi
+
+| Décision | Qui | Où |
+|---|---|---|
+| Qui est opérateur d'une machine | l'admin Anheart, ou l'admin de l'organisation de la machine, parmi les admins et gestionnaires actifs de cette organisation | fiche de la machine, carte « Accès à la console » |
+| Le code de console d'un opérateur | l'opérateur seul, pour son propre compte | page « Mes machines », carte « Code de console » |
+| Les tablettes d'une machine (jetons d'appareil) | les mêmes admins | fiche de la machine |
+
+L'admin ne voit jamais un code et ne peut pas en poser un : un code connu
+de deux personnes n'identifie plus celle qui a agi. Un opérateur qui a oublié
+son code en choisit un autre sur le site ; un opérateur qui part est
+désactivé, et le départ d'un membre de l'organisation (ou un rôle qui n'est
+plus admin ni gestionnaire) le désactive de lui-même et efface son code :
+revenu, il faut l'activer de nouveau, et il choisit un nouveau code. La formation (`trainedAt`, ANH-106) n'est pas encore exigée.
+
+### 17.2 Le code : un secret faible, haché, et ce qui le protège vraiment
+
+Un code de 6 chiffres n'a qu'un million de valeurs. Il est haché par Convex
+avec scrypt (N = 32 768, r = 8, p = 1, sel aléatoire de 16 octets tiré à
+chaque code choisi, le même sur toutes les machines de l'opérateur ;
+paramètres et sel dans la liste signée), dans une action Node :
+le runtime par défaut de Convex n'offre que WebCrypto, sans haché lent, et
+Argon2id n'est pas assuré dans le runtime Node de Convex, alors que scrypt est
+dans `node:crypto` comme dans `hashlib` de Python sur le Pi. Le code en clair
+n'existe que dans l'appel qui le hache : ni stocké, ni journalisé, ni
+renvoyé ; l'audit ne dit que le nombre de machines concernées. Le site refuse
+un même chiffre répété et une suite (123456, 987654).
+
+**Ce que le haché ne protège pas.** Qui tient la liste signée (la clé d'une
+machine volée, le disque d'un Pi lu) peut essayer hors ligne le million de
+codes contre chaque haché. scrypt ralentit chaque essai (32 Mio de mémoire),
+il ne rend pas l'essai impossible : de l'ordre de quelques heures par
+opérateur sur un processeur de bureau, moins sur du matériel dédié. Ce
+n'est pas un risque accepté par cette page : c'est la limite d'un code court,
+écrite pour qu'on ne la prenne pas pour une protection. Ce qui protège :
+
+- **en ligne**, le verrouillage de la console après 5 échecs (lot de la
+  console), qui ne cède pas à un redémarrage ;
+- **hors ligne**, la liste ne sort que vers la machine authentifiée par sa
+  clé, et un code trouvé n'ouvre que la console d'une machine où l'opérateur
+  est activé, avec en plus un jeton de tablette de cette machine ;
+- **après une fuite** (clé de machine, disque du Pi) : révoquer la clé de la
+  machine ([secrets.md, 3.1](secrets.md#31-clé-de-la-machine)), puis chaque
+  opérateur de cette machine change son code. Un code de console ne sert
+  nulle part ailleurs.
+
+### 17.3 Les tablettes et la liste signée
+
+Le jeton partagé `UI_TOKEN` devient un jeton par tablette, créé sur le site,
+montré une fois, révocable : la liste en porte le SHA-256 (le jeton a
+256 bits aléatoires, un haché simple suffit). La liste descend vers la
+machine sur le canal du catalogue (même clé Ed25519, même vérification,
+au repos seulement), avec un champ `kind` qui l'empêche d'être lue comme un
+catalogue, et datée par le serveur : la console refusera une liste plus
+ancienne que la sienne, ce qui empêche de réactiver un opérateur désactivé
+en rejouant une ancienne réponse. Détail :
+[convex.md](convex.md#la-liste-des-opérateurs-signée-contrat-113-anh-152).
+
+Aujourd'hui la clé privée du catalogue n'est posée sur aucun déploiement, et
+la clé publique livrée n'a pas de partie privée
+([secrets.md, 3.4](secrets.md#34-clés-de-signature)) : aucune console ne
+peut encore accepter de liste. Le lot de la console devra donc arriver avec
+une procédure d'amorçage, sans quoi une console qui exige une liste n'ouvrirait
+plus rien que l'E-STOP.
+
+### 17.4 Ce que ce lot ne couvre pas
+
+| Limite | Conséquence |
+|---|---|
+| La console n'applique rien encore | Le jeton partagé et le nom tapé restent la seule protection jusqu'au lot de la console |
+| Un code de 6 chiffres se trouve hors ligne en quelques heures à partir de la liste | Voir 17.2 : la liste ne doit pas fuir, et une fuite se traite par la révocation de la clé de la machine et le changement des codes |
+| L'admin peut activer un membre sans qu'il le sache | Sans code posé par ce membre, il n'est pas dans la liste et ne peut pas se connecter ; s'il a déjà un code dans l'organisation, il peut se connecter à la nouvelle machine dès sa synchronisation |
+| Le site ne dit pas encore quelle liste une console tient | Une désactivation prend effet à la synchronisation suivante au repos ; l'admin ne voit pas quand elle a eu lieu |

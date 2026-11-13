@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 import { audit, userActor } from "./lib/audit";
+import { insertMembership } from "./lib/memberships";
 import type { Id } from "./_generated/dataModel";
 import {
   canAccessUser,
@@ -86,12 +87,11 @@ export const prepare = internalMutation({
           createdAt: now,
         })));
     if (!held && userId)
-      await ctx.db.insert("memberships", {
-        userId,
-        organizationId: me.organizationId,
-        role: "user",
-        active: false,
-      });
+      await insertMembership(
+        ctx,
+        { userId, organizationId: me.organizationId, role: "user", active: false },
+        { actor: userActor(me), source: "site" },
+      );
     const gestionnaireIds: Id<"users">[] = [];
     for (const id of me.role === "gestionnaire"
       ? [me._id]

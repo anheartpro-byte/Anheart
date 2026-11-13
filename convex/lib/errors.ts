@@ -133,6 +133,21 @@ export const DASHBOARD_ERRORS = {
   programme_changed:
     "End code (contract 1.12): the programmes the machine held when it armed the launch were no longer those it was made from, or could not be checked against them. Launch it again.",
 
+  // The console's operators and tablets (ANH-152).
+  invalid_operator_code:
+    "A console code is 6 to 12 digits, neither one digit repeated nor a run up or down.",
+  operator_not_enabled:
+    "The caller is enabled as an operator on no machine of their organisation: there is no code to set.",
+  operator_not_eligible:
+    "Only an active admin or gestionnaire of the machine's organisation can be enabled as its operator.",
+  machine_operator_not_found:
+    "This account is not an operator of the machine, or the machine is not one the caller administers.",
+  too_many_operators: "The machine already has the most operators its console reads.",
+  invalid_device_name: "A tablet's name is 1 to 100 characters.",
+  too_many_devices: "The machine already has the most tablets its console reads.",
+  machine_device_not_found:
+    "The tablet does not exist, or belongs to a machine the caller does not administer.",
+
   // Machine keys (ANH-165).
   machine_key_not_found:
     "The machine key does not exist, or belongs to a machine the caller does not administer.",

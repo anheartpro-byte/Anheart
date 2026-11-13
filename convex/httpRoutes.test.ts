@@ -4,7 +4,7 @@
  *
  * Authentication refusals (missing header, malformed/unknown key, deleted or
  * disabled machine, revoked, expired or replaced key after its overlap) across
- * all 14 routes are proven by `machineAuth.test.ts` and `machineKeys.test.ts`;
+ * all 15 routes are proven by `machineAuth.test.ts` and `machineKeys.test.ts`;
  * this suite does not repeat them. It covers
  * the per-route contract: malformed bodies, idempotency, machine binding, and
  * the pending-session filtering the Pi depends on.

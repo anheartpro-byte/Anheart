@@ -27,6 +27,12 @@ import { internalMutation, type MutationCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
+  deleteMembership,
+  insertMembership,
+  updateMembership,
+} from "../lib/memberships";
+import { SYSTEM_ACTOR } from "../lib/audit";
+import {
   DEFAULT_ORGANIZATION_SLUG,
   anheartClerkOrganizationId,
   findMembership,
@@ -163,6 +169,9 @@ export const attachExistingRowsToAnheart = internalMutation({
     done: v.boolean(),
   }),
   handler: async (ctx, args) => {
+    // Run from the command line with the deployment key: a release of a console
+    // operator it causes (ANH-152) is audited as the operator's, by the system.
+    const BY_MIGRATION = { actor: SYSTEM_ACTOR, source: "operator" } as const;
     const batchSize = Math.min(
       Math.max(Math.floor(args.batchSize ?? DEFAULT_BATCH_SIZE), 1),
       MAX_BATCH_SIZE,
@@ -200,12 +209,11 @@ export const attachExistingRowsToAnheart = internalMutation({
     for (const user of users) {
       await ctx.db.patch(user._id, { organizationId: anheart });
       if (!(await findMembership(ctx, user._id, anheart))) {
-        await ctx.db.insert("memberships", {
-          userId: user._id,
-          organizationId: anheart,
-          role: user.role,
-          active: true,
-        });
+        await insertMembership(
+          ctx,
+          { userId: user._id, organizationId: anheart, role: user.role, active: true },
+          BY_MIGRATION,
+        );
       }
       attached++;
     }
@@ -392,6 +400,9 @@ export const repairDuplicatedAnheartOrganization = internalMutation({
     }),
   ),
   handler: async (ctx, args) => {
+    // Run from the command line with the deployment key: a release of a console
+    // operator it causes (ANH-152) is audited as the operator's, by the system.
+    const BY_MIGRATION = { actor: SYSTEM_ACTOR, source: "operator" } as const;
     const plan = await planRepair(ctx);
     if (plan === null) return { status: "nothing_to_repair" as const };
     const { clerkOrgId, duplicate, anheart } = plan;
@@ -425,17 +436,17 @@ export const repairDuplicatedAnheartOrganization = internalMutation({
     }
 
     for (const membership of plan.moves) {
-      await ctx.db.patch(membership._id, { organizationId: anheart._id });
+      await updateMembership(ctx, membership, { organizationId: anheart._id }, BY_MIGRATION);
     }
     for (const { membership, held } of plan.merges) {
-      await ctx.db.patch(held._id, {
+      await updateMembership(ctx, held, {
         role: membership.role,
         active: membership.active,
         clerkMembershipId: membership.clerkMembershipId,
         clerkUpdatedAt: membership.clerkUpdatedAt,
         clerkEventAt: membership.clerkEventAt,
-      });
-      await ctx.db.delete(membership._id);
+      }, BY_MIGRATION);
+      await deleteMembership(ctx, membership, BY_MIGRATION);
     }
     for (const user of plan.users) {
       await ctx.db.patch(user._id, { organizationId: anheart._id });

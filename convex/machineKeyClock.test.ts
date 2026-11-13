@@ -102,7 +102,7 @@ describe("ANH-238 the action judges time even with a cached query", () => {
     }
   });
 
-  it("refuses a cached expired key on all 14 routes before the contract or bucket", async () => {
+  it("refuses a cached expired key on all 15 routes before the contract or bucket", async () => {
     let captured: Awaited<ReturnType<typeof authenticateMachine>> = null;
     const f = await machineFixture({
       ...modules,
