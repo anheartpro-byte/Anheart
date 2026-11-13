@@ -176,6 +176,11 @@ _STATIC_FILES: Final[Mapping[str, str]] = {
 
 _INDEX: Final[str] = "index.html"
 
+STATIC_CACHE_CONTROL: Final[str] = "no-cache"
+"""How the page's files are served: kept by the browser, but asked again at each load.
+A script kept from a former version would send what this console no longer takes
+(a start with no list digest is refused, ANH-138)."""
+
 
 def register_routes(app: FastAPI, *, services: Services, config: WebConfig) -> None:
     """Register every HTTP route on ``app``. Called once, from ``create_app``."""
@@ -347,14 +352,18 @@ def _static_response(path: Path, media_type: str) -> FileResponse:
     unlike the serial and subprocess calls contract rule 8 is about - and it
     buys a diagnosable 404 instead of a bare 500 from inside the response
     object. ``FileResponse`` itself reads the body on a worker thread, so the
-    event loop is not blocked by the transfer.
+    event loop is not blocked by the transfer. Every file is served
+    :data:`STATIC_CACHE_CONTROL`: a page never runs a script older than its
+    console.
     """
     if not path.is_file():
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
             detail=f"{path.name} is missing from the installation",
         )
-    return FileResponse(path=path, media_type=media_type)
+    return FileResponse(
+        path=path, media_type=media_type, headers={"Cache-Control": STATIC_CACHE_CONTROL}
+    )
 
 
 # =========================================================================

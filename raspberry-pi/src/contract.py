@@ -85,6 +85,13 @@ asked for at rest only and judged again by this console's rules
 was accepted and refused. A dashboard before 1.11 answers 404 to the route:
 nothing is received, the programmes stay.
 
+Since 1.12 an automatic launch is tied to the programme list it was made from
+(``launch_programme_list`` of the shared file): the console sends the digest
+of its list with its programmes and with the start it confirms, the poll gives
+the launch's, and a launch made from another list, or from none, is refused
+``programme_changed``; this console never arms one, whatever the dashboard
+answers (:mod:`src.cloud_sync`).
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -145,6 +152,10 @@ RATE_LIMITED: Final[ErrorCode] = ErrorCode("rate_limited")
 PAYLOAD_TOO_LARGE: Final[ErrorCode] = ErrorCode("payload_too_large")
 """The code of the 413 a server answers a body over a route's size."""
 
+PROGRAMME_CHANGED: Final[ErrorCode] = ErrorCode("programme_changed")
+"""The arming refusal of an automatic launch made from another programme list than
+the one the machine holds (contract 1.12, ``launch_programme_list``)."""
+
 ARMING_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
     {
         ErrorCode("expired_before_start"),
@@ -159,7 +170,7 @@ ARMING_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("rider_busy"),
         ErrorCode("machine_busy"),
         ErrorCode("incident_open"),
-        ErrorCode("programme_changed"),
+        PROGRAMME_CHANGED,
     }
 )
 """The codes of the 409 a server answers a start it refuses (contract 1.6,

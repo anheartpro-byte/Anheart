@@ -149,6 +149,7 @@ from src.contract import (
     CONTRACT_HEADER,
     CONTRACT_UNSUPPORTED,
     CONTRACT_VERSION,
+    PROGRAMME_CHANGED,
     RATE_LIMITED,
     SERVER_VERSION_FIELD,
     STABLE_CODES,
@@ -212,7 +213,7 @@ from src.roster import (
     RosterState,
     describe_passenger_refusal,
 )
-from src.training.plan import JsonValue, ProfileStore, TrainingProfile
+from src.training.plan import JsonValue, ProfileStore, TrainingProfile, profiles_digest
 from src.training.preflight import (
     BRIDGED_BENCH_ONLY,
     BRIDGED_REMOTE_LAUNCH,
@@ -328,7 +329,7 @@ ARMING_REFUSAL_WORDS: Final[Mapping[ErrorCode, str]] = MappingProxyType(
             "incident grave ouvert sur cette machine : seances programmees fermees jusqu'a "
             "sa cloture"
         ),
-        ErrorCode("programme_changed"): (
+        PROGRAMME_CHANGED: (
             "programmes de la machine changes depuis le lancement : le relancer depuis le "
             "tableau de bord"
         ),
@@ -933,6 +934,7 @@ class CloudSync:
         "_preflight_start",
         "_programs_enabled",
         "_pushed_catalog",
+        "_pushed_digest",
         "_pushed_rev",
         "_record_degraded",
         "_refused_launch",
@@ -1038,6 +1040,7 @@ class CloudSync:
         self._unanswered: _Awaiting | None = None
         self._pushed_rev: int | None = None
         self._pushed_catalog: Mapping[str, JsonValue] | None = None
+        self._pushed_digest: str | None = None
         self._next_profiles: Monotonic | None = None
         self._last_heartbeat: Monotonic | None = None
         self._last_poll: Monotonic | None = None
@@ -1448,7 +1451,8 @@ class CloudSync:
     async def _push_profiles(self, now: Monotonic) -> None:
         rev = int(self._store.rev)
         catalog = None if self._catalog_fields is None else self._catalog_fields()
-        if rev == self._pushed_rev and catalog == self._pushed_catalog:
+        digest = self._held_digest()
+        if (rev, catalog, digest) == (self._pushed_rev, self._pushed_catalog, self._pushed_digest):
             return
         if self._next_profiles is not None and now < self._next_profiles:
             return
@@ -1459,6 +1463,7 @@ class CloudSync:
             "storeRev": rev,
             "programsEnabled": self._programs_enabled,
             "profiles": rows,
+            "profilesDigest": digest,
         }
         if catalog is not None:
             body.update(catalog)
@@ -1467,9 +1472,14 @@ class CloudSync:
         if isinstance(sent, Ok):
             self._pushed_rev = rev
             self._pushed_catalog = catalog
+            self._pushed_digest = digest
             self._next_profiles = None
         else:
             self._next_profiles = Monotonic(now + RETRY_PERIOD)
+
+    def _held_digest(self) -> str:
+        """The digest of the programme list held now, as ``GET /api/profiles`` gives it."""
+        return profiles_digest(self._store.list_profiles())
 
     # --- the riders' list --------------------------------------------------
 
@@ -1646,14 +1656,15 @@ class CloudSync:
         self, launch: Launch, operator: str, now: Monotonic, generation: int
     ) -> None:
         started_at = self._clock.unix_millis()
-        answer = await self.send(
-            START_PATH,
-            {
-                "sessionId": launch.session_id,
-                "startedAt": int(started_at),
-                "sessionAgeMs": 0,
-            },
-        )
+        body: dict[str, JsonValue] = {
+            "sessionId": launch.session_id,
+            "startedAt": int(started_at),
+            "sessionAgeMs": 0,
+        }
+        if isinstance(launch, AutoLaunch):
+            # Contract 1.12: the dashboard refuses a launch made from another list.
+            body["profilesDigest"] = self._held_digest()
+        answer = await self.send(START_PATH, body)
         # Answered once its hold is over: obsolete, as if the offer had gone meanwhile.
         if self._hold_over(self._clock.monotonic()):
             self._clear_offer()
@@ -1701,6 +1712,11 @@ class CloudSync:
         self._owe_refusal(launch.session_id, reason)
 
     def _submit_confirmed_launch(self, launch: Launch, operator: str, now: Monotonic) -> None:
+        if isinstance(launch, AutoLaunch) and launch.profiles_digest != self._held_digest():
+            # Whatever a dashboard answered: the programme it names is not the one
+            # this console would run (contract 1.12). It is failed, to be launched again.
+            self._refuse_local_launch(launch, ARMING_REFUSAL_WORDS[PROGRAMME_CHANGED])
+            return
         refused = self._submitted(launch, operator)
         if refused is not None:
             self._refuse_local_launch(launch, describe_surface_refusal(refused))
@@ -1953,6 +1969,9 @@ class AutoLaunch:
     subject_age: int | None
     """From the rider's birth year on the dashboard; ``None`` if unknown (the panel refuses)."""
     subject_label: str | None
+    profiles_digest: str | None
+    """The digest of this machine's programme list the launch was made from (contract
+    1.12); ``None`` for a launch made without one, which this console never arms."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -2044,6 +2063,7 @@ def _auto_launch_of(session: Document) -> AutoLaunch | None:
     total = session.get("totalDurationS")
     age = session.get("subjectAge")
     label = session.get("subjectLabel")
+    digest = session.get("profilesDigest")
     if (
         not isinstance(session_id, str)
         or not isinstance(profile_id, str)
@@ -2068,6 +2088,7 @@ def _auto_launch_of(session: Document) -> AutoLaunch | None:
         operator=operator or DASHBOARD_OPERATOR,
         subject_age=age if isinstance(age, int) and not isinstance(age, bool) else None,
         subject_label=label if isinstance(label, str) else None,
+        profiles_digest=digest if isinstance(digest, str) else None,
     )
 
 

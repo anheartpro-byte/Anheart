@@ -344,6 +344,12 @@ class Violation(Enum):
     # An operator picks a profile by name off a screen. Two profiles both
     # showing as "" is a choice made by accident.
 
+    NAME_LONE_SURROGATE = "name_lone_surrogate"
+    # A surrogate code point (U+D800 to U+DFFF) in the name: half of a pair
+    # that JSON's escapes let in alone. It has no UTF-8, so no answer of the
+    # console could carry the name (``GET /api/profiles`` would fail), nor its
+    # list digest. Convex refuses it the same (ANH-138).
+
     NON_POSITIVE_DURATION = "non_positive_duration"
     # Some phase duration, or the total, is zero, negative, NaN or infinite. A
     # NaN duration would propagate into every "remaining" the UI shows and into
@@ -756,6 +762,12 @@ def _check_name(profile: TrainingProfile) -> Violation | None:
     return Violation.EMPTY_NAME
 
 
+def _check_name_encodable(profile: TrainingProfile) -> Violation | None:
+    if not any("\ud800" <= character <= "\udfff" for character in profile.name):
+        return None
+    return Violation.NAME_LONE_SURROGATE
+
+
 def _check_durations_positive(profile: TrainingProfile) -> Violation | None:
     durations = (
         profile.total_duration_s,
@@ -893,6 +905,7 @@ def _check_channels_unique(profile: TrainingProfile) -> Violation | None:
 _CHECKS: Final[tuple[Callable[[TrainingProfile], Violation | None], ...]] = (
     _check_profile_id,
     _check_name,
+    _check_name_encodable,
     _check_durations_positive,
     _check_cooldown_not_faster_than_drive,
     _check_cooldown_long_enough,

@@ -295,6 +295,10 @@ REFUSALS: Final[tuple[tuple[Violation, Callable[[], TrainingProfile]], ...]] = (
         lambda: replace(BASE, name="   "),
     ),
     (
+        Violation.NAME_LONE_SURROGATE,
+        lambda: replace(BASE, name="jog \udc00"),
+    ),
+    (
         Violation.NON_POSITIVE_DURATION,
         lambda: replace(BASE, baseline_s=Seconds(0.0)),
     ),

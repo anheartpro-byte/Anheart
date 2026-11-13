@@ -43,7 +43,7 @@ from src.control_surface import EventKind
 from src.ecg_pipeline import EcgFrame, EcgMetrics, Treatment
 from src.result import Ok
 from src.sim.physiology import Physiology, SubjectState
-from src.training.plan import JsonValue
+from src.training.plan import JsonValue, profiles_digest
 from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import RULE_HR_STALE, RULE_SESSION_STANDSTILL, SELF_CLEARING
 from src.training.types import RunMode, SafetyAction, SignalQuality, TelemetrySnapshot
@@ -139,6 +139,8 @@ class Console:
             **LAUNCH,
             "sessionId": session_id,
             "profileId": profile_id,
+            # Made from the list this console holds (contract 1.12).
+            "profilesDigest": profiles_digest(self.rig.panel.services.store.list_profiles()),
         }
         pending = [launch]
 
@@ -312,10 +314,11 @@ async def test_after_a_standstill_the_console_restarts_nothing_and_refuses_every
         run.confirm("remote-2")
         await run.run(5.0)
         assert run.state() is RuntimeState.RUNNING
-        # Confirmed once, with the start the console dated and the age of the session.
+        # Confirmed once, with the start the console dated, the age of the session, and
+        # the list it holds (contract 1.12).
         (confirmed,) = run.dashboard.to(START)
         assert confirmed["sessionId"] == "remote-2"
-        assert set(confirmed) == {"sessionId", "startedAt", "sessionAgeMs"}
+        assert set(confirmed) == {"sessionId", "startedAt", "sessionAgeMs", "profilesDigest"}
         assert run.ended("remote-2") == []
     await rig.panel.close()
     assert await rig.left_stopped() == ""

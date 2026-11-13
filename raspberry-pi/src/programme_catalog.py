@@ -330,10 +330,14 @@ def _machine_refusal(profile: TrainingProfile, rules: LocalRules) -> str | None:
 
 
 def _said_id(document: Mapping[str, object]) -> str:
-    """The id a refused programme is named by: its own when it is text, bounded."""
+    """The id a refused programme is named by: its own when it is text, bounded.
+
+    A surrogate in it is said as U+FFFD: the report is JSON, which has no
+    UTF-8 for one.
+    """
     value = document.get("profile_id")
     named = value if isinstance(value, str) else repr(value)
-    return named[:MAX_ID_CHARS]
+    return "".join("\ufffd" if "\ud800" <= c <= "\udfff" else c for c in named[:MAX_ID_CHARS])
 
 
 def _bounded_reason(reason: str) -> str:
