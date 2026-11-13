@@ -1137,7 +1137,10 @@ séance. Index `by_user_and_organization_and_updated` (la liste),
 `by_user_and_organization_and_machine_and_updated` et
 `by_user_and_organization_and_machine_and_read` (liste et non lues des seules
 machines liées au gestionnaire, avant la coupe ; ce dernier index sert aussi
-au regroupement), `by_user` (suppression d'un compte) et `by_updated` (purge à 90 jours).
+aux dernières non lues lues par un défaut sans séance),
+`by_user_and_organization_and_machine_and_read_and_session` (le regroupement :
+les non lues d'une séance, ou sans séance, `FOLD_SCAN` = 50 au plus par
+lecture), `by_user` (suppression d'un compte) et `by_updated` (purge à 90 jours).
 
 `notification_settings` : une ligne par compte, `email` (un booléen
 facultatif par type : l'alerte part aussi par e-mail), `updatedAt`. Un type
@@ -2640,13 +2643,23 @@ restent indépendants, chacun dans sa sous-transaction.
 
 Sans séance, les règles restent inchangées : `machine_offline` se regroupe
 par machine et type, comme un `drive_fault` sans séance dans une alerte
-`drive_fault` non lue de la machine, même si celle-ci nomme une séance.
+`drive_fault` non lue de la machine, même si celle-ci nomme une séance :
+d'abord celle sans séance, sinon la plus récente.
 Un `drive_fault` qui nomme une séance cherche d'abord l'alerte de cette
 séance ; à défaut, il peut reprendre une alerte `drive_fault` non lue de la
 machine **sans séance**, qui prend alors cette séance. Il ne reprend jamais
 une alerte déjà liée à une autre séance. Les séances différentes gardent
-ainsi leurs alertes distinctes. La recherche utilise l'index existant
-`by_user_and_organization_and_machine_and_read`, sans nouvel index.
+ainsi leurs alertes distinctes.
+
+**Lecture bornée (ANH-237).** Une livraison ne lit plus toutes les non lues
+de la machine : l'index
+`by_user_and_organization_and_machine_and_read_and_session` donne celles de
+sa séance et celles sans séance, au plus `FOLD_SCAN` (50) chacune, alors que
+le regroupement n'en laisse qu'une par séance et par type sans séance. Seul
+un `drive_fault` sans séance lit en plus les 50 dernières non lues de la
+machine (`by_user_and_organization_and_machine_and_read`, ordre décroissant),
+où se trouve l'alerte de la séance qui vient de finir ; au delà, il crée une
+alerte de plus, sans en perdre aucune.
 
 **Un défaut, une alerte (EX-5).** Un heartbeat en défaut qui ne nomme pas
 la séance (séance déjà finie côté Pi, ou pas encore déclarée) et la séance

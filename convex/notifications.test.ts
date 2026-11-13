@@ -1623,6 +1623,49 @@ describe("session alert grouping (T03)", () => {
     },
   );
 
+  it("finds the session's alert and the machine's fault among more unread alerts than one read takes", async () => {
+    const w = await seedWorld(modules);
+    const sessionId = await session(w);
+    await deliver(w, sessionId, "failed");
+    const others: Id<"sessions">[] = [];
+    for (let i = 0; i < 60; i++) others.push(await session(w));
+    await w.t.run(async (ctx) => {
+      for (const other of others)
+        await ctx.db.insert("notifications", {
+          organizationId: w.orgA,
+          userId: w.manager,
+          type: "session_failed",
+          machineId: w.machine,
+          sessionId: other,
+          count: 1,
+          createdAt: NOW,
+          updatedAt: NOW,
+          read: false,
+        });
+    });
+    await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      type: "drive_fault",
+      count: 1,
+    });
+    await deliver(w, sessionId, "verdict");
+    await w.t.mutation(internal.notifications.deliver, {
+      machineId: w.machine,
+      type: "drive_fault",
+      count: 1,
+    });
+
+    const own = (await alerts(w)).filter(
+      (row) =>
+        row.userId === w.manager &&
+        !(row.sessionId && others.includes(row.sessionId)),
+    );
+    expect(own.map((row) => [row.type, row.sessionId, row.count])).toEqual([
+      ["safety_verdict", sessionId, 2],
+      ["drive_fault", undefined, 2],
+    ]);
+  });
+
   it("T03-e: keeps drive faults of different sessions separate", async () => {
     const w = await seedWorld(modules);
     const first = await session(w);

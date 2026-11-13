@@ -1028,6 +1028,14 @@ export default defineSchema({
       "machineId",
       "read",
     ])
+    // A delivery's unread alerts of one session, or without one (ANH-237).
+    .index("by_user_and_organization_and_machine_and_read_and_session", [
+      "userId",
+      "organizationId",
+      "machineId",
+      "read",
+      "sessionId",
+    ])
     .index("by_user", ["userId"])
     .index("by_email_status_and_updated", ["email.status", "email.updatedAt"])
     .index("by_updated", ["updatedAt"]),

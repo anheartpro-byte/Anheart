@@ -342,6 +342,13 @@ export async function retryDelivery(
   );
 }
 
+/**
+ * How many unread alerts one lookup of a delivery reads. Folding keeps one
+ * unread alert per session and per kind without one, so only the latest
+ * alerts of a machine read by a fault without a session can reach it.
+ */
+const FOLD_SCAN = 50;
+
 /** How many of a session's last events are read for a drive fault, which ends it. */
 const FAULT_SCAN = 50;
 
@@ -425,16 +432,39 @@ export async function notifyRecipient(
     CODE.test(event.detail)
       ? event.detail
       : undefined;
-  const unread = await ctx.db
-    .query("notifications")
-    .withIndex("by_user_and_organization_and_machine_and_read", (q) =>
-      q
-        .eq("userId", user._id)
-        .eq("organizationId", organizationId)
-        .eq("machineId", machine._id)
-        .eq("read", false),
-    )
-    .collect();
+  const unreadOf = (sessionId: Id<"sessions"> | undefined) =>
+    ctx.db
+      .query("notifications")
+      .withIndex(
+        "by_user_and_organization_and_machine_and_read_and_session",
+        (q) =>
+          q
+            .eq("userId", user._id)
+            .eq("organizationId", organizationId)
+            .eq("machineId", machine._id)
+            .eq("read", false)
+            .eq("sessionId", sessionId),
+      )
+      .take(FOLD_SCAN);
+  // The session's unread alerts and those without a session; for a fault
+  // without a session, also the machine's latest unread ones, newest first.
+  const unread = [
+    ...(event.sessionId === undefined ? [] : await unreadOf(event.sessionId)),
+    ...(await unreadOf(undefined)),
+    ...(event.sessionId === undefined && type === "drive_fault"
+      ? await ctx.db
+          .query("notifications")
+          .withIndex("by_user_and_organization_and_machine_and_read", (q) =>
+            q
+              .eq("userId", user._id)
+              .eq("organizationId", organizationId)
+              .eq("machineId", machine._id)
+              .eq("read", false),
+          )
+          .order("desc")
+          .take(FOLD_SCAN)
+      : []),
+  ];
   const sameSession =
     event.sessionId !== undefined &&
     NOTIFICATION_TYPES[type].sessionPriority > 0
