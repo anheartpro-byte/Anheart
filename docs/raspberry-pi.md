@@ -1598,8 +1598,13 @@ affiche et ne les modifie pas.
   horloge restée en 1970 pour une personne née après 1970). Une horloge restée
   dans le passé mais après la naissance donne un âge **trop jeune**, jamais trop
   vieux (née en 1940, une personne a 29 ans sur une horloge de 1970) : l'erreur
-  va vers le refus de l'âge minimum. Une personne à bord est de toute façon
-  refusée sur une horloge murale que personne ne tient (4.2).
+  va vers le refus de l'âge minimum. Une horloge **en avance** peut au
+  contraire vieillir le passager, quand elle compte déjà une année que la date
+  vraie n'a pas atteinte : l'erreur va alors vers l'acceptation de l'âge
+  minimum. Une personne à bord est de toute façon refusée sur une horloge
+  murale que personne ne tient (4.2) ; le Mac du banc, qui ne juge pas son
+  horloge, n'a pas cette garde
+  ([console-locale.md](console-locale.md#ligne-horloge--lheure-de-la-machine)).
 * **Séance manuelle avec personne à bord** : le passager nommé doit être dans la
   liste, avoir une année de naissance réglée sur le site, et un âge d'au moins
   `min_rider_age` du fichier médical, compté comme pour un programme (`roster.age_of`,
