@@ -3934,6 +3934,20 @@ enregistrement dont la télémétrie ou la fin n'était pas encore envoyée
 n'est plus rattaché, et ce qui en restait ne part plus (`RecordUplink._next`,
 `raspberry-pi/src/record_uplink.py`, le laisse de côté à chaque démarrage).
 
+#### Source STO dans le manifeste (ANH-92)
+
+`depositManifest` accepte aussi `sto_source`, la valeur de `STO_SOURCE` de la
+console (`none`, `sim_ready`, `sim_open`, `drive_input` ou
+`bridged_declared`), `null` (simulation) ou absente (enregistrement
+antérieur) ; toute autre valeur fait refuser le manifeste
+(`invalid_manifest`). `bridged_declared` dit qu'aucun arrêt d'urgence
+matériel n'existait pendant la séance
+([enregistrement.md](enregistrement.md#manifeste)). Le résumé l'ignore et le
+site ne l'affiche pas. Le contrat machine ne change pas, pour la raison
+donnée pour les compteurs de zone. Même ordre de déploiement : Convex d'abord, puis l'image du Pi ; dans
+l'ordre inverse, la console écrit le champ dans chaque manifeste et perd ses
+dépôts de fichiers comme décrit ci-dessus, sans rien perdre sur sa carte.
+
 ### Ce que chaque mineure ajoute
 
 Les trois plafonds par machine ajoutés par ANH-228 gardent le contrat `1.6`

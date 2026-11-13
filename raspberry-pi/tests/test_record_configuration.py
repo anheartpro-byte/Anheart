@@ -66,7 +66,8 @@ def test_document_hash_stays_identical_and_excludes_secrets_identities_and_healt
         config, RUNTIME_LIMITS, safety, DEFAULT_MOTION_LIMITS, SoftwareVersion("reference")
     )
     assert hashlib.sha256(content).hexdigest() == stamp.config_hash
-    assert stamp.config_hash == "84b15fbb12301f57aa0e7407eaa6b38dc3bd3afd50f2fa6c52c10bb260cdcff6"
+    # Changed once on purpose by ANH-92, which added `sto_source` to the document.
+    assert stamp.config_hash == "e8f63a2674d3ae910901d9d2a36bf5554306bb364011efc216fab6f9061e436b"
     assert sentinel.encode() not in content
     for forbidden in (
         b"subject",

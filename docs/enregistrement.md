@@ -113,6 +113,7 @@ Tous les champs suivants sont présents, y compris ceux dont la valeur est
 | `profile` | programme résolu figé, ou `null` pour une séance manuelle |
 | `subject_fit` | `true` pour le passager admis par la console au départ ; `null` pour le banc ou un producteur qui ne juge pas l'aptitude |
 | `fitness_questionnaire_version` | version du questionnaire du passager admis au départ ; `null` pour le banc ou si le producteur ne la connaît pas |
+| `sto_source` | valeur de `STO_SOURCE` de la console (ANH-92) : `none`, `sim_ready`, `sim_open`, `drive_input` ou `bridged_declared` ([raspberry-pi.md](raspberry-pi.md#banc-déclaré-ponté--bridged_declared-anh-92)). Sous `bridged_declared`, aucun arrêt d'urgence matériel n'existe : l'événement `confirm_estop_wiring` de l'enregistrement est l'attestation de banc (STO ponté, coupure de la prise secteur, capsule vide ou lestée), pas celle d'un coup de poing câblé. `null` pour la simulation, qui n'a pas ce réglage ; absent d'un enregistrement antérieur, relu comme `null` |
 | `config_hash` | SHA-256 hexadécimal minuscule de la configuration appliquée |
 | `software_version` | version du logiciel qui a écrit l'enregistrement : le contenu de `raspberry-pi/VERSION`, pour la console du Pi comme pour les scénarios de la simulation (`pi-unknown` si le fichier manque ou est mal formé). Aucune variable d'environnement ne la règle. Les enregistrements exportés dans la bibliothèque de la simulation portent `unversioned`, exprès, pour rester reproductibles d'une version à l'autre |
 | `contract_version` | version du contrat d'enregistrement, `2` actuellement |
@@ -828,6 +829,12 @@ plus avec le retrait du port de `drive_link` ; aucune console déployée
 n'écrivait encore ce document. Un ancien lecteur de configuration refuse
 la clé nouvelle.
 
+Depuis ANH-92, le document porte aussi `sto_source`, la valeur de
+`STO_SOURCE`, comme `motor_backend` : l'empreinte de toute console change une
+fois, un nouveau document est écrit, et chaque enregistrement antérieur garde
+le sien. Le rejeu relit un document sans cette clé ; il ne s'en sert pas et
+lit toujours une chaîne STO simulée prête.
+
 Au démarrage, la console remet ces octets au journal, en mémoire. Le premier
 cycle du fil `record-journal` les écrit dans `config/<config_hash>.json` :
 jamais dans un tic ni dans la boucle de contrôle, et sans attente du départ
@@ -1018,6 +1025,7 @@ valeur de `schema_version` :
 | commande `attendant_ping` | ANH-192 | le reader structurel relit l'événement, mais le rejeu déclare l'enregistrement non rejouable (commande inconnue, code 2) |
 | commande `presence_trip` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; ni kind ni champ de manifeste nouveau |
 | commande `latch_estop` | ANH-192 | même refus de commande inconnue par le rejeu antérieur ; le verrou immédiat de la surface est distinct de l'appel `estop` du runtime |
+| `sto_source` dans le manifeste | ANH-92 | le lecteur du Pi refuse le manifeste (clé inconnue) ; le dépôt Convex antérieur le refuse aussi ([convex.md](convex.md#source-sto-dans-le-manifeste-anh-92)) |
 | `zone_in_s`, `zone_above_s`, `zone_below_s` dans `end_observation` | ANH-234 | le lecteur du Pi refuse le manifeste (clé inconnue), même aux trois `null` d'une séance manuelle ; le dépôt Convex antérieur le refuse aussi ([convex.md](convex.md#compteurs-de-zone-et-ordre-de-déploiement-anh-234)) |
 
 Une commande mal écrite sous un kind d'entrée est aussi refusée par le rejeu

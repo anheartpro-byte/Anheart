@@ -30,6 +30,7 @@ from src.motor.observation import (
     SdkException,
     WrongFunction,
 )
+from src.motor.sto import StoSourceKind
 from src.record.rows import JsonValue
 from src.training.types import MAX_BALLAST_KG
 from src.units import Monotonic, MotorRpm, OutOfRange, RawRegister, Seconds
@@ -180,6 +181,10 @@ class Manifest:
     files: tuple[str, ...] | None = None
     subject_fit: Literal[True] | None = None
     fitness_questionnaire_version: str | None = None
+    sto_source: StoSourceKind | None = None
+    """The console's ``STO_SOURCE`` (ANH-92). ``bridged_declared``: no hardware emergency
+    stop, and the record's ``confirm_estop_wiring`` is the bench statement. ``None``: a
+    producer with no such setting (the simulation), and every record written before it."""
     ballast: RecordedBallast | None = Field(default=None, exclude_if=_absent)
     """A ballasted bench session launched from the dashboard; absent from every other
     record, and from every record written before contract 1.9, which stays readable."""

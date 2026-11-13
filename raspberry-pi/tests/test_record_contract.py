@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.clock import ManualClock
+from src.motor.sto import StoSourceKind
 from src.record.codec import JSON, Privacy, encode, mapping
 from src.record.ecg import Header, RawBlock, decode_block, encode_block
 from src.record.reader import read
@@ -42,6 +43,7 @@ def complete_manifest_record(root: Path) -> Path:
         subject_id="subject-7",
         subject_fit=True,
         fitness_questionnaire_version="0.1.0",
+        sto_source=StoSourceKind.DRIVE_INPUT,
         profile=Profile(
             total_duration_s=420.0,
             baseline_s=60.0,
@@ -129,6 +131,18 @@ def test_older_manifest_without_fitness_fields_still_reads(tmp_path: Path) -> No
     assert isinstance(loaded, Ok)
     assert loaded.value.manifest.subject_fit is None
     assert loaded.value.manifest.fitness_questionnaire_version is None
+
+
+def test_older_manifest_without_the_sto_source_still_reads_and_an_unknown_one_is_refused() -> None:
+    document = dict(mapping(JSON.validate_json(MANIFEST_FIXTURE.read_bytes())))
+    current = MANIFEST.validate_json(MANIFEST_FIXTURE.read_bytes())
+    assert current.sto_source is StoSourceKind.DRIVE_INPUT
+    removed = document.pop("sto_source")
+    assert removed == "drive_input"
+    older = MANIFEST.validate_json(encode(document, Privacy()))
+    assert older == replace(current, sto_source=None)
+    with pytest.raises(ValidationError, match="sto_source"):
+        MANIFEST.validate_json(encode({**document, "sto_source": "bridged"}, Privacy()))
 
 
 ZONE_KEYS: Final[tuple[str, ...]] = ("zone_in_s", "zone_above_s", "zone_below_s")

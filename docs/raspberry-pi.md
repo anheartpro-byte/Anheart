@@ -174,6 +174,15 @@ secteur. Cette valeur le déclare, honnêtement, et ne permet que cela.
   Après un verrou, un nouveau départ reste nécessaire. Le heartbeat et le contrat
   avec le tableau de bord ne changent pas : l'état est dans l'instantané local
   (`state` `bridged`, `source` `bridged_declared`).
+* **Enregistrement.** Le manifeste de chaque enregistrement porte
+  `sto_source: "bridged_declared"`, et le document de la configuration
+  appliquée aussi ([15.2](#152-aucune-écriture-dans-la-boucle)) : une séance
+  faite sous le pont le dit elle-même, déposée sur le site comme sur la carte
+  du Pi. Son événement `confirm_estop_wiring` est alors l'attestation de banc
+  ci-dessus, pas celle d'un coup de poing câblé
+  ([enregistrement.md](enregistrement.md#manifeste)). Le dépôt Convex doit
+  accepter ce champ avant que l'image du Pi l'écrive
+  ([convex.md](convex.md#source-sto-dans-le-manifeste-anh-92)).
 * **Réalité physique.** Couper la prise secteur coupe le variateur : le couple
   disparaît d'un coup et le bras part en roue libre, sans frein. Le modèle du
   variateur simulé donne **144,6 s** depuis 1380 tr/min moteur jusqu'à moins de
@@ -4064,7 +4073,8 @@ sans bloquer la séance ; le rejeu refuse avec sa raison. Une faute interne
 dans cette écriture ne remonte pas vers le contrôle.
 
 Ce document contient les limites, la géométrie appliquée et les réglages de
-la machine, sans clé, jeton, identité ou donnée de santé individuelle.
+la machine, dont `motor_backend` et, depuis ANH-92, `sto_source`, sans clé,
+jeton, identité ou donnée de santé individuelle.
 Il reste local : rétention, synchronisation, dépôt, export et journal hors
 séance ignorent `config/`. Pour rejouer une console, récupérer séparément
 le fichier et passer `--config`, ou préparer un fichier adjacent

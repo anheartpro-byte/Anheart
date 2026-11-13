@@ -71,6 +71,7 @@ from src.control_surface import LOCAL_SUBJECT, SessionEvent
 from src.control_surface import EventKind as SurfaceEvent
 from src.local_config import LocalConfig
 from src.motor.drive import DriveState, DriveStatus
+from src.motor.sto import StoSourceKind
 from src.record import commands
 from src.record.codec import IDENTIFIER, Privacy
 from src.record.ecg import RuntimeDelivery
@@ -202,6 +203,9 @@ class Stamp:
     software_version: str
     config_hash: str
     medical_parameters_version: str
+    sto_source: StoSourceKind
+    """``STO_SOURCE``, in every manifest: a bridged chain is said by the record itself."""
+
     medical_warning: str | None = None
     """The bench mode's sentence when the medical parameters are not signed: written
     as a ``warning`` event at the start of every record. ``None``: they are."""
@@ -249,6 +253,7 @@ def applied_configuration(
         "programs_enabled": config.programs_enabled,
         "sensors": tuple(kind.value for kind in config.sensors),
         "motor_backend": config.motor_backend.value,
+        "sto_source": config.sto_source.value,
         "ecg_source": config.ecg_source.value,
         "camera": config.camera.value,
         "drive_link": None if link is None else "native",
@@ -293,6 +298,7 @@ def stamp_for(
             applied_configuration(config, limits, safety, motion)
         ).hexdigest(),
         medical_parameters_version=status.recorded_version,
+        sto_source=config.sto_source,
         medical_warning=status.warning,
     )
 
@@ -394,6 +400,7 @@ def manifest_for(
         subject_id=None if subject in ("", LOCAL_SUBJECT) else opaque("subject", subject),
         subject_fit=None if version is None else True,
         fitness_questionnaire_version=version,
+        sto_source=stamp.sto_source,
         profile=None if request.program is None else frozen_profile(request.program),
         config_hash=stamp.config_hash,
         software_version=stamp.software_version,
