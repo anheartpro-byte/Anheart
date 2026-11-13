@@ -3320,7 +3320,8 @@ Détails du contrat :
   `/training/end` avec `failed: true` et une raison qui commence par
   `refusee par la machine : `, sans `endedAt` : le serveur date ce refus. Un
   lancement ni démarré ni refusé en 60 s est terminé avec « la boucle n'a ni
-  demarre ni refuse ».
+  demarre ni refuse » ; la console ne l'arme plus ensuite et ne redemande pas
+  son départ (ANH-240).
 - **Départ non pris** : si `/training/start` reçoit autre chose qu'un oui, le
   Pi arrête la séance qu'il vient d'armer, tout de suite et une fois. Cela
   vaut pour un refus (séance annulée sur le site entre le poll et

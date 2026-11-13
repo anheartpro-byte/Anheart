@@ -2919,6 +2919,16 @@ Une nouvelle confirmation dans les 60 s envoie de nouveau `training/start`, qui
 reçoit 200 tant que la machine n'a rien envoyé de la séance et que l'arrêt n'a
 pas été demandé, dans les 90 s qui suivent le départ daté par le serveur à la
 première confirmation (contrat 1.8, ANH-240) : la console arme une seule fois.
+Après un 2xx, la boucle n'arme le lancement que tant que la liaison
+l'attend : 60 s au plus après l'étape qui a envoyé la confirmation
+(`LAUNCH_TIMEOUT`, compté jusqu'au début de l'armement). Passé ce délai, la
+liaison envoie la fin échouée « la boucle n'a ni demarre ni refuse », et une
+boucle qui prend la commande plus tard la refuse sur la console avec
+`lancement du tableau de bord abandonne : pas arme dans les 60 s qui ont suivi
+sa confirmation`, sans redemander `training/start` ni rien envoyer de plus
+(`CloudSync.begin_arming`). Avant, elle armait, redemandait le départ, pouvait
+recevoir 200 dans les 90 s du serveur, puis s'arrêtait quelques secondes plus
+tard sur la fin échouée.
 Sans nouveau clic dans les 60 s,
 Convex peut garder la séance active jusqu'à son interruption. Le bouton exige
 un opérateur connecté (ANH-152) et c'est lui, la confirmation sur place
