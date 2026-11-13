@@ -145,7 +145,6 @@ describe("ANH-132 completeness of the authorization matrix", () => {
       "notifications.unreadCount", // the caller's own alerts, in their organisation
       "notifications.updateSettings", // the caller's own choices
       "organizations.listOrganizations", // Anheart admin only; [] to centre B
-      "sessions.getCompletedSessionsForUser",
       "softwareReleases.listReleases", // Anheart-wide register, Anheart admin only
       "softwareReleases.recordRelease", // Anheart-wide register, Anheart admin only
       "training.listLaunchableMachines",

@@ -283,22 +283,6 @@ describe("ANH-158 lists of sessions: 300 sessions, 3 machines, 2 centres", () =>
     },
   );
 
-  it.each(USER_ACTORS)(
-    "gives %s their 100 newest completed sessions for the reports of the previous site",
-    async (actor) => {
-      const completed = await as(w.t, actor).query(
-        api.sessions.getCompletedSessionsForUser,
-        {},
-      );
-      expect(completed.map((r) => r._id)).toEqual(
-        readableBy(actor)
-          .filter((s) => s.status === "completed")
-          .slice(0, 100)
-          .map((s) => s.id),
-      );
-    },
-  );
-
   it.each(
     USER_ACTORS.flatMap((actor) =>
       STATUSES.map((status) => [actor, status] as const),

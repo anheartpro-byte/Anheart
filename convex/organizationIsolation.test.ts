@@ -243,7 +243,6 @@ describe("EX-6 a member of centre A never reads centre B, even by direct identif
     ].map((row) => String(row._id));
     const sessions = [
       ...(await me.query(api.sessions.listSessions, {})),
-      ...(await me.query(api.sessions.getCompletedSessionsForUser, {})),
     ].map((row) => row.patientName);
 
     expect(listed.filter((id) => foreign.has(id))).toEqual([]);
@@ -1295,14 +1294,8 @@ describe("EX-5 an account of two organisations acts in one organisation at a tim
     ).toBeNull();
     expect(await asB.query(api.sessions.listSessions, {})).toEqual([]);
     expect(
-      await asB.query(api.sessions.getCompletedSessionsForUser, {}),
-    ).toEqual([]);
-    expect(
       (
-        await sharedIn(w, ORG_A_CLERK_ORG).query(
-          api.sessions.getCompletedSessionsForUser,
-          {},
-        )
+        await sharedIn(w, ORG_A_CLERK_ORG).query(api.sessions.listSessions, {})
       ).map((s) => s._id),
     ).toEqual([sessionOfA]);
   });

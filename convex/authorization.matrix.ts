@@ -1814,60 +1814,6 @@ export const MATRIX: Entry[] = [
       },
     ],
   },
-  {
-    id: "sessions.getCompletedSessionsForUser",
-    ref: api.sessions.getCompletedSessionsForUser,
-    kind: "query",
-    // User-own and anonymous paths are already proven by sessions.test.ts
-    // (ANH-71); here we cover the admin and gestionnaire roles it does not.
-    build: async (w) => {
-      await addSession(w, {
-        machineId: w.machine,
-        userId: w.patient,
-        status: "completed",
-        kind: "auto",
-      });
-      await addSession(w, {
-        machineId: w.otherMachine,
-        userId: w.otherPatient,
-        status: "completed",
-        kind: "auto",
-      });
-      await addSession(w, {
-        machineId: w.orgBMachine,
-        userId: w.orgBPatient,
-        status: "completed",
-        kind: "auto",
-      });
-      return {};
-    },
-    onSuccess: (res) => {
-      if (asArray(res).length !== 3)
-        throw new Error(
-          "Admin should see all completed sessions, in every organisation",
-        );
-    },
-    onFiltered: (res, _w, actor) => {
-      expectExactly(
-        riders(res),
-        SESSION_RIDERS_SEEN_BY[actor] ?? [],
-        `Completed sessions listed to ${actor}`,
-      );
-    },
-    cases: [
-      { actor: "admin", expect: ok, note: "all completed sessions" },
-      { actor: "manager", scope: "own", expect: filtered, note: "their machine's completed sessions" },
-      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the completed sessions of centre A only" },
-      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "the completed sessions of centre B only" },
-      {
-        actor: "orgBManager",
-        scope: "own",
-        expect: filtered,
-        note: "their machine's completed sessions, in centre B",
-      },
-    ],
-  },
-
   // =========================================================================
   // training.ts  (live/telemetry masking detail is in trainingPrivacy.test.ts)
   // =========================================================================

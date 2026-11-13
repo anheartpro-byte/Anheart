@@ -11,7 +11,7 @@
  * read-only history and is reported here with the kind "recording".
  *
  * Every list applies the caller's rights before its limit (ANH-158).
- * `listSessions` and `getCompletedSessionsForUser` use `newestReadableSessions`:
+ * `listSessions` uses `newestReadableSessions`:
  * an unfiltered gestionnaire reads at most limit per managed machine and per
  * rider source, organisation and status already in each index range.
  * `listSessionsPaginated` keeps one `readableSessions` range and caps its scan
@@ -297,49 +297,5 @@ export const getActiveSessionForMachine = query({
         ? `${patient.firstName} ${patient.lastName}`
         : (session.subjectLabel ?? "Unknown"),
     };
-  },
-});
-
-/**
- * The 100 most recent completed sessions the caller may read. The Reports
- * page of the previous version of the site reads it; this version reads
- * `listSessionsPaginated` with the status `completed`.
- */
-export const getCompletedSessionsForUser = query({
-  args: {},
-  returns: v.array(
-    v.object({
-      _id: v.id("sessions"),
-      status: v.string(),
-      startedAt: v.number(),
-      endedAt: v.optional(v.number()),
-      channels: v.array(v.string()),
-      notes: v.optional(v.string()),
-      patientName: v.string(),
-      machineName: v.string(),
-    }),
-  ),
-  handler: async (ctx) => {
-    const caller = await getCurrentUserOrThrow(ctx);
-    const sessions = await newestReadableSessions(
-      ctx,
-      caller,
-      { status: "completed" },
-      100,
-    );
-
-    const result = [];
-    for (const session of await stillReadable(ctx, caller, sessions)) {
-      result.push({
-        _id: session._id,
-        status: session.status,
-        startedAt: session.startedAt,
-        endedAt: session.endedAt,
-        channels: session.channels,
-        notes: session.notes,
-        ...(await namesOf(ctx, session)),
-      });
-    }
-    return result;
   },
 });
