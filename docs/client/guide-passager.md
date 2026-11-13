@@ -1,7 +1,7 @@
 # Guide passager : votre séance dans la machine
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 7 octobre 2026. Aucun passager n'a encore utilisé ce guide.
+> Version du 13 novembre 2026. Aucun passager n'a encore utilisé ce guide.
 >
 > - À cette date, aucune séance avec une personne à bord n'a encore eu lieu
 >   avec ce logiciel. Ce guide décrit ce que le logiciel est conçu pour faire.

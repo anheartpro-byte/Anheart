@@ -134,6 +134,7 @@ from typing import Annotated, Final, Literal, TextIO, assert_never, override
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uvicorn
+import uvicorn.server
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -846,11 +847,13 @@ EXIT_HELP: Final[str] = (
     "(ttO), a verifier sur son clavier."
 )
 
-EXIT_STOP_UNFINISHED: Final[int] = 1
+EXIT_STOP_UNFINISHED: Final[int] = 4
 """The exit status when the process ends without having seen the driver's stop finish.
 
 Not zero: whatever started the tool must be able to tell this exit from a stop
-that was seen through.
+that was seen through. Not 1 either, the status of an ordinary error (an
+exception nobody caught), nor 2 (a wrong argument) or 3 (the web server could
+not start): this one says that nothing confirmed the motor stopped.
 """
 
 #: What ``signal.signal`` hands back: the handler a signal had before.
@@ -874,13 +877,14 @@ def _leave(signum: int, _frame: FrameType | None) -> None:
     was already pending is dropped.
 
     An exception and not a flag, because the main thread may be anywhere: in
-    the start-up wait, in the web server's loop (SIGHUP, which the web server
-    does not take: its loop is cancelled and it closes what it serves on the
-    way out), or in the web server just after it has shut itself down and
-    handed the signal back (Ctrl+C and SIGTERM, which it does take). Ctrl+C
-    stays the interruption it always was. SIGTERM and SIGHUP leave with the
-    status a shell gives a process ended by them, 128 plus the signal's
-    number.
+    the start-up wait, or in the web server just after it has shut itself
+    down and handed the signal back. While the web server runs it takes all
+    three itself (``main``), so this never raises inside it: its lifespan and
+    its request handlers catch every exception, and an exit raised there was
+    lost, the shield already up, leaving a console deaf to all but
+    ``kill -9``. Ctrl+C stays the interruption it always was. SIGTERM and
+    SIGHUP leave with the status a shell gives a process ended by them, 128
+    plus the signal's number.
     """
     _let_nothing_cut_the_stop()
     if signum == signal.SIGINT:
@@ -951,6 +955,8 @@ def _say_last(line: str) -> None:
     """
     said = False
     for stream in (sys.stdout, sys.stderr):
+        if stream is None:  # started without that stream: nothing to write to or flush
+            continue
         try:
             if not said:
                 print(line, file=stream)
@@ -1049,6 +1055,12 @@ def main() -> int:
             print("La console demarre quand meme et affichera l'etat reel de la liaison.")
         print(f"\n  ->  http://{host}:{http_port}\n")
         print("Rien ne tourne avant que VOUS armiez et cliquiez.")
+        # SIGHUP too, as it takes Ctrl+C and SIGTERM: the web server closes what it
+        # serves and hands the signal back once out of its loop (see `_leave`). Its
+        # list is read when it starts serving; setattr, as the library types it a pair.
+        taken = uvicorn.server.HANDLED_SIGNALS
+        untaken = tuple(wanted for wanted in _exit_signals() if wanted not in taken)
+        setattr(uvicorn.server, "HANDLED_SIGNALS", (*taken, *untaken))  # noqa: B010
         uvicorn.run(app, host=host, port=http_port, log_level="warning")
     finally:
         # An exit that no signal asked for (the web server returning, an

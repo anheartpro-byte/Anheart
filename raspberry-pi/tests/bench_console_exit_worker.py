@@ -33,6 +33,7 @@ import asyncio
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Final, cast
 
@@ -49,6 +50,10 @@ from src.result import Err, Ok, Result
 from src.units import Seconds
 
 NO_ANSWER: Final[CommTimeout] = CommTimeout(after=Seconds(0.1))
+
+SERVING_HOLD_S: Final[float] = 0.3
+"""How long the start-up hook keeps the main thread in the web server's lifespan after
+writing ``serving``: the window in which an exit signal used to be swallowed by it."""
 
 STUCK: Final[str] = "stuck"
 """The ``<stop>`` argument of a stop that never returns."""
@@ -109,6 +114,9 @@ def main() -> int:
 
     def serving() -> None:
         report.note("serving")
+        # Still inside the web server's start-up (its lifespan) for a moment: a signal the
+        # parent sends once it reads "serving" lands there every time, as it can under load.
+        time.sleep(SERVING_HOLD_S)
 
     def served() -> None:
         report.note("served")
