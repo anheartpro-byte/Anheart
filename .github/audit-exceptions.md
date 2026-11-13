@@ -49,10 +49,11 @@ exception n'est écrite ailleurs, ni dans le workflow ni dans une commande.
 **Le tableau est le seul de la section**, ses lignes à la suite les unes des
 autres, sans retrait. Sont refusés : une ligne qui commence par une barre
 verticale ailleurs dans la section, un bloc de code dans la section, un second
-titre « Exceptions en cours » ou ce titre écrit dans un bloc de code clôturé
-(ouvert par trois accents graves ou trois tildes au moins, après trois
-espaces au plus, et fermé seulement par le même signe, au moins autant de
-fois, sans rien après ; jamais fermé, il court jusqu'à la fin), et,
+titre « Exceptions en cours », souligné compris, ou ce titre écrit dans un
+bloc de code clôturé (ouvert par trois accents graves ou trois tildes au
+moins, après trois espaces au plus, et fermé seulement par le même signe, au
+moins autant de fois, suivi d'espaces ou de tabulations seulement ; jamais
+fermé, il court jusqu'à la fin), et,
 n'importe où dans ce fichier, code compris, le signe `<` immédiatement suivi
 d'une lettre Unicode, de `/`, de `!` ou de `?` : c'est ainsi que s'ouvre toute
 balise ou tout bloc HTML, y compris un bloc `details` replié au milieu d'une
@@ -64,8 +65,9 @@ reste permis, par exemple suivi d'une espace, d'un chiffre ou de `=`. Ce que
 la page affichée cache dans du HTML ne peut donc pas compter comme exception.
 Sont aussi refusés, n'importe où dans ce fichier, ce que la page montre
 autrement que le script ne le lit : un octet nul, une fin de ligne faite d'un
-seul retour chariot, et un en-tête YAML (un fichier qui commence par `---`),
-que GitHub montre comme un tableau à part.
+seul retour chariot, et un en-tête YAML (un fichier qui commence par `---`,
+après une marque d'ordre des octets s'il en a une), que GitHub montre comme
+un tableau à part.
 
 Une exception npm ne cache pas l'avis : le job l'affiche encore, avec sa date
 d'expiration et son ticket. `pip-audit` compte les vulnérabilités sautées

@@ -70,11 +70,13 @@ const cellsOf = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").spli
 
 /**
  * The exceptions of the file, and what is wrong with it on that day.
- * @param {string} text the content of .github/audit-exceptions.md
+ * @param {string} content the content of .github/audit-exceptions.md
  * @param {string} today AAAA-MM-JJ, in UTC
  * @returns {{ exceptions: Exception[], problems: string[] }}
  */
-export function parse(text, today) {
+export function parse(content, today) {
+  // A byte-order mark is not shown: every check reads what follows it.
+  const text = content.replace(/^\uFEFF/, "");
   /** @type {Exception[]} */
   const exceptions = [];
   /** @type {string[]} */
@@ -125,8 +127,11 @@ export function parse(text, today) {
     const sign = marks?.[1]?.[0] ?? "";
     const size = marks?.[1]?.length ?? 0;
     if (fence === undefined && marks && !(sign === "`" && (marks[2] ?? "").includes("`"))) fence = { sign, size };
-    else if (fence !== undefined && marks && sign === fence.sign && size >= fence.size && (marks[2] ?? "").trim() === "") fence = undefined;
+    // Only spaces and tabs may follow a closing fence: a no-break space keeps the block open.
+    else if (fence !== undefined && marks && sign === fence.sign && size >= fence.size && /^[ \t]*$/.test(marks[2] ?? "")) fence = undefined;
     else if (/^ {0,3}#{1,6}[ \t]+Exceptions en cours[ \t#]*$/i.test(line)) headings.push({ index, line, fenced: fence !== undefined });
+    // The same title underlined by "=" or "-" (a setext heading) is a heading too.
+    else if (/^ {0,3}Exceptions en cours[ \t]*$/i.test(line) && /^ {0,3}(?:=+|-+)[ \t]*$/.test(lines[index + 1] ?? "")) headings.push({ index, line, fenced: fence !== undefined });
   });
   if (headings.length > 1) {
     return { exceptions, problems: [`${FILE}: the heading "${SECTION}" is written ${headings.length} times (lines ${headings.map(({ index }) => index + 1).join(", ")}): one section, read by the job and shown by the page`] };
