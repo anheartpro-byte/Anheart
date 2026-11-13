@@ -2220,7 +2220,55 @@ l'armement ; un programme lancé du site, avec celles d'une personne à bord.
 |---|---|
 | La conversion de la batterie du BITalino en pourcentage est supposée (3,3 V de référence, moitié de la tension de l'élément, 3,4 V vide, 4,2 V plein), jamais mesurée | Le seuil de 30 % n'a de sens qu'après une mesure au banc sur le vrai BITalino ([section 6](#6-avant-la-première-personne-à-bord), point 9) |
 | Les paramètres du variateur (tFr, HSP, LSP, ACC, dEC) ne sont pas relus par la liste | Ils restent relus et jugés à chaque armement ; la liste ne juge que la liaison et l'état du variateur |
-| Le serveur n'annonce ni le compte d'incidents graves (ANH-145), ni une version logicielle de référence, ni la version attendue des paramètres médicaux | Ces trois contrôles restent orange, « non annonces » ou « non jugee » ; la signature des paramètres médicaux est exigée |
+| Le serveur n'annonce ni une version logicielle de référence, ni la version attendue des paramètres médicaux ; un serveur antérieur au contrat 1.10 n'annonce pas non plus le compte d'incidents graves ([section 16](#16-le-registre-des-incidents-anh-145)) | Ces contrôles restent orange, « non annonces » ou « non jugee » ; la signature des paramètres médicaux est exigée |
 | La qualité ECG est jugée sur l'image de chaque tic (5 Hz) | Deux mesures arrivées entre deux tics ne sont vues que par la dernière ; la porte du runtime exige de plus une fréquence cardiaque fraîche et sûre pour une personne à bord |
 | Une batterie est lue une fois par passe, et vaut 30 min | Au-delà, le contrôle demande de relancer le pré-vol ; aucune relecture automatique pendant une longue attente au repos |
 | Le Mac du banc ne peut pas interroger son horloge, ni lire la batterie par RFCOMM | L'erreur de l'horloge y est inconnue et la batterie illisible : rouge avec une personne à bord, orange au banc. Avec le variateur simulé (`MOTOR_BACKEND=sim`), l'horloge inconnue est orange même avec une personne à bord : aucun moteur réel ne tourne |
+
+## 16. Le registre des incidents (ANH-145)
+
+Chaque événement de sécurité qui mérite une revue devient un incident dans
+Convex, lié à la machine, à la séance et, s'il y a lieu, à l'enregistrement :
+verdict `QUICK_STOP` ou `GO_SILENT` (même si la séance continue), défaut du
+variateur, fin `emergency_stop`, `safety_verdict` ou `tick_exception`, trois
+refus de pré-vol de suite, enregistrement refusé. Un même événement
+physique ne fait qu'un incident : l'arrêt d'urgence (son verdict puis sa fin),
+l'exception du tic, le défaut du variateur avec son verdict et sa fin, dans
+n'importe quel ordre d'arrivée. Le détail est dans
+[convex.md](convex.md#incidents--registre-des-incidents-anh-145).
+
+### 16.1 La règle : un incident ouvert de gravité haute ferme les séances programmées
+
+**Un incident ouvert de gravité haute ferme les séances programmées.** Tant
+qu'un incident `high` de la machine est ouvert ou analysé, le serveur refuse
+de lancer une séance programmée sur cette machine (« incident ouvert »,
+`incident_open`), retire un lancement déjà en attente et refuse son départ à
+l'armement (409 `incident_open`, contrat 1.10). Le poll annonce le compte à la
+console (`incidents_open_high`), dont le pré-vol refuse tout départ avec une
+personne à bord tant qu'il n'est pas nul ([section 15](#15-le-pré-vol-avant-chaque-séance-anh-142)).
+Le serveur laisse possible la seule séance manuelle de banc, aucune personne
+à bord : c'est elle qui permet de chercher la cause. Seul un admin Anheart clôt un incident,
+et seulement avec sa cause et l'action menée : c'est cette clôture qui rouvre
+la machine aux séances programmées. Une analyse seule ne la rouvre pas.
+
+Gravité haute : avec une personne à bord, tout niveau `RAMP_DOWN` ou plus
+(défaut du variateur, arrêt d'urgence, verdict qui arrête) ; partout, un
+niveau `GO_SILENT` ou une action inconnue du serveur, et une exception du
+tic. Une fin `safety_verdict` dont le verdict n'est pas reçu est grave même au
+banc, l'arrêt ayant pu être un `GO_SILENT` ; quand son verdict arrive,
+l'incident prend la gravité observée, et un niveau observé n'est jamais
+abaissé. Un verdict tardif rejoint l'incident même si un admin l'a déjà clos,
+et le rouvre s'il le rend grave. Chaque incident grave ouvert est une
+alerte aux admins Anheart, dans le site (aucun e-mail : les alertes par e-mail
+sont coupées en production).
+
+### 16.2 Ce que le registre ne couvre pas
+
+| Limite | Conséquence |
+|---|---|
+| Une séance démarrée à la console, sans lancement du site, n'est connue du serveur qu'une fois armée | Le serveur ne peut pas la refuser ; seul le pré-vol de la console la refuse, et seulement s'il a reçu le compte d'un poll |
+| Une console qui n'a jamais reçu de poll (tableau de bord injoignable) ne connaît pas le compte | Le contrôle reste orange, « non annonce » : il ne bloque pas. Un incident grave ouvert ne la retient donc pas hors ligne |
+| Un défaut du variateur annoncé par le seul heartbeat, hors de tout événement de séance, n'ouvre pas d'incident | L'alerte `drive_fault` reste ; le pré-vol refuse de toute façon un départ sur un variateur en défaut |
+| Un refus de pré-vol d'un départ décidé à la console n'est pas envoyé au serveur | Seuls les refus de lancements venus du site comptent pour les trois refus de suite ; toute autre séance de la machine remet le compte à zéro |
+| Une séance mal terminée pendant que le lien était coupé n'est connue du serveur qu'à l'arrivée de ses événements et de sa fin | Jusque-là le compte annoncé reste celui d'avant : un nouveau lancement est possible côté serveur ; voir le pré-vol de la console pour ce qui le retient |
+| Aucune déclaration d'incident à la main n'existe encore (`manual` est réservé) | Un événement que le logiciel ne voit pas ne bloque pas la machine |

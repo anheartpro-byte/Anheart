@@ -143,8 +143,8 @@ export const machineRegistryRadiiFields = {
 };
 
 /**
- * What an alert to the gestionnaires is about (ANH-90). Another kind (the
- * incidents of ANH-145) is one more literal here and in
+ * What an alert to the gestionnaires is about (ANH-90). Another kind is one
+ * more literal here and in
  * `notificationEmailFields`, a field of `emailChoicesValidator`
  * (convex/notifications.ts), an entry of `NOTIFICATION_TYPES`
  * (convex/lib/notifications.ts), a type in `TYPES` on the alerts page
@@ -156,6 +156,7 @@ export const notificationTypeValidator = v.union(
   v.literal("session_failed"), // the machine ended a session as failed
   v.literal("drive_fault"), // the drive reports a fault
   v.literal("safety_verdict"), // a safety verdict stopped a session
+  v.literal("incident_high"), // a high-severity incident opened (ANH-145)
 );
 
 /** Whether each kind of alert is sent by e-mail too; unset: its default. */
@@ -164,7 +165,29 @@ export const notificationEmailFields = {
   session_failed: v.optional(v.boolean()),
   drive_fault: v.optional(v.boolean()),
   safety_verdict: v.optional(v.boolean()),
+  incident_high: v.optional(v.boolean()),
 };
+
+/** What opened an incident (ANH-145, convex/lib/incidents.ts). */
+export const incidentKindValidator = v.union(
+  v.literal("safety_verdict"),
+  v.literal("emergency_stop"),
+  v.literal("drive_fault"),
+  v.literal("tick_exception"),
+  v.literal("preflight_repeated_failure"),
+  v.literal("record_rejected"),
+  v.literal("manual"),
+);
+export const incidentSeverityValidator = v.union(
+  v.literal("low"),
+  v.literal("medium"),
+  v.literal("high"),
+);
+export const incidentStatusValidator = v.union(
+  v.literal("open"),
+  v.literal("analyzed"),
+  v.literal("closed"),
+);
 /**
  * Role of a member inside ONE organisation: the mirror of the Clerk roles
  * `org:admin`, `org:gestionnaire` and `org:patient`. Whether an `admin` is the
@@ -816,7 +839,48 @@ export default defineSchema({
     actor: v.string(), // "system", "remote" or an opaque operator identifier
   })
     .index("by_session_and_seq", ["sessionId", "seq"])
+    // The events around an incident's instant (ANH-145, `incidents.get`).
+    .index("by_session_and_t", ["sessionId", "t"])
     .index("by_organization", ["organizationId"]),
+
+  // The incident register (ANH-145): one row per safety event worth a human
+  // review, opened by the server where it hears of it (convex/lib/incidents.ts),
+  // analysed, then closed by an Anheart admin. While a `high` one is `open` or
+  // `analyzed`, no programmed session is launched or armed on its machine.
+  incidents: defineTable({
+    organizationId, // Always the machine's organisation
+    machineId: v.id("machines"),
+    sessionId: v.optional(v.id("sessions")),
+    kind: incidentKindValidator,
+    // The safety rule (`hr_critical`), the drive's LFT mnemonic (`OHF`), the
+    // end (`emergency_stop`), `preflight`, or the record's rejection code.
+    rule: v.string(),
+    // The instant of what opened it, unix ms on the machine's clock, as the
+    // events are (`training_events.t`): with `sessionId` and `rule`, what one
+    // incident is, however many times the machine sends it.
+    t: v.number(),
+    severity: incidentSeverityValidator,
+    occupied: v.boolean(), // a person was (to be) on board
+    status: incidentStatusValidator,
+    openedAt: v.number(), // the server's clock
+    analyzedBy: v.optional(v.id("users")),
+    analysis: v.optional(v.string()), // the cause
+    action: v.optional(v.string()), // what was done about it
+    closedBy: v.optional(v.id("users")),
+    closedAt: v.optional(v.number()),
+    // The rejected file of a `record_rejected` incident.
+    recordId: v.optional(v.id("session_record_files")),
+  })
+    // The blocking count reads the high ones only (`openHighIncidents`).
+    .index("by_machine_and_status_and_severity", [
+      "machineId",
+      "status",
+      "severity",
+    ])
+    // A machine's incidents, most recently opened last (a gestionnaire's list).
+    .index("by_machine", ["machineId"])
+    .index("by_organization", ["organizationId"])
+    .index("by_session", ["sessionId", "rule", "t"]),
 
   machine_health_history: defineTable({
     machineId: v.id("machines"),

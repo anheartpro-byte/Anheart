@@ -309,6 +309,10 @@ ARMING_REFUSAL_WORDS: Final[Mapping[ErrorCode, str]] = MappingProxyType(
         ErrorCode("machine_busy"): (
             "machine deja tenue par une autre seance en attente ou en cours : une seule a la fois"
         ),
+        ErrorCode("incident_open"): (
+            "incident grave ouvert sur cette machine : seances programmees fermees jusqu'a "
+            "sa cloture"
+        ),
     }
 )
 

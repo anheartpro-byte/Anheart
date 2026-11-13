@@ -165,6 +165,21 @@ async function observe(w: Pick<World, "t">, call: () => Promise<Expected[]>) {
   }
   return written;
 }
+/** A high incident of centre A's machine, open (ANH-145). */
+const addIncident = (w: World) =>
+  w.t.run((ctx) =>
+    ctx.db.insert("incidents", {
+      organizationId: w.orgA,
+      machineId: w.machine,
+      kind: "manual",
+      rule: "manual",
+      t: NOW,
+      severity: "high",
+      occupied: false,
+      status: "open",
+      openedAt: NOW,
+    }),
+  );
 /** A feedback whose text must never reach an audit entry (ANH-146). */
 const PRIVATE_FEEDBACK = {
   nauseaScore: 7,
@@ -1101,6 +1116,36 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         }),
       ];
     }),
+  "incidents.analyze": async (w) => {
+    const incidentId = await addIncident(w);
+    return observe(w, async () => {
+      await as(w.t, "manager").mutation(api.incidents.analyze, {
+        incidentId,
+        analysis: "synthetic-private-incident-cause",
+        action: "synthetic-private-incident-action",
+      });
+      return [
+        site(w, "incident.analyzed", incidentId, "incident", "manager", w.orgA, {
+          machineId: w.machine,
+        }),
+      ];
+    });
+  },
+  "incidents.close": async (w) => {
+    const incidentId = await addIncident(w);
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.incidents.close, {
+        incidentId,
+        analysis: "synthetic-private-incident-cause",
+        action: "synthetic-private-incident-action",
+      });
+      return [
+        site(w, "incident.closed", incidentId, "incident", "admin", w.orgA, {
+          machineId: w.machine,
+        }),
+      ];
+    });
+  },
   "training.launchAutoSession": async (w) =>
     observe(w, async () => {
       const sessionId = await as(w.t, "manager").mutation(
@@ -1418,6 +1463,7 @@ describe("ANH-167 T02-a completeness through registered entry points", () => {
           "synthetic-private-postal-address",
           "synthetic-private-downgrade-reason",
           "synthetic-private-end-code-and-reason",
+          "synthetic-private-incident",
           PRIVATE_FEEDBACK.freeText,
         ])
           expect(JSON.stringify(row)).not.toContain(privateValue);

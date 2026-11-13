@@ -55,8 +55,10 @@ afterEach(() => {
 });
 
 /** The alerts of the store, as `[recipient, type, machine]`, sorted. */
+/** The alerts of the machine's staff: the Anheart admins' incident alerts are `incidents.test.ts`'s. */
 async function alerts(w: World) {
-  return await w.t.run((ctx) => ctx.db.query("notifications").collect());
+  const rows = await w.t.run((ctx) => ctx.db.query("notifications").collect());
+  return rows.filter((row) => row.type !== "incident_high");
 }
 
 function recipients(rows: Doc<"notifications">[]) {
@@ -1039,6 +1041,7 @@ describe("the choice of alerts sent by e-mail", () => {
         session_failed: true,
         drive_fault: true,
         safety_verdict: true,
+        incident_high: false,
       },
     });
 
@@ -1058,6 +1061,7 @@ describe("the choice of alerts sent by e-mail", () => {
       session_failed: true,
       drive_fault: false,
       safety_verdict: true,
+      incident_high: false,
     });
     expect(emailChoices(null).machine_offline).toBe(false);
   });
@@ -1298,7 +1302,12 @@ describe("session alert grouping (T03)", () => {
     const jobs = await w.t.run((ctx) =>
       ctx.db.system.query("_scheduled_functions").collect(),
     );
-    expect(jobs.map((job) => job.args[0])).toEqual([
+    // The incident the drive fault opens alerts the Anheart admins on its own.
+    expect(
+      jobs
+        .map((job) => job.args[0])
+        .filter((args) => args.type !== "incident_high"),
+    ).toEqual([
       expect.objectContaining({ type: "safety_verdict", sessionId }),
       expect.objectContaining({ type: "drive_fault", sessionId }),
     ]);

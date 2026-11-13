@@ -100,6 +100,13 @@ import {
   verdictAction,
   verdictAlerts,
 } from "./lib/notifications";
+// The incident register (ANH-145): what an event or an end opens, and what an
+// open high incident closes.
+import {
+  openHighIncidents,
+  openIncidentOfEnd,
+  openIncidentOfEvent,
+} from "./lib/incidents";
 
 // ---------------------------------------------------------------------------
 // Physiology: mirrors raspberry-pi/src/training/plan.py. The Pi re-checks all
@@ -712,6 +719,10 @@ export const ARMING_REFUSALS = {
   // Bench launches only (ANH-250): they have no rider to hold.
   machine_busy:
     "another open session held the machine when it armed the bench launch",
+  // Auto launches only (ANH-145, contract 1.10), checked after the
+  // organisation: a bench launch puts nobody on board.
+  incident_open:
+    "a high-severity incident of the machine was open when it armed the launch",
 } as const satisfies Partial<
   Record<Extract<MachineErrorCode, DashboardErrorCode>, string>
 >;
@@ -928,7 +939,9 @@ async function benchLauncherStillAllowed(
  * A bench launch (ANH-250) has no rider: after 3, whoever made it could still
  * make it (`benchLauncherRefusal`, else `right_revoked_before_start`), and no
  * other session may still hold its machine (`machine_busy`). Nothing of a
- * rider, a fitness, an age, a heart rate or the medical parameters is read.
+ * rider, a fitness, an age, a heart rate or the medical parameters is read,
+ * nor the incidents. Any other launch, after 3, is refused while a high
+ * incident of its machine is open or analysed (`incident_open`, ANH-145).
  */
 async function armingRefusal(
   ctx: QueryCtx | MutationCtx,
@@ -950,6 +963,8 @@ async function armingRefusal(
       return refusalFor("machine_busy");
     return null;
   }
+  if ((await openHighIncidents(ctx, machine._id)) > 0)
+    return refusalFor("incident_open");
   const rider = await riderStillAllowed(ctx, session, machine);
   if (rider === null) return refusalFor("right_revoked_before_start");
   const fitnessRefusal = await riderLaunchRefusal(
@@ -1163,6 +1178,9 @@ export const launchAutoSession = mutation({
     );
     if (launchRefusal !== null) throw refusal(launchRefusal);
     if (machine.status === "offline") throw refusal("machine_offline");
+    // ANH-145: a high incident open or analysed closes programmed sessions.
+    if ((await openHighIncidents(ctx, args.machineId)) > 0)
+      throw refusal("incident_open");
     const medical = await currentMedicalParameters(ctx);
     if (medical === null) throw refusal("medical_parameters_unavailable");
     if (machine.medicalParametersVersion === null) {
@@ -2230,12 +2248,21 @@ export const endTrainingSession = internalMutation({
     if (axis !== null && args.endedAt !== undefined) {
       endedAt = Math.max(s.startedAt, args.endedAt + axis.shift);
     }
+    const status = args.failed ? "failed" : "completed";
     await ctx.db.patch(args.sessionId, {
-      status: args.failed ? "failed" : "completed",
+      status,
       endedAt,
       endReason: args.reason,
       interruptedAt: undefined,
     });
+    // ANH-145: an emergency stop, a safety verdict, a tick exception, or the
+    // third pre-flight refusal in a row opens an incident.
+    await openIncidentOfEnd(
+      ctx,
+      { ...s, status, endedAt, endReason: args.reason },
+      args.reason,
+      args.endedAt ?? endedAt,
+    );
     await audit(ctx, {
       actor: machineActor(args.machineId),
       source: "machine",
@@ -2364,7 +2391,8 @@ const trainingEvent = v.object({
  * Store events of a session of this machine, as it reads them back from the
  * session's local record. Idempotent like `storeTelemetry`: an event is one
  * `(sessionId, seq)`, its rank in that record, and an event already stored is
- * left as it is. The dates are bounded as those of the telemetry are.
+ * left as it is. The dates are bounded as those of the telemetry are. An event
+ * stored by this call may open an incident (ANH-145, `openIncidentOfEvent`).
  */
 export const storeEvents = internalMutation({
   args: {
@@ -2405,6 +2433,7 @@ export const storeEvents = internalMutation({
         ...event,
       });
       outcome.stored++;
+      await openIncidentOfEvent(ctx, s, event);
       if (event.kind === "verdict" && verdictAlerts(event.detail)) {
         verdicts.count++;
         verdicts.detail = foldedDetail(

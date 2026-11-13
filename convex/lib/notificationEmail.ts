@@ -67,6 +67,7 @@ const WORDS: Record<
       session_failed: "Séance échouée",
       drive_fault: "Défaut variateur",
       safety_verdict: "Arrêt demandé par la sécurité",
+      incident_high: "Incident grave ouvert",
     },
     subject: (what, machine) => `[Gaura] ${what} : ${machine}`,
     body: (what, machine, link) =>
@@ -84,6 +85,7 @@ const WORDS: Record<
       session_failed: "Session failed",
       drive_fault: "Drive fault",
       safety_verdict: "Stop requested by the safety layer",
+      incident_high: "High-severity incident opened",
     },
     subject: (what, machine) => `[Gaura] ${what}: ${machine}`,
     body: (what, machine, link) =>

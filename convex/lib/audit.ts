@@ -45,6 +45,7 @@ export const AUDIT_TARGET_TYPES = [
   "medical_parameters_version",
   "programme",
   "patient_invitation",
+  "incident",
 ] as const;
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[number];
 export const auditTargetTypeValidator = v.union(
@@ -103,6 +104,8 @@ export const AUDIT_ACTIONS = [
   "programme.published", // Anheart admin publishes a validated programme; target: programme.
   "programme.retired", // Anheart admin retires a published programme; target: programme.
   "record.deleted", // Authorised user or retention cron deletes a recording; target: session.
+  "incident.analyzed", // Staff of the machine records an incident's cause and action, without the text; target: incident.
+  "incident.closed", // Anheart admin closes an incident, without the text; target: incident.
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 export const auditActionValidator = v.union(
@@ -161,6 +164,8 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "programme.published": "programme",
   "programme.retired": "programme",
   "record.deleted": "session",
+  "incident.analyzed": "incident",
+  "incident.closed": "incident",
 };
 
 const detailRoleValidator = v.union(
@@ -232,6 +237,8 @@ export const SENSITIVE_MUTATIONS: Readonly<
   "users.getOrCreateUser": ["membership.created", "membership.role_changed"],
   "fitness.submitFitnessAnswers": ["fitness.submitted"],
   "fitness.validateFitnessAssessment": ["fitness.validated"],
+  "incidents.analyze": ["incident.analyzed"],
+  "incidents.close": ["incident.closed"],
   "fitness.signConsent": ["consent.signed"],
   "fitness.withdrawConsent": ["consent.withdrawn"],
   "machineKeys.createMachineKey": [

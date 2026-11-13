@@ -162,6 +162,7 @@ const emailChoicesValidator = v.object({
   session_failed: v.boolean(),
   drive_fault: v.boolean(),
   safety_verdict: v.boolean(),
+  incident_high: v.boolean(),
 });
 
 /**

@@ -3798,7 +3798,152 @@ export const MATRIX: Entry[] = [
       },
     ],
   },
+  // =========================================================================
+  // incidents.ts (ANH-145): the incidents of the machines the staff reach;
+  // only the Anheart admin closes one
+  // =========================================================================
+  {
+    id: "incidents.list",
+    ref: api.incidents.list,
+    kind: "query",
+    // One incident on each machine: `machine` and `otherMachine` (centre A),
+    // `orgBMachine` (centre B).
+    build: async (w) => {
+      for (const machineId of [w.machine, w.otherMachine, w.orgBMachine])
+        await addIncident(w, machineId);
+      return {};
+    },
+    onSuccess: (res, w) =>
+      expectIncidentsOf(res, [w.machine, w.otherMachine, w.orgBMachine]),
+    onFiltered: (res, w, actor) =>
+      expectIncidentsOf(
+        res,
+        {
+          orgAdmin: [w.machine, w.otherMachine],
+          manager: [w.machine],
+          otherManager: [w.otherMachine],
+          orgBAdmin: [w.orgBMachine],
+          orgBManager: [w.orgBMachine],
+        }[actor as "orgAdmin"],
+      ),
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "every organisation" },
+      { actor: "orgAdmin", scope: "own", expect: filtered, note: "the machines of centre A" },
+      { actor: "manager", scope: "own", expect: filtered, note: "the machine they manage only" },
+      { actor: "otherManager", scope: "own", expect: filtered, note: "the machine they manage only" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient reads no incident" },
+      { actor: "orgBAdmin", scope: "own", expect: filtered, note: "centre B only" },
+      { actor: "orgBManager", scope: "own", expect: filtered, note: "centre B only" },
+      { actor: "orgBPatient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient reads no incident" },
+    ],
+  },
+  {
+    id: "incidents.get",
+    ref: api.incidents.get,
+    kind: "query",
+    // An incident of centre A's `machine`: "foreign" asks it from centre B.
+    build: async (w) => ({ incidentId: await addIncident(w, w.machine) }),
+    onSuccess: (res, w, actor) => {
+      const sheet = res as { incident: { machineId: string }; canClose: boolean };
+      if (
+        sheet.incident.machineId !== w.machine ||
+        sheet.canClose !== (actor === "admin")
+      )
+        throw new Error("Incident sheet not served as expected");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "every organisation, and may close it" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "a machine of their organisation" },
+      { actor: "manager", scope: "own", expect: ok, note: "the machine they manage" },
+      { actor: "otherManager", scope: "other", expect: empty, note: "a machine they do not manage" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient reads no incident" },
+      { actor: "orgBAdmin", scope: "foreign", expect: empty, note: "a centre A incident, by identifier" },
+      { actor: "orgBManager", scope: "foreign", expect: empty, note: "a centre A incident, by identifier" },
+      { actor: "orgBPatient", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "a patient reads no incident" },
+    ],
+  },
+  {
+    id: "incidents.analyze",
+    ref: api.incidents.analyze,
+    kind: "mutation",
+    build: async (w) => ({
+      incidentId: await addIncident(w, w.machine),
+      analysis: "cause",
+      action: "action",
+    }),
+    onSuccess: async (_res, w, actor, _scope, args) => {
+      const row = await w.t.run((ctx) =>
+        ctx.db.get(args.incidentId as Id<"incidents">),
+      );
+      if (row?.status !== "analyzed" || row.analyzedBy !== userId(w, actor))
+        throw new Error("Incident not analysed by the caller");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "every organisation" },
+      { actor: "orgAdmin", scope: "own", expect: ok, note: "a machine of their organisation" },
+      { actor: "manager", scope: "own", expect: ok, note: "the machine they manage" },
+      { actor: "otherManager", scope: "other", expect: refuse(/incident_not_found/), note: "a machine they do not manage" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient analyses no incident" },
+      { actor: "orgBAdmin", scope: "foreign", expect: refuse(/incident_not_found/), note: "a centre A incident, by identifier" },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(/incident_not_found/), note: "a centre A incident, by identifier" },
+      { actor: "orgBPatient", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "a patient analyses no incident" },
+    ],
+  },
+  {
+    id: "incidents.close",
+    ref: api.incidents.close,
+    kind: "mutation",
+    build: async (w) => ({
+      incidentId: await addIncident(w, w.machine),
+      analysis: "cause",
+      action: "action",
+    }),
+    onSuccess: async (_res, w, _actor, _scope, args) => {
+      const row = await w.t.run((ctx) =>
+        ctx.db.get(args.incidentId as Id<"incidents">),
+      );
+      if (row?.status !== "closed" || row.closedBy !== w.admin)
+        throw new Error("Incident not closed by the Anheart admin");
+    },
+    cases: [
+      { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+      { actor: "admin", expect: ok, note: "the Anheart admin closes it" },
+      { actor: "orgAdmin", scope: "own", expect: refuse(UNAUTHORIZED), note: "an organisation admin does not close one" },
+      { actor: "manager", scope: "own", expect: refuse(UNAUTHORIZED), note: "a gestionnaire does not close one" },
+      { actor: "patient", scope: "self", expect: refuse(UNAUTHORIZED), note: "a patient does not close one" },
+      { actor: "orgBAdmin", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "an organisation admin does not close one" },
+      { actor: "orgBManager", scope: "foreign", expect: refuse(UNAUTHORIZED), note: "a gestionnaire does not close one" },
+    ],
+  },
 ];
+
+/** A high incident of `machineId`, open, in its machine's organisation (ANH-145). */
+async function addIncident(w: World, machineId: Id<"machines">) {
+  return await w.t.run(async (ctx) =>
+    ctx.db.insert("incidents", {
+      organizationId: (await ctx.db.get(machineId))?.organizationId,
+      machineId,
+      kind: "manual",
+      rule: "manual",
+      t: NOW,
+      severity: "high",
+      occupied: false,
+      status: "open",
+      openedAt: NOW,
+    }),
+  );
+}
+
+function expectIncidentsOf(res: unknown, machines: Id<"machines">[]) {
+  const listed = (res as { machineId: Id<"machines"> }[])
+    .map((row) => row.machineId)
+    .sort();
+  if (!isDeepStrictEqual(listed, [...machines].sort()))
+    throw new Error(`Listed ${listed.join(", ")}`);
+}
 
 function registryTarget(w: World, actor: Actor, scope: Scope) {
   return actor === "orgAdmin" && scope === "foreign" ? w.orgBMachine : w.machine;

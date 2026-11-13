@@ -361,6 +361,20 @@ D'où l'ordre du premier cas :
 `scripts/pi/preflight.sh` dit dans quelle situation se trouve une console avant
 de la démarrer ([section 7.5](#75-vérifier-puis-démarrer)).
 
+**Le registre des incidents (contrat 1.10, ANH-145) : le banc entre Convex et
+l'image du Pi.** Dès que Convex 1.10 est en service, son poll annonce aux
+consoles le nombre d'incidents graves ouverts de leur machine
+(`incidents_open_high`). Une console 1.9 (ANH-142) le lit déjà, et le juge
+**bloquant aussi au banc** ; une console 1.10 ne le juge bloquant qu'avec une
+personne à bord. Entre le déploiement de Convex 1.10 et celui de l'image du
+Pi 1.10, **un seul incident grave suffit donc à fermer le banc** d'une console
+1.9 : une exception du tic, un arrêt `GO_SILENT` ou une fin `safety_verdict`
+dont le verdict n'a pas été reçu, même sans personne à bord, et jusqu'à ce
+qu'un admin Anheart le close sur la page Incidents, avec sa cause et son
+action. Pour qui déploie : mettre l'image du Pi à jour aussitôt après Convex,
+ou prévoir qu'un admin Anheart soit là pour clore un incident pendant cet
+intervalle. Le côté sûr reste celui-ci : rien ne tourne de plus que prévu.
+
 ### 3.5 Vérifier la physiologie déjà enregistrée
 
 `training.setUserPhysiology` n'enregistre une FC max ou une année de naissance

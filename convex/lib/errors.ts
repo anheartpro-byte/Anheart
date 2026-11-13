@@ -250,6 +250,15 @@ export const DASHBOARD_ERRORS = {
   // Alerts to the gestionnaires (convex/notifications.ts).
   notification_not_found:
     "The notification does not exist, or is not the caller's in this organisation.",
+
+  // The incident register (convex/incidents.ts, ANH-145).
+  incident_open:
+    "A high-severity incident of the machine is open or analysed: no programmed session is launched or armed there until an Anheart admin closes it. Thrown by `launchAutoSession`; also an arming refusal (contract 1.10).",
+  incident_not_found:
+    "The incident does not exist, or concerns a machine the caller does not reach.",
+  incident_closed: "The incident is closed: it is no longer analysed.",
+  incident_text_required:
+    "Analysing or closing an incident requires its cause and its action, each of 1 to INCIDENT_TEXT_MAX (2000) characters.",
 } as const satisfies Record<string, string>;
 
 /** A stable error code of the dashboard's functions. */

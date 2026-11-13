@@ -31,6 +31,7 @@ import {
 } from "./lib/recordStorage";
 import { SUMMARY_FILES } from "./lib/sessionSummary";
 import { scheduleRecordSummary } from "./sessionReports";
+import { machineEndOf, openIncident } from "./lib/incidents";
 
 const fileMetadata = v.object({
   id: v.id("session_record_files"),
@@ -143,7 +144,11 @@ async function refreshStatus(
   ctx: MutationCtx,
   sessionId: Id<"sessions">,
   before: { verified: boolean; rejection?: string } | null,
-  after: { verified: boolean; rejection?: string },
+  after: {
+    verified: boolean;
+    rejection?: string;
+    fileId: Id<"session_record_files">;
+  },
 ) {
   const session = await ctx.db.get(sessionId);
   if (!session || session.recordDeleted) return;
@@ -176,6 +181,17 @@ async function refreshStatus(
     recordVerifiedCount: verified,
     recordRejectedCount: rejected,
   });
+  // ANH-145: a record that becomes rejected opens an incident, once a session.
+  if (record === "rejected" && session.record !== "rejected")
+    await openIncident(ctx, session, {
+      kind: "record_rejected",
+      rule: after.rejection ?? "record_rejected",
+      // On the machine's axis, as the events around it are.
+      t: machineEndOf(session),
+      level: null,
+      fromEvent: false,
+      recordId: after.fileId,
+    });
 }
 
 export const requestUpload = internalMutation({
@@ -327,6 +343,7 @@ async function attachUpload(
   await refreshStatus(ctx, ticket.sessionId, previous, {
     verified: false,
     rejection: metadata.size !== ticket.size ? "size_mismatch" : undefined,
+    fileId,
   });
   return { accepted: true };
 }
@@ -485,6 +502,7 @@ export const finishVerification = internalMutation({
     await refreshStatus(ctx, file.sessionId, file, {
       verified: !args.rejection,
       rejection: args.rejection,
+      fileId: file._id,
     });
     // The final summary of the session (ANH-89) reads three files only: it
     // is computed once they are all verified, raw blocks or not.
