@@ -325,6 +325,16 @@ describe("ANH-203 launch window: who can be chosen as rider", () => {
     expect(asks("users:getUserById")).toEqual(["skip"]);
   });
 
+  it("ANH-250 says where a manual session starts, a ballasted bench session aside", () => {
+    signedInAs("user");
+    machine();
+
+    const { screen } = open();
+
+    expect(screen.text()).toContain(fr.training.manualFromMachine);
+    expect(screen.text()).not.toContain(fr.training.manualOnlyAtMachine);
+  });
+
   it("a gestionnaire is offered himself and his own patients, never the list of all users", () => {
     gestionnaireWithPatient({ hrMax: 180, birthYear: 1986 });
 

@@ -193,6 +193,32 @@ describe("reports", () => {
     expect(screen.queryByText(fr.reports.noReports)).toBeNull();
   });
 
+  it("ANH-250 marks a ballasted bench session, with its mass when declared, and no other", async () => {
+    signedInAs("gestionnaire");
+    serverLists(
+      completed("k57abcd1234efgh5678", {
+        kind: "manual",
+        ballast: { massKg: 80 },
+      }),
+      completed("k57zzzz0000yyyy1111", {
+        kind: "manual",
+        ballast: { massKg: null },
+      }),
+      completed("k57wwww2222xxxx3333"),
+    );
+    await renderPage(<ReportsPage />);
+
+    expect(
+      report("EFGH5678").getByText(
+        fr.training.ballast.badgeMass.replace("{mass}", "80"),
+      ),
+    ).toBeTruthy();
+    expect(
+      report("YYYY1111").getByText(fr.training.ballast.badge),
+    ).toBeTruthy();
+    expect(report("XXXX3333").queryByText(/Banc lesté/)).toBeNull();
+  });
+
   it("leads from each report to the detail of its session and to its printable report", async () => {
     signedInAs("user");
     serverLists(completed("k57abcd1234efgh5678"));

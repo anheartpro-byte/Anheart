@@ -1106,6 +1106,7 @@
       "remote": "Banc lesté : proposé depuis le site, confirmé et piloté à la console de la machine"
     },
     "manualOnlyAtMachine": "Manuel : uniquement depuis la console de la machine",
+    "manualFromMachine": "Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site.",
     "runMode": {
       "repos": "Repos",
       "manuel": "Manuel",

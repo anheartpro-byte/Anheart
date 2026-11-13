@@ -19,6 +19,8 @@ import {
 import { Link } from "@/i18n/navigation";
 import { isOrganizationAdmin } from "@/lib/organizationAccess";
 import { FeedbackExportButton } from "@/components/training/FeedbackExportButton";
+import { BallastBadge } from "@/components/training/TrainingBadges";
+import type { Ballast } from "@/lib/training";
 
 /** Reports asked for at once: the first page, then each "Show more". */
 const PAGE_SIZE = 50;
@@ -100,6 +102,7 @@ interface SessionReportCardProps {
     patientName: string;
     machineName: string;
     kind: string;
+    ballast?: Ballast;
   };
 }
 
@@ -168,6 +171,7 @@ function SessionReportCard({ session }: SessionReportCardProps) {
               {duration > 0 ? t("durationMinutes", { minutes: duration }) : "-"}
             </span>
           </div>
+          <BallastBadge ballast={session.ballast} />
         </div>
       </CardContent>
     </Card>

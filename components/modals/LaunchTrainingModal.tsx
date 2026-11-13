@@ -480,7 +480,7 @@ function LaunchForm({
         </p>
         <p className="flex items-start gap-2">
           <Hand className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-          {t("training.manualOnlyAtMachine")}
+          {t("training.manualFromMachine")}
         </p>
       </div>
 

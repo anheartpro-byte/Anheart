@@ -1106,6 +1106,7 @@
       "remote": "Ballasted bench: proposed from the site, confirmed and driven at the machine's console"
     },
     "manualOnlyAtMachine": "Manual: only from the machine's console",
+    "manualFromMachine": "Manual: from the machine's console. With nobody on board, a ballasted bench session can also be proposed from the site.",
     "runMode": {
       "repos": "Idle",
       "manuel": "Manual",

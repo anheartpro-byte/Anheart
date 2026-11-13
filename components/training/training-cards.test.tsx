@@ -384,7 +384,9 @@ describe("ANH-203 programmes of a machine", () => {
       "Endurance 110-140 bpm (FC limite 165) 30 min 24.1 tr/min bras 1200 tr/min moteur",
     );
     expect(screen.text()).not.toContain(t.programs.disabled);
-    expect(screen.text()).toContain(t.manualOnlyAtMachine);
+    // ANH-250: a ballasted bench session can be proposed from the site.
+    expect(screen.text()).toContain(t.manualFromMachine);
+    expect(screen.text()).not.toContain(t.manualOnlyAtMachine);
   });
 
   it("says that auto programmes are disabled, and greys the programmes, when the machine says so", () => {
