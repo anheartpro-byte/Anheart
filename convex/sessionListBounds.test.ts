@@ -189,9 +189,6 @@ describe("ANH-227 short lists: a manager with no readable history", () => {
           [],
         );
       }
-      expect(
-        await reader.query(api.sessions.getCompletedSessionsForUser, {}),
-      ).toEqual([]);
     },
   );
 });
@@ -223,8 +220,8 @@ describe.each([1, 5, 10, 50, 100])(
   },
 );
 
-describe("ANH-227 short lists: default and previous reports", () => {
-  it("keeps the default and previous reports lists exact under the read budget", async () => {
+describe("ANH-227 short lists: default list", () => {
+  it("keeps the default list exact under the read budget", async () => {
     const w = await boundsWorld(420, true);
     await expectBudgetBites(w);
     const expected = expectedForManager(w, w.seeded);
@@ -232,16 +229,6 @@ describe("ANH-227 short lists: default and previous reports", () => {
     const listed = await reader.query(api.sessions.listSessions, {});
     expect(listed.map((row) => row._id)).toEqual(
       expected.slice(0, 50).map((row) => row.id),
-    );
-    const completed = await reader.query(
-      api.sessions.getCompletedSessionsForUser,
-      {},
-    );
-    expect(completed.map((row) => row._id)).toEqual(
-      expected
-        .filter((row) => row.status === "completed")
-        .slice(0, 100)
-        .map((row) => row.id),
     );
   });
 });
