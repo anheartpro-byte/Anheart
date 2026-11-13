@@ -1095,7 +1095,7 @@ capture d'origine, est « Sessions » depuis ANH-194.
 | Colonne **Patient** | Nom du pratiquant. « Unknown » pour une séance démarrée à la machine sans pratiquant connu. |
 | Colonne **Type** | Badge **Auto** (jauge), **Manuel** (main, ambre) ou **Enregistrement** (courbe) ; badge d'origine **Tableau de bord** (écran) ou **Machine** (puce). |
 | **Démarrée à** | Date et heure. |
-| **Durée** | Séance finie : durée (« 25m 3s »). Séance interrompue : « Fin inconnue ». Autre séance non finie : temps écoulé depuis le début (« 12 minutes »). |
+| **Durée** | Séance finie : durée (« 25m 3s »). Séance interrompue : « Fin inconnue ». Séance de l'ancien mode d'enregistrement jamais finie : « - ». Autre séance non finie : temps écoulé depuis le début (« 12 minutes »). |
 | **Voir en direct** (séance active) | Ouvre la vue en direct. |
 | Icône **œil** (autres statuts) | Ouvre le détail. |
 | Clic sur la ligne | Même effet. |
@@ -1344,7 +1344,7 @@ direct.
 | « En attente de l'appareil » | Séance d'entraînement en attente : « En attente que la machine arme la séance… ». |
 | Carte **Entraînement** (séances auto et manuelles) | **Programme**, **Zone cible**, **Durée prévue**, **FC max du pratiquant**, **Opérateur**, **Origine** (Tableau de bord / Machine), encadré **Motif de fin** (rouge si échouée), puis **Télémétrie** : les mêmes deux courbes que la vue en direct, pour toute la séance (jusqu'à 2 heures). « Aucune télémétrie reçue pour l'instant. » si rien n'a été reçu. |
 | Carte **Ancien enregistrement ECG** (séances de l'ancien mode seulement, à la place de la carte Entraînement) | « Cette séance vient de l'ancien mode d'enregistrement ECG, retiré du logiciel. Elle est conservée en lecture seule. » ; « Canaux enregistrés » ; puis, si des données existent, « Lots de données », « Durée des données » et « Données enregistrées de ... à ... ». Sinon « Aucune donnée ECG enregistrée pour cette session ». Le tracé n'est plus affiché. |
-| « Informations patient », « Chronologie de la session », « Notes de session » | Nom et adresse, début, durée (« En cours » pour une séance d'entraînement non finie), fin, « Démarrée par », notes. |
+| « Informations patient », « Chronologie de la session », « Notes de session » | Nom et adresse, début, durée (la règle de **Sessions**, mais « En cours » pour une séance d'entraînement non finie), fin, « Démarrée par », notes. |
 
 **Lire le motif de fin** (champ « Motif de fin ») :
 
@@ -1458,7 +1458,7 @@ gestionnaire du patient. Sinon « Aucun utilisateur trouvé » et **Retour**.
 |---|---|
 | En tête | Flèche retour vers **Patients**, nom, adresse, bouton **Modifier** (fenêtre du [§4.13](#413-patients-liste-et-fenêtres-patient)). |
 | **Informations patient** | Nom, badge de rôle, adresse, langue, date de création. Bouton **Supprimer** : fenêtre « Êtes-vous sûr de vouloir supprimer cet utilisateur? », texte anglais « This action cannot be undone... », **Annuler** / **Supprimer**. La suppression est **définitive** ; en cas de refus, un message d'échec s'affiche en bas à droite de l'écran. |
-| **Sessions récentes** | Les 10 dernières séances du patient visibles par vous : machine, statut, début, durée. La durée suit la règle de **Sessions** : séance finie, sa durée (« 25m 3s ») ; séance interrompue, « Fin inconnue » ; autre séance non finie, temps écoulé depuis le début (« 12 minutes »). Action : **Voir en direct** (active), **Voir le rapport** (terminée, ouvre le détail), « - » sinon. Une séance échouée, en attente ou interrompue s'ouvre depuis **Sessions**. |
+| **Sessions récentes** | Les 10 dernières séances du patient visibles par vous : machine, statut, début, durée. La durée suit la règle de **Sessions** : séance finie, sa durée (« 25m 3s ») ; séance interrompue, « Fin inconnue » ; séance de l'ancien mode jamais finie, « - » ; autre séance non finie, temps écoulé depuis le début (« 12 minutes »). Action : **Voir en direct** (active), **Voir le rapport** (terminée ou interrompue, ouvre le détail), « - » sinon. Une séance échouée ou en attente s'ouvre depuis **Sessions**. |
 | **Physiologie** | Voir ci dessous. |
 
 **Carte « Physiologie »** :

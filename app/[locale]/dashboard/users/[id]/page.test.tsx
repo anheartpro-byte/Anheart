@@ -434,12 +434,13 @@ describe("user page: the sessions of a patient", () => {
     expect(length("Machine C")).toBe("10 minutes");
   });
 
-  it("leads to the live view of an active session and to the report of a completed one, and nowhere for the others", async () => {
+  it("leads to the live view of an active session and to the page of a completed or interrupted one, and nowhere for the others", async () => {
     answer(api.sessions.listSessions, [
       listed("A", { status: "active", endedAt: undefined }),
       listed("B"),
       listed("C", { status: "failed" }),
       listed("D", { status: "pending", endedAt: undefined }),
+      listed("E", { status: "interrupted", endedAt: undefined }),
     ]);
     await open("admin");
 
@@ -451,6 +452,12 @@ describe("user page: the sessions of a patient", () => {
     const report = rowOf("Machine B").getByRole("link");
     expect(report.getAttribute("href")).toBe("/dashboard/sessions/session-B");
     expect(report.textContent).toBe(fr.sessions.viewReport);
+    // ANH-231: its page says its end is unknown and offers its live view.
+    const interrupted = rowOf("Machine E").getByRole("link");
+    expect(interrupted.getAttribute("href")).toBe(
+      "/dashboard/sessions/session-E",
+    );
+    expect(interrupted.textContent).toBe(fr.sessions.viewReport);
     for (const machine of ["Machine C", "Machine D"]) {
       expect(rowOf(machine).queryByRole("link")).toBeNull();
       expect(rowOf(machine).getAllByRole("cell")[4].textContent).toBe("-");

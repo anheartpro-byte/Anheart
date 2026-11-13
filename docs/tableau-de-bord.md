@@ -555,8 +555,9 @@ Tous, **En attente** (lancée du site, la machine ne l'a pas encore armée),
 Actives, **Interrompues** (aucune nouvelle depuis 10 min, fin inconnue),
 Terminées, Échouées. Colonnes : patient, machine,
 **Type** (badges Auto / Manuel / Enregistrement et origine), statut, début,
-durée (« Fin inconnue » pour une séance interrompue). Un clic ouvre la vue
-en direct (séance active) ou le détail.
+durée (« Fin inconnue » pour une séance interrompue, « - » pour une séance
+de l'ancien mode jamais finie, `lib/sessionDuration.ts`). Un clic ouvre la
+vue en direct (séance active) ou le détail.
 
 La liste est servie **par pages de 50**, du début le plus récent au plus ancien
 (`sessions.listSessionsPaginated`, [convex.md §5](convex.md#sessionsts-lectures-seulement)).
@@ -619,7 +620,8 @@ d'enregistrement ECG, retiré.
 Nom du pratiquant (ou « Pratiquant non précisé »), machine, statut, bandeau
 d'échec avec la raison. Pour une séance **interrompue, fin inconnue** : un
 bandeau orange qui le dit, avec la date à laquelle le serveur l'a marquée,
-la durée « Fin inconnue » au lieu de « En cours », et le bouton **Voir en
+la durée « Fin inconnue » au lieu de « En cours » (la règle des listes,
+`lib/sessionDuration.ts`), et le bouton **Voir en
 direct**, d'où son arrêt peut encore être demandé. Pour une séance
 d'entraînement terminée (`completed` ou `failed`), la carte **Résumé de la
 séance** (ANH-89, ci-dessous) ; une séance interrompue n'est pas terminée et
@@ -744,7 +746,8 @@ sans créer un deuxième dossier ni écraser ses champs communs.
 Fiche patient : identité, **Sessions récentes** (les 10 dernières : machine,
 statut, début, durée, comme la page Sessions : « Fin inconnue » pour une
 séance interrompue, temps depuis le début pour une séance active ou en
-attente), bouton Modifier, suppression, les cartes
+attente ; **Voir le rapport** ouvre le détail d'une séance terminée ou
+interrompue), bouton Modifier, suppression, les cartes
 **Physiologie** (voir §5.1), **Aptitude** et **Consentement**, et la carte
 **Historique et progression** (ANH-89,
 `components/training/RiderHistoryCard.tsx`). Celle-ci liste les séances

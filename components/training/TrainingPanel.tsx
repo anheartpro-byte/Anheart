@@ -121,12 +121,14 @@ export function TrainingPanel({ sessionId }: { sessionId: Id<"sessions"> }) {
   // An interrupted session has no end: it ran at least until its last point,
   // for the time the machine counted there (`elapsedS`). The point's `t` is
   // not used: it may be on the machine's clock, `startedAt` on the server's.
+  // Convex accepts a negative `elapsedS` (only finite is checked): never less
+  // than 0, so the time left never exceeds the programme.
   const elapsedS = isPending
     ? 0
     : isActive
       ? (now - training.startedAt) / 1000
       : isInterrupted
-        ? (last?.elapsedS ?? 0)
+        ? Math.max(0, last?.elapsedS ?? 0)
         : ((training.endedAt ?? training.startedAt) - training.startedAt) / 1000;
   const remainingS =
     training.totalDurationS !== undefined

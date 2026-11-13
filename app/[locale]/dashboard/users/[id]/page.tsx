@@ -302,7 +302,8 @@ export default function UserDetailPage({
                                 {t("sessions.viewLive")}
                               </Button>
                             </Link>
-                          ) : session.status === "completed" ? (
+                          ) : session.status === "completed" ||
+                            session.status === "interrupted" ? (
                             <Link href={`/dashboard/sessions/${session._id}`}>
                               <Button variant="outline" size="sm">
                                 {t("sessions.viewReport")}

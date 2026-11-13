@@ -3442,7 +3442,12 @@ marquage ne tourne pas dans la transaction de `check-offline-machines` : avec
 beaucoup de séances orphelines, ces limites atteintes empêcheraient aussi de
 passer les machines hors ligne. Ni son coût ni son échec ne retiennent ce
 passage. Chaque page rend `{marked, done}` : combien de séances elle a
-marquées, et si c'était la dernière.
+marquées, et si c'était la dernière. Une page qui échoue arrête la chaîne,
+sans autre reprise : la tâche de la minute suivante repart de la première
+séance active (`cursor: null`). Les séances déjà marquées ont quitté
+l'index, elle ne relit donc que celles qui ont des nouvelles. Seule une page
+qui échouerait à chaque passage retiendrait les séances placées après elle :
+à l'exploitant de lire alors l'erreur dans les journaux de Convex.
 
 `interrupted` n'est **pas une fin** : la séance peut tourner encore sur une
 machine dont le lien est coupé depuis 10 min. Rien n'est demandé à la

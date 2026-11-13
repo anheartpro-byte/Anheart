@@ -530,6 +530,22 @@ describe("ANH-203 training panel: what it says of a session", () => {
     },
   );
 
+  it("an interrupted session whose last point counts a negative time counts none, and leaves the programme's whole time", () => {
+    session({
+      status: "interrupted",
+      interruptedAt: NOW - 60_000,
+      lastSignalAt: null,
+      lastMeasuredAt: null,
+    });
+    telemetry([point({ t: NOW - 960_000, elapsedS: -120 })]);
+
+    const screen = panel();
+
+    expect(screen.text()).toContain(`0:00 ${t.elapsed}`);
+    expect(screen.text()).toContain(`${t.remaining} 30:00`);
+    expect(screen.text()).not.toContain("32:00");
+  });
+
   it("an interrupted session without any point has run for an unknown time: none is counted", () => {
     session({
       status: "interrupted",

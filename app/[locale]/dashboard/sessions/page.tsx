@@ -44,6 +44,7 @@ type Session = {
   channels: string[];
   patientName: string;
   machineName: string;
+  kind: string;
 };
 
 type StatusFilter =
