@@ -128,6 +128,11 @@ class PreflightInputs:
     incidents_open_high: int | None = None
     """As the dashboard last announced it; ``None``: not announced."""
 
+    unreported_stop: str | None = None
+    """Why the dashboard may not count yet a session that ended on a stop (its end and
+    events not acknowledged, :attr:`~src.record_uplink.RecordUplink.unreported_stop`);
+    ``None``: it has them all, or the console is not linked."""
+
     cpu_temp_c: Celsius | None = None
     records_pending: int | None = None
     min_battery: Percent = DEFAULT_MIN_BATTERY
@@ -295,6 +300,10 @@ def _medical(inputs: PreflightInputs) -> Result[str, Finding]:
 
 def _incidents(inputs: PreflightInputs) -> Result[str, Finding]:
     count = inputs.incidents_open_high
+    unreported = inputs.unreported_stop
+    if unreported is not None and not count:
+        # The count may be stale: the incident of that session is not on the server yet.
+        return Err(Failed(f"{unreported} : son incident n'est pas encore compte"))
     if count is None:
         return Err(Unjudged("incidents graves ouverts : non annonces par le tableau de bord"))
     if count > 0:

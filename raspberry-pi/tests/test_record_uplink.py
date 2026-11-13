@@ -59,6 +59,7 @@ from src.record_uplink import (
     START_UNKNOWN,
     TELEMETRY_PATH,
     TELEMETRY_PERIOD,
+    UNKNOWN_END,
     UNOBSERVED_END,
     Acked,
     Answer,
@@ -2885,3 +2886,73 @@ def test_a_manifest_alone_describes_a_programme_without_its_name(tmp_path: Path)
     assert (declaration.profile_id, declaration.profile_name) == (None, None)
     assert (declaration.zone_low_bpm, declaration.zone_high_bpm) == (118, 138)
     assert (declaration.total_duration_s, declaration.subject_hr_max) == (600.0, 162)
+
+
+# =========================================================================
+# ANH-145: whether the dashboard may not count yet a session that ended on a stop
+# =========================================================================
+
+
+async def test_a_session_ended_on_a_stop_is_unreported_until_its_end_is_acknowledged(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path, recording=False)
+    assert b.unreported_stop() is None
+    b.uplink.begin(armed(b.clock))
+    await b.step()
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop: ecran"))
+    await b.step()
+    assert b.unreported_stop() == (
+        "seance terminee sur emergency_stop pas encore recue par le tableau de bord"
+    )
+    del b.link.answers[END_PATH]
+    await b.step(float(RETRY_PERIOD))
+    assert b.link.to(END_PATH)[-1]["reason"] == "emergency_stop: ecran"
+    assert b.unreported_stop() is None
+
+
+@pytest.mark.parametrize("reason", ["operator_stop: fini", "programme_complete", "shutdown"])
+async def test_a_session_ended_otherwise_is_never_unreported(tmp_path: Path, reason: str) -> None:
+    b = bench(tmp_path, recording=False)
+    b.uplink.begin(armed(b.clock))
+    await b.step()
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.finished(RuntimeEnd(failed=True, reason=reason))
+    await b.step()
+    assert b.unreported_stop() is None
+
+
+async def test_a_refused_launch_owed_is_not_a_stop_and_does_not_hide_one_queued_behind_it(
+    tmp_path: Path,
+) -> None:
+    b = bench(tmp_path, recording=False)
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.owe_refusal("k17remote", "pre-vol : batterie")
+    assert b.unreported_stop() is None
+    b.uplink.begin(armed(b.clock))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="tick_exception: boom"))
+    assert b.unreported_stop() == (
+        "seance terminee sur tick_exception pas encore recue par le tableau de bord"
+    )
+
+
+async def test_the_records_of_an_earlier_run_are_unreported_until_their_end_is_acknowledged(
+    tmp_path: Path,
+) -> None:
+    old = bench(tmp_path)
+    left = recording(tmp_path, old.clock, "ref-old")
+    left.tick(3.0)
+    left.close()
+    tie(left.path, Cursor(session_id="cloud-old"))
+    old.clock.advance(Seconds(3600.0))
+    b = old.restarted()
+    assert b.unreported_stop() == UNKNOWN_END, "not listed yet"
+    b.link.answer(END_PATH, DOWN)
+    await b.run(3)
+    assert b.unreported_stop() == UNKNOWN_END, "read, its end not acknowledged"
+    del b.link.answers[END_PATH]
+    await b.run(int(RETRY_PERIOD) + 5)
+    assert cursor_of_record(left.path).end == "sent"
+    assert b.unreported_stop() is None

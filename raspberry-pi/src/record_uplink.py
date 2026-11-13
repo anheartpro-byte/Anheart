@@ -409,6 +409,17 @@ class _Step(Enum):
     """Set aside: it is taken up again at the next start of the console."""
 
 
+STOP_ENDS: Final[frozenset[str]] = frozenset({"emergency_stop", "safety_verdict", "tick_exception"})
+"""The ends that open an incident on the dashboard (ANH-145): until it has the end of a
+session that ended so, and its events, the count of serious incidents it announces does
+not count it."""
+
+UNKNOWN_END: Final[str] = (
+    "seance(s) d'une execution precedente de la console pas encore recue(s) par le tableau "
+    "de bord : leur fin est inconnue"
+)
+"""Why :attr:`RecordUplink.unreported_stop` holds for a record whose end is not read yet."""
+
 _NOTHING_TO_DECLARE: Final[Declaration] = Declaration(kind="auto", operator="")
 """For a launch that never started: the dashboard already knows it."""
 
@@ -461,6 +472,11 @@ def _last_instant(owed: _Owed, batch: Batch) -> int:
     if batch.last_tick_ms is not None:
         return owed.start_ms + batch.last_tick_ms
     return owed.start_ms if owed.cursor.last_t is None else owed.cursor.last_t
+
+
+def _end_word(reason: str) -> str:
+    """The end of a session in the words the dashboard is sent: ``<end>`` or ``<end>: <why>``."""
+    return reason.partition(":")[0].strip()
 
 
 def _halted(wait: _Wait) -> _Step:
@@ -519,6 +535,7 @@ class RecordUplink:
         "_sender",
         "_source",
         "_start_refused",
+        "_stop_told",
         "_unwritten",
     )
 
@@ -554,6 +571,8 @@ class RecordUplink:
         self._held_until: Monotonic | None = None
         self._last_batch: Monotonic | None = None
         self._unwritten: bool = False
+        # When the dashboard last acknowledged the end of a session ended on a stop.
+        self._stop_told: Monotonic | None = None
 
     # --- read access -----------------------------------------------------
 
@@ -621,6 +640,37 @@ class RecordUplink:
             + len(self._owed_queue)
             + len(self._backlog)
         )
+
+    @property
+    def unreported_stop(self) -> str | None:
+        """Why the dashboard may not know yet of a session that ended on a stop; ``None``.
+
+        A session of this run that the runtime ended on one of :data:`STOP_ENDS`, and
+        whose end the dashboard has not acknowledged (its events go before it); or a
+        session of an earlier run of the console, or the list of them not made yet: its
+        end is known only once its record is read, so it counts as one until the
+        dashboard acknowledged its end. ``None`` once every such end was acknowledged.
+        Memory only (ANH-145, the pre-flight's ``incidents`` control).
+        """
+        for owed in (self._catching, *self._owed_queue):
+            if owed is None or owed.refused_launch or owed.cursor.end == "sent":
+                continue
+            ended = owed.ended
+            if ended is None:
+                return UNKNOWN_END
+            word = _end_word(ended.end.reason)
+            if word in STOP_ENDS:
+                return f"seance terminee sur {word} pas encore recue par le tableau de bord"
+        if self._backlog or (self._source is not None and not self._scanned):
+            return UNKNOWN_END
+        return None
+
+    @property
+    def stop_told_at(self) -> Monotonic | None:
+        """When the dashboard last acknowledged the end of a session ended on one of
+        :data:`STOP_ENDS`; ``None`` before. A count of incidents asked before it may not
+        hold that session's."""
+        return self._stop_told
 
     # --- what the link tells it ------------------------------------------
 
@@ -1266,6 +1316,8 @@ class RecordUplink:
         owed.cursor = replace(
             owed.cursor, end="sent", refused=owed.cursor.refused + _refused(answer)
         )
+        if _end_word(end.reason) in STOP_ENDS:
+            self._stop_told = self._clock.monotonic()
         return None
 
     async def _finish(
