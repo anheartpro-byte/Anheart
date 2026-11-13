@@ -651,8 +651,10 @@ source d'ANH-180 ; son effet en production dépend du redéploiement ANH-82.
 
 `sessionId`, `machineId`, `t`, `elapsedS`, `phase`, `bpm` (absent = pas de FC
 fiable), `motorRpm`, `outputRpm`, `setpointMotorRpm`, `gLoad`, `safetyAction`.
-Index `by_session_and_t`. La route de télémétrie ramène à 0 un `elapsedS`
-négatif plutôt que de refuser le lot : aucun point n'est perdu.
+Index `by_session_and_t`. Un point dont l'`elapsedS` est négatif n'est pas
+stocké et compte dans `rejected`, sans refuser le reste du lot : seul un
+client fautif en envoie un (le Pi saute de tels ticks,
+`raspberry-pi/src/record/upload.py`).
 
 **Une ligne par `(sessionId, t)`.** Un point envoyé une seconde fois (réponse
 perdue, console redémarrée) n'est pas inséré de nouveau : la ligne déjà là
@@ -1581,7 +1583,7 @@ l'organisation de la machine. Action d'audit `session.bench_launched`.
 | `registerLocalSession` | Crée (une seule fois par `localRef`) une séance `active`, `origin: local`, dans l'organisation de la machine, et passe la machine `in_session`. Le pratiquant nommé par la machine n'est gardé que s'il est membre actif de cette organisation ; la séance est enregistrée dans tous les cas. `startedAt` = la date envoyée par la machine. Si elle dit aussi l'âge de la séance : `startedAt` = cet âge avant maintenant, et sa date devient `machineStartedAt` ([Deux horloges](#deux-horloges)). Un second appel avec le même `localRef` renvoie la séance sans la redater. |
 | `endTrainingSession` | `completed` ou `failed` avec `endReason`, machine `online`, `interruptedAt` effacé. Une séance `interrupted` est terminée comme une séance active : la fin arrivée tard la clôt avec sa date et sa raison. Idempotent. `endedAt` = la date de fin écrite par la machine, ou la réception si elle n'en envoie pas. Pour une séance qui a un axe machine, la date de la machine est placée sur l'horloge du serveur, et jamais avant `startedAt`. Planifie le résumé provisoire de la séance (`sessionReports.summarizeTelemetry`, ANH-89) et, pour une séance `failed`, l'alerte `session_failed` (ANH-90). |
 | `getTrainingStatus` | `{status, active, stopRequested}`. `active` vaut vrai pour une séance `active` **et** pour une séance `interrupted` : le Pi arrête sa séance sur `active: false`, et Convex ne demande jamais l'arrêt d'une séance faute d'en avoir des nouvelles. |
-| `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; pour une séance qui a un axe machine, un point daté hors de la séance est compté dans `rejected` ; ni l'un ni l'autre n'est écrit. Retourne `{stored, duplicates, rejected}`. |
+| `storeTelemetry` | Insère les points de la séance (qui doit appartenir à la machine), dans l'organisation de la séance, **une seule fois chacun**. Un point déjà stocké (même `(sessionId, t)`) est compté dans `duplicates` ; pour une séance qui a un axe machine, un point daté hors de la séance est compté dans `rejected`, comme un point dont l'`elapsedS` est négatif ; aucun n'est écrit. Retourne `{stored, duplicates, rejected}`. |
 | `storeEvents` | La même chose pour les événements : un événement est un `(sessionId, seq)`. Retourne `{stored, duplicates, rejected}`. Les événements nouvellement stockés peuvent planifier une alerte `safety_verdict` ou `drive_fault` (ANH-90). |
 
 Les refus de `markTrainingStarted`, `registerLocalSession`,

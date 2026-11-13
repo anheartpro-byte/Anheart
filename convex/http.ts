@@ -729,9 +729,7 @@ http.route({
       }
       points.push({
         t: p.t,
-        // A session's elapsed time is never negative: clamped, not refused,
-        // so that no point of the batch is lost.
-        elapsedS: Math.max(0, p.elapsedS),
+        elapsedS: p.elapsedS,
         phase: p.phase,
         bpm: p.bpm as number | undefined,
         motorRpm: p.motorRpm,

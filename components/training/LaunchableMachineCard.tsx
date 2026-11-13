@@ -111,7 +111,8 @@ export function LaunchableMachineCard({
             profiles={m.profiles}
             programsEnabled={m.programsEnabled}
             medicalParametersStatus={medicalParametersStatus}
-            staff={!isUser}
+            // The same rule as the bench button below (isStaff, my-machines).
+            staff={onLaunchBench !== undefined}
           />
         </div>
         <div className="flex gap-2 pt-2">
