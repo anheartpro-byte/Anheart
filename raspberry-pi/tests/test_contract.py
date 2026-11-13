@@ -67,7 +67,7 @@ def shared() -> dict[str, object]:
 
 def test_ex1_the_contract_version_is_the_shared_file_s() -> None:
     assert shared()["contract_version"] == CONTRACT_VERSION
-    assert CONTRACT_VERSION == "1.12"
+    assert CONTRACT_VERSION == "1.13"
     assert version_of(CONTRACT_VERSION) == CONTRACT_VERSION
 
 

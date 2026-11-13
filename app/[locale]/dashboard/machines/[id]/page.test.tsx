@@ -52,6 +52,11 @@ vi.mock("@/components/machines/MachineKeysCard", async () => ({
     "MachineKeysCard",
   ),
 }));
+vi.mock("@/components/machines/MachineConsoleAccessCard", async () => ({
+  MachineConsoleAccessCard: (await import("@/test-support/pages")).standIn(
+    "MachineConsoleAccessCard",
+  ),
+}));
 vi.mock("@/components/machines/MachineRegistryCard", async () => ({
   MachineRegistryCard: (await import("@/test-support/pages")).standIn(
     "MachineRegistryCard",
@@ -432,6 +437,7 @@ describe("machine page: what each role may do", () => {
     expect(screen.getByRole("button", deleteButton)).toBeTruthy();
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
     expect(propsOf("MachineKeysCard")).toEqual({ machineId, deleted: false });
+    expect(propsOf("MachineConsoleAccessCard")).toEqual({ machineId });
     expect(screen.queryByRole("button", restoreButton)).toBeNull();
   });
 
@@ -445,6 +451,8 @@ describe("machine page: what each role may do", () => {
     expect(screen.getByRole("button", deleteButton)).toBeTruthy();
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: false });
     expect(wasMounted("MachineKeysCard")).toBe(false);
+    // ANH-152: the console's operators and tablets are its admins' too.
+    expect(wasMounted("MachineConsoleAccessCard")).toBe(false);
   });
 
   it("lets the admin of a client organisation do the same, choosing among all the patients of the organisation, without restoring", async () => {
@@ -457,6 +465,7 @@ describe("machine page: what each role may do", () => {
     expect(screen.getByRole("button", deleteButton)).toBeTruthy();
     expect(propsOf("LaunchRightsCard")).toEqual({ machineId, isAdmin: true });
     expect(propsOf("MachineKeysCard")).toEqual({ machineId, deleted: false });
+    expect(propsOf("MachineConsoleAccessCard")).toEqual({ machineId });
     expect(screen.queryByRole("button", restoreButton)).toBeNull();
   });
 
@@ -475,6 +484,7 @@ describe("machine page: what each role may do", () => {
       expect(screen.queryByText(fr.machines.dangerZone)).toBeNull();
       expect(wasMounted("LaunchRightsCard")).toBe(false);
       expect(wasMounted("MachineKeysCard")).toBe(false);
+      expect(wasMounted("MachineConsoleAccessCard")).toBe(false);
       expect(wasMounted("MachineLiveCard")).toBe(true);
     },
   );
@@ -544,6 +554,7 @@ describe("machine page: a deleted machine", () => {
       machineId,
       deleted: true,
     });
+    expect(wasMounted("MachineConsoleAccessCard")).toBe(false);
   });
 
   it("leaves the admin of a client organisation nothing to act on a deleted machine", async () => {

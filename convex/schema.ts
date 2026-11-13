@@ -11,6 +11,7 @@ import {
   feedbackSubmitterValidator,
 } from "./lib/feedback";
 import { machineCatalogValidator, programmeFields } from "./lib/programmes";
+import { operatorCodeValidator } from "./lib/consoleAccess";
 import { recordState } from "./lib/recordStorage";
 import {
   summaryFiguresValidator,
@@ -595,6 +596,45 @@ export default defineSchema({
     .index("by_machine_and_revoked", ["machineId", "revokedAt"])
     .index("by_revoked_and_expiry", ["revokedAt", "expiresAt"]),
 
+  // The operators enabled on a machine's console (ANH-152): one row per
+  // machine and member, enabled and disabled by an admin of the machine's
+  // organisation (or the Anheart admin), the code set by the operator alone on
+  // the site and kept only as its scrypt hash. Signed down to the machine
+  // (`GET /api/machine/operators`), which verifies a code offline.
+  machine_operators: defineTable({
+    organizationId: v.id("organizations"), // Always the machine's
+    machineId: v.id("machines"),
+    userId: v.id("users"),
+    operatorCode: v.optional(operatorCodeValidator),
+    codeSetAt: v.optional(v.number()),
+    enabledAt: v.number(),
+    enabledBy: v.id("users"),
+    // Absent while enabled; set by a disablement, cleared by a new enablement.
+    disabledAt: v.optional(v.number()),
+    disabledBy: v.optional(v.id("users")),
+    // When the operator was trained on this machine (ANH-106 writes it).
+    trainedAt: v.optional(v.number()),
+  })
+    .index("by_machine", ["machineId"])
+    .index("by_user", ["userId"])
+    .index("by_machine_and_user", ["machineId", "userId"]),
+
+  // The tablets of a machine's console (ANH-152): the device token replaces
+  // the shared UI_TOKEN, one per tablet. Shown once at its creation; only its
+  // SHA-256 is kept and signed down to the machine.
+  machine_devices: defineTable({
+    organizationId: v.id("organizations"), // Always the machine's
+    machineId: v.id("machines"),
+    name: v.string(),
+    tokenSha256: v.string(),
+    // What the site shows of the token: `anhd1.` and its first 8 digits.
+    prefix: v.string(),
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+    revokedAt: v.optional(v.number()),
+    revokedBy: v.optional(v.id("users")),
+  }).index("by_machine", ["machineId"]),
+
   // Sessions - training sessions (auto, manual), plus the read-only history
   // of the retired ECG recording mode (rows without `kind`).
   sessions: defineTable({
@@ -643,6 +683,10 @@ export default defineSchema({
     // machine's programme list it was made from, checked when the machine
     // arms it (`programme_changed`). Absent when the machine had sent none.
     profilesDigest: v.optional(v.string()),
+    // The console operator's account (ANH-152, contract 1.13), or for a launch
+    // from the dashboard its launcher: the site shows their name from it.
+    // Absent on older sessions, which keep the name typed in `operatorName`.
+    operatorId: v.optional(v.id("users")),
     localRef: v.optional(v.string()), // Pi-side idempotency key, local sessions
     // The start as the machine dated it, on its own clock (unix ms), for a
     // session whose machine said how long ago it started it. Such a machine
