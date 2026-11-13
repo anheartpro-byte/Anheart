@@ -2127,9 +2127,12 @@ sur la vraie console avec le variateur simulé :
 
 ### 6.1 La table
 
-Table **générée** par un script qui parcourt `LFT_FAULT_CODES` et
-`DriveFault.spec` (22 défauts réarmables, 38 non réarmables, plus `nOF` et
-`UNKNOWN`). La colonne « Signification » est le texte exact affiché à
+Table tirée de `LFT_FAULT_CODES` et de `DriveFault.spec` (22 défauts
+réarmables, 38 non réarmables, plus `nOF` et `UNKNOWN`), et tenue égale au
+code ligne à ligne par `tests/test_drive_faults_complete.py` : code, membre,
+catégorie, réarmement et texte affiché. Le script qui l'a d'abord produite
+n'est pas dans le dépôt ; une modification d'un côté seul fait échouer le
+test. La colonne « Signification » est le texte exact affiché à
 l'opérateur, tel qu'il est écrit dans le code (sans accents). Le fichier
 NVE41316 écrit les codes en capitales (`CRF1`) ; la table les écrit comme
 l'afficheur à quatre caractères du variateur (`CrF1`).
