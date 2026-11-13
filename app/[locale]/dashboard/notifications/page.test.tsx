@@ -299,6 +299,19 @@ describe("the alerts page", () => {
     expect(item(fr.notifications.types.machine_offline).getByText(/Banc 2/)).toBeTruthy();
   });
 
+  it("names the action a drive fault alert kept from the verdict it was promoted from", async () => {
+    signedInAs("gestionnaire");
+    serverHas([alert("a1", { type: "drive_fault", detail: "RAMP_DOWN" })]);
+
+    await renderPage(<NotificationsPage />);
+
+    const fault = item(fr.notifications.types.drive_fault);
+    expect(fault.getByText(fr.notifications.verdict.RAMP_DOWN)).toBeTruthy();
+    expect(
+      fault.queryByText(fr.notifications.faultCode.replace("{code}", "RAMP_DOWN")),
+    ).toBeNull();
+  });
+
   it("words the code of a launch refused before its machine armed it, not its sentence", async () => {
     signedInAs("gestionnaire");
     serverHas([

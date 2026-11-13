@@ -13,6 +13,7 @@ import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   NOTIFICATION_RETENTION_MS,
+  SAME_FAULT_MS,
   driveFaultAlerts,
   driveFaultCode,
   emailChoices,
@@ -1289,7 +1290,9 @@ describe("session alert grouping (T03)", () => {
 
   // EX-5: one drive fault as the machine reports it: a heartbeat in fault
   // that names no session, the verdict of the `drive_fault` rule and the
-  // fault event of the session's record, each through its own route.
+  // fault event of the session's record, each through the internal mutation
+  // its HTTP route calls (`updateLive`, `storeEvents`). httpRoutes.test.ts
+  // sends two of these orders through the routes themselves.
   const verdictOfFault = "drive_fault (RAMP_DOWN): OHF (LFT 17): overheat";
   const faultEvent = "OHF (LFT 17): overheat";
   const inputs = {
@@ -1323,7 +1326,7 @@ describe("session alert grouping (T03)", () => {
     { order: ["heartbeat", "batch"] },
     { order: ["batch", "heartbeat"] },
   ])(
-    "EX-5: gives one alert and one e-mail per recipient for a heartbeat without a session, in order $order",
+    "EX-5: gives one alert and one e-mail per recipient for a heartbeat without a session, in order $order, through the internal mutations",
     async ({ order }) => {
       const w = await seedWorld(modules);
       setEmailVariables();
@@ -1341,6 +1344,122 @@ describe("session alert grouping (T03)", () => {
           read: false,
         });
       await expectEmails(w, 2);
+    },
+  );
+
+  /** The e-mails sent to one recipient so far. */
+  async function emailsTo(w: World, userId: Id<"users">) {
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    const user = await w.t.run((ctx) => ctx.db.get(userId));
+    return vi
+      .mocked(fetch)
+      .mock.calls.filter(([, init]) =>
+        String(init?.body).includes(`"to":["${user?.email}"]`),
+      ).length;
+  }
+
+  it("R2 P1: a session does not take an unread fault alert written before it started", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    await inputs.heartbeat(w);
+    expect(await emailsTo(w, w.manager)).toBe(1);
+    await w.t.mutation(internal.training.updateLive, {
+      machineId: w.machine,
+      live: live(),
+    });
+    const later = NOW + 21 * 24 * 60 * 60 * 1000;
+    vi.setSystemTime(later);
+    const sessionId = await session(w);
+    await w.t.run((ctx) => ctx.db.patch(sessionId, { startedAt: later }));
+    await inputs.batch(w, sessionId);
+
+    expect(
+      (await alerts(w))
+        .filter((row) => row.userId === w.manager)
+        .map((row) => [row.type, row.sessionId, row.count]),
+    ).toEqual([
+      ["drive_fault", undefined, 1],
+      ["drive_fault", sessionId, 2],
+    ]);
+    expect(await emailsTo(w, w.manager)).toBe(2);
+  });
+
+  it.each([
+    { gap: SAME_FAULT_MS, alerts: 1 },
+    { gap: SAME_FAULT_MS + 1, alerts: 2 },
+  ])(
+    "R2 P2: a fault heartbeat $gap ms after the session's fault verdict gives $alerts alert(s)",
+    async ({ gap, alerts: expected }) => {
+      const w = await seedWorld(modules);
+      setEmailVariables();
+      const sessionId = await session(w);
+      // Only the verdict: the Pi records no fault event without a report.
+      await inputs.verdict(w, sessionId);
+      vi.setSystemTime(NOW + gap);
+      await inputs.heartbeat(w);
+
+      const own = (await alerts(w)).filter((row) => row.userId === w.manager);
+      expect(own).toHaveLength(expected);
+      expect(own[0]).toMatchObject({ sessionId, detail: "RAMP_DOWN" });
+      expect(await emailsTo(w, w.manager)).toBe(expected);
+    },
+  );
+
+  it.each([
+    { first: "idle fault", gap: SAME_FAULT_MS, alerts: 1 },
+    { first: "idle fault", gap: SAME_FAULT_MS + 1, alerts: 2 },
+    { first: "session fault", gap: SAME_FAULT_MS, alerts: 1 },
+    { first: "session fault", gap: SAME_FAULT_MS + 1, alerts: 2 },
+  ])(
+    "R2 P3, L1: a fault heartbeat without a session $gap ms after an $first gives $alerts alert(s)",
+    async ({ first, gap, alerts: expected }) => {
+      const w = await seedWorld(modules);
+      setEmailVariables();
+      if (first === "idle fault") await inputs.heartbeat(w);
+      else await inputs.batch(w, await session(w));
+      await w.t.mutation(internal.training.updateLive, {
+        machineId: w.machine,
+        live: live(),
+      });
+      vi.setSystemTime(NOW + gap);
+      await inputs.heartbeat(w);
+
+      const own = (await alerts(w)).filter((row) => row.userId === w.manager);
+      expect(own).toHaveLength(expected);
+      expect(await emailsTo(w, w.manager)).toBe(expected);
+    },
+  );
+
+  it.each([
+    { after: SAME_FAULT_MS, alerts: 1 },
+    { after: SAME_FAULT_MS + 1, alerts: 2 },
+  ])(
+    "R2 B1: a session's verdict takes a fault alert without a session written $after ms after its end only within the bound",
+    async ({ after, alerts: expected }) => {
+      const w = await seedWorld(modules);
+      const sessionId = await session(w);
+      await w.t.run(async (ctx) => {
+        await ctx.db.patch(sessionId, { status: "failed", endedAt: NOW });
+        await ctx.db.insert("training_events", {
+          organizationId: w.orgA,
+          sessionId,
+          machineId: w.machine,
+          ...event(1, "verdict", verdictOfFault),
+        });
+      });
+      vi.setSystemTime(NOW + after);
+      await w.t.mutation(internal.notifications.deliver, {
+        machineId: w.machine,
+        type: "drive_fault",
+        count: 1,
+      });
+      await deliver(w, sessionId, "verdict");
+
+      const own = (await alerts(w)).filter((row) => row.userId === w.manager);
+      expect(own).toHaveLength(expected);
+      expect(own.some((row) => row.sessionId === undefined)).toBe(
+        expected === 2,
+      );
     },
   );
 
@@ -1747,6 +1866,15 @@ describe("session alert grouping (T03)", () => {
       type: "drive_fault",
       count: 1,
     });
+    // The fault event `storeEvents` stores before it asks for the alert.
+    await w.t.run((ctx) =>
+      ctx.db.insert("training_events", {
+        organizationId: w.orgA,
+        sessionId,
+        machineId: w.machine,
+        ...event(1, "drive_fault", "OHF (LFT 17): overheat"),
+      }),
+    );
     await deliver(w, sessionId, "fault");
     await w.t.mutation(internal.notifications.deliver, {
       machineId: w.machine,
@@ -1826,9 +1954,10 @@ describe("session alert grouping (T03)", () => {
       count: 2,
     });
     const rows = await alerts(w);
+    // R2 L3: the verdict's action stays when the promoting event has no code.
     expect(rows.map((row) => [row.type, row.detail, row.count])).toEqual([
-      ["drive_fault", undefined, 3],
-      ["drive_fault", undefined, 3],
+      ["drive_fault", "RAMP_DOWN", 3],
+      ["drive_fault", "RAMP_DOWN", 3],
     ]);
     expect(JSON.stringify(rows)).not.toContain("HEALTH_SENTINEL_T03");
   });
@@ -1890,21 +2019,29 @@ describe("session alert grouping (T03)", () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
   });
 
-  it("does not queue an e-mail on promotion when the recipient disabled the creation type", async () => {
+  it("R2 L2: queues the e-mail of the promoted type when the creation type sent none", async () => {
     const w = await seedWorld(modules);
     setEmailVariables();
-    await as(w.t, "manager").mutation(api.notifications.updateSettings, {
-      type: "session_failed",
-      email: false,
-    });
+    for (const type of ["session_failed", "safety_verdict"] as const)
+      await as(w.t, "manager").mutation(api.notifications.updateSettings, {
+        type,
+        email: false,
+      });
     const sessionId = await session(w);
     await deliver(w, sessionId, "failed");
+    await deliver(w, sessionId, "verdict");
     await deliver(w, sessionId, "fault");
     await w.t.finishAllScheduledFunctions(vi.runAllTimers);
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
-    expect(
-      (await alerts(w)).find((row) => row.userId === w.manager)?.email,
-    ).toBeUndefined();
+    // The admin's e-mail of the failed session, then the manager's of the
+    // drive fault: the failed session and the verdict, off for the manager,
+    // queued none.
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+    const own = (await alerts(w)).find((row) => row.userId === w.manager);
+    expect(own).toMatchObject({
+      type: "drive_fault",
+      count: 3,
+      email: { type: "drive_fault", status: "sent" },
+    });
   });
 });
 

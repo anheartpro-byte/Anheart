@@ -1024,13 +1024,8 @@ export default defineSchema({
       "machineId",
       "updatedAt",
     ])
-    .index("by_user_and_organization_and_machine_and_read", [
-      "userId",
-      "organizationId",
-      "machineId",
-      "read",
-    ])
-    // A delivery's unread alerts of one session, or without one (ANH-237).
+    // A machine's unread alerts (visibility), and a delivery's unread alerts
+    // of one session or without one (ANH-237).
     .index("by_user_and_organization_and_machine_and_read_and_session", [
       "userId",
       "organizationId",

@@ -171,12 +171,13 @@ function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
     endReason: alert.reason,
   });
 
+  // Read by its form: a drive fault alert promoted from a verdict keeps the
+  // verdict's action until the drive's own code arrives.
   let detail: string | null = null;
-  if (alert.type === "safety_verdict") {
-    detail =
-      alert.detail !== undefined && t.has(`verdict.${alert.detail}`)
-        ? t(`verdict.${alert.detail}`)
-        : t("verdict.unknown");
+  if (alert.detail !== undefined && t.has(`verdict.${alert.detail}`)) {
+    detail = t(`verdict.${alert.detail}`);
+  } else if (alert.type === "safety_verdict") {
+    detail = t("verdict.unknown");
   } else if (alert.type === "drive_fault" && alert.detail !== undefined) {
     detail = t("faultCode", { code: alert.detail });
   }

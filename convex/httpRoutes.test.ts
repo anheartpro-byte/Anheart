@@ -9,7 +9,7 @@
  * the per-route contract: malformed bodies, idempotency, machine binding, and
  * the pending-session filtering the Pi depends on.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import http from "./http";
 import { modules, NOW, seedMachineWorld } from "./test.setup";
 import type { Id } from "./_generated/dataModel";
@@ -796,4 +796,60 @@ describe("ANH-177 roster is limited to this machine's riders", () => {
     expect(riders).toContain(w.patient);
     expect(riders).not.toContain(outsider);
   });
+});
+
+describe("ANH-237 EX-5 one alert for one drive fault, as the Pi sends it", () => {
+  const verdict = "drive_fault (RAMP_DOWN): OHF (LFT 17): overheat";
+  const fault = "OHF (LFT 17): overheat";
+
+  it.each([
+    ["the heartbeat, then the record's batch", ["heartbeat", "events"]],
+    ["the record's batch, then the heartbeat", ["events", "heartbeat"]],
+  ] as const)(
+    "writes one alert through the HTTP routes: %s",
+    async (_label, order) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      try {
+        const w = await world();
+        const sessionId = await seedSession(w, w.machine, "active", "auto");
+        for (const step of order) {
+          const response =
+            step === "heartbeat"
+              ? // In fault, naming no session: the Pi had ended it already.
+                await send(w, w.machineKey, "POST", "/api/machine/heartbeat", {
+                  live: {
+                    runMode: "seance",
+                    phase: "hold",
+                    motorRpm: 0,
+                    outputRpm: 0,
+                    setpointMotorRpm: 0,
+                    gLoad: 1,
+                    safetyAction: "ramp_down",
+                    driveState: "fault",
+                  },
+                })
+              : await send(w, w.machineKey, "POST", "/api/machine/training/events", {
+                  sessionId,
+                  events: [
+                    { seq: 1, t: NOW + 1, kind: "verdict", detail: verdict, actor: "system" },
+                    { seq: 2, t: NOW + 2, kind: "drive_fault", detail: fault, actor: "system" },
+                  ],
+                });
+          expect(response.status).toBe(200);
+          await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+        }
+        const alerts = await w.t.run((ctx) =>
+          ctx.db.query("notifications").collect(),
+        );
+        expect(
+          alerts
+            .filter((row) => row.type !== "incident_high")
+            .map((row) => [row.userId, row.type, row.sessionId, row.detail, row.count]),
+        ).toEqual([[w.adminId, "drive_fault", sessionId, "OHF", 3]]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

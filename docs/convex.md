@@ -126,7 +126,7 @@ Vingt tables portent un champ `organizationId` dans `convex/schema.ts` :
   `by_organization_and_target_and_at`) et `notifications`
   (`by_user_and_organization_and_updated`, `by_user_and_organization_and_read`,
   `by_user_and_organization_and_machine_and_updated`,
-  `by_user_and_organization_and_machine_and_read`).
+  `by_user_and_organization_and_machine_and_read_and_session`).
 - Trois n'ont pas d'index par organisation : `machine_health_history`
   (lecture par machine et période), `session_record_files` et
   `session_record_uploads` (lecture par séance, machine ou jeton de dépôt).
@@ -1134,13 +1134,13 @@ nom de passager ni de raison de fin de séance : la raison reste sur la
 séance, et la liste ne la lit qu'au moment de l'afficher, à qui peut lire la
 séance. Index `by_user_and_organization_and_updated` (la liste),
 `by_user_and_organization_and_read` (le nombre de non lues),
-`by_user_and_organization_and_machine_and_updated` et
-`by_user_and_organization_and_machine_and_read` (liste et non lues des seules
-machines liées au gestionnaire, avant la coupe ; ce dernier index sert aussi
-aux dernières non lues lues par un défaut sans séance),
-`by_user_and_organization_and_machine_and_read_and_session` (le regroupement :
-les non lues d'une séance, ou sans séance, `FOLD_SCAN` = 50 au plus par
-lecture), `by_user` (suppression d'un compte) et `by_updated` (purge à 90 jours).
+`by_user_and_organization_and_machine_and_updated` (liste des seules machines
+liées au gestionnaire ; alertes changées dans la borne d'un défaut sans
+séance) et `by_user_and_organization_and_machine_and_read_and_session` (non
+lues des seules machines liées au gestionnaire, avant la coupe, par ses
+quatre premiers champs ; regroupement : les non lues d'une séance, ou sans
+séance, `FOLD_SCAN` = 50 au plus par lecture), `by_user` (suppression d'un
+compte) et `by_updated` (purge à 90 jours).
 
 `notification_settings` : une ligne par compte, `email` (un booléen
 facultatif par type : l'alerte part aussi par e-mail), `updatedAt`. Un type
@@ -2602,7 +2602,7 @@ structurée ne contient que des identifiants et des codes.
 | `session_failed` | `training.endTrainingSession` (route de fin) | La machine termine une séance comme échouée (refus de départ par la machine compris). Une seule fois : une fin renvoyée ne change rien. |
 | `session_failed` | `failBeforeStart` (`training.ts`, ANH-144) | Un lancement refusé avant que sa machine l'arme : par la tâche `sweepPendingSessions` (expiré, droit retiré, physiologie changée…), par la route de départ (`markTrainingStarted`, 409), ou expiré par un nouveau lancement. La liste rend son `endCode` (`reasonCode`), que la page traduit. Une confirmation répétée n'alerte pas de nouveau. |
 | `safety_verdict` | `training.storeEvents` | Un événement `verdict` dont l'action termine la séance : `RAMP_DOWN`, `QUICK_STOP`, `GO_SILENT`, ou une action que ce serveur ne sait pas lire (côté sûr). `FREEZE` et `REDUCE`, qui régulent sans arrêter, et `cleared` ne donnent rien. L'action la plus sévère est gardée. |
-| `incident_high` | `openIncident` (`convex/lib/incidents.ts`, ANH-145) | Un incident de gravité haute s'ouvre. Va aux seuls admins actifs de l'organisation Anheart (`anheartOrganization`), écrite dans cette organisation, jamais aux gestionnaires ni aux admins de l'organisation de la machine. Regroupée par séance avec l'alerte `incident_high` non lue de la même séance, jamais avec une autre (`sessionPriority` 0). Sans e-mail par défaut. |
+| `incident_high` | `openIncident` et `join` (`convex/lib/incidents.ts`, ANH-145) | Un incident de gravité haute s'ouvre, ou un incident existant devient haut (un incident clos se rouvre alors). Va aux seuls admins actifs de l'organisation Anheart (`anheartOrganization`), écrite dans cette organisation, jamais aux gestionnaires ni aux admins de l'organisation de la machine. Regroupée par séance avec l'alerte `incident_high` non lue de la même séance, jamais avec une autre (`sessionPriority` 0). Sans e-mail par défaut. |
 
 **Refus de la console (ANH-237).** La console envoie déjà le refus d'un
 lancement par `POST /api/machine/training/end` :
@@ -2641,63 +2641,91 @@ reste celui de la séance. Pour le même type, `foldedDetail` garde l'action
 la plus sévère d'un verdict ou le dernier code du variateur ; quand le type
 monte, le code de l'arrivant remplace le détail ; un type moindre ne change
 pas ce détail. Seuls les codes filtrés par `CODE` sont conservés.
+Quand le type monte et que l'arrivant n'a pas de code (un heartbeat), le
+détail reste celui de l'alerte : l'action d'un verdict reste lisible, et la
+page la nomme comme une action (« Arrêt progressif demandé »), non comme un
+code du variateur, jusqu'à l'arrivée du code du défaut.
+
+**E-mail.** Une alerte a un seul e-mail, celui de son type de création.
+Quand le type monte et qu'aucun e-mail n'a été mis en file pour cette alerte
+(type de création non choisi par le destinataire, ou envoi indisponible à la
+création), un e-mail du nouveau type part si le destinataire le veut. Limite :
+un e-mail déjà `failed` (reprises épuisées ou réponse finale) n'est pas
+retenté par les événements fondus ensuite ; l'alerte du site, elle, avance.
 
 Une alerte lue n'absorbe plus rien : l'événement suivant crée une nouvelle
 alerte, avec son e-mail selon les réglages, puis les événements suivants de
 la séance se fondent dans cette nouvelle alerte non lue. Les destinataires
 restent indépendants, chacun dans sa sous-transaction.
 
-Sans séance, les règles restent inchangées : `machine_offline` se regroupe
-par machine et type, comme un `drive_fault` sans séance dans une alerte
-`drive_fault` non lue de la machine, même si celle-ci nomme une séance :
-d'abord celle sans séance, sinon la plus récente.
-Un `drive_fault` qui nomme une séance cherche d'abord l'alerte de cette
-séance ; à défaut, il peut reprendre une alerte `drive_fault` non lue de la
-machine **sans séance**, qui prend alors cette séance. Il ne reprend jamais
-une alerte déjà liée à une autre séance. Les séances différentes gardent
-ainsi leurs alertes distinctes.
+Sans séance, `machine_offline` se regroupe par machine et type, sans borne
+de temps, tant que l'alerte n'est pas lue. Un `drive_fault` ne se fond que
+dans **le même défaut, dans la borne de temps** `SAME_FAULT_MS`
+(`LIVE_FRESH_MS`, 90 s : la console envoie un heartbeat toutes les 10 s, et
+au delà de 90 s sans heartbeat le serveur tient la machine hors ligne et ne
+peut plus distinguer un défaut du suivant).
+
+Un `drive_fault` sans séance se fond dans l'alerte `drive_fault` non lue
+sans séance de la machine changée depuis moins de `SAME_FAULT_MS`. Sinon, il
+se fond dans l'alerte non lue de séance changée en dernier dans cette borne,
+si l'enregistrement de cette séance a reçu un défaut dans cette même borne.
+
+Un événement d'une séance (défaut, verdict, fin en échec, heartbeat qui la
+nomme), sans alerte non lue de cette séance, reprend l'alerte `drive_fault`
+non lue sans séance de la machine écrite pendant la séance : pas avant son
+`startedAt`, pas plus de `SAME_FAULT_MS` après son `endedAt`. Pour un
+verdict ou une fin, l'enregistrement de la séance doit aussi tenir un
+défaut. L'alerte prend alors cette séance.
+
+Au delà de la borne, un défaut donne une nouvelle alerte et son e-mail : un
+défaut hors séance lu par l'un et pas par l'autre, puis un défaut d'une
+séance trois semaines plus tard, en donne une seconde à chacun. Un
+`drive_fault` ne reprend jamais une alerte liée à une autre séance. Les dates
+de séance sont celles du serveur pour une console qui date son départ (axe de
+la machine) ; une horloge de Pi fausse sans cet axe peut empêcher une reprise
+(une alerte de plus), jamais en perdre une.
 
 **Lecture bornée (ANH-237).** Une livraison ne lit plus toutes les non lues
 de la machine : l'index
 `by_user_and_organization_and_machine_and_read_and_session` donne celles de
-sa séance et celles sans séance, au plus `FOLD_SCAN` (50) chacune, alors que
-le regroupement n'en laisse qu'une par séance et par type sans séance. Seul
-un `drive_fault` sans séance lit en plus les 50 dernières non lues de la
-machine (`by_user_and_organization_and_machine_and_read`, ordre décroissant),
-où se trouve l'alerte de la séance qui vient de finir ; au delà, il crée une
-alerte de plus, sans en perdre aucune.
+sa séance et celles sans séance, au plus `FOLD_SCAN` (50) chacune, les plus
+récentes d'abord, alors que le regroupement n'en laisse qu'une par séance et
+peu sans séance. Un `drive_fault` sans séance lit en plus les alertes de la
+machine changées depuis moins de `SAME_FAULT_MS`
+(`by_user_and_organization_and_machine_and_updated`), 50 au plus. Au delà
+d'une borne, une alerte de plus, jamais une alerte perdue. Le même index sert
+aux non lues visibles des gestionnaires ; l'ancien index
+`by_user_and_organization_and_machine_and_read`, dont il prolonge les champs,
+est retiré.
 
 **Un défaut, une alerte (EX-5).** Un heartbeat en défaut qui ne nomme pas
 la séance (séance déjà finie côté Pi, ou pas encore déclarée) et la séance
-dont l'enregistrement tient un défaut variateur sont un seul événement, dans
-n'importe quel ordre de livraison. L'enregistrement tient un défaut quand
-l'un des 50 derniers événements de la séance (`FAULT_SCAN`) est un
-`drive_fault` autre que `cleared`, ou le verdict de la règle `drive_fault`
-du Pi (`drive_fault (RAMP_DOWN): …`) ; le défaut termine la séance, il est
-donc parmi ses derniers événements. Alors un verdict, un défaut ou une fin
-en échec de cette séance, sans alerte non lue de la séance, reprend l'alerte
-`drive_fault` non lue sans séance de la machine, qui prend cette séance. Et
-un `drive_fault` sans séance, sans alerte `drive_fault` non lue de la
-machine, se fond dans l'alerte non lue de séance changée en dernier
-(`updatedAt`) si cette séance a ce défaut ; elle monte en `drive_fault`.
-Aucune alerte ne disparaît ni ne descend.
+dont l'enregistrement tient ce défaut sont un seul événement, selon les
+règles ci-dessus. L'enregistrement tient un défaut quand l'un des 50 derniers
+événements de la séance (`FAULT_SCAN`) est un `drive_fault` autre que
+`cleared`, ou le verdict de la règle `drive_fault` du Pi
+(`drive_fault (RAMP_DOWN): …`) ; le défaut termine la séance, il est donc
+parmi ses derniers événements. Aucune alerte ne disparaît ni ne descend.
 
-Le heartbeat, le verdict et l'événement du défaut, dans les 6 ordres, et
-aussi en un seul lot (verdict planifié avant le défaut par `storeEvents`),
-donnent **1 alerte de compteur 3 et 1 e-mail par destinataire** ; avec la
-fin en échec, à toute place, compteur 4. Ni `training.ts`, ni `http.ts`, ni
+Garantie : **le même défaut, dans la borne de temps, donne 1 alerte et
+1 e-mail par destinataire**. Le heartbeat, le verdict et l'événement du
+défaut, dans les 6 ordres et aussi en un seul lot (verdict planifié avant le
+défaut par `storeEvents`), livrés à moins de `SAME_FAULT_MS` les uns des
+autres, donnent 1 alerte de compteur 3 ; avec la fin en échec, à toute
+place, compteur 4 (tests par les mutations internes des routes, et deux
+ordres par les routes HTTP elles-mêmes). Ni `training.ts`, ni `http.ts`, ni
 le contrat ne changent. Une séance dont l'enregistrement ne tient aucun
 défaut (verdict cardiaque seul, par exemple) reste à part d'un défaut sans
-séance, avant comme après : 2 alertes. Deux défauts d'une même séance
-donnent 2 alertes au destinataire qui a lu la première, une seule alerte de
-compteur 6 à celui qui ne l'a pas lue (une alerte non lue par séance).
+séance : 2 alertes. Deux défauts d'une même séance donnent 2 alertes au
+destinataire qui a lu la première, une seule alerte de compteur 6 à celui
+qui ne l'a pas lue (une alerte non lue par séance).
 
-Limites : le défaut doit être stocké quand arrive l'autre moitié (le Pi
-envoie les événements avant la fin) ; si seul un verdict d'une autre règle
-est arrivé quand le heartbeat est livré, puis le défaut ensuite, il reste
-2 alertes. Une alerte `drive_fault` sans séance plus ancienne, d'un défaut
-hors séance non lu, peut être reprise par une séance qui a un défaut, comme
-le faisait déjà l'événement `drive_fault`.
+Limites, qui donnent encore 2 alertes pour un même défaut : un heartbeat
+livré plus de `SAME_FAULT_MS` après le défaut de l'enregistrement (lien
+coupé puis rétabli, lot d'événements en retard) ; et, quand seul un verdict
+d'une autre règle est arrivé à la livraison du heartbeat, puis le défaut
+ensuite. Le défaut doit être stocké quand arrive l'autre moitié : le Pi
+envoie les événements avant la fin.
 
 Ce regroupement s'applique aussi aux verdicts hors défaut variateur : par
 exemple, `hr_drop (RAMP_DOWN)` et la fin en échec de la même séance donnent
@@ -3622,8 +3650,8 @@ reste fondée sur son propre `updatedAt`.
 
 Pour ANH-82 : le composant `resend` n'est plus monté et ses tables n'ont
 jamais reçu d'e-mail, aucune clé n'ayant été posée. Leur retrait est une
-étape du déploiement ([deploiement.md](deploiement.md#33-vers-la-production),
-point 8), non vérifiée contre un déploiement.
+étape d'après le déploiement ([deploiement.md](deploiement.md#33-vers-la-production),
+ligne « Après la pipeline »), non vérifiée contre un déploiement.
 
 Le webhook de Resend (statuts de remise) n'est pas branché :
 le site ne dit pas si un e-mail est arrivé. Aucun compte, aucune clé et aucun
