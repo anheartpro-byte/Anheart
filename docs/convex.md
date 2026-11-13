@@ -4536,9 +4536,10 @@ que soit sa valeur :
 - `RecordDeposit` (`raspberry-pi/src/record/deposit.py`) lit ce refus dans
   `records/status` et renvoie le même manifeste avec une nouvelle
   réservation. Un fichier refusé et renvoyé tel quel ne compte pas comme un
-  succès, même quand chaque envoi reçoit 200 : l'essai suivant attend, avec
-  un recul qui double de 2 s à 300 s (`MAX_BACKOFF`), et passe d'abord aux
-  enregistrements suivants. Chaque renvoi remplace la ligne refusée et
+  succès, même quand chaque envoi reçoit 200 : ce seul enregistrement attend
+  2 s avant son essai suivant, puis 4, 8 et ainsi de suite jusqu'à 300 s
+  (`MIN_BACKOFF`, `MAX_BACKOFF`), et repasse après les enregistrements
+  suivants ; un enregistrement nouveau ou sain est essayé sans attendre. Chaque renvoi remplace la ligne refusée et
   repasse la séance à `partial` (`attachUpload`, `convex/recordStorage.ts`)
   avant que la vérification ne la remette à `rejected` : le statut bascule à
   chaque renvoi, et un objet de manifeste est stocké puis effacé à chaque

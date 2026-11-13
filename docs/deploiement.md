@@ -311,7 +311,7 @@ l'applique à sa mineure :
 | La **majeure** change entre **deux majeures versionnées** : le Convex en service sert déjà le contrat | **Une release dont Convex sert les deux majeures d'abord, puis les consoles, puis une release qui retire l'ancienne majeure quand plus aucune console en service ne la parle.** | Le Convex en service répond 426 à une console qui annonce une majeure qu'il ne sert pas : les consoles d'abord seraient coupées. Un Convex qui ne sert que la nouvelle majeure répond 426 aux consoles encore sur l'ancienne : Convex d'abord les couperait. La release de transition doit donc lister les deux majeures dans `SUPPORTED_MAJORS`, comme le code le prévoit (aucune release ne l'a encore fait), et se déploie dans l'ordre de la pipeline, Convex d'abord. |
 | Une **mineure** du contrat, ou rien du contrat | **Convex d'abord, les consoles ensuite.** | Dans une même majeure les deux ordres sont sans danger : chaque côté ne s'appuie que sur ce que toutes ses mineures fournissent. Convex d'abord est l'ordre qui ne laisse rien derrière lui : une console plus récente que son serveur garde sur son disque ce qu'il ne sait pas encore recevoir ([section 3.6](#36-ce-que-demande-la-synchronisation-par-relecture-du-journal)). |
 
-Rien du contrat ne change aussi quand seul le contenu d'un fichier déposé
+Rien du contrat ne change non plus quand seul le contenu d'un fichier déposé
 s'enrichit, comme les compteurs de zone d'ANH-234 : Convex d'abord, sans quoi
 le dépôt d'une console à jour est refusé
 ([convex.md](convex.md#compteurs-de-zone-et-ordre-de-déploiement-anh-234)).

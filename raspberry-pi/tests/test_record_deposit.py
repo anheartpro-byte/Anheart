@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal, override
+from typing import Final, Literal, override
 
 import httpx
 import pytest
@@ -443,39 +444,152 @@ async def test_rejected_blob_is_replaced_instead_of_reusing_the_deleted_id(tmp_p
     await deposit.close()
 
 
-async def test_a_file_the_server_refused_is_sent_again_only_after_a_growing_wait(
+REFUSED_MANIFEST: Final[Document] = {
+    "record": "rejected",
+    "expectedCount": 0,
+    "files": [
+        {
+            "path": "manifest.json",
+            "sha256": "bad",
+            "verified": False,
+            "rejection": "invalid_manifest",
+        }
+    ],
+}
+"""What the server says of a record whose manifest its verification refused."""
+
+
+@dataclass
+class RefusingServer(DepositServer):
+    """Refuses the manifest of ``session-1`` at every sending, as the same server always
+    would; any other session is deposited as by ``DepositServer``. Each status asked is kept,
+    by session, in order."""
+
+    asked: list[str] = field(default_factory=list[str])
+
+    @override
+    async def get(
+        self, path: str, params: Mapping[str, str] | None = None
+    ) -> Result[Document, CloudError]:
+        assert params is not None
+        session = params["sessionId"]
+        self.asked.append(session)
+        self.calls += 1
+        if session == "session-1":
+            return Ok(REFUSED_MANIFEST)
+        state = "complete" if self.expected and set(self.expected) == set(self.files) else "partial"
+        rows: list[dict[str, object]] = [
+            {"path": name, "sha256": digest, "verified": True}
+            for name, (_id, digest) in self.files.items()
+        ]
+        return Ok(
+            {"record": state, "files": rows, "expectedCount": len(self.expected), "deleted": False}
+        )
+
+    @override
+    async def post(self, path: str, body: Mapping[str, JsonValue]) -> Result[Document, CloudError]:
+        if body.get("sessionId") != "session-1":
+            return await super().post(path, body)
+        self.calls += 1
+        if path.endswith("upload-url"):
+            return Ok(
+                {
+                    "uploadUrl": "https://test.convex.cloud/upload",
+                    "contentType": "application/octet-stream",
+                    "rejected": True,
+                }
+            )
+        return Ok({"accepted": True})
+
+
+async def test_a_refused_record_waits_its_own_delay_doubling_from_two_seconds_to_five_minutes(
     tmp_path: Path,
 ) -> None:
     """The refusal comes back as long as the server is the same: each new sending of the
-    refused manifest waits longer, never once a second (the pace of a success)."""
+    refused manifest waits twice as long as the one before, 2 s first, 300 s at most."""
     record = ready_record(tmp_path / "records")
-    refused = {
-        "record": "rejected",
-        "expectedCount": 0,
-        "files": [
-            {
-                "path": "manifest.json",
-                "sha256": "bad",
-                "verified": False,
-                "rejection": "invalid_manifest",
-            }
-        ],
-    }
-    server = ScriptedDepositServer(status_reply=Ok(refused))
+    server = RefusingServer()
     clock = ManualClock()
     deposit = RecordDeposit(record.parent, clock, server, server.upload)
     await deposit.step()
+    assert server.asked == ["session-1"]
     assert server.uploads_sent == 1
-    asked = server.calls
+    for wait in (2, 4, 8, 16, 32, 64, 128, 256, 300, 300):
+        asked = len(server.asked)
+        clock.advance(Seconds(wait - 0.5))
+        await deposit.step()
+        assert len(server.asked) == asked, f"sent again before its {wait} s"
+        clock.advance(Seconds(0.5))
+        await deposit.step()
+        assert len(server.asked) == asked + 1, f"not sent again after its {wait} s"
+    await deposit.close()
+
+
+async def test_the_records_after_a_refused_one_go_first(tmp_path: Path) -> None:
+    root = tmp_path / "records"
+    ready_record(root, 1)
+    ready_record(root, 2)
+    server = RefusingServer()
+    deposit = RecordDeposit(root, ManualClock(), server, server.upload)
+    await deposit.step()
+    await deposit.step()
+    assert server.asked == ["session-1", "session-2"]
+    await deposit.close()
+
+
+async def test_a_new_record_is_sent_at_once_while_a_refused_one_waits_five_minutes(
+    tmp_path: Path,
+) -> None:
+    """The wait belongs to the refused record: a session closed meanwhile is not held behind
+    it, at the pace the link loop asks for a step."""
+    root = tmp_path / "records"
+    ready_record(root, 1)
+    server = RefusingServer()
+    clock = ManualClock()
+    deposit = RecordDeposit(root, clock, server, server.upload)
+    await deposit.step()
+    for _ in range(8):
+        clock.advance(Seconds(300))
+        await deposit.step()
+    assert server.asked == ["session-1"] * 9, "its wait is now 300 s"
+    ready_record(root, 2)
     clock.advance(Seconds(1))
     deposit.schedule()
-    await asyncio.sleep(0)
-    assert server.calls == asked, "asked again within a second, as after a success"
-    clock.advance(Seconds(3))
-    deposit.schedule()
+    for _ in range(200):
+        if len(server.asked) > 9:
+            break
+        await asyncio.sleep(0.01)
+    assert server.asked[9:] == ["session-2"]
     await deposit.close()
-    await deposit.step()
-    assert server.calls > asked
+
+
+async def test_a_record_the_reader_refuses_is_said_once_in_the_log_by_its_name_alone(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A manifest the strict reader refuses (a zone counter written as text) never reaches
+    the server, so no incident opens there: the Pi's log keeps a trace, once, with the name
+    of the record and nothing of its content."""
+    record = ready_record(tmp_path / "records")
+    manifest_path = record / "manifest.json"
+    text = manifest_path.read_text(encoding="utf-8")
+    assert text.count('"end_observation":null') == 1
+    manifest_path.write_text(
+        text.replace('"end_observation":null', '"end_observation":{"t":1.0,"zone_in_s":"12.5"}'),
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.WARNING, logger="src.record.deposit")
+    server = DepositServer()
+    clock = ManualClock()
+    deposit = RecordDeposit(record.parent, clock, server, server.upload)
+    for _ in range(3):
+        await deposit.step()
+        clock.advance(Seconds(300))
+    said = [line.getMessage() for line in caplog.records if line.name == "src.record.deposit"]
+    assert len(said) == 1
+    assert repr(record.name) in said[0]
+    assert "12.5" not in said[0]
+    assert "zone" not in said[0]
+    assert server.calls == 0
     await deposit.close()
 
 

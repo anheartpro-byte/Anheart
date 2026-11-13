@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final, NewType
@@ -42,7 +42,16 @@ class FilePayload:
     storage_id: str | None
 
 
-def next_record(root: Path, after: Path | None = None) -> Result[DepositRecord | None, RecordError]:
+def next_record(
+    root: Path,
+    after: Path | None = None,
+    waiting: frozenset[Path] = frozenset(),
+    unreadable: Callable[[Path], None] | None = None,
+) -> Result[DepositRecord | None, RecordError]:
+    """The first record to deposit after ``after``, in turn, passing over the ``waiting`` ones.
+
+    A record that cannot be read is passed over too, and handed to ``unreadable``.
+    """
     try:
         paths = records(root)
     except OSError as error:
@@ -54,9 +63,13 @@ def next_record(root: Path, after: Path | None = None) -> Result[DepositRecord |
     )
     failure: RecordError | None = None
     for path in ordered:
+        if path in waiting:
+            continue
         selected = eligible_record(path)
         if isinstance(selected, Err):
             failure = selected.error
+            if unreadable is not None:
+                unreadable(path)
         elif selected.value is not None:
             return selected
     return Ok(None) if failure is None else Err(failure)
