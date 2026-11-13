@@ -2964,12 +2964,13 @@ Pre-vol`). La fin d'une séance sans enregistrement n'est jamais abandonnée
 pour la suivante : elle attend derrière, en mémoire, et retient comme une fin
 pas encore reçue (ANH-144). Si elle a pu finir sur un arrêt (ou de fin
 inconnue), elle est aussi écrite au registre, au pas d'envoi qui suit sa fin
-et avant que sa fin parte : une console qui s'arrête avant de l'avoir envoyée
-la retrouve au démarrage suivant comme une séance perdue (`fin perdue au
-redemarrage`), à acquitter. Cette ligne disparaît quand le tableau de bord a
-sa fin, quand il la refuse pour de bon (elle devient la perte `fin refusee`),
-ou quand la séance est liée à son enregistrement, que le démarrage suivant
-liste. Les refus, qu'aucun démarrage ne renverra, sont
+(une seconde environ) et avant que sa fin parte : une console qui s'arrête
+après ce pas et avant de l'avoir envoyée la retrouve au démarrage suivant
+comme une séance perdue (`fin perdue au redemarrage`), à acquitter. Cette
+ligne disparaît quand le tableau de bord a sa fin, quand il la refuse pour de
+bon (elle devient la perte `fin refusee`), quand il refuse pour de bon la
+déclaration de la séance (perte `declaration refusee`), ou quand la séance
+est liée à son enregistrement, que le démarrage suivant liste. Les refus, qu'aucun démarrage ne renverra, sont
 écrits à côté
 des enregistrements (`.sync-lost-stops.json`, comme un curseur) et
 **retiennent encore après un redémarrage de la console**, jusqu'à
@@ -2980,8 +2981,9 @@ garde en mémoire seulement. Une perte arrivée avant la première liste des
 enregistrements d'une exécution précédente est ajoutée au registre de
 celle-ci, jamais écrite par-dessus. Reste en mémoire seulement jusqu'au pas
 suivant de l'envoi (une seconde environ), et oubliée par un redémarrage à cet
-instant, la perte d'une séance sans enregistrement, qui n'a pas de curseur à
-retenir : la déclaration refusée de la séance en cours. Un enregistrement illisible reste dû sur le disque : l'acquittement
+instant, ce qui d'une séance sans enregistrement n'a pas de curseur à
+retenir : la perte d'une déclaration refusée de la séance en cours, et la fin
+qui a pu être un arrêt, avant d'être écrite au registre. Un enregistrement illisible reste dû sur le disque : l'acquittement
 le lève pour cette exécution seulement, en mémoire, et le démarrage suivant le
 liste et le retient de nouveau, jusqu'à ce qu'il soit lu et envoyé ou
 acquitté encore. L'acquittement efface ces séances, celles affichées quand il

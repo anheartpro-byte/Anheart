@@ -3311,15 +3311,21 @@ lequel la même requête serait encore refusée.
   `pending`, sous le nom de l'exécution de la console qui l'attend, `run`) au
   pas d'envoi qui suit sa fin, avant que sa fin parte. Le démarrage suivant
   la lit comme une séance perdue (`fin perdue au redemarrage`), à acquitter.
-  Elle en sort quand le tableau de bord a sa fin, quand il la refuse pour de
-  bon (perte `fin refusee`), ou quand la séance est liée à son
-  enregistrement, que le démarrage suivant liste.
-- Retour à une image antérieure : une console d'avant ANH-145 et ANH-144
-  (contrat 1.10 compris) refuse un registre qui porte `released`, `pending` ou
-  `run` (membres inconnus) et le lit comme illisible : elle retient une
-  personne à bord (`registre des seances perdues illisible`) jusqu'à
-  l'acquittement nommé de l'opérateur, page Pré-vol. Le côté sûr, mais un
-  acquittement à prévoir après le retour arrière.
+  Une console arrêtée entre la fin et ce pas (une seconde environ) ne l'a pas
+  écrite, et rien ne la retient après le redémarrage. Elle en sort quand le
+  tableau de bord a sa fin, quand il la refuse pour de bon (perte `fin
+  refusee`) ou refuse pour de bon la déclaration de la séance (perte
+  `declaration refusee`), ou quand la séance est liée à son enregistrement,
+  que le démarrage suivant liste.
+- Retour à une image antérieure, deux cas. Une image qui a déjà le registre
+  d'ANH-145 sans ces suites (`330bbbd` par exemple) refuse un registre qui
+  porte `released`, `pending` ou `run` (membres inconnus) et le lit comme
+  illisible : elle retient une personne à bord (`registre des seances perdues
+  illisible`) jusqu'à l'acquittement nommé de l'opérateur, page Pré-vol. Le
+  côté sûr, mais un acquittement à prévoir. Une image d'avant ANH-145, comme
+  l'image 1.9 du banc `d222a0d`, ne lit jamais `.sync-lost-stops.json` :
+  **revenir à `d222a0d` supprime toute retenue pour une séance perdue**,
+  aucune n'est plus retenue après le retour arrière.
 
 Vérifié par les tests automatiques, en simulation et en temps simulé
 (`tests/test_record_cursor.py`, `test_record_upload.py`,
