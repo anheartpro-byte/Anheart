@@ -1101,15 +1101,16 @@ reste inchangée ; l'événement suivant en crée une nouvelle. Les alertes
 « Machine hors ligne » gardent leur regroupement par machine.
 
 Un défaut variateur ne rejoint que le même défaut. Un heartbeat en défaut
-qui ne nomme pas la séance, arrivé d'abord, est rejoint par l'enregistrement
-de la séance qui tient ce défaut tant que la séance est ouverte, ou moins de
-90 s (`SAME_FAULT_MS`) après sa fin : c'est le cas d'un lien coupé puis
-rétabli, où le heartbeat passe le premier. Un enregistrement arrivé d'abord
-n'est rejoint que par un heartbeat arrivé moins de 90 s après. Le même
-défaut donne alors **1 alerte et 1 e-mail par destinataire**. Restent 2
-alertes : un heartbeat arrivé plus de 90 s après l'enregistrement (route du
-heartbeat en échec ou refusée pendant que les événements passent), ou un
-verdict d'une autre règle seul arrivé avant le heartbeat. Un défaut plus
+qui ne nomme pas la séance et l'enregistrement de la séance qui tient ce
+défaut se rejoignent s'ils arrivent à moins de 90 s (`SAME_FAULT_MS`) l'un
+de l'autre, dans les deux ordres, ou, pour une séance que le serveur a
+terminée et dont la console date le départ, si le heartbeat a été écrit
+entre son départ et 90 s après sa fin. Le même défaut donne alors
+**1 alerte et 1 e-mail par destinataire**. Restent 2 alertes : plus de
+90 s d'écart hors de cette fenêtre (enregistrement qui met plus de 90 s à
+suivre le heartbeat après un lien rétabli, route du heartbeat en échec
+pendant que les événements passent), ou un verdict d'une autre règle seul
+arrivé avant le heartbeat. Un défaut plus
 tardif donne une nouvelle alerte, et une séance sans défaut variateur reste
 à part d'un défaut hors séance.
 Détail :

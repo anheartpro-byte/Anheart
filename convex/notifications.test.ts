@@ -1439,7 +1439,11 @@ describe("session alert grouping (T03)", () => {
       const w = await seedWorld(modules);
       const sessionId = await session(w);
       await w.t.run(async (ctx) => {
-        await ctx.db.patch(sessionId, { status: "failed", endedAt: NOW });
+        await ctx.db.patch(sessionId, {
+          status: "failed",
+          endedAt: NOW,
+          machineStartedAt: NOW,
+        });
         await ctx.db.insert("training_events", {
           organizationId: w.orgA,
           sessionId,
@@ -1453,6 +1457,8 @@ describe("session alert grouping (T03)", () => {
         type: "drive_fault",
         count: 1,
       });
+      // Delivered past the bound of the alert itself: only the window decides.
+      vi.setSystemTime(NOW + after + SAME_FAULT_MS + 1);
       await deliver(w, sessionId, "verdict");
 
       const own = (await alerts(w)).filter((row) => row.userId === w.manager);
@@ -1462,6 +1468,76 @@ describe("session alert grouping (T03)", () => {
       );
     },
   );
+
+  it("R2 Q3: a session still open on the server does not take a later, different idle fault when its record arrives late", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    const sessionId = await session(w);
+    await w.t.run((ctx) => ctx.db.patch(sessionId, { machineStartedAt: NOW }));
+    // The link drops, the session faults offline, the drive is reset; back
+    // at +2 h, another fault while idle; the session's record just after.
+    vi.setSystemTime(NOW + 2 * 60 * 60 * 1000);
+    await inputs.heartbeat(w);
+    expect(await emailsTo(w, w.manager)).toBe(1);
+    vi.setSystemTime(NOW + 2 * 60 * 60 * 1000 + SAME_FAULT_MS + 1);
+    await inputs.batch(w, sessionId);
+    await w.t.mutation(internal.training.endTrainingSession, {
+      machineId: w.machine,
+      sessionId,
+      failed: true,
+      reason: "safety_verdict: drive_fault",
+      endedAt: NOW + 20 * 60 * 1000,
+    });
+    await delivered(w);
+
+    expect(
+      (await alerts(w))
+        .filter((row) => row.userId === w.manager)
+        .map((row) => [row.type, row.sessionId]),
+    ).toEqual([
+      ["drive_fault", undefined],
+      ["drive_fault", sessionId],
+    ]);
+    expect(await emailsTo(w, w.manager)).toBe(2);
+  });
+
+  it("R2 Q2: a session without a machine axis does not take an older idle fault, whatever its Pi clock says", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    await inputs.heartbeat(w);
+    expect(await emailsTo(w, w.manager)).toBe(1);
+    await w.t.mutation(internal.training.updateLive, {
+      machineId: w.machine,
+      live: live(),
+    });
+    const later = NOW + 10 * 24 * 60 * 60 * 1000;
+    vi.setSystemTime(later);
+    const sessionId = await session(w);
+    // A Pi clock 11 days behind: its dates cover the idle fault of day 0.
+    const piNow = later - 11 * 24 * 60 * 60 * 1000;
+    await w.t.run((ctx) =>
+      ctx.db.patch(sessionId, { startedAt: piNow - 20 * 60 * 1000 }),
+    );
+    await inputs.batch(w, sessionId);
+    await w.t.mutation(internal.training.endTrainingSession, {
+      machineId: w.machine,
+      sessionId,
+      failed: true,
+      reason: "safety_verdict: drive_fault",
+      endedAt: piNow,
+    });
+    await delivered(w);
+
+    expect(
+      (await alerts(w))
+        .filter((row) => row.userId === w.manager)
+        .map((row) => [row.type, row.sessionId]),
+    ).toEqual([
+      ["drive_fault", undefined],
+      ["drive_fault", sessionId],
+    ]);
+    expect(await emailsTo(w, w.manager)).toBe(2);
+  });
 
   it("EX-5: gives two alerts for two faults of one session to the recipient who read the first", async () => {
     const w = await seedWorld(modules);

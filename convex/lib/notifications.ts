@@ -385,9 +385,11 @@ async function sessionFaulted(
  * folds into the machine's fault alert without a session changed within
  * `SAME_FAULT_MS`, else into the session alert changed last whose record
  * received a drive fault within `SAME_FAULT_MS`. An event of a session takes
- * the machine's fault alert without a session written while that session ran
- * (from its start to `SAME_FAULT_MS` after its end), when it is a fault or
- * the session's record holds one. Undefined otherwise: a new alert.
+ * the machine's fault alert without a session written within `SAME_FAULT_MS`,
+ * or while that session ran (from its start to `SAME_FAULT_MS` after its end,
+ * for a session the server ended and whose machine dated its start), when the
+ * event is a fault or the session's record holds one. Undefined otherwise: a
+ * new alert, never a lost one.
  */
 async function sameFault(
   ctx: QueryCtx,
@@ -419,12 +421,20 @@ async function sameFault(
   }
   if (NOTIFICATION_TYPES[type].sessionPriority === 0) return undefined;
   const session = await ctx.db.get(event.sessionId);
+  // An alert just written; or one written while the session ran, read on its
+  // dates only once the server has ended it and when its machine dated its
+  // start (`machineAxis`): before that, a late record may come hours after a
+  // different fault, and a Pi clock is not the server's.
+  const dated =
+    session?.endedAt !== undefined && session.machineStartedAt !== undefined
+      ? { from: session.startedAt, to: session.endedAt + SAME_FAULT_MS }
+      : null;
   const during = loose.find(
     (row) =>
-      session !== null &&
-      row.createdAt >= session.startedAt &&
-      (session.endedAt === undefined ||
-        row.createdAt <= session.endedAt + SAME_FAULT_MS),
+      now - row.createdAt <= SAME_FAULT_MS ||
+      (dated !== null &&
+        row.createdAt >= dated.from &&
+        row.createdAt <= dated.to),
   );
   return during !== undefined &&
     (type === "drive_fault" ||
