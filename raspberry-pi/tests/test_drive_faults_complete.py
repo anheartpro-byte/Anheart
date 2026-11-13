@@ -380,26 +380,38 @@ def _section(page: str) -> str:
     return page.split("### 6.1 La table", 1)[1].split("\n### ", 1)[0]
 
 
+def _is_separator(line: str) -> bool:
+    """A delimiter row: cells of ``-`` and ``:`` only (and spaces), outer pipes or not."""
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    return "|" in line and all(cell and set(cell) <= set("-:") and "-" in cell for cell in cells)
+
+
 def _documented_faults(page: str) -> list[tuple[str, ...]]:
     """The rows of the table of section 6.1 of ``docs/raspberry-pi.md``, cell by cell.
 
-    Every line of the section a reader sees as a line of the table, however it
-    is spaced or indented, is read: the header, a separator (cells made only of
-    ``-``, ``:`` and spaces, wherever it stands), or a row of as many cells as
-    the header. Any other fails: no row can be shown on the page and passed
+    The table is what Markdown makes of it: the line before its first delimiter
+    row, then every line down to the first blank one, a line without pipes
+    included. Each is read, however it is spaced or indented, and must be the
+    header, a separator (cells made only of ``-``, ``:`` and spaces, wherever it
+    stands), or a row of as many cells as the header between an opening and a
+    closing pipe. Any other fails: no row can be shown on the page and passed
     over here.
     """
+    lines = _section(page).splitlines()
+    start = next(index for index, line in enumerate(lines) if _is_separator(line)) - 1
+    end = next(
+        (index for index in range(start, len(lines)) if not lines[index].strip()), len(lines)
+    )
     rows: list[tuple[str, ...]] = []
-    for line in _section(page).splitlines():
+    for line in lines[start:end]:
         written = line.strip()
-        if not written.startswith("|"):
-            continue
         cells = tuple(cell.strip() for cell in written.split("|")[1:-1])
         malformed = f"6.1 : ligne de la table mal formée : {line!r}"
+        assert written.startswith("|"), malformed
         assert written.endswith("|"), malformed
         assert len(cells) == len(HEADER), malformed
         assert all(cells), malformed
-        if all(set(cell) <= set("-: ") and "-" in cell for cell in cells):
+        if _is_separator(written):
             continue
         rows.append(cells)
     assert rows[0] == HEADER, rows[0]
@@ -447,6 +459,8 @@ RECLASSED_2: Final[str] = ROW_2.replace("| materiel variateur |", "| configurati
         pytest.param("|" + RECLASSED_2[2:-2].replace(" | ", "|") + "|", id="sans espaces"),
         pytest.param(RECLASSED_2, id="bien formee"),
         pytest.param("   " + RECLASSED_2, id="en retrait"),
+        pytest.param(RECLASSED_2[2:], id="sans barre initiale"),
+        pytest.param(RECLASSED_2[2:-2], id="sans barres"),
         pytest.param(RECLASSED_2.rsplit(" | ", 1)[0] + " |", id="cinq cellules"),
         pytest.param(RECLASSED_2[:-2], id="non fermee"),
     ],
