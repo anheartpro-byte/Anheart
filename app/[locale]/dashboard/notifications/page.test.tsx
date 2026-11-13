@@ -280,7 +280,7 @@ describe("the alerts page", () => {
       .getAllByRole("listitem")
       .filter((element) => element.getAttribute("data-alert") === "safety_verdict");
     expect(within(verdicts[0]).getByText(fr.notifications.verdict.QUICK_STOP)).toBeTruthy();
-    expect(within(verdicts[0]).getByText(/3 fois, dernière à/)).toBeTruthy();
+    expect(within(verdicts[0]).getByText(/3 événements regroupés, le dernier à/)).toBeTruthy();
     expect(within(verdicts[1]).getByText(fr.notifications.verdict.unknown)).toBeTruthy();
 
     const fault = item(fr.notifications.types.drive_fault);

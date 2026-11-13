@@ -1509,7 +1509,7 @@
     "markRead": "Mark as read",
     "markAllRead": "Mark all as read",
     "allRead": "Alerts marked as read.",
-    "repeated": "{count} times, last at {time}",
+    "repeated": "{count} events grouped, the last at {time}",
     "openSession": "View session",
     "openMachine": "View machine",
     "openIncidents": "View incidents",

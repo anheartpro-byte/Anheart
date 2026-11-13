@@ -1509,7 +1509,7 @@
     "markRead": "Marquer comme lue",
     "markAllRead": "Tout marquer comme lu",
     "allRead": "Alertes marquées comme lues.",
-    "repeated": "{count} fois, dernière à {time}",
+    "repeated": "{count} événements regroupés, le dernier à {time}",
     "openSession": "Voir la séance",
     "openMachine": "Voir la machine",
     "openIncidents": "Voir les incidents",

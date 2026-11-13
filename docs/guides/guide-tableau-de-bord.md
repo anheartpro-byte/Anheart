@@ -1776,7 +1776,9 @@ séance se regroupent dans votre alerte non lue. Le défaut variateur est
 prioritaire sur le verdict de sécurité, lui-même prioritaire sur la séance
 échouée : le type affiché peut donc devenir plus précis. Un verdict de
 fréquence cardiaque et la fin en échec se regroupent aussi. L'unique e-mail
-dit le type de départ et n'est pas renvoyé quand le type change. Une alerte
+dit le type de départ et n'est pas renvoyé quand le type change. « N
+événements regroupés » compte tous les événements fondus dans l'alerte, de
+tous types, et non les répétitions du type affiché. Une alerte
 lue reste inchangée ; l'événement suivant en crée une nouvelle. Sans séance,
 le regroupement reste par machine.
 

@@ -1075,8 +1075,10 @@ code dédié attend un ajout au contrat du Pi.
   et **Voir la séance**. Jamais d'e-mail : la page ne propose pas
   d'interrupteur pour ce type, l'envoi d'e-mails étant coupé en production.
 
-Chaque alerte donne la machine, l'heure, « N fois, dernière à … » quand
-plusieurs événements s'y sont fondus pendant qu'elle était non lue, le
+Chaque alerte donne la machine, l'heure, « N événements regroupés, le
+dernier à … » quand plusieurs événements, de tous types, s'y sont fondus
+pendant qu'elle était non lue (un défaut variateur signalé par le heartbeat,
+son verdict, son événement et la fin en échec comptent 4), le
 badge « Non lue », et un lien **Voir la séance** (quand le visiteur peut la
 lire) ou **Voir la machine**. Si la machine a été supprimée, l'alerte reste
 visible et comptée, comme sa séance reste lisible : **Machine supprimée**

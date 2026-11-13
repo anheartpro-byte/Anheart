@@ -981,8 +981,10 @@ export default defineSchema({
     // A code the machine sent, never a sentence: the drive's fault mnemonic
     // ("OHF"), or the action a safety verdict demanded ("RAMP_DOWN").
     detail: v.optional(v.string()),
-    // How many events this row stands for: a new event of the same kind
-    // folds into the recipient's unread row instead of adding one.
+    // How many events this row stands for, of every kind folded into it
+    // (a heartbeat, a verdict, a fault event, an end), not how many times its
+    // type happened: a new event folds into the recipient's unread row
+    // instead of adding one.
     count: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),

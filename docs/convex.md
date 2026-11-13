@@ -2630,7 +2630,9 @@ destinataire, pour la même organisation et la même machine : `drive_fault`,
 `safety_verdict` et `session_failed` qui nomment la même séance s'y fondent,
 quel que soit l'ordre des livraisons. Le type gardé est le plus précis :
 `drive_fault` > `safety_verdict` > `session_failed`. Il peut monter après
-coup. `count` additionne les événements, `updatedAt` avance et `sessionId`
+coup. `count` additionne les événements fondus, de tous types (heartbeat,
+verdict, défaut, fin) : ce n'est pas le nombre de fois où le type affiché
+s'est produit, et la page dit « N événements regroupés ». `updatedAt` avance et `sessionId`
 reste celui de la séance. Pour le même type, `foldedDetail` garde l'action
 la plus sévère d'un verdict ou le dernier code du variateur ; quand le type
 monte, le code de l'arrivant remplace le détail ; un type moindre ne change
