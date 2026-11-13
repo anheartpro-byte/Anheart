@@ -3565,7 +3565,12 @@ L'en-tête `Idempotency-Key` vaut `notification:<identifiant de l'alerte>`.
 [Resend conserve ces clés 24 heures](https://resend.com/changelog/idempotency-keys).
 Les constantes exportées de `notificationEmails.ts` bornent les reprises :
 `EMAIL_MAX_ATTEMPTS` = 5, `EMAIL_RETRY_DELAYS_MS` = 1 min, 5 min, 30 min,
-2 h, et `EMAIL_RETRY_WINDOW_MS` = 23 h depuis la mise en attente. Aucune des
+2 h, et `EMAIL_RETRY_WINDOW_MS` = 23 h depuis la mise en attente. Chaque
+délai est raccourci au hasard de 20 % au plus (`EMAIL_RETRY_JITTER`), pour
+que les reprises de plusieurs alertes ne tombent pas ensemble. Un en-tête
+`Retry-After` de la réponse (secondes ou date HTTP, `retryAfterMs`) allonge
+le délai s'il demande plus, jamais au-delà du plus long délai (2 h), sur
+lequel compte la clôture des e-mails abandonnés. Aucune des
 cinq tentatives au plus ne commence après cette fenêtre ; chaque requête a
 un délai maximal de 30 s (`EMAIL_REQUEST_TIMEOUT_MS`) si le runtime fournit
 `AbortSignal.timeout` ou `AbortController` avec `setTimeout`, sinon elle part

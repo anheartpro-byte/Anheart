@@ -22,7 +22,9 @@ import {
   EMAIL_MAX_ATTEMPTS,
   EMAIL_REQUEST_TIMEOUT_MS,
   EMAIL_RETRY_DELAYS_MS,
+  EMAIL_RETRY_JITTER,
   EMAIL_RETRY_WINDOW_MS,
+  retryAfterMs,
 } from "./notificationEmails";
 import schema from "./schema";
 import { as, modules, NOW, seedLaunchWorld, type World } from "./test.setup";
@@ -43,6 +45,8 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async () => Response.json({ id: "email_synthetic" }));
   vi.stubGlobal("fetch", network);
+  // No jitter unless a test asks for it: the delays below are exact.
+  vi.spyOn(Math, "random").mockReturnValue(0);
 });
 
 afterEach(() => {
@@ -447,6 +451,68 @@ describe("bounded email retries (T02-d)", () => {
       expect(JSON.stringify(await rows(w))).not.toContain(SECRET);
     },
   );
+
+  it("shortens each delay by a bounded random share", async () => {
+    vi.mocked(Math.random).mockReturnValue(0.5);
+    const times: number[] = [];
+    network.mockImplementation(async () => {
+      times.push(Date.now());
+      return new Response(null, { status: 503 });
+    });
+    const w = await seedLaunchWorld(modules);
+    await queue(w);
+    await drain(w);
+    const waits = times.slice(1).map((t, i) => t - times[i]);
+    expect(waits).toEqual(
+      EMAIL_RETRY_DELAYS_MS.map((d) => d * (1 - EMAIL_RETRY_JITTER / 2)),
+    );
+    waits.forEach((wait, i) => {
+      expect(wait).toBeLessThan(EMAIL_RETRY_DELAYS_MS[i]);
+      expect(wait).toBeGreaterThanOrEqual(
+        EMAIL_RETRY_DELAYS_MS[i] * (1 - EMAIL_RETRY_JITTER),
+      );
+    });
+  });
+
+  it.each([
+    ["seconds longer than the delay", "600", 600_000],
+    ["seconds shorter than the delay", "1", EMAIL_RETRY_DELAYS_MS[0]],
+    [
+      "a date past the longest delay",
+      new Date(NOW + 3 * 60 * 60 * 1000).toUTCString(),
+      Math.max(...EMAIL_RETRY_DELAYS_MS),
+    ],
+    ["no readable wait", "soon", EMAIL_RETRY_DELAYS_MS[0]],
+  ])(
+    "waits as Retry-After asks, %s, within the longest delay",
+    async (_label, header, wait) => {
+      const times: number[] = [];
+      network.mockImplementation(async () => {
+        times.push(Date.now());
+        return times.length === 1
+          ? new Response(null, {
+              status: 429,
+              headers: { "Retry-After": header },
+            })
+          : Response.json({ id: "email_synthetic" });
+      });
+      const w = await seedLaunchWorld(modules);
+      const row = await queue(w);
+      await drain(w);
+      expect(times).toEqual([NOW, NOW + wait]);
+      expect(await email(w, row)).toMatchObject({
+        status: "sent",
+        attempts: 2,
+      });
+    },
+  );
+
+  it("reads Retry-After in seconds or as a date, never below zero", () => {
+    expect(retryAfterMs(null, NOW)).toBeUndefined();
+    expect(retryAfterMs(" 120 ", NOW)).toBe(120_000);
+    expect(retryAfterMs(new Date(NOW + 5_000).toUTCString(), NOW)).toBe(5_000);
+    expect(retryAfterMs(new Date(NOW - 5_000).toUTCString(), NOW)).toBe(0);
+  });
 
   it.each([422, 401, 409, 302])(
     "fails HTTP %s immediately and never sends after failure",
