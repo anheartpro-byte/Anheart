@@ -559,7 +559,8 @@ def test_ex2_a_descriptor_that_leaks_fails_and_descriptors_that_come_and_go_do_n
         "12 au début, au moins 12 sur la fin (5 relevés depuis 23 h 00) ; au plus 15, 15 à la fin"
     )
     assert leak.status is Status.FAIL
-    assert "12 au début, au moins 21 sur la fin" in leak.measured
+    # The low before the end is above its lowest tenth: 7 readings at 12, then 13.
+    assert "13 au début, au moins 21 sur la fin" in leak.measured
     assert few.status is Status.FAIL
     assert "trop peu" in few.measured
 
@@ -626,12 +627,70 @@ def test_ex2_a_descriptor_open_or_closed_for_one_reading_fails_nothing() -> None
         for descriptors in (40, 11):
             verdict = one(index, descriptors)
             assert verdict.status is Status.PASS, (index, descriptors, verdict.measured)
-    # Four readings judged, the last quarter holds one: the end is still two of them.
+    # Before the end, a tenth of the readings (8 of 88 here) may be caught with one closed.
+    before = range(start, len(flat.samples) - 5)
+    for lows, status in ((2, Status.PASS), (8, Status.PASS), (9, Status.FAIL)):
+        closed = {before[n * 9] for n in range(lows)}
+        dipped = replace(
+            flat,
+            samples=tuple(
+                replace(sample, descriptors=11) if number in closed else sample
+                for number, sample in enumerate(flat.samples)
+            ),
+        )
+        assert check_descriptors(dipped).status is status, lows
+    # The documented price of the lowest of the end: one reading there caught with a
+    # descriptor closed hides a leak of one descriptor.
+    leaked = counted(flat, lambda at: 13 if at >= 13 * 3600.0 else 12)
+    hidden = replace(
+        leaked,
+        samples=tuple(
+            replace(sample, descriptors=12) if number == len(flat.samples) - 2 else sample
+            for number, sample in enumerate(leaked.samples)
+        ),
+    )
+    assert check_descriptors(leaked).status is Status.FAIL
+    assert check_descriptors(hidden).status is Status.PASS
+    # Five readings judged, the last quarter holds one: the end is still two of them, and
+    # the low of the three before it their middle one. One reading caught high at the end
+    # and one caught low before it fail nothing.
     short = replace(
         steady(1.0),
-        samples=(*(reading(600.0 * (n + 1)) for n in range(4)), reading(3000.0, descriptors=40)),
+        samples=(
+            reading(600.0),
+            reading(1000.0, descriptors=11),
+            reading(1100.0),
+            reading(1200.0),
+            reading(1300.0),
+            reading(2000.0, descriptors=40),
+        ),
     )
     assert check_descriptors(short).status is Status.PASS
+
+
+def test_ex2_four_readings_after_the_warm_up_are_too_few_for_the_descriptors() -> None:
+    """With two readings before the end, their second lowest would be their highest: a
+    leak would pass. Four readings are refused instead, and five keep three before it."""
+    for counts in ((12, 40, 13, 13), (12, 13, 13, 13)):
+        four = replace(
+            steady(1.0),
+            samples=tuple(
+                reading(1000.0 + 100.0 * n, descriptors=count) for n, count in enumerate(counts)
+            ),
+        )
+        verdict = check_descriptors(four)
+        assert verdict.status is Status.FAIL, counts
+        assert verdict.measured == "4 relevés après la chauffe : trop peu"
+    # Five, the last three close together: three still come before the end, whose middle
+    # one shows the leak that the higher of two would hide.
+    clustered = replace(
+        steady(1.0),
+        samples=tuple(
+            reading(at, descriptors=count)
+            for at, count in ((1000.0, 12), (1100.0, 40), (1900.0, 12), (1950.0, 13), (2000.0, 13))
+        ),
+    )
+    assert check_descriptors(clustered).status is Status.FAIL
 
 
 STALL_MS = PANEL_SAFETY.loop_stall_freeze_gap * 1000.0
@@ -658,6 +717,7 @@ def test_ex2_in_real_time_a_stall_fails_tick_gap_and_names_its_cause() -> None:
     )
     latched = check_tick_gap(replace(run, gaps=replace(GAPS, verdict="took 1.00 s between ticks")))
     unread = check_tick_gap(replace(run, gaps=replace(GAPS, exact=None)))
+    only_merged = check_tick_gap(replace(run, gaps=replace(GAPS, exact=None, merged=over_merges)))
     partial = check_tick_gap(replace(run, gaps=replace(GAPS, seen=0.89 * 86_400)))
 
     assert fine is not None
@@ -673,10 +733,13 @@ def test_ex2_in_real_time_a_stall_fails_tick_gap_and_names_its_cause() -> None:
     assert merged is not None
     assert merged.status is Status.PASS
     assert "3 écarts sur des instantanés fusionnés par le hub (au plus 633.6 ms)" in merged.measured
+    # A page that only ever read merged snapshots: the console's verdict decides alone.
+    assert only_merged is not None
+    assert only_merged.status is Status.PASS
     for verdict, cause in (
         (reached, "un écart de 600.0 ms entre deux tics consécutifs"),
         (latched, "la console a levé loop_stall : took 1.00 s between ticks"),
-        (unread, "aucun écart entre deux tics consécutifs relevé"),
+        (unread, "aucun écart entre deux tics relevé"),
         (partial, "tics relevés sur 76896 s des 86400 s de l'essai"),
     ):
         assert verdict is not None

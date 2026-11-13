@@ -46,16 +46,27 @@ from simulation.endurance import (
     main,
     real_time,
     simulated,
+    stall_among,
 )
-from simulation.endurance_measures import CSV_HEADER, Kind, Mode, Run, Status, judge
+from simulation.endurance_measures import (
+    CSV_HEADER,
+    Gaps,
+    Kind,
+    Mode,
+    Run,
+    Status,
+    check_tick_gap,
+    judge,
+)
 from simulation.harness import PANEL_SAFETY
 from simulation.tests.conftest import document, num, obj, seq
 from src.clock import ManualClock, RealClock
 from src.local_panel import EXIT_FAILED, LocalPanel
+from src.record.journal import Journal
 from src.record.session import PRESTART_SECONDS
 from src.training.runtime import EndReason, RuntimeState
-from src.training.safety import SafetyLimits
-from src.training.types import TelemetrySnapshot
+from src.training.safety import RULE_LOOP_STALL, SafetyLimits
+from src.training.types import SafetyAction, SafetyVerdict, TelemetrySnapshot
 from src.units import Bpm, Monotonic, Seconds, UnixMillis
 
 SHORT_DAY = Plan(manual=30, rest=25, sample_every=15, programme=320.0)
@@ -72,6 +83,9 @@ LATE: Final[float] = 0.8
 
 FROZEN: Final[float] = 3.4
 """Seconds the whole loop is frozen: past the console's own stall bound (3 s)."""
+
+LATE_PAST_TWO: Final[float] = 2.2
+"""Seconds a tick is held past a freeze moved to two seconds, short of silence (3 s)."""
 
 
 def statuses(run: Run) -> dict[str, Status]:
@@ -230,6 +244,17 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     assert left - {"console.log"} == {"endurance.json", "endurance.md"}
 
 
+def freeze_at_two_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build the console with its ``loop_stall`` freeze at two seconds instead of 0.6 s."""
+
+    def slower(*, hard_max_bpm: Bpm, critical_bpm: Bpm) -> SafetyLimits:
+        return SafetyLimits(
+            hard_max_bpm=hard_max_bpm, critical_bpm=critical_bpm, loop_stall_freeze_periods=10.0
+        )
+
+    monkeypatch.setattr("src.local_panel.SafetyLimits", slower)
+
+
 def hold_a_session_tick(monkeypatch: pytest.MonkeyPatch, *, after: int = 0) -> list[float]:
     """Hold one tick of a session :data:`LATE` seconds, past the ``after`` first ticks.
 
@@ -282,7 +307,9 @@ async def test_ex1_in_real_time_a_late_tick_fails_tick_gap_and_a_frozen_console_
     assert gap.measured.startswith("la console a levé loop_stall : the control loop took")
     assert f"un écart de {gaps.exact.highest:.1f} ms entre deux tics consécutifs" in gap.measured
     # Read from the console's own exit, which a console cancelled instead never reaches.
-    assert run.anomaly == f"the console left with exit code {EXIT_FAILED}"
+    assert run.anomaly is not None
+    assert f"the console left with exit code {EXIT_FAILED}" in run.anomaly
+    assert "latched safety verdict (loop_stall)" in run.anomaly
     assert verdicts["sessions"].status is Status.FAIL
 
 
@@ -291,13 +318,7 @@ async def test_ex1_in_real_time_tick_gap_follows_the_console_s_own_loop_stall_bo
 ) -> None:
     """The console's freeze moved to two seconds: a tick held 0.8 s is no stall for its rule,
     nor for the judge, which reads the console's figure. And so, on any host, a PASS."""
-
-    def slower(*, hard_max_bpm: Bpm, critical_bpm: Bpm) -> SafetyLimits:
-        return SafetyLimits(
-            hard_max_bpm=hard_max_bpm, critical_bpm=critical_bpm, loop_stall_freeze_periods=10.0
-        )
-
-    monkeypatch.setattr("src.local_panel.SafetyLimits", slower)
+    freeze_at_two_seconds(monkeypatch)
     held = hold_a_session_tick(monkeypatch)
 
     run = await real_time(6, tmp_path / "out", Plan(manual=3, rest=2, sample_every=2))
@@ -313,34 +334,91 @@ async def test_ex1_in_real_time_tick_gap_follows_the_console_s_own_loop_stall_bo
     assert gap.status is Status.PASS, gap.measured
 
 
-async def test_ex1_in_real_time_a_gap_over_snapshots_the_hub_merged_is_no_stall(
+async def test_ex1_a_verdict_still_latched_at_the_end_fails_the_run_by_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The loop blocked 0.45 s right after a tick published: the console's own gap stays
-    under its bound, the page's gap over the snapshot the hub merged does not, and is
-    not judged a stall."""
+    """A stall in the session, then a ``GO_SILENT`` latched once it is over, which takes the
+    stall's place in the supervisor's floor. The stall is still found behind it, and the
+    verdict left latched fails the run by name: a run in good health ends with none."""
     control_step = LocalPanel.control_step
-    held = [0.45]
+    tripped = [False]
 
-    async def busy_after(panel: LocalPanel) -> TelemetrySnapshot:
+    async def trip_once_finished(panel: LocalPanel) -> TelemetrySnapshot:
         snapshot = await control_step(panel)
-        if held and panel.runtime.state is RuntimeState.RUNNING:
-            time.sleep(held.pop())  # noqa: ASYNC251  # the loop blocked, as a slow call would
+        if not tripped[0] and panel.runtime.state is RuntimeState.FINISHED:
+            tripped[0] = True
+            panel.runtime.supervisor.trip_from_thread(
+                "endurance_trip", SafetyAction.GO_SILENT, "tripped by the test"
+            )
         return snapshot
 
-    monkeypatch.setattr(LocalPanel, "control_step", busy_after)
+    monkeypatch.setattr(LocalPanel, "control_step", trip_once_finished)
+    held = hold_a_session_tick(monkeypatch)
 
     run = await real_time(6, tmp_path / "out", Plan(manual=3, rest=2, sample_every=2))
-    gap = {check.name: check for check in judge(run)}["tick_gap"]
+    verdicts = {check.name: check for check in judge(run)}
 
-    assert held == []
+    assert (held, tripped) == ([], [True])
+    assert run.anomaly is not None
+    assert "the console ends the run with a latched safety verdict (endurance_trip)" in run.anomaly
+    assert verdicts["sessions"].status is Status.FAIL
+    assert verdicts["tick_gap"].measured.startswith("la console a levé loop_stall")
+
+
+async def test_ex1_a_stall_behind_an_earlier_freeze_of_another_rule_still_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A FREEZE latched by another rule early in the session keeps the supervisor's floor:
+    the stall's own FREEZE, as severe, does not replace it, and no verdict names the stall.
+    The page's gap still fails ``tick_gap``, and the verdict left latched fails the run.
+    The freeze at two seconds: a host slow enough to stall the console for 0.6 s does not
+    latch ``loop_stall`` before the other rule."""
+    freeze_at_two_seconds(monkeypatch)
+    control_step = LocalPanel.control_step
+    running = [0]
+
+    async def freeze_then_late(panel: LocalPanel) -> TelemetrySnapshot:
+        if panel.runtime.state is RuntimeState.RUNNING:
+            running[0] += 1
+            if running[0] == 1:
+                panel.runtime.supervisor.trip_from_thread(
+                    "endurance_freeze", SafetyAction.FREEZE, "frozen by the test"
+                )
+            elif running[0] == 3:
+                await asyncio.sleep(LATE_PAST_TWO)
+        return await control_step(panel)
+
+    monkeypatch.setattr(LocalPanel, "control_step", freeze_then_late)
+
+    run = await real_time(6, tmp_path / "out", Plan(manual=3, rest=2, sample_every=2))
+    verdicts = {check.name: check for check in judge(run)}
+
+    assert running[0] > 3
     gaps = run.gaps
     assert gaps is not None
-    assert gaps.verdict is None, "no gap of the console reached its bound"
-    assert gaps.merged is not None
-    assert gaps.merged.highest >= gaps.bound
-    assert gap.status is Status.PASS, gap.measured
-    assert "sur des instantanés fusionnés par le hub" in gap.measured
+    assert gaps.verdict is None, "the earlier FREEZE holds the floor"
+    assert verdicts["tick_gap"].status is Status.FAIL
+    assert verdicts["tick_gap"].measured.startswith("un écart de")
+    assert run.anomaly is not None
+    assert "latched safety verdict (endurance_freeze)" in run.anomaly
+    assert verdicts["sessions"].status is Status.FAIL
+
+
+def test_ex1_the_console_s_stall_is_found_where_its_supervisor_holds_it() -> None:
+    """In its floor, or behind the ``GO_SILENT`` that replaced it there."""
+
+    def verdict(rule: str, action: SafetyAction) -> SafetyVerdict:
+        return SafetyVerdict(
+            action=action, rule=rule, detail=f"{rule} said", latched=True, since=Monotonic(1.0)
+        )
+
+    stall = verdict(RULE_LOOP_STALL, SafetyAction.FREEZE)
+    silent = verdict("endurance_trip", SafetyAction.GO_SILENT)
+
+    assert stall_among((stall, None)) == "loop_stall said"
+    assert stall_among((silent, stall)) == "loop_stall said"
+    assert stall_among((silent, None)) is None
+    assert stall_among((None, None)) is None
 
 
 async def test_ex1_a_page_evicted_early_is_an_anomaly_and_a_later_stall_still_fails(
@@ -367,7 +445,8 @@ async def test_ex1_a_page_evicted_early_is_an_anomaly_and_a_later_stall_still_fa
     gap = {check.name: check for check in judge(run)}["tick_gap"]
 
     assert held == []
-    assert run.anomaly == "the tick meter stopped before the console did: its page was evicted"
+    assert run.anomaly is not None
+    assert "the tick meter stopped before the console did: its page was evicted" in run.anomaly
     assert gap.status is Status.FAIL
     assert gap.measured.startswith("la console a levé loop_stall : the control loop took")
     assert f"des {run.covered:.0f} s de l'essai" in gap.measured
@@ -654,11 +733,15 @@ async def test_ex1_the_tick_meter_times_what_the_page_is_shown_and_ends_when_the
 async def test_ex1_the_simulated_tick_is_control_step_and_nothing_beside_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A slow control step is a slow tick; a slow acquisition step next to it is not."""
+    """A slow control step is a slow tick; what runs next to it in each tick is not: the
+    acquisition before it, the page, the journal and the dashboard's stop watch after it."""
     console, clock = console_on_a_manual_clock(tmp_path)
     world = SimulatedWorld(console, clock)
     control_step = LocalPanel.control_step
     ecg_step = LocalPanel.ecg_step
+    cloud_stop_step = LocalPanel.cloud_stop_step
+    read = Screen.read
+    drain = Journal.drain
     slow = 0.2
 
     async def slow_control(panel: LocalPanel) -> TelemetrySnapshot:
@@ -669,12 +752,27 @@ async def test_ex1_the_simulated_tick_is_control_step_and_nothing_beside_it(
         await asyncio.sleep(slow)
         await ecg_step(panel)
 
+    async def slow_read(screen: Screen) -> TelemetrySnapshot | None:
+        await asyncio.sleep(slow)
+        return await read(screen)
+
+    def slow_drain(journal: Journal) -> None:
+        time.sleep(slow)
+        drain(journal)
+
+    async def slow_stop_watch(panel: LocalPanel) -> None:
+        await asyncio.sleep(slow)
+        await cloud_stop_step(panel)
+
     monkeypatch.setattr(LocalPanel, "control_step", slow_control)
     await world.second()
     timed = world.whole.summary()
     world.whole.reset()
     monkeypatch.setattr(LocalPanel, "control_step", control_step)
     monkeypatch.setattr(LocalPanel, "ecg_step", slow_ecg)
+    monkeypatch.setattr(Screen, "read", slow_read)
+    monkeypatch.setattr(Journal, "drain", slow_drain)
+    monkeypatch.setattr(LocalPanel, "cloud_stop_step", slow_stop_watch)
     await world.second()
     beside = world.whole.summary()
 
@@ -683,6 +781,52 @@ async def test_ex1_the_simulated_tick_is_control_step_and_nothing_beside_it(
     assert beside is not None
     assert (beside.count, beside.p50 < slow * 1000.0) == (5, True)
     await console.deposit.close()
+    await console.panel.close()
+
+
+async def test_ex1_a_gap_over_snapshots_the_hub_merged_is_counted_apart_and_is_no_stall(
+    tmp_path: Path,
+) -> None:
+    """Ticks 0.4 s apart on a manual clock, two of them published before the page reads:
+    the hub keeps the second. The page's gap over both, 0.8 s, passes the bound while no
+    gap of the console does: it is counted apart, and judged no stall."""
+    console, clock = console_on_a_manual_clock(tmp_path)
+    world = RealWorld(console, RealClock())
+    meter = asyncio.create_task(world.meter())
+
+    async def tick() -> None:
+        clock.advance(Seconds(0.4))
+        await console.panel.control_step()
+
+    await tick()
+    await asyncio.sleep(0.01)
+    await tick()
+    await tick()
+    await asyncio.sleep(0.01)
+    await tick()
+    await asyncio.sleep(0.01)
+    meter.cancel()
+    await asyncio.gather(meter, return_exceptions=True)
+    gaps = Gaps(
+        bound=STALL_MS,
+        exact=world.periods.summary(),
+        merged=world.merged.summary(),
+        seen=world.seen,
+        verdict=stall_among((console.panel.runtime.supervisor.floor,)),
+    )
+    run = Run(mode=Mode.REAL_TIME, requested=1.2, covered=1.2, wall=1.2, samples=(), gaps=gaps)
+    verdict = check_tick_gap(run)
+
+    assert gaps.verdict is None, "no gap of the console reached its bound"
+    assert gaps.exact is not None
+    assert (gaps.exact.count, round(gaps.exact.highest)) == (1, 400)
+    assert gaps.merged is not None
+    assert (gaps.merged.count, round(gaps.merged.highest)) == (1, 800)
+    assert verdict is not None
+    assert verdict.status is Status.PASS, verdict.measured
+    assert (
+        "1 écarts sur des instantanés fusionnés par le hub (au plus 800.0 ms)" in verdict.measured
+    )
     await console.panel.close()
 
 

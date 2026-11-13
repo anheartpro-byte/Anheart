@@ -26,9 +26,9 @@ And it judges a run against the thresholds of the ticket (:func:`judge`):
     and the ticks seen span the run (:class:`Gaps`);
 ``descriptors``
     the lowest count of the end of the run (its last quarter after the
-    warm-up, an hour at most) does not exceed the second lowest count before
-    it: a descriptor that leaks is never closed and raises every later
-    reading, one open or closed for a moment moves one reading only;
+    warm-up, an hour at most) does not exceed the low of the counts before it
+    (the one above their lowest tenth): a descriptor that leaks is never
+    closed and raises every later reading;
 ``data``
     what the code guarantees today about the data folder: a record takes no
     more files than the arming gate plans for (five raw blocks a second), no
@@ -92,8 +92,10 @@ WARM_UP_S: Final[float] = 3600.0
 SHORT_RUN_WARM_UP: Final[float] = 0.25
 """A run shorter than two warm-ups leaves its first quarter out instead."""
 
-MIN_JUDGED: Final[int] = 4
-"""Readings needed after the warm-up before memory or descriptors can be judged."""
+MIN_JUDGED: Final[int] = 5
+"""Readings needed after the warm-up before memory or descriptors can be judged: for the
+descriptors, :data:`END_READINGS` at the end and three before it, so that the low of
+those three is their middle one, never their highest."""
 
 END_SHARE: Final[float] = 0.25
 END_MAX_S: Final[float] = 3600.0
@@ -101,6 +103,11 @@ END_READINGS: Final[int] = 2
 """The end of a run whose lowest descriptor count is judged: the last quarter of what is
 judged, an hour at most (two cycles of the simulated day, five of the real-time one), and
 two readings at least, so that one reading caught with a descriptor open does not set it."""
+
+LOW_SHARE: Final[float] = 0.10
+"""What comes before the end is judged by its low: the reading just above its lowest tenth,
+the second lowest at least. A tenth of those readings, one at least, may be caught with a
+descriptor closed for a moment (a page that reconnects) without failing a run."""
 
 TICK_COVERAGE: Final[float] = 0.9
 """Share of a real-time run the ticks the meter saw must span: otherwise part of it was
@@ -694,9 +701,14 @@ def check_tick_gap(run: Run) -> Check | None:
 
     The console's own ``loop_stall`` verdict is the authority: its rule judges
     every real gap between two of its ticks, and latches. The gaps the page saw
-    between two consecutive snapshots are an independent check of it; a gap
-    over snapshots the hub merged adds several real ones and is not judged.
-    Both say something only of the time the page watched: it must span the run.
+    between two consecutive snapshots are an independent check of it. A gap
+    over snapshots the hub merged adds several real ones: under the bound it
+    proves none of them reached it, over the bound it proves nothing, and is
+    not judged; the verdict decides. Both say something only of the time the
+    page watched: it must span the run. A gap that reaches the bound fails
+    here, where the console's rule fires only past it: a FAIL when a gap
+    reaches the bound is what was asked for, and the two differ for a gap of
+    exactly the bound alone.
     """
     gaps = run.gaps
     if gaps is None:
@@ -708,54 +720,58 @@ def check_tick_gap(run: Run) -> Check | None:
     problems: list[str] = []
     if gaps.verdict is not None:
         problems.append(f"la console a levé loop_stall : {gaps.verdict}")
-    exact = gaps.exact
-    if exact is None:
-        problems.append("aucun écart entre deux tics consécutifs relevé")
-        seen = "aucun écart consécutif"
-    else:
-        seen = (
+    seen: list[str] = []
+    exact, merged = gaps.exact, gaps.merged
+    if exact is not None:
+        seen.append(
             f"p50 {exact.p50:.1f} ms, p99 {exact.p99:.1f} ms, maximum {exact.highest:.1f} ms "
             f"sur {exact.count} écarts consécutifs"
         )
         if exact.highest >= gaps.bound:
             problems.append(f"un écart de {exact.highest:.1f} ms entre deux tics consécutifs")
-    if gaps.seen < TICK_COVERAGE * run.covered:
-        problems.append(f"tics relevés sur {gaps.seen:.0f} s des {run.covered:.0f} s de l'essai")
-    merged = gaps.merged
     if merged is not None:
-        seen += (
-            f" ; {merged.count} écarts sur des instantanés fusionnés par le hub "
+        seen.append(
+            f"{merged.count} écarts sur des instantanés fusionnés par le hub "
             f"(au plus {merged.highest:.1f} ms), non jugés comme gel"
         )
+    if not seen:
+        problems.append("aucun écart entre deux tics relevé")
+    if gaps.seen < TICK_COVERAGE * run.covered:
+        problems.append(f"tics relevés sur {gaps.seen:.0f} s des {run.covered:.0f} s de l'essai")
     status = Status.FAIL if problems else Status.PASS
-    return Check("tick_gap", status, threshold, " ; ".join([*problems, seen]))
+    return Check("tick_gap", status, threshold, " ; ".join([*problems, *seen]))
 
 
 def end_of(kept: Sequence[Sample]) -> int:
     """How many of the last readings of ``kept`` are its end, for the descriptors.
 
     The readings of its last quarter, an hour at most; :data:`END_READINGS` at
-    least, and as many left before them.
+    least, and three left before them (:data:`MIN_JUDGED`).
     """
     span = min(END_SHARE * (kept[-1].at - kept[0].at), END_MAX_S)
     count = sum(1 for sample in kept if sample.at >= kept[-1].at - span)
-    return min(max(count, END_READINGS), len(kept) - END_READINGS)
+    return min(max(count, END_READINGS), len(kept) - (MIN_JUDGED - END_READINGS))
 
 
 def check_descriptors(run: Run) -> Check:
     """No descriptor leaks: the end of the run holds none more than its start.
 
     A leaked descriptor is never closed: it raises every later reading. So the
-    lowest reading of the end (:func:`end_of`) is compared with the second
-    lowest of what comes before it, after the warm-up. One reading caught with
-    a descriptor open for a moment (a block being written, a request) does not
-    set the lowest of two or more; one caught with a descriptor closed for a
-    moment does not set the second lowest. A leak that starts at any time
-    before the end fails; one that only starts within the end is not seen.
+    lowest reading of the end (:func:`end_of`) is compared with the low of
+    what comes before it, after the warm-up (:data:`LOW_SHARE`). Readings
+    caught with a descriptor open for a moment (a block being written, a
+    request) do not set the lowest of the end while one reading there is
+    clean; a tenth of the readings before it may be caught with one closed. A
+    leak that starts at any time before the end fails; one that only starts
+    within the end is not seen. Nor, the price of taking the lowest of the
+    end, is a leak of as many descriptors as one reading of the end was caught
+    with closed: the end tolerates any number of readings caught high, which
+    is the noise met so far, and none caught low.
     """
     threshold = (
         "le relevé le plus bas de la fin (dernier quart après la chauffe, une heure au plus) "
-        "ne dépasse pas le deuxième relevé le plus bas de ce qui précède"
+        "ne dépasse pas le bas de ce qui précède (le relevé qui suit son dixième le plus bas, "
+        "le deuxième au moins)"
     )
     kept = judged(run)
     if len(kept) < MIN_JUDGED:
@@ -766,7 +782,8 @@ def check_descriptors(run: Run) -> Check:
             f"{len(kept)} relevés après la chauffe : trop peu",
         )
     ending = end_of(kept)
-    start = sorted(sample.descriptors for sample in kept[:-ending])[1]
+    before = sorted(sample.descriptors for sample in kept[:-ending])
+    start = before[max(1, int(LOW_SHARE * len(before)))]
     end = min(sample.descriptors for sample in kept[-ending:])
     highest = max(sample.descriptors for sample in kept)
     measured = (
