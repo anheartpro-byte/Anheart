@@ -37,7 +37,9 @@ of its HTTP transport: **no Convex deployment is ever contacted**, whatever
     console's own tasks, its web server on a free loopback port, its journal
     thread, its DSP on worker threads. The tick is timed from outside the
     loop: from the instant a tick reads to the moment its snapshot reaches a
-    subscriber of the telemetry hub, which is slightly more than the tick.
+    subscriber of the telemetry hub, which is slightly more than the tick. The
+    longest gap between two ticks is judged against the console's own
+    ``loop_stall`` bound: exit code 0 says no tick came that late.
 
 ``judge``
     Applies the same memory and descriptor thresholds to readings taken from
@@ -1009,6 +1011,7 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         samples=tuple(day.samples),
         tick=world.whole.summary(),
         period=world.periods.summary(),
+        stall=panel.runtime.supervisor.limits.loop_stall_freeze_gap * 1000.0,
         sessions=tuple(day.sessions),
         sync=sync,
         data=data,

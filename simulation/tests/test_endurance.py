@@ -17,8 +17,10 @@ them. Each thing established about a run is a function named for what it says.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Final
 
 import httpx
 import pytest
@@ -33,19 +35,26 @@ from simulation.endurance import (
     NOTE_GATED_DSP,
     AnomalyError,
     Console,
+    Day,
     GatedDsp,
     Operator,
     Plan,
     RealWorld,
     Screen,
+    SimulatedWorld,
     build_console,
     main,
+    real_time,
     simulated,
 )
 from simulation.endurance_measures import CSV_HEADER, Kind, Mode, Run, Status, judge
+from simulation.harness import PANEL_SAFETY
 from simulation.tests.conftest import document, num, obj, seq
 from src.clock import ManualClock, RealClock
+from src.local_panel import EXIT_FAILED, LocalPanel
 from src.record.session import PRESTART_SECONDS
+from src.training.runtime import EndReason, RuntimeState
+from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, Seconds, UnixMillis
 
 SHORT_DAY = Plan(manual=30, rest=25, sample_every=15, programme=320.0)
@@ -53,6 +62,15 @@ SHORT_DAY = Plan(manual=30, rest=25, sample_every=15, programme=320.0)
 
 SHORT_DAY_S = 440
 """Long enough for the programme to end by itself and a second manual session to start."""
+
+STALL_MS: Final[float] = PANEL_SAFETY.loop_stall_freeze_gap * 1000.0
+"""The gap between two ticks at which the console's ``loop_stall`` rule freezes the arm."""
+
+LATE: Final[float] = 0.8
+"""Seconds one tick of a session is held: past the ``loop_stall`` freeze, short of silence."""
+
+FROZEN: Final[float] = 3.4
+"""Seconds the whole loop is frozen: past the console's own stall bound (3 s)."""
 
 
 def statuses(run: Run) -> dict[str, Status]:
@@ -200,6 +218,11 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     period = obj(report["tick_period_ms"])
     tick = obj(report["tick_ms"])
     assert 150.0 <= num(period["p50"]) <= 260.0
+    # Judged against the console's own loop_stall figure, whatever this loaded host gave.
+    checks = {obj(check)["name"]: obj(check) for check in seq(report["checks"])}
+    assert checks["tick_gap"]["threshold"] == (
+        f"maximum < {STALL_MS:.0f} ms (gel loop_stall de la console)"
+    )
     assert num(tick["count"]) >= 25
     assert 0.0 < num(tick["p50"]) < 150.0
     assert len(seq(report["samples"])) >= 3
@@ -207,6 +230,45 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     # Nothing is left behind: the console's data is removed, its log is next to the report.
     left = {path.name for path in out.iterdir()}
     assert left - {"console.log"} == {"endurance.json", "endurance.md"}
+
+
+async def test_ex1_in_real_time_a_late_tick_fails_tick_gap_and_a_frozen_console_its_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tick of the session held 0.8 s: ``loop_stall`` freezes the arm, the session still
+    ends as planned, and only ``tick_gap`` says so. Then, the day over, the whole loop
+    frozen past 3 s: the console's own exit says it was no clean stop."""
+    control_step = LocalPanel.control_step
+    attempt = Day.attempt
+    held = [LATE]
+
+    async def late(panel: LocalPanel) -> TelemetrySnapshot:
+        if held and panel.runtime.state is RuntimeState.RUNNING:
+            await asyncio.sleep(held.pop())
+        return await control_step(panel)
+
+    async def then_frozen(day: Day) -> str | None:
+        said = await attempt(day)
+        time.sleep(FROZEN)  # noqa: ASYNC251  # the fault injected: the loop frozen whole
+        return said
+
+    monkeypatch.setattr(LocalPanel, "control_step", late)
+    monkeypatch.setattr(Day, "attempt", then_frozen)
+
+    run = await real_time(6, tmp_path / "out", Plan(manual=3, rest=2, sample_every=2))
+    verdicts = {check.name: check for check in judge(run)}
+
+    assert held == [], "the late tick was given"
+    assert [(session.end, session.as_planned) for session in run.sessions] == [
+        ("operator_stop", True)
+    ]
+    assert run.period is not None
+    assert run.period.highest >= LATE * 1000.0
+    assert verdicts["tick_gap"].status is Status.FAIL
+    assert f"maximum {run.period.highest:.1f} ms" in verdicts["tick_gap"].measured
+    # Read from the console's own exit, which a console cancelled instead never reaches.
+    assert run.anomaly == f"the console left with exit code {EXIT_FAILED}"
+    assert verdicts["sessions"].status is Status.FAIL
 
 
 def test_ex1_the_command_line_runs_a_simulated_day_with_the_dsp_on_all_along(
@@ -293,6 +355,30 @@ async def test_ex1_a_programme_running_when_the_time_is_up_is_stopped_by_the_ope
     assert run.sessions[1].started_at < 25
     assert run.sessions[1].recorded < FINISH_LIMIT
     assert statuses(run)["sessions"] is Status.PASS
+
+
+async def test_ex1_a_session_that_ends_otherwise_than_planned_is_said_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The end the console gives is compared with the scenario's plan, never taken as it."""
+
+    class Swapped:
+        """The two planned ends exchanged: neither session can end as planned."""
+
+        OPERATOR_STOP = EndReason.PROGRAMME_COMPLETE
+        PROGRAMME_COMPLETE = EndReason.OPERATOR_STOP
+
+    monkeypatch.setattr("simulation.endurance.EndReason", Swapped)
+
+    run = await simulated(25, tmp_path / "out", Plan(manual=3, rest=2, sample_every=10))
+
+    assert [(session.end, session.as_planned) for session in run.sessions] == [
+        ("operator_stop", False),
+        ("operator_stop", False),
+    ]
+    verdict = {check.name: check for check in judge(run)}["sessions"]
+    assert verdict.status is Status.FAIL
+    assert "2 fins imprévues (séance 1 : operator_stop)" in verdict.measured
 
 
 async def test_ex1_a_start_the_console_has_not_taken_stops_the_scenario(
@@ -460,6 +546,41 @@ async def test_ex1_the_tick_meter_times_what_the_page_is_shown_and_ends_when_the
     assert ticks.count == 3
     assert periods is not None
     assert (periods.count, round(periods.highest)) == (2, 200)
+    await console.panel.close()
+
+
+async def test_ex1_the_simulated_tick_is_control_step_and_nothing_beside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow control step is a slow tick; a slow acquisition step next to it is not."""
+    console, clock = console_on_a_manual_clock(tmp_path)
+    world = SimulatedWorld(console, clock)
+    control_step = LocalPanel.control_step
+    ecg_step = LocalPanel.ecg_step
+    slow = 0.2
+
+    async def slow_control(panel: LocalPanel) -> TelemetrySnapshot:
+        await asyncio.sleep(slow)
+        return await control_step(panel)
+
+    async def slow_ecg(panel: LocalPanel) -> None:
+        await asyncio.sleep(slow)
+        await ecg_step(panel)
+
+    monkeypatch.setattr(LocalPanel, "control_step", slow_control)
+    await world.second()
+    timed = world.whole.summary()
+    world.whole.reset()
+    monkeypatch.setattr(LocalPanel, "control_step", control_step)
+    monkeypatch.setattr(LocalPanel, "ecg_step", slow_ecg)
+    await world.second()
+    beside = world.whole.summary()
+
+    assert timed is not None
+    assert (timed.count, timed.p50 >= slow * 1000.0) == (5, True)
+    assert beside is not None
+    assert (beside.count, beside.p50 < slow * 1000.0) == (5, True)
+    await console.deposit.close()
     await console.panel.close()
 
 
