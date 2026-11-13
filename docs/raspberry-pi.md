@@ -3238,9 +3238,8 @@ lequel la même requête serait encore refusée.
   servi voit ses battements de cœur refusés (426) : sa séance en cours passe
   interrompue au bout de 10 min, et la question de l'arrêt, qui répond sous
   tous les contrats, continue de lui dire `active: true`. Ce comportement
-  est celui du Convex de ce dépôt : il n'avait été déployé sur aucun Convex
-  quand ces lignes ont été écrites, et la production l'attend du
-  redéploiement ANH-82.
+  est celui du Convex de ce dépôt, en production depuis le redéploiement du
+  29 octobre 2026 (ANH-82).
 - Une séance déclarée sans son enregistrement, dont l'enregistrement
   n'apparaît qu'après la fin de la séance, est envoyée au démarrage suivant
   sous la référence de son manifeste : le tableau de bord en garde alors deux
