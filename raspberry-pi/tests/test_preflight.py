@@ -314,6 +314,22 @@ def test_the_green_details_say_what_was_found() -> None:
     assert green["temperature"] == "Pi a 48 °C"
 
 
+def test_a_stop_the_dashboard_has_not_counted_refuses_on_board_and_warns_at_the_bench() -> None:
+    """ANH-145: a session that ended on a stop while the link was down: the count the
+    dashboard last announced does not hold its incident yet."""
+    words = "seance terminee sur emergency_stop pas encore recue par le tableau de bord"
+    for count in (None, 0):
+        inputs = _green(incidents_open_high=count, unreported_stop=words)
+        on_board = _result(inputs, "incidents")
+        assert on_board.state is ControlState.BLOCK
+        assert on_board.detail == f"{words} : son incident n'est pas encore compte"
+        bench = {r.id: r for r in judge(CONTROLS, inputs, Occupancy.BENCH).results}
+        assert bench["incidents"].state is ControlState.WARN
+    # A count already announced says more: it is what the operator reads.
+    counted = _result(_green(incidents_open_high=2, unreported_stop=words), "incidents")
+    assert counted.detail.startswith("2 incident(s) grave(s)")
+
+
 def test_what_the_server_cannot_judge_is_orange_never_red() -> None:
     unannounced = _green(
         incidents_open_high=None,

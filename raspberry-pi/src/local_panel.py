@@ -2434,6 +2434,8 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     watchdog = ServiceWatchdog(notify_socket, overdue=safety.loop_stall_silent_gap)
     backend = drive.backend
     storage = None if journal is None else storage_gate(journal, clock)
+    # The dashboard link, built below: the pre-flight reads it once the panel runs.
+    cloud: CloudSync | None = None
 
     def preflight_facts() -> PreflightInputs:
         """What the pre-flight reads of this console, now. Called only once it is built."""
@@ -2453,7 +2455,9 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             medical_refusal=config.medical.warning,
             medical_version=config.medical.version,
             software_version=version,
-            incidents_open_high=None if sampled is None else sampled.incidents_open_high,
+            # Read from the link itself: the poll every few seconds, not the heartbeat.
+            incidents_open_high=None if cloud is None else cloud.incidents_open_high,
+            unreported_stop=None if cloud is None else cloud.unreported_stop,
             records_pending=None if sampled is None else sampled.records_pending,
             min_battery=config.bitalino_min_battery,
         )
@@ -2616,7 +2620,6 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
         sto=sto,
         preflight=monitor,
     )
-    cloud: CloudSync | None = None
     owned: HttpxTransport | None = None
     if config.cloud is not None:
         if health is None:

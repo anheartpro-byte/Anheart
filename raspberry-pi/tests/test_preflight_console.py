@@ -22,6 +22,7 @@ import pytest
 
 from src import local_panel
 from src.clock import ManualClock
+from src.cloud_sync import CloudSync
 from src.contract import CONTRACT_VERSION, SERVER_VERSION_FIELD
 from src.health import HealthWatch
 from src.health_system import Celsius, SystemHealth
@@ -493,6 +494,33 @@ async def test_a_serious_incident_read_on_the_poll_refuses_a_person_on_board_and
     manual = rig_.panel.runtime.manual
     assert manual is not None
     assert manual.occupancy is Occupancy.BENCH
+    await rig_.panel.close()
+
+
+async def test_a_stop_the_dashboard_has_not_counted_holds_a_person_on_board_not_the_bench(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ANH-145: the pre-flight reads from the dashboard link whether a session that ended
+    on a stop is still unsent; the count the server announced cannot hold it yet."""
+    words = "seance terminee sur safety_verdict pas encore recue par le tableau de bord"
+
+    def unreported(_self: CloudSync) -> str:
+        return words
+
+    monkeypatch.setattr(CloudSync, "unreported_stop", property(unreported))
+    announced = ok(
+        {"session": dict(BENCH), SERVER_VERSION_FIELD: CONTRACT_VERSION, "incidents_open_high": 0}
+    )
+    rig_ = linked(tmp_path, preflight=True)
+    rig_.dashboard.answer(POLL_PATH, announced)
+    await rig_.run(13.0)
+    monitor = rig_.panel.preflight
+    assert monitor is not None
+    on_board = monitor.refusal(Occupancy.OCCUPIED)
+    assert on_board is not None
+    assert on_board.control == "incidents"
+    assert words in on_board.detail
+    assert monitor.refusal(Occupancy.BENCH) is None
     await rig_.panel.close()
 
 

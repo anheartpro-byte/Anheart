@@ -42,6 +42,7 @@ from src.cloud_sync import (
     POLL_PERIOD,
     RETRY_PERIOD,
     STATUS_PERIOD,
+    STOP_NOT_COUNTED,
     CloudError,
     CloudSync,
     CloudTransport,
@@ -2209,6 +2210,54 @@ async def test_a_local_session_is_registered_then_ended(tmp_path: Path) -> None:
     ]
     assert r.sync.owed == 0
     assert r.sync.current_session_id is None
+
+
+ENDED: Final[str] = "/api/machine/training/end"
+
+
+def unreported(sync: CloudSync) -> str | None:
+    """Read afresh: a checker keeps a property's narrowing across an ``await``."""
+    return sync.unreported_stop
+
+
+async def test_a_session_ended_on_a_stop_holds_until_a_poll_asked_after_its_end(
+    tmp_path: Path,
+) -> None:
+    """ANH-145: the count of serious incidents held is one asked before the dashboard
+    had the end of a session ended on an emergency stop: it may not count its incident
+    until a poll is asked after it."""
+    r = rig(tmp_path)
+    r.dashboard.answer("/api/machine/training/local", ok({"sessionId": "cloud-1"}))
+    r.dashboard.answer("/api/machine/training/status", status_answer())
+    r.dashboard.answer(
+        POLL_PATH,
+        ok({SERVER_VERSION_FIELD: CONTRACT_VERSION, "session": None, "incidents_open_high": 0}),
+    )
+    await r.step()
+    assert r.sync.incidents_open_high == 0
+    assert unreported(r.sync) is None
+    r.runtime.state = RuntimeState.RUNNING
+    r.sync.session_started(manual(r.clock))
+    for _ in range(3):
+        await r.step()
+    r.dashboard.answer(ENDED, DOWN)
+    r.runtime.state = RuntimeState.FINISHED
+    r.runtime.end_reason = EndReason.EMERGENCY_STOP
+    await r.step()
+    assert unreported(r.sync) == (
+        "seance terminee sur emergency_stop pas encore recue par le tableau de bord"
+    )
+    del r.dashboard.handlers[ENDED]
+    await r.step(float(RETRY_PERIOD))
+    assert r.dashboard.to(ENDED)[-1]["reason"] == "emergency_stop"
+    assert unreported(r.sync) == STOP_NOT_COUNTED
+    r.dashboard.answer(
+        POLL_PATH,
+        ok({SERVER_VERSION_FIELD: CONTRACT_VERSION, "session": None, "incidents_open_high": 1}),
+    )
+    await r.step(float(POLL_PERIOD))
+    assert r.sync.incidents_open_high == 1
+    assert unreported(r.sync) is None
 
 
 async def test_an_auto_session_registers_its_programme(tmp_path: Path) -> None:

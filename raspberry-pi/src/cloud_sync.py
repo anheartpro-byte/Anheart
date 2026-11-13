@@ -285,6 +285,13 @@ FINAL_CODES: Final[frozenset[str]] = frozenset(
 (``contracts/machine-api.json``). ``request_failed`` is not one: it also covers a
 failure of the moment."""
 
+STOP_NOT_COUNTED: Final[str] = (
+    "fin d'une seance terminee sur un arret recue par le tableau de bord, compte des "
+    "incidents pas encore relu"
+)
+"""Why :attr:`CloudSync.unreported_stop` holds between a stop's end acknowledged and the
+next poll."""
+
 DASHBOARD_OPERATOR: Final[str] = "tableau de bord"
 """Who a stop from the dashboard is attributed to in the console's event list."""
 
@@ -890,6 +897,7 @@ class CloudSync:
         "_clock",
         "_confirmed_launch",
         "_confirmed_launch_id",
+        "_counted_at",
         "_deposit",
         "_health",
         "_health_context",
@@ -963,6 +971,9 @@ class CloudSync:
         self._health_context: Callable[[], HealthContext] = health_context
         self._last_rtt: Seconds | None = None
         self._incidents_open_high: int | None = None
+        # When the poll whose count is held was asked (ANH-145): a count asked before the
+        # dashboard acknowledged a stop's end may not hold its incident.
+        self._counted_at: Monotonic | None = None
         self._link: LinkHealth = LinkHealth(clock.monotonic()) if link is None else link
         self._record_degraded: Callable[[], bool] | None = record_degraded
         self._transport: CloudTransport = transport
@@ -1033,6 +1044,25 @@ class CloudSync:
     def owed(self) -> int:
         """Sessions the dashboard has not acknowledged whole, as far as this run knows."""
         return self._uplink.owed
+
+    @property
+    def unreported_stop(self) -> str | None:
+        """Why the count of serious incidents held may not count yet a session that ended
+        on a stop (ANH-145): the dashboard has not acknowledged its end, or no poll was
+        asked since it did. ``None``: the count held is one asked after every such end."""
+        unsent = self._uplink.unreported_stop
+        if unsent is not None:
+            return unsent
+        told = self._uplink.stop_told_at
+        if told is not None and (self._counted_at is None or self._counted_at <= told):
+            return STOP_NOT_COUNTED
+        return None
+
+    @property
+    def incidents_open_high(self) -> int | None:
+        """The serious incidents of this machine open or analysed, as the last compatible
+        poll announced them (contract 1.10); ``None``: not announced."""
+        return self._incidents_open_high
 
     @property
     def server_contract(self) -> ContractVersion | None:
@@ -1455,6 +1485,7 @@ class CloudSync:
             self._refuse_server(refusal, launch)
             return
         self._incompatible = None
+        self._counted_at = now
         incidents = polled.value.get("incidents_open_high")
         self._incidents_open_high = (
             incidents

@@ -2892,6 +2892,14 @@ interruption après la reprise de l'acquisition. Une batterie lue il y a plus de
   orange au banc (ANH-145), avec la raison : `1 incident(s) grave(s)
   ouvert(s) sur cette machine : aucune personne a bord avant leur cloture par
   un admin Anheart`. Il redevient vert au poll qui suit la clôture du dernier.
+  Il est rouge de même avec une personne à bord, orange au banc, tant que le
+  compte ne tient pas encore une séance mal terminée : `seance terminee sur
+  emergency_stop pas encore recue par le tableau de bord : son incident n'est
+  pas encore compte` (aussi `safety_verdict`, `tick_exception`), un
+  enregistrement d'une exécution précédente dont la fin n'est pas encore reçue,
+  ou une fin reçue sans poll depuis (`fin d'une seance terminee sur un arret
+  recue par le tableau de bord, compte des incidents pas encore relu`). Hors
+  ligne, il le reste jusqu'au retour du lien.
 - La batterie : la conversion de la lecture brute en pourcentage est une
   hypothèse à vérifier au banc sur le vrai BITalino
   ([raspberry-pi.md, 4.2](raspberry-pi.md#le-pré-vol-anh-142)).

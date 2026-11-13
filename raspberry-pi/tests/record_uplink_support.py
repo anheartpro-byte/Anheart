@@ -138,6 +138,10 @@ class Bench:
         """Read afresh, for the same reason."""
         return self.uplink.refusal_owed
 
+    def unreported_stop(self) -> str | None:
+        """Read afresh, for the same reason."""
+        return self.uplink.unreported_stop
+
     def cursor(self, record: Path) -> CursorRead:
         return load(record)
 
