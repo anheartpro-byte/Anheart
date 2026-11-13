@@ -58,9 +58,9 @@ function plantOperatorList(root: string): string {
   writeFileSync(path.join(root, CATALOG_KEY), publicKey.export({ type: "spki", format: "pem" }));
   const code = String(randomInt(100_000, 1_000_000));
   const salt = randomBytes(16);
-  // Cheap parameters: the console takes those the signed list carries.
-  const [n, r, p] = [1024, 8, 1];
-  const digest = scryptSync(code, salt, 32, { N: n, r, p });
+  // The contract's parameters (`operator_list.code`), the only ones the console takes.
+  const [n, r, p] = [32768, 8, 1];
+  const digest = scryptSync(code, salt, 32, { N: n, r, p, maxmem: 256 * n * r });
   const payload = JSON.stringify({
     kind: "operator_list",
     machineId: "machine-e2e",

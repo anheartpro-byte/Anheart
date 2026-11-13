@@ -2376,18 +2376,40 @@ les lectures ; l'amorçage est écrit dans
   et vérifie que l'E-STOP répond aussitôt. Arrêter n'est jamais plus difficile
   que démarrer : c'est pourquoi STOP, que le ticket rangeait parmi les routes
   `/api/session/*` qui exigent une session, n'en exige pas.
-- **Le verrouillage.** Cinq codes faux de suite verrouillent l'opérateur
-  15 min. Le compte est écrit sur le disque et un opérateur trouvé verrouillé
-  au démarrage l'est 15 min à partir de ce démarrage : couper le courant ne
-  donne pas d'essais. Une connexion à la fois : une rafale de codes ne passe
-  pas le verrou. À 5 essais par quart d'heure, essayer le million de codes en
-  ligne prend des années. Revers : quiconque tient un jeton d'appareil peut
-  verrouiller un opérateur 15 min en tapant cinq codes faux ; STOP et E-STOP
-  restent disponibles. Un fichier de comptes que le disque refuse est gardé en
-  mémoire : un redémarrage avant l'écriture suivante l'oublie.
+- **Le verrouillage.** Trois comptes de codes faux, chacun verrouillant
+  15 min : cinq de suite verrouillent l'opérateur ; dix depuis un même
+  appareil, quels que soient les opérateurs visés, verrouillent cet
+  appareil ; vingt sur la console, tous appareils confondus, verrouillent
+  toute connexion. Le compte d'un opérateur s'efface à son bon code, ceux
+  d'un appareil et de la console après 15 min sans code faux. Les comptes
+  sont écrits sur le disque, effacements compris, et ce qui est trouvé
+  verrouillé au démarrage l'est 15 min à partir de ce démarrage : couper le
+  courant ne donne pas d'essais. Une connexion à la fois : une rafale de
+  codes ne passe pas le verrou. En ligne, toute la console voit donc au plus
+  une vingtaine de codes faux par quart d'heure, environ 80 par heure, chacun
+  écrit au journal de bord. Chaque essai vise un code d'un opérateur : pour
+  des codes de 6 chiffres tirés au hasard, il en faut de l'ordre du million,
+  soit plus d'un an d'essais continus, et bien plus avec des codes plus
+  longs (jusqu'à 12 chiffres). Un code facile à deviner tombe bien plus vite :
+  le site refuse les suites (`123456`, `654321`) et les répétitions
+  (`111111`), pas une date ; c'est à l'opérateur de ne pas en choisir une.
+  Essayer un code demande un jeton d'appareil. Revers : quiconque tient un jeton d'appareil peut
+  verrouiller un opérateur, son appareil ou toute connexion 15 min en tapant
+  des codes faux ; STOP et E-STOP restent disponibles. Un fichier de comptes
+  que le disque refuse est gardé en mémoire : un redémarrage avant l'écriture
+  suivante l'oublie.
+- **Les paramètres du haché.** La console ne prend un code que haché avec les
+  paramètres du contrat (scrypt `n` 32768, `r` 8, `p` 1, sel de 16 octets,
+  empreinte de 32), ceux de Convex : une liste qui en porterait d'autres
+  pourrait tenir la connexion des heures, ou faire refuser le calcul par
+  OpenSSL.
 - **La session.** Liée à l'appareil, 8 h au plus, 30 min sans action, fermée
   par la déconnexion, par une nouvelle liste qui ne tient plus l'opérateur ou
-  la tablette, et par tout redémarrage (elle n'existe qu'en mémoire). Le
+  la tablette, ou qui tient un autre code pour l'opérateur, et par tout
+  redémarrage (elle n'existe qu'en mémoire). Le WebSocket d'une tablette
+  révoquée est fermé avant son image suivante : le jeton est jugé à chaque
+  image. Une liste n'est prise qu'au repos, et une séance commencée pendant
+  son écriture la laisse au repos suivant. Le
   signal de présence de l'accompagnant n'est pas une action : une tablette
   ouverte et laissée seule se déconnecte, et la règle `attendant_absent`
   arrête alors une rotation en cours (côté sûr).
@@ -2408,7 +2430,7 @@ les lectures ; l'amorçage est écrit dans
 |---|---|
 | Le cookie sans `Secure` sur une console en clair | Une console en clair n'écoute que sur la boucle locale (elle refuse de démarrer autrement, section 11) : le cookie ne quitte pas le Pi. Un mandataire TLS placé devant une console en clair, que rien ne livre, recevrait un cookie sans `Secure` : à ne pas faire. Tant que le TLS n'est pas en service sur un Pi installé (section 11), aucune tablette n'atteint la console par le réseau |
 | Une console hors ligne garde sa dernière liste sans limite de durée | Un opérateur désactivé ou une tablette révoquée sur le site restent valables sur une console qui ne se synchronise plus |
-| La liste n'est pas liée à sa machine | Une liste copiée sur le disque d'une autre console du même déploiement y serait acceptée ; écrire sur ce disque donne bien plus (MEN-04) |
+| La liste n'est liée à sa machine que si `RECORD_MACHINE_ID` est posé | Sans lui, une liste copiée sur le disque d'une autre console du même déploiement y serait acceptée ; écrire sur ce disque donne bien plus (MEN-04) |
 | Le jeton `DEVICE_TOKEN` du `.env` ne se révoque pas depuis le site | Il se change dans le `.env` ([secrets.md, 3.2](secrets.md#32-jeton-de-la-page-de-la-console)) |
 | Une rotation de la clé du catalogue laisse les consoles sur leur liste | Jusqu'à la nouvelle image, une désactivation sur le site n'y arrive pas |
 | Un code de 6 chiffres se trouve hors ligne en quelques heures à partir de la liste | Voir 17.2 : la liste ne doit pas fuir, et une fuite se traite par la révocation de la clé de la machine et le changement des codes |

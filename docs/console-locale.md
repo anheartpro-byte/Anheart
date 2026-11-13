@@ -1988,7 +1988,7 @@ service.` et le bouton `Remettre en service`, pour l'opérateur connecté (ANH-1
 |---|---|
 | remise en service faite et écrite sur le disque | `console remise en service` |
 | faite, mais le disque n'a pas pris le nouvel état | `console remise en service jusqu'a son prochain redemarrage : l'etat n'a pas pu etre enregistre` |
-| nom vide | `an operator name is required: an unattributable session record is not one`, et une boîte d'alerte `remise en service refusee : …` |
+| aucun opérateur connecté sur cet appareil | `connexion d'un operateur requise : seuls le STOP, l'E-STOP et les lectures sont ouverts sans connexion` sous le bloc de connexion (401 `operator_required`, ANH-152), et une boîte d'alerte `remise en service refusee : …` |
 | la console est déjà en service | `the console is in service: there is nothing to lift` |
 
 La page ne change pas la pastille elle-même : elle redemande `/api/panel`, et c'est la
@@ -2309,7 +2309,7 @@ même si le verdict à libérer porte sur une autre cause (pas sous
 
 | Message | Code | Sens |
 |---|---|---|
-| `an operator name is required: an unattributable session record is not one` | 400 | nom d'opérateur vide (démarrage, cible, fin, reset, acquittement) |
+| `connexion d'un operateur requise : seuls le STOP, l'E-STOP et les lectures sont ouverts sans connexion` | 401 | `operator_required` : aucun opérateur connecté sur cet appareil (démarrage, cible, reset, attestation, acquittement, remise en service ; jamais STOP ni E-STOP). Avant ANH-152 : 400 `an operator name is required` pour un nom vide |
 | `nobody has attested the emergency stop this boot: …` | 412 | attestation du câblage non faite depuis le démarrage du Pi |
 | `nobody has attested the bench declaration this boot: …` | 412 | sous `STO_SOURCE=bridged_declared` : déclaration de banc non faite depuis le démarrage du Pi (même code `estop_unattested`) |
 | `a latched safety verdict stands (<règle>): <détail> - it must be acknowledged by name first` | 409 | `verdict_latched` : un verdict verrouillé attend un acquittement, quel qu'en soit l'auteur : le superviseur, ou la console elle-même (`sto_open`, `drive_precommanded`, `enable_unconfirmed`, son propre `comms_lost`...). Sous un verdict de la console elle-même, la règle nommée est celle de la ligne `plancher verrouille` de la page Securite. La console répond au clic, sans rien déposer dans la boîte aux lettres. Jusqu'au 25 octobre 2026, un verdict verrouillé par la console elle-même n'était pas lu ici : le démarrage était accepté (202) puis refusé un cycle plus tard par la boucle |
@@ -2492,7 +2492,7 @@ d'ailleurs. `/openapi.json` est servi ; `/docs` et `/redoc` sont désactivés.
 | 202 | intention acceptée dans la boîte aux lettres ; la boucle n'a pas encore agi. Le corps porte `request_id`, l'identifiant de la demande ; ce que la boucle en fait arrive ensuite comme événement `taken`, `refused` ou `cancelled` portant le même identifiant |
 | 400 | requête mal formée : attestation incomplète, profil incohérent |
 | 401 | jeton absent ou faux ; ou, code `operator_required`, aucun opérateur connecté sur cet appareil (ANH-152) ; ou, code `wrong_code`, un code faux à la connexion |
-| 423 | connexion refusée : opérateur verrouillé après cinq codes faux de suite (code `locked`) |
+| 423 | connexion refusée (code `locked`) : opérateur verrouillé après cinq codes faux de suite, appareil après dix codes faux tous opérateurs confondus, ou toute connexion après vingt sur la console |
 | 403 | mouvement désactivé, séances programmées désactivées, occupation refusée par configuration |
 | 404 | profil inconnu, fichier statique absent, enregistrement inconnu |
 | 409 | la machine n'est pas dans un état pour ça (dont : liste ou export des enregistrements pendant une séance). Un refus de la boîte aux lettres pour un démarrage, un arrêt, une cible ou un reset porte `{"detail", "code", "waiting_request_id"}` (voir plus bas). Le refus préalable d'un démarrage pour défaut variateur porte seulement `{"detail"}` |
@@ -2585,8 +2585,8 @@ console.
 | POST | `/api/remote-launch/confirm` | `{"session_id", "bench_attested"?}` | confirme localement l'offre au nom de l'opérateur connecté ; la route ne fait aucun appel réseau, CloudSync traite ensuite la demande | 202 `{session_id, state}` ; 401 `operator_required` ; 409 (`launch_not_pending`, `launch_in_progress`, `passenger_unavailable`, `launch_refused`) |
 | GET | `/api/roster` | - | la liste des passagers tenue (section 9) : `{state, detail, age_s, problem, riders: [{user_id, name, hr_max, age, programme}]}` ; `programme` vaut `null`, ou la phrase de refus d'une séance programmée pour ce passager | 200 |
 | POST | `/api/session/start` | `{"profile_id", "total_duration_s"?, "subject_id", "profiles_digest"}` | démarre une séance programmée pour le passager nommé (identifiant de la liste) ; un `subject_age` est refusé ; `profiles_digest` est le `digest` de la liste que la page a montrée | 202 `{kind, operator, detail, at, request_id}` (`operator` : l'identifiant du compte connecté) ; 401 `operator_required` ; 403 (mouvement ou programmes désactivés) ; 400 (id mal formé) ; 404 ; 422 (dont : sans passager, âge saisi, sans `profiles_digest`) ; 409 (dont : passager refusé, variateur en défaut, `profiles_changed` : les programmes ne sont plus ceux de la liste montrée) ; 412 |
-| POST | `/api/session/stop` | `{"reason"?}` | fin sur la rampe mise en service ; **sans connexion** (ANH-152), attribuée à l'opérateur connecté sinon à l'appareil | 202 `{kind, operator, detail, at, request_id}` ; 409 |
-| POST | `/api/session/estop` | `{"reason"?}` | verrouille l'arrêt d'urgence, **jamais refusé** pour qui tient un jeton d'appareil, connecté ou non ; `operator` est le compte connecté ou `device:<id>` (ANH-152) | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
+| POST | `/api/session/stop` | `{"reason"?}`, ou rien | fin sur la rampe mise en service ; **sans connexion** (ANH-152), attribuée à l'opérateur connecté sinon à l'appareil ; jamais refusée pour son corps (absent, vide, pas du JSON, trop long : la raison par défaut) | 202 `{kind, operator, detail, at, request_id}` ; 409 |
+| POST | `/api/session/estop` | `{"reason"?}`, ou rien | verrouille l'arrêt d'urgence, **jamais refusé** pour qui tient un jeton d'appareil, connecté ou non, ni pour son corps ; `operator` est le compte connecté ou `device:<id>` (ANH-152) | 200 `{operator, reason, at, wall_clock, action, rule, detail}` |
 
 ### Manuel et variateur
 
@@ -2663,7 +2663,10 @@ répondu à temps. Détail dans
 ### WebSocket `/ws/telemetry`
 
 - Paramètre `?token=<jeton>` si `DEVICE_TOKEN` est défini : celui de la console ou
-  d'une tablette de la liste (ANH-152) ; aucune connexion d'opérateur n'est demandée. Hors boucle locale, cette URL ne
+  d'une tablette de la liste (ANH-152) ; aucune connexion d'opérateur n'est demandée.
+  Le jeton est jugé de nouveau avant chaque image : une tablette révoquée sur le site,
+  absente de la liste que la console adopte, voit son WebSocket fermé (code 1008) avant
+  l'image suivante, ECG compris. Hors boucle locale, cette URL ne
   circule qu'à l'intérieur de TLS (`wss://`), et la console ne tient pas de journal
   d'accès : le jeton n'est lisible ni sur le réseau ni dans le journal du service.
 - La poignée de main est refusée **avant** acceptation (code 1008) si l'en-tête `Origin`
@@ -3059,7 +3062,10 @@ n'écrit que l'identifiant.
 |---|---|
 | Session sans action (la présence de l'accompagnant, envoyée par la page toutes les quelques secondes, n'en est pas une) | 30 min |
 | Session, quoi qu'on fasse | 8 h |
-| Verrouillage après 5 codes faux de suite, redémarrage compris | 15 min |
+| Verrouillage d'un opérateur après 5 codes faux de suite, redémarrage compris | 15 min |
+| Verrouillage d'un appareil après 10 codes faux, tous opérateurs confondus | 15 min |
+| Verrouillage de toute connexion après 20 codes faux sur la console | 15 min |
+| Oubli du compte d'un appareil ou de la console, sans code faux | 15 min |
 
 Une session qui se ferme pendant une rotation arrête le signal de présence : la règle
 `attendant_absent` fige la consigne à 60 s et la fait descendre à 120 s, ce qui est le

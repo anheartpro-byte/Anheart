@@ -212,6 +212,7 @@ from src.local_config import (
     KEY_UI_TLS_KEY,
     KEY_UI_TOKEN,
     RETIRED_KEYS,
+    UNASSIGNED,
     CameraSource,
     CloudConfig,
     ConfigProblem,
@@ -2671,10 +2672,11 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
     public_key = read_public_key()
     operators_path = profiles_path.parent / OPERATORS_FILE
     lockout_path = profiles_path.parent / LOCKOUT_FILE
+    machine_id = this_machine(config)
     if access is None:
         access = ConsoleAccess(
             clock=clock,
-            held=stored_operators(operators_path, public_key, say),
+            held=stored_operators(operators_path, public_key, machine_id, say),
             lockout_path=lockout_path,
             failures=load_failures(lockout_path),
             note=functools.partial(note_access, recorder, clock),
@@ -2806,6 +2808,7 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             public_key=public_key,
             at_rest=panel.catalog_at_rest,
             say=say,
+            machine_id=machine_id,
         )
         cloud = CloudSync(
             clock=clock,
@@ -2845,16 +2848,23 @@ OPERATORS_FILE: Final[str] = "operators.json"
 """The signed operator list accepted last, next to the programmes (ANH-152)."""
 
 LOCKOUT_FILE: Final[str] = "operator_lockout.json"
-"""Wrong codes in a row, per operator: a restart does not lift a lock (ANH-152)."""
+"""The counts of wrong codes: a restart does not lift a lock (ANH-152)."""
+
+
+def this_machine(config: LocalConfig) -> str | None:
+    """The machine whose operator list alone is taken (``RECORD_MACHINE_ID``); ``None``
+    when it is not set, and the list's own machine is not judged."""
+    machine_id = config.record.machine_id
+    return None if machine_id == UNASSIGNED else machine_id
 
 
 def stored_operators(
-    path: Path, public_key: bytes | None, say: Callable[[str], None]
+    path: Path, public_key: bytes | None, machine_id: str | None, say: Callable[[str], None]
 ) -> OperatorList | None:
     """The list accepted before this start, verified again; ``None`` when there is none or
     it no longer verifies, which is said: the console then opens no action until a list
     is accepted."""
-    loaded = load_list(path, public_key)
+    loaded = load_list(path, public_key, machine_id)
     if isinstance(loaded, Err):
         say(f"{loaded.error} : aucune action ouverte avant la prochaine liste")
         return None

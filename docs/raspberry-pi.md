@@ -633,7 +633,9 @@ connexion, avec le seul jeton de l'appareil.
    signée de cette machine ([8.9](#89-la-liste-des-opérateurs-signée-anh-152) :
    amorçage d'une console neuve). Choisir son nom, taper son code, « Se
    connecter » ; la barre dit `connecte : <nom>`. Cinq codes faux de suite
-   verrouillent l'opérateur 15 min, redémarrage compris. La connexion se ferme
+   verrouillent l'opérateur 15 min, dix depuis un même appareil verrouillent
+   cet appareil, vingt sur la console verrouillent toute connexion, redémarrage
+   compris. La connexion se ferme
    après 30 min sans action : pendant un long palier, toucher
    « Rester connecte » (la barre passe en rouge sous 5 min). Si elle se ferme
    pendant une rotation, la présence de l'accompagnant n'est plus signalée :
@@ -3483,16 +3485,25 @@ ligne compris.
    (`config/anheart_catalog.pub`) ; puis le texte doit dire
    `kind: "operator_list"` (un catalogue signé par la même clé n'est jamais lu
    comme une liste), être entier et bien formé (un seul opérateur ou appareil
-   mal formé et toute la liste est refusée), d'au plus 200 000 octets, et dater
-   (`issuedAt`) d'après la liste tenue : une liste plus ancienne est refusée,
-   pour qu'une réponse ancienne rejouée ne réactive pas un opérateur
-   désactivé. Un refus est écrit au journal de bord, une fois par raison et
+   mal formé et toute la liste est refusée), d'au plus 200 000 octets, chaque
+   code haché avec les paramètres du contrat et aucun autre (`n` 32768, `r` 8,
+   `p` 1, sel de 16 octets, empreinte de 32 : des paramètres choisis par la
+   liste tiendraient la connexion des heures), de cette machine si
+   `RECORD_MACHINE_ID` est posé, et plus récente (`issuedAt`) que la liste
+   tenue : une liste plus ancienne, ou du même instant mais différente, est
+   refusée, pour qu'une réponse ancienne rejouée ne réactive pas un opérateur
+   désactivé. Une liste qui ne change personne n'est pas réécrite, mais sa
+   date est retenue en mémoire. Un refus est écrit au journal de bord, une fois par raison et
    par signature, et la console garde sa liste.
 3. **En vigueur.** Une liste acceptée qui change quelque chose est écrite
    telle que reçue, signature comprise, dans `data/operators.json` (à côté de
    `profiles.local.json`, fichier privé, remplacé d'un coup), puis mise en
-   vigueur : une session dont l'opérateur ou la tablette n'y est plus prend fin,
-   et le journal de bord le dit. Au démarrage suivant, ce fichier est vérifié
+   vigueur : une session dont l'opérateur ou la tablette n'y est plus, ou dont
+   l'opérateur y a un autre code, prend fin, et le journal de bord le dit. Le
+   WebSocket d'une tablette qui n'y est plus est fermé avant son image
+   suivante. Une séance commencée pendant l'écriture garde la liste en
+   vigueur : la nouvelle est prise au repos suivant (ou au démarrage, depuis
+   le fichier). Au démarrage suivant, ce fichier est vérifié
    de nouveau (signature et forme) avant de servir ; refusé (autre clé
    publique dans une nouvelle image, fichier altéré), la console n'ouvre
    aucune action jusqu'à la liste suivante et le dit au journal de bord.
@@ -3506,11 +3517,14 @@ ligne compris.
 **La connexion.** Un opérateur de la liste et son code, vérifié hors ligne
 contre le haché scrypt de la liste (`hashlib.scrypt`, sur un fil à part :
 quelques dizaines à quelques centaines de millisecondes sur un Pi), une
-connexion à la fois. Cinq codes faux de suite verrouillent cet opérateur
-15 min ; le compte est écrit dans `data/operator_lockout.json` et un
-opérateur trouvé verrouillé au démarrage l'est 15 min à compter de ce
-démarrage (l'horloge murale du Pi n'est pas sûre après un redémarrage : le
-compte est gardé, pas l'heure). La session est liée à l'appareil qui s'est
+connexion à la fois. Trois comptes de codes faux, chacun verrouillant
+15 min : cinq de suite pour un opérateur (effacé par son bon code), dix
+depuis un même appareil quel que soit l'opérateur, vingt sur toute la
+console (ces deux derniers effacés après 15 min sans code faux). Les comptes
+sont écrits dans `data/operator_lockout.json`, effacements compris ; ce qui
+est trouvé verrouillé au démarrage l'est 15 min à compter de ce démarrage
+(l'horloge murale du Pi n'est pas sûre après un redémarrage : le compte est
+gardé, pas l'heure). La session est liée à l'appareil qui s'est
 connecté (cookie `anheart_operator`, `HttpOnly`, `SameSite=Strict`, `Secure`
 sur une console qui sert TLS), dure 8 h au plus et 30 min sans action
 (la présence de l'accompagnant n'est pas une action), se ferme par
@@ -3550,11 +3564,15 @@ qui porte ANH-152 sur une machine en service :
 4. Hors ligne au banc, une console qui a déjà reçu sa liste la garde. Une
    console qui ne l'a jamais reçue n'ouvre que STOP, E-STOP et les lectures :
    il faut la relier au réseau une fois. Il n'y a pas d'amorçage à la main.
-   La console ne lie pas la liste à sa machine (`machineId` est lu, pas
-   jugé) : un `data/operators.json` copié d'une autre console du même
-   déploiement serait accepté et l'ouvrirait aux opérateurs de l'autre
-   machine. Ce n'est pas une procédure ; écrire sur le disque du Pi donne de
-   toute façon bien plus (MEN-04).
+   Avec `RECORD_MACHINE_ID` posé à l'identifiant de la machine sur le tableau
+   de bord (celui de l'adresse de sa fiche), la console ne prend que la liste
+   de cette machine (`machineId`), au démarrage comme à la synchronisation, et
+   dit au journal de bord la liste d'une autre qu'elle refuse. Sans lui,
+   `machineId` n'est pas jugé : un `data/operators.json` copié d'une autre
+   console du même déploiement serait accepté ; écrire sur le disque du Pi
+   donne de toute façon bien plus (MEN-04). Une console dont
+   `RECORD_MACHINE_ID` porte autre chose que cet identifiant ne prend aucune
+   liste et n'ouvre que STOP, E-STOP et les lectures.
 
 **Migration d'une console déployée.** `UI_TOKEN` est l'ancien nom de
 `DEVICE_TOKEN` : il est lu tel quel quand `DEVICE_TOKEN` est absent, et la
@@ -3704,7 +3722,7 @@ sort avec le code 2.
 | `CONVEX_URL` | vide | hôte `.convex.site` | exigée si la clé est présente : `https://…` ou `http://localhost` / `http://127.0.0.1` |
 | `RECORD_ROOT` | `data/records` | dossier des enregistrements de séance (relatif à `raspberry-pi/` s'il n'est pas absolu) | créé en mode 700 ; s'il est inutilisable, la console démarre et **refuse tout départ** ([15.4](#154-départ-refusé-sous-500-mo)) |
 | `RECORD_LOCAL_RETENTION_DAYS` | `30` | durée de garde d'un enregistrement déposé **et** confirmé ; un enregistrement non déposé n'est jamais purgé | entier 0..3650 |
-| `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom |
+| `RECORD_MACHINE_ID` | `unassigned` | identifiant de la machine écrit dans le manifeste ; posé, la console ne prend que la liste des opérateurs de cette machine ([8.9](#89-la-liste-des-opérateurs-signée-anh-152)) | opaque : lettres ASCII, chiffres, `_`, `-` ; 128 caractères au plus ; jamais un nom ; l'identifiant de la machine sur le tableau de bord |
 | `RECORD_ORGANIZATION_ID` | `unassigned` | identifiant de l'organisation écrit dans le manifeste | même règle |
 | `HR_HARD_MAX_BPM`, `HR_CRITICAL_BPM`, `MIN_RIDER_AGE`, `MOTION_LIMITS_PATH` | - | **ne sont plus lues** (ANH-139) : les valeurs médicales viennent du fichier signé ([12.6](#126-les-paramètres-médicaux-signés-anh-139)). Une valeur non vide encore réglée est une **erreur de configuration** : la console refuse de démarrer, dit laquelle (`configuration: MIN_RIDER_AGE: n'est plus lue : la valeur est parameters.min_rider_age de config/medical_parameters.json, signe ; retirer cette cle du .env`) et sort avec le code 2, sur lequel le service ne la relance pas. Deux sources pour une valeur médicale, c'est la non signée qui finit appliquée | à retirer du `.env` |
 | `ANHEART_SOFTWARE_VERSION` | - | **n'est plus lue.** La version écrite dans le manifeste (`software_version`) est le contenu de `raspberry-pi/VERSION` (`/app/VERSION` dans l'image), la même que celle de la page et du heartbeat ([section 14](#14-versions-et-compatibilité)). Une valeur encore réglée ne change rien et n'arrête plus le démarrage, même mal formée : la console l'écrit une fois dans son journal (`configuration: ANHEART_SOFTWARE_VERSION is set and no longer read`) | - |

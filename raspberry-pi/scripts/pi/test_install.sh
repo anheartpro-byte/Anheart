@@ -206,8 +206,8 @@ post() {
 
 # The signed operator list of the console (ANH-152, src/console_access.py), as
 # convex/lib/consoleAccess.ts writes it and Convex signs it: one operator, its
-# code hashed with scrypt (cheap parameters: the console takes those the list
-# carries), one tablet. Written in $SIGNING with the public half of the pair:
+# code hashed with scrypt with the contract's parameters (the only ones the
+# console takes), one tablet. Written in $SIGNING with the public half of the pair:
 # anheart_catalog.pub and operators.json.
 make_operator_list() {
     openssl genpkey -algorithm ed25519 -out "$SIGNING/catalog.key" \
@@ -220,8 +220,8 @@ import base64, hashlib, json, os, sys, time
 
 folder, user_id, code, token = sys.argv[1:5]
 salt = os.urandom(16)
-n, r, p = 1024, 8, 1
-digest = hashlib.scrypt(code.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
+n, r, p = 32768, 8, 1
+digest = hashlib.scrypt(code.encode(), salt=salt, n=n, r=r, p=p, maxmem=64 * 2**20, dklen=32)
 payload = json.dumps({
     "kind": "operator_list",
     "machineId": "install-test",
