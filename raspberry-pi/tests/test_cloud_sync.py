@@ -3411,7 +3411,7 @@ def test_an_unknown_end_reason_fails_loudly() -> None:
 
 def test_an_unknown_resolve_error_fails_loudly() -> None:
     with pytest.raises(AssertionError):
-        describe_resolve_error(cast("ResolveError", object()))
+        describe_resolve_error(cast(ResolveError, object()))
 
 
 @pytest.mark.parametrize("path", ["/api/machine/heartbeat", "/api/machine/profiles"])
