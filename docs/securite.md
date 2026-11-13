@@ -2116,8 +2116,10 @@ La source **`operator` est une extension d'EX-1 décidée pendant le
 développement faute de valeur adaptée, à relire par le chef de projet**.
 Elle identifie les fonctions lancées en ligne de commande avec la clé de
 déploiement : `machineKeys.createKeyByOperator`,
-`machineKeys.revokeKeyByOperator` et `medicalParameters.registerVersion`
-(via `medicalParametersStore.insertVersion`). Ces chemins internes écrivent
+`machineKeys.revokeKeyByOperator`, `medicalParameters.registerVersion`
+(via `medicalParametersStore.insertVersion`), et les deux migrations
+d'organisations (`migrations/multiOrganization`) pour le retrait d'un
+opérateur de console qu'elles causeraient (ANH-152). Ces chemins internes écrivent
 avec l'acteur `system`, sans compte humain attribué ; le test de complétude
 vérifie leur isolement du site et des routes machine.
 

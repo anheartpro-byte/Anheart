@@ -2536,6 +2536,9 @@ describe("ANH-167 T02-f operator isolation", () => {
       "./machineKeys.ts:createKeyByOperator",
       "./machineKeys.ts:revokeKeyByOperator",
       "./medicalParametersStore.ts:insertVersion",
+      // A release of a console operator these migrations cause (ANH-152).
+      "./migrations/multiOrganization.ts:attachExistingRowsToAnheart",
+      "./migrations/multiOrganization.ts:repairDuplicatedAnheartOrganization",
     ]);
     expect(internalReferences).toEqual([
       "./medicalParameters.ts:registerVersion:insertVersion",
