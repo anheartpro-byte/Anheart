@@ -2648,16 +2648,37 @@ une alerte déjà liée à une autre séance. Les séances différentes gardent
 ainsi leurs alertes distinctes. La recherche utilise l'index existant
 `by_user_and_organization_and_machine_and_read`, sans nouvel index.
 
-Limite vérifiée : un heartbeat en défaut qui ne nomme pas la séance crée
-une alerte `drive_fault` sans séance. Si le lot d'événements de la séance
-livre ensuite le verdict avant le défaut (ordre de planification actuel de
-`storeEvents`), le verdict crée l'alerte de la séance et le défaut s'y fond :
-il reste **2 alertes et 2 e-mails par destinataire**, avec l'envoi activé,
-une alerte sans séance de compteur 1 et une alerte de la séance de compteur 2.
-Dans l'ordre inverse, défaut puis verdict, l'alerte sans séance est reprise :
-**1 alerte de compteur 3 et 1 e-mail par destinataire**. L'ordre de
-planification dans `storeEvents`, ou une séance nommée plus tôt par le Pi,
-reste un point de suivi.
+**Un défaut, une alerte (EX-5).** Un heartbeat en défaut qui ne nomme pas
+la séance (séance déjà finie côté Pi, ou pas encore déclarée) et la séance
+dont l'enregistrement tient un défaut variateur sont un seul événement, dans
+n'importe quel ordre de livraison. L'enregistrement tient un défaut quand
+l'un des 50 derniers événements de la séance (`FAULT_SCAN`) est un
+`drive_fault` autre que `cleared`, ou le verdict de la règle `drive_fault`
+du Pi (`drive_fault (RAMP_DOWN): …`) ; le défaut termine la séance, il est
+donc parmi ses derniers événements. Alors un verdict, un défaut ou une fin
+en échec de cette séance, sans alerte non lue de la séance, reprend l'alerte
+`drive_fault` non lue sans séance de la machine, qui prend cette séance. Et
+un `drive_fault` sans séance, sans alerte `drive_fault` non lue de la
+machine, se fond dans l'alerte non lue de séance changée en dernier
+(`updatedAt`) si cette séance a ce défaut ; elle monte en `drive_fault`.
+Aucune alerte ne disparaît ni ne descend.
+
+Le heartbeat, le verdict et l'événement du défaut, dans les 6 ordres, et
+aussi en un seul lot (verdict planifié avant le défaut par `storeEvents`),
+donnent **1 alerte de compteur 3 et 1 e-mail par destinataire** ; avec la
+fin en échec, à toute place, compteur 4. Ni `training.ts`, ni `http.ts`, ni
+le contrat ne changent. Une séance dont l'enregistrement ne tient aucun
+défaut (verdict cardiaque seul, par exemple) reste à part d'un défaut sans
+séance, avant comme après : 2 alertes. Deux défauts d'une même séance
+donnent 2 alertes au destinataire qui a lu la première, une seule alerte de
+compteur 6 à celui qui ne l'a pas lue (une alerte non lue par séance).
+
+Limites : le défaut doit être stocké quand arrive l'autre moitié (le Pi
+envoie les événements avant la fin) ; si seul un verdict d'une autre règle
+est arrivé quand le heartbeat est livré, puis le défaut ensuite, il reste
+2 alertes. Une alerte `drive_fault` sans séance plus ancienne, d'un défaut
+hors séance non lu, peut être reprise par une séance qui a un défaut, comme
+le faisait déjà l'événement `drive_fault`.
 
 Ce regroupement s'applique aussi aux verdicts hors défaut variateur : par
 exemple, `hr_drop (RAMP_DOWN)` et la fin en échec de la même séance donnent

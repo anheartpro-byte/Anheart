@@ -1096,15 +1096,11 @@ un verdict de fréquence cardiaque et la fin en échec. Une alerte déjà lue
 reste inchangée ; l'événement suivant en crée une nouvelle. Les alertes sans
 séance gardent leur regroupement par machine.
 
-Limite vérifiée : un heartbeat en défaut qui ne nomme pas la séance crée
-une alerte `drive_fault` sans séance. Si le lot d'événements de la séance
-livre ensuite le verdict avant le défaut (ordre de planification actuel de
-`storeEvents`), le verdict crée l'alerte de la séance et le défaut s'y fond :
-**2 alertes et 2 e-mails par destinataire** si l'envoi est activé, de
-compteurs 1 sans séance et 2 avec séance. Dans l'ordre inverse, défaut puis
-verdict, il reste **1 alerte de compteur 3 et 1 e-mail par destinataire**.
-L'ordre de planification dans `storeEvents`, ou une séance nommée plus tôt
-par le Pi, reste un point de suivi.
+Un heartbeat en défaut qui ne nomme pas la séance rejoint l'alerte de la
+séance dont l'enregistrement tient un défaut variateur, dans tout ordre
+d'arrivée : **1 alerte et 1 e-mail par destinataire** pour ce défaut. Une
+séance sans défaut variateur reste à part d'un défaut hors séance. Détail :
+[convex.md](convex.md#notificationsts-alertes-aux-gestionnaires-anh-90).
 
 En bas, **Alertes par e-mail** : un interrupteur par type d'alerte. Par
 défaut tout part aussi par e-mail sauf « Machine hors ligne ». Un e-mail ne

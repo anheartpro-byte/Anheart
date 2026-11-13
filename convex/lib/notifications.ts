@@ -342,6 +342,63 @@ export async function retryDelivery(
   );
 }
 
+/** How many of a session's last events are read for a drive fault, which ends it. */
+const FAULT_SCAN = 50;
+
+/**
+ * Whether the session's record holds a drive fault: its `drive_fault` event,
+ * or the verdict of the Pi's `drive_fault` rule, whichever is stored first.
+ */
+async function sessionFaulted(
+  ctx: QueryCtx,
+  sessionId: Id<"sessions">,
+): Promise<boolean> {
+  const events = await ctx.db
+    .query("training_events")
+    .withIndex("by_session_and_seq", (q) => q.eq("sessionId", sessionId))
+    .order("desc")
+    .take(FAULT_SCAN);
+  return events.some((row) =>
+    row.kind === "drive_fault"
+      ? driveFaultAlerts(row.detail)
+      : row.kind === "verdict" && row.detail.startsWith("drive_fault ("),
+  );
+}
+
+/**
+ * EX-5 (ANH-237): a drive fault whose heartbeat named no session, and a
+ * session whose record holds a drive fault, are one event, whichever is
+ * delivered first. For an event of a session: the machine's unread fault
+ * alert without a session. For a fault without a session: the unread alert
+ * of a session changed last. Undefined unless that session faulted.
+ */
+async function sameFault(
+  ctx: QueryCtx,
+  unread: Doc<"notifications">[],
+  type: NotificationType,
+  event: MachineEvent,
+): Promise<Doc<"notifications"> | undefined> {
+  if (NOTIFICATION_TYPES[type].sessionPriority === 0) return undefined;
+  let other: Doc<"notifications"> | undefined;
+  if (event.sessionId !== undefined) {
+    other = unread.find(
+      (row) => row.sessionId === undefined && row.type === "drive_fault",
+    );
+  } else if (type === "drive_fault") {
+    other = unread
+      .filter(
+        (row) =>
+          row.sessionId !== undefined &&
+          NOTIFICATION_TYPES[row.type].sessionPriority > 0,
+      )
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  }
+  const sessionId = event.sessionId ?? other?.sessionId;
+  return other && sessionId && (await sessionFaulted(ctx, sessionId))
+    ? other
+    : undefined;
+}
+
 /**
  * Write or fold one recipient's alert inside the subtransaction of
  * `deliverRecipient`, returning one only for a new alert. Queue its optional
@@ -395,7 +452,8 @@ export async function notifyRecipient(
         (NOTIFICATION_TYPES[type].foldsBy === "machine"
           ? event.sessionId === undefined || row.sessionId === undefined
           : row.sessionId === event.sessionId),
-    );
+    ) ??
+    (await sameFault(ctx, unread, type, event));
   if (same) {
     const promoted =
       NOTIFICATION_TYPES[type].sessionPriority >

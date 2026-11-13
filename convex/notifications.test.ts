@@ -1252,37 +1252,132 @@ describe("session alert grouping (T03)", () => {
     }
   }
 
-  it.each([
-    { order: ["verdict", "fault"] as const, expected: 2 },
-    { order: ["fault", "verdict"] as const, expected: 1 },
-  ])(
-    "R1c1-1: keeps $expected alerts per recipient after a sessionless heartbeat and $order",
-    async ({ order, expected }) => {
-      const w = await seedWorld(modules);
-      setEmailVariables();
-      const sessionId = await session(w);
+  // EX-5: one drive fault as the machine reports it: a heartbeat in fault
+  // that names no session, the verdict of the `drive_fault` rule and the
+  // fault event of the session's record, each through its own route.
+  const verdictOfFault = "drive_fault (RAMP_DOWN): OHF (LFT 17): overheat";
+  const faultEvent = "OHF (LFT 17): overheat";
+  const inputs = {
+    heartbeat: async (w: World) => {
       await w.t.mutation(internal.training.updateLive, {
         machineId: w.machine,
         live: live({ driveState: "fault" }),
       });
       await delivered(w);
+    },
+    verdict: (w: World, id: Id<"sessions">) =>
+      storeEvents(w, id, [event(1, "verdict", verdictOfFault)]),
+    fault: (w: World, id: Id<"sessions">) =>
+      storeEvents(w, id, [event(2, "drive_fault", faultEvent)]),
+    // The record's order, which `storeEvents` schedules verdict first.
+    batch: (w: World, id: Id<"sessions">) =>
+      storeEvents(w, id, [
+        event(1, "verdict", verdictOfFault),
+        event(2, "drive_fault", faultEvent),
+      ]),
+  };
+  type Input = keyof typeof inputs;
 
-      for (const kind of order) await deliver(w, sessionId, kind);
+  it.each<{ order: Input[] }>([
+    { order: ["heartbeat", "verdict", "fault"] },
+    { order: ["heartbeat", "fault", "verdict"] },
+    { order: ["verdict", "heartbeat", "fault"] },
+    { order: ["verdict", "fault", "heartbeat"] },
+    { order: ["fault", "heartbeat", "verdict"] },
+    { order: ["fault", "verdict", "heartbeat"] },
+    { order: ["heartbeat", "batch"] },
+    { order: ["batch", "heartbeat"] },
+  ])(
+    "EX-5: gives one alert and one e-mail per recipient for a heartbeat without a session, in order $order",
+    async ({ order }) => {
+      const w = await seedWorld(modules);
+      setEmailVariables();
+      const sessionId = await session(w);
+      for (const input of order) await inputs[input](w, sessionId);
 
       const rows = await alerts(w);
-      for (const userId of [w.manager, w.orgAdmin]) {
-        const own = rows.filter((row) => row.userId === userId);
-        expect(own).toHaveLength(expected);
-        expect(own.map((row) => [row.type, row.sessionId, row.count])).toEqual(
-          expected === 2
-            ? [
-                ["drive_fault", undefined, 1],
-                ["drive_fault", sessionId, 2],
-              ]
-            : [["drive_fault", sessionId, 3]],
-        );
+      expect(recipients(rows)).toEqual([w.manager, w.orgAdmin].sort());
+      for (const row of rows)
+        expect(row).toMatchObject({
+          type: "drive_fault",
+          detail: "OHF",
+          sessionId,
+          count: 3,
+          read: false,
+        });
+      await expectEmails(w, 2);
+    },
+  );
+
+  it("EX-5: gives two alerts for two faults of one session to the recipient who read the first", async () => {
+    const w = await seedWorld(modules);
+    setEmailVariables();
+    const sessionId = await session(w);
+    await inputs.heartbeat(w);
+    await inputs.batch(w, sessionId);
+    const first = (await alerts(w)).find((row) => row.userId === w.manager);
+    if (!first) throw new Error("Missing manager alert");
+    await as(w.t, "manager").mutation(api.notifications.markRead, {
+      notificationId: first._id,
+    });
+    await w.t.mutation(internal.training.updateLive, {
+      machineId: w.machine,
+      live: live(),
+    });
+
+    await inputs.heartbeat(w);
+    await storeEvents(w, sessionId, [
+      event(3, "drive_fault", "cleared"),
+      event(4, "verdict", "cleared"),
+      event(5, "verdict", verdictOfFault),
+    ]);
+    await storeEvents(w, sessionId, [event(6, "drive_fault", faultEvent)]);
+
+    const rows = await alerts(w);
+    const own = (userId: Id<"users">) =>
+      rows
+        .filter((row) => row.userId === userId)
+        .map((row) => [row.type, row.sessionId, row.count, row.read]);
+    expect(own(w.manager)).toEqual([
+      ["drive_fault", sessionId, 3, true],
+      ["drive_fault", sessionId, 3, false],
+    ]);
+    // Not read: the second fault folds into the session's alert (T03).
+    expect(own(w.orgAdmin)).toEqual([["drive_fault", sessionId, 6, false]]);
+    await expectEmails(w, 3);
+  });
+
+  it.each([
+    ["an earlier fault without a session", "heartbeat", "verdict"],
+    ["a later fault without a session", "verdict", "heartbeat"],
+  ] as const)(
+    "EX-5: keeps %s apart from a session whose record holds no drive fault",
+    async (_label, first, second) => {
+      const w = await seedWorld(modules);
+      setEmailVariables();
+      const sessionId = await session(w);
+      for (const input of [first, second]) {
+        if (input === "heartbeat") await inputs.heartbeat(w);
+        else
+          await storeEvents(w, sessionId, [
+            event(1, "phase", "hold"),
+            event(2, "verdict", "hr_critical (QUICK_STOP): synthetic"),
+          ]);
       }
-      await expectEmails(w, expected * 2);
+      const rows = await alerts(w);
+      for (const userId of [w.manager, w.orgAdmin])
+        expect(
+          rows
+            .filter((row) => row.userId === userId)
+            .map((row) => [row.type, row.sessionId, row.detail, row.count])
+            .sort(),
+        ).toEqual(
+          [
+            ["drive_fault", undefined, undefined, 1],
+            ["safety_verdict", sessionId, "QUICK_STOP", 1],
+          ].sort(),
+        );
+      await expectEmails(w, 4);
     },
   );
 
@@ -1345,17 +1440,49 @@ describe("session alert grouping (T03)", () => {
 
   it.each(
     orders.flatMap((order) =>
-      [0, 1, 2, 3].map((position) => {
+      [0, 1, 2, 3].flatMap((position) => {
         const withHeartbeat: Delivery[] = [...order];
         withHeartbeat.splice(position, 0, "heartbeat");
-        return { order: withHeartbeat, label: withHeartbeat.join(", ") };
+        const label = withHeartbeat.join(", ");
+        return [
+          { order: withHeartbeat, named: true, label },
+          // EX-5: a heartbeat without a session, once the record holds the fault.
+          { order: withHeartbeat, named: false, label: `${label}, unnamed` },
+        ];
       }),
     ),
-  )("T03-b: also folds the heartbeat in order $label", async ({ order }) => {
+  )("T03-b: also folds the heartbeat in order $label", async ({
+    order,
+    named,
+  }) => {
     const w = await seedWorld(modules);
     setEmailVariables();
     const sessionId = await session(w);
-    for (const kind of order) await deliver(w, sessionId, kind);
+    await w.t.run(async (ctx) => {
+      for (const [seq, kind, detail] of [
+        [1, "verdict", "drive_fault (RAMP_DOWN): OHF"],
+        [2, "drive_fault", "OHF (LFT 17): overheat"],
+      ] as const)
+        await ctx.db.insert("training_events", {
+          organizationId: w.orgA,
+          sessionId,
+          machineId: w.machine,
+          seq,
+          t: NOW + seq,
+          kind,
+          detail,
+          actor: "system",
+        });
+    });
+    for (const kind of order) {
+      if (kind === "heartbeat" && !named)
+        await w.t.mutation(internal.notifications.deliver, {
+          machineId: w.machine,
+          type: "drive_fault",
+          count: 1,
+        });
+      else await deliver(w, sessionId, kind);
+    }
     const rows = await alerts(w);
     expect(recipients(rows)).toEqual([w.manager, w.orgAdmin].sort());
     for (const row of rows) {
