@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import cast, final
+from typing import Final, cast, final
 
 import anyio
 
@@ -31,10 +31,14 @@ from src.console_access import (
     replace_file,
     signed_text,
 )
-from src.result import Err, Result
-from src.units import Monotonic, elapsed
+from src.result import Err, Ok, Result
+from src.units import Monotonic, Seconds, elapsed
 
 _logger: logging.Logger = logging.getLogger(__name__)
+
+DATE_WRITE_PERIOD: Final[Seconds] = Seconds(3600.0)
+"""The least time between two writes of a list whose only change, from the file, is its
+date: some 24 writes a day instead of 1 440. Anyone or any code changed: written at once."""
 
 
 def _bounded_list(text: str, machine_id: str | None) -> Result[OperatorList, str]:
@@ -70,11 +74,13 @@ class OperatorSync:
         "_at_rest",
         "_clock",
         "_machine_id",
+        "_on_disk",
         "_path",
         "_public_key",
         "_refused",
         "_say",
         "_transport",
+        "_written",
     )
 
     def __init__(
@@ -103,6 +109,9 @@ class OperatorSync:
         self._machine_id: str | None = machine_id
         self._asked: Monotonic | None = None
         self._refused: tuple[str, object] | None = None
+        # What the file holds: at the start, the list the console loaded from it.
+        self._on_disk: OperatorList | None = access.held
+        self._written: Monotonic | None = None
 
     async def step(self) -> None:
         """Ask for the list when it is due and the machine is at rest; never raises."""
@@ -143,11 +152,7 @@ class OperatorSync:
             # A session began during the request: asked again at the next rest.
             self._asked = None
             return
-        # Written whatever changed, its date alone included: the file is always the list
-        # in force, or a newer one a session kept from it, which the next start takes.
-        envelope = StoredList(payload=payload, signature=cast(str, signature))
-        content = STORED_LIST.dump_json(envelope) + b"\n"
-        written = await anyio.to_thread.run_sync(partial(replace_file, self._path, content))
+        written = await self._write(accepted, payload, signature)
         if same_people:
             # Nobody gains or loses: in force at once, its date with it, so that a list
             # replayed from between the two is refused. Said by nothing but the log.
@@ -170,6 +175,30 @@ class OperatorSync:
             f"liste des operateurs recue : {len(accepted.operators)} operateur(s), "
             f"{len(accepted.devices)} tablette(s)"
         )
+
+    async def _write(
+        self, accepted: OperatorList, payload: str, signature: object
+    ) -> Result[None, str]:
+        """Write ``accepted``, unless the file holds the same people and codes, written less
+        than :data:`DATE_WRITE_PERIOD` ago. The file is so always the list in force, or a
+        newer one a session kept from it (which the next start takes), its date at most an
+        hour behind."""
+        now = self._clock.monotonic()
+        on_disk = self._on_disk
+        if (
+            on_disk is not None
+            and accepted.same_holders(on_disk)
+            and self._written is not None
+            and elapsed(self._written, now) < DATE_WRITE_PERIOD
+        ):
+            return Ok(None)
+        envelope = StoredList(payload=payload, signature=cast(str, signature))
+        content = STORED_LIST.dump_json(envelope) + b"\n"
+        written = await anyio.to_thread.run_sync(partial(replace_file, self._path, content))
+        if isinstance(written, Ok):
+            self._on_disk = accepted
+            self._written = now
+        return written
 
     def _missed(self, error: CloudError) -> None:
         """No answer to read: the list stays. One too large to read is refused and said."""

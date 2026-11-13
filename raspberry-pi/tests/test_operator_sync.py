@@ -28,7 +28,7 @@ from src.console_access import (
     load_list,
     replace_file,
 )
-from src.operator_sync import OperatorSync
+from src.operator_sync import DATE_WRITE_PERIOD, OperatorSync
 from src.result import Err, Ok, Result
 from src.training.plan import JsonValue
 from src.units import Seconds
@@ -138,7 +138,7 @@ async def test_accepts_a_signed_list_writes_it_and_asks_again_after_the_period(
     assert stored == Ok(held)
     await rig.step(OPERATORS_PERIOD - 1.0)
     assert rig.dashboard.asked == 1
-    # The same holders again: nothing said, its date taken and written.
+    # The same holders again: nothing said, its date taken; on the disk within the hour.
     rig.sign(payload(1_790_000_000_500))
     await rig.step(1.0)
     assert rig.dashboard.asked == 2
@@ -146,11 +146,16 @@ async def test_accepts_a_signed_list_writes_it_and_asks_again_after_the_period(
     newer = rig.access.held
     assert newer is not None
     assert newer.issued_at == 1_790_000_000_500
-    assert load_list(rig.path, rig.public, None) == Ok(newer)
+    assert load_list(rig.path, rig.public, None) == Ok(held)
+    rig.sign(payload(1_790_000_003_600))
+    await rig.step(DATE_WRITE_PERIOD)
+    newest = rig.access.held
+    assert newest is not None
+    assert load_list(rig.path, rig.public, None) == Ok(newest)
     # So a list from between the two, replayed, is refused.
     rig.sign(payload(1_790_000_000_200, operators=0))
     await rig.step(OPERATORS_PERIOD)
-    assert rig.access.held == newer
+    assert rig.access.held == newest
 
 
 async def test_nothing_is_asked_away_from_rest(tmp_path: Path) -> None:
