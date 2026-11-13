@@ -111,6 +111,7 @@ async def test_the_recording_drive_logs_every_frame_it_passes_on() -> None:
     await drive.write_command(ControlWord.SHUTDOWN)
     await drive.write_speed(MotorRpm(100))
     assert drive.emergency_budget > 0
+    assert drive.inspection_budget == SimulatedDrive(clock).inspection_budget
     drive.emergency_disable_blocking(drive.emergency_budget)
     await drive.close()
     failed = await drive.read_status()

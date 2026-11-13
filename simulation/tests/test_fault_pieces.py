@@ -174,6 +174,7 @@ async def test_the_faulty_drive_refuses_lies_and_freezes() -> None:
     assert frozen.value is again.value
     assert isinstance(await drive.read_limits(), Ok)
     assert drive.emergency_budget == sim.emergency_budget
+    assert drive.inspection_budget == sim.inspection_budget
     drive.emergency_disable_blocking(drive.emergency_budget)
     sim.inject_comms_loss(Seconds(5.0))
     assert isinstance(await drive.read_status(), Err)
