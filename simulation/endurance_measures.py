@@ -110,8 +110,8 @@ the second lowest at least. A tenth of those readings, one at least, may be caug
 descriptor closed for a moment (a page that reconnects) without failing a run."""
 
 TICK_COVERAGE: Final[float] = 0.9
-"""Share of a real-time run the ticks the meter saw must span: otherwise part of it was
-not watched (a page evicted, a meter that stopped)."""
+"""Share of the time the console ticked that the ticks the page saw must span: otherwise
+part of it was not watched (a page evicted, a meter that stopped)."""
 
 RECORD_SLACK_S: Final[float] = 5.0
 """Seconds a record may last beyond what the scenario timed of its session (it times
@@ -577,6 +577,11 @@ class Gaps:
     seen: float = 0.0
     """Seconds from the first tick the page saw to the last."""
 
+    span: float = 0.0
+    """Seconds from the first tick the page saw to the console's last tick before its stop:
+    what the page should have seen. Not the run's seconds, which start before the
+    console's first tick, later on a loaded host."""
+
     verdict: str | None = None
     """The console's own ``loop_stall`` verdict, in its words, when its supervisor holds it
     latched at the end of the run. The supervisor keeps the most severe latched verdict:
@@ -715,7 +720,8 @@ def check_tick_gap(run: Run) -> Check | None:
         return None
     threshold = (
         f"aucun verdict loop_stall de la console ; écart entre deux tics consécutifs "
-        f"< {gaps.bound:.0f} ms ; tics relevés sur {TICK_COVERAGE:.0%} de l'essai au moins"
+        f"< {gaps.bound:.0f} ms ; tics relevés sur {TICK_COVERAGE:.0%} du temps où la console "
+        "a tourné au moins"
     )
     problems: list[str] = []
     if gaps.verdict is not None:
@@ -736,8 +742,10 @@ def check_tick_gap(run: Run) -> Check | None:
         )
     if not seen:
         problems.append("aucun écart entre deux tics relevé")
-    if gaps.seen < TICK_COVERAGE * run.covered:
-        problems.append(f"tics relevés sur {gaps.seen:.0f} s des {run.covered:.0f} s de l'essai")
+    if gaps.seen < TICK_COVERAGE * gaps.span:
+        problems.append(
+            f"tics relevés sur {gaps.seen:.0f} s des {gaps.span:.0f} s où la console a tourné"
+        )
     status = Status.FAIL if problems else Status.PASS
     return Check("tick_gap", status, threshold, " ; ".join([*problems, *seen]))
 
@@ -762,11 +770,15 @@ def check_descriptors(run: Run) -> Check:
     caught with a descriptor open for a moment (a block being written, a
     request) do not set the lowest of the end while one reading there is
     clean; a tenth of the readings before it may be caught with one closed. A
-    leak that starts at any time before the end fails; one that only starts
-    within the end is not seen. Nor, the price of taking the lowest of the
-    end, is a leak of as many descriptors as one reading of the end was caught
-    with closed: the end tolerates any number of readings caught high, which
-    is the noise met so far, and none caught low.
+    leak that recurs (one descriptor a session, say) fails wherever it starts
+    before the end. A one-off leak, descriptors kept once for good, fails only
+    when it comes after the lowest tenth of the readings before the end: within
+    it, it sets the low itself (until about 3 h 10 of the nightly day, the first
+    4 min 30 s after the first hour of the two real-time hours). A leak that
+    only starts within the end is not seen. Nor, the price of taking the lowest
+    of the end, is a leak of as many descriptors as one reading of the end was
+    caught with closed: the end tolerates any number of readings caught high,
+    which is the noise met so far, and none caught low.
     """
     threshold = (
         "le relevé le plus bas de la fin (dernier quart après la chauffe, une heure au plus) "
@@ -1021,6 +1033,7 @@ def _gaps(gaps: Gaps | None) -> Mapping[str, object] | None:
         "bound_ms": round(gaps.bound, 1),
         "merged_ms": _quantiles(gaps.merged),
         "seen_s": round(gaps.seen, 1),
+        "span_s": round(gaps.span, 1),
         "loop_stall_verdict": gaps.verdict,
     }
 

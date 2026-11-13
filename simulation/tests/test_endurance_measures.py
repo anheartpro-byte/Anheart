@@ -608,6 +608,26 @@ def test_ex2_a_leak_that_starts_late_in_two_hours_fails_unless_in_their_last_qua
     assert "(31 relevés depuis 1 h 45)" in blind.measured
 
 
+NIGHT = replace(steady(), samples=tuple(reading(300.0 * (n + 1)) for n in range(288)))
+"""The shape of the nightly day: a reading every 300 s."""
+
+
+def kept_once_from(start: float) -> Callable[[float], int]:
+    """Twelve descriptors open, and one more kept for good from ``start`` on: a one-off leak."""
+    return lambda at: 13 if at >= start else 12
+
+
+def test_ex2_a_one_off_leak_sets_the_low_itself_only_in_its_documented_window() -> None:
+    """A descriptor kept once for good is missed only within the lowest tenth of the
+    readings before the end; one that recurs is caught wherever it starts (above)."""
+    for shape, missed, caught in (
+        (NIGHT, 3.1 * 3600, 3.25 * 3600),
+        (TWO_HOURS, 64.5 * 60, 65 * 60),
+    ):
+        assert check_descriptors(counted(shape, kept_once_from(missed))).status is Status.PASS
+        assert check_descriptors(counted(shape, kept_once_from(caught))).status is Status.FAIL
+
+
 def test_ex2_a_descriptor_open_or_closed_for_one_reading_fails_nothing() -> None:
     flat = counted(steady(), lambda _at: 12)
     start = len(flat.samples) - len(judged(flat))
@@ -700,6 +720,7 @@ GAPS = Gaps(
     bound=STALL_MS,
     exact=Quantiles(count=36_000, p50=201.0, p99=229.0, highest=517.0),
     seen=86_400.0,
+    span=86_400.0,
 )
 """A real-time run in good health, as the page saw its ticks."""
 
@@ -719,13 +740,17 @@ def test_ex2_in_real_time_a_stall_fails_tick_gap_and_names_its_cause() -> None:
     unread = check_tick_gap(replace(run, gaps=replace(GAPS, exact=None)))
     only_merged = check_tick_gap(replace(run, gaps=replace(GAPS, exact=None, merged=over_merges)))
     partial = check_tick_gap(replace(run, gaps=replace(GAPS, seen=0.89 * 86_400)))
+    # The run's seconds start before the console's first tick: on a loaded host, later.
+    late_start = check_tick_gap(replace(run, covered=100_000.0))
 
     assert fine is not None
     assert fine.status is Status.PASS
     assert fine.threshold == (
         "aucun verdict loop_stall de la console ; écart entre deux tics consécutifs < 600 ms ; "
-        "tics relevés sur 90% de l'essai au moins"
+        "tics relevés sur 90% du temps où la console a tourné au moins"
     )
+    assert late_start is not None
+    assert late_start.status is Status.PASS, "the reference is the time the console ticked"
     assert (
         fine.measured == "p50 201.0 ms, p99 229.0 ms, maximum 517.0 ms sur 36000 écarts consécutifs"
     )
@@ -740,7 +765,7 @@ def test_ex2_in_real_time_a_stall_fails_tick_gap_and_names_its_cause() -> None:
         (reached, "un écart de 600.0 ms entre deux tics consécutifs"),
         (latched, "la console a levé loop_stall : took 1.00 s between ticks"),
         (unread, "aucun écart entre deux tics relevé"),
-        (partial, "tics relevés sur 76896 s des 86400 s de l'essai"),
+        (partial, "tics relevés sur 76896 s des 86400 s où la console a tourné"),
     ):
         assert verdict is not None
         assert verdict.status is Status.FAIL
@@ -872,7 +897,7 @@ def test_ex2_a_session_that_ends_otherwise_or_never_reaches_the_dashboard_fails(
 
 def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_path: Path) -> None:
     exact = Quantiles(count=10, p50=200.0, p99=212.0, highest=260.0)
-    run = replace(steady(), gaps=Gaps(bound=STALL_MS, exact=exact, seen=86_400.0))
+    run = replace(steady(), gaps=Gaps(bound=STALL_MS, exact=exact, seen=86_400.0, span=86_400.0))
     checks = judge(run)
 
     data, summary = write_report(run, checks, tmp_path / "out")
@@ -902,6 +927,7 @@ def test_ex3_the_report_keeps_every_reading_and_says_what_was_not_active(tmp_pat
         "bound_ms": 600.0,
         "merged_ms": None,
         "seen_s": 86_400.0,
+        "span_s": 86_400.0,
         "loop_stall_verdict": None,
     }
     assert obj(report["data"])["bounded_by_rotation"] is True
