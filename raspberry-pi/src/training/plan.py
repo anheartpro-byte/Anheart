@@ -1510,8 +1510,22 @@ class LoadReport:
 
 
 @dataclass(frozen=True, slots=True)
+class CatalogStamp:
+    """Which signed catalogue the profiles of a store were accepted from (ANH-138).
+
+    ``medical`` is what the console recorded of its medical parameters when
+    it accepted them (:attr:`~src.medical.MedicalStatus.recorded_version`): a
+    console whose parameters are no longer those does not trust them
+    (:mod:`src.programme_catalog`).
+    """
+
+    revision: int
+    medical: str
+
+
+@dataclass(frozen=True, slots=True)
 class StoreContent:
-    """A parsed store file: the revision and the profiles, nothing else.
+    """A parsed store file: the revision, the profiles, and where they came from.
 
     Public because :func:`parse_store` is: an operator tool that checks a
     profiles file before it is deployed needs to say what it found, and a
@@ -1520,6 +1534,9 @@ class StoreContent:
 
     rev: StoreRev
     profiles: tuple[TrainingProfile, ...]
+    catalog: CatalogStamp | None = None
+    """The signed catalogue they were accepted from; ``None``: never one (the
+    shipped fallback, or a store written before ANH-138)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1658,19 +1675,43 @@ def parse_store(raw: str) -> Result[StoreContent, Malformed]:
     if rev < 0:
         reader.note(f"'rev' must not be negative, got {rev}")
     profiles = _parse_profiles(reader, _read_profile_entries(reader, document.value))
+    catalog = _read_catalog(reader, document.value)
     problems = reader.problems
     if problems:
         return Err(Malformed(detail="; ".join(problems), problems=problems))
-    return Ok(StoreContent(rev=StoreRev(rev), profiles=profiles))
+    return Ok(StoreContent(rev=StoreRev(rev), profiles=profiles, catalog=catalog))
 
 
-def _store_document(rev: StoreRev, profiles: Sequence[TrainingProfile]) -> Mapping[str, JsonValue]:
+def _read_catalog(reader: _Reader, document: Mapping[str, object]) -> CatalogStamp | None:
+    """The optional ``catalog`` object, ``{"revision": int, "medical": str}``."""
+    value = document.get("catalog", _MISSING)
+    if value is _MISSING:
+        return None
+    if not isinstance(value, dict):
+        reader.note(f"'catalog' must be an object, got {_kind(value)}")
+        return None
+    stamp = _Reader(cast("Mapping[str, object]", value), "catalog")
+    revision = stamp.integer("revision")
+    if revision < 0:
+        stamp.note(f"'revision' must not be negative, got {revision}")
+    medical = stamp.text("medical")
+    for problem in stamp.problems:
+        reader.note(problem)
+    return CatalogStamp(revision=revision, medical=medical)
+
+
+def _store_document(
+    rev: StoreRev, profiles: Sequence[TrainingProfile], catalog: CatalogStamp | None
+) -> Mapping[str, JsonValue]:
     """The whole file, ready for ``json.dumps``."""
-    return {
+    document: dict[str, JsonValue] = {
         "version": SCHEMA_VERSION,
         "rev": int(rev),
         "profiles": [profile_to_document(profile) for profile in profiles],
     }
+    if catalog is not None:
+        document["catalog"] = {"revision": catalog.revision, "medical": catalog.medical}
+    return document
 
 
 def _quarantine_path(path: Path, raw: str | None) -> Path:
@@ -1721,7 +1762,7 @@ class ProfileStore:
     confirmed, so memory never claims a revision the disk does not have.
     """
 
-    __slots__ = ("_defaults_path", "_path", "_profiles", "_rev")
+    __slots__ = ("_catalog", "_defaults_path", "_path", "_profiles", "_rev")
 
     def __init__(self, path: Path, defaults_path: Path = SHIPPED_DEFAULTS_PATH) -> None:
         """Inert: no file is touched until :meth:`load`.
@@ -1735,6 +1776,7 @@ class ProfileStore:
         # Mutable cache; see the class docstring. Empty until load().
         self._profiles: dict[str, TrainingProfile] = {}
         self._rev: StoreRev = INITIAL_REV
+        self._catalog: CatalogStamp | None = None
 
     # --- reading ---------------------------------------------------------
 
@@ -1742,6 +1784,11 @@ class ProfileStore:
     def rev(self) -> StoreRev:
         """The revision currently in memory, which is the one on disk."""
         return self._rev
+
+    @property
+    def catalog(self) -> CatalogStamp | None:
+        """The signed catalogue the profiles were accepted from; ``None``: never one."""
+        return self._catalog
 
     def list_profiles(self) -> tuple[TrainingProfile, ...]:
         """Every profile, ordered by id.
@@ -1801,7 +1848,8 @@ class ProfileStore:
             return Err(RevMismatch(expected=expected_rev, actual=self._rev))
         updated = dict(self._profiles)
         updated[profile.profile_id] = profile
-        return self._commit(updated)
+        # Edited by hand: the store is no signed catalogue's any more.
+        return self._commit(updated, None)
 
     def delete(self, profile_id: str, *, expected_rev: StoreRev) -> Result[StoreRev, DeleteError]:
         """Remove one profile, bumping the revision.
@@ -1818,7 +1866,19 @@ class ProfileStore:
             return Err(UnknownProfile(profile_id=profile_id, known=self._ids()))
         updated = dict(self._profiles)
         del updated[profile_id]
-        return self._commit(updated)
+        return self._commit(updated, None)
+
+    def replace_catalog(
+        self, profiles: Sequence[TrainingProfile], catalog: CatalogStamp
+    ) -> Result[StoreRev, StoreUnwritable]:
+        """Replace every profile with those accepted from a signed catalogue (ANH-138).
+
+        One atomic write, as every other (:meth:`_commit`): the previous file
+        stays whole until the new one has replaced it. No expected revision:
+        the catalogue is the one writer of a running console
+        (:class:`~src.web.profile_writer.ProfileWriter` serialises it).
+        """
+        return self._commit({profile.profile_id: profile for profile in profiles}, catalog)
 
     # --- resolving -------------------------------------------------------
 
@@ -1889,8 +1949,11 @@ class ProfileStore:
         """Replace the cache. Called only with content that has been parsed."""
         self._profiles = {profile.profile_id: profile for profile in content.profiles}
         self._rev = content.rev
+        self._catalog = content.catalog
 
-    def _commit(self, updated: Mapping[str, TrainingProfile]) -> Result[StoreRev, StoreUnwritable]:
+    def _commit(
+        self, updated: Mapping[str, TrainingProfile], catalog: CatalogStamp | None
+    ) -> Result[StoreRev, StoreUnwritable]:
         """Write a new revision, and adopt it **only** if the write landed.
 
         The ordering is the invariant: if the file could not be replaced, the
@@ -1901,11 +1964,12 @@ class ProfileStore:
         """
         candidate = StoreRev(self._rev + 1)
         ordered = tuple(updated[key] for key in sorted(updated))
-        written = self._write_atomically(_store_document(candidate, ordered))
+        written = self._write_atomically(_store_document(candidate, ordered, catalog))
         if isinstance(written, Err):
             return written
         self._profiles = dict(updated)
         self._rev = candidate
+        self._catalog = catalog
         return Ok(candidate)
 
     def _write_atomically(self, document: Mapping[str, JsonValue]) -> Result[None, StoreUnwritable]:

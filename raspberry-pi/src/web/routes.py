@@ -87,21 +87,12 @@ from src.roster import (
 )
 from src.sensors.registry import SPECS
 from src.training.plan import (
-    DeleteError,
-    Malformed,
-    ProfileParseError,
     ProfileStore,
     Program,
     Rejected,
     ResolveError,
-    RevMismatch,
-    StoreRev,
-    StoreUnwritable,
-    TrainingProfile,
     UnknownProfile,
-    UpsertError,
     is_profile_id,
-    parse_profile,
 )
 from src.training.preflight import (
     BRIDGED_BENCH_ONLY,
@@ -123,7 +114,6 @@ from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySna
 from src.units import Bpm, Monotonic, OutputRpm, Seconds, elapsed
 from src.web.deps import TOKEN_HEADER, Services, VerdictSource, WebConfig
 from src.web.preflight_routes import register_preflight
-from src.web.profile_writer import ProfileWriter
 from src.web.schemas import (
     AckBody,
     AckRow,
@@ -653,53 +643,18 @@ def _register_reads(
 
 
 def _register_profiles(app: FastAPI, *, services: Services, auth: Sequence[params.Depends]) -> None:
-    """Profile CRUD and the dry-run phase-plan preview."""
+    """The stored profiles, read only, and the dry-run phase-plan preview.
+
+    No route writes a profile (ANH-138): they come from the signed catalogue
+    (:mod:`src.programme_catalog`), or are the shipped fallback.
+    """
     store = services.store
     geometry = services.geometry
-    writer = ProfileWriter(store)
 
     @app.get("/api/profiles", dependencies=auth, tags=["profiles"])
     async def list_profiles() -> ProfileListRow:
         """Every stored profile, with the revision they were read at."""
         return _profile_list(store)
-
-    @app.put("/api/profiles/{profile_id}", dependencies=auth, tags=["profiles"])
-    async def upsert_profile(
-        profile_id: str, rev: int, document: Mapping[str, object]
-    ) -> ProfileRow:
-        """Create or replace one profile.
-
-        The document is untrusted JSON and goes through
-        :func:`~src.training.plan.parse_profile`, which is the only thing in
-        this system that decides whether a set of numbers is a usable training
-        programme - including the check that the zone sits below 90% of the
-        subject's maximum. A refusal comes back as 422 listing every violation,
-        because an operator fixing a profile needs all of them rather than the
-        first.
-
-        ``rev`` is optimistic concurrency. Two browsers editing the same
-        profile produce a 409 for the second one instead of a silent overwrite.
-        """
-        if profile_id != document.get("profile_id"):
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail=(
-                    f"the URL names {profile_id!r} and the document names "
-                    f"{document.get('profile_id')!r}: they must agree"
-                ),
-            )
-        parsed = parse_profile(document, where=f"profile {profile_id!r}")
-        if isinstance(parsed, Ok):
-            return await _commit_profile(writer, parsed.value, rev)
-        raise _parse_failure(parsed.error)
-
-    @app.delete("/api/profiles/{profile_id}", dependencies=auth, tags=["profiles"])
-    async def delete_profile(profile_id: str, rev: int) -> ProfileListRow:
-        """Delete one profile. Deleting the last one leaves an empty store."""
-        removed = await writer.delete(profile_id, StoreRev(rev))
-        if isinstance(removed, Ok):
-            return _profile_list(store)
-        raise _delete_failure(removed.error)
 
     @app.post("/api/plan/preview", dependencies=auth, tags=["profiles"])
     async def preview_plan(body: PreviewBody) -> PlanPreviewRow:
@@ -1296,23 +1251,6 @@ def _attestation_failure(refusal: AttestationRefusal) -> HTTPException:
     raise assert_never(refusal)
 
 
-def _parse_failure(error: ProfileParseError) -> HTTPException:
-    """Map a profile parse failure."""
-    match error:
-        case Malformed():
-            return HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail=f"{error.detail}: " + "; ".join(error.problems),
-            )
-        case Rejected():
-            return HTTPException(
-                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-                detail=f"{error.detail}: "
-                + ", ".join(violation.value for violation in error.violations),
-            )
-    raise assert_never(error)
-
-
 def _resolve_failure(error: ResolveError) -> HTTPException:
     """Map a profile resolution failure."""
     match error:
@@ -1327,37 +1265,6 @@ def _resolve_failure(error: ResolveError) -> HTTPException:
                 detail=f"{error.detail}: "
                 + ", ".join(violation.value for violation in error.violations),
             )
-    raise assert_never(error)
-
-
-def _upsert_failure(error: UpsertError) -> HTTPException:
-    """Map a profile write failure."""
-    match error:
-        case RevMismatch():
-            return HTTPException(
-                status_code=HTTPStatus.CONFLICT,
-                detail=(
-                    f"the store moved on: you edited revision {error.expected}, it is now "
-                    f"{error.actual}. Reload before saving, or an edit is lost silently"
-                ),
-            )
-        case StoreUnwritable():
-            return HTTPException(
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                detail=f"cannot write {error.path}: {error.detail}",
-            )
-    raise assert_never(error)
-
-
-def _delete_failure(error: DeleteError) -> HTTPException:
-    """Map a profile delete failure."""
-    match error:
-        case UnknownProfile():
-            return HTTPException(
-                status_code=HTTPStatus.NOT_FOUND, detail=f"no profile {error.profile_id!r}"
-            )
-        case RevMismatch() | StoreUnwritable():
-            return _upsert_failure(error)
     raise assert_never(error)
 
 
@@ -1639,14 +1546,6 @@ def _profile_list(store: ProfileStore) -> ProfileListRow:
         rev=int(store.rev),
         profiles=tuple(ProfileRow.of(profile) for profile in store.list_profiles()),
     )
-
-
-async def _commit_profile(writer: ProfileWriter, profile: TrainingProfile, rev: int) -> ProfileRow:
-    """Write one validated profile, or raise the mapped failure."""
-    written = await writer.upsert(profile, StoreRev(rev))
-    if isinstance(written, Ok):
-        return ProfileRow.of(profile)
-    raise _upsert_failure(written.error)
 
 
 def _preview(program: Program, geometry: MachineGeometry) -> PlanPreviewRow:

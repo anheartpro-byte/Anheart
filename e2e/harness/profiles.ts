@@ -17,6 +17,19 @@ export function medicalOf(run: RunInfo): Medical {
   return (JSON.parse(readFileSync(file, "utf8")) as { parameters: Medical }).parameters;
 }
 
+/** The profiles the console ships with, its fallback before any signed catalogue (ANH-138). */
+export function shippedProfiles(repoRoot: string): Record<string, unknown>[] {
+  const file = path.join(repoRoot, "raspberry-pi", "config", "profiles.default.json");
+  return (JSON.parse(readFileSync(file, "utf8")) as { profiles: Record<string, unknown>[] }).profiles;
+}
+
+/** One of them, by its id. */
+export function shippedProfile(run: RunInfo, profileId: string): Record<string, unknown> {
+  const found = shippedProfiles(run.repoRoot).find((profile) => profile.profile_id === profileId);
+  if (!found) throw new Error(`profil livré ${profileId} absent de config/profiles.default.json`);
+  return found;
+}
+
 /**
  * A programme short enough to watch to its end: the console's shipped
  * `standard_30_min` (its zone, reference subject and ceilings), with the tiers

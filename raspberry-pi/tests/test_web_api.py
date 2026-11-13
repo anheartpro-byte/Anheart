@@ -120,7 +120,6 @@ from src.web.schemas import (
     PlanPreviewRow,
     PresenceRow,
     ProfileListRow,
-    ProfileRow,
     RemoteLaunchAcceptedRow,
     RemoteLaunchRow,
     SnapshotRow,
@@ -1330,123 +1329,26 @@ async def test_the_preview_refuses_an_unknown_profile(client: httpx.AsyncClient)
     assert PROFILE_ID in detail(response)
 
 
-async def test_a_profile_can_be_saved_and_read_back(client: httpx.AsyncClient, rig: Rig) -> None:
-    """Round trip through the store, at the revision it was read at."""
-    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
-    document = profile_document("bench_short")
-    saved = await client.put(
-        f"/api/profiles/bench_short?rev={listing.rev}", headers=auth(), json=document
-    )
-    assert parse(ProfileRow, saved).profile_id == "bench_short"
-    assert "bench_short" in [profile.profile_id for profile in rig.store.list_profiles()]
-
-
-async def test_a_store_that_cannot_be_written_says_so_rather_than_traceback(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("method", ["PUT", "DELETE"])
+async def test_no_route_writes_a_profile_any_more(
+    client: httpx.AsyncClient, rig: Rig, method: str
 ) -> None:
-    """A full or read-only disk is an operator-visible failure, not a 500 with no text.
+    """ANH-138 EX-6: the profiles come from the signed catalogue, never from the page.
 
-    The store writes through a temporary file and one rename; failing the rename
-    is what a wedged filesystem does. The response has to name the path, because
-    "500" on its own sends somebody looking in the wrong place.
+    Neither writing method of the former editor exists: refused before any
+    profile is read, and the store is left exactly as it was.
     """
-    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
-    monkeypatch.setattr(Path, "replace", _explode)
-    response = await client.put(
-        f"/api/profiles/bench_short?rev={listing.rev}",
+    before = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
+    response = await client.request(
+        method,
+        f"/api/profiles/{PROFILE_ID}?rev={before.rev}",
         headers=auth(),
-        json=profile_document("bench_short"),
+        json=profile_document(PROFILE_ID) if method == "PUT" else None,
     )
-    assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
-    assert "profiles.json" in detail(response)
-
-
-async def test_a_profile_whose_zone_is_too_high_is_refused(
-    client: httpx.AsyncClient,
-) -> None:
-    """The check the plan layer exists for, surfaced as a 422 with the reason.
-
-    A zone above 90% of the subject's own maximum is a programme that asks the
-    control law to drive somebody past their screening ceiling.
-    """
-    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
-    document = profile_document("too_hot")
-    document["zone_high_bpm"] = 200
-    response = await client.put(
-        f"/api/profiles/too_hot?rev={listing.rev}", headers=auth(), json=document
-    )
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-    assert "zone" in detail(response)
-
-
-async def test_a_profile_save_at_a_stale_revision_is_refused(
-    client: httpx.AsyncClient,
-) -> None:
-    """Optimistic concurrency: the second editor is told, not overwritten."""
-    document = profile_document("bench_short")
-    response = await client.put("/api/profiles/bench_short?rev=999", headers=auth(), json=document)
-    assert response.status_code == HTTPStatus.CONFLICT
-    assert "revision" in detail(response)
-
-
-async def test_a_profile_save_whose_url_and_body_disagree_is_refused(
-    client: httpx.AsyncClient,
-) -> None:
-    """Two names for one thing is how the wrong profile gets edited."""
-    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
-    document = profile_document("bench_short")
-    response = await client.put(
-        f"/api/profiles/other_name?rev={listing.rev}", headers=auth(), json=document
-    )
-    assert response.status_code == HTTPStatus.BAD_REQUEST
-
-
-async def test_a_malformed_profile_document_is_refused(client: httpx.AsyncClient) -> None:
-    """Untrusted JSON, parsed once, with every problem reported."""
-    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
-    response = await client.put(
-        f"/api/profiles/broken?rev={listing.rev}",
-        headers=auth(),
-        json={"profile_id": "broken"},
-    )
-    assert response.status_code == HTTPStatus.BAD_REQUEST
-
-
-async def test_an_integer_beyond_every_float_is_a_malformed_profile(
-    client: httpx.AsyncClient,
-) -> None:
-    """Refused as malformed, not a 500: ``float(10**400)`` raises (ANH-137)."""
-    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
-    document = {**profile_document("bench_huge"), "max_rpm": 10**400}
-    response = await client.put(
-        f"/api/profiles/bench_huge?rev={listing.rev}", headers=auth(), json=document
-    )
-    assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert "a float can hold" in detail(response)
-
-
-async def test_a_profile_can_be_deleted(client: httpx.AsyncClient) -> None:
-    """And the listing that comes back is the one after the deletion."""
-    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
-    remaining = parse(
-        ProfileListRow,
-        await client.delete(f"/api/profiles/{PROFILE_ID}?rev={listing.rev}", headers=auth()),
-    )
-    assert PROFILE_ID not in [profile.profile_id for profile in remaining.profiles]
-
-
-async def test_deleting_at_a_stale_revision_is_refused(client: httpx.AsyncClient) -> None:
-    """The same optimistic-concurrency answer a save gets, for the same reason."""
-    response = await client.delete(f"/api/profiles/{PROFILE_ID}?rev=999", headers=auth())
-    assert response.status_code == HTTPStatus.CONFLICT
-    assert "revision" in detail(response)
-
-
-async def test_deleting_an_unknown_profile_is_a_404(client: httpx.AsyncClient) -> None:
-    """Rather than a silent success that looks like it worked."""
-    listing = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
-    response = await client.delete(f"/api/profiles/nope?rev={listing.rev}", headers=auth())
     assert response.status_code == HTTPStatus.NOT_FOUND
+    after = parse(ProfileListRow, await client.get("/api/profiles", headers=auth()))
+    assert after == before
+    assert rig.store.rev == before.rev
 
 
 # =========================================================================

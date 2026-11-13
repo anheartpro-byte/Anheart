@@ -67,6 +67,7 @@ from src.training.plan import (
     SUBJECT_HR_MAX_MAX,
     SUBJECT_HR_MAX_MIN,
     ZONE_CEILING_FRACTION,
+    CatalogStamp,
     Channel,
     DefaultsUnusable,
     DeleteError,
@@ -2031,6 +2032,22 @@ def test_invalid_defaults_are_unrecoverable(tmp_path: Path) -> None:
             "profiles[0] is malformed",
             id="entry_malformed",
         ),
+        pytest.param(
+            '{"version": 1, "rev": 0, "profiles": [], "catalog": 4}',
+            "'catalog' must be an object, got int",
+            id="catalog_not_an_object",
+        ),
+        pytest.param(
+            '{"version": 1, "rev": 0, "profiles": [], "catalog": {"revision": -1, "medical": "x"}}',
+            "store: catalog: 'revision' must not be negative, got -1",
+            id="catalog_revision_negative",
+        ),
+        pytest.param(
+            '{"version": 1, "rev": 0, "profiles": [], "catalog": {"revision": 1.5, "medical": 2}}',
+            "store: catalog: 'revision' must be a whole number, got float; "
+            "store: catalog: 'medical' must be a string, got int",
+            id="catalog_of_the_wrong_types",
+        ),
     ],
 )
 def test_a_store_file_of_the_wrong_shape_is_malformed(raw: str, expected: str) -> None:
@@ -2050,6 +2067,30 @@ def test_an_empty_profile_list_parses_cleanly() -> None:
     content = _ok(parse_store('{"version": 1, "rev": 4, "profiles": []}'))
     assert content.profiles == ()
     assert content.rev == StoreRev(4)
+    assert content.catalog is None
+
+
+def test_a_signed_catalogue_s_profiles_round_trip_with_their_stamp(tmp_path: Path) -> None:
+    """ANH-138: the store says which catalogue it holds, under which medical parameters."""
+    store = _loaded_store(tmp_path)
+    stamp = CatalogStamp(revision=7, medical="0.1.0")
+    assert _ok(store.replace_catalog((BASE,), stamp)) == StoreRev(1)
+    assert store.catalog == stamp
+    assert store.list_profiles() == (BASE,)
+    reopened = _store(tmp_path)
+    _ok(reopened.load())
+    assert reopened.catalog == stamp
+    assert reopened.list_profiles() == (BASE,)
+
+
+def test_a_profile_saved_by_hand_makes_the_store_no_catalogue_s(tmp_path: Path) -> None:
+    store = _loaded_store(tmp_path)
+    _ok(store.replace_catalog((BASE,), CatalogStamp(revision=7, medical="0.1.0")))
+    _ok(store.delete(BASE.profile_id, expected_rev=store.rev))
+    assert store.catalog is None
+    reopened = _store(tmp_path)
+    _ok(reopened.load())
+    assert reopened.catalog is None
 
 
 def test_a_stored_profile_with_an_unsafe_limit_makes_the_store_malformed() -> None:
@@ -2118,6 +2159,7 @@ IMMUTABLE_RECORDS: Final[tuple[tuple[object, str], ...]] = (
     (_PROGRAM, "source_rev"),
     (LoadReport(LoadSource.STORE_FILE, StoreRev(1), (), None, "detail"), "rev"),
     (StoreContent(StoreRev(1), (BASE,)), "rev"),
+    (CatalogStamp(revision=1, medical="0.1.0"), "revision"),
     (Malformed("detail", ("problem",)), "detail"),
     (Rejected((Violation.EMPTY_NAME,), "detail"), "violations"),
     (UnknownProfile("id", ()), "profile_id"),

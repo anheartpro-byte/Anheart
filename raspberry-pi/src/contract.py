@@ -78,6 +78,13 @@ machine are open or analysed, which the pre-flight reads
 launch an automatic session there, and refuses its start 409
 ``incident_open``; a bench launch is never refused for it.
 
+Since 1.11 the published programme catalogue comes down signed
+(``GET /api/machine/programmes``, ``programme_catalog`` of the shared file),
+asked for at rest only and judged again by this console's rules
+(:mod:`src.programme_catalog`), and ``POST /api/machine/profiles`` says what
+was accepted and refused. A dashboard before 1.11 answers 404 to the route:
+nothing is received, the programmes stay.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer

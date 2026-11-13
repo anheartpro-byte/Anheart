@@ -1,23 +1,24 @@
+"""The catalogue's writes to the profile store (ANH-138): off the loop, whole, one at a time."""
+
 import asyncio
 import os
 import threading
 from pathlib import Path
 
 import pytest
-from pydantic import TypeAdapter
 
-from src.web.schemas import ProfileListRow
+from src.result import Ok
+from src.training.plan import CatalogStamp, parse_profile, parse_store
+from src.web.profile_writer import ProfileWriter
 from tests.test_failure_process import cruising
 from tests.test_failure_rig import make_rig
 from tests.test_web_api import profile_document
 
 
-@pytest.mark.parametrize("delete_first", [False, True])
 @pytest.mark.parametrize("cancel_first", [False, True])
 async def test_storage_wait_keeps_motor_responsive_and_serializes_revisions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    delete_first: bool,
     cancel_first: bool,
 ) -> None:
     # Given a running motor and storage paused before its atomic commit.
@@ -38,44 +39,47 @@ async def test_storage_wait_keeps_motor_responsive_and_serializes_revisions(
         fsync(fd)
 
     monkeypatch.setattr(os, "fsync", blocked_fsync)
-    async with rig.http() as client:
-        parser = TypeAdapter(ProfileListRow)
-        initial = parser.validate_json((await client.get("/api/profiles")).text)
-        profile_id = initial.profiles[0].profile_id
-        url = f"/api/profiles/{profile_id}?rev={initial.rev}"
-        mutation = (
-            client.delete(url)
-            if delete_first
-            else client.put(url, json=profile_document(profile_id))
-        )
-        first = asyncio.create_task(mutation)
-        second = None
-        try:
-            # When persistence is blocked, ticks and reads still run on the loop.
-            await asyncio.wait_for(entered.wait(), 2)
-            assert threads[0] != loop_thread
-            await asyncio.wait_for(rig.tick(0.2), 2)
-            assert rig.simulator.commanded_setpoint > 0
-            during = parser.validate_json((await client.get("/api/profiles")).text)
-            assert during == initial
-            if cancel_first:
-                first.cancel()
-            second = asyncio.create_task(client.delete(url))
-            release.set()
-            if cancel_first:
-                with pytest.raises(asyncio.CancelledError):
-                    _ = await first
-            else:
-                assert (await first).status_code == 200
+    store = rig.panel.services.store
+    writer = ProfileWriter(store)
+    initial = (store.rev, store.list_profiles(), store.catalog)
+    parsed = parse_profile(profile_document("bench_short"))
+    assert isinstance(parsed, Ok)
+    first = asyncio.create_task(
+        writer.replace_catalog((parsed.value,), CatalogStamp(revision=7, medical="0.1.0"))
+    )
+    last = CatalogStamp(revision=8, medical="0.1.0")
+    second = None
+    try:
+        # When persistence is blocked, ticks still run on the loop, and the
+        # store in memory is the one before the write.
+        await asyncio.wait_for(entered.wait(), 2)
+        assert threads[0] != loop_thread
+        await asyncio.wait_for(rig.tick(0.2), 2)
+        assert rig.simulator.commanded_setpoint > 0
+        assert (store.rev, store.list_profiles(), store.catalog) == initial
+        if cancel_first:
+            first.cancel()
+        second = asyncio.create_task(writer.replace_catalog((), last))
+        release.set()
+        if cancel_first:
+            with pytest.raises(asyncio.CancelledError):
+                _ = await first
+        else:
+            assert isinstance(await first, Ok)
+        assert isinstance(await second, Ok)
 
-            # Then only the first writer commits; its competitor is stale.
-            assert (await second).status_code == 409
-            final = parser.validate_json((await client.get("/api/profiles")).text)
-            assert final.rev == initial.rev + 1
-            assert len(threads) == 1
-        finally:
-            release.set()
-            await asyncio.gather(first, return_exceptions=True)
-            if second is not None:
-                await asyncio.gather(second, return_exceptions=True)
-            await rig.panel.close()
+        # Then both writes landed whole, one after the other, a cancelled one too.
+        assert len(threads) == 2
+        assert store.rev == initial[0] + 2
+        assert store.catalog == last
+        assert store.list_profiles() == ()
+        on_disk = parse_store((tmp_path / "profiles.json").read_text(encoding="utf-8"))
+        assert isinstance(on_disk, Ok)
+        assert on_disk.value.catalog == last
+        assert on_disk.value.profiles == ()
+    finally:
+        release.set()
+        await asyncio.gather(first, return_exceptions=True)
+        if second is not None:
+            await asyncio.gather(second, return_exceptions=True)
+        await rig.panel.close()

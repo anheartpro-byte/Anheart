@@ -7,7 +7,7 @@ import { consoleTreeDigest, startConsole, type PiConsole } from "../harness/cons
 import { callAs } from "../harness/convex";
 import { logTail, portIsFree } from "../harness/processes";
 import { convexUserId, identityOf, type AccountKey, type RunInfo } from "../harness/run";
-import { medicalOf, PROFILE_NAME, shortProfile } from "../harness/profiles";
+import { medicalOf, PROFILE_NAME, shippedProfile, shortProfile } from "../harness/profiles";
 import { rememberFromTest } from "../harness/secrets";
 import { card, choose, escape } from "../ui";
 
@@ -193,6 +193,9 @@ test("2. la console simulée démarre avec cette clé : machine en ligne, santé
     repoRoot: run.repoRoot,
     backendUrl: run.backend.url,
     machineApiKey: required(journey.machineKey, "clé de la machine"),
+    // The short programme of test 4, held from the start: no route of the
+    // console writes a profile (ANH-138), and the local backend signs no catalogue.
+    profiles: [shortProfile(shippedProfile(run, "standard_30_min"), medicalOf(run))],
   });
   journey.console = pi;
   expect(consoleTreeDigest(pi.root)).toBe(consoleTreeDigest(path.join(run.repoRoot, "raspberry-pi")));
@@ -292,13 +295,13 @@ test("4. le passager lance une séance programmée, l'opérateur la confirme à 
   test.setTimeout(210_000);
   const pi = required(journey.console, "console");
 
-  // The short programme, through the console's own API and its validations.
+  // The short programme, loaded by the console from its store and its validations.
+  const profile = shortProfile(shippedProfile(run, "standard_30_min"), medicalOf(run));
   const listed = (await pi.profiles()).body;
-  const standard = listed.profiles.find((profile) => profile.profile_id === "standard_30_min");
-  if (!standard) throw new Error("profil livré standard_30_min absent de la console");
-  const profile = shortProfile(standard, medicalOf(run));
-  const stored = await pi.putProfile(profile, listed.rev);
-  expect(stored.status, "le profil court est accepté par la console").toBe(200);
+  expect(
+    listed.profiles.map((p) => p.profile_id),
+    "le profil court est chargé par la console",
+  ).toContain(profile.profile_id);
   // Written next to the code that runs: the copy in the run folder, never raspberry-pi/.
   expect(existsSync(path.join(pi.root, "data", "profiles.local.json"))).toBe(true);
   const inTree = path.join(run.repoRoot, "raspberry-pi", "data", "profiles.local.json");
