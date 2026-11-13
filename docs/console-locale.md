@@ -2888,11 +2888,20 @@ bord ne recevra pas (...) : a acquitter a la console, page Pre-vol`). Les
 refus et la fin abandonnée, qu'aucun démarrage ne renverra, sont écrits à côté
 des enregistrements (`.sync-lost-stops.json`, comme un curseur) et
 **retiennent encore après un redémarrage de la console**, jusqu'à
-l'acquittement ; une console qui n'enregistre rien les garde en mémoire
-seulement. Un enregistrement illisible reste dû sur le disque : l'acquittement
+l'acquittement ; le curseur qui clôt une telle séance n'est écrit qu'une
+fois elle écrite au registre (sinon le démarrage suivant la renvoie, et elle
+est perdue de nouveau, une seule fois). Une console qui n'enregistre rien les
+garde en mémoire seulement. Reste en mémoire seulement, et oubliée par un
+redémarrage à cet instant, la perte d'une séance sans enregistrement, qui n'a
+pas de curseur à retenir : avant la première liste des enregistrements d'une
+exécution précédente (le registre de celle-ci n'est pas écrit avant d'être
+lu, pour ne pas l'écraser), et, pour une fin abandonnée, jusqu'au pas suivant
+(une seconde environ). Un enregistrement illisible reste dû sur le disque : l'acquittement
 le lève pour cette exécution seulement, en mémoire, et le démarrage suivant le
 liste et le retient de nouveau, jusqu'à ce qu'il soit lu et envoyé ou
-acquitté encore. L'acquittement efface ces séances, et une ligne `lost_stops_acknowledged`
+acquitté encore. L'acquittement efface ces séances, celles affichées quand il
+est demandé et elles seules : une séance perdue pendant qu'il s'écrit retient
+encore. Une ligne `lost_stops_acknowledged`
 est écrite au journal de bord (`logbook/events.jsonl`), avec l'alias de
 l'opérateur et ce qui a été levé ; le nom va aussi au journal du système.
 

@@ -25,6 +25,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 from collections.abc import Callable, Mapping
 from itertools import pairwise
 from pathlib import Path
@@ -3248,3 +3249,132 @@ async def test_the_losses_are_written_once_the_register_of_an_earlier_run_is_rea
     assert len(b.uplink.lost_stops) == 2
     again = await restarted_and_listed(b)
     assert len(again.uplink.lost_stops) == 2
+
+
+async def test_a_session_lost_while_an_acknowledgement_is_written_still_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The operator releases k1; while the empty register is written, the link comes
+    back and the dashboard refuses for good the end of k2, an emergency stop: k2 holds,
+    in memory, on disk and after a restart."""
+    b = await listed(tmp_path)
+    b.link.answer(END_PATH, GONE)
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    await b.run(3)
+    (k1,) = b.uplink.lost_stops
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.begin(armed(b.clock, remote="k2", kind="auto"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    await b.step()
+
+    real = store_lost_stops
+    loop = asyncio.get_running_loop()
+    writing = asyncio.Event()
+    written = threading.Event()
+
+    def slow(root: Path, lost: tuple[str, ...]) -> Result[None, CursorError]:
+        if not lost:
+            loop.call_soon_threadsafe(writing.set)
+            written.wait(5.0)
+        return real(root, lost)
+
+    monkeypatch.setattr("src.record_uplink.store_lost_stops", slow)
+    acknowledgement = asyncio.create_task(b.uplink.acknowledge())
+    await asyncio.wait_for(writing.wait(), 5.0)
+    b.link.answer(END_PATH, GONE)
+    # The link comes back: k2 is lost, and the one disk thread is taken, so its write
+    # must wait.
+    for _ in range(int(RETRY_PERIOD) * 4):
+        await b.step()
+    (k2,) = b.uplink.lost_stops[1:]
+    assert k2.startswith("fin refusee, ")
+    written.set()
+    assert await acknowledgement == Ok((k1,)), "only what the operator was shown"
+
+    assert b.uplink.lost_stops == (k2,)
+    assert lost(b, "fin refusee")
+    assert load_lost_stops(tmp_path) == (k2,)
+    await b.run(5)
+    assert lost(b, "fin refusee")
+    again = await restarted_and_listed(b)
+    assert again.uplink.lost_stops == (k2,)
+
+
+async def test_a_cursor_that_closes_a_lost_session_waits_for_its_loss_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A register the disk refuses: the end refused for good is not written as sent,
+    so a restart that comes now lists the session again, and it is lost again, once."""
+    b = await listed(tmp_path)
+    b.uplink.begin(armed(b.clock, remote="k17remote", kind="auto"))
+    record = recording(tmp_path, b.clock, remote="k17remote")
+    b.disk.current = record.path
+    await b.run(3)
+    real = store_lost_stops
+
+    def full(_root: Path, _lost: tuple[str, ...]) -> Result[None, CursorError]:
+        return Err(CursorError("OSError:ENOSPC"))
+
+    monkeypatch.setattr("src.record_uplink.store_lost_stops", full)
+    b.link.answer(END_PATH, GONE)
+    b.uplink.finished(RuntimeEnd(failed=True, reason="tick_exception: boom"))
+    record.close("tick_exception", stop="boom")
+    b.disk.current = None
+    await b.run(5)
+    assert lost(b, "fin refusee")
+    assert cursor_of_record(record.path).end != "sent", "not before its loss"
+
+    # The disk takes the register again; the console restarts before anything else.
+    monkeypatch.setattr("src.record_uplink.store_lost_stops", real)
+    await b.step()
+    assert load_lost_stops(tmp_path) == b.uplink.lost_stops
+    again = await restarted_and_listed(b)
+    await again.run(5)
+    assert len(again.link.to(END_PATH)) == 2, "sent again, refused again"
+    assert again.uplink.lost_stops == b.uplink.lost_stops, "held once"
+    assert cursor_of_record(record.path).end == "sent", "its loss is on disk now"
+
+
+async def test_an_acknowledgement_whose_write_lands_after_its_wait_is_written_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The empty register lands after the acknowledgement gave up on it: the next step
+    writes again the losses, which still hold, so a restart does not forget them."""
+    b = await listed(tmp_path)
+    b.link.answer(END_PATH, GONE)
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
+    await b.step()
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    await b.run(3)
+    held = b.uplink.lost_stops
+    assert load_lost_stops(tmp_path) == held
+
+    real = store_lost_stops
+    loop = asyncio.get_running_loop()
+    landed = asyncio.Event()
+    go = threading.Event()
+
+    def late(root: Path, lost: tuple[str, ...]) -> Result[None, CursorError]:
+        go.wait(5.0)
+        wrote = real(root, lost)
+        loop.call_soon_threadsafe(landed.set)
+        return wrote
+
+    monkeypatch.setattr("src.record_uplink.store_lost_stops", late)
+    monkeypatch.setattr("src.record_uplink.READ_TIMEOUT", Seconds(0.01))
+    refused = await b.uplink.acknowledge()
+    assert isinstance(refused, Err)
+    assert refused.error == f"{LOST_UNWRITTEN} ({TIMEOUT})"
+    go.set()
+    await asyncio.wait_for(landed.wait(), 5.0)
+    assert load_lost_stops(tmp_path) == (), "landed after its wait"
+    assert b.uplink.lost_stops == held, "still held"
+
+    monkeypatch.undo()  # the disk answers again, in time
+    await b.run(2)
+    assert load_lost_stops(tmp_path) == held
+    again = await restarted_and_listed(b)
+    assert again.uplink.lost_stops == held

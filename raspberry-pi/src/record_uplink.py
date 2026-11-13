@@ -380,6 +380,10 @@ class _Owed:
     left: Path | None = None
     """For a session that ended before it was bound: the record the console had open then."""
 
+    lost: bool = False
+    """The sending gave up on it (ANH-145): its cursor, which closes it, is not written
+    before its loss is in the register, or a restart would forget the loss."""
+
     caught_up: bool = False
     last_transfer: Monotonic | None = None
     next_try: Monotonic | None = None
@@ -758,18 +762,24 @@ class RecordUplink:
             return Err(SESSION_RUNS)
         if self._source is not None and not self._scanned:
             return Err(NOT_LISTED)
-        lost = self.lost_stops
-        if not lost:
+        kept, here = self._lost, self._lost_here
+        if not kept and not here:
             return Err(NOTHING_LOST)
         source = self._source
-        if source is not None and self._lost:
+        if source is not None and kept:
             wrote = await self._disk(functools.partial(_write_lost, source.root, ()), READ_TIMEOUT)
             if isinstance(wrote, Err):
+                # A write that timed out may still land, empty: the next step writes
+                # the losses, which still hold, again.
+                self._lost_unwritten = True
                 return Err(f"{LOST_UNWRITTEN} ({wrote.error.detail})")
-        self._lost = ()
-        self._lost_unwritten = False
-        self._lost_here = ()
-        return Ok(lost)
+        # Only what the operator was shown: a session lost during the write still
+        # holds, and is written at once, or at the next step.
+        self._lost = tuple(line for line in self._lost if line not in kept)
+        self._lost_unwritten = bool(self._lost)
+        self._lost_here = tuple(line for line in self._lost_here if line not in here)
+        await self._keep_lost()
+        return Ok((*kept, *here))
 
     def _lose(self, identity: str, why: str, reason: str | None, *, kept: bool = True) -> None:
         """The sending gives up on a session: if it may have opened an incident, the
@@ -778,7 +788,9 @@ class RecordUplink:
         step otherwise, and never before the register kept by an earlier run is read:
         :meth:`_keep_lost`). A console that records nothing keeps them in memory only.
         Not ``kept``: a record the next start lists again, which holds for it again."""
-        if not _stop_or_unknown(reason):
+        line = f"{why}, {identity}"
+        # Lost again after a restart that found it in the register: once is enough.
+        if not _stop_or_unknown(reason) or line in self.lost_stops:
             return
         _logger.warning(
             "dashboard: %s (%s), which may have ended on a stop: a person on board waits for "
@@ -787,9 +799,9 @@ class RecordUplink:
             identity,
         )
         if not kept:
-            self._lost_here = (*self._lost_here, f"{why}, {identity}")
+            self._lost_here = (*self._lost_here, line)
             return
-        self._lost = (*self._lost, f"{why}, {identity}")
+        self._lost = (*self._lost, line)
         self._lost_unwritten = True
 
     async def _keep_lost(self) -> None:
@@ -798,11 +810,11 @@ class RecordUplink:
         # Not before the register an earlier run kept is read: it would be written over.
         if source is None or not self._lost_unwritten or not self._scanned:
             return
-        wrote = await self._disk(
-            functools.partial(_write_lost, source.root, self._lost), READ_TIMEOUT
-        )
+        lost = self._lost
+        wrote = await self._disk(functools.partial(_write_lost, source.root, lost), READ_TIMEOUT)
         if isinstance(wrote, Ok):
-            self._lost_unwritten = False
+            # A session lost during the write is written at the next turn.
+            self._lost_unwritten = self._lost != lost
         else:
             _logger.warning(
                 "dashboard: the sessions given up on could not be written (%s): written at "
@@ -1112,6 +1124,7 @@ class RecordUplink:
 
     async def _serve(self, now: Monotonic, owed: _Owed, *, live: bool = True) -> _Step:
         if owed.cursor.state == "complete":
+            await self._persist(owed)  # a cursor held back for its loss (ANH-145)
             return _Step.IDLE
         if owed.next_try is not None and now < owed.next_try:
             return _Step.BUSY
@@ -1169,9 +1182,13 @@ class RecordUplink:
         self._said(RECORD_UNREADABLE)
 
     async def _persist(self, owed: _Owed) -> None:
+        # The losses go to the register before a cursor (ANH-145): one that closes a
+        # session given up on waits for them. A restart that comes first finds that
+        # session still open, sends it again, and it is lost again.
+        await self._keep_lost()
         record = owed.record
         cursor = owed.cursor
-        if record is None or cursor == owed.stored:
+        if record is None or cursor == owed.stored or (owed.lost and self._lost_unwritten):
             return
         wrote = await self._disk(functools.partial(_write, record, cursor), READ_TIMEOUT)
         if isinstance(wrote, Ok):
@@ -1260,7 +1277,7 @@ class RecordUplink:
             # It cannot be declared, so nothing of it can be sent: it is closed here.
             owed.cursor = replace(owed.cursor, state="complete", refused=owed.cursor.refused + 1)
             self._lose(_identity(owed), "declaration refusee", _reason_of(owed))
-            await self._keep_lost()
+            owed.lost = True
             return _Step.DONE
         found = answer.document.get("sessionId")
         if not isinstance(found, str):
@@ -1472,7 +1489,7 @@ class RecordUplink:
         )
         if isinstance(answer, Refusal):
             self._lose(_identity(owed), "fin refusee", end.reason)
-            await self._keep_lost()
+            owed.lost = True
         elif _end_word(end.reason) in STOP_ENDS:
             self._stop_told = self._clock.monotonic()
         return None
