@@ -95,6 +95,7 @@ export function navigationFor(
           "reports",
           "notifications",
           "programmes",
+          "incidents",
         ]
       : [],
     myHealth: isPatient(role)

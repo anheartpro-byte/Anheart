@@ -654,7 +654,8 @@
     "myMachines": "Mes machines",
     "members": "Membres",
     "notifications": "Alertes",
-    "programmes": "Programmes"
+    "programmes": "Programmes",
+    "incidents": "Incidents"
   },
   "sidebar": {
     "main": "Principal",
@@ -1507,6 +1508,7 @@
     "repeated": "{count} fois, dernière à {time}",
     "openSession": "Voir la séance",
     "openMachine": "Voir la machine",
+    "openIncidents": "Voir les incidents",
     "machineDeleted": "Machine supprimée",
     "reason": "Raison : {reason}",
     "reasonLabelled": "{label} : {detail}",
@@ -1531,6 +1533,64 @@
       "unavailable": "L'envoi d'e-mails n'est pas configuré sur ce déploiement : les alertes restent dans le site.",
       "email": "E-mail : {type}",
       "saved": "Préférence enregistrée."
+    }
+  },
+  "incidents": {
+    "title": "Incidents",
+    "description": "Chaque événement de sécurité de vos machines devient un incident, revu puis clos par une personne nommée. Tant qu'un incident de gravité haute est ouvert ou analysé, les séances programmées de sa machine sont fermées ; seule une séance de banc reste possible.",
+    "accessDenied": "Les incidents sont réservés aux gestionnaires et aux administrateurs.",
+    "empty": "Aucun incident.",
+    "listCut": "Seuls les {count} incidents les plus récents sont affichés.",
+    "export": "Exporter en CSV",
+    "exportHint": "Tous les incidents listés ici, toutes organisations, pour l'analyse de risques.",
+    "openedAt": "Ouvert le",
+    "machine": "Machine",
+    "kind": "Type",
+    "rule": "Règle",
+    "severity": "Gravité",
+    "status": "Statut",
+    "occupied": "Personne à bord",
+    "yes": "Oui",
+    "no": "Non",
+    "open": "Voir la fiche",
+    "back": "Retour aux incidents",
+    "notFound": "Incident introuvable.",
+    "blocked": "Séances programmées fermées sur cette machine jusqu'à la clôture de cet incident par un admin Anheart. Une séance de banc reste possible.",
+    "details": "L'incident",
+    "session": "La séance",
+    "openSession": "Voir la séance",
+    "noSession": "Aucune séance lisible pour cet incident.",
+    "events": "Événements à 60 s de l'instant",
+    "noEvents": "Aucun événement reçu autour de cet instant.",
+    "offset": "{seconds} s",
+    "review": "Analyse et clôture",
+    "analysis": "Cause",
+    "action": "Action menée",
+    "analyzedBy": "Analysé par {name}",
+    "closedBy": "Clos par {name} le {date}",
+    "saveAnalysis": "Enregistrer l'analyse",
+    "close": "Clore l'incident",
+    "analyzed": "Analyse enregistrée.",
+    "closed": "Incident clos.",
+    "closeAdminOnly": "Seul un admin Anheart clôt un incident.",
+    "kinds": {
+      "safety_verdict": "Verdict de sécurité",
+      "emergency_stop": "Arrêt d'urgence",
+      "drive_fault": "Défaut variateur",
+      "tick_exception": "Exception de la boucle",
+      "preflight_repeated_failure": "Pré-vol refusé trois fois de suite",
+      "record_rejected": "Enregistrement refusé",
+      "manual": "Déclaré à la main"
+    },
+    "severities": {
+      "low": "Basse",
+      "medium": "Moyenne",
+      "high": "Haute"
+    },
+    "statuses": {
+      "open": "Ouvert",
+      "analyzed": "Analysé",
+      "closed": "Clos"
     }
   }
 }
