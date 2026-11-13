@@ -82,12 +82,14 @@ export async function visibleUnread(
   for (const machineId of machineIds) {
     const unread = await ctx.db
       .query("notifications")
-      .withIndex("by_user_and_organization_and_machine_and_read", (q) =>
-        q
-          .eq("userId", caller._id)
-          .eq("organizationId", caller.organizationId)
-          .eq("machineId", machineId)
-          .eq("read", false),
+      .withIndex(
+        "by_user_and_organization_and_machine_and_read_and_session",
+        (q) =>
+          q
+            .eq("userId", caller._id)
+            .eq("organizationId", caller.organizationId)
+            .eq("machineId", machineId)
+            .eq("read", false),
       )
       .take(limit - rows.length);
     rows.push(...unread);

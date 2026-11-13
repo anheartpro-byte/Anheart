@@ -126,7 +126,7 @@ Vingt tables portent un champ `organizationId` dans `convex/schema.ts` :
   `by_organization_and_target_and_at`) et `notifications`
   (`by_user_and_organization_and_updated`, `by_user_and_organization_and_read`,
   `by_user_and_organization_and_machine_and_updated`,
-  `by_user_and_organization_and_machine_and_read`).
+  `by_user_and_organization_and_machine_and_read_and_session`).
 - Trois n'ont pas d'index par organisation : `machine_health_history`
   (lecture par machine et période), `session_record_files` et
   `session_record_uploads` (lecture par séance, machine ou jeton de dépôt).
@@ -1134,10 +1134,13 @@ nom de passager ni de raison de fin de séance : la raison reste sur la
 séance, et la liste ne la lit qu'au moment de l'afficher, à qui peut lire la
 séance. Index `by_user_and_organization_and_updated` (la liste),
 `by_user_and_organization_and_read` (le nombre de non lues),
-`by_user_and_organization_and_machine_and_updated` et
-`by_user_and_organization_and_machine_and_read` (liste et non lues des seules
-machines liées au gestionnaire, avant la coupe ; ce dernier index sert aussi
-au regroupement), `by_user` (suppression d'un compte) et `by_updated` (purge à 90 jours).
+`by_user_and_organization_and_machine_and_updated` (liste des seules machines
+liées au gestionnaire ; alertes changées dans la borne d'un défaut sans
+séance) et `by_user_and_organization_and_machine_and_read_and_session` (non
+lues des seules machines liées au gestionnaire, avant la coupe, par ses
+quatre premiers champs ; regroupement : les non lues d'une séance, ou sans
+séance, `FOLD_SCAN` = 50 au plus par lecture), `by_user` (suppression d'un
+compte) et `by_updated` (purge à 90 jours).
 
 `notification_settings` : une ligne par compte, `email` (un booléen
 facultatif par type : l'alerte part aussi par e-mail), `updatedAt`. Un type
@@ -1390,7 +1393,11 @@ noms de `convex/values`. Il refuse toute construction ou appel d'`Error`,
 `URIError` ou `AggregateError`, nus ou via `globalThis`, même entre parenthèses,
 ainsi que les clauses `extends` de ces noms. Il refuse aussi toute construction
 ou appel de l'identifiant `ConvexError` ou d'une propriété nommée `ConvexError`,
-quel que soit l'objet ou l'import, avec un littéral ou une variable. Chaque `throw`
+quel que soit l'objet ou l'import, avec un littéral ou une variable. Les
+parenthèses ne cachent rien : autour du constructeur, de `globalThis`
+(`(globalThis).Error`), de `ConvexError` (`new (ConvexError)(…)`) ou de
+l'espace de noms (`(values).ConvexError`), elles sont retirées avant chaque
+vérification (ANH-237). Chaque `throw`
 suit une liste blanche : une fois les parenthèses retirées, son expression
 doit être un appel direct de `refusal(...)` ou de `machineError(...)`, ou un
 simple identifiant (`throw err`, pour propager une erreur). Les chaînes,
@@ -2595,7 +2602,7 @@ structurée ne contient que des identifiants et des codes.
 | `session_failed` | `training.endTrainingSession` (route de fin) | La machine termine une séance comme échouée (refus de départ par la machine compris). Une seule fois : une fin renvoyée ne change rien. |
 | `session_failed` | `failBeforeStart` (`training.ts`, ANH-144) | Un lancement refusé avant que sa machine l'arme : par la tâche `sweepPendingSessions` (expiré, droit retiré, physiologie changée…), par la route de départ (`markTrainingStarted`, 409), ou expiré par un nouveau lancement. La liste rend son `endCode` (`reasonCode`), que la page traduit. Une confirmation répétée n'alerte pas de nouveau. |
 | `safety_verdict` | `training.storeEvents` | Un événement `verdict` dont l'action termine la séance : `RAMP_DOWN`, `QUICK_STOP`, `GO_SILENT`, ou une action que ce serveur ne sait pas lire (côté sûr). `FREEZE` et `REDUCE`, qui régulent sans arrêter, et `cleared` ne donnent rien. L'action la plus sévère est gardée. |
-| `incident_high` | `openIncident` (`convex/lib/incidents.ts`, ANH-145) | Un incident de gravité haute s'ouvre. Va aux seuls admins actifs de l'organisation Anheart (`anheartOrganization`), écrite dans cette organisation, jamais aux gestionnaires ni aux admins de l'organisation de la machine. Regroupée par séance avec l'alerte `incident_high` non lue de la même séance, jamais avec une autre (`sessionPriority` 0). Sans e-mail par défaut. |
+| `incident_high` | `openIncident` et `join` (`convex/lib/incidents.ts`, ANH-145) | Un incident de gravité haute s'ouvre, ou un incident existant devient haut (un incident clos se rouvre alors). Va aux seuls admins actifs de l'organisation Anheart (`anheartOrganization`), écrite dans cette organisation, jamais aux gestionnaires ni aux admins de l'organisation de la machine. Regroupée par séance avec l'alerte `incident_high` non lue de la même séance, jamais avec une autre (`sessionPriority` 0). Sans e-mail par défaut. |
 
 **Refus de la console (ANH-237).** La console envoie déjà le refus d'un
 lancement par `POST /api/machine/training/end` :
@@ -2627,37 +2634,125 @@ destinataire, pour la même organisation et la même machine : `drive_fault`,
 `safety_verdict` et `session_failed` qui nomment la même séance s'y fondent,
 quel que soit l'ordre des livraisons. Le type gardé est le plus précis :
 `drive_fault` > `safety_verdict` > `session_failed`. Il peut monter après
-coup. `count` additionne les événements, `updatedAt` avance et `sessionId`
+coup. `count` additionne les événements fondus, de tous types (heartbeat,
+verdict, défaut, fin) : ce n'est pas le nombre de fois où le type affiché
+s'est produit, et la page dit « N événements regroupés ». `updatedAt` avance et `sessionId`
 reste celui de la séance. Pour le même type, `foldedDetail` garde l'action
 la plus sévère d'un verdict ou le dernier code du variateur ; quand le type
 monte, le code de l'arrivant remplace le détail ; un type moindre ne change
 pas ce détail. Seuls les codes filtrés par `CODE` sont conservés.
+Quand le type monte et que l'arrivant n'a pas de code (un heartbeat), le
+détail reste celui de l'alerte : l'action d'un verdict reste lisible, et la
+page la nomme comme une action (« Arrêt progressif demandé »), non comme un
+code du variateur, jusqu'à l'arrivée du code du défaut.
+
+**E-mail.** Une alerte a un seul e-mail, celui de son type de création.
+Quand le type monte et qu'aucun e-mail n'a été mis en file pour cette alerte
+(type de création non choisi par le destinataire, ou envoi indisponible à la
+création), un e-mail du nouveau type part si le destinataire le veut. Limite :
+un e-mail déjà `failed` (reprises épuisées ou réponse finale) n'est pas
+retenté par les événements fondus ensuite ; l'alerte du site, elle, avance.
 
 Une alerte lue n'absorbe plus rien : l'événement suivant crée une nouvelle
 alerte, avec son e-mail selon les réglages, puis les événements suivants de
 la séance se fondent dans cette nouvelle alerte non lue. Les destinataires
 restent indépendants, chacun dans sa sous-transaction.
 
-Sans séance, les règles restent inchangées : `machine_offline` se regroupe
-par machine et type, comme un `drive_fault` sans séance dans une alerte
-`drive_fault` non lue de la machine, même si celle-ci nomme une séance.
-Un `drive_fault` qui nomme une séance cherche d'abord l'alerte de cette
-séance ; à défaut, il peut reprendre une alerte `drive_fault` non lue de la
-machine **sans séance**, qui prend alors cette séance. Il ne reprend jamais
-une alerte déjà liée à une autre séance. Les séances différentes gardent
-ainsi leurs alertes distinctes. La recherche utilise l'index existant
-`by_user_and_organization_and_machine_and_read`, sans nouvel index.
+Sans séance, `machine_offline` se regroupe par machine et type, sans borne
+de temps, tant que l'alerte n'est pas lue. Un `drive_fault` ne se fond que
+dans **le même défaut, dans la borne de temps** `SAME_FAULT_MS`
+(`LIVE_FRESH_MS`, 90 s : la console envoie un heartbeat toutes les 10 s, et
+au delà de 90 s sans heartbeat le serveur tient la machine hors ligne et ne
+peut plus distinguer un défaut du suivant).
 
-Limite vérifiée : un heartbeat en défaut qui ne nomme pas la séance crée
-une alerte `drive_fault` sans séance. Si le lot d'événements de la séance
-livre ensuite le verdict avant le défaut (ordre de planification actuel de
-`storeEvents`), le verdict crée l'alerte de la séance et le défaut s'y fond :
-il reste **2 alertes et 2 e-mails par destinataire**, avec l'envoi activé,
-une alerte sans séance de compteur 1 et une alerte de la séance de compteur 2.
-Dans l'ordre inverse, défaut puis verdict, l'alerte sans séance est reprise :
-**1 alerte de compteur 3 et 1 e-mail par destinataire**. L'ordre de
-planification dans `storeEvents`, ou une séance nommée plus tôt par le Pi,
-reste un point de suivi.
+Un `drive_fault` sans séance se fond dans l'alerte `drive_fault` non lue
+sans séance de la machine changée depuis moins de `SAME_FAULT_MS`. Sinon, il
+se fond dans l'alerte non lue de séance changée en dernier dans cette borne,
+si l'enregistrement de cette séance a reçu un défaut dans cette même borne.
+
+Un événement d'une séance (défaut, verdict, fin en échec, heartbeat qui la
+nomme), sans alerte non lue de cette séance, reprend l'alerte `drive_fault`
+non lue sans séance de la machine écrite depuis moins de `SAME_FAULT_MS`.
+Pour un verdict ou une fin, l'enregistrement de la séance doit aussi avoir
+reçu un défaut depuis moins de `SAME_FAULT_MS` : la fin tardive d'une séance
+dont l'alerte a été lue ne donne pas son nom à l'alerte d'un défaut plus
+récent. L'alerte prend alors cette séance.
+
+Une seule exception, la fenêtre datée : quand cet événement arrive alors que
+le serveur a déjà terminé la séance (`endedAt`), que sa console a daté son
+départ (`machineStartedAt`, axe de la machine, dates sur l'horloge du
+serveur) et que le destinataire n'a aucune alerte non lue de cette séance,
+il reprend aussi une alerte sans séance écrite entre son `startedAt` et
+`SAME_FAULT_MS` après son `endedAt`. L'ordre du Pi, qui envoie les
+événements avant la fin, ne produit presque jamais ce cas, et un heartbeat
+sans séance ne regarde jamais cette fenêtre. Une séance active ou
+interrompue pour le serveur, un enregistrement rattrapé après un
+redémarrage de la console (sa fin arrive en dernier) ou une console sans
+axe (dates de l'horloge du Pi) n'ont que la borne de `SAME_FAULT_MS`.
+
+Au delà de la borne, un défaut donne une nouvelle alerte et son e-mail : un
+défaut hors séance lu par l'un et pas par l'autre, puis un défaut d'une
+séance trois semaines plus tard, en donne une seconde à chacun ; de même pour
+l'enregistrement d'une séance arrivé deux heures en retard, plus de 90 s
+après un autre défaut hors séance. Un `drive_fault` ne reprend jamais une
+alerte liée à une autre séance, et l'horloge du Pi n'élargit jamais la
+fenêtre : au pire, une alerte de plus.
+
+« Arrivés à moins de 90 s » se lit à l'heure d'arrivée au serveur, quelles
+que soient les dates réelles des défauts. Deux défauts différents de la même
+machine arrivés à moins de 90 s l'un de l'autre se fondent donc, comme un
+défaut qui se répète, même quand l'un est ancien : l'enregistrement d'une
+séance qui arrive deux heures en retard, 60 s après un autre défaut hors
+séance, se fond dans l'alerte de ce défaut récent. L'alerte reste non lue et
+les compte tous les deux ; le défaut fondu n'envoie pas son propre e-mail,
+mais un e-mail de défaut variateur sur la même machine est parti au plus
+90 s plus tôt.
+
+**Lecture bornée (ANH-237).** Une livraison ne lit plus toutes les non lues
+de la machine : l'index
+`by_user_and_organization_and_machine_and_read_and_session` donne celles de
+sa séance et celles sans séance, au plus `FOLD_SCAN` (50) chacune, les plus
+récentes d'abord, alors que le regroupement n'en laisse qu'une par séance et
+peu sans séance. Un `drive_fault` sans séance lit en plus les alertes de la
+machine changées depuis moins de `SAME_FAULT_MS`
+(`by_user_and_organization_and_machine_and_updated`), 50 au plus. Au delà
+d'une borne, une alerte de plus, jamais une alerte perdue. Le même index sert
+aux non lues visibles des gestionnaires ; l'ancien index
+`by_user_and_organization_and_machine_and_read`, dont il prolonge les champs,
+est retiré.
+
+**Un défaut, une alerte (EX-5).** Un heartbeat en défaut qui ne nomme pas
+la séance (séance déjà finie côté Pi, ou pas encore déclarée) et la séance
+dont l'enregistrement tient ce défaut sont un seul événement, selon les
+règles ci-dessus. L'enregistrement tient un défaut quand l'un des 50 derniers
+événements de la séance (`FAULT_SCAN`) est un `drive_fault` autre que
+`cleared`, ou le verdict de la règle `drive_fault` du Pi
+(`drive_fault (RAMP_DOWN): …`) ; le défaut termine la séance, il est donc
+parmi ses derniers événements. Aucune alerte ne disparaît ni ne descend.
+
+Garantie, selon l'ordre d'arrivée, pour le même défaut : **1 alerte et
+1 e-mail par destinataire** quand le heartbeat et l'enregistrement de la
+séance arrivent à moins de `SAME_FAULT_MS` l'un de l'autre, dans les deux
+ordres. Le heartbeat, le verdict et l'événement du
+défaut, dans les 6 ordres et aussi en un seul lot (verdict planifié avant le
+défaut par `storeEvents`), donnent ainsi 1 alerte de compteur 3 ; avec la
+fin en échec, à toute place, compteur 4 (tests par les mutations internes
+des routes, et deux ordres par les routes HTTP elles-mêmes). Ni `training.ts`, ni `http.ts`, ni
+le contrat ne changent. Une séance dont l'enregistrement ne tient aucun
+défaut (verdict cardiaque seul, par exemple) reste à part d'un défaut sans
+séance : 2 alertes. Deux défauts d'une même séance donnent 2 alertes au
+destinataire qui a lu la première, une seule alerte de compteur 6 à celui
+qui ne l'a pas lue (une alerte non lue par séance).
+
+Limites, qui donnent encore 2 alertes pour un même défaut : un heartbeat
+et l'enregistrement arrivés à plus de `SAME_FAULT_MS` l'un de l'autre, même
+pour une séance datée (heartbeat au départ et enregistrement 10 min plus
+tard, ou enregistrement, fin, puis heartbeat 100 s après). Par exemple, un lien coupé
+puis rétabli dont l'enregistrement met plus de 90 s à suivre le heartbeat de
+la reconnexion, ou une route du heartbeat qui échoue plus de 90 s pendant
+que les lots d'événements passent. Et, quand seul un verdict d'une autre
+règle est arrivé à la livraison du heartbeat, puis le défaut ensuite. Le défaut doit être stocké quand arrive l'autre moitié : le Pi
+envoie les événements avant la fin.
 
 Ce regroupement s'applique aussi aux verdicts hors défaut variateur : par
 exemple, `hr_drop (RAMP_DOWN)` et la fin en échec de la même séance donnent
@@ -2736,9 +2831,12 @@ lire. Il est écrit dans la langue du compte (`users.language`). Il n'est mis
 en file que si le déploiement a ses trois variables (§8), que le
 destinataire veut ce type par e-mail et qu'il a une adresse.
 
-Un seul e-mail est mis en file, à la création de l'alerte, selon le réglage
+Un seul e-mail est mis en file par alerte, à sa création, selon le réglage
 du type de départ. Il ne dit que ce type de départ, même si l'alerte monte
-ensuite en précision ; cette montée ne renvoie aucun e-mail. `email.type`
+ensuite en précision ; cette montée ne renvoie aucun e-mail. Seule
+exception : si aucun e-mail n'a été mis en file à la création (type non
+choisi, envoi indisponible), une montée vers un type que le destinataire
+veut en met un en file, de ce nouveau type. `email.type`
 conserve le type de création, y compris si la montée précède le premier
 envoi ou arrive entre deux reprises : le type et le corps restent ainsi
 identiques malgré cette montée entre les tentatives pour la même clé
@@ -2748,8 +2846,8 @@ le type de l'alerte.
 
 **Un type de plus.** Ajouter un type dans `notificationTypeValidator` et
 `notificationEmailFields` de `convex/schema.ts`, une entrée de
-`NOTIFICATION_TYPES` dans `convex/lib/notifications.ts` avec son `foldsBy`,
-sa `sessionPriority` et `emailByDefault`, le choix correspondant dans
+`NOTIFICATION_TYPES` dans `convex/lib/notifications.ts` avec sa
+`sessionPriority` et `emailByDefault`, le choix correspondant dans
 `emailChoicesValidator` (`convex/notifications.ts`), le type dans `TYPES`
 de la page des alertes (`app/[locale]/dashboard/notifications/page.tsx`),
 les libellés français et anglais d'`alertEmail`
@@ -3544,7 +3642,12 @@ L'en-tête `Idempotency-Key` vaut `notification:<identifiant de l'alerte>`.
 [Resend conserve ces clés 24 heures](https://resend.com/changelog/idempotency-keys).
 Les constantes exportées de `notificationEmails.ts` bornent les reprises :
 `EMAIL_MAX_ATTEMPTS` = 5, `EMAIL_RETRY_DELAYS_MS` = 1 min, 5 min, 30 min,
-2 h, et `EMAIL_RETRY_WINDOW_MS` = 23 h depuis la mise en attente. Aucune des
+2 h, et `EMAIL_RETRY_WINDOW_MS` = 23 h depuis la mise en attente. Chaque
+délai est raccourci au hasard de 20 % au plus (`EMAIL_RETRY_JITTER`), pour
+que les reprises de plusieurs alertes ne tombent pas ensemble. Un en-tête
+`Retry-After` de la réponse (secondes ou date HTTP, `retryAfterMs`) allonge
+le délai s'il demande plus, jamais au-delà du plus long délai (2 h), sur
+lequel compte la clôture des e-mails abandonnés. Aucune des
 cinq tentatives au plus ne commence après cette fenêtre ; chaque requête a
 un délai maximal de 30 s (`EMAIL_REQUEST_TIMEOUT_MS`) si le runtime fournit
 `AbortSignal.timeout` ou `AbortController` avec `setTimeout`, sinon elle part
@@ -3576,8 +3679,9 @@ qui suit la marge. Seul `email.updatedAt` change : la rétention de l'alerte
 reste fondée sur son propre `updatedAt`.
 
 Pour ANH-82 : le composant `resend` n'est plus monté et ses tables n'ont
-jamais reçu d'e-mail, aucune clé n'ayant été posée. Le sort de ses anciennes
-tables au prochain déploiement n'a pas été vérifié.
+jamais reçu d'e-mail, aucune clé n'ayant été posée. Leur retrait est une
+étape d'après le déploiement ([deploiement.md](deploiement.md#33-vers-la-production),
+ligne « Après la pipeline »), non vérifiée contre un déploiement.
 
 Le webhook de Resend (statuts de remise) n'est pas branché :
 le site ne dit pas si un e-mail est arrivé. Aucun compte, aucune clé et aucun
@@ -4100,7 +4204,7 @@ C'est aussi le job `convex-tests` de l'intégration continue, déjà requis.
 | `convex/trainingPrivacy.test.ts` | Confidentialité des mesures live et des séances (ANH-71), sur le même monde mono-organisation migré. |
 | `convex/sessionLists.test.ts` | Les listes de séances (ANH-158) : 300 séances sur les trois machines des deux centres, commencées dans un autre ordre que celui de leur écriture, certaines au même instant, d'autres sans organisation ou montées par un pratiquant de l'autre centre. Chaque acteur les lit par pages de 50 et reçoit exactement celles que la règle de §3 lui ouvre, du début le plus récent au plus ancien : sans filtre, par statut, par pratiquant, par machine ; puis `listSessions`. Et ce que la règle écarte : une séance dont la machine est d'une autre organisation, une machine gérée dans une autre organisation ou disparue. |
 | `convex/gestionnaireMachines.test.ts` | `machines.setGestionnaireMachines` : deux gestionnaires sur une machine (retirer l'un ne touche pas l'autre), ajout, liens existants conservés, refus sans écriture (ANH-154). Machine absente de la table : lien orphelin retiré, nommé ou non, sans le compter dans le retour au site mais en le listant dans l'audit, y compris pour un nettoyage seul ; liens orphelins de l'autre organisation gardés et refus sans nettoyage ni audit (ANH-232). Machine supprimée : ni listée ni comptée sur la fiche, lien gardé qu'elle soit nommée ou non, jamais liée ; `assignMachineToGestionnaires` et `createMachine` : une ligne par gestionnaire même envoyé deux fois, lignes gardées, propriétaire = premier gestionnaire gardé (ANH-194). |
-| `convex/errors.test.ts` | La table `convex/lib/errors.ts` : chaque code a sa traduction française et anglaise, aucune traduction sans code ; recherche textuelle des codes écrits en place dans un `new ConvexError("code")` ou `new ConvexError({ code: "code", ... })` pour vérifier leur présence dans la table (littéraux entre guillemets doubles, une lettre minuscule puis des minuscules, chiffres ou `_`, champ `code` en tête d'objet). Les codes de `refusal(...)` sont contraints par le type `DashboardErrorCode` ; ceux de `machineError(...)` relèvent du contrat machine via `MachineErrorCode`, pas de cette recherche. Plus aucune `Error` simple dans `users.ts` et `machines.ts` hors du heartbeat interne (ANH-194) ; la connexion et les refus d'organisation par code, plus aucune phrase dans `softwareReleases.ts`, `notifications.ts` et `training.ts` (ANH-90). Pour `training.ts`, garde-fou AST contre tout import nommé de `ConvexError` (tout module, alias et type compris), ses accès via l'espace de noms de `convex/values`, toute construction ou appel d'`Error`, `TypeError`, `RangeError`, `SyntaxError`, `ReferenceError`, `EvalError`, `URIError`, `AggregateError` (nus ou via `globalThis`, même entre parenthèses) et leurs clauses `extends`, toute construction ou appel de l'identifiant `ConvexError` ou d'une propriété `ConvexError` (tout objet ou import, littéral ou variable). Liste blanche des `throw`, parenthèses retirées : seuls les appels directs de `refusal(...)` ou de `machineError(...)` et les identifiants (`throw err`) sont autorisés. Extraits positifs et négatifs, commentaires et chaînes inertes ignorés. Le contenu des identifiants propagés et, entre autres, les constructions indirectes sans `throw` par alias locaux, déstructuration d'espace de noms, `Reflect.construct`, `import()` dynamique ou accès calculés restent hors portée ; liste non exhaustive (ANH-237). |
+| `convex/errors.test.ts` | La table `convex/lib/errors.ts` : chaque code a sa traduction française et anglaise, aucune traduction sans code ; recherche textuelle des codes écrits en place dans un `new ConvexError("code")` ou `new ConvexError({ code: "code", ... })` pour vérifier leur présence dans la table (littéraux entre guillemets doubles, une lettre minuscule puis des minuscules, chiffres ou `_`, champ `code` en tête d'objet). Les codes de `refusal(...)` sont contraints par le type `DashboardErrorCode` ; ceux de `machineError(...)` relèvent du contrat machine via `MachineErrorCode`, pas de cette recherche. Plus aucune `Error` simple dans `users.ts` et `machines.ts` hors du heartbeat interne (ANH-194) ; la connexion et les refus d'organisation par code, plus aucune phrase dans `softwareReleases.ts`, `notifications.ts` et `training.ts` (ANH-90). Pour `training.ts`, garde-fou AST contre tout import nommé de `ConvexError` (tout module, alias et type compris), ses accès via l'espace de noms de `convex/values`, toute construction ou appel d'`Error`, `TypeError`, `RangeError`, `SyntaxError`, `ReferenceError`, `EvalError`, `URIError`, `AggregateError` (nus ou via `globalThis`, même entre parenthèses, `globalThis` compris) et leurs clauses `extends`, toute construction ou appel de l'identifiant `ConvexError` ou d'une propriété `ConvexError` (tout objet ou import, littéral ou variable, parenthèses retirées). Liste blanche des `throw`, parenthèses retirées : seuls les appels directs de `refusal(...)` ou de `machineError(...)` et les identifiants (`throw err`) sont autorisés. Extraits positifs et négatifs, commentaires et chaînes inertes ignorés. Le contenu des identifiants propagés et, entre autres, les constructions indirectes sans `throw` par alias locaux, déstructuration d'espace de noms, `Reflect.construct`, `import()` dynamique ou accès calculés restent hors portée ; liste non exhaustive (ANH-237). |
 | `convex/notifications.test.ts`, `convex/notificationEmails.test.ts` | Alertes aux gestionnaires : destinataires, événements, regroupement, lectures autorisées, choix par défaut, langue et corps envoyé sans donnée de santé (sentinelles MEN-13), purge et suppression avec le compte. ANH-237 : livraison isolée, reprises bornées, erreurs HTTP et réseau, contrat REST exact, clé absente de toutes les tables et arguments planifiés. Horloges simulées et `fetch` simulé : aucun appel à Resend. |
 | `convex/gestionnairePatients.test.ts` | `users.assignPatientsToGestionnaire` : ajout seul, retrait seul, les deux, liste inchangée (aucune ligne réécrite), identifiant répété, patient d'une autre organisation traité comme un compte inconnu, admin d'une autre organisation refusé comme pour un gestionnaire inconnu, deux enregistrements successifs (ANH-208). |
 | `convex/softwareReleases.test.ts` | Le registre des versions : ce que `recordRelease` accepte et refuse, une ligne par version, et chaque case de la règle « quelle machine reçoit quelle version » (ANH-134). |

@@ -195,7 +195,8 @@ describe("ANH-203 session detail card", () => {
     session({ status: "completed", endReason: "operator_stop" });
     const completed = render(<TrainingDetailsCard sessionId={sessionId} />);
     expect(
-      completed.reading("operator_stop")[0].parentElement?.className,
+      completed.reading(fr.sessionReport.endReasons.operator_stop)[0]
+        .parentElement?.className,
     ).not.toContain("red");
   });
 

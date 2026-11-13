@@ -23,18 +23,31 @@ export function useTrainingLabel() {
 /**
  * Why a session ended, for a person: the sentence of its stable end code (a
  * launch refused before its machine armed it, ANH-144), translated like any
- * code of the server's table (`errors.<code>`, convex/lib/errors.ts), else
- * the reason as it was written (the machine's words or the server's), else
- * nothing.
+ * code of the server's table (`errors.<code>`, convex/lib/errors.ts); else
+ * the reason, its leading end code (`safety_verdict: ...`) translated
+ * (`sessionReport.endReasons`) and the machine's words after it kept; else
+ * nothing. The session pages and the alerts page say it alike.
  */
 export function useEndReason() {
   const messages = useMessages();
-  const t = useTranslations("errors");
-  return (training: { endCode?: string; endReason?: string }) =>
-    training.endCode !== undefined &&
-    hasOwnMessage(messages, ["errors", training.endCode])
-      ? t(training.endCode)
-      : training.endReason;
+  const t = useTranslations();
+  return (training: { endCode?: string; endReason?: string }) => {
+    if (
+      training.endCode !== undefined &&
+      hasOwnMessage(messages, ["errors", training.endCode])
+    )
+      return t(`errors.${training.endCode}`);
+    const reason = training.endReason;
+    const code = reason?.split(":", 1)[0] ?? "";
+    if (
+      reason === undefined ||
+      !hasOwnMessage(messages, ["sessionReport", "endReasons", code])
+    )
+      return reason;
+    const label = t(`sessionReport.endReasons.${code}`);
+    const detail = reason.slice(code.length + 1).trimStart();
+    return detail ? t("notifications.reasonLabelled", { label, detail }) : label;
+  };
 }
 
 export function SessionKindBadge({ kind }: { kind: string | undefined }) {

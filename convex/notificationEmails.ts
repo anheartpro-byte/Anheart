@@ -26,6 +26,8 @@ export const EMAIL_RETRY_WINDOW_MS = 23 * 60 * 60 * 1_000;
 export const EMAIL_RETRY_DELAYS_MS = [
   60_000, 300_000, 1_800_000, 7_200_000,
 ] as const;
+/** Shorten each delay by up to this share, at random, so retries do not fall together. */
+export const EMAIL_RETRY_JITTER = 0.2;
 /** Abort a request after 30 seconds when the runtime supports a deadline. */
 export const EMAIL_REQUEST_TIMEOUT_MS = 30_000;
 /** Close abandoned attempts after the longest retry delay (2 h) plus a 1 h margin. */
@@ -167,6 +169,8 @@ export const finishAttempt = internalMutation({
     ),
     code: v.optional(v.string()),
     resendId: v.optional(v.string()),
+    // The wait the response's `Retry-After` asked for (`retryAfterMs`).
+    retryAfterMs: v.optional(v.number()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -175,7 +179,17 @@ export const finishAttempt = internalMutation({
     if (!email || email.status !== "pending" || email.attempts !== args.attempt)
       return null;
     const now = Date.now();
-    const delay = EMAIL_RETRY_DELAYS_MS[email.attempts - 1];
+    // Never past the longest delay: the abandoned sweep counts on it.
+    const delay = Math.min(
+      Math.max(...EMAIL_RETRY_DELAYS_MS),
+      Math.max(
+        args.retryAfterMs ?? 0,
+        Math.round(
+          EMAIL_RETRY_DELAYS_MS[email.attempts - 1] *
+            (1 - EMAIL_RETRY_JITTER * Math.random()),
+        ),
+      ),
+    );
     if (
       args.outcome === "retry" &&
       email.attempts < EMAIL_MAX_ATTEMPTS &&
@@ -206,6 +220,21 @@ export const finishAttempt = internalMutation({
     return null;
   },
 });
+
+/**
+ * The wait a `Retry-After` header asks for, in seconds or as an HTTP date,
+ * never below zero; undefined without a readable one.
+ */
+export function retryAfterMs(
+  header: string | null,
+  now: number,
+): number | undefined {
+  if (header === null) return undefined;
+  const wait = /^\d+$/.test(header.trim())
+    ? Number(header.trim()) * 1_000
+    : Date.parse(header) - now;
+  return Number.isNaN(wait) ? undefined : Math.max(0, wait);
+}
 
 /**
  * Send the action queued by `notifyRecipient` or a retry from `finishAttempt`.
@@ -240,6 +269,7 @@ export const send = internalAction({
     let outcome: "sent" | "retry" | "failed";
     let code: string;
     let resendId: string | undefined;
+    let retryAfter: number | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       let signal: AbortSignal | undefined;
@@ -279,6 +309,10 @@ export const send = internalAction({
         signal,
       });
       code = `email_http_${response.status}`;
+      retryAfter = retryAfterMs(
+        response.headers.get("Retry-After"),
+        Date.now(),
+      );
       outcome =
         response.status === 429 || response.status >= 500 ? "retry" : "failed";
       if (response.status === 409) {
@@ -322,6 +356,7 @@ export const send = internalAction({
       outcome,
       code,
       resendId,
+      retryAfterMs: retryAfter,
     });
     return null;
   },

@@ -137,13 +137,16 @@ export function trainingErrorViolations(text: string): string[] {
     }
     return expression;
   };
+  const isIdentifierNamed = (expression: ts.Expression, name: string) => {
+    const unwrapped = withoutParentheses(expression);
+    return ts.isIdentifier(unwrapped) && unwrapped.text === name;
+  };
   const isGlobalError = (expression: ts.Expression) => {
     const unwrapped = withoutParentheses(expression);
     return (
       (ts.isIdentifier(unwrapped) && globalErrors.has(unwrapped.text)) ||
       (ts.isPropertyAccessExpression(unwrapped) &&
-        ts.isIdentifier(unwrapped.expression) &&
-        unwrapped.expression.text === "globalThis" &&
+        isIdentifierNamed(unwrapped.expression, "globalThis") &&
         globalErrors.has(unwrapped.name.text))
     );
   };
@@ -166,13 +169,16 @@ export function trainingErrorViolations(text: string): string[] {
     }
   }
   const visit = (node: ts.Node) => {
+    const callee =
+      ts.isNewExpression(node) || ts.isCallExpression(node)
+        ? withoutParentheses(node.expression)
+        : undefined;
     if (
-      (ts.isNewExpression(node) || ts.isCallExpression(node)) &&
-      (isGlobalError(node.expression) ||
-        (ts.isIdentifier(node.expression) &&
-          node.expression.text === "ConvexError") ||
-        (ts.isPropertyAccessExpression(node.expression) &&
-          node.expression.name.text === "ConvexError"))
+      callee !== undefined &&
+      (isGlobalError(callee) ||
+        isIdentifierNamed(callee, "ConvexError") ||
+        (ts.isPropertyAccessExpression(callee) &&
+          callee.name.text === "ConvexError"))
     ) {
       violations.push(node.getText(source));
     }
@@ -199,8 +205,9 @@ export function trainingErrorViolations(text: string): string[] {
     }
     if (
       ts.isPropertyAccessExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      namespaces.has(node.expression.text) &&
+      [...namespaces].some((name) =>
+        isIdentifierNamed(node.expression, name),
+      ) &&
       node.name.text === "ConvexError"
     ) {
       violations.push(node.getText(source));
@@ -222,8 +229,8 @@ describe("T04-a: training's error guard", () => {
       "EvalError",
       "URIError",
       "AggregateError",
-    ].flatMap((name) =>
-      [name, `globalThis.${name}`].flatMap((constructor) => [
+    ].flatMap((name) => [
+      ...[name, `globalThis.${name}`].flatMap((constructor) => [
         `new ${constructor}(message)`,
         `${constructor}(message)`,
         `class Refused extends ${constructor} {}`,
@@ -231,7 +238,10 @@ describe("T04-a: training's error guard", () => {
         `((${constructor}))(message)`,
         `class Refused extends ((${constructor})) {}`,
       ]),
-    ),
+      `new (globalThis).${name}(message)`,
+      `((globalThis)).${name}(message)`,
+      `class Refused extends (globalThis).${name} {}`,
+    ]),
   )("R1c1-3: detects a global error constructor: %s", (text) => {
     expect(trainingErrorViolations(text)).not.toEqual([]);
   });
@@ -273,6 +283,11 @@ describe("T04-a: training's error guard", () => {
     "throw new errors.ConvexError(code)",
     "throw ConvexError(code)",
     "throw errors.ConvexError(code)",
+    'const refused = new (ConvexError)("phrase")',
+    "const refused = ((ConvexError))(code)",
+    "const refused = new (errors.ConvexError)(code)",
+    "const refused = ((errors.ConvexError))(code)",
+    'import * as values from "convex/values"; const CE = (values).ConvexError;',
     "throw new Error(message)",
     "throw Error(message)",
     'throw new Error("x")',

@@ -1758,13 +1758,22 @@ de fin connu est traduit et son complément est conservé :
 « Verdict de sécurité : hr_drop (RAMP_DOWN) », et `emergency_stop` devient
 « Arrêt d'urgence ». La ponctuation suit la langue du site (sans espace
 avant `:` en anglais). Un motif inconnu ou libre, comme
-« refusee par la machine : console occupee », reste tel quel. Ce libellé
-est propre à la page des alertes ; les raisons brutes sur les pages de
-séance restent en suivi.
+« refusee par la machine : console occupee », reste tel quel. Les pages
+de séance disent la raison de fin de la même façon.
 
 Le refus d'un lancement par la console donne aussi **Séance échouée**.
-Un code dédié attend un ajout au contrat du Pi ; les alertes d'incident
-restent bloquées par ANH-145.
+Un code dédié attend un ajout au contrat du Pi.
+
+**Incident grave ouvert** : seuls les admins Anheart la reçoivent, dans
+l'organisation Anheart, à l'ouverture d'un incident de gravité haute, et
+aussi quand un incident existant devient grave (un incident clos se rouvre
+alors), quelle que soit l'organisation de la machine ; ni l'admin d'organisation ni
+le gestionnaire de la machine ne la voient. Elle propose **Voir les
+incidents** (la page
+[Incidents](../tableau-de-bord.md#incidents--frdashboardincidents-et-frdashboardincidentsid),
+où l'incident s'analyse et se clôt) et **Voir la séance**. Pas d'e-mail par
+défaut, et aucun interrupteur pour ce type : l'envoi d'e-mails reste coupé
+en production (décision en attente, EX-8 d'ANH-237).
 
 **Marquer comme lue** marque une alerte ; **Tout marquer comme lu** marque
 toutes vos alertes visibles non lues, par lots automatiques de 500 sans
@@ -1776,20 +1785,24 @@ Le défaut variateur, le verdict de sécurité et la fin en échec d'une même
 séance se regroupent dans votre alerte non lue. Le défaut variateur est
 prioritaire sur le verdict de sécurité, lui-même prioritaire sur la séance
 échouée : le type affiché peut donc devenir plus précis. Un verdict de
-fréquence cardiaque et la fin en échec se regroupent aussi. L'unique e-mail
-dit le type de départ et n'est pas renvoyé quand le type change. Une alerte
-lue reste inchangée ; l'événement suivant en crée une nouvelle. Sans séance,
-le regroupement reste par machine.
+fréquence cardiaque et la fin en échec se regroupent aussi. L'e-mail dit
+le type de départ et n'est pas renvoyé quand le type change ; si aucun
+e-mail n'est parti à la création parce que vous ne vouliez pas ce type, un
+e-mail part quand le type monte vers un type que vous voulez. « N
+événements regroupés » compte tous les événements fondus dans l'alerte, de
+tous types, et non les répétitions du type affiché. Une alerte
+lue reste inchangée ; l'événement suivant en crée une nouvelle. « Machine
+hors ligne » reste regroupée par machine.
 
-Limite vérifiée : un heartbeat en défaut qui ne nomme pas la séance crée
-une alerte `drive_fault` sans séance. Si le lot d'événements de la séance
-livre ensuite le verdict avant le défaut (ordre de planification actuel de
-`storeEvents`), le verdict crée l'alerte de la séance et le défaut s'y fond :
-vous recevez **2 alertes et 2 e-mails** si l'envoi est activé, de compteurs
-1 sans séance et 2 avec séance. Dans l'ordre inverse, défaut puis verdict,
-vous recevez **1 alerte de compteur 3 et 1 e-mail**. Cette limite vaut pour
-chaque destinataire. L'ordre de planification dans `storeEvents`, ou une
-séance nommée plus tôt par le Pi, reste un point de suivi.
+Un défaut variateur signalé par la machine sans nommer la séance et
+l'enregistrement de la séance qui tient ce défaut se rejoignent s'ils
+arrivent à moins de 90 s l'un de l'autre, dans les deux ordres. Vous
+recevez alors **1 alerte et 1 e-mail**
+pour ce défaut. Vous en recevez encore 2 au delà de 90 s d'écart (par
+exemple un enregistrement long à remonter après un lien rétabli), ou si
+seul un verdict d'une autre règle était arrivé. Un défaut plus tardif donne une
+nouvelle alerte, et une séance sans défaut variateur reste à part d'un
+défaut hors séance.
 
 ---
 

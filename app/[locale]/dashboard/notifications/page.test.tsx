@@ -280,7 +280,7 @@ describe("the alerts page", () => {
       .getAllByRole("listitem")
       .filter((element) => element.getAttribute("data-alert") === "safety_verdict");
     expect(within(verdicts[0]).getByText(fr.notifications.verdict.QUICK_STOP)).toBeTruthy();
-    expect(within(verdicts[0]).getByText(/3 fois, dernière à/)).toBeTruthy();
+    expect(within(verdicts[0]).getByText(/3 événements regroupés, le dernier à/)).toBeTruthy();
     expect(within(verdicts[1]).getByText(fr.notifications.verdict.unknown)).toBeTruthy();
 
     const fault = item(fr.notifications.types.drive_fault);
@@ -297,6 +297,19 @@ describe("the alerts page", () => {
     ).toBe("/dashboard/machines/machine-1");
 
     expect(item(fr.notifications.types.machine_offline).getByText(/Banc 2/)).toBeTruthy();
+  });
+
+  it("names the action a drive fault alert kept from the verdict it was promoted from", async () => {
+    signedInAs("gestionnaire");
+    serverHas([alert("a1", { type: "drive_fault", detail: "RAMP_DOWN" })]);
+
+    await renderPage(<NotificationsPage />);
+
+    const fault = item(fr.notifications.types.drive_fault);
+    expect(fault.getByText(fr.notifications.verdict.RAMP_DOWN)).toBeTruthy();
+    expect(
+      fault.queryByText(fr.notifications.faultCode.replace("{code}", "RAMP_DOWN")),
+    ).toBeNull();
   });
 
   it("words the code of a launch refused before its machine armed it, not its sentence", async () => {

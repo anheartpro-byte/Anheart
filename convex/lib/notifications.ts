@@ -45,51 +45,46 @@ import {
   organizationRoleOf,
 } from "./auth";
 import { emailSettings, type NotificationType } from "./notificationEmail";
+import { LIVE_FRESH_MS } from "../../lib/training";
 
 export type { NotificationType };
 
 /**
- * Each kind of alert: its priority within a session, its fallback grouping,
- * and whether it goes by e-mail too for an account that has not chosen
- * (`notification_settings`).
+ * Each kind of alert: its priority within a session, and whether it goes by
+ * e-mail too for an account that has not chosen (`notification_settings`).
  *
- * - "machine": a state of the machine. A new event folds into the
- *   recipient's unread alert of that kind for that machine.
- * - "session": something that happened in one session. It folds into the
- *   recipient's unread alert for that session only. With a session, all
- *   kinds with a positive session priority fold together, keeping the highest.
+ * With a session, every kind with a positive session priority folds into the
+ * recipient's unread alert of that session, keeping the highest. Otherwise a
+ * kind folds into the recipient's unread alert of the same kind and session,
+ * or without a session: `machine_offline` by machine, with no time bound.
+ * A drive fault only folds into the same fault, within `SAME_FAULT_MS`
+ * (`sameFault`).
  */
 export const NOTIFICATION_TYPES = {
   machine_offline: {
-    foldsBy: "machine",
     sessionPriority: 0,
     emailByDefault: false,
   },
   session_failed: {
-    foldsBy: "session",
     sessionPriority: 1,
     emailByDefault: true,
   },
   drive_fault: {
-    foldsBy: "machine",
     sessionPriority: 3,
     emailByDefault: true,
   },
   safety_verdict: {
-    foldsBy: "session",
     sessionPriority: 2,
     emailByDefault: true,
   },
   // To the Anheart admins: never folded into an alert of the machine's staff.
   incident_high: {
-    foldsBy: "session",
     sessionPriority: 0,
     emailByDefault: false,
   },
 } as const satisfies Record<
   NotificationType,
   {
-    foldsBy: "machine" | "session";
     sessionPriority: number;
     emailByDefault: boolean;
   }
@@ -343,90 +338,124 @@ export async function retryDelivery(
 }
 
 /**
- * Write or fold one recipient's alert inside the subtransaction of
- * `deliverRecipient`, returning one only for a new alert. Queue its optional
- * REST e-mail separately from the write so an e-mail setup failure keeps the
- * site alert and records a safe failure code on it.
+ * How many unread alerts one lookup of a delivery reads. Folding leaves one
+ * unread alert per session, and the time bound below leaves few without a
+ * session; past this many, a delivery writes one alert more, never fewer.
  */
-export async function notifyRecipient(
-  ctx: MutationCtx,
-  machine: Doc<"machines">,
-  user: Doc<"users">,
+const FOLD_SCAN = 50;
+
+/** How many of a session's last events are read for a drive fault, which ends it. */
+const FAULT_SCAN = 50;
+
+/**
+ * How far apart a fault without a session and a session's fault may be heard
+ * and still be one fault: the console sends a heartbeat every 10 s, and past
+ * `LIVE_FRESH_MS` without one the server holds the machine offline and can no
+ * longer tell one fault from the next. Further apart, a new alert.
+ */
+export const SAME_FAULT_MS = LIVE_FRESH_MS;
+
+/**
+ * Whether the session's record holds a drive fault received since `since`
+ * (server clock): its `drive_fault` event, or the verdict of the Pi's
+ * `drive_fault` rule, whichever is stored first.
+ */
+async function sessionFaulted(
+  ctx: QueryCtx,
+  sessionId: Id<"sessions">,
+  since: number,
+): Promise<boolean> {
+  const events = await ctx.db
+    .query("training_events")
+    .withIndex("by_session_and_seq", (q) => q.eq("sessionId", sessionId))
+    .order("desc")
+    .take(FAULT_SCAN);
+  return events.some(
+    (row) =>
+      row._creationTime >= since &&
+      (row.kind === "drive_fault"
+        ? driveFaultAlerts(row.detail)
+        : row.kind === "verdict" && row.detail.startsWith("drive_fault (")),
+  );
+}
+
+/**
+ * EX-5 (ANH-237): the unread alert a drive fault shares with this event, the
+ * same fault inside the time bound. A fault whose heartbeat named no session
+ * folds into the machine's fault alert without a session changed within
+ * `SAME_FAULT_MS`, else into the session alert changed last whose record
+ * received a drive fault within `SAME_FAULT_MS`. An event of a session takes
+ * the machine's fault alert without a session written within `SAME_FAULT_MS`,
+ * or while that session ran (from its start to `SAME_FAULT_MS` after its end,
+ * for a session the server ended and whose machine dated its start), when the
+ * event is a fault or the session's record received one within
+ * `SAME_FAULT_MS`. Undefined otherwise: a new alert, never a lost one.
+ */
+async function sameFault(
+  ctx: QueryCtx,
+  unread: Doc<"notifications">[],
+  recent: () => Promise<Doc<"notifications">[]>,
   type: NotificationType,
   event: MachineEvent,
-): Promise<number> {
-  // A high incident's alert is the Anheart admins', in their organisation.
-  const organizationId =
-    type === "incident_high"
-      ? (await anheartOrganization(ctx))?._id
-      : machine.organizationId;
-  if (organizationId === undefined) return 0;
-  const now = Date.now();
-  const detail =
-    event.detail !== undefined &&
-    event.detail !== null &&
-    CODE.test(event.detail)
-      ? event.detail
+  now: number,
+): Promise<Doc<"notifications"> | undefined> {
+  const loose = unread.filter(
+    (row) => row.sessionId === undefined && row.type === "drive_fault",
+  );
+  if (event.sessionId === undefined) {
+    if (type !== "drive_fault") return undefined;
+    const fresh = loose.find((row) => now - row.updatedAt <= SAME_FAULT_MS);
+    if (fresh) return fresh;
+    const latest = (await recent())
+      .filter(
+        (row) =>
+          !row.read &&
+          row.sessionId !== undefined &&
+          NOTIFICATION_TYPES[row.type].sessionPriority > 0,
+      )
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    return latest?.sessionId !== undefined &&
+      (await sessionFaulted(ctx, latest.sessionId, now - SAME_FAULT_MS))
+      ? latest
       : undefined;
-  const unread = await ctx.db
-    .query("notifications")
-    .withIndex("by_user_and_organization_and_machine_and_read", (q) =>
-      q
-        .eq("userId", user._id)
-        .eq("organizationId", organizationId)
-        .eq("machineId", machine._id)
-        .eq("read", false),
-    )
-    .collect();
-  const sameSession =
-    event.sessionId !== undefined &&
-    NOTIFICATION_TYPES[type].sessionPriority > 0
-      ? unread.find(
-          (row) =>
-            row.sessionId === event.sessionId &&
-            NOTIFICATION_TYPES[row.type].sessionPriority > 0,
-        )
-      : undefined;
-  const same =
-    sameSession ??
-    unread.find(
-      (row) =>
-        row.type === type &&
-        (NOTIFICATION_TYPES[type].foldsBy === "machine"
-          ? event.sessionId === undefined || row.sessionId === undefined
-          : row.sessionId === event.sessionId),
-    );
-  if (same) {
-    const promoted =
-      NOTIFICATION_TYPES[type].sessionPriority >
-      NOTIFICATION_TYPES[same.type].sessionPriority;
-    await ctx.db.patch(same._id, {
-      type: promoted ? type : same.type,
-      count: same.count + (event.count ?? 1),
-      updatedAt: now,
-      detail:
-        same.type === type
-          ? foldedDetail(type, same.detail, detail)
-          : promoted
-            ? detail
-            : same.detail,
-      sessionId: same.sessionId ?? event.sessionId,
-    });
-    return 0;
   }
-  const notificationId = await ctx.db.insert("notifications", {
-    organizationId,
-    userId: user._id,
-    type,
-    machineId: machine._id,
-    sessionId: event.sessionId,
-    detail,
-    count: event.count ?? 1,
-    createdAt: now,
-    updatedAt: now,
-    read: false,
-  });
-  if (emailSettings() === null || user.email.trim() === "") return 1;
+  if (NOTIFICATION_TYPES[type].sessionPriority === 0) return undefined;
+  const session = await ctx.db.get(event.sessionId);
+  // An alert just written; or one written while the session ran, read on its
+  // dates only once the server has ended it and when its machine dated its
+  // start (`machineAxis`): before that, a late record may come hours after a
+  // different fault, and a Pi clock is not the server's.
+  const dated =
+    session?.endedAt !== undefined && session.machineStartedAt !== undefined
+      ? { from: session.startedAt, to: session.endedAt + SAME_FAULT_MS }
+      : null;
+  const during = loose.find(
+    (row) =>
+      now - row.createdAt <= SAME_FAULT_MS ||
+      (dated !== null &&
+        row.createdAt >= dated.from &&
+        row.createdAt <= dated.to),
+  );
+  return during !== undefined &&
+    (type === "drive_fault" ||
+      (await sessionFaulted(ctx, event.sessionId, now - SAME_FAULT_MS)))
+    ? during
+    : undefined;
+}
+
+/**
+ * Queue the REST e-mail of a recipient's alert of `type` when its settings
+ * want one, recording a safe failure code if queuing fails: the site alert
+ * stays either way.
+ */
+async function queueEmail(
+  ctx: MutationCtx,
+  notificationId: Id<"notifications">,
+  user: Doc<"users">,
+  type: NotificationType,
+  now: number,
+): Promise<void> {
+  if (emailSettings() === null || user.email.trim() === "") return;
   try {
     const choices = emailChoices(
       await ctx.db
@@ -434,7 +463,7 @@ export async function notifyRecipient(
         .withIndex("by_user", (q) => q.eq("userId", user._id))
         .unique(),
     );
-    if (!choices[type]) return 1;
+    if (!choices[type]) return;
     await ctx.db.patch(notificationId, {
       email: {
         type,
@@ -460,6 +489,118 @@ export async function notifyRecipient(
       },
     });
   }
+}
+
+/**
+ * Write or fold one recipient's alert inside the subtransaction of
+ * `deliverRecipient`, returning one only for a new alert. Queue its optional
+ * REST e-mail separately from the write so an e-mail setup failure keeps the
+ * site alert and records a safe failure code on it. A fold that promotes an
+ * alert no e-mail was queued for queues one for its new type.
+ */
+export async function notifyRecipient(
+  ctx: MutationCtx,
+  machine: Doc<"machines">,
+  user: Doc<"users">,
+  type: NotificationType,
+  event: MachineEvent,
+): Promise<number> {
+  // A high incident's alert is the Anheart admins', in their organisation.
+  const organizationId =
+    type === "incident_high"
+      ? (await anheartOrganization(ctx))?._id
+      : machine.organizationId;
+  if (organizationId === undefined) return 0;
+  const now = Date.now();
+  const detail =
+    event.detail !== undefined &&
+    event.detail !== null &&
+    CODE.test(event.detail)
+      ? event.detail
+      : undefined;
+  const unreadOf = (sessionId: Id<"sessions"> | undefined) =>
+    ctx.db
+      .query("notifications")
+      .withIndex(
+        "by_user_and_organization_and_machine_and_read_and_session",
+        (q) =>
+          q
+            .eq("userId", user._id)
+            .eq("organizationId", organizationId)
+            .eq("machineId", machine._id)
+            .eq("read", false)
+            .eq("sessionId", sessionId),
+      )
+      .order("desc")
+      .take(FOLD_SCAN);
+  // The machine's alerts changed within the time bound of a fault.
+  const recent = () =>
+    ctx.db
+      .query("notifications")
+      .withIndex("by_user_and_organization_and_machine_and_updated", (q) =>
+        q
+          .eq("userId", user._id)
+          .eq("organizationId", organizationId)
+          .eq("machineId", machine._id)
+          .gte("updatedAt", now - SAME_FAULT_MS),
+      )
+      .take(FOLD_SCAN);
+  // The session's unread alerts, then those without a session, newest first.
+  const unread = [
+    ...(event.sessionId === undefined ? [] : await unreadOf(event.sessionId)),
+    ...(await unreadOf(undefined)),
+  ];
+  const sameSession =
+    event.sessionId !== undefined &&
+    NOTIFICATION_TYPES[type].sessionPriority > 0
+      ? unread.find(
+          (row) =>
+            row.sessionId === event.sessionId &&
+            NOTIFICATION_TYPES[row.type].sessionPriority > 0,
+        )
+      : undefined;
+  const same =
+    sameSession ??
+    // A drive fault only folds into the same fault (`sameFault`).
+    (type === "drive_fault"
+      ? undefined
+      : unread.find(
+          (row) => row.type === type && row.sessionId === event.sessionId,
+        )) ??
+    (await sameFault(ctx, unread, recent, type, event, now));
+  if (same) {
+    const promoted =
+      NOTIFICATION_TYPES[type].sessionPriority >
+      NOTIFICATION_TYPES[same.type].sessionPriority;
+    await ctx.db.patch(same._id, {
+      type: promoted ? type : same.type,
+      count: same.count + (event.count ?? 1),
+      updatedAt: now,
+      detail:
+        same.type === type
+          ? foldedDetail(type, same.detail, detail)
+          : promoted
+            ? (detail ?? same.detail)
+            : same.detail,
+      sessionId: same.sessionId ?? event.sessionId,
+    });
+    if (promoted && same.email === undefined)
+      await queueEmail(ctx, same._id, user, type, now);
+    return 0;
+  }
+  const notificationId = await ctx.db.insert("notifications", {
+    organizationId,
+    userId: user._id,
+    type,
+    machineId: machine._id,
+    sessionId: event.sessionId,
+    detail,
+    count: event.count ?? 1,
+    createdAt: now,
+    updatedAt: now,
+    read: false,
+  });
+  await queueEmail(ctx, notificationId, user, type, now);
   return 1;
 }
 

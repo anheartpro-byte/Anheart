@@ -1,6 +1,6 @@
 "use client";
 
-import { useLocale, useMessages, useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { AlertTriangle, Bell, Mail } from "lucide-react";
@@ -8,7 +8,7 @@ import { api } from "@/convex/_generated/api";
 import { Link } from "@/i18n/navigation";
 import { useMutationWithFeedback } from "@/hooks/use-mutation-with-feedback";
 import { isStaff } from "@/lib/organizationAccess";
-import { hasOwnMessage } from "@/components/dashboard/statusLabels";
+import { useEndReason } from "@/components/training/TrainingBadges";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -158,9 +158,7 @@ export default function NotificationsPage() {
 /** One alert: its kind, its machine, when, what the machine said, and where to look. */
 function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
   const t = useTranslations("notifications");
-  const tErrors = useTranslations("errors");
-  const tEndReasons = useTranslations("sessionReport.endReasons");
-  const messages = useMessages();
+  const endReasonOf = useEndReason();
   const locale = useLocale();
   const at = (time: number) =>
     new Date(time).toLocaleString(locale, {
@@ -168,27 +166,18 @@ function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
       timeStyle: "short",
     });
 
-  let reason = alert.reason;
-  if (
-    alert.reasonCode !== undefined &&
-    hasOwnMessage(messages, ["errors", alert.reasonCode])
-  ) {
-    reason = tErrors(alert.reasonCode);
-  } else if (reason !== undefined) {
-    const code = reason.split(":", 1)[0];
-    if (hasOwnMessage(messages, ["sessionReport", "endReasons", code])) {
-      const label = tEndReasons(code);
-      const detail = reason.slice(code.length + 1).trimStart();
-      reason = detail ? t("reasonLabelled", { label, detail }) : label;
-    }
-  }
+  const reason = endReasonOf({
+    endCode: alert.reasonCode,
+    endReason: alert.reason,
+  });
 
+  // Read by its form: a drive fault alert promoted from a verdict keeps the
+  // verdict's action until the drive's own code arrives.
   let detail: string | null = null;
-  if (alert.type === "safety_verdict") {
-    detail =
-      alert.detail !== undefined && t.has(`verdict.${alert.detail}`)
-        ? t(`verdict.${alert.detail}`)
-        : t("verdict.unknown");
+  if (alert.detail !== undefined && t.has(`verdict.${alert.detail}`)) {
+    detail = t(`verdict.${alert.detail}`);
+  } else if (alert.type === "safety_verdict") {
+    detail = t("verdict.unknown");
   } else if (alert.type === "drive_fault" && alert.detail !== undefined) {
     detail = t("faultCode", { code: alert.detail });
   }
