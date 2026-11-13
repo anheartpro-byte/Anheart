@@ -42,6 +42,7 @@ var PANEL_MS = 1000;            // console link panel refresh
 var PANEL_STALE_MS = 3500;      // no /api/panel answer for this long: what it last said is not the present
 var SENSORS_MS = 1000;          // /api/sensors poll
 var ROSTER_MS = 10000;          // riders' list refresh (the console asks the dashboard once a minute)
+var PROFILES_MS = 10000;        // programmes refresh (they change when the console accepts a signed catalogue)
 var SENSOR_STALE_MS = 3500;     // a channel whose `at` has not moved for this long is stale
 var ECG_CAPACITY = 1600;        // samples kept for the trace (~6 s at 250 Hz)
 var STANDSTILL_RPM = 0.05;      // below this, the output shaft is called stopped
@@ -57,6 +58,7 @@ var state = {
   snapshot: null,
   zone: null,            // {low, high} from the chosen profile, for the band
   profiles: [],
+  profilesShown: null,   // the programmes the choice shows, as one string: rebuilt only when they change
   roster: null,          // the last /api/roster answer: names live here, in this page's memory only
   rosterShown: null,     // the riders the list shows, as one string: rebuilt only when it changes
   riderLost: false,      // the rider chosen here is no longer in the list
@@ -3572,18 +3574,42 @@ function loadStatus() {
 }
 
 function loadProfiles() {
-  return api("/api/profiles").then(function (listing) {
-    state.profiles = listing.profiles;
-    var select = el("profile");
-    select.textContent = "";
-    listing.profiles.forEach(function (profile) {
-      var option = document.createElement("option");
-      option.value = profile.profile_id;
-      option.textContent = profile.name + " (" + profile.profile_id + ")";
-      select.appendChild(option);
-    });
-    onProfileChange();
+  return api("/api/profiles").then(renderProfiles);
+}
+
+/*
+  The programmes change while the page is open: the console accepts a signed
+  catalogue (ANH-138). Asked again on their own cadence, the choice is rebuilt
+  only when they changed, and keeps the programme chosen while it is still
+  offered.
+*/
+function refreshProfiles() {
+  return loadProfiles().catch(function () {
+    /* shown by the banner and the token note */
   });
+}
+
+function renderProfiles(listing) {
+  var shown = JSON.stringify(listing.profiles);
+  if (shown === state.profilesShown) {
+    return;
+  }
+  state.profilesShown = shown;
+  state.profiles = listing.profiles;
+  var select = el("profile");
+  var chosen = select.value;
+  select.textContent = "";
+  listing.profiles.forEach(function (profile) {
+    var option = document.createElement("option");
+    option.value = profile.profile_id;
+    option.textContent = profile.name + " (" + profile.profile_id + ")";
+    select.appendChild(option);
+  });
+  var kept = listing.profiles.some(function (profile) {
+    return profile.profile_id === chosen;
+  });
+  select.value = kept ? chosen : listing.profiles.length ? listing.profiles[0].profile_id : "";
+  onProfileChange();
 }
 
 function selectedProfile() {
@@ -4238,6 +4264,7 @@ function start() {
   window.setInterval(loadFeedback, PANEL_MS);
   window.setInterval(loadSensors, SENSORS_MS);
   window.setInterval(loadRoster, ROSTER_MS);
+  window.setInterval(refreshProfiles, PROFILES_MS);
   window.setInterval(loadCamera, 1000);
   loadCamera();
   window.setInterval(ping, PRESENCE_MS);

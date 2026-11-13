@@ -228,7 +228,12 @@ from src.presence.adapter import RuntimePort as PresenceRuntimePort
 from src.presence.monitor import EmergencyStop, PresenceDecision, PresenceMonitor, RampDown
 from src.presence.simulated import SimulatedCamera
 from src.presence.types import CapsuleState, RiderPosture
-from src.programme_catalog import ProgrammeCatalog, read_public_key, rules_of
+from src.programme_catalog import (
+    ProgrammeCatalog,
+    read_public_key,
+    rules_of,
+    screen_stored,
+)
 from src.record import commands as record_commands
 from src.record.cursor import boot_identity
 from src.record.deposit import RecordDeposit
@@ -2605,6 +2610,11 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             raise ValueError(f"the profile store cannot start: {error}")
         case _:
             pass
+    # Linked or not: a stored catalogue is judged by this start's rules before anything
+    # is offered (ANH-138).
+    rules = rules_of(config)
+    say = functools.partial(say_catalog, recorder, clock)
+    screened = screen_stored(store, rules, say)
 
     sensor_hub = SensorHub(clock=clock, kinds=config.sensors, fs=ECG_SAMPLE_RATE)
     bridge = EcgBridge(
@@ -2717,10 +2727,11 @@ def build_panel(  # noqa: PLR0915  # one statement per wired part
             clock=clock,
             transport=link,
             store=store,
-            rules=rules_of(config),
+            rules=rules,
             at_rest=panel.catalog_at_rest,
-            say=functools.partial(say_catalog, recorder, clock),
+            say=say,
             public_key=read_public_key(),
+            report=screened,
         )
         cloud = CloudSync(
             clock=clock,

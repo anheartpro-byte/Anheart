@@ -28,24 +28,32 @@ What it does, in this order
    board. A programme refused is named with its reason; the others are kept.
 4. **The accepted ones replace the store**, in one atomic write
    (:meth:`~src.training.plan.ProfileStore.replace_catalog`, through
-   :class:`~src.web.profile_writer.ProfileWriter`, off the loop).
+   :class:`~src.web.profile_writer.ProfileWriter`, off the loop), and are put
+   in effect only if the console is still at rest when the write has landed.
+   Otherwise memory keeps the programmes before, the disk holds the new ones,
+   and the whole list is asked for again at the next rest; a restart in
+   between screens what the disk holds before offering it
+   (:func:`screen_stored`).
 5. **The dashboard is told** with the programmes (:meth:`wire_fields`, read by
    :class:`~src.cloud_sync.CloudSync` for ``POST /api/machine/profiles``):
    the revision accepted, the ids accepted, the ids refused and why.
 
 A session never sees any of this: it runs a frozen copy of its programme
 (:class:`~src.training.plan.Program`), and a programme withdrawn from the
-catalogue meanwhile goes only at the next update at rest.
+catalogue meanwhile goes only at the next update at rest. At every start,
+linked or not, a stored catalogue is judged again by this start's rules
+(:func:`screen_stored`).
 
 What it never does
 ------------------
 Nothing here starts, stops or arms anything. No answer of the dashboard can
 make a programme accepted without the signature, nor accepted against this
 console's rules. A dashboard that signs nothing (``not_configured``), that
-does not know the route (an older one answers 404) or that does not answer
-leaves the programmes as they are: the shipped fallback
-(``config/profiles.default.json``) on a console that never received a signed
-catalogue.
+does not know the route (an older one answers 404), that has published
+nothing yet (:data:`NOTHING_PUBLISHED`) or that does not answer leaves the
+programmes as they are: the shipped fallback (``config/profiles.default.json``)
+on a console that never received a signed catalogue. An answer too large to
+read is refused and said in the logbook.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -62,7 +70,14 @@ from pathlib import Path
 from typing import Final, cast, final
 
 from src.clock import Clock
-from src.cloud_sync import CloudTransport, Document
+from src.cloud_sync import (
+    MAX_RESPONSE_BYTES,
+    TOO_LARGE_ANSWER,
+    CloudError,
+    CloudTransport,
+    Document,
+    Unreachable,
+)
 from src.local_config import CardiacTiers, LocalConfig
 from src.medical import CONFIG_DIRECTORY, UNSIGNED_SENTENCE, MedicalVersion, verify_signature
 from src.result import Err, Ok, Result
@@ -104,6 +119,16 @@ MAX_ID_CHARS: Final[int] = 64
 
 DUPLICATE: Final[str] = "identifiant en double dans le catalogue"
 """Why every programme of an id the catalogue holds twice is refused: neither is guessed."""
+
+NOTHING_PUBLISHED: Final[int] = 0
+"""The revision of a catalogue nothing was ever published in: not a catalogue at all.
+
+Kept apart so that a key set on a deployment before anything is published
+does not empty every console of its fallback programmes."""
+
+MAX_PAYLOAD_BYTES: Final[int] = 500_000
+"""The largest signed text Convex publishes (``max_payload_bytes``): the whole answer, its
+text escaped once in JSON, stays under what the transport reads (``MAX_RESPONSE_BYTES``)."""
 
 
 # =========================================================================
@@ -330,6 +355,53 @@ def review_all(
     return tuple(accepted), tuple(rejected)
 
 
+def screen_stored(
+    store: ProfileStore, rules: LocalRules, say: Callable[[str], None]
+) -> CatalogReport:
+    """What this start may offer of a stored catalogue, judged by this start's rules.
+
+    Called right after the store is loaded, linked to a dashboard or not:
+    the medical parameters or the configuration may have changed since the
+    catalogue was accepted (a new signed file, a lower ``MOTOR_MAX_RPM``,
+    ``OCCUPANCY_OCCUPIED_ENABLED`` turned off, another radius). Accepted
+    under other medical parameters, the whole catalogue is set aside;
+    otherwise each programme this machine now refuses is. In memory only,
+    until a catalogue is accepted again; each refusal is said. A store that
+    holds no catalogue (the shipped fallback) is left as it is.
+    """
+    stamp = store.catalog
+    if stamp is None:
+        return CatalogReport(revision=None, accepted=(), rejected=())
+    stored = store.list_profiles()
+    if stamp.medical != rules.medical_record:
+        reason = (
+            f"accepte sous les parametres medicaux {stamp.medical}, "
+            f"la machine a {rules.medical_record}"
+        )
+        say(f"catalogue {stamp.revision} ecarte jusqu'au prochain : {reason}")
+        refused = tuple(RejectedProgramme(p.profile_id, reason) for p in stored)
+    else:
+        refused = tuple(
+            RejectedProgramme(p.profile_id, _bounded_reason(why))
+            for p in stored
+            if (why := _machine_refusal(p, rules)) is not None
+        )
+        for programme in refused:
+            say(
+                f"programme {programme.profile_id} ecarte jusqu'au prochain catalogue : "
+                f"{programme.reason}"
+            )
+    gone = {programme.profile_id for programme in refused}
+    kept = tuple(p for p in stored if p.profile_id not in gone)
+    if refused:
+        store.adopt(StoreContent(rev=store.rev, profiles=kept, catalog=stamp))
+    return CatalogReport(
+        revision=stamp.revision,
+        accepted=tuple(p.profile_id for p in kept),
+        rejected=refused,
+    )
+
+
 # =========================================================================
 # The link
 # =========================================================================
@@ -368,14 +440,12 @@ class ProgrammeCatalog:
         at_rest: Callable[[], bool],
         say: Callable[[str], None],
         public_key: bytes | None,
+        report: CatalogReport,
     ) -> None:
         """``at_rest``: whether the programmes may change now. ``say``: one warning for the
         console's logbook. ``public_key``: the Anheart catalogue key, PEM; ``None``: none
-        could be read, and every signature is refused.
-
-        The store is screened here, before anything is asked: profiles accepted under
-        other medical parameters than this console's are set aside, in memory, until the
-        next catalogue is accepted.
+        could be read, and every signature is refused. ``report``: what the screening of
+        the store at the start found (:func:`screen_stored`).
         """
         self._clock: Clock = clock
         self._transport: CloudTransport = transport
@@ -390,7 +460,7 @@ class ProgrammeCatalog:
         # with the rules of this start.
         self._held: int | None = None
         self._refused: tuple[str, object] | None = None
-        self._report: CatalogReport = self._screen_stored()
+        self._report: CatalogReport = report
 
     @property
     def report(self) -> CatalogReport:
@@ -408,29 +478,6 @@ class ProgrammeCatalog:
             "rejected": [{"profileId": r.profile_id, "reason": r.reason} for r in rejected],
         }
 
-    def _screen_stored(self) -> CatalogReport:
-        stamp = self._store.catalog
-        if stamp is None:
-            return CatalogReport(revision=None, accepted=(), rejected=())
-        stored = self._store.list_profiles()
-        if stamp.medical == self._rules.medical_record:
-            return CatalogReport(
-                revision=stamp.revision,
-                accepted=tuple(p.profile_id for p in stored),
-                rejected=(),
-            )
-        reason = (
-            f"accepte sous les parametres medicaux {stamp.medical}, "
-            f"la machine a {self._rules.medical_record}"
-        )
-        self._store.adopt(StoreContent(rev=self._store.rev, profiles=(), catalog=stamp))
-        self._say(f"catalogue {stamp.revision} ecarte jusqu'au prochain : {reason}")
-        return CatalogReport(
-            revision=stamp.revision,
-            accepted=(),
-            rejected=tuple(RejectedProgramme(p.profile_id, reason) for p in stored),
-        )
-
     async def step(self) -> None:
         """Ask for the catalogue when it is due and the machine is at rest; never raises."""
         now = self._clock.monotonic()
@@ -442,8 +489,7 @@ class ProgrammeCatalog:
         params = None if self._held is None else {"since": str(self._held)}
         fetched = await self._transport.get(CATALOG_PATH, params)
         if isinstance(fetched, Err):
-            # An older dashboard answers 404: as no answer, the programmes stay.
-            _logger.info("programme catalogue: nothing received (%r)", fetched.error)
+            self._missed(fetched.error)
             return
         answer = fetched.value
         text = signed_text(answer, self._public_key)
@@ -460,6 +506,10 @@ class ProgrammeCatalog:
         await self._receive(payload.value)
 
     async def _receive(self, catalog: CatalogPayload) -> None:
+        if catalog.revision == NOTHING_PUBLISHED:
+            # Nothing was ever published: no catalogue, the programmes stay as they are.
+            self._held = catalog.revision
+            return
         if catalog.unchanged:
             if catalog.revision != self._held:
                 self._refuse(f"catalogue dit inchange a la revision {catalog.revision}", None)
@@ -472,12 +522,18 @@ class ProgrammeCatalog:
         stamp = CatalogStamp(revision=catalog.revision, medical=self._rules.medical_record)
         kept = {p.profile_id: p for p in self._store.list_profiles()}
         if self._store.catalog != stamp or kept != {p.profile_id: p for p in accepted}:
-            written = await self._writer.replace_catalog(accepted, stamp)
+            written = await self._writer.replace_catalog(accepted, stamp, may_adopt=self._at_rest)
             if isinstance(written, Err):
                 self._say(
                     f"catalogue {catalog.revision} non enregistre, programmes inchanges : "
                     f"{written.error.detail}"
                 )
+                return
+            if not written.value:
+                # A launch or a session came during the write: the programmes in memory
+                # are those before, and the whole list is asked again at the next rest.
+                self._asked = None
+                self._held = None
                 return
         self._held = catalog.revision
         self._refused = None
@@ -496,6 +552,14 @@ class ProgrammeCatalog:
             _logger.warning(
                 "programme catalogue: %r refused: %r", refused.profile_id, refused.reason
             )
+
+    def _missed(self, error: CloudError) -> None:
+        """No answer to read. One too large to read is refused and said; any other (the
+        404 of a dashboard before 1.11 too) leaves the programmes as they are."""
+        if isinstance(error, Unreachable) and error.detail == TOO_LARGE_ANSWER:
+            self._refuse(f"reponse du catalogue au-dela de {MAX_RESPONSE_BYTES} octets", None)
+            return
+        _logger.info("programme catalogue: nothing received (%r)", error)
 
     def _refuse(self, reason: str, signature: object) -> None:
         """Say an answer dropped, once for the same reason and the same signature."""

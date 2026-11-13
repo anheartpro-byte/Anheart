@@ -41,11 +41,17 @@ async def test_storage_wait_keeps_motor_responsive_and_serializes_revisions(
     monkeypatch.setattr(os, "fsync", blocked_fsync)
     store = rig.panel.services.store
     writer = ProfileWriter(store)
+
+    def at_rest() -> bool:
+        return True
+
     initial = (store.rev, store.list_profiles(), store.catalog)
     parsed = parse_profile(profile_document("bench_short"))
     assert isinstance(parsed, Ok)
     first = asyncio.create_task(
-        writer.replace_catalog((parsed.value,), CatalogStamp(revision=7, medical="0.1.0"))
+        writer.replace_catalog(
+            (parsed.value,), CatalogStamp(revision=7, medical="0.1.0"), may_adopt=at_rest
+        )
     )
     last = CatalogStamp(revision=8, medical="0.1.0")
     second = None
@@ -59,14 +65,16 @@ async def test_storage_wait_keeps_motor_responsive_and_serializes_revisions(
         assert (store.rev, store.list_profiles(), store.catalog) == initial
         if cancel_first:
             first.cancel()
-        second = asyncio.create_task(writer.replace_catalog((), last))
+        second = asyncio.create_task(writer.replace_catalog((), last, may_adopt=at_rest))
         release.set()
         if cancel_first:
             with pytest.raises(asyncio.CancelledError):
                 _ = await first
         else:
-            assert isinstance(await first, Ok)
-        assert isinstance(await second, Ok)
+            landed = await first
+            assert landed == Ok(True)
+        landed = await second
+        assert landed == Ok(True)
 
         # Then both writes landed whole, one after the other, a cancelled one too.
         assert len(threads) == 2

@@ -302,8 +302,17 @@ test("4. le passager lance une séance programmée, l'opérateur la confirme à 
     listed.profiles.map((p) => p.profile_id),
     "le profil court est chargé par la console",
   ).toContain(profile.profile_id);
-  // Written next to the code that runs: the copy in the run folder, never raspberry-pi/.
-  expect(existsSync(path.join(pi.root, "data", "profiles.local.json"))).toBe(true);
+  // Read from the copy in the run folder, never from raspberry-pi/: the console offers
+  // exactly what that store holds, and no catalogue made it its own (the local backend
+  // signs none).
+  const stored = JSON.parse(readFileSync(path.join(pi.root, "data", "profiles.local.json"), "utf8")) as {
+    profiles: { profile_id: string }[];
+    catalog?: unknown;
+  };
+  expect(listed.profiles.map((p) => p.profile_id).sort()).toEqual(
+    stored.profiles.map((p) => p.profile_id).sort(),
+  );
+  expect(stored.catalog, "aucun catalogue signé accepté par la console").toBeUndefined();
   const inTree = path.join(run.repoRoot, "raspberry-pi", "data", "profiles.local.json");
   expect(!existsSync(inTree) || !readFileSync(inTree, "utf8").includes(profile.profile_id)).toBe(true);
 

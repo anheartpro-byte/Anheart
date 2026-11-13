@@ -214,9 +214,33 @@ propres règles, dans cet ordre :
 Les programmes acceptés remplacent son magasin (`data/profiles.local.json`)
 en une écriture atomique ; chaque refusé est dit au site avec sa raison. La
 mise à jour n'est appliquée que si la console est encore au repos quand la
-réponse arrive. Les profils livrés (`config/profiles.default.json`) ne sont
-plus que ses programmes de secours, tant qu'aucun catalogue signé n'a été
-accepté, et la console n'a plus de route pour écrire un profil.
+réponse arrive, puis encore quand l'écriture a abouti : un lancement du site
+offert pendant l'écriture garde les programmes qu'il a vus. Les profils
+livrés (`config/profiles.default.json`) ne sont plus que ses programmes de
+secours, tant qu'aucun catalogue signé n'a été accepté, et la console n'a
+plus de route pour écrire un profil. Un catalogue où rien n'a jamais été
+publié (révision 0) n'en est pas un : la console garde ses programmes de
+secours.
+
+À chaque démarrage, qu'elle ait un tableau de bord ou non, la console juge
+de nouveau le catalogue qu'elle a gardé : accepté sous d'autres paramètres
+médicaux, il est écarté entier ; sinon chaque programme que sa configuration
+refuse maintenant (un plafond plus bas, la personne à bord désactivée) est
+écarté, jusqu'au prochain catalogue accepté.
+
+Deux conséquences à connaître :
+
+- **Une console où `OCCUPANCY_OCCUPIED_ENABLED=false`** (le réglage par
+  défaut), ou dont les paramètres médicaux ne sont pas signés, n'a pas de
+  plafond avec une personne à bord : elle refuse chaque programme du
+  catalogue avec cette raison, et son magasin n'en garde aucun. Un programme
+  a toujours quelqu'un à bord : il n'y partirait pas. Une séance de banc
+  lancée du site y part toujours, son départ ne lisant pas le magasin.
+- **Convex ne vérifie pas les paliers cardiaques**, ni le plafond, contre le
+  fichier médical et la configuration de chaque console : il ne les connaît
+  pas. Un programme dont les paliers ne sont pas ceux d'une machine est
+  refusé par elle, et sa fiche affiche « refusé par la machine : » suivi des
+  paliers en cause.
 
 ### Ce que la fiche machine montre
 

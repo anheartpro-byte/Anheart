@@ -372,6 +372,8 @@ type Document = Mapping[str, object]
 UPLOAD_CHUNK_BYTES: Final[int] = 16 * 1024
 UPLOAD_BYTES_PER_SECOND: Final[int] = 256 * 1024
 MAX_RESPONSE_BYTES: Final[int] = 1024 * 1024
+TOO_LARGE_ANSWER: Final[str] = "Response exceeds byte limit"
+"""The words of an answer refused for its size, which the catalogue says (ANH-138)."""
 
 
 class CloudTransport(Protocol):
@@ -496,12 +498,12 @@ async def _bounded_answer(response: httpx.Response) -> Result[Document, CloudErr
         return Err(Unreachable("Unsupported response encoding", response.status_code))
     if response.is_stream_consumed:
         if len(response.content) > MAX_RESPONSE_BYTES:
-            return Err(Unreachable("Response exceeds byte limit", response.status_code))
+            return Err(Unreachable(TOO_LARGE_ANSWER, response.status_code))
         return _answer(response)
     body = bytearray()
     async for chunk in response.aiter_raw(chunk_size=UPLOAD_CHUNK_BYTES):
         if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
-            return Err(Unreachable("Response exceeds byte limit", response.status_code))
+            return Err(Unreachable(TOO_LARGE_ANSWER, response.status_code))
         body.extend(chunk)
     return _answer(
         httpx.Response(response.status_code, content=bytes(body), headers=response.headers)
@@ -1045,11 +1047,14 @@ class CloudSync:
         """Whether a launch from the dashboard is offered, being confirmed or not yet armed.
 
         The programmes must not change under it (:mod:`src.programme_catalog`).
+        The confirmed launch is read by its id, which its start, its refusal and
+        :data:`LAUNCH_TIMEOUT` all clear: the launch itself is kept after a
+        timeout, for the words of a later refusal only.
         """
         return (
             self._offered_launch is not None
             or self._awaiting is not None
-            or self._confirmed_launch is not None
+            or self._confirmed_launch_id is not None
         )
 
     @property

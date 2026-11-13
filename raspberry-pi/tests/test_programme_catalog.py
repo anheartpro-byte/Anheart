@@ -14,10 +14,13 @@ private key is written anywhere.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from pathlib import Path
 from typing import Final, cast
 
@@ -25,15 +28,27 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
+from src import local_panel
 from src.clock import ManualClock
-from src.cloud_sync import CloudSync, Document, Refused, Unreachable
-from src.local_config import CardiacTiers
+from src.cloud_sync import (
+    LAUNCH_TIMEOUT,
+    MAX_RESPONSE_BYTES,
+    TOO_LARGE_ANSWER,
+    CloudSync,
+    Document,
+    Refused,
+    Unreachable,
+)
+from src.local_config import CardiacTiers, load_local_config
+from src.local_panel import build_panel
 from src.medical import PUBLIC_KEY_PATH as MEDICAL_PUBLIC_KEY_PATH
 from src.medical import SHIPPED_DOCUMENT, SHIPPED_PARAMETERS, MedicalVersion
 from src.programme_catalog import (
     CATALOG_PATH,
     CATALOG_PERIOD,
     DUPLICATE,
+    MAX_ID_CHARS,
+    MAX_PAYLOAD_BYTES,
     MAX_REASON_CHARS,
     MAX_REPORT_ENTRIES,
     PUBLIC_KEY_PATH,
@@ -46,6 +61,7 @@ from src.programme_catalog import (
     review,
     review_all,
     rules_of,
+    screen_stored,
     signed_text,
 )
 from src.result import Err, Ok, Result
@@ -55,18 +71,33 @@ from src.training.plan import (
     JsonValue,
     ProfileStore,
     StoreContent,
+    TrainingProfile,
     parse_store,
 )
+from src.training.runtime import RuntimeState
 from src.training.types import Occupancy
 from src.units import Monotonic, MotorRpm, Seconds, UnixMillis
 from tests.medical_support import public_pem, signed, unsigned
-from tests.test_cloud_sync import LAUNCH, OPERATOR, POLL_PATH, config_of, count, launch_answer
+from tests.test_cloud_sync import (
+    LAUNCH,
+    LINKED_ENV,
+    OPERATOR,
+    POLL_PATH,
+    START,
+    config_of,
+    count,
+    launch_answer,
+    ok,
+)
+from tests.test_cloud_sync import Dashboard as LinkDashboard
 from tests.test_cloud_sync import Rig as CloudRig
+from tests.test_cloud_sync import linked as linked_rig
 from tests.test_cloud_sync import rig as cloud_rig
 from tests.test_contract import shared
 from tests.test_failure_process import cruising
 from tests.test_failure_rig import make_rig as failure_rig
 from tests.test_programme_validation_parity import CASES
+from tests.test_remote_bench_launch import BENCH, confirm_over_http
 
 VERSION: Final[MedicalVersion] = SHIPPED_DOCUMENT.version
 TIERS: Final[CardiacTiers] = CardiacTiers(
@@ -180,6 +211,7 @@ def make_rig(
         at_rest=lambda: rest[0],
         say=said.append,
         public_key=trusted,
+        report=screen_stored(store, rules, said.append),
     )
     return Rig(clock, dashboard, store, catalog, key, said, rest, path)
 
@@ -202,6 +234,9 @@ def test_the_route_cadence_bounds_and_key_are_the_shared_file_s() -> None:
     assert section["poll_period_s"] == CATALOG_PERIOD
     assert section["max_report_entries"] == MAX_REPORT_ENTRIES
     assert section["max_reason_chars"] == MAX_REASON_CHARS
+    assert section["max_payload_bytes"] == MAX_PAYLOAD_BYTES
+    # The text, escaped once inside the answer, fits under what the transport reads.
+    assert 2 * MAX_PAYLOAD_BYTES + 4096 <= MAX_RESPONSE_BYTES
     assert Path(__file__).resolve().parents[2] / str(section["public_key"]) == PUBLIC_KEY_PATH
 
 
@@ -502,6 +537,7 @@ async def test_the_same_catalogue_again_is_not_written_again(tmp_path: Path) -> 
         at_rest=lambda: True,
         say=r.said.append,
         public_key=public_pem(r.signer),
+        report=screen_stored(r.store, RULES, r.said.append),
     )
     assert restarted.report.accepted == ("standard_30_min",)
     await restarted.step()
@@ -717,6 +753,311 @@ async def test_a_store_from_a_catalogue_under_other_parameters_is_set_aside(
     assert r.dashboard.asked == [None]
     assert ids(r) == ["standard_30_min"]
     assert r.on_disk().catalog == CatalogStamp(revision=3, medical=VERSION)
+
+
+def test_a_programme_this_start_refuses_is_set_aside_and_said(tmp_path: Path) -> None:
+    """A lower ceiling since the catalogue was accepted: never listed, never reported accepted."""
+    store = ProfileStore(tmp_path / "x.json", SHIPPED_DEFAULTS_PATH)
+    assert isinstance(store.load(), Ok)
+    stored = store.list_profiles()
+    content = StoreContent(
+        rev=store.rev, profiles=stored, catalog=CatalogStamp(revision=3, medical=VERSION)
+    )
+    lower = LocalRules(
+        tiers=TIERS,
+        min_run=MotorRpm(55),
+        ceiling=Ok(MotorRpm(200)),
+        medical_version=VERSION,
+        medical_record=VERSION,
+    )
+    r = make_rig(tmp_path, rules=lower, stored=content)
+    reason = "max_rpm 276 tr/min moteur au-dessus du plafond personne a bord (200 tr/min)"
+    assert ids(r) == []
+    assert r.catalog.wire_fields() == {
+        "catalogRevision": 3,
+        "accepted": [],
+        "rejected": [{"profileId": p.profile_id, "reason": reason} for p in stored],
+    }
+    assert r.said == [
+        f"programme {p.profile_id} ecarte jusqu'au prochain catalogue : {reason}" for p in stored
+    ]
+    # In memory only: the file keeps what was accepted.
+    assert not r.path.exists()
+
+
+def test_a_programme_this_start_still_accepts_is_kept_beside_one_it_refuses(
+    tmp_path: Path,
+) -> None:
+    store = ProfileStore(tmp_path / "x.json", SHIPPED_DEFAULTS_PATH)
+    assert isinstance(store.load(), Ok)
+    slow = review(programme(profile_id="slow_one", max_rpm=150), RULES)
+    fast = review(programme(profile_id="fast_one", max_rpm=276), RULES)
+    assert isinstance(slow, Ok)
+    assert isinstance(fast, Ok)
+    stamp = CatalogStamp(revision=5, medical=VERSION)
+    store.adopt(StoreContent(rev=store.rev, profiles=(slow.value, fast.value), catalog=stamp))
+    lower = LocalRules(
+        tiers=TIERS,
+        min_run=MotorRpm(55),
+        ceiling=Ok(MotorRpm(200)),
+        medical_version=VERSION,
+        medical_record=VERSION,
+    )
+    report = screen_stored(store, lower, lambda _words: None)
+    assert [p.profile_id for p in store.list_profiles()] == ["slow_one"]
+    assert store.catalog == stamp
+    assert report.accepted == ("slow_one",)
+    assert [x.profile_id for x in report.rejected] == ["fast_one"]
+
+
+def unlinked_env(**changes: str) -> dict[str, str]:
+    env = {k: v for k, v in LINKED_ENV.items() if k not in ("MACHINE_API_KEY", "CONVEX_URL")}
+    return {**env, **changes}
+
+
+def stamped_store(path: Path, medical: str) -> None:
+    """The shipped profiles, written as a catalogue accepted under ``medical``."""
+    decoded: object = json.loads(SHIPPED_DEFAULTS_PATH.read_text(encoding="utf-8"))  # pyright: ignore[reportAny]  # narrowed below
+    assert isinstance(decoded, dict)
+    document = {
+        **cast("dict[str, object]", decoded),
+        "rev": 4,
+        "catalog": {"revision": 9, "medical": medical},
+    }
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_every_start_screens_the_store_linked_or_not(tmp_path: Path, linked: bool) -> None:
+    """ANH-138: a console with no dashboard does not keep a catalogue it no longer accepts."""
+    path = tmp_path / "p.json"
+    stamped_store(path, "0.0.9")
+    env = dict(LINKED_ENV) if linked else unlinked_env()
+    loaded = load_local_config(env, signed())
+    assert isinstance(loaded, Ok), loaded
+    panel = build_panel(
+        loaded.value,
+        clock=ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000)),
+        profiles_path=path,
+        transport=lambda _c: LinkDashboard(),
+    )
+    store = panel.services.store
+    assert store.catalog == CatalogStamp(revision=9, medical="0.0.9")
+    assert store.list_profiles() == ()
+    assert (panel.catalog is not None) is linked
+    if panel.catalog is not None:
+        assert panel.catalog.report.accepted == ()
+        assert len(panel.catalog.report.rejected) == 2
+
+
+async def test_a_console_without_a_person_on_board_keeps_no_programme_and_still_runs_a_bench(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OCCUPANCY_OCCUPIED_ENABLED=false: the catalogue leaves no programme; a bench launch
+    from the site still arms, its start reading no programme."""
+    key = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(local_panel, "read_public_key", lambda: public_pem(key))
+    rig_ = linked_rig(tmp_path, signed(), OCCUPANCY_OCCUPIED_ENABLED="false")
+    store = rig_.panel.services.store
+    assert [p.profile_id for p in store.list_profiles()] == ["standard_30_min", "standard_45_min"]
+    rig_.dashboard.answer(CATALOG_PATH, Ok(answer(key, text_of(2, [programme()]))))
+    await rig_.panel.catalog_step()
+    assert store.list_profiles() == ()
+    catalog = rig_.panel.catalog
+    assert catalog is not None
+    assert catalog.report.rejected[0].reason.startswith(
+        "personne a bord refusee : OCCUPANCY_OCCUPIED_ENABLED=false"
+    )
+    rig_.dashboard.answer(POLL_PATH, launch_answer(dict(BENCH)))
+    await rig_.run(0.2)
+    attested = await confirm_over_http(rig_, "Console Operator", attested=True)
+    assert attested.status_code == HTTPStatus.ACCEPTED
+    await rig_.run(1.8)
+    assert rig_.panel.runtime.state is RuntimeState.RUNNING
+    await rig_.panel.close()
+
+
+def test_an_unlinked_start_sets_aside_what_its_ceiling_now_refuses(tmp_path: Path) -> None:
+    path = tmp_path / "p.json"
+    stamped_store(path, VERSION)
+    loaded = load_local_config(unlinked_env(OCCUPANCY_OCCUPIED_ENABLED="false"), signed())
+    assert isinstance(loaded, Ok), loaded
+    panel = build_panel(
+        loaded.value,
+        clock=ManualClock(Monotonic(10.0), UnixMillis(1_700_000_000_000)),
+        profiles_path=path,
+    )
+    assert panel.catalog is None
+    assert panel.services.store.list_profiles() == ()
+
+
+# =========================================================================
+# Nothing published yet, an answer too large, a launch that timed out
+# =========================================================================
+
+
+async def test_a_catalogue_nothing_was_ever_published_in_is_no_catalogue(tmp_path: Path) -> None:
+    """A key set before anything is published empties no console of its fallback."""
+    r = make_rig(tmp_path)
+    shipped = ids(r)
+    r.sign(0, [])
+    await r.step()
+    assert ids(r) == shipped
+    assert not r.path.exists()
+    assert r.said == []
+    assert r.catalog.report.revision is None
+    await r.step(CATALOG_PERIOD)
+    assert r.dashboard.asked == [None, {"since": "0"}]
+    # The first publication is then taken as any catalogue.
+    r.sign(1, [programme(profile_id="first_one")])
+    await r.step(CATALOG_PERIOD)
+    assert ids(r) == ["first_one"]
+
+
+async def test_an_answer_too_large_to_read_is_refused_once_in_the_logbook(tmp_path: Path) -> None:
+    r = make_rig(tmp_path)
+    shipped = ids(r)
+    r.dashboard.reply = Err(Unreachable(TOO_LARGE_ANSWER, 200))
+    await r.step()
+    await r.step(CATALOG_PERIOD)
+    assert ids(r) == shipped
+    assert r.said == [
+        f"catalogue refuse, programmes inchanges : reponse du catalogue au-dela de "
+        f"{MAX_RESPONSE_BYTES} octets"
+    ]
+
+
+async def test_a_launch_that_timed_out_no_longer_holds_the_catalogue(tmp_path: Path) -> None:
+    """Its id is cleared by the timeout: the catalogue is asked for again at rest."""
+    r = cloud_rig(tmp_path)
+    cloud = r.panel.cloud
+    assert cloud is not None
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    r.dashboard.answer(START, ok())
+    await r.step()
+    r.confirm_offer()
+    await r.step()
+    held = r.sync.launch_in_hand
+    r.panel.surface.take_command()  # the loop took it, then said nothing
+    r.dashboard.answer(POLL_PATH, launch_answer(None))
+    await r.step(float(LAUNCH_TIMEOUT) + 1.0)
+    assert [held, r.sync.launch_in_hand] == [True, False]
+    assert r.dashboard.to("/api/machine/training/end") != []
+
+
+# =========================================================================
+# A launch offered while the catalogue is being written (EX-5)
+# =========================================================================
+
+
+async def test_a_launch_offered_during_the_write_keeps_the_programmes_it_was_offered_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The disk takes the new catalogue; memory keeps the programmes the offer saw, until rest.
+
+    The real interleaving: the write holds its worker thread while the console's own
+    link step offers a dashboard launch, then lands.
+    """
+    r = cloud_rig(tmp_path)
+    store = r.panel.services.store
+    cloud = r.panel.cloud
+    assert cloud is not None
+    dashboard = Dashboard()
+    key = Ed25519PrivateKey.generate()
+    said: list[str] = []
+    catalog = ProgrammeCatalog(
+        clock=r.clock,
+        transport=dashboard,
+        store=store,
+        rules=RULES,
+        at_rest=r.panel.catalog_at_rest,
+        say=said.append,
+        public_key=public_pem(key),
+        report=screen_stored(store, RULES, said.append),
+    )
+    before = store.list_profiles()
+    rev = store.rev
+    dashboard.reply = Ok(answer(key, text_of(7, [programme(profile_id="new_one")])))
+    loop = asyncio.get_running_loop()
+    in_write = asyncio.Event()
+    release = threading.Event()
+    write = ProfileStore._write_atomically  # pyright: ignore[reportPrivateUsage]  # held, then let through
+
+    def held_write(self: ProfileStore, document: Mapping[str, JsonValue]) -> object:
+        loop.call_soon_threadsafe(in_write.set)
+        assert release.wait(5)
+        return write(self, document)
+
+    monkeypatch.setattr(ProfileStore, "_write_atomically", held_write)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+
+    async def offer_meanwhile() -> None:
+        await asyncio.wait_for(in_write.wait(), 5)
+        await r.panel.cloud_step()  # the poll offers the dashboard's launch
+        assert cloud.launch_in_hand
+        release.set()
+
+    await asyncio.gather(catalog.step(), offer_meanwhile())
+    assert store.list_profiles() == before
+    assert store.rev == rev
+    on_disk = parse_store((tmp_path / "p.json").read_text(encoding="utf-8"))
+    assert isinstance(on_disk, Ok)
+    assert [p.profile_id for p in on_disk.value.profiles] == ["new_one"]
+    assert catalog.report.revision is None
+    # A restart now would screen what the disk holds before offering it.
+    reopened = ProfileStore(tmp_path / "p.json", SHIPPED_DEFAULTS_PATH)
+    assert isinstance(reopened.load(), Ok)
+    assert screen_stored(reopened, RULES, said.append).accepted == ("new_one",)
+    # At the next rest, the whole list is asked for again and put in effect.
+    monkeypatch.undo()
+    r.dashboard.answer(POLL_PATH, launch_answer(None))
+    r.clock.advance(Seconds(5.0))
+    await r.panel.cloud_step()
+    assert r.panel.catalog_at_rest()
+    await catalog.step()
+    assert dashboard.asked[-1] is None
+    assert [p.profile_id for p in store.list_profiles()] == ["new_one"]
+    assert catalog.report.revision == 7
+
+
+async def test_a_session_armed_during_the_write_keeps_the_programmes_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same, the rest ended from inside the write itself."""
+    r = make_rig(tmp_path)
+    shipped = ids(r)
+    r.sign(4, [programme(profile_id="new_one")])
+    write = ProfileStore.replace_catalog
+
+    def ending_rest(
+        self: ProfileStore, profiles: Sequence[TrainingProfile], catalog: CatalogStamp
+    ) -> object:
+        r.rest[0] = False
+        return write(self, profiles, catalog)
+
+    monkeypatch.setattr(ProfileStore, "replace_catalog", ending_rest)
+    await r.step()
+    monkeypatch.undo()
+    assert ids(r) == shipped
+    assert [p.profile_id for p in r.on_disk().profiles] == ["new_one"]
+    r.rest[0] = True
+    await r.step(1)
+    assert r.dashboard.asked == [None, None]
+    assert ids(r) == ["new_one"]
+
+
+def test_a_reason_and_an_id_are_bounded_in_code_points_as_the_dashboard_counts_them() -> None:
+    """500 and 64 at most, an emoji counting one, as Convex counts them (ANH-138)."""
+    emoji = "\U0001f6b4"
+    _, rejected = review_all(
+        [{"profile_id": emoji * 80, "medical_parameters_version": emoji * 600}], RULES
+    )
+    assert rejected[0].profile_id == emoji * MAX_ID_CHARS
+    reason = rejected[0].reason
+    assert len(reason) == MAX_REASON_CHARS
+    # Twice as many UTF-16 units: what Convex no longer counts.
+    assert len(reason.encode("utf-16-le")) // 2 > MAX_REASON_CHARS
 
 
 # =========================================================================

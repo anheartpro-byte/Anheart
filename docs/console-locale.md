@@ -2521,6 +2521,9 @@ Aucune route n'écrit un profil : `PUT` et `DELETE /api/profiles/{profile_id}`
 sont retirés (ANH-138, ils répondent 404). Les programmes viennent du
 catalogue signé, revalidé par la console, ou sont ses programmes de secours
 livrés ([raspberry-pi.md, 8.8](raspberry-pi.md#88-le-catalogue-de-programmes-signé-anh-138)).
+La page redemande la liste toutes les 10 s : un catalogue accepté y paraît
+sans recharger la page, et le programme choisi reste choisi tant qu'il est
+offert.
 
 ### Séance
 

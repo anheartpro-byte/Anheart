@@ -1521,7 +1521,10 @@ quel jusqu'au premier catalogue accepté, et le site le montre de la même
 façon. Aucune route de la console n'écrit plus un profil
 (`PUT` et `DELETE /api/profiles` sont retirés). Les portes ci-dessus
 s'appliquent à un programme du catalogue comme à tout autre, à chaque
-départ, après sa revalidation à la réception.
+départ, après sa revalidation à la réception et à chaque démarrage de la
+console, qu'elle ait un tableau de bord ou non. Sur une console où
+`OCCUPANCY_OCCUPIED_ENABLED=false`, le catalogue n'y laisse aucun programme
+(porte 4) ; une séance de banc lancée du site part quand même.
 
 ### 4.5 Le passager : la liste du tableau de bord (ANH-84)
 
@@ -3287,32 +3290,71 @@ ses propres règles et refuse, un par un, ce qui ne passe pas.
    personne à bord disponible (sinon sa raison, par exemple
    `OCCUPANCY_OCCUPIED_ENABLED=false`), et `max_rpm` sous ce plafond. Un
    identifiant présent deux fois est refusé deux fois. Chaque refus garde sa
-   raison, 500 caractères au plus.
+   raison, 500 caractères au plus, et l'identifiant 64, comptés en points de
+   code Unicode comme Convex les compte.
+
+   **Une console sans personne à bord refuse tout le catalogue.** Avec
+   `OCCUPANCY_OCCUPIED_ENABLED=false` (le réglage par défaut) ou des
+   paramètres médicaux non signés, il n'y a pas de plafond personne à bord :
+   chaque programme est refusé avec cette raison, et le magasin n'en garde
+   aucun. Un programme a toujours quelqu'un à bord (porte 4 de
+   [4.4](#44-séance-programmée-auto)) : il ne pourrait pas partir. Une séance
+   de banc lancée du site part toujours, elle : son départ ne lit pas le
+   magasin. Convex ne connaît ni les paliers, ni le plafond, ni le fichier
+   médical de chaque console : ce qu'une machine refuse n'apparaît que sur
+   sa fiche, « refusé par la machine : » suivi de la raison.
 4. **Les acceptés remplacent le magasin**, en une écriture atomique (fichier
    temporaire, `fsync`, puis renommage ; `ProfileStore.replace_catalog` par
    `ProfileWriter`, hors de la boucle), avec la révision du catalogue et la
-   version médicale de la console. Une écriture refusée par le disque laisse
-   l'ancien fichier entier et les programmes d'avant, et se dit dans le
-   journal de bord ; le catalogue est redemandé en entier à la période
-   suivante. Un catalogue identique à ce que le magasin tient n'est pas
-   réécrit. Un catalogue vide vide le magasin : la machine n'a plus de
-   programme.
+   version médicale de la console. Les nouveaux programmes ne prennent effet
+   que si la console est **encore au repos quand l'écriture a abouti** (voir
+   plus bas). Une écriture refusée par le disque laisse l'ancien fichier
+   entier et les programmes d'avant, et se dit dans le journal de bord ; le
+   catalogue est redemandé en entier à la période suivante. Un catalogue
+   identique à ce que le magasin tient n'est pas réécrit. Un catalogue dont
+   tout a été retiré vide le magasin : la machine n'a plus de programme. Un
+   catalogue où rien n'a jamais été publié (révision 0) n'en est pas un : la
+   console garde ses programmes, ceux de secours.
 5. **Le tableau de bord le sait** par `POST /api/machine/profiles`
    (`catalogRevision`, `accepted`, `rejected`), renvoyé dès que cela change.
 
-**Jamais pendant une séance.** Rien n'est demandé hors du repos, et ce qui
-revient d'une demande faite au repos n'est appliqué que si la console y est
-toujours : une séance armée entre-temps laisse les programmes tels quels, et
-le catalogue est redemandé au repos suivant. Une séance court sur sa copie
-figée (`Program`) : un programme retiré du catalogue ne part qu'à la
-prochaine mise à jour, au repos, et ne l'interrompt jamais. Une séance
-armée pendant les quelques millisecondes de l'écriture du fichier a déjà sa
-copie figée elle aussi.
+**Jamais pendant une séance ni sous un lancement.** Rien n'est demandé hors
+du repos. Ce qui revient d'une demande faite au repos n'est appliqué que si
+la console y est toujours, vérifié deux fois : à l'arrivée de la réponse,
+puis quand l'écriture du fichier a abouti, juste avant que les programmes en
+mémoire changent (`ProfileWriter`, `may_adopt`). Une séance armée, ou un
+lancement du tableau de bord offert ou confirmé pendant la demande ou
+pendant l'écriture laisse donc les programmes en mémoire tels qu'il les a
+vus. Si l'écriture avait déjà abouti, le disque tient le nouveau catalogue
+et la mémoire l'ancien : la console redemande la liste entière au repos
+suivant, et ne la met en vigueur qu'à ce moment-là ; redémarrée entre-temps,
+elle lit le disque et le juge de nouveau (paragraphe suivant) avant d'en
+proposer quoi que ce soit, puis redemande la liste entière. Une séance court
+sur sa copie figée (`Program`) : un programme retiré du catalogue ne part
+qu'à la prochaine mise à jour, au repos, et ne l'interrompt jamais. Un
+lancement dont la boucle n'a dit ni le départ ni le refus en 60 s
+(`LAUNCH_TIMEOUT`) ne retient plus le catalogue.
 
-**Au démarrage.** Un magasin accepté sous d'autres paramètres médicaux que
-ceux de la console (une nouvelle image, un nouveau fichier signé) est écarté
-en mémoire : aucun programme jusqu'au prochain catalogue accepté, chaque
-programme refusé avec cette raison, une ligne dans le journal de bord.
+**Au démarrage, avec ou sans tableau de bord.** Juste après la lecture du
+magasin (`screen_stored`, appelé par `build_panel`, que la console ait une
+clé machine ou non), un catalogue enregistré est jugé par les règles de ce
+démarrage. Accepté sous d'autres paramètres médicaux (une nouvelle image, un
+nouveau fichier signé) : écarté entier. Sinon, chaque programme que la
+machine refuse maintenant (un `MOTOR_MAX_RPM` plus bas, un autre rayon,
+`OCCUPANCY_OCCUPIED_ENABLED` passé à `false`) est écarté. En mémoire
+seulement, jusqu'au prochain catalogue accepté : chaque programme écarté est
+dit dans le journal de bord et au tableau de bord comme refusé, avec sa
+raison, et n'est ni proposé ni dit accepté. Un magasin sans catalogue (les
+programmes de secours) n'est pas touché.
+
+**Une réponse trop grande.** Une réponse au-delà de ce que la console lit
+(1 Mio) est refusée et écrite une fois dans le journal de bord ; les
+programmes restent ceux d'avant. Convex refuse de publier un programme qui
+ferait dépasser au texte signé 500 000 octets, bien en dessous.
+
+**La page de la console.** La liste des programmes du choix de séance est
+redemandée toutes les 10 s : un catalogue accepté y paraît sans recharger la
+page, et le programme choisi reste choisi tant qu'il est offert.
 
 **Sans catalogue.** Un serveur qui ne signe rien (`not_configured`, l'état
 de tous les déploiements tant que la clé n'est pas posée), un serveur
@@ -3330,8 +3372,11 @@ Refuser les révisions anciennes bloquerait en revanche une console après la
 remise à zéro d'un déploiement : le choix est laissé ouvert.
 
 Testé par `tests/test_programme_catalog.py` (horloge manuelle, clés créées
-pendant le test), `tests/test_profile_persistence.py` (écriture hors de la
-boucle, entière, sous un moteur qui tourne) et `tests/test_plan.py`. Non
+pendant le test ; l'écriture retenue pendant que la tâche du lien offre un
+lancement ; le démarrage avec et sans tableau de bord),
+`tests/test_profile_persistence.py` (écriture hors de la boucle, entière,
+sous un moteur qui tourne), `tests/test_plan.py` et
+`tests/web/panel_profiles.test.mjs` (la page). Non
 vérifié : aucun déploiement Convex réel n'a signé de catalogue, et le délai
 de deux minutes entre une publication et un programme lançable sur le site
 (au plus une minute pour la demande, puis l'envoi des profils) n'a pas été
