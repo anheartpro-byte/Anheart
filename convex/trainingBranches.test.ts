@@ -459,6 +459,7 @@ describe("a launch is refused when the rider's physiology does not allow the pro
       subjectHrMax: 182,
       subjectAge: 36,
       operatorName: "manager Synthetic",
+      profilesDigest: null,
     });
     // Queuing a launch does not put the machine in session: the machine does.
     expect((await rowOf(w, w.machine))?.status).toBe("online");
@@ -1641,6 +1642,7 @@ describe("what a machine reports through its routes", () => {
         subjectHrMax: 180,
         subjectAge: null,
         operatorName: "dashboard",
+        profilesDigest: null,
       },
       incidents_open_high: 0,
       server_contract_version: CONTRACT_VERSION,

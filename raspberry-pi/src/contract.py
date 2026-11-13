@@ -127,7 +127,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.11")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.12")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"
@@ -159,12 +159,13 @@ ARMING_REFUSALS: Final[frozenset[ErrorCode]] = frozenset(
         ErrorCode("rider_busy"),
         ErrorCode("machine_busy"),
         ErrorCode("incident_open"),
+        ErrorCode("programme_changed"),
     }
 )
 """The codes of the 409 a server answers a start it refuses (contract 1.6,
-``machine_busy`` since 1.9 for a bench launch, ``incident_open`` since 1.10 for
-an automatic one; ``arming_refusals`` of the shared file). Pinned to the shared
-file."""
+``machine_busy`` since 1.9 for a bench launch, ``incident_open`` since 1.10 and
+``programme_changed`` since 1.12 for an automatic one; ``arming_refusals`` of
+the shared file). Pinned to the shared file."""
 
 STABLE_CODES: Final[frozenset[ErrorCode]] = frozenset(
     {

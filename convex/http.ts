@@ -33,6 +33,7 @@ import { parseMachineFeedback } from "./lib/feedback";
 import {
   CATALOG_SIGNING_KEY_ENV,
   catalogReportOf,
+  PROFILES_DIGEST,
   signCatalog,
 } from "./lib/programmes";
 
@@ -396,6 +397,9 @@ http.route({
  * Contract 1.11 (ANH-138): and `{catalogRevision, accepted, rejected}`, what
  * the machine made of the signed catalogue; absent from an older console,
  * whose machine then has no catalogue state any more.
+ * Contract 1.12: and `profilesDigest`, the digest of the whole content of the
+ * list (`PROFILES_DIGEST`); absent from an older console, whose machine then
+ * has none, and its auto launches none to be checked against.
  */
 http.route({
   path: "/api/machine/profiles",
@@ -415,6 +419,14 @@ http.route({
         400,
         "invalid_request",
         "Expected {catalogRevision, accepted, rejected} with {storeRev, programsEnabled, profiles}",
+      );
+    }
+    const digest = body.profilesDigest;
+    if (digest !== undefined && !(isStr(digest) && PROFILES_DIGEST.test(digest))) {
+      return refuse(
+        400,
+        "invalid_request",
+        "profilesDigest must be 64 lowercase hexadecimal digits",
       );
     }
     const keys = [
@@ -463,6 +475,7 @@ http.route({
       programsEnabled: body.programsEnabled === true,
       profiles,
       catalog,
+      profilesDigest: digest,
     });
     return json(200, result);
   }),
@@ -530,6 +543,11 @@ http.route({
  * machine has sent nothing yet, and no stop asked for, within 90 s of the
  * start the server dated at the first confirmation (ANH-240, contract 1.8):
  * `markTrainingStarted`.
+ *
+ * Contract 1.12: `profilesDigest`, the digest of the programme list the
+ * machine holds now. An auto launch made from another list, or from none, or
+ * one made from a list confirmed without a digest, is refused 409
+ * `programme_changed`.
  */
 http.route({
   path: "/api/machine/training/start",
@@ -546,6 +564,7 @@ http.route({
         sessionId,
         machineStartedAt: isNum(body.startedAt) ? body.startedAt : undefined,
         sessionAgeMs: isNum(body.sessionAgeMs) ? body.sessionAgeMs : undefined,
+        profilesDigest: isStr(body.profilesDigest) ? body.profilesDigest : undefined,
       },
     );
     return started.armed

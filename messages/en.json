@@ -390,6 +390,7 @@
     "right_revoked_before_start": "Launch right withdrawn before the start",
     "age_refused_before_start": "Rider's age refused before the start",
     "hr_max_changed_before_start": "Rider's max heart rate changed before the start",
+    "programme_changed": "The machine's programmes changed since the launch: launch the session again",
     "machine_key_not_found": "This key does not exist, or belongs to a machine you do not administer.",
     "invalid_key_overlap": "The overlap must be a whole number of minutes, between 0 and 10,080 (7 days).",
     "invalid_key_expiry": "The lifetime of a new key must be a whole number of minutes, between one hour and ten years."

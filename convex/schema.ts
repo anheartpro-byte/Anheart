@@ -522,6 +522,10 @@ export default defineSchema({
     // catalogue revision it accepted, null on its fallback programmes, and the
     // programmes it refused with why. Absent: a console that says nothing of it.
     programmeCatalog: v.optional(machineCatalogValidator),
+    // Reported by the Pi with its programmes (contract 1.12): the digest of
+    // the whole content of the list `machine_profiles` holds, which an auto
+    // launch records. Absent: a console that sends none, or none yet.
+    profilesDigest: v.optional(v.string()),
     live: v.optional(liveStateValidator),
     // Announced by the Pi with each heartbeat (contracts/machine-api.json):
     // its software version (a git tag, e.g. "pi-0.4.2"; absent when it sent
@@ -635,6 +639,10 @@ export default defineSchema({
     subjectAge: v.optional(v.number()),
     subjectLabel: v.optional(v.string()),
     operatorName: v.optional(v.string()),
+    // An auto launch from the dashboard (contract 1.12): the digest of the
+    // machine's programme list it was made from, checked when the machine
+    // arms it (`programme_changed`). Absent when the machine had sent none.
+    profilesDigest: v.optional(v.string()),
     localRef: v.optional(v.string()), // Pi-side idempotency key, local sessions
     // The start as the machine dated it, on its own clock (unix ms), for a
     // session whose machine said how long ago it started it. Such a machine

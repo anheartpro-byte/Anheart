@@ -76,6 +76,24 @@ describe("ANH-137 EX-2 the Pi's verdict on every shared case", () => {
     expect(await w.t.run((ctx) => ctx.db.query("programmes").collect())).toEqual([]);
   });
 
+  it("refuses a name with a surrogate left unpaired, which no JSON a machine writes holds", async () => {
+    const w = await seedWorld(modules);
+    for (const name of ["\uD800", "jog \uDC00", "\uDE00\uD83D"]) {
+      const error = await failure(
+        as(w.t, "admin").mutation(api.programmes.create, { ...JOG, name }),
+      );
+      expect((error as ConvexError<{ message: string }>).data).toEqual({
+        code: "programme_refused",
+        message: "training profile refused: name_lone_surrogate",
+        violations: ["name_lone_surrogate"],
+      });
+    }
+    // A pair is one character: accepted.
+    expect(
+      await failure(as(w.t, "admin").mutation(api.programmes.create, { ...JOG, name: "jog 😀" })),
+    ).toBeNull();
+  });
+
   it("refuses at saving a zone above 0.9 x subject_hr_max with the Pi's message", async () => {
     const w = await seedWorld(modules);
     const programmeId = await insertProgramme(w, "draft", w.admin);
