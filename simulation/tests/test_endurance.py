@@ -27,13 +27,16 @@ import pytest
 from tests.fake_record_dashboard import RecordingDashboard
 
 from simulation.endurance import (
+    BUSY_RETRIES,
     CLOSING_LIMIT,
     ENV,
     EPOCH_MS,
     FINISH_LIMIT,
     IDLE_PORT,
+    MANUAL_TARGETS,
     NOTE_GATED_DSP,
     AnomalyError,
+    BusyError,
     Console,
     Day,
     GatedDsp,
@@ -69,6 +72,7 @@ from src.training.runtime import EndReason, RuntimeState
 from src.training.safety import RULE_LOOP_STALL, SafetyLimits
 from src.training.types import SafetyAction, SafetyVerdict, TelemetrySnapshot
 from src.units import Bpm, Monotonic, Seconds, UnixMillis
+from src.web.routes import REQUEST_WAITING
 
 SHORT_DAY = Plan(manual=30, rest=25, sample_every=15, programme=320.0)
 """A manual session of half a minute and the shortest programme the profile allows."""
@@ -566,6 +570,95 @@ async def test_ex1_a_session_that_ends_otherwise_than_planned_is_said_so(
     verdict = {check.name: check for check in judge(run)}["sessions"]
     assert verdict.status is Status.FAIL
     assert "2 fins imprévues (séance 1 : operator_stop)" in verdict.measured
+
+
+BUSY_REFUSAL = (
+    'POST /api/manual/target: HTTP 409 {"detail":"une demande a la fois","code":"request_waiting"}'
+)
+"""What the operator is told when the console still holds the previous request."""
+
+
+def busy_targets(monkeypatch: pytest.MonkeyPatch, times: int) -> list[tuple[float, int]]:
+    """The first ``times`` targets refused as a console whose loop has not taken the previous
+    request refuses them. Returns every target sent, with the second of the console's life
+    it was sent in."""
+    target = Operator.target
+    second = SimulatedWorld.second
+    seconds = [0]
+    sent: list[tuple[float, int]] = []
+
+    async def counted(world: SimulatedWorld) -> None:
+        seconds[0] += 1
+        await second(world)
+
+    async def busy(operator: Operator, output_rpm: float) -> None:
+        sent.append((output_rpm, seconds[0]))
+        if len(sent) <= times:
+            raise BusyError(BUSY_REFUSAL)
+        await target(operator, output_rpm)
+
+    monkeypatch.setattr(SimulatedWorld, "second", counted)
+    monkeypatch.setattr(Operator, "target", busy)
+    return sent
+
+
+async def test_ex1_a_command_the_console_cannot_take_yet_is_sent_again_a_second_later(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A loop starved on a loaded host takes a request late: refused while it still holds
+    the previous one, the command is sent again, a second of its life later, three times."""
+    sent = busy_targets(monkeypatch, 3)
+
+    run = await simulated(25, tmp_path / "out", Plan(manual=3, rest=2, sample_every=10))
+
+    assert run.anomaly is None
+    first = sent[0][1]
+    assert sent[:4] == [(MANUAL_TARGETS[0], first + n) for n in range(4)]
+    assert sent[4][0] == MANUAL_TARGETS[1]
+    assert (run.sessions[0].kind, run.sessions[0].as_planned) == (Kind.MANUAL, True)
+
+
+async def test_ex1_a_command_refused_past_its_retries_stops_the_scenario_by_its_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sent four times in all, the first and three more: refused a fourth time, the run
+    stops on that refusal, in the console's words."""
+    sent = busy_targets(monkeypatch, 4)
+
+    run = await simulated(25, tmp_path / "out", Plan(manual=3, rest=2, sample_every=10))
+
+    assert [rpm for rpm, _ in sent] == [MANUAL_TARGETS[0]] * 4
+    assert BUSY_RETRIES == 3
+    assert run.anomaly == BUSY_REFUSAL
+
+
+def refusing(request: httpx.Request) -> httpx.Response:
+    """A console that refuses every command, each in its own way."""
+    path = request.url.path
+    if path == "/api/manual/target":
+        return httpx.Response(409, json={"detail": "attendre", "code": REQUEST_WAITING})
+    if path == "/api/manual/start":
+        return httpx.Response(409, json={"detail": "en cours", "code": "machine_running"})
+    if path == "/api/session/stop":
+        return httpx.Response(409, text="pas du JSON")
+    return httpx.Response(503, json={"code": REQUEST_WAITING})
+
+
+async def test_ex1_only_a_refusal_for_a_request_still_waiting_is_one_to_send_again() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(refusing), base_url="http://console"
+    ) as http:
+        operator = Operator(http)
+        with pytest.raises(BusyError, match="HTTP 409"):
+            await operator.target(5.0)
+        with pytest.raises(AnomalyError) as running:
+            await operator.start_manual()
+        with pytest.raises(AnomalyError) as garbled:
+            await operator.stop("fin")
+        with pytest.raises(AnomalyError) as unavailable:
+            await operator.ping()
+    for refused in (running, garbled, unavailable):
+        assert type(refused.value) is AnomalyError, refused.value
 
 
 async def test_ex1_a_start_the_console_has_not_taken_stops_the_scenario(

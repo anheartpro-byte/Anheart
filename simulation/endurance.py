@@ -63,15 +63,16 @@ import sys
 import tempfile
 import time
 from abc import abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from typing import Final, Protocol
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from tests.access_support import CODE, OPERATOR_ID, held_list
 from tests.fake_record_dashboard import RecordingDashboard
 from tests.roster_support import RIDER_ID
@@ -112,6 +113,7 @@ from src.training.safety import RULE_LOOP_STALL
 from src.training.types import SafetyVerdict, TelemetrySnapshot
 from src.units import Monotonic, Seconds, UnixMillis
 from src.web.app import create_app
+from src.web.routes import REQUEST_WAITING
 from src.web.schemas import ProfileListRow
 
 OUT_DIR: Final[Path] = Path(__file__).resolve().parent / "out" / "endurance"
@@ -193,6 +195,11 @@ CLOSING_LIMIT: Final[int] = 120
 """Seconds the last session is given to reach the dashboard once the run is over."""
 
 POINTS_MISSING: Final[int] = 5
+
+BUSY_RETRIES: Final[int] = 3
+"""Times a command is sent again, a second of the console's life apart, when the console
+refused it because it still held another (one request at a time): a loop starved on a
+loaded host takes the first late, and is not a console in bad health."""
 """1 Hz points a session may lack on the dashboard against the seconds the scenario timed."""
 
 READY_ATTEMPTS: Final[int] = 100
@@ -260,6 +267,23 @@ NOTE_OBSERVED: Final[str] = (
 
 class AnomalyError(Exception):
     """The scenario met something it does not expect of a console in good health."""
+
+
+class BusyError(AnomalyError):
+    """The console refused a command because it still held another, one request at a time."""
+
+
+_BODY: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+
+
+def waiting(answered: httpx.Response) -> bool:
+    """Whether the console refused because another request still holds its mailbox."""
+    if answered.status_code != HTTPStatus.CONFLICT:
+        return False
+    try:
+        return _BODY.validate_json(answered.content).get("code") == REQUEST_WAITING
+    except ValidationError:
+        return False
 
 
 @unique
@@ -438,7 +462,8 @@ class Operator:
         except httpx.TransportError as error:
             raise AnomalyError(f"POST {path}: the console did not answer ({error!r})") from error
         if answered.is_error:
-            raise AnomalyError(f"POST {path}: HTTP {answered.status_code} {answered.text[:300]}")
+            refused = BusyError if waiting(answered) else AnomalyError
+            raise refused(f"POST {path}: HTTP {answered.status_code} {answered.text[:300]}")
 
     async def _profiles_digest(self) -> str:
         """The digest of the programme list, read as the page reads it before a start."""
@@ -737,7 +762,7 @@ class Day:
         """Run the day. Returns what stopped it short, or ``None`` when nothing did."""
         try:
             await self._operator.ready()
-            await self._operator.attest()
+            await self._command(self._operator.attest)
             while not self.over():
                 await self._manual()
                 await self._rest(before_programme=True)
@@ -768,6 +793,19 @@ class Day:
                 return
             await self._second()
 
+    async def _command(self, send: Callable[[], Awaitable[None]]) -> None:
+        """Send an operator's command; refused while the console held another, it is sent
+        again a second of the console's life later, :data:`BUSY_RETRIES` times at most.
+        The last refusal stops the run in its own words."""
+        for _ in range(BUSY_RETRIES):
+            try:
+                await send()
+            except BusyError:
+                await self._second()
+            else:
+                return
+        await send()
+
     def _state(self) -> RuntimeState:
         """Read afresh: a checker would otherwise keep a narrowing across an ``await``."""
         return self._console.panel.runtime.state
@@ -792,7 +830,7 @@ class Day:
             if self._state() is RuntimeState.FINISHED:
                 return stopped
             if cut and not stopped and self.over():
-                await self._operator.stop("fin de l'essai")
+                await self._command(lambda: self._operator.stop("fin de l'essai"))
                 stopped = True
             await self._second()
         raise AnomalyError(
@@ -801,20 +839,20 @@ class Day:
 
     async def _manual(self) -> None:
         started = self.elapsed
-        await self._operator.start_manual()
+        await self._command(self._operator.start_manual)
         await self._started("manual session")
         for output_rpm in MANUAL_TARGETS:
             if self.over():
                 break
-            await self._operator.target(output_rpm)
+            await self._command(partial(self._operator.target, output_rpm))
             await self._wait(self._plan.manual // len(MANUAL_TARGETS))
-        await self._operator.stop("fin de la séance manuelle")
+        await self._command(lambda: self._operator.stop("fin de la séance manuelle"))
         await self._finished(FINISH_LIMIT, cut=False)
         await self._note_end(Kind.MANUAL, started, EndReason.OPERATOR_STOP)
 
     async def _programme(self) -> None:
         started = self.elapsed
-        await self._operator.start_programme(self._plan.programme)
+        await self._command(lambda: self._operator.start_programme(self._plan.programme))
         await self._started("programmed session")
         cut = await self._finished(PROGRAMME_LIMIT, cut=True)
         await self._note_end(
