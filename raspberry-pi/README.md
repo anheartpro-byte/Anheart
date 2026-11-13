@@ -14,15 +14,15 @@ what is still to be checked on a real Pi).
 
 ## Development setup
 
-Use Python 3.12 (the target in `pyproject.toml` and the Docker base) and the
-shared `.venv` used by the Pi and simulation tests. From this directory:
+Use Python 3.12 (the target in `pyproject.toml` and the Docker base), `uv`, and
+the shared `.venv` used by the Pi and simulation tests. From this directory,
+the two installations CI runs, every package at the version and hashes of its
+lock:
 
 ```sh
-python3.12 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pip install pyserial
-.venv/bin/python -m pip install --no-deps bitalino==1.2.6
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python --require-hashes -r requirements-dev-lock.txt
+uv pip install --python .venv/bin/python --require-hashes --no-deps -r requirements-dev-nodeps-lock.txt
 ```
 
 `requirements-base.txt` pins every runtime package to an exact version, the

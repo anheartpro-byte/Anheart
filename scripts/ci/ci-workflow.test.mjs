@@ -697,20 +697,27 @@ test("all five Python gates install only the hashed development locks", () => {
   }
 });
 
-test("Python installation in every workflow requires hashes except the named CAD extractor", () => {
-  const exceptions = [];
+test("Python installation in every workflow requires hashes, the CAD extractor and the audit tools included", () => {
   for (const file of readdirSync(new URL("../../.github/workflows/", import.meta.url))) {
     const text = atRoot(`.github/workflows/${file}`).replaceAll(/\\\n\s*/g, " ");
-    for (const step of text.split(/^ {6}- /m)) {
-      for (const line of step.split("\n").filter((line) => !line.trimStart().startsWith("#") && /\bpip install\b/.test(line))) {
-        if (/\s--require-hashes(?:\s|$)/.test(line)) continue;
-        assert.ok(step.startsWith("name: Install and verify CAD extractor\n"), `${file}: ${line}`);
-        assert.equal(line.trim(), "uv pip install --python simulation/cad/.venv-cad/bin/python -r simulation/cad/requirements.txt");
-        exceptions.push(file);
-      }
+    for (const line of text.split("\n").filter((line) => !line.trimStart().startsWith("#") && /\bpip install\b/.test(line))) {
+      assert.match(line, /\s--require-hashes(?:\s|$)/, `${file}: ${line}`);
     }
+    // A tool run by `uv tool run` is fixed by its version only, without hashes (ANH-230).
+    assert.doesNotMatch(text, /\buv tool (?:run|install)\b|\buvx\b|\bpipx\b/, file);
   }
-  assert.deepEqual(exceptions, ["ci.yml"]);
+  assert.equal(
+    script("simulation-battery", "Install and verify CAD extractor").split("\n")[1],
+    "uv pip install --python simulation/cad/.venv-cad/bin/python --require-hashes -r simulation/cad/requirements-lock.txt",
+  );
+  assert.equal(
+    script("audit", "Install the audit tools"),
+    'uv venv "$RUNNER_TEMP/audit-tools"\nuv pip install --python "$RUNNER_TEMP/audit-tools/bin/python" --require-hashes --no-deps -r scripts/ci/audit-tools/requirements-lock.txt\n',
+  );
+  // lxml, needed only to validate XML, is left out: none published by then takes a fixed lxml.
+  assert.match(atRoot("scripts/ci/audit-tools/requirements-lock.txt"), /^# {4}uv pip compile .* --no-emit-package lxml /m);
+  assert.doesNotMatch(atRoot("scripts/ci/audit-tools/requirements-lock.txt"), /^lxml==/m);
+  assert.match(atRoot("scripts/ci/audit-tools/requirements.txt"), /^pip-audit==\d+\.\d+\.\d+\ncyclonedx-bom==\d+\.\d+\.\d+\n$/m);
 });
 
 test("simulation-gate installs the assembled hashed payload and serves it without the repository Python path", () => {
@@ -1028,6 +1035,7 @@ test("the audit reads its exceptions first, and every audit it runs fails the re
     "Read the exceptions of the audit",
     "Audit npm dependencies",
     "Verify dependency stack-depth guards",
+    "Install the audit tools",
     "Audit Python dependencies",
     "Scan all Git history",
     "Write the bill of materials",
@@ -1058,19 +1066,31 @@ const loopOver = (text, name) => new RegExp(`^for ${name} in (.+); do$`, "m").ex
 test("pip-audit audits every Python environment the project installs, skipping only the exceptions of the table", () => {
   const python = script("audit", "Audit Python dependencies");
   assert.match(python, /^skipped="\$\(node scripts\/ci\/audit-exceptions\.mjs pip-audit-args\)"\nread -r -a ignore <<< "\$skipped"$/m);
-  assert.equal(python.split("pip-audit==").length - 1, 1, "pip-audit is called once, by the function every environment goes through");
-  assert.match(python, /uv tool run pip-audit==\d+\.\d+\.\d+ --disable-pip --require-hashes "\$\{ignore\[@\]\}" -r "\$2" \|\| failed\+=\("\$1"\)/);
+  assert.equal(python.split("bin/pip-audit").length - 1, 1, "pip-audit is called once, by the function every environment goes through");
+  assert.match(python, /^ {2}"\$RUNNER_TEMP\/audit-tools\/bin\/pip-audit" --disable-pip --require-hashes "\$\{ignore\[@\]\}" -r "\$2" \|\| failed\+=\("\$1"\)$/m);
   assert.match(python, /^if \(\( \$\{#failed\[@\]\} > 0 \)\); then\n.*\n {2}exit 1\nfi\n$/m);
   const locks = loopOver(python, "lock");
   const sets = loopOver(python, "set");
-  assert.deepEqual(locks, ["raspberry-pi/requirements-lock.txt", "raspberry-pi/requirements-build-lock.txt", "raspberry-pi/requirements-dev-lock.txt", "raspberry-pi/requirements-dev-nodeps-lock.txt", "deploy/simulation-vercel/requirements-lock.txt"]);
-  assert.deepEqual(sets, ["simulation/cad/requirements.txt"]);
-  assert.match(python, /^ {2}uv pip compile "\$set" --python-version 3\.12 --generate-hashes --quiet --output-file "\$resolved"$/m);
+  assert.deepEqual(locks, ["raspberry-pi/requirements-lock.txt", "raspberry-pi/requirements-build-lock.txt", "raspberry-pi/requirements-dev-lock.txt", "raspberry-pi/requirements-dev-nodeps-lock.txt", "deploy/simulation-vercel/requirements-lock.txt", "simulation/cad/requirements-lock.txt", "scripts/ci/audit-tools/requirements-lock.txt"]);
+  assert.deepEqual(sets, []);
+  assert.doesNotMatch(python, /uv pip compile/, "nothing is resolved on the day of the audit");
+  // Each lock is audited through a copy without its environment markers, so that no line is skipped on Linux.
+  const strip = /^ {2}sed -E '(.+)' "\$lock" > "\$every"$/m.exec(python)?.[1] ?? "";
+  assert.match(python, /^ {2}every="\$RUNNER_TEMP\/audit-\$\{lock\/\/\\\/\/-\}"\n {2}sed .*\n {2}audit "\$lock" "\$every"$/m);
+  const [, pattern = "", replacement = ""] = /^s\/(.+)\/(.+)\/$/.exec(strip) ?? [];
+  const unmarked = (/** @type {string} */ line) => line.replace(new RegExp(pattern), replacement.replace("\\1", "$1").replaceAll("\\\\", "\\"));
+  assert.equal(unmarked("colorama==0.4.6 ; sys_platform == 'win32' \\"), "colorama==0.4.6 \\");
+  assert.equal(unmarked("pyobjc-core==12.2.2 ; sys_platform == 'darwin' \\"), "pyobjc-core==12.2.2 \\");
+  assert.equal(unmarked("numpy==2.5.4 \\"), "numpy==2.5.4 \\");
+  assert.equal(unmarked("    --hash=sha256:00 \\"), "    --hash=sha256:00 \\");
   // A lock file audited as it is fixes every version and every hash: pip-audit reads nothing it would resolve.
   for (const lock of locks) {
     const requirements = atRoot(lock).split("\n").filter((line) => /^[A-Za-z0-9]/.test(line));
     assert.ok(requirements.length > 0 && requirements.every((line) => /^[\w.-]+==[\w.+!-]+(?: ; [^\r\n\\]+)? \\$/.test(line)), lock);
     assert.equal(atRoot(lock).split("--hash=sha256:").length - 1 >= requirements.length, true, lock);
+    // Without its markers, a lock that named a package twice would give pip-audit two versions of it.
+    const names = requirements.map((line) => line.split("==")[0].toLowerCase());
+    assert.equal(new Set(names).size, names.length, lock);
   }
   // Every requirements file of the repository is one of those, is included by one (`-r`), or is
   // the file a lock was compiled from (the command at its top).
@@ -1102,8 +1122,8 @@ test("the bill of materials is written from the lock files on every run, and kep
   const written = script("audit", "Write the bill of materials");
   assert.match(written, /^npm sbom --sbom-format cyclonedx --package-lock-only > "\$RUNNER_TEMP\/sbom\/site-convex\.cdx\.json"$/m);
   assert.deepEqual(loopOver(written, "lock"), ["requirements-lock", "requirements-build-lock"]);
-  assert.match(written, /uv tool run --from cyclonedx-bom==\d+\.\d+\.\d+ cyclonedx-py requirements "raspberry-pi\/\$lock\.txt" --output-format JSON --output-file "\$RUNNER_TEMP\/sbom\/pi-\$lock\.cdx\.json"$/m);
-  assert.match(written, /^uv tool run --from cyclonedx-bom==7\.4\.0 cyclonedx-py requirements deploy\/simulation-vercel\/requirements-lock\.txt --output-format JSON --output-file "\$RUNNER_TEMP\/sbom\/simulation-requirements-lock\.cdx\.json"$/m);
+  assert.match(written, /^ {2}"\$RUNNER_TEMP\/audit-tools\/bin\/cyclonedx-py" requirements "raspberry-pi\/\$lock\.txt" --output-format JSON --output-file "\$RUNNER_TEMP\/sbom\/pi-\$lock\.cdx\.json"$/m);
+  assert.match(written, /^"\$RUNNER_TEMP\/audit-tools\/bin\/cyclonedx-py" requirements deploy\/simulation-vercel\/requirements-lock\.txt --output-format JSON --output-file "\$RUNNER_TEMP\/sbom\/simulation-requirements-lock\.cdx\.json"$/m);
   const kept = auditStep("Keep the bill of materials");
   assert.match(kept, /^ {8}uses: actions\/upload-artifact@/m);
   assert.deepEqual(

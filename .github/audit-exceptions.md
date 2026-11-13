@@ -9,7 +9,7 @@ Le job `audit` de la CI, vérification obligatoire sur `develop` comme sur
 - `pip-audit` trouve une vulnérabilité connue, **quelle que soit sa gravité**
   (il ne lit pas la gravité), dans l'un des environnements Python audités :
   l'image du Pi, l'environnement des tests et de la simulation, la simulation
-  hébergée, l'extracteur CAO.
+  hébergée, l'extracteur CAO, les outils du job `audit`.
 
 Ce qui est audité, et comment : [framework-de-test.md](../docs/framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153).
 
@@ -32,7 +32,7 @@ exception n'est écrite ailleurs, ni dans le workflow ni dans une commande.
   - **pip** : l'exception n'est liée ni au paquet ni à l'environnement.
     `pip-audit` reçoit l'identifiant par `--ignore-vuln` et saute toute
     vulnérabilité dont l'identifiant, **ou l'un des alias**, est celui-là,
-    quel que soit le paquet, dans chacun des cinq environnements audités. La
+    quel que soit le paquet, dans chacun des sept verrous audités. La
     colonne `Paquet` ne restreint rien : elle dit à un lecteur de quoi il
     s'agit. C'est pourquoi un `CVE-...` est refusé : le même CVE peut être
     l'alias d'avis de plusieurs paquets, quand une bibliothèque vulnérable est

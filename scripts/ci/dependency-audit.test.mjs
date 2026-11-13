@@ -385,7 +385,7 @@ test("Dependabot watches every place the audit audits, and nothing else, against
   assert.match(DEPENDABOT, /^version: 2$/m);
   assert.deepEqual(
     entries.map(({ ecosystem, directory }) => `${ecosystem} ${directory}`),
-    ["npm /", "pip /raspberry-pi", "pip /deploy/simulation-vercel", "pip /simulation/cad", "github-actions /"],
+    ["npm /", "pip /raspberry-pi", "pip /deploy/simulation-vercel", "pip /simulation/cad", "pip /scripts/ci/audit-tools", "github-actions /"],
   );
   for (const { ecosystem, directory, branch, interval, text } of entries) {
     assert.equal(branch, "develop", `${ecosystem} ${directory}: pull requests go to develop`);

@@ -85,10 +85,10 @@ elif [ -x ".venv/Scripts/python.exe" ]; then
     PY=".venv/Scripts/python.exe"
     BPR=".venv/Scripts/basedpyright.exe"
 else
-    echo "No venv found at .venv - create it first:" >&2
-    echo "    python -m venv .venv && . .venv/bin/activate" >&2
-    echo "    pip install -r requirements-dev.txt" >&2
-    echo "    pip install pyserial && pip install --no-deps bitalino" >&2
+    echo "No venv found at .venv - create it first, with hashes required:" >&2
+    echo "    uv venv --python 3.12 .venv" >&2
+    echo "    uv pip install --python .venv/bin/python --require-hashes -r requirements-dev-lock.txt" >&2
+    echo "    uv pip install --python .venv/bin/python --require-hashes --no-deps -r requirements-dev-nodeps-lock.txt" >&2
     exit 1
 fi
 

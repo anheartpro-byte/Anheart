@@ -20,6 +20,7 @@ la racine. Dans un nouveau terminal, revenir à cette racine avant de continuer.
 | Outil | Version de référence | Pour quoi |
 |---|---|---|
 | Python | 3.12 (le code vise 3.12 : `pythonVersion = "3.12"` dans `raspberry-pi/pyproject.toml`) | le Pi et la simulation |
+| uv | celui de la CI est 0.8.22 (`.github/workflows/ci.yml`) | créer le venv et y installer les verrous Python, empreintes exigées |
 | Node.js | 24 (comme la CI dans `.github/workflows/ci.yml`) | le site Next.js et la CLI Convex |
 | npm | npm 10+ (le seul gestionnaire de paquets JavaScript du dépôt ; son verrou, `package-lock.json`, fait foi) | installer le site |
 | libusb | `brew install libusb` | seulement pour le vrai câble RS485 Schneider sur Mac |
@@ -35,20 +36,21 @@ Depuis la racine du dépôt (une seule installation) :
 ```sh
 (
 cd raspberry-pi
-python3.12 -m venv .venv
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install -r requirements-dev.txt
-# le module bitalino n'est pas dans requirements-dev.txt (voir la note du fichier) :
-.venv/bin/pip install pyserial
-.venv/bin/pip install --no-deps bitalino==1.2.6
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python --require-hashes -r requirements-dev-lock.txt
+uv pip install --python .venv/bin/python --require-hashes --no-deps -r requirements-dev-nodeps-lock.txt
 )
 ```
 
-`requirements-dev.txt` inclut `requirements-base.txt` et ajoute pytest,
-hypothesis, basedpyright, mypy et ruff. `requirements-base.txt` fixe chaque
-paquet à une version exacte : ce sont celles de la CI et de l'image du Pi
-([pi-image.md](pi-image.md#2-versions-figées)). Après un changement de ce
-fichier, relancer la commande `pip install -r requirements-dev.txt`. C'est aussi ce que demande la
+Ce sont les deux installations de la CI : chaque paquet à sa version et à
+ses empreintes, celles des verrous. `requirements-dev-lock.txt` est compilé
+depuis `requirements-dev.txt`, qui inclut `requirements-base.txt` (les
+versions de l'image du Pi, `pyserial` compris,
+[pi-image.md](pi-image.md#2-versions-figées)) et ajoute pytest, hypothesis,
+basedpyright, mypy et ruff. Le second
+verrou ne porte que `bitalino`, installé sans ses dépendances (voir la note
+de `requirements-dev.txt`). Après un changement d'un verrou, relancer les
+deux commandes `uv pip install`. C'est aussi ce que demande la
 [gate](glossaire.md#gate-porte) (`scripts/check.sh`) si le venv manque.
 
 ## 3. Lancer la console locale en simulation complète
