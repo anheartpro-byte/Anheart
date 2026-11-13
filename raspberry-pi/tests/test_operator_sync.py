@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -137,16 +138,15 @@ async def test_accepts_a_signed_list_writes_it_and_asks_again_after_the_period(
     assert stored == Ok(held)
     await rig.step(OPERATORS_PERIOD - 1.0)
     assert rig.dashboard.asked == 1
-    # The same holders again: nothing written, nothing said, its date taken in memory.
-    rig.path.unlink()
+    # The same holders again: nothing said, its date taken and written.
     rig.sign(payload(1_790_000_000_500))
     await rig.step(1.0)
     assert rig.dashboard.asked == 2
-    assert not rig.path.exists()
     assert len(rig.said) == 1
     newer = rig.access.held
     assert newer is not None
     assert newer.issued_at == 1_790_000_000_500
+    assert load_list(rig.path, rig.public, None) == Ok(newer)
     # So a list from between the two, replayed, is refused.
     rig.sign(payload(1_790_000_000_200, operators=0))
     await rig.step(OPERATORS_PERIOD)
@@ -232,6 +232,60 @@ async def test_a_session_that_begins_during_the_write_keeps_the_list_in_force(
     rig.rest[0] = True
     await rig.step()  # asked again at the next rest, at once
     assert rig.access.held is not None
+
+
+async def test_the_file_never_keeps_a_list_the_console_went_back_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2's r8: a list written during a session, then reverted by the site."""
+    rig = make_rig(tmp_path / "operators.json")
+    rig.sign(payload(1_000, operators=0))  # L1: nobody
+    await rig.step()
+
+    def written_then_a_session(path: Path, content: bytes) -> Result[None, str]:
+        written = replace_file(path, content)
+        rig.rest[0] = False
+        return written
+
+    monkeypatch.setattr(operator_sync_module, "replace_file", written_then_a_session)
+    rig.sign(payload(2_000, operators=1))  # L2: an operator enabled
+    await rig.step(OPERATORS_PERIOD)
+    monkeypatch.setattr(operator_sync_module, "replace_file", replace_file)
+    held = rig.access.held
+    assert held is not None
+    assert held.operators == ()  # L1 still in force for that session
+    stored = load_list(rig.path, rig.public, None)
+    assert isinstance(stored, Ok)
+    assert stored.value is not None
+    assert len(stored.value.operators) == 1  # L2 on the disk, newer, not yet in force
+
+    rig.rest[0] = True
+    rig.sign(payload(3_000, operators=0))  # L3: the admin went back to nobody
+    await rig.step(OPERATORS_PERIOD)
+    held = rig.access.held
+    assert held is not None
+    assert (held.issued_at, held.operators) == (3_000, ())
+    # What the next start loads is L3, never L2.
+    assert load_list(rig.path, rig.public, None) == Ok(held)
+
+
+async def test_a_date_the_disk_refuses_is_taken_in_memory_and_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    blocked = tmp_path / "file"
+    blocked.write_text("", encoding="utf-8")
+    rig = make_rig(blocked / "operators.json")
+    rig.sign(payload())
+    await rig.step()
+    said = len(rig.said)
+    rig.sign(payload(1_790_000_000_500))
+    with caplog.at_level(logging.WARNING, logger="src.operator_sync"):
+        await rig.step(OPERATORS_PERIOD)
+    held = rig.access.held
+    assert held is not None
+    assert held.issued_at == 1_790_000_000_500
+    assert "operator list date not written" in caplog.text
+    assert len(rig.said) == said
 
 
 async def test_a_list_of_another_machine_is_refused(tmp_path: Path) -> None:

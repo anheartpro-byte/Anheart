@@ -356,6 +356,19 @@ async def test_a_stop_is_never_refused_for_its_body(
     assert c.services.supervisor.standing is not None
 
 
+async def test_a_reason_with_a_lone_surrogate_is_answered(tmp_path: Path) -> None:
+    """R2's r7: the stop latched, and its answer must not fail on the reason."""
+    c = console(tmp_path)
+    body = b'{"reason": "a \\ud800 b \\ud83d\\ude00"}'
+    headers = device() | {"content-type": "application/json"}
+    async with c.client() as client:
+        estop = await client.post("/api/session/estop", content=body, headers=headers)
+        assert estop.status_code == HTTPStatus.OK, estop.text
+        assert estop.json()["reason"] == "a \ufffd b \U0001f600"
+        stop = await client.post("/api/session/stop", content=body, headers=headers)
+        assert stop.status_code == HTTPStatus.CONFLICT
+
+
 async def test_a_stop_says_the_reason_its_body_gives(tmp_path: Path) -> None:
     c = console(tmp_path)
     async with c.client() as client:
