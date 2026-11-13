@@ -1762,8 +1762,17 @@ avant `:` en anglais). Un motif inconnu ou libre, comme
 de séance disent la raison de fin de la même façon.
 
 Le refus d'un lancement par la console donne aussi **Séance échouée**.
-Un code dédié attend un ajout au contrat du Pi ; les alertes d'incident
-restent bloquées par ANH-145.
+Un code dédié attend un ajout au contrat du Pi.
+
+**Incident grave ouvert** : seuls les admins Anheart la reçoivent, dans
+l'organisation Anheart, à l'ouverture de chaque incident de gravité haute,
+quelle que soit l'organisation de la machine ; ni l'admin d'organisation ni
+le gestionnaire de la machine ne la voient. Elle propose **Voir les
+incidents** (la page
+[Incidents](../tableau-de-bord.md#incidents--frdashboardincidents-et-frdashboardincidentsid),
+où l'incident s'analyse et se clôt) et **Voir la séance**. Pas d'e-mail par
+défaut, et aucun interrupteur pour ce type : l'envoi d'e-mails reste coupé
+en production (décision en attente, EX-8 d'ANH-237).
 
 **Marquer comme lue** marque une alerte ; **Tout marquer comme lu** marque
 toutes vos alertes visibles non lues, par lots automatiques de 500 sans
