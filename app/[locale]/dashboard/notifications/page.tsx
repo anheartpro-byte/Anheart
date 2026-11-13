@@ -220,6 +220,11 @@ function AlertItem({ alert, onRead }: { alert: Alert; onRead: () => void }) {
               {t("machineDeleted")}
             </span>
           )}
+          {alert.type === "incident_high" && (
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/dashboard/incidents">{t("openIncidents")}</Link>
+            </Button>
+          )}
           {(alert.sessionId || !alert.machineDeleted) && (
             <Button variant="ghost" size="sm" asChild>
               <Link

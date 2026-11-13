@@ -156,6 +156,7 @@ const MANAGER_ENTRIES = [
   [nav.reports, "/dashboard/reports"],
   [nav.notifications, "/dashboard/notifications"],
   [nav.programmes, "/dashboard/programmes"],
+  [nav.incidents, "/dashboard/incidents"],
 ];
 const ORGANIZATION_ADMIN_ENTRIES = [
   [nav.gestionnaires, "/dashboard/gestionnaires"],
@@ -401,6 +402,7 @@ describe("ANH-203 breadcrumb of a dashboard page", () => {
     ["settings", nav.settings],
     ["reports", nav.reports],
     ["notifications", nav.notifications],
+    ["incidents", nav.incidents],
     ["audit", nav.audit],
     ["programmes", nav.programmes],
   ])("the level « %s » reads « %s »", (segment, label) => {

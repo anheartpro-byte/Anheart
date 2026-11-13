@@ -48,6 +48,7 @@ const MANAGEMENT = [
   "reports",
   "notifications",
   "programmes",
+  "incidents",
 ];
 
 describe("ANH-187 the sidebar of each role", () => {

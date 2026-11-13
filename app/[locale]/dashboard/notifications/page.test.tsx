@@ -330,6 +330,30 @@ describe("the alerts page", () => {
     )).toBeTruthy();
   });
 
+  it("leads the Anheart admin from a high incident's alert to the incidents (ANH-145)", async () => {
+    signedInAs("admin");
+    serverHas([
+      alert("a1", {
+        type: "incident_high",
+        sessionId: "session-1" as Id<"sessions">,
+      }),
+    ]);
+
+    await renderPage(<NotificationsPage />);
+
+    const shown = item(fr.notifications.types.incident_high);
+    expect(
+      shown
+        .getByRole("link", { name: fr.notifications.openIncidents })
+        .getAttribute("href"),
+    ).toBe("/dashboard/incidents");
+    expect(
+      shown
+        .getByRole("link", { name: fr.notifications.openSession })
+        .getAttribute("href"),
+    ).toBe("/dashboard/sessions/session-1");
+  });
+
   it("marks one alert, or all of them, as read", async () => {
     signedInAs("org_admin");
     serverHas([alert("a1"), alert("a2", { type: "machine_offline" })]);

@@ -654,7 +654,8 @@
     "myMachines": "My machines",
     "members": "Members",
     "notifications": "Alerts",
-    "programmes": "Programmes"
+    "programmes": "Programmes",
+    "incidents": "Incidents"
   },
   "sidebar": {
     "main": "Main",
@@ -1507,6 +1508,7 @@
     "repeated": "{count} times, last at {time}",
     "openSession": "View session",
     "openMachine": "View machine",
+    "openIncidents": "View incidents",
     "machineDeleted": "Machine deleted",
     "reason": "Reason: {reason}",
     "reasonLabelled": "{label}: {detail}",
@@ -1531,6 +1533,64 @@
       "unavailable": "Email is not configured on this deployment: alerts stay on the site.",
       "email": "Email: {type}",
       "saved": "Preference saved."
+    }
+  },
+  "incidents": {
+    "title": "Incidents",
+    "description": "Every safety event of your machines becomes an incident, reviewed then closed by a named person. While a high-severity incident is open or analysed, its machine's programmed sessions are closed; only a bench session remains possible.",
+    "accessDenied": "Incidents are for gestionnaires and administrators.",
+    "empty": "No incident.",
+    "listCut": "Only the {count} most recent incidents are shown.",
+    "export": "Export as CSV",
+    "exportHint": "Every incident listed here, every organisation, for the risk analysis.",
+    "openedAt": "Opened",
+    "machine": "Machine",
+    "kind": "Kind",
+    "rule": "Rule",
+    "severity": "Severity",
+    "status": "Status",
+    "occupied": "Person on board",
+    "yes": "Yes",
+    "no": "No",
+    "open": "View",
+    "back": "Back to incidents",
+    "notFound": "Incident not found.",
+    "blocked": "Programmed sessions are closed on this machine until an Anheart admin closes this incident. A bench session remains possible.",
+    "details": "The incident",
+    "session": "The session",
+    "openSession": "View session",
+    "noSession": "No readable session for this incident.",
+    "events": "Events within 60 s of the instant",
+    "noEvents": "No event received around this instant.",
+    "offset": "{seconds} s",
+    "review": "Analysis and closing",
+    "analysis": "Cause",
+    "action": "Action taken",
+    "analyzedBy": "Analysed by {name}",
+    "closedBy": "Closed by {name} on {date}",
+    "saveAnalysis": "Save the analysis",
+    "close": "Close the incident",
+    "analyzed": "Analysis saved.",
+    "closed": "Incident closed.",
+    "closeAdminOnly": "Only an Anheart admin closes an incident.",
+    "kinds": {
+      "safety_verdict": "Safety verdict",
+      "emergency_stop": "Emergency stop",
+      "drive_fault": "Drive fault",
+      "tick_exception": "Loop exception",
+      "preflight_repeated_failure": "Pre-flight refused three times in a row",
+      "record_rejected": "Record rejected",
+      "manual": "Declared by hand"
+    },
+    "severities": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High"
+    },
+    "statuses": {
+      "open": "Open",
+      "analyzed": "Analysed",
+      "closed": "Closed"
     }
   }
 }
