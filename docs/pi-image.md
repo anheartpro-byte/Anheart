@@ -1307,21 +1307,29 @@ du tableau de bord sont copiés à part.
 
    **Ce que garantit un code de sortie 0.** Pendant les deux heures :
 
-   * `tick_gap` : aucun écart entre deux tics n'a atteint le gel `loop_stall`
-     de la console (600 ms, trois périodes de 200 ms, lu dans son propre
-     superviseur et non recopié). Il n'y a donc eu **aucun gel de la boucle**.
-     L'écart est lu entre les instantanés qu'un abonné du hub de télémétrie
-     reçoit ; le hub peut en fondre deux en un, et l'écart lu n'est alors
-     jamais plus court que le vrai : un `PASS` prouve l'absence de gel. Un
-     `FAIL` donne l'écart maximal mesuré ; un essai sans aucun écart relevé
-     échoue aussi ;
+   * `tick_gap` : **aucun gel de la boucle**. Le superviseur de la console ne
+     tient aucun verdict `loop_stall` à la fin de l'essai : sa règle juge
+     chaque écart réel entre deux de ses tics contre son propre seuil (600 ms,
+     trois périodes de 200 ms, lu dans le superviseur et non recopié) et le
+     verdict reste levé jusqu'à un acquittement que l'essai ne fait jamais. En
+     contrôle indépendant, aucun écart entre deux instantanés consécutifs reçus
+     par l'abonné du hub n'atteint ce seuil. Le hub fond parfois deux
+     instantanés en un (il ne sert une page qu'une fois toutes les 0,15 s) :
+     l'écart lu par-dessus additionne alors deux écarts réels, il est compté à
+     part et n'est pas jugé comme un gel, le verdict de la console faisant foi
+     pour lui. Enfin les tics reçus couvrent au moins 90 % de l'essai : une
+     page évincée en cours de route fait échouer `tick_gap` et `sessions`. Un
+     `FAIL` nomme sa cause : verdict de la console, écart consécutif, ou
+     relevé incomplet ;
    * `tick` : 99e centile de la durée du tic sous 150 ms ;
    * `rss` : mémoire à 10 % près de son premier relevé après la première heure ;
-   * `descriptors` : le plancher des descripteurs ouverts (le relevé le plus
-     bas) de la seconde moitié ne dépasse pas celui de la première. Un
-     descripteur qui fuit n'est jamais refermé et relève le plancher ; un
-     descripteur ouvert un instant (un bloc en cours d'écriture, une requête)
-     ne relève que le relevé qui l'a vu, et ne fait plus échouer l'essai ;
+   * `descriptors` : aucune fuite qui commence avant le dernier quart d'heure.
+     Le relevé le plus bas des quinze dernières minutes (le dernier quart de
+     l'heure jugée) ne dépasse pas le deuxième relevé le plus bas de ce qui
+     précède, depuis la fin de la première heure. Un descripteur qui fuit
+     n'est jamais refermé et relève tous les relevés suivants. Un descripteur
+     ouvert un instant (un bloc en cours d'écriture, une requête) ou refermé un
+     instant ne déplace qu'un relevé, et ne fait pas échouer l'essai ;
    * `data`, `rotation`, `sessions` : dossier de données borné, enregistrements
      confirmés, chaque séance finie comme prévu et livrée, heartbeats avec
      santé ;
@@ -1329,14 +1337,29 @@ du tableau de bord sont copiés à part.
      tâches n'a échoué et sa boucle n'a jamais passé plus de 3 s sans finir un
      tic.
 
-   Ce qu'il ne garantit pas : aucun seuil ne juge une **dérive lente** du tic
-   qui resterait sous 150 ms et sous 600 ms. Comparer le 99e centile de la
-   dernière heure à celui de la première a été écarté : ces centiles valent
-   quelques millisecondes, la charge de la machine les fait varier du simple
-   au double sans que la console change, et aucune marge ne viendrait du
-   ticket. Une dérive qui compte pour la personne à bord finit sur l'une des
-   deux bornes, qui sont jugées ; la colonne « Tic p50 / p99 » des relevés
-   permet de lire la tendance.
+   Ce qu'il ne garantit pas :
+
+   * une fuite de descripteurs qui ne commence que dans les **quinze dernières
+     minutes** n'est pas vue ; une fuite qui commence et cesse pendant la
+     première heure non plus (elle n'est pas jugée), ni un seul descripteur
+     gardé une fois pour toutes juste après elle ;
+   * une boucle qui cesse de tourner **moins de 3 s** avant l'arrêt de l'essai
+     et ne tourne plus ensuite : aucun tic ne vient alors mesurer l'écart, ni
+     pour la règle de la console ni pour l'abonné. Passé 3 s, la sortie de la
+     console échoue d'elle-même ;
+   * aucun seuil ne juge une **dérive lente** du tic qui resterait sous 150 ms
+     et sous 600 ms. Comparer le 99e centile de la dernière heure à celui de la
+     première a été écarté : ces centiles valent quelques millisecondes, la
+     charge de la machine les fait varier du simple au double sans que la
+     console change, et aucune marge ne viendrait du ticket. Une dérive qui
+     compte pour la personne à bord finit sur l'une des deux bornes, qui sont
+     jugées ; la colonne « Tic p50 / p99 » des relevés permet de lire la
+     tendance.
+
+   **Seul cet essai juge un gel.** Les 24 heures simulées de la nuit tournent
+   sur une horloge simulée où chaque écart entre deux tics vaut 200 ms par
+   construction : `tick_gap` n'y est pas jugé, et une nuit verte ne dit rien
+   d'un gel.
 
 4. **Relever.** Le résumé est affiché à la fin et écrit dans
    `~/anheart-endurance/out/endurance.md` (le détail dans `endurance.json`, ce
@@ -1421,8 +1444,10 @@ fait de l'extérieur, en lecture seule, depuis une seconde session SSH.
 
 4. **Juger le relevé**, sur le poste de développement, avec les seuils de
    l'essai simulé (mémoire stable à 10 % près après la première heure, aucun
-   descripteur qui fuit : le plancher de la seconde moitié ne dépasse pas celui
-   de la première) :
+   descripteur qui fuit : le relevé le plus bas de la fin de la journée, son
+   dernier quart après la première heure et une heure au plus, ne dépasse pas
+   le deuxième relevé le plus bas de ce qui précède ; une fuite qui ne commence
+   que dans cette fin n'est pas vue) :
 
    ```sh
    scp <utilisateur>@<pi>:endurance-banc.csv .

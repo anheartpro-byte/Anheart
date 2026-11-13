@@ -54,8 +54,9 @@ from src.clock import ManualClock, RealClock
 from src.local_panel import EXIT_FAILED, LocalPanel
 from src.record.session import PRESTART_SECONDS
 from src.training.runtime import EndReason, RuntimeState
+from src.training.safety import SafetyLimits
 from src.training.types import TelemetrySnapshot
-from src.units import Monotonic, Seconds, UnixMillis
+from src.units import Bpm, Monotonic, Seconds, UnixMillis
 
 SHORT_DAY = Plan(manual=30, rest=25, sample_every=15, programme=320.0)
 """A manual session of half a minute and the shortest programme the profile allows."""
@@ -218,11 +219,8 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     period = obj(report["tick_period_ms"])
     tick = obj(report["tick_ms"])
     assert 150.0 <= num(period["p50"]) <= 260.0
-    # Judged against the console's own loop_stall figure, whatever this loaded host gave.
-    checks = {obj(check)["name"]: obj(check) for check in seq(report["checks"])}
-    assert checks["tick_gap"]["threshold"] == (
-        f"maximum < {STALL_MS:.0f} ms (gel loop_stall de la console)"
-    )
+    # Judged against the console's loop_stall figure, whatever this loaded host gave.
+    assert obj(report["tick_gaps"])["bound_ms"] == round(STALL_MS, 1)
     assert num(tick["count"]) >= 25
     assert 0.0 < num(tick["p50"]) < 150.0
     assert len(seq(report["samples"])) >= 3
@@ -232,27 +230,40 @@ def test_ex1_the_console_runs_in_real_time_on_a_loopback_port_and_stops_when_ask
     assert left - {"console.log"} == {"endurance.json", "endurance.md"}
 
 
+def hold_a_session_tick(monkeypatch: pytest.MonkeyPatch, *, after: int = 0) -> list[float]:
+    """Hold one tick of a session :data:`LATE` seconds, past the ``after`` first ticks.
+
+    Returns what is still to be held: empty once the late tick was given.
+    """
+    control_step = LocalPanel.control_step
+    held = [LATE]
+    ticks = [0]
+
+    async def late(panel: LocalPanel) -> TelemetrySnapshot:
+        ticks[0] += 1
+        if held and ticks[0] > after and panel.runtime.state is RuntimeState.RUNNING:
+            await asyncio.sleep(held.pop())
+        return await control_step(panel)
+
+    monkeypatch.setattr(LocalPanel, "control_step", late)
+    return held
+
+
 async def test_ex1_in_real_time_a_late_tick_fails_tick_gap_and_a_frozen_console_its_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A tick of the session held 0.8 s: ``loop_stall`` freezes the arm, the session still
-    ends as planned, and only ``tick_gap`` says so. Then, the day over, the whole loop
-    frozen past 3 s: the console's own exit says it was no clean stop."""
-    control_step = LocalPanel.control_step
+    ends as planned, and ``tick_gap`` says so twice: the console's verdict, the gap seen.
+    Then, the day over, the whole loop frozen past 3 s: the console's own exit says it was
+    no clean stop."""
     attempt = Day.attempt
-    held = [LATE]
-
-    async def late(panel: LocalPanel) -> TelemetrySnapshot:
-        if held and panel.runtime.state is RuntimeState.RUNNING:
-            await asyncio.sleep(held.pop())
-        return await control_step(panel)
+    held = hold_a_session_tick(monkeypatch)
 
     async def then_frozen(day: Day) -> str | None:
         said = await attempt(day)
         time.sleep(FROZEN)  # noqa: ASYNC251  # the fault injected: the loop frozen whole
         return said
 
-    monkeypatch.setattr(LocalPanel, "control_step", late)
     monkeypatch.setattr(Day, "attempt", then_frozen)
 
     run = await real_time(6, tmp_path / "out", Plan(manual=3, rest=2, sample_every=2))
@@ -262,13 +273,104 @@ async def test_ex1_in_real_time_a_late_tick_fails_tick_gap_and_a_frozen_console_
     assert [(session.end, session.as_planned) for session in run.sessions] == [
         ("operator_stop", True)
     ]
-    assert run.period is not None
-    assert run.period.highest >= LATE * 1000.0
-    assert verdicts["tick_gap"].status is Status.FAIL
-    assert f"maximum {run.period.highest:.1f} ms" in verdicts["tick_gap"].measured
+    gaps = run.gaps
+    assert gaps is not None
+    assert gaps.exact is not None
+    assert gaps.exact.highest >= LATE * 1000.0
+    gap = verdicts["tick_gap"]
+    assert gap.status is Status.FAIL
+    assert gap.measured.startswith("la console a levé loop_stall : the control loop took")
+    assert f"un écart de {gaps.exact.highest:.1f} ms entre deux tics consécutifs" in gap.measured
     # Read from the console's own exit, which a console cancelled instead never reaches.
     assert run.anomaly == f"the console left with exit code {EXIT_FAILED}"
     assert verdicts["sessions"].status is Status.FAIL
+
+
+async def test_ex1_in_real_time_tick_gap_follows_the_console_s_own_loop_stall_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The console's freeze moved to two seconds: a tick held 0.8 s is no stall for its rule,
+    nor for the judge, which reads the console's figure. And so, on any host, a PASS."""
+
+    def slower(*, hard_max_bpm: Bpm, critical_bpm: Bpm) -> SafetyLimits:
+        return SafetyLimits(
+            hard_max_bpm=hard_max_bpm, critical_bpm=critical_bpm, loop_stall_freeze_periods=10.0
+        )
+
+    monkeypatch.setattr("src.local_panel.SafetyLimits", slower)
+    held = hold_a_session_tick(monkeypatch)
+
+    run = await real_time(6, tmp_path / "out", Plan(manual=3, rest=2, sample_every=2))
+    gap = {check.name: check for check in judge(run)}["tick_gap"]
+
+    assert held == []
+    gaps = run.gaps
+    assert gaps is not None
+    assert (gaps.bound, gaps.verdict) == (2000.0, None)
+    assert gaps.exact is not None
+    assert gaps.exact.highest >= LATE * 1000.0
+    assert "écart entre deux tics consécutifs < 2000 ms" in gap.threshold
+    assert gap.status is Status.PASS, gap.measured
+
+
+async def test_ex1_in_real_time_a_gap_over_snapshots_the_hub_merged_is_no_stall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loop blocked 0.45 s right after a tick published: the console's own gap stays
+    under its bound, the page's gap over the snapshot the hub merged does not, and is
+    not judged a stall."""
+    control_step = LocalPanel.control_step
+    held = [0.45]
+
+    async def busy_after(panel: LocalPanel) -> TelemetrySnapshot:
+        snapshot = await control_step(panel)
+        if held and panel.runtime.state is RuntimeState.RUNNING:
+            time.sleep(held.pop())  # noqa: ASYNC251  # the loop blocked, as a slow call would
+        return snapshot
+
+    monkeypatch.setattr(LocalPanel, "control_step", busy_after)
+
+    run = await real_time(6, tmp_path / "out", Plan(manual=3, rest=2, sample_every=2))
+    gap = {check.name: check for check in judge(run)}["tick_gap"]
+
+    assert held == []
+    gaps = run.gaps
+    assert gaps is not None
+    assert gaps.verdict is None, "no gap of the console reached its bound"
+    assert gaps.merged is not None
+    assert gaps.merged.highest >= gaps.bound
+    assert gap.status is Status.PASS, gap.measured
+    assert "sur des instantanés fusionnés par le hub" in gap.measured
+
+
+async def test_ex1_a_page_evicted_early_is_an_anomaly_and_a_later_stall_still_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page evicted after two seconds: the meter stops, and the stall that follows is
+    seen by no snapshot. The console latched it all the same, and the run says it was not
+    watched."""
+    control_step = LocalPanel.control_step
+    ticks = [0]
+
+    async def evicting(panel: LocalPanel) -> TelemetrySnapshot:
+        ticks[0] += 1
+        if ticks[0] == 10:
+            # Nine events at once, unread: the hub evicts the page, as a browser left behind.
+            for index in range(9):
+                panel.surface.note_withdrawn(f"refus {index}")
+        return await control_step(panel)
+
+    monkeypatch.setattr(LocalPanel, "control_step", evicting)
+    held = hold_a_session_tick(monkeypatch, after=10)
+
+    run = await real_time(8, tmp_path / "out", Plan(manual=3, rest=2, sample_every=2))
+    gap = {check.name: check for check in judge(run)}["tick_gap"]
+
+    assert held == []
+    assert run.anomaly == "the tick meter stopped before the console did: its page was evicted"
+    assert gap.status is Status.FAIL
+    assert gap.measured.startswith("la console a levé loop_stall : the control loop took")
+    assert f"des {run.covered:.0f} s de l'essai" in gap.measured
 
 
 def test_ex1_the_command_line_runs_a_simulated_day_with_the_dsp_on_all_along(

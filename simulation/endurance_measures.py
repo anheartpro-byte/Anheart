@@ -21,12 +21,14 @@ And it judges a run against the thresholds of the ticket (:func:`judge`):
 ``tick``
     the 99th centile of the tick stays under 150 ms;
 ``tick_gap``
-    in real time, the longest gap between two ticks stays under the gap at
-    which the console's own ``loop_stall`` rule freezes the arm: no stall;
+    in real time, no stall: the console latched no ``loop_stall`` verdict, no
+    gap between two consecutive ticks reached the gap that rule freezes on,
+    and the ticks seen span the run (:class:`Gaps`);
 ``descriptors``
-    the lowest count of the second half of the run does not exceed the lowest
-    count of the first half: a descriptor that leaks is never closed, and
-    raises the floor; one open for a moment raises one reading only;
+    the lowest count of the end of the run (its last quarter after the
+    warm-up, an hour at most) does not exceed the second lowest count before
+    it: a descriptor that leaks is never closed and raises every later
+    reading, one open or closed for a moment moves one reading only;
 ``data``
     what the code guarantees today about the data folder: a record takes no
     more files than the arming gate plans for (five raw blocks a second), no
@@ -92,6 +94,17 @@ SHORT_RUN_WARM_UP: Final[float] = 0.25
 
 MIN_JUDGED: Final[int] = 4
 """Readings needed after the warm-up before memory or descriptors can be judged."""
+
+END_SHARE: Final[float] = 0.25
+END_MAX_S: Final[float] = 3600.0
+END_READINGS: Final[int] = 2
+"""The end of a run whose lowest descriptor count is judged: the last quarter of what is
+judged, an hour at most (two cycles of the simulated day, five of the real-time one), and
+two readings at least, so that one reading caught with a descriptor open does not set it."""
+
+TICK_COVERAGE: Final[float] = 0.9
+"""Share of a real-time run the ticks the meter saw must span: otherwise part of it was
+not watched (a page evicted, a meter that stopped)."""
 
 RECORD_SLACK_S: Final[float] = 5.0
 """Seconds a record may last beyond what the scenario timed of its session (it times
@@ -536,6 +549,35 @@ class Mode(Enum):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class Gaps:
+    """What a real-time run saw of the time between two ticks, in ms.
+
+    Read between the snapshots a page of the hub receives. The hub paces a page
+    (0.15 s) and keeps one snapshot for it: a snapshot the page had not read
+    yet is replaced by the next one. A gap over such a merge adds two real gaps
+    or more, and is kept apart in :attr:`merged`.
+    """
+
+    bound: float
+    """The gap at which the console's ``loop_stall`` rule freezes the arm: its own figure."""
+
+    exact: Quantiles | None
+    """Gaps between two snapshots with none merged between them: one real gap each."""
+
+    merged: Quantiles | None = None
+    """Gaps over merged snapshots: reported, never judged as a stall (the verdict is)."""
+
+    seen: float = 0.0
+    """Seconds from the first tick the page saw to the last."""
+
+    verdict: str | None = None
+    """The console's own ``loop_stall`` verdict, in its words, when its supervisor holds it
+    latched at the end of the run. The supervisor keeps the most severe latched verdict:
+    one more severe than a stall, latched after it, is what the run then reports (and
+    such a verdict ends the session it falls in)."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Run:
     """Everything one run measured."""
 
@@ -551,12 +593,8 @@ class Run:
     machine was doing. 0 for a console read from outside."""
 
     tick: Quantiles | None = None
-    period: Quantiles | None = None
+    gaps: Gaps | None = None
     """Time between two ticks, real-time runs only: what the ``loop_stall`` rule judges."""
-
-    stall: float | None = None
-    """The gap between two ticks, in ms, at which the console's ``loop_stall`` rule
-    freezes the arm: read from its own supervisor. Real-time runs only."""
 
     sessions: tuple[Session, ...] = ()
     sync: Sync | None = None
@@ -652,39 +690,73 @@ def check_tick(run: Run) -> Check | None:
 
 
 def check_tick_gap(run: Run) -> Check | None:
-    """No stall: the longest gap between two ticks stays under the ``loop_stall`` bound.
+    """No stall in a real-time run. ``None`` for any other.
 
-    ``None`` for a run that is not made in real time. The gaps are read between
-    the snapshots a subscriber of the hub receives, and the hub may merge two
-    of them (snapshots coalesce): a gap read is never shorter than the true
-    one, so a PASS proves that no gap reached the bound.
+    The console's own ``loop_stall`` verdict is the authority: its rule judges
+    every real gap between two of its ticks, and latches. The gaps the page saw
+    between two consecutive snapshots are an independent check of it; a gap
+    over snapshots the hub merged adds several real ones and is not judged.
+    Both say something only of the time the page watched: it must span the run.
     """
-    stall = run.stall
-    if stall is None:
+    gaps = run.gaps
+    if gaps is None:
         return None
-    threshold = f"maximum < {stall:.0f} ms (gel loop_stall de la console)"
-    period = run.period
-    if period is None:
-        return Check("tick_gap", Status.FAIL, threshold, "aucun écart entre deux tics relevé")
-    measured = (
-        f"p50 {period.p50:.1f} ms, p99 {period.p99:.1f} ms, maximum {period.highest:.1f} ms "
-        f"sur {period.count} écarts"
+    threshold = (
+        f"aucun verdict loop_stall de la console ; écart entre deux tics consécutifs "
+        f"< {gaps.bound:.0f} ms ; tics relevés sur {TICK_COVERAGE:.0%} de l'essai au moins"
     )
-    status = Status.PASS if period.highest < stall else Status.FAIL
-    return Check("tick_gap", status, threshold, measured)
+    problems: list[str] = []
+    if gaps.verdict is not None:
+        problems.append(f"la console a levé loop_stall : {gaps.verdict}")
+    exact = gaps.exact
+    if exact is None:
+        problems.append("aucun écart entre deux tics consécutifs relevé")
+        seen = "aucun écart consécutif"
+    else:
+        seen = (
+            f"p50 {exact.p50:.1f} ms, p99 {exact.p99:.1f} ms, maximum {exact.highest:.1f} ms "
+            f"sur {exact.count} écarts consécutifs"
+        )
+        if exact.highest >= gaps.bound:
+            problems.append(f"un écart de {exact.highest:.1f} ms entre deux tics consécutifs")
+    if gaps.seen < TICK_COVERAGE * run.covered:
+        problems.append(f"tics relevés sur {gaps.seen:.0f} s des {run.covered:.0f} s de l'essai")
+    merged = gaps.merged
+    if merged is not None:
+        seen += (
+            f" ; {merged.count} écarts sur des instantanés fusionnés par le hub "
+            f"(au plus {merged.highest:.1f} ms), non jugés comme gel"
+        )
+    status = Status.FAIL if problems else Status.PASS
+    return Check("tick_gap", status, threshold, " ; ".join([*problems, seen]))
+
+
+def end_of(kept: Sequence[Sample]) -> int:
+    """How many of the last readings of ``kept`` are its end, for the descriptors.
+
+    The readings of its last quarter, an hour at most; :data:`END_READINGS` at
+    least, and as many left before them.
+    """
+    span = min(END_SHARE * (kept[-1].at - kept[0].at), END_MAX_S)
+    count = sum(1 for sample in kept if sample.at >= kept[-1].at - span)
+    return min(max(count, END_READINGS), len(kept) - END_READINGS)
 
 
 def check_descriptors(run: Run) -> Check:
-    """No descriptor leaks: the floor of the second half is no higher than the first's.
+    """No descriptor leaks: the end of the run holds none more than its start.
 
-    A leaked descriptor is never closed: it raises every later reading, the
-    lowest included. One open for a moment (a block being written, a request
-    being answered) raises the reading that caught it, never the lowest of a
-    half: :data:`MIN_JUDGED` leaves two readings in each at least. The price: a
-    leak that only starts after the lowest reading of the second half is not
-    seen; the leaks of a run of sessions start with the first ones.
+    A leaked descriptor is never closed: it raises every later reading. So the
+    lowest reading of the end (:func:`end_of`) is compared with the second
+    lowest of what comes before it, after the warm-up. One reading caught with
+    a descriptor open for a moment (a block being written, a request) does not
+    set the lowest of two or more; one caught with a descriptor closed for a
+    moment does not set the second lowest. A leak that starts at any time
+    before the end fails; one that only starts within the end is not seen.
     """
-    threshold = "le plancher de la seconde moitié ne dépasse pas celui de la première"
+    threshold = (
+        "le relevé le plus bas de la fin (dernier quart après la chauffe, une heure au plus) "
+        "ne dépasse pas le deuxième relevé le plus bas de ce qui précède"
+    )
     kept = judged(run)
     if len(kept) < MIN_JUDGED:
         return Check(
@@ -693,17 +765,15 @@ def check_descriptors(run: Run) -> Check:
             threshold,
             f"{len(kept)} relevés après la chauffe : trop peu",
         )
-    half = len(kept) // 2
-    first = min(sample.descriptors for sample in kept[:half])
-    second = min(sample.descriptors for sample in kept[half:])
+    ending = end_of(kept)
+    start = sorted(sample.descriptors for sample in kept[:-ending])[1]
+    end = min(sample.descriptors for sample in kept[-ending:])
     highest = max(sample.descriptors for sample in kept)
     measured = (
-        f"plancher {first} puis {second} descripteurs ouverts "
-        f"(au plus {highest}, {kept[-1].descriptors} à la fin)"
+        f"{start} au début, au moins {end} sur la fin ({ending} relevés depuis "
+        f"{hours_minutes(kept[-ending].at)}) ; au plus {highest}, {kept[-1].descriptors} à la fin"
     )
-    return Check(
-        "descriptors", Status.PASS if second <= first else Status.FAIL, threshold, measured
-    )
+    return Check("descriptors", Status.PASS if end <= start else Status.FAIL, threshold, measured)
 
 
 def record_problems(session: Session) -> tuple[str, ...]:
@@ -927,8 +997,20 @@ def _sync(sync: Sync | None) -> Mapping[str, object] | None:
     }
 
 
+def _gaps(gaps: Gaps | None) -> Mapping[str, object] | None:
+    if gaps is None:
+        return None
+    return {
+        "bound_ms": round(gaps.bound, 1),
+        "merged_ms": _quantiles(gaps.merged),
+        "seen_s": round(gaps.seen, 1),
+        "loop_stall_verdict": gaps.verdict,
+    }
+
+
 def document(run: Run, checks: Sequence[Check]) -> Mapping[str, object]:
     """The JSON report of a run: every reading, every session, every threshold."""
+    gaps = run.gaps
     return {
         "scenario": "endurance",
         "ticket": "ANH-164",
@@ -953,7 +1035,8 @@ def document(run: Run, checks: Sequence[Check]) -> Mapping[str, object]:
             for check in checks
         ],
         "tick_ms": _quantiles(run.tick),
-        "tick_period_ms": _quantiles(run.period),
+        "tick_period_ms": _quantiles(None if gaps is None else gaps.exact),
+        "tick_gaps": _gaps(gaps),
         "sync": _sync(run.sync),
         "data": _data(run),
         "anomaly": run.anomaly,
@@ -1004,7 +1087,7 @@ def markdown(run: Run, checks: Sequence[Check]) -> str:
         f"| `{check.name}` | {check.status.value} | {check.threshold} | {check.measured} |"
         for check in checks
     )
-    period = run.period
+    period = None if run.gaps is None else run.gaps.exact
     if period is not None:
         gap = (
             f"Écart entre deux tics : p50 {period.p50:.1f} ms, p99 {period.p99:.1f} ms, "

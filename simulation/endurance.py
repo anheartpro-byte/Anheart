@@ -37,9 +37,12 @@ of its HTTP transport: **no Convex deployment is ever contacted**, whatever
     console's own tasks, its web server on a free loopback port, its journal
     thread, its DSP on worker threads. The tick is timed from outside the
     loop: from the instant a tick reads to the moment its snapshot reaches a
-    subscriber of the telemetry hub, which is slightly more than the tick. The
-    longest gap between two ticks is judged against the console's own
-    ``loop_stall`` bound: exit code 0 says no tick came that late.
+    subscriber of the telemetry hub, which is slightly more than the tick. A
+    stall is judged on the console's own ``loop_stall`` verdict, and on the
+    gaps between two consecutive snapshots against that rule's bound
+    (:class:`~simulation.endurance_measures.Gaps`). What neither sees: a loop
+    that stops ticking less than 3 s before the run's stop and never ticks
+    again (past 3 s, the console's own exit fails).
 
 ``judge``
     Applies the same memory and descriptor thresholds to readings taken from
@@ -76,6 +79,7 @@ from tests.roster_support import RIDER_ID
 from simulation.endurance_measures import (
     DataFolder,
     Footprint,
+    Gaps,
     Histogram,
     Kind,
     Mode,
@@ -104,6 +108,7 @@ from src.record.journal import Journal
 from src.result import Err
 from src.telemetry import TelemetryClient
 from src.training.runtime import EndReason, RuntimeState
+from src.training.safety import RULE_LOOP_STALL
 from src.training.types import TelemetrySnapshot
 from src.units import Monotonic, Seconds, UnixMillis
 from src.web.app import create_app
@@ -381,6 +386,11 @@ class Screen:
         self.refusal: str | None = None
         """The last thing the console refused, in its own words."""
 
+    @property
+    def coalesced(self) -> int:
+        """Snapshots the hub replaced before this page read them, so far."""
+        return self._client.stats.coalesced
+
     async def read(self) -> TelemetrySnapshot | None:
         """Read up to the next snapshot and return it; ``None`` when the hub evicted this page."""
         while True:
@@ -569,7 +579,19 @@ class RealWorld:
     loop would delay the very tick this run times.
     """
 
-    __slots__ = ("_clock", "_console", "_due", "_sampler", "_screen", "_window", "periods", "whole")
+    __slots__ = (
+        "_clock",
+        "_console",
+        "_due",
+        "_sampler",
+        "_screen",
+        "_window",
+        "first",
+        "last",
+        "merged",
+        "periods",
+        "whole",
+    )
 
     def __init__(self, console: Console, clock: RealClock) -> None:
         self._console: Console = console
@@ -582,16 +604,29 @@ class RealWorld:
         """Every control tick the page was shown."""
 
         self.periods: Histogram = Histogram()
-        """The time between two of them."""
+        """The time between two of them, when the hub merged no snapshot in between."""
+
+        self.merged: Histogram = Histogram()
+        """The time between two of them over snapshots the hub merged: several real gaps."""
+
+        self.first: Monotonic | None = None
+        self.last: Monotonic | None = None
+        """The first and the last tick the page was shown."""
 
     @property
     def screen(self) -> Screen:
         """The page that reads the hub."""
         return self._screen
 
+    @property
+    def seen(self) -> float:
+        """Seconds from the first tick the page was shown to the last."""
+        first, last = self.first, self.last
+        return 0.0 if first is None or last is None else last - first
+
     async def meter(self) -> None:
         """Time every tick from the snapshot it publishes, until the page is evicted."""
-        previous: Monotonic | None = None
+        merged = self._screen.coalesced
         while True:
             snapshot = await self._screen.read()
             if snapshot is None:
@@ -599,9 +634,14 @@ class RealWorld:
             spent = (self._clock.monotonic() - snapshot.at) * 1000.0
             self._window.add(spent)
             self.whole.add(spent)
-            if previous is not None:
-                self.periods.add((snapshot.at - previous) * 1000.0)
-            previous = snapshot.at
+            coalesced = self._screen.coalesced
+            if self.last is None:
+                self.first = snapshot.at
+            else:
+                gaps = self.merged if coalesced > merged else self.periods
+                gaps.add((snapshot.at - self.last) * 1000.0)
+            merged = coalesced
+            self.last = snapshot.at
 
     async def second(self) -> None:
         """Wait for the next whole second of the run: the seconds counted do not drift."""
@@ -994,14 +1034,27 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
             anomaly = await day.attempt()
         sync = day.sync()
     finally:
+        # What the supervisor latched over the run, read before the console's exit acts.
+        floor = panel.runtime.supervisor.floor
         # The console's own exit: it stops the drive, closes the record, ends its tasks.
         stop.set()
         code = await served
+        unwatched = meter.done()
         meter.cancel()
         await asyncio.gather(meter, return_exceptions=True)
     data = console.folder.measure()
     leave(work, keep=keep_data)
+    gaps = Gaps(
+        bound=panel.runtime.supervisor.limits.loop_stall_freeze_gap * 1000.0,
+        exact=world.periods.summary(),
+        merged=world.merged.summary(),
+        seen=world.seen,
+        verdict=None if floor is None or floor.rule != RULE_LOOP_STALL else floor.detail,
+    )
     left = None if code == 0 else f"the console left with exit code {code}"
+    blind = (
+        "the tick meter stopped before the console did: its page was evicted" if unwatched else None
+    )
     return Run(
         mode=Mode.REAL_TIME,
         requested=float(seconds),
@@ -1010,12 +1063,11 @@ async def real_time(seconds: int, out: Path, plan: Plan, *, keep_data: bool = Fa
         cpu=time.process_time() - spent,
         samples=tuple(day.samples),
         tick=world.whole.summary(),
-        period=world.periods.summary(),
-        stall=panel.runtime.supervisor.limits.loop_stall_freeze_gap * 1000.0,
+        gaps=gaps,
         sessions=tuple(day.sessions),
         sync=sync,
         data=data,
-        anomaly=anomaly or left,
+        anomaly=anomaly or left or blind,
         notes=(*NOTES, NOTE_REAL_TICK),
     )
 
