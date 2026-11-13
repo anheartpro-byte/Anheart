@@ -533,6 +533,9 @@ et les chiffres : le nom ainsi coupé, que l'affichage réunit, est refusé. Ce
 contournement, consigné comme point de suivi dans la PR qui introduit ces
 contrôles ([PR #117](https://github.com/anheartpro-byte/Anheart/pull/117)),
 est fermé ; ses deux formes sont des cas de `scripts/ci/check-men.test.mjs`.
+Un nom inscrit suivi aussitôt d'un crochet est refusé aussi : un lien, une
+image ou une référence collés au nom peuvent y ajouter des chiffres à
+l'affichage, qui montrerait alors un autre numéro que celui lu.
 L'effacement des adresses nues reconnaît `http://`, `https://` ou `www.` en
 toute casse et n'importe où, même sans domaine, plus largement que la
 comparaison des adresses Linear ; il ne s'arrête pas à l'astérisque.

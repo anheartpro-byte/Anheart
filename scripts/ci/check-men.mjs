@@ -148,6 +148,11 @@ for (const { start, end } of destinations) {
 checkTicketNames(withoutAddresses(ticketText));
 checkTicketNames(withoutAddresses(catalogue), true);
 
+// A name followed at once by a bracket is read short of what the page shows:
+// `ANH-121[0](x)` displays as ANH-1210, and an image or a reference the same way.
+const bracketed = /(?<![\p{L}\p{N}])ANH-[1-9][0-9]*!?\[/iu.exec(catalogue);
+if (bracketed) refuse(`ticket name followed by a bracket, which can carry more of its digits: ${JSON.stringify(bracketed[0])}`);
+
 // Character references can hide ticket letters or separators, so require literal characters.
 const characterReference = /&(?:#(?:[0-9]+|x[0-9a-f]+)|[a-z][a-z0-9]*);/i.exec(catalogue);
 if (characterReference) refuse(`character reference in the catalogue: write the character itself: ${JSON.stringify(characterReference[0])}`);

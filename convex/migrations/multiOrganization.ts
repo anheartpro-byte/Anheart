@@ -112,14 +112,15 @@ export function duplicateHoldsData(table: string): string {
 }
 
 /**
- * One account holds two memberships of the webhook's row. Clerk gives an
- * account one membership per organisation, so the repair does not know which
- * one to keep, and moving both would give the account two memberships of the
- * default organisation.
+ * One account holds two memberships of the webhook's row, or a member of it
+ * two of the default organisation. Clerk gives an account one membership per
+ * organisation, so the repair does not know which one to keep or to merge
+ * into, and moving both would give the account two of the default one.
  */
 export const DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT =
-  "An account holds two memberships of the row the Clerk webhook created for " +
-  "the Anheart organisation. Nothing was changed: keep one of them by hand " +
+  "An account holds two memberships of one organisation: of the row the " +
+  "Clerk webhook created for the Anheart organisation, or of the default " +
+  "organisation. Nothing was changed: keep one of them by hand " +
   "(docs/convex.md, Sortir de deux organisations Anheart).";
 
 /**
@@ -340,9 +341,19 @@ async function planRepair(ctx: MutationCtx) {
   }> = [];
   const moves: Array<Doc<"memberships">> = [];
   for (const membership of memberships) {
-    const held = await findMembership(ctx, membership.userId, anheart._id);
-    if (held === null) moves.push(membership);
-    else merges.push({ membership, held });
+    // Two here would make a unique() read throw a raw error: refused by name.
+    const held = await ctx.db
+      .query("memberships")
+      .withIndex("by_user_and_organization", (q) =>
+        q.eq("userId", membership.userId).eq("organizationId", anheart._id),
+      )
+      .take(2);
+    if (held.length > 1) {
+      throw new ConvexError(DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT);
+    }
+    const [kept] = held;
+    if (kept === undefined) moves.push(membership);
+    else merges.push({ membership, held: kept });
   }
   const users = await ctx.db
     .query("users")
