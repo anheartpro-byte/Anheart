@@ -1714,11 +1714,16 @@ d'autre message. Le toaster mesure cette place avec `ResizeObserver` et la
 publie dans `--feedback-toaster-space` sur `<html>` ; la réservation disparaît
 avec le dernier message ou au démontage. Sans `ResizeObserver`, les messages
 restent utilisables mais aucune place n'est réservée.
-Les fenêtres se centrent dans l'espace libre au-dessus de la pile, à toutes
-les largeurs. Une grande fenêtre défile à l'intérieur ; les boutons d'un
+Les fenêtres se centrent dans l'espace libre au-dessus de la pile, là où la
+pile peut les recouvrir : sous 82rem (1312 px) de large. Au delà, la pile est
+à côté d'une fenêtre de largeur normale (`sm:max-w-lg`), qui reste centrée
+dans tout l'écran. Une grande fenêtre défile à l'intérieur ; les boutons d'un
 `DialogFooter` collant restent visibles. Les formulaires sans ce pied
 (`MachineFormModal`, `PatientFormModal`, `LaunchTrainingModal`) gardent leurs
-boutons atteignables en faisant défiler la fenêtre. Sans message, une fenêtre
+boutons atteignables en faisant défiler la fenêtre. À l'ouverture, le champ
+que Radix met au focus est amené dans la vue au-dessus du pied (Radix le
+met au focus sans faire défiler). Chaque nouveau message est amené dans la
+vue de la pile, même quand elle déborde. Sans message, une fenêtre
 qui tient dans l'écran garde sa taille et sa position.
 Le menu latéral mobile réserve la même place sous son contenu, y compris
 sous le pied du menu, afin que les messages ne le recouvrent pas.

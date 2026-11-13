@@ -130,6 +130,15 @@ describe("ANH-203 dialog: the content", () => {
     }
   });
 
+  // ANH-232: from 82rem the stack (24rem, 1rem from the right) is beside a
+  // window of sm:max-w-lg (32rem): 50% + 16rem <= 100% - 25rem.
+  it("reserves no space for the messages where the stack is beside the window", () => {
+    const classes = draw(<DialogContent />).slot("dialog-content").classes;
+    expect(classes).toContain("min-[82rem]:top-[50dvh]");
+    expect(classes).toContain("min-[82rem]:max-h-[calc(100dvh-2rem)]");
+    expect(classes).toContain("sm:max-w-lg");
+  });
+
   it("draws the window in a portal, after the overlay that dims the page", () => {
     const page = draw(<DialogContent>Confirmer ?</DialogContent>);
 
