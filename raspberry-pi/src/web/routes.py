@@ -1153,7 +1153,8 @@ async def stop_reason(request: Request, default: str) -> str:
 
     A stop is never refused for its body: none, empty, too long, not JSON, not
     an object, or a reason that is not text is the default reason. Read from
-    the raw bytes, never by FastAPI's validation, which answers 422.
+    the raw bytes, never by FastAPI's validation, which answers 422. A lone
+    surrogate in the reason becomes U+FFFD.
     """
     raw = await request.body()
     if len(raw) > STOP_BODY_LIMIT:
@@ -1163,7 +1164,11 @@ async def stop_reason(request: Request, default: str) -> str:
     except (ValueError, RecursionError):
         return default
     given = cast(Mapping[str, object], parsed).get("reason") if isinstance(parsed, dict) else None
-    return given if isinstance(given, str) and given.strip() else default
+    if not isinstance(given, str) or not given.strip():
+        return default
+    # JSON can carry a lone surrogate ("\\ud800"), which no answer, log or record can
+    # encode: it would fail the answer of a stop already latched.
+    return "".join("\ufffd" if "\ud800" <= char <= "\udfff" else char for char in given)
 
 
 def _register_manual(

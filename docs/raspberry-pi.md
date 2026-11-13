@@ -3492,8 +3492,10 @@ ligne compris.
    `RECORD_MACHINE_ID` est posé, et plus récente (`issuedAt`) que la liste
    tenue : une liste plus ancienne, ou du même instant mais différente, est
    refusée, pour qu'une réponse ancienne rejouée ne réactive pas un opérateur
-   désactivé. Une liste qui ne change personne n'est pas réécrite, mais sa
-   date est retenue en mémoire. Un refus est écrit au journal de bord, une fois par raison et
+   désactivé. Une liste qui ne change personne est écrite aussi, sa date
+   avec elle (une écriture par minute au repos au plus) : le fichier est
+   toujours la liste en vigueur, ou une plus récente qu'une séance a tenue à
+   l'écart, que le démarrage suivant prend. Un refus est écrit au journal de bord, une fois par raison et
    par signature, et la console garde sa liste.
 3. **En vigueur.** Une liste acceptée qui change quelque chose est écrite
    telle que reçue, signature comprise, dans `data/operators.json` (à côté de

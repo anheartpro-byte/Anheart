@@ -136,18 +136,25 @@ class OperatorSync:
             self._refuse("liste qui n'est pas plus recente que celle de la console", signature)
             return
         self._refused = None
-        if held is not None and accepted.same_holders(held):
-            # Nobody gains or loses: its date alone is taken, in memory, so that a list
-            # replayed from between the two is refused. The disk is not written each minute.
-            self._access.adopt(accepted)
+        if accepted == held:
             return
-        if not self._at_rest():
+        same_people = held is not None and accepted.same_holders(held)
+        if not same_people and not self._at_rest():
             # A session began during the request: asked again at the next rest.
             self._asked = None
             return
+        # Written whatever changed, its date alone included: the file is always the list
+        # in force, or a newer one a session kept from it, which the next start takes.
         envelope = StoredList(payload=payload, signature=cast(str, signature))
         content = STORED_LIST.dump_json(envelope) + b"\n"
         written = await anyio.to_thread.run_sync(partial(replace_file, self._path, content))
+        if same_people:
+            # Nobody gains or loses: in force at once, its date with it, so that a list
+            # replayed from between the two is refused. Said by nothing but the log.
+            self._access.adopt(accepted)
+            if isinstance(written, Err):
+                _logger.warning("operator list date not written: %r", written.error)
+            return
         if not self._at_rest():
             # A session began during the write: the disk holds the new list, memory the
             # one in force for that session; adopted at the next rest, or the next start.

@@ -2375,7 +2375,10 @@ les lectures ; l'amorçage est écrit dans
   appareil, quels que soient les opérateurs visés, verrouillent cet
   appareil ; vingt sur la console, tous appareils confondus, verrouillent
   toute connexion. Le compte d'un opérateur s'efface à son bon code, ceux
-  d'un appareil et de la console après 15 min sans code faux. Les comptes
+  d'un appareil et de la console après 15 min sans code faux, et seulement
+  ainsi : les fautes de frappe de plusieurs opérateurs s'y additionnent, et
+  vingt codes faux sur la console sans 15 minutes de calme entre eux la
+  verrouillent toute 15 min, même faits de bonne foi. Les comptes
   sont écrits sur le disque, effacements compris, et ce qui est trouvé
   verrouillé au démarrage l'est 15 min à partir de ce démarrage : couper le
   courant ne donne pas d'essais. Une connexion à la fois : une rafale de

@@ -460,6 +460,25 @@ class _Omitted(Enum):
     LOCAL = "local"
 
 
+_LAST_OF_ONE_UNIT: Final[int] = 0xFFFF
+"""The last code point UTF-16 writes in one unit; any above takes a pair."""
+
+
+def within_utf16(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` UTF-16 code units, never inside a pair.
+
+    What Convex counts (``detail.length`` of a JavaScript string): an emoji is
+    two. A detail cut at ``limit`` code points could be refused, and with it
+    the whole batch, an emergency stop included.
+    """
+    units = 0
+    for index, char in enumerate(text):
+        units += 2 if ord(char) > _LAST_OF_ONE_UNIT else 1
+        if units > limit:
+            return text[:index]
+    return text
+
+
 def _event(raw: bytes, seq: int, start_ms: int) -> Wire | _Omitted | None:
     """One wire event, a local omission, or ``None`` for an unreadable line."""
     try:
@@ -490,7 +509,7 @@ def _event(raw: bytes, seq: int, start_ms: int) -> Wire | _Omitted | None:
         "seq": seq,
         "t": start_ms + round(t * 1000),
         "kind": kind,
-        "detail": detail[:MAX_EVENT_DETAIL],
+        "detail": within_utf16(detail, MAX_EVENT_DETAIL),
         "actor": actor,
     }
 
