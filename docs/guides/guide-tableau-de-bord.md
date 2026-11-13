@@ -79,7 +79,7 @@ ordinateur ou une tablette, n'importe où, il permet de :
 
 | Le site ne peut pas | Pourquoi, et où le faire |
 |---|---|
-| Démarrer une séance **manuelle** (vitesse choisie par l'opérateur), ou en régler la vitesse. | Volontaire : le manuel se démarre **uniquement à la console de la machine**, par quelqu'un qui se tient à côté. Le site l'affiche sur la carte des programmes et dans la fenêtre de lancement : « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » Seule exception, sans personne à bord : un admin ou un gestionnaire peut proposer une **séance de banc lestée**, que la console ne démarre qu'après la confirmation et l'attestation de son opérateur ([tableau-de-bord.md, 5.6](../tableau-de-bord.md#56-séance-de-banc-lestée-anh-250)). |
+| Démarrer une séance **manuelle** (vitesse choisie par l'opérateur), ou en régler la vitesse. | Volontaire : le manuel se démarre **uniquement à la console de la machine**, par quelqu'un qui se tient à côté. Le site l'affiche sur la carte des programmes et dans la fenêtre de lancement : « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un administrateur ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient. Seule exception, sans personne à bord : un admin ou un gestionnaire peut proposer une **séance de banc lestée**, que la console ne démarre qu'après la confirmation et l'attestation de son opérateur ([tableau-de-bord.md, 5.6](../tableau-de-bord.md#56-séance-de-banc-lestée-anh-250)). |
 | Arrêter la machine **instantanément**. | Le bouton du site est une **demande** : la machine la lit toutes les 3 s environ, puis décélère sur sa rampe de sécurité. L'arrêt d'urgence est **sur la machine**. |
 | Créer ou modifier un **programme**. | Les programmes sont écrits à la console de la machine, puis recopiés sur le site en lecture seule. |
 | Forcer un départ. | La machine revérifie tout et peut refuser. |
@@ -779,7 +779,7 @@ Messages possibles :
   machine a déclaré qu'elle n'accepte pas de séance auto ; les programmes sont
   grisés et aucun lancement n'est possible ;
 - « **Aucun programme synchronisé depuis la machine** » ;
-- toujours, en bas : « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. »
+- toujours, en bas : « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » pour un administrateur ou un gestionnaire, « Manuel : uniquement depuis la console de la machine » pour un patient, qui ne peut pas proposer de séance de banc.
 
 On ne peut ni ajouter ni modifier un programme ici (voir [procédure P9](#p9-préparer-un-programme-exemple--footing-150-à-155-bpm)).
 
@@ -1346,7 +1346,7 @@ direct.
 | « En attente de l'appareil » | Séance d'entraînement en attente : « En attente que la machine arme la séance… ». |
 | Carte **Entraînement** (séances auto et manuelles) | **Programme**, **Zone cible**, **Durée prévue**, **FC max du pratiquant**, **Opérateur**, **Origine** (Tableau de bord / Machine), encadré **Motif de fin** (rouge si échouée), puis **Télémétrie** : les mêmes deux courbes que la vue en direct, pour toute la séance (jusqu'à 2 heures). « Aucune télémétrie reçue pour l'instant. » si rien n'a été reçu. |
 | Carte **Ancien enregistrement ECG** (séances de l'ancien mode seulement, à la place de la carte Entraînement) | « Cette séance vient de l'ancien mode d'enregistrement ECG, retiré du logiciel. Elle est conservée en lecture seule. » ; « Canaux enregistrés » ; puis, si des données existent, « Lots de données », « Durée des données » et « Données enregistrées de ... à ... ». Sinon « Aucune donnée ECG enregistrée pour cette session ». Le tracé n'est plus affiché. |
-| « Informations patient », « Chronologie de la session », « Notes de session » | Nom et adresse, début, durée (la règle de **Sessions**, mais « En cours » pour une séance d'entraînement non finie), fin, « Démarrée par », notes. |
+| « Informations patient », « Chronologie de la session », « Notes de session » | Nom et adresse, début, durée (la règle de **Sessions** : « 25m 3s », ou « 1h 2m » au delà d'une heure, sans les secondes ; mais « En cours » pour une séance d'entraînement non finie), fin, « Démarrée par », notes. |
 
 **Lire le motif de fin** (champ « Motif de fin ») :
 

@@ -372,7 +372,14 @@ describe("machine page: which machine it shows", () => {
     await open("user");
 
     expect(propsOf("MachineLiveCard")).toEqual({ machineId });
-    expect(propsOf("MachineProgramsCard")).toEqual({ machineId });
+    // ANH-250: a patient is not told of the bench session he cannot propose.
+    expect(propsOf("MachineProgramsCard")).toEqual({ machineId, staff: false });
+  });
+
+  it("tells the programmes card that a gestionnaire is staff", async () => {
+    await open("gestionnaire");
+
+    expect(propsOf("MachineProgramsCard")).toEqual({ machineId, staff: true });
   });
 });
 

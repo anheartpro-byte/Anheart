@@ -1102,7 +1102,7 @@
     },
     "ballast": {
       "badge": "Ballasted bench",
-      "badgeMass": "Ballasted bench · {mass} kg",
+      "badgeMass": "Ballasted bench · {mass, number} kg",
       "remote": "Ballasted bench: proposed from the site, confirmed and driven at the machine's console"
     },
     "manualOnlyAtMachine": "Manual: only from the machine's console",

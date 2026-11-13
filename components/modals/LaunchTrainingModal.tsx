@@ -480,7 +480,10 @@ function LaunchForm({
         </p>
         <p className="flex items-start gap-2">
           <Hand className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-          {t("training.manualFromMachine")}
+          {/* Only the staff may propose a ballasted bench session. */}
+          {isManager
+            ? t("training.manualFromMachine")
+            : t("training.manualOnlyAtMachine")}
         </p>
       </div>
 

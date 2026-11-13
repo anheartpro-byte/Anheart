@@ -328,8 +328,17 @@ describe("ANH-203 kind and origin of a session", () => {
 
   it("ANH-250: a bench session launched from the site reads « Banc lesté », with its mass when declared", () => {
     const declared = render(<BallastBadge ballast={{ massKg: 80 }} />);
-    expect(declared.text()).toBe(t.ballast.badgeMass.replace("{mass}", "80"));
+    expect(declared.text()).toBe("Banc lesté · 80 kg");
     declared.unmount();
+    // The mass is written as the page's language writes a number.
+    const fraction = render(<BallastBadge ballast={{ massKg: 80.25 }} />);
+    expect(fraction.text()).toBe("Banc lesté · 80,25 kg");
+    fraction.unmount();
+    const english = render(<BallastBadge ballast={{ massKg: 80.25 }} />, {
+      locale: "en",
+    });
+    expect(english.text()).toBe("Ballasted bench · 80.25 kg");
+    english.unmount();
     const undeclared = render(<BallastBadge ballast={{ massKg: null }} />);
     expect(undeclared.text()).toBe(t.ballast.badge);
     undeclared.unmount();
@@ -347,7 +356,7 @@ describe("ANH-203 kind and origin of a session", () => {
     };
     const listed = render(<SessionKindCell row={row} />);
     expect(listed.text()).toBe(
-      `${t.kind.manual} ${t.origin.remote} ${t.ballast.badgeMass.replace("{mass}", "80")}`,
+      `${t.kind.manual} ${t.origin.remote} Banc lesté · 80 kg`,
     );
     listed.unmount();
 
@@ -384,7 +393,16 @@ describe("ANH-203 programmes of a machine", () => {
       "Endurance 110-140 bpm (FC limite 165) 30 min 24.1 tr/min bras 1200 tr/min moteur",
     );
     expect(screen.text()).not.toContain(t.programs.disabled);
-    // ANH-250: a ballasted bench session can be proposed from the site.
+    // ANH-250: without `staff`, nothing of the bench session.
+    expect(screen.text()).toContain(t.manualOnlyAtMachine);
+    expect(screen.text()).not.toContain(t.manualFromMachine);
+  });
+
+  it("ANH-250 tells the staff that a ballasted bench session can also be proposed from the site", () => {
+    const screen = render(
+      <ProfileList profiles={[ENDURANCE]} programsEnabled staff />,
+    );
+
     expect(screen.text()).toContain(t.manualFromMachine);
     expect(screen.text()).not.toContain(t.manualOnlyAtMachine);
   });
@@ -443,6 +461,17 @@ describe("ANH-203 programmes of a machine", () => {
     expect(screen.text()).toContain(t.launch.medicalParametersUnavailable);
     expect(screen.text()).not.toContain(t.launch.medicalParametersUnsigned);
     expect(screen.text()).not.toContain(t.programs.disabled);
+  });
+
+  it("ANH-250 the card names the bench session to the staff only", () => {
+    answer("training:listMachineProfiles", [ENDURANCE]);
+    answer("training:getMachineLive", { programsEnabled: true, live: null });
+
+    const patient = render(<MachineProgramsCard machineId={machineId} />);
+    expect(patient.text()).toContain(t.manualOnlyAtMachine);
+    patient.rerender(<MachineProgramsCard machineId={machineId} staff />);
+    expect(patient.text()).toContain(t.manualFromMachine);
+    expect(patient.text()).not.toContain(t.manualOnlyAtMachine);
   });
 
   it("does not grey the programmes of a machine that accepts them", () => {

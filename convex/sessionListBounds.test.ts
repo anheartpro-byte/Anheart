@@ -246,6 +246,11 @@ describe("ANH-227 short lists: default list", () => {
     expect(await ids(10)).toEqual(expected.slice(0, 10));
     expect(await ids(0)).toEqual(expected.slice(0, 1));
     expect(await ids(-5)).toEqual(expected.slice(0, 1));
+    // `take` refuses what is not a whole number: floored, NaN the default.
+    expect(await ids(2.5)).toEqual(expected.slice(0, 2));
+    expect(await ids(0.5)).toEqual(expected.slice(0, 1));
+    expect(await ids(Number.NaN)).toEqual(expected.slice(0, 50));
+    expect(await ids(Number.POSITIVE_INFINITY)).toEqual(expected.slice(0, 50));
   });
 });
 

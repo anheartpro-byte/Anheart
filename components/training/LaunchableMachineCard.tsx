@@ -111,6 +111,7 @@ export function LaunchableMachineCard({
             profiles={m.profiles}
             programsEnabled={m.programsEnabled}
             medicalParametersStatus={medicalParametersStatus}
+            staff={!isUser}
           />
         </div>
         <div className="flex gap-2 pt-2">

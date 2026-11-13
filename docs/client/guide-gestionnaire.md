@@ -80,7 +80,7 @@ Le site vous permet de :
 
 | Le site ne peut pas | Ce qu'il faut savoir |
 |---|---|
-| Démarrer une séance manuelle | Elle se démarre seulement à la console de la machine. Le site le rappelle : « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » Seule exception : une séance de banc lestée, sans personne à bord, que vous pouvez proposer depuis la page de la machine ; l'opérateur la confirme à la console. |
+| Démarrer une séance manuelle | Elle se démarre seulement à la console de la machine. Le site vous le rappelle : « Manuel : depuis la console de la machine. Sans personne à bord, une séance de banc lestée peut aussi être proposée depuis le site. » Cette séance de banc lestée se propose depuis la page de la machine ; l'opérateur la confirme à la console. |
 | Arrêter la machine tout de suite | Le bouton d'arrêt du site envoie une demande. La machine la lit toutes les 3 secondes environ. En temps normal, elle décélère ensuite progressivement, y compris quand elle gardait sa vitesse pour une raison de sécurité (action « Vitesse figée »). L'arrêt d'urgence se fait à la machine, par l'opérateur. |
 | Voir la machine | Le site ne voit ni la capsule, ni la salle, ni l'opérateur. Il affiche ce que la machine lui envoie, avec quelques secondes de retard. |
 | Forcer un départ | La machine refait tous les contrôles et peut refuser. |

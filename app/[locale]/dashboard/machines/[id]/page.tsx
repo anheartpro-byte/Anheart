@@ -328,7 +328,7 @@ export default function MachineDetailPage({
       {!machine.isDeleted && (
         <div className="grid lg:grid-cols-2 gap-6">
           <MachineLiveCard machineId={machineId} />
-          <MachineProgramsCard machineId={machineId} />
+          <MachineProgramsCard machineId={machineId} staff={canManage} />
         </div>
       )}
 

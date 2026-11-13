@@ -483,6 +483,27 @@ describe("ANH-132 /api/machine/training/telemetry binding", () => {
     expect(await response.json()).toEqual({ stored: 1, duplicates: 0, rejected: 0 });
   });
 
+  it("stores a negative elapsed time as 0, and keeps every point of the batch", async () => {
+    const w = await world();
+    const sessionId = await seedSession(w, w.machine, "active", "auto");
+    const response = await send(w, w.machineKey, "POST", "/api/machine/training/telemetry", {
+      sessionId,
+      points: [
+        { ...point, t: NOW, elapsedS: -120 },
+        { ...point, t: NOW + 1000, elapsedS: 2.5 },
+      ],
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ stored: 2, duplicates: 0, rejected: 0 });
+    const stored = await w.t.run((ctx) =>
+      ctx.db
+        .query("training_telemetry")
+        .withIndex("by_session_and_t", (q) => q.eq("sessionId", sessionId))
+        .collect(),
+    );
+    expect(stored.map((row) => row.elapsedS)).toEqual([0, 2.5]);
+  });
+
   it("refuses a session that belongs to another machine (400)", async () => {
     const w = await world();
     const foreign = await seedSession(w, w.otherMachine, "active", "auto");

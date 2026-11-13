@@ -651,7 +651,8 @@ source d'ANH-180 ; son effet en production dépend du redéploiement ANH-82.
 
 `sessionId`, `machineId`, `t`, `elapsedS`, `phase`, `bpm` (absent = pas de FC
 fiable), `motorRpm`, `outputRpm`, `setpointMotorRpm`, `gLoad`, `safetyAction`.
-Index `by_session_and_t`.
+Index `by_session_and_t`. La route de télémétrie ramène à 0 un `elapsedS`
+négatif plutôt que de refuser le lot : aucun point n'est perdu.
 
 **Une ligne par `(sessionId, t)`.** Un point envoyé une seconde fois (réponse
 perdue, console redémarrée) n'est pas inséré de nouveau : la ligne déjà là
@@ -2258,7 +2259,7 @@ routes d'entraînement.
 | Fonction | Autorisation | Rôle |
 |---|---|---|
 | `getSession` | pratiquant ou accès machine | Détail avec patient et machine. |
-| `listSessions` | connecté | Les `limit` (50 par défaut et au plus, 1 au moins : une valeur hors de ces bornes y est ramenée) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status` (`pending`, `active`, `interrupted`, `completed` ou `failed`), `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
+| `listSessions` | connecté | Les `limit` (50 par défaut et au plus, 1 au moins : une valeur hors de ces bornes y est ramenée, une fraction arrondie à l'entier inférieur, NaN pris pour la valeur par défaut) séances les plus récentes que l'appelant peut lire, avec les filtres facultatifs `status` (`pending`, `active`, `interrupted`, `completed` ou `failed`), `machineId`, `userId`. Retourne `kind` et `origin`. Pour les listes courtes du site (accueil, fiche patient, fiche utilisateur). |
 | `listSessionsPaginated` | connecté | Les mêmes séances, avec les mêmes filtres, **page par page** (`paginationOpts`, pour `usePaginatedQuery`). Page Sessions (un statut par onglet) et page Rapports (`status: "completed"`). |
 | `getActiveSessionForMachine` | accès machine | Séance `active` (une séance `interrupted` n'en est pas une). |
 

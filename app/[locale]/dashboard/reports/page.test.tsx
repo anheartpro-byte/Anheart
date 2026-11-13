@@ -146,6 +146,20 @@ describe("reports", () => {
     ).toBeTruthy();
   });
 
+  it("keeps its live region mounted while the first page loads, then puts the message in it", async () => {
+    signedInAs("user");
+    answer(LIST, undefined);
+    const view = await renderPage(<ReportsPage />);
+    const region = screen.getByRole("status");
+    expect(region.textContent).toBe("");
+    expect(screen.queryByRole("heading")).toBeNull();
+
+    serverLists();
+    await view.refresh();
+    expect(screen.getByRole("status")).toBe(region);
+    expect(region.textContent).toBe(fr.reports.noReports);
+  });
+
   it("says so when there is no report", async () => {
     signedInAs("user");
     serverLists();
@@ -209,9 +223,7 @@ describe("reports", () => {
     await renderPage(<ReportsPage />);
 
     expect(
-      report("EFGH5678").getByText(
-        fr.training.ballast.badgeMass.replace("{mass}", "80"),
-      ),
+      report("EFGH5678").getByText("Banc lesté · 80 kg"),
     ).toBeTruthy();
     expect(
       report("YYYY1111").getByText(fr.training.ballast.badge),

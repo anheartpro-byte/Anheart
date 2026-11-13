@@ -27,6 +27,7 @@ export function ProfileList({
   programsEnabled,
   medicalParametersStatus,
   catalog,
+  staff = false,
 }: {
   profiles: TrainingProfile[];
   programsEnabled: boolean;
@@ -39,6 +40,8 @@ export function ProfileList({
     | "ahead";
   /** Absent: the machine says nothing of the catalogue (a console before contract 1.11). */
   catalog?: ProgrammeCatalog;
+  /** An admin or a gestionnaire, who may also propose a ballasted bench session. */
+  staff?: boolean;
 }) {
   const t = useTranslations("training");
   const medicalIssue =
@@ -110,7 +113,7 @@ export function ProfileList({
       )}
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
         <Hand className="h-3.5 w-3.5" />
-        {t("manualFromMachine")}
+        {staff ? t("manualFromMachine") : t("manualOnlyAtMachine")}
       </p>
     </div>
   );
@@ -120,9 +123,11 @@ export function ProfileList({
 export function MachineProgramsCard({
   machineId,
   action,
+  staff = false,
 }: {
   machineId: Id<"machines">;
   action?: React.ReactNode;
+  staff?: boolean;
 }) {
   const t = useTranslations("training.programs");
   const profiles = useQuery(api.training.listMachineProfiles, { machineId });
@@ -155,6 +160,7 @@ export function MachineProgramsCard({
             programsEnabled={live?.programsEnabled ?? false}
             medicalParametersStatus={medicalParametersStatus}
             catalog={live?.programmeCatalog}
+            staff={staff}
           />
         )}
       </CardContent>

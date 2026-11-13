@@ -424,7 +424,7 @@ describe("the report of a session", () => {
     await open();
     expect(valueUnder(r.kind)).toBe(fr.training.kind.manual);
     expect(valueUnder(r.ballast)).toBe(
-      fr.training.ballast.badgeMass.replace("{mass}", "80"),
+      "Banc lesté · 80 kg",
     );
   });
 

@@ -225,11 +225,16 @@ export const listSessions = query({
   returns: v.array(listedSessionValidator),
   handler: async (ctx, { limit, ...filters }) => {
     const caller = await getCurrentUserOrThrow(ctx);
+    // `take` wants a whole number: a fraction is floored, NaN is the default.
+    const wanted = Math.floor(limit ?? LIST_SESSIONS_MAX);
     const sessions = await newestReadableSessions(
       ctx,
       caller,
       filters,
-      Math.min(Math.max(limit ?? LIST_SESSIONS_MAX, 1), LIST_SESSIONS_MAX),
+      Math.min(
+        Math.max(Number.isNaN(wanted) ? LIST_SESSIONS_MAX : wanted, 1),
+        LIST_SESSIONS_MAX,
+      ),
     );
     return await listedRows(ctx, caller, sessions);
   },
