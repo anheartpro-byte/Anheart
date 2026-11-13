@@ -6,7 +6,7 @@
  */
 import { ConvexError } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import cases from "../contracts/programme-validation-cases.json";
+import casesText from "../contracts/programme-validation-cases.json?raw";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
@@ -23,6 +23,19 @@ import {
   SIGNOFF,
 } from "./programmes.fixtures";
 import { as, modules, NOW, seedWorld, type World } from "./test.setup";
+
+/** A case of the shared file: a change to its base document, and the Pi's verdict on it. */
+type SharedCase = {
+  name: string;
+  changes: Record<string, unknown>;
+  expected:
+    | { verdict: "accepted" }
+    | { verdict: "rejected" | "malformed"; violations?: string[]; detail: string };
+};
+
+// Read as text: the bundler's JSON reader refuses an escaped surrogate left
+// unpaired, which a case holds on purpose (ANH-138), and `JSON.parse` keeps it.
+const cases = JSON.parse(casesText) as { base: Record<string, unknown>; cases: SharedCase[] };
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
