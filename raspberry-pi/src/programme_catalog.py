@@ -49,11 +49,13 @@ What it never does
 Nothing here starts, stops or arms anything. No answer of the dashboard can
 make a programme accepted without the signature, nor accepted against this
 console's rules. A dashboard that signs nothing (``not_configured``), that
-does not know the route (an older one answers 404), that has published
-nothing yet (:data:`NOTHING_PUBLISHED`) or that does not answer leaves the
-programmes as they are: the shipped fallback (``config/profiles.default.json``)
-on a console that never received a signed catalogue. An answer too large to
-read is refused and said in the logbook.
+does not know the route (an older one answers 404) or that does not answer
+leaves the programmes as they are: the shipped fallback
+(``config/profiles.default.json``) on a console that never received a signed
+catalogue. One that has published nothing (:data:`NOTHING_PUBLISHED`) leaves
+the shipped fallback too, and takes back to it a console holding another
+deployment's catalogue. An answer too large to read is refused and said in
+the logbook.
 
 See .claude/skills/anheart-strict-python/SKILL.md.
 """
@@ -124,7 +126,9 @@ NOTHING_PUBLISHED: Final[int] = 0
 """The revision of a catalogue nothing was ever published in: not a catalogue at all.
 
 Kept apart so that a key set on a deployment before anything is published
-does not empty every console of its fallback programmes."""
+does not empty every console of its fallback programmes, and so that a
+console moved to it from another deployment signed by the same key does not
+keep, nor report, that deployment's programmes."""
 
 MAX_PAYLOAD_BYTES: Final[int] = 500_000
 """The largest signed text Convex publishes (``max_payload_bytes``): the whole answer, its
@@ -507,8 +511,7 @@ class ProgrammeCatalog:
 
     async def _receive(self, catalog: CatalogPayload) -> None:
         if catalog.revision == NOTHING_PUBLISHED:
-            # Nothing was ever published: no catalogue, the programmes stay as they are.
-            self._held = catalog.revision
+            await self._nothing_published()
             return
         if catalog.unchanged:
             if catalog.revision != self._held:
@@ -521,20 +524,9 @@ class ProgrammeCatalog:
             return
         stamp = CatalogStamp(revision=catalog.revision, medical=self._rules.medical_record)
         kept = {p.profile_id: p for p in self._store.list_profiles()}
-        if self._store.catalog != stamp or kept != {p.profile_id: p for p in accepted}:
-            written = await self._writer.replace_catalog(accepted, stamp, may_adopt=self._at_rest)
-            if isinstance(written, Err):
-                self._say(
-                    f"catalogue {catalog.revision} non enregistre, programmes inchanges : "
-                    f"{written.error.detail}"
-                )
-                return
-            if not written.value:
-                # A launch or a session came during the write: the programmes in memory
-                # are those before, and the whole list is asked again at the next rest.
-                self._asked = None
-                self._held = None
-                return
+        changed = self._store.catalog != stamp or kept != {p.profile_id: p for p in accepted}
+        if changed and not await self._replace(accepted, stamp, catalog.revision):
+            return
         self._held = catalog.revision
         self._refused = None
         self._report = CatalogReport(
@@ -552,6 +544,55 @@ class ProgrammeCatalog:
             _logger.warning(
                 "programme catalogue: %r refused: %r", refused.profile_id, refused.reason
             )
+
+    async def _nothing_published(self) -> None:
+        """Revision 0: this dashboard publishes nothing, so no catalogue.
+
+        A store holding one accepted before had it from another deployment
+        signed by the same key: its programmes are not this dashboard's to
+        launch, nor its revision to report. The console goes back to its
+        shipped fallback, says so once, and reports none. A store that holds
+        no catalogue is left as it is.
+        """
+        held = self._store.catalog
+        if held is not None:
+            if not self._at_rest():
+                self._asked = None
+                return
+            defaults = self._store.read_defaults()
+            fallback = defaults.value.profiles if isinstance(defaults, Ok) else ()
+            if not await self._replace(fallback, None, NOTHING_PUBLISHED):
+                return
+            self._say(
+                f"catalogue {held.revision} retire : ce tableau de bord n'en publie aucun, "
+                + (
+                    "programmes de secours repris"
+                    if isinstance(defaults, Ok)
+                    else f"aucun programme, ceux de secours illisibles : {defaults.error.detail}"
+                )
+            )
+            self._refused = None
+            self._report = CatalogReport(revision=None, accepted=(), rejected=())
+        self._held = NOTHING_PUBLISHED
+
+    async def _replace(
+        self, profiles: Sequence[TrainingProfile], stamp: CatalogStamp | None, revision: int
+    ) -> bool:
+        """Write the programmes the console offers; ``False``: they stay as they were."""
+        written = await self._writer.replace_catalog(profiles, stamp, may_adopt=self._at_rest)
+        if isinstance(written, Err):
+            self._say(
+                f"catalogue {revision} non enregistre, programmes inchanges : "
+                f"{written.error.detail}"
+            )
+            return False
+        if not written.value:
+            # A launch or a session came during the write: the programmes in memory
+            # are those before, and the whole list is asked again at the next rest.
+            self._asked = None
+            self._held = None
+            return False
+        return True
 
     def _missed(self, error: CloudError) -> None:
         """No answer to read. One too large to read is refused and said; any other (the

@@ -59,6 +59,7 @@ var state = {
   zone: null,            // {low, high} from the chosen profile, for the band
   profiles: [],
   profilesShown: null,   // the programmes the choice shows, as one string: rebuilt only when they change
+  previewNeeded: false,  // the catalogue withdrew or changed the programme chosen: no Start before a new preview
   roster: null,          // the last /api/roster answer: names live here, in this page's memory only
   rosterShown: null,     // the riders the list shows, as one string: rebuilt only when it changes
   riderLost: false,      // the rider chosen here is no longer in the list
@@ -1049,7 +1050,7 @@ function renderSto() {
   // Under the declaration an acknowledgement is taken by name: no reading is waited for.
   text(el("ack-sto-note"), ready || bridged ? "" : "Acquittement refuse : " + reason + ". " + action);
   var status = state.status;
-  el("start").disabled = !ready || !status || !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled;
+  el("start").disabled = !ready || !status || !status.attested || status.run_state !== "idle" || !state.motionEnabled || !state.programsEnabled || state.previewNeeded;
   // The manual card starts a bench session only: the one start the declaration admits.
   el("manual-start").disabled = !(ready || bridged) || !state.motionEnabled;
   // And neither while the pre-flight has a red blocking control for its kind of start.
@@ -3580,8 +3581,11 @@ function loadProfiles() {
 /*
   The programmes change while the page is open: the console accepts a signed
   catalogue (ANH-138). Asked again on their own cadence, the choice is rebuilt
-  only when they changed, and keeps the programme chosen while it is still
-  offered.
+  only when they changed. The programme chosen, and its preview, stand while
+  it is offered unchanged. Withdrawn, nothing is chosen in its place; changed
+  under the same id, the preview no longer holds. Either way the page says so
+  and Start waits for a preview of what is chosen then: the operator never
+  starts a programme they did not choose and see.
 */
 function refreshProfiles() {
   return loadProfiles().catch(function () {
@@ -3594,22 +3598,42 @@ function renderProfiles(listing) {
   if (shown === state.profilesShown) {
     return;
   }
+  var first = state.profilesShown === null;
+  var before = selectedProfile();
   state.profilesShown = shown;
   state.profiles = listing.profiles;
   var select = el("profile");
-  var chosen = select.value;
   select.textContent = "";
+  var kept = null;
   listing.profiles.forEach(function (profile) {
     var option = document.createElement("option");
     option.value = profile.profile_id;
     option.textContent = profile.name + " (" + profile.profile_id + ")";
     select.appendChild(option);
+    if (before && profile.profile_id === before.profile_id) {
+      kept = profile;
+    }
   });
-  var kept = listing.profiles.some(function (profile) {
-    return profile.profile_id === chosen;
-  });
-  select.value = kept ? chosen : listing.profiles.length ? listing.profiles[0].profile_id : "";
+  // The first programme offered is chosen only when the page opens.
+  select.value = kept ? kept.profile_id : first && listing.profiles.length ? listing.profiles[0].profile_id : "";
+  if (before && JSON.stringify(kept) === JSON.stringify(before)) {
+    return;
+  }
+  if (before) {
+    var named = "Programme " + before.name + " (" + before.profile_id + ") ";
+    previewWithdrawn(
+      kept
+        ? named + "modifie par le catalogue de la console : l'apercu ne vaut plus. Refaire l'apercu avant de demarrer."
+        : named + "retire par le catalogue de la console : aucun programme n'est choisi. Choisir un programme et en faire l'apercu avant de demarrer."
+    );
+  }
   onProfileChange();
+}
+
+function previewWithdrawn(message) {
+  state.previewNeeded = true;
+  el("start").disabled = true;
+  problem(el("start-note"), message);
 }
 
 function selectedProfile() {
@@ -3622,10 +3646,18 @@ function selectedProfile() {
   return null;
 }
 
+// The operator's own choice: a preview said under the previous one no longer stands.
+function onProfileChosen() {
+  ok(el("start-note"), state.previewNeeded ? "Faire l'apercu du programme choisi avant de demarrer." : "");
+  onProfileChange();
+}
+
 function onProfileChange() {
   var profile = selectedProfile();
   if (!profile) {
     state.zone = null;
+    grid(el("plan-limits"), []);
+    el("plan-timeline").textContent = "";
     return;
   }
   state.zone = { low: profile.zone_low_bpm, high: profile.zone_high_bpm };
@@ -3809,9 +3841,17 @@ function doPreview() {
     body: { profile_id: profile.profile_id, total_duration_s: durationSeconds(), subject_id: riderId() },
   })
     .then(function (preview) {
+      // Answered for a programme no longer chosen, or since changed: it resolves nothing shown.
+      if (JSON.stringify(selectedProfile()) !== JSON.stringify(profile)) {
+        return;
+      }
       state.zone = { low: preview.profile.zone_low_bpm, high: preview.profile.zone_high_bpm };
       renderPlanLimits(preview.profile, preview);
       ok(el("start-note"), "plan resolu ; rien n'a ete demarre");
+      if (state.previewNeeded) {
+        state.previewNeeded = false;
+        renderSto();
+      }
     })
     .catch(function (error) {
       problem(el("start-note"), error);
@@ -3819,6 +3859,10 @@ function doPreview() {
 }
 
 function doStart() {
+  if (state.previewNeeded) {
+    problem(el("start-note"), "Depart refuse : le catalogue de la console a retire ou modifie le programme choisi. Choisir un programme et en faire l'apercu.");
+    return;
+  }
   var profile = selectedProfile();
   if (!profile) {
     return;
@@ -4205,7 +4249,7 @@ function start() {
       openNav();
     }
   };
-  el("profile").onchange = onProfileChange;
+  el("profile").onchange = onProfileChosen;
   el("rider").onchange = onRiderChange;
   el("preview").onclick = doPreview;
   el("start").onclick = doStart;

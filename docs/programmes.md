@@ -220,7 +220,9 @@ livrés (`config/profiles.default.json`) ne sont plus que ses programmes de
 secours, tant qu'aucun catalogue signé n'a été accepté, et la console n'a
 plus de route pour écrire un profil. Un catalogue où rien n'a jamais été
 publié (révision 0) n'en est pas un : la console garde ses programmes de
-secours.
+secours, et une console qui tenait le catalogue d'un autre déploiement
+signé par la même clé y revient (une ligne au journal de bord), sans plus
+annoncer la révision de l'autre.
 
 À chaque démarrage, qu'elle ait un tableau de bord ou non, la console juge
 de nouveau le catalogue qu'elle a gardé : accepté sous d'autres paramètres

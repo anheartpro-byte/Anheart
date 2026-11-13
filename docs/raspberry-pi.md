@@ -3261,7 +3261,10 @@ ses propres règles et refuse, un par un, ce qui ne passe pas.
 1. **Au repos seulement** (`LocalPanel.catalog_at_rest`) : runtime `idle`
    ou `finished`, aucun départ dans la boîte aux lettres, aucun lancement du
    tableau de bord offert, en confirmation ou pas encore armé
-   (`CloudSync.launch_in_hand`). Au démarrage, puis au plus une fois par
+   (`CloudSync.launch_in_hand`). Une retenue du pré-vol (incident grave
+   ouvert, séance perdue à acquitter, ANH-145) n'en fait pas partie : elle
+   ne fait rien tourner, et ce qu'elle ferme, le départ avec une personne à
+   bord, se juge de nouveau à chaque départ. Au démarrage, puis au plus une fois par
    minute (`CATALOG_PERIOD`), par une tâche à elle, `catalog_step`, avec la
    même clôture que les autres tâches du lien : une exception y est
    journalisée et ne touche ni la console ni ses programmes. La première
@@ -3314,7 +3317,14 @@ ses propres règles et refuse, un par un, ce qui ne passe pas.
    identique à ce que le magasin tient n'est pas réécrit. Un catalogue dont
    tout a été retiré vide le magasin : la machine n'a plus de programme. Un
    catalogue où rien n'a jamais été publié (révision 0) n'en est pas un : la
-   console garde ses programmes, ceux de secours.
+   console garde ses programmes de secours. Si elle tenait un catalogue
+   signé, il venait d'un autre déploiement signé par la même clé (la console
+   a été rattachée ailleurs) : elle **revient aux programmes de secours**,
+   l'écrit sans tampon de catalogue, l'annonce `catalogRevision: null` et le
+   dit une fois au journal de bord (`catalogue 5 retire : ce tableau de bord
+   n'en publie aucun, programmes de secours repris`). Au redémarrage, le
+   magasin sans tampon reste tel quel. Un magasin sans tampon (jamais de
+   catalogue) n'est pas touché.
 5. **Le tableau de bord le sait** par `POST /api/machine/profiles`
    (`catalogRevision`, `accepted`, `rejected`), renvoyé dès que cela change.
 
@@ -3353,8 +3363,16 @@ programmes restent ceux d'avant. Convex refuse de publier un programme qui
 ferait dépasser au texte signé 500 000 octets, bien en dessous.
 
 **La page de la console.** La liste des programmes du choix de séance est
-redemandée toutes les 10 s : un catalogue accepté y paraît sans recharger la
-page, et le programme choisi reste choisi tant qu'il est offert.
+redemandée toutes les 10 s : un catalogue accepté y paraît
+sans recharger la page. Le programme choisi, et son aperçu, restent tant
+qu'il est offert tel quel. Retiré, aucun autre n'est choisi à sa place ;
+modifié sous le même identifiant, son aperçu ne vaut plus. Dans les deux cas
+la page le dit sous les boutons et **Démarrer** attend l'aperçu de ce que
+l'opérateur choisit alors : la page n'envoie jamais un programme que
+l'opérateur n'a ni choisi ni vu. Reste une fenêtre : un catalogue
+accepté par la console après la dernière demande de la page (10 s au plus)
+et avant **Démarrer** n'y paraît pas encore ; la console résout alors le
+programme qu'elle tient.
 
 **Sans catalogue.** Un serveur qui ne signe rien (`not_configured`, l'état
 de tous les déploiements tant que la clé n'est pas posée), un serveur
@@ -3367,7 +3385,8 @@ tant qu'elle n'est pas remplacée, aucune console n'accepte de catalogue.
 pas une révision plus ancienne que celle qu'elle tient : un texte signé un
 jour par la clé reste acceptable, revalidé par les mêmes règles. Il faudrait,
 pour le rejouer, se placer entre la console et Convex malgré TLS ; il ne
-pourrait que remettre des programmes publiés un jour, ou un catalogue vide.
+pourrait que remettre des programmes publiés un jour, un catalogue vide ou
+les programmes de secours (une révision 0 signée).
 Refuser les révisions anciennes bloquerait en revanche une console après la
 remise à zéro d'un déploiement : le choix est laissé ouvert.
 

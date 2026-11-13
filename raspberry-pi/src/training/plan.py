@@ -1869,16 +1869,32 @@ class ProfileStore:
         return self._commit(updated, None)
 
     def replace_catalog(
-        self, profiles: Sequence[TrainingProfile], catalog: CatalogStamp
+        self, profiles: Sequence[TrainingProfile], catalog: CatalogStamp | None
     ) -> Result[StoreRev, StoreUnwritable]:
         """Replace every profile with those accepted from a signed catalogue (ANH-138).
 
+        ``catalog`` ``None``: the shipped fallback again, from no catalogue.
         One atomic write, as every other (:meth:`_commit`): the previous file
         stays whole until the new one has replaced it. No expected revision:
         the catalogue is the one writer of a running console
         (:class:`~src.web.profile_writer.ProfileWriter` serialises it).
         """
         return self._commit({profile.profile_id: profile for profile in profiles}, catalog)
+
+    def read_defaults(self) -> Result[StoreContent, DefaultsUnusable]:
+        """The shipped defaults, read from their file; nothing in memory changes."""
+        raw = _read_text(self._defaults_path)
+        if isinstance(raw, Err):
+            return Err(
+                DefaultsUnusable(
+                    path=str(self._defaults_path),
+                    detail=_describe_read_failure(raw.error),
+                )
+            )
+        parsed = parse_store(raw.value)
+        if isinstance(parsed, Err):
+            return Err(DefaultsUnusable(path=str(self._defaults_path), detail=parsed.error.detail))
+        return Ok(parsed.value)
 
     # --- resolving -------------------------------------------------------
 
@@ -2080,18 +2096,10 @@ class ProfileStore:
         nothing else to fall back to, and the honest answer is to refuse to
         start rather than to run a session with no limits at all.
         """
-        raw = _read_text(self._defaults_path)
-        if isinstance(raw, Err):
-            return Err(
-                DefaultsUnusable(
-                    path=str(self._defaults_path),
-                    detail=_describe_read_failure(raw.error),
-                )
-            )
-        parsed = parse_store(raw.value)
-        if isinstance(parsed, Err):
-            return Err(DefaultsUnusable(path=str(self._defaults_path), detail=parsed.error.detail))
-        self.adopt(parsed.value)
+        defaults = self.read_defaults()
+        if isinstance(defaults, Err):
+            return defaults
+        self.adopt(defaults.value)
         if loud:
             _LOG.error("%s", detail)
         else:

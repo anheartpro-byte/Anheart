@@ -272,7 +272,9 @@ partie privée hors du dépôt :
    l'utilisateur. Signé, le catalogue remplace les programmes de chaque
    console : sans programme publié (révision 0) une console garde ses
    programmes de secours, mais un catalogue dont tout est retiré la laisse
-   sans programme.
+   sans programme. Une console qui tenait le catalogue d'un autre
+   déploiement signé par la même clé revient à ses programmes de secours dès
+   sa première réponse en révision 0, et le dit au journal de bord.
    `npx convex env set ANHEART_CATALOG_SIGNING_KEY "$(openssl pkey -in <chemin hors du dépôt>/catalogue.key -outform DER | base64 | tr -d '\n')"`
    (PKCS #8 en base64 sur une ligne ; le PEM complet est accepté aussi).
    Une valeur qui n'est pas une clé Ed25519 n'est jamais servie : la route

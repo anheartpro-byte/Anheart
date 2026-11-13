@@ -43,7 +43,7 @@ class ProfileWriter:
     async def replace_catalog(
         self,
         profiles: Sequence[TrainingProfile],
-        catalog: CatalogStamp,
+        catalog: CatalogStamp | None,
         *,
         may_adopt: Callable[[], bool],
     ) -> Result[bool, StoreUnwritable]:

@@ -68,6 +68,7 @@ from src.result import Err, Ok, Result
 from src.training.plan import (
     SHIPPED_DEFAULTS_PATH,
     CatalogStamp,
+    DefaultsUnusable,
     JsonValue,
     ProfileStore,
     StoreContent,
@@ -912,6 +913,113 @@ async def test_a_catalogue_nothing_was_ever_published_in_is_no_catalogue(tmp_pat
     r.sign(1, [programme(profile_id="first_one")])
     await r.step(CATALOG_PERIOD)
     assert ids(r) == ["first_one"]
+
+
+LEFT: Final[str] = (
+    "catalogue 5 retire : ce tableau de bord n'en publie aucun, programmes de secours repris"
+)
+
+
+async def test_a_console_moved_to_a_deployment_that_published_nothing_goes_back_to_its_fallback(
+    tmp_path: Path,
+) -> None:
+    """Revision 5 of one deployment, then revision 0 of another signed by the same key: the
+    first one's programmes are neither kept nor reported, and a restart keeps the fallback."""
+    r = make_rig(tmp_path)
+    shipped = ids(r)
+    r.sign(5, [programme(profile_id="dev_only")])
+    await r.step()
+    assert ids(r) == ["dev_only"]
+    r.sign(0, [])
+    await r.step(CATALOG_PERIOD)
+    assert ids(r) == shipped
+    assert r.store.catalog is None
+    on_disk = r.on_disk()
+    assert (sorted(p.profile_id for p in on_disk.profiles), on_disk.catalog) == (shipped, None)
+    assert r.catalog.wire_fields()["catalogRevision"] is None
+    assert r.said == [LEFT]
+    # Said once: the next answer finds no catalogue to leave.
+    await r.step(CATALOG_PERIOD)
+    assert r.said == [LEFT]
+    assert r.dashboard.asked[-1] == {"since": "0"}
+    # Restarted: a store without a catalogue is left as it is.
+    again = make_rig(tmp_path, stored=r.on_disk())
+    again.sign(0, [])
+    await again.step()
+    assert ids(again) == shipped
+    assert (again.said, again.catalog.report.revision) == ([], None)
+
+
+async def test_restarted_with_another_deployments_catalogue_the_first_answer_takes_it_back(
+    tmp_path: Path,
+) -> None:
+    r = make_rig(tmp_path)
+    shipped = ids(r)
+    r.sign(5, [programme(profile_id="dev_only")])
+    await r.step()
+    again = make_rig(tmp_path, stored=r.on_disk())
+    assert ids(again) == ["dev_only"]
+    assert again.catalog.wire_fields()["catalogRevision"] == 5
+    again.sign(0, [])
+    await again.step()
+    assert ids(again) == shipped
+    assert again.catalog.wire_fields()["catalogRevision"] is None
+    assert again.said == [LEFT]
+
+
+async def test_a_return_to_the_fallback_waits_for_the_rest_and_for_the_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = make_rig(tmp_path)
+    shipped = ids(r)
+    r.sign(5, [programme(profile_id="dev_only")])
+    await r.step()
+    r.sign(0, [])
+
+    def session_begins() -> None:
+        r.rest[0] = False
+
+    r.dashboard.during = session_begins
+    await r.step(CATALOG_PERIOD)
+    assert ids(r) == ["dev_only"]
+    r.dashboard.during = lambda: None
+    r.rest[0] = True
+
+    def refuse(*_args: object, **_kwargs: object) -> Path:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(Path, "replace", refuse)
+    await r.step(1)
+    assert ids(r) == ["dev_only"]
+    assert r.catalog.wire_fields()["catalogRevision"] == 5
+    assert len(r.said) == 1
+    assert r.said[0].startswith("catalogue 0 non enregistre, programmes inchanges : ")
+    monkeypatch.undo()
+    await r.step(CATALOG_PERIOD)
+    assert ids(r) == shipped
+    assert r.said[1:] == [LEFT]
+
+
+async def test_without_readable_fallback_programmes_the_console_keeps_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = make_rig(tmp_path)
+    r.sign(5, [programme(profile_id="dev_only")])
+    await r.step()
+    unusable = DefaultsUnusable(path="profiles.default.json", detail="absent")
+
+    def unreadable(_store: ProfileStore) -> Result[StoreContent, DefaultsUnusable]:
+        return Err(unusable)
+
+    monkeypatch.setattr(ProfileStore, "read_defaults", unreadable)
+    r.sign(0, [])
+    await r.step(CATALOG_PERIOD)
+    assert ids(r) == []
+    assert r.catalog.wire_fields()["catalogRevision"] is None
+    assert r.said == [
+        "catalogue 5 retire : ce tableau de bord n'en publie aucun, "
+        "aucun programme, ceux de secours illisibles : absent"
+    ]
 
 
 async def test_an_answer_too_large_to_read_is_refused_once_in_the_logbook(tmp_path: Path) -> None:

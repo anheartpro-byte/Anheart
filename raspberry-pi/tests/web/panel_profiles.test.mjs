@@ -1,6 +1,8 @@
 // ANH-138: the programmes the Seance page offers change while it is open, when the console
-// accepts a signed catalogue. The page asks for them again on its own cadence, rebuilds the
-// choice only when they changed, and keeps the programme chosen while it is still offered.
+// accepts a signed catalogue. The page asks for them again on its own cadence and rebuilds the
+// choice only when they changed. The programme chosen, and its preview, stand while it is
+// offered unchanged; withdrawn or changed, the page says so, chooses nothing in its place, and
+// Start waits for a preview of what the operator chooses then.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -17,6 +19,7 @@ class Element {
     this.children = [];
     this.className = "";
     this.value = "";
+    this.style = {};
     this.classList = {
       toggle: (name, enabled) => {
         if (enabled) this.classes.add(name);
@@ -40,6 +43,7 @@ function panel() {
     document: {
       getElementById: (id) => nodes.get(id) ?? null,
       createElement: () => new Element(),
+      documentElement: { style: { setProperty: () => undefined } },
     },
     window: { addEventListener: () => undefined },
   });
@@ -78,6 +82,35 @@ function profile(profileId, name, zoneLow = 118) {
 
 const listing = (...profiles) => ({ rev: 1, profiles });
 const options = (node) => node.children.map((option) => option.value);
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+const speed = { g_load: 1, output_rpm: 10 };
+
+// The console's answers, and every request the page sends, as [path, body].
+function console_(context) {
+  const sent = [];
+  context.api = (path, init) => {
+    sent.push([path, init?.body]);
+    if (path === "/api/plan/preview") {
+      const profile = context.state.profiles.find((p) => p.profile_id === init.body.profile_id);
+      return Promise.resolve({ profile, spans: [], ceiling: speed, warmup_ceiling: speed, min_run: speed, total_overridden: false });
+    }
+    return new Promise(() => {});
+  };
+  context.liveStream = () => null;
+  context.rememberOperator = (value) => value;
+  return sent;
+}
+
+const starts = (sent) => sent.filter(([path]) => path === "/api/session/start").map(([, body]) => body.profile_id);
+
+// The operator chooses `id` from the list and previews it.
+async function chooseAndPreview(context, nodes, id) {
+  nodes.get("profile").value = id;
+  context.onProfileChosen();
+  context.doPreview();
+  await settle();
+  assert.equal(nodes.get("start-note").textContent, "plan resolu ; rien n'a ete demarre");
+}
 
 test("the programmes are offered, the first one chosen, its zone drawn", () => {
   const { context, nodes } = panel();
@@ -98,18 +131,103 @@ test("a refresh that changes nothing rebuilds nothing and keeps the choice", () 
   assert.equal(nodes.get("profile").value, "jog_court");
 });
 
-test("a new catalogue replaces the choice, keeping the programme chosen while it is offered", () => {
+test("a new catalogue keeps the programme chosen, and its preview, while it is offered unchanged", async () => {
   const { context, nodes } = panel();
+  const sent = console_(context);
   context.renderProfiles(listing(profile("standard_30_min", "30 min"), profile("jog_court", "Jog")));
-  nodes.get("profile").value = "jog_court";
+  await chooseAndPreview(context, nodes, "jog_court");
+  const drawn = nodes.get("plan-limits").children.length;
   context.renderProfiles(listing(profile("jog_court", "Jog"), profile("jog_long", "Jog long", 120)));
   assert.deepEqual(options(nodes.get("profile")), ["jog_court", "jog_long"]);
   assert.equal(nodes.get("profile").value, "jog_court");
-  // Withdrawn from the catalogue: the first one offered is chosen, and its zone drawn.
+  assert.equal(nodes.get("start-note").textContent, "plan resolu ; rien n'a ete demarre");
+  assert.equal(nodes.get("plan-limits").children.length, drawn, "the preview's rows are still drawn");
+  context.doStart();
+  assert.deepEqual(starts(sent), ["jog_court"]);
+});
+
+test("the programme previewed is withdrawn: nothing is chosen in its place and Start waits", async () => {
+  const { context, nodes } = panel();
+  const sent = console_(context);
+  context.renderProfiles(listing(profile("jog_long", "Jog long", 120), profile("jog_court", "Jog")));
+  await chooseAndPreview(context, nodes, "jog_court");
+  // The refresh after the console accepted a catalogue without it.
   context.renderProfiles(listing(profile("jog_long", "Jog long", 120)));
-  assert.equal(nodes.get("profile").value, "jog_long");
+  assert.equal(nodes.get("profile").value, "");
+  assert.equal(context.state.zone, null);
+  assert.deepEqual(nodes.get("plan-limits").children, [], "its preview is no longer drawn");
+  assert.match(nodes.get("start-note").textContent, /^Programme Jog \(jog_court\) retire par le catalogue/);
+  assert.equal(nodes.get("start-note").className, "note note-bad");
+  assert.equal(nodes.get("start").disabled, true);
+  context.doStart();
+  assert.deepEqual(starts(sent), [], "nothing is started");
+  assert.match(nodes.get("start-note").textContent, /^Depart refuse/);
+  // A later refresh that offers programmes again still chooses none of them.
+  context.renderProfiles(listing(profile("jog_long", "Jog long", 120), profile("jog_neuf", "Neuf")));
+  assert.equal(nodes.get("profile").value, "");
+  // Chosen but not previewed: still no Start.
+  nodes.get("profile").value = "jog_long";
+  context.onProfileChosen();
+  assert.equal(nodes.get("start-note").textContent, "Faire l'apercu du programme choisi avant de demarrer.");
+  context.doStart();
+  assert.deepEqual(starts(sent), []);
+  // Chosen and previewed: Start sends that one.
+  context.doPreview();
+  await settle();
+  assert.equal(nodes.get("start-note").textContent, "plan resolu ; rien n'a ete demarre");
+  assert.equal(context.state.previewNeeded, false);
+  context.doStart();
+  assert.deepEqual(starts(sent), ["jog_long"]);
+});
+
+test("the programme previewed changes under the same id: the preview no longer holds", async () => {
+  const { context, nodes } = panel();
+  const sent = console_(context);
+  context.renderProfiles(listing(profile("jog_court", "Jog")));
+  await chooseAndPreview(context, nodes, "jog_court");
+  context.renderProfiles(listing(profile("jog_court", "Jog", 124)));
+  assert.equal(nodes.get("profile").value, "jog_court");
+  assert.equal(context.state.zone.low, 124, "the new limits are drawn");
+  assert.match(nodes.get("start-note").textContent, /modifie par le catalogue de la console : l'apercu ne vaut plus/);
+  assert.equal(nodes.get("start").disabled, true);
+  context.doStart();
+  assert.deepEqual(starts(sent), []);
+  context.doPreview();
+  await settle();
+  context.doStart();
+  assert.deepEqual(starts(sent), ["jog_court"]);
+});
+
+test("a preview answered after its programme was withdrawn resolves nothing", async () => {
+  const { context, nodes } = panel();
+  const sent = console_(context);
+  context.renderProfiles(listing(profile("jog_long", "Jog long", 120), profile("jog_court", "Jog")));
+  nodes.get("profile").value = "jog_court";
+  context.onProfileChosen();
+  context.doPreview();
+  context.renderProfiles(listing(profile("jog_long", "Jog long", 120)));
+  await settle();
+  assert.match(nodes.get("start-note").textContent, /retire par le catalogue/);
+  assert.equal(context.state.previewNeeded, true);
+  assert.deepEqual(nodes.get("plan-limits").children, []);
+  context.doStart();
+  assert.deepEqual(starts(sent), []);
+});
+
+test("an operator's own choice clears a preview said under the previous one", async () => {
+  const { context, nodes } = panel();
+  console_(context);
+  context.renderProfiles(listing(profile("jog_long", "Jog long", 120), profile("jog_court", "Jog")));
+  await chooseAndPreview(context, nodes, "jog_court");
+  nodes.get("profile").value = "jog_long";
+  context.onProfileChosen();
+  assert.equal(nodes.get("start-note").textContent, "");
   assert.equal(context.state.zone.low, 120);
-  // None left: nothing is chosen, and no zone is drawn.
+});
+
+test("none left: nothing is chosen, and no zone is drawn", () => {
+  const { context, nodes } = panel();
+  context.renderProfiles(listing(profile("standard_30_min", "30 min")));
   context.renderProfiles(listing());
   assert.equal(nodes.get("profile").value, "");
   assert.equal(context.state.zone, null);
