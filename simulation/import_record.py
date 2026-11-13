@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shutil
@@ -11,8 +12,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from simulation.import_privacy import (
-    NEUTRAL_FOLDER,
-    NEUTRAL_MILLIS,
     anonymous_events,
     anonymous_manifest,
     identifying_content,
@@ -23,6 +22,8 @@ from simulation.import_privacy import (
 from simulation.real_records import (
     ACCEPTED_SUFFIX,
     ARCHIVE_SUFFIX,
+    NEUTRAL_FOLDER,
+    NEUTRAL_MILLIS,
     REAL_DIR,
     SCENARIO_NAME,
     pack,
@@ -204,9 +205,30 @@ def _import_folder(  # noqa: PLR0911  # one return per refusal
     staged = work / "archive.tar.gz"
     pack(made.value, staged)
     files.append((staged, archive))
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    _publish(tuple(files))
+    _publish_into(archive.parent, tuple(files))
     return Ok(Imported(archive, report))
+
+
+def _publish_into(library: Path, files: tuple[tuple[Path, Path], ...]) -> None:
+    """Publish ``files`` into ``library``, made if missing. Raises ``OSError``.
+
+    A publication that fails takes away the folders it made (``library`` and its
+    missing parents, deepest first, each only once empty again), as ``_publish``
+    takes away the files: nothing of the import is left.
+    """
+    created: list[Path] = []
+    folder = library
+    while not folder.exists():
+        created.append(folder)
+        folder = folder.parent
+    library.mkdir(parents=True, exist_ok=True)
+    try:
+        _publish(files)
+    except OSError:
+        for made in created:
+            with contextlib.suppress(OSError):
+                made.rmdir()
+        raise
 
 
 def _destination(name: str, directory: Path) -> Result[Path, str]:

@@ -25,6 +25,7 @@ from simulation import run as cli
 from simulation.real_records import (
     ANONYMIZED,
     LOCAL_REF_LENGTH,
+    NEUTRAL_MILLIS,
     UNVERSIONED,
     Accepted,
     Exported,
@@ -65,7 +66,7 @@ from simulation.tests.replay_support import (
 from src.record.codec import JSON, mapping
 from src.record.reader import Recording, read
 from src.record.rows import JsonValue
-from src.record.schema import EventKind, Manifest
+from src.record.schema import EventKind, Manifest, Profile
 from src.result import Err, Ok
 from src.training.types import Phase, SafetyAction
 from src.units import MotorRpm, OutputRpm, Seconds
@@ -253,7 +254,7 @@ def test_extension_payloads_cannot_read_past_the_decompressed_byte_limit(
     monkeypatch.setattr(library, "MAX_ARCHIVE_HEADER_BYTES", tarfile.RECORDSIZE)
     header = tarfile.TarInfo("extension")
     header.type = kind
-    header.size = 32 * 1024 * 1024
+    header.size = library.MAX_EXTENSION_BYTES  # within its own bound: the budget refuses it
     archive = tmp_path / "extension.tar.gz"
     archive.write_bytes(
         gzip.compress(header.tobuf() + b"x" * (payload_bytes + tarfile.RECORDSIZE), mtime=0)
@@ -335,6 +336,69 @@ def test_deflate_errors_are_a_named_archive_refusal(tmp_path: Path) -> None:
     archive.write_bytes(bytes.fromhex("1f8b08000000000002ff07"))
     with pytest.raises(zlib.error):
         gzip.decompress(archive.read_bytes())
+    result = unpack(archive, tmp_path / "out")
+    assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
+
+
+@pytest.mark.parametrize(
+    "kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK]
+)
+def test_an_extension_header_above_its_bound_is_refused_before_its_payload_is_read(
+    tmp_path: Path, kind: bytes
+) -> None:
+    """tarfile holds an extension's payload in memory whole, and copies it: one that a
+    record's names could never need is refused on its announced size, unread."""
+    header = tarfile.TarInfo("extension")
+    header.type = kind
+    header.size = library.MAX_EXTENSION_BYTES + 1
+    archive = tmp_path / "extension.tar.gz"
+    payload = b"x" * tarfile.BLOCKSIZE  # far less than announced: it is never reached
+    archive.write_bytes(gzip.compress(header.tobuf() + payload, mtime=0))
+    into = tmp_path / "out"
+    assert unpack(archive, into) == Err(
+        "the archive holds an extension header above MAX_EXTENSION_BYTES"
+    )
+    assert list(into.iterdir()) == []
+
+
+def test_an_extension_header_within_its_bound_is_read_as_ever(tmp_path: Path) -> None:
+    """A long name, carried by a PAX header, is a name like another."""
+    long_name = "record/" + "n" * 200
+    archive = tmp_path / "pax.tar.gz"
+    with tarfile.open(archive, "w:gz", format=tarfile.PAX_FORMAT) as tar:
+        member = tarfile.TarInfo(long_name)
+        member.size = 1
+        tar.addfile(member, io.BytesIO(b"x"))
+    into = tmp_path / "out"
+    unpack(archive, into)
+    assert (into / long_name).read_bytes() == b"x"
+
+
+def test_a_long_chain_of_extension_headers_is_a_named_refusal(tmp_path: Path) -> None:
+    """tarfile reads each extension header from the one before it, by recursion: a chain
+    long enough to exhaust the stack is refused, never an uncaught RecursionError."""
+    extension = tarfile.TarInfo("extension")
+    extension.type = tarfile.XHDTYPE
+    record = b"11 path=xy\n"
+    extension.size = len(record)
+    one = extension.tobuf() + record.ljust(tarfile.BLOCKSIZE, b"\0")
+    manifest = tarfile.TarInfo("record/manifest.json")
+    archive = tmp_path / "chain.tar.gz"
+    archive.write_bytes(gzip.compress(one * 5000 + manifest.tobuf(), mtime=0))
+    into = tmp_path / "out"
+    assert unpack(archive, into) == Err(
+        "the archive holds a chain of extension headers too long to read"
+    )
+
+
+def test_a_short_fragment_after_the_last_member_is_not_taken_for_the_end(
+    tmp_path: Path,
+) -> None:
+    """Fewer than 512 bytes after the last member, with no end-of-archive block: tarfile
+    stops there in silence, and the archive is refused rather than read as whole."""
+    manifest = tarfile.TarInfo("record/manifest.json")
+    archive = tmp_path / "fragment.tar.gz"
+    archive.write_bytes(gzip.compress(manifest.tobuf() + b"x" * 100, mtime=0))
     result = unpack(archive, tmp_path / "out")
     assert result == Err("the archive cannot be read as a .tar.gz of a record folder")
 
@@ -573,6 +637,38 @@ def test_ex5_a_real_session_must_name_nobody_and_carry_the_librarys_identifiers(
     by_somebody = replace(recording, events=(*recording.events, spoken))
     assert identifying(by_somebody, "session_a", folder.name) == "actor"
     assert identifying(recording, "session_a", "2026-10-07T101112Z_convex-session-1") == "folder"
+    # No date of its own either: the library's, which says nothing of when it ran.
+    assert names(replace(manifest, started_at="2026-10-07T10:11:12Z")) == "date"
+    assert names(replace(manifest, ended_at="2026-10-07T10:41:12Z")) == "date"
+    dated_clocks = replace(manifest.clocks, utc_start="2026-10-07T10:11:12Z")
+    assert names(replace(manifest, clocks=dated_clocks)) == "date"
+    assert manifest.profile is None  # a manual session: no programme, nothing it was resolved at
+    programme = Profile(
+        total_duration_s=420.0,
+        baseline_s=60.0,
+        warmup_max_s=60.0,
+        hold_min_s=60.0,
+        cooldown_s=60.0,
+        recovery_s=60.0,
+        zone_low_bpm=118,
+        zone_high_bpm=138,
+        hard_max_bpm=148,
+        critical_bpm=158,
+        subject_hr_max=190,
+        min_run_rpm=10,
+        max_rpm=276,
+        warmup_rpm_ceiling_fraction=0.5,
+        channels=("ECG",),
+        allow_above_nameplate=False,
+        source_rev=1,
+        resolved_at=NEUTRAL_MILLIS,
+        total_overridden=False,
+    )
+    assert names(replace(manifest, profile=programme)) is None
+    resolved = replace(programme, resolved_at=1_791_195_072_000)
+    assert names(replace(manifest, profile=resolved)) == "date"
+    dated_folder = f"2026-10-07T101112Z_{manifest.local_ref}"
+    assert identifying(recording, "session_a", dated_folder) == "date"
     # What a library identity is: 32 hexadecimal digits that say the name, and are stable.
     assert identity == library_identity("session_a") != library_identity("session_b")
     assert len(identity) == 32

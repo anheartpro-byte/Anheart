@@ -7,11 +7,20 @@ from pathlib import Path
 from typing import Final
 
 from simulation.harness import REMOTE, SYSTEM
-from simulation.real_records import ANONYMIZED, LOCAL_REF_LENGTH, UNVERSIONED, library_identity
+from simulation.real_records import (
+    ANONYMIZED,
+    LOCAL_REF_LENGTH,
+    NEUTRAL_FOLDER,
+    NEUTRAL_MILLIS,
+    NEUTRAL_UTC,
+    UNVERSIONED,
+    library_identity,
+)
 from src.motor.drive import DriveFault
 from src.presence.monitor import MOTION_RULES, START_RULES
 from src.record import commands
 from src.record.codec import EMAIL
+from src.record.ecg import inflate
 from src.record.reader import Recording
 from src.record.schema import Event, EventKind, Manifest
 from src.result import Err, Ok, Result
@@ -19,9 +28,6 @@ from src.training.runtime import RULE_STO_OPEN, RULE_STO_UNREADABLE, EndReason
 from src.training.safety import ALL_RULES
 from src.training.types import Phase, SafetyAction
 
-NEUTRAL_UTC: Final[str] = "2000-01-01T00:00:00Z"
-NEUTRAL_MILLIS: Final[int] = 946_684_800_000
-NEUTRAL_FOLDER: Final[str] = "2000-01-01T000000Z"
 _DATES: Final = re.compile(
     rb"(?<![0-9A-Za-z])(?:[12][0-9]{3}[-/.][01][0-9][-/\.][0-3][0-9]"
     rb"(?:T[0-9:.]+Z)?|[0-3][0-9][/.][01][0-9][/.][12][0-9]{3})"
@@ -170,10 +176,10 @@ def remaining_identity(folder: Path, known: tuple[str, ...]) -> bool:
             if path.name.endswith(".bin.gz"):
                 if content[3:8] != bytes(5):
                     return True
-                decoder = zlib.decompressobj(wbits=31)
-                decoded = decoder.decompress(content)
-                if decoder.unused_data:
-                    return True
+                try:
+                    decoded = inflate(content)
+                except (ValueError, EOFError, zlib.error):
+                    return True  # not one whole block: nothing in it can be vouched for
                 header, _, samples = decoded.partition(b"\n")
                 if identifying_content(samples, known, text=False):
                     return True

@@ -151,6 +151,14 @@ def test_the_delivery_admission_boundary_includes_the_instant_epsilon(
     tick = recording.rows[0].t if at_start else recording.rows[-1].t
     direction = -1 if at_start else 1
     arrival = tick + direction * (DELIVERY_ADMISSION_MARGIN + INSTANT_EPSILON / 2)
+    # The premise, in the replay's own arithmetic: past the margin, within the epsilon.
+    # Rounding could otherwise land the arrival on the margin and prove nothing.
+    if at_start:
+        assert tick - DELIVERY_ADMISSION_MARGIN - INSTANT_EPSILON <= arrival
+        assert arrival < tick - DELIVERY_ADMISSION_MARGIN
+    else:
+        assert tick + DELIVERY_ADMISSION_MARGIN < arrival
+        assert arrival <= tick + DELIVERY_ADMISSION_MARGIN + INSTANT_EPSILON
     block = recording.raw[0]
     altered = replace(
         block,

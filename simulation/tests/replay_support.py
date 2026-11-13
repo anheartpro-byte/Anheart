@@ -15,9 +15,17 @@ import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 from simulation.harness import PANEL_SAFETY, RUNTIME_LIMITS, load_motion
-from simulation.real_records import ANONYMIZED, LOCAL_REF_LENGTH, library_identity
+from simulation.real_records import (
+    ANONYMIZED,
+    LOCAL_REF_LENGTH,
+    NEUTRAL_FOLDER,
+    NEUTRAL_MILLIS,
+    NEUTRAL_UTC,
+    library_identity,
+)
 from simulation.scenario import SCENARIO_DIR, Action, EcgMode, Scenario
 from simulation.tests.conftest import document, load, run
 from src.geometry import MachineGeometry
@@ -168,7 +176,8 @@ def as_real(folder: Path, name: str) -> Path:
 
     Nothing in the library is a real session yet. This is what one looks like
     once anonymised: nobody named in the manifest or the events, the library's
-    identifiers, the folder renamed after them, the checksums written again.
+    identifiers and its neutral date, the folder renamed after them, the
+    checksums written again.
     """
     identity = library_identity(name)
     local_ref = identity[:LOCAL_REF_LENGTH]
@@ -181,7 +190,12 @@ def as_real(folder: Path, name: str) -> Path:
             subject_id=None,
             record_id=identity,
             local_ref=local_ref,
+            started_at=NEUTRAL_UTC,
+            ended_at=NEUTRAL_UTC,
         )
+        cast("Line", manifest["clocks"])["utc_start"] = NEUTRAL_UTC
+        if manifest["profile"] is not None:
+            cast("Line", manifest["profile"])["resolved_at"] = NEUTRAL_MILLIS
 
     def rename(lines: list[Line]) -> list[Line]:
         for line in lines:
@@ -192,5 +206,4 @@ def as_real(folder: Path, name: str) -> Path:
     edit_manifest(folder, anonymise)
     edit_lines(folder, "events.jsonl", rename)
     reseal(folder)
-    stamp = folder.name.partition("_")[0]
-    return folder.rename(folder.with_name(f"{stamp}_{local_ref}"))
+    return folder.rename(folder.with_name(f"{NEUTRAL_FOLDER}_{local_ref}"))

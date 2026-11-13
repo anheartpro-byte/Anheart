@@ -4382,7 +4382,8 @@ exigences n'est pas tenue :
    | `operator` | `sim-operator` | `anonymized` |
    | `actor` de chaque événement | `system`, `remote` ou `sim-operator` | `system`, `remote` ou `anonymized` |
    | `record_id`, `local_ref` | ceux de la bibliothèque, dérivés du nom de l'archive (`library_identity`) | les mêmes : les identifiants d'origine ramèneraient à la séance |
-   | nom du dossier dans l'archive | se termine par `_<local_ref>` | se termine par `_<local_ref>` |
+   | nom du dossier dans l'archive | se termine par `_<local_ref>` | `2000-01-01T000000Z_<local_ref>` |
+   | dates (`started_at`, `ended_at`, `clocks.utc_start`, `profile.resolved_at`) | celles de l'horloge déterministe du harness | la date neutre de la bibliothèque, `2000-01-01T00:00:00Z` |
 
 3. un rejeu conforme à ce que la bibliothèque déclare : `MATCH`, ou l'écart
    accepté décrit en 16.7.
@@ -4392,8 +4393,8 @@ enregistrement de la bibliothèque ne porte jamais ceux sous lesquels sa
 source le connaît, quelle que soit la forme qu'il déclare.
 
 L'import de console neutralise aussi les dates de séance et le nom du dossier
-(section 16.6). Les dates des archives de scénarios viennent de l'horloge
-déterministe du harness.
+(section 16.6), et la gate le vérifie (`date`). Les dates des archives de
+scénarios viennent de l'horloge déterministe du harness.
 
 Une archive est le fichier de quelqu'un d'autre. Elle est extraite membre par
 membre (`unpack`), et seuls des fichiers ordinaires et des dossiers sont
@@ -4410,7 +4411,11 @@ de padding, plus un bloc terminal tar de 10 240 octets. Les extensions,
 masquées par l'itérateur public de `tarfile`, ne prennent pas de rang de
 membre ; elles partagent ce plafond d'octets avec le contenu, les en-têtes
 et le padding. Le flux refuse avant de remettre des octets au-delà de
-512 Mio plus cette marge, quelle que soit la version de `tarfile`.
+512 Mio plus cette marge, quelle que soit la version de `tarfile`. Une
+extension annoncée au-delà de 64 Kio (`MAX_EXTENSION_BYTES`) est refusée sans
+être lue, une chaîne d'extensions trop longue pour la récursion de `tarfile`
+aussi, et un fragment de moins de 512 octets après le dernier membre n'est
+pas pris pour la fin de l'archive.
 Une taille négative, une taille non nulle hors fichier ordinaire, un en-tête
 invalide ou une erreur de décompression donne un refus nommé.
 Le compte des membres et leurs tailles effectives sont vérifiés avant
