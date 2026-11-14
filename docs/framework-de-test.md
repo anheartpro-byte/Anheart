@@ -4427,10 +4427,15 @@ aussi l'ECG avant de le décoder, pour l'import, le rejeu `--replay` et le
 jugement de bibliothèque : 39 000 blocs et `MAX_RAW_BYTES` (113 568 000
 octets) décompressés au plus, ce que tient la séance la plus longue, à six
 voies, et chaque fichier lu en entier est borné de même avant d'être lu
-(`FILE_BOUNDS`), un lien, un tube ou un périphérique refusé. Un enregistrement
-à ces bornes demande au plus environ 4 Go de mémoire pour être rejoué, dont
-2,3 pour l'ECG ; un `ticks.csv` gonflé de ses propres lignes est refusé avec
-quelques Mio (test de `test_real_records.py`).
+(`FILE_BOUNDS`), un lien, un tube ou un périphérique refusé ; une ligne de plus
+de 64 Kio est refusée avant d'être analysée, une trame de plus de registres
+qu'une lecture Modbus (125) dès qu'elle l'est. Un enregistrement à ces bornes
+demande au plus environ 7 Go de mémoire pour être rejoué : 6,7 mesurés au plus
+fort de sa lecture, chaque fichier rempli de la ligne valide qui garde le plus
+de mémoire par octet lu et l'ECG à sa borne, dont 3,2 pour les trames et 2
+pour l'ECG (`src/record/reader.py`, `FILE_BOUNDS`, dit comment) ; un
+`ticks.csv` gonflé de ses propres lignes est refusé avec quelques Mio (test de
+`test_real_records.py`).
 Le compte des membres et leurs tailles effectives sont vérifiés avant
 d'écrire le membre suivant. L'import, le rejeu,
 le jugement de bibliothèque et le visualiseur utilisent cette même extraction.
