@@ -44,6 +44,15 @@ import {
   machineValidationValidator,
 } from "./schema";
 import { endedBeforeStart } from "./sessionReports";
+import { configurationStatusOf } from "./lib/machineConfig";
+import { rejectLocksAbove } from "./machineConfigs";
+
+const configurationStatusValidator = v.union(
+  v.literal("unavailable"),
+  v.literal("pending"),
+  v.literal("applied"),
+  v.literal("mismatch"),
+);
 
 const configurationKeyValidator = v.union(
   v.literal("PROGRAMS_ENABLED"),
@@ -404,7 +413,7 @@ export const getRegistry = query({
         PROGRAMS_ENABLED: lockVerdictValidator,
         OCCUPANCY_OCCUPIED_ENABLED: lockVerdictValidator,
       }),
-      configurationStatus: v.literal("unavailable"),
+      configurationStatus: configurationStatusValidator,
       configurationProposal: v.object({
         ARM_RADIUS_M: v.union(v.number(), v.null()),
         LEG_TIP_RADIUS_M: v.union(v.number(), v.null()),
@@ -506,7 +515,7 @@ export const getRegistry = query({
           true,
         ),
       },
-      configurationStatus: "unavailable" as const,
+      configurationStatus: await configurationStatusOf(ctx, machine),
       configurationProposal: radiiProposal(registry),
       alerts: await alertsOf(ctx, access, registry),
       medicalKeyIsTest: MEDICAL_KEY_IS_TEST,
@@ -523,7 +532,7 @@ export const listRegistryBadges = query({
       machineId: v.id("machines"),
       level: machineValidationLevelValidator,
       versionStatus: versionStatusValidator,
-      configurationStatus: v.literal("unavailable"),
+      configurationStatus: configurationStatusValidator,
     }),
   ),
   handler: async (ctx) => {
@@ -548,7 +557,7 @@ export const listRegistryBadges = query({
             level: effectiveValidationLevel(registry?.validation, Date.now()),
             versionStatus: (await statusOf(ctx, machine, registry))
               .versionStatus,
-            configurationStatus: "unavailable" as const,
+            configurationStatus: await configurationStatusOf(ctx, machine),
           };
         }),
     );
@@ -854,6 +863,8 @@ export const lowerValidationLevel = mutation({
       targetId: args.machineId,
       details: { level: args.level, previousLevel: effectiveLevel },
     });
+    // ANH-141: a lock approved above the new level is not sent any more.
+    await rejectLocksAbove(ctx, state.machine, args.level, state.admin);
     return null;
   },
 });

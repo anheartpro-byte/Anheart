@@ -60,6 +60,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, params
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
+from src.config_view import ConfigView
 from src.console_access import (
     Locked,
     NoList,
@@ -145,6 +146,7 @@ from src.web.schemas import (
     BindRow,
     CameraRow,
     CommandRow,
+    ConfigApplied,
     EcgRow,
     EstopRow,
     FaultRow,
@@ -468,6 +470,7 @@ def _register_api(app: FastAPI, *, services: Services, config: WebConfig) -> Non
     )
     _register_records(app, services=services, auth=auth, acting=acting)
     _register_service(app, services=services, auth=auth, acting=acting)
+    _register_config(app, services=services, auth=auth, acting=acting)
     register_preflight(app, services=services, auth=auth, acting=acting)
 
 
@@ -563,6 +566,40 @@ def _sign_in_failure(refusal: NoList | UnknownOperator | Locked | WrongCode) -> 
         case WrongCode():
             return Refusal(HTTPStatus.UNAUTHORIZED, code="wrong_code", detail=detail)
     raise assert_never(refusal)
+
+
+def _register_config(
+    app: FastAPI, *, services: Services, auth: Sequence[params.Depends], acting: OperatorGuard
+) -> None:
+    """The machine's configuration from the dashboard (ANH-141): what runs, and the safety
+    revision an operator at the console confirms."""
+
+    @app.get("/api/config", dependencies=auth, tags=["system"])
+    async def read_config() -> ConfigView:
+        """The revision the console runs with (or its ``.env``), the machine's name and
+        place, the revision with a safety key that waits and what it changes, the last
+        refusal, and whether the console is about to restart to apply one."""
+        return services.config_view()
+
+    @app.post("/api/config/apply", dependencies=auth, tags=["system"])
+    async def apply_config(who: SignedIn = Depends(acting)) -> ConfigApplied:
+        """Apply the revision with a safety key that waits: « Appliquer la configuration
+        de surete ». By an operator signed in at the console, at rest only; the console
+        then restarts, still at rest, on the new values.
+
+        **409** with nothing waiting, away from rest, or when the disk refuses the
+        file: the configuration in force stays.
+        """
+        confirm = services.config_confirm
+        if confirm is None:
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail="cette console n'a pas de tableau de bord : aucune configuration n'attend",
+            )
+        applied = await confirm(who.user_id)
+        if isinstance(applied, Ok):
+            return ConfigApplied(revision=applied.value)
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=applied.error)
 
 
 def _register_service(

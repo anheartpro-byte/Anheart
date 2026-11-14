@@ -48,6 +48,8 @@ export const machineRoutes = [
   ["GET", "/api/machine/roster"],
   ["GET", "/api/machine/programmes"],
   ["GET", "/api/machine/operators"],
+  ["GET", "/api/machine/config"],
+  ["POST", "/api/machine/config/applied"],
   ["POST", "/api/machine/profiles"],
   ["POST", "/api/machine/training/start"],
   ["POST", "/api/machine/training/local"],

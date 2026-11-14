@@ -186,6 +186,7 @@
     <dt>Serveur</dt><dd><span id="dashboard-link" class="pill">-</span></dd>
     <dt>Version</dt><dd><span id="software-version" class="pill">-</span></dd>
     <dt>Service</dt><dd><span id="service-state" class="pill">-</span></dd>
+    <dt>Machine</dt><dd><span id="machine-identity" class="pill">-</span></dd>
   </dl>
   <div id="dashboard-link-detail" class="bind"></div>
   <div id="wall-clock" class="bind"></div>
@@ -639,6 +640,20 @@
           </div>
         </div>
         <p id="service-note" class="note"></p>
+        <!--
+          The machine's configuration from the dashboard (ANH-141). A revision that changes
+          a safety key waits here, with what it changes, until an operator signed in at the
+          console applies it, at rest. Nothing else applies it; the console then restarts.
+        -->
+        <div id="config-card" class="hidden">
+          <h3>Configuration du tableau de bord</h3>
+          <p id="config-summary" class="note"></p>
+          <ul id="config-changes"></ul>
+          <div class="ackrow">
+            <button id="config-apply" class="btn hidden" type="button">Appliquer la configuration de sûreté</button>
+          </div>
+          <p id="config-note" class="note"></p>
+        </div>
       </div>
 
       <!--

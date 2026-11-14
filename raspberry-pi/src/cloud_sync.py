@@ -974,6 +974,7 @@ class CloudSync:
         "_catalog_fields",
         "_clicked_at",
         "_clock",
+        "_config_hash",
         "_confirmed_launch",
         "_confirmed_launch_id",
         "_counted_at",
@@ -1035,6 +1036,7 @@ class CloudSync:
         deposit: DepositTask | None = None,
         roster: Roster | None = None,
         catalog_fields: Callable[[], Mapping[str, JsonValue]] | None = None,
+        config_hash: str | None = None,
     ) -> None:
         """``record_degraded``: whether the local session record is incomplete or cannot
         be written, read at every heartbeat; ``None`` when this console records nothing.
@@ -1047,8 +1049,11 @@ class CloudSync:
         version the heartbeat announces when signed; ``None``: the heartbeat says there
         is none. ``catalog_fields``: what the console says of the signed catalogue with
         its programmes (contract 1.11, :mod:`src.programme_catalog`), sent again when it
-        changes; ``None``: nothing is said of one."""
+        changes; ``None``: nothing is said of one. ``config_hash``: the hash of the
+        dashboard's configuration this console runs (contract 1.15, ANH-141); ``None`` on
+        its ``.env``."""
         self._clock: Clock = clock
+        self._config_hash: str | None = config_hash
         self._deposit: DepositTask | None = deposit
         self._roster: Roster | None = roster
         self._catalog_fields: Callable[[], Mapping[str, JsonValue]] | None = catalog_fields
@@ -1491,8 +1496,8 @@ class CloudSync:
             "medical_parameters_version": (
                 None if self._medical is None else self._medical.announced_version
             ),
-            # This console has none yet: said to be absent, not left out.
-            "config_hash": None,
+            # The revision applied (contract 1.15); null on the `.env`: said, not left out.
+            "config_hash": self._config_hash,
         }
         session = self.current_session_id
         if session is not None:

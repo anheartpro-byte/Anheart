@@ -313,10 +313,35 @@ préalables :
    et joindre les comptes rendus de validation. Le niveau `occupied` est
    accordé uniquement par une revue jointe après `bench` puis `auto`, et reste
    refusé tant que la clé médicale embarquée est la clé de test. Les rayons
-   mesurés du registre sont proposés à la configuration centralisée ; les
-   verrous `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` y seront appliqués
-   quand ANH-141 existera. Aucun verrou lié au registre n'est ajouté au
-   lancement distant aujourd'hui (suivi ANH-102 et ANH-107).
+   mesurés du registre sont proposés à la configuration centralisée ; Convex
+   y refuse `PROGRAMS_ENABLED` au dessous du niveau `auto` et
+   `OCCUPANCY_OCCUPIED_ENABLED` au dessous du niveau `occupied`, à la
+   proposition et à l'approbation (ANH-141,
+   [convex.md](convex.md#machineconfigsts--configuration-des-machines-anh-141)) ;
+   la console le revérifie contre le niveau signé avec chaque réponse, à
+   l'application comme pour une révision déjà appliquée, et tient à faux au
+   démarrage un verrou que ce niveau ne permet pas
+   ([raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)).
+   Ce verrou ne revient pas de lui même quand le niveau remonte : le rendre est
+   un changement de clé de sûreté, confirmé par un opérateur au repos ; une
+   révision qui met un verrou à faux passe aussi par cette confirmation. Seul
+   le niveau abaissé, qui est la barrière et non un changement, tient un verrou
+   à faux sans confirmation. Limites : une console hors ligne garde le dernier
+   niveau signé reçu, sans âge maximal ; une console qui tourne sur son `.env`
+   n'a pas cette barrière ; une console sans `RECORD_MACHINE_ID` ne prend
+   aucune configuration du site.
+   Un niveau qui descend refuse les révisions approuvées et pas encore
+   appliquées dont un verrou ne passe plus ; une révision déjà appliquée au
+   dessus du niveau est signalée sur la fiche, et c'est la console qui reste
+   l'arrêt ferme. **Une clé de sûreté change à deux, et sur place** : deux
+   comptes admin Anheart distincts sur le site, l'auteur puis un autre, puis
+   un opérateur connecté à la console, au repos, qui voit ce qui change avant
+   de l'appliquer ; rien d'autre ne l'applique. Pour les deux comptes : une même
+   personne qui tiendrait deux comptes admin passerait seule ce contrôle,
+   limite propre à toute règle « deux comptes nommés », que seule la gestion
+   des comptes admin (un compte par personne) couvre. Aucun verrou lié au
+   registre n'est ajouté au lancement distant aujourd'hui (suivi ANH-102 et
+   ANH-107).
 9. Mesurer au banc la batterie du vrai BITalino contre un voltmètre : le seuil
    du pré-vol (30 %) repose sur une conversion supposée
    ([section 15](#15-le-pré-vol-avant-chaque-séance-anh-142)).

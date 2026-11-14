@@ -162,6 +162,12 @@ const ROUTES: Record<
     path: "/api/machine/records/commit",
     body: "{}",
   }),
+  // A revision unknown (400): the token is taken before the body is read.
+  "POST /api/machine/config/applied": async () => ({
+    method: "POST",
+    path: "/api/machine/config/applied",
+    body: JSON.stringify({ revision: 1, hash: "0".repeat(64) }),
+  }),
 };
 
 async function rateLimited(response: Response) {

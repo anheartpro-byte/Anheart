@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, cast
 
@@ -24,6 +25,7 @@ from pydantic import TypeAdapter
 
 from src import local_panel
 from src.clock import Clock, ManualClock
+from src.config_sync import AppliedConfig
 from src.local_config import LocalConfig
 from src.local_panel import (
     WALL_CLOCK_PERIOD,
@@ -387,6 +389,8 @@ async def test_on_a_system_that_cannot_be_asked_the_production_console_says_so_o
         notify_socket: str | None,
         service: ServiceDesk,
         preflight: bool,
+        applied: AppliedConfig | None = None,
+        local_env: Mapping[str, str] | None = None,
     ) -> LocalPanel:
         panel = real(
             config,
@@ -396,6 +400,8 @@ async def test_on_a_system_that_cannot_be_asked_the_production_console_says_so_o
             notify_socket=notify_socket,
             service=service,
             preflight=preflight,
+            applied=applied,
+            local_env=local_env,
         )
         built.append(panel)
         return panel

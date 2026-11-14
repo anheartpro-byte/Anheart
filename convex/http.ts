@@ -39,6 +39,7 @@ import {
   signCatalog,
 } from "./lib/programmes";
 import { DEVICE_ACTOR_PREFIX } from "./lib/consoleAccess";
+import { CONFIG_HASH, MAX_REFUSAL_CHARS } from "./lib/machineConfig";
 
 const http = httpRouter();
 http.route({
@@ -101,6 +102,7 @@ http.route({
       programsEnabled?: boolean;
       software_version?: unknown;
       medical_parameters_version?: unknown;
+      config_hash?: unknown;
     } = {};
 
     // An empty body is a heartbeat without a field. Anything else is refused
@@ -146,6 +148,7 @@ http.route({
       medicalParametersVersion: medicalParametersVersionOf(
         body.medical_parameters_version,
       ),
+      configHash: configHashOf(body.config_hash),
       // The header's value, which the gate just checked, not the body's copy.
       contractVersion: authResult.contract,
       health: parsedHealth?.data,
@@ -267,6 +270,12 @@ function medicalParametersVersionOf(
   if (value === null) return null;
   if (!isMedicalVersion(value)) return undefined;
   return value;
+}
+
+/** `config_hash` (contract 1.15): a SHA-256 in lowercase hexadecimal, `null`, or not read. */
+function configHashOf(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  return isStr(value) && CONFIG_HASH.test(value) ? value : undefined;
 }
 
 /** The fields of a heartbeat that are stored as sent: each absent, or of its type. */
@@ -573,6 +582,83 @@ http.route({
       }),
     ),
   ),
+});
+
+/**
+ * GET /api/machine/config (contract 1.15, ANH-141)
+ * -> {status: "signed", payload, signature, server_contract_version}
+ *  | {status: "not_configured", server_contract_version}
+ *
+ * The machine's configuration in force (`machineConfigs.signedConfig`), its
+ * canonical values as text and their hash, with the machine's validation
+ * level now, signed on the catalogue's channel. The console revalidates it
+ * and applies it at rest only. Never rate limited: read only, asked once a
+ * minute at most, at rest.
+ */
+http.route({
+  path: "/api/machine/config",
+  method: "GET",
+  handler: machineRoute(async (ctx, _req, machineId) =>
+    signedAnswer(() =>
+      ctx.runQuery(internal.machineConfigs.signedConfig, {
+        machineId,
+        issuedAt: Date.now(),
+      }),
+    ),
+  ),
+});
+
+/** A machine's refusal of a revision: 1 to `MAX_REFUSAL_CHARS` code points, or none. */
+function refusalOfConfig(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  return isStr(value) && value.length > 0 && Array.from(value).length <= MAX_REFUSAL_CHARS
+    ? value
+    : null;
+}
+
+/**
+ * POST /api/machine/config/applied {revision, hash, refusal?} (contract 1.15)
+ * -> {status: "applied" | "refused" | "unchanged", server_contract_version}
+ *
+ * The machine applied a revision, or refused it with why (`refusal`). A
+ * revision unknown to this machine, another hash, or one never approved: 400
+ * `invalid_request`. One every 10 s per machine, five ahead.
+ */
+http.route({
+  path: "/api/machine/config/applied",
+  method: "POST",
+  handler: limitedRoute("machineConfigApplied", async (ctx, req, machineId) => {
+    const body = await readJson(req);
+    const refusal = refusalOfConfig(body?.refusal);
+    if (
+      body === null ||
+      !(isNum(body.revision) && Number.isSafeInteger(body.revision) && body.revision > 0) ||
+      !(isStr(body.hash) && CONFIG_HASH.test(body.hash)) ||
+      refusal === null
+    ) {
+      return refuse(
+        400,
+        "invalid_request",
+        `Expected {revision, hash, refusal?}: a revision, its 64 hexadecimal digits, a refusal of 1 to ${MAX_REFUSAL_CHARS} characters`,
+      );
+    }
+    const outcome = await ctx.runMutation(internal.machineConfigs.recordApplied, {
+      machineId,
+      revision: body.revision,
+      hash: body.hash,
+      refusal,
+    });
+    if (outcome === "unknown" || outcome === "not_approved") {
+      return refuse(
+        400,
+        "invalid_request",
+        outcome === "unknown"
+          ? "No revision of this machine has this number and this hash"
+          : "This revision is not approved",
+      );
+    }
+    return json(200, { status: outcome, server_contract_version: CONTRACT_VERSION });
+  }),
 });
 
 /**

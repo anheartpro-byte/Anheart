@@ -368,6 +368,7 @@ pas que le bras est arrêté : seule la vitesse mesurée renseigne sur son mouve
 | **Securite** | action de sécurité en cours : `none`, `freeze`, `reduce`, `ramp_down`, `quick_stop`, `go_silent` (vert, orange, rouge). Un `freeze` ou un `reduce` non verrouillé se lève seul, et la vitesse d'un bras qui tourne remonte alors sans clic : le bandeau orange `REPRISE AUTOMATIQUE POSSIBLE` le dit tant que c'est le cas ; `ramp_down`, `quick_stop` et `go_silent` terminent la séance (section 11). `freeze` ne veut pas dire que la consigne ne bouge plus : elle descend sous un `freeze` après un STOP (section 5) et, pour un programme, à partir de sa phase `cooldown` (section 11) | l'instantané |
 | **Console** | `mouvement actif`, `LECTURE SEULE`, `pas de console` | `/api/panel` |
 | **Serveur** | `joignable`, `injoignable`, `incompatible`, `cle refusee`, `en erreur`, `en attente`, `non configure` : le lien de la console avec le tableau de bord ([détail plus bas](#pastille-serveur--le-lien-avec-le-tableau-de-bord)) | `/api/panel` (`dashboard`) |
+| **Machine** | le nom et le lieu de la révision de configuration appliquée (ANH-141), `revision N` sans nom, `configuration .env` sans révision | `/api/config` |
 | **Version** | la version du logiciel de la console, par exemple `pi-0.0.0-dev` ; `pi-unknown` si le fichier `VERSION` manque ou est mal formé | `/api/panel` (`software_version`) |
 | **Service** | `en service` (vert) ou `HORS SERVICE` (rouge) : la console arme-t-elle quoi que ce soit ([détail plus bas](#pastille-service--en-service-ou-hors-service)) | `/api/panel` (`service`) |
 
@@ -2013,6 +2014,29 @@ verdicts acquittés, puis un départ. Elle est écrite dans le journal hors séa
 l'alias de l'opérateur, jamais son nom. Ce n'est pas un geste de routine : une console
 qui redémarre en boucle est une machine à faire vérifier.
 
+### Carte « Configuration du tableau de bord » (ANH-141)
+
+Sous la remise en service, la carte n'apparaît que lorsqu'une révision de
+configuration attend, qu'un refus est à dire ou que la console va redémarrer
+(`/api/config`, [raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)).
+Une révision qui change une clé de sûreté y est listée changement par
+changement (`MOTOR_MAX_RPM : 300 -> 400 (surete)`), avec le bouton
+`Appliquer la configuration de sûreté`, pour l'opérateur connecté
+(`POST /api/config/apply`).
+
+| Résultat | Ce que la page écrit |
+|---|---|
+| appliquée | `revision N appliquee : la console redemarre au repos` sous le bouton ; plus aucun départ n'est armé, et la console redémarre aussitôt |
+| console pas au repos (séance, départ en attente, lancement du site) | le refus de la console, sous le bouton (409) ; rien n'est appliqué |
+| la révision n'est plus celle du site, ou son niveau ne la permet plus | le refus de la console (409) ; la carte suit la réponse suivante |
+| aucun opérateur connecté | 401 `operator_required`, comme toute action |
+| révision refusée par la console | `configuration refusee, la console garde la sienne : ...`, sans bouton |
+| `RECORD_MACHINE_ID` non posé | `configuration refusee, la console garde la sienne : RECORD_MACHINE_ID non pose : ...` : la console ne demande aucune configuration et tourne sur son `.env` |
+| niveau du registre relevé, verrou tenu à faux | le verrou listé `PROGRAMS_ENABLED : false -> true (surete)` avec le bouton : il ne revient qu'après la confirmation |
+
+Une révision qui ne change que des clés d'exploitation n'y attend pas : la
+console l'applique d'elle même au repos.
+
 ### Carte « Cablage de l'arret d'urgence » (l'attestation en deux cases)
 
 Avant tout mouvement, à **chaque démarrage du Pi**, une personne nommée doit attester
@@ -2369,6 +2393,7 @@ Démarrage (`describe_start_refusal`, `rider_age_refusal`, `describe_resolve_err
 | `demarrage refuse : variateur deja en marche (<n> tr/min), arret demande` | variateur trouvé en marche (processus précédent mort) ; la console le met à zéro et exige un acquittement |
 | `demarrage refuse : variateur en defaut (<mnémonique>, LFT <code>)` | défaut variateur présent quand la boucle relit le variateur pour armer. Depuis le 11 octobre 2026 un démarrage demandé depuis la page est refusé avant, par la console (tableau précédent) ; ce refus de la boucle reste pour un défaut apparu entre la réponse de la console et l'armement, et pour un lancement venu du tableau de bord |
 | `demarrage refuse : console hors service : 3 demarrages apres un arret non propre en moins de 10 min. Faire verifier la machine, puis la remettre en service depuis cette page, par un operateur nomme` | la console est hors service ([section 4](#pastille-service--en-service-ou-hors-service)) ; aucun départ, manuel ou programmé, n'est armé, avant toute autre porte |
+| `demarrage refuse : redemarrage pour la nouvelle configuration en cours` | une configuration du tableau de bord vient d'être écrite (ANH-141, [raspberry-pi.md, 12.7](raspberry-pi.md#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)) : aucun départ, manuel, de banc, programmé ou lancé du site, n'est armé avant le redémarrage qui l'applique, au repos ; un lancement du site finit en échec avec cette raison |
 | `demarrage refuse : espace disque insuffisant pour l'enregistrement de seance : <n> Mo libres sous <dossier>, 500 Mo requis. Liberer de l'espace` | moins de 500 Mo libres sous le dossier d'enregistrement ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |
 | `demarrage refuse : enregistrement de seance impossible, espace libre illisible sous <dossier> (dossier absent, droits, disque)` | le dossier d'enregistrement ne peut pas être créé ou mesuré |
 | `demarrage refuse : plus assez de fichiers libres pour l'enregistrement de seance : <n> inodes libres sous <dossier>, 36016 requis (une seance cree des milliers de petits fichiers). Liberer de l'espace` | il reste des octets, mais plus assez d'inodes libres pour les fichiers d'une séance ([section 16](#16-lenregistrement-de-séance-boîte-noire-locale)) |

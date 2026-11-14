@@ -266,6 +266,12 @@ include = [
     # sign-in, the lockout and the sessions, and the link that brings the list.
     "src/console_access.py",
     "src/operator_sync.py",
+    # The machine's configuration as the dashboard proposes it (ANH-141): the
+    # ceilings, the radii and the two locks pass its revalidation.
+    "src/machine_config.py",
+    # And the link that brings it at rest, applies it with a controlled restart, and
+    # holds a safety key until an operator at the console confirms it.
+    "src/config_sync.py",
     # What that link has last heard of itself, as the state the operator reads
     # on the console: it must never say reachable of a dashboard that is not.
     "src/link_state.py",
@@ -344,6 +350,8 @@ safety_chain = [
     "src/programme_catalog.py",
     "src/console_access.py",
     "src/operator_sync.py",
+    "src/machine_config.py",
+    "src/config_sync.py",
     "src/link_state.py",
     "src/record_uplink.py",
     "src/contract.py",

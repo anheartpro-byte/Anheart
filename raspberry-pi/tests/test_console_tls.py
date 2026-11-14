@@ -462,8 +462,15 @@ def _never_run(monkeypatch: pytest.MonkeyPatch) -> list[LocalConfig]:
     """Replace ``run_console``: a console that gets that far was not refused."""
     ran: list[LocalConfig] = []
 
-    async def fake(config: LocalConfig, *, stopped: object, notify_socket: str | None) -> int:
-        del stopped, notify_socket
+    async def fake(
+        config: LocalConfig,
+        *,
+        stopped: object,
+        notify_socket: str | None,
+        applied: object = None,
+        local_env: object = None,
+    ) -> int:
+        del stopped, notify_socket, applied, local_env
         ran.append(config)
         return EXIT_OK
 

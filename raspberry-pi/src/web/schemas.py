@@ -848,6 +848,13 @@ class WallClockRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfigApplied:
+    """The answer of ``POST /api/config/apply``: the revision applied; the console restarts."""
+
+    revision: int
+
+
+@dataclass(frozen=True, slots=True)
 class ServiceRow:
     """Whether the console is in service, and what it knows of its own restarts.
 

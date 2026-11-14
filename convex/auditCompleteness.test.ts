@@ -21,6 +21,7 @@ import {
   SIGNOFF,
 } from "./programmes.fixtures";
 import { CONTRACT_HEADER, CONTRACT_VERSION } from "./lib/contract";
+import { insertConfigRevision, MACHINE_CONFIG_BASE } from "./machineConfigs.fixtures";
 import {
   addSession,
   as,
@@ -902,6 +903,13 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
   },
   "machineRegistry.lowerValidationLevel": async (w) => {
     await benchReview(w);
+    // ANH-141: an approved lock the new level no longer allows is rejected with it.
+    const locked = await insertConfigRevision(w, {
+      status: "approved",
+      author: w.admin,
+      revision: 1,
+      values: { ...MACHINE_CONFIG_BASE, PROGRAMS_ENABLED: true },
+    });
     return observe(w, async () => {
       await as(w.t, "admin").mutation(
         api.machineRegistry.lowerValidationLevel,
@@ -921,6 +929,96 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
           w.orgA,
           { level: "none", previousLevel: "bench" },
         ),
+        site(w, "machine_config.rejected", locked, "machine_config", "admin", w.orgA, {
+          machineId: w.machine,
+          version: "1",
+          fields: ["PROGRAMS_ENABLED"],
+        }),
+      ];
+    });
+  },
+  "machineConfigs.proposeConfig": async (w) => {
+    const draft = await insertConfigRevision(w, { status: "draft", author: w.admin, revision: 1 });
+    return observe(w, async () => {
+      const { configId } = await as(w.t, "admin").mutation(api.machineConfigs.proposeConfig, {
+        machineId: w.machine,
+        values: { ...MACHINE_CONFIG_BASE, location: "synthetic-private-postal-address" },
+        basedOn: null,
+      });
+      const details = { machineId: w.machine };
+      return [
+        site(w, "machine_config.rejected", draft, "machine_config", "admin", w.orgA, { ...details, version: "1" }),
+        site(w, "machine_config.proposed", configId, "machine_config", "admin", w.orgA, { ...details, version: "2" }),
+      ];
+    });
+  },
+  "machineConfigs.approveConfig": async (w) => {
+    const earlier = await insertConfigRevision(w, { status: "approved", author: w.admin, revision: 1 });
+    const draft = await insertConfigRevision(w, {
+      status: "draft",
+      author: await addSecondAdmin(w),
+      revision: 2,
+      values: { ...MACHINE_CONFIG_BASE, MOTOR_MAX_RPM: 250 },
+    });
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.machineConfigs.approveConfig, { configId: draft });
+      const details = { machineId: w.machine };
+      return [
+        site(w, "machine_config.rejected", earlier, "machine_config", "admin", w.orgA, { ...details, version: "1" }),
+        site(w, "machine_config.approved", draft, "machine_config", "admin", w.orgA, { ...details, version: "2" }),
+      ];
+    });
+  },
+  "machineConfigs.rejectConfig": async (w) => {
+    const draft = await insertConfigRevision(w, { status: "draft", author: w.admin, revision: 1 });
+    return observe(w, async () => {
+      await as(w.t, "admin").mutation(api.machineConfigs.rejectConfig, {
+        configId: draft,
+        reason: "synthetic-private-downgrade-reason",
+      });
+      return [
+        site(w, "machine_config.rejected", draft, "machine_config", "admin", w.orgA, {
+          machineId: w.machine,
+          version: "1",
+        }),
+      ];
+    });
+  },
+  "machineConfigs.recordApplied": async (w) => {
+    const applied = await insertConfigRevision(w, { status: "approved", author: w.admin, revision: 1 });
+    const refused = await insertConfigRevision(w, {
+      status: "approved",
+      author: w.admin,
+      revision: 2,
+      values: { ...MACHINE_CONFIG_BASE, location: "Ailleurs" },
+    });
+    const hashOf = async (id: Id<"machine_configs">) =>
+      (await w.t.run((ctx) => ctx.db.get(id)))?.hash ?? "";
+    const machine = (targetId: string, action: AuditAction, version: string): Expected => ({
+      action,
+      targetId,
+      targetType: "machine_config",
+      source: "machine",
+      actorRole: "machine",
+      actorId: w.machine,
+      organizationId: w.orgA,
+      details: { machineId: w.machine, version },
+    });
+    return observe(w, async () => {
+      await w.t.mutation(internal.machineConfigs.recordApplied, {
+        machineId: w.machine,
+        revision: 1,
+        hash: await hashOf(applied),
+      });
+      await w.t.mutation(internal.machineConfigs.recordApplied, {
+        machineId: w.machine,
+        revision: 2,
+        hash: await hashOf(refused),
+        refusal: "synthetic-private-end-code-and-reason",
+      });
+      return [
+        machine(applied, "machine_config.applied", "1"),
+        machine(refused, "machine_config.refused", "2"),
       ];
     });
   },

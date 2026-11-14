@@ -45,6 +45,7 @@ from packaging.requirements import Requirement
 
 from src.contract import UNKNOWN_SOFTWARE_VERSION, VERSION_PATH, read_software_version
 from src.local_config import EcgSource, MotorBackend, load_local_config
+from src.local_panel import EXIT_CONFIG, EXIT_OK, EXIT_RESTART
 from src.result import Ok
 from src.service_state import THRESHOLD, WINDOW
 
@@ -1313,6 +1314,15 @@ def test_ex1_the_installer_has_systemd_arm_the_hardware_watchdog_and_restarts_no
     assert "/dev/watchdog is present" in third.output
     assert "no /dev/watchdog" not in third.output
     assert f"{machine.manager_drop_in} unchanged" in third.output
+
+
+def test_anh141_the_controlled_restart_is_started_again_and_a_refused_file_is_not() -> None:
+    """Exit 75 (a configuration just applied) is not 0, so ``on-failure`` starts it again;
+    exit 2 (``data/config.applied.json`` that does not verify) is the one it never does."""
+    assert _directive("Restart") == ["on-failure"]
+    assert str(EXIT_RESTART) not in _directive("RestartPreventExitStatus")
+    assert _directive("RestartPreventExitStatus") == [str(EXIT_CONFIG)]
+    assert EXIT_RESTART not in (EXIT_OK, EXIT_CONFIG)
 
 
 def test_the_unit_leaves_the_image_health_check_on_healthz_in_place() -> None:

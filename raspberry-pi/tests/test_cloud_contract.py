@@ -193,6 +193,25 @@ async def test_ex2_the_heartbeat_names_the_software_and_the_contract(tmp_path: P
     assert isinstance(beat["live"], Mapping)
 
 
+async def test_anh141_the_heartbeat_says_the_hash_of_the_configuration_applied(
+    tmp_path: Path,
+) -> None:
+    r = rig(tmp_path)
+    sync = CloudSync(
+        clock=r.clock,
+        transport=r.dashboard,
+        runtime=r.runtime,
+        surface=r.panel.surface,
+        store=r.panel.services.store,
+        tiers=config_of().tiers,
+        programs_enabled=False,
+        config_hash="ab" * 32,
+    )
+    r.clock.advance(Seconds(1.0))
+    await sync.step()
+    assert r.dashboard.to(HEARTBEAT)[0]["config_hash"] == "ab" * 32
+
+
 async def test_ex2_a_link_built_without_a_version_says_it_is_unknown(tmp_path: Path) -> None:
     r = rig(tmp_path)
     await r.step()

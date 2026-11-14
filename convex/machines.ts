@@ -730,6 +730,7 @@ export const recordHeartbeat = internalMutation({
     softwareVersion: v.optional(v.string()),
     contractVersion: v.optional(v.string()),
     medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
+    configHash: v.optional(v.union(v.string(), v.null())),
     health: v.optional(machineHealthValidator),
   },
   returns: v.null(),
@@ -763,6 +764,7 @@ export const recordHeartbeat = internalMutation({
             softwareVersion: args.softwareVersion,
             contractVersion: args.contractVersion,
             medicalParametersVersion: args.medicalParametersVersion,
+            configHash: args.configHash,
             lastVersionSeenAt: now,
           }),
     });

@@ -340,12 +340,14 @@ def _of_machine(held: OperatorList, machine_id: str | None) -> Result[OperatorLi
 
 
 def signed_text(
-    document: Mapping[str, object], public_key: bytes | None
+    document: Mapping[str, object], public_key: bytes | None, subject: str = "liste"
 ) -> Result[str | None, str]:
     """The text of an answer, once its signature verifies; ``None`` when nothing is signed.
 
     As the catalogue's (:func:`src.programme_catalog.signed_text`): nothing of
     the text is read before the signature is checked over its exact bytes.
+    ``subject``: what the refusals call the text (the machine's configuration
+    uses it too, ANH-141).
     """
     status = document.get("status")
     if status == "not_configured":
@@ -353,7 +355,7 @@ def signed_text(
     payload = document.get("payload")
     signature = document.get("signature")
     if status != "signed" or not isinstance(payload, str) or not isinstance(signature, str):
-        return Err("reponse sans liste signee")
+        return Err(f"reponse sans {subject} signee")
     if public_key is None:
         return Err("cle publique du catalogue absente ou illisible")
     raw = _b64(signature)
@@ -362,10 +364,10 @@ def signed_text(
     except UnicodeEncodeError:
         content = None
     if raw is None or content is None:
-        return Err("signature de la liste invalide : texte ou signature illisible")
+        return Err(f"signature de la {subject} invalide : texte ou signature illisible")
     verified = verify_signature(content, raw, public_key)
     if isinstance(verified, Err):
-        return Err(f"signature de la liste invalide : {verified.error.detail}")
+        return Err(f"signature de la {subject} invalide : {verified.error.detail}")
     return Ok(payload)
 
 

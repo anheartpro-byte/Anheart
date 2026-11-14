@@ -263,6 +263,14 @@ def applied_configuration(
         "camera": config.camera.value,
         "drive_link": None if link is None else "native",
     }
+    machine_config = config.machine_config
+    if machine_config is not None:
+        # The dashboard's revision the keys came from (ANH-141): absent on a `.env`, so
+        # that a console that never applied one keeps the hash it always had.
+        applied["machine_config"] = {
+            "revision": machine_config.revision,
+            "config_hash": machine_config.digest,
+        }
     if link is not None:
         settings = link.settings
         applied["native_drive"] = {

@@ -142,6 +142,13 @@
       "incident": {
         "analyzed": "Incident analysed",
         "closed": "Incident closed"
+      },
+      "machine_config": {
+        "proposed": "Machine configuration proposed",
+        "approved": "Machine configuration approved",
+        "rejected": "Machine configuration rejected",
+        "applied": "Configuration applied by the machine",
+        "refused": "Configuration refused by the machine"
       }
     },
     "targets": {
@@ -158,7 +165,8 @@
       "medical_parameters_version": "Medical parameters version",
       "programme": "Programme",
       "patient_invitation": "Patient invitation",
-      "incident": "Incident"
+      "incident": "Incident",
+      "machine_config": "Machine configuration"
     },
     "roles": {
       "admin": "Anheart admin",
@@ -213,7 +221,11 @@
     "site": "Site address",
     "contacts": "Organisation contacts",
     "noContacts": "No active members in this machine's organisation.",
-    "contactRoles": { "admin": "Administrator", "gestionnaire": "Manager", "user": "Patient" },
+    "contactRoles": {
+      "admin": "Administrator",
+      "gestionnaire": "Manager",
+      "user": "Patient"
+    },
     "expectedSoftwareVersion": "Expected software version",
     "expectedHelp": "Enter an existing Pi release. A release with insufficient validation can still be selected, with a warning.",
     "armRadiusM": "Arm radius (m)",
@@ -222,7 +234,7 @@
     "measuredBy": "Measured by",
     "metres": "{value} m",
     "proposal": "Configuration proposal",
-    "proposalPending": "These measurements will be used by centralised configuration (ANH-141). They are not yet applied to the machine.",
+    "proposalPending": "These measurements are proposed by default for the machine's first configuration.",
     "fileHelp": "PDF or JSON, up to 10 MiB. Do not attach health data.",
     "currentSheet": "Current parameter sheet",
     "sheetHistory": "Parameter sheet history",
@@ -232,7 +244,12 @@
     "sheetVersion": "Drive parameter sheet version",
     "signedBy": "Signatory",
     "sheetAt": "Sheet date",
-    "levels": { "none": "No validation", "bench": "Bench", "auto": "Automatic", "occupied": "Person on board" },
+    "levels": {
+      "none": "No validation",
+      "bench": "Bench",
+      "auto": "Automatic",
+      "occupied": "Person on board"
+    },
     "reviewRule": "Only a review with an attached report can raise the machine to the next level. Lowering the level requires a reason.",
     "medicalKeyIsTest": "The Person on board level remains unavailable until medical parameters are signed with the medical key (ANH-98). The current key is a test key.",
     "reviews": "Validation reviews",
@@ -257,12 +274,17 @@
     "softwareAndLocks": "Software version and locks",
     "reportedVersion": "Reported software version",
     "versionStatus": "Version status",
-    "versions": { "unknown": "Unknown", "up_to_date": "Up to date", "outdated": "Outdated", "not_validated": "Not validated for this machine" },
+    "versions": {
+      "unknown": "Unknown",
+      "up_to_date": "Up to date",
+      "outdated": "Outdated",
+      "not_validated": "Not validated for this machine"
+    },
     "expectedNotValidated": "The expected version is not validated for this machine.",
     "allowed": "Allowed",
     "denied": "Denied",
     "lockReason": "Machine validated up to level: {level}.",
-    "locksPending": "Applying these locks awaits centralised configuration (ANH-141). These verdicts describe registry permissions.",
+    "locksPending": "The machine configuration applies these verdicts: a lock turns true only at the required level.",
     "otaPending": "OTA rejection of a release with insufficient validation awaits ANH-116.",
     "alerts": {
       "programs_enabled_without_auto": "Programs are enabled while the machine has not reached the Automatic level.",
@@ -272,7 +294,12 @@
     "badges": {
       "validation": "Validation: {level}",
       "version": "Version: {status}",
-      "configuration": { "unavailable": "Configuration: unavailable (ANH-141)" }
+      "configuration": {
+        "unavailable": "Configuration: none approved",
+        "pending": "Configuration: waiting for the machine",
+        "applied": "Configuration: applied",
+        "mismatch": "Configuration: applied ≠ approved"
+      }
     },
     "saving": "Saving...",
     "saveIdentity": "Save identity",
@@ -286,6 +313,85 @@
     "reviewSaved": "Review recorded.",
     "levelLowered": "Validation level lowered with its reason."
   },
+  "machineConfig": {
+    "title": "Machine configuration",
+    "loading": "Loading the configuration",
+    "safety": "safety",
+    "safetyChange": "safety key changed",
+    "enabled": "enabled",
+    "choose": "Choose",
+    "form": "Propose a configuration",
+    "level": "Machine validated up to level {level}: both locks depend on it.",
+    "problems": "{count} error(s): the console would refuse this configuration.",
+    "problemList": "Configuration errors",
+    "diff": "Changes",
+    "diffNone": "No revision applied: every key is new to the machine, and a safety key changes.",
+    "diffApplied": "Changes from applied revision {revision}:",
+    "propose": "Propose",
+    "proposed": "Revision {revision} proposed.",
+    "unchanged": "This configuration is already the one sent to the machine.",
+    "approve": "Approve",
+    "approved": "Revision {revision} approved.",
+    "reject": "Reject",
+    "rejected": "Revision {revision} rejected.",
+    "reason": "Reason for rejecting (3 to 500 characters)",
+    "revisions": "Revisions",
+    "revision": "Revision {revision}",
+    "proposedBy": "proposed by {name} on {at}",
+    "approvedBy": "approved by {names} on {at}",
+    "appliedAt": "applied by the machine on {at}",
+    "rejectReason": "Reason: {reason}",
+    "mismatch": "Applied configuration ≠ approved: the machine does not report running the revision in force.",
+    "statuses": {
+      "draft": "draft",
+      "approved": "approved, waiting for the machine",
+      "applied": "applied",
+      "rejected": "rejected"
+    },
+    "status": {
+      "unavailable": "No configuration approved",
+      "pending": "Waiting for the machine",
+      "applied": "Applied",
+      "mismatch": "Applied ≠ approved"
+    },
+    "blocked": {
+      "machine_config_wrong_status": "This revision is no longer a draft.",
+      "machine_config_keys_not_allowed": "An organisation admin approves only the name and the location.",
+      "machine_config_self_approval": "A safety key changes: an Anheart admin other than the author must approve.",
+      "machine_config_safety_needs_admins": "A safety key changes: the revision must be proposed by an Anheart admin."
+    },
+    "keys": {
+      "name": "Machine name",
+      "location": "Location",
+      "SENSORS": "Acquired channels",
+      "MOTOR_PORT": "Drive port",
+      "MOTOR_SLAVE_ID": "Modbus address",
+      "MODBUS_BAUDRATE": "Modbus baud rate",
+      "MODBUS_PARITY": "Modbus parity",
+      "MODBUS_TIMEOUT_S": "Modbus timeout (s)",
+      "MOTOR_REG_OFFSET": "Register offset",
+      "ECG_SOURCE": "ECG source",
+      "BITALINO_ADDRESS": "BITalino address",
+      "PRESENCE_SOURCE": "Camera",
+      "UI_PORT": "Console port",
+      "GEAR_RATIO": "Gear ratio",
+      "RECORD_LOCAL_RETENTION_DAYS": "Record retention (days)",
+      "MOTOR_BACKEND": "Drive",
+      "MOTOR_MAX_RPM": "Motor ceiling (rpm)",
+      "ARM_RADIUS_M": "Rider radius (m)",
+      "LEG_TIP_RADIUS_M": "Foot tip radius (m)",
+      "PROGRAMS_ENABLED": "Programmed sessions",
+      "OCCUPANCY_OCCUPIED_ENABLED": "Person on board"
+    },
+    "stale": "The configuration in force changed since the form was opened (revision {revision}): reload before proposing.",
+    "reload": "Reload the configuration in force",
+    "organizationOnly": "An organisation admin changes only the machine's name and location: the other fields are greyed out.",
+    "consoleWords": "The errors are written in the console's own words, in French.",
+    "changedFromApplied": "What this revision changes from the applied revision:",
+    "changes": "Changes of revision {revision}",
+    "reasonNeeded": "Give a reason of at least 3 characters to reject.",
+    "locksAbove": "The applied revision or the one in force enables {keys} above the machine's validation level ({level}): the console holds these locks false, propose a revision that disables them."
+  },
   "errors": {
     "invalid_registry_field": "Invalid machine registry value.",
     "contact_not_in_organization": "The contact must be an active member of the machine's organization.",
@@ -297,6 +403,15 @@
     "downgrade_reason_required": "Lowering validation requires a reason of 3 to 500 characters.",
     "occupied_requires_signed_medical_parameters": "Occupied validation requires a production medical key and a medical parameters version.",
     "machine_validation_insufficient": "The machine's validation level does not permit this configuration.",
+    "invalid_machine_config": "The console would refuse this configuration: see the errors of the form.",
+    "machine_config_not_found": "This configuration revision does not exist, or its machine is no longer reachable.",
+    "machine_config_wrong_status": "This revision is no longer in the state this action needs.",
+    "machine_config_unchanged": "This configuration is already the one sent to the machine.",
+    "machine_config_keys_not_allowed": "An organisation admin changes only the machine's name and location.",
+    "machine_config_self_approval": "A safety key changes: an Anheart admin other than the author must approve.",
+    "machine_config_safety_needs_admins": "A safety key changes: the revision must be proposed by an Anheart admin.",
+    "machine_config_reason_required": "Give a reason of 3 to 500 characters.",
+    "machine_config_stale": "The configuration in force changed since the form was opened: reload it before proposing.",
     "programme_not_found": "Programme not found.",
     "programme_wrong_status": "The programme is no longer in the state this step needs. Reload the page.",
     "programme_refused": "The Pi's validation refuses this programme.",

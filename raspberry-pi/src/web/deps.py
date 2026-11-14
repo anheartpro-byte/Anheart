@@ -48,6 +48,7 @@ from typing import Final, Protocol, final, runtime_checkable
 from uuid import uuid4
 
 from src.clock import Clock
+from src.config_view import ENV_VIEW, ConfigView
 from src.console_access import LOCAL_DEVICE, LOOPBACK_DEVICE, ConsoleAccess
 from src.control_surface import ControlSurface
 from src.geometry import MachineGeometry
@@ -634,6 +635,14 @@ class Services:
 
     preflight: PreflightMonitor | None = None
     """The pre-flight (``/api/preflight``, ANH-142); ``None``: this console judges none."""
+
+    config_view: Callable[[], ConfigView] = lambda: ENV_VIEW
+    """The machine's configuration as the page reads it (``GET /api/config``, ANH-141)."""
+
+    config_confirm: Callable[[str], Awaitable[Result[int, str]]] | None = None
+    """Apply, by an operator signed in, the revision with a safety key that waits
+    (``POST /api/config/apply``): the revision, or why not. ``None``: the console is not
+    linked to a dashboard, and nothing can wait."""
 
     access: ConsoleAccess | None = None
     """Who may act (ANH-152): the signed operator list, the sign-in, the sessions.

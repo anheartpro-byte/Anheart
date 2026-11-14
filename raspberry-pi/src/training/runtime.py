@@ -725,6 +725,12 @@ class RecordStorageLow:
     """How old the measurement is, when that is why it is refused; else ``None``."""
 
 
+@dataclass(frozen=True, slots=True)
+class RestartPending:
+    """The console restarts at rest to run a configuration just written (ANH-141): nothing
+    is armed on the values it is leaving, whoever asks and from wherever."""
+
+
 type StartRefusal = (
     AlreadyStarted
     | NotAttested
@@ -739,6 +745,7 @@ type StartRefusal = (
     | StoNotReady
     | StoBridgedOnBoard
     | PreflightRefused
+    | RestartPending
 )
 """Every way :meth:`TrainingRuntime.start` can refuse. Closed; match it nested."""
 
@@ -1313,6 +1320,7 @@ class TrainingRuntime:
         "_previous_tick_at",
         "_program",
         "_recovery_from",
+        "_restart_held",
         "_resting_bpm",
         "_rise_held",
         "_rise_reading_within",
@@ -1339,7 +1347,7 @@ class TrainingRuntime:
         "_withdrawn",
     )
 
-    def __init__(
+    def __init__(  # noqa: PLR0915  # one statement per field it holds
         self,
         *,
         clock: Clock,
@@ -1407,6 +1415,7 @@ class TrainingRuntime:
         self._sto: StoSource = UnconfiguredStoSource() if sto is None else sto
         self._arming_gate: ArmingGate | None = arming_gate
         self._preflight: PreflightGate | None = preflight
+        self._restart_held: bool = False
         self._drive: DriveBackend = drive
         self._geometry: MachineGeometry = geometry
         self._limits: RuntimeLimits = limits
@@ -1778,6 +1787,20 @@ class TrainingRuntime:
         :meth:`_readable_status`, which forgets an observation once it is stale.
         """
         return self._last_status
+
+    def hold_for_restart(self, held: bool) -> None:
+        """Refuse every arming while the console restarts for a configuration (ANH-141).
+
+        ``True`` before the configuration is written: from then on nothing arms on the
+        values the console is leaving, until the process ends for its restart. ``False``
+        only when that write failed, and the configuration in force stays.
+        """
+        self._restart_held = held
+
+    @property
+    def restart_hold(self) -> RestartPending | None:
+        """Why every arming is refused now for a restart; ``None`` when none is waiting."""
+        return RestartPending() if self._restart_held else None
 
     @property
     def standing(self) -> SafetyVerdict | None:
@@ -2302,7 +2325,7 @@ class TrainingRuntime:
         # Last, so the operator is first told what only they can clear.
         storage = None if self._arming_gate is None else self._arming_gate()
         preflight = self._preflight
-        return storage or (None if preflight is None else preflight(occupancy))
+        return self.restart_hold or storage or (None if preflight is None else preflight(occupancy))
 
     def _reset_session(self) -> None:
         """Forget the previous session before arming a new one. Link and tracker survive.

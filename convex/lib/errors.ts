@@ -248,6 +248,26 @@ export const DASHBOARD_ERRORS = {
   machine_validation_insufficient:
     "The machine's validation level does not permit this configuration.",
 
+  // The machine configuration (convex/machineConfigs.ts, ANH-141).
+  invalid_machine_config:
+    "The console would refuse the configuration. Thrown as `{code, message, problems}`, each problem `{key, detail}` in the console's words.",
+  machine_config_not_found:
+    "The configuration revision does not exist, or its machine is deleted or out of the caller's reach.",
+  machine_config_wrong_status:
+    "The revision is not in the state this step starts from.",
+  machine_config_unchanged:
+    "The revision is the one the machine is already sent.",
+  machine_config_keys_not_allowed:
+    "An organisation admin proposes or approves only the machine's name and location.",
+  machine_config_self_approval:
+    "A revision that changes a safety key is approved by another Anheart admin than its author.",
+  machine_config_safety_needs_admins:
+    "A revision that changes a safety key is proposed by an Anheart admin: an organisation admin's cannot be approved.",
+  machine_config_stale:
+    "The values were edited from another revision than the one in force now: reload them before proposing.",
+  machine_config_reason_required:
+    "Rejecting a revision requires a reason of 3 to 500 characters.",
+
   // The programme catalogue (convex/programmes.ts, ANH-137).
   programme_not_found: "The programme does not exist.",
   programme_wrong_status:

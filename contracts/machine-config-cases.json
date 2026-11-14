@@ -1,0 +1,1190 @@
+{
+  "description": "Cas de validation d'une configuration de machine (ANH-141). Chaque cas est la configuration `base` modifiée par `changes`, sans les clés de `remove`, jugée pour une machine validée jusqu'au niveau `level` (`none` sans lui), avec une console sans clé locale et des paramètres médicaux signés. `expected` est le verdict : `accepted`, ou `refused` avec chaque problème `{key, detail}`, dans l'ordre et les mots de la console. Lu par raspberry-pi/tests/test_machine_config_parity.py (review, raspberry-pi/src/machine_config.py) et par convex/machineConfigs.test.ts (machineConfigProblems, convex/lib/machineConfig.ts), qui exigent ce verdict des deux côtés.",
+  "base": {
+    "name": "Banc d'essai",
+    "location": "Atelier Anheart",
+    "SENSORS": [
+      "ECG"
+    ],
+    "MOTOR_PORT": "ftdi://schneider:rs485/1",
+    "MOTOR_SLAVE_ID": 248,
+    "MODBUS_BAUDRATE": 19200,
+    "MODBUS_PARITY": "E",
+    "MODBUS_TIMEOUT_S": 0.1,
+    "MOTOR_REG_OFFSET": 0,
+    "ECG_SOURCE": "sim",
+    "BITALINO_ADDRESS": null,
+    "PRESENCE_SOURCE": "none",
+    "UI_PORT": 8080,
+    "GEAR_RATIO": 49.79,
+    "RECORD_LOCAL_RETENTION_DAYS": 30,
+    "MOTOR_BACKEND": "sim",
+    "MOTOR_MAX_RPM": 300,
+    "ARM_RADIUS_M": 1.5,
+    "LEG_TIP_RADIUS_M": null,
+    "PROGRAMS_ENABLED": false,
+    "OCCUPANCY_OCCUPIED_ENABLED": false
+  },
+  "cases": [
+    {
+      "name": "la configuration de base, en simulation, est acceptee",
+      "changes": {},
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "le variateur reel avec la liaison par defaut est accepte",
+      "changes": {
+        "MOTOR_BACKEND": "serial"
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM a 1380, la plaque, est accepte",
+      "changes": {
+        "MOTOR_MAX_RPM": 1380
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM a 0 est accepte",
+      "changes": {
+        "MOTOR_MAX_RPM": 0
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM au dessus de la plaque est refuse",
+      "changes": {
+        "MOTOR_MAX_RPM": 1381
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "1381 tr/min hors de 0..1380 (plaque signaletique)"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM negatif est refuse",
+      "changes": {
+        "MOTOR_MAX_RPM": -1
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "-1 tr/min hors de 0..1380 (plaque signaletique)"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM 300.0 est le nombre entier 300",
+      "changes": {
+        "MOTOR_MAX_RPM": 300.0
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM non entier est refuse",
+      "changes": {
+        "MOTOR_MAX_RPM": 300.5
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "attendu un nombre entier"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM en texte est refuse",
+      "changes": {
+        "MOTOR_MAX_RPM": "300"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "attendu un nombre entier"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM booleen est refuse",
+      "changes": {
+        "MOTOR_MAX_RPM": true
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "attendu un nombre entier"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM au dela de 2^53 est refuse",
+      "changes": {
+        "MOTOR_MAX_RPM": 1e+21
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "attendu un nombre entier"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M absent est obligatoire",
+      "changes": {
+        "ARM_RADIUS_M": null
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "obligatoire"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M nul est refuse",
+      "changes": {
+        "ARM_RADIUS_M": 0
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "0.0 m hors de ]0, 5.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M de 15 m est refuse",
+      "changes": {
+        "ARM_RADIUS_M": 15
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "15.0 m hors de ]0, 5.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M de 5 m est accepte",
+      "changes": {
+        "ARM_RADIUS_M": 5
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M de 1e16 m est refuse, ecrit comme la console l'ecrit",
+      "changes": {
+        "ARM_RADIUS_M": 1e+16
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "1e+16 m hors de ]0, 5.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M de 123456.789 m est refuse",
+      "changes": {
+        "ARM_RADIUS_M": 123456.789
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "123456.789 m hors de ]0, 5.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M en texte est refuse",
+      "changes": {
+        "ARM_RADIUS_M": "1.5"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "attendu un nombre fini"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LEG_TIP_RADIUS_M en deca de ARM_RADIUS_M est refuse",
+      "changes": {
+        "LEG_TIP_RADIUS_M": 1.4
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "LEG_TIP_RADIUS_M",
+            "detail": "1.4 m hors de [ARM_RADIUS_M, 5.0] : la pointe du pied est au moins aussi loin de l'axe que le point de reference"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LEG_TIP_RADIUS_M de 2,43 m est accepte",
+      "changes": {
+        "LEG_TIP_RADIUS_M": 2.43
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "LEG_TIP_RADIUS_M au dela de 5 m est refuse",
+      "changes": {
+        "LEG_TIP_RADIUS_M": 5.5
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "LEG_TIP_RADIUS_M",
+            "detail": "5.5 m hors de [ARM_RADIUS_M, 5.0] : la pointe du pied est au moins aussi loin de l'axe que le point de reference"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LEG_TIP_RADIUS_M est juge contre 0 quand ARM_RADIUS_M est refuse",
+      "changes": {
+        "ARM_RADIUS_M": 15,
+        "LEG_TIP_RADIUS_M": 1.4
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "15.0 m hors de ]0, 5.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LEG_TIP_RADIUS_M est juge contre 0 quand ARM_RADIUS_M est mal forme",
+      "changes": {
+        "ARM_RADIUS_M": "x",
+        "LEG_TIP_RADIUS_M": 1.4
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "attendu un nombre fini"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GEAR_RATIO nul est refuse",
+      "changes": {
+        "GEAR_RATIO": 0
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "GEAR_RATIO",
+            "detail": "0.0 doit etre positif"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GEAR_RATIO negatif est refuse, ecrit comme la console l'ecrit",
+      "changes": {
+        "GEAR_RATIO": -1e-05
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "GEAR_RATIO",
+            "detail": "-1e-05 doit etre positif"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GEAR_RATIO de 50 est accepte",
+      "changes": {
+        "GEAR_RATIO": 50
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "MOTOR_BACKEND en majuscules est refuse",
+      "changes": {
+        "MOTOR_BACKEND": "SIM"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_BACKEND",
+            "detail": "attendu l'une des valeurs : sim, serial"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_BACKEND absent est obligatoire",
+      "changes": {
+        "MOTOR_BACKEND": null
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_BACKEND",
+            "detail": "obligatoire"
+          }
+        ]
+      }
+    },
+    {
+      "name": "l'adresse Modbus 0 est refusee avec le variateur reel",
+      "changes": {
+        "MOTOR_BACKEND": "serial",
+        "MOTOR_SLAVE_ID": 0
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_*",
+            "detail": "Modbus slave address 0 is neither in 1..247 nor Schneider's point-to-point address 248; address 0 is the broadcast address, which commands every drive on the bus and cannot be verified"
+          }
+        ]
+      }
+    },
+    {
+      "name": "l'adresse Modbus n'est pas lue en simulation",
+      "changes": {
+        "MOTOR_SLAVE_ID": 0
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "un delai Modbus nul est refuse avec le variateur reel",
+      "changes": {
+        "MOTOR_BACKEND": "serial",
+        "MODBUS_TIMEOUT_S": 0
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_*",
+            "detail": "serial timeout 0.0 s must be positive; a zero timeout makes every read return nothing, which this driver would report as a dead drive"
+          }
+        ]
+      }
+    },
+    {
+      "name": "seul le premier refus de la liaison est dit",
+      "changes": {
+        "MOTOR_BACKEND": "serial",
+        "MODBUS_TIMEOUT_S": -0.5,
+        "MOTOR_REG_OFFSET": 2
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_*",
+            "detail": "serial timeout -0.5 s must be positive; a zero timeout makes every read return nothing, which this driver would report as a dead drive"
+          }
+        ]
+      }
+    },
+    {
+      "name": "un decalage de registres de 2 est refuse avec le variateur reel",
+      "changes": {
+        "MOTOR_BACKEND": "serial",
+        "MOTOR_REG_OFFSET": 2
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_*",
+            "detail": "register offset 2 is outside -1..1; the only legitimate offset is a 0/1-based indexing difference, and a larger one would address an unrelated drive parameter"
+          }
+        ]
+      }
+    },
+    {
+      "name": "un delai Modbus de 1e-05 s est accepte",
+      "changes": {
+        "MOTOR_BACKEND": "serial",
+        "MODBUS_TIMEOUT_S": 1e-05
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "MODBUS_PARITY en minuscule est refusee",
+      "changes": {
+        "MODBUS_PARITY": "e"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MODBUS_PARITY",
+            "detail": "attendu l'une des valeurs : N, E, O"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_PORT vide est refuse",
+      "changes": {
+        "MOTOR_PORT": ""
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_PORT",
+            "detail": "attendu 1 a 200 caracteres ASCII imprimables, sans espace, guillemet, apostrophe ni barre oblique inverse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_PORT COM3 est accepte",
+      "changes": {
+        "MOTOR_BACKEND": "serial",
+        "MOTOR_PORT": "COM3"
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "MOTOR_PORT de 201 caracteres est refuse",
+      "changes": {
+        "MOTOR_PORT": "ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_PORT",
+            "detail": "attendu 1 a 200 caracteres ASCII imprimables, sans espace, guillemet, apostrophe ni barre oblique inverse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ECG_SOURCE=rfcomm sans adresse est refuse",
+      "changes": {
+        "ECG_SOURCE": "rfcomm"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "'' : ECG_SOURCE=rfcomm attend rfcomm:XX-XX-XX-XX-XX-XX"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ECG_SOURCE=rfcomm avec une adresse rfcomm est accepte",
+      "changes": {
+        "ECG_SOURCE": "rfcomm",
+        "BITALINO_ADDRESS": "rfcomm:98-D3-91-FE-4E-9F"
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "ECG_SOURCE=rfcomm avec une adresse MAC est refuse",
+      "changes": {
+        "ECG_SOURCE": "rfcomm",
+        "BITALINO_ADDRESS": "98:D3:91:FE:4E:9F"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "'98:D3:91:FE:4E:9F' : ECG_SOURCE=rfcomm attend rfcomm:XX-XX-XX-XX-XX-XX"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ECG_SOURCE=serial avec /dev/rfcomm0 est accepte",
+      "changes": {
+        "ECG_SOURCE": "serial",
+        "BITALINO_ADDRESS": "/dev/rfcomm0"
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "ECG_SOURCE=serial avec une adresse rfcomm est refuse",
+      "changes": {
+        "ECG_SOURCE": "serial",
+        "BITALINO_ADDRESS": "RFCOMM:98-d3-91-fe-4e-9f"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "'RFCOMM:98-d3-91-fe-4e-9f' : ECG_SOURCE=serial attend un port serie (/dev/rfcomm0, COM4) ou une adresse MAC"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ECG_SOURCE=serial sans adresse est refuse",
+      "changes": {
+        "ECG_SOURCE": "serial"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "'' : ECG_SOURCE=serial attend un port serie (/dev/rfcomm0, COM4) ou une adresse MAC"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ECG_SOURCE refuse : l'adresse n'est pas jugee",
+      "changes": {
+        "ECG_SOURCE": "bluetooth",
+        "BITALINO_ADDRESS": "98:D3"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ECG_SOURCE",
+            "detail": "attendu l'une des valeurs : sim, serial, rfcomm"
+          }
+        ]
+      }
+    },
+    {
+      "name": "une adresse BITalino avec une espace est refusee",
+      "changes": {
+        "BITALINO_ADDRESS": "98 D3"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "attendu 1 a 200 caracteres ASCII imprimables, sans espace, guillemet, apostrophe ni barre oblique inverse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ECG_SOURCE=serial et une adresse mal formee : seul son type est dit",
+      "changes": {
+        "ECG_SOURCE": "serial",
+        "BITALINO_ADDRESS": "98 D3"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "attendu 1 a 200 caracteres ASCII imprimables, sans espace, guillemet, apostrophe ni barre oblique inverse"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ECG_SOURCE=rfcomm sans la cle de l'adresse : seule son absence est dite",
+      "changes": {
+        "ECG_SOURCE": "rfcomm"
+      },
+      "remove": [
+        "BITALINO_ADDRESS"
+      ],
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "BITALINO_ADDRESS",
+            "detail": "cle absente"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARM_RADIUS_M -0.0 est refuse comme 0",
+      "changes": {
+        "ARM_RADIUS_M": -0.0
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "0.0 m hors de ]0, 5.0]"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GEAR_RATIO entier au dela d'un flottant est refuse",
+      "changes": {
+        "GEAR_RATIO": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "GEAR_RATIO",
+            "detail": "attendu un nombre fini"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MOTOR_MAX_RPM entier au dela d'un flottant est refuse",
+      "changes": {
+        "MOTOR_MAX_RPM": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "attendu un nombre entier"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UI_PORT 8123, celui du banc, est refuse",
+      "changes": {
+        "UI_PORT": 8123
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "UI_PORT",
+            "detail": "8123 est le port de scripts/bench_console.py"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UI_PORT 0 est refuse par la page",
+      "changes": {
+        "UI_PORT": 0
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "UI_HOST/UI_PORT/DEVICE_TOKEN",
+            "detail": "port must be 1..65535, got 0"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UI_PORT 70000 est refuse par la page",
+      "changes": {
+        "UI_PORT": 70000
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "UI_HOST/UI_PORT/DEVICE_TOKEN",
+            "detail": "port must be 1..65535, got 70000"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RECORD_LOCAL_RETENTION_DAYS au dela de dix ans est refuse",
+      "changes": {
+        "RECORD_LOCAL_RETENTION_DAYS": 3651
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "RECORD_LOCAL_RETENTION_DAYS",
+            "detail": "3651 jours hors de 0..3650"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RECORD_LOCAL_RETENTION_DAYS negatif est refuse",
+      "changes": {
+        "RECORD_LOCAL_RETENTION_DAYS": -1
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "RECORD_LOCAL_RETENTION_DAYS",
+            "detail": "-1 jours hors de 0..3650"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SENSORS sans ECG est refuse",
+      "changes": {
+        "SENSORS": [
+          "EDA"
+        ]
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "SENSORS",
+            "detail": "ECG obligatoire : la frequence cardiaque pilote le moteur"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SENSORS vide est refuse",
+      "changes": {
+        "SENSORS": []
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "SENSORS",
+            "detail": "attendu une liste non vide, sans doublon, parmi : ECG, EDA, SpO2, RESP, EMG, LUX"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SENSORS en double est refuse",
+      "changes": {
+        "SENSORS": [
+          "ECG",
+          "ECG"
+        ]
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "SENSORS",
+            "detail": "attendu une liste non vide, sans doublon, parmi : ECG, EDA, SpO2, RESP, EMG, LUX"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SENSORS en minuscules est refuse",
+      "changes": {
+        "SENSORS": [
+          "ECG",
+          "spo2"
+        ]
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "SENSORS",
+            "detail": "attendu une liste non vide, sans doublon, parmi : ECG, EDA, SpO2, RESP, EMG, LUX"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SENSORS ECG et SpO2 est accepte",
+      "changes": {
+        "SENSORS": [
+          "ECG",
+          "SpO2"
+        ]
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "SENSORS qui n'est pas une liste est refuse",
+      "changes": {
+        "SENSORS": "ECG"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "SENSORS",
+            "detail": "attendu une liste non vide, sans doublon, parmi : ECG, EDA, SpO2, RESP, EMG, LUX"
+          }
+        ]
+      }
+    },
+    {
+      "name": "name vide est refuse",
+      "changes": {
+        "name": ""
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "name",
+            "detail": "attendu un texte de 1 a 100 caracteres, sans caractere de controle ni espace en tete ou en fin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "name avec une espace en tete est refuse",
+      "changes": {
+        "name": " Banc"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "name",
+            "detail": "attendu un texte de 1 a 100 caracteres, sans caractere de controle ni espace en tete ou en fin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "name avec une espace insecable en fin est refuse",
+      "changes": {
+        "name": "Banc "
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "name",
+            "detail": "attendu un texte de 1 a 100 caracteres, sans caractere de controle ni espace en tete ou en fin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "name avec un retour a la ligne est refuse",
+      "changes": {
+        "name": "Banc\nA"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "name",
+            "detail": "attendu un texte de 1 a 100 caracteres, sans caractere de controle ni espace en tete ou en fin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "name de 101 caracteres est refuse",
+      "changes": {
+        "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "name",
+            "detail": "attendu un texte de 1 a 100 caracteres, sans caractere de controle ni espace en tete ou en fin"
+          }
+        ]
+      }
+    },
+    {
+      "name": "name absent est obligatoire",
+      "changes": {
+        "name": null
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "name",
+            "detail": "obligatoire"
+          }
+        ]
+      }
+    },
+    {
+      "name": "name accentue est accepte",
+      "changes": {
+        "name": "Bâti d'essai n°2 é"
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "location absente est acceptee",
+      "changes": {
+        "location": null
+      },
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "une cle de la console est refusee",
+      "changes": {
+        "MACHINE_API_KEY": "x",
+        "STO_SOURCE": "bridged_declared"
+      },
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "MACHINE_API_KEY",
+            "detail": "cle inconnue : la console ne la revalide pas"
+          },
+          {
+            "key": "STO_SOURCE",
+            "detail": "cle inconnue : la console ne la revalide pas"
+          }
+        ]
+      }
+    },
+    {
+      "name": "une cle manquante est refusee",
+      "changes": {},
+      "remove": [
+        "PRESENCE_SOURCE"
+      ],
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "PRESENCE_SOURCE",
+            "detail": "cle absente"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PROGRAMS_ENABLED vrai sous le niveau auto est refuse",
+      "changes": {
+        "PROGRAMS_ENABLED": true
+      },
+      "level": "bench",
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "PROGRAMS_ENABLED",
+            "detail": "machine validée jusqu'au niveau bench"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PROGRAMS_ENABLED vrai au niveau auto est accepte",
+      "changes": {
+        "PROGRAMS_ENABLED": true
+      },
+      "level": "auto",
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "OCCUPANCY_OCCUPIED_ENABLED vrai au niveau auto est refuse",
+      "changes": {
+        "OCCUPANCY_OCCUPIED_ENABLED": true
+      },
+      "level": "auto",
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "OCCUPANCY_OCCUPIED_ENABLED",
+            "detail": "machine validée jusqu'au niveau auto"
+          }
+        ]
+      }
+    },
+    {
+      "name": "les deux verrous vrais au niveau occupied sont acceptes",
+      "changes": {
+        "PROGRAMS_ENABLED": true,
+        "OCCUPANCY_OCCUPIED_ENABLED": true
+      },
+      "level": "occupied",
+      "expected": {
+        "verdict": "accepted"
+      }
+    },
+    {
+      "name": "les deux verrous vrais sans niveau sont refuses",
+      "changes": {
+        "PROGRAMS_ENABLED": true,
+        "OCCUPANCY_OCCUPIED_ENABLED": true
+      },
+      "level": "none",
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "PROGRAMS_ENABLED",
+            "detail": "machine validée jusqu'au niveau none"
+          },
+          {
+            "key": "OCCUPANCY_OCCUPIED_ENABLED",
+            "detail": "machine validée jusqu'au niveau none"
+          }
+        ]
+      }
+    },
+    {
+      "name": "les deux verrous en texte sont refuses",
+      "changes": {
+        "PROGRAMS_ENABLED": "true",
+        "OCCUPANCY_OCCUPIED_ENABLED": 1
+      },
+      "level": "occupied",
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "PROGRAMS_ENABLED",
+            "detail": "attendu true ou false"
+          },
+          {
+            "key": "OCCUPANCY_OCCUPIED_ENABLED",
+            "detail": "attendu true ou false"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tous les refus sont dits d'un coup",
+      "changes": {
+        "MOTOR_MAX_RPM": 2000,
+        "ARM_RADIUS_M": 0,
+        "UI_PORT": 8123,
+        "PROGRAMS_ENABLED": true,
+        "name": "",
+        "EXTRA": 1,
+        "SENSORS": [
+          "EDA"
+        ]
+      },
+      "level": "none",
+      "expected": {
+        "verdict": "refused",
+        "problems": [
+          {
+            "key": "name",
+            "detail": "attendu un texte de 1 a 100 caracteres, sans caractere de controle ni espace en tete ou en fin"
+          },
+          {
+            "key": "EXTRA",
+            "detail": "cle inconnue : la console ne la revalide pas"
+          },
+          {
+            "key": "ARM_RADIUS_M",
+            "detail": "0.0 m hors de ]0, 5.0]"
+          },
+          {
+            "key": "MOTOR_MAX_RPM",
+            "detail": "2000 tr/min hors de 0..1380 (plaque signaletique)"
+          },
+          {
+            "key": "SENSORS",
+            "detail": "ECG obligatoire : la frequence cardiaque pilote le moteur"
+          },
+          {
+            "key": "UI_PORT",
+            "detail": "8123 est le port de scripts/bench_console.py"
+          },
+          {
+            "key": "PROGRAMS_ENABLED",
+            "detail": "machine validée jusqu'au niveau none"
+          }
+        ]
+      }
+    }
+  ]
+}

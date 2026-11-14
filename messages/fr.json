@@ -142,6 +142,13 @@
       "incident": {
         "analyzed": "Incident analysé",
         "closed": "Incident clos"
+      },
+      "machine_config": {
+        "proposed": "Configuration de machine proposée",
+        "approved": "Configuration de machine approuvée",
+        "rejected": "Configuration de machine refusée",
+        "applied": "Configuration appliquée par la machine",
+        "refused": "Configuration refusée par la machine"
       }
     },
     "targets": {
@@ -158,7 +165,8 @@
       "medical_parameters_version": "Version des paramètres médicaux",
       "programme": "Programme",
       "patient_invitation": "Invitation du patient",
-      "incident": "Incident"
+      "incident": "Incident",
+      "machine_config": "Configuration de machine"
     },
     "roles": {
       "admin": "Admin Anheart",
@@ -213,7 +221,11 @@
     "site": "Adresse du site",
     "contacts": "Contacts de l'organisation",
     "noContacts": "Aucun membre actif dans l'organisation de cette machine.",
-    "contactRoles": { "admin": "Administrateur", "gestionnaire": "Gestionnaire", "user": "Patient" },
+    "contactRoles": {
+      "admin": "Administrateur",
+      "gestionnaire": "Gestionnaire",
+      "user": "Patient"
+    },
     "expectedSoftwareVersion": "Version logicielle attendue",
     "expectedHelp": "Saisissez une version Pi déjà enregistrée. Une version insuffisamment validée reste sélectionnable, avec un avertissement.",
     "armRadiusM": "Rayon du bras (m)",
@@ -222,7 +234,7 @@
     "measuredBy": "Auteur de la mesure",
     "metres": "{value} m",
     "proposal": "Proposition de configuration",
-    "proposalPending": "Ces mesures seront reprises par la configuration centralisée (ANH-141). Elles ne sont pas encore appliquées à la machine.",
+    "proposalPending": "Ces mesures sont proposées par défaut à la première configuration de la machine.",
     "fileHelp": "PDF ou JSON, 10 Mio maximum. Ne joignez aucune donnée de santé.",
     "currentSheet": "Fiche courante",
     "sheetHistory": "Historique des fiches",
@@ -232,7 +244,12 @@
     "sheetVersion": "Version de la fiche variateur",
     "signedBy": "Signataire",
     "sheetAt": "Date de la fiche",
-    "levels": { "none": "Aucune validation", "bench": "Au banc", "auto": "Automatique", "occupied": "Personne à bord" },
+    "levels": {
+      "none": "Aucune validation",
+      "bench": "Au banc",
+      "auto": "Automatique",
+      "occupied": "Personne à bord"
+    },
     "reviewRule": "Seule une revue avec compte rendu permet de passer au niveau suivant. Une descente exige un motif.",
     "medicalKeyIsTest": "Le niveau « Personne à bord » reste impossible tant que les paramètres médicaux ne sont pas signés par la clé médicale (ANH-98). La clé actuelle est une clé de test.",
     "reviews": "Revues de validation",
@@ -257,12 +274,17 @@
     "softwareAndLocks": "Version logicielle et verrous",
     "reportedVersion": "Version logicielle remontée",
     "versionStatus": "Statut de la version",
-    "versions": { "unknown": "Inconnue", "up_to_date": "À jour", "outdated": "Obsolète", "not_validated": "Non validée pour cette machine" },
+    "versions": {
+      "unknown": "Inconnue",
+      "up_to_date": "À jour",
+      "outdated": "Obsolète",
+      "not_validated": "Non validée pour cette machine"
+    },
     "expectedNotValidated": "La version attendue n'est pas validée pour cette machine.",
     "allowed": "Autorisé",
     "denied": "Refusé",
     "lockReason": "Machine validée jusqu'au niveau : {level}.",
-    "locksPending": "L'application des verrous attend la configuration centralisée (ANH-141). Ces verdicts indiquent les autorisations du registre.",
+    "locksPending": "La configuration de la machine applique ces verdicts : un verrou ne passe à vrai qu'au niveau requis.",
     "otaPending": "Le refus d'installation d'une version insuffisamment validée par l'OTA attend ANH-116.",
     "alerts": {
       "programs_enabled_without_auto": "Les programmes sont activés alors que la machine n'atteint pas le niveau Automatique.",
@@ -272,7 +294,12 @@
     "badges": {
       "validation": "Validation : {level}",
       "version": "Version : {status}",
-      "configuration": { "unavailable": "Configuration : non disponible (ANH-141)" }
+      "configuration": {
+        "unavailable": "Configuration : aucune approuvée",
+        "pending": "Configuration : en attente de la machine",
+        "applied": "Configuration : appliquée",
+        "mismatch": "Configuration : appliquée ≠ approuvée"
+      }
     },
     "saving": "Enregistrement...",
     "saveIdentity": "Enregistrer l'identité",
@@ -286,6 +313,85 @@
     "reviewSaved": "Revue enregistrée.",
     "levelLowered": "Niveau abaissé avec son motif."
   },
+  "machineConfig": {
+    "title": "Configuration de la machine",
+    "loading": "Chargement de la configuration",
+    "safety": "sûreté",
+    "safetyChange": "clé de sûreté changée",
+    "enabled": "activé",
+    "choose": "Choisir",
+    "form": "Proposer une configuration",
+    "level": "Machine validée jusqu'au niveau {level} : les deux verrous en dépendent.",
+    "problems": "{count} erreur(s) : la console refuserait cette configuration.",
+    "problemList": "Erreurs de la configuration",
+    "diff": "Changements",
+    "diffNone": "Aucune révision appliquée : toutes les clés sont nouvelles pour la machine, et une clé de sûreté change.",
+    "diffApplied": "Changements par rapport à la révision appliquée {revision} :",
+    "propose": "Proposer",
+    "proposed": "Révision {revision} proposée.",
+    "unchanged": "Cette configuration est déjà celle envoyée à la machine.",
+    "approve": "Approuver",
+    "approved": "Révision {revision} approuvée.",
+    "reject": "Refuser",
+    "rejected": "Révision {revision} refusée.",
+    "reason": "Motif du refus (3 à 500 caractères)",
+    "revisions": "Révisions",
+    "revision": "Révision {revision}",
+    "proposedBy": "proposée par {name} le {at}",
+    "approvedBy": "approuvée par {names} le {at}",
+    "appliedAt": "appliquée par la machine le {at}",
+    "rejectReason": "Motif : {reason}",
+    "mismatch": "Configuration appliquée ≠ approuvée : la machine ne dit pas tourner sur la révision en vigueur.",
+    "statuses": {
+      "draft": "brouillon",
+      "approved": "approuvée, en attente de la machine",
+      "applied": "appliquée",
+      "rejected": "refusée"
+    },
+    "status": {
+      "unavailable": "Aucune configuration approuvée",
+      "pending": "En attente de la machine",
+      "applied": "Appliquée",
+      "mismatch": "Appliquée ≠ approuvée"
+    },
+    "blocked": {
+      "machine_config_wrong_status": "Cette révision n'est plus un brouillon.",
+      "machine_config_keys_not_allowed": "Un administrateur d'organisation n'approuve que le nom et le lieu.",
+      "machine_config_self_approval": "Une clé de sûreté change : un autre administrateur Anheart que l'auteur doit approuver.",
+      "machine_config_safety_needs_admins": "Une clé de sûreté change : la révision doit être proposée par un administrateur Anheart."
+    },
+    "keys": {
+      "name": "Nom de la machine",
+      "location": "Lieu",
+      "SENSORS": "Voies acquises",
+      "MOTOR_PORT": "Port du variateur",
+      "MOTOR_SLAVE_ID": "Adresse Modbus",
+      "MODBUS_BAUDRATE": "Débit Modbus",
+      "MODBUS_PARITY": "Parité Modbus",
+      "MODBUS_TIMEOUT_S": "Délai Modbus (s)",
+      "MOTOR_REG_OFFSET": "Décalage des registres",
+      "ECG_SOURCE": "Source de l'ECG",
+      "BITALINO_ADDRESS": "Adresse du BITalino",
+      "PRESENCE_SOURCE": "Caméra",
+      "UI_PORT": "Port de la console",
+      "GEAR_RATIO": "Rapport du réducteur",
+      "RECORD_LOCAL_RETENTION_DAYS": "Garde des enregistrements (jours)",
+      "MOTOR_BACKEND": "Variateur",
+      "MOTOR_MAX_RPM": "Plafond moteur (tr/min)",
+      "ARM_RADIUS_M": "Rayon de l'occupant (m)",
+      "LEG_TIP_RADIUS_M": "Rayon de la pointe du pied (m)",
+      "PROGRAMS_ENABLED": "Séances programmées",
+      "OCCUPANCY_OCCUPIED_ENABLED": "Personne à bord"
+    },
+    "stale": "La configuration en vigueur a changé depuis l'ouverture du formulaire (révision {revision}) : rechargez avant de proposer.",
+    "reload": "Recharger la configuration en vigueur",
+    "organizationOnly": "Un administrateur d'organisation ne modifie que le nom et le lieu de la machine : les autres champs sont grisés.",
+    "consoleWords": "Les erreurs sont écrites dans les mots de la console.",
+    "changedFromApplied": "Ce que cette révision change par rapport à la révision appliquée :",
+    "changes": "Changements de la révision {revision}",
+    "reasonNeeded": "Indiquez un motif de 3 caractères au moins pour refuser.",
+    "locksAbove": "La révision appliquée ou celle en vigueur active {keys} au dessus du niveau de validation de la machine ({level}) : la console tient ces verrous à faux, proposez une révision qui les désactive."
+  },
   "errors": {
     "invalid_registry_field": "Valeur invalide dans le registre machine.",
     "contact_not_in_organization": "Le contact doit être membre actif de l'organisation de la machine.",
@@ -297,6 +403,15 @@
     "downgrade_reason_required": "La descente de niveau exige un motif de 3 à 500 caractères.",
     "occupied_requires_signed_medical_parameters": "La validation avec une personne à bord exige une clé médicale de production et une version des paramètres médicaux.",
     "machine_validation_insufficient": "Le niveau de validation de la machine ne permet pas cette configuration.",
+    "invalid_machine_config": "La console refuserait cette configuration : voir les erreurs du formulaire.",
+    "machine_config_not_found": "Cette révision de configuration n'existe pas, ou sa machine n'est plus accessible.",
+    "machine_config_wrong_status": "Cette révision n'est plus dans l'état qui permet cette action.",
+    "machine_config_unchanged": "Cette configuration est déjà celle envoyée à la machine.",
+    "machine_config_keys_not_allowed": "Un administrateur d'organisation ne modifie que le nom et le lieu de la machine.",
+    "machine_config_self_approval": "Une clé de sûreté change : un autre administrateur Anheart que l'auteur doit approuver.",
+    "machine_config_safety_needs_admins": "Une clé de sûreté change : la révision doit être proposée par un administrateur Anheart.",
+    "machine_config_reason_required": "Indiquez un motif de 3 à 500 caractères.",
+    "machine_config_stale": "La configuration en vigueur a changé depuis l'ouverture du formulaire : rechargez-la avant de proposer.",
     "programme_not_found": "Programme introuvable.",
     "programme_wrong_status": "Le programme n'est plus dans l'état que demande cette étape. Rechargez la page.",
     "programme_refused": "La validation du Pi refuse ce programme.",

@@ -3747,6 +3747,12 @@ Booléens acceptés : `1/true/yes/on` et `0/false/no/off`. Une valeur vide vaut
 « non renseignée ». Toutes les erreurs sont listées d'un coup, puis la console
 sort avec le code 2.
 
+Une console qui a appliqué une révision du tableau de bord (ANH-141) prend
+les clés de [`contracts/machine-config.json`](../contracts/machine-config.json)
+dans `data/config.applied.json` et ignore celles du `.env`
+([12.7](#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)) ; sans
+ce fichier, tout vient du `.env`, comme ci-dessous.
+
 | Clé | Défaut | Rôle | Contrainte |
 |---|---|---|---|
 | `MOTOR_BACKEND` | **aucun (obligatoire)** | `sim` (variateur simulé) ou `serial` (ATV320 réel) | autre valeur refusée |
@@ -4126,6 +4132,154 @@ dit avant le démarrage (`FAIL  MIN_RIDER_AGE is no longer read: the medical
 values are in config/medical_parameters.json, signed; remove this line`).
 L'installateur ne réécrit jamais une configuration existante.
 
+### 12.7 La configuration tenue par le tableau de bord (ANH-141)
+
+Depuis le contrat 1.15, la configuration d'une machine se règle sur sa fiche
+du site, et la console la reçoit signée. Le `.env` ne garde que ce qui
+appartient au lieu et au Pi. Ce qui descend du site reste une proposition : la
+console la revalide avec ses propres règles, et c'est elle qui décide de
+l'appliquer.
+
+**Ce qui vient du tableau de bord.** Les clés de
+[`contracts/machine-config.json`](../contracts/machine-config.json), en deux
+familles :
+
+| Famille | Clés | Appliquée |
+|---|---|---|
+| exploitation | `name`, `location`, `SENSORS`, `MOTOR_PORT`, `MOTOR_SLAVE_ID`, `MODBUS_BAUDRATE`, `MODBUS_PARITY`, `MODBUS_TIMEOUT_S`, `MOTOR_REG_OFFSET`, `ECG_SOURCE`, `BITALINO_ADDRESS`, `PRESENCE_SOURCE`, `UI_PORT`, `GEAR_RATIO`, `RECORD_LOCAL_RETENTION_DAYS` | au repos, d'elle même, par un redémarrage contrôlé |
+| sûreté | `MOTOR_BACKEND`, `MOTOR_MAX_RPM`, `ARM_RADIUS_M`, `LEG_TIP_RADIUS_M`, `PROGRAMS_ENABLED`, `OCCUPANCY_OCCUPIED_ENABLED` | au repos, quand un opérateur connecté à la console le confirme, puis par un redémarrage contrôlé |
+
+**Ce qui reste dans le `.env`.** Les `local_keys` du contrat, chacune avec sa
+raison : `MACHINE_API_KEY` et `CONVEX_URL` (le lien), `UI_HOST`,
+`DEVICE_TOKEN` (ou `UI_TOKEN`), `UI_TLS_CERT`, `UI_TLS_KEY` et `UI_TLS_NAMES`
+(le réseau du lieu et les fichiers du Pi), `STO_SOURCE` et `STO_DRIVE_INPUT`
+(le câblage du retour de sûreté, déclaré sur place, jamais depuis le site),
+`BITALINO_MIN_BATTERY_PCT`, `RECORD_ROOT`, `RECORD_MACHINE_ID`,
+`RECORD_ORGANIZATION_ID` et `RECORD_DRIVE_SDK_FRAMES`. Les clés lues hors du
+code Python ([12.3](#123-clés-lues-hors-du-code-python)) et le fichier
+médical signé ([12.6](#126-les-paramètres-médicaux-signés-anh-139)) ne
+changent pas.
+
+**Le chemin d'une révision** (`src/config_sync.py`).
+
+1. Un admin Anheart la propose sur la fiche de la machine. Une révision qui
+   change une clé de sûreté est approuvée par un second admin Anheart ; Convex
+   la refuse quand un verrou dépasse le niveau de validation du registre
+   ([securite.md, 6](securite.md#6-avant-la-première-personne-à-bord), point 8).
+2. La console interroge `GET /api/machine/config` **au repos seulement**
+   (aucune séance, aucun départ en attente ou en cours d'armement, aucun
+   lancement du site en main),
+   à son démarrage puis au plus une fois par minute, et **seulement quand
+   `RECORD_MACHINE_ID` est posé** : sans lui, elle ne saurait pas distinguer sa
+   configuration de celle d'une autre machine, signée par la même clé. Elle ne
+   demande, n'applique ni ne relit alors aucune configuration, tourne sur son
+   `.env`, et le dit une fois au journal et sur la carte de la page Sécurité
+   (`RECORD_MACHINE_ID non pose : aucune configuration du site n'est demandee
+   ni appliquee, la console tourne sur son .env`).
+3. Elle vérifie la signature avec la clé publique du catalogue avant de lire
+   quoi que ce soit, puis le texte : une configuration, de cette machine, pas
+   plus ancienne que la dernière
+   prise, dont l'empreinte est celle de ses valeurs, et pas une révision plus
+   ancienne que celle qu'elle applique.
+4. Elle revalide chaque valeur avec `load_local_config` et ses clés locales,
+   et les deux verrous contre le niveau signé avec la réponse :
+   `PROGRAMS_ENABLED` demande `auto`, `OCCUPANCY_OCCUPIED_ENABLED` demande
+   `occupied`. Une révision refusée laisse la configuration en vigueur telle
+   qu'elle est et revient au site une fois, avec sa raison
+   (`POST /api/machine/config/applied {revision, hash, refusal}`).
+5. Une révision qui ne change que des clés d'exploitation est appliquée
+   aussitôt. Une qui change une clé de sûreté attend, montrée sur la page
+   Sécurité de la console avec chaque changement (`CLE : avant -> après`),
+   jusqu'à ce qu'un opérateur connecté appuie sur **Appliquer la configuration
+   de sûreté** (`POST /api/config/apply`, [console-locale.md](console-locale.md#carte--configuration-du-tableau-de-bord--anh-141)).
+   À ce moment la console interroge le site de nouveau : si la révision n'est
+   plus celle en vigueur, ou si le niveau signé avec la nouvelle réponse ne la
+   permet plus, rien n'est appliqué.
+6. Appliquer, c'est écrire la réponse telle qu'elle est venue, signature
+   comprise, dans `data/config.applied.json` (sur le Pi
+   `/var/lib/anheart/data/config.applied.json`) en un remplacement atomique
+   (fichier privé, `fsync`, renommage), si la console est encore au repos une
+   fois la réponse reçue : un départ en cours d'armement à ce moment fait
+   attendre l'écriture jusqu'au repos suivant. Dès avant l'écriture et jusqu'au
+   redémarrage, tout
+   départ est refusé, manuel, de banc, programmé ou lancé du site
+   (`demarrage refuse : redemarrage pour la nouvelle configuration en cours`,
+   un lancement du site finit en échec avec cette raison) : aucune séance ne
+   s'arme sur les valeurs que la console quitte. Une écriture qui n'aboutit
+   pas, quelle qu'en soit la cause, lève ce refus ; une écriture réussie le
+   garde jusqu'au redémarrage, déjà demandé avant d'être dit au journal. Puis la console redémarre au repos :
+   code de sortie 75, écrit comme un arrêt propre, que le service relance
+   (`Restart=on-failure`). Chaque configuration appliquée est donc un
+   démarrage pour systemd : dix en 30 minutes, à la mise en service par
+   exemple, font avec le démarrage de la console onze démarrages, au delà de
+   `StartLimitBurst=10`, et laissent l'unité en échec, et
+   le Pi ne redémarre pas de lui même. Espacer les approbations, ou sinon
+   `sudo systemctl reset-failed anheart && sudo systemctl start anheart`
+   ([pi-image.md](pi-image.md#le-chien-de-garde)). Le processus qui démarre sur la révision le dit au
+   site (`POST /api/machine/config/applied {revision, hash}`) et en porte
+   l'empreinte dans chaque heartbeat (`config_hash`) et dans le document de
+   configuration de chaque enregistrement (`machine_config`, donc dans le
+   `config_hash` de son manifeste, [section 15](#15-lenregistrement-de-séance-boîte-noire-locale)).
+
+**À chaque démarrage.** La console relit `data/config.applied.json` et en
+vérifie de nouveau la signature, la machine, l'empreinte et les valeurs : le
+compte de la console peut écrire ses données, il ne peut pas signer pour
+Anheart.
+
+* Un fichier qui ne se vérifie pas : la console ne démarre pas, le dit
+  (`configuration: data/config.applied.json '...' : le retirer pour revenir aux
+  cles du .env`) et sort avec le code 2, sur lequel le service ne la relance
+  pas.
+* Une clé du tableau de bord encore réglée dans le `.env` est ignorée, et le
+  journal le dit (`configuration: 'MOTOR_MAX_RPM' du .env ignoree : la
+  configuration appliquee (data/config.applied.json) la fixe`).
+* Un verrou au dessus du niveau signé avec le fichier est mis à faux
+  (`configuration: 'PROGRAMS_ENABLED' au dessus du niveau de validation signe :
+  mis a faux`). Chaque réponse porte le niveau du registre, quelle que soit la
+  révision qu'elle porte : quand ce niveau ne permet plus un verrou de la
+  révision appliquée (un niveau abaissé), la console garde cette réponse à
+  côté, dans `data/config.level.json`, et redémarre au repos, ce verrou tenu à
+  faux ; la révision appliquée reste la même. C'est la barrière, pas un
+  changement de configuration : elle seule tient un verrou à faux sans
+  confirmation. Un `config.level.json` qui ne se vérifie pas tient les deux
+  verrous à faux.
+* Un verrou tenu à faux **ne revient jamais de lui même** quand le registre
+  relève le niveau : le rendre, c'est changer une clé de sûreté
+  (`PROGRAMS_ENABLED : false -> true`), qui attend la confirmation d'un
+  opérateur connecté, au repos, comme toute autre. De même, une révision qui
+  met un verrou à faux change une clé de sûreté : elle attend aussi cette
+  confirmation.
+* Une console hors ligne n'apprend pas qu'un niveau a été abaissé : ses
+  verrous restent au dernier niveau signé qu'elle a reçu, jusqu'à la réponse
+  suivante. Aucun âge maximal de ce niveau n'est imposé aujourd'hui.
+* Une console qui tourne sur son `.env` (aucune révision appliquée) n'a pas
+  cette barrière : ses verrous sont ceux de son `.env`, que le niveau signé ne
+  borne pas. C'était déjà le cas avant ANH-141 ; elle la reçoit avec la
+  première révision appliquée.
+
+**Ce que la page lit.** `GET /api/config` donne la révision appliquée et son
+empreinte, le nom et le lieu (pastille **Machine** de la barre latérale,
+`configuration .env` sans révision), la révision en attente et ses
+changements, le dernier refus et le redémarrage demandé.
+
+**Migration : une console sans `data/config.applied.json`.** Elle tourne sur
+son `.env` comme avant, et rien ne la bloque :
+
+* son démarrage ne change pas, son heartbeat dit `config_hash: null`, et la
+  fiche du site affiche « En attente de la machine » tant qu'une révision
+  approuvée n'est pas appliquée (« appliquée ≠ approuvée » est réservé à une
+  révision appliquée dont le heartbeat donne une autre empreinte) ;
+* sans lien (`MACHINE_API_KEY` vide), sans `RECORD_MACHINE_ID`, sans
+  révision approuvée, ou face à un serveur antérieur à 1.15 (404), rien ne
+  descend ;
+* la première révision approuvée est comparée à ce que la console applique de
+  son `.env` : les clés d'exploitation qui changent passent d'elles mêmes au
+  repos, une clé de sûreté qui change attend un opérateur à la console ;
+* revenir au `.env` : arrêter la console, retirer
+  `/var/lib/anheart/data/config.applied.json` (et `config.level.json` s'il
+  est là), la redémarrer. Tant qu'une
+  révision approuvée existe sur le site, elle redescend au repos suivant.
+
 ---
 
 ## 13. Le contrat de code strict et la gate
@@ -4210,23 +4364,24 @@ jour-là ; la durée varie).
 ## 14. Versions et compatibilité
 
 `src/contract.py`. Le contrat entre la console et Convex porte un numéro
-`majeure.mineure` (aujourd'hui `1.12`). Sa définition unique est
+`majeure.mineure` (aujourd'hui `1.15`). Sa définition unique est
 [`contracts/machine-api.json`](../contracts/machine-api.json) à la racine du
 dépôt ; la description complète des règles est dans
 [convex.md](convex.md#11-versions-et-compatibilité).
 
 Ce que fait la console :
 
-* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.12`. Il est posé sur
+* **Chaque requête** porte l'en-tête `X-Anheart-Contract: 1.15`. Il est posé sur
   le client HTTP lui-même, pas requête par requête : aucune ne peut partir sans.
 * **Chaque heartbeat** porte `software_version`, `contract_version`,
   `medical_parameters_version` et `config_hash`. `medical_parameters_version`
   est la version du fichier médical quand sa signature a été vérifiée au
   démarrage (`0.1.0` pour le fichier livré), `null` sinon : un fichier non
   signé ne garantit aucune version ([12.6](#126-les-paramètres-médicaux-signés-anh-139)).
-  `config_hash` vaut `null` : la console n'envoie pas encore d'empreinte de
-  configuration. Le champ existait déjà dans le contrat (`string|null`) : sa
-  valeur ne change ni la version du contrat ni ce que Convex accepte.
+  `config_hash` est l'empreinte de la révision de configuration du tableau de
+  bord que la console applique (le `hash` du texte signé,
+  [12.7](#127-la-configuration-tenue-par-le-tableau-de-bord-anh-141)), `null`
+  pour une console qui tourne sur son `.env`.
 * **Chaque réponse de heartbeat** annonce `server_contract_version`. Sans version
   lisible de la même majeure, la pastille Serveur ne peut pas lire `joignable`,
   même sans programmes. Une interrogation réussie ne remplace pas cette preuve.
@@ -5028,7 +5183,9 @@ porte ni le nom ni l'identifiant du compte sous lequel tourne la console.
   `/var/lib/anheart`.
 - `config_hash` est un SHA-256 de la configuration appliquée (géométrie,
   plafonds, paliers cardiaques et autres limites de sécurité, limites de
-  mouvement, âge minimum, empreinte et verdict du fichier médical, sources) ;
+  mouvement, âge minimum, empreinte et verdict du fichier médical, sources,
+  et, depuis ANH-141, la révision du tableau de bord appliquée :
+  `machine_config` avec `revision` et `config_hash`, absent sur un `.env`) ;
   ni la clé machine ni le jeton de la console n'y entrent.
 - `medical_parameters_version` est la version du fichier médical signé
   (`0.1.0` aujourd'hui) ; quand sa signature ne se vérifie pas,
