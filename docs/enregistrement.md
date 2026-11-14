@@ -1065,11 +1065,18 @@ fragment de moins de 512 octets après le dernier membre, sans bloc de fin,
 sont refusés aussi. Les tailles négatives, tailles non nulles hors fichiers
 ordinaires, en-têtes invalides, erreurs de décompression, et toute erreur de
 valeur ou d'index que `tarfile` lève sur un en-tête donnent un refus nommé,
-jamais une trace d'exception. L'import refuse, avant que le lecteur ne
-décode et ne garde les blocs ECG, plus de 39 000 blocs ou plus d'octets
-décompressés (la taille que chaque bloc gzip annonce) que n'en tient la séance
-la plus longue, deux heures de programme et dix minutes, six voies à 1000 Hz
-(`MAX_ECG_BYTES`, environ 97 Mio). Il retire ensuite sa copie
+jamais une trace d'exception. Le lecteur partagé (`read`), par où passent
+l'import, le rejeu et le jugement de bibliothèque, refuse avant de décoder et
+de garder les blocs ECG plus de 39 000 blocs ou plus d'octets décompressés (la
+taille que chaque bloc gzip annonce) que n'en tient la séance la plus longue :
+deux heures de programme et dix minutes, cinq blocs de 200 échantillons par
+seconde, six voies de deux octets et 512 octets d'en-tête par bloc
+(`MAX_RAW_BYTES`, 39 000 × 2 912 = 113 568 000 octets ; un vrai enregistrement
+de six voies de cette durée en tient environ 102,8 Mo, avec ses en-têtes de
+235 octets). Le refus est `raw_blocks_above_longest_record` ou
+`raw_bytes_above_longest_record`. Un bloc décodé prend environ vingt fois ses
+octets en mémoire : lire un enregistrement à cette borne demande environ
+2,3 Go, comme un vrai de cette durée. L'import retire ensuite sa copie
 temporaire. Le serveur utilise le reader
 partagé et le viewer affiche les avertissements de complétude dans sa zone
 source existante. `/?trace=out/ancienne-trace.jsonl` garde la lecture du

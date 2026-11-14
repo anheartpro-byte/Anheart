@@ -4422,9 +4422,12 @@ qui prenaient des gigaoctets sont refusées avec une mémoire de quelques Mio,
 vérifiée par `tracemalloc` dans les tests.
 Une taille négative, une taille non nulle hors fichier ordinaire, un en-tête
 invalide, une erreur de décompression, ou une erreur de valeur ou d'index que
-`tarfile` lève sur un en-tête, donne un refus nommé. L'import borne aussi
-l'ECG avant de le lire : 39 000 blocs et `MAX_ECG_BYTES` décompressés au plus,
-ce que tient la séance la plus longue.
+`tarfile` lève sur un en-tête, donne un refus nommé. Le lecteur partagé borne
+aussi l'ECG avant de le décoder, pour l'import, le rejeu `--replay` et le
+jugement de bibliothèque : 39 000 blocs et `MAX_RAW_BYTES` (113 568 000
+octets) décompressés au plus, ce que tient la séance la plus longue, à six
+voies. Un enregistrement à cette borne demande environ 2,3 Go de mémoire pour
+être rejoué, comme un vrai de cette durée.
 Le compte des membres et leurs tailles effectives sont vérifiés avant
 d'écrire le membre suivant. L'import, le rejeu,
 le jugement de bibliothèque et le visualiseur utilisent cette même extraction.
