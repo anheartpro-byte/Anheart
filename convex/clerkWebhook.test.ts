@@ -109,8 +109,13 @@ async function send(t: Test, value: unknown, id = "msg_qa"): Promise<Response> {
 describe("Clerk webhook signature and persistence", () => {
   it("accepts organizations with slugs disabled in Clerk", async () => {
     const t = makeTest();
-    expect((await send(t, event("organization.created", { ...org, slug: null }))).status).toBe(204);
-    expect((await t.run((ctx) => ctx.db.query("organizations").unique()))?.slug).toBe(org.id);
+    expect(
+      (await send(t, event("organization.created", { ...org, slug: null })))
+        .status,
+    ).toBe(204);
+    expect(
+      (await t.run((ctx) => ctx.db.query("organizations").unique()))?.slug,
+    ).toBe(org.id);
   });
   it("retries verification failures without recording or linking the event", async () => {
     const t = makeTest();
@@ -562,17 +567,13 @@ describe("membership boundaries", () => {
         userId: w.patient,
         firstName: "Changed",
       }),
-    ).rejects.toThrow(
-      "shared_profile_admin_only",
-    );
+    ).rejects.toThrow("shared_profile_admin_only");
     await expect(
       as(w.t, "manager").mutation(api.training.setUserPhysiology, {
         userId: w.patient,
         hrMax: 180,
       }),
-    ).rejects.toThrow(
-      "shared_profile_admin_only",
-    );
+    ).rejects.toThrow("shared_profile_admin_only");
     await as(w.t, "admin").mutation(api.training.setUserPhysiology, {
       userId: w.patient,
       hrMax: 180,
@@ -640,7 +641,11 @@ describe("ANH-249 the schemas of a Clerk payload, under zod 4.6", () => {
     });
     expect(
       parseClerkEvent(event("organization.deleted", { id: org.id })),
-    ).toMatchObject({ kind: "organization", deleted: true, organization: { id: org.id } });
+    ).toMatchObject({
+      kind: "organization",
+      deleted: true,
+      organization: { id: org.id },
+    });
     for (const type of ["user.deleted", "organization.deleted"])
       for (const data of [{}, { id: "" }, { id: "x".repeat(257) }])
         expect(parseClerkEvent(event(type, data))).toBeNull();
@@ -651,6 +656,13 @@ describe("ANH-249 the schemas of a Clerk payload, under zod 4.6", () => {
       parseClerkEvent(event("organization.created", { ...org, name }));
     expect(named("x".repeat(1024))).toMatchObject({ kind: "organization" });
     expect(named("x".repeat(1025))).toBeNull();
+    // In characters (code points), not UTF-16 units, as zod 4.6 counts them.
+    for (const letter of ["é", "𝒜"]) {
+      expect(named(letter.repeat(1024))).toMatchObject({
+        kind: "organization",
+      });
+      expect(named(letter.repeat(1025))).toBeNull();
+    }
   });
 
   it("takes the public identifier as the email only when it is an address", () => {

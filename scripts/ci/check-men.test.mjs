@@ -262,6 +262,13 @@ const scenarios = [
   { name: "R1b refuses a middle dot separator", files: { "menaces.md": open + "ANH·999\n" }, status: 1, message: spellingMessage },
   { name: "R1b refuses linked digits after a hyphen", files: { "menaces.md": open + "ANH-[999](x.md)\n" }, status: 1, message: spellingMessage },
   { name: "R1b refuses a linked hyphen before the digits", files: { "menaces.md": open + "ANH[-](x.md)999\n" }, status: 1, message: spellingMessage },
+  // ANH-229 C-12: a destination with no `.`, `/`, `#` or `:` no longer hides the name it splits.
+  { name: "C-12 refuses a linked separator whose destination is a bare word", files: { "menaces.md": open + "anh[-](x)180\n" }, status: 1, message: spellingMessage },
+  { name: "C-12 refuses linked letters whose destination is a bare word", files: { "menaces.md": open + "[ANH](x) 180\n" }, status: 1, message: spellingMessage },
+  // A registered name followed by a linked digit shows another number than the one read.
+  { name: "refuses a registered ticket followed by a linked digit", files: { "menaces.md": open + "ANH-180[0](x)\n" }, status: 1, message: /ticket name followed by a bracket, which can carry more of its digits: "ANH-180\["/ },
+  { name: "refuses a registered ticket followed by an image", files: { "menaces.md": open + "ANH-180![0](x.png)\n" }, status: 1, message: /ticket name followed by a bracket, which can carry more of its digits: "ANH-180!\["/ },
+  { name: "accepts a registered ticket as a whole link label", files: { "menaces.md": open + `[ANH-180](${url180})\n` }, status: 0 },
   { name: "refuses an opening parenthesis separator", files: { "menaces.md": open + "ANH(999\n" }, status: 1, message: spellingMessage },
   { name: "refuses a closing parenthesis separator", files: { "menaces.md": open + "ANH)999\n" }, status: 1, message: spellingMessage },
 ];

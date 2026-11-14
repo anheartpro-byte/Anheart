@@ -253,20 +253,30 @@ La table est **append-only** : seule `audit()` y insère une ligne, dans la
 même transaction que l'effet ; aucune fonction ne la modifie ni ne la
 supprime. [`convex/auditLog.test.ts`](../convex/auditLog.test.ts) énumère les
 fonctions enregistrées dans tout `convex/**/*.ts`, hors fichiers générés,
-tests, fixtures, setup et matrices. Le test cherche le littéral `audit_log`
-et interdit toute assertion de type (`as ...` ou `<Type>...`, y compris
-`GenericId<...>`) dans l'identifiant passé à `ctx.db.delete`, `patch` ou
-`replace`. Il refuse aussi ces écritures sur un alias déclaré directement
-par `const db = ctx.db`, quel que soit son nom. Cette analyse de source
-ne constitue pas une preuve générale : elle ne suit pas le flux des valeurs.
-Un identifiant non typé, une assertion faite avant l'appel, un alias obtenu
-par affectation, déstructuration ou alias successifs, une méthode extraite,
-un accès calculé (`db[method]`) ou un nom de table construit peut lui échapper.
+tests, fixtures, setup et matrices. Le test cherche le littéral `audit_log` :
+un module qui le nomme, hors `lib/audit.ts` et le schéma, n'enregistre que
+des requêtes et n'appelle ni `patch`, ni `replace`, ni `delete` ; aucune
+écriture ne nomme la table, nulle part ; `lib/audit.ts` n'y fait qu'insérer.
+Ce sont les protections fortes. S'y ajoute une garde de motif sur les
+écritures `delete`, `patch` et `replace` de la base : elle refuse toute
+assertion de type (`as ...` ou `<Type>...`, y compris `GenericId<...>`) dans
+leur identifiant, et toute écriture sur un alias de la base déclaré par
+`const w = ctx.db`, `ctx["db"]` ou une déstructuration (`const { db } = ctx`,
+renommée ou dans un paramètre), vu dans la seule portée qui le déclare ; elle
+lit `ctx.db["patch"]` et refuse un appel par une clé calculée
+(`ctx.db[name]`). C'est une vérification de motifs, pas une preuve
+générale : elle ne suit pas le flux des valeurs. Lui échappent notamment un
+identifiant non typé, une assertion faite avant l'appel, `ctx.db` passé en
+paramètre à une fonction, `ctx.db` entre parenthèses, converti (`as`) ou
+assuré non nul (`!`), un appel par `Reflect.apply` ou `.call`, une méthode
+extraite (`const { patch } = ctx.db`), un alias obtenu par affectation
+(`let w; w = ctx.db`) ou par un autre alias, l'opérateur virgule, et un nom
+de table construit.
 **Aucune purge n'existe.** La rétention envisagée est de **5 ans, à
 confirmer par ANH-87a** ; rien n'est supprimé, ni avant ni après cinq ans,
 tant que cette durée et sa mise en œuvre ne sont pas décidées. La portée de
 l'immutabilité est précisée dans
-[securite.md §14](securite.md).
+[securite.md §14](securite.md#14-journal-daudit-anh-167).
 
 ### `users` : comptes
 
@@ -4124,6 +4134,11 @@ dans `absorbs.name` :
 npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{"apply": true, "expectedName": "<absorbs.name>"}'
 ```
 
+Le nom est écrit en JSON, entre guillemets, dans une chaîne que le shell lit
+entre apostrophes : une apostrophe du nom s'y écrit `'\''` (« L'Atelier »
+devient `"expectedName": "L'\''Atelier"`), un guillemet `\"` et une barre
+oblique inverse `\\`.
+
 Sans `expectedName`, ou avec un autre nom, elle refuse sans rien écrire.
 Sinon, en une seule transaction :
 
@@ -4157,7 +4172,12 @@ La description comme l'application refusent, sans rien écrire :
   gestionnaire et une machine ou un patient, invitation de patient. Le message
   nomme la table. Quelqu'un a alors travaillé dans cette organisation, et
   rattacher ou supprimer ces lignes demande de les examiner une à une : aucune
-  procédure n'est écrite pour ce cas, qui revient au responsable produit.
+  procédure n'est écrite pour ce cas, qui revient au responsable produit ;
+- si un même compte a deux appartenances dans la ligne du webhook, ou si un
+  membre de cette ligne en a deux dans l'organisation par défaut (Clerk n'en
+  donne qu'une par organisation) : la réparation ne sait pas laquelle garder
+  ni dans laquelle fusionner. N'en garder qu'une, à la main, puis relancer la
+  description.
 
 Relancée après une réparation, ou quand l'ordre de l'amorçage a été suivi,
 elle répond `status: "nothing_to_repair"` et ne change rien. Comme la
@@ -4602,7 +4622,7 @@ stockés comme avant ; le passager peut toujours donner le sien depuis le
 site.
 
 **Retour arrière : ne pas redescendre Convex sous `1.7` tant qu'une console
-`1.7` est en service.** La console décide d'envoyer d'après le dernier
+`1.7` ou plus récente est en service.** La console décide d'envoyer d'après le dernier
 heartbeat : pendant un intervalle de heartbeat, elle croirait encore parler à
 un serveur `1.7`, et un retour envoyé à ce moment finirait dans
 `training_events`.

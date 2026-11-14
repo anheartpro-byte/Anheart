@@ -1235,9 +1235,17 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         action: "synthetic-private-incident-action",
       });
       return [
-        site(w, "incident.analyzed", incidentId, "incident", "manager", w.orgA, {
-          machineId: w.machine,
-        }),
+        site(
+          w,
+          "incident.analyzed",
+          incidentId,
+          "incident",
+          "manager",
+          w.orgA,
+          {
+            machineId: w.machine,
+          },
+        ),
       ];
     });
   },
@@ -1278,9 +1286,17 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
         { machineId: w.machine, ballastKg: 80 },
       );
       return [
-        site(w, "session.bench_launched", sessionId, "session", "manager", w.orgA, {
-          machineId: w.machine,
-        }),
+        site(
+          w,
+          "session.bench_launched",
+          sessionId,
+          "session",
+          "manager",
+          w.orgA,
+          {
+            machineId: w.machine,
+          },
+        ),
       ];
     });
   },
@@ -1551,6 +1567,13 @@ const SCENARIOS: Record<string, (w: World) => Promise<Doc<"audit_log">[]>> = {
     }),
 };
 
+/** The three internal functions run by the operator with the deploy key. */
+const OPERATOR_SCENARIOS = new Set([
+  "machineKeys.createKeyByOperator",
+  "machineKeys.revokeKeyByOperator",
+  "medicalParametersStore.insertVersion",
+]);
+
 describe("ANH-167 T02-a completeness through registered entry points", () => {
   const observedActions = new Set<AuditAction>();
   it("has exactly the sensitive mutation keys", () => {
@@ -1580,6 +1603,12 @@ describe("ANH-167 T02-a completeness through registered entry points", () => {
       }
       if (name === "machines.createMachine")
         expect(new Set(written.map((row) => row.requestId)).size).toBe(1);
+      // B-3: the rows each mutation really writes, not only its source text,
+      // carry `operator` for the three operator functions and for no other.
+      expect(
+        written.some((row) => row.source === "operator"),
+        name,
+      ).toBe(OPERATOR_SCENARIOS.has(name));
     },
   );
   it("observes every closed action in a sensitive mutation scenario", () => {
@@ -1867,7 +1896,9 @@ describe("ANH-167 C2 regression effects", () => {
     const page = await as(w.t, "orgAdmin").query(api.audit.list, {
       paginationOpts: { cursor: null, numItems: 200 },
     });
-    const review = page.page.find((row) => row.action === "registry.review_added");
+    const review = page.page.find(
+      (row) => row.action === "registry.review_added",
+    );
     for (const sentinel of [version, "187", "private medical version"])
       for (const representation of [
         JSON.stringify(written),

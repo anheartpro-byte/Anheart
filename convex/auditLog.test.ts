@@ -76,6 +76,31 @@ function registrations(mod: Record<string, unknown>): [string, Registration][] {
   );
 }
 
+/** The name `a.name` or `a["name"]` reads, or undefined for anything else. */
+function readName(node: ts.Node): string | undefined {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  if (
+    ts.isElementAccessExpression(node) &&
+    ts.isStringLiteralLike(node.argumentExpression)
+  )
+    return node.argumentExpression.text;
+  return undefined;
+}
+
+/** The block, function or file a name declared at `node` is seen in. */
+function scopeOf(node: ts.Node): ts.Node {
+  let scope = node.parent;
+  while (
+    !ts.isBlock(scope) &&
+    !ts.isSourceFile(scope) &&
+    !ts.isFunctionLike(scope)
+  )
+    scope = scope.parent;
+  return scope;
+}
+
+const WRITES = ["delete", "patch", "replace"];
+
 function unsafeDatabaseIdCasts(text: string): string[] {
   const source = ts.createSourceFile(
     "source.ts",
@@ -84,32 +109,69 @@ function unsafeDatabaseIdCasts(text: string): string[] {
     true,
   );
   const unsafe: string[] = [];
-  const aliases = new Set<string>();
+  // Each alias of the database is seen only in the scope that declares it, so
+  // a name another function gives to something else is not taken for it.
+  const aliases = new Map<ts.Node, Set<string>>();
+  const alias = (name: ts.Identifier) => {
+    const scope = scopeOf(name);
+    aliases.set(scope, new Set([...(aliases.get(scope) ?? []), name.text]));
+  };
+  const aliased = (name: ts.Identifier) => {
+    for (let scope: ts.Node | undefined = name; scope; scope = scope.parent)
+      if (aliases.get(scope)?.has(name.text)) return true;
+    return false;
+  };
   const findAliases = (node: ts.Node) => {
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
       node.initializer &&
-      ts.isPropertyAccessExpression(node.initializer) &&
-      node.initializer.name.text === "db"
+      readName(node.initializer) === "db"
     )
-      aliases.add(node.name.text);
+      alias(node.name);
+    // `const { db } = ctx`, `const { db: writer } = ctx`, `({ db }: Ctx) =>`.
+    if (
+      ts.isBindingElement(node) &&
+      ts.isObjectBindingPattern(node.parent) &&
+      ts.isIdentifier(node.name) &&
+      (node.propertyName ?? node.name).getText(source).replace(/["'`]/g, "") ===
+        "db"
+    )
+      alias(node.name);
     ts.forEachChild(node, findAliases);
   };
   findAliases(source);
   const visit = (node: ts.Node) => {
+    const callee = ts.isCallExpression(node) ? node.expression : undefined;
+    const method = callee === undefined ? undefined : readName(callee);
+    const receiver =
+      callee !== undefined &&
+      (ts.isPropertyAccessExpression(callee) ||
+        ts.isElementAccessExpression(callee))
+        ? callee.expression
+        : undefined;
+    const onDatabase =
+      receiver !== undefined &&
+      (readName(receiver) === "db" ||
+        (ts.isIdentifier(receiver) && aliased(receiver)));
     if (
       ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      ["delete", "patch", "replace"].includes(node.expression.name.text)
+      onDatabase &&
+      callee !== undefined &&
+      ts.isElementAccessExpression(callee) &&
+      method === undefined
     ) {
-      const receiver = node.expression.expression;
-      if (ts.isIdentifier(receiver) && aliases.has(receiver.text)) {
+      // `ctx.db[name](...)`: which method it calls cannot be read.
+      unsafe.push(node.getText(source));
+    } else if (
+      ts.isCallExpression(node) &&
+      receiver !== undefined &&
+      method !== undefined &&
+      WRITES.includes(method)
+    ) {
+      if (ts.isIdentifier(receiver) && aliased(receiver)) {
         unsafe.push(node.getText(source));
-      } else if (
-        ts.isPropertyAccessExpression(receiver) &&
-        receiver.name.text === "db"
-      ) {
+      } else if (readName(receiver) === "db") {
         const id =
           ts.isStringLiteral(node.arguments[0]) && node.arguments.length > 1
             ? node.arguments[1]
@@ -464,18 +526,60 @@ describe("ANH-167 T01-b append-only and T01-c no purge", () => {
       for (const argument of [
         'id as GenericId<"users">',
         '(<GenericId<"users">>id)',
-        'id as CustomIdentifier',
-        '(id as unknown) as CustomIdentifier',
+        "id as CustomIdentifier",
+        "(id as unknown) as CustomIdentifier",
       ])
         for (const prefix of ["", '"users", '])
           expect(
-            unsafeDatabaseIdCasts(`ctx.db.${method}(${prefix}${argument}, {});`),
+            unsafeDatabaseIdCasts(
+              `ctx.db.${method}(${prefix}${argument}, {});`,
+            ),
           ).not.toEqual([]);
       expect(
         unsafeDatabaseIdCasts(
           `// const db = ctx.db; db.${method}(id as CustomIdentifier);\nctx.db.${method}(id, { text: "as CustomIdentifier", db: "ctx.db" });`,
         ),
       ).toEqual([]);
+    },
+  );
+
+  it.each(["delete", "patch", "replace"])(
+    "B-2 rejects a write reached by destructuring or by brackets for %s",
+    (method) => {
+      for (const write of [
+        `const { db } = ctx; db.${method}(id, {});`,
+        `const { db: writer } = ctx; writer.${method}(id, {});`,
+        `const { "db": writer } = ctx; writer.${method}(id, {});`,
+        `const writer = ctx["db"]; writer.${method}(id, {});`,
+        `async function f({ db }: Ctx) { await db.${method}(id, {}); }`,
+        `ctx.db["${method}"](id as never, {});`,
+        `ctx["db"].${method}(id as never, {});`,
+        `ctx["db"]["${method}"]("users", id as never, {});`,
+        `ctx.db[name](id, {});`,
+        `const writer = ctx.db; writer[name](id, {});`,
+      ])
+        expect(unsafeDatabaseIdCasts(write), write).not.toEqual([]);
+      expect(
+        unsafeDatabaseIdCasts(
+          `ctx.db["${method}"](id, {}); ctx["db"].${method}("users", id, {});`,
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["delete", "patch", "replace"])(
+    "B-2 reads an alias only in the scope that declares it, for %s",
+    (method) => {
+      const elsewhere = `function a(ctx: Ctx) { const db = ctx.db; return db.get(id); }
+function b(db: Map<string, number>) { db.${method}("key"); }
+function c() { const writer = new Map(); writer.${method}("key"); }
+function d(ctx: Ctx) { const { db: writer } = ctx; return writer.get(id); }`;
+      expect(unsafeDatabaseIdCasts(elsewhere)).toEqual([]);
+      expect(
+        unsafeDatabaseIdCasts(
+          `function a(ctx: Ctx) { const db = ctx.db; if (ok) { db.${method}(id, {}); } }`,
+        ),
+      ).not.toEqual([]);
     },
   );
 

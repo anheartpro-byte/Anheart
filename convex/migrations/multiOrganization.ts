@@ -21,6 +21,9 @@
  *
  *     npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{}'
  *     npx convex run migrations/multiOrganization:repairDuplicatedAnheartOrganization '{"apply": true, "expectedName": "..."}'
+ *
+ * The name sits in single quotes for the shell: an apostrophe in it is
+ * written `'\''` there (docs/convex.md, Sortir de deux organisations Anheart).
  */
 import { ConvexError, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "../_generated/server";
@@ -107,6 +110,18 @@ export function duplicateHoldsData(table: string): string {
     `automatically (docs/convex.md, Sortir de deux organisations Anheart).`
   );
 }
+
+/**
+ * One account holds two memberships of the webhook's row, or a member of it
+ * two of the default organisation. Clerk gives an account one membership per
+ * organisation, so the repair does not know which one to keep or to merge
+ * into, and moving both would give the account two of the default one.
+ */
+export const DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT =
+  "An account holds two memberships of one organisation: of the row the " +
+  "Clerk webhook created for the Anheart organisation, or of the default " +
+  "organisation. Nothing was changed: keep one of them by hand " +
+  "(docs/convex.md, Sortir de deux organisations Anheart).";
 
 /**
  * Tables whose rows belong to an organisation and would be lost with it. The
@@ -315,6 +330,10 @@ async function planRepair(ctx: MutationCtx) {
     .query("memberships")
     .withIndex("by_organization", (q) => q.eq("organizationId", duplicate._id))
     .collect();
+  const members = new Set(memberships.map((membership) => membership.userId));
+  if (members.size !== memberships.length) {
+    throw new ConvexError(DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT);
+  }
   // A member the default organisation already has keeps that membership.
   const merges: Array<{
     membership: Doc<"memberships">;
@@ -322,9 +341,19 @@ async function planRepair(ctx: MutationCtx) {
   }> = [];
   const moves: Array<Doc<"memberships">> = [];
   for (const membership of memberships) {
-    const held = await findMembership(ctx, membership.userId, anheart._id);
-    if (held === null) moves.push(membership);
-    else merges.push({ membership, held });
+    // Two here would make a unique() read throw a raw error: refused by name.
+    const held = await ctx.db
+      .query("memberships")
+      .withIndex("by_user_and_organization", (q) =>
+        q.eq("userId", membership.userId).eq("organizationId", anheart._id),
+      )
+      .take(2);
+    if (held.length > 1) {
+      throw new ConvexError(DUPLICATE_MEMBERSHIPS_OF_ONE_ACCOUNT);
+    }
+    const [kept] = held;
+    if (kept === undefined) moves.push(membership);
+    else merges.push({ membership, held: kept });
   }
   const users = await ctx.db
     .query("users")

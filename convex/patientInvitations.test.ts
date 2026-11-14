@@ -391,21 +391,30 @@ describe("Clerk response verification", () => {
 
 describe("ANH-249 the schemas of an invitation, under zod 4.6", () => {
   it("keeps the length limits of the names and of the address", () => {
-    const valid = (args: typeof input) => invitationInput.safeParse(args).success;
+    const valid = (args: typeof input) =>
+      invitationInput.safeParse(args).success;
     expect(
       invitationInput.parse({ ...input, firstName: ` ${"a".repeat(100)} ` })
         .firstName,
     ).toBe("a".repeat(100));
     expect(valid({ ...input, firstName: "a".repeat(101) })).toBe(false);
     expect(valid({ ...input, lastName: "a".repeat(101) })).toBe(false);
+    // Counted in characters (code points), not in UTF-16 units: an accented
+    // letter is one, and so is a character outside the basic plane.
+    for (const letter of ["é", "𝒜"]) {
+      expect(valid({ ...input, firstName: letter.repeat(100) })).toBe(true);
+      expect(valid({ ...input, lastName: letter.repeat(100) })).toBe(true);
+      expect(valid({ ...input, firstName: letter.repeat(101) })).toBe(false);
+      expect(valid({ ...input, lastName: letter.repeat(101) })).toBe(false);
+    }
     const domain = (last: number) =>
       `${"b".repeat(60)}.${"c".repeat(60)}.${"d".repeat(last)}.com`;
     expect(valid({ ...input, email: `${"a".repeat(64)}@${domain(63)}` })).toBe(
       true,
     );
-    expect(
-      valid({ ...input, email: `${"a".repeat(65)}@${domain(63)}` }),
-    ).toBe(false);
+    expect(valid({ ...input, email: `${"a".repeat(65)}@${domain(63)}` })).toBe(
+      false,
+    );
   });
 
   it("refuses a provider answer that is not an invitation, and a page that is not a list", async () => {
