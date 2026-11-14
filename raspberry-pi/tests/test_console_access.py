@@ -14,6 +14,7 @@ import errno
 import functools
 import hashlib
 import json
+import logging
 import os
 import threading
 from collections.abc import Mapping
@@ -408,6 +409,25 @@ def test_a_replaced_file_is_flushed_then_its_directory(
     monkeypatch.setattr(console_access, "DIRECTORY_SYNC", False)
     assert replace_file(path, b"[]") == Ok(None)
     assert flushed == [path.with_name(".kept.json.tmp")]
+
+
+def test_a_directory_not_flushed_after_the_rename_is_said_and_the_file_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The file is in place: the caller is told so (a configuration then restarts on
+    it), and the log names the error, never the path."""
+    path = tmp_path / "data" / "kept.json"
+
+    def flush(target: Path) -> None:
+        if target == path.parent:
+            raise OSError(errno.EIO, "directory flush refused")
+
+    monkeypatch.setattr(console_access, "fsync_path", flush)
+    with caplog.at_level(logging.WARNING, logger="src.console_access"):
+        assert replace_file(path, b"{}") == Ok(None)
+    assert path.read_bytes() == b"{}"
+    assert "kept file replaced, its directory not flushed: OSError:EIO" in caplog.text
+    assert str(tmp_path) not in caplog.text
 
 
 def test_a_kept_file_is_read_only_when_it_is_a_small_regular_file(tmp_path: Path) -> None:

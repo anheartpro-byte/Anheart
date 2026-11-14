@@ -415,7 +415,8 @@ _STORED_LOCKOUT: Final[TypeAdapter[StoredLockout]] = TypeAdapter(StoredLockout)
 def replace_file(path: Path, content: bytes) -> Result[None, str]:
     """Replace ``path``: a private file, flushed, renamed, then its directory flushed, so
     that a power cut after the call cannot bring the old file back. Blocking, never
-    raises."""
+    raises. A directory that cannot be flushed once the file is renamed is logged, and
+    the call succeeds: the file is in place, and the next start reads it."""
     temporary = path.with_name(f".{path.name}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -423,12 +424,17 @@ def replace_file(path: Path, content: bytes) -> Result[None, str]:
         create_private(temporary, content)
         fsync_path(temporary)
         temporary.replace(path)
-        if DIRECTORY_SYNC:
-            fsync_path(path.parent)
     except OSError as error:
         with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
         return Err(describe_os_error(error))
+    if DIRECTORY_SYNC:
+        try:
+            fsync_path(path.parent)
+        except OSError as error:
+            _logger.warning(
+                "kept file replaced, its directory not flushed: %s", describe_os_error(error)
+            )
     return Ok(None)
 
 
