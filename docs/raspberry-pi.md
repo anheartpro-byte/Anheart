@@ -1608,7 +1608,7 @@ affiche et ne les modifie pas.
 * **Séance manuelle avec personne à bord** : le passager nommé doit être dans la
   liste, avoir une année de naissance réglée sur le site, et un âge d'au moins
   `min_rider_age` du fichier médical, compté comme pour un programme (`roster.age_of`,
-  `LocalPanel._on_board_refusal`). La FC max n'est pas demandée : rien n'y est
+  `LocalPanel._cleared_on_board`). La FC max n'est pas demandée : rien n'y est
   ajusté en manuel.
 * **Séance déclarée** : une séance lancée ici est envoyée à
   `/api/machine/training/local` avec `userId` et, tant que la console l'a en

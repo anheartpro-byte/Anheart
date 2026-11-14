@@ -18,12 +18,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import httpx
 import pytest
 
 from src.control_surface import LOCAL_SUBJECT, StartManual, StartRefusal, StartSession
+from src.local_panel import OnBoardRefusal, TooYoung, describe_on_board_refusal
 from src.result import Ok, Result
 from src.roster import (
     ROSTER_MAX_AGE,
@@ -544,3 +545,13 @@ async def test_a_manual_session_on_board_needs_a_birth_year_not_a_max_heart_rate
     assert state_of(recorded) is RuntimeState.RUNNING, recorded.rig.refusals()
     assert recorded.recording().manifest.subject_id == NO_HR_MAX.user_id
     await recorded.rig.panel.close()
+
+
+def test_a_refusal_on_board_is_said_by_its_kind_and_none_other_is_made_up() -> None:
+    """ANH-143: the age sentence for :class:`TooYoung`; a refusal of no known kind is a bug."""
+    assert describe_on_board_refusal(TooYoung(age=12, minimum=18)) == (
+        "demarrage refuse : passager de 12 ans, minimum 18 ans "
+        "(min_rider_age des parametres medicaux)"
+    )
+    with pytest.raises(AssertionError):
+        describe_on_board_refusal(cast(OnBoardRefusal, object()))

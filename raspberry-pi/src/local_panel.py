@@ -278,6 +278,15 @@ from src.record.session import (
 from src.record_uplink import NOT_LINKED, RecordSource
 from src.result import Err, Ok, Result
 from src.roster import (
+    AgeUnknowable,
+    BirthYearUnknown,
+    FitnessExpired,
+    HrMaxUnknown,
+    NoConsent,
+    NoList,
+    NoPassenger,
+    NotFit,
+    NotListed,
     OnBench,
     PassengerRefusal,
     Rider,
@@ -3227,13 +3236,25 @@ def too_young(age: int, minimum: int) -> TooYoung | None:
 def describe_on_board_refusal(refusal: OnBoardRefusal) -> str:
     """One line for a start refused for the person on board. Never the rider's name."""
     match refusal:
-        case TooYoung(age=age, minimum=minimum):
+        case TooYoung():
             return (
-                f"demarrage refuse : {rider_words(age)}, minimum {minimum} ans "
+                f"demarrage refuse : {rider_words(refusal.age)}, minimum {refusal.minimum} ans "
                 "(min_rider_age des parametres medicaux)"
             )
-        case _:
+        case (
+            NoPassenger()
+            | OnBench()
+            | NoList()
+            | NotListed()
+            | HrMaxUnknown()
+            | BirthYearUnknown()
+            | AgeUnknowable()
+            | NotFit()
+            | FitnessExpired()
+            | NoConsent()
+        ):
             return describe_passenger_refusal(refusal)
+    raise assert_never(refusal)
 
 
 def rider_words(age: int) -> str:
