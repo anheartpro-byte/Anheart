@@ -3823,3 +3823,56 @@ async def test_a_loss_before_the_list_is_made_is_added_to_the_register_at_once(
     assert b.uplink.lost_stops == ("fin refusee, k0", k1)
     await b.step()
     assert load_lost_stops(tmp_path) == LostStops(lost=("fin refusee, k0", k1))
+
+
+class _HeldFirstOperation(RecordIo):
+    """One thread, as the console's sending has; its first operation holds that thread
+    until :attr:`release` is set, as a slow disk does."""
+
+    def __init__(self) -> None:
+        super().__init__(1)
+        self.holding: threading.Event = threading.Event()
+        self.release: threading.Event = threading.Event()
+        self._first: bool = True
+
+    @override
+    async def run[T](
+        self,
+        work: Callable[[], T],
+        timeout: Seconds,
+        late: Callable[[T], None] | None = None,
+    ) -> Result[T, RecordError]:
+        if not self._first:
+            return await super().run(work, timeout, late)
+        self._first = False
+
+        def held() -> T:
+            self.holding.set()
+            assert self.release.wait(5), "the test never let the disk go"
+            return work()
+
+        return await super().run(held, timeout, late)
+
+
+async def test_the_register_waits_its_turn_behind_a_read_of_the_sending_rather_than_fail(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ANH-239: the sending has a task of its own, and the dashboard step writes the register
+    before it waits on the link (``keep``). A read of the sending holds the one disk thread
+    then: the register waits for it, bounded, instead of being refused as busy, and the end
+    that waits in memory is in it once the read is done."""
+    io = _HeldFirstOperation()
+    b = bench(tmp_path, io=io)
+    listing = asyncio.create_task(b.uplink.step())  # the list of older records: held
+    assert await asyncio.to_thread(io.holding.wait, 5), "the list was never asked for"
+    # A session armed and ended with no record meanwhile: its end waits in memory.
+    b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
+    b.uplink.finished(RuntimeEnd(failed=True, reason="emergency_stop"))
+    keeping = asyncio.create_task(b.uplink.keep())
+    await asyncio.sleep(0.05)
+    assert not keeping.done(), "the register waits for the read"
+    io.release.set()
+    await asyncio.wait_for(asyncio.gather(listing, keeping), timeout=5)
+    assert "could not be written" not in caplog.text
+    (line,) = load_lost_stops(tmp_path).pending
+    assert line.startswith(f"{FORGOTTEN_END}, "), line

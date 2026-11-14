@@ -119,10 +119,11 @@ class Console:
         for tick in range(round(seconds / TICK)):
             seen.append(await self.rig.tick(TICK))
             # The stop watch is a task of its own on the console: it looks at
-            # each tick here, the sending once a second.
+            # each tick here, the dashboard step and the sending once a second.
             await self.rig.panel.cloud_stop_step()
             if tick % 5 == 4:
                 await self.rig.panel.cloud_step()
+                await self.rig.panel.records_step()
         return seen
 
     def state(self) -> RuntimeState:

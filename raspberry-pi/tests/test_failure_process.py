@@ -239,6 +239,7 @@ async def test_a_failing_dashboard_link_never_touches_the_session(
         for _ in range(30):
             await rig.tick(1.0)
             await rig.panel.cloud_step()
+            await rig.panel.records_step()
     last = rig.panel.runtime.snapshot()
     assert rig.panel.runtime.state is RuntimeState.RUNNING
     assert last.safety is None
@@ -250,6 +251,7 @@ async def test_a_failing_dashboard_link_never_touches_the_session(
         assert stop.status_code == httpx.codes.ACCEPTED
     await rig.tick(60.0)
     await rig.panel.cloud_step()
+    await rig.panel.records_step()
     assert rig.panel.runtime.end_reason is EndReason.OPERATOR_STOP
     await rig.panel.close()
     assert await rig.left_stopped() == ""

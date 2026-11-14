@@ -75,6 +75,7 @@ See .claude/skills/anheart-strict-python/SKILL.md.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 from abc import abstractmethod
@@ -630,13 +631,14 @@ def _passed_over(count: int, what: str, session_id: str) -> None:
 
 
 class RecordUplink:
-    """The sending, stepped from the dashboard task. See the module docstring."""
+    """The sending, stepped from a task of its own. See the module docstring."""
 
     __slots__ = (
         "_backlog",
         "_born",
         "_catching",
         "_clock",
+        "_disk_turn",
         "_held_until",
         "_identified",
         "_io",
@@ -679,10 +681,15 @@ class RecordUplink:
         self._sender: Sender = sender
         self._source: RecordSource | None = source
         self._io: RecordIo = RecordIo(1) if source is None else source.io
+        # One read or write at a time between the sending's own task and the dashboard
+        # step: the register written before that step waits on the link (:meth:`keep`)
+        # waits for a read of the sending, bounded, rather than being refused for it.
+        # The operator's acknowledgement does not wait (:meth:`acknowledge`).
+        self._disk_turn: asyncio.Lock = asyncio.Lock()
         self._start_refused: Callable[[str], None] = start_refused
         self._said: Callable[[str], None] = said
         # Delivery state, mutated only by this object's own step and by the
-        # three calls of the link below, all on the event loop.
+        # calls of the link below, all on the event loop.
         self._live: _Owed | None = None
         self._catching: _Owed | None = None
         self._backlog: tuple[str, ...] = ()
@@ -843,7 +850,9 @@ class RecordUplink:
         if source is not None and kept:
             freed = (*self._released, *kept)
             write = functools.partial(_write_lost, source.root, (), freed, pending, self._run)
-            wrote = await self._disk(write, READ_TIMEOUT)
+            # The operator is answered at once: a thread the sending holds is a refusal to
+            # try again, never a wait behind it.
+            wrote = await self._disk_now(write, READ_TIMEOUT)
             if isinstance(wrote, Err):
                 # A write that timed out may still land: the next step writes the losses,
                 # which still hold, again, and should the console stop first, the register
@@ -1776,6 +1785,17 @@ class RecordUplink:
     async def _disk[T](
         self, work: Callable[[], Result[T, RecordError]], limit: Seconds
     ) -> Result[T, RecordError]:
-        """Run one read or write on a record I/O thread, and wait for it at most ``limit``."""
+        """Run one read or write on a record I/O thread, and wait for it at most ``limit``.
+
+        Its turn first, between the sending's own task and the dashboard step
+        (:meth:`keep`): a read or write of the other runs, and holds the turn for
+        its own ``limit`` at most."""
+        async with self._disk_turn:
+            return await self._disk_now(work, limit)
+
+    async def _disk_now[T](
+        self, work: Callable[[], Result[T, RecordError]], limit: Seconds
+    ) -> Result[T, RecordError]:
+        """:meth:`_disk` without waiting for a turn: busy if the thread is, at once."""
         ran = await self._io.run(work, limit)
         return ran.value if isinstance(ran, Ok) else Err(ran.error)
