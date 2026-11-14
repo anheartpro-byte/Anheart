@@ -9,7 +9,13 @@
  * attachment in Convex Storage. Never edited, never deleted.
  */
 import { v } from "convex/values";
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+} from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { audit, userActor } from "./lib/audit";
 import {
@@ -137,7 +143,8 @@ export const list = query({
     return {
       entries,
       interventionsDue: await driveInterventionsDue(ctx, machine._id),
-      writable: [...writable(caller, machine.organizationId)],
+      // A deleted machine's logbook is read, never written (`addEntry` refuses it).
+      writable: machine.isDeleted ? [] : [...writable(caller, machine.organizationId)],
     };
   },
 });
@@ -264,5 +271,38 @@ export const addEntry = mutation({
       details: { fields: [args.kind] },
     });
     return entryId;
+  },
+});
+
+/** Incidents judged per run of the backfill, at most. */
+export const BACKFILL_BATCH = 200;
+
+/**
+ * Judge the drive fault incidents written before ANH-149 (`interventionDue`
+ * absent), a batch at a time, the next batch scheduled until the table is
+ * read. Idempotent: a row already judged is judged the same again. Optional,
+ * after the Convex deploy (docs/deploiement.md): `driveInterventionsDue` judges
+ * an unjudged row itself; the backfill only saves it the work. To run again
+ * after any change to contracts/drive-faults.json, whose codes the rows were
+ * judged by: `npx convex run machineLogbook:backfillInterventionDue '{}'`.
+ */
+export const backfillInterventionDue = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  returns: v.object({ judged: v.number(), done: v.boolean() }),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("incidents")
+      .paginate({ cursor: args.cursor ?? null, numItems: BACKFILL_BATCH });
+    let judged = 0;
+    for (const incident of page.page) {
+      if (incident.kind !== "drive_fault") continue;
+      await refreshInterventionDue(ctx, incident._id);
+      judged++;
+    }
+    if (!page.isDone)
+      await ctx.scheduler.runAfter(0, internal.machineLogbook.backfillInterventionDue, {
+        cursor: page.continueCursor,
+      });
+    return { judged, done: page.isDone };
   },
 });

@@ -989,11 +989,22 @@ l'incident n'est pas clos **et** qu'aucune entrée `intervention` ne le nomme,
 réouverture (`reopenedAt`). L'heure d'écriture est celle du serveur
 (`_creationTime`), jamais la date que l'admin donne à l'entrée : une
 intervention datée d'avant la panne ne lève rien. L'incident porte
-`interventionDue` tant que c'est le cas (`refreshInterventionDue`, appelé à
+`interventionDue` comme la règle le juge (`refreshInterventionDue`, appelé à
 son ouverture, à chaque jonction, à sa clôture et à chaque intervention qui le
-nomme), et `driveInterventionsDue` ne lit que ceux-là (index
-`by_machine_and_intervention_due`) : les défauts résolus d'une machine ne sont
-jamais relus. Un défaut que la console réarme (`console_reset`) ne demande
+nomme : vrai, ou faux une fois résolu). `driveInterventionsDue` lit, par
+l'index `by_machine_and_kind_and_intervention_due`, les défauts marqués vrais
+et ceux qui ne portent pas encore le champ (écrits avant ANH-149), qu'il juge
+lui même par la règle entière : les défauts résolus d'une machine ne sont
+jamais relus, et la lecture est juste que le rattrapage ait été lancé ou non.
+
+**Rattrapage, facultatif.** `machineLogbook.backfillInterventionDue`
+(interne) pose le champ sur les défauts écrits avant ANH-149, 200 incidents par
+lot, le lot suivant programmé jusqu'au bout de la table ; relancé, il juge de
+même. À lancer une fois après le déploiement de Convex
+([deploiement.md](deploiement.md#3-déployer-convex)), et **après tout
+changement de [`contracts/drive-faults.json`](../contracts/drive-faults.json)** :
+un code passé à `manual_reset_only` ne change pas d'eux mêmes les incidents
+déjà jugés, qui gardent leur marque jusqu'à ce qu'on y touche. Un défaut que la console réarme (`console_reset`) ne demande
 rien de plus que ce que demande déjà son incident. Une séance de banc reste
 possible : c'est ainsi que la machine est essayée après l'intervention.
 
@@ -1003,7 +1014,7 @@ Ce que la règle ferme aujourd'hui, et ce qu'elle ne ferme pas encore :
 |---|---|---|
 | Lancement automatique depuis le site | oui | `launchAutoSession` refuse `drive_intervention_required` |
 | Offre du poll d'un lancement déjà en attente | oui | `armingRefusal` : le poll ne l'offre plus |
-| Départ confirmé par la machine (`training/start`) | oui | `armingRefusal` : 409 `incident_open`, le code existant, jusqu'à ce que le contrat 1.16 lui en donne un à lui |
+| Départ confirmé par la machine (`training/start`) | oui | `armingRefusal` : 409 `incident_open`, le code existant, jusqu'à ce que le contrat 1.16 lui en donne un à lui ; son message et celui du site disent les deux causes (un incident grave ouvert, ou un défaut variateur qui attend son intervention) |
 | Tâche qui échoue les lancements en attente | oui | `armingRefusal` : le lancement est échoué |
 | Programme lancé à la console | **non** | la console n'en sait rien aujourd'hui. Le contrat 1.16 (après ANH-141) porte le champ du poll qui le lui dit, et la couche Pi d'ANH-149 refuse alors un programme local, en gardant hors ligne la dernière valeur reçue, comme pour les incidents |
 
@@ -1014,13 +1025,19 @@ par le serveur là où il l'apprend (`convex/lib/incidents.ts`), jamais par un
 client : `organizationId` (celle de la machine), `machineId`, `sessionId?`,
 `kind`, `rule`, `t`, `severity`, `occupied`, `status`, `openedAt` (horloge du
 serveur), puis `analyzedBy?`, `analysis?` (la cause), `action?`, `closedBy?`,
-`closedAt?`, `recordId?` (le fichier refusé d'un `record_rejected`). Index
+`closedAt?`, `recordId?` (le fichier refusé d'un `record_rejected`),
+`reopenedAt?` (la dernière réouverture d'un incident clos, ANH-149) et
+`interventionDue?` (sur un `drive_fault` : vrai tant qu'il ferme les séances
+programmées, faux une fois jugé autrement ; absent sur les autres types et sur
+un défaut écrit avant ANH-149, [règle du carnet](#machine_logbook--carnet-de-bord-des-machines-anh-149)). Index
 `by_machine_and_status_and_severity` (le blocage ne lit que les incidents
 `high` ouverts ou analysés ; il remplace `by_machine_and_status` du ticket,
 qui en est le préfixe), `by_machine` (la liste d'un gestionnaire, du plus
 récent au plus ancien, quel que soit le statut), `by_organization` (la liste
-d'un admin d'organisation) et `by_session` (`sessionId`, `rule`, `t` :
-l'unicité).
+d'un admin d'organisation), `by_session` (`sessionId`, `rule`, `t` :
+l'unicité) et `by_machine_and_kind_and_intervention_due` (les défauts
+variateur d'une machine qui ferment ses séances programmées, et ceux jamais
+jugés).
 
 | `kind` | Ouvert par | `rule` | `t` |
 |---|---|---|---|
@@ -2638,9 +2655,9 @@ ces fonctions lisent le carnet et y écrivent à la main.
 `list` donne à chaque lecteur le nom de qui a écrit une entrée (`byName`) :
 une entrée écrite à la main engage son auteur, et le carnet le dit à qui le
 lit. L'export du carnet (EX-5 : un CSV, et une vue à imprimer en PDF par le
-navigateur, comme le rapport de séance) vient avec la couche site d'ANH-149 ;
-il est fait à partir de `list` et n'en garde que les identifiants : `by`,
-jamais `byName`.
+navigateur, comme le rapport de séance) est fait par le site, pour l'admin
+Anheart, à partir de `list` ([tableau-de-bord.md](tableau-de-bord.md#carte--carnet-de-bord-anh-149)) ;
+il n'en garde que les identifiants : `by`, jamais `byName`.
 
 Limites connues :
 

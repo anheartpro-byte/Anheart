@@ -185,6 +185,18 @@ publié, une console garde ses programmes de secours ; un catalogue dont
 tout a été retiré la laisse sans programme. Procédure de la clé :
 [secrets.md, 3.4](secrets.md#34-clés-de-signature).
 
+**Carnet de bord (ANH-149), étape facultative après le déploiement de
+Convex.** Les défauts variateur enregistrés avant ANH-149 ne portent pas
+encore leur marque `interventionDue` ; le serveur les juge lui même tant
+qu'ils ne la portent pas, et le rattrapage la leur pose une fois pour toutes :
+
+```bash
+npx convex run machineLogbook:backfillInterventionDue '{}'
+```
+
+À relancer après tout changement de `contracts/drive-faults.json`
+([convex.md](convex.md#machine_logbook--carnet-de-bord-des-machines-anh-149)).
+
 ### 3.2 Vérifier un déploiement sans navigateur
 
 ```sh

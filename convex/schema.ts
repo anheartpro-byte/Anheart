@@ -958,9 +958,11 @@ export default defineSchema({
     // When a closed incident was last opened again (`join`): an intervention
     // written before it no longer counts (ANH-149).
     reopenedAt: v.optional(v.number()),
-    // A drive fault the console cannot reset, not resolved yet: not closed, or
-    // closed with no intervention written since it last opened. Kept by
-    // `refreshInterventionDue` (convex/lib/logbook.ts); absent otherwise.
+    // On a `drive_fault`: true while it closes programmed sessions (a code the
+    // console cannot reset, not closed, or closed with no intervention written
+    // since it last opened), false once judged otherwise. Kept by
+    // `refreshInterventionDue` (convex/lib/logbook.ts). Absent on the other
+    // kinds, and on a drive fault never judged (written before ANH-149).
     interventionDue: v.optional(v.boolean()),
   })
     // The blocking count reads the high ones only (`openHighIncidents`).
@@ -971,8 +973,13 @@ export default defineSchema({
     ])
     // A machine's incidents, most recently opened last (a gestionnaire's list).
     .index("by_machine", ["machineId"])
-    // Its drive faults that still close programmed sessions (ANH-149).
-    .index("by_machine_and_intervention_due", ["machineId", "interventionDue"])
+    // Its drive faults by their judgement (ANH-149): those that close its
+    // programmed sessions, and those never judged.
+    .index("by_machine_and_kind_and_intervention_due", [
+      "machineId",
+      "kind",
+      "interventionDue",
+    ])
     .index("by_organization", ["organizationId"])
     .index("by_session", ["sessionId", "rule", "t"]),
 

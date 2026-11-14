@@ -756,7 +756,7 @@ export const ARMING_REFUSALS = {
   // Auto launches only (ANH-145, contract 1.10), checked after the
   // organisation: a bench launch puts nobody on board.
   incident_open:
-    "a high-severity incident of the machine was open when it armed the launch",
+    "an incident of the machine closed its programmed sessions when it armed the launch: a high-severity incident open or analysed, or a drive fault waiting for its intervention",
   // Auto launches only (contract 1.12), checked last and by the start alone:
   // the machine says what it holds when it confirms (`programmeChanged`).
   programme_changed:

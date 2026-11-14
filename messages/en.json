@@ -465,7 +465,7 @@
     "release_notes_too_long": "Notes are limited to 2000 characters.",
     "level_change_needs_notes": "Changing the validation level of a recorded version needs notes that say why.",
     "notification_not_found": "Alert not found.",
-    "incident_open": "A high-severity incident is open on this machine: programmed sessions are closed there until an Anheart admin closes it (Incidents page). A bench session remains possible.",
+    "incident_open": "An incident of this machine closes its programmed sessions: a high-severity incident open, until an Anheart admin closes it (Incidents page), or a drive fault the console cannot reset, waiting for its intervention in the logbook. A bench session remains possible.",
     "incident_not_found": "Incident not found.",
     "incident_closed": "This incident is closed.",
     "drive_intervention_required": "A drive fault the console cannot reset happened on this machine: its programmed sessions stay closed until the incident is closed and an \"intervention\" logbook entry names it. A bench session is still possible.",
