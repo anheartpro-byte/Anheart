@@ -702,8 +702,12 @@ export default defineSchema({
     // machine armed it (ANH-144): expired, launch right withdrawn, rider's
     // physiology changed... One of the arming refusals of
     // `convex/training.ts`, also a code of contracts/machine-api.json. The
-    // site words it from this code; `endReason` says it in English. Absent
-    // on every other session.
+    // site words it from this code; `endReason` says it in English. Or, for
+    // a session that ended before its start otherwise (ANH-102),
+    // `cancelled_before_start` (cancelled from the site while it waited) or
+    // `refused_by_machine` (its machine refused it before arming), which the
+    // site says by `endReason`. Absent on every other session, and on those
+    // two endings written before their codes.
     endCode: v.optional(v.string()),
     // When the server marked the session "interrupted" (server's clock).
     // Present exactly while the status is "interrupted".

@@ -633,8 +633,8 @@ describe("ANH-147 machine registry", () => {
         expect(cancelled).toMatchObject({
           status: "failed",
           endReason: "Cancelled before start by manager Synthetic",
+          endCode: "cancelled_before_start",
         });
-        expect(cancelled?.endCode).toBeUndefined();
       } else if (state === "pi_refused") {
         await w.t.mutation(internal.training.endTrainingSession, {
           machineId: w.machine,
@@ -645,6 +645,7 @@ describe("ANH-147 machine registry", () => {
         expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
           status: "failed",
           endReason: "refusee par la machine : TEST",
+          endCode: "refused_by_machine",
         });
       } else if (state === "expired") {
         vi.setSystemTime(NOW + pendingSessionTtlMs() + 1);
@@ -676,9 +677,9 @@ describe("ANH-147 machine registry", () => {
             failed: state === "failed",
             reason: "TEST end after arming",
           });
-        expect(await w.t.run((ctx) => ctx.db.get(sessionId))).toMatchObject({
-          status: state,
-        });
+        const ended = await w.t.run((ctx) => ctx.db.get(sessionId));
+        expect(ended).toMatchObject({ status: state });
+        expect(ended?.endCode).toBeUndefined();
       }
       const ran =
         state === "active" || state === "completed" || state === "failed";

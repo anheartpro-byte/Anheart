@@ -28,6 +28,7 @@ import { MATRIX } from "./authorization.matrix";
 import {
   MAX_EVENTS_BYTES,
   MAX_HEARTBEAT_BYTES,
+  MAX_PROFILES_BYTES,
   MAX_TELEMETRY_BYTES,
   rateLimiter,
 } from "./lib/rateLimits";
@@ -453,6 +454,81 @@ describe("ANH-166 EX-2 the largest body of a machine route", () => {
     expect(
       await w.t.run((ctx) => ctx.db.query("training_telemetry").collect()),
     ).toEqual([]);
+  });
+
+  /** A programme of the list, as the console sends it (`profile_row`). */
+  const programme = (rank: number) => ({
+    profileId: `programme_${rank}`,
+    name: `Programme ${rank}`,
+    totalDurationS: 1800,
+    zoneLowBpm: 110,
+    zoneHighBpm: 130,
+    hardMaxBpm: 165,
+    criticalBpm: 175,
+    subjectHrMax: 185,
+    minRunRpm: 6,
+    maxRpm: 12,
+  });
+  const machineProfiles = (w: MachineWorld) =>
+    w.t.run((ctx) => ctx.db.query("machine_profiles").collect());
+
+  it("refuses a list of programmes over its size, and stores nothing of it (ANH-228)", async () => {
+    const w = await seedMachineWorld(modules);
+    const before = await machineProfiles(w);
+    expect(MAX_PROFILES_BYTES).toBe(
+      shared.max_body_bytes.routes["POST /api/machine/profiles"],
+    );
+    const head = JSON.stringify({
+      storeRev: 1,
+      programsEnabled: true,
+      profiles: [programme(0)],
+    });
+    const body = `${head.slice(0, -1)},"pad":"${"p".repeat(MAX_PROFILES_BYTES - head.length - 8)}"}`;
+    expect(new TextEncoder().encode(body).byteLength).toBe(
+      MAX_PROFILES_BYTES + 1,
+    );
+
+    await tooLarge(
+      await request(w, w.machineKey, "POST", "/api/machine/profiles", body),
+      new RegExp(`${MAX_PROFILES_BYTES} bytes`),
+    );
+    expect(await machineProfiles(w)).toEqual(before);
+  });
+
+  it("refuses 2001 programmes before reading one, and takes 2000", async () => {
+    const w = await seedMachineWorld(modules);
+    const before = await machineProfiles(w);
+    const list = Array.from({ length: 2000 }, (_, rank) => programme(rank));
+    // The 2001st is not even a programme: the count is refused before any is read.
+    await tooLarge(
+      await request(
+        w,
+        w.machineKey,
+        "POST",
+        "/api/machine/profiles",
+        JSON.stringify({
+          storeRev: 1,
+          programsEnabled: true,
+          profiles: [...list, 7],
+        }),
+      ),
+      /2000 programmes/,
+    );
+    expect(await machineProfiles(w)).toEqual(before);
+
+    later(10_000);
+    const taken = await request(
+      w,
+      w.machineKey,
+      "POST",
+      "/api/machine/profiles",
+      JSON.stringify({ storeRev: 1, programsEnabled: true, profiles: list }),
+    );
+    expect(taken.status).toBe(200);
+    expect(await taken.json()).toEqual({ count: 2000 });
+    expect(
+      (await machineProfiles(w)).filter((row) => row.machineId === w.machine),
+    ).toHaveLength(2000);
   });
 
   it("still takes the largest batch of events a machine may send", async () => {

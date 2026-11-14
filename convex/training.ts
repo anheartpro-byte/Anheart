@@ -708,6 +708,24 @@ export function pendingSessionTtlMs(): number {
 export const EXPIRED_REASON = "expired before the machine armed it";
 
 /**
+ * The `endCode` of a session that ended before its start and is no arming
+ * refusal (ANH-102): cancelled from the site while it waited
+ * (`requestStop`), or refused by its machine, whose reason starts with
+ * {@link MACHINE_REFUSAL_PREFIX} (`endTrainingSession`). Never answered to a
+ * machine; the site says their `endReason`. Rows written before them carry
+ * none, and are known by that reason alone (`endedBeforeStart`).
+ */
+export const CANCELLED_BEFORE_START = "cancelled_before_start";
+export const REFUSED_BY_MACHINE = "refused_by_machine";
+
+/** How the machine begins the reason of a launch it refused before arming it
+ * (`raspberry-pi/src/cloud_sync.py`, docs/convex.md). */
+export const MACHINE_REFUSAL_PREFIX = "refusee par la machine : ";
+
+/** Who cancelled a launch that waited: the `endReason` of `requestStop`. */
+export const CANCELLED_REASON_PREFIX = "Cancelled before start by";
+
+/**
  * Why a launch is refused when its machine arms it: each one a stable code
  * of the machine API (contracts/machine-api.json, `arming_refusals`) and of
  * the dashboard's table (convex/lib/errors.ts, which the site translates),
@@ -1439,7 +1457,8 @@ export const requestStop = mutation({
       await ctx.db.patch(args.sessionId, {
         status: "failed",
         endedAt: now,
-        endReason: `Cancelled before start by ${fullName(me)}`,
+        endReason: `${CANCELLED_REASON_PREFIX} ${fullName(me)}`,
+        endCode: CANCELLED_BEFORE_START,
       });
       await audit(ctx, {
         actor: userActor(me),
@@ -2333,11 +2352,14 @@ export const endTrainingSession = internalMutation({
       endedAt = Math.max(s.startedAt, args.endedAt + axis.shift);
     }
     const status = args.failed ? "failed" : "completed";
+    const refused =
+      args.failed && args.reason.startsWith(MACHINE_REFUSAL_PREFIX);
     await ctx.db.patch(args.sessionId, {
       status,
       endedAt,
       endReason: args.reason,
       interruptedAt: undefined,
+      ...(refused ? { endCode: REFUSED_BY_MACHINE } : {}),
     });
     // ANH-145: an emergency stop, a safety verdict, a tick exception, or the
     // third pre-flight refusal in a row opens an incident.
@@ -2477,8 +2499,10 @@ const trainingEvent = v.object({
 /**
  * Store events of a session of this machine, as it reads them back from the
  * session's local record. Idempotent like `storeTelemetry`: an event is one
- * `(sessionId, seq)`, its rank in that record, and an event already stored is
- * left as it is. The dates are bounded as those of the telemetry are. An event
+ * `(sessionId, seq)`, its rank among the events the machine sends of that
+ * record (presence pings and events dated before the start take none,
+ * `raspberry-pi/src/record/upload.py`), and an event already stored is left
+ * as it is. The dates are bounded as those of the telemetry are. An event
  * stored by this call may open an incident (ANH-145, `openIncidentOfEvent`).
  */
 export const storeEvents = internalMutation({
@@ -2618,6 +2642,34 @@ async function heardOfSince(
 export const INTERRUPT_BATCH = 50;
 
 /**
+ * How far back a run of `interruptSilentSessions` started by its job looks
+ * for a page of an earlier run still waiting (ANH-231): each page hands the
+ * next to the scheduler at once, so a run under way has one created moments
+ * ago. Reads the scheduler's own table over that span only.
+ */
+export const INTERRUPT_RUN_LOOKBACK_MS = 5 * 60_000;
+
+/** Whether a page of an earlier run of `interruptSilentSessions` waits or runs. */
+async function interruptRunUnderWay(
+  ctx: MutationCtx,
+  now: number,
+): Promise<boolean> {
+  const recent = ctx.db.system
+    .query("_scheduled_functions")
+    .withIndex("by_creation_time", (q) =>
+      q.gt("_creationTime", now - INTERRUPT_RUN_LOOKBACK_MS),
+    );
+  for await (const job of recent) {
+    if (
+      job.name.includes("interruptSilentSessions") &&
+      (job.state.kind === "pending" || job.state.kind === "inProgress")
+    )
+      return true;
+  }
+  return false;
+}
+
+/**
  * Mark `interrupted` every active training session the server has heard
  * nothing of for `SESSION_SILENCE_MS` (`heardOfSince`): its console stopped
  * before sending its end, its machine is off, or its link has been down that
@@ -2627,7 +2679,10 @@ export const INTERRUPT_BATCH = 50;
  * marks, and schedules the next page at once. Its own job, apart from
  * `machines.checkOfflineMachines`: however many sessions are silent, its cost
  * or its failure never keeps a machine from being marked offline. Returns how
- * many sessions this page marked, and whether it was the last page.
+ * many sessions this page marked, and whether it was the last page. A run
+ * the job starts while a page of the one before still waits does nothing
+ * (`interruptRunUnderWay`): that one reads every page; two at once would only
+ * read the same sessions twice.
  *
  * Never `completed` nor `failed`: its end is unknown, and it may still be
  * running on a machine that cannot reach the server. Nothing is asked of the
@@ -2642,6 +2697,8 @@ export const interruptSilentSessions = internalMutation({
   returns: v.object({ marked: v.number(), done: v.boolean() }),
   handler: async (ctx, args) => {
     const now = Date.now();
+    if (args.cursor === null && (await interruptRunUnderWay(ctx, now)))
+      return { marked: 0, done: false };
     const since = now - SESSION_SILENCE_MS;
     const page = await ctx.db
       .query("sessions")

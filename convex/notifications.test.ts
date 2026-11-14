@@ -532,7 +532,8 @@ describe("a launch failed before its machine armed it (ANH-144)", () => {
           sessionId,
           reason,
         });
-        expect(listed.reasonCode).toBeUndefined();
+        // ANH-102: its stable end code, which the site says by the reason.
+        expect(listed.reasonCode).toBe("refused_by_machine");
       }
 
       expect((await end()).status).toBe(200);

@@ -24,6 +24,7 @@ import {
   limitMachine,
   MAX_EVENTS_BYTES,
   MAX_HEARTBEAT_BYTES,
+  MAX_PROFILES_BYTES,
   MAX_TELEMETRY_BYTES,
   payloadTooLarge,
   type MachineLimit,
@@ -393,8 +394,18 @@ http.route({
 });
 
 /**
+ * Programmes accepted in one list of `POST /api/machine/profiles` (ANH-228):
+ * a catalogue of `max_payload_bytes` holds 1,430 at most, each taking 350
+ * bytes of it or more (its 19 keys alone take 322), and a list is two writes
+ * a programme in one mutation.
+ */
+const MAX_PROFILES_PER_PUSH = 2000;
+
+/**
  * POST /api/machine/profiles {storeRev, programsEnabled, profiles[]}
- * One every 10 s per machine, five in reserve (ANH-228).
+ * One every 10 s per machine, five in reserve (ANH-228). At most
+ * `max_body_bytes` of body and `MAX_PROFILES_PER_PUSH` programmes, both
+ * refused (413) before a programme is read.
  * Contract 1.11 (ANH-138): and `{catalogRevision, accepted, rejected}`, what
  * the machine made of the signed catalogue; absent from an older console,
  * whose machine then has no catalogue state any more.
@@ -406,12 +417,18 @@ http.route({
   path: "/api/machine/profiles",
   method: "POST",
   handler: limitedRoute("machineProfiles", async (ctx, req, machineId) => {
-    const body = await readJson(req);
+    const body = await readBoundedJson(req, MAX_PROFILES_BYTES);
+    if (body instanceof Response) return body;
     if (!body || !isNum(body.storeRev) || !Array.isArray(body.profiles)) {
       return refuse(
         400,
         "invalid_request",
         "Expected {storeRev, programsEnabled, profiles}",
+      );
+    }
+    if (body.profiles.length > MAX_PROFILES_PER_PUSH) {
+      return payloadTooLarge(
+        `At most ${MAX_PROFILES_PER_PUSH} programmes per list`,
       );
     }
     const catalog = catalogReportOf(body);
@@ -838,9 +855,11 @@ function eventOf(raw: unknown) {
  * -> {stored, duplicates, rejected}
  *
  * The events of the session's local record, each `{seq, t, kind, detail,
- * actor}`: `seq` is its rank in the record (999 999 at most), `t` a whole
- * number of ms, and an event is one `(sessionId, seq)`, stored once however
- * many times it is sent. Sizes are bounded here: 2.5 MiB of body and 200
+ * actor}`: `seq` is its rank among the events the machine sends of the
+ * record (999 999 at most), the presence pings and the events dated before
+ * the start, which it keeps to itself, taking none; `t` is a whole number of
+ * ms, and an event is one `(sessionId, seq)`, stored once however many times
+ * it is sent. Sizes are bounded here: 2.5 MiB of body and 200
  * events per request, both refused (413) before an event is read; 2000
  * characters of text per event. Ten requests a second per machine at most.
  *

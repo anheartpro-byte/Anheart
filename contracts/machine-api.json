@@ -65,11 +65,12 @@
     }
   },
   "max_body_bytes": {
-    "description": "Taille maximale du corps, en octets, vérifiée avant toute lecture du JSON (en-tête Content-Length, puis octets reçus). Au-delà : 413 `payload_too_large`. Le nombre d'éléments d'un lot est vérifié aussitôt après, avant d'en lire un seul : 600 points, 200 événements.",
+    "description": "Taille maximale du corps, en octets, vérifiée avant toute lecture du JSON (en-tête Content-Length, puis octets reçus). Au-delà : 413 `payload_too_large`. Le nombre d'éléments d'un lot est vérifié aussitôt après, avant d'en lire un seul : 600 points, 200 événements, 2000 programmes. Les bornes de `POST /api/machine/profiles` (ANH-228) sont loin au-dessus de ce qu'une console envoie : ses programmes viennent d'un catalogue de `programme_catalog.max_payload_bytes` octets au plus, où chacun prend au moins 350 octets, et son rapport tient en `max_report_entries` éléments.",
     "routes": {
       "POST /api/machine/heartbeat": 16384,
       "POST /api/machine/training/telemetry": 307200,
-      "POST /api/machine/training/events": 2621440
+      "POST /api/machine/training/events": 2621440,
+      "POST /api/machine/profiles": 4194304
     }
   },
   "arming_refusals": {

@@ -48,21 +48,36 @@ import {
   summarySourceValidator,
 } from "./lib/sessionSummary";
 import { readableSessions, stillReadable } from "./lib/readableSessions";
-import { ARMING_REFUSAL_CODES } from "./training";
+import {
+  ARMING_REFUSAL_CODES,
+  CANCELLED_BEFORE_START,
+  CANCELLED_REASON_PREFIX,
+  MACHINE_REFUSAL_PREFIX,
+  REFUSED_BY_MACHINE,
+} from "./training";
+
+/** The end codes of a session that ended before its start (ANH-102). */
+const BEFORE_START_CODES: ReadonlySet<string | undefined> = new Set([
+  ...ARMING_REFUSAL_CODES,
+  CANCELLED_BEFORE_START,
+  REFUSED_BY_MACHINE,
+]);
 
 /**
  * Known pre-start endings: the reports (no summary to expect) and the machine's registry
  * (a session that never started is not one with a person on board) share this one rule.
+ * A failed session with one of their end codes, or, written before those codes, none
+ * and the reason they were known by.
  */
 export function endedBeforeStart(
   session: Pick<Doc<"sessions">, "status" | "endCode" | "endReason">,
 ): boolean {
   return (
     session.status === "failed" &&
-    (ARMING_REFUSAL_CODES.some((code) => code === session.endCode) ||
+    (BEFORE_START_CODES.has(session.endCode) ||
       (session.endCode === undefined &&
-        (session.endReason?.startsWith("Cancelled before start by") === true ||
-          session.endReason?.startsWith("refusee par la machine : ") === true)))
+        (session.endReason?.startsWith(CANCELLED_REASON_PREFIX) === true ||
+          session.endReason?.startsWith(MACHINE_REFUSAL_PREFIX) === true)))
   );
 }
 

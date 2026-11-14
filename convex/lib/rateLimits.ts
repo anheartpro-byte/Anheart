@@ -98,6 +98,7 @@ export const MAX_TELEMETRY_BYTES = sizeOf(
   "POST /api/machine/training/telemetry",
 );
 export const MAX_EVENTS_BYTES = sizeOf("POST /api/machine/training/events");
+export const MAX_PROFILES_BYTES = sizeOf("POST /api/machine/profiles");
 
 /** Milliseconds to wait, as a whole number never below zero. */
 function waitOf(retryAfter: number): number {

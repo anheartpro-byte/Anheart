@@ -46,6 +46,7 @@ import { machineHeaders } from "./machineAuth.fixtures";
 import {
   AUTO_RAMP_MARGIN_MS,
   INTERRUPT_BATCH,
+  INTERRUPT_RUN_LOOKBACK_MS,
   REPEATED_START_WINDOW_MS,
 } from "./training";
 import {
@@ -883,6 +884,29 @@ describe("ANH-231 EX-3 the job marks the silent sessions a bounded page per tran
     const w = await limitedWorld();
     expect(await interrupt(w, null)).toEqual({ marked: 0, done: true });
     expect(await scheduledPages(w)).toEqual([]);
+  });
+
+  it("starts no second run while a page of the one before waits: that one reads every page", async () => {
+    const w = await limitedWorld();
+    const sessions = await insertSilentSessions(w, INTERRUPT_BATCH + 3);
+    vi.setSystemTime(DUE);
+    expect(await interrupt(w, null)).toEqual({
+      marked: INTERRUPT_BATCH,
+      done: false,
+    });
+
+    // The job's next minute comes while that page still waits.
+    vi.setSystemTime(DUE + 60 * SECOND);
+    expect(await interrupt(w, null)).toEqual({ marked: 0, done: false });
+    expect(await scheduledPages(w)).toHaveLength(1);
+    // A page left waiting longer than the look back is no run under way.
+    vi.setSystemTime(DUE + INTERRUPT_RUN_LOOKBACK_MS + SECOND);
+    expect(await interrupt(w, null)).toEqual({ marked: 3, done: true });
+
+    await w.t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await statusesOf(w, sessions)).toEqual(new Set(["interrupted"]));
+    // Once its pages have run, the job's next run starts from the first page.
+    expect(await interrupt(w, null)).toEqual({ marked: 0, done: true });
   });
 });
 
