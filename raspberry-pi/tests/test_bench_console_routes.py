@@ -13,12 +13,15 @@ and an unarmed console writes nothing when it polls.
 from __future__ import annotations
 
 import asyncio
+import math
+import re
 import threading
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Final
+from typing import Final, cast
 
 import httpx
 import pytest
@@ -26,16 +29,21 @@ import pytest
 import scripts.bench_console as bench
 from scripts.drive_link import BuiltDrive
 from src.clock import Clock, ManualClock
+from src.geometry import MachineGeometry
 from src.local_config import DriveLink, load_local_config
+from src.motor.atv320 import ATV320Drive, ModbusMaster
 from src.motor.drive import ControlWord, RegisterMap
 from src.result import Ok
+from src.units import Metres, Seconds
 from tests.test_atv320 import (
     ETA_FAULT,
     ETA_SWITCH_ON_DISABLED,
     ETA_SWITCHED_ON,
     LFT_OVERCURRENT,
+    SETTINGS,
     Behave,
     FakeBus,
+    connection_exception,
     io_exception,
     seed_bench_limits,
 )
@@ -134,8 +142,15 @@ def _zeroed_before(writes: list[tuple[int, int | None]], regs: RegisterMap, word
     return writes.index((regs.lfrd, 0)) < writes.index((regs.cmd, word))
 
 
-@pytest.fixture
-async def rig(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Bench]:
+@asynccontextmanager
+async def started(
+    monkeypatch: pytest.MonkeyPatch,
+    prepare: Callable[[FakeBus], None] | None = None,
+    line: Callable[[FakeBus], ModbusMaster] | None = None,
+) -> AsyncGenerator[Bench]:
+    """The bench over a fresh in-memory drive; ``prepare`` shapes that drive before the
+    bus thread first opens it, and ``line``, when given, is what the driver talks to
+    instead of the drive itself (a line that loses some frames, say)."""
     clock = ManualClock()
     regs = RegisterMap()
     bus = FakeBus(clock, regs)
@@ -143,7 +158,25 @@ async def rig(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Bench]:
         bus.registers[address] = 0
     bus.registers[regs.eta] = ETA_SWITCH_ON_DISABLED
     seed_bench_limits(bus)
-    built = BuiltDrive(drive=driver_over(clock, bus), master=bus)
+    if prepare is not None:
+        prepare(bus)
+    master = bus if line is None else line(bus)
+    driver = (
+        driver_over(clock, bus)
+        if line is None
+        else ATV320Drive(
+            clock,
+            master,
+            SETTINGS,
+            regs,
+            failure_threshold=3,
+            settle_attempts=1,
+            settle_delay=Seconds(0.0),
+            stop_attempts=1,
+            stop_poll_interval=Seconds(0.0),
+        )
+    )
+    built = BuiltDrive(drive=driver, master=master)
 
     def build(_link: DriveLink, _clock: Clock) -> BuiltDrive:
         return built
@@ -163,6 +196,12 @@ async def rig(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Bench]:
         worker.shutdown()
         worker.join(WAIT_S)
         assert not worker.is_alive()
+
+
+@pytest.fixture
+async def rig(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Bench]:
+    async with started(monkeypatch) as bench_rig:
+        yield bench_rig
 
 
 # =========================================================================
@@ -490,3 +529,351 @@ async def test_a_lost_link_disarms_and_reconnects_without_resuming(rig: Bench) -
     await rig.polled()
     await rig.polled()
     assert rig.since(mark) == [], "the keepalive resumed by itself"
+
+
+# =========================================================================
+# What the page reads: GET /api/state
+# =========================================================================
+
+NO_REPLY: Final[str] = "pas de reponse du variateur (apres 0.000 s)"
+"""What the page says of a request the drive did not answer, on this rig's clock."""
+
+
+def test_the_link_error_rate_is_the_share_of_failed_reads() -> None:
+    assert bench.Snapshot().error_rate() == 0.0, "no read yet: no rate"
+    assert bench.Snapshot(read_ok=3, read_failed=1).error_rate() == 25.0
+    assert bench.Snapshot(read_ok=2, read_failed=1).error_rate() == 33.3
+
+
+def test_the_derived_values_are_computed_from_the_speed_and_current_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bench, "GEOMETRY", None)
+    unknown = dict.fromkeys(("output_shaft_rpm", "hz", "gc", "gr", "torque_pct"))
+    assert bench.Snapshot().derived() == unknown, "no speed read: nothing derived"
+    assert bench.Snapshot(output_rpm=690, current_a=1.2).derived() == {
+        "output_shaft_rpm": round(690 / 49.79, 2),
+        "hz": 25.0,
+        "gc": None,
+        "gr": None,
+        "torque_pct": 55.8,
+    }
+    assert bench.Snapshot(output_rpm=690).derived()["torque_pct"] is None
+    # With the arm's radius, the g loads: omega^2 r / g at the arm, then with gravity.
+    monkeypatch.setattr(bench, "GEOMETRY", MachineGeometry(radius=Metres(1.5)))
+    omega = 2 * math.pi * (690 / 49.79) / 60
+    load = omega**2 * 1.5 / 9.80665
+    derived = bench.Snapshot(output_rpm=690, current_a=1.2).derived()
+    assert derived["gc"] == round(load, 4)
+    assert derived["gr"] == round(math.hypot(load, 1.0), 4)
+
+
+async def test_the_page_reads_the_state_the_bus_thread_last_saw(
+    rig: Bench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bench, "GEOMETRY", None)
+    rig.bus.registers[rig.regs.rfrd] = 690
+    rig.bus.registers[rig.regs.lcr] = 12
+    await rig.polled()
+    await rig.polled()
+    answered = await rig.page.get("/api/state")
+    assert answered.status_code == HTTPStatus.OK
+    state = cast(dict[str, object], answered.json())
+    snap = rig.worker.snap
+    assert (state["link_ok"], state["armed"], state["drive_state"], state["enabled"]) == (
+        True,
+        False,
+        "SWITCH_ON_DISABLED",
+        False,
+    )
+    assert (state["output_rpm"], state["current_a"], state["fault"], state["hsp_hz"]) == (
+        690,
+        1.2,
+        "aucun",
+        50.0,
+    )
+    assert state["derived"] == bench.Snapshot(output_rpm=690, current_a=1.2).derived()
+    assert state["nameplate"] == {
+        "rpm": bench.NOMINAL_RPM,
+        "current_a": bench.NAMEPLATE_CURRENT_A,
+        "gear_ratio": bench.GEAR_RATIO,
+        "torque_nm": bench.OUTPUT_TORQUE_NM,
+    }
+    link = cast(dict[str, object], state["link"])
+    assert (link["read_failed"], link["error_rate_pct"], link["implausible"]) == (0, 0.0, 0)
+    assert isinstance(link["read_ok"], int)
+    assert 0 < link["read_ok"] <= snap.read_ok
+    assert state["max_rpm"] == 300
+    rig.bus.registers[rig.regs.rfrd] = 0
+
+
+async def test_the_page_itself_is_served(rig: Bench) -> None:
+    answered = await rig.page.get("/")
+    assert answered.status_code == HTTPStatus.OK
+    assert "Acquitter d&eacute;faut" in answered.text
+
+
+# =========================================================================
+# What the page says when a drive call fails, and that nothing follows it
+# =========================================================================
+
+
+async def test_a_port_that_will_not_open_keeps_its_reason_until_it_opens_and_hsp_is_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator at the bench must know why the drive is not there: the reason stays on
+    the page whatever the polls read, until an open and its HSP read succeed."""
+
+    def dead(bus: FakeBus) -> None:
+        bus.raise_on_connect = connection_exception()
+        bus.sticky_reads = io_exception()
+
+    async with started(monkeypatch, dead) as broken:
+        for _ in range(4):
+            await broken.polled()
+        snap = broken.worker.snap
+        assert snap.link_ok is False
+        assert snap.hsp_hz is None, "HSP never read"
+        why = snap.last_link_error
+        assert why is not None
+        assert why.startswith("ouverture: "), why
+        state = cast(dict[str, object], (await broken.page.get("/api/state")).json())
+        assert state["last_link_error"] == why
+        assert broken.bus.writes() == []
+        # The port comes up: the next open succeeds, HSP is read, the reason goes.
+        broken.bus.raise_on_connect = None
+        broken.bus.sticky_reads = Behave.NORMALLY
+        await _until(lambda: broken.worker.snap.hsp_hz == 50.0, "HSP never read once open")
+        await broken.polled()
+        assert broken.worker.snap.last_link_error is None
+        assert broken.worker.snap.link_ok is True
+        assert broken.bus.writes() == []
+
+
+async def test_an_open_that_fails_while_reads_go_through_is_tried_again_at_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The open refused while the drive still answers (a port the library reopens by
+    itself): the bus thread opens it again at rest, and reads HSP once it does."""
+
+    def refused(bus: FakeBus) -> None:
+        bus.port_opens = False
+
+    async with started(monkeypatch, refused) as halfway:
+        await halfway.polled()
+        await halfway.polled()
+        snap = halfway.worker.snap
+        assert snap.hsp_hz is None
+        why = snap.last_link_error
+        assert why is not None
+        assert why.startswith("ouverture: "), why
+        assert snap.link_ok is True, "the polls do answer"
+        halfway.bus.port_opens = True
+        await _until(lambda: halfway.worker.snap.hsp_hz == 50.0, "never opened again")
+        assert halfway.worker.snap.last_link_error is None
+
+
+class _SilentHsp:
+    """The line to an Altivar that leaves a read of HSP unanswered while :attr:`silent` is
+    set, and carries every other request: a frame lost on the line, not a register that
+    is missing."""
+
+    def __init__(self, bus: FakeBus) -> None:
+        self.bus: FakeBus = bus
+        self.silent: bool = True
+        self.unanswered: int = 0
+
+    def connect(self) -> bool:
+        return self.bus.connect()
+
+    def close(self) -> None:
+        self.bus.close()
+
+    def read_holding_registers(self, address: int, count: int = 1, slave: int = 1) -> object:
+        if self.silent and address == self.bus.regs.hsp:
+            self.unanswered += 1
+            raise io_exception()
+        return self.bus.read_holding_registers(address, count, slave)
+
+    def write_register(self, address: int, value: int, slave: int = 1) -> object:
+        return self.bus.write_register(address, value, slave)
+
+
+async def test_a_ceiling_left_unanswered_is_read_again_at_rest_until_it_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R1 of ANH-218: the open worked, HSP got no answer. The reason stays, HSP is read
+    again at rest, read only, and once the drive answers the reason goes."""
+    lines: list[_SilentHsp] = []
+
+    def silent_hsp(bus: FakeBus) -> ModbusMaster:
+        lines.append(_SilentHsp(bus))
+        return lines[0]
+
+    async with started(monkeypatch, line=silent_hsp) as unread:
+        for _ in range(3):
+            await unread.polled()
+        snap = unread.worker.snap
+        assert snap.hsp_hz is None, "shown as unknown, never guessed"
+        assert snap.link_ok is True
+        why = snap.last_link_error
+        assert why == f"lecture HSP: {NO_REPLY}", why
+        assert snap.last_error is None, "the polls succeed; the reason is kept apart"
+        (silent,) = lines
+        assert silent.unanswered >= 3, "tried again at each cycle"
+        silent.silent = False
+        await _until(lambda: unread.worker.snap.hsp_hz == 50.0, "HSP never read again")
+        assert unread.worker.snap.last_link_error is None
+        assert unread.bus.connect_calls == 1, "read again, never reopened"
+        assert unread.bus.writes() == []
+
+
+async def test_a_ceiling_the_drive_has_no_register_for_is_said_final_and_not_read_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2 of ANH-218: Modbus exception code 2, the register does not exist. Reading again
+    gets the same answer, which the driver itself says not to retry."""
+
+    def no_hsp(bus: FakeBus) -> None:
+        del bus.registers[bus.regs.hsp]
+
+    async with started(monkeypatch, no_hsp) as unread:
+        for _ in range(4):
+            await unread.polled()
+        snap = unread.worker.snap
+        assert snap.hsp_hz is None
+        why = snap.last_link_error
+        assert why is not None
+        assert why.startswith("lecture HSP: reponse invalide: "), why
+        assert why.endswith("(definitif: HSP n'est relu qu'a la prochaine ouverture)"), why
+        assert unread.bus.reads().count(unread.regs.hsp) == 1, "read once, at the open"
+        assert unread.bus.writes() == []
+
+
+def test_the_page_builds_no_markup_from_a_reason_or_an_error() -> None:
+    """R2 of ANH-218: the reasons are the transport's own words. No statement of the page
+    gives them to innerHTML; they go in as text."""
+    statements = cast(list[str], re.findall(r"innerHTML=[^;]*;", bench.PAGE))
+    assert statements, "the page still writes some fixed markup"
+    assert not [found for found in statements if "last_" in found], statements
+
+
+async def test_a_start_sequence_that_stalls_says_so_and_writes_no_15(rig: Bench) -> None:
+    rig.bus.obeys = frozenset({ControlWord.SHUTDOWN, ControlWord.ENABLE_OPERATION})
+    armed = await rig.press("/api/arm", {"motor_uncoupled": True})
+    assert armed.status_code == HTTPStatus.OK
+    mark = rig.mark()
+    await rig.press("/api/enable")
+    shown = await rig.result("enable")
+    assert shown == "enable: ECHEC activation: etat READY au lieu de SWITCHED_ON"
+    await rig.polled()
+    lfrd, cmd = rig.regs.lfrd, rig.regs.cmd
+    assert rig.since(mark) == [
+        (lfrd, 0),
+        (cmd, ControlWord.SHUTDOWN),
+        (cmd, ControlWord.SWITCH_ON),
+    ], "no 15 after the step that stalled, and no keepalive"
+
+
+async def test_a_speed_the_drive_does_not_take_is_said_and_never_kept_alive(rig: Bench) -> None:
+    armed = await rig.press("/api/arm", {"motor_uncoupled": True})
+    assert armed.status_code == HTTPStatus.OK
+    rig.bus.script_writes.append(io_exception())
+    mark = rig.mark()
+    await rig.press("/api/speed", {"rpm": 60})
+    shown = await rig.result("speed")
+    assert shown == f"speed 60 tr/min: ECHEC consigne 60: {NO_REPLY}"
+    assert rig.worker.snap.setpoint_rpm == 0
+    await rig.polled()
+    assert rig.since(mark) == [(rig.regs.lfrd, 60)], "the one attempt, nothing after it"
+
+
+async def test_a_stop_whose_shaft_cannot_be_read_never_writes_6(
+    rig: Bench, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bench, "STOP_WAIT_S", 0.5)
+    monkeypatch.setattr(bench, "STOP_POLL_S", 1.0)  # one read in the wait
+    rfrd = rig.regs.rfrd
+    del rig.bus.registers[rfrd]
+    mark = rig.mark()
+    await rig.press("/api/stop")
+    shown = await rig.result("stop")
+    rig.bus.registers[rfrd] = 0
+    assert shown.startswith("stop: ECHEC: arret NON confirme apres 0 s (RFRD illisible ("), shown
+    assert shown.endswith(
+        "CMD=6 NON envoye (ce serait une roue libre). LFRD=0 ok, CMD=7 ok. Verifiez le variateur."
+    ), shown
+    written = rig.since(mark)
+    assert _commands(written, rig.regs.cmd) == [ControlWord.SWITCH_ON]
+
+
+async def test_a_confirmed_stop_whose_6_fails_says_so(rig: Bench) -> None:
+    rig.bus.script_writes.extend((Behave.NORMALLY, Behave.NORMALLY, io_exception()))
+    mark = rig.mark()
+    await rig.press("/api/stop")
+    shown = await rig.result("stop")
+    assert shown == f"stop: arret confirme (RFRD=0) mais CMD=6 ECHEC: {NO_REPLY}"
+    await rig.polled()
+    lfrd, cmd = rig.regs.lfrd, rig.regs.cmd
+    assert rig.since(mark) == [
+        (lfrd, 0),
+        (cmd, ControlWord.SWITCH_ON),
+        (cmd, ControlWord.SHUTDOWN),
+    ], "the 6 tried once, nothing after it"
+
+
+@pytest.mark.parametrize(
+    ("scripted", "said"),
+    [
+        pytest.param(
+            (io_exception(),), f"LFRD=0 ECHEC: {NO_REPLY}, CMD=7 ok", id="the zero refused"
+        ),
+        pytest.param(
+            (Behave.NORMALLY, io_exception()),
+            f"LFRD=0 ok, CMD=7 ECHEC: {NO_REPLY}",
+            id="the ramp word refused",
+        ),
+    ],
+)
+async def test_an_estop_half_done_says_which_half(
+    rig: Bench, scripted: tuple[object, ...], said: str
+) -> None:
+    rig.bus.script_writes.extend(scripted)
+    mark = rig.mark()
+    await rig.press("/api/estop")
+    shown = await rig.result("estop")
+    assert shown == f"estop: ECHEC partiel: {said}"
+    await rig.polled()
+    assert rig.since(mark) == [(rig.regs.lfrd, 0), (rig.regs.cmd, ControlWord.SWITCH_ON)]
+
+
+@pytest.mark.parametrize(
+    ("scripted", "said", "words"),
+    [
+        pytest.param(
+            (io_exception(),),
+            f"ECHEC CMD=128: {NO_REPLY}",
+            [ControlWord.FAULT_RESET],
+            id="the reset refused",
+        ),
+        pytest.param(
+            (Behave.NORMALLY, io_exception()),
+            f"CMD=128 ok, CMD=6 ECHEC: {NO_REPLY}",
+            [ControlWord.FAULT_RESET, ControlWord.SHUTDOWN],
+            id="the 6 after it refused",
+        ),
+    ],
+)
+async def test_a_fault_reset_half_done_says_which_half(
+    rig: Bench, scripted: tuple[object, ...], said: str, words: list[ControlWord]
+) -> None:
+    rig.bus.registers[rig.regs.eta] = ETA_FAULT
+    rig.bus.registers[rig.regs.lft] = LFT_MODBUS_LOSS
+    await rig.polled()
+    rig.bus.script_writes.extend(scripted)
+    mark = rig.mark()
+    await rig.press("/api/fault-reset")
+    shown = await rig.result("fault_reset")
+    assert shown == f"fault_reset: {said}"
+    await rig.polled()
+    assert _commands(rig.since(mark), rig.regs.cmd) == words
