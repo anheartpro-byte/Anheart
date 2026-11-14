@@ -4557,9 +4557,10 @@ acceptée par le nouveau Convex ; ses séances gardent le recalcul
 
 Dans l'ordre inverse, une console récente face à un Convex qui ne connaît pas
 encore ces champs perd ses dépôts de fichiers, pas ses données. Les séances
-manuelles sont touchées aussi : la console écrit toujours les trois clés, à
-`null` sans programme, et l'ancien Convex refuse une clé inconnue quelle
-que soit sa valeur :
+manuelles sont touchées aussi : la console écrit les trois clés avec chaque
+observation de fin, à `null` sans programme (un enregistrement clos sans
+observation de fin n'en porte aucune), et l'ancien Convex refuse une clé
+inconnue quelle que soit sa valeur :
 
 - `records/upload-url` répond 200 avec la réservation, et `records/commit`
   répond 200 (`accepted: true`) : la vérification est asynchrone.

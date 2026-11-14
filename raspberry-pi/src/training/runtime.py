@@ -2150,8 +2150,9 @@ class TrainingRuntime:
         tick and by :meth:`set_manual_target` at the console, so that what is
         refused and what is held cannot drift apart. Nobody on board: no gate.
         A person on board: no rise unless the shared age gate
-        (:meth:`_rise_reading_recent`, ``RuntimeLimits.rise_reading_within``)
-        accepts the last tracker-accepted reading, nor while the short trend
+        (:meth:`_rise_reading_recent`: the smaller of
+        ``RuntimeLimits.rise_reading_within`` and the tracker's
+        ``stale_after``) accepts the last tracker-accepted reading, nor while the short trend
         is unknown or falling too fast (:meth:`_increase_permitted`, the
         very test a programme's rise passes). The trend is read a second time
         only to distinguish an unknown trend from a falling one when that

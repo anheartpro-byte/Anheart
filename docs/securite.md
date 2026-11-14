@@ -128,9 +128,12 @@ avant : ces temps ne sont mesurés qu'après.
 | `auto_jog_150_nominal` (DSP) | 1 800,0 / 1 800,0 | programme_complete / programme_complete | 31,363 % / 30,630 % | 414,4 | 158,8 |
 
 L'outil commité `python -m simulation.signal_loss --dsp` mesure l'intersection
-continue des écarts entre acceptations avec les intervalles de tics. Sur le
-candidat relu, il donne **162,2 / 36,5 / 176,1 / 172,8 / 417,0 s** pour les
-cinq lignes non nulles du tableau, dans leur ordre. L'écart avec le comptage
+continue des écarts entre acceptations avec les intervalles de tics : seule
+compte la part de chaque écart au-delà de 2,5 s, en WARMUP et en HOLD
+additionnés (la somme de `gap_exposure.warmup["2.5"]` et de
+`gap_exposure.hold["2.5"]` de sa sortie). Sur cette version, il donne
+**162,2 / 36,5 / 176,1 / 172,8 / 417,0 s** pour les cinq lignes non nulles du
+tableau, dans leur ordre. L'écart avec le comptage
 par tic est inférieur à 1 % (source : rejeu de revue).
 
 **Péremption et tendances.** Dans le cas rejoué où chaque lecture utilisable

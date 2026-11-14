@@ -916,9 +916,10 @@ gestionnaire de service (`LocalPanel.control_cycle`,
    de commande n'est consultée que dans deux branches, et plafonnée.
    Toute hausse d'un programme, y compris vers une demande déjà décidée et
    pour son premier pas, passe par `_increase_permitted(now)`. La porte
-   `_rise_reading_recent(now)` exige un âge connu, fini et au plus égal à
-   `RuntimeLimits.rise_reading_within` (**2,5 s**) pour la dernière lecture
-   acceptée par le suiveur. Sinon le runtime tient la **consigne appliquée**,
+   `_rise_reading_recent(now)` exige un âge connu, fini et au plus égal au
+   plus petit de `RuntimeLimits.rise_reading_within` (**2,5 s**) et de la
+   fraîcheur du suiveur (`TrackerLimits.stale_after`), fixé à la
+   construction, pour la dernière lecture acceptée par le suiveur. Sinon le runtime tient la **consigne appliquée**,
    recale la loi sur cette vitesse (`rebase`) et remet la base de temps du
    mouvement au tic courant. En manuel occupé, `_heart_rate_hold(now)` lit
    la même porte avant de laisser monter la consigne. Les descentes et la
