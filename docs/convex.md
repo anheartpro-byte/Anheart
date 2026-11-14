@@ -977,7 +977,7 @@ défaut variateur), `by_storage` (une pièce jointe ne sert qu'une fois) et
 | `validation_review` | le serveur : une revue ajoutée (`addValidationReview`, le compte rendu dans `refs.storageId`, la version dans `refs.softwareVersion`) ou un niveau abaissé (`lowerValidationLevel`) |
 | `drive_parameter_change` | le serveur : une fiche variateur jointe (`attachDriveParameterSheet`, la fiche dans `refs.storageId`) |
 | `software_update` | le serveur : un heartbeat qui annonce une autre version que la précédente (`recordHeartbeat`, `writeSoftwareUpdate`, la nouvelle dans `refs.softwareVersion`). Une version absente ne compte pas ; une entrée qui dit déjà cette version n'est pas réécrite, et une console qui passe et repasse entre deux versions n'en écrit qu'une par sens, puis plus rien : elle ne pousse pas les vraies entrées hors des 500 que la liste montre |
-| `config_change` | le serveur : une configuration appliquée (ANH-141, `refs.configRevision`), une fois ANH-141 sur `develop` |
+| `config_change` | le serveur : une révision de configuration que la machine dit appliquée (`machineConfigs.recordApplied`, ANH-141), `configuration révision 3 appliquée`, la révision dans `refs.configRevision`. Une révision redite appliquée n'en écrit pas une seconde ; une révision que la machine refuse n'en écrit aucune (son refus reste dans l'audit, `machine_config.refused`) |
 
 Les lignes du serveur nomment des règles, des codes, des niveaux et des
 versions, jamais une personne : `incident drive_fault OCF ouvert (high)`,
@@ -2753,7 +2753,7 @@ revalide pas ([raspberry-pi.md, 12](raspberry-pi.md#12-la-configuration-env)).
 | `approveConfig({configId})` (mutation) | Une révision qui ne change aucune clé de sûreté par rapport à la révision appliquée : une approbation, l'auteur compris ; un admin d'organisation n'approuve que ce qu'il peut proposer. Une qui en change une, ou la première d'une machine : un admin Anheart autre que l'auteur, qui doit en être un aussi au moment de l'approbation (son rôle est relu alors, pas celui de la proposition) ; `approvedBy` porte alors les deux. Les valeurs sont jugées de nouveau au niveau du registre de cet instant, puis les deux verrous passent par `requireConfigurationAllowed` (ANH-147). Une révision approuvée plus ancienne, non appliquée, est refusée (« remplacée par la révision N avant son application »), et le nom et le lieu de la machine suivent les valeurs. |
 | `rejectConfig({configId, reason})` (mutation) | Admin Anheart : un brouillon ou une révision approuvée non appliquée. Admin d'organisation : ses propres brouillons. Motif de 3 à 500 caractères. |
 | `signedConfig` (interne) | Le texte que `GET /api/machine/config` signe. |
-| `recordApplied` (interne) | Ce que la machine dit d'une révision (`POST /api/machine/config/applied`). |
+| `recordApplied` (interne) | Ce que la machine dit d'une révision (`POST /api/machine/config/applied`). Une révision appliquée est une entrée `config_change` du [carnet de bord](#machine_logbook--carnet-de-bord-des-machines-anh-149) (ANH-149). |
 
 Les règles des clés de sûreté (`MOTOR_BACKEND`, `MOTOR_MAX_RPM`,
 `ARM_RADIUS_M`, `LEG_TIP_RADIUS_M`, `PROGRAMS_ENABLED`,
