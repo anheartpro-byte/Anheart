@@ -116,7 +116,6 @@ from src.training.preflight import (
     describe_sto_refusal,
 )
 from src.training.safety import (
-    BENCH_BRIDGED_ATTESTATION,
     AcknowledgeRefusal,
     AttestationRefusal,
     EmergencyStopStillLatched,
@@ -125,7 +124,12 @@ from src.training.safety import (
     NothingLatched,
     Unattributed,
 )
-from src.training.types import DRIVE_STATUS_STALE_AFTER, Occupancy, TelemetrySnapshot
+from src.training.types import (
+    DRIVE_STATUS_STALE_AFTER,
+    Occupancy,
+    SafetyAction,
+    TelemetrySnapshot,
+)
 from src.units import Bpm, Monotonic, OutputRpm, Seconds, elapsed
 from src.web.deps import (
     SESSION_COOKIE,
@@ -264,6 +268,12 @@ VERDICT_LATCHED: Final[str] = "verdict_latched"
 ESTOP_UNATTESTED: Final[str] = "estop_unattested"
 STO_NOT_READY: Final[str] = "sto_not_ready"
 STO_BRIDGED_BENCH_ONLY: Final[str] = "sto_bridged_bench_only"
+
+GO_SILENT_RECOVERY: Final[str] = (
+    "this process will not command motion again, and recovery is an operator action "
+    "on a machine that has demonstrably stopped"
+)
+"""What follows GO_SILENT, said by every refusal it causes: never an acknowledgement."""
 PROFILES_CHANGED: Final[str] = "profiles_changed"
 """The programmes are no longer those the page showed: chosen and previewed again first."""
 
@@ -758,7 +768,7 @@ def _register_reads(
         pending = surface.pending
         drive_state, drive_fault = _drive_seen(surface.latest, now)
         latest = surface.latest
-        bench = _bench_declared(services)
+        bench = _sto_bridged(services)
         if latest is not None:
             sto = latest.sto
         elif services.sto is None:
@@ -1327,7 +1337,7 @@ def _register_safety(
         false attestation can be recorded (``attestation_fields`` in
         ``/api/status`` names the confirmations of the console's mode).
         """
-        if _bench_declared(services):
+        if _sto_bridged(services):
             if body.sto_jumper_removed or body.mushroom_wired_nc or not body.bench_bridged_declared:
                 raise HTTPException(
                     status_code=HTTPStatus.BAD_REQUEST,
@@ -1406,12 +1416,18 @@ def _start_failure(refusal: StartRefusal, services: Services) -> Refusal:
         case SurfaceBusy():
             return _busy_start(refusal)
         case SafetyHolding():
+            # GO_SILENT is never acknowledged (ANH-92): its 409 says what is done instead.
+            then = (
+                f"GO_SILENT is one-way: {GO_SILENT_RECOVERY}"
+                if refusal.verdict.action is SafetyAction.GO_SILENT
+                else "it must be acknowledged by name first"
+            )
             return Refusal(
                 HTTPStatus.CONFLICT,
                 code=VERDICT_LATCHED,
                 detail=(
                     f"a latched safety verdict stands ({refusal.verdict.rule}): "
-                    f"{refusal.verdict.detail} - it must be acknowledged by name first"
+                    f"{refusal.verdict.detail} - {then}"
                 ),
             )
         case EstopUnattested():
@@ -1525,11 +1541,7 @@ def _acknowledge_failure(refusal: AcknowledgeRefusal) -> HTTPException:
         case GoSilentIsTerminal():
             return HTTPException(
                 status_code=HTTPStatus.CONFLICT,
-                detail=(
-                    f"{refusal.rule} demanded GO_SILENT, which is one-way: this process "
-                    "will not command motion again, and recovery is an operator action "
-                    "on a machine that has demonstrably stopped"
-                ),
+                detail=f"{refusal.rule} demanded GO_SILENT, which is one-way: {GO_SILENT_RECOVERY}",
             )
         case EmergencyStopStillLatched():
             return HTTPException(
@@ -1696,14 +1708,14 @@ def _require_nothing_latched(services: Services, occupancy: Occupancy) -> None:
 
 
 def _sto_bridged(services: Services) -> bool:
-    """Whether this console's STO source is the declared bridge, by the arming rule's own test."""
+    """Whether this console's STO source is the declared bridge, by the arming rule's own test.
+
+    Also whether this console attests the bench bridge: the supervisor's statement
+    is chosen by the same test on the same source (:func:`~src.local_panel.build_panel`),
+    never by its text (ANH-92).
+    """
     sto = services.sto
     return sto is not None and sto_bridged(sto.latest(services.clock.monotonic()))
-
-
-def _bench_declared(services: Services) -> bool:
-    """Whether this console attests the declared bench bridge: its supervisor's mode decides."""
-    return services.supervisor.attestation_statement == BENCH_BRIDGED_ATTESTATION
 
 
 def _require_occupancy(value: str) -> Occupancy:
