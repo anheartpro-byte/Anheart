@@ -18,6 +18,7 @@ const ROUTES = [
   "POST /api/machine/training/local",
   "POST /api/machine/profiles",
   "POST /api/machine/records/commit",
+  "POST /api/machine/config/applied",
 ] as const;
 
 function substitute(
@@ -72,7 +73,12 @@ describe("ANH-166 the limits are read from contracts/machine-api.json", () => {
       capacity: 7,
     });
     for (const [index, name] of (
-      ["machineLocalSession", "machineProfiles", "machineRecordCommit"] as const
+      [
+        "machineLocalSession",
+        "machineProfiles",
+        "machineRecordCommit",
+        "machineConfigApplied",
+      ] as const
     ).entries()) {
       expect(limits.rateLimiter.limits?.[name]).toEqual({
         kind: "token bucket",

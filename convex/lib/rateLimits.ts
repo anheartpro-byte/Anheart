@@ -68,6 +68,7 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   machineLocalSession: bucket("POST /api/machine/training/local"),
   machineProfiles: bucket("POST /api/machine/profiles"),
   machineRecordCommit: bucket("POST /api/machine/records/commit"),
+  machineConfigApplied: bucket("POST /api/machine/config/applied"),
   /** Remote launches by one account, auto and bench together: five a minute. */
   launchAutoSession: {
     kind: "token bucket",
@@ -88,7 +89,8 @@ export type MachineLimit =
   | "machineUploadUrl"
   | "machineLocalSession"
   | "machineProfiles"
-  | "machineRecordCommit";
+  | "machineRecordCommit"
+  | "machineConfigApplied";
 
 /** The limits of an account. */
 export type UserLimit = "launchAutoSession" | "userWrite";

@@ -66,10 +66,10 @@ describe("ANH-135 the recording routes are gone", () => {
 
   it("registers training and record-deposit routes without the retired acquisition API", () => {
     const paths = http.getRoutes().map(([path]) => path);
-    expect(paths).toHaveLength(18);
+    expect(paths).toHaveLength(20);
     for (const path of paths) {
       expect(path).toMatch(
-        /^(\/api\/(machine\/(heartbeat|roster|profiles|programmes|operators|training\/[a-z]+|records\/(upload-url|commit|status))|records\/download)|\/clerk\/webhook)$/,
+        /^(\/api\/(machine\/(heartbeat|roster|profiles|programmes|operators|config(\/applied)?|training\/[a-z]+|records\/(upload-url|commit|status))|records\/download)|\/clerk\/webhook)$/,
       );
     }
   });

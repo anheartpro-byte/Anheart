@@ -1,6 +1,6 @@
 {
   "description": "Contrat HTTP entre une machine (console du Raspberry Pi) et Convex. Source unique : convex/lib/contract.ts lit ce fichier, raspberry-pi/src/contract.py y est épinglé par ses tests. Voir docs/convex.md, section Versions et compatibilité.",
-  "contract_version": "1.14",
+  "contract_version": "1.15",
   "header": "X-Anheart-Contract",
   "server_version_field": "server_contract_version",
   "heartbeat_response_fields": ["success", "serverTime", "server_contract_version"],
@@ -50,6 +50,20 @@
     "sto_states": ["ready", "open", "unknown", "not_configured", "bridged"],
     "sto_sources": ["none", "sim_ready", "sim_open", "drive_input", "bridged_declared"]
   },
+  "machine_config": {
+    "since": "1.15",
+    "route": "GET /api/machine/config",
+    "applied_route": "POST /api/machine/config/applied",
+    "description": "Depuis 1.15 (ANH-141), la configuration de la machine, tenue dans Convex (`contracts/machine-config.json`), descend vers la console signée sur le canal du catalogue (`programme_catalog`) : même clé `signing_key_env`, même clé publique `public_key`, même enveloppe. `GET /api/machine/config` répond `{status: \"signed\", payload, signature, server_contract_version}` ou, sans clé utilisable, `{status: \"not_configured\", server_contract_version}`. Le texte signé porte `{kind, machineId, issuedAt, validationLevel, revision, hash, values}` : `kind` vaut `kind` (ni un catalogue ni une liste d'opérateurs) ; `machineId`, la machine authentifiée ; `issuedAt`, l'horloge du serveur en millisecondes Unix au moment de la réponse ; `validationLevel`, le niveau effectif du registre machine (`none`, `bench`, `auto`, `occupied`), contre lequel la console revérifie les deux verrous ; `revision`, la dernière révision approuvée ou appliquée, `hash` et `values` les siens, ou les trois `null` quand rien n'est approuvé. `values` est un texte : le JSON canonique de la révision (clés triées, sans espace), et `hash` le SHA-256 en hexadécimal minuscule de ses octets UTF-8, que la console recalcule sur ce texte sans jamais le réécrire. Le texte signé fait au plus `max_payload_bytes` octets. La console n'interroge la route qu'au repos, au démarrage puis au plus une fois par `poll_period_s`. Elle refuse et journalise une signature invalide, un `kind` autre, une machine autre que la sienne, un `issuedAt` plus ancien que celui qu'elle tient, une révision plus ancienne que celle qu'elle a appliquée et un `hash` qui n'est pas celui de `values`. Elle revalide chaque clé avec ses propres règles (`load_local_config`) et ses clés locales, et refuse toute clé qu'elle ne revalide pas : la configuration appliquée reste alors en vigueur. Une révision qui ne change que des clés de la famille `exploitation` est appliquée au repos d'elle-même ; une qui change une clé de la famille `safety` est montrée à la console avec ce qui change, et appliquée seulement quand un opérateur connecté le confirme sur place. Chaque application est dite par `POST /api/machine/config/applied {revision, hash}` ; un refus de la console par `{revision, hash, refusal}`, `refusal` de `max_reason_chars` caractères au plus, comptés en points de code Unicode. Une révision inconnue de la machine, ou un `hash` qui n'est pas le sien : 400 `invalid_request`. Le heartbeat porte depuis 1.15 `config_hash`, le `hash` de la révision appliquée, ou `null` pour une console qui tourne sur son `.env`. La route du texte signé n'est pas limitée en débit, comme le roster ; celle de l'application l'est (`rate_limits`). Un serveur antérieur répond 404 : la console garde sa configuration. Ordre de déploiement : Convex, puis la clé dans Convex, puis l'image du Pi.",
+    "kind": "machine_config",
+    "signing_key_env": "ANHEART_CATALOG_SIGNING_KEY",
+    "public_key": "raspberry-pi/config/anheart_catalog.pub",
+    "poll_period_s": 60,
+    "max_payload_bytes": 16384,
+    "max_reason_chars": 500,
+    "hash_pattern": "^[0-9a-f]{64}$",
+    "config_contract": "contracts/machine-config.json"
+  },
   "contract_exempt_routes": {
     "GET /api/machine/training/status": "Porte la demande d'arrêt, qui doit atteindre une séance en cours quelle que soit la version du contrat. La clé de la machine reste exigée et la réponse annonce `server_contract_version`. Une console d'une autre majeure n'en retient que ce qui arrête : `stopRequested: true` ou `active: false`."
   },
@@ -69,7 +83,8 @@
       "POST /api/machine/records/upload-url": { "rate": 10, "period_ms": 1000, "capacity": 64 },
       "POST /api/machine/training/local": { "rate": 1, "period_ms": 60000, "capacity": 20 },
       "POST /api/machine/profiles": { "rate": 1, "period_ms": 10000, "capacity": 5 },
-      "POST /api/machine/records/commit": { "rate": 10, "period_ms": 1000, "capacity": 64 }
+      "POST /api/machine/records/commit": { "rate": 10, "period_ms": 1000, "capacity": 64 },
+      "POST /api/machine/config/applied": { "rate": 1, "period_ms": 10000, "capacity": 5 }
     }
   },
   "max_body_bytes": {

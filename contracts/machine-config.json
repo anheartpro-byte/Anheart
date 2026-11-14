@@ -1,0 +1,59 @@
+{
+  "description": "Configuration d'une machine tenue dans Convex et appliquée au repos par la console (ANH-141). Source unique des clés que le site propose : leur famille, leur type, leurs bornes et leur défaut. Lu par convex/lib/machineConfig.ts ; raspberry-pi/src/machine_config.py y est épinglé par ses tests, et contracts/machine-config-cases.json tient la validation des deux côtés égale. La configuration du cloud est une proposition : la console la revalide avec load_local_config (raspberry-pi/src/local_config.py) et refuse toute clé qu'elle ne revalide pas. Voir docs/convex.md et docs/raspberry-pi.md, section 12.",
+  "schema_version": 1,
+  "families": {
+    "exploitation": "Appliquée automatiquement au repos par la console, qui redémarre les tâches concernées. Une seule approbation, que l'auteur peut donner.",
+    "safety": "Décide de ce que la machine fait avec quelqu'un dedans. Une révision qui en change une, par rapport à la révision appliquée, est approuvée par deux admin Anheart distincts (l'auteur et un autre), puis appliquée seulement après la confirmation physique d'un opérateur connecté à la console."
+  },
+  "types": {
+    "text": "Texte de 1 à max_chars caractères, sans caractère de contrôle ni espace en tête ou en fin.",
+    "token": "1 à max_chars caractères ASCII imprimables, sans espace, guillemet, apostrophe ni barre oblique inverse.",
+    "enum": "Exactement l'une des valeurs de values.",
+    "enum_list": "Liste non vide, sans doublon, de valeurs de values.",
+    "integer": "Nombre entier, au plus 2^53 - 1 en valeur absolue.",
+    "number": "Nombre fini.",
+    "boolean": "true ou false."
+  },
+  "keys": {
+    "name": { "family": "exploitation", "env": null, "type": "text", "max_chars": 100, "nullable": false, "default": null },
+    "location": { "family": "exploitation", "env": null, "type": "text", "max_chars": 200, "nullable": true, "default": null },
+    "SENSORS": { "family": "exploitation", "env": "SENSORS", "type": "enum_list", "values": ["ECG", "EDA", "SpO2", "RESP", "EMG", "LUX"], "nullable": false, "default": ["ECG"], "required_value": "ECG" },
+    "MOTOR_PORT": { "family": "exploitation", "env": "MOTOR_PORT", "type": "token", "max_chars": 200, "nullable": false, "default": "ftdi://schneider:rs485/1" },
+    "MOTOR_SLAVE_ID": { "family": "exploitation", "env": "MOTOR_SLAVE_ID", "type": "integer", "min": 1, "max": 248, "nullable": false, "default": 248 },
+    "MODBUS_BAUDRATE": { "family": "exploitation", "env": "MODBUS_BAUDRATE", "type": "integer", "nullable": false, "default": 19200 },
+    "MODBUS_PARITY": { "family": "exploitation", "env": "MODBUS_PARITY", "type": "enum", "values": ["N", "E", "O"], "nullable": false, "default": "E" },
+    "MODBUS_TIMEOUT_S": { "family": "exploitation", "env": "MODBUS_TIMEOUT_S", "type": "number", "min_exclusive": 0, "nullable": false, "default": 0.1 },
+    "MOTOR_REG_OFFSET": { "family": "exploitation", "env": "MOTOR_REG_OFFSET", "type": "integer", "min": -1, "max": 1, "nullable": false, "default": 0 },
+    "ECG_SOURCE": { "family": "exploitation", "env": "ECG_SOURCE", "type": "enum", "values": ["sim", "serial", "rfcomm"], "nullable": false, "default": null },
+    "BITALINO_ADDRESS": { "family": "exploitation", "env": "BITALINO_ADDRESS", "type": "token", "max_chars": 200, "nullable": true, "default": null },
+    "PRESENCE_SOURCE": { "family": "exploitation", "env": "PRESENCE_SOURCE", "type": "enum", "values": ["none", "sim_empty", "sim_occupied"], "nullable": false, "default": "none" },
+    "UI_PORT": { "family": "exploitation", "env": "UI_PORT", "type": "integer", "min": 1, "max": 65535, "not": [8123], "nullable": false, "default": 8080 },
+    "GEAR_RATIO": { "family": "exploitation", "env": "GEAR_RATIO", "type": "number", "min_exclusive": 0, "nullable": false, "default": 49.79 },
+    "RECORD_LOCAL_RETENTION_DAYS": { "family": "exploitation", "env": "RECORD_LOCAL_RETENTION_DAYS", "type": "integer", "min": 0, "max": 3650, "nullable": false, "default": 30 },
+    "MOTOR_BACKEND": { "family": "safety", "env": "MOTOR_BACKEND", "type": "enum", "values": ["sim", "serial"], "nullable": false, "default": null },
+    "MOTOR_MAX_RPM": { "family": "safety", "env": "MOTOR_MAX_RPM", "type": "integer", "min": 0, "max": 1380, "nullable": false, "default": 300 },
+    "ARM_RADIUS_M": { "family": "safety", "env": "ARM_RADIUS_M", "type": "number", "min_exclusive": 0, "max": 5, "nullable": false, "default": null },
+    "LEG_TIP_RADIUS_M": { "family": "safety", "env": "LEG_TIP_RADIUS_M", "type": "number", "min_key": "ARM_RADIUS_M", "max": 5, "nullable": true, "default": null },
+    "PROGRAMS_ENABLED": { "family": "safety", "env": "PROGRAMS_ENABLED", "type": "boolean", "nullable": false, "default": false, "requires_level": "auto" },
+    "OCCUPANCY_OCCUPIED_ENABLED": { "family": "safety", "env": "OCCUPANCY_OCCUPIED_ENABLED", "type": "boolean", "nullable": false, "default": false, "requires_level": "occupied" }
+  },
+  "local_keys": {
+    "MACHINE_API_KEY": "Clé de la machine : ce par quoi la console se fait connaître du cloud.",
+    "CONVEX_URL": "Où est le cloud.",
+    "UI_HOST": "Adresse d'écoute de la page : une décision du réseau du lieu.",
+    "DEVICE_TOKEN": "Jeton de l'appareil local de la console.",
+    "UI_TOKEN": "Ancien nom de DEVICE_TOKEN, encore lu.",
+    "UI_TLS_CERT": "Chemin d'un fichier du Pi.",
+    "UI_TLS_KEY": "Chemin d'un fichier du Pi.",
+    "UI_TLS_NAMES": "Noms que porte le certificat du Pi.",
+    "STO_SOURCE": "Câblage du retour de sûreté, déclaré sur place : jamais depuis le cloud.",
+    "STO_DRIVE_INPUT": "Câblage du retour de sûreté, déclaré sur place : jamais depuis le cloud.",
+    "BITALINO_MIN_BATTERY_PCT": "Seuil du pré-vol, réglé au banc.",
+    "RECORD_ROOT": "Chemin d'un dossier du Pi.",
+    "RECORD_MACHINE_ID": "Identité de la machine, posée à la mise en service.",
+    "RECORD_ORGANIZATION_ID": "Identité de l'organisation, posée à la mise en service.",
+    "RECORD_DRIVE_SDK_FRAMES": "Diagnostic de banc."
+  },
+  "unset_meaning": "null pour une clé nullable : non renseignée, comme une ligne vide du .env (LEG_TIP_RADIUS_M jugée à ARM_RADIUS_M, BITALINO_ADDRESS absente, location absente).",
+  "canonical": "values est envoyé comme texte : JSON.stringify de l'objet aux clés triées, sans espace. hash est le SHA-256 en hexadécimal minuscule de ses octets UTF-8. La console le recalcule sur le texte reçu, sans jamais le réécrire."
+}

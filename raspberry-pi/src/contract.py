@@ -99,6 +99,14 @@ file), at rest only (:mod:`src.operator_sync`); an event may name a tablet
 before 1.13 answers 404: the console keeps its list, or opens no action
 without one (:mod:`src.console_access`).
 
+Since 1.15 the machine's configuration, held in Convex, comes down signed on
+the same channel (``GET /api/machine/config``, ``machine_config`` of the shared
+file), and the heartbeat's ``config_hash`` is the hash of the configuration
+applied. This build announces 1.15 and still runs from its ``.env``: it never
+asks for the route, and its ``config_hash`` stays ``null``
+(:mod:`src.machine_config` holds the rules it will revalidate a proposal
+with). A dashboard before 1.15 answers 404.
+
 One exchange is outside this rule on purpose: **a stop**. It means the same
 under every contract, so the dashboard answers the status request whatever
 major the console announces, and the console ends its session on that answer
@@ -141,7 +149,7 @@ ErrorCode = NewType("ErrorCode", str)
 SoftwareVersion = NewType("SoftwareVersion", str)
 """What this build calls itself: a git tag such as ``pi-0.4.2``."""
 
-CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.14")
+CONTRACT_VERSION: Final[ContractVersion] = ContractVersion("1.15")
 """The contract this console speaks. Pinned to ``contracts/machine-api.json``."""
 
 CONTRACT_HEADER: Final[str] = "X-Anheart-Contract"

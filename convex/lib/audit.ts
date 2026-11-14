@@ -48,6 +48,7 @@ export const AUDIT_TARGET_TYPES = [
   "programme",
   "patient_invitation",
   "incident",
+  "machine_config",
 ] as const;
 export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[number];
 export const auditTargetTypeValidator = v.union(
@@ -114,6 +115,11 @@ export const AUDIT_ACTIONS = [
   "record.deleted", // Authorised user or retention cron deletes a recording; target: session.
   "incident.analyzed", // Staff of the machine records an incident's cause and action, without the text; target: incident.
   "incident.closed", // Anheart admin closes an incident, without the text; target: incident.
+  "machine_config.proposed", // Admin proposes a configuration revision, its changed keys only (ANH-141); target: revision.
+  "machine_config.approved", // Admin approves a revision, its changed keys only; target: revision.
+  "machine_config.rejected", // Admin rejects or replaces a revision; target: revision.
+  "machine_config.applied", // Machine says it applied a revision; target: revision.
+  "machine_config.refused", // Machine refuses a revision, without its reason; target: revision.
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 export const auditActionValidator = v.union(
@@ -180,6 +186,11 @@ export const AUDIT_ACTION_TARGET: Record<AuditAction, AuditTargetType> = {
   "record.deleted": "session",
   "incident.analyzed": "incident",
   "incident.closed": "incident",
+  "machine_config.proposed": "machine_config",
+  "machine_config.approved": "machine_config",
+  "machine_config.rejected": "machine_config",
+  "machine_config.applied": "machine_config",
+  "machine_config.refused": "machine_config",
 };
 
 const detailRoleValidator = v.union(
@@ -279,6 +290,19 @@ export const SENSITIVE_MUTATIONS: Readonly<
   ],
   "machineRegistry.addValidationReview": ["registry.review_added"],
   "machineRegistry.lowerValidationLevel": ["registry.level_lowered"],
+  "machineConfigs.proposeConfig": [
+    "machine_config.proposed",
+    "machine_config.rejected",
+  ],
+  "machineConfigs.approveConfig": [
+    "machine_config.approved",
+    "machine_config.rejected",
+  ],
+  "machineConfigs.rejectConfig": ["machine_config.rejected"],
+  "machineConfigs.recordApplied": [
+    "machine_config.applied",
+    "machine_config.refused",
+  ],
   "machines.createMachine": [
     "machine.created",
     "machine_key.created",

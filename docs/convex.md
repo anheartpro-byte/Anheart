@@ -177,8 +177,8 @@ requête. Les valeurs fermées sont définies dans
 | `organizationId` | Identifiant d'organisation, facultatif pour une action globale. Une ligne sans organisation n'est lisible que par l'admin Anheart. |
 | `actorId` | Identifiant de `users` ou de `machines`, absent pour le système. |
 | `actorRole` | `admin`, `org_admin`, `gestionnaire`, `user`, `machine` ou `system`. Le rôle de l'acteur au moment de l'effet. |
-| `action` | Une des 51 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
-| `targetType` | `user`, `machine`, `machine_key`, `session`, `fitness_assessment`, `consent`, `organization`, `software_release`, `medical_parameters_version`, `programme` ou `patient_invitation`. Déduit de l'action par `AUDIT_ACTION_TARGET`. `user.invited` cible une `patient_invitation`, y compris quand aucun profil unique ne peut être lié à l'invitation. |
+| `action` | Une des 64 valeurs de `AUDIT_ACTIONS`, énumération fermée ; catégories décrites au [§5](#convexlibauditts-anh-167). |
+| `targetType` | `user`, `machine`, `machine_key`, `machine_operator`, `machine_device`, `session`, `fitness_assessment`, `consent`, `organization`, `software_release`, `medical_parameters_version`, `programme`, `patient_invitation`, `incident` ou `machine_config`. Déduit de l'action par `AUDIT_ACTION_TARGET`. `user.invited` cible une `patient_invitation`, y compris quand aucun profil unique ne peut être lié à l'invitation. |
 | `targetId` | Chaîne, identifiant de la cible ; il reste dans le journal après la suppression de celle-ci. |
 | `details` | Objet facultatif, dont seules les clés ci-dessous sont admises. |
 | `requestId` | Identifiant de requête Convex lu par `ctx.meta.getRequestMetadata()`, partagé par la route ou l'action d'origine et la mutation qu'elle appelle, ainsi que par les lignes d'une même requête. |
@@ -532,6 +532,34 @@ dans le Storage sans référence de registre et sans URL exposée. Point de
 suivi : prévoir le nettoyage des dépôts non rattachés ; aucun mécanisme de
 purge supplémentaire n'est livré ici.
 
+### `machine_configs` : la configuration des machines (ANH-141)
+
+Une ligne par révision de la configuration d'une machine, proposée et
+approuvée sur le site, puis appliquée au repos par la console, qui la
+revalide. Les clés, leur famille (`exploitation` ou `safety`), leur type,
+leurs bornes et leur défaut sont
+[`contracts/machine-config.json`](../contracts/machine-config.json), lu par
+Convex (`convex/lib/machineConfig.ts`) et épinglé côté Pi
+(`raspberry-pi/src/machine_config.py`). Les valeurs d'une révision ne sont
+jamais réécrites : un changement est une révision de plus.
+
+| Champ | Contenu |
+|---|---|
+| `machineId`, `organizationId` | La machine et son organisation, recopiée à l'écriture. |
+| `revision` | 1 pour la première de la machine, plus un à chaque proposition. |
+| `values` | Toutes les clés du contrat, validées comme la console les valide. `null` : clé nullable non renseignée. |
+| `canonical`, `hash` | Le texte JSON canonique des valeurs (clés triées, sans espace), envoyé tel quel à la machine, et son SHA-256 en hexadécimal minuscule. |
+| `status` | `draft`, `approved` (ce que la machine reçoit), `applied` (la machine dit l'avoir appliquée) ou `rejected`. |
+| `changedKeys` | Les clés qui diffèrent de la révision appliquée au moment de la proposition, toutes sans révision appliquée. |
+| `proposedBy`, `proposedByRole`, `proposedAt` | L'auteur, son rôle (`admin` ou `org_admin`) et la date. |
+| `approvedBy`, `approvedAt` | Qui a validé : quand une clé de sûreté change par rapport à la révision appliquée, l'auteur puis un autre admin Anheart, deux comptes distincts ; sinon l'approbateur seul, qui peut être l'auteur. |
+| `appliedAt`, `appliedHash` | Quand la machine a dit l'avoir appliquée, et l'empreinte qu'elle a donnée. |
+| `rejectedAt`, `rejectedBy`, `rejectReason` | Le refus : par un admin avec son motif, par une proposition ou une approbation plus récente (« remplacée par la révision N »), ou par la machine (« refusée par la machine : » suivi de sa raison, sans `rejectedBy`). |
+
+Index : `by_machine_and_revision`, `by_organization`. La révision « en
+vigueur » est la dernière `approved` ou `applied` ; c'est elle que
+`GET /api/machine/config` envoie ([§6](#la-configuration-signée-contrat-115-anh-141)).
+
 ### `machines`
 
 | Champ | Rôle |
@@ -548,6 +576,7 @@ purge supplémentaire n'est livré ici.
 | `softwareVersion` | Version logicielle annoncée par le Pi dans son heartbeat (tag git, par exemple `pi-0.4.2`). Absente tant qu'aucun heartbeat ne l'a donnée, et effacée si le dernier heartbeat n'en portait pas de bien formée. |
 | `contractVersion` | Version du contrat machine annoncée par le Pi : l'en-tête `X-Anheart-Contract` du dernier heartbeat accepté. |
 | `lastVersionSeenAt` | ms Unix du dernier heartbeat qui a actualisé les versions rapportées. |
+| `configHash` | Depuis le contrat 1.15 (ANH-141) : `config_hash` du dernier heartbeat accepté, l'empreinte de la révision de configuration que la console applique ; `null` pour une console qui tourne sur son `.env` ; absent quand le heartbeat n'en portait pas de bien formée (64 chiffres hexadécimaux minuscules). Comparé à la révision en vigueur pour « configuration appliquée ≠ approuvée ». |
 | `medicalParametersVersion` | Version médicale annoncée par `medical_parameters_version` dans le heartbeat. Une chaîne est la version que le Pi annonce après sa vérification locale du fichier signé ; `null` est classé non signé ; l'absence signifie qu'aucune version bien formée n'a été retenue. |
 
 Index : `by_status`, `by_is_deleted`, `by_organization`. Une machine ne porte aucune clé : ses clés sont dans [`machine_api_keys`](#machine_api_keys--les-clés-des-machines-anh-165), seul endroit où une requête machine est authentifiée (ANH-238). Les anciens champs `apiKey` et `apiKeySelector`, et leurs index `by_api_key` et `by_apiKeySelector`, ont quitté le schéma une fois la migration passée sur les deux déploiements ([§8](#migration-des-clés-machine-anh-165)).
@@ -1946,6 +1975,19 @@ ANH-145 ajoute quatre codes, du lancement et du registre des incidents :
 | `incident_closed` | L'incident est clos : il n'est plus ni analysé ni clos de nouveau. |
 | `incident_text_required` | La cause ou l'action manque (vide une fois rognée) ou dépasse `INCIDENT_TEXT_MAX` (2000 caractères). |
 
+ANH-141 ajoute les codes de la configuration des machines (`machineConfigs.ts`) :
+
+| Code | Sens |
+|---|---|
+| `invalid_machine_config` | La console refuserait les valeurs. Levé comme un objet `{code, message, problems}` : chaque problème `{key, detail}` dans les mots et l'ordre de la console ; le formulaire les montre tous d'un coup. |
+| `machine_config_not_found` | La révision n'existe pas, ou sa machine est supprimée ou hors d'atteinte de l'appelant : même réponse. |
+| `machine_config_wrong_status` | La révision n'est plus dans l'état d'où part l'étape (approuver un brouillon ; refuser un brouillon ou une révision approuvée non appliquée). |
+| `machine_config_unchanged` | La proposition est la révision en vigueur, mot pour mot. |
+| `machine_config_keys_not_allowed` | Un admin d'organisation propose ou approuve une autre clé que `name` et `location`, ou une révision qui porte une clé de sûreté changée. |
+| `machine_config_self_approval` | Une clé de sûreté change : l'auteur ne l'approuve pas, un autre admin Anheart le fait. |
+| `machine_config_safety_needs_admins` | Une clé de sûreté change dans une révision proposée par un admin d'organisation : elle n'est pas approuvable, un admin Anheart la propose. |
+| `machine_config_reason_required` | Le motif d'un refus fait moins de 3 ou plus de 500 caractères une fois rogné. |
+
 ### Fonctions par fichier
 
 Résumé des fonctions les plus utilisées par le site. Dans ces tableaux,
@@ -2059,6 +2101,16 @@ ANH-141 (configuration approuvée) ajoutera les siennes de la même façon.
 ANH-145 a ajouté `incident.analyzed` et `incident.closed` (cible `incident`,
 détail `machineId` seul : ni la cause ni l'action, texte libre, n'entrent dans
 le journal ; elles restent sur l'incident).
+
+ANH-141 a ajouté, cible `machine_config` (la révision) et détail `machineId`
+et `version` (le numéro de révision) : `machine_config.proposed` et
+`machine_config.approved` (avec `fields`, les clés qui changent par rapport à
+la révision appliquée : le diff, dont les valeurs restent sur les deux
+révisions, jamais réécrites), `machine_config.rejected` (par un admin, ou une
+révision remplacée), `machine_config.applied` et `machine_config.refused`
+(acteur `machine`). Ni le nom, ni le lieu, ni un motif, ni la raison d'un
+refus de la machine n'entrent dans le journal : texte libre, ils restent sur
+la révision.
 
 `audit()` lit une fois les métadonnées de requête puis insère une ligne,
 sans autre lecture, contrôle métier ni chemin de refus ajouté. Son contrat
@@ -2561,6 +2613,34 @@ applique un **retard de 5 s** aux gestionnaires sur une séance active. Le site
 n'appelle plus que `getSessionDataStats`, pour la carte d'historique du détail
 d'une séance.
 
+### `machineConfigs.ts` : configuration des machines (ANH-141)
+
+La console reste l'autorité : ce qui est approuvé ici est une proposition
+qu'elle revalide avec ses propres règles, et qu'elle refuse si elle ne la
+revalide pas ([raspberry-pi.md, 12](raspberry-pi.md#12-la-configuration-env)).
+
+| Fonction | Droits et effet |
+|---|---|
+| `getMachineConfig({machineId})` (query) | Admin Anheart : toute machine. Admin d'organisation : machine non supprimée de son organisation. Autres : `null`. Les 20 dernières révisions (la plus récente d'abord), chacune avec ses auteurs résolus, `changedFromApplied` (le diff avec la révision appliquée maintenant), `safetyChange` et `approveBlocked` (`null` quand l'appelant peut approuver ce brouillon, sinon le code qu'il rencontrerait) ; `appliedRevision`, `inForceRevision`, `reportedHash` (le `config_hash` du heartbeat), `hashMatches`, `configurationStatus`, `defaults` (ceux du contrat, les rayons du registre, le nom et le lieu de la machine, pour une première proposition), `validationLevel` et `canPropose` (`all`, `name_location`, `none` pour une machine supprimée). |
+| `proposeConfig({machineId, values})` (mutation) | Admin Anheart : toutes les clés. Admin d'organisation : seulement `name` et `location`, par rapport à la révision en vigueur (sans révision en vigueur, rien). Valide comme la console (`machineConfigProblems`) au niveau de validation du registre : tout est refusé d'un coup (`invalid_machine_config`). Refuse la révision en vigueur (`machine_config_unchanged`). Un brouillon en attente est remplacé (refusé, « remplacée par la révision N »). |
+| `approveConfig({configId})` (mutation) | Une révision qui ne change aucune clé de sûreté par rapport à la révision appliquée : une approbation, l'auteur compris ; un admin d'organisation n'approuve que ce qu'il peut proposer. Une qui en change une, ou la première d'une machine : un admin Anheart autre que l'auteur, qui doit en être un aussi ; `approvedBy` porte alors les deux. Les valeurs sont jugées de nouveau au niveau du registre de cet instant, puis les deux verrous passent par `requireConfigurationAllowed` (ANH-147). Une révision approuvée plus ancienne, non appliquée, est refusée (« remplacée par la révision N avant son application »), et le nom et le lieu de la machine suivent les valeurs. |
+| `rejectConfig({configId, reason})` (mutation) | Admin Anheart : un brouillon ou une révision approuvée non appliquée. Admin d'organisation : ses propres brouillons. Motif de 3 à 500 caractères. |
+| `signedConfig` (interne) | Le texte que `GET /api/machine/config` signe. |
+| `recordApplied` (interne) | Ce que la machine dit d'une révision (`POST /api/machine/config/applied`). |
+
+Les règles des clés de sûreté (`MOTOR_BACKEND`, `MOTOR_MAX_RPM`,
+`ARM_RADIUS_M`, `LEG_TIP_RADIUS_M`, `PROGRAMS_ENABLED`,
+`OCCUPANCY_OCCUPIED_ENABLED`) se jugent toujours par rapport à la révision
+**appliquée**, celle que la machine fait tourner : une révision approuvée et
+pas encore appliquée ne compte pas. Une machine sans révision appliquée (une
+console qui tourne encore sur son `.env`) a toutes ses clés « changées ».
+
+Le nom et le lieu sont aussi écrits par `machines.updateMachine` (fenêtre
+d'édition de la machine, gestionnaire compris) : ce chemin ne crée pas de
+révision, la console garde le nom de la révision en vigueur jusqu'à la
+suivante, et la prochaine proposition part du nom de la machine. Point
+ouvert, à trancher par le chef de projet.
+
 ### `programmes.ts` : catalogue de programmes (ANH-137)
 
 | Fonction | Droits et effet |
@@ -2605,7 +2685,7 @@ organisation cliente est refusé, en lecture comme en écriture.
 | `getRegistry` (query) | Admin Anheart : toute machine, même supprimée. `org_admin` : machine non supprimée de sa propre organisation. Autres cas : `null` ; anonyme : `not_authenticated`. Retourne les champs du registre, contacts résolus en `{userId, firstName, lastName}`, auteurs résolus, URL de la fiche, de son historique et des comptes rendus, `effectiveLevel` et `canEdit` (admin et machine non supprimée). |
 | `listRegistryBadges` (query) | Machines non supprimées de toutes les organisations pour l'admin Anheart, de sa propre organisation pour `org_admin`, `[]` pour les autres rôles ; anonyme refusé. Par machine : niveau effectif, statut de version et statut de configuration. Aucun champ `alerts` ni lecture des séances : les alertes restent sur la fiche. |
 | `listContactCandidates({machineId})` (query) | Admin Anheart uniquement. Membres actifs de l'organisation de la machine, hors comptes supprimés dans Clerk, sous la forme `{userId, firstName, lastName, role}` (rôle dans cette organisation, sans e-mail). Tri par nom, prénom puis identifiant. La même règle contrôle les contacts proposés, lus et enregistrés. Machine absente ou supprimée : `machine_not_found` ; sans organisation : liste vide. |
-| `checkConfigurationLock` (query) | Même accès que la fiche ; verdict `{allowed, requiredLevel, reachedLevel, message}` pour une clé et sa valeur booléenne. Point d'entrée prévu pour ANH-141. |
+| `checkConfigurationLock` (query) | Même accès que la fiche ; verdict `{allowed, requiredLevel, reachedLevel, message}` pour une clé et sa valeur booléenne. Le formulaire de configuration (ANH-141) en affiche le `message`. |
 | `generateUploadUrl` (mutation) | Admin Anheart uniquement ; URL de dépôt Convex Storage. |
 | `updateIdentity` (mutation) | Admin Anheart uniquement ; champ absent inchangé, `null` efface ; contrôle des contacts et de la version attendue. |
 | `recordRadii` (mutation) | Admin Anheart uniquement ; enregistre ensemble les deux rayons, la date et le nom du mesureur. |
@@ -2647,10 +2727,18 @@ Les auteurs `by`, `attachedBy` et `updatedBy` sont résolus à la lecture en
 absent, seul `{userId}` est renvoyé ; les identifiants stockés sont conservés.
 
 `configurationProposal` propose `ARM_RADIUS_M` et `LEG_TIP_RADIUS_M` depuis
-les mesures du registre, ou `null` si elles manquent. L'écriture de la
-configuration centralisée et sa consommation des rayons restent bloquées
-par ANH-141. Le badge `configurationStatus` vaut donc `unavailable`, pas
-« appliquée » ou « en attente ». Le refus OTA reste bloqué par ANH-116.
+les mesures du registre, ou `null` si elles manquent ; la configuration
+centralisée (ANH-141) les reprend dans les valeurs par défaut d'une première
+proposition (`machineConfigs.getMachineConfig`, `defaults`). Le badge
+`configurationStatus` vient des révisions de
+[`machine_configs`](#machine_configs--la-configuration-des-machines-anh-141) :
+`unavailable` sans révision approuvée, `pending` tant que la révision en
+vigueur est approuvée et pas encore appliquée, `applied` quand elle l'est et
+que le heartbeat en donne l'empreinte, `mismatch` (« configuration appliquée
+≠ approuvée ») quand le heartbeat en donne une autre ou aucune. Les deux
+verrous sont tenus par `machineConfigs.proposeConfig` et `approveConfig`, qui
+appellent `configurationLockVerdict` et `requireConfigurationAllowed`. Le
+refus OTA reste bloqué par ANH-116.
 Il n'y a aucun verrou supplémentaire au lancement distant : décision du
 chef de projet, suivie par ANH-102 et ANH-107.
 
@@ -3087,7 +3175,7 @@ se sert toujours de sa clé, au moins pour demander l'arrêt. Cette écriture
 ne consomme aucun jeton du seau de débit : « rien n'est écrit », ailleurs dans
 cette page, s'entend hors de cette date.
 
-**Erreurs** : tout refus des 14 routes machine (les 401 et les 426 compris)
+**Erreurs** : tout refus des 17 routes machine (les 401 et les 426 compris)
 a la forme
 `{"error": "<code stable>", "message": "<texte>"}`. Le code ne change pas
 d'une version à l'autre ; le texte, en anglais, est fait pour être lu et peut
@@ -3287,6 +3375,8 @@ déploiement.
 | `POST /api/machine/profiles` | `{storeRev, programsEnabled, profiles: [...]}` ; depuis 1.11, et `{catalogRevision\|null, accepted: [profileId], rejected: [{profileId, reason}]}` (200 entrées en tout, `reason` de 500 caractères au plus ; mal formés : 400 `invalid_request`, rien n'est écrit) ; depuis 1.12, et `profilesDigest`, 64 chiffres hexadécimaux minuscules (autre forme : 400 `invalid_request`), effacé quand il manque | `{count}` | quand la révision du magasin change, ou depuis 1.11 ce que la console dit du catalogue ; nouvel essai après 15 s ; limite 1 toutes les 10 s, réserve 5 |
 | `GET /api/machine/programmes?since=<révision>` | `since` facultatif, entier de 0 ou plus (sinon 400 `invalid_request`) | `{status: "signed", payload, signature, server_contract_version}`, ou `{status: "not_configured", server_contract_version}` sans clé de signature utilisable ([ci-dessous](#le-catalogue-signé-contrat-111-anh-138)) | contrat 1.11 : au démarrage de la console, puis au plus une fois par minute, au repos seulement ; non limitée en débit |
 | `GET /api/machine/operators` | - | `{status: "signed", payload, signature, server_contract_version}`, ou `{status: "not_configured", server_contract_version}` sans clé de signature utilisable ([ci-dessous](#la-liste-des-opérateurs-signée-contrat-113-anh-152)) | contrat 1.13 : au démarrage de la console, puis au plus une fois par minute, au repos seulement ; non limitée en débit |
+| `GET /api/machine/config` | - | `{status: "signed", payload, signature, server_contract_version}`, ou `{status: "not_configured", server_contract_version}` sans clé de signature utilisable ([ci-dessous](#la-configuration-signée-contrat-115-anh-141)) | contrat 1.15 : au démarrage de la console, puis au plus une fois par minute, au repos seulement ; non limitée en débit |
+| `POST /api/machine/config/applied` | `{revision, hash}`, ou `{revision, hash, refusal}` pour une révision que la console refuse (`refusal` de 1 à 500 caractères, comptés en points de code) | `{status: "applied"\|"refused"\|"unchanged", server_contract_version}` ; 400 `invalid_request` pour un corps mal formé, une révision inconnue de la machine, une autre empreinte, ou un brouillon | contrat 1.15 : après chaque application, ou chaque refus ; limite 1 toutes les 10 s, réserve 5 |
 | `GET /api/machine/roster` | - | `{riders: [{userId, name, hrMax\|null, birthYear\|null, fit, fitnessValidUntil\|null, consent, fitnessQuestionnaireVersion\|null}]}` (`getRoster`, [`roster` du contrat 1.6](../contracts/machine-api.json)) | au démarrage de la console, puis toutes les 60 s sans séance en cours ; non limitée en débit. La console garde la liste en mémoire seulement, au plus 15 min sans nouvelle réponse, et la vide sur un 401 ou un 403 ([raspberry-pi.md, 4.5](raspberry-pi.md#45-le-passager--la-liste-du-tableau-de-bord-anh-84)) |
 | `GET /api/machine/training/poll` | - | `{session: null, incidents_open_high, server_contract_version}` ou `{session: {sessionId, mode: "auto", profileId, totalDurationS\|null, subjectId, subjectLabel, subjectHrMax, subjectAge\|null, operatorName, profilesDigest\|null}, incidents_open_high, server_contract_version}` (`profilesDigest` depuis 1.12, à toute console : l'empreinte de la liste d'où le lancement a été fait) ou, depuis 1.9 et seulement à une console qui l'annonce, `{session: {sessionId, mode: "bench", occupancy: "ballast", ballastKg\|null, notes\|null, operatorName}, incidents_open_high, server_contract_version}`. `incidents_open_high` (depuis 1.10, ANH-145, à toute console) : le nombre d'incidents de gravité haute de la machine ouverts ou analysés, que le pré-vol lit | toutes les 3 s, sans séance en cours ni lancement en attente, quels que soient les programmes depuis 1.9 (un lancement auto que la console ne prend pas est laissé comme s'il n'était pas là) |
 | `POST /api/machine/training/start` | `{sessionId, startedAt?, sessionAgeMs?, profilesDigest?}` (`profilesDigest` depuis 1.12 : l'empreinte de la liste que la machine tient ; une valeur qui n'est pas du texte n'est pas lue) | `{success: true}`, aussi pour une confirmation répétée d'un départ déjà confirmé dont la machine n'a encore rien envoyé et sans arrêt demandé, dans les 90 s qui suivent le départ daté par le serveur à la première confirmation (contrat 1.8) ; **409** `{error: <refus à l'armement>, message}` si le lancement revérifié est refusé (contrat 1.5) | après la confirmation de l'opérateur et avant l'armement ; seul un 2xx autorise l'armement, et sur un 409 la console n'arme pas et n'envoie pas de fin. Les deux champs sont facultatifs. Jamais limitée en débit |
@@ -3319,6 +3409,9 @@ Détails du contrat :
   elle est classée non signée et le refus de lancement est correct, mais le
   libellé « mode banc » ne la décrit pas. `medicalParametersStatus` et
   `medicalParametersReferenceVersion` sont calculés ensuite à la lecture.
+  Depuis 1.15 (ANH-141), `config_hash` est écrit dans `machines.configHash` :
+  64 chiffres hexadécimaux minuscules gardés, `null` gardé (une console sur
+  son `.env`), autre forme ou absent effacé.
 - **Serveur d'un autre contrat** : `server_contract_version` vaut la version
   servie par Convex. Le Pi n'arme rien d'une réponse dont la majeure n'est
   pas la sienne ; il termine le lancement par `/training/end` avec la raison
@@ -3563,6 +3656,40 @@ de [`contracts/machine-api.json`](../contracts/machine-api.json).
   cette machine changent leur code.
 - **Non limitée en débit**, comme le roster et le catalogue : lecture seule,
   demandée au plus une fois par minute, au repos.
+
+### La configuration signée (contrat 1.15, ANH-141)
+
+`GET /api/machine/config` porte vers la machine sa révision de configuration
+en vigueur ([`machine_configs`](#machine_configs--la-configuration-des-machines-anh-141)),
+sur le canal du catalogue : même clé `ANHEART_CATALOG_SIGNING_KEY`, même clé
+publique dans l'image, même enveloppe. Définition partagée : l'entrée
+`machine_config` de [`contracts/machine-api.json`](../contracts/machine-api.json),
+et les clés dans [`contracts/machine-config.json`](../contracts/machine-config.json).
+
+- **Ce qui est signé.** `payload` est le texte JSON
+  `{kind: "machine_config", machineId, issuedAt, validationLevel, revision, hash, values}`
+  construit par `machineConfigs.signedConfig` (`machineConfigPayload`,
+  `convex/lib/machineConfig.ts`). `values` est lui-même un texte : le JSON
+  canonique de la révision tel qu'il a été haché à la proposition, que la
+  console hache de nouveau sans jamais le réécrire, de sorte que les deux côtés
+  ne dépendent d'aucune façon d'écrire un nombre. `revision`, `hash` et
+  `values` valent `null` tant que rien n'est approuvé : la console garde alors
+  ce qu'elle a.
+- **Le niveau.** `validationLevel` est le niveau effectif du registre au
+  moment de la réponse : la console refuse `PROGRAMS_ENABLED=true` sous
+  `auto` et `OCCUPANCY_OCCUPIED_ENABLED=true` sous `occupied`, deuxième
+  barrière après l'approbation (EX-5).
+- **La date.** `issuedAt`, l'horloge de l'action ; la console refuse un texte
+  plus ancien que celui qu'elle tient, et une révision plus ancienne que celle
+  qu'elle a appliquée.
+- **Ce que la console en fait.** Elle revalide les valeurs avec ses règles et
+  ses clés locales, applique au repos une révision qui ne change que des clés
+  d'exploitation, et ne fait passer une clé de sûreté qu'après la confirmation
+  physique d'un opérateur connecté. Elle le dit par
+  `POST /api/machine/config/applied` ; un refus revient avec sa raison, que la
+  fiche de la machine affiche (« refusée par la machine : »).
+- **Non limitée en débit**, comme le catalogue et la liste des opérateurs.
+  L'accusé d'application l'est (1 toutes les 10 s, réserve 5).
 
 ### Routes retirées
 
@@ -4516,7 +4643,7 @@ nom de l'en-tête, liste des codes d'erreur), et les constantes de
 |---|---|
 | Même **majeure** des deux côtés | Les deux se parlent. |
 | **Mineure** différente, même majeure | Acceptée dans les deux sens : dans une majeure, chacun ne s'appuie que sur ce que toutes ses mineures fournissent. |
-| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 13 des 14 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre que la dernière utilisation de la clé ([§6](#6-routes-http-machine-convexhttpts)). |
+| Majeure de la machine absente, illisible ou non servie | Convex répond **426** `contract_unsupported` à 16 des 17 routes machine (toutes **sauf** `GET /api/machine/training/status`), sans rien lire ni écrire d'autre que la dernière utilisation de la clé ([§6](#6-routes-http-machine-convexhttpts)). |
 | Arrêt venu du tableau de bord | Il traverse toutes les versions : la route `training/status` répond avec la seule clé, et le Pi arrête sa séance sur `stopRequested: true` ou `active: false` d'une réponse de n'importe quelle majeure, version absente comprise. C'est tout ce qu'il retient d'une réponse d'une autre majeure. |
 | Majeure du serveur différente de celle de la machine, ou non annoncée | Le Pi **n'arme aucun lancement distant** venu de cette réponse, l'affiche sur la console et renvoie le lancement comme séance échouée (voir [raspberry-pi.md](raspberry-pi.md#14-versions-et-compatibilité)). |
 
@@ -4637,6 +4764,7 @@ sont décrites ci-dessous.
 
 | Mineure | Ajouts, tous compatibles |
 |---|---|
+| `1.15` | La configuration de la machine tenue dans Convex (ANH-141, [entrée `machine_config`](../contracts/machine-api.json), [§6](#la-configuration-signée-contrat-115-anh-141)) : la route `GET /api/machine/config`, non limitée en débit, qui répond la révision en vigueur signée avec le niveau de validation de la machine, ou `not_configured` sans clé ; la route `POST /api/machine/config/applied {revision, hash, refusal?}`, limitée à 1 toutes les 10 s ; `config_hash` du heartbeat gardé (`machines.configHash`). Aucun code d'erreur nouveau. Une console 1.15 de la couche Convex seule (contrat épinglé, rien d'autre) ne demande pas la route et envoie `config_hash: null`. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi. |
 | `1.14` | L'état de la chaîne STO et de l'horloge dans la santé du heartbeat (ANH-92, ANH-148, [entrée `health_state`](../contracts/machine-api.json), [Santé machine](#santé-machine-anh-148)) : `sto_state`, `sto_source`, `clock_trusted` et `clock_max_error_s`, facultatifs et nullables, que la console n'envoie qu'à un serveur qui a annoncé 1.14 ou plus. Aucun code d'erreur nouveau. Ordre de déploiement : Convex avant l'image du Pi. |
 | `1.13` | La connexion nommée à la console (ANH-152, [entrée `operator_list`](../contracts/machine-api.json), [§6](#la-liste-des-opérateurs-signée-contrat-113-anh-152)) : la route `GET /api/machine/operators`, non limitée en débit, qui répond la liste signée des opérateurs et des tablettes de la machine, ou `not_configured` sans clé ; `actor` d'un événement peut valoir `device:<id>` ; `POST /api/machine/training/local` accepte `operatorId`, gardé s'il est un opérateur de la machine, `operatorName` restant exigé. Aucun code d'erreur nouveau. Ordre de déploiement : Convex, puis la clé de signature dans Convex, puis l'image du Pi. |
 | `1.12` | Le lancement auto lié à la liste de programmes d'où il a été fait ([entrée `launch_programme_list`](../contracts/machine-api.json), [§6](#lancement-lié-à-la-liste-de-programmes-contrat-112)) : `profilesDigest` dans le corps de `POST /api/machine/profiles` et de `POST /api/machine/training/start`, facultatif, et dans le lancement auto du poll ; un refus à l'armement de plus en **409**, `programme_changed`, pour un lancement auto seulement. Ordre de déploiement : Convex avant l'image du Pi. |
@@ -4833,5 +4961,6 @@ Limites à connaître :
   validation de la machine ; le refus d'installation OTA attend ANH-116.
 - `medical_parameters_version` et `config_hash` sont acceptés dans le heartbeat.
   Depuis ANH-139, Convex stocke et compare la version médicale annoncée à la
-  référence courante, puis l'affiche sur la fiche machine. `config_hash` garde
-  son statut : il vaut toujours `null` et n'est pas stocké.
+  référence courante, puis l'affiche sur la fiche machine. Depuis ANH-141
+  (contrat 1.15), `config_hash` est stocké dans `machines.configHash` et
+  comparé à la révision de configuration en vigueur.

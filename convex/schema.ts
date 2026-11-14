@@ -19,6 +19,7 @@ import {
 } from "./lib/sessionSummary";
 import { v } from "convex/values";
 import { MACHINE_VALIDATION_LEVELS } from "./lib/releaseValidation";
+import { machineConfigFields } from "./lib/machineConfig";
 import {
   machineHealthValidator,
   healthMeasurementsValidator,
@@ -535,6 +536,9 @@ export default defineSchema({
     contractVersion: v.optional(v.string()),
     lastVersionSeenAt: v.optional(v.number()),
     medicalParametersVersion: v.optional(v.union(v.string(), v.null())),
+    // Announced by the Pi with each heartbeat since contract 1.15 (ANH-141):
+    // the hash of the configuration it applied, null on its `.env`.
+    configHash: v.optional(v.union(v.string(), v.null())),
     health: v.optional(machineHealthValidator),
     healthUpdatedAt: v.optional(v.number()),
   })
@@ -558,6 +562,13 @@ export default defineSchema({
     updatedBy: v.id("users"),
   })
     .index("by_machine", ["machineId"])
+    .index("by_organization", ["organizationId"]),
+
+  // The configuration of each machine, one row per revision (ANH-141):
+  // proposed and approved on the site, applied at rest by the console, which
+  // revalidates it. A change is a new revision; values are never rewritten.
+  machine_configs: defineTable(machineConfigFields)
+    .index("by_machine_and_revision", ["machineId", "revision"])
     .index("by_organization", ["organizationId"]),
 
   // The keys of the machines (ANH-165). A machine may hold several valid keys

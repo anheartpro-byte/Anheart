@@ -42,7 +42,7 @@ const SUBJECT_HR_MAX_MAX = 220;
 /** `PROFILE_ID_PATTERN`; without the `m` flag `$` is the end of the text only. */
 const PROFILE_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 /** What Python's `str.strip()` removes (`str.isspace`), which is not what `trim()` removes. */
-const PYTHON_WHITESPACE = new Set([
+export const PYTHON_WHITESPACE = new Set([
   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x85, 0xa0, 0x1680,
   0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009,
   0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,

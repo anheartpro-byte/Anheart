@@ -313,9 +313,12 @@ préalables :
    et joindre les comptes rendus de validation. Le niveau `occupied` est
    accordé uniquement par une revue jointe après `bench` puis `auto`, et reste
    refusé tant que la clé médicale embarquée est la clé de test. Les rayons
-   mesurés du registre sont proposés à la configuration centralisée ; les
-   verrous `PROGRAMS_ENABLED` et `OCCUPANCY_OCCUPIED_ENABLED` y seront appliqués
-   quand ANH-141 existera. Aucun verrou lié au registre n'est ajouté au
+   mesurés du registre sont proposés à la configuration centralisée ; Convex
+   y refuse `PROGRAMS_ENABLED` au dessous du niveau `auto` et
+   `OCCUPANCY_OCCUPIED_ENABLED` au dessous du niveau `occupied`, à la
+   proposition et à l'approbation (ANH-141,
+   [convex.md](convex.md#machineconfigsts--configuration-des-machines-anh-141)) ;
+   la console le revérifie à l'application, une fois sa couche livrée. Aucun verrou lié au registre n'est ajouté au
    lancement distant aujourd'hui (suivi ANH-102 et ANH-107).
 9. Mesurer au banc la batterie du vrai BITalino contre un voltmètre : le seuil
    du pré-vol (30 %) repose sur une conversion supposée

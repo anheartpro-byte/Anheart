@@ -33,6 +33,7 @@ import { CURRENT_QUESTIONNAIRE } from "../lib/fitnessQuestionnaire";
 import { notifyMachine } from "./lib/notifications";
 import { registryRelease, registryUpload } from "./machineRegistry.fixtures";
 import { addSecondAdmin, insertProgramme, JOG, SIGNOFF } from "./programmes.fixtures";
+import { insertConfigRevision, MACHINE_CONFIG_BASE } from "./machineConfigs.fixtures";
 import {
   addSession,
   as,
@@ -375,6 +376,7 @@ export const MATRIX: Entry[] = [
     },
   },
   ...registryMutationEntries(),
+  ...machineConfigEntries(),
   // =========================================================================
   // users.ts
   // =========================================================================
@@ -4298,6 +4300,79 @@ function registryMutationEntries(): Entry[] {
   ] }));
 }
 
+/** A draft each writer may act on: a name change on an applied revision, by the organisation admin or a second Anheart admin. */
+async function configDraft(w: World, actor: Actor) {
+  await insertConfigRevision(w, { status: "applied", author: w.admin, revision: 1 });
+  return await insertConfigRevision(w, {
+    status: "draft",
+    author: actor === "orgAdmin" ? w.orgAdmin : await addSecondAdmin(w),
+    role: actor === "orgAdmin" ? "org_admin" : "admin",
+    revision: 2,
+    values: { ...MACHINE_CONFIG_BASE, name: "TEST renamed" },
+  });
+}
+
+function machineConfigWriteCases(foreign: RegExp): Case[] {
+  return [
+    { actor: "anonymous", expect: refuse(NOT_AUTH), note: "sign-in required" },
+    { actor: "admin", scope: "own", expect: ok, note: "the Anheart admin configures every machine" },
+    { actor: "orgAdmin", scope: "own", expect: ok, note: "the name and the place of their own machine" },
+    ...(["manager", "otherManager", "patient", "otherPatient", "stranger"] as const)
+      .map((actor) => ({ actor, scope: "own" as const, expect: refuse(UNAUTHORIZED), note: "only admins configure a machine" })),
+    { actor: "orgBAdmin", scope: "foreign", expect: refuse(foreign), note: "centre A's machine is unknown from centre B" },
+    ...(["orgBManager", "orgBPatient"] as const)
+      .map((actor) => ({ actor, scope: "foreign" as const, expect: refuse(UNAUTHORIZED), note: "only admins configure a machine" })),
+  ];
+}
+
+function machineConfigEntries(): Entry[] {
+  return [
+    {
+      id: "machineConfigs.getMachineConfig", ref: api.machineConfigs.getMachineConfig, kind: "query",
+      cases: registryReadCases(),
+      build: async (w, actor, scope) => ({ machineId: registryTarget(w, actor, scope) }),
+      onSuccess: (res, w, actor) => {
+        const row = res as { machineId: string; canPropose: string; configurationStatus: string };
+        if (row.machineId !== w.machine || row.configurationStatus !== "unavailable" || row.canPropose !== (actor === "admin" ? "all" : "name_location"))
+          throw new Error("Configuration visibility or rights differ");
+      },
+    },
+    {
+      id: "machineConfigs.proposeConfig", ref: api.machineConfigs.proposeConfig, kind: "mutation",
+      cases: machineConfigWriteCases(/machine_not_found/),
+      build: async (w, actor) => {
+        if (actor === "orgAdmin") await insertConfigRevision(w, { status: "applied", author: w.admin, revision: 1 });
+        return { machineId: w.machine, values: actor === "orgAdmin" ? { ...MACHINE_CONFIG_BASE, location: "TEST ailleurs" } : MACHINE_CONFIG_BASE };
+      },
+      onSuccess: async (res, w, actor) => {
+        const { configId } = res as { configId: Id<"machine_configs"> };
+        const row = await w.t.run((ctx) => ctx.db.get(configId));
+        if (row?.status !== "draft" || row.proposedBy !== userId(w, actor) || row.machineId !== w.machine)
+          throw new Error("Draft not stored with its author");
+      },
+    },
+    {
+      id: "machineConfigs.approveConfig", ref: api.machineConfigs.approveConfig, kind: "mutation",
+      cases: machineConfigWriteCases(/machine_config_not_found/),
+      build: async (w, actor) => ({ configId: await configDraft(w, actor) }),
+      onSuccess: async (_res, w, _actor, _scope, args) => {
+        const row = await w.t.run((ctx) => ctx.db.get(args.configId as Id<"machine_configs">));
+        const machine = await w.t.run((ctx) => ctx.db.get(w.machine));
+        if (row?.status !== "approved" || machine?.name !== "TEST renamed") throw new Error("Revision not approved");
+      },
+    },
+    {
+      id: "machineConfigs.rejectConfig", ref: api.machineConfigs.rejectConfig, kind: "mutation",
+      cases: machineConfigWriteCases(/machine_config_not_found/),
+      build: async (w, actor) => ({ configId: await configDraft(w, actor), reason: "TEST motif" }),
+      onSuccess: async (_res, w, _actor, _scope, args) => {
+        const row = await w.t.run((ctx) => ctx.db.get(args.configId as Id<"machine_configs">));
+        if (row?.status !== "rejected" || row.rejectReason !== "TEST motif") throw new Error("Revision not rejected");
+      },
+    },
+  ];
+}
+
 async function registryRow(w: World) {
   return await w.t.run((ctx) => ctx.db.query("machine_registry").withIndex("by_machine", (q) => q.eq("machineId", w.machine)).unique());
 }
@@ -4647,6 +4722,8 @@ export const ROUTE_COVERAGE: ReadonlyArray<{
   { method: "GET", path: "/api/machine/roster", tests: "httpRoutes.test.ts" },
   { method: "GET", path: "/api/machine/programmes", tests: "programmeCatalog.test.ts (signature verified with a test key, since, not configured); machineAuth.test.ts (machine key)" },
   { method: "GET", path: "/api/machine/operators", tests: "consoleAccess.test.ts (signature verified with a test key, disabled operator and revoked tablet left out, not configured); machineAuth.test.ts (machine key); rateLimitsRoutes.test.ts (never limited)" },
+  { method: "GET", path: "/api/machine/config", tests: "machineConfigs.test.ts (signature verified with a test key, revision in force, level, not configured); machineAuth.test.ts (machine key); rateLimitsRoutes.test.ts (never limited)" },
+  { method: "POST", path: "/api/machine/config/applied", tests: "machineConfigs.test.ts (applied, refused, unknown revision, other hash, draft, malformed body); machineAuth.test.ts (machine key); rateLimits.test.ts (limit per machine)" },
   { method: "POST", path: "/api/machine/profiles", tests: "httpRoutes.test.ts (malformed body)" },
   { method: "POST", path: "/api/machine/training/start", tests: "httpRoutes.test.ts (non-pending refused); contract.test.ts and armingRecheck.test.ts (409 with the arming refusal's code)" },
   { method: "POST", path: "/api/machine/training/local", tests: "httpRoutes.test.ts (idempotent)" },

@@ -55,6 +55,7 @@ const NEVER_LIMITED = [
   "GET /api/machine/roster",
   "GET /api/machine/programmes",
   "GET /api/machine/operators",
+  "GET /api/machine/config",
 ] as const;
 
 describe("ANH-228 refused writes", () => {
@@ -146,7 +147,7 @@ describe("ANH-228 routes that must never depend on a limiter", () => {
     }
   });
 
-  it("still serves all seven routes with every machine bucket exhausted", async () => {
+  it("still serves all eight routes with every machine bucket exhausted", async () => {
     const w = await seedMachineWorld(modules);
     const sessionId = await session(w);
     const pending = await w.admin.mutation(api.training.launchAutoSession, {
@@ -216,6 +217,9 @@ describe("ANH-228 routes that must never depend on a limiter", () => {
     const operators = await send(w, "operators", undefined, headers);
     expect(operators.status).toBe(200);
     expect(await operators.json()).toHaveProperty("status");
+    const config = await send(w, "config", undefined, headers);
+    expect(config.status).toBe(200);
+    expect(await config.json()).toHaveProperty("status");
     expect(
       (await send(w, `training/status?sessionId=${sessionId}`)).status,
     ).toBe(200);

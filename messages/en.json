@@ -142,6 +142,13 @@
       "incident": {
         "analyzed": "Incident analysed",
         "closed": "Incident closed"
+      },
+      "machine_config": {
+        "proposed": "Machine configuration proposed",
+        "approved": "Machine configuration approved",
+        "rejected": "Machine configuration rejected",
+        "applied": "Configuration applied by the machine",
+        "refused": "Configuration refused by the machine"
       }
     },
     "targets": {
@@ -158,7 +165,8 @@
       "medical_parameters_version": "Medical parameters version",
       "programme": "Programme",
       "patient_invitation": "Patient invitation",
-      "incident": "Incident"
+      "incident": "Incident",
+      "machine_config": "Machine configuration"
     },
     "roles": {
       "admin": "Anheart admin",
@@ -272,7 +280,7 @@
     "badges": {
       "validation": "Validation: {level}",
       "version": "Version: {status}",
-      "configuration": { "unavailable": "Configuration: unavailable (ANH-141)" }
+      "configuration": { "unavailable": "Configuration: unavailable (ANH-141)", "pending": "Configuration: waiting for the machine", "applied": "Configuration: applied", "mismatch": "Configuration: applied ≠ approved" }
     },
     "saving": "Saving...",
     "saveIdentity": "Save identity",
@@ -297,6 +305,14 @@
     "downgrade_reason_required": "Lowering validation requires a reason of 3 to 500 characters.",
     "occupied_requires_signed_medical_parameters": "Occupied validation requires a production medical key and a medical parameters version.",
     "machine_validation_insufficient": "The machine's validation level does not permit this configuration.",
+    "invalid_machine_config": "The console would refuse this configuration: see the errors of the form.",
+    "machine_config_not_found": "This configuration revision does not exist, or its machine is no longer reachable.",
+    "machine_config_wrong_status": "This revision is no longer in the state this action needs.",
+    "machine_config_unchanged": "This configuration is already the one sent to the machine.",
+    "machine_config_keys_not_allowed": "An organisation admin changes only the machine's name and location.",
+    "machine_config_self_approval": "A safety key changes: an Anheart admin other than the author must approve.",
+    "machine_config_safety_needs_admins": "A safety key changes: the revision must be proposed by an Anheart admin.",
+    "machine_config_reason_required": "Give a reason of 3 to 500 characters.",
     "programme_not_found": "Programme not found.",
     "programme_wrong_status": "The programme is no longer in the state this step needs. Reload the page.",
     "programme_refused": "The Pi's validation refuses this programme.",
