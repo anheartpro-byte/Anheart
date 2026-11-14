@@ -201,8 +201,13 @@ const summaryRows = (w: World) =>
 
 describe("ANH-234 pre-start endings and absent summary isolation", () => {
   it("recognises only the three known pre-start endings of failed sessions", () => {
-    for (const endCode of ARMING_REFUSAL_CODES)
+    for (const endCode of [
+      ...ARMING_REFUSAL_CODES,
+      "cancelled_before_start",
+      "refused_by_machine",
+    ])
       expect(endedBeforeStart({ status: "failed", endCode })).toBe(true);
+    // Rows written before those two codes: known by their reason alone.
     for (const endReason of [
       "Cancelled before start by Synthetic",
       "refusee par la machine : busy",
@@ -211,6 +216,7 @@ describe("ANH-234 pre-start endings and absent summary isolation", () => {
     for (const session of [
       { status: "completed", endReason: "Cancelled before start by Synthetic" },
       { status: "active", endCode: ARMING_REFUSAL_CODES[0] },
+      { status: "completed", endCode: "cancelled_before_start" },
       { status: "failed", endReason: "machine failure" },
       { status: "failed" },
       {

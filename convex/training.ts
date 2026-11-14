@@ -708,6 +708,25 @@ export function pendingSessionTtlMs(): number {
 export const EXPIRED_REASON = "expired before the machine armed it";
 
 /**
+ * The `endCode` of a session that ended before its start and is no arming
+ * refusal (ANH-102): cancelled from the site while it waited
+ * (`requestStop`), or refused by its machine while it still waited, whose
+ * reason starts with {@link MACHINE_REFUSAL_PREFIX} (`endTrainingSession`).
+ * Never answered to a machine. Rows written before them carry none, and are
+ * known by that reason alone (`endedBeforeStart`), as is a refusal that
+ * reached a session the server already held started.
+ */
+export const CANCELLED_BEFORE_START = "cancelled_before_start";
+export const REFUSED_BY_MACHINE = "refused_by_machine";
+
+/** How the machine begins the reason of a launch it refused before arming it
+ * (`raspberry-pi/src/cloud_sync.py`, docs/convex.md). */
+export const MACHINE_REFUSAL_PREFIX = "refusee par la machine : ";
+
+/** Who cancelled a launch that waited: the `endReason` of `requestStop`. */
+export const CANCELLED_REASON_PREFIX = "Cancelled before start by";
+
+/**
  * Why a launch is refused when its machine arms it: each one a stable code
  * of the machine API (contracts/machine-api.json, `arming_refusals`) and of
  * the dashboard's table (convex/lib/errors.ts, which the site translates),
@@ -1439,7 +1458,8 @@ export const requestStop = mutation({
       await ctx.db.patch(args.sessionId, {
         status: "failed",
         endedAt: now,
-        endReason: `Cancelled before start by ${fullName(me)}`,
+        endReason: `${CANCELLED_REASON_PREFIX} ${fullName(me)}`,
+        endCode: CANCELLED_BEFORE_START,
       });
       await audit(ctx, {
         actor: userActor(me),
@@ -2333,11 +2353,18 @@ export const endTrainingSession = internalMutation({
       endedAt = Math.max(s.startedAt, args.endedAt + axis.shift);
     }
     const status = args.failed ? "failed" : "completed";
+    // Only a launch still waiting: a session the server holds started is no
+    // end before its start for the server, whatever its machine says of it.
+    const refused =
+      s.status === "pending" &&
+      args.failed &&
+      args.reason.startsWith(MACHINE_REFUSAL_PREFIX);
     await ctx.db.patch(args.sessionId, {
       status,
       endedAt,
       endReason: args.reason,
       interruptedAt: undefined,
+      ...(refused ? { endCode: REFUSED_BY_MACHINE } : {}),
     });
     // ANH-145: an emergency stop, a safety verdict, a tick exception, or the
     // third pre-flight refusal in a row opens an incident.
@@ -2618,6 +2645,35 @@ async function heardOfSince(
 export const INTERRUPT_BATCH = 50;
 
 /**
+ * How long the marker of a run of `interruptSilentSessions` holds the job
+ * after its last page (ANH-231): a run whose pages stopped coming (a page
+ * that failed, a scheduler that lost it) never holds it for good. A healthy
+ * page follows the one before at once, so five minutes is far beyond one.
+ */
+export const INTERRUPT_RUN_STALE_MS = 5 * 60_000;
+
+/** The marker of the run under way: one row, read and written by its name. */
+const INTERRUPT_RUN = "interrupt" as const;
+
+/**
+ * The marker of the run under way, or null: read by its index. The code never
+ * writes a second row, but one put there from outside (an edit, an import)
+ * must not wedge the job: the most recently renewed is kept, the others go.
+ */
+async function interruptRun(ctx: MutationCtx) {
+  const rows = await ctx.db
+    .query("job_runs")
+    .withIndex("by_name", (q) => q.eq("name", INTERRUPT_RUN))
+    .collect();
+  const kept = rows.reduce<(typeof rows)[number] | null>(
+    (best, row) => (best === null || row.renewedAt > best.renewedAt ? row : best),
+    null,
+  );
+  for (const row of rows) if (row !== kept) await ctx.db.delete(row._id);
+  return kept;
+}
+
+/**
  * Mark `interrupted` every active training session the server has heard
  * nothing of for `SESSION_SILENCE_MS` (`heardOfSince`): its console stopped
  * before sending its end, its machine is off, or its link has been down that
@@ -2629,6 +2685,13 @@ export const INTERRUPT_BATCH = 50;
  * or its failure never keeps a machine from being marked offline. Returns how
  * many sessions this page marked, and whether it was the last page.
  *
+ * One run at a time (ANH-231). Its first page writes a marker (`job_runs`,
+ * the run's start as its identity), every page renews it, and the last page
+ * removes it. The job starts nothing while a marker renewed less than
+ * `INTERRUPT_RUN_STALE_MS` ago stands (`{marked: 0, done: false}`): that run
+ * reads every page. An older marker is taken over, and a page of the run it
+ * named, if one still comes, stops at once without touching the new one.
+ *
  * Never `completed` nor `failed`: its end is unknown, and it may still be
  * running on a machine that cannot reach the server. Nothing is asked of the
  * machine: `getTrainingStatus` still answers that the session is active, a
@@ -2638,10 +2701,34 @@ export const INTERRUPT_BATCH = 50;
  * left as they are.
  */
 export const interruptSilentSessions = internalMutation({
-  args: { cursor: v.union(v.string(), v.null()) },
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    // The run a page belongs to (its start); absent from the job's call.
+    run: v.optional(v.number()),
+  },
   returns: v.object({ marked: v.number(), done: v.boolean() }),
   handler: async (ctx, args) => {
     const now = Date.now();
+    const marker = await interruptRun(ctx);
+    let run: number;
+    if (args.cursor === null) {
+      if (marker !== null && now - marker.renewedAt < INTERRUPT_RUN_STALE_MS)
+        return { marked: 0, done: false };
+      run = now;
+      if (marker === null)
+        await ctx.db.insert("job_runs", {
+          name: INTERRUPT_RUN,
+          startedAt: run,
+          renewedAt: now,
+        });
+      else await ctx.db.patch(marker._id, { startedAt: run, renewedAt: now });
+    } else {
+      // A page of a run taken over, or already ended: the run under way reads it.
+      if (marker === null || marker.startedAt !== args.run)
+        return { marked: 0, done: true };
+      run = marker.startedAt;
+      await ctx.db.patch(marker._id, { renewedAt: now });
+    }
     const since = now - SESSION_SILENCE_MS;
     const page = await ctx.db
       .query("sessions")
@@ -2661,8 +2748,11 @@ export const interruptSilentSessions = internalMutation({
       await ctx.scheduler.runAfter(
         0,
         internal.training.interruptSilentSessions,
-        { cursor: page.continueCursor },
+        { cursor: page.continueCursor, run },
       );
+    } else {
+      const ended = await interruptRun(ctx);
+      if (ended !== null) await ctx.db.delete(ended._id);
     }
     return { marked, done: page.isDone };
   },

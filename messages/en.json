@@ -1048,7 +1048,8 @@
     "legacyTitle": "Former ECG recording",
     "legacyDescription": "This session comes from the former ECG recording mode, which has been removed. It is kept read-only.",
     "dataBatches": "Data Batches",
-    "failedBeforeStartDescription": "This launch was refused before the server confirmed its start to the machine."
+    "failedBeforeStartDescription": "This launch was refused before the server confirmed its start to the machine.",
+    "cancelledBeforeStartDescription": "This launch was cancelled from the site before its machine started it."
   },
   "sessionLive": {
     "viewDetails": "View Session Details",

@@ -26,6 +26,7 @@ function substitute(
     "POST /api/machine/heartbeat": 111,
     "POST /api/machine/training/telemetry": 222,
     "POST /api/machine/training/events": 333,
+    "POST /api/machine/profiles": 444,
   },
 ) {
   vi.resetModules();
@@ -84,7 +85,8 @@ describe("ANH-166 the limits are read from contracts/machine-api.json", () => {
       limits.MAX_HEARTBEAT_BYTES,
       limits.MAX_TELEMETRY_BYTES,
       limits.MAX_EVENTS_BYTES,
-    ]).toEqual([111, 222, 333]);
+      limits.MAX_PROFILES_BYTES,
+    ]).toEqual([111, 222, 333, 444]);
   });
 
   it("refuses to load without a limit for a route it limits", async () => {

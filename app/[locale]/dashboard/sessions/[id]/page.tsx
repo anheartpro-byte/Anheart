@@ -145,9 +145,11 @@ export default function SessionDetailPage({
                   {t("sessionDetail.failedTitle")}
                 </h3>
                 <p className="text-sm text-red-700 dark:text-red-300 mt-1">
-                  {training?.endCode !== undefined
-                    ? t("sessionDetail.failedBeforeStartDescription")
-                    : t("sessionDetail.failedDescription")}
+                  {training?.endCode === "cancelled_before_start"
+                    ? t("sessionDetail.cancelledBeforeStartDescription")
+                    : training?.endCode !== undefined
+                      ? t("sessionDetail.failedBeforeStartDescription")
+                      : t("sessionDetail.failedDescription")}
                 </p>
                 {training && endReasonOf(training) && (
                   <p className="text-sm text-red-600 dark:text-red-400 mt-2 font-mono">

@@ -503,6 +503,51 @@ describe("session detail: a failed session", () => {
     ).toBeNull();
   });
 
+  it("ANH-102: says a launch cancelled from the site was cancelled, not refused", async () => {
+    answer(api.sessions.getSession, session(failed));
+    answer(
+      api.training.getTrainingSession,
+      training({
+        ...failed,
+        endReason: "Cancelled before start by manager Synthetic",
+        endCode: "cancelled_before_start",
+      }),
+    );
+    await open();
+
+    expect(
+      screen.getByText(fr.sessionDetail.cancelledBeforeStartDescription),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(fr.sessionDetail.failedBeforeStartDescription),
+    ).toBeNull();
+    expect(screen.queryByText(fr.sessionDetail.failedDescription)).toBeNull();
+    // No message for the code: the reason as written.
+    expect(
+      screen.getByText("Cancelled before start by manager Synthetic"),
+    ).toBeTruthy();
+  });
+
+  it("ANH-102: a launch its machine refused before arming it is a refusal before its start", async () => {
+    answer(api.sessions.getSession, session(failed));
+    answer(
+      api.training.getTrainingSession,
+      training({
+        ...failed,
+        endReason: "refusee par la machine : variateur en defaut",
+        endCode: "refused_by_machine",
+      }),
+    );
+    await open();
+
+    expect(
+      screen.getByText(fr.sessionDetail.failedBeforeStartDescription),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("refusee par la machine : variateur en defaut"),
+    ).toBeTruthy();
+  });
+
   it("gives the reason written in the notes of a session of the former mode", async () => {
     answer(
       api.sessions.getSession,

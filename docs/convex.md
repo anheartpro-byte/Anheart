@@ -138,11 +138,12 @@ Toute nouvelle table de données d'une organisation porte `organizationId`.
 sont pas des tables communes à tous les clients. Les tables globales et les
 tables liées ci-dessous expliquent les absences actuelles du champ.
 
-Douze tables ne le portent pas : `organizations` décrit les organisations
+Treize tables ne le portent pas : `organizations` décrit les organisations
 elles-mêmes ; `clerk_webhook_events` déduplique les événements Clerk au niveau
 global ; `software_releases`, `software_release_levels` et
 `medical_parameters_versions` sont des registres communs à tous les clients ;
 `record_upload_sweeps` conserve le curseur global de nettoyage des dépôts ;
+`job_runs` le marqueur de la passe en cours d'une tâche paginée (ANH-231) ;
 `ecg_data`, `session_summaries` et `session_record_manifest_pages` se lisent par
 leur séance ; `machine_api_keys` et `machine_heartbeats` par leur machine ;
 `notification_settings` par leur compte. Ces six dernières tables liées
@@ -660,7 +661,7 @@ Index : `by_machine`.
 | `localRef` | Clé d'idempotence côté Pi (séances locales). |
 | `stopRequestedAt` | Posé par `requestStop` : le Pi le lit et arrête. |
 | `endReason` | Raison de fin donnée par le Pi (ou « Cancelled before start by … », ou la phrase d'un refus à l'armement, par exemple « expired before the machine armed it »). |
-| `endCode` | Code stable d'un lancement refusé avant que sa machine l'arme (ANH-144) : `expired_before_start`, `right_revoked_before_start`... ([Revérification à l'armement](#revérification-à-larmement-anh-144)). Le site le traduit. Absent sur toute autre séance. |
+| `endCode` | Code stable d'un lancement refusé avant que sa machine l'arme (ANH-144) : `expired_before_start`, `right_revoked_before_start`... ([Revérification à l'armement](#revérification-à-larmement-anh-144)). Le site le traduit. Depuis ANH-102, aussi `cancelled_before_start` (annulé sur le site pendant qu'il attendait, `requestStop`) et `refused_by_machine` (fin échouée de la machine, sur une séance encore `pending`, dont la raison commence par `refusee par la machine : `) ; le site dit alors `endReason`, et la page de la séance dit, pour le premier, que le lancement a été annulé depuis le site. Absent sur toute autre séance, et sur ces deux fins écrites avant leurs codes. |
 | `interruptedAt` | Quand la tâche planifiée a marqué la séance `interrupted` (horloge du serveur). Présent exactement tant que la séance l'est. |
 | `ballast` | `{massKg}` : une séance de banc lestée lancée du site (ANH-250, `launchBenchSession`), `kind: manual`, `origin: remote`, capsule lestée et aucune personne à bord. `massKg` est la masse déclarée par le lanceur, en kg, ou `null` s'il n'en a pas donné ; jamais mesurée, rien ne décide sur elle. Absent sur toute autre séance. Une telle séance ne prend jamais de retour du passager (`personOnBoard` est faux, quelle que soit sa note). |
 
@@ -2658,10 +2659,15 @@ organisation. Ce filtre Convex précède `.take(50)` pour que les séances
 illisibles ne masquent pas les séances lisibles.
 Les séances `pending` sont exclues, ainsi que les séances
 `failed` avec un `endCode` de `ARMING_REFUSAL_CODES` (refus à l'armement,
-expiration comprise), ou sans `endCode` et dont `endReason` commence par
-`Cancelled before start by` (annulation par `requestStop` avant départ) ou
-`refusee par la machine : ` (refus du Pi avant départ, terminé par
-`/training/end`, préfixe écrit par `raspberry-pi/src/cloud_sync.py`).
+expiration comprise), `cancelled_before_start` (annulation par `requestStop`
+avant départ) ou `refused_by_machine` (refus du Pi d'un lancement encore
+`pending`, terminé par `/training/end`, raison au préfixe
+`refusee par la machine : ` écrit par `raspberry-pi/src/cloud_sync.py`), ou,
+sans `endCode`, dont `endReason` commence par `Cancelled before start by` ou
+par ce préfixe : les lignes écrites avant ces deux codes, et un refus du Pi
+arrivé sur une séance que le serveur tenait déjà démarrée (2xx du départ
+perdu). Le prédicat est un seul, `endedBeforeStart`
+(`convex/sessionReports.ts`), que les rapports lisent aussi.
 Seules les fins avant départ connues sont exclues ; toute autre fin compte,
 l'alerte penchant vers le signalement (fail closed). Une séance armée reste
 comptée même si elle échoue ensuite.
@@ -3081,7 +3087,7 @@ changer. La liste des codes est dans `contracts/machine-api.json` :
 | `machine_not_found` | 400 | La machine a disparu entre l'authentification et l'écriture. |
 | `request_failed` | 400 | Toute autre erreur levée pendant le traitement ; `message` porte son texte. |
 | `rate_limited` | 429 | La machine a dépassé la limite de débit de la route ; la réponse porte `retryAfterMs` et l'en-tête `Retry-After` (contrat 1.4, [ci-dessous](#limitation-de-débit-et-taille-des-corps-anh-166)). |
-| `payload_too_large` | 413 | Corps au-delà de la taille de la route, ou lot de plus de 600 points ou 200 événements, refusé avant d'être parcouru (contrat 1.4). |
+| `payload_too_large` | 413 | Corps au-delà de la taille de la route, ou lot de plus de 600 points, 200 événements (contrat 1.4) ou 2 000 programmes (ANH-228), refusé avant d'être parcouru. |
 | `feedback_not_eligible`, `feedback_session_not_ended`, `feedback_window_closed` | 400 | `training/events` seulement, depuis le contrat 1.7 : le retour du passager porté par un événement `feedback` est refusé (séance sans personne à bord, pas terminée, ou finie depuis plus de 24 h), [ci-dessous](#routes-utilisées-par-la-console-locale-raspberry-pisrccloud_syncpy). |
 | `expired_before_start`, `machine_deleted_before_start`, `organization_changed_before_start`, `right_revoked_before_start`, `age_refused_before_start`, `hr_max_changed_before_start`, `rider_busy` ; depuis 1.6 : `rider_not_fit`, `fitness_expired`, `consent_missing` ; depuis 1.9, pour un lancement de banc seulement : `machine_busy` ; depuis 1.10 : `incident_open` ; depuis 1.12, pour un lancement auto seulement : `programme_changed` | 409 | `training/start` seulement (depuis le contrat 1.5) : le lancement, revérifié au moment où la machine l'arme, est refusé ; la séance est `failed` avec ce code, et la machine ne doit pas la faire tourner ([Revérification à l'armement](#revérification-à-larmement-anh-144)). |
 
@@ -3211,14 +3217,23 @@ rien passer). Au-delà : **413** `payload_too_large`, rien n'est écrit.
 | `POST /api/machine/heartbeat` | 16 Kio (16 384 octets) | - |
 | `POST /api/machine/training/telemetry` | 300 Kio (307 200 octets) | 600 points |
 | `POST /api/machine/training/events` | 2,5 Mio (2 621 440 octets) | 200 événements |
+| `POST /api/machine/profiles` | 4 Mio (4 194 304 octets) | 2 000 programmes |
 
 Le nombre d'éléments est vérifié aussitôt le JSON lu, avant d'en examiner un
-seul : 601 points ou 201 événements reçoivent 413 (400 avant le contrat 1.4).
+seul : 601 points, 201 événements ou 2 001 programmes reçoivent 413 (400
+avant le contrat 1.4 pour les deux premiers).
 Les tailles laissent passer le plus grand lot valide : 200 événements de
 2 000 caractères écrits `\uXXXX` (6 octets chacun), comme la console écrit un
 caractère non ASCII, tiennent sous 2,5 Mio ; 600 points aux nombres les plus
 longs sous 300 Kio ; le plus grand heartbeat de la console (128 codes de
-défaut du variateur) fait environ 8 Kio. Les autres routes `POST` n'ont pas
+défaut du variateur) fait environ 8 Kio. Les programmes d'une console
+viennent d'un catalogue signé de 500 000 octets au plus, où chacun prend au
+moins 341 octets (ses 19 clés seules en prennent 322) : moins de 1 470
+programmes, dont les mots, même écrits `\uXXXX`, et le rapport de 200 entrées
+tiennent sous 4 Mio ; les tests du Pi l'épinglent
+(`test_cloud_rate_limit.py`). Ces deux bornes (ANH-228), `max_body_bytes` et
+`max_programmes` du contrat partagé, n'ajoutent ni champ ni code sur le fil :
+la version du contrat ne change pas. Les autres routes `POST` n'ont pas
 de taille propre ; seule la limite de Convex sur le corps d'une action HTTP
 les borne (20 Mio selon sa documentation publique, non vérifiée ici).
 
@@ -3591,6 +3606,15 @@ Ce n'est donc pas le critère de la machine hors ligne : une machine qui
 répond mais ne nomme plus la séance (console redémarrée sur un enregistrement
 illisible) la voit marquée aussi, et une machine muette 2 min ne fait rien
 marquer. Les séances de l'ancien mode (sans `kind`) ne sont pas touchées.
+Une passe à la fois. Sa première page écrit un marqueur, une ligne de
+`job_runs` (`name: "interrupt"`, le début de la passe comme identité), chaque
+page le renouvelle et la dernière le retire ; chacune le lit par son index,
+une seule ligne. La tâche ne lance rien tant qu'un marqueur renouvelé il y a
+moins de 5 min (`INTERRUPT_RUN_STALE_MS`) tient (`{marked: 0, done: false}`) :
+cette passe-là lit toutes les pages. Un marqueur plus ancien (une page qui a
+échoué, une page perdue) est repris par la passe suivante, qui repart de la
+première page ; une page de la passe reprise, si elle arrive encore, ne lit
+rien et ne touche pas au nouveau marqueur.
 
 C'est une tâche à part, bornée. Une transaction lit au plus
 `INTERRUPT_BATCH` (50) séances actives, une page de l'index

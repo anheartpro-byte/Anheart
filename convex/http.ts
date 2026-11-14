@@ -24,6 +24,8 @@ import {
   limitMachine,
   MAX_EVENTS_BYTES,
   MAX_HEARTBEAT_BYTES,
+  MAX_PROFILES_BYTES,
+  MAX_PROFILES_PER_PUSH,
   MAX_TELEMETRY_BYTES,
   payloadTooLarge,
   type MachineLimit,
@@ -394,7 +396,13 @@ http.route({
 
 /**
  * POST /api/machine/profiles {storeRev, programsEnabled, profiles[]}
- * One every 10 s per machine, five in reserve (ANH-228).
+ * One every 10 s per machine, five in reserve (ANH-228). At most
+ * `max_body_bytes` of body and `max_programmes` programmes
+ * (`MAX_PROFILES_PER_PUSH`), both refused (413) before a programme is read: a
+ * catalogue of `max_payload_bytes` holds fewer than 1,470, each taking more
+ * than 340 bytes of it (its 19 keys alone take 322), and a list is two
+ * writes a programme in one mutation. The Pi's tests pin its largest list
+ * under both (test_cloud_rate_limit.py).
  * Contract 1.11 (ANH-138): and `{catalogRevision, accepted, rejected}`, what
  * the machine made of the signed catalogue; absent from an older console,
  * whose machine then has no catalogue state any more.
@@ -406,12 +414,18 @@ http.route({
   path: "/api/machine/profiles",
   method: "POST",
   handler: limitedRoute("machineProfiles", async (ctx, req, machineId) => {
-    const body = await readJson(req);
+    const body = await readBoundedJson(req, MAX_PROFILES_BYTES);
+    if (body instanceof Response) return body;
     if (!body || !isNum(body.storeRev) || !Array.isArray(body.profiles)) {
       return refuse(
         400,
         "invalid_request",
         "Expected {storeRev, programsEnabled, profiles}",
+      );
+    }
+    if (body.profiles.length > MAX_PROFILES_PER_PUSH) {
+      return payloadTooLarge(
+        `At most ${MAX_PROFILES_PER_PUSH} programmes per list`,
       );
     }
     const catalog = catalogReportOf(body);
