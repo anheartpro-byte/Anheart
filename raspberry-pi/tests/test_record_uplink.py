@@ -3352,6 +3352,40 @@ async def test_a_recordless_stop_moved_by_the_next_end_is_sent_after_it_never_gi
     assert "given up" not in caplog.text
 
 
+async def test_an_end_never_tied_to_its_record_moved_by_the_next_is_caught_up_with_its_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ANH-228: a session that ended before the link tied it to its record, then moved by
+    the end of the next one before being caught up, is sent from its record, never given
+    up: it waits in memory behind the next one (`_take`), and is tied at its turn."""
+    b = bench(tmp_path)
+    b.link.answer(END_PATH, DOWN)
+    b.uplink.begin(armed(b.clock))
+    first = recording(tmp_path, b.clock, "ref-1")
+    first.tick(3.0)
+    first.close()
+    b.disk.current = first.path
+    b.uplink.finished(ENDED)  # no step in between: never tied to its record
+    b.disk.current = None
+    b.uplink.begin(armed(b.clock))
+    second = recording(tmp_path, b.clock, "ref-2")
+    second.tick(3.0)
+    second.close()
+    b.disk.current = second.path
+    b.uplink.finished(ENDED)  # takes the first one's place before it was caught up
+    b.disk.current = None
+    await b.run(5)
+    assert b.uplink.owed == 2
+
+    del b.link.answers[END_PATH]
+    await b.run(int(RETRY_PERIOD) + 30)
+    assert b.uplink.owed == 0
+    declared = sorted(str(body["localRef"]) for body in b.link.to(LOCAL_PATH))
+    assert declared == ["ref-1", "ref-2"]
+    assert len({str(body["sessionId"]) for body in b.link.to(END_PATH)}) == 2
+    assert "given up" not in caplog.text
+
+
 async def test_a_recordless_end_settled_while_the_next_takes_its_place_holds_nothing_back(
     tmp_path: Path,
 ) -> None:
