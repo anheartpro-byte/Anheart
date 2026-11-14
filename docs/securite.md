@@ -1996,7 +1996,7 @@ en **mode banc seulement**.
   Programmes activés, une annonce absente ou mal formée est refusée depuis
   ANH-235 (`medical_parameters_unannounced`) : « La machine n'a pas annoncé
   quels paramètres médicaux elle utilise : aucune séance auto ne peut y être
-  lancée tant qu'elle ne l'a pas fait. ». Avant, le serveur la laissait
+  lancée tant qu'elle ne l'a pas fait ». Avant, le serveur la laissait
   passer et seule la console refusait au départ. La carte et la fenêtre de
   lancement le bloquent avant le clic avec la même phrase (statut `unknown`,
   après les programmes désactivés, comme le serveur).

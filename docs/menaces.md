@@ -553,7 +553,7 @@ Il compare les liens au [registre Linear vérifié](../scripts/ci/men-linear-iss
 (clé, UUID, date de lecture, URL canonique), constitué par lectures réelles
 `get_issue`. Chaque ligne porte sa date de lecture, la plus récente quand le
 ticket a été relu : 2026-10-10 pour 29 lignes, 2026-10-14 pour 9 lignes,
-2026-10-15 pour 1 ligne, 2026-10-16 pour 8 lignes.
+2026-10-15 pour 1 ligne, 2026-10-16 pour 8 lignes, 2026-11-14 pour 1 ligne.
 La revue de release du 10 octobre 2026 n'avait relu
 aucun ticket ; la relecture a suivi le même jour, et son résultat, ticket par
 ticket, est dans les preuves de la PR qui a redaté le registre. Les 32 tickets
