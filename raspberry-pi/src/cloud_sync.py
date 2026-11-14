@@ -154,7 +154,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.dataclasses import dataclass as validated
 
 from src.clock import Clock
-from src.console_access import replace_file
+from src.console_access import read_kept, replace_file
 from src.contract import (
     ARMING_REFUSALS,
     CONTRACT_HEADER,
@@ -188,6 +188,7 @@ from src.health import HealthContext, HealthWatch
 from src.link_state import NOT_THE_DASHBOARD, LinkHealth, LinkStatus, bounded
 from src.local_config import CardiacTiers, CloudConfig
 from src.medical import MedicalStatus
+from src.record.writer import describe_os_error
 from src.record_uplink import (
     EVENTS_PATH,
     SESSION_RUNS,
@@ -2271,17 +2272,20 @@ class StoredCount:
 
 STORED_COUNT: Final[TypeAdapter[StoredCount]] = TypeAdapter(StoredCount)
 
+COUNT_FILE_MAX_BYTES: Final[int] = 4096
+"""Far above what a :class:`StoredCount` takes: a larger file is not one this wrote."""
+
 
 def load_count(path: Path) -> HeldCount | None:
     """The count kept before this start; ``None`` when none is, or when the file cannot
     be read, which is logged: a file that does not parse is never taken for 0. Blocking:
     read once, when the console is built."""
     try:
-        content = path.read_bytes()
+        content = read_kept(path, COUNT_FILE_MAX_BYTES)
     except FileNotFoundError:
         return None
     except OSError as error:
-        _logger.warning("%s unreadable (%s): count unknown", path.name, error)
+        _logger.warning("%s unreadable (%s): count unknown", path.name, describe_os_error(error))
         return None
     try:
         stored = STORED_COUNT.validate_json(content)
