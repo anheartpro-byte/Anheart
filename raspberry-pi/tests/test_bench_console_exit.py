@@ -314,6 +314,86 @@ def test_a_fault_with_no_name_read_is_never_reset_and_says_so(
     assert rig.drive.stops == 1
 
 
+def test_a_configuration_the_tool_refuses_ends_it_with_2_before_anything_opens(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit 2, and no bus thread: a speed ceiling that is not a number."""
+    started: list[str] = []
+
+    def start(_self: bench.BusWorker) -> None:
+        started.append("bus")
+
+    monkeypatch.setattr(bench.BusWorker, "start", start)
+    monkeypatch.setattr(
+        sys, "argv", ["bench_console.py", "--port", "COM-NONE", "--max-rpm", "vite"]
+    )
+    code = bench.main()
+    assert code == 2
+    assert capsys.readouterr().out.startswith("configuration refusee: ")
+    assert started == []
+
+
+def test_a_ceiling_above_the_nameplate_is_refused_with_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    started: list[str] = []
+
+    def start(_self: bench.BusWorker) -> None:
+        started.append("bus")
+
+    monkeypatch.setattr(bench.BusWorker, "start", start)
+    monkeypatch.setattr(
+        sys, "argv", ["bench_console.py", "--port", "COM-NONE", "--max-rpm", "5000"]
+    )
+    with pytest.raises(SystemExit) as refused:
+        bench.main()
+    assert refused.value.code == 2
+    assert f"--max-rpm=5000 doit etre dans 0..{bench.NOMINAL_RPM}" in capsys.readouterr().err
+    assert started == []
+
+
+async def test_the_page_answers_503_before_the_bus_thread_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bench, "worker", None)
+    page = httpx.AsyncClient(transport=httpx.ASGITransport(app=bench.app), base_url="http://bench")
+    async with page:
+        answered = await page.get("/api/state")
+    assert answered.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert "bus non demarre" in answered.text
+
+
+def test_an_arm_radius_that_is_not_a_number_is_said_and_ignored() -> None:
+    """Read once, at the import of the script: in a process of its own."""
+    shown = subprocess.run(  # this interpreter, a module of this repository
+        [sys.executable, "-c", "import scripts.bench_console"],
+        cwd=WORKER.parent.parent,
+        env={**os.environ, "ARM_RADIUS_M": "un metre"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert shown.returncode == 0, shown.stderr
+    assert "ARM_RADIUS_M='un metre' ignore: g affiche inconnu" in shown.stdout
+
+
+def test_a_page_whose_port_is_taken_ends_the_console_through_the_stop_with_3(
+    tmp_path: Path,
+) -> None:
+    """The web server cannot listen: uvicorn ends its start-up with 3 itself, and the
+    driver's stop still runs on the way out (``WEB_SERVER_FAILED`` is the same 3, for a
+    server that returns without having started)."""
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = cast(int, taken.getsockname()[1])
+        console = _console(tmp_path, http_port=port)
+        code = console.ended()
+    assert code == bench.WEB_SERVER_FAILED, console.said()
+    assert "sortie: arret confirme, port libere" in console.said()
+
+
 type _Dispatch = Callable[[bench.BusWorker, bench.Command], Awaitable[str]]
 
 
