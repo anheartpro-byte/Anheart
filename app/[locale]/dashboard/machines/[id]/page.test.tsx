@@ -776,8 +776,8 @@ describe("machine page: launching a session on the machine", () => {
         lastHeartbeat: NOW - 5_000,
         serverNow: NOW,
         programsEnabled: true,
-        medicalParametersVersion: undefined,
-        medicalParametersStatus: "unknown",
+        medicalParametersVersion: "0.1.0",
+        medicalParametersStatus: "current",
         medicalParametersReferenceVersion: "0.1.0",
         live: null,
         profiles: [
