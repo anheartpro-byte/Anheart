@@ -9,6 +9,10 @@ for :data:`~src.cloud_sync.LAUNCH_TIMEOUT` after the click of the first
 confirmation left unanswered, and never for another launch nor once the
 dashboard has refused it.
 
+Confirmed, a launch is armed only while the console waits for it: a loop that
+takes it past :data:`~src.cloud_sync.LAUNCH_TIMEOUT`, once it is failed on the
+dashboard, refuses it instead of asking for its start again.
+
 The scripted dashboard below behaves as Convex does: from the first request for
 the start on, its poll offers nothing (:func:`like_convex`).
 """
@@ -21,8 +25,16 @@ from typing import Final
 
 import pytest
 
-from src.cloud_sync import ARMING_REFUSAL_WORDS, LAUNCH_TIMEOUT, POLL_PERIOD, Document, Refused
+from src.cloud_sync import (
+    ARMING_REFUSAL_WORDS,
+    LAUNCH_GIVEN_UP,
+    LAUNCH_TIMEOUT,
+    POLL_PERIOD,
+    Document,
+    Refused,
+)
 from src.contract import ErrorCode
+from src.control_surface import ControlSurface
 from src.remote_launch import ConfirmationCode, LaunchStage
 from src.result import Err, Ok
 from src.training.plan import JsonValue
@@ -34,17 +46,20 @@ from tests.test_cloud_sync import (
     OPERATOR,
     POLL_PATH,
     START,
+    TICK,
     Dashboard,
     Reply,
     Rig,
     confirm_linked,
     launch_answer,
     linked,
+    manual,
     ok,
     pending_start,
     rig,
     state_of,
 )
+from tests.test_remote_bench_launch import BENCH
 
 END: Final[str] = "/api/machine/training/end"
 NOT_FOUND: Final[Reply] = Err(Refused(404, "Not found"))
@@ -529,3 +544,89 @@ def test_the_scripted_start_answers_in_turn_then_repeats_the_last() -> None:
     answers = [dashboard.reply("POST", START, {}) for _ in range(3)]
     assert answers == [ok(first), ok(), ok()]
     assert dashboard.reply("GET", POLL_PATH, {}) == launch_answer(None)
+
+
+# The loop arms a launch only while the link waits for it
+
+
+@pytest.mark.parametrize("link_first", [False, True], ids=["loop-first", "link-first"])
+@pytest.mark.parametrize("bench", [False, True], ids=["programme", "bench"])
+async def test_a_launch_the_loop_takes_after_its_wait_is_refused_and_not_asked_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, link_first: bool, bench: bool
+) -> None:
+    """A loop that takes a confirmed launch past LAUNCH_TIMEOUT arms nothing.
+
+    Before, it armed it, asked ``training/start`` again, got 200 within the
+    dashboard's 90 s, then stopped a few seconds later on the failed end owed.
+    Whichever comes first, the link's step or the loop: one failed end, one start.
+    A programme and a bench launch alike, each refused by its own start.
+    """
+    launch = BENCH if bench else LAUNCH
+    session_id = str(launch["sessionId"])
+    r = linked(tmp_path)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(launch)))
+    await r.run(0.2)
+    cloud = r.panel.cloud
+    assert cloud is not None
+    assert isinstance(cloud.confirm_remote_launch(session_id, OPERATOR, bench), Ok)
+    await r.panel.cloud_step()
+    assert len(r.dashboard.to(START)) == 1
+
+    def waiting() -> bool:
+        """Read afresh: a checker would otherwise keep a narrowing across an ``await``."""
+        return r.panel.surface.pending is not None
+
+    assert waiting()
+
+    # The loop ticks on, but does not get round to the mailbox for a minute,
+    # and the link's step, held on the network, does not run meanwhile.
+    def not_got_round_to(_surface: ControlSurface) -> None:
+        return None
+
+    with monkeypatch.context() as held:
+        held.setattr(ControlSurface, "take_command", not_got_round_to)
+        for _ in range(round(LAUNCH_TIMEOUT / TICK)):
+            r.clock.advance(TICK)
+            r.panel.surface.note_presence(OPERATOR)
+            await r.panel.ecg_step()
+            await r.panel.control_step()
+    assert waiting()
+    if link_first:
+        await r.panel.cloud_step()
+    r.clock.advance(TICK)
+    await r.panel.control_step()
+
+    assert state_of(r.panel) is RuntimeState.IDLE
+    assert not waiting()
+    assert r.panel.surface.fates[-1].detail == LAUNCH_GIVEN_UP
+    await r.run(2.0)
+    assert state_of(r.panel) is RuntimeState.IDLE
+    assert len(r.dashboard.to(START)) == 1
+    (end,) = r.dashboard.to(END)
+    assert end["sessionId"] == session_id
+    assert end["failed"] is True
+    assert "ni demarre ni refuse" in str(end["reason"])
+    await r.panel.close()
+
+
+async def test_a_launch_the_loop_is_arming_does_not_run_out(tmp_path: Path) -> None:
+    """Once the loop has begun to arm it, the launch is the loop's to end: armed or refused."""
+    r = rig(tmp_path)
+    assert isinstance(r.panel.surface.attest_estop_wiring(OPERATOR), Ok)
+    r.dashboard.answer(POLL_PATH, launch_answer(dict(LAUNCH)))
+    await r.step()
+    r.confirm_offer()
+    await r.step()
+    assert len(r.dashboard.to(START)) == 1
+    # Not the launch the link waits for: refused, and that one is still awaited.
+    assert r.sync.begin_arming("remote-2") == LAUNCH_GIVEN_UP
+
+    r.clock.advance(Seconds(LAUNCH_TIMEOUT - 2.0))
+    assert r.sync.begin_arming("remote-1") is None
+    await r.step(5.0)
+    assert r.dashboard.to(END) == []
+
+    r.sync.session_started(manual(r.clock, remote="remote-1"))
+    await r.step()
+    assert len(r.dashboard.to(START)) == 1
+    assert r.dashboard.to(END) == []

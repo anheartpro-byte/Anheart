@@ -28,14 +28,17 @@ Down, from the dashboard to this machine, exactly three things:
   fresh roster check, without submitting or arming. Only then does this task
   send ``training/start``; ``submit_start`` and the panel re-run every gate
   after a 2xx before the runtime is asked to arm. A local refusal goes back as a failed session with
-  its reason. A refusal by the dashboard is shown on the console and is not
-  ended again; a missing route or an unavailable link leaves the machine
-  unarmed. A start left without an answer may be confirmed again by the
-  operator: while the poll offers the launch, as before, and also once it no
-  longer does, for the dashboard may hold it active with its answer lost, and
-  answers a repeated confirmation 200 while this machine has sent nothing of
-  it and no stop was asked for, within 90 s of the start it dated at the
-  first confirmation. Then for
+  its reason. The loop arms it only while this link still waits for it
+  (:meth:`CloudSync.begin_arming`): past :data:`LAUNCH_TIMEOUT` it is failed
+  on the dashboard, and refused here if the loop takes it later. A refusal by
+  the dashboard is shown on the console and is not ended again; a missing
+  route or an unavailable link leaves the machine unarmed. A start left
+  without an answer may be confirmed again by the operator: while the poll
+  offers the launch, as before, and also once it no longer does, for the
+  dashboard may hold it active with its answer lost, and answers a repeated
+  confirmation 200 while this machine has sent nothing of it and no stop was
+  asked for, within 90 s of the start it dated at the first confirmation.
+  Then for
   :data:`LAUNCH_TIMEOUT` at most after the click of the first
   confirmation left unanswered since the poll last offered the launch, even
   with the polls failing meanwhile, and never for another launch: the offer
@@ -135,7 +138,7 @@ import logging
 import math
 from abc import abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, unique
 from http import HTTPStatus
 from types import MappingProxyType
@@ -246,8 +249,17 @@ RETRY_PERIOD: Final[Seconds] = Seconds(15.0)
 LAUNCH_TIMEOUT: Final[Seconds] = Seconds(60.0)
 """A launch the loop has neither started nor refused by now is reported as failed.
 
+Counted from the step that sent its confirmation, until the loop begins to arm
+it (:meth:`CloudSync.begin_arming`); the loop refuses it if it comes later.
+
 Also how long a launch the poll no longer offers may be confirmed again after the
 click of its first confirmation left unanswered (see the module docstring)."""
+
+LAUNCH_GIVEN_UP: Final = (
+    f"lancement du tableau de bord abandonne : pas arme dans les {LAUNCH_TIMEOUT:.0f} s "
+    "qui ont suivi sa confirmation"
+)
+"""Why the loop refuses a launch this link no longer waits for (ANH-240)."""
 
 INCOMPATIBLE_REPEAT: Final[Seconds] = Seconds(60.0)
 """How often a dashboard of another contract is said again on the console while it lasts.
@@ -727,6 +739,16 @@ class SessionListener(Protocol):
     def start_refused(self, cloud_session_id: str, detail: str) -> None:
         """The launch ``cloud_session_id`` was refused; ``detail`` says why."""
 
+    @abstractmethod
+    def begin_arming(self, cloud_session_id: str) -> str | None:
+        """The loop is about to arm the launch ``cloud_session_id``: ``None``, or why it may not.
+
+        Asked once, right before the drive is touched. Refused, the dashboard
+        already holds the launch failed: the loop tells the console and nobody
+        else. Past ``None`` the launch's wait no longer runs out: the loop ends
+        it with :meth:`session_started` or :meth:`start_refused`.
+        """
+
 
 class RuntimeView(Protocol):
     """The four things the link reads from the runtime."""
@@ -901,6 +923,8 @@ def answer_of(result: Result[Document, CloudError]) -> Answer:
 class _Awaiting:
     cloud_session_id: str
     since: Monotonic
+    arming: bool = False
+    """The loop has begun to arm it: its wait no longer runs out."""
 
 
 class CloudSync:
@@ -1326,6 +1350,22 @@ class CloudSync:
         ):
             self._confirmed_launch = None
         self._owe_refusal(cloud_session_id, _safe_launch_refusal(detail, matching_launch))
+
+    def begin_arming(self, cloud_session_id: str) -> str | None:
+        """See :meth:`SessionListener.begin_arming` (ANH-240).
+
+        Only the launch this link waits for, and before :data:`LAUNCH_TIMEOUT`,
+        may be armed: the wait runs out here too, should the step that would
+        end it be held on the network. A launch armed after its wait ran out
+        would ask ``training/start`` again, be accepted within the dashboard's
+        90 s, and stop a few seconds later on the failed end already owed.
+        """
+        self._check_launch_timeout(self._clock.monotonic())
+        awaiting = self._awaiting
+        if awaiting is None or awaiting.cloud_session_id != cloud_session_id:
+            return LAUNCH_GIVEN_UP
+        self._awaiting = replace(awaiting, arming=True)
+        return None
 
     # --- the step ----------------------------------------------------------
 
@@ -1786,7 +1826,7 @@ class CloudSync:
 
     def _check_launch_timeout(self, now: Monotonic) -> None:
         awaiting = self._awaiting
-        if awaiting is None or elapsed(awaiting.since, now) < LAUNCH_TIMEOUT:
+        if awaiting is None or awaiting.arming or elapsed(awaiting.since, now) < LAUNCH_TIMEOUT:
             return
         self._awaiting = None
         self._confirmed_launch_id = None

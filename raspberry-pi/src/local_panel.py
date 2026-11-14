@@ -1585,7 +1585,7 @@ class LocalPanel:
         else:
             self._surface.note_refused(command, words(outcome.error))
 
-    async def _start_manual(self, command: StartManual) -> None:
+    async def _start_manual(self, command: StartManual) -> None:  # noqa: PLR0911  # one per gate
         """Resolve the occupancy's ceiling from the configuration, then arm, or say why not.
 
         Before anything: a console out of service arms nothing. After the
@@ -1624,6 +1624,8 @@ class LocalPanel:
         blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
         if blocked is not None:
             self._refuse_start(command, blocked)
+            return
+        if self._given_up(command):
             return
         # Read before the drive is touched: the record's frames start with the arming,
         # and so does the count of those it loses.
@@ -1754,6 +1756,8 @@ class LocalPanel:
         prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
             self._refuse_start(command, prepared.error)
+            return
+        if self._given_up(command):
             return
         program = prepared.value.program
         label = prepared.value.rider.label
@@ -1964,6 +1968,22 @@ class LocalPanel:
         """:func:`describe_start_refusal` in this console's mode, which its STO source says."""
         bridged = sto_bridged(self._sto.latest(self._clock.monotonic()))
         return describe_start_refusal(refusal, bridged=bridged)
+
+    def _given_up(self, command: StartSession | StartManual) -> bool:
+        """Whether the link no longer waits for this dashboard launch: then it is refused.
+
+        Asked once every gate has passed, right before the drive is touched,
+        nothing awaited in between (ANH-240). Only the console is told: the
+        dashboard already holds the launch failed
+        (:meth:`~src.cloud_sync.SessionListener.begin_arming`).
+        """
+        remote = command.cloud_session_id
+        listener = self._listener
+        refusal = None if remote is None or listener is None else listener.begin_arming(remote)
+        if refusal is None:
+            return False
+        self._surface.note_refused(command, refusal)
+        return True
 
     def _refuse_start(self, command: StartSession | StartManual, detail: str) -> None:
         """Say why a start is refused; a launch from the dashboard is told so too."""
