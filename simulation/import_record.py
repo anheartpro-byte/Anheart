@@ -38,8 +38,10 @@ from src.record.codec import JSON, Privacy, document, encode
 from src.record.containment import resolve_under
 from src.record.reader import (
     FILE_ABOVE_ITS_BOUND,
+    LINE_ABOVE_ITS_BOUND,
     RAW_BLOCKS_ABOVE_LONGEST_RECORD,
     RAW_BYTES_ABOVE_LONGEST_RECORD,
+    REGISTERS_ABOVE_A_MODBUS_READ,
     Recording,
     read,
 )
@@ -116,8 +118,12 @@ _SIZE_REFUSALS: Final[Mapping[str, str]] = {
     ),
     RAW_BYTES_ABOVE_LONGEST_RECORD: "the source record holds more ECG than the longest record",
     FILE_ABOVE_ITS_BOUND: "the source record holds a file larger than the longest record",
+    LINE_ABOVE_ITS_BOUND: "the source record holds a line longer than any record writes",
+    REGISTERS_ABOVE_A_MODBUS_READ: (
+        "the source record holds a drive frame of more registers than a Modbus read"
+    ),
 }
-"""The reader's refusals of more than the longest record holds (``src.record.reader``)."""
+"""The reader's refusals of more than a record holds (``src.record.reader``)."""
 
 
 def _load_source(source: Path) -> Result[Recording, str]:  # noqa: PLR0911  # one return per refusal
