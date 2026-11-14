@@ -124,6 +124,8 @@ export function LaunchableMachineCard({
               !m.programsEnabled ||
               medicalParametersStatus === "unsigned" ||
               medicalParametersStatus === "no_reference" ||
+              // ANH-235: programmes enabled, no readable version announced.
+              medicalParametersStatus === "unknown" ||
               m.profiles.length === 0 ||
               (isUser && launchRefusal !== null)
             }

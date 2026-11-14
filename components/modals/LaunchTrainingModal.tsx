@@ -225,6 +225,9 @@ function LaunchForm({
     blocker = t("training.launch.medicalParametersUnsigned");
   else if (!machine.programsEnabled)
     blocker = t("training.launch.programsDisabled");
+  // ANH-235: no readable medical version announced, as the server refuses it.
+  else if (machine.medicalParametersStatus === "unknown")
+    blocker = t("training.launch.medicalParametersUnannounced");
   else if (machine.profiles.length === 0)
     blocker = t("training.launch.noPrograms");
   else if (readiness === undefined)

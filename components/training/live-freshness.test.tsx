@@ -231,8 +231,8 @@ describe("my machines: one card per machine", () => {
       lastHeartbeat: server,
       serverNow: server,
       programsEnabled: true,
-      medicalParametersVersion: undefined,
-      medicalParametersStatus: "unknown",
+      medicalParametersVersion: "0.1.0",
+      medicalParametersStatus: "current",
       medicalParametersReferenceVersion: "0.1.0",
       live: liveState(0),
       profiles: [

@@ -1998,8 +1998,8 @@ en **mode banc seulement**.
   quels paramètres médicaux elle utilise : aucune séance auto ne peut y être
   lancée tant qu'elle ne l'a pas fait. ». Avant, le serveur la laissait
   passer et seule la console refusait au départ. La carte et la fenêtre de
-  lancement ne bloquent pas encore ce cas avant le clic : c'est le refus du
-  serveur qui le dit.
+  lancement le bloquent avant le clic avec la même phrase (statut `unknown`,
+  après les programmes désactivés, comme le serveur).
   Au contrôle médical local en mode
   banc, la console refuse : « refusee par la machine : parametres medicaux non
   signes (raison) : console en mode banc seulement, aucune seance programmee

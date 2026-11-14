@@ -50,8 +50,15 @@ export function ProfileList({
       : medicalParametersStatus === "no_reference"
         ? t("launch.medicalParametersUnavailable")
         : null;
-  const programsUnavailable = !programsEnabled || medicalIssue !== null;
-  const unavailableMessage = medicalIssue ?? t("programs.disabled");
+  // ANH-235: as the server, said after the programmes disabled, which come first.
+  const unannounced =
+    programsEnabled && medicalParametersStatus === "unknown"
+      ? t("launch.medicalParametersUnannounced")
+      : null;
+  const programsUnavailable =
+    !programsEnabled || medicalIssue !== null || unannounced !== null;
+  const unavailableMessage =
+    medicalIssue ?? unannounced ?? t("programs.disabled");
 
   return (
     <div className="space-y-3">

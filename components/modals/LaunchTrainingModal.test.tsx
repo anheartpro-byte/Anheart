@@ -110,7 +110,7 @@ function machine(over: Partial<Machine> = {}) {
       lastHeartbeat: 0,
       serverNow: 0,
       programsEnabled: true,
-      medicalParametersStatus: "unknown",
+      medicalParametersStatus: "current",
       live: null,
       profiles: [ENDURANCE, SPRINT],
       myHrMax: 185,
@@ -503,6 +503,28 @@ describe("ANH-203 launch window: what stops a launch before the server is asked"
     expect(launchDisabled(screen)).toBe(true);
     await submit(screen.form());
     expect(mutationCalls()).toEqual({});
+  });
+
+  it("ANH-235: a machine that announced no medical version is blocked before the click, as the server refuses it", async () => {
+    signedInAs("user");
+    machine({ medicalParametersStatus: "unknown" });
+
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain(t.medicalParametersUnannounced);
+    expect(launchDisabled(screen)).toBe(true);
+    await submit(screen.form());
+    expect(mutationCalls()).toEqual({});
+  });
+
+  it("ANH-235: with its programmes disabled, that machine says the disabled programmes first, as the server", () => {
+    signedInAs("user");
+    machine({ programsEnabled: false, medicalParametersStatus: "unknown" });
+
+    const { screen } = open({ profileId: ENDURANCE.profileId });
+
+    expect(screen.text()).toContain(t.programsDisabled);
+    expect(screen.text()).not.toContain(t.medicalParametersUnannounced);
   });
 
   it("a missing server reference blocks launch with its specific message", async () => {
