@@ -2927,7 +2927,8 @@ liaison envoie la fin échouée « la boucle n'a ni demarre ni refuse », et une
 boucle qui prend la commande plus tard la refuse sur la console avec
 `lancement du tableau de bord abandonne : pas arme dans les 60 s qui ont suivi
 sa confirmation`, sans redemander `training/start` ni rien envoyer de plus
-(`CloudSync.begin_arming`). Avant, elle armait, redemandait le départ, pouvait
+(`CloudSync.begin_arming`, demandé avant toute autre porte du départ : un lancement
+déjà échoué ne l'est pas une seconde fois). Avant, elle armait, redemandait le départ, pouvait
 recevoir 200 dans les 90 s du serveur, puis s'arrêtait quelques secondes plus
 tard sur la fin échouée.
 Sans nouveau clic dans les 60 s,

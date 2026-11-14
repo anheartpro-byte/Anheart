@@ -35,6 +35,7 @@ from src.cloud_sync import (
 )
 from src.contract import ErrorCode
 from src.control_surface import ControlSurface
+from src.local_panel import LocalPanel
 from src.remote_launch import ConfirmationCode, LaunchStage
 from src.result import Err, Ok
 from src.training.plan import JsonValue
@@ -551,15 +552,21 @@ def test_the_scripted_start_answers_in_turn_then_repeats_the_last() -> None:
 
 @pytest.mark.parametrize("link_first", [False, True], ids=["loop-first", "link-first"])
 @pytest.mark.parametrize("bench", [False, True], ids=["programme", "bench"])
+@pytest.mark.parametrize("gate_refuses", [False, True], ids=["gates-pass", "a-gate-refuses"])
 async def test_a_launch_the_loop_takes_after_its_wait_is_refused_and_not_asked_again(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, link_first: bool, bench: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    link_first: bool,
+    bench: bool,
+    gate_refuses: bool,
 ) -> None:
     """A loop that takes a confirmed launch past LAUNCH_TIMEOUT arms nothing.
 
     Before, it armed it, asked ``training/start`` again, got 200 within the
     dashboard's 90 s, then stopped a few seconds later on the failed end owed.
     Whichever comes first, the link's step or the loop: one failed end, one start.
-    A programme and a bench launch alike, each refused by its own start.
+    A programme and a bench launch alike, each refused by its own start. A gate
+    that would refuse it too is not asked: the launch is failed once, not twice.
     """
     launch = BENCH if bench else LAUNCH
     session_id = str(launch["sessionId"])
@@ -593,6 +600,13 @@ async def test_a_launch_the_loop_takes_after_its_wait_is_refused_and_not_asked_a
     assert waiting()
     if link_first:
         await r.panel.cloud_step()
+
+    def out_of_service(_panel: LocalPanel) -> str:
+        return "hors service : test"
+
+    if gate_refuses:
+        # The first gate of both starts: asked before, it would fail the launch again.
+        monkeypatch.setattr(LocalPanel, "_service_refusal", out_of_service)
     r.clock.advance(TICK)
     await r.panel.control_step()
 

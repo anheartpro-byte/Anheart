@@ -38,6 +38,7 @@ from src.cloud_sync import (
     DASHBOARD_OPERATOR,
     FINAL_CODES,
     HEARTBEAT_PERIOD,
+    LAUNCH_GIVEN_UP,
     LAUNCH_TIMEOUT,
     POLL_PERIOD,
     RETRY_PERIOD,
@@ -3294,7 +3295,13 @@ async def test_a_launch_to_a_console_in_bench_mode_is_refused_for_its_medical_pa
 async def test_a_launch_that_reached_a_panel_without_programmes_is_refused(
     tmp_path: Path,
 ) -> None:
-    """Belt and braces: the link does not poll then, but a start in the mailbox is still refused."""
+    """Belt and braces: the link does not poll then, but a start in the mailbox is still refused.
+
+    Only the link puts a launch from the dashboard in the mailbox, and it waits
+    for it there. One the link does not wait for is refused before any gate
+    (ANH-240, ``CloudSync.begin_arming``): nothing is armed, and nothing is sent
+    of a launch this console never asked to start.
+    """
     rig_ = linked(tmp_path, PROGRAMS_ENABLED="false")
     submitted = rig_.panel.surface.submit_start(
         profile_id=PROFILE,
@@ -3305,12 +3312,10 @@ async def test_a_launch_that_reached_a_panel_without_programmes_is_refused(
     )
     assert isinstance(submitted, Ok)
     await rig_.run(1.0)
-    (end,) = rig_.dashboard.to("/api/machine/training/end")
-    assert end["failed"] is True
-    reason = end["reason"]
-    assert isinstance(reason, str)
-    assert reason.startswith("refusee par la machine : seances programmees desactivees")
-    assert "PROGRAMS_ENABLED=false" in reason
+    assert state_of(rig_.panel) is RuntimeState.IDLE
+    assert rig_.panel.surface.fates[-1].detail == LAUNCH_GIVEN_UP
+    assert rig_.dashboard.to("/api/machine/training/end") == []
+    assert rig_.dashboard.to(START) == []
     await rig_.panel.close()
 
 

@@ -1601,6 +1601,9 @@ class LocalPanel:
         """
         occupancy = command.occupancy
         operator = command.operator
+        # First: a launch already failed on the dashboard is not failed twice.
+        if self._given_up(command):
+            return
         out = self._service_refusal()
         if out is not None:
             self._refuse_start(command, out)
@@ -1624,8 +1627,6 @@ class LocalPanel:
         blocked = self._presence_refusal(occupancy) or self._clock_refusal(occupancy)
         if blocked is not None:
             self._refuse_start(command, blocked)
-            return
-        if self._given_up(command):
             return
         # Read before the drive is touched: the record's frames start with the arming,
         # and so does the count of those it loses.
@@ -1751,13 +1752,14 @@ class LocalPanel:
         sent back to the dashboard as a failed session.
         """
         operator = command.operator
+        # First: a launch already failed on the dashboard is not failed twice.
+        if self._given_up(command):
+            return
         rider = self._rider_for(command)
         self._withhold_programme_words(command.profile_id, rider)
         prepared = self._prepare_programme(command, rider)
         if isinstance(prepared, Err):
             self._refuse_start(command, prepared.error)
-            return
-        if self._given_up(command):
             return
         program = prepared.value.program
         label = prepared.value.rider.label
@@ -1972,9 +1974,11 @@ class LocalPanel:
     def _given_up(self, command: StartSession | StartManual) -> bool:
         """Whether the link no longer waits for this dashboard launch: then it is refused.
 
-        Asked once every gate has passed, right before the drive is touched,
-        nothing awaited in between (ANH-240). Only the console is told: the
-        dashboard already holds the launch failed
+        Asked first, before the start's gates (ANH-240): a launch the
+        dashboard already holds failed is not failed a second time by a gate.
+        Those gates await nothing, so nothing is awaited between this answer
+        and the arming either, and the link's wait cannot run out in between.
+        Only the console is told
         (:meth:`~src.cloud_sync.SessionListener.begin_arming`).
         """
         remote = command.cloud_session_id
