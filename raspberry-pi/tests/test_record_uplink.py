@@ -3370,7 +3370,7 @@ async def test_a_recordless_end_settled_while_the_next_takes_its_place_holds_not
     await asyncio.sleep(0)
     b.uplink.finished(ENDED)
     late.release.set()
-    await stepping
+    await asyncio.gather(stepping)
     await b.run(3)
     assert [body["sessionId"] for body in link.to(END_PATH)] == ["k1", "k2"]
     assert b.uplink.owed == 0
