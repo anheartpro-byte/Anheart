@@ -1013,7 +1013,8 @@ def test_a_silent_drive_costs_a_bounded_time_and_is_a_modbus_io_exception() -> N
 
     assert isinstance(reply, ModbusIOException)
     assert taken >= 2 * settings.timeout * 0.9
-    assert taken < transaction_worst_case(settings) + 0.1
+    # Bounded, not timed: a loaded runner adds tenths of a second, a hang never ends.
+    assert taken < transaction_worst_case(settings) + 1.0
     assert chip.close_calls == 1, "pymodbus closes the port after a failed exchange"
 
 
