@@ -1285,7 +1285,8 @@ dans un workflow ou une page de la documentation.
 | Image du Pi | `raspberry-pi/requirements-lock.txt`, compilé depuis `requirements-prod.txt` (donc `requirements-base.txt`), et `requirements-build-lock.txt` pour les outils qui construisent l'image | toutes, dépendances transitives comprises | oui : le `Dockerfile` installe avec `--require-hashes` ([pi-image.md](pi-image.md#2-versions-figées)) |
 | Tests, simulation locale, CI | `raspberry-pi/requirements-dev-lock.txt` et `requirements-dev-nodeps-lock.txt` | toutes, dépendances transitives comprises | oui : les cinq étapes « Install Python dependencies » (`pi-tests`, `pi-gate`, `simulation-battery`, `simulation-report`, `simulation-gate`) passent `--require-hashes` ; la seconde installation passe aussi `--no-deps` |
 | Simulation hébergée | `deploy/simulation-vercel/requirements-lock.txt`, compilé depuis `requirements.txt` sous la contrainte de `raspberry-pi/requirements-base.txt` ; le `requirements.txt` racine inclut le verrou, le `pyproject.toml` garde la liste d'entrée | toutes, dépendances transitives comprises | `build.sh` écrit `dist/requirements.txt` : `--require-hashes`, puis le verrou exact ; `simulation-gate` l'installe avec `--require-hashes` et sert une requête HTTP en CI ; la construction sur Vercel n'est pas constatée |
-| Extracteur CAO, en CI seulement | `simulation/cad/requirements.txt` | `cadquery-ocp` seul | non |
+| Extracteur CAO | `simulation/cad/requirements-lock.txt`, compilé depuis `requirements.txt` (`cadquery-ocp`) pour toutes les plateformes (`--universal`) | toutes, dépendances transitives comprises | oui : l'étape « Install and verify CAD extractor » de `simulation-battery` passe `--require-hashes` |
+| Outils du job `audit` | `scripts/ci/audit-tools/requirements-lock.txt`, compilé depuis `requirements.txt` (`pip-audit`, `cyclonedx-bom`) pour le runner Linux, sans `lxml` | toutes, dépendances transitives comprises, sauf `lxml` | oui : l'étape « Install the audit tools » passe `--require-hashes --no-deps` ; aucun workflow ne lance plus d'outil par `uv tool run` |
 
 **Produire ou régénérer les verrous.** Chaque fichier porte sa commande en
 tête. Depuis `raspberry-pi/`, pour les quatre verrous du Pi et des tests :
@@ -1302,6 +1303,24 @@ Depuis `deploy/simulation-vercel/`, pour la simulation hébergée :
 ```sh
 uv pip compile requirements.txt -c ../../raspberry-pi/requirements-base.txt --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --exclude-newer 2026-10-21T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
 ```
+
+Depuis `simulation/cad/` pour l'extracteur CAO, et depuis
+`scripts/ci/audit-tools/` pour les outils du job `audit` :
+
+```sh
+uv pip compile requirements.txt --universal --python-version 3.12 --exclude-newer 2026-10-21T00:00:00Z --generate-hashes --no-annotate --output-file requirements-lock.txt
+uv pip compile requirements.txt --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --exclude-newer 2026-10-21T00:00:00Z --generate-hashes --no-annotate --no-emit-package lxml --output-file requirements-lock.txt
+```
+
+La seconde commande ajoute `--no-emit-package lxml` : `cyclonedx-python-lib`
+ne s'en sert que pour valider du XML, et le job écrit du JSON. Tout
+`cyclonedx-bom` publié au 13 novembre 2026 demande `lxml` < 6, et tout `lxml`
+avant 6.1.0 lit des fichiers locaux par une entité XML (CVE-2026-41066) :
+l'audit du verrou des outils échouait. Les outils sont donc installés avec
+`--no-deps`, chaque paquet du verrou nommé ; essai du 13 novembre 2026 sur
+macOS : sans `lxml`, `cyclonedx-py` écrit la nomenclature JSON du verrou de
+l'image et `pip-audit` audite. Ces deux verrous ont été compilés à partir de
+rien le 13 novembre 2026, à la date commune.
 
 La date commune `--exclude-newer 2026-10-21T00:00:00Z` a été avancée au
 21 octobre 2026 (ANH-248) pour prendre `certifi` 2026.10.19 et `pillow`
@@ -1327,7 +1346,7 @@ est `--universal` pour Linux en CI et les postes macOS et Windows : les
 les plateformes de développement. Sa version et ses empreintes sont celles
 du verrou de l'image, vérifiées par un test. Changer une version demande de
 régénérer tous les verrous qui la portent, avec leurs commandes en tête ; si
-la date avance, elle reste commune aux cinq verrous.
+la date avance, elle reste commune aux sept verrous.
 
 **Installer les tests sur un poste.** Depuis la racine du dépôt, dans un venv
 neuf, les deux commandes sont celles de la CI :
@@ -1340,9 +1359,10 @@ uv pip install --python raspberry-pi/.venv/bin/python --require-hashes --no-deps
 
 Sous Windows, le chemin de l'interpréteur est
 `raspberry-pi/.venv/Scripts/python.exe`. L'installation n'a été essayée que sur
-macOS et, en CI, sous Linux, pas sous Windows. L'ancienne commande des guides,
-`pip install -r requirements-dev.txt`, installe encore sans empreintes : la
-mise à jour de ces guides reste à suivre.
+macOS et, en CI, sous Linux, pas sous Windows. Les guides des postes
+([démarrage rapide](demarrage-rapide.md), guides de la console locale et du
+framework de test, `raspberry-pi/README.md`) et le message de
+`scripts/check.sh` quand le venv manque donnent ces deux commandes.
 
 **Ce que lit l'installateur de la simulation.** pip et uv 0.13.0 lisent la
 ligne `--require-hashes` de `dist/requirements.txt` et refusent toute ligne
@@ -1365,18 +1385,19 @@ exceptée.
 | Quoi | Outil | Ce qui fait échouer |
 |---|---|---|
 | `package-lock.json` (site et Convex), paquets de développement compris | `npm audit --audit-level=high` | un avis de gravité haute ou critique ; un avis modéré ou faible est affiché, sans faire échouer |
-| Image du Pi, tests et CI, simulation hébergée : les cinq verrous tels quels (`raspberry-pi/requirements-lock.txt`, `requirements-build-lock.txt`, `requirements-dev-lock.txt`, `requirements-dev-nodeps-lock.txt`, et `deploy/simulation-vercel/requirements-lock.txt`) | `pip-audit --disable-pip --require-hashes` | toute vulnérabilité connue, quelle que soit sa gravité (`pip-audit` ne lit pas la gravité) |
-| Extracteur CAO seul : `simulation/cad/requirements.txt`, résolu pour Python 3.12 avec ses dépendances transitives (`uv pip compile --generate-hashes`) le jour de l'audit | le même | le même |
+| Image du Pi, tests et CI, simulation hébergée, extracteur CAO, outils du job : les sept verrous (`raspberry-pi/requirements-lock.txt`, `requirements-build-lock.txt`, `requirements-dev-lock.txt`, `requirements-dev-nodeps-lock.txt`, `deploy/simulation-vercel/requirements-lock.txt`, `simulation/cad/requirements-lock.txt` et `scripts/ci/audit-tools/requirements-lock.txt`), chacun lu sans ses marqueurs d'environnement | `pip-audit --disable-pip --require-hashes` | toute vulnérabilité connue, quelle que soit sa gravité (`pip-audit` ne lit pas la gravité) |
 | Tout l'historique Git | gitleaks | un secret (voir plus haut) |
 
 Chaque environnement est audité même quand un autre a échoué, et le message
-d'erreur les nomme. Pour l'extracteur CAO, l'audit porte sur ce que la
-résolution choisit ce jour-là sur un runner Linux. Les paquets réservés à macOS
-et à Windows (`pyobjc-*`, `colorama`) sont désormais dans le verrou dev ; d'après le source de
-`pip-audit` 2.9.0 (lu le 16 octobre 2026), il applique leurs marqueurs de
-plateforme et les saute sur Linux. L'essai du 16 octobre
-2026 sur macOS n'a signalé aucune vulnérabilité connue ; ce n'est pas une
-preuve de leur audit en CI. Un audit ne voit que les vulnérabilités publiées :
+d'erreur les nomme. `pip-audit` saute une ligne dont le marqueur ne vaut pas
+sur la machine qui l'exécute : sur le runner Linux, les paquets réservés à
+macOS et à Windows du verrou dev (`pyobjc-*`, `colorama`). L'audit lit donc
+une copie de chaque verrou sans ses marqueurs, versions et empreintes
+inchangées ; `scripts/ci/ci-workflow.test.mjs` vérifie qu'aucun verrou ne
+nomme deux fois un paquet, ce qui donnerait deux versions à cette copie.
+Essai du 13 novembre 2026 sur macOS : une version vulnérable de `requests`
+marquée `sys_platform == 'win32'` n'est pas signalée, la même sans son
+marqueur l'est. Un audit ne voit que les vulnérabilités publiées :
 il ne détecte pas un paquet malveillant
 ([menaces.md, MEN-06](menaces.md#men-06-compromission-dun-paquet-pip-ou-npm)).
 `scripts/ci/ci-workflow.test.mjs` vérifie que chaque fichier `requirements*.txt`
@@ -1474,13 +1495,12 @@ exemple, ce qui demande au job des tags un droit d'écriture de plus), les
 signer ou les attester. Cela demande un lancement de release et de nouveaux
 droits du workflow.
 
-**Ce qui reste, hors de ce lot.** L'extracteur CAO n'a pas de verrou avec
-empreintes. Les outils lancés par `uv tool run`, `pip-audit` 2.9.0 et
-`cyclonedx-bom` 7.4.0, sont figés par version, sans empreintes. La construction
-sur Vercel et le comportement de Dependabot face aux verrous générés par uv
-ne sont pas constatés. Les guides des postes gardent l'ancienne installation
-sans empreintes ; le stockage durable et la signature ou l'attestation des
-SBOM restent bloqués avec ANH-220, comme décrit ci-dessus.
+**Ce qui reste, hors de ce lot.** La construction sur Vercel et le
+comportement de Dependabot face aux verrous générés par uv ne sont pas
+constatés ; le stockage durable et la signature ou l'attestation des SBOM
+restent bloqués avec ANH-220, comme décrit ci-dessus. L'extracteur CAO, les
+outils du job `audit` et les guides des postes installent depuis leurs verrous,
+empreintes exigées, depuis le 13 novembre 2026.
 
 ### Gate Pi en parallèle (ANH-72)
 

@@ -5,7 +5,7 @@
 #
 # One entry per directory the project installs from, the ones the `audit` job
 # audits: the site and Convex (npm), the image and the tests of the Pi, the
-# hosted simulation, the CAD extractor (pip). The requirements.txt and
+# hosted simulation, the CAD extractor, the tools of the `audit` job (pip). The requirements.txt and
 # pyproject.toml of the root repeat the hosted simulation for the Git layout of
 # Vercel, which `vercel.json` turns off: they have no entry of their own. And
 # the actions of the workflows, pinned to a full commit with their version in
@@ -56,6 +56,9 @@ updates:
       simulation-minor-and-patch:
         update-types: [minor, patch]
 
+  # A lock compiled by uv with its hashes, as in /raspberry-pi: a pull request
+  # here is finished by hand, with the command written at the top of
+  # requirements-lock.txt.
   - package-ecosystem: pip
     directory: /simulation/cad
     target-branch: develop
@@ -64,6 +67,18 @@ updates:
     open-pull-requests-limit: 5
     groups:
       cad-minor-and-patch:
+        update-types: [minor, patch]
+
+  # pip-audit and cyclonedx-bom, which the `audit` job installs from their lock;
+  # finished by hand in the same way.
+  - package-ecosystem: pip
+    directory: /scripts/ci/audit-tools
+    target-branch: develop
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      audit-tools-minor-and-patch:
         update-types: [minor, patch]
 
   - package-ecosystem: github-actions

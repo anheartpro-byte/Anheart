@@ -1,0 +1,8 @@
+# The tools of the audit job of .github/workflows/ci.yml, installed from
+# requirements-lock.txt with their hashes and --no-deps (ANH-230). The lock
+# leaves out lxml (--no-emit-package): cyclonedx-python-lib needs it only to
+# validate XML, and the job writes JSON. Every cyclonedx-bom published by
+# 13 November 2026 asks for lxml<6, and every lxml before 6.1.0 reads local
+# files through an XML entity (CVE-2026-41066).
+pip-audit==2.9.0
+cyclonedx-bom==7.4.0

@@ -388,7 +388,7 @@ jobs:
       - name: Install and verify CAD extractor
         run: |
           uv venv simulation/cad/.venv-cad
-          uv pip install --python simulation/cad/.venv-cad/bin/python -r simulation/cad/requirements.txt
+          uv pip install --python simulation/cad/.venv-cad/bin/python --require-hashes -r simulation/cad/requirements-lock.txt
           simulation/cad/.venv-cad/bin/python simulation/cad/extract_geometry.py CAO/Gaura_Assy_2907.STEP "$RUNNER_TEMP/cad-preflight.json"
       - name: Simulation gate, shares ${{ matrix.shares }} of the battery
         env:
@@ -749,14 +749,25 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/quality"
           node --test $NODE_TEST_REPORT --test-reporter-destination="$RUNNER_TEMP/quality/scripts-dependency-guard.xml" scripts/ci/braces-depth-guard.test.mjs
+      # The tools of this job, pip-audit and cyclonedx-py, come from their lock
+      # with its hashes, like every Python package the project installs: a file
+      # changed on PyPI under the same version is refused (ANH-230). Without
+      # their dependencies, each package being in the lock: the lock leaves out
+      # lxml, which only validates XML (scripts/ci/audit-tools/requirements.txt).
+      - name: Install the audit tools
+        if: ${{ !cancelled() }}
+        run: |
+          uv venv "$RUNNER_TEMP/audit-tools"
+          uv pip install --python "$RUNNER_TEMP/audit-tools/bin/python" --require-hashes --no-deps -r scripts/ci/audit-tools/requirements-lock.txt
       # Each Python environment the project installs, audited on its own, as
-      # it is installed. The five locks of the Pi image, development/CI and
-      # hosted simulation are read as they are, every version and hash fixed.
-      # Only the CAD extractor is resolved first for Python 3.12 with the
-      # packages it pulls in, since its input fixes only some versions.
-      # pip-audit fails on any known vulnerability, whatever its severity,
-      # except the Python exceptions. Every environment is audited, even
-      # after one has failed.
+      # it is installed: the five locks of the Pi image, development/CI and
+      # hosted simulation, the lock of the CAD extractor and the lock of the
+      # tools of this job, every version and hash fixed. Each lock is read
+      # without its environment markers: pip-audit skips a line whose marker
+      # does not hold on this Linux runner, as the Windows (`colorama`) and
+      # macOS (`pyobjc-*`) lines of the development lock. pip-audit fails on
+      # any known vulnerability, whatever its severity, except the Python
+      # exceptions. Every environment is audited, even after one has failed.
       - name: Audit Python dependencies
         if: ${{ !cancelled() }}
         run: |
@@ -765,15 +776,12 @@ jobs:
           failed=()
           audit() {
             echo "pip-audit: $1"
-            uv tool run pip-audit==2.9.0 --disable-pip --require-hashes "${ignore[@]}" -r "$2" || failed+=("$1")
+            "$RUNNER_TEMP/audit-tools/bin/pip-audit" --disable-pip --require-hashes "${ignore[@]}" -r "$2" || failed+=("$1")
           }
-          for lock in raspberry-pi/requirements-lock.txt raspberry-pi/requirements-build-lock.txt raspberry-pi/requirements-dev-lock.txt raspberry-pi/requirements-dev-nodeps-lock.txt deploy/simulation-vercel/requirements-lock.txt; do
-            audit "$lock" "$lock"
-          done
-          for set in simulation/cad/requirements.txt; do
-            resolved="$RUNNER_TEMP/audit-${set//\//-}"
-            uv pip compile "$set" --python-version 3.12 --generate-hashes --quiet --output-file "$resolved"
-            audit "$set" "$resolved"
+          for lock in raspberry-pi/requirements-lock.txt raspberry-pi/requirements-build-lock.txt raspberry-pi/requirements-dev-lock.txt raspberry-pi/requirements-dev-nodeps-lock.txt deploy/simulation-vercel/requirements-lock.txt simulation/cad/requirements-lock.txt scripts/ci/audit-tools/requirements-lock.txt; do
+            every="$RUNNER_TEMP/audit-${lock//\//-}"
+            sed -E 's/^([^ ]+==[^ ]+) ; .* \\$/\1 \\/' "$lock" > "$every"
+            audit "$lock" "$every"
           done
           if (( ${#failed[@]} > 0 )); then
             echo "::error title=Vulnérabilité Python::pip-audit a trouvé une vulnérabilité connue dans : ${failed[*]}. Prendre une version corrigée, ou écrire une exception datée dans .github/audit-exceptions.md."
@@ -801,9 +809,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/sbom"
           npm sbom --sbom-format cyclonedx --package-lock-only > "$RUNNER_TEMP/sbom/site-convex.cdx.json"
           for lock in requirements-lock requirements-build-lock; do
-            uv tool run --from cyclonedx-bom==7.4.0 cyclonedx-py requirements "raspberry-pi/$lock.txt" --output-format JSON --output-file "$RUNNER_TEMP/sbom/pi-$lock.cdx.json"
+            "$RUNNER_TEMP/audit-tools/bin/cyclonedx-py" requirements "raspberry-pi/$lock.txt" --output-format JSON --output-file "$RUNNER_TEMP/sbom/pi-$lock.cdx.json"
           done
-          uv tool run --from cyclonedx-bom==7.4.0 cyclonedx-py requirements deploy/simulation-vercel/requirements-lock.txt --output-format JSON --output-file "$RUNNER_TEMP/sbom/simulation-requirements-lock.cdx.json"
+          "$RUNNER_TEMP/audit-tools/bin/cyclonedx-py" requirements deploy/simulation-vercel/requirements-lock.txt --output-format JSON --output-file "$RUNNER_TEMP/sbom/simulation-requirements-lock.cdx.json"
       - name: Keep the bill of materials
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

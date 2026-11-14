@@ -177,15 +177,13 @@ dans un navigateur. Elle fonctionne sans internet.
 
 ### 3.1 Préparer l'ordinateur (une seule fois)
 
-Il faut Python 3.12. Depuis le dossier du dépôt :
+Il faut Python 3.12 et `uv`. Depuis le dossier du dépôt :
 
 ```sh
 cd raspberry-pi
-python3.12 -m venv .venv
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pip install pyserial
-.venv/bin/pip install --no-deps bitalino
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python --require-hashes -r requirements-dev-lock.txt
+uv pip install --python .venv/bin/python --require-hashes --no-deps -r requirements-dev-nodeps-lock.txt
 ```
 
 (Ces commandes viennent de [demarrage-rapide.md](../demarrage-rapide.md). Le

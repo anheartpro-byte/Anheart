@@ -149,6 +149,15 @@ test("the page shows the one section that is read: no HTML that hides a line, on
     ["a heading in a code block before the real one", `# Exceptions\n\n\`\`\`md\n${hidden}\`\`\`\n\n${real}`, /is written 2 times/],
     ["the only heading in a code block left open", `# Exceptions\n\n\`\`\`\n${hidden}`, /must be the line "## Exceptions en cours", outside any code block/],
     ["the only heading written otherwise", hidden.replace(SECTION, "## exceptions en cours"), /must be the line "## Exceptions en cours"/],
+    // ANH-236 follow-ups: a fence closes only on its own sign, as many times or more.
+    ["a heading after a fence of four backticks that three do not close", `# Exceptions\n\n\`\`\`\`md\n\`\`\`\n${hidden}\`\`\`\`\n\n${real}`, /is written 2 times/],
+    ["a heading after a backtick fence that tildes do not close", `# Exceptions\n\n\`\`\`md\n~~~\n${hidden}\`\`\`\n\n${real}`, /is written 2 times/],
+    ["the only heading after a fence a longer one does not reopen", `# Exceptions\n\n~~~~\n~~~\n${hidden}`, /must be the line "## Exceptions en cours", outside any code block/],
+    ["the only heading after a closing fence followed by a no-break space", `# Exceptions\n\n\`\`\`\nx\n\`\`\`\u00a0\n${hidden}`, /must be the line "## Exceptions en cours", outside any code block/],
+    ["a second heading underlined by dashes", `${real}\nExceptions en cours\n---\n\nAucune.\n`, /is written 2 times/],
+    ["a second heading underlined by equals signs", `# Exceptions\n\nExceptions en cours\n===\n\n${real.replace("# Exceptions\n\n", "")}`, /is written 2 times/],
+    ["the only heading underlined", hidden.replace(SECTION, "Exceptions en cours\n---"), /must be the line "## Exceptions en cours"/],
+    ["the only heading after a closing fence followed by text", `# Exceptions\n\n\`\`\`\nx\n\`\`\` suite\n${hidden}`, /must be the line "## Exceptions en cours", outside any code block/],
     // Reported by the second delta review: blocks of HTML that GitHub renders as nothing, or as an attribute.
     ["the table in a CDATA block", `${SECTION}\n\n<![CDATA[\n${HEAD}${row()}\n]]>\n`, /line 3 begins with HTML \("<!\[CDATA\["\)/],
     ["the table in a processing instruction", `${SECTION}\n\n<?x\n${HEAD}${row()}\n?>\n`, /line 3 begins with HTML \("<\?x"\)/],
@@ -173,6 +182,32 @@ test("the page shows the one section that is read: no HTML that hides a line, on
   const refusalRules = committed.split("**Le tableau est le seul de la section**")[1]?.split("\n\n")[0] ?? "";
   assert.match(refusalRules, /suivi\s+d'une\s+lettre\s+Unicode,\s+de\s+`\/`,\s+de\s+`!`\s+ou\s+de\s+`\?`/);
   assert.match(refusalRules, /code\s+compris/);
+});
+
+test("ANH-236: what the page shows otherwise than the script reads is refused, before anything is read", () => {
+  const real = table([row()]);
+  for (const [name, text, refusal] of [
+    ["a NUL byte", real.replace("Texte.", "Te\0xte."), /line \d+ holds a NUL byte/],
+    ["lines ended by a carriage return alone", real.replaceAll("\n", "\r"), /line 1 ends with a carriage return alone/],
+    ["one carriage return alone among line feeds", `${SECTION}\n\nTexte.\r${HEAD}${row()}\n`, /line 3 ends with a carriage return alone/],
+    ["a YAML header", `---\ntitle: x\n---\n${real}`, /begins with "---", a YAML header/],
+    ["a YAML header with spaces after its dashes", `--- \n${SECTION}\n---\n${real}`, /begins with "---", a YAML header/],
+    ["a YAML header after a byte-order mark", `\uFEFF---\ntitle: x\n---\n${real}`, /begins with "---", a YAML header/],
+  ]) {
+    const { exceptions, problems } = parse(String(text), TODAY);
+    assert.deepEqual(exceptions, [], String(name));
+    assert.equal(problems.length, 1, `${name}: ${problems.join(" / ")}`);
+    assert.ok(refusal instanceof RegExp && refusal.test(problems[0] ?? ""), `${name}: ${problems.join(" / ")}`);
+  }
+  // Line feeds, or a carriage return then a line feed, are read alike; a fence is followed as Markdown does.
+  assert.deepEqual(parse(real.replaceAll("\n", "\r\n"), TODAY).problems, []);
+  assert.deepEqual(parse(`\uFEFF${real}`, TODAY).problems, []);
+  assert.equal(parse(real.replaceAll("\n", "\r\n"), TODAY).exceptions.length, 1);
+  for (const before of ["````md\n```\nx\n````\n", "~~~\n```\n~~~\n", "    ```\n", "``` a`b\n"]) {
+    const { exceptions, problems } = parse(`# Exceptions\n\n${before}\n${real.replace("# Exceptions\n\n", "")}`, TODAY);
+    assert.deepEqual(problems, [], before);
+    assert.equal(exceptions.length, 1, before);
+  }
 });
 
 for (const [name, text, refusal] of /** @type {const} */ ([
@@ -385,7 +420,7 @@ test("Dependabot watches every place the audit audits, and nothing else, against
   assert.match(DEPENDABOT, /^version: 2$/m);
   assert.deepEqual(
     entries.map(({ ecosystem, directory }) => `${ecosystem} ${directory}`),
-    ["npm /", "pip /raspberry-pi", "pip /deploy/simulation-vercel", "pip /simulation/cad", "github-actions /"],
+    ["npm /", "pip /raspberry-pi", "pip /deploy/simulation-vercel", "pip /simulation/cad", "pip /scripts/ci/audit-tools", "github-actions /"],
   );
   for (const { ecosystem, directory, branch, interval, text } of entries) {
     assert.equal(branch, "develop", `${ecosystem} ${directory}: pull requests go to develop`);

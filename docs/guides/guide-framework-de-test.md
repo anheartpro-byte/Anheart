@@ -109,15 +109,15 @@ uv venv --python 3.12 --seed .venv
 ### Étape 3 : installer les dépendances
 
 ```sh
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pip install pyserial
-.venv/bin/pip install --no-deps bitalino
+uv pip install --python .venv/bin/python --require-hashes -r requirements-dev-lock.txt
+uv pip install --python .venv/bin/python --require-hashes --no-deps -r requirements-dev-nodeps-lock.txt
 ```
 
-Le module `bitalino` est à part, sans ses dépendances : sa métadonnée exige
-`PyBluez-bitalino`, qui ne s'installe pas en Python 3.12 (voir la note en fin
-de `requirements-dev.txt`).
+Ce sont les commandes de la CI : chaque paquet à la version et aux empreintes
+de son verrou, `pyserial` compris. Le module `bitalino` est dans le second,
+installé sans ses dépendances : sa métadonnée exige `PyBluez-bitalino`, qui
+ne s'installe pas en Python 3.12 (voir la note en fin de
+`requirements-dev.txt`).
 
 Vérification (sortie obtenue sur un venv neuf, environ 1 minute
 d'installation) :

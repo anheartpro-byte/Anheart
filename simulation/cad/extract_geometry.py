@@ -4,7 +4,7 @@ Run it in the CAD venv (cadquery-ocp is ~300 MB, so it is kept out of the
 project venv)::
 
     cd simulation/cad
-    uv venv --python 3.12 .venv-cad && uv pip install --python .venv-cad/bin/python -r requirements.txt
+    uv venv --python 3.12 .venv-cad && uv pip install --python .venv-cad/bin/python --require-hashes -r requirements-lock.txt
     .venv-cad/bin/python extract_geometry.py ../../CAO/Gaura_Assy_2907.STEP machine_geometry.json
 
 What it does, and why each step is there

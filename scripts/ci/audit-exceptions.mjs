@@ -70,18 +70,34 @@ const cellsOf = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").spli
 
 /**
  * The exceptions of the file, and what is wrong with it on that day.
- * @param {string} text the content of .github/audit-exceptions.md
+ * @param {string} content the content of .github/audit-exceptions.md
  * @param {string} today AAAA-MM-JJ, in UTC
  * @returns {{ exceptions: Exception[], problems: string[] }}
  */
-export function parse(text, today) {
+export function parse(content, today) {
+  // A byte-order mark is not shown: every check reads what follows it.
+  const text = content.replace(/^\uFEFF/, "");
   /** @type {Exception[]} */
   const exceptions = [];
   /** @type {string[]} */
   const problems = [];
   const now = dayOf(today);
   if (now === undefined) throw new Error(`not a day: ${today}`);
+  // What the renderer reads otherwise than this script: a NUL (shown as U+FFFD, or the file as
+  // binary), a line ended by a carriage return alone (a line break for Markdown, not for a split
+  // on "\n"), and a YAML header (shown by GitHub as a table of its own). Each is refused.
+  const nul = text.indexOf("\0");
+  if (nul >= 0) {
+    return { exceptions, problems: [`${FILE}: line ${text.slice(0, nul).split("\n").length} holds a NUL byte: the page must show all that is read`] };
+  }
+  const carriage = /\r(?!\n)/.exec(text);
+  if (carriage !== null) {
+    return { exceptions, problems: [`${FILE}: line ${text.slice(0, carriage.index).split("\n").length} ends with a carriage return alone: write each line ending as a line feed, or as a carriage return then a line feed`] };
+  }
   const lines = text.replaceAll("\r\n", "\n").split("\n");
+  if (/^---[ \t]*$/.test(lines[0] ?? "")) {
+    return { exceptions, problems: [`${FILE}: begins with "---", a YAML header, which GitHub shows as a table of its own: the page must begin with its title`] };
+  }
   // Refuse HTML comments, lines beginning with "<" after at most three spaces, and any "<" followed
   // by a Unicode letter, "/", "!" or "?" anywhere in the file so the page shows all that is read.
   // Code is included because exempting it would require exactly matching GitHub's backtick and
@@ -99,12 +115,23 @@ export function parse(text, today) {
     return { exceptions, problems: [`${FILE}: line ${line} holds "${inline[0]}": a "<" followed by a letter, "/", "!" or "?" opens HTML wherever it stands, a folded details block in the middle of a line included, and none is allowed in this file, code included: the page must show all that is read`] };
   }
   // The heading of the section, written once, and not inside a code block, where it would be text.
+  // A fence is followed as Markdown follows it: opened by three backticks or tildes or more after
+  // three spaces at most (a backtick fence's info string holds no backtick), closed only by the
+  // same sign, as many times or more, with nothing after it; never closed, it runs to the end.
   /** @type {{ index: number, line: string, fenced: boolean }[]} */
   const headings = [];
-  let fenced = false;
+  /** @type {{ sign: string, size: number } | undefined} */
+  let fence;
   lines.forEach((line, index) => {
-    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
-    else if (/^ {0,3}#{1,6}[ \t]+Exceptions en cours[ \t#]*$/i.test(line)) headings.push({ index, line, fenced });
+    const marks = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    const sign = marks?.[1]?.[0] ?? "";
+    const size = marks?.[1]?.length ?? 0;
+    if (fence === undefined && marks && !(sign === "`" && (marks[2] ?? "").includes("`"))) fence = { sign, size };
+    // Only spaces and tabs may follow a closing fence: a no-break space keeps the block open.
+    else if (fence !== undefined && marks && sign === fence.sign && size >= fence.size && /^[ \t]*$/.test(marks[2] ?? "")) fence = undefined;
+    else if (/^ {0,3}#{1,6}[ \t]+Exceptions en cours[ \t#]*$/i.test(line)) headings.push({ index, line, fenced: fence !== undefined });
+    // The same title underlined by "=" or "-" (a setext heading) is a heading too.
+    else if (/^ {0,3}Exceptions en cours[ \t]*$/i.test(line) && /^ {0,3}(?:=+|-+)[ \t]*$/.test(lines[index + 1] ?? "")) headings.push({ index, line, fenced: fence !== undefined });
   });
   if (headings.length > 1) {
     return { exceptions, problems: [`${FILE}: the heading "${SECTION}" is written ${headings.length} times (lines ${headings.map(({ index }) => index + 1).join(", ")}): one section, read by the job and shown by the page`] };

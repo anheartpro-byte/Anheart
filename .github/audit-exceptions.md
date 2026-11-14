@@ -9,7 +9,7 @@ Le job `audit` de la CI, vérification obligatoire sur `develop` comme sur
 - `pip-audit` trouve une vulnérabilité connue, **quelle que soit sa gravité**
   (il ne lit pas la gravité), dans l'un des environnements Python audités :
   l'image du Pi, l'environnement des tests et de la simulation, la simulation
-  hébergée, l'extracteur CAO.
+  hébergée, l'extracteur CAO, les outils du job `audit`.
 
 Ce qui est audité, et comment : [framework-de-test.md](../docs/framework-de-test.md#dépendances--un-gestionnaire-des-versions-figées-un-audit-anh-153).
 
@@ -32,7 +32,7 @@ exception n'est écrite ailleurs, ni dans le workflow ni dans une commande.
   - **pip** : l'exception n'est liée ni au paquet ni à l'environnement.
     `pip-audit` reçoit l'identifiant par `--ignore-vuln` et saute toute
     vulnérabilité dont l'identifiant, **ou l'un des alias**, est celui-là,
-    quel que soit le paquet, dans chacun des cinq environnements audités. La
+    quel que soit le paquet, dans chacun des sept verrous audités. La
     colonne `Paquet` ne restreint rien : elle dit à un lecteur de quoi il
     s'agit. C'est pourquoi un `CVE-...` est refusé : le même CVE peut être
     l'alias d'avis de plusieurs paquets, quand une bibliothèque vulnérable est
@@ -49,8 +49,11 @@ exception n'est écrite ailleurs, ni dans le workflow ni dans une commande.
 **Le tableau est le seul de la section**, ses lignes à la suite les unes des
 autres, sans retrait. Sont refusés : une ligne qui commence par une barre
 verticale ailleurs dans la section, un bloc de code dans la section, un second
-titre « Exceptions en cours » ou ce titre écrit entre deux lignes qui
-commencent par trois accents graves ou trois tildes, et,
+titre « Exceptions en cours », souligné compris, ou ce titre écrit dans un
+bloc de code clôturé (ouvert par trois accents graves ou trois tildes au
+moins, après trois espaces au plus, et fermé seulement par le même signe, au
+moins autant de fois, suivi d'espaces ou de tabulations seulement ; jamais
+fermé, il court jusqu'à la fin), et,
 n'importe où dans ce fichier, code compris, le signe `<` immédiatement suivi
 d'une lettre Unicode, de `/`, de `!` ou de `?` : c'est ainsi que s'ouvre toute
 balise ou tout bloc HTML, y compris un bloc `details` replié au milieu d'une
@@ -60,12 +63,11 @@ adresse web, l'est aussi. Est également refusée toute ligne qui commence par
 `<` après trois espaces au plus. Ailleurs qu'en début de ligne, tout autre `<`
 reste permis, par exemple suivi d'une espace, d'un chiffre ou de `=`. Ce que
 la page affichée cache dans du HTML ne peut donc pas compter comme exception.
-D'autres écarts entre le fichier lu et la page affichée restent possibles,
-et ne sont pas encore refusés : des fins de ligne faites d'un seul retour
-chariot, un octet nul, un en-tête YAML, et un bloc de code dont la clôture ne
-suit pas celle de son ouverture (le script ne compare ni le caractère ni le
-nombre des signes de clôture, et prend pour une clôture une ligne en retrait
-de quatre espaces ou plus).
+Sont aussi refusés, n'importe où dans ce fichier, ce que la page montre
+autrement que le script ne le lit : un octet nul, une fin de ligne faite d'un
+seul retour chariot, et un en-tête YAML (un fichier qui commence par `---`,
+après une marque d'ordre des octets s'il en a une), que GitHub montre comme
+un tableau à part.
 
 Une exception npm ne cache pas l'avis : le job l'affiche encore, avec sa date
 d'expiration et son ticket. `pip-audit` compte les vulnérabilités sautées

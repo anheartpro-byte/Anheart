@@ -19,11 +19,10 @@ $python = Join-Path $root ".venv\Scripts\python.exe"
 $basedpyright = Join-Path $root ".venv\Scripts\basedpyright.exe"
 
 if (-not (Test-Path $python)) {
-    Write-Host "No venv found at .venv - create it first:" -ForegroundColor Red
-    Write-Host "    python -m venv .venv"
-    Write-Host "    .\.venv\Scripts\Activate.ps1"
-    Write-Host "    pip install -r requirements-dev.txt"
-    Write-Host "    pip install pyserial; pip install --no-deps bitalino"
+    Write-Host "No venv found at .venv - create it first, with hashes required:" -ForegroundColor Red
+    Write-Host "    uv venv --python 3.12 .venv"
+    Write-Host "    uv pip install --python .venv\Scripts\python.exe --require-hashes -r requirements-dev-lock.txt"
+    Write-Host "    uv pip install --python .venv\Scripts\python.exe --require-hashes --no-deps -r requirements-dev-nodeps-lock.txt"
     exit 1
 }
 
