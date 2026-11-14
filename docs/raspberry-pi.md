@@ -2337,7 +2337,7 @@ chacun le code lu, l'arrêt, le verrouillage et le message de l'opérateur.
 |---|---|---|
 | Version du logiciel du variateur, menu [Identification] `OID-` | à comparer à V3.5, la version des documents utilisés. Ce menu n'est accessible que sur le **terminal graphique** (manuel, page 26) : ce terminal est nécessaire. Sans lui, écrire « non relevée » : NVE41316 liste bien un paramètre en lecture seule, `VDP` (« Drive software version », adresse logique 16#0CE6 = 3302), mais aucun outil du dépôt ne le lit et son codage n'y est pas décrit | |
 | [ModbusTimeout] `ttO`, délai de perte Modbus | la valeur de mise en service (réglage d'usine : 10,0 s ; le simulateur suppose 3 s) | |
-| [Modbus Error Resp] `SLL`, réaction à la perte Modbus | attendu : [Ramp stop], la rampe sur laquelle compte la [section 7](#7-ce-qui-se-passe-physiquement-à-larrêt). [Freewheel Stop], le réglage d'usine, déclenche aussi `SLF1` : s'il est trouvé, l'essai 1 se fait et l'écart est noté. **Essai 1 interdit** sous [Ignore], [Configured Stop], [Fallback Speed] ou [Speed maintained] | |
+| [Modbus Error Resp] `SLL`, réaction à la perte Modbus | attendu : [Ramp stop], la rampe sur laquelle compte la [section 7](#7-ce-qui-se-passe-physiquement-à-larrêt). [Freewheel Stop], le réglage d'usine, déclenche aussi `SLF1` : s'il est trouvé, l'essai 1 se fait et l'écart est noté. **Essai 1 interdit** sous [Ignore], [Configured Stop], [Fallback Speed] ou [Speed maintained], et sous toute autre valeur ou une valeur illisible, notée telle qu'affichée | |
 | [Auto Fault Reset] `ATR`, redémarrage automatique | [No] (réglage d'usine) | |
 | [Fault Reset Assign] `RSF`, entrée de reset de défaut | à noter (réglage d'usine : [No]) | |
 | [Extended Fault Reset] `HRFC`, reset étendu | [No] (réglage d'usine) | |
@@ -2348,7 +2348,8 @@ chacun le code lu, l'arrêt, le verrouillage et le message de l'opérateur.
 
 **Précondition.** `SLL` a été lu au clavier **avant** l'essai (tableau
 ci-dessus). L'essai ne se fait sous **aucune** de ces quatre valeurs : [Ignore],
-[Configured Stop], [Fallback Speed], [Speed maintained]. D'après le manuel
+[Configured Stop], [Fallback Speed], [Speed maintained], ni sous une valeur que
+ce tableau ne cite pas ou qu'on ne sait pas lire. D'après le manuel
 (pages 349 et 350), sous aucune d'elles le variateur ne s'arrête sur le défaut
 `SLF1` : la première ne surveille plus la liaison ; sous la deuxième, il
 s'arrête sans défaut et se tient prêt à repartir dès que la communication

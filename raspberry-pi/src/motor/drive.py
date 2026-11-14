@@ -1913,6 +1913,17 @@ class DriveBackend(Protocol):
         nothing.
         """
 
+    @property
+    @abstractmethod
+    def inspection_budget(self) -> Seconds:
+        """The longest an inspection can take while the drive answers, however late.
+
+        An :meth:`open` and a :meth:`read_status`, every exchange at its worst
+        case (on the Modbus link, the settling of the port and six worst-case
+        transactions - see ``src.motor.atv320.inspection_budget_for``). A reply
+        later than this is not coming: what waits for one stops there (ANH-162).
+        """
+
     @abstractmethod
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         """Zero the speed reference, synchronously, best effort.

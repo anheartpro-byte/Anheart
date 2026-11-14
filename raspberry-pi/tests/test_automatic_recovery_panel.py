@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from http import HTTPStatus
@@ -7,7 +8,7 @@ import httpx
 import pytest
 
 from src.clock import ManualClock
-from src.local_panel import DriveSide, LocalPanel, build_panel
+from src.local_panel import EXIT_FAILED, DriveSide, LocalPanel, build_panel
 from src.motor.drive import ControlWord, RegisterMap
 from src.training.runtime import IDLE_POLL_PERIOD, RULE_DRIVE_PRECOMMANDED
 from src.training.safety import RULE_COMMS_LOST
@@ -23,6 +24,7 @@ from tests.test_atv320 import (
     parameter_exception,
 )
 from tests.test_failure_rig import BENCH_ENV, config_of, no_dsp
+from tests.test_local_panel import FakeWeb
 from tests.test_web_api import StubPorts, parse
 
 clock = test_atv320.clock
@@ -171,6 +173,22 @@ async def test_http_terminal_recovery_retains_unknown_output_and_stops_all_traff
     assert tuple(bus.log) == trace
     assert bus.connect_calls == connects
     assert panel.runtime.manual is None
+
+
+async def test_a_console_that_gave_up_on_the_drive_link_exits_as_an_unclean_stop(
+    panel: LocalPanel, clock: ManualClock, bus: FakeBus, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ANH-162: recovery exhausted, silent under ``comms_lost``: the drive's ttO carries the
+    stop, so the console's exit is unclean (EXIT_FAILED) and counts toward the restarts that
+    put it out of service, as a frozen console's does."""
+    bus.sticky_reads = parameter_exception()
+    for _ in range(panel.runtime.supervisor.limits.comms_lost_failures):
+        await step(panel, clock)
+    assert panel.runtime.gave_up_on_the_link
+    stop = asyncio.Event()
+    stop.set()
+    assert await panel.run(stop, FakeWeb()) == EXIT_FAILED
+    assert "giving up on the drive link" in caplog.text
 
 
 @pytest.mark.parametrize("failed_attempts", [1, 2])

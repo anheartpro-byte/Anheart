@@ -187,6 +187,7 @@ async def test_ex1_the_tape_answers_each_call_with_what_was_recorded_in_order() 
     assert isinstance(drive, DriveBackend)
     assert drive.acquisition_evidence == AcquisitionEvidence(0, address_proven=False)
     assert drive.emergency_budget == EMERGENCY_BUDGET
+    assert drive.inspection_budget == 6 * EMERGENCY_BUDGET
     opened = await drive.open()
     assert isinstance(opened, Ok)
     assert drive.acquisition_evidence == AcquisitionEvidence(1, address_proven=True)

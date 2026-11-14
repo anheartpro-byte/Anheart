@@ -415,6 +415,11 @@ class TapeDrive:
     def emergency_budget(self) -> Seconds:
         return EMERGENCY_BUDGET
 
+    @property
+    def inspection_budget(self) -> Seconds:
+        """Six round trips, as the simulated drive: a tape answers at once or not at all."""
+        return Seconds(6 * EMERGENCY_BUDGET)
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:  # noqa: ARG002  # the seam's signature; a tape waits for nothing
         """The recorded emergency zero, or ``NOTHING_SENT`` once the tape no longer holds."""
         exchange = self._take(Call.EMERGENCY_ZERO)

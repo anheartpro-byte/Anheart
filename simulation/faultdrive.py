@@ -116,5 +116,9 @@ class FaultyDrive:
     def emergency_budget(self) -> Seconds:
         return self._inner.emergency_budget
 
+    @property
+    def inspection_budget(self) -> Seconds:
+        return self._inner.inspection_budget
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         return self._inner.emergency_disable_blocking(timeout)

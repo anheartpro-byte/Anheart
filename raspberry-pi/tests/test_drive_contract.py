@@ -718,6 +718,10 @@ class _RecordingBackend:
     def emergency_budget(self) -> Seconds:
         return Seconds(1.0)
 
+    @property
+    def inspection_budget(self) -> Seconds:
+        return Seconds(3.0)
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         self._possible_frames += 1
         self.emergency_timeouts.append(timeout)

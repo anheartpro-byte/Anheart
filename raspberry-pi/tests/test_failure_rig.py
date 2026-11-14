@@ -177,6 +177,10 @@ class Wrapped:
     def emergency_budget(self) -> Seconds:
         return self.inner.emergency_budget
 
+    @property
+    def inspection_budget(self) -> Seconds:
+        return self.inner.inspection_budget
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         return self.inner.emergency_disable_blocking(timeout)
 

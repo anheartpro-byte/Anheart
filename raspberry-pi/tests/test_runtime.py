@@ -572,6 +572,10 @@ class FakeDrive:
         """A figure no module constant happens to equal, so a test can tell whose it is."""
         return FAKE_EMERGENCY_BUDGET
 
+    @property
+    def inspection_budget(self) -> Seconds:
+        return Seconds(3.0)
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         self.advance(self._clock.monotonic())
         self.emergency_calls += 1

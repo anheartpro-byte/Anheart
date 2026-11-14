@@ -971,6 +971,11 @@ class SimulatedDrive:
         """
         return self._config.response_timeout
 
+    @property
+    def inspection_budget(self) -> Seconds:
+        """Six modelled round trips at ``response_timeout``: an open and a status read."""
+        return Seconds(6 * self._config.response_timeout)
+
     def emergency_disable_blocking(self, timeout: Seconds) -> EmergencyStopOutcome:
         """Zero the setpoint, synchronously, best effort. Never raises.
 
