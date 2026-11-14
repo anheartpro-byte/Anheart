@@ -4722,8 +4722,13 @@ class TrainingRuntime:
         Only ticks with a usable, fresh rate count, so the three do not add up to
         the session length - and that gap is informative: a session whose counters
         sum to a fraction of its length was a session spent mostly blind.
+
+        Never once the phase is DONE, the tick that reached it included (ANH-234):
+        the programme stays set until the next arming, and the idle ticks that
+        follow would otherwise keep counting into the page's snapshot, after the
+        record has taken its end observation from the first DONE tick.
         """
-        if interval is None:
+        if interval is None or self._phase is Phase.DONE:
             return
         program = self._program
         if program is None:
