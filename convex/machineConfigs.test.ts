@@ -652,6 +652,31 @@ describe("ANH-141 review R2: the two-admin rule rests on the site alone", () => 
     expect(view).toMatchObject({ inForceRevision: 1, locksAboveLevel: ["PROGRAMS_ENABLED"] });
   });
 
+  it("A2: says a lock the applied revision runs above the level, a newer lock-free one waiting", async () => {
+    const w = await seedWorld(modules);
+    await setLevel(w, "auto");
+    const key = await machineKey(w);
+    const first = await approvedFirst(w, { ...BASE, PROGRAMS_ENABLED: true });
+    await applyOnMachine(w, key, 1, (await rowOf(w, first.configId))?.hash ?? "");
+    const off = await propose(w, BASE);
+    await asSecondAdmin(w).mutation(api.machineConfigs.approveConfig, { configId: off.configId });
+    await as(w.t, "admin").mutation(api.machineRegistry.lowerValidationLevel, {
+      machineId: w.machine,
+      level: "bench",
+      reason: "TEST nouvel essai requis",
+    });
+    // Lock-free, the waiting revision stays; the machine still runs revision 1 until it applies it.
+    expect((await rowOf(w, off.configId))?.status).toBe("approved");
+    const view = await as(w.t, "admin").query(api.machineConfigs.getMachineConfig, {
+      machineId: w.machine,
+    });
+    expect(view).toMatchObject({
+      appliedRevision: 1,
+      inForceRevision: 2,
+      locksAboveLevel: ["PROGRAMS_ENABLED"],
+    });
+  });
+
   it("A3: an author demoted since the proposal no longer counts as the first admin", async () => {
     const w = await seedWorld(modules);
     await addSecondAdmin(w);

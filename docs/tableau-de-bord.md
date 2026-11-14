@@ -477,9 +477,9 @@ rayons du registre et du nom et du lieu de la machine.
 - **Les alertes** : « Configuration appliquée ≠ approuvée » quand la machine
   dit tourner sur une autre révision que la révision appliquée
   (`configurationStatus` `mismatch`), jamais pendant l'attente d'une
-  révision approuvée ; et les verrous qu'une révision en vigueur active au
-  dessus du niveau de validation, après une descente de niveau
-  (`locksAboveLevel`). Les erreurs restent les mots de la console, en
+  révision approuvée ; et les verrous que la révision appliquée ou celle en
+  vigueur active au dessus du niveau de validation, après une descente de
+  niveau (`locksAboveLevel`). Les erreurs restent les mots de la console, en
   français, et la page anglaise le dit.
 
 Le site ne fait que proposer : la machine revalide chaque révision, et une

@@ -390,7 +390,7 @@
     "changedFromApplied": "Ce que cette révision change par rapport à la révision appliquée :",
     "changes": "Changements de la révision {revision}",
     "reasonNeeded": "Indiquez un motif de 3 caractères au moins pour refuser.",
-    "locksAbove": "La révision en vigueur active {keys} au dessus du niveau de validation de la machine ({level}) : la console la refuse, proposez une révision qui les désactive."
+    "locksAbove": "La révision appliquée ou celle en vigueur active {keys} au dessus du niveau de validation de la machine ({level}) : la console tient ces verrous à faux, proposez une révision qui les désactive."
   },
   "errors": {
     "invalid_registry_field": "Valeur invalide dans le registre machine.",

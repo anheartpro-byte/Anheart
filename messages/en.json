@@ -390,7 +390,7 @@
     "changedFromApplied": "What this revision changes from the applied revision:",
     "changes": "Changes of revision {revision}",
     "reasonNeeded": "Give a reason of at least 3 characters to reject.",
-    "locksAbove": "The revision in force enables {keys} above the machine's validation level ({level}): the console refuses it, propose a revision that disables them."
+    "locksAbove": "The applied revision or the one in force enables {keys} above the machine's validation level ({level}): the console holds these locks false, propose a revision that disables them."
   },
   "errors": {
     "invalid_registry_field": "Invalid machine registry value.",

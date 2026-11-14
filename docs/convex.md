@@ -2645,9 +2645,11 @@ chaque révision approuvée et pas encore appliquée dont un verrou ne passe
 plus à ce niveau est refusée, « machine validée jusqu'au niveau … », au nom
 de l'admin qui descend, et auditée (`machine_config.rejected`, `fields` les
 verrous). Une révision déjà appliquée reste ce que la machine fait tourner :
-`getMachineConfig` en donne les verrous au dessus du niveau
-(`locksAboveLevel`), et la console la juge contre le niveau signé avec chaque
-réponse.
+`getMachineConfig` donne les verrous au dessus du niveau de la révision
+appliquée comme de celle en vigueur (`locksAboveLevel`) : une révision plus
+récente sans verrou peut attendre la machine pendant que celle-ci fait encore
+tourner le sien. La console juge la révision qu'elle applique contre le niveau
+signé avec chaque réponse.
 
 Le nom et le lieu sont aussi écrits par `machines.updateMachine` (fenêtre
 d'édition de la machine, gestionnaire compris) : ce chemin ne crée pas de

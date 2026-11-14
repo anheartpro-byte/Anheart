@@ -266,7 +266,7 @@ export const getMachineConfig = query({
       ),
       defaults: configValuesValidator,
       validationLevel: machineValidationLevelValidator,
-      /** Locks the revision in force sets true above the level now (a level lowered since). */
+      /** Locks the revision applied or the one in force sets true above the level now. */
       locksAboveLevel: v.array(v.string()),
       canPropose: v.union(v.literal("all"), v.literal("name_location"), v.literal("none")),
     }),
@@ -325,7 +325,10 @@ export const getMachineConfig = query({
       configurationStatus: configurationStatus(target, reported),
       defaults,
       validationLevel: level,
-      locksAboveLevel: target === null ? [] : locksAbove(target.values, level),
+      // Both: the machine may still run a lock of the one applied while a newer one waits.
+      locksAboveLevel: (["PROGRAMS_ENABLED", "OCCUPANCY_OCCUPIED_ENABLED"] as const).filter((key) =>
+        [applied, target].some((row) => row !== null && locksAbove(row.values, level).includes(key)),
+      ),
       canPropose:
         machine.isDeleted === true
           ? ("none" as const)
