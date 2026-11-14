@@ -2,13 +2,13 @@
 
 Started by ``tests/test_bench_console_exit.py``, which sends it real signals:
 
-    python tests/bench_console_exit_worker.py <report file> <stop> [<wait>]
+    python tests/bench_console_exit_worker.py <report file> <stop> [<wait> [<http port>]]
 
 ``<stop>`` is how long the driver's stop takes, in seconds, or ``stuck`` for a
 stop that never returns: an exchange blocked in a thread of an executor, as a
 driver transaction on a dead link would be, which is a thread the interpreter
 waits for on its way out. ``<wait>``, when given, replaces the time the script
-waits for the stop before it gives up (35 s on the bench).
+waits for the stop before it gives up (35 s on the bench); ``-`` keeps it.
 
 Only the drive is a stand-in. The argument parsing, the signal handlers, the
 bus thread, the web server and the exit are the script's own, in a process of
@@ -23,8 +23,9 @@ driver's stop begins and ``stopped`` when it has finished. Once ``main`` is
 over it writes ``signals-back`` if each exit signal does again what it did
 before ``main``, ``signals-kept`` if not. The report file is the only thing
 written that way: the standard output and error of this process are the
-script's own, and a test may have closed them. The web server listens on a
-port the system picks: nothing here needs to reach it.
+script's own, and a test may have closed them. The web server listens on
+``<http port>``, or on a port the system picks: only a test that holds a
+request open needs to reach it.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ import asyncio
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Final, cast
 
@@ -49,6 +51,10 @@ from src.result import Err, Ok, Result
 from src.units import Seconds
 
 NO_ANSWER: Final[CommTimeout] = CommTimeout(after=Seconds(0.1))
+
+SERVING_HOLD_S: Final[float] = 0.3
+"""How long the start-up hook keeps the main thread in the web server's lifespan after
+writing ``serving``: the window in which an exit signal used to be swallowed by it."""
 
 STUCK: Final[str] = "stuck"
 """The ``<stop>`` argument of a stop that never returns."""
@@ -109,16 +115,20 @@ def main() -> int:
 
     def serving() -> None:
         report.note("serving")
+        # Still inside the web server's start-up (its lifespan) for a moment: a signal the
+        # parent sends once it reads "serving" lands there every time, as it can under load.
+        time.sleep(SERVING_HOLD_S)
 
     def served() -> None:
         report.note("served")
 
     patch.setattr(bench, "build_drive", build)
-    if len(sys.argv) > 3:
+    if len(sys.argv) > 3 and sys.argv[3] != "-":
         patch.setattr(bench, "SHUTDOWN_JOIN_S", float(sys.argv[3]))
+    http_port = sys.argv[4] if len(sys.argv) > 4 else "0"
     bench.app.router.on_startup.append(serving)
     bench.app.router.on_shutdown.append(served)
-    sys.argv = ["bench_console.py", "--port", "COM-NONE", "--http-port", "0"]
+    sys.argv = ["bench_console.py", "--port", "COM-NONE", "--http-port", http_port]
     watched = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
     before = [signal.getsignal(exit_signal) for exit_signal in watched]
     try:

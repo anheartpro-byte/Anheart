@@ -65,11 +65,13 @@ ends:
 * the terminal or the SSH session going away (SIGHUP);
 * an exception in the bus thread, or the web server failing to start.
 
-SIGTERM and SIGHUP used to end the process with NO stop: the web server takes
-the signal, shuts itself down, then hands the signal back to whatever handled
-it before, and by default that is the end of the process on the spot, before
-any ``finally``. SIGHUP it does not take at all. All three now have one
-handler, this script's, and leave through ``main``'s ``finally``. Nothing in that path can do anything but stop: it sets
+SIGTERM and SIGHUP used to end the process with NO stop: the web server took
+the signal, shut itself down, then handed the signal back to whatever handled
+it before, and by default that was the end of the process on the spot, before
+any ``finally``. SIGHUP it did not take at all. It now takes all three, waits
+at most ``GRACEFUL_SHUTDOWN_S`` (2 s) for a request still open, then hands the
+signal to one handler, this script's: all three leave through ``main``'s
+``finally``. Nothing in that path can do anything but stop: it sets
 one flag, and the bus thread answers it with the driver's stop and nothing
 else.
 
@@ -94,7 +96,8 @@ done. The last line printed, ``sortie: ...``, says how the machine was left:
 
 The exit status: 0 after a Ctrl+C taken while the page was served (the
 interruption itself during the start-up wait), 143 after SIGTERM, 129 after
-SIGHUP, and 1 when the stop had not finished when the wait ended.
+SIGHUP, and 4 (``EXIT_STOP_UNFINISHED``) when the stop had not finished when
+the wait ended. A 1 is an ordinary error, and says nothing of the stop.
 
 None of this depends on the last line being written. With the terminal gone
 or the pipe broken there is nobody to read it: the line is dropped, the
@@ -134,6 +137,7 @@ from typing import Annotated, Final, Literal, TextIO, assert_never, override
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uvicorn
+import uvicorn.server
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -201,6 +205,12 @@ STOP_POLL_S = 0.25
 
 #: How long the process waits, at exit, for the worker's own stop sequence.
 SHUTDOWN_JOIN_S = STOP_WAIT_S + 10.0
+
+#: How long the web server waits, on an exit signal, for a request still open
+#: (a tablet asleep halfway through a POST) before it cancels it. Unbounded, it
+#: waited for good, deaf to SIGTERM and SIGHUP, and the driver's stop, which
+#: runs after it, never began.
+GRACEFUL_SHUTDOWN_S = 2
 
 
 @dataclass
@@ -846,11 +856,13 @@ EXIT_HELP: Final[str] = (
     "(ttO), a verifier sur son clavier."
 )
 
-EXIT_STOP_UNFINISHED: Final[int] = 1
+EXIT_STOP_UNFINISHED: Final[int] = 4
 """The exit status when the process ends without having seen the driver's stop finish.
 
 Not zero: whatever started the tool must be able to tell this exit from a stop
-that was seen through.
+that was seen through. Not 1 either, the status of an ordinary error (an
+exception nobody caught), nor 2 (a wrong argument) or 3 (the web server could
+not start): this one says that nothing confirmed the motor stopped.
 """
 
 #: What ``signal.signal`` hands back: the handler a signal had before.
@@ -874,13 +886,14 @@ def _leave(signum: int, _frame: FrameType | None) -> None:
     was already pending is dropped.
 
     An exception and not a flag, because the main thread may be anywhere: in
-    the start-up wait, in the web server's loop (SIGHUP, which the web server
-    does not take: its loop is cancelled and it closes what it serves on the
-    way out), or in the web server just after it has shut itself down and
-    handed the signal back (Ctrl+C and SIGTERM, which it does take). Ctrl+C
-    stays the interruption it always was. SIGTERM and SIGHUP leave with the
-    status a shell gives a process ended by them, 128 plus the signal's
-    number.
+    the start-up wait, or in the web server just after it has shut itself
+    down and handed the signal back. While the web server runs it takes all
+    three itself (``main``), so this never raises inside it: its lifespan and
+    its request handlers catch every exception, and an exit raised there was
+    lost, the shield already up, leaving a console deaf to all but
+    ``kill -9``. Ctrl+C stays the interruption it always was. SIGTERM and
+    SIGHUP leave with the status a shell gives a process ended by them, 128
+    plus the signal's number.
     """
     _let_nothing_cut_the_stop()
     if signum == signal.SIGINT:
@@ -951,6 +964,8 @@ def _say_last(line: str) -> None:
     """
     said = False
     for stream in (sys.stdout, sys.stderr):
+        if stream is None:  # started without that stream: nothing to write to or flush
+            continue
         try:
             if not said:
                 print(line, file=stream)
@@ -1049,7 +1064,19 @@ def main() -> int:
             print("La console demarre quand meme et affichera l'etat reel de la liaison.")
         print(f"\n  ->  http://{host}:{http_port}\n")
         print("Rien ne tourne avant que VOUS armiez et cliquiez.")
-        uvicorn.run(app, host=host, port=http_port, log_level="warning")
+        # SIGHUP too, as it takes Ctrl+C and SIGTERM: the web server closes what it
+        # serves and hands the signal back once out of its loop (see `_leave`). Its
+        # list is read when it starts serving; setattr, as the library types it a pair.
+        taken = uvicorn.server.HANDLED_SIGNALS
+        untaken = tuple(wanted for wanted in _exit_signals() if wanted not in taken)
+        setattr(uvicorn.server, "HANDLED_SIGNALS", (*taken, *untaken))  # noqa: B010
+        uvicorn.run(
+            app,
+            host=host,
+            port=http_port,
+            log_level="warning",
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+        )
     finally:
         # An exit that no signal asked for (the web server returning, an
         # exception) gets here with the handlers still armed. A signal that

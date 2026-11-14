@@ -2470,6 +2470,9 @@ lance l'arrêt du pilote (consigne à 0, arbre lu à l'arrêt, puis mots d'arrê
 seule fois, et l'attend **35 s au plus** avant de se terminer. Pendant cette attente
 les signaux suivants sont ignorés, un second Ctrl+C compris : couper l'arrêt le
 laisserait à moitié fait. L'attente finie, les signaux retrouvent leur effet habituel.
+Une requête de la page encore en cours (une tablette mise en veille ou qui perd le Wi-Fi
+au milieu d'un envoi) ne retient pas l'arrêt : le serveur web l'attend **2 s au plus**,
+puis l'abandonne, et l'arrêt du pilote commence.
 
 Sa dernière ligne, `sortie: ...`, dit comment la machine a été laissée :
 
@@ -2488,8 +2491,10 @@ Sa dernière ligne, `sortie: ...`, dit comment la machine a été laissée :
   commandé.
 
 Son code de sortie : 0 après un Ctrl+C reçu quand la page était servie (130 s'il est
-reçu pendant le démarrage), 143 après SIGTERM, 129 après SIGHUP, et 1 quand l'arrêt
-n'avait pas fini au bout de l'attente.
+reçu pendant le démarrage), 143 après SIGTERM, 129 après SIGHUP, et 4 quand l'arrêt
+n'avait pas fini au bout de l'attente. Un 1 est une erreur ordinaire, que la dernière
+ligne décrit ; il ne dit rien de l'arrêt. Lancé sans sortie d'erreur (`2>&-`),
+l'outil sort avec les mêmes codes.
 
 Rien de tout cela ne dépend de l'écriture de la dernière ligne. Si le terminal est
 fermé ou si la sortie allait dans un tube dont le lecteur a disparu (`| tee`, arrêté

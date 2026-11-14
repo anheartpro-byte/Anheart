@@ -1,13 +1,14 @@
 # Guide gestionnaire : le tableau de bord
 
 > **Brouillon, en attente de validation par la semaine pilote.**
-> Version du 7 octobre 2026. Aucun client n'a encore utilisé ce guide.
+> Version du 13 novembre 2026. Aucun client n'a encore utilisé ce guide.
 >
 > - Les écrans décrits ici (machines en direct, lancement d'une séance auto,
 >   suivi en direct, droits de lancement, physiologie) appartiennent à la
->   version du site prévue pour la semaine pilote. À cette date, cette version
->   n'est pas encore en ligne : le site que vous ouvrez aujourd'hui peut
->   différer.
+>   version du site prévue pour la semaine pilote. Le site en ligne porte
+>   cette version depuis le 30 octobre 2026 ; ce qui a été ajouté depuis,
+>   comme la séance de banc lestée, n'y est pas encore : le site que vous
+>   ouvrez aujourd'hui peut différer.
 > - Les captures d'écran viennent d'un site d'essai, avec des comptes de
 >   démonstration et une machine simulée. Elles ont été prises avant la
 >   traduction de plusieurs écrans : certaines montrent encore des textes en

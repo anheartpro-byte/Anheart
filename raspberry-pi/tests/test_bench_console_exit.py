@@ -39,6 +39,7 @@ import errno
 import io
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -456,12 +457,19 @@ ENDED_WELL: Final[list[str]] = ["stopping", "stopped", "signals-back"]
 """How the stand-in's report ends when the stop ran once, to its end, before ``main`` was over,
 and every exit signal then did again what it did before ``main``."""
 
-STOP_UNFINISHED: Final[int] = 1
+STOP_UNFINISHED: Final[int] = 4
 """The exit status of a console that ended without having seen the stop finish. Written here
 as the number the guide gives, not read from the script: zero would say all went well."""
 
-type Output = Literal["a file", "a pipe", "a terminal"]
-"""Where the console's standard output and error go. The last two can be closed under it."""
+type Output = Literal["a file", "a pipe", "a terminal", "a file, no error output"]
+"""Where the console's standard output and error go. A pipe and a terminal can be closed
+under it; with ``a file, no error output`` it starts with its standard error closed."""
+
+WITHOUT_ERROR_OUTPUT: Final[str] = (
+    "import os, sys; os.close(2); os.execv(sys.executable, [sys.executable, *sys.argv[1:]])"
+)
+"""A process that closes its standard error, then becomes the command its arguments give.
+Python then has ``None`` for ``sys.stderr``: what ``2>&-`` does in a shell."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,7 +516,12 @@ class _Console:
 
 
 def _console(
-    tmp_path: Path, *, stop: str = "0", wait: float | None = None, output: Output = "a file"
+    tmp_path: Path,
+    *,
+    stop: str = "0",
+    wait: float | None = None,
+    output: Output = "a file",
+    http_port: int | None = None,
 ) -> _Console:
     """Start the real ``main()`` over the stand-in drive. The caller ends it with a signal.
 
@@ -517,12 +530,15 @@ def _console(
     for the stop. ``output`` is where the console writes: a file the test
     reads afterwards, or something ``lose_output`` can take away, a pipe
     (whose reader then is gone) or a terminal (which then is closed).
+    ``http_port`` is where its page listens, for a test that has to reach it.
     """
     report = tmp_path / "report.txt"
     log = tmp_path / "console.log"
     command = [sys.executable, str(WORKER), str(report), stop]
-    if wait is not None:
-        command.append(str(wait))
+    if wait is not None or http_port is not None:
+        command.append("-" if wait is None else str(wait))
+    if http_port is not None:
+        command.append(str(http_port))
     home = WORKER.parent.parent
     match output:
         case "a file":
@@ -547,7 +563,44 @@ def _console(
             finally:
                 os.close(theirs)
             return _Console(process, report, log, partial(os.close, ours))
+        case "a file, no error output":
+            with log.open("wb") as kept:
+                process = subprocess.Popen(  # noqa: S603  # this interpreter, a file of this repository
+                    [sys.executable, "-c", WITHOUT_ERROR_OUTPUT, *command[1:]],
+                    cwd=home,
+                    stdout=kept,
+                )
+            return _Console(process, report, log)
     raise assert_never(output)
+
+
+def _free_port() -> int:
+    """A port of this machine that nothing listens on, for the console's page."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return cast(int, probe.getsockname()[1])
+
+
+def _held_request(port: int) -> socket.socket:
+    """A client that sends a request's headers and one byte of its body, then waits.
+
+    What a tablet that sleeps, or drops its Wi-Fi, halfway through a POST does.
+    The page listens once the web server's start-up is over: until then the
+    connection is refused, and tried again.
+    """
+    deadline = time.monotonic() + PATIENCE
+    client: socket.socket | None = None
+    while client is None:
+        try:
+            client = socket.create_connection(("127.0.0.1", port), timeout=PATIENCE)
+        except ConnectionRefusedError:
+            assert time.monotonic() < deadline, f"the page never listened on {port}"
+            time.sleep(0.02)
+    client.sendall(
+        b"POST /api/speed HTTP/1.1\r\nHost: bench\r\nContent-Type: application/json\r\n"
+        b"Content-Length: 100\r\n\r\n{"
+    )
+    return client
 
 
 def _kill_if_left(console: _Console) -> None:
@@ -593,6 +646,49 @@ def test_a_signal_to_the_serving_console_ends_in_the_driver_s_stop_once(
     )
     assert code == status, said
     assert CONFIRMED_LINE in said
+
+
+@signals_reach_a_process
+@pytest.mark.parametrize(
+    ("sent", "status"),
+    [
+        pytest.param(signal.SIGTERM, BY_SIGTERM, id="SIGTERM"),
+        pytest.param(HANG_UP, BY_HANG_UP, id="SIGHUP"),
+    ],
+)
+def test_a_request_left_open_does_not_keep_the_console_from_its_stop(
+    tmp_path: Path, sent: signal.Signals, status: int
+) -> None:
+    """A client is halfway through a request when the signal arrives. One stop, then the end.
+
+    The web server waits for the requests it serves before it lets go. Without
+    a bound it waited for good: the process stayed, deaf to SIGTERM and SIGHUP,
+    its page closed, the driver's stop never begun and the bus still commanding
+    the setpoint. It now cancels the request after ``GRACEFUL_SHUTDOWN_S``.
+    """
+    port = _free_port()
+    console = _console(tmp_path, http_port=port)
+    client: socket.socket | None = None
+    try:
+        console.wait_for("serving")
+        client = _held_request(port)
+        # The server has the headers, and a request under way, before the signal.
+        time.sleep(0.3)
+        signalled = time.monotonic()
+        console.process.send_signal(sent)
+        code = console.ended()
+        took = time.monotonic() - signalled
+    finally:
+        if client is not None:
+            client.close()
+        _kill_if_left(console)
+    words = console.words()
+
+    assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
+    assert words[-4:] == ["served", *ENDED_WELL], f"not one whole stop: {words}"
+    assert code == status, console.said()
+    # Sooner, and the server had no request under way: the bound was never put to the test.
+    assert took >= bench.GRACEFUL_SHUTDOWN_S, f"ended {took:.2f} s after the signal"
 
 
 @signals_reach_a_process
@@ -868,7 +964,7 @@ def test_what_follows_the_last_line_happens_whatever_becomes_of_the_line(
     Writing the last line is replaced by something that raises what the
     script does not catch. Both things that follow are in ``finally`` blocks:
     each exit signal does again what it did before, and the process is ended
-    with the status of a stop that was not seen through, which is 1.
+    with the status of a stop that was not seen through, which is 4.
     """
     ended_with: list[int] = []
 
@@ -897,3 +993,82 @@ def test_what_follows_the_last_line_happens_whatever_becomes_of_the_line(
     assert set(shielded.values()) == {signal.SIG_IGN}
     assert after == before, "the signals were not given back"
     assert ended_with == [STOP_UNFINISHED], "the process was not ended, or not with that status"
+
+
+def test_the_process_is_ended_even_when_giving_the_signals_back_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Giving the signals back raises what nobody foresaw: the process is ended all the same.
+
+    The forced end is in a ``finally`` of its own, after the signals are given
+    back: a stop that has not finished must never leave the process waiting
+    for the thread it is stuck in, whatever happened just before.
+    """
+    ended_with: list[int] = []
+
+    def broken(_before: object) -> None:
+        raise RuntimeError("the handlers could not be set back")
+
+    def forced_end(status: int) -> None:
+        ended_with.append(status)
+        raise _ForcedEndError
+
+    def unsaid(_line: str) -> None:
+        """The last line, written as if all went well."""
+
+    before = _handlers()
+    monkeypatch.setattr(bench, "_say_last", unsaid)
+    monkeypatch.setattr(bench, "_give_the_signals_back", broken)
+    monkeypatch.setattr(os, "_exit", forced_end)
+    try:
+        with pytest.raises(_ForcedEndError):
+            bench._stop_and_report(  # pyright: ignore[reportPrivateUsage]
+                cast(bench.BusWorker, _StillStopping()), before
+            )
+    finally:
+        for watched, handler in before.items():
+            signal.signal(watched, signal.SIG_DFL if handler is None else handler)
+
+    assert ended_with == [STOP_UNFINISHED], "the process was not ended, or not with that status"
+
+
+@pytest.mark.parametrize(
+    ("output", "error"),
+    [(None, None), (io.StringIO(), None), (None, io.StringIO())],
+    ids=["neither", "no error output", "no standard output"],
+)
+def test_a_standard_stream_the_process_was_started_without_is_passed_over(
+    monkeypatch: pytest.MonkeyPatch, output: io.StringIO | None, error: io.StringIO | None
+) -> None:
+    """A stream the process was started without is ``None`` to Python: the last line goes to
+    the one that is there, if any, and nothing is raised. It used to raise on the missing
+    stream's flush, and a normal stop then ended with the status of an error."""
+    monkeypatch.setattr(sys, "stdout", output)
+    monkeypatch.setattr(sys, "stderr", error)
+    bench._say_last("\nsortie: arret confirme, port libere")  # pyright: ignore[reportPrivateUsage]
+    there = output if output is not None else error
+    assert there is None or there.getvalue() == CONFIRMED_LINE
+
+
+@signals_reach_a_process
+def test_with_no_error_output_a_normal_stop_keeps_the_status_of_its_signal(
+    tmp_path: Path,
+) -> None:
+    """Started with its standard error closed (``2>&-``), the console stops as ever.
+
+    One whole stop, the signals given back, the last line on its standard
+    output, and the status a shell gives a process ended by SIGTERM. It used
+    to be 1: the flush of the missing error output raised.
+    """
+    console = _console(tmp_path, output="a file, no error output")
+    try:
+        console.wait_for("serving")
+        console.process.send_signal(signal.SIGTERM)
+        code = console.ended()
+    finally:
+        _kill_if_left(console)
+    words = console.words()
+
+    assert words[-4:] == ["served", *ENDED_WELL], f"not one whole stop: {words}"
+    assert console.said().endswith(CONFIRMED_LINE), console.said()
+    assert code == BY_SIGTERM
