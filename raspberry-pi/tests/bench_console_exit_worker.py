@@ -19,7 +19,9 @@ The parent cannot look into this process, so the stand-in writes one word a
 line to the report file: ``open`` when the bus thread has connected,
 ``serving`` when the web server has started (its signal handlers are in place
 by then), ``served`` when it has closed what it serves, ``stopping`` when the
-driver's stop begins and ``stopped`` when it has finished. Once ``main`` is
+driver's stop begins and ``stopped`` when it has finished; ``wrote-speed-<rpm>``,
+``wrote-command`` and ``enabled`` for each write a motion command makes of the
+drive (ANH-218: none may come once the exit has begun). Once ``main`` is
 over it writes ``signals-back`` if each exit signal does again what it did
 before ``main``, ``signals-kept`` if not. The report file is the only thing
 written that way: the standard output and error of this process are the
@@ -46,9 +48,9 @@ import scripts.bench_console as bench
 from scripts.drive_link import BuiltDrive
 from src.clock import Clock
 from src.local_config import DriveLink
-from src.motor.drive import CommTimeout, DriveError, DriveLimits, DriveStatus
+from src.motor.drive import CommTimeout, ControlWord, DriveError, DriveLimits, DriveStatus
 from src.result import Err, Ok, Result
-from src.units import Seconds
+from src.units import MotorRpm, Seconds
 
 NO_ANSWER: Final[CommTimeout] = CommTimeout(after=Seconds(0.1))
 
@@ -88,6 +90,18 @@ class _Drive:
 
     async def read_status(self) -> Result[DriveStatus, DriveError]:
         return Err(NO_ANSWER)
+
+    async def write_speed(self, rpm: MotorRpm) -> Result[None, DriveError]:
+        self._report.note(f"wrote-speed-{int(rpm)}")
+        return Ok(None)
+
+    async def write_command(self, _word: ControlWord) -> Result[None, DriveError]:
+        self._report.note("wrote-command")
+        return Ok(None)
+
+    async def enable(self) -> Result[None, DriveError]:
+        self._report.note("enabled")
+        return Ok(None)
 
     async def close(self) -> Result[None, DriveError]:
         self._report.note("stopping")

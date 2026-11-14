@@ -38,19 +38,24 @@ from __future__ import annotations
 import errno
 import io
 import os
+import queue
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
+from http import HTTPStatus
 from pathlib import Path
 from types import FrameType
 from typing import Final, Literal, assert_never, cast, override
 
+import httpx
 import pytest
+import uvicorn
 
 import scripts.bench_console as bench
 from scripts.drive_link import BuiltDrive
@@ -183,6 +188,233 @@ def _rig(
     worker = bench.BusWorker(_link(), max_rpm=300)
     worker.snap.armed = True
     return _Rig(worker=worker, drive=drive, master=master)
+
+
+async def test_once_the_exit_has_begun_every_motion_route_is_refused_and_the_stop_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ANH-218, in process: an armed console, then the exit. Enable, speed and arming are
+    409 at once, nothing is queued, and the bus thread has been asked for the stop."""
+    rig = _rig(monkeypatch)
+    monkeypatch.setattr(bench, "worker", rig.worker)
+    monkeypatch.setattr(bench, "LEAVING", threading.Event())
+    asked: list[str] = []
+    queued: list[str] = []
+
+    def shutdown(_worker: bench.BusWorker) -> None:
+        asked.append("stop")
+
+    def submit(_worker: bench.BusWorker, command: bench.Command) -> None:
+        queued.append(command.action)
+
+    monkeypatch.setattr(bench.BusWorker, "shutdown", shutdown)
+    monkeypatch.setattr(bench.BusWorker, "submit", submit)
+    page = httpx.AsyncClient(transport=httpx.ASGITransport(app=bench.app), base_url="http://bench")
+    async with page:
+        before = await page.post("/api/speed", json={"rpm": 30})
+        assert before.status_code == HTTPStatus.OK
+        rig.worker.snap.armed = True
+        bench.disarm_and_stop()  # what the exit signal calls
+        refused = [
+            await page.post("/api/enable"),
+            await page.post("/api/speed", json={"rpm": 60}),
+            await page.post("/api/arm", json={"motor_uncoupled": True}),
+        ]
+        disarmed = await page.post("/api/arm", json={"motor_uncoupled": False})
+    assert [answer.status_code for answer in refused] == [HTTPStatus.CONFLICT] * 3
+    assert all(bench.LEAVING_REFUSAL in answer.text for answer in refused)
+    assert disarmed.status_code == HTTPStatus.OK, "disarming stays possible"
+    assert rig.worker.snap.armed is False
+    assert asked == ["stop"]
+    assert queued == ["speed"], "only the speed asked for before the exit was queued"
+
+
+def test_a_command_still_queued_when_the_stop_is_asked_for_is_never_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bus thread drains its queue only while no stop is asked for (ANH-218)."""
+    rig = _rig(monkeypatch)
+    rig.worker.submit(bench.Command("speed", 60))
+    rig.worker.shutdown()
+    # This stand-in has no speed to write: run, the speed would raise out of the thread.
+    rig.worker.run()
+    assert rig.drive.stops == 1
+    assert rig.worker.snap.setpoint_rpm == 0
+
+
+async def test_an_unarmed_console_refuses_the_motion_routes_before_any_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The arming's own refusal, the second reason ``_motion_refusal`` gives: nothing queued."""
+    rig = _rig(monkeypatch)
+    rig.worker.snap.armed = False
+    monkeypatch.setattr(bench, "worker", rig.worker)
+    monkeypatch.setattr(bench, "LEAVING", threading.Event())
+    queued: list[str] = []
+
+    def submit(_worker: bench.BusWorker, command: bench.Command) -> None:
+        queued.append(command.action)
+
+    monkeypatch.setattr(bench.BusWorker, "submit", submit)
+    page = httpx.AsyncClient(transport=httpx.ASGITransport(app=bench.app), base_url="http://bench")
+    async with page:
+        refused = [
+            await page.post("/api/enable"),
+            await page.post("/api/speed", json={"rpm": 60}),
+        ]
+    assert [answer.status_code for answer in refused] == [HTTPStatus.CONFLICT] * 2
+    assert all("console non armee" in answer.text for answer in refused)
+    assert queued == []
+
+
+type _Dispatch = Callable[[bench.BusWorker, bench.Command], Awaitable[str]]
+
+
+def _dispatching(
+    actions: list[str], then: Callable[[bench.BusWorker], None] | None = None
+) -> _Dispatch:
+    """The bus thread's actions, recorded in ``actions`` in place of the drive's. The first
+    asks for the stop, then runs ``then`` on the bus thread, as a request handler would
+    submit in that instant."""
+
+    async def dispatch(worker: bench.BusWorker, command: bench.Command) -> str:
+        actions.append(command.action)
+        if len(actions) == 1:
+            worker.shutdown()
+            if then is not None:
+                then(worker)
+        return command.action
+
+    return dispatch
+
+
+def test_a_command_queued_behind_the_one_that_asks_for_the_stop_is_never_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The drain itself stops at the stop (ANH-218): the bus thread is taking its queue when
+    the stop is asked for, and the command behind is left there."""
+    rig = _rig(monkeypatch)
+    actions: list[str] = []
+    monkeypatch.setattr(bench.BusWorker, "_dispatch", _dispatching(actions))
+    rig.worker.submit(bench.Command("speed", 30))
+    rig.worker.submit(bench.Command("enable"))
+    rig.worker.run()
+    assert actions == ["speed"], "the command behind was run after the stop"
+    assert rig.drive.stops == 1
+
+
+def test_a_command_submitted_once_the_stop_is_asked_for_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2's race (ANH-218): the bus thread checks for the stop, is pre-empted, and a request
+    queues a command in that instant. Dropped at the queue, whatever check the bus thread
+    passed, there is nothing for it to take."""
+    rig = _rig(monkeypatch)
+    commands: queue.Queue[bench.Command] = queue.Queue()
+    monkeypatch.setattr(rig.worker, "_commands", commands)
+
+    def submit_late(worker: bench.BusWorker) -> None:
+        worker.submit(bench.Command("enable"))
+        worker.submit(bench.Command("speed", 60))
+
+    actions: list[str] = []
+    monkeypatch.setattr(bench.BusWorker, "_dispatch", _dispatching(actions, submit_late))
+    rig.worker.submit(bench.Command("speed", 30))
+    rig.worker.run()
+    assert commands.empty(), "a command was queued after the stop was asked for"
+    assert actions == ["speed"]
+    assert rig.drive.stops == 1
+
+
+def test_the_server_s_exit_goes_ahead_when_the_disarm_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2 of ANH-218: the exit signal's own handling goes on whatever the disarm does. It
+    raises here, and uvicorn is still told to exit."""
+
+    def broken() -> None:
+        raise RuntimeError("the disarm went wrong")
+
+    monkeypatch.setattr(bench, "disarm_and_stop", broken)
+    server = bench.StoppingServer(uvicorn.Config(bench.app))
+    with pytest.raises(RuntimeError, match="the disarm went wrong"):
+        server.handle_exit(signal.SIGTERM, None)
+    assert server.should_exit, "uvicorn's own exit was skipped"
+
+
+class _HeldFlag:
+    """The stop flag, whose drain check on the bus thread is answered, then held.
+
+    The ``held_at``-th check made on the bus thread gives its answer, then waits
+    for :attr:`released` before returning it: the bus thread pre-empted between
+    that check and its next step, as R2 forced it. Every other check, and the
+    flag itself, is a plain event's.
+    """
+
+    def __init__(self, thread: threading.Thread, held_at: int) -> None:
+        self._flag: threading.Event = threading.Event()
+        self._thread: threading.Thread = thread
+        self._held_at: int = held_at
+        self._checks: int = 0
+        self.paused: threading.Event = threading.Event()
+        self.released: threading.Event = threading.Event()
+
+    def is_set(self) -> bool:
+        answer = self._flag.is_set()
+        if threading.current_thread() is self._thread:
+            self._checks += 1
+            if self._checks == self._held_at:
+                self.paused.set()
+                assert self.released.wait(5), "the test never let the bus thread go"
+        return answer
+
+    def set(self) -> None:
+        self._flag.set()
+
+
+class _SignalInsidePut(queue.Queue[bench.Command]):
+    """A queue whose put lets the exit signal land first: inside submit, after its check."""
+
+    def __init__(self, worker: bench.BusWorker) -> None:
+        super().__init__()
+        self._worker: bench.BusWorker = worker
+
+    @override
+    def put(self, item: bench.Command, block: bool = True, timeout: float | None = None) -> None:
+        self._worker.shutdown()
+        super().put(item, block, timeout)
+
+
+def test_a_command_put_after_the_stop_by_a_submit_already_past_its_check_never_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2's interleaving (ANH-218), forced. The bus thread checks for the stop (no stop yet)
+    and is pre-empted; a request's submit passes its own check, the exit signal sets the
+    flag, then the submit puts its speed. Taken from the queue, the speed is dropped by the
+    bus thread's re-check; the driver's stop follows."""
+    rig = _rig(monkeypatch)
+    worker = rig.worker
+    flag = _HeldFlag(worker, held_at=2)  # 1: the cycle's check, 2: the drain's
+    monkeypatch.setattr(worker, "_stop_requested", flag)
+    monkeypatch.setattr(worker, "_commands", _SignalInsidePut(worker))
+    actions: list[str] = []
+
+    async def record(_worker: bench.BusWorker, command: bench.Command) -> str:
+        actions.append(command.action)
+        return "ok"
+
+    monkeypatch.setattr(bench.BusWorker, "_dispatch", record)
+    worker.start()
+    try:
+        assert flag.paused.wait(5), "the bus thread never reached its drain check"
+        worker.submit(bench.Command("speed", 200))
+        assert flag.is_set(), "the signal landed inside submit"
+    finally:
+        flag.released.set()
+        worker.join(10)
+    assert not worker.is_alive()
+    assert actions == [], "the speed put after the stop reached the drive"
+    assert rig.drive.stops == 1
 
 
 async def _raising(_self: bench.BusWorker, _command: bench.Command) -> str:
@@ -641,8 +873,10 @@ def test_a_signal_to_the_serving_console_ends_in_the_driver_s_stop_once(
     said = console.said()
 
     assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
-    assert words[-4:] == ["served", *ENDED_WELL], (
-        f"not one whole stop after the web server: {words}"
+    # The stop starts with the signal (ANH-218): the web server closes beside it.
+    assert "served" in words, f"the web server never closed: {words}"
+    assert [word for word in words if word != "served"][-3:] == ENDED_WELL, (
+        f"not one whole stop: {words}"
     )
     assert code == status, said
     assert CONFIRMED_LINE in said
@@ -685,10 +919,94 @@ def test_a_request_left_open_does_not_keep_the_console_from_its_stop(
     words = console.words()
 
     assert words.count("stopping") == 1, f"the driver's stop ran {words.count('stopping')} times"
-    assert words[-4:] == ["served", *ENDED_WELL], f"not one whole stop: {words}"
+    assert [word for word in words if word != "served"][-3:] == ENDED_WELL, (
+        f"not one whole stop: {words}"
+    )
+    # ANH-218: the driver's stop began while the web server still waited for the request.
+    assert words.index("stopping") < words.index("served"), f"the stop waited: {words}"
     assert code == status, console.said()
     # Sooner, and the server had no request under way: the bound was never put to the test.
     assert took >= bench.GRACEFUL_SHUTDOWN_S, f"ended {took:.2f} s after the signal"
+
+
+def _post(port: int, path: str, body: str) -> tuple[int, str]:
+    """One whole request to the console's page: its status and its body.
+
+    The page listens once the web server's start-up is over: until then the
+    connection is refused, and tried again.
+    """
+    deadline = time.monotonic() + PATIENCE
+    client: socket.socket | None = None
+    while client is None:
+        try:
+            client = socket.create_connection(("127.0.0.1", port), timeout=PATIENCE)
+        except ConnectionRefusedError:
+            assert time.monotonic() < deadline, f"the page never listened on {port}"
+            time.sleep(0.02)
+    with client:
+        payload = body.encode()
+        client.sendall(
+            f"POST {path} HTTP/1.1\r\nHost: bench\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode()
+            + payload
+        )
+        return _answer(client)
+
+
+def _answer(client: socket.socket) -> tuple[int, str]:
+    """The status and the body of the one answer a connection gets, read to its close."""
+    received = b""
+    while chunk := client.recv(4096):
+        received += chunk
+    head, _, answer = received.partition(b"\r\n\r\n")
+    return int(head.split()[1]), answer.decode()
+
+
+@signals_reach_a_process
+@pytest.mark.parametrize("sent", [signal.SIGTERM, HANG_UP], ids=["SIGTERM", "SIGHUP"])
+def test_from_the_exit_signal_no_motion_request_reaches_the_drive_and_the_stop_begins(
+    tmp_path: Path, sent: signal.Signals
+) -> None:
+    """ANH-218: the signal disarms the console and starts the driver's stop at once.
+
+    Two clients are halfway through a speed request on an armed console when the
+    signal arrives. The web server waits for them, up to ``GRACEFUL_SHUTDOWN_S``.
+    Before, the one that completed its request in that window reached the drive.
+    Now it is answered 409, nothing is written, and the stop has already begun.
+    """
+    port = _free_port()
+    console = _console(tmp_path, http_port=port)
+    holding: socket.socket | None = None
+    late: socket.socket | None = None
+    try:
+        console.wait_for("serving")
+        armed = _post(port, "/api/arm", '{"motor_uncoupled": true}')
+        assert armed[0] == HTTPStatus.OK, armed
+        holding = _held_request(port)
+        late = _held_request(port)
+        time.sleep(0.3)  # both requests under way on the server
+        signalled = time.monotonic()
+        console.process.send_signal(sent)
+        console.wait_for("stopping")
+        began = time.monotonic() - signalled
+        # The second client completes its request inside the graceful window.
+        late.sendall(b'"rpm": 60}' + b" " * 89)
+        status, answer = _answer(late)
+        code = console.ended()
+    finally:
+        for client in (holding, late):
+            if client is not None:
+                client.close()
+        _kill_if_left(console)
+    words = console.words()
+
+    assert status == HTTPStatus.CONFLICT, answer
+    assert bench.LEAVING_REFUSAL in answer
+    assert not [word for word in words if word.startswith("wrote-")], words
+    assert "enabled" not in words
+    assert began < bench.GRACEFUL_SHUTDOWN_S, f"the stop began {began:.2f} s after the signal"
+    assert words.count("stopping") == 1, words
+    assert code == (BY_SIGTERM if sent == signal.SIGTERM else BY_HANG_UP), console.said()
 
 
 @signals_reach_a_process

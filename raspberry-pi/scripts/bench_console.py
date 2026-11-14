@@ -75,6 +75,14 @@ signal to one handler, this script's: all three leave through ``main``'s
 one flag, and the bus thread answers it with the driver's stop and nothing
 else.
 
+That stop does not wait for the web server (ANH-218). The exit signal itself,
+as the web server takes it, disarms the console and asks the bus thread for
+the stop at once (``disarm_and_stop``): from that instant every motion route
+(``/api/enable``, ``/api/speed``, arming) answers 409, a command still in the
+queue is never run, and the driver's stop begins while the web server is
+still waiting for an open request. A request that completes in that window
+no longer reaches the drive.
+
 The wait is bounded: 35 s (``SHUTDOWN_JOIN_S``). During it further signals are
 ignored, a second Ctrl+C included: cutting the stop short would leave it half
 done. The last line printed, ``sortie: ...``, says how the machine was left:
@@ -96,8 +104,9 @@ done. The last line printed, ``sortie: ...``, says how the machine was left:
 
 The exit status: 0 after a Ctrl+C taken while the page was served (the
 interruption itself during the start-up wait), 143 after SIGTERM, 129 after
-SIGHUP, and 4 (``EXIT_STOP_UNFINISHED``) when the stop had not finished when
-the wait ended. A 1 is an ordinary error, and says nothing of the stop.
+SIGHUP, 4 (``EXIT_STOP_UNFINISHED``) when the stop had not finished when
+the wait ended, and 3 (``WEB_SERVER_FAILED``) when the page could not start.
+A 1 is an ordinary error, and says nothing of the stop.
 
 None of this depends on the last line being written. With the terminal gone
 or the pipe broken there is nobody to read it: the line is dropped, the
@@ -296,6 +305,14 @@ class BusWorker(threading.Thread):
         self.exit_report: str = "-"
 
     def submit(self, cmd: Command) -> None:
+        """Queue ``cmd`` for the bus thread; dropped once the stop is asked for (ANH-218).
+
+        A command put after the flag, even one that passed this check just
+        before the flag was set, is dropped by the bus thread's re-check once it
+        has taken it from the queue (:meth:`_cycle`).
+        """
+        if self._stop_requested.is_set():
+            return
         self._commands.put(cmd)
 
     def shutdown(self) -> None:
@@ -565,10 +582,15 @@ class BusWorker(threading.Thread):
     async def _cycle(self) -> None:
         while not self._stop_requested.is_set():
             started: Monotonic = self._clock.monotonic()
-            while True:
+            # A command still queued when the stop is asked for is never run (ANH-218).
+            while not self._stop_requested.is_set():
                 try:
                     cmd = self._commands.get_nowait()
                 except queue.Empty:
+                    break
+                # Again once taken: a command put after the flag, whatever the interleaving
+                # with the check above or with submit's own, never runs.
+                if self._stop_requested.is_set():
                     break
                 await self._execute(cmd)
             await self._recover_if_latched()
@@ -617,6 +639,39 @@ def _stop_report(closed: Result[None, DriveError]) -> str:
 
 
 worker: BusWorker | None = None
+
+LEAVING: Final[threading.Event] = threading.Event()
+"""Set by the exit signal as the web server takes it, before anything else (ANH-218).
+
+From then on no motion route is taken, whatever the console's arming said."""
+
+LEAVING_REFUSAL: Final[str] = "console en cours d'arret: aucune commande de mouvement"
+"""What a motion route answers, 409, once the exit has begun."""
+
+
+def disarm_and_stop() -> None:
+    """The exit begins: disarm, refuse every motion route, and start the driver's stop now.
+
+    Called by the exit signal itself (:class:`StoppingServer`), on the web
+    server's thread, before the web server waits for the requests still open:
+    the stop no longer waits for them, and none of them can reach the drive.
+    """
+    LEAVING.set()
+    started = worker
+    if started is None:
+        return
+    started.snap.armed = False
+    started.snap.last_action = "sortie: console desarmee, arret du pilote lance"
+    started.shutdown()
+
+
+def _motion_refusal(w: BusWorker) -> str | None:
+    """Why a motion route is refused now (409), or ``None``: the exit first, then the arming."""
+    if LEAVING.is_set():
+        return LEAVING_REFUSAL
+    if not w.snap.armed:
+        return "console non armee"
+    return None
 
 
 def need_worker() -> BusWorker:
@@ -677,6 +732,8 @@ async def api_state() -> JSONResponse:
 @app.post("/api/arm")
 async def api_arm(motor_uncoupled: MotorUncoupled) -> JSONResponse:
     w = need_worker()
+    if motor_uncoupled and LEAVING.is_set():
+        raise HTTPException(409, LEAVING_REFUSAL)
     w.snap.armed = motor_uncoupled
     w.snap.last_action = "arme par l'operateur" if w.snap.armed else "desarme"
     return JSONResponse({"armed": w.snap.armed})
@@ -685,8 +742,9 @@ async def api_arm(motor_uncoupled: MotorUncoupled) -> JSONResponse:
 @app.post("/api/enable")
 async def api_enable() -> JSONResponse:
     w = need_worker()
-    if not w.snap.armed:
-        raise HTTPException(409, "console non armee")
+    refused = _motion_refusal(w)
+    if refused is not None:
+        raise HTTPException(409, refused)
     w.submit(Command("enable"))
     return JSONResponse({"queued": "enable"})
 
@@ -694,8 +752,9 @@ async def api_enable() -> JSONResponse:
 @app.post("/api/speed")
 async def api_speed(rpm: SpeedRpm) -> JSONResponse:
     w = need_worker()
-    if not w.snap.armed:
-        raise HTTPException(409, "console non armee")
+    refused = _motion_refusal(w)
+    if refused is not None:
+        raise HTTPException(409, refused)
     w.submit(Command("speed", rpm))
     return JSONResponse({"queued": "speed", "rpm": rpm})
 
@@ -855,6 +914,28 @@ EXIT_HELP: Final[str] = (
     "interceptes. Dans tous ces cas le seul filet est le delai de communication du variateur "
     "(ttO), a verifier sur son clavier."
 )
+
+WEB_SERVER_FAILED: Final[int] = 3
+"""The exit status when the web server could not start, as ``uvicorn.run`` gives it."""
+
+
+class StoppingServer(uvicorn.Server):
+    """The web server, whose exit signal disarms the console and starts the stop at once.
+
+    The signal is taken as the server always took it (``HANDLED_SIGNALS``,
+    patched in ``main`` to take SIGHUP too); before the server begins its
+    graceful shutdown, :func:`disarm_and_stop` has disarmed the console and
+    asked the bus thread for the driver's stop (ANH-218).
+    """
+
+    @override
+    def handle_exit(self, sig: int, frame: FrameType | None) -> None:
+        try:
+            disarm_and_stop()
+        finally:
+            # Whatever happened above, the server's own exit goes ahead.
+            super().handle_exit(sig, frame)
+
 
 EXIT_STOP_UNFINISHED: Final[int] = 4
 """The exit status when the process ends without having seen the driver's stop finish.
@@ -1070,13 +1151,20 @@ def main() -> int:
         taken = uvicorn.server.HANDLED_SIGNALS
         untaken = tuple(wanted for wanted in _exit_signals() if wanted not in taken)
         setattr(uvicorn.server, "HANDLED_SIGNALS", (*taken, *untaken))  # noqa: B010
-        uvicorn.run(
-            app,
-            host=host,
-            port=http_port,
-            log_level="warning",
-            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+        server = StoppingServer(
+            uvicorn.Config(
+                app,
+                host=host,
+                port=http_port,
+                log_level="warning",
+                timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S,
+            )
         )
+        # As uvicorn.run: Ctrl+C, handed back once the server is out of its loop, ends it.
+        with contextlib.suppress(KeyboardInterrupt):
+            server.run()
+        if not server.started:
+            return WEB_SERVER_FAILED
     finally:
         # An exit that no signal asked for (the web server returning, an
         # exception) gets here with the handlers still armed. A signal that
