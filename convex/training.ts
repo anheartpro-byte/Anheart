@@ -2655,12 +2655,22 @@ export const INTERRUPT_RUN_STALE_MS = 5 * 60_000;
 /** The marker of the run under way: one row, read and written by its name. */
 const INTERRUPT_RUN = "interrupt" as const;
 
-/** The marker of the run under way, or null: one indexed point lookup. */
-function interruptRun(ctx: MutationCtx) {
-  return ctx.db
+/**
+ * The marker of the run under way, or null: read by its index. The code never
+ * writes a second row, but one put there from outside (an edit, an import)
+ * must not wedge the job: the most recently renewed is kept, the others go.
+ */
+async function interruptRun(ctx: MutationCtx) {
+  const rows = await ctx.db
     .query("job_runs")
     .withIndex("by_name", (q) => q.eq("name", INTERRUPT_RUN))
-    .unique();
+    .collect();
+  const kept = rows.reduce<(typeof rows)[number] | null>(
+    (best, row) => (best === null || row.renewedAt > best.renewedAt ? row : best),
+    null,
+  );
+  for (const row of rows) if (row !== kept) await ctx.db.delete(row._id);
+  return kept;
 }
 
 /**

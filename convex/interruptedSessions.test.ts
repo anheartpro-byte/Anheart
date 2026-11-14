@@ -965,6 +965,46 @@ describe("ANH-231 EX-3 the job marks the silent sessions a bounded page per tran
     expect(await runMarker(w)).toBeNull();
   });
 
+  it("keeps the most recently renewed of two markers, deletes the other, and is never wedged by it", async () => {
+    const w = await limitedWorld();
+    const sessions = await insertSilentSessions(w, 2);
+    vi.setSystemTime(DUE);
+    // A second row put there from outside: `.unique()` would throw at every run.
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("job_runs", {
+        name: "interrupt",
+        startedAt: DUE - 20 * 60 * SECOND,
+        renewedAt: DUE - 20 * 60 * SECOND,
+      });
+      await ctx.db.insert("job_runs", {
+        name: "interrupt",
+        startedAt: DUE - 10 * 60 * SECOND,
+        renewedAt: DUE - 10 * 60 * SECOND,
+      });
+    });
+    expect(await interrupt(w, null)).toEqual({ marked: 2, done: true });
+    expect(await statusesOf(w, sessions)).toEqual(new Set(["interrupted"]));
+    expect(
+      await w.t.run((ctx) => ctx.db.query("job_runs").collect()),
+    ).toEqual([]);
+
+    // A fresh one beside a stale one: the fresh one holds the job, the stale one goes.
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("job_runs", {
+        name: "interrupt",
+        startedAt: DUE - 20 * 60 * SECOND,
+        renewedAt: DUE - 20 * 60 * SECOND,
+      });
+      await ctx.db.insert("job_runs", {
+        name: "interrupt",
+        startedAt: DUE - SECOND,
+        renewedAt: DUE - SECOND,
+      });
+    });
+    expect(await interrupt(w, null)).toEqual({ marked: 0, done: false });
+    expect(await runMarker(w)).toMatchObject({ renewedAt: DUE - SECOND });
+  });
+
   it("is held by a marker a failed page left behind only until it is stale", async () => {
     const w = await limitedWorld();
     const sessions = await insertSilentSessions(w, 2);

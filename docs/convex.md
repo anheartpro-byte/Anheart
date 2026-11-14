@@ -138,11 +138,12 @@ Toute nouvelle table de données d'une organisation porte `organizationId`.
 sont pas des tables communes à tous les clients. Les tables globales et les
 tables liées ci-dessous expliquent les absences actuelles du champ.
 
-Douze tables ne le portent pas : `organizations` décrit les organisations
+Treize tables ne le portent pas : `organizations` décrit les organisations
 elles-mêmes ; `clerk_webhook_events` déduplique les événements Clerk au niveau
 global ; `software_releases`, `software_release_levels` et
 `medical_parameters_versions` sont des registres communs à tous les clients ;
 `record_upload_sweeps` conserve le curseur global de nettoyage des dépôts ;
+`job_runs` le marqueur de la passe en cours d'une tâche paginée (ANH-231) ;
 `ecg_data`, `session_summaries` et `session_record_manifest_pages` se lisent par
 leur séance ; `machine_api_keys` et `machine_heartbeats` par leur machine ;
 `notification_settings` par leur compte. Ces six dernières tables liées
@@ -3227,8 +3228,8 @@ caractère non ASCII, tiennent sous 2,5 Mio ; 600 points aux nombres les plus
 longs sous 300 Kio ; le plus grand heartbeat de la console (128 codes de
 défaut du variateur) fait environ 8 Kio. Les programmes d'une console
 viennent d'un catalogue signé de 500 000 octets au plus, où chacun prend au
-moins 341 octets (ses 19 clés seules en prennent 322) : 1 470 programmes au
-plus, dont les mots, même écrits `\uXXXX`, et le rapport de 200 entrées
+moins 341 octets (ses 19 clés seules en prennent 322) : moins de 1 470
+programmes, dont les mots, même écrits `\uXXXX`, et le rapport de 200 entrées
 tiennent sous 4 Mio ; les tests du Pi l'épinglent
 (`test_cloud_rate_limit.py`). Ces deux bornes (ANH-228), `max_body_bytes` et
 `max_programmes` du contrat partagé, n'ajoutent ni champ ni code sur le fil :
