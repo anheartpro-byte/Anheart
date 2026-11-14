@@ -3022,9 +3022,9 @@ def test_the_ends_that_hold_are_the_runtime_s_and_the_contract_s() -> None:
 GONE = Refusal("session_not_found (HTTP 404): gone", final=True)
 
 
-async def listed(tmp_path: Path) -> Bench:
+async def listed(tmp_path: Path, io: RecordIo | None = None) -> Bench:
     """A console whose first steps listed the records of earlier runs."""
-    b = bench(tmp_path)
+    b = bench(tmp_path, io=io)
     await b.run(2)
     assert b.unreported_stop() is None
     return b
@@ -3037,6 +3037,12 @@ def lost(b: Bench, why: str) -> bool:
         and words.startswith(LOST_STOP.format(why=why).split(" (")[0])
         and (f"({why}, " in words)
     )
+
+
+async def slot_free(io: RecordIo) -> None:
+    """Until every thread of ``io`` has answered: a slot is given back on the loop."""
+    while io.active:  # noqa: ASYNC110  # given back by the I/O thread, which has no event
+        await asyncio.sleep(0.001)
 
 
 async def restarted_and_listed(b: Bench) -> Bench:
@@ -3375,7 +3381,8 @@ async def test_an_acknowledgement_whose_write_lands_after_its_wait_is_written_ov
 ) -> None:
     """The empty register lands after the acknowledgement gave up on it: the next step
     writes again the losses, which still hold, so a restart does not forget them."""
-    b = await listed(tmp_path)
+    io = RecordIo(1)
+    b = await listed(tmp_path, io)
     b.link.answer(END_PATH, GONE)
     b.uplink.begin(armed(b.clock, remote="k1", kind="auto"))
     await b.step()
@@ -3402,6 +3409,9 @@ async def test_an_acknowledgement_whose_write_lands_after_its_wait_is_written_ov
     assert refused.error == f"{LOST_UNWRITTEN} ({TIMEOUT})"
     go.set()
     await asyncio.wait_for(landed.wait(), 5.0)
+    # Its thread gives the one slot back a moment after the write lands: a step before
+    # then is refused as busy, and on a loaded host both steps below were.
+    await asyncio.wait_for(slot_free(io), 5.0)
     assert load_lost_stops(tmp_path) == (), "landed after its wait"
     assert b.uplink.lost_stops == held, "still held"
 
