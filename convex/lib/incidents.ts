@@ -35,7 +35,7 @@
 import machineApi from "../../contracts/machine-api.json";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { incidentSummary, writeLogbook } from "./logbook";
+import { incidentSummary, refreshInterventionDue, writeLogbook } from "./logbook";
 import { personOnBoard } from "./machineRegistry";
 import {
   driveFaultAlerts,
@@ -219,9 +219,15 @@ async function join(
       ? { kind: observation.kind, rule: observation.rule, t: observation.t }
       : {}),
     ...(reopened
-      ? { status: "open" as const, closedBy: undefined, closedAt: undefined }
+      ? {
+          status: "open" as const,
+          closedBy: undefined,
+          closedAt: undefined,
+          reopenedAt: Date.now(),
+        }
       : {}),
   });
+  await refreshInterventionDue(ctx, incident._id);
   if (severity === "high" && incident.severity !== "high") {
     await scheduleAlert(ctx, session.machineId, "incident_high", {
       sessionId: session._id,
@@ -291,6 +297,7 @@ export async function openIncident(
       refs: { incidentId },
     },
   );
+  await refreshInterventionDue(ctx, incidentId);
   return incidentId;
 }
 

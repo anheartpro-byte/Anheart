@@ -955,6 +955,13 @@ export default defineSchema({
     closedAt: v.optional(v.number()),
     // The rejected file of a `record_rejected` incident.
     recordId: v.optional(v.id("session_record_files")),
+    // When a closed incident was last opened again (`join`): an intervention
+    // written before it no longer counts (ANH-149).
+    reopenedAt: v.optional(v.number()),
+    // A drive fault the console cannot reset, not resolved yet: not closed, or
+    // closed with no intervention written since it last opened. Kept by
+    // `refreshInterventionDue` (convex/lib/logbook.ts); absent otherwise.
+    interventionDue: v.optional(v.boolean()),
   })
     // The blocking count reads the high ones only (`openHighIncidents`).
     .index("by_machine_and_status_and_severity", [
@@ -964,8 +971,8 @@ export default defineSchema({
     ])
     // A machine's incidents, most recently opened last (a gestionnaire's list).
     .index("by_machine", ["machineId"])
-    // Its drive faults, for the logbook's intervention rule (ANH-149).
-    .index("by_machine_and_kind", ["machineId", "kind"])
+    // Its drive faults that still close programmed sessions (ANH-149).
+    .index("by_machine_and_intervention_due", ["machineId", "interventionDue"])
     .index("by_organization", ["organizationId"])
     .index("by_session", ["sessionId", "rule", "t"]),
 
@@ -990,6 +997,8 @@ export default defineSchema({
   })
     // A machine's line of time, oldest first.
     .index("by_machine_and_at", ["machineId", "at"])
+    // Its entries of one kind (the last software updates).
+    .index("by_machine_and_kind_and_at", ["machineId", "kind", "at"])
     // The interventions written for an incident (the drive fault rule).
     .index("by_incident_and_kind", ["refs.incidentId", "kind"])
     // An attachment is attached once.

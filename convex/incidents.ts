@@ -29,7 +29,11 @@ import {
 import { audit, userActor } from "./lib/audit";
 import { refusal } from "./lib/errors";
 import { openHighIncidents } from "./lib/incidents";
-import { incidentSummary, writeLogbook } from "./lib/logbook";
+import {
+  incidentSummary,
+  refreshInterventionDue,
+  writeLogbook,
+} from "./lib/logbook";
 import { limitUser } from "./lib/rateLimits";
 import {
   incidentKindValidator,
@@ -328,6 +332,7 @@ export const close = mutation({
         refs: { incidentId: incident._id },
       },
     );
+    await refreshInterventionDue(ctx, incident._id);
     await audit(ctx, {
       actor: userActor(caller),
       source: "site",
