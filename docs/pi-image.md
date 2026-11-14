@@ -1273,6 +1273,7 @@ du tableau de bord sont copiés à part.
        simulation/__init__.py simulation/endurance.py simulation/endurance_measures.py \
        raspberry-pi/tests/__init__.py raspberry-pi/tests/fake_dashboard.py \
        raspberry-pi/tests/fake_record_dashboard.py raspberry-pi/tests/roster_support.py \
+       raspberry-pi/tests/access_support.py \
      | ssh <utilisateur>@<pi> 'mkdir -p anheart-endurance && tar -xf - -C anheart-endurance'
    ```
 
@@ -1407,9 +1408,13 @@ Cette commande n'a été lancée ni sur un Pi ni dans l'image : sur le poste de
 développement, la même commande Python a tourné hors Docker
 ([framework-de-test.md, section 17.6](framework-de-test.md#176-mesures-relevées)).
 Le scénario importe aussi `fake_record_dashboard.py` et `roster_support.py`,
-absents de la première version de l'étape 1 : avec les sept fichiers de
-l'étape 1 seulement à côté de `src/` et `config/` de la console, il s'importe
-(vérifié hors Docker le 13 novembre 2026).
+absents de la première version de l'étape 1, et depuis ANH-152
+`access_support.py`, l'opérateur se connectant à la console par son code. Avec
+les huit fichiers de l'étape 1 seulement à côté de `src/` et `config/` de la
+console, il s'importe : vérifié hors Docker le 14 novembre 2026, sur une copie
+faite exactement selon la liste, au-dessus de develop d612484. Sans
+`access_support.py`, l'import échoue (`ModuleNotFoundError`) : la liste de
+sept fichiers vérifiée le 13 novembre ne suffit plus depuis ANH-152.
 
 ### 9.2 Une journée au banc, capsule vide
 
